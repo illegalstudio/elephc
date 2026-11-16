@@ -35,7 +35,11 @@
 //!   rejects those ids too, so this is a documented, honest gap.
 
 use crate::optimize::reachability::PreludeInventory;
-use crate::parser::ast::Program;
+use crate::parser::ast::{BinOp, CastType, Expr, Program, Stmt, TypeExpr};
+use crate::synthetic_class::{
+    e_binop, e_bool, e_call, e_cast, e_concat_all, e_const, e_index, e_int, e_not, e_null, e_str, e_ternary,
+    e_var, function, php_semantics_declarations, s_assign, s_expr, s_if, s_return, t_array, t_mixed,
+};
 
 /// The bare symbol name of the int-flags dynamic-`$filter` helper. Kept as a constant so the
 /// prelude source and the `crate::ir_lower::expr::filter` call site cannot drift apart. The
@@ -51,87 +55,168 @@ pub const FILTER_VAR_GROUP: &str = "filter_var";
 /// (element access fatals at runtime), so the array must never take the `mixed` seam.
 pub(crate) const DYN_FILTER_VAR_ARR_NAME: &str = "__elephc_filter_var_dyn_arr";
 
-/// The elephc-PHP dynamic-`filter_var` prelude: the int-flags `__elephc_filter_var_dyn` helper
-/// plus the array-options `__elephc_filter_var_dyn_arr` shim. Each branch delegates to
-/// `filter_var()` with a LITERAL filter id and flags, so the existing literal lowering handles the
-/// real work.
-pub const FILTER_VAR_DYN_PRELUDE_SRC: &str = r#"<?php
-function __elephc_filter_var_dyn_arr(mixed $value, int $filter, array $options): mixed {
-    if (isset($options['options'])) {
-        error_log("filter_var(): array \$options['options'] is not supported by elephc yet; per-filter options ignored");
-    }
-    $flags = isset($options['flags']) ? (int) $options['flags'] : 0;
-    return __elephc_filter_var_dyn($value, $filter, $flags);
+/// Builds the dynamic-`filter_var` prelude: the int-flags `__elephc_filter_var_dyn` helper plus
+/// the array-options `__elephc_filter_var_dyn_arr` shim. Each branch delegates to `filter_var()`
+/// with a LITERAL filter id and flags, so the existing literal lowering handles the real work.
+///
+/// The helpers are typed like user code (`php_semantics_declarations`), which is how the PHP form
+/// they replace was parsed: `array $options` keeps the user-array ABI the caller passes.
+pub(crate) fn declarations() -> Program {
+    php_semantics_declarations(|| vec![decl_fn_filter_var_dyn_arr(), decl_fn_filter_var_dyn()])
 }
-function __elephc_filter_var_dyn(mixed $value, int $filter, mixed $flags = 0): mixed {
-    if (is_array($flags)) {
-        // Reading the array out of a `mixed` seam WORKS: the element-access gap this used to warn
-        // about is gone, and warning anyway made Symfony log three false failures on every single
-        // request. Only the genuinely unsupported half stays loud — `$options['options']`, the
-        // per-filter settings (min_range, default, …) neither dynamic path applies.
-        if (isset($flags['options'])) {
-            error_log("filter_var(): array \$options['options'] is not supported by elephc yet; per-filter options ignored");
-        }
-        $flags = isset($flags['flags']) ? (int) $flags['flags'] : 0;
-    } else {
-        $flags = (int) $flags;
-    }
-    $nof = ($flags & FILTER_NULL_ON_FAILURE) !== 0;
-    if ($filter === FILTER_VALIDATE_INT) {
-        return $nof
-            ? filter_var($value, FILTER_VALIDATE_INT, FILTER_NULL_ON_FAILURE)
-            : filter_var($value, FILTER_VALIDATE_INT);
-    }
-    if ($filter === FILTER_VALIDATE_FLOAT) {
-        return $nof
-            ? filter_var($value, FILTER_VALIDATE_FLOAT, FILTER_NULL_ON_FAILURE)
-            : filter_var($value, FILTER_VALIDATE_FLOAT);
-    }
-    if ($filter === FILTER_VALIDATE_BOOL) {
-        return $nof
-            ? filter_var($value, FILTER_VALIDATE_BOOL, FILTER_NULL_ON_FAILURE)
-            : filter_var($value, FILTER_VALIDATE_BOOL);
-    }
-    if ($filter === FILTER_VALIDATE_IP) {
-        $v4 = ($flags & FILTER_FLAG_IPV4) !== 0;
-        $v6 = ($flags & FILTER_FLAG_IPV6) !== 0;
-        if ($v4 && !$v6) {
-            return $nof
-                ? filter_var($value, FILTER_VALIDATE_IP, FILTER_FLAG_IPV4 | FILTER_NULL_ON_FAILURE)
-                : filter_var($value, FILTER_VALIDATE_IP, FILTER_FLAG_IPV4);
-        }
-        if ($v6 && !$v4) {
-            return $nof
-                ? filter_var($value, FILTER_VALIDATE_IP, FILTER_FLAG_IPV6 | FILTER_NULL_ON_FAILURE)
-                : filter_var($value, FILTER_VALIDATE_IP, FILTER_FLAG_IPV6);
-        }
-        return $nof
-            ? filter_var($value, FILTER_VALIDATE_IP, FILTER_NULL_ON_FAILURE)
-            : filter_var($value, FILTER_VALIDATE_IP);
-    }
-    if ($filter === FILTER_DEFAULT) {
-        return $nof
-            ? filter_var($value, FILTER_DEFAULT, FILTER_NULL_ON_FAILURE)
-            : filter_var($value, FILTER_DEFAULT);
-    }
-    error_log("filter_var(): filter with ID " . $filter . " is not supported by elephc yet");
-    return $nof ? null : false;
+
+/// `$nof ? <nof_value> : <plain_value>`.
+fn nof_ternary(nof_value: Expr, plain_value: Expr) -> Expr {
+    e_ternary(e_var("nof"), nof_value, plain_value)
 }
-"#;
+
+/// `filter_var($value, <id>[, <flags>])` with a literal id.
+fn literal_filter_var(id: &str, flags: Option<Expr>) -> Expr {
+    let mut args = vec![e_var("value"), e_const(id)];
+    args.extend(flags);
+    e_call("filter_var", args)
+}
+
+/// `return $nof ? filter_var($value, <id>, <flag | FILTER_NULL_ON_FAILURE>) : filter_var($value, <id>[, <flag>]);`
+fn return_literal_filter(id: &str, flag: Option<&str>) -> Stmt {
+    let nof = match flag {
+        Some(flag) => e_binop(e_const(flag), BinOp::BitOr, e_const("FILTER_NULL_ON_FAILURE")),
+        None => e_const("FILTER_NULL_ON_FAILURE"),
+    };
+    s_return(nof_ternary(
+        literal_filter_var(id, Some(nof)),
+        literal_filter_var(id, flag.map(e_const)),
+    ))
+}
+
+/// The `error_log()` call that flags `$source['options']`, which neither dynamic path applies.
+fn warn_unsupported_options(source: &str) -> Stmt {
+    s_if(
+        e_call("isset", vec![e_index(e_var(source), e_str("options"))]),
+        vec![s_expr(e_call(
+            "error_log",
+            vec![e_str(
+                "filter_var(): array $options['options'] is not supported by elephc yet; per-filter options ignored",
+            )],
+        ))],
+        vec![],
+        None,
+    )
+}
+
+/// `$flags = isset($source['flags']) ? (int) $source['flags'] : 0;`
+fn flags_from_array(source: &str) -> Stmt {
+    s_assign(
+        "flags",
+        e_ternary(
+            e_call("isset", vec![e_index(e_var(source), e_str("flags"))]),
+            e_cast(CastType::Int, e_index(e_var(source), e_str("flags"))),
+            e_int(0),
+        ),
+    )
+}
+
+/// `($flags & <flag>) !== 0`.
+fn flag_set(flag: &str) -> Expr {
+    e_binop(
+        e_binop(e_var("flags"), BinOp::BitAnd, e_const(flag)),
+        BinOp::StrictNotEq,
+        e_int(0),
+    )
+}
+
+/// `if ($<only> && !$<other>) { return <the IP filter restricted to <flag>>; }`
+fn ip_only_branch(only: &str, other: &str, flag: &str) -> Stmt {
+    s_if(
+        e_binop(e_var(only), BinOp::And, e_not(e_var(other))),
+        vec![return_literal_filter("FILTER_VALIDATE_IP", Some(flag))],
+        vec![],
+        None,
+    )
+}
+
+/// `if ($filter === <id>) { return <the literal filter>; }`
+fn dispatch_simple(id: &str) -> Stmt {
+    s_if(
+        e_binop(e_var("filter"), BinOp::StrictEq, e_const(id)),
+        vec![return_literal_filter(id, None)],
+        vec![],
+        None,
+    )
+}
+
+/// `__elephc_filter_var_dyn_arr(mixed $value, int $filter, array $options): mixed`.
+fn decl_fn_filter_var_dyn_arr() -> Stmt {
+    function(DYN_FILTER_VAR_ARR_NAME)
+        .param("value", t_mixed())
+        .param("filter", TypeExpr::Int)
+        .param("options", t_array())
+        .returns(t_mixed())
+        .body(vec![
+            warn_unsupported_options("options"),
+            flags_from_array("options"),
+            s_return(e_call(
+                DYN_FILTER_VAR_NAME,
+                vec![e_var("value"), e_var("filter"), e_var("flags")],
+            )),
+        ])
+        .build()
+}
+
+/// `__elephc_filter_var_dyn(mixed $value, int $filter, mixed $flags = 0): mixed`.
+fn decl_fn_filter_var_dyn() -> Stmt {
+    function(DYN_FILTER_VAR_NAME)
+        .param("value", t_mixed())
+        .param("filter", TypeExpr::Int)
+        .param_default("flags", t_mixed(), e_int(0))
+        .returns(t_mixed())
+        .body(vec![
+            s_if(
+                e_call("is_array", vec![e_var("flags")]),
+                vec![warn_unsupported_options("flags"), flags_from_array("flags")],
+                vec![],
+                Some(vec![s_assign("flags", e_cast(CastType::Int, e_var("flags")))]),
+            ),
+            s_assign("nof", flag_set("FILTER_NULL_ON_FAILURE")),
+            dispatch_simple("FILTER_VALIDATE_INT"),
+            dispatch_simple("FILTER_VALIDATE_FLOAT"),
+            dispatch_simple("FILTER_VALIDATE_BOOL"),
+            s_if(
+                e_binop(e_var("filter"), BinOp::StrictEq, e_const("FILTER_VALIDATE_IP")),
+                vec![
+                    s_assign("v4", flag_set("FILTER_FLAG_IPV4")),
+                    s_assign("v6", flag_set("FILTER_FLAG_IPV6")),
+                    ip_only_branch("v4", "v6", "FILTER_FLAG_IPV4"),
+                    ip_only_branch("v6", "v4", "FILTER_FLAG_IPV6"),
+                    return_literal_filter("FILTER_VALIDATE_IP", None),
+                ],
+                vec![],
+                None,
+            ),
+            dispatch_simple("FILTER_DEFAULT"),
+            s_expr(e_call(
+                "error_log",
+                vec![e_concat_all(vec![
+                    e_str("filter_var(): filter with ID "),
+                    e_var("filter"),
+                    e_str(" is not supported by elephc yet"),
+                ])],
+            )),
+            s_return(nof_ternary(e_null(), e_bool(false))),
+        ])
+        .build()
+}
 
 /// Prepends the dynamic-`filter_var` prelude when the program references `filter_var`, so binaries
 /// without any `filter_var` usage carry nothing. Injecting on ANY `filter_var` reference (not only
 /// dynamic ones) is sound: a program whose `filter_var` calls are all literal never calls the
 /// helper, so it is dead code; a program with a dynamic call has `filter_var` referenced and thus
-/// gets the helper it needs. The source is static and tested, so a tokenize/parse failure is a
-/// compiler bug and panics rather than degrading silently.
+/// gets the helper it needs. The helpers are built as AST, never parsed from PHP source text.
 pub fn inject_if_used(program: Program, inventory: &mut PreludeInventory) -> Program {
     if !crate::ast_usage::collect(&program).references("filter_var") {
         return program;
     }
-    let tokens = crate::lexer::tokenize(FILTER_VAR_DYN_PRELUDE_SRC)
-        .expect("filter_var dynamic prelude must tokenize");
-    let mut combined = crate::parser::parse(&tokens).expect("filter_var dynamic prelude must parse");
+    let mut combined = declarations();
     // The URL/EMAIL/DOMAIN/CALLBACK helpers, named only by the literal lowering as well, and only
     // when a literal call uses one of those filters.
     let (extended, email) = crate::filter_ext_prelude::extended_filters_used(&program);
@@ -185,6 +270,101 @@ mod tests {
     //! - Source is parsed the way `inject_if_used` sees it: tokenize then parse.
 
     use super::*;
+
+    /// The PHP form of the helpers: the oracle's reference side, parsed only here in tests.
+    const PHP_FORM: &str = r#"<?php
+    function __elephc_filter_var_dyn_arr(mixed $value, int $filter, array $options): mixed {
+        if (isset($options['options'])) {
+            error_log("filter_var(): array \$options['options'] is not supported by elephc yet; per-filter options ignored");
+        }
+        $flags = isset($options['flags']) ? (int) $options['flags'] : 0;
+        return __elephc_filter_var_dyn($value, $filter, $flags);
+    }
+    function __elephc_filter_var_dyn(mixed $value, int $filter, mixed $flags = 0): mixed {
+        if (is_array($flags)) {
+            // Reading the array out of a `mixed` seam WORKS: the element-access gap this used to warn
+            // about is gone, and warning anyway made Symfony log three false failures on every single
+            // request. Only the genuinely unsupported half stays loud — `$options['options']`, the
+            // per-filter settings (min_range, default, …) neither dynamic path applies.
+            if (isset($flags['options'])) {
+                error_log("filter_var(): array \$options['options'] is not supported by elephc yet; per-filter options ignored");
+            }
+            $flags = isset($flags['flags']) ? (int) $flags['flags'] : 0;
+        } else {
+            $flags = (int) $flags;
+        }
+        $nof = ($flags & FILTER_NULL_ON_FAILURE) !== 0;
+        if ($filter === FILTER_VALIDATE_INT) {
+            return $nof
+                ? filter_var($value, FILTER_VALIDATE_INT, FILTER_NULL_ON_FAILURE)
+                : filter_var($value, FILTER_VALIDATE_INT);
+        }
+        if ($filter === FILTER_VALIDATE_FLOAT) {
+            return $nof
+                ? filter_var($value, FILTER_VALIDATE_FLOAT, FILTER_NULL_ON_FAILURE)
+                : filter_var($value, FILTER_VALIDATE_FLOAT);
+        }
+        if ($filter === FILTER_VALIDATE_BOOL) {
+            return $nof
+                ? filter_var($value, FILTER_VALIDATE_BOOL, FILTER_NULL_ON_FAILURE)
+                : filter_var($value, FILTER_VALIDATE_BOOL);
+        }
+        if ($filter === FILTER_VALIDATE_IP) {
+            $v4 = ($flags & FILTER_FLAG_IPV4) !== 0;
+            $v6 = ($flags & FILTER_FLAG_IPV6) !== 0;
+            if ($v4 && !$v6) {
+                return $nof
+                    ? filter_var($value, FILTER_VALIDATE_IP, FILTER_FLAG_IPV4 | FILTER_NULL_ON_FAILURE)
+                    : filter_var($value, FILTER_VALIDATE_IP, FILTER_FLAG_IPV4);
+            }
+            if ($v6 && !$v4) {
+                return $nof
+                    ? filter_var($value, FILTER_VALIDATE_IP, FILTER_FLAG_IPV6 | FILTER_NULL_ON_FAILURE)
+                    : filter_var($value, FILTER_VALIDATE_IP, FILTER_FLAG_IPV6);
+            }
+            return $nof
+                ? filter_var($value, FILTER_VALIDATE_IP, FILTER_NULL_ON_FAILURE)
+                : filter_var($value, FILTER_VALIDATE_IP);
+        }
+        if ($filter === FILTER_DEFAULT) {
+            return $nof
+                ? filter_var($value, FILTER_DEFAULT, FILTER_NULL_ON_FAILURE)
+                : filter_var($value, FILTER_DEFAULT);
+        }
+        error_log("filter_var(): filter with ID " . $filter . " is not supported by elephc yet");
+        return $nof ? null : false;
+    }
+    "#;
+
+    /// Removes span payloads so a built node and a parsed node compare on structure alone.
+    fn strip_spans(rendered: &str) -> String {
+        let mut cleaned = String::with_capacity(rendered.len());
+        let mut rest = rendered;
+        while let Some(at) = rest.find("Span {") {
+            cleaned.push_str(&rest[..at]);
+            cleaned.push_str("Span");
+            let after = &rest[at..];
+            let close = after.find('}').map(|end| end + 1).unwrap_or(after.len());
+            rest = &after[close..];
+        }
+        cleaned.push_str(rest);
+        cleaned
+    }
+
+    /// The built helpers are the parse of the PHP form, declaration by declaration.
+    #[test]
+    fn built_declarations_match_the_php() {
+        let tokens = crate::lexer::tokenize(PHP_FORM).expect("the PHP form must tokenize");
+        let parsed = crate::parser::parse_internal(&tokens).expect("the PHP form must parse");
+        let built = declarations();
+        assert_eq!(built.len(), parsed.len());
+        for (built_stmt, parsed_stmt) in built.iter().zip(parsed.iter()) {
+            assert_eq!(
+                strip_spans(&format!("{built_stmt:?}")),
+                strip_spans(&format!("{parsed_stmt:?}")),
+            );
+        }
+    }
 
     /// Parses source the way `inject_if_used` sees it: tokenize then parse.
     fn parse(source: &str) -> Program {
