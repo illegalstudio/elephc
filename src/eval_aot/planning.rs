@@ -105,6 +105,10 @@ where
     let Some(program) = parse_literal_fragment(fragment, strict_php) else {
         return parse_error_plan();
     };
+    // No call site is known, but the optimizer the plan runs through accepts no `MagicConstant`:
+    // lower them against a neutral path. The plan only decides what the fragment needs, so the
+    // placeholder text of `__FILE__`/`__DIR__` never reaches the program.
+    let program = crate::magic_constants::substitute_file_and_scope_constants(program, Path::new(""));
     plan_parsed_literal_fragment_with_static_and_method_calls(
         fragment,
         strict_php,
