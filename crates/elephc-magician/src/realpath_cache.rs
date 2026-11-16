@@ -56,12 +56,24 @@ pub(crate) fn canonicalize_cached(path: &Path) -> PathBuf {
 /// Like [`canonicalize_cached`], but reports a path that cannot be canonicalized as `None`, for
 /// callers that have their own fallback (the script cache keys a missing file by its parent).
 pub(crate) fn try_canonicalize_cached(path: &Path) -> Option<PathBuf> {
-    if let Some(cached) = lock_realpath_cache().lookup(path) {
+    // A relative path canonicalizes against the working directory, so the cache is keyed by the
+    // expanded path, as php's realpath cache is: a `chdir()` must not serve the old directory's file.
+    let key = cache_key(path);
+    if let Some(cached) = lock_realpath_cache().lookup(&key) {
         return Some(cached);
     }
     let canonical = std::fs::canonicalize(path).ok()?;
-    lock_realpath_cache().insert(path.to_path_buf(), canonical.clone());
+    lock_realpath_cache().insert(key, canonical.clone());
     Some(canonical)
+}
+
+/// Returns the key one path is cached under: the path expanded against the working directory.
+fn cache_key(path: &Path) -> PathBuf {
+    if path.is_relative() {
+        std::env::current_dir().map_or_else(|_| path.to_path_buf(), |cwd| cwd.join(path))
+    } else {
+        path.to_path_buf()
+    }
 }
 
 /// Returns the process-wide realpath cache singleton.
@@ -179,5 +191,12 @@ mod tests {
             cache.lookup(Path::new("/link")),
             Some(PathBuf::from("/new"))
         );
+    }
+
+    /// Verifies a relative path is cached under its absolute form, so a `chdir()` cannot reuse it.
+    #[test]
+    fn relative_paths_are_keyed_by_their_expanded_form() {
+        assert!(cache_key(Path::new("bootstrap.php")).is_absolute());
+        assert_eq!(cache_key(Path::new("/a/b.php")), PathBuf::from("/a/b.php"));
     }
 }
