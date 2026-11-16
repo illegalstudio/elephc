@@ -20,6 +20,8 @@ touches:
 ## Tried and ruled out
 - Using "slot ∈ initialized_slots" as the definedness fact: loops and try leave slots initialized after a body that may not run, and the vivify seed initializes the slot at entry.
 - Answering NULL for a plain read of a seeded `$a[] =` local: the checker types it `array` for the whole scope (seed_vivified_array_locals), so `return $out;` hit a TypeError at the inferred array return. Plain reads of seeded locals warn but keep the seed's []; probes and compact are exact.
+- Answering every guarded read with a boxed mixed NULL: a concretely typed read (an object after a try) then changed its consumer's dispatch, and empty($box['q']) skipped offsetExists(). Only reads whose load is already mixed, and probes whose whole operand is the variable, answer NULL; other typed reads keep their load and only warn.
+- Emitting the builder's flag store BEFORE the write: it landed between `load; str_append; store`, which the validator requires adjacent (InvalidStringAppendTransfer). It goes after the write; StrAppend leaves it to its store.
 - Guarding by-ref argument reads: byref($r) then got a copy and a false warning. Names a body may pass by reference (any method/closure/unknown call arg, resolved functions per param) are never tracked.
 ## Watch out
 - `~/.cargo/bin/cargo` is a fork that ignores CARGO_TARGET_DIR; a cancelled background `cargo +1.98 build` can finish later and REPLACE target/debug/elephc, so the worktree binary is not a safe baseline for asm comparisons. Build the baseline in a separate `git worktree` (here .elephc-work/base).
