@@ -235,7 +235,7 @@ pub(super) fn required_builtin_spl_metadata_methods(class_name: &str) -> &'stati
             "valid",
             "getInnerIterator",
         ],
-        "RecursiveTreeIterator" => &["setPrefixPart"],
+        "RecursiveTreeIterator" => &["current", "key", "setPrefixPart"],
         "SplFileInfo" => &["__toString"],
         "SplFileObject" => &[
             "current",

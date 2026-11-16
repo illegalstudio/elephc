@@ -488,7 +488,17 @@ pub(super) fn is_supported_builtin_spl_method(class_name: &str, method_key: &str
                 | "__elephcslotfordepth"
                 | "__elephcassumerecursiveiterator"
         ),
-        "RecursiveTreeIterator" => method_key == "setprefixpart",
+        "RecursiveTreeIterator" => matches!(
+            method_key,
+            "__construct"
+                | "key"
+                | "current"
+                | "getprefix"
+                | "setpostfix"
+                | "setprefixpart"
+                | "getentry"
+                | "getpostfix"
+        ),
         "__ElephcAppendIteratorArrayIterator" => matches!(
             method_key,
             "__construct"

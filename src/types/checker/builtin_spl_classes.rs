@@ -34,6 +34,7 @@ mod recursive;
 mod recursive_array;
 mod recursive_iterator_iterator;
 mod recursive_iterator_iterator_traversal;
+mod recursive_tree_iterator;
 mod regex;
 mod registry;
 

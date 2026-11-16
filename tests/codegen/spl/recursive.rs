@@ -85,6 +85,38 @@ echo RecursiveTreeIterator::BYPASS_KEY, ":", RecursiveTreeIterator::PREFIX_RIGHT
     assert_eq!(out, "bool(true)\nbool(true)\n8:5");
 }
 
+/// `RecursiveTreeIterator` renders php's ASCII tree: `SELF_FIRST` over a `RecursiveCachingIterator`,
+/// each line `prefix . entry . postfix` with `|`/`\` parts chosen by each level's `hasNext()`,
+/// `Array` for an array entry, raw keys under the default `BYPASS_KEY`. It used to be an empty
+/// shell over `RecursiveIteratorIterator` that printed the leaves only, without any prefix.
+#[test]
+fn test_recursive_tree_iterator_renders_the_tree() {
+    let out = compile_and_run(
+        r#"<?php
+$data = ['a' => ['b' => 1, 'd' => [5]], 'c' => 2];
+foreach (new RecursiveTreeIterator(new RecursiveArrayIterator($data)) as $k => $line) {
+    echo $k, " => ", $line, "\n";
+}
+$t = new RecursiveTreeIterator(new RecursiveArrayIterator([1]));
+try { $t->setPrefixPart(7, "x"); } catch (ValueError $e) { echo get_class($e), ": ", $e->getMessage(), "\n"; }
+$t->setPrefixPart(RecursiveTreeIterator::PREFIX_LEFT, "> ");
+$t->setPostfix(" <");
+foreach ($t as $k => $v) { echo "$k=$v\n"; }
+$keys = new RecursiveTreeIterator(new RecursiveArrayIterator(["x" => [1, 2]]), 0);
+foreach ($keys as $k => $v) { echo "$k => $v\n"; }
+echo get_class($keys->getInnerIterator()), "\n";
+"#,
+    );
+    assert_eq!(
+        out,
+        "a => |-Array\nb => | |-1\nd => | \\-Array\n0 => |   \\-5\nc => \\-2\n\
+         ValueError: RecursiveTreeIterator::setPrefixPart(): Argument #1 ($part) must be a RecursiveTreeIterator::PREFIX_* constant\n\
+         0=> \\-1 <\n\
+         \\-x => \\-Array\n  |-0 =>   |-1\n  \\-1 =>   \\-2\n\
+         RecursiveCachingIterator\n"
+    );
+}
+
 /// Verifies that recursive array iterator children from mixed values.
 #[test]
 fn test_recursive_array_iterator_children_from_mixed_values() {
