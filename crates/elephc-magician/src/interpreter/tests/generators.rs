@@ -748,6 +748,32 @@ Exception:Cannot traverse an already closed generator|",
     );
 }
 
+/// Verifies a `yield` can be the condition of an `if` and of a `while`.
+///
+/// `php -n` 8.5.6 prints `a|1,w0|w1,w1|end` for the fragment below: the sent value decides the
+/// branch, and a `while` condition that assigns a yield re-yields on every pass.
+#[test]
+fn a_yield_can_be_an_if_or_while_condition() {
+    assert_eq!(
+        out(
+            br#"function c() {
+    if (yield 'a') { echo "1,"; } else { echo "0,"; }
+    $n = 0;
+    while ($x = yield "w$n") { $n++; echo "w$n,"; }
+    echo "end";
+}
+$g = c();
+echo $g->current(), "|";
+$g->send(true);
+echo $g->current(), "|";
+$g->send(true);
+echo $g->current(), "|";
+$g->send(false);"#
+        ),
+        "a|1,w0|w1,w1|end",
+    );
+}
+
 /// Verifies a `return` inside a `finally` that follows a yielding `try` lowers and wins.
 ///
 /// `php -n` 8.5.6 prints `12`: the `finally` return replaces the `try` return value.

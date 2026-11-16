@@ -591,6 +591,38 @@ impl Lowering {
         Ok(())
     }
 
+    /// Emits the steps a condition needs and returns the expression the jump tests.
+    ///
+    /// A condition that IS a yield, or assigns one to a variable (`if (yield $x)`,
+    /// `while ($chunk = yield $next)`), suspends in a step of its own and is then tested through
+    /// the variable that received the sent value. A yield buried deeper in the condition has no
+    /// step to carry it and is refused here, where the construct can be named, instead of
+    /// reaching the evaluator as a call to an undefined function.
+    fn lower_condition(&mut self, condition: &EvalExpr) -> Result<EvalExpr, EvalStatus> {
+        if !expression_contains_yield(condition) {
+            return Ok(condition.clone());
+        }
+        let is_yield = |expr: &EvalExpr| {
+            matches!(expr, EvalExpr::Call { name, .. }
+                if name == EVAL_YIELD_INTRINSIC || name == EVAL_YIELD_FROM_INTRINSIC)
+        };
+        match condition {
+            expr if is_yield(expr) => {
+                let slot = EVAL_GENERATOR_SENT_SLOT.to_string();
+                self.lower_yield_expr(expr, Some(slot.clone()))?;
+                Ok(EvalExpr::LoadVar(slot))
+            }
+            EvalExpr::Assign { target, value } if is_yield(value) => {
+                let EvalExpr::LoadVar(name) = target.as_ref() else {
+                    return Err(EvalStatus::UnsupportedConstruct);
+                };
+                self.lower_yield_expr(value, Some(name.clone()))?;
+                Ok(EvalExpr::LoadVar(name.clone()))
+            }
+            _ => Err(EvalStatus::UnsupportedConstruct),
+        }
+    }
+
     /// Lowers `if`/`else` into a conditional jump around each branch.
     fn lower_if(
         &mut self,
@@ -598,9 +630,10 @@ impl Lowering {
         then_branch: &[EvalStmt],
         else_branch: &[EvalStmt],
     ) -> Result<(), EvalStatus> {
+        let condition = self.lower_condition(condition)?;
         let branch_patch = self.steps.len();
         self.steps.push(EvalGeneratorStep::JumpIfFalse {
-            condition: condition.clone(),
+            condition,
             target: usize::MAX,
         });
         self.lower_statements(then_branch)?;
@@ -626,9 +659,10 @@ impl Lowering {
         body: &[EvalStmt],
     ) -> Result<(), EvalStatus> {
         let top = self.steps.len();
+        let condition = self.lower_condition(condition)?;
         let exit_patch = self.steps.len();
         self.steps.push(EvalGeneratorStep::JumpIfFalse {
-            condition: condition.clone(),
+            condition,
             target: usize::MAX,
         });
         self.loops.push(LoopLabels {
@@ -660,13 +694,15 @@ impl Lowering {
         });
         self.lower_statements(body)?;
         let test = self.steps.len();
+        let condition = self.lower_condition(condition)?;
+        let test_jump = self.steps.len();
         self.steps.push(EvalGeneratorStep::JumpIfFalse {
-            condition: condition.clone(),
+            condition,
             target: usize::MAX,
         });
         self.steps.push(EvalGeneratorStep::Jump(top));
         let after = self.steps.len();
-        self.patch_jump(test, after);
+        self.patch_jump(test_jump, after);
         self.close_loop(test, after);
         Ok(())
     }
@@ -683,14 +719,18 @@ impl Lowering {
             self.steps.push(EvalGeneratorStep::Run(init.to_vec()));
         }
         let top = self.steps.len();
-        let exit_patch = condition.map(|condition| {
-            let patch = self.steps.len();
-            self.steps.push(EvalGeneratorStep::JumpIfFalse {
-                condition: condition.clone(),
-                target: usize::MAX,
-            });
-            patch
-        });
+        let exit_patch = match condition {
+            Some(condition) => {
+                let condition = self.lower_condition(condition)?;
+                let patch = self.steps.len();
+                self.steps.push(EvalGeneratorStep::JumpIfFalse {
+                    condition,
+                    target: usize::MAX,
+                });
+                Some(patch)
+            }
+            None => None,
+        };
         self.loops.push(LoopLabels {
             continue_patches: Vec::new(),
             break_patches: Vec::new(),
