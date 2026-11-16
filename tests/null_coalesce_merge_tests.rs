@@ -140,10 +140,13 @@ fn assert_program_output(prefix: &str, source: &str, expected: &str) {
 /// undefined-key warning while a plain read must still raise it, and the difference is only
 /// visible on the combined streams. The two streams are captured separately, so `expected`
 /// carries the program's whole stdout first and its whole stderr after — not the interleaving
-/// a terminal would show.
+/// a terminal would show. `{file}` in `expected` stands for the canonical source path a warning
+/// names in php's ` in FILE on line N` tail.
 fn assert_program_output_with_warnings(prefix: &str, source: &str, expected: &str) {
     let dir = make_test_dir(prefix);
     let bin = compile(&dir, source, prefix);
+    let source_path = fs::canonicalize(dir.join(format!("{prefix}.php"))).expect("canonical source path");
+    let expected = expected.replace("{file}", &source_path.display().to_string());
     let output = Command::new(&bin)
         .output()
         .expect("failed to run compiled binary");
@@ -308,7 +311,8 @@ fn warned_float_miss_keeps_its_zero_value_shape() {
 function raw(string $k) { $m = ["a" => 1.5]; return $m[$k]; }
 var_dump(raw("zz"));
 "#,
-        "float(0)\nWarning: Undefined array key \"zz\"\n",
+        // php -n 8.5.10 names the read's file and line 2 in the warning.
+        "float(0)\nWarning: Undefined array key \"zz\" in {file} on line 2\n",
     );
 }
 
