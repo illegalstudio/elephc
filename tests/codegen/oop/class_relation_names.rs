@@ -486,3 +486,30 @@ echo probe($argv[1] ?? 'Dyn');
     );
     assert_eq!(out, ["yy nnnnnn\n", "yn nnnnnn\n"]);
 }
+
+/// A closure created inside `eval()` is a Closure too: boxed in a Mixed it is an eval object
+/// (runtime tag 6) that only the eval bridge knows as a `Closure`, and a runtime call into a
+/// `callable` parameter wraps it in an eval callback adapter. An eval invokable object is an
+/// object but no Closure, and a function name is neither. Expected output measured with
+/// php 8.5.12.
+#[test]
+fn test_eval_closure_keeps_its_closure_identity() {
+    let out = compile_and_run_per_argv(
+        r#"<?php
+function yn(bool $b): string { return $b ? "y" : "n"; }
+function c(callable $f, string $t): string { return yn(is_a($f, 'Closure')) . yn($f instanceof Closure) . yn(is_object($f)) . yn(is_a($f, $t)); }
+function cm(callable $f, string $t): string { return m($f, $t); }
+function m(mixed $v, string $t): string { return yn(is_a($v, 'Closure')) . yn($v instanceof Closure) . yn(is_object($v)) . yn(is_a($v, $t)); }
+$t = $argv[1] ?? 'Closure';
+$e = eval('return function () { return 1; };');
+$i = eval('class EvInv { public function __invoke() { return 2; } } return new EvInv();');
+$cn = $argv[2] ?? "c"; $cmn = $argv[3] ?? "cm";
+echo $cn($e, $t), " ", $cmn($e, $t), " ", m($e, $t), " | ", $cn($i, $t), " ", $cmn($i, $t), " ", m($i, $t), " | ", $cn('strlen', $t), " ", $cmn('strlen', $t), "\n";
+"#,
+        &[&[], &["Other"]],
+    );
+    assert_eq!(out, [
+        "yyyy yyyy yyyy | nnyn nnyn nnyn | nnnn nnnn\n",
+        "yyyn yyyn yyyn | nnyn nnyn nnyn | nnnn nnnn\n",
+    ]);
+}
