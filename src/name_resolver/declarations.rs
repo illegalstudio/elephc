@@ -86,6 +86,11 @@ fn resolve_type_params(
                         .map(|(name, ty)| (name.clone(), resolve(ty)))
                         .collect(),
                     return_type: hint.return_type.as_ref().map(resolve),
+                    member_returns: hint
+                        .member_returns
+                        .iter()
+                        .map(|(method, ty)| (method.clone(), resolve(ty)))
+                        .collect(),
                 }
             }),
         })

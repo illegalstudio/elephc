@@ -3798,3 +3798,58 @@ fn test_docblock_union_annotation_does_not_replace_a_native_hint() {
         assert!(error.contains(expected), "{declarations}: {error}");
     }
 }
+
+/// A dispatched method erased for a PHPDoc class template gets back the native return type the
+/// template took over (`@return T` on `: object` or `: array`), so it still implements its
+/// interface or overrides its parent, and still refuses a value php-src would not return.
+#[test]
+fn test_docblock_class_template_erased_method_keeps_its_native_return_type() {
+    let out = compile_and_run(
+        r#"<?php
+class User {}
+interface Sink { public function fetch(): object; }
+/** @template T */
+class Bin implements Sink {
+    /** @var T */
+    public object $value;
+    /** @param T $v */
+    public function __construct(object $v) { $this->value = $v; }
+    /** @return T */
+    public function fetch(): object { return $this->value; }
+}
+class Base { public function fetch(): object { return new stdClass(); } }
+/** @template T */
+class Derived extends Base {
+    /** @var T */
+    public object $value;
+    /** @param T $v */
+    public function __construct(object $v) { $this->value = $v; }
+    /** @return T */
+    public function fetch(): object { return $this->value; }
+}
+interface Rows { public function all(): array; }
+/** @template T */
+class Table implements Rows {
+    /** @return T */
+    public function all(): array { return [1, 2]; }
+}
+echo get_class((new Bin(new User()))->fetch()), "|", get_class((new Derived(new User()))->fetch()),
+    "|", gettype((new Table())->all());
+"#,
+    );
+    assert_eq!(out, "User|User|array");
+    let error = compile_cli_file_with_flags_expect_failure(
+        r#"<?php
+/** @template T */
+class Box {
+    /** @return T */
+    public function fetch(): object { return "nope"; }
+}
+class Child extends Box {
+    public function fetch(): object { return new stdClass(); }
+}
+"#,
+        &[],
+    );
+    assert!(error.contains("return type expects object, got string"), "{error}");
+}

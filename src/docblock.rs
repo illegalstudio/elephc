@@ -1097,6 +1097,7 @@ mod tests {
                 ty: named(ty),
                 params: params.iter().map(|(name, ty)| (name.to_string(), ty.clone())).collect(),
                 return_type,
+                member_returns: Vec::new(),
             })
         };
         let StmtKind::ClassDecl { methods, .. } = &program[0].kind else {

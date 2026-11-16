@@ -284,6 +284,19 @@ fn erase_in(stmts: &mut [Stmt], dispatched: &BTreeSet<(String, String)>) {
                         erase_method(method, &[]);
                     }
                     if is_dispatched && !doc_class_params.is_empty() {
+                        // The return type a class template took over comes back before the
+                        // erasure, which would otherwise leave the method without one.
+                        let native_return = generics
+                            .iter()
+                            .flat_map(|g| g.type_params.iter())
+                            .filter(|param| param.from_docblock)
+                            .filter_map(|param| param.native_hint.as_ref())
+                            .flat_map(|hint| hint.member_returns.iter())
+                            .find(|(name, _)| name.eq_ignore_ascii_case(&method.name))
+                            .map(|(_, native)| native.clone());
+                        if native_return.is_some() {
+                            method.return_type = native_return;
+                        }
                         erase_method(method, &doc_class_params);
                     }
                 }
@@ -305,10 +318,12 @@ fn erase_in(stmts: &mut [Stmt], dispatched: &BTreeSet<(String, String)>) {
 /// `Model $m` is `Model $m` again, and `@return T` on `: Model` is `: Model`. A parameter the
 /// same template annotates without a native hint stays untyped.
 ///
-/// A CLASS template's positions are not restored. The instantiation keeps the template's
+/// A CLASS template's parameters are not restored. The instantiation keeps the template's
 /// properties at the type argument (`Bin<User>::$value` is a `User`), and a body that stores an
 /// erased parameter there (`$this->value = $v`) only checks while that parameter is untyped: a
-/// restored `object $v` is not a `User`, and php-src runs the method.
+/// restored `object $v` is not a `User`, and php-src runs the method. Its return type is
+/// restored by `erase_in` (a `User` is a legal `object` return), which is what keeps the method
+/// compatible with the interface or parent method it implements.
 fn erase_method(method: &mut ClassMethod, class_params: &[String]) {
     for hint in method.type_params.iter().filter_map(|param| param.native_hint.as_ref()) {
         for (name, native) in &hint.params {

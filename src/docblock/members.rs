@@ -325,6 +325,7 @@ pub(super) fn anchor_native_hints(declared: &[TypeParam], positions: &[Position]
                         .iter()
                         .find(|(name, _)| name.is_none())
                         .map(|(_, native)| (*native).clone()),
+                    member_returns: Vec::new(),
                 });
             TypeParam { native_hint, ..param.clone() }
         })
@@ -337,9 +338,9 @@ pub(super) fn anchor_native_hints(declared: &[TypeParam], positions: &[Position]
 /// `@var` of each property and the `@param`/`@return` of each method that adopts annotations.
 /// A class template has one type argument per instantiation, so one hint must speak for all of
 /// them. Only a loosely enforced hint qualifies: a class hint (`Model $m`) is never handed to a
-/// class template, bounded or not. The per-position record stays empty, because a dispatched
-/// method erased for a class template is not given its hints back (see
-/// `crate::generics::erasure`).
+/// class template, bounded or not. Of the positions, only the return types it took over are
+/// recorded (`NativeHint::member_returns`): a dispatched method erased for a class template
+/// gets its return type back and nothing else (see `crate::generics::erasure`).
 fn anchor_class_hints(
     class_templates: &mut [TypeParam],
     properties: &[ClassProperty],
@@ -386,13 +387,27 @@ fn anchor_class_hints(
         .collect();
     let anchored = anchor_native_hints(&unbounded, &positions);
     for (param, anchored) in class_templates.iter_mut().zip(anchored) {
-        if param.from_docblock {
-            param.native_hint = anchored.native_hint.map(|hint| NativeHint {
-                ty: hint.ty,
-                params: Vec::new(),
-                return_type: None,
-            });
+        if !param.from_docblock {
+            continue;
         }
+        param.native_hint = anchored.native_hint.map(|hint| {
+            let member_returns = methods
+                .iter()
+                .filter(|method| method.type_params.is_empty() && method.has_body)
+                .filter_map(|method| {
+                    let block = blocks.get(&(method.span.line, method.span.col))?;
+                    let own: &[TypeParam] =
+                        if block.declares_generics() { &block.type_params } else { &[] };
+                    let annotated = block.return_type.as_ref()?;
+                    let native = method.return_type.as_ref()?;
+                    (direct_template(annotated, own).is_none()
+                        && direct_template(annotated, std::slice::from_ref(param)).is_some()
+                        && hint_covers(&hint.ty, strip_nullable(native)))
+                    .then(|| (method.name.to_ascii_lowercase(), native.clone()))
+                })
+                .collect();
+            NativeHint { ty: hint.ty, params: Vec::new(), return_type: None, member_returns }
+        });
     }
 }
 

@@ -72,6 +72,9 @@ pub struct NativeHint {
     /// The native return type as written, when a function or method type parameter took it
     /// over too.
     pub return_type: Option<TypeExpr>,
+    /// For a CLASS type parameter: the methods (by lowercased name) whose native return type
+    /// it took over, each with that type as written.
+    pub member_returns: Vec<(String, TypeExpr)>,
 }
 
 impl PartialEq for TypeParam {
