@@ -19,6 +19,10 @@
 //! - The last segment is unguarded and the loop exits from inside it. By then the state is
 //!   zero or one of that segment's own labels, and termination analysis sees a function whose
 //!   last segment returns as returning on every path.
+//! - A jump is pending from its state store until it arrives at its label. Only `finally`
+//!   bodies and destructors run in between, and one that throws cancels the jump, as in PHP.
+//!   Every `catch` body therefore starts by zeroing the state: the exception it caught may have
+//!   left a cancelled jump's label number behind, which would make later guards skip code.
 //! - `frames` mirrors the `break`/`continue` levels open at the statement being rewritten, the
 //!   program's own and the synthesized ones, so every level count is computed, never guessed.
 //! - Function and class declarations are moved out in front of their loop: this compiler does
@@ -33,7 +37,9 @@ use crate::parser::ast::{Expr, ExprKind, Stmt, StmtKind};
 use crate::span::Span;
 use crate::termination::{block_terminal_effect, TerminalEffect};
 
-use super::plan::{child_blocks_mut, opens_loop_level, BlockId, Dispatch, Plan, Unsupported};
+use super::plan::{
+    child_blocks_mut, opens_loop_level, BlockId, Dispatch, Plan, Unsupported, Via,
+};
 use super::build::{resume_guard, Origin};
 
 /// One `break`/`continue` level open around the statement being rewritten.
@@ -100,6 +106,14 @@ impl Rewriter<'_> {
         let island = self.plan.blocks[block].island;
         let fresh = self.fresh_state_local;
         self.state_locals.entry(island).or_insert_with(fresh).clone()
+    }
+
+    /// Returns whether any jump of the island `block` belongs to goes through the state local.
+    fn island_uses_state(&self, block: BlockId) -> bool {
+        let island = self.plan.blocks[block].island;
+        self.plan.labels.iter().any(|label| {
+            label.top.is_some() && label.uses_state && self.plan.blocks[label.block].island == island
+        })
     }
 
     /// Rewrites one statement list.
@@ -248,7 +262,13 @@ impl Rewriter<'_> {
                         .children
                         .get(&(block, index, slot))
                         .expect("the scan recorded every child block");
-                    *child = self.block(child_id, std::mem::take(child));
+                    let mut body = self.block(child_id, std::mem::take(child));
+                    if self.plan.blocks[child_id].via == Via::Catch && self.island_uses_state(child_id) {
+                        // A caught exception cancelled whatever jump was on its way.
+                        let state = self.state_local(child_id);
+                        body.insert(0, origin.assign_state(&state, 0));
+                    }
+                    *child = body;
                 }
                 if opens_level {
                     self.frames.pop();

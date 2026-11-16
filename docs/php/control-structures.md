@@ -448,7 +448,9 @@ The rules are PHP's, with PHP's diagnostics:
   `finally` block is allowed.
 
 Leaving a `try` block with `goto` runs its `finally` block first, as `break` and
-`return` do, and leaving a `foreach` releases its iterator. A jump may land
+`return` do, and leaving a `foreach` releases its iterator. A `finally` block
+that throws on the way cancels the jump, and execution continues from the
+`catch` that handles the exception. A jump may land
 inside an `if`/`elseif`/`else` branch or inside a `try` body. The branch
 condition is not evaluated, and a `try` body entered this way is still covered
 by its `catch` and `finally` clauses. A variable whose assignment the jump

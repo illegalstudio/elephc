@@ -519,6 +519,36 @@ fn test_goto_independent_jumps_in_two_namespaces() {
     assert_eq!(out, "ABA");
 }
 
+/// Verifies a jump an exception cancels does not stay pending: a `finally` that throws while
+/// the jump leaves its `try` replaces the jump, and the code after the `catch` that handles
+/// the exception runs in source order instead of being skipped up to the jump's label.
+#[test]
+fn test_goto_cancelled_by_throwing_finally() {
+    let out = compile_and_run(
+        r#"<?php
+        goto start;
+        pad:
+        goto end;
+        start:
+        try {
+            try {
+                goto end;
+            } finally {
+                throw new Exception("x");
+            }
+        } catch (Exception $e) {
+            echo "caught ";
+        }
+        other:
+        echo "other ";
+        if ($argc < 0) goto other;
+        end:
+        echo "end";
+        "#,
+    );
+    assert_eq!(out, "caught other end");
+}
+
 /// Verifies a jump inside a braced `namespace` block is lowered inside that block, which keeps
 /// resolving its own names.
 #[test]

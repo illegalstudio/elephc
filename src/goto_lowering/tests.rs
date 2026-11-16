@@ -35,6 +35,20 @@ fn any_stmt(stmts: &[Stmt], test: &dyn Fn(&StmtKind) -> bool) -> bool {
     })
 }
 
+/// Returns the first statement of the first `catch` body found in `stmts`, at any depth.
+fn first_stmt_of_first_catch(stmts: &[Stmt]) -> Option<&StmtKind> {
+    stmts.iter().find_map(|stmt| {
+        if let StmtKind::Try { catches, .. } = &stmt.kind {
+            if let Some(clause) = catches.first() {
+                return clause.body.first().map(|first| &first.kind);
+            }
+        }
+        plan::child_blocks(&stmt.kind)
+            .into_iter()
+            .find_map(|(_, body)| first_stmt_of_first_catch(body))
+    })
+}
+
 /// Asserts no jump or label survives lowering anywhere in `program`.
 fn assert_fully_lowered(program: &[Stmt]) {
     assert!(!any_stmt(program, &|kind| matches!(
@@ -170,6 +184,21 @@ fn reports_out_of_range_breaks_with_the_written_level() {
         error("<?php while ($argc > 9) { again: continue 3; goto again; }"),
         "Cannot 'continue' 3 levels"
     );
+}
+
+/// Verifies a `catch` body starts by zeroing the jump state when the scope's jumps use it, and
+/// is left as written when they are bare `continue`s.
+#[test]
+fn catch_bodies_clear_a_cancelled_jump() {
+    let stateful = lower(
+        "<?php goto b; a: echo 1; b: try { goto a; } catch (Exception $e) { echo 2; }",
+    )
+    .expect("lowers");
+    assert!(matches!(first_stmt_of_first_catch(&stateful), Some(StmtKind::Assign { .. })));
+
+    let stateless =
+        lower("<?php a: try { goto a; } catch (Exception $e) { echo 2; }").expect("lowers");
+    assert!(matches!(first_stmt_of_first_catch(&stateless), Some(StmtKind::Echo(_))));
 }
 
 /// Verifies a jump into an `if` branch guards the condition with the pending label.

@@ -57,6 +57,13 @@ pub(in crate::interpreter) fn execute_statements(
 }
 
 /// Propagates control flow while skipping only templates already hoisted at program entry.
+///
+/// PHP binds the functions declared at the top level of a file when it compiles the file, so a
+/// jump can neither skip such a declaration nor run it twice. This interpreter declares a
+/// function when its statement executes. The first jump of the program's own statement list
+/// therefore declares the functions that have not been reached yet, and the resumed execution
+/// treats every top-level function declaration as already done. Declarations inside a block
+/// stay tied to that block, as in PHP.
 fn execute_statement_sequence(
     statements: &[EvalStmt],
     templates_registered: bool,
@@ -64,12 +71,17 @@ fn execute_statement_sequence(
     scope: &mut ElephcEvalScope,
     values: &mut impl RuntimeValueOps,
 ) -> Result<EvalControl, EvalStatus> {
-    for stmt in statements {
+    for (index, stmt) in statements.iter().enumerate() {
         eval_pcntl_maybe_dispatch(context, values)?;
         if templates_registered && matches!(stmt, EvalStmt::GenericDecl(_)) { continue; }
         match execute_stmt(stmt, context, scope, values)? {
             EvalControl::None => {}
             EvalControl::Goto(label) => {
+                if templates_registered {
+                    for later in &statements[index + 1..] {
+                        declare_function(later, context)?;
+                    }
+                }
                 return resume_statement_sequence(
                     statements, templates_registered, label, context, scope, values,
                 );
@@ -78,6 +90,48 @@ fn execute_statement_sequence(
         }
     }
     Ok(EvalControl::None)
+}
+
+/// Registers the function a `FunctionDecl` statement declares. Any other statement is ignored.
+///
+/// Runs when the statement executes, and ahead of time for the top-level declarations a jump
+/// would otherwise skip or repeat (see `execute_statement_sequence`).
+fn declare_function(stmt: &EvalStmt, context: &mut ElephcEvalContext) -> Result<(), EvalStatus> {
+    let EvalStmt::FunctionDecl {
+        name,
+        source_location,
+        attributes,
+        params,
+        parameter_attributes,
+        parameter_types,
+        parameter_defaults,
+        parameter_is_by_ref,
+        parameter_is_variadic,
+        return_type,
+        body,
+    } = stmt
+    else {
+        return Ok(());
+    };
+    let key = name.to_ascii_lowercase();
+    validate_eval_core_attribute_targets(attributes, 2)?;
+    for attributes in parameter_attributes { validate_eval_core_attribute_targets(attributes, 32)?; }
+    if context.generic_function_template(name).is_some() { return Err(EvalStatus::RuntimeFatal); }
+    let mut function = EvalFunction::new(name.clone(), params.clone(), body.clone())
+        .with_attributes(attributes.clone())
+        .with_parameter_attributes(parameter_attributes.clone())
+        .with_parameter_types(parameter_types.clone())
+        .with_parameter_defaults(parameter_defaults.clone())
+        .with_parameter_by_ref_flags(parameter_is_by_ref.clone())
+        .with_parameter_variadic_flags(parameter_is_variadic.clone())
+        .with_return_type(return_type.clone());
+    if let Some(source_location) = source_location {
+        function = function.with_source_location(*source_location);
+    }
+    super::super::bytecode::attach_simple_body(&mut function);
+    context
+        .define_function(key, function)
+        .map_err(|_| EvalStatus::RuntimeFatal)
 }
 
 /// Executes `statements` starting at the label a jump is on its way to.
@@ -124,7 +178,10 @@ fn resume_statement_sequence(
         eval_pcntl_maybe_dispatch(context, values)?;
         let control = match pending.take() {
             Some(label) => execute_stmt_from_label(stmt, label, context, scope, values)?,
-            None if templates_registered && matches!(stmt, EvalStmt::GenericDecl(_)) => {
+            // Hoisted at program entry, or declared when the first jump was raised.
+            None if templates_registered
+                && matches!(stmt, EvalStmt::GenericDecl(_) | EvalStmt::FunctionDecl { .. }) =>
+            {
                 EvalControl::None
             }
             None => execute_stmt(stmt, context, scope, values)?,
@@ -257,38 +314,8 @@ pub(in crate::interpreter) fn execute_stmt(
             scope,
             values,
         ),
-        EvalStmt::FunctionDecl {
-            name,
-            source_location,
-            attributes,
-            params,
-            parameter_attributes,
-            parameter_types,
-            parameter_defaults,
-            parameter_is_by_ref,
-            parameter_is_variadic,
-            return_type,
-            body,
-        } => {
-            let key = name.to_ascii_lowercase();
-            validate_eval_core_attribute_targets(attributes, 2)?;
-            for attributes in parameter_attributes { validate_eval_core_attribute_targets(attributes, 32)?; }
-            if context.generic_function_template(name).is_some() { return Err(EvalStatus::RuntimeFatal); }
-            let mut function = EvalFunction::new(name.clone(), params.clone(), body.clone())
-                .with_attributes(attributes.clone())
-                .with_parameter_attributes(parameter_attributes.clone())
-                .with_parameter_types(parameter_types.clone())
-                .with_parameter_defaults(parameter_defaults.clone())
-                .with_parameter_by_ref_flags(parameter_is_by_ref.clone())
-                .with_parameter_variadic_flags(parameter_is_variadic.clone())
-                .with_return_type(return_type.clone());
-            if let Some(source_location) = source_location {
-                function = function.with_source_location(*source_location);
-            }
-            super::super::bytecode::attach_simple_body(&mut function);
-            context
-                .define_function(key, function)
-                .map_err(|_| EvalStatus::RuntimeFatal)?;
+        EvalStmt::FunctionDecl { .. } => {
+            declare_function(stmt, context)?;
             Ok(EvalControl::None)
         }
         EvalStmt::Global { vars } => {

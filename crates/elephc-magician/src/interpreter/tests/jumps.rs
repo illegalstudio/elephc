@@ -32,6 +32,23 @@ fn execute_program_goto_backward_jump_repeats_code() {
     assert_eq!(output, "012|done");
 }
 
+/// Verifies a top-level function a forward jump skips is still declared, as PHP binds it when
+/// it compiles the fragment.
+#[test]
+fn execute_program_goto_forward_jump_keeps_skipped_function_declared() {
+    let output = run(br#"goto L; function f() { return "ok"; } L: echo f();"#);
+    assert_eq!(output, "ok");
+}
+
+/// Verifies a backward jump across a top-level function declaration does not declare it twice.
+#[test]
+fn execute_program_goto_backward_jump_across_function_declaration() {
+    let output = run(
+        br#"$i = 0; again: function f() { return "f"; } echo f(); $i = $i + 1; if ($i < 2) { goto again; } echo "|done";"#,
+    );
+    assert_eq!(output, "ff|done");
+}
+
 /// Verifies a forward jump skips the statements before its label.
 #[test]
 fn execute_program_goto_forward_jump_skips_code() {
