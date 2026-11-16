@@ -91,7 +91,7 @@ pub(in crate::codegen::lower_inst) fn lower_object_new(ctx: &mut FunctionContext
             )));
         }
         let property_initialization =
-            collect_property_initialization(ctx.module, &class_name, class_info, inst);
+            collect_property_initialization(ctx.module, &class_name, class_info, inst.op.name());
         let mut initialize_inherited_builtin_throwable = false;
         // A private constructor is not inherited, so a descendant of a class that declares one
         // carries no `__construct` entry of its own. PHP still instantiates it through that

@@ -106,6 +106,16 @@ pub(crate) struct SharedCodegenState {
     pub(super) reflection_constant_values: std::cell::RefCell<
         crate::fast_hash::FastMap<(String, String, bool), Option<Box<dyn std::any::Any + Send>>>,
     >,
+    /// The classes a `new $c(…)` can name, in class-id order: every site's ladder and refusals
+    /// walk them, and sorting the class table per site was most of a site's cost.
+    pub(super) dynamic_new_aot_classes: std::cell::OnceCell<std::sync::Arc<Vec<String>>>,
+    /// The dynamic-new class candidates of each `new $c(…)` arity, in class-id order: all but the
+    /// site's argument types, so the sites of one arity share them
+    /// (`dynamic_mixed_candidates::dynamic_new_mixed_candidates`). Type-erased: the candidate type
+    /// is private to the object lowering.
+    pub(super) dynamic_new_class_candidates: std::cell::RefCell<
+        crate::fast_hash::FastMap<Option<usize>, std::sync::Arc<dyn std::any::Any + Send + Sync>>,
+    >,
     /// How the class scopes share the named property helpers, per (is a write, property name):
     /// a whole-program fact each site of a name asked again (`named_helper_scope`).
     named_helper_scopes: std::cell::RefCell<
@@ -797,6 +807,8 @@ impl SharedCodegenState {
             class_like_names: Default::default(),
             reflection_constant_values: Default::default(),
             named_helper_scopes: Default::default(),
+            dynamic_new_aot_classes: std::cell::OnceCell::new(),
+            dynamic_new_class_candidates: Default::default(),
             class_descendants: std::cell::OnceCell::new(),
             class_ancestors: std::cell::OnceCell::new(),
             instance_target_split: std::cell::OnceCell::new(),

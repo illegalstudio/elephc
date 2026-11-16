@@ -14,7 +14,7 @@ pub(super) fn collect_property_initialization(
     module: &crate::ir::Module,
     class_name: &str,
     class_info: &ClassInfo,
-    inst: &Instruction,
+    op_name: &str,
 ) -> PropertyInitialization {
     if class_info.deferred_property_default_error.is_some() {
         return PropertyInitialization::Thunk {
@@ -61,7 +61,7 @@ pub(super) fn collect_property_initialization(
             &format!("property {}::${}", class_name, property),
             php_type,
             &resolved,
-            inst.op.name(),
+            op_name,
         ) else {
             // No literal form (an array of enum cases, a constant this path cannot fold): the
             // class initializer is ordinary EIR and preserves lazy branches in constant

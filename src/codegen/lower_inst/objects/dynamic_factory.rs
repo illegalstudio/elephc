@@ -85,15 +85,59 @@ pub(super) fn dynamic_new_candidate(
     arg_count: Option<usize>,
     inst: &Instruction,
 ) -> Result<Option<DynamicNewCandidate>> {
+    let Some(class_candidate) =
+        dynamic_new_class_candidate(ctx, class_name, class_info, arg_count, inst.op.name())
+    else {
+        return Ok(None);
+    };
+    Ok(class_candidate.for_site(ctx, inst)?.then_some(class_candidate.candidate))
+}
+
+/// A dynamic-new candidate as far as its class and the site's arity decide it: everything but the
+/// site's argument types, so a program's `new $c(…)` sites of one arity share it
+/// (`dynamic_mixed_candidates::dynamic_new_mixed_candidates`).
+#[derive(Clone)]
+pub(super) struct ClassCandidate {
+    pub(super) candidate: DynamicNewCandidate,
+    /// The constructor's declared parameters must still accept what the site passes.
+    check_site_arguments: bool,
+}
+
+impl ClassCandidate {
+    /// Whether the site's arguments leave this class a candidate: a declared parameter that
+    /// cannot hold what the site passes means PHP raises a `TypeError` before the body runs, so
+    /// the class can never be what this site builds.
+    ///
+    /// Symfony's `Router::getMatcher` is the shape — `new $this->options['matcher_class'](
+    /// $routes, $this->context)` passes a `RequestContext` object, and a class whose second
+    /// constructor parameter is `?int` turned that into a hard
+    /// "conversion from Object(...) to TaggedScalar" for a class that site never builds.
+    pub(super) fn for_site(&self, ctx: &FunctionContext<'_>, inst: &Instruction) -> Result<bool> {
+        let Some(target) = self.candidate.constructor_impl.as_ref().filter(|_| self.check_site_arguments) else {
+            return Ok(true);
+        };
+        Ok(!dynamic_new_param_refuses_site_argument(ctx, inst, &target.param_types)?)
+    }
+}
+
+/// [`ClassCandidate`] for `class_name` at `arg_count`; `op_name` only names the instruction in a
+/// property default diagnostic.
+pub(super) fn dynamic_new_class_candidate(
+    ctx: &FunctionContext<'_>,
+    class_name: &str,
+    class_info: &ClassInfo,
+    arg_count: Option<usize>,
+    op_name: &str,
+) -> Option<ClassCandidate> {
     if let Some(arg_count) = arg_count {
         if let Some(candidate) =
             spl_runtime_storage_dynamic_new_candidate(class_name, class_info, arg_count)
         {
-            return Ok(Some(candidate));
+            return Some(ClassCandidate { candidate, check_site_arguments: false });
         }
     }
     if class_interfaces_require_missing_method_symbols(ctx, class_name, class_info) {
-        return Ok(None);
+        return None;
     }
     let constructor_key = php_symbol_key("__construct");
     let mut padding_thunk = None;
@@ -128,7 +172,7 @@ pub(super) fn dynamic_new_candidate(
                     arg_count,
                 );
                 if !ctx.module.has_function_named(&thunk) {
-                    return Ok(None);
+                    return None;
                 }
                 padding_thunk = Some(thunk);
             }
@@ -137,7 +181,7 @@ pub(super) fn dynamic_new_candidate(
             .and_then(|(_, info)| info.method_impl_classes.get(&constructor_key).cloned())
             .unwrap_or_else(|| owner_name.to_string());
         if !class_method_already_emitted(ctx, &impl_class, &constructor_key, false) {
-            return Ok(None);
+            return None;
         }
         // When a thunk pads the call, the SITE's arity is what gets materialized — the thunk
         // itself supplies the rest — so the parameter list is truncated to what is passed.
@@ -156,7 +200,7 @@ pub(super) fn dynamic_new_candidate(
             })
             .collect::<Option<Vec<_>>>()
         else {
-            return Ok(None);
+            return None;
         };
         let ref_params = (0..materialized)
             .map(|index| constructor.ref_params.get(index).copied().unwrap_or(false))
@@ -172,24 +216,15 @@ pub(super) fn dynamic_new_candidate(
         // cannot supply the element type as-is drops the class from the ladder, which is a MISSING
         // constructor call — the behaviour this class had before the thunk existed — rather than a
         // fabricated integer.
-        // A candidate whose declared parameter cannot hold what this SITE passes can never be the
-        // runtime class: PHP would raise a `TypeError` before the body ran. Dropping it from the
-        // ladder is the same judgement `dynamic_new_uncastable_collector` makes just below, and
-        // without it one unrelated class in the program decided the whole construction site.
-        // Symfony's `Router::getMatcher` is the shape — `new $this->options['matcher_class'](
-        // $routes, $this->context)` passes a `RequestContext` object, and a class whose second
-        // constructor parameter is `?int` turned that into a hard
-        // "conversion from Object(...) to TaggedScalar" for a class that site never builds.
-        if dynamic_new_param_refuses_site_argument(ctx, inst, &param_types)? {
-            return Ok(None);
-        }
+        // Whether the declared parameters can hold what a SITE passes is the site's own question
+        // (`ClassCandidate::for_site`); everything here is the class's and the arity's.
         if padding_thunk.is_some()
             && dynamic_new_uncastable_collector(constructor, materialized).is_some()
         {
             // NOT constructed, and NOT silently dropped either: `dynamic_new_mixed_refusals` asks
             // the same judge and emits a ladder arm that REPORTS. Leaving only this half in place
             // is what made `new $c("x")` on `int ...$r` answer with a constructor-less object.
-            return Ok(None);
+            return None;
         }
         Some(ConstructorCallTarget {
             impl_class,
@@ -201,11 +236,12 @@ pub(super) fn dynamic_new_candidate(
     } else if arg_count.is_none_or(|arg_count| arg_count == 0) {
         None
     } else {
-        return Ok(None);
+        return None;
     };
+    let check_site_arguments = constructor_impl.is_some();
     let property_initialization =
-        collect_property_initialization(ctx.module, class_name, class_info, inst);
-    Ok(Some(DynamicNewCandidate {
+        collect_property_initialization(ctx.module, class_name, class_info, op_name);
+    let candidate = DynamicNewCandidate {
         class_name: class_name.to_string(),
         class_id: class_info.class_id,
         property_count: class_info.properties.len(),
@@ -214,7 +250,8 @@ pub(super) fn dynamic_new_candidate(
         owned_reference_property_offsets: owned_reference_property_offsets(class_info),
         property_initialization,
         constructor_impl,
-    }))
+    };
+    Some(ClassCandidate { candidate, check_site_arguments })
 }
 
 /// Builds a dynamic-new candidate that deliberately omits constructor invocation.
@@ -237,7 +274,7 @@ pub(super) fn dynamic_new_without_constructor_candidate(
         return Ok(None);
     }
     let property_initialization =
-        collect_property_initialization(ctx.module, class_name, class_info, inst);
+        collect_property_initialization(ctx.module, class_name, class_info, inst.op.name());
     Ok(Some(DynamicNewCandidate {
         class_name: class_name.to_string(),
         class_id: class_info.class_id,

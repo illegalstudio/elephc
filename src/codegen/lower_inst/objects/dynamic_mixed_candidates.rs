@@ -57,34 +57,77 @@ fn emit_strip_leading_namespace_separator(ctx: &mut FunctionContext<'_>) {
 }
 
 /// Returns AOT dynamic-new candidates in stable class-id order.
+///
+/// What the class and the arity decide is built once per arity for the whole module
+/// ([`dynamic_new_mixed_class_candidates`]); a site only checks its own argument types against
+/// each constructor. Building them per site was a tenth of the Symfony Demo's code generation.
 pub(super) fn dynamic_new_mixed_candidates(
     ctx: &FunctionContext<'_>,
     arg_count: Option<usize>,
     inst: &Instruction,
 ) -> Result<Vec<DynamicNewCandidate>> {
-    let mut candidates = Vec::new();
-    let mut sorted_classes = ctx.module.class_infos.iter().collect::<Vec<_>>();
-    sorted_classes.sort_by_key(|(_, class_info)| class_info.class_id);
-    for (class_name, class_info) in sorted_classes {
-        if !is_dynamic_new_mixed_aot_candidate(class_name) {
-            continue;
-        }
-        if let Some(candidate) =
-            dynamic_new_candidate(ctx, class_name, class_info, arg_count, inst)?
-        {
-            candidates.push(candidate);
+    let classes = dynamic_new_mixed_class_candidates(ctx, arg_count, inst.op.name());
+    let mut candidates = Vec::with_capacity(classes.len());
+    for class_candidate in classes.iter() {
+        if class_candidate.for_site(ctx, inst)? {
+            candidates.push(class_candidate.candidate.clone());
         }
     }
     Ok(candidates)
 }
 
+#[cfg(test)]
+thread_local! {
+    /// The arity of every class candidate list built, in order (`dynamic_new_mixed_class_candidates`).
+    pub(crate) static DYNAMIC_NEW_CANDIDATE_LISTS_BUILT: std::cell::RefCell<Vec<Option<usize>>> =
+        const { std::cell::RefCell::new(Vec::new()) };
+}
+
+/// The module's class candidates at `arg_count`, in class-id order, built on first request.
+fn dynamic_new_mixed_class_candidates(
+    ctx: &FunctionContext<'_>,
+    arg_count: Option<usize>,
+    op_name: &str,
+) -> std::sync::Arc<Vec<super::dynamic_factory::ClassCandidate>> {
+    let cached = ctx.shared.dynamic_new_class_candidates.borrow().get(&arg_count).cloned();
+    if let Some(found) = cached.and_then(|stored| stored.downcast::<Vec<super::dynamic_factory::ClassCandidate>>().ok()) {
+        return found;
+    }
+    #[cfg(test)]
+    DYNAMIC_NEW_CANDIDATE_LISTS_BUILT.with(|lists| lists.borrow_mut().push(arg_count));
+    let built = std::sync::Arc::new(
+        dynamic_new_aot_classes(ctx)
+            .iter()
+            .filter_map(|class_name| {
+                let class_info = ctx.module.class_infos.get(class_name)?;
+                super::dynamic_factory::dynamic_new_class_candidate(ctx, class_name, class_info, arg_count, op_name)
+            })
+            .collect::<Vec<_>>(),
+    );
+    ctx.shared.dynamic_new_class_candidates.borrow_mut().insert(arg_count, built.clone());
+    built
+}
+
+/// The classes a `new $c(…)` can name, in class-id order, sorted once per module.
+fn dynamic_new_aot_classes(ctx: &FunctionContext<'_>) -> std::sync::Arc<Vec<String>> {
+    ctx.shared
+        .dynamic_new_aot_classes
+        .get_or_init(|| {
+            let mut sorted = ctx
+                .module
+                .class_infos
+                .iter()
+                .filter(|(class_name, _)| is_dynamic_new_mixed_aot_candidate(class_name))
+                .collect::<Vec<_>>();
+            sorted.sort_by_key(|(_, class_info)| class_info.class_id);
+            std::sync::Arc::new(sorted.into_iter().map(|(class_name, _)| class_name.clone()).collect())
+        })
+        .clone()
+}
+
 /// Counts the AOT classes that would expand a generic dynamic-new dispatch.
 pub(super) fn dynamic_new_mixed_aot_candidate_count(ctx: &FunctionContext<'_>) -> usize {
-    ctx.module
-        .class_infos
-        .keys()
-        .filter(|class_name| is_dynamic_new_mixed_aot_candidate(class_name))
-        .count()
+    dynamic_new_aot_classes(ctx).len()
 }
 
 /// Returns AOT candidates that can be allocated without constructor dispatch.
@@ -173,15 +216,15 @@ pub(super) fn dynamic_new_mixed_refusals(
     matched: &[String],
 ) -> Vec<DynamicNewRefusal> {
     let constructor_key = php_symbol_key("__construct");
-    let mut sorted_classes = ctx.module.class_infos.iter().collect::<Vec<_>>();
-    sorted_classes.sort_by_key(|(_, class_info)| class_info.class_id);
+    let matched: HashSet<&str> = matched.iter().map(String::as_str).collect();
     let mut refusals = Vec::new();
-    for (class_name, class_info) in sorted_classes {
-        if !is_dynamic_new_mixed_aot_candidate(class_name)
-            || matched.iter().any(|name| name == class_name)
-        {
+    for class_name in dynamic_new_aot_classes(ctx).iter() {
+        if matched.contains(class_name.as_str()) {
             continue;
         }
+        let Some(class_info) = ctx.module.class_infos.get(class_name) else {
+            continue;
+        };
         let Some(constructor) = class_info.methods.get(&constructor_key) else {
             continue;
         };

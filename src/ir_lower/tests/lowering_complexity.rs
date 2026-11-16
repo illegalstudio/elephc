@@ -249,6 +249,51 @@ fn reflection_constants_are_evaluated_once_per_class() {
     assert_eq!(large - small, 18, "{small} evaluations for 2 subclasses, {large} for 20");
 }
 
+/// Eight classes a runtime class name can construct, and `sites` one-argument `new $c(…)` sites.
+fn many_dynamic_new_sites(sites: usize) -> String {
+    let mut source = String::from("<?php\n");
+    for index in 0..8 {
+        source.push_str(&format!(
+            "class D{index} {{ public int $v; public function __construct(int $v) {{ $this->v = $v + {index}; }} }}\n"
+        ));
+    }
+    source.push_str("function make(string $c): int {\n    $n = 0;\n");
+    for index in 0..sites {
+        source.push_str(&format!("    $n += (new $c({index}))->v;\n"));
+    }
+    source.push_str("    return $n;\n}\necho make($argc > 1 ? 'D1' : 'D0'), \"\\n\";\n");
+    source
+}
+
+/// The arity of each dynamic-new class candidate list built while generating code for `source`.
+fn dynamic_new_candidate_lists_built(source: &str) -> Vec<Option<usize>> {
+    // A closed-world build: with the eval bridge in, a site with this many classes defers them all
+    // to it and builds no candidate.
+    crate::closed_world::set_enabled(true);
+    let mut module = lower_source(source);
+    module.closed_world = true;
+    crate::codegen::DYNAMIC_NEW_CANDIDATE_LISTS_BUILT.with(|lists| lists.borrow_mut().clear());
+    let generated = crate::codegen::generate_user_asm_from_ir(&module, false, false);
+    crate::closed_world::set_enabled(false);
+    generated.expect("codegen");
+    crate::codegen::DYNAMIC_NEW_CANDIDATE_LISTS_BUILT.with(|lists| lists.take())
+}
+
+/// What a class and an arity decide about a `new $c(…)` candidate is built once per program: every
+/// site sorted the class table and rebuilt every class's candidate, a tenth of the Symfony Demo's
+/// code generation. The program's own sites and the runtime's dynamic-new helpers share the lists.
+#[test]
+fn dynamic_new_candidates_are_built_once_per_arity() {
+    for sites in [2, 24] {
+        let built = dynamic_new_candidate_lists_built(&many_dynamic_new_sites(sites));
+        assert!(!built.is_empty(), "the fixture no longer builds dynamic-new candidates");
+        let mut arities = built.clone();
+        arities.sort();
+        arities.dedup();
+        assert_eq!(arities.len(), built.len(), "an arity's candidates were built again: {built:?}");
+    }
+}
+
 /// `count` calls of one variadic method name on an untyped receiver.
 fn many_boxed_receiver_variadic_calls(count: usize) -> String {
     let mut source = String::from("<?php\n");

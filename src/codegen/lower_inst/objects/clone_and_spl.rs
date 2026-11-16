@@ -505,7 +505,7 @@ pub(super) fn lower_callback_filter_iterator_new(
             class_info.class_id,
             class_info.properties.len(),
             uninitialized_property_marker_offsets(class_info),
-            collect_property_initialization(ctx.module, class_name, class_info, inst),
+            collect_property_initialization(ctx.module, class_name, class_info, inst.op.name()),
             class_info.property_offsets.get("callbackEnv").copied(),
         )
     };

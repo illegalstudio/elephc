@@ -163,6 +163,7 @@ struct PropertyDefault {
 }
 
 /// Strategy used to initialize a newly allocated object's physical property slots.
+#[derive(Clone)]
 enum PropertyInitialization {
     /// Copy backend-supported literal defaults directly into their slots.
     Inline(Vec<PropertyDefault>),
@@ -194,6 +195,7 @@ impl PropertyInitialization {
 }
 
 /// Concrete class that a dynamic factory can instantiate in this EIR module.
+#[derive(Clone)]
 struct DynamicNewCandidate {
     class_name: String,
     class_id: u64,
@@ -206,6 +208,7 @@ struct DynamicNewCandidate {
 }
 
 /// Constructor metadata needed after object allocation has produced `$this`.
+#[derive(Clone)]
 struct ConstructorCallTarget {
     impl_class: String,
     param_types: Vec<PhpType>,
@@ -244,6 +247,8 @@ pub(crate) use property_resolution::CLASS_DESCENDANT_BUILDS;
 pub(crate) use mixed_property_type_guard::IS_A_INDEX_BUILDS;
 #[cfg(test)]
 pub(crate) use reflection::CLASS_CONSTANT_EVALUATIONS;
+#[cfg(test)]
+pub(crate) use dynamic_mixed_candidates::DYNAMIC_NEW_CANDIDATE_LISTS_BUILT;
 #[cfg(test)]
 pub(crate) use outlined_dynamic_property::NAMED_SCOPE_GROUP_BUILDS;
 pub(in crate::codegen) use outlined_dynamic_property::NamedHelperScopes;

@@ -65,6 +65,8 @@ pub(crate) use lower_inst::IS_A_INDEX_BUILDS;
 #[cfg(test)]
 pub(crate) use lower_inst::CLASS_CONSTANT_EVALUATIONS;
 #[cfg(test)]
+pub(crate) use lower_inst::DYNAMIC_NEW_CANDIDATE_LISTS_BUILT;
+#[cfg(test)]
 pub(crate) use lower_inst::NAMED_SCOPE_GROUP_BUILDS;
 #[cfg(test)]
 pub(crate) use lower_inst::builtins::CLASS_LIKE_NAME_BUILDS;
