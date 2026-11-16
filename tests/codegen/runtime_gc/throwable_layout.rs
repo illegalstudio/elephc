@@ -1,9 +1,22 @@
-//! Purpose: keep Throwable allocation, declared properties and intrinsic getters coherent.
-//! Called from: the runtime GC integration suite.
-//! Key details: protected property writes must not overwrite neighboring heap blocks.
+//! Purpose:
+//! Regression tests keeping Throwable allocation, declared properties and intrinsic getters
+//! coherent: `getFile()`/`getLine()` creation sites for static, dynamic and runtime-included
+//! `new`, writes to the protected `$file`/`$line` fields, and `getPrevious()` after those writes.
+//!
+//! Called from:
+//! - `cargo test` through Rust's test harness (runtime GC integration suite).
+//!
+//! Key details:
+//! - Protected property writes must not overwrite neighboring heap blocks, so tests read
+//!   message, code and previous back after relocating file and line.
+//! - Class names chosen with `$argc` keep `new $class` dynamic so constant folding cannot turn
+//!   it into a static `new`.
 
 use crate::support::*;
 
+/// Verifies a subclass with an extra declared property and a `new $class` of a built-in
+/// exception both record the creating file and line, so `getFile()` equals `__FILE__` and
+/// `getLine()` the `new` line. PHP outputs "file:line:file:line".
 #[test]
 fn test_throwable_layout_declared_and_dynamic_new_record_creation_site() {
     let out = compile_cli_files_and_run(
@@ -24,6 +37,9 @@ echo $dynamic->getFile() === __FILE__ ? 'file' : 'wrong-file', ':',
     assert_eq!(out, "file:line:file:line");
 }
 
+/// Verifies a closure bound to an `Exception` subclass scope can write the protected `file` and
+/// `line` of a `ReflectionException`, and the intrinsic getters then return the new values while
+/// message, code and previous are intact. PHP outputs "message:7:fixture.php:149:none".
 #[test]
 fn test_throwable_layout_bound_closure_updates_source_fields() {
     let out = compile_cli_files_and_run(
@@ -44,6 +60,9 @@ echo $exception->getMessage(), ':', $exception->getCode(), ':',
     assert_eq!(out, "message:7:fixture.php:149:none");
 }
 
+/// Verifies a subclass method rewriting `$this->file` and `$this->line` leaves the chained
+/// previous exception in place: `getPrevious()` is still the same object, whose own message and
+/// code are unchanged. PHP outputs "outer:7:fixture.php:149:same:inner:3".
 #[test]
 fn test_throwable_layout_previous_survives_source_field_writes() {
     let out = compile_cli_files_and_run(
@@ -67,6 +86,10 @@ echo $exception->getMessage(), ':', $exception->getCode(), ':',
     assert_eq!(out, "outer:7:fixture.php:149:same:inner:3");
 }
 
+/// Verifies a `ReflectionException` thrown by the runtime (for a missing class) has the full
+/// Throwable layout: a static subclass method can rewrite its `file` and `line`, and the
+/// message and null previous read back correctly. PHP outputs
+/// `Class "AbsentLayoutFixture0" does not exist:generated.php:149:none`.
 #[test]
 fn test_throwable_layout_generated_reflection_error_has_writable_source_fields() {
     let out = compile_cli_files_and_run(
@@ -91,6 +114,9 @@ try {
     assert_eq!(out, "Class \"AbsentLayoutFixture0\" does not exist:generated.php:149:none");
 }
 
+/// Verifies twelve rounds of creating a chained exception with built message strings, then
+/// replacing its `file` and `line`, release every superseded field and the previous exception:
+/// prints "ok" with a clean heap-debug leak summary.
 #[test]
 fn test_throwable_layout_repeated_owned_fields_are_heap_clean() {
     let out = compile_and_run_with_heap_debug(r#"<?php
@@ -117,6 +143,9 @@ echo 'ok';
     assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
 }
 
+/// Verifies an exception created in a file included through a variable path (run by the
+/// runtime evaluator) records that file and line as its creation site, matching the included
+/// file's `__FILE__` and `__LINE__`. PHP outputs "file:line".
 #[test]
 fn test_throwable_layout_runtime_include_records_creation_site() {
     let out = compile_cli_files_and_run(
@@ -134,6 +163,9 @@ echo $exception->getFile() === __FILE__ ? 'file' : 'wrong-file', ':',
     assert_eq!(out, "file:line");
 }
 
+/// Verifies `file` and `line` assigned in a custom constructor after `parent::__construct()`
+/// survive a dynamic `new $class()`: the creation-site recording must not overwrite them after
+/// the constructor returns. PHP outputs "custom:custom.php:88".
 #[test]
 fn test_throwable_layout_constructor_source_replacements_survive() {
     let out = compile_cli_files_and_run(

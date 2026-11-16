@@ -1,7 +1,24 @@
-//! Declaration visibility is separate from source discovery and source inclusion.
+//! Purpose:
+//! Integration tests for declaration activation: a function, class, interface, trait, enum or
+//! constant compiled into the binary is visible to PHP code only once the source that declares
+//! it has executed (or been early-bound), independently of source discovery and inclusion.
+//!
+//! Called from:
+//! - `cargo test` through Rust's test harness (via `type_builtins/includes/mod.rs`).
+//!
+//! Key details:
+//! - `if ($argc < 0) { require ... }` makes the compiler discover and compile a file whose code
+//!   never runs, so its declarations must stay inactive at run time.
+//! - A file that throws on its first line still early-binds what php early-binds (plain
+//!   functions, classes, interfaces and traits without unresolved parents) but not enums,
+//!   constants, conditional declarations or declarations in nested includes.
+//! - Expected output matches `php -n` on the same files.
 
 use super::*;
 
+/// Verifies creating a first-class callable `unusedCallableProbe(...)` for a function whose file
+/// was compiled but never required throws `Error`, even though the callable is never invoked.
+/// PHP outputs "caught|done".
 #[test]
 fn test_runtime_function_first_class_unused_creation_keeps_error() {
     let out = compile_cli_files_and_run(&[
@@ -16,6 +33,8 @@ echo '|done';
     assert_eq!(out, "caught|done");
 }
 
+/// Verifies a first-class callable resolves to the variant from the file actually required when
+/// two files declare the same function name: only `right.php` runs, so the callable returns 22.
 #[test]
 fn test_runtime_function_first_class_creation_selects_active_variant() {
     let out = compile_cli_files_and_run(&[
@@ -26,6 +45,9 @@ fn test_runtime_function_first_class_creation_selects_active_variant() {
     assert_eq!(out, "22");
 }
 
+/// Verifies first-class callable creation follows activation over time: it throws before the
+/// declaring file runs and succeeds after `require_once` activates the function. PHP outputs
+/// "caught|42".
 #[test]
 fn test_runtime_function_first_class_creation_tracks_activation() {
     let out = compile_cli_files_and_run(&[
@@ -42,6 +64,9 @@ echo $callback();
     assert_eq!(out, "caught|42");
 }
 
+/// Verifies the activation guard emitted around a call to an included function does not clobber
+/// a live `abs(...)` callable held in a local: after `callableBoundaryProbe()` the callback
+/// still computes `abs(-42)`, printing "42".
 #[test]
 fn test_runtime_function_binding_guard_preserves_existing_callback() {
     let out = compile_cli_files_and_run(&[
@@ -51,6 +76,9 @@ fn test_runtime_function_binding_guard_preserves_existing_callback() {
     assert_eq!(out, "42");
 }
 
+/// Verifies early binding of interfaces in a file that throws before its declarations: a plain
+/// interface is bound, while one extending a parent and one inside an `if` are not. PHP outputs
+/// "1:0:0".
 #[test]
 fn test_interface_early_binding_distinguishes_parent_linking() {
     let out = compile_cli_files_and_run(&[
@@ -71,6 +99,9 @@ if ($argc > 0) { interface ActivationConditional {} }
     assert_eq!(out, "1:0:0");
 }
 
+/// Verifies two conditional declarations of one function with different signatures keep their
+/// own signatures: the taken `int $value` branch is called with 41 and returns 42, rather than
+/// the string-concatenating alternative.
 #[test]
 fn test_conditional_function_alternatives_preserve_selected_signature() {
     let source = r#"<?php
@@ -85,6 +116,9 @@ echo signatureBindingProbe(41);
     assert_eq!(out, "42");
 }
 
+/// Verifies same-named functions in the `if` and `else` branches compile to distinct bodies:
+/// with either condition `function_exists()` is false before the branch runs, and the call
+/// reaches the body of the branch taken ("0:left" or "0:right").
 #[test]
 fn test_conditional_function_alternatives_keep_distinct_implementations() {
     for (condition, expected) in [("$argc > 0", "0:left"), ("$argc < 0", "0:right")] {
@@ -102,6 +136,9 @@ echo branchBindingProbe();
     }
 }
 
+/// Verifies the activation guard also applies to calls made from a method body and from a
+/// closure: both throw `Error` before the declaring file is required and return 42 after.
+/// PHP outputs "method|closure|42:42".
 #[test]
 fn test_runtime_function_binding_guard_in_method_and_closure() {
     let out = compile_cli_files_and_run(&[
@@ -121,6 +158,9 @@ echo $caller->invoke(), ':', $closure();
     assert_eq!(out, "method|closure|42:42");
 }
 
+/// Verifies calling a compiled but inactive function throws "undefined function" before its
+/// arguments are evaluated, as php does: neither "argument-ran" nor "body-ran" is printed, only
+/// "caught|done".
 #[test]
 fn test_inactive_compiled_function_call_throws_before_arguments() {
     let out = compile_cli_files_and_run(&[
@@ -135,6 +175,8 @@ echo '|done';
     assert_eq!(out, "caught|done");
 }
 
+/// Verifies a function declared inside a taken `if` is absent to `function_exists()` before the
+/// branch executes and both reported and callable after it. PHP outputs "0:1:42".
 #[test]
 fn test_conditional_function_activation_matches_callable_availability() {
     let out = compile_cli_files_and_run(&[
@@ -149,6 +191,8 @@ echo (int) function_exists('conditionalBindingProbe'), ':', conditionalBindingPr
     assert_eq!(out, "0:1:42");
 }
 
+/// Verifies a top-level function in a required file is early-bound when the file is entered, so
+/// it exists even though the file throws on its first statement. PHP outputs "1".
 #[test]
 fn test_file_function_early_binding_before_throw() {
     let out = compile_cli_files_and_run(&[
@@ -158,6 +202,8 @@ fn test_file_function_early_binding_before_throw() {
     assert_eq!(out, "1");
 }
 
+/// Verifies early binding covers every braced namespace block of the entered file: code in
+/// `namespace First` already sees `Second\fileEarlyFunction` before it throws. PHP outputs "1".
 #[test]
 fn test_file_function_early_binding_across_namespaces() {
     let out = compile_cli_files_and_run(&[
@@ -167,6 +213,9 @@ fn test_file_function_early_binding_across_namespaces() {
     assert_eq!(out, "1");
 }
 
+/// Verifies early binding of an entered file stops at its own declarations: the parent's
+/// function is bound before the throw, but the function of a `require` that never executes is
+/// not. PHP outputs "1:0".
 #[test]
 fn test_file_function_early_binding_does_not_enter_child_include() {
     let out = compile_cli_files_and_run(&[
@@ -177,6 +226,8 @@ fn test_file_function_early_binding_does_not_enter_child_include() {
     assert_eq!(out, "1:0");
 }
 
+/// Verifies `interface_exists()` with a name only known at run time answers false for an
+/// interface compiled from a file that was never required. PHP outputs "0".
 #[test]
 fn test_unentered_interface_runtime_name_is_not_active() {
     let out = compile_cli_files_and_run(&[
@@ -190,6 +241,9 @@ echo (int) interface_exists($name, false);
     assert_eq!(out, "0");
 }
 
+/// Verifies `require_once` of a file activates each kind of class-like declaration it holds:
+/// `class_exists`, `interface_exists`, `trait_exists` and `enum_exists` all answer true,
+/// "1:1:1:1".
 #[test]
 fn test_entered_source_activates_its_classlike_declarations() {
     let out = compile_cli_files_and_run(&[
@@ -205,6 +259,9 @@ echo (int) enum_exists('LoadedBoundaryEnum', false);
     assert_eq!(out, "1:1:1:1");
 }
 
+/// Verifies which declaration kinds php early-binds in a file that throws first: the class,
+/// interface, trait and function exist, while the enum and the `const` (bound only when
+/// executed) do not. PHP outputs "1:1:1:0:1:0".
 #[test]
 fn test_file_early_binding_distinguishes_declaration_kinds() {
     let out = compile_cli_files_and_run(&[
@@ -230,6 +287,8 @@ const LATE_BOUNDARY_CONSTANT = 1;
     assert_eq!(out, "1:1:1:0:1:0");
 }
 
+/// Verifies a file compiled from an unreachable `require_once` activates none of its class,
+/// interface, trait or enum declarations. PHP outputs "0:0:0:0".
 #[test]
 fn test_unentered_source_does_not_activate_classlike_declarations() {
     let out = compile_cli_files_and_run(&[
@@ -245,6 +304,8 @@ echo (int) enum_exists('BoundaryEnum', false);
     assert_eq!(out, "0:0:0:0");
 }
 
+/// Verifies entering a file does not activate a function declared inside an `if` whose
+/// condition is false there. PHP outputs "0".
 #[test]
 fn test_entered_source_does_not_activate_unexecuted_conditional_function() {
     let out = compile_cli_files_and_run(&[
@@ -254,6 +315,8 @@ fn test_entered_source_does_not_activate_unexecuted_conditional_function() {
     assert_eq!(out, "0");
 }
 
+/// Verifies entering a file does not define a constant whose `define()` sits in an `if` that
+/// does not run. PHP outputs "0".
 #[test]
 fn test_entered_source_does_not_activate_unexecuted_define() {
     let out = compile_cli_files_and_run(&[

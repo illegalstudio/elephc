@@ -1,9 +1,26 @@
-//! Purpose: verify assignment-expression ownership at runtime evaluation boundaries.
-//! Called from: the runtime GC integration suite.
-//! Key details: assignment results must preserve aliases without stranding temporary owners.
+//! Purpose:
+//! Regression tests for value ownership across the runtime evaluation boundary: assignments,
+//! appends, destructuring, property replacement and native call arguments executed by `eval()`
+//! or by a file included through a run-time path, including calls into compiled functions,
+//! constructors and methods.
+//!
+//! Called from:
+//! - `cargo test` through Rust's test harness (runtime GC integration suite).
+//!
+//! Key details:
+//! - Assignment results must preserve aliases without stranding temporary owners.
+//! - `include __DIR__ . '/' . $file . '.php'` with a variable path keeps `runtime.php` out of
+//!   the compiled set, so its body runs in the runtime evaluator.
+//! - Leak tests go through `assert_eval_heap_stable_across_branches`, which runs one binary with
+//!   `once` and `many` (equal-length arguments) and requires identical `--heap-debug` leak
+//!   summaries, since eval keeps process-level metadata that would hide an absolute check.
 
 use crate::support::*;
 
+/// Verifies assignment expressions used as conditions in runtime-evaluated code release their
+/// owned values and keep aliases: `if ($a = new V)`, a chained `$c = ($a = $b)`, a property
+/// assignment and an array-element assignment each destroy their object exactly when the last
+/// owner goes away. PHP outputs "adbdpdqd".
 #[test]
 fn test_eval_assignment_conditions_release_owned_values_and_preserve_aliases() {
     let out = compile_cli_files_and_run(
@@ -39,6 +56,9 @@ unset($array);
     assert_eq!(out, "adbdpdqd");
 }
 
+/// Verifies `$array[] = ...` in runtime-evaluated code releases an appended temporary object with
+/// the array, keeps a borrowed `$value` alive until its own variable is unset, and releases an
+/// object nested in an appended array literal. PHP outputs "dabddc".
 #[test]
 fn test_eval_array_append_releases_owned_values_and_preserves_borrowed_values() {
     let out = compile_cli_files_and_run(
@@ -69,6 +89,8 @@ echo 'c';
     assert_eq!(out, "dabddc");
 }
 
+/// Verifies an eval'd list literal of nested lists frees the integer keys it generates: building
+/// four inner arrays leaks no more than building one.
 #[test]
 fn test_eval_indexed_array_literal_releases_generated_keys() {
     assert_eval_heap_stable_across_branches(r#"<?php
@@ -78,6 +100,8 @@ echo 'ok';
 "#);
 }
 
+/// Verifies repeated `ReflectionClass::getName()` reads assigned to the same eval'd local do not
+/// accumulate string copies: four reassignments leak no more than one.
 #[test]
 fn test_eval_string_bytes_metadata_reads_do_not_accumulate_copies() {
     assert_eval_heap_stable_across_branches(r#"<?php
@@ -88,6 +112,8 @@ echo 'ok';
 "#);
 }
 
+/// Verifies `if ($x = n)` on locals that do not exist yet, inside an eval-declared function,
+/// frees the placeholder cell the fetch creates: four such assignments leak no more than one.
 #[test]
 fn test_eval_assignment_to_absent_locals_releases_fetch_placeholders() {
     assert_eval_heap_stable_across_branches(r#"<?php
@@ -97,6 +123,8 @@ echo 'ok';
 "#);
 }
 
+/// Verifies `[$a, $b] = $source` inside an eval-declared function frees the implicit integer key
+/// cells of the destructuring pattern: four destructurings leak no more than one.
 #[test]
 fn test_eval_destructuring_releases_literal_key_cells() {
     assert_eval_heap_stable_across_branches(r#"<?php
@@ -136,6 +164,9 @@ echo 'ok';
 "#);
 }
 
+/// Verifies the `global $counter; $counter .= 'x'` spelling of the heap-backed global
+/// replacement, called from eval: each compiled call releases the superseded string, so four
+/// calls leak no more than one.
 #[test]
 fn test_eval_native_global_keyword_heap_replacements_do_not_accumulate_owners() {
     assert_eval_heap_stable_across_branches(r#"<?php
@@ -151,6 +182,9 @@ echo 'ok';
 "#);
 }
 
+/// Control for `test_eval_native_global_heap_replacements_do_not_accumulate_owners`: the same
+/// `$GLOBALS['counter'] .`-replacement calls made from compiled code with no eval, so a leak
+/// here belongs to the native global write itself rather than to the eval boundary.
 #[test]
 fn test_native_global_heap_replacements_without_eval_do_not_accumulate_owners() {
     assert_eval_heap_stable_across_branches(r#"<?php
@@ -196,6 +230,8 @@ echo 'ok';
 "#);
 }
 
+/// Verifies `[...$input]` over a mixed string/int keyed array in eval frees the entry cells it
+/// copies: three spreads leak no more than one.
 #[test]
 fn test_eval_array_spread_releases_owned_entry_cells() {
     assert_eval_heap_stable_across_branches(r#"<?php
@@ -206,6 +242,9 @@ echo 'ok';
 "#);
 }
 
+/// Verifies passing an eval local to a compiled constructor's `mixed &$value` parameter that is
+/// never written leaves the reference slot's ownership balanced: three constructions leak no
+/// more than one.
 #[test]
 fn test_eval_native_mixed_ref_slot_owner_is_balanced_when_unchanged() {
     assert_eval_heap_stable_across_branches(r#"<?php
@@ -217,6 +256,9 @@ echo 'ok';
 "#);
 }
 
+/// Verifies a compiled constructor writing `$target = $source` through a `mixed &$target`
+/// reference from runtime-evaluated code shares the string by value: `$target` becomes
+/// "payload" and keeps it after `$source` is reassigned. PHP outputs "payload:payload:payload".
 #[test]
 fn test_eval_native_mixed_ref_writeback_preserves_shared_source() {
     let out = compile_cli_files_and_run(&[("main.php", r#"<?php
@@ -236,6 +278,8 @@ echo ':', $target;
     assert_eq!(out, "payload:payload:payload");
 }
 
+/// Verifies `new ArgumentOwner(1, 2, 3)` from eval frees the per-argument index cells built to
+/// call the compiled constructor: three constructions leak no more than one.
 #[test]
 fn test_eval_native_constructor_argument_indexes_are_released() {
     assert_eval_heap_stable_across_branches(r#"<?php
@@ -249,6 +293,10 @@ echo 'ok';
 "#);
 }
 
+/// Verifies converting runtime-evaluated `array` and object arguments for a compiled constructor
+/// borrows correctly: the stored copies survive, the constructor's local `$items[] = 99` does not
+/// reach the caller's array, and the caller's values outlive the destroyed object. PHP outputs
+/// "2:2:Ada:Ada:Ada:2".
 #[test]
 fn test_eval_native_constructor_conversions_preserve_caller_and_stored_values() {
     let out = compile_cli_files_and_run(&[("main.php", r#"<?php
@@ -275,6 +323,9 @@ echo ':', $source->name, ':', count($items);
     assert_eq!(out, "2:2:Ada:Ada:Ada:2");
 }
 
+/// Verifies a compiled constructor called from eval with no arguments releases its non-string
+/// defaults (`[]`, `new DefaultArgumentLeaf()`, `mixed = []`): three constructions leak no more
+/// than one.
 #[test]
 fn test_eval_native_non_string_default_argument_owners_are_released() {
     assert_eval_heap_stable_across_branches(r#"<?php
@@ -289,6 +340,8 @@ echo 'ok';
 "#);
 }
 
+/// Verifies a compiled constructor called from eval with no arguments releases its scalar,
+/// string and `null` default argument cells: three constructions leak no more than one.
 #[test]
 fn test_eval_native_constructor_default_argument_owners_are_released() {
     assert_eval_heap_stable_across_branches(r#"<?php
@@ -302,6 +355,8 @@ echo 'ok';
 "#);
 }
 
+/// Verifies eval writes replacing a compiled object's typed `array` property release the
+/// previous array each time: two extra replacements leak nothing.
 #[test]
 fn test_eval_native_array_property_replacement_releases_previous_owner() {
     assert_eval_heap_stable_across_branches(r#"<?php
@@ -315,6 +370,8 @@ echo 'ok';
 "#);
 }
 
+/// Verifies eval writes replacing a compiled object's `mixed` property, alternating array and
+/// string payloads, release the previous value each time: two extra replacements leak nothing.
 #[test]
 fn test_eval_native_mixed_property_replacement_releases_previous_owner() {
     assert_eval_heap_stable_across_branches(r#"<?php
@@ -328,6 +385,9 @@ echo 'ok';
 "#);
 }
 
+/// Verifies replacing a compiled class's typed object property from runtime-evaluated code
+/// destroys the previous object at the replacement, and the last one when the owner is unset.
+/// PHP outputs "drd".
 #[test]
 fn test_eval_native_object_property_replacement_runs_destructor() {
     let out = compile_cli_files_and_run(&[("main.php", r#"<?php
@@ -345,6 +405,9 @@ unset($owner);
     assert_eq!(out, "drd");
 }
 
+/// Verifies the same replacement when the owner object is created by compiled code and imported
+/// into the runtime-evaluated include: the replaced value is destroyed at the write, and
+/// `unset($owner)` in the include releases the last owner. PHP outputs "drd".
 #[test]
 fn test_eval_imported_native_owner_unset_releases_property() {
     let out = compile_cli_files_and_run(&[("main.php", r#"<?php
@@ -362,6 +425,8 @@ unset($owner);
     assert_eq!(out, "drd");
 }
 
+/// Verifies eval writes replacing a compiled object's typed `string` property release the
+/// previous string each time: two extra replacements leak nothing.
 #[test]
 fn test_eval_native_string_property_replacement_releases_previous_owner() {
     assert_eval_heap_stable_across_branches(r#"<?php
@@ -375,6 +440,8 @@ echo 'ok';
 "#);
 }
 
+/// Verifies eval calls to a compiled instance method and a compiled static method free their
+/// argument cells: an extra call of each leaks nothing.
 #[test]
 fn test_eval_native_method_argument_owners_are_released() {
     assert_eval_heap_stable_across_branches(r#"<?php
@@ -391,6 +458,9 @@ echo 'ok';
 "#);
 }
 
+/// Verifies releasing the argument owner of a compiled method called from runtime-evaluated code
+/// does not free a return value that aliases that argument: both the instance and the static
+/// identity method return a readable "payload". PHP outputs "payload:payload".
 #[test]
 fn test_eval_native_method_argument_owner_preserves_return_alias() {
     let out = compile_cli_files_and_run(&[("main.php", r#"<?php
@@ -409,6 +479,9 @@ $value = AliasReader::readStatic("payload"); echo $value; unset($value);
     assert_eq!(out, "payload:payload");
 }
 
+/// Verifies eval'd `$holder->setArguments($holder->getArguments())` frees the array returned by
+/// the inner compiled call once it has been passed to the outer one: three round trips leak no
+/// more than one.
 #[test]
 fn test_eval_nested_native_array_calls_release_argument_results() {
     assert_eval_heap_stable_across_branches(r#"<?php
@@ -433,6 +506,9 @@ echo 'ok';
 "#);
 }
 
+/// Control for `test_eval_nested_native_array_calls_release_argument_results`: the same
+/// getter/setter array round trip run purely in compiled code (four calls versus one), so a leak
+/// here belongs to native array conversion rather than to the eval call path.
 #[test]
 fn test_native_array_setter_roundtrip_releases_conversion_owners() {
     assert_eval_heap_stable_across_branches(r#"<?php
@@ -458,6 +534,10 @@ echo 'ok';
 "#);
 }
 
+/// Compiles `source` once with `--heap-debug`, runs the binary with `once` and with `many`, and
+/// asserts both print "ok" and report the same `HEAP DEBUG: leak summary:` line, so the extra
+/// work the `many` branch does must not leave any allocation behind. Removes the test directory
+/// on success.
 fn assert_eval_heap_stable_across_branches(source: &str) {
     let dir = make_cli_test_dir("elephc_eval_temporary_ownership");
     fs::write(dir.join("main.php"), source).unwrap();

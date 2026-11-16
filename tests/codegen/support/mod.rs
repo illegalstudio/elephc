@@ -38,12 +38,17 @@ pub(crate) struct TestDirGuard {
 }
 
 impl TestDirGuard {
+    /// Takes ownership of an already-created test directory `path`; the directory is removed
+    /// when the returned guard drops.
     pub(crate) fn new(path: std::path::PathBuf) -> Self {
         Self { path }
     }
 }
 
 impl Drop for TestDirGuard {
+    /// Deletes the guarded directory recursively, ignoring errors, including on panic unwinds.
+    /// When `ELEPHC_TEST_KEEP` is set (to any value) it keeps the directory instead and prints
+    /// `[elephc-test] kept <path>` to stderr so the failing case's files can be inspected.
     fn drop(&mut self) {
         if std::env::var_os("ELEPHC_TEST_KEEP").is_some() {
             eprintln!("[elephc-test] kept {}", self.path.display());

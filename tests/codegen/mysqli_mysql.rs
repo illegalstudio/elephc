@@ -828,11 +828,6 @@ $db->query("DROP TABLE msi");
     );
 }
 
-/// `bind_result` + `fetch` write each row into the caller's variables, streaming or from a
-/// `store_result` buffer, with php's `true` / `null` / `false` answers; `bind_param` reads its
-/// variables at `execute()`. Includes doctrine/dbal's `Mysqli\Result` shape
-/// (`$refs = &$this->boundValues; bind_result(...$refs)`), the procedural forms, and the
-/// column-count `ArgumentCountError`.
 /// `ssl_set()` records the TLS files and `real_connect(..., MYSQLI_CLIENT_SSL)` opens TLS over
 /// the bridge, as mysqlnd does: `ssl_set()` alone (doctrine/dbal's `Initializer\Secure` with no
 /// flags) stays plain, and without a CA the server certificate is not verified.
@@ -906,6 +901,11 @@ echo "done\n";
     assert_eq!(out, "bool(true)\nbool(true)\nbool(false)\n2034\nValueError: mysqli_stmt::send_long_data(): Argument #1 ($param_num) must be greater than or equal to 0\n1='hello, world'\n2=NULL\n3='kept'\ndone\n");
 }
 
+/// `bind_result` + `fetch` write each row into the caller's variables, streaming or from a
+/// `store_result` buffer, with php's `true` / `null` / `false` answers; `bind_param` reads its
+/// variables at `execute()`. Includes doctrine/dbal's `Mysqli\Result` shape
+/// (`$refs = &$this->boundValues; bind_result(...$refs)`), the procedural forms, and the
+/// column-count `ArgumentCountError`.
 #[test]
 #[ignore]
 fn test_mysqli_stmt_bind_result_and_fetch() {
