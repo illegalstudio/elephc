@@ -24,6 +24,7 @@ mod catalog_data;
 mod catalog_gmp;
 mod catalog_mbstring;
 mod catalog_pcntl;
+mod catalog_tidy;
 mod catalog_xml;
 #[cfg(feature = "curl")]
 mod catalog_curl;
@@ -66,7 +67,7 @@ pub use module::PhpModule;
 pub use object_operators::{
     ClassCasts, ClassOperators, ObjectArithmetic, ObjectArithmeticResult, ObjectBitwise,
     ObjectCast, ObjectDimension, ObjectOperandDispatch, ObjectOrdering, ObjectProperty, ObjectPropertyUpdate,
-    ObjectShift, BCMATH_NUMBER_OPERATORS, GMP_CASTS, GMP_OPERATORS,
+    ObjectShift, BCMATH_NUMBER_OPERATORS, GMP_CASTS, GMP_OPERATORS, TIDY_CASTS, TIDY_OPERATORS,
 };
 pub use catalog_gmp::FUNCTIONS as GMP_FUNCTIONS;
 pub use php_version::PhpVersion;

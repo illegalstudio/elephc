@@ -26,7 +26,7 @@ use super::{
     lower_method_call_with_receiver, lower_property_get_from_value,
     lower_property_probe_from_value, property_can_be_uninitialized,
     property_probe_needs_runtime_name_form_for_type, store_value_into_temp, take_owned_temp,
-    value_is_definitely_null, value_is_nullable,
+    try_static_only_method_through_receiver, value_is_definitely_null, value_is_nullable,
     refine_member_receiver,
 };
 
@@ -397,6 +397,11 @@ fn lower_nullsafe_postfix_segment(
                 }
             } else if !guard_regular_method_receiver(ctx, current, method, expr) {
                 return None;
+            }
+            if let Some(result) = try_static_only_method_through_receiver(
+                ctx, current, method, args, expr,
+            ) {
+                return Some(result);
             }
             Some(lower_method_call_with_receiver(
                 ctx,

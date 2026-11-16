@@ -736,10 +736,13 @@ fn test_union_string_or_false_param() {
     let out = compile_and_run(
         "<?php
         function label(string|false $x): string { return $x === false ? \"F\" : $x; }
-        echo label(\"hi\"), label(false);
+        $local = false;
+        $box = new stdClass();
+        $box->value = false;
+        echo label(\"hi\"), label(false), label($local), label($box->value);
         ",
     );
-    assert_eq!(out, "hiF");
+    assert_eq!(out, "hiFFF");
 }
 
 /// Verifies that a `bool|true` return type widens to bool and returns a real boolean.

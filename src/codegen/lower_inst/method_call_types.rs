@@ -123,4 +123,6 @@ pub(super) enum CalledClassIdArg {
     Immediate(u64),
     Local(LocalSlotId),
     ThisObject(LocalSlotId),
+    /// An object receiver whose header class id is the late-bound called class.
+    Object(ValueId),
 }

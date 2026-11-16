@@ -17,6 +17,33 @@ pub(super) fn lower_static_method_call(
     args: &[Expr],
     expr: &Expr,
 ) -> LoweredValue {
+    lower_static_method_call_impl(ctx, receiver, method, args, expr, None)
+}
+
+/// Lowers `$object->staticMethod()` through the statically named `receiver`.
+///
+/// The receiver value travels as operand zero so codegen can read the object's runtime
+/// class id and bind `static` to it; the call itself still has no `$this`.
+pub(super) fn lower_object_static_method_call(
+    ctx: &mut LoweringContext<'_, '_>,
+    object: crate::ir::ValueId,
+    receiver: &StaticReceiver,
+    method: &str,
+    args: &[Expr],
+    expr: &Expr,
+) -> LoweredValue {
+    lower_static_method_call_impl(ctx, receiver, method, args, expr, Some(object))
+}
+
+/// Shared static-call lowering with an optional object receiver for late static binding.
+fn lower_static_method_call_impl(
+    ctx: &mut LoweringContext<'_, '_>,
+    receiver: &StaticReceiver,
+    method: &str,
+    args: &[Expr],
+    expr: &Expr,
+    object_receiver: Option<crate::ir::ValueId>,
+) -> LoweredValue {
     // `Closure::bind($closure, $newThis [, $scope])` is the static form of bindTo.
     if let StaticReceiver::Named(name) = receiver {
         if name.trim_start_matches('\\') == "Closure"
@@ -106,7 +133,10 @@ pub(super) fn lower_static_method_call(
     ctx.call_description = previous_description;
     let mut operands =
         coerce_int_backed_enum_string_argument(ctx, receiver, dispatch_method, operands, expr);
-    let name = format!("{}::{}", receiver_name(receiver), dispatch_method);
+    let name = match object_receiver {
+        Some(_) => format!("@object@{}::{}", receiver_name(receiver), dispatch_method),
+        None => format!("{}::{}", receiver_name(receiver), dispatch_method),
+    };
     let data = ctx.intern_string(&name);
     let evaluation_intermediates = finish_call_argument_evaluation(ctx, &mut operands);
     let roots = root_user_call_operands(
@@ -117,9 +147,13 @@ pub(super) fn lower_static_method_call(
         &result_type,
         expr.span,
     );
+    let mut call_operands = operands.clone();
+    if let Some(object) = object_receiver {
+        call_operands.insert(0, object);
+    }
     let call = ctx.emit_value(
         Op::StaticMethodCall,
-        operands.clone(),
+        call_operands,
         Some(Immediate::Data(data)),
         result_type,
         Op::StaticMethodCall.default_effects(),
