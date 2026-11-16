@@ -94,6 +94,16 @@ pub(super) fn expand_eval_enum_traits(
     if !properties.is_empty() {
         return Err(EvalStatus::RuntimeFatal);
     }
+    // The declared cases and constants keep their source order; the constants the traits
+    // import come after them, as in php-src's constant table.
+    let mut member_order = enum_decl.member_order().to_vec();
+    if !member_order.is_empty() {
+        for constant in &constants {
+            if !member_order.iter().any(|member| member == constant.name()) {
+                member_order.push(constant.name().to_string());
+            }
+        }
+    }
     constants.extend(enum_decl.constants().iter().cloned());
     methods.extend(enum_decl.methods().iter().cloned());
     let mut expanded = EvalEnum::with_members_traits_adaptations(
@@ -106,7 +116,8 @@ pub(super) fn expand_eval_enum_traits(
         enum_decl.traits().to_vec(),
         enum_decl.trait_adaptations().to_vec(),
     )
-    .with_attributes(enum_decl.attributes().to_vec());
+    .with_attributes(enum_decl.attributes().to_vec())
+    .with_member_order(member_order);
     if let Some(source_location) = enum_decl.source_location() {
         expanded = expanded.with_source_location(source_location);
     }

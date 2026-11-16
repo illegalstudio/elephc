@@ -895,7 +895,9 @@ $second = get_class_vars("OperandDefaults"); unset($second);
 "#).unwrap();
     execute_program_with_context(&mut context, &program, &mut scope, &mut values).unwrap();
     let constant = context.class_constant_cell("OperandDefaults", "TOKEN").unwrap();
-    assert_eq!(values.retains.iter().filter(|cell| **cell == constant).count(), 2);
+    // Each `get_class_vars()` lease is released; the class's evaluated default table, filled
+    // when the class initialized, keeps the one lasting reference.
+    assert_eq!(values.retains.iter().filter(|cell| **cell == constant).count(), 3);
     assert_eq!(values.releases.iter().filter(|cell| **cell == constant).count(), 2);
 }
 

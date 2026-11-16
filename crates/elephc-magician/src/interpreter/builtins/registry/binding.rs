@@ -39,7 +39,7 @@ pub(in crate::interpreter) fn eval_builtin_call(
 /// Records, after `define(NAME, value)`, a string value the argument built at run time
 /// (anything but a literal or a constant read), which php-src keeps refcounted; it decides
 /// whether a parameter default reading the constant is cached
-/// (`eval_parameter_default_is_refcounted`).
+/// (`eval_result_is_refcounted`).
 fn eval_note_defined_built_string(
     args: &[EvalCallArg],
     context: &mut ElephcEvalContext,

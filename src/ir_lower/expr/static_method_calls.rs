@@ -135,9 +135,10 @@ fn lower_static_method_call_impl(
         coerce_int_backed_enum_string_argument(ctx, receiver, dispatch_method, operands, expr);
     // `from()`/`tryFrom()` initialize a backed enum: the constants php-src has not evaluated
     // yet are evaluated, after the argument.
+    // `self::`/`static::` name the enum whose method is being lowered.
     if matches!(php_symbol_key(dispatch_method).as_str(), "from" | "tryfrom") {
-        if let StaticReceiver::Named(enum_name) = receiver {
-            emit_backed_enum_initialization(ctx, enum_name.as_str(), expr.span);
+        if let Some(enum_name) = static_receiver_class_name(ctx, receiver) {
+            emit_backed_enum_initialization(ctx, &enum_name, expr.span);
         }
     }
     let name = match object_receiver {

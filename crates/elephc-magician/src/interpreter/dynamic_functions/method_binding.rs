@@ -1034,9 +1034,11 @@ pub(in crate::interpreter) fn eval_method_parameter_default(
 
 /// Evaluates the default of parameter `site` (`callable#position`) for a call that omitted
 /// it. php-src caches an evaluated parameter default that is not refcounted, so its
-/// deprecation notices are raised on the first evaluation of this site only; a default that
-/// builds an array or a string reports on every call. The site names the declaration, since a
-/// callable is copied for each call.
+/// deprecation notices are raised on the first successful evaluation of this site only; a
+/// default whose value is refcounted reports on every call. Whether this call reports is
+/// decided before evaluating, so its notices are raised at the reads themselves (before a
+/// constructor in the default runs, and even when a later read fails). The site names the
+/// declaration, since a callable is copied for each call.
 pub(in crate::interpreter) fn eval_method_parameter_default_at(
     default: &EvalExpr,
     site: &str,
@@ -1046,21 +1048,21 @@ pub(in crate::interpreter) fn eval_method_parameter_default_at(
     if !eval_method_default_expr_is_supported(default) {
         return Err(EvalStatus::UnsupportedConstruct);
     }
+    let refcounted = super::super::statements::eval_result_is_refcounted(default, true, context, values)?;
+    let reports = refcounted || !context.default_site_reported(site);
     let mut default_scope = ElephcEvalScope::new();
-    context.begin_deprecation_capture();
+    if !reports {
+        context.begin_deprecation_silence();
+    }
     context.enter_constant_expression();
     let value = eval_owned_expr(default, context, &mut default_scope, values);
     context.leave_constant_expression();
-    let notices = context.end_deprecation_capture();
+    if !reports {
+        context.end_deprecation_silence();
+    }
     let value = value?;
-    if !notices.is_empty()
-        && !context.deprecations_silenced()
-        && (super::super::statements::eval_parameter_default_is_refcounted(default, value, context, values)?
-            || context.first_default_site_report(site))
-    {
-        for message in notices {
-            eval_raise_or_capture_deprecation(message, context, values)?;
-        }
+    if reports && !refcounted && !context.deprecations_silenced() {
+        context.first_default_site_report(site);
     }
     Ok(value)
 }

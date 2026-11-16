@@ -1828,3 +1828,180 @@ end
 "#
     );
 }
+
+/// `self::from()` and `static::tryFrom()` inside an enum method initialize the backed enum like a named receiver, so the deprecated constant reports on that call and not on a later `E::from()`.
+#[test]
+fn test_self_and_static_enum_from_initialize_the_backed_enum() {
+    let out = compile_and_run(
+        r#"<?php set_error_handler(function (int $l, string $m, string $f, int $line): bool { echo "  ", substr($m, 0, strpos($m, " is deprecated")), " @$line\n"; return true; });
+class P { public $a = DATE_RFC7231; }
+echo "np\n"; new P;
+trait T { public $t = DATE_RFC7231; }
+echo "gcv\n"; get_class_vars("T");
+enum E: string {
+    case A = "a";
+    const C = DATE_RFC7231;
+    public static function go(string $v): self { return self::from($v); }
+}
+enum F: string {
+    case A = "a";
+    const C = MT_RAND_PHP;
+    public static function go(string $v): ?static { return static::tryFrom($v); }
+}
+echo "go\n"; E::go("a");
+echo "from\n"; E::from("a");
+echo "fgo\n"; F::go("a");
+echo "ffrom\n"; F::from("a");
+echo "end\n";
+"#,
+    );
+    assert_eq!(
+        out,
+        r#"np
+  Constant DATE_RFC7231 @3
+gcv
+  Constant DATE_RFC7231 @5
+go
+  Constant DATE_RFC7231 @9
+from
+fgo
+  Constant MT_RAND_PHP @14
+ffrom
+end
+"#
+    );
+}
+
+/// In `eval()` a class or trait declared inside a runtime condition binds at its statement, copying the parent's and trait's defaults as they are then, and `self::from()` / `static::tryFrom()` initialize the backed enum. (`eval()`; eval reports every notice at the `eval()` line, so lines are not compared.)
+#[test]
+fn test_eval_conditional_declarations_and_self_enum_from_bind_and_initialize_when_they_run() {
+    let out = compile_and_run(
+        r#"<?php
+set_error_handler(function (int $l, string $m): bool { echo "  ", substr($m, 0, strpos($m, " is deprecated")), "\n"; return true; });
+eval(<<<'PHPCODE'
+$on = true;
+class P { public $a = DATE_RFC7231; }
+echo "np\n"; new P;
+if ($on) { class C extends P {} }
+echo "nc\n"; new C;
+trait T { public $t = DATE_RFC7231; }
+echo "gcv\n"; get_class_vars("T");
+if ($on) { class U { use T; } }
+echo "nu\n"; new U;
+enum E: string {
+    case A = "a";
+    const C = DATE_RFC7231;
+    public static function go(string $v): self { return self::from($v); }
+}
+enum F: string {
+    case A = "a";
+    const C = MT_RAND_PHP;
+    public static function go(string $v): ?static { return static::tryFrom($v); }
+}
+echo "go\n"; E::go("a");
+echo "from\n"; E::from("a");
+echo "fgo\n"; F::go("a");
+echo "ffrom\n"; F::from("a");
+echo "end\n";
+PHPCODE
+);
+"#,
+    );
+    assert_eq!(
+        out,
+        r#"np
+  Constant DATE_RFC7231
+nc
+gcv
+  Constant DATE_RFC7231
+nu
+go
+  Constant DATE_RFC7231
+from
+fgo
+  Constant MT_RAND_PHP
+ffrom
+end
+"#
+    );
+}
+
+/// A parameter default's deprecation is raised at the read, before a constructor in the default runs; a class default whose condition only folds at run time reports only the branch it takes.
+#[test]
+fn test_defaults_report_at_the_read_and_only_taken_branches() {
+    let out = compile_and_run(
+        r#"<?php
+set_error_handler(function (int $l, string $m): bool { echo "  ", substr($m, 0, strpos($m, " is deprecated")), "\n"; return true; });
+class A { public function __construct($v) { echo "ctor\n"; } }
+function g($x = new A(DATE_RFC7231)) {}
+echo "g\n"; g(); g();
+class C { public $x = [MT_RAND_PHP][0] ? DATE_RFC7231 : E_STRICT; public $y = [0][0] ?: DATE_RFC7231; public $z = [null][0] ?? MT_RAND_PHP; }
+echo "c\n"; new C;
+echo "end\n";
+"#,
+    );
+    assert_eq!(
+        out,
+        r#"g
+  Constant DATE_RFC7231
+ctor
+  Constant DATE_RFC7231
+ctor
+c
+  Constant MT_RAND_PHP
+  Constant DATE_RFC7231
+  Constant DATE_RFC7231
+  Constant MT_RAND_PHP
+end
+"#
+    );
+}
+
+/// The same in `eval()`, where an enum that uses a trait also evaluates its members in declaration order and a default whose later read throws still reports, and reports again on the next call since PHP caches only a successful evaluation. (`eval()`; eval reports every notice at the `eval()` line, so lines are not compared.)
+#[test]
+fn test_eval_defaults_report_at_the_read_and_only_taken_branches() {
+    let out = compile_and_run(
+        r#"<?php
+set_error_handler(function (int $l, string $m): bool { echo "  ", substr($m, 0, strpos($m, " is deprecated")), "\n"; return true; });
+eval(<<<'PHPCODE'
+class A { public function __construct($v) { echo "ctor\n"; } }
+function g($x = new A(DATE_RFC7231)) {}
+echo "g\n"; g(); g();
+class C { public $x = [MT_RAND_PHP][0] ? DATE_RFC7231 : E_STRICT; public $y = [0][0] ?: DATE_RFC7231; public $z = [null][0] ?? MT_RAND_PHP; }
+echo "c\n"; new C;
+trait T {}
+enum E: string { use T; const K = E_STRICT; case A = DATE_RFC7231 . "x"; }
+echo "e\n"; E::A;
+function f($x = DATE_RFC7231 . MISSING_CONST) {}
+echo "f\n";
+try { f(); } catch (Error $e) { echo $e->getMessage(), "\n"; }
+try { f(); } catch (Error $e) { echo $e->getMessage(), "\n"; }
+echo "end\n";
+PHPCODE
+);
+"#,
+    );
+    assert_eq!(
+        out,
+        r#"g
+  Constant DATE_RFC7231
+ctor
+  Constant DATE_RFC7231
+ctor
+c
+  Constant MT_RAND_PHP
+  Constant DATE_RFC7231
+  Constant DATE_RFC7231
+  Constant MT_RAND_PHP
+e
+  Constant E_STRICT
+  Constant DATE_RFC7231
+f
+  Constant DATE_RFC7231
+Undefined constant "MISSING_CONST"
+  Constant DATE_RFC7231
+Undefined constant "MISSING_CONST"
+end
+"#
+    );
+}

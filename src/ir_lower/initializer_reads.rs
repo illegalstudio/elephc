@@ -906,30 +906,39 @@ fn walk_initializer_reads(
             match static_truthiness(ctx, scope, condition) {
                 Some(true) => walk(ctx, then_expr),
                 Some(false) => walk(ctx, else_expr),
-                None => {
-                    walk(ctx, then_expr);
-                    walk(ctx, else_expr);
-                }
+                None => walk_runtime_branch(ctx, condition, scope, |ctx| walk(ctx, then_expr), |ctx| walk(ctx, else_expr)),
             }
         }
         ExprKind::ShortTernary { value, default } => {
             walk(ctx, value);
-            if static_truthiness(ctx, scope, value) != Some(true) {
-                walk(ctx, default);
+            match static_truthiness(ctx, scope, value) {
+                Some(true) => {}
+                Some(false) => walk(ctx, default),
+                None => walk_runtime_branch(ctx, value, scope, |_| {}, |ctx| walk(ctx, default)),
             }
         }
         ExprKind::NullCoalesce { value, default } => {
             walk(ctx, value);
-            let known_non_null = static_value(ctx, scope, value).is_some_and(|value| !matches!(value.kind, ExprKind::Null));
-            if !known_non_null {
-                walk(ctx, default);
+            match static_value(ctx, scope, value).map(|value| matches!(value.kind, ExprKind::Null)) {
+                Some(false) => {}
+                Some(true) => walk(ctx, default),
+                None => {
+                    let not_null = Expr::new(
+                        ExprKind::BinaryOp { left: value.clone(), op: BinOp::StrictNotEq, right: Box::new(Expr::new(ExprKind::Null, value.span)) },
+                        value.span,
+                    );
+                    walk_runtime_branch(ctx, &not_null, scope, |_| {}, |ctx| walk(ctx, default));
+                }
             }
         }
         ExprKind::BinaryOp { left, op: op @ (BinOp::And | BinOp::Or), right } => {
             walk(ctx, left);
-            let decided = static_truthiness(ctx, scope, left) == Some(matches!(op, BinOp::Or));
-            if !decided {
-                walk(ctx, right);
+            match static_truthiness(ctx, scope, left) {
+                Some(truth) if truth == matches!(op, BinOp::Or) => {}
+                Some(_) => walk(ctx, right),
+                // `&&` evaluates the right operand when the left is truthy, `||` when falsy.
+                None if matches!(op, BinOp::And) => walk_runtime_branch(ctx, left, scope, |ctx| walk(ctx, right), |_| {}),
+                None => walk_runtime_branch(ctx, left, scope, |_| {}, |ctx| walk(ctx, right)),
             }
         }
         _ => {
@@ -940,6 +949,35 @@ fn walk_initializer_reads(
             }
         }
     }
+}
+
+/// Walks `when_true` or `when_false` on the branch `condition` takes at run time, for a
+/// condition compile-time folding cannot decide: php-src evaluates only the branch it takes,
+/// so only that branch's reads report. The condition's own reads were walked already, so it
+/// is evaluated here with their deprecations suppressed, after its class constants are
+/// replaced by their values (a `self::` read resolves against `scope`, not the code lowering
+/// this walk).
+fn walk_runtime_branch(
+    ctx: &mut LoweringContext<'_, '_>,
+    condition: &Expr,
+    scope: Option<&str>,
+    when_true: impl FnOnce(&mut LoweringContext<'_, '_>),
+    when_false: impl FnOnce(&mut LoweringContext<'_, '_>),
+) {
+    let condition = substitute_constants(ctx, scope, condition, 0, true);
+    let then_block = ctx.builder.create_named_block("initializer.branch.then", Vec::new());
+    let else_block = ctx.builder.create_named_block("initializer.branch.else", Vec::new());
+    let after = ctx.builder.create_named_block("initializer.branch.after", Vec::new());
+    crate::ir_lower::expr::with_constant_deprecations_suppressed(|| {
+        crate::ir_lower::expr::lower_condition(ctx, &condition, then_block, else_block);
+    });
+    ctx.builder.position_at_end(then_block);
+    when_true(ctx);
+    ctx.builder.terminate(crate::ir::Terminator::Br { target: after, args: Vec::new() });
+    ctx.builder.position_at_end(else_block);
+    when_false(ctx);
+    ctx.builder.terminate(crate::ir::Terminator::Br { target: after, args: Vec::new() });
+    ctx.builder.position_at_end(after);
 }
 
 /// Calls `visit` for the direct children of `expr` in evaluation order.

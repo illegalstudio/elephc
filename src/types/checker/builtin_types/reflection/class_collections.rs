@@ -445,7 +445,7 @@ pub(super) fn reflection_lazy_return(method: &str, args: Vec<Expr>, span: crate:
         StmtKind::If {
             condition: Expr::new(
                 ExprKind::BinaryOp {
-                    left: Box::new(lazy),
+                    left: Box::new(lazy.clone()),
                     op: BinOp::StrictNotEq,
                     right: Box::new(Expr::new(ExprKind::Null, span)),
                 },

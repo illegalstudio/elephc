@@ -35,7 +35,7 @@ pub(in crate::interpreter) fn eval_builtin_define(
     let defined = eval_define_name(name, value, context, values)?;
     // A string the argument built at run time (anything but a literal or a constant read) is
     // refcounted in php-src, which decides whether a parameter default reading the constant
-    // is cached (`eval_parameter_default_is_refcounted`).
+    // is cached (`eval_result_is_refcounted`).
     if defined
         && is_string
         && !matches!(value_expr, EvalExpr::Const(_) | EvalExpr::ConstFetch(_) | EvalExpr::NamespacedConstFetch { .. } | EvalExpr::ClassConstantFetch { .. })

@@ -57,7 +57,7 @@ pub(super) fn eval_reflection_owner_object(
     let lazy = eval_reflection_lazy_source(owner_kind, reflected_name, parent_class_name, default_value.is_some(), object, context, values)
         .and_then(|lazy| match lazy {
             Some((scope, source)) => eval_reflection_attach_lazy(object, &scope, "__lazy", &source, None, context, values),
-            None => Ok(()),
+            None => eval_reflection_clear_lazy(owner_kind, object, context, values),
         });
     if let Err(status) = lazy {
         let _ = eval_release_value(context, values, object);
@@ -106,6 +106,37 @@ fn eval_reflection_attach_parameter_lazy_default(
     eval_reflection_attach_lazy(object, "ReflectionParameter", "__default_factory", &source, None, context, values)
 }
 
+/// Stores `null` in the `__lazy` slot of a reflector whose getters answer from its own slots.
+/// The runtime allocates an eval-built reflector's payload zeroed, which a compiled
+/// `__lazy !== null` test would read as a value.
+fn eval_reflection_clear_lazy(
+    owner_kind: u64,
+    object: RuntimeCellHandle,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<(), EvalStatus> {
+    let scope = if eval_reflection_owner_uses_class_metadata(owner_kind) {
+        eval_reflection_class_owner_scope(owner_kind).to_string()
+    } else if matches!(
+        owner_kind,
+        EVAL_REFLECTION_OWNER_PROPERTY
+            | EVAL_REFLECTION_OWNER_CLASS_CONSTANT
+            | EVAL_REFLECTION_OWNER_ENUM_UNIT_CASE
+            | EVAL_REFLECTION_OWNER_ENUM_BACKED_CASE
+    ) {
+        let class_name = values.object_class_name(object)?;
+        let bytes = values.string_bytes(class_name);
+        values.release(class_name)?;
+        String::from_utf8_lossy(&bytes?).into_owned()
+    } else {
+        return Ok(());
+    };
+    let null = values.null()?;
+    let stored = crate::interpreter::statements::eval_set_reflector_slots(object, &scope, &[("__lazy", null)], context, values);
+    let released = values.release(null);
+    stored.and(released)
+}
+
 /// Quotes `text` as a PHP single-quoted string literal.
 fn eval_php_single_quoted(text: &str) -> String {
     format!("'{}'", text.replace('\\', "\\\\").replace('\'', "\\'"))
@@ -147,7 +178,13 @@ fn eval_reflection_lazy_source(
     let quoted_holder = eval_php_single_quoted(holder.trim_start_matches('\\'));
     let quoted_name = eval_php_single_quoted(reflected_name);
     if owner_kind == EVAL_REFLECTION_OWNER_PROPERTY {
-        if !has_default {
+        // Only a default eval evaluates itself (`eval_reflected_property_default`) gets the
+        // closure: for any other (an implicit `null`, a native class) eval answers nothing, and
+        // the compiled getter would call the closure again.
+        let evaluates = context.class(holder).is_some_and(|class| {
+            class.properties().iter().any(|property| property.name() == reflected_name && property.default().is_some())
+        });
+        if !has_default || !evaluates {
             return Ok(None);
         }
         let source = format!(

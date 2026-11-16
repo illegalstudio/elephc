@@ -1,11 +1,11 @@
 //! Purpose:
 //! Tracks when eval reaches the moments php-src evaluates stored constant expressions (a
 //! class initialization, a class constant being evaluated, a parameter default's first
-//! report), plus the captures and silent evaluations that route deprecation notices.
+//! report), plus the silent evaluations that drop deprecation notices.
 //!
 //! Called from:
-//! - `crate::interpreter::constant_eval` and the class-constant fetch path, which capture or
-//!   drop a notice instead of raising it while a capture or silent evaluation is open.
+//! - `crate::interpreter::constant_eval` and the class-constant fetch path, which drop a
+//!   notice instead of raising it while a silent evaluation is open.
 //! - Class and enum initialization (first `new`, static-property access, enum use),
 //!   class-constant evaluation, reflection, and parameter-default evaluation.
 //!
@@ -15,8 +15,6 @@
 //!   parameter default on its first omitted call; eval evaluates each at that moment too.
 //! - A silent evaluation is eval materializing a value php-src does not compute at that point
 //!   (a reflector being built): it drops notices and has no lasting effect.
-//! - Captures nest: an expression evaluated inside another capture records into the
-//!   innermost one.
 //! - Class names are compared case-insensitively; constant names exactly.
 
 use super::*;
@@ -25,10 +23,10 @@ use crate::eval_ir::EvalExpr;
 /// Deprecation routing state and the evaluation moments eval has reached.
 #[derive(Default)]
 pub(crate) struct EvalDeprecationNotices {
-    /// Open captures, innermost last. `None` is a silent evaluation: notices are dropped and
-    /// nothing waiting for its moment (a class constant's evaluation, a class initialization,
-    /// a default site's first report) happens.
-    captures: Vec<Option<Vec<&'static str>>>,
+    /// How many silent evaluations are open: notices are dropped and nothing waiting for its
+    /// moment (a class constant's evaluation, a class initialization, a default site's first
+    /// report) happens.
+    silence_depth: usize,
     /// Classes and enums whose initialization already ran.
     initialized_classes: HashSet<String>,
     /// Parameter-default sites (`callable#position`) whose notices were already raised.
@@ -73,46 +71,28 @@ fn notice_class_key(class_name: &str) -> String {
 }
 
 impl ElephcEvalContext {
-    /// Opens a capture: deprecation notices raised until the matching
-    /// [`Self::end_deprecation_capture`] are recorded instead of dispatched.
-    pub(crate) fn begin_deprecation_capture(&mut self) {
-        self.deprecation_notices.captures.push(Some(Vec::new()));
-    }
-
-    /// Closes the innermost capture and returns the notices it recorded, in order.
-    pub(crate) fn end_deprecation_capture(&mut self) -> Vec<&'static str> {
-        self.deprecation_notices.captures.pop().flatten().unwrap_or_default()
-    }
-
     /// Opens a silent evaluation, for work php-src does not do at this point (materializing a
     /// reflector, re-evaluating a default per object): notices raised until the matching
     /// [`Self::end_deprecation_silence`] are dropped.
     pub(crate) fn begin_deprecation_silence(&mut self) {
-        self.deprecation_notices.captures.push(None);
+        self.deprecation_notices.silence_depth += 1;
     }
 
     /// Closes the innermost silent evaluation.
     pub(crate) fn end_deprecation_silence(&mut self) {
-        self.deprecation_notices.captures.pop();
+        self.deprecation_notices.silence_depth = self.deprecation_notices.silence_depth.saturating_sub(1);
     }
 
     /// Reports whether the innermost open evaluation is silent: it must store nothing and start
     /// no initialization, which happens at the moment php-src makes that evaluation.
     pub(crate) fn deprecations_silenced(&self) -> bool {
-        matches!(self.deprecation_notices.captures.last(), Some(None))
+        self.deprecation_notices.silence_depth > 0
     }
 
-    /// Records `message` in the innermost open capture, or drops it in a silent evaluation.
-    /// Returns `false` when neither is open, in which case the caller raises the notice itself.
-    pub(crate) fn capture_deprecation(&mut self, message: &'static str) -> bool {
-        match self.deprecation_notices.captures.last_mut() {
-            Some(Some(capture)) => {
-                capture.push(message);
-                true
-            }
-            Some(None) => true,
-            None => false,
-        }
+    /// Drops `message` in a silent evaluation. Returns `false` outside one, in which case the
+    /// caller raises the notice itself.
+    pub(crate) fn capture_deprecation(&mut self, _message: &'static str) -> bool {
+        self.deprecations_silenced()
     }
 
     /// Marks `class_name` (a class or an enum) initialized. Returns `true` only the first time.
@@ -223,6 +203,11 @@ impl ElephcEvalContext {
     /// does not mark the class initialized then, so the next use retries it.
     pub(crate) fn abort_class_initialization(&mut self, class_name: &str) {
         self.deprecation_notices.initialized_classes.remove(&notice_class_key(class_name));
+    }
+
+    /// Reports whether a parameter-default site already reported its notices.
+    pub(crate) fn default_site_reported(&self, site: &str) -> bool {
+        self.deprecation_notices.reported_default_sites.contains(&site.to_ascii_lowercase())
     }
 
     /// Returns `true` the first time a parameter-default site reports its notices.

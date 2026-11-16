@@ -477,6 +477,16 @@ fn eval_initialize_class(
             &mut default_scope,
             values,
         )?;
+        // A static already stored (a reference bound to it, a write through a path that
+        // initialized the class) keeps its value.
+        if context.static_property(class.name(), property.name()).is_some()
+            || context.static_property_alias(class.name(), property.name()).is_some()
+        {
+            if !value.is_borrowed() {
+                values.release(value)?;
+            }
+            continue;
+        }
         store_static_property_value(class.name(), property.name(), value, context, values)?;
     }
     Ok(())
@@ -910,6 +920,9 @@ pub(super) fn eval_static_property_reference_bind_result(
     values: &mut impl RuntimeValueOps,
 ) -> Result<(), EvalStatus> {
     let class_name = resolve_eval_static_member_class_name(class_name, context)?;
+    // Binding a static by reference fetches it, which initializes the class first, as every
+    // other static-property access does.
+    eval_raise_class_initialization_deprecations(&class_name, context, values)?;
     if let Some((declaring_class, property)) = context.class_property(&class_name, property_name) {
         if !property.is_static() {
             return eval_throw_undeclared_static_property_error(

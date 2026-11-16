@@ -540,21 +540,6 @@ fn eval_reflected_parameter_default(
     }
 }
 
-/// Reports whether parameter default `default`, which evaluated to `value`, yields a refcounted
-/// value, which `RECV_INIT` does not cache, so such a default is evaluated again, and reports
-/// again, on every call (see [`eval_result_is_refcounted`]).
-pub(in crate::interpreter) fn eval_parameter_default_is_refcounted(
-    default: &EvalExpr,
-    value: RuntimeCellHandle,
-    context: &mut ElephcEvalContext,
-    values: &mut impl RuntimeValueOps,
-) -> Result<bool, EvalStatus> {
-    if values.type_tag(value)? == EVAL_TAG_OBJECT {
-        return Ok(true);
-    }
-    eval_result_is_refcounted(default, true, context, values)
-}
-
 /// Reports whether `expr` evaluates to a refcounted value in php-src: an object, a non-empty
 /// array built at run time or read from a constant, an array cast of anything but an array
 /// that is not refcounted, an array `+`, or a string built at run time (a concatenation of two
@@ -562,7 +547,8 @@ pub(in crate::interpreter) fn eval_parameter_default_is_refcounted(
 /// value was built). An interned string, an immutable array, and a scalar are not. `folded`
 /// tells whether php-src folded `expr` at compile time where it could: it does not fold the
 /// branches of a conditional whose condition does not fold (`zend_eval_const_expr`), so a
-/// literal-only branch there is still evaluated at run time. Values are found by evaluating
+/// literal-only branch there is still evaluated at run time. `RECV_INIT` caches a parameter
+/// default only when it is not refcounted. Values are found by evaluating
 /// subexpressions again silently (constant expressions, so without effects).
 pub(in crate::interpreter) fn eval_result_is_refcounted<V: RuntimeValueOps>(
     expr: &EvalExpr,

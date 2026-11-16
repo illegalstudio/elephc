@@ -139,7 +139,7 @@ fn collect_class_binding_marks(program: &[crate::parser::ast::Stmt], out: &mut H
 /// an anonymous class when its `new` first runs: both copy at that moment, so both are recorded
 /// runtime-bound and bound elsewhere, and neither is bound while the root file compiles.
 fn collect_runtime_bound(
-    program: &Program,
+    program: &[crate::parser::ast::Stmt],
     top_level: bool,
     marked: &HashSet<String>,
     bound: &mut HashSet<String>,
@@ -173,9 +173,49 @@ fn collect_runtime_bound(
                     binding.runtime_bound.insert(name.clone());
                 }
             }
-            StmtKind::NamespaceBlock { body, .. } => collect_runtime_bound(body, top_level, marked, bound, binding),
+            StmtKind::NamespaceBlock { body, .. } | StmtKind::Synthetic(body) | StmtKind::IncludeOnceGuard { body, .. } => {
+                collect_runtime_bound(body, top_level, marked, bound, binding)
+            }
             _ => {}
         }
+        // A declaration inside a condition, a loop, a `try`, or a function or method body is
+        // not top level: php-src binds it when its statement runs.
+        for body in nested_statement_bodies(statement) {
+            collect_runtime_bound(body, false, marked, bound, binding);
+        }
+    }
+}
+
+/// Returns the statement lists nested in `statement` whose declarations are not top level:
+/// the branches of a condition, loop and `try` bodies, and function and method bodies.
+fn nested_statement_bodies(statement: &crate::parser::ast::Stmt) -> Vec<&[crate::parser::ast::Stmt]> {
+    match &statement.kind {
+        StmtKind::If { then_body, elseif_clauses, else_body, .. } => {
+            let mut bodies: Vec<&[crate::parser::ast::Stmt]> = vec![then_body.as_slice()];
+            bodies.extend(elseif_clauses.iter().map(|(_, body)| body.as_slice()));
+            bodies.extend(else_body.as_deref());
+            bodies
+        }
+        StmtKind::Switch { cases, default, .. } => {
+            let mut bodies: Vec<&[crate::parser::ast::Stmt]> = cases.iter().map(|(_, body)| body.as_slice()).collect();
+            bodies.extend(default.as_deref());
+            bodies
+        }
+        StmtKind::Try { try_body, catches, finally_body } => {
+            let mut bodies: Vec<&[crate::parser::ast::Stmt]> = vec![try_body.as_slice()];
+            bodies.extend(catches.iter().map(|clause| clause.body.as_slice()));
+            bodies.extend(finally_body.as_deref());
+            bodies
+        }
+        StmtKind::While { body, .. }
+        | StmtKind::DoWhile { body, .. }
+        | StmtKind::Foreach { body, .. }
+        | StmtKind::For { body, .. }
+        | StmtKind::FunctionDecl { body, .. } => vec![body.as_slice()],
+        StmtKind::ClassDecl { methods, .. } | StmtKind::TraitDecl { methods, .. } => {
+            methods.iter().map(|method| method.body.as_slice()).collect()
+        }
+        _ => Vec::new(),
     }
 }
 
