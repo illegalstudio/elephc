@@ -3857,8 +3857,8 @@ class Child extends Box {
 /// A dispatched method erased for a PHPDoc class template still makes the check php-src makes
 /// on entry: an argument the native hint rejects throws a `TypeError`, `null` passes a nullable
 /// hint, a variadic is checked element by element and numbered as php-src numbers it (named
-/// elements share the number after the last positional one), and the body still stores the
-/// parameter in a property of the template.
+/// elements share the number after the last positional one), `iterable` is spelled as php-src
+/// spells it, and the body still stores the parameter in a property of the template.
 #[test]
 fn test_docblock_class_template_erased_method_checks_its_native_parameter_hints() {
     let out = compile_and_run(
@@ -3893,6 +3893,15 @@ class Stack implements Pile {
         return count($items) + count(get_defined_vars()) - 2;
     }
 }
+interface Feed { public function each(iterable $it, ?iterable $more = null): int; }
+/** @template T */
+class Source implements Feed {
+    /**
+     * @param T $it
+     * @param ?T $more
+     */
+    public function each(iterable $it, ?iterable $more = null): int { return 1; }
+}
 class Heap { public function all(object ...$items): int { return 0; } }
 /** @template T */
 class Bag extends Heap {
@@ -3925,6 +3934,18 @@ try {
 } catch (TypeError $e) {
     echo "|", $e->getMessage();
 }
+$source = new Source();
+echo "|", $source->each([1]), $source->each([1], null);
+try {
+    $source->each(5);
+} catch (TypeError $e) {
+    echo "|", $e->getMessage();
+}
+try {
+    $source->each([1], 5);
+} catch (TypeError $e) {
+    echo "|", $e->getMessage();
+}
 "#,
     );
     assert_eq!(
@@ -3932,7 +3953,9 @@ try {
         "1User|Bin::put(): Argument #1 ($v) must be of type object, integer given\
          |02|Table::add(): Argument #1 ($row) must be of type ?array, string given\
          |02|Stack::push(): Argument #3 must be of type object, integer given\
-         |Bag::all(): Argument #2 must be of type object, integer given"
+         |Bag::all(): Argument #2 must be of type object, integer given\
+         |11|Source::each(): Argument #1 ($it) must be of type Traversable|array, integer given\
+         |Source::each(): Argument #2 ($more) must be of type Traversable|array|null, integer given"
     );
 }
 

@@ -374,6 +374,13 @@ fn native_param_guard(
         }
         _ => return Vec::new(),
     };
+    // php-src spells `iterable` as the union it stands for, with `null` as a member of it.
+    let expected = if predicate == "\\is_iterable" {
+        let null = if matches!(native, TypeExpr::Nullable(_)) { "|null" } else { "" };
+        format!("Traversable|array{null}")
+    } else {
+        super::describe_type(native)
+    };
     // `if (<value> is rejected) { throw new \TypeError("...Argument #<position> ..."); }`
     let check = |value: &str, position: crate::parser::ast::Expr| {
         let accepted = if predicate.is_empty() {
@@ -392,7 +399,7 @@ fn native_param_guard(
         let message = e_concat_all(vec![
             e_str(&format!("{}::{}(): Argument #", class, method.name)),
             position,
-            e_str(&format!("{} must be of type {}, ", named, super::describe_type(native))),
+            e_str(&format!("{} must be of type {}, ", named, expected)),
             e_call("\\gettype", vec![e_var(value)]),
             e_str(" given"),
         ]);
