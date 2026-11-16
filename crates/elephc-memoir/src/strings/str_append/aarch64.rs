@@ -8,10 +8,10 @@
 //! - Header size is capacity, logical length stays in the returned string pair.
 //! - The old owner survives all allocation and copying until the replacement is ready.
 
-use crate::codegen_support::emit::Emitter;
+use crate::Emitter;
 
 /// Emits the target ABI helper while preserving frame alignment across nested calls.
-pub(super) fn emit(emitter: &mut Emitter, mbstring: bool) {
+pub(super) fn emit(emitter: &mut impl Emitter, mbstring: bool) {
     emitter.blank();
     emitter.comment("--- runtime: consuming string append ---");
     // -- set up the frame and preserve the input owner --
