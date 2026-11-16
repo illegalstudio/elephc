@@ -497,6 +497,17 @@ fn decl_fn_parse_str() -> Stmt {
                         None,
                     ),
                     s_assign("name", e_call(DECODE_NAME, vec![e_var("rawName")])),
+                    // php registers the name as a C string, so a decoded NUL ends it; values are
+                    // binary-safe and keep theirs.
+                    s_assign("nameNul", e_call("strpos", vec![e_var("name"), e_str("\0")])),
+                    when(
+                        e_binop(e_var("nameNul"), BinOp::StrictNotEq, e_bool(false)),
+                        vec![s_assign(
+                            "name",
+                            e_call("substr", vec![e_var("name"), e_int(0), e_var("nameNul")]),
+                        )],
+                        None,
+                    ),
                     // Only `0x20`, and only at the front: a leading tab stays part of the name.
                     s_assign("start", e_int(0)),
                     s_assign("length", e_call("strlen", vec![e_var("name")])),

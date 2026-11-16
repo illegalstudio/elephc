@@ -222,3 +222,18 @@ echo \json_encode(\Symfony\Component\DependencyInjection\probe('c=3'));
     );
     assert_eq!(out, r#"{"a":"1","b":["2","3"]}|{"c":"3"}"#);
 }
+
+/// A decoded NUL ends the field NAME, as php registers it as a C string; the value keeps its NUL.
+#[test]
+fn test_parse_str_name_ends_at_a_decoded_nul() {
+    let out = compile_and_run(
+        r#"<?php
+parse_str("a%00b=1&c[d%00e]=2&%00x=3&f=v%00w", $r);
+var_dump($r);
+"#,
+    );
+    assert_eq!(
+        out,
+        "array(3) {\n  [\"a\"]=>\n  string(1) \"1\"\n  [\"c_d\"]=>\n  string(1) \"2\"\n  [\"f\"]=>\n  string(3) \"v\0w\"\n}\n"
+    );
+}
