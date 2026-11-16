@@ -32,10 +32,15 @@ pub(super) fn emit_x86_64_casts(emitter: &mut Emitter) {
     emitter.instruction("mov rdi, QWORD PTR [rbp - 16]");                       // source descriptor for the bind helper
     emitter.instruction("mov rsi, QWORD PTR [rbp - 24]");                       // receiver object pointer or null
     emitter.instruction("call __rt_closure_bind");                              // copy the descriptor with the new $this
+    emitter.instruction("mov QWORD PTR [rbp - 32], rax");                       // keep the fresh descriptor's construction reference
     emitter.instruction("mov rdi, rax");                                        // the fresh descriptor is the callable payload
     emitter.instruction("mov rax, 10");                                         // runtime tag 10 = callable descriptor
-    emitter.instruction("xor edx, edx");                                        // callables carry no high payload word
-    emitter.instruction("call __rt_mixed_from_value");                          // box the bound callable for the interpreter
+    emitter.instruction("xor esi, esi");                                        // callables carry no high payload word (rsi = value_hi)
+    emitter.instruction("call __rt_mixed_from_value");                          // box the bound callable (the box takes its own reference)
+    emitter.instruction("mov QWORD PTR [rbp - 8], rax");                        // keep the box across the release
+    emitter.instruction("mov rax, QWORD PTR [rbp - 32]");                       // reload the fresh descriptor
+    emitter.instruction("call __rt_callable_descriptor_release");               // the box now owns the only reference
+    emitter.instruction("mov rax, QWORD PTR [rbp - 8]");                        // return the boxed bound closure
     emitter.instruction("mov rsp, rbp");                                        // release the operand slots
     emitter.instruction("pop rbp");                                             // restore the Rust caller frame pointer
     emitter.instruction("ret");                                                 // return the boxed bound closure to Rust

@@ -33,10 +33,15 @@ pub(super) fn emit_aarch64_casts(emitter: &mut Emitter) {
     emitter.instruction("ldr x0, [sp, #8]");                                    // source descriptor for the bind helper
     emitter.instruction("ldr x1, [sp, #16]");                                   // receiver object pointer or null
     emitter.instruction("bl __rt_closure_bind");                                // copy the descriptor with the new $this
+    emitter.instruction("str x0, [sp, #24]");                                   // keep the fresh descriptor's construction reference
     emitter.instruction("mov x1, x0");                                          // the fresh descriptor is the callable payload
     emitter.instruction("mov x0, #10");                                         // runtime tag 10 = callable descriptor
     emitter.instruction("mov x2, #0");                                          // callables carry no high payload word
-    emitter.instruction("bl __rt_mixed_from_value");                            // box the bound callable for the interpreter
+    emitter.instruction("bl __rt_mixed_from_value");                            // box the bound callable (the box takes its own reference)
+    emitter.instruction("str x0, [sp, #0]");                                    // keep the box across the release
+    emitter.instruction("ldr x0, [sp, #24]");                                   // reload the fresh descriptor
+    emitter.instruction("bl __rt_callable_descriptor_release");                 // the box now owns the only reference
+    emitter.instruction("ldr x0, [sp, #0]");                                    // return the boxed bound closure
     emitter.instruction("ldp x29, x30, [sp, #32]");                             // restore frame pointer and return address
     emitter.instruction("add sp, sp, #48");                                     // release the wrapper frame
     emitter.instruction("ret");                                                 // return the boxed bound closure to Rust
