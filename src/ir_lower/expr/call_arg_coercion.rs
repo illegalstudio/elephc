@@ -2538,7 +2538,16 @@ fn lower_runtime_spread_args(
     if prefix_len == 0 {
         return operands;
     }
-    let rest = operands.split_off(prefix_len);
+    // The prefix check can throw: publish the spread operands first, or a freshly built
+    // spread array (the last argument, which argument evaluation never roots) leaks.
+    let rest = operands
+        .split_off(prefix_len)
+        .into_iter()
+        .map(|operand| {
+            let lowered = lowered_value_from_id(ctx, operand);
+            root_evaluated_call_argument(ctx, lowered, Span::dummy()).value
+        })
+        .collect::<Vec<_>>();
     let sources = args[..prefix_len]
         .iter()
         .map(|arg| super::scalar_param_guards::GuardSource::Recorded(arg.span))

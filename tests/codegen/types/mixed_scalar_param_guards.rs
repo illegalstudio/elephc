@@ -485,3 +485,30 @@ for ($i = 0; $i < 3; $i++) {
     assert_eq!(output.stdout, "ibfsm1\nibfsm1\nibfsm1\n");
     assert!(output.stderr.contains("leak summary: clean"), "{}", output.stderr);
 }
+
+/// A rejected prefix before a runtime spread must not leak the spread array: the last argument
+/// is never rooted while arguments are evaluated, so a fresh array from `side()` stayed live on
+/// every caught `TypeError` (review of the runtime-spread prefix check).
+#[test]
+fn test_rejected_spread_call_releases_the_spread_array() {
+    let output = compile_and_run_with_heap_debug(
+        r#"<?php
+function box(mixed $v): mixed { return $v; }
+function side(): array { return [str_repeat("x", 40), "yy"]; }
+class O { public function m(string $s, string ...$rest): int { return 1; } public static function s(string $s, string ...$r): int { return 1; } }
+function f(string $s, string ...$r): int { return 1; }
+$o = new O();
+$null = box(null);
+$n = 0;
+for ($i = 0; $i < 3; $i++) {
+    try { $o->m($null, ...side()); } catch (TypeError $e) { $n++; }
+    try { O::s($null, ...side()); } catch (TypeError $e) { $n++; }
+    try { f($null, ...side()); } catch (TypeError $e) { $n++; }
+}
+echo $n, "\n";
+"#,
+    );
+    assert!(output.success, "{}", output.stderr);
+    assert_eq!(output.stdout, "9\n");
+    assert!(output.stderr.contains("leak summary: clean"), "{}", output.stderr);
+}
