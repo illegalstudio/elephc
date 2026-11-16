@@ -84,6 +84,25 @@ fn test_posix_isatty_accepts_streams_and_descriptors() {
     assert_eq!(out, "notty:25|notty:9|notty:25|notty:9|notty|0");
 }
 
+/// Probes `?int` and `int|false` descriptors, whose inline storage is not a boxed `Mixed` cell.
+#[test]
+fn test_posix_isatty_accepts_nullable_and_scalar_union_descriptors() {
+    let out = compile_and_run_capture(
+        r#"<?php
+        function nullable(?int $fd): string {
+            $result = posix_isatty($fd);
+            return gettype($result) . ':' . posix_get_last_error();
+        }
+        function falsable(int|false $fd): string {
+            return (posix_isatty($fd) ? 'tty' : 'notty') . ':' . posix_get_last_error();
+        }
+        echo nullable(2147483647), '|', falsable(2147483647), '|';
+        echo explode(':', nullable(null))[0];"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "boolean:9|notty:9|boolean");
+}
+
 /// Warns and records EBADF for descriptors outside `0..=INT_MAX`, as PHP 8.5 does.
 #[test]
 fn test_posix_isatty_warns_for_out_of_range_descriptor() {
