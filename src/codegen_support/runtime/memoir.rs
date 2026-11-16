@@ -8,11 +8,16 @@
 //! - This code runs in the compiler and emits assembly; it is never a target-program library.
 
 mod resources;
+mod stack_mapping;
 
 use crate::codegen_support::{abi, emit::Emitter};
 use elephc_memoir::{Arch, GraphLayout, GcStatusSelectors};
 
 impl elephc_memoir::Emitter for Emitter {
+    /// Supplies platform mapping policy without exposing compiler platform types to Memoir.
+    fn anonymous_private_map_flags(&self) -> i32 {
+        stack_mapping::map_anon_private_flags(self.target.platform)
+    }
     /// Keeps the PHP uninitialized-property marker authoritative in the compiler.
     fn uninitialized_property_sentinel(&self) -> i64 {
         crate::codegen_support::sentinels::UNINITIALIZED_TYPED_PROPERTY_SENTINEL

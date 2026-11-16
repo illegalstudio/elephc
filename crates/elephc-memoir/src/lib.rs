@@ -63,3 +63,8 @@ pub use value_features::ValueFeatures;
 pub mod data;
 pub mod callables;
 pub mod cleanup_preserve;
+
+pub mod temporary_owners;
+pub mod identity_pin;
+pub mod object_handles;
+pub mod stacks;

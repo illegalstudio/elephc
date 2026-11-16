@@ -312,3 +312,5 @@ pub fn emit_unmanaged_borrow_lookup(emitter: &mut impl Emitter) {
     abi::emit_return(emitter);
 }
 pub mod local_release;
+
+pub mod parameter_bindings;

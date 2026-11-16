@@ -71,6 +71,8 @@ pub struct GcStatusSelectors {
 
 /// Host services used exclusively while generating assembly in the compiler.
 pub trait Emitter {
+    /// Returns the target platform flags for an anonymous private memory mapping.
+    fn anonymous_private_map_flags(&self) -> i32;
     /// Provides the compiler arch contract.
     fn arch(&self) -> Arch;
     /// Provides the compiler extern symbol contract.

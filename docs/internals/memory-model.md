@@ -11,14 +11,14 @@ The compiler-side `elephc-memoir` crate centralizes the Rust code that emits
 heap allocation, reference counting, cycle collection, graph traversal, COW,
 cloning, deep release, owned strings, growable string buffers, consuming append,
 callable capture release, hash ownership guards, buffers, Mixed boxing, persistent
-references and protected owner retirement.
-It also owns fixed heap/GC/buffer state and string-scratch declarations. It is an ordinary compiler dependency and is never linked
-as a Rust library into compiled PHP programs. Those programs contain the same
+references, unboxing, protected cleanup, temporary-owner transfers, reference acquisition,
+identity pinning, object-handle recycling and guarded stack allocation/free.
+It also owns fixed heap/GC/buffer state, handle tables and string-scratch
+declarations. It is an ordinary compiler dependency and is never linked as a Rust library into compiled PHP programs. Those programs contain the same
 assembly `__rt_*` helpers. EIR ownership analysis and optimization remain in the
 compiler, together with PHP type/reference validation, resource identity policy,
-layout definitions,
-semantic runtime data, helper ordering and linking. The
-compiler emitter adapter supplies target ABI operations and layout facts to
+layout definitions, PHP object hash formatting, platform mapping flags,
+semantic runtime data, helper ordering and linking. The compiler emitter adapter supplies target ABI operations and layout facts to
 Memoir. Memoir source changes also participate in runtime-object cache identity.
 
 This page explains where every value lives in memory at runtime.

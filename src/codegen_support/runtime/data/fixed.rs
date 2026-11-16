@@ -659,32 +659,7 @@ pub(crate) fn emit_runtime_data_fixed(
     // list is static metadata and therefore does not consume user heap space.
     elephc_memoir::data::append_buffer_registry(&mut out, &target);
 
-    // PHP object-handle pool. `_obj_handle_index` is a DIRECT-MAPPED side table
-    // holding one u32 handle per 16-byte granule of `_heap_buf`: two live heap
-    // blocks can never share a granule because the smallest block is 16 header
-    // bytes plus the allocator's 8-byte minimum payload = 24 > 16, so the mapping
-    // needs no hashing, no probing and no capacity policy. It stores handles keyed
-    // BY POSITION and never an object pointer, so it owns nothing, keeps nothing
-    // alive and is never a GC root. `_obj_handle_free` is the LIFO stack of
-    // released handles php-src reuses from; its depth can never exceed the number
-    // of distinct handles, which is bounded by the peak live-object count, which is
-    // bounded by `heap_size / 24`. See `runtime::objects::handles`.
-    out.push_str(&comm_directive(
-        "_obj_handle_index",
-        crate::codegen_support::runtime::object_handle_index_slots(heap_size) * 4,
-        target,
-    ));
-    out.push_str(&comm_directive(
-        "_obj_weak_reference_index",
-        crate::codegen_support::runtime::object_handle_index_slots(heap_size) * 8,
-        target,
-    ));
-    out.push_str(&comm_directive(
-        "_obj_handle_free",
-        crate::codegen_support::runtime::object_handle_free_slots(heap_size) * 4,
-        target,
-    ));
-    out.push_str(&comm_directive("_obj_handle_free_top", 8, target));
+    elephc_memoir::data::append_object_handle_storage(&mut out, heap_size, &target);
     // PHP RESOURCE ids. A SEPARATE numbering space from the object handles above —
     // php-src keeps `zend_resource.handle` and `zend_object.handle` in two unrelated
     // lists, so `resource(5)` and `object(C)#5` can and do coexist. The table maps a
@@ -757,10 +732,7 @@ pub(crate) fn emit_runtime_data_fixed(
     // both at zero; a recorded decode error increments them once.
     out.push_str(&comm_directive("_json_error_scan_count", 8, target));
     out.push_str(&comm_directive("_json_error_scan_bytes", 8, target));
-    // `_obj_handle_next` is the never-used PHP object-handle cursor. PHP's first
-    // object is `#1`, so the pool starts at 1 and handle 0 is reserved to mean
-    // "this block never acquired a handle".
-    out.push_str(".globl _obj_handle_next\n_obj_handle_next:\n    .quad 1\n");
+    elephc_memoir::data::append_object_handle_cursor(&mut out);
     // `_resource_id_next` is the never-used PHP RESOURCE id cursor. It starts at 5,
     // not at 1, and that number is measured rather than chosen: under PHP 8.5.6 CLI
     // the three standard streams occupy ids 1..3 (`get_resource_id(STDIN|STDOUT|STDERR)`

@@ -77,9 +77,7 @@ pub(crate) use exceptions::emit_creation_line_load;
 pub(crate) use exceptions::emit_guarded_cleanup_call;
 /// The PHP object-handle pool: binding a handle at allocation and reading one back.
 /// Every object-allocation site in codegen calls `emit_acquire_object_handle`.
-pub(crate) use objects::{
-    emit_acquire_object_handle, object_handle_free_slots, object_handle_index_slots,
-};
+pub(crate) use objects::emit_acquire_object_handle;
 /// The PHP RESOURCE-id registry — a numbering space entirely separate from the
 /// object handles above. `RESOURCE_ID_TABLE_SLOTS` sizes its two side tables in
 /// the fixed data section.
@@ -125,3 +123,6 @@ mod memoir_storage_tests;
 
 #[cfg(test)]
 mod memoir_boxed_tests;
+
+#[cfg(test)]
+mod memoir_identity_tests;
