@@ -21,6 +21,17 @@ pub(super) struct OutputPaths {
     pub(super) header: Option<PathBuf>,
 }
 
+impl OutputPaths {
+    /// Returns the file the backend spills completed assembly text to (`<asm>.spill`).
+    ///
+    /// It is a generated destination like the others, so the symlink guard checks it too.
+    pub(super) fn asm_spill(&self) -> PathBuf {
+        let mut path = self.asm.clone().into_os_string();
+        path.push(".spill");
+        PathBuf::from(path)
+    }
+}
+
 /// Returns the post-link reminder for dynamic eval without optional regex support.
 ///
 /// `runs_interpreted_code` separates a program that EXECUTES code through the interpreter from

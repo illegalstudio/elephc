@@ -84,6 +84,12 @@ pub(super) fn reject_unsafe_destinations(
     plan: &ArtifactPlan,
 ) -> Result<(), String> {
     let mut destinations: Vec<&Path> = Vec::new();
+    // The backend spills the assembly to `<asm>.spill` whenever it writes the assembly at all
+    // (an `--emit-asm` or a linked build).
+    let spill = paths.asm_spill();
+    if plan.assembly || plan.linked {
+        destinations.push(spill.as_path());
+    }
     if plan.assembly {
         destinations.push(paths.asm.as_path());
     }
@@ -393,6 +399,24 @@ mod tests {
         let asm = ArtifactPlan::for_run(false, false, true, false, true);
         reject_unsafe_destinations(&paths, &asm)
             .expect("--emit-asm writes only the assembly and must not be refused");
+
+        // The spill file the backend writes next to the assembly is guarded like it.
+        let spill_dir = scratch("spill");
+        let spill_paths = OutputPaths {
+            asm: spill_dir.join("main.s"),
+            obj: spill_dir.join("main.o"),
+            bin: spill_dir.join("main"),
+            source_map: spill_dir.join("main.map"),
+            header: None,
+        };
+        let spill_victim = spill_dir.join("victim.txt");
+        std::fs::write(&spill_victim, b"original").expect("victim must be writable");
+        std::os::unix::fs::symlink(&spill_victim, spill_dir.join("main.s.spill"))
+            .expect("symlink must be creatable");
+        let emit_asm = ArtifactPlan::for_run(false, false, true, false, true);
+        reject_unsafe_destinations(&spill_paths, &emit_asm)
+            .expect_err("a symlinked spill file must be refused");
+        let _ = std::fs::remove_dir_all(&spill_dir);
 
         // The full build does reach all of them, and is refused.
         let full = ArtifactPlan::for_run(false, false, false, true, true);

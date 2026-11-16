@@ -241,9 +241,7 @@ pub(super) fn emit_and_link(inputs: BackendInputs<'_>) {
     crate::progress::phase("codegen");
     let phase_started = Instant::now();
     // Completed text leaves memory in 32 MB steps; the spill file becomes the `.s` itself.
-    let mut spill_path = output_paths.asm.clone().into_os_string();
-    spill_path.push(".spill");
-    let spill_path = std::path::PathBuf::from(spill_path);
+    let spill_path = output_paths.asm_spill();
     // Nobody reads this assembly in an ordinary build, so it is written compact (no comments,
     // short local labels). `--emit-asm` hands it to the user, `--debug-info` is stepped
     // through and the source map reads its `@src`/`@block` markers, so all three keep the
@@ -271,11 +269,11 @@ pub(super) fn emit_and_link(inputs: BackendInputs<'_>) {
     ) {
         Ok(output) => output,
         Err(err) => {
+            // The partial spill is of no use whether the build re-runs or stops here.
+            let _ = std::fs::remove_file(&spill_path);
             // Bodies of a class php would have autoloaded lazily are handed to the runtime and
             // the build runs again; this returns only when nothing new can be handed back.
             if let Some(deferral) = &deferral {
-                // The re-run replaces this process, so nothing would remove the partial spill.
-                let _ = std::fs::remove_file(&spill_path);
                 deferral.rerun_without_refused_bodies(err.failed_bodies());
             }
             crate::progress::clear();
