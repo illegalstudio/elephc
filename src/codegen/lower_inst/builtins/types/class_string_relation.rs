@@ -10,8 +10,9 @@
 //! - A versioned query follows dynamic inheritance through the compiled positive candidates.
 //! - A runtime target name (`is_a($name, $name, true)`) dispatches the subject over every
 //!   compiled class and interface, then compares the target with that subject's ancestors.
-//!   An object subject dispatches on its runtime class id the same way; a closure (a callable,
-//!   or a Mixed with runtime tag 10) is a `Closure` and has no other ancestor.
+//!   An object subject dispatches on its runtime class id the same way; a callable descriptor
+//!   (a callable, or a Mixed with runtime tag 10) is a `Closure`, with no other ancestor, only
+//!   when it carries an object handle: an implicit string or array callable is no object.
 //! - A runtime target holding a NUL byte never reaches the eval bridge, which splits its
 //!   candidate list at NUL bytes.
 
@@ -223,22 +224,29 @@ fn emit_runtime_target(
             emit_object_class_id(ctx, &unrelated);
             abi::emit_jump(ctx.emitter, &object_dispatch);
         }
-        PhpType::Callable => abi::emit_jump(ctx.emitter, &closure_subject),
+        PhpType::Callable => {
+            ctx.load_value_to_reg(subject, result)?;
+            abi::emit_jump(ctx.emitter, &closure_subject);
+        }
         _ => {
             ctx.load_value_to_reg(subject, result)?;
             abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
             let object_label = ctx.next_label("class_relation_mixed_object");
+            let mixed_closure = ctx.next_label("class_relation_mixed_closure");
             match ctx.emitter.target.arch {
                 Arch::AArch64 => {
                     ctx.emitter.instruction("cmp x0, #6");                      // runtime tag 6 means the subject is an object
                     ctx.emitter.instruction(&format!("b.eq {object_label}"));   // match an object subject by its class id
                     ctx.emitter.instruction("cmp x0, #10");                     // runtime tag 10 means the subject is a Closure
-                    ctx.emitter.instruction(&format!("b.eq {closure_subject}")); // match a closure against Closure's ancestors
+                    ctx.emitter.instruction(&format!("b.eq {mixed_closure}"));  // match a callable descriptor that is a Closure
                     ctx.emitter.instruction("cmp x0, #1");                      // runtime tag 1 means the subject is a class name
                     ctx.emitter.instruction(&format!("b.ne {unrelated}"));      // any other value names no class
                     ctx.emitter.instruction("str x1, [sp, #0]");                // save the unboxed subject name pointer
                     ctx.emitter.instruction("str x2, [sp, #8]");                // save the unboxed subject name length
                     ctx.emitter.instruction(&format!("b {string_dispatch}"));   // match the subject by name
+                    ctx.emitter.label(&mixed_closure);
+                    ctx.emitter.instruction("mov x0, x1");                      // move the unboxed descriptor into the result register
+                    ctx.emitter.instruction(&format!("b {closure_subject}"));   // check the descriptor's Closure identity
                     ctx.emitter.label(&object_label);
                     ctx.emitter.instruction("mov x0, x1");                      // move the unboxed object pointer into the result register
                 }
@@ -246,12 +254,15 @@ fn emit_runtime_target(
                     ctx.emitter.instruction("cmp rax, 6");                      // runtime tag 6 means the subject is an object
                     ctx.emitter.instruction(&format!("je {object_label}"));     // match an object subject by its class id
                     ctx.emitter.instruction("cmp rax, 10");                     // runtime tag 10 means the subject is a Closure
-                    ctx.emitter.instruction(&format!("je {closure_subject}"));  // match a closure against Closure's ancestors
+                    ctx.emitter.instruction(&format!("je {mixed_closure}"));    // match a callable descriptor that is a Closure
                     ctx.emitter.instruction("cmp rax, 1");                      // runtime tag 1 means the subject is a class name
                     ctx.emitter.instruction(&format!("jne {unrelated}"));       // any other value names no class
                     ctx.emitter.instruction("mov QWORD PTR [rsp], rdi");        // save the unboxed subject name pointer
                     ctx.emitter.instruction("mov QWORD PTR [rsp + 8], rdx");    // save the unboxed subject name length
                     ctx.emitter.instruction(&format!("jmp {string_dispatch}")); // match the subject by name
+                    ctx.emitter.label(&mixed_closure);
+                    ctx.emitter.instruction("mov rax, rdi");                    // move the unboxed descriptor into the result register
+                    ctx.emitter.instruction(&format!("jmp {closure_subject}")); // check the descriptor's Closure identity
                     ctx.emitter.label(&object_label);
                     ctx.emitter.instruction("mov rax, rdi");                    // move the unboxed object pointer into the result register
                 }
@@ -261,12 +272,15 @@ fn emit_runtime_target(
         }
     }
 
-    // -- closure subject: a callable value is a Closure, final and implementing nothing, so its
-    // only ancestor is Closure itself, which is_subclass_of() excludes --
+    // -- closure subject: the callable descriptor is in the result register. Only a descriptor
+    // with an object handle is a Closure; an implicit string or array callable (`'strlen'`,
+    // `[$obj, 'm']` passed as a callable) is no object. A Closure is final and implements
+    // nothing, so its only ancestor is Closure itself, which is_subclass_of() excludes --
     ctx.emitter.label(&closure_subject);
     if exclude_self {
         abi::emit_jump(ctx.emitter, &unrelated);
     } else {
+        crate::codegen_support::callable_descriptor::emit_require_object_handle(ctx.emitter, result, &unrelated);
         if literal_flag.is_none() {
             abi::emit_load_int_immediate(ctx.emitter, result, 1);
             abi::emit_store_to_sp(ctx.emitter, result, 16);
