@@ -251,7 +251,9 @@ pub enum EvalParameterTypeVariant {
     /// one value: `function f(): false` returning `true` is a TypeError in PHP. Without it both
     /// `false` and `true` parsed as a CLASS named "false", so Symfony's
     /// `ControllerResolver::getController(): callable|false` threw on its ordinary
-    /// "no `_controller` attribute" path — the 404 route — instead of returning.
+    /// "no `_controller` attribute" path — the 404 route — instead of returning. Declarations
+    /// spell `false` as the generic atom (the parser and the native registration agree on it);
+    /// this variant is built by `eval_ir::generics::parameter_type` for value checks.
     False,
     Float,
     Int,
