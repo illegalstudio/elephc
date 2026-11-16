@@ -135,16 +135,16 @@ mod decref_array;
 mod decref_hash;
 mod decref_mixed;
 mod decref_object;
+#[cfg(test)]
 mod eval_array_references;
 pub(crate) mod gc_candidates;
 mod gc_collect_cycles;
-mod gc_host_roots;
-mod gc_collect_cycles_x86_64;
 mod gc_control;
+#[cfg(test)]
 mod gc_collect_budget;
 mod memory;
 mod gc_destructors;
-mod gc_weak_observers;
+#[cfg(test)]
 mod gc_exceptions;
 mod gc_eval_object_children;
 mod gc_callable_children;
@@ -646,3 +646,6 @@ pub use usort_str::emit_usort_str;
 
 pub use gc_frame_children::emit_gc_frame_children;
 pub use gc_frame_slots::emit_gc_frame_slots;
+
+#[cfg(test)]
+mod memoir_extraction_tests;

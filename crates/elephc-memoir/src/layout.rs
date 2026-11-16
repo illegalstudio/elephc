@@ -1,0 +1,81 @@
+//! Purpose:
+//! Owns canonical managed-heap kinds and memory-boundary layouts.
+//!
+//! Called from:
+//! - The elephc compiler memory subsystem.
+//!
+//! Key details:
+//! - This code runs in the compiler and emits assembly; it is never a target-program library.
+
+/// Shared string heap kind contract.
+pub const STRING_HEAP_KIND: u32 = 1;
+/// Shared array heap kind contract.
+pub const ARRAY_HEAP_KIND: u32 = 2;
+/// Shared hash heap kind contract.
+pub const HASH_HEAP_KIND: u32 = 3;
+/// Shared object heap kind contract.
+pub const OBJECT_HEAP_KIND: u32 = 4;
+/// Shared mixed heap kind contract.
+pub const MIXED_HEAP_KIND: u32 = 5;
+/// Shared throwable heap kind contract.
+pub const THROWABLE_HEAP_KIND: u32 = 6;
+/// Shared concat temp heap kind contract.
+pub const CONCAT_TEMP_HEAP_KIND: u32 = 7;
+/// Shared reference cell heap kind contract.
+pub const REFERENCE_CELL_HEAP_KIND: u32 = 8;
+/// Shared callable heap kind contract.
+pub const CALLABLE_HEAP_KIND: u32 = 9;
+/// Shared mbstring identity tracked contract.
+pub const MBSTRING_IDENTITY_TRACKED: u32 = 1 << 24;
+/// Shared x86 64 heap magic hi32 contract.
+pub const X86_64_HEAP_MAGIC_HI32: u64 = 0x454C5048;
+
+/// Stamps the canonical x86_64 heap magic above the low runtime kind bits.
+pub fn x86_64_heap_kind_word(low_bits: u32) -> u64 {
+    (X86_64_HEAP_MAGIC_HI32 << 32) | u64::from(low_bits)
+}
+
+/// Shared try handler slot size contract.
+pub const TRY_HANDLER_SLOT_SIZE: usize = 224;
+
+/// Shared try handler diag depth offset contract.
+pub const TRY_HANDLER_DIAG_DEPTH_OFFSET: usize = 16;
+
+/// Shared try handler jmp buf offset contract.
+pub const TRY_HANDLER_JMP_BUF_OFFSET: usize = 24;
+
+/// Shared boundary active contract.
+pub const BOUNDARY_ACTIVE: &str = "_elephc_boundary_active";
+
+/// Shared boundary status contract.
+pub const BOUNDARY_STATUS: &str = "_elephc_boundary_status";
+
+/// Shared status allocation failure contract.
+pub const STATUS_ALLOCATION_FAILURE: i32 = 3;
+
+/// Legacy scalar null marker accepted at memory-container boundaries.
+pub const NULL_SENTINEL: i64 = 0x7fff_ffff_ffff_fffe;
+
+/// Emits null-container branching using the shared scalar representation contract.
+pub fn emit_branch_if_null_container(
+    emitter: &mut impl crate::Emitter,
+    value_reg: &str,
+    scratch_reg: &str,
+    label: &str,
+) {
+    match emitter.arch() {
+        crate::Arch::AArch64 => {
+            emitter.instruction(&format!("cbz {}, {}", value_reg, label));      // zero container pointers take the caller's null path
+            super::abi::emit_load_int_immediate(emitter, scratch_reg, NULL_SENTINEL);
+            emitter.instruction(&format!("cmp {}, {}", value_reg, scratch_reg)); // does the container carry the in-band null sentinel?
+            emitter.instruction(&format!("b.eq {}", label));                    // sentinel-null containers take the caller's null path
+        }
+        crate::Arch::X86_64 => {
+            emitter.instruction(&format!("test {}, {}", value_reg, value_reg)); // is the container pointer zero (PHP null)?
+            emitter.instruction(&format!("jz {}", label));                      // zero container pointers take the caller's null path
+            super::abi::emit_load_int_immediate(emitter, scratch_reg, NULL_SENTINEL);
+            emitter.instruction(&format!("cmp {}, {}", value_reg, scratch_reg)); // does the container carry the in-band null sentinel?
+            emitter.instruction(&format!("je {}", label));                      // sentinel-null containers take the caller's null path
+        }
+    }
+}

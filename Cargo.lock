@@ -754,6 +754,7 @@ dependencies = [
  "elephc-image",
  "elephc-magician",
  "elephc-mbstring",
+ "elephc-memoir",
  "elephc-monitoring-contract",
  "elephc-pcntl",
  "elephc-pdo",
@@ -923,6 +924,10 @@ dependencies = [
  "serde_json",
  "sha2 0.10.9",
 ]
+
+[[package]]
+name = "elephc-memoir"
+version = "0.1.0"
 
 [[package]]
 name = "elephc-monitoring-contract"

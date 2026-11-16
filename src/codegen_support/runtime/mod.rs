@@ -115,3 +115,5 @@ pub(crate) use fibers::{
 };
 
 pub(crate) use exceptions::guards as exception_guards;
+
+mod memoir;

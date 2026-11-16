@@ -10,10 +10,10 @@
 //! - Native retained edges are counted through the side-effect-free enumeration mode.
 
 use super::{load, op, reg, save};
-use crate::codegen_support::{abi, emit::Emitter, platform::Arch, sentinels::{REFERENCE_CELL_HEAP_KIND, CALLABLE_HEAP_KIND}};
+use crate::{abi, Emitter, Arch, layout::{REFERENCE_CELL_HEAP_KIND, CALLABLE_HEAP_KIND}};
 
 /// Returns one node unit plus the logical slots actually inspected by its child visitor.
-pub(super) fn emit(e: &mut Emitter) {
+pub fn emit(e: &mut impl Emitter) {
     e.blank();
     e.comment("--- runtime: gc_node_scan_cost ---");
     e.label_global("__rt_gc_node_scan_cost");
@@ -73,7 +73,7 @@ pub(super) fn emit(e: &mut Emitter) {
     op(e, "ldr x12, [x12, x10, lsl #3]", "mov r9, QWORD PTR [r11 + r10 * 8]", "identify the separately owned dynamic-property tail");
     op(e, "sub x11, x11, #8", "sub rcx, 8", "exclude the leading class identity from property slots");
     op(e, "sub x11, x11, x12, lsl #3", "lea r11, [r9 * 8]", "exclude the optional tail before dividing the fixed-property region");
-    if e.target.arch == Arch::X86_64 { op(e, "", "sub rcx, r11", "remove the dynamic tail from the fixed region"); }
+    if e.arch() == Arch::X86_64 { op(e, "", "sub rcx, r11", "remove the dynamic tail from the fixed region"); }
     op(e, "lsr x11, x11, #4", "shr rcx, 4", "count all fixed property slots, including scalar and string properties");
     op(e, "add x11, x11, x12", "add rcx, r9", "include the optional owned dynamic-property slot");
     op(e, "add x0, x11, #1", "lea rax, [rcx + 1]", "include the object itself in its structural scan estimate");
@@ -97,14 +97,14 @@ pub(super) fn emit(e: &mut Emitter) {
 }
 
 /// Reads the array or reference cell payload descriptor without collector flags.
-fn descriptor(e: &mut Emitter) {
+fn descriptor(e: &mut impl Emitter) {
     op(e, "ldr x9, [x0, #-8]", "mov r10, QWORD PTR [rax - 8]", "inspect whether this layout actually traverses pointer slots");
     op(e, "ubfx x9, x9, #8, #7", "shr r10, 8", "isolate the packed payload descriptor");
-    if e.target.arch == Arch::X86_64 { op(e, "", "and r10d, 0x7f", "discard COW and collector flags before choosing loop work"); }
+    if e.arch() == Arch::X86_64 { op(e, "", "and r10d, 0x7f", "discard COW and collector flags before choosing loop work"); }
 }
 
 /// Skips an element loop when its representation cannot contain graph pointers.
-fn range(e: &mut Emitter, name: &str) {
+fn range(e: &mut impl Emitter, name: &str) {
     let ready = format!("__rt_gc_scan_cost_range_{name}");
     op(e, "cmp x9, #10", "cmp r10, 10", "callable payloads own descriptors with typed capture edges");
     abi::emit_branch_if_equal_wide(e, &ready);
@@ -116,6 +116,6 @@ fn range(e: &mut Emitter, name: &str) {
 }
 
 /// Addresses class metadata without borrowing the live class index.
-fn address(e: &mut Emitter, arm: &str, x86: &str, symbol: &str) {
+fn address(e: &mut impl Emitter, arm: &str, x86: &str, symbol: &str) {
     abi::emit_symbol_address(e, reg(e, arm, x86), symbol);
 }

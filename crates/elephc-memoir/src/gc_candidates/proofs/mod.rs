@@ -10,7 +10,7 @@
 //! - Unproved nodes retain ordinary immediate candidate collection and destructor timing.
 
 use super::{load, op, restore, save};
-use crate::codegen_support::{abi, emit::Emitter, platform::Arch};
+use crate::{abi, Emitter, Arch};
 
 mod build;
 mod edges;
@@ -19,7 +19,7 @@ mod memo;
 mod cost;
 
 /// Emits cache construction, binary lookup and current-path validation on every target.
-pub(super) fn emit(e: &mut Emitter) {
+pub fn emit(e: &mut impl Emitter) {
     edges::emit(e);
     callable_edges::emit(e);
     build::emit(e);
@@ -30,7 +30,7 @@ pub(super) fn emit(e: &mut Emitter) {
 }
 
 /// Finds a borrowed proof record by exact payload base in the sorted cache.
-fn emit_lookup(e: &mut Emitter) {
+fn emit_lookup(e: &mut impl Emitter) {
     e.blank();
     e.comment("--- runtime: gc_proof_lookup ---");
     e.label_global("__rt_gc_proof_lookup");
@@ -64,7 +64,7 @@ fn emit_lookup(e: &mut Emitter) {
 }
 
 /// Returns the original payload only if every current owning edge reaches a current root.
-fn emit_valid(e: &mut Emitter) {
+fn emit_valid(e: &mut impl Emitter) {
     e.blank();
     e.comment("--- runtime: gc_proof_valid ---");
     e.label_global("__rt_gc_proof_valid");
@@ -117,18 +117,18 @@ fn emit_valid(e: &mut Emitter) {
 }
 
 /// Selects a register whose value is already expressed in the target's runtime ABI.
-fn reg<'a>(e: &Emitter, arm: &'a str, x86: &'a str) -> &'a str {
-    if e.target.arch == Arch::AArch64 { arm } else { x86 }
+fn reg<'a>(e: &impl Emitter, arm: &'a str, x86: &'a str) -> &'a str {
+    if e.arch() == Arch::AArch64 { arm } else { x86 }
 }
 
 /// Publishes a logical child slot only during cache construction, preserving visitor operands.
-pub(crate) fn slot(e: &mut Emitter, name: &str, registers: Option<(&str, &str, i64)>, constant: i64) {
+pub fn slot(e: &mut impl Emitter, name: &str, registers: Option<(&str, &str, i64)>, constant: i64) {
     let done = format!("__rt_gc_proof_slot_{name}_done");
     // -- ordinary marking and candidate traversal do not maintain proof metadata --
     load(e, "x17", "r11", "_gc_candidates_gathering");
     op(e, "cmp x17, #3", "cmp r11, 3", "publish edge metadata only while building the rooted cache");
     op(e, &format!("b.ne {done}"), &format!("jne {done}"), "preserve ordinary traversal without recording a cached edge");
-    if e.target.arch == Arch::AArch64 {
+    if e.arch() == Arch::AArch64 {
         op(e, "stp x9, x10, [sp, #-16]!", "", "preserve live loop operands around symbol-address materialization");
     }
     if let Some((arm, x86, adjustment)) = registers {
@@ -140,7 +140,7 @@ pub(crate) fn slot(e: &mut Emitter, name: &str, registers: Option<(&str, &str, i
     } else {
         abi::emit_store_imm_to_symbol(e, "_gc_proof_slot", 0, constant);
     }
-    if e.target.arch == Arch::AArch64 {
+    if e.arch() == Arch::AArch64 {
         op(e, "ldp x9, x10, [sp], #16", "", "restore all visitor loop operands before following the child");
     }
     e.label(&done);

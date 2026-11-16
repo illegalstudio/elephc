@@ -2068,3 +2068,20 @@ mod tests {
         assert!(!unknown_command_message(&typo).contains("did you mean"));
     }
 }
+
+#[cfg(test)]
+mod memoir_tests {
+    /// Memoir remains a compiler library with no generated-program bridge or opt-in flag.
+    #[test]
+    fn memoir_remains_a_compiler_only_library() {
+        let manifest: toml::Value = toml::from_str(include_str!(
+            "../crates/elephc-memoir/Cargo.toml"
+        )).unwrap();
+        let crate_types = manifest["lib"]["crate-type"].as_array().unwrap();
+        assert_eq!(crate_types.len(), 1);
+        assert_eq!(crate_types[0].as_str(), Some("rlib"));
+        assert_eq!(crate::linker::bridge_lib_for_flag("memoir"), None);
+        assert_eq!(crate::linker::archive_filename_for_flag("memoir"), None);
+        assert!(!crate::linker::crate_flag_names().contains(&"memoir"));
+    }
+}

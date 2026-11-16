@@ -136,10 +136,16 @@ use super::*;
     #[test]
     fn runtime_build_identity_tracks_source_tree_membership() {
         let build_script = include_str!("../../build.rs");
-        assert!(
-            build_script.contains("cargo:rerun-if-changed=src"),
-            "runtime build identity must be recomputed when src tree membership changes"
-        );
+        for source in ["src", "crates/elephc-memoir/src"] {
+            assert!(
+                build_script.contains(&format!("cargo:rerun-if-changed={source}")),
+                "runtime build identity must track membership of {source}"
+            );
+            assert!(
+                build_script.contains(&format!("hash_rust_sources(Path::new(\"{source}\"), &mut state)")),
+                "runtime build identity must hash emitter sources under {source}"
+            );
+        }
     }
 
     /// Verifies the runtime cache directory is private to its owner so another

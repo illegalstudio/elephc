@@ -10,10 +10,10 @@
 //! - Reference captures prove ownership of their managed cell, not its changing payload.
 
 use super::{op, restore, save};
-use crate::codegen_support::{abi, emit::Emitter, platform::Arch};
+use crate::{abi, Emitter, Arch};
 
 /// Emits a predicate with parent in x0/rax, capture index in x1/rdi and child in x2/rsi.
-pub(super) fn emit(e: &mut Emitter) {
+pub fn emit(e: &mut impl Emitter) {
     e.blank();
     e.label_global("__rt_gc_proof_callable_edge");
     abi::emit_frame_prologue(e, 32);
@@ -35,14 +35,14 @@ pub(super) fn emit(e: &mut Emitter) {
     op(e, "cmp x10, #0", "test r9, r9", "untyped foreign environments do not establish a native ownership proof");
     branch(e, "eq", "z", "invalid");
     op(e, "add x10, x10, x1, lsl #5", "mov r8, rdi", "address the selected four-word capture binding");
-    if e.target.arch == Arch::X86_64 {
+    if e.arch() == Arch::X86_64 {
         op(e, "", "shl r8, 5", "scale the logical index by the immutable binding record width");
         op(e, "", "add r9, r8", "locate the binding without retaining its address across calls");
     }
     op(e, "ldr x11, [x10, #24]", "mov r10, QWORD PTR [r9 + 24]", "reference bindings own a managed cell independently of its contents");
     op(e, "ldr x10, [x10, #16]", "mov r9, QWORD PTR [r9 + 16]", "recover the current by-value ownership representation");
     op(e, "add x0, x0, x1, lsl #4", "mov r8, rdi", "locate this runtime capture inside the validated allocation");
-    if e.target.arch == Arch::X86_64 {
+    if e.arch() == Arch::X86_64 {
         op(e, "", "shl r8, 4", "scale the capture index by its two-word slot width");
         op(e, "", "add rax, r8", "address the capture relative to its current descriptor");
     }
@@ -73,6 +73,6 @@ pub(super) fn emit(e: &mut Emitter) {
 }
 
 /// Selects local predicate paths using the target's condition-code syntax.
-fn branch(e: &mut Emitter, arm: &str, x86: &str, label: &str) {
+fn branch(e: &mut impl Emitter, arm: &str, x86: &str, label: &str) {
     op(e, &format!("b.{arm} __rt_gc_proof_callable_{label}"), &format!("j{x86} __rt_gc_proof_callable_{label}"), "reject a stale proof or select the next validated capture check");
 }

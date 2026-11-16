@@ -10,11 +10,11 @@
 //! - Anchor bit 20 exists only during discovery and is cleared before edge counting.
 
 use super::{load, op, restore, save};
-use crate::codegen_support::{abi, emit::Emitter, platform::Arch};
-use crate::codegen_support::sentinels::REFERENCE_CELL_HEAP_KIND;
+use crate::{abi, Emitter, Arch};
+use crate::layout::REFERENCE_CELL_HEAP_KIND;
 
 /// Emits bounded root normalization and exact retirement of temporary anchor metadata.
-pub(super) fn emit(e: &mut Emitter) {
+pub fn emit(e: &mut impl Emitter) {
     e.blank();
     e.comment("--- runtime: gc_candidate_root ---");
     e.label_global("__rt_gc_candidate_root");
@@ -33,7 +33,7 @@ pub(super) fn emit(e: &mut Emitter) {
     abi::emit_branch_if_int_result_zero(e, "__rt_gc_candidate_root_done");
     op(e, "ldr x9, [x0, #-8]", "mov r10, QWORD PTR [rax - 8]", "inspect whether this root prefix was already normalized");
     op(e, "tbnz x9, #20, __rt_gc_candidate_root_done", "test r10, 0x100000", "test the temporary root anchor to stop alias cycles");
-    if e.target.arch == Arch::X86_64 { op(e, "", "jnz __rt_gc_candidate_root_done", "return when this identity is already an established anchor"); }
+    if e.arch() == Arch::X86_64 { op(e, "", "jnz __rt_gc_candidate_root_done", "return when this identity is already an established anchor"); }
     save(e, 0);
     abi::emit_call_label(e, "__rt_gc_candidate_anchor");
     restore(e, 0);
@@ -46,7 +46,7 @@ pub(super) fn emit(e: &mut Emitter) {
     op(e, "b.ne __rt_gc_candidate_root_done", "jne __rt_gc_candidate_root_done", "stop normalization at ordinary non-wrapper roots");
     op(e, "ldr x9, [x0, #-8]", "mov r10, QWORD PTR [rax - 8]", "recover the reference cell's current payload descriptor");
     op(e, "ubfx x9, x9, #8, #7", "shr r10, 8", "isolate its runtime payload shape");
-    if e.target.arch == Arch::X86_64 { op(e, "", "and r10d, 0x7f", "remove flags before deciding whether the cell owns a graph"); }
+    if e.arch() == Arch::X86_64 { op(e, "", "and r10d, 0x7f", "remove flags before deciding whether the cell owns a graph"); }
     op(e, "cmp x9, #4", "cmp r10d, 4", "exclude scalar and string reference payloads");
     op(e, "b.lo __rt_gc_candidate_root_done", "jb __rt_gc_candidate_root_done", "stop before treating a scalar value as a heap pointer");
     op(e, "cmp x9, #10", "cmp r10, 10", "callable wrappers own managed descriptor nodes");
@@ -92,7 +92,7 @@ pub(super) fn emit(e: &mut Emitter) {
     abi::emit_call_label(e, "__rt_gc_candidate_live");
     abi::emit_branch_if_int_result_zero(e, "__rt_gc_clear_anchor_next");
     op(e, "ldr x9, [x0, #-8]", "and DWORD PTR [rax - 8], 0xffefffff", "clear only the temporary anchor metadata");
-    if e.target.arch == Arch::AArch64 {
+    if e.arch() == Arch::AArch64 {
         op(e, "bic x9, x9, #0x100000", "", "remove the anchor bit before incoming counts reuse that range");
         op(e, "str x9, [x0, #-8]", "", "publish the cleared marker while preserving other flags");
     }

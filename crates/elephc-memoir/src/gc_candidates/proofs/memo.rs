@@ -10,16 +10,16 @@
 //! - Recounts advance the epoch before callbacks' changed graph is reconsidered.
 
 use super::{load, op, reg, restore, save};
-use crate::codegen_support::{abi, emit::Emitter, platform::Arch};
+use crate::{abi, Emitter, Arch};
 
 /// Emits reusable memo storage and wrap-safe preparation epochs.
-pub(super) fn emit(e: &mut Emitter) {
+pub fn emit(e: &mut impl Emitter) {
     reset(e);
     epoch(e);
 }
 
 /// Reuses one native word per sorted forest record, clearing stamps after a rebuild.
-fn reset(e: &mut Emitter) {
+fn reset(e: &mut impl Emitter) {
     e.blank();
     e.comment("--- runtime: gc_proof_memo_reset ---");
     e.label_global("__rt_gc_proof_memo_reset");
@@ -46,9 +46,9 @@ fn reset(e: &mut Emitter) {
     load(e, "x10", "r11", "_gc_proofs_count");
     e.label("__rt_gc_proof_memo_clear_loop");
     op(e, "cbz x10, __rt_gc_proof_memo_clear_done", "test r11, r11", "stop before dereferencing an empty memo buffer");
-    if e.target.arch == Arch::X86_64 { op(e, "", "jz __rt_gc_proof_memo_clear_done", "finish after every current record stamp was retired"); }
+    if e.arch() == Arch::X86_64 { op(e, "", "jz __rt_gc_proof_memo_clear_done", "finish after every current record stamp was retired"); }
     op(e, "str xzr, [x9], #8", "mov QWORD PTR [r10], 0", "retire the preceding record's validation outcome");
-    if e.target.arch == Arch::X86_64 { op(e, "", "add r10, 8", "advance one native memo word"); }
+    if e.arch() == Arch::X86_64 { op(e, "", "add r10, 8", "advance one native memo word"); }
     op(e, "sub x10, x10, #1", "sub r11, 1", "consume one bounded memo slot");
     abi::emit_jump(e, "__rt_gc_proof_memo_clear_loop");
     e.label("__rt_gc_proof_memo_clear_done");
@@ -57,7 +57,7 @@ fn reset(e: &mut Emitter) {
 }
 
 /// Advances the pass generation, clearing ancient stamps before an epoch wraps.
-fn epoch(e: &mut Emitter) {
+fn epoch(e: &mut impl Emitter) {
     e.blank();
     e.comment("--- runtime: gc_proof_epoch_begin ---");
     e.label_global("__rt_gc_proof_epoch_begin");
@@ -79,7 +79,7 @@ fn epoch(e: &mut Emitter) {
 }
 
 /// Emits result propagation and iterative prefix stamping inside the validator's 64-byte frame.
-pub(super) fn finish(e: &mut Emitter) {
+pub fn finish(e: &mut impl Emitter) {
     // -- both outcomes mean only whether this cached path proves current liveness --
     e.label("__rt_gc_proof_valid_missing");
     abi::emit_load_int_immediate(e, abi::int_result_reg(e), 0);
