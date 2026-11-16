@@ -75,24 +75,22 @@ echo get_debug_type(fn() => 1);"#),
     );
 }
 
-/// Verifies an anonymous class's name starts with php's own `"class@anonymous"` prefix and
-/// agrees with `get_class()` on the SAME object -- the interpreter's own anonymous-class naming
-/// (`class@anonymous#evalN`, `crate::parser::state::next_anonymous_class_name`) differs from
-/// php's `class@anonymous\0<file>:<line>$<id>` internal spelling, and unlike php's it never
-/// carries a NUL byte to truncate, so this checks internal agreement with `get_class()` rather
-/// than hard-coding php's own byte count (which would fail here for a reason that has nothing to
-/// do with `get_debug_type()` itself).
+/// Verifies an anonymous class is named `class@anonymous` by `get_debug_type()` and that this
+/// differs from `get_class()` on the SAME object, as in php: the interpreter's own internal name
+/// (`class@anonymous#evalN`, `crate::parser::state::next_anonymous_class_name`) never reaches
+/// the program through `get_debug_type()`.
 ///
-/// `php -n` 8.5.6: `get_debug_type($a) !== get_class($a)` for an anonymous class (`bool(false)`,
-/// because of the NUL truncation) -- elephc's names never diverge, so here they are EQUAL.
+/// `php -n` 8.5.10: `get_debug_type($a)` is `class@anonymous` and differs from `get_class($a)`,
+/// which keeps the NUL-suffixed internal name.
 #[test]
 fn get_debug_type_names_an_anonymous_class() {
     assert_eq!(
         out(br#"$a = new class {};
 $debug = get_debug_type($a);
 echo str_starts_with($debug, "class@anonymous") ? "prefix-ok" : "bad-prefix", ":";
-echo $debug === get_class($a) ? "agrees-with-get_class" : "bad-mismatch";"#),
-        "prefix-ok:agrees-with-get_class",
+echo $debug === "class@anonymous" ? "plain" : "bad-name", ":";
+echo $debug !== get_class($a) ? "differs-from-get_class" : "bad-same";"#),
+        "prefix-ok:plain:differs-from-get_class",
     );
 }
 

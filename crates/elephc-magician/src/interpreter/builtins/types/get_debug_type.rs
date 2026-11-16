@@ -13,7 +13,8 @@
 //!   whose internal name carries a `\0file:line` suffix -- the interpreter's own anonymous
 //!   class names (`class@anonymous#evalN`, `crate::parser::state::next_anonymous_class_name`)
 //!   never contain one, so the truncation is implemented for parity but is not observable here
-//!   today.
+//!   today. The `#evalN` suffix itself is mapped to php's `Parent@anonymous` /
+//!   `Interface@anonymous` / `class@anonymous` spelling.
 //! - An EVAL-DECLARED closure (`function(){}`/`fn()=>1`) is NOT eval's tag 10
 //!   (`EVAL_TAG_CALLABLE`) -- `eval_closure_object_expr()`
 //!   (`interpreter/expressions/evaluation.rs:634`) materializes it as an ordinary tag-6 object
@@ -97,7 +98,8 @@ fn eval_get_debug_type_result(
         EVAL_TAG_OBJECT => {
             let class_name = eval_get_debug_type_object_class_name(value, context, values)?;
             let truncated = eval_debug_type_truncate_at_nul(&class_name);
-            values.string(&truncated)
+            let named = eval_debug_type_anonymous_class_name(&truncated, value, context, values);
+            values.string(&named)
         }
         EVAL_TAG_RESOURCE => {
             let closed = eval_resource_is_closed(value, context, values)?;
@@ -133,6 +135,34 @@ fn eval_get_debug_type_object_class_name(
     values.release(class_name)?;
     let bytes = bytes.strip_prefix(b"\\").unwrap_or(&bytes);
     String::from_utf8(bytes.to_vec()).map_err(|_| EvalStatus::RuntimeFatal)
+}
+
+/// Names an interpreter-declared anonymous class the way php's `get_debug_type()` does.
+///
+/// php prints `Parent@anonymous` for a class that extends one, `Interface@anonymous` for the
+/// first interface it implements, and plain `class@anonymous` otherwise. The interpreter's own
+/// internal name carries an `#evalN` suffix that must never reach the program.
+fn eval_debug_type_anonymous_class_name(
+    name: &str,
+    object: RuntimeCellHandle,
+    context: &ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> String {
+    if !name.starts_with("class@anonymous#eval") {
+        return name.to_string();
+    }
+    let base = values
+        .object_identity(object)
+        .ok()
+        .and_then(|identity| context.dynamic_object_class(identity))
+        .and_then(|class| {
+            class
+                .parent()
+                .or_else(|| class.interfaces().first().map(String::as_str))
+        })
+        .map(|base| base.trim_start_matches('\\').to_string())
+        .unwrap_or_else(|| "class".to_string());
+    format!("{base}@anonymous")
 }
 
 /// Truncates a class name at its first NUL byte, matching php's `get_debug_type()` (as opposed
