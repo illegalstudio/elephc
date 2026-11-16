@@ -2460,20 +2460,16 @@ fn runtime_string_descriptor_cases_at_arity(
 /// runs, through the interpreter's builtin table on the table miss
 /// (`lower_runtime_string_callable_eval_fallback`). Without the bridge nothing is narrowed.
 fn literal_builtin_gate(ctx: &FunctionContext<'_>) -> Option<std::sync::Arc<crate::fast_hash::FastSet<String>>> {
-    use std::sync::{Arc, Mutex};
-    static CACHE: Mutex<Option<(usize, usize, Arc<crate::fast_hash::FastSet<String>>)>> = Mutex::new(None);
     if !runtime_string_callable_has_eval_fallback(ctx) {
         return None;
     }
     let strings = &ctx.module.data.strings;
-    let identity = (strings.as_ptr() as usize, strings.len());
-    let mut cache = CACHE.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
-    if let Some((ptr, len, set)) = cache.as_ref() {
-        if (*ptr, *len) == identity {
-            return Some(set.clone());
-        }
-    }
-    let set: crate::fast_hash::FastSet<String> = strings
+    Some(ctx.shared.literal_builtin_gate(strings.len(), || literal_builtin_names(strings)))
+}
+
+/// Collects the identifier-shaped literals of a string pool, keyed like PHP symbols.
+fn literal_builtin_names(strings: &[String]) -> crate::fast_hash::FastSet<String> {
+    strings
         .iter()
         .filter(|s| {
             !s.is_empty()
@@ -2481,10 +2477,7 @@ fn literal_builtin_gate(ctx: &FunctionContext<'_>) -> Option<std::sync::Arc<crat
                 && s.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'\\')
         })
         .map(|s| php_symbol_key(s.trim_start_matches('\\')))
-        .collect();
-    let set = Arc::new(set);
-    *cache = Some((identity.0, identity.1, set.clone()));
-    Some(set)
+        .collect()
 }
 
 /// Returns whether one PHP callable name belongs to a finite reachable target set.

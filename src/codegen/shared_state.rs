@@ -243,6 +243,13 @@ pub(crate) struct SharedCodegenState {
     class_key_index: std::cell::RefCell<Option<crate::fast_hash::FastMap<String, String>>>,
     /// Interface names by the same key, for the same reason.
     interface_key_index: std::cell::RefCell<Option<crate::fast_hash::FastMap<String, String>>>,
+    /// The identifier-shaped literals of the module's string pool, keyed like PHP symbols: the
+    /// builtin names an open runtime string callable may still dispatch natively. A pure function
+    /// of the module, filled once per compilation (it used to live in a process-global static
+    /// keyed by the pool's address and length, which a later module could alias). Keyed by the
+    /// pool length: a wrapper's module copy only appends to the pool, so within one compilation
+    /// an equal length is an equal pool.
+    literal_builtin_gate: std::cell::RefCell<Option<(usize, std::sync::Arc<crate::fast_hash::FastSet<String>>)>>,
     /// Trait POSITIONS in `trait_table.names` by the same key; the table is a `Vec`, so the index
     /// stores where the name lives rather than a second copy of it.
     trait_key_index: std::cell::RefCell<Option<crate::fast_hash::FastMap<String, usize>>>,
@@ -833,6 +840,7 @@ impl SharedCodegenState {
             static_throw_sharing: None,
             class_key_index: std::cell::RefCell::new(None),
             interface_key_index: std::cell::RefCell::new(None),
+            literal_builtin_gate: std::cell::RefCell::new(None),
             trait_key_index: std::cell::RefCell::new(None),
             enum_key_index: std::cell::RefCell::new(None),
             type_is_a_memo: std::cell::RefCell::new(Default::default()),
@@ -1181,6 +1189,24 @@ impl SharedCodegenState {
             .borrow_mut()
             .insert(class_names.to_vec(), ids.clone());
         ids
+    }
+
+    /// Returns the literal builtin-name gate of a string pool of `pool_len` entries, building it
+    /// with `build` when no gate of that pool is cached yet.
+    pub(crate) fn literal_builtin_gate(
+        &self,
+        pool_len: usize,
+        build: impl FnOnce() -> crate::fast_hash::FastSet<String>,
+    ) -> std::sync::Arc<crate::fast_hash::FastSet<String>> {
+        let mut cached = self.literal_builtin_gate.borrow_mut();
+        if let Some((len, set)) = cached.as_ref() {
+            if *len == pool_len {
+                return set.clone();
+            }
+        }
+        let set = std::sync::Arc::new(build());
+        *cached = Some((pool_len, set.clone()));
+        set
     }
 
     /// Returns the module's spelling of the class whose PHP key is `key`, indexing once.
@@ -2006,6 +2032,25 @@ mod tests {
                             && php_symbol_key(candidate_method) == method_key
                     })
         })
+    }
+
+    /// The literal builtin-name gate belongs to one compilation: two modules lowered in the same
+    /// process with equal-length string pools each get their own set. A process-global memo keyed
+    /// by the pool's address and length handed a second module the first one's names whenever the
+    /// allocator recycled the address.
+    #[test]
+    fn literal_builtin_gate_is_scoped_to_one_compilation() {
+        let module = Module::new(Target::parse("macos-aarch64").expect("target"));
+        let first = SharedCodegenState::for_module(&module);
+        let a = first.literal_builtin_gate(1, || std::iter::once("strrev".to_string()).collect());
+        let second = SharedCodegenState::for_module(&module);
+        let b = second.literal_builtin_gate(1, || std::iter::once("strlen".to_string()).collect());
+        assert!(a.contains("strrev") && !a.contains("strlen"));
+        assert!(b.contains("strlen") && !b.contains("strrev"));
+        let again = first.literal_builtin_gate(1, || panic!("an equal pool is not rebuilt"));
+        assert!(again.contains("strrev"));
+        let grown = first.literal_builtin_gate(2, || std::iter::once("trim".to_string()).collect());
+        assert!(grown.contains("trim"));
     }
 
     /// A worker chunk inherits every whole-module answer: 256 chunks each walking all the bodies
