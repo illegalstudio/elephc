@@ -1671,7 +1671,10 @@ fn recursive_directory_get_sub_pathname_body() -> Vec<Stmt> {
 fn recursive_directory_get_children_body() -> Vec<Stmt> {
     vec![
         if_stmt(
-            not_expr(method_call(this_expr(), "hasChildren", Vec::new())),
+            // php never consults `hasChildren()` here: any directory entry (a symlink without
+            // FOLLOW_SYMLINKS, `.`/`..`, an entry a subclass's `hasChildren()` refuses) gets its
+            // child iterator, and only a path that is not a directory fails.
+            not_expr(function_call("is_dir", vec![file_path_arg_expr()])),
             vec![throw_stmt(new_object_expr(
                 "UnexpectedValueException",
                 vec![binary_expr(
