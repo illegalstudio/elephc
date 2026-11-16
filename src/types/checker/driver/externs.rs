@@ -342,10 +342,16 @@ impl Checker {
             };
             let Some((size, align)) = packed_type_layout(&storage_type, &self.packed_classes)
             else {
-                errors.push(CompileError::new(
+                // An unknown name resolves to a class type, as in php, so a misspelled width
+                // (`I32`, `uint8_t`) lands here and still gets its spelling hint.
+                let error = CompileError::new(
                     field.span,
                     "Packed class fields must use POD scalars, pointers, or packed classes",
-                ));
+                );
+                errors.extend(
+                    self.width_position_type_error(&field.type_expr, field.span, error)
+                        .flatten(),
+                );
                 class_has_errors = true;
                 continue;
             };

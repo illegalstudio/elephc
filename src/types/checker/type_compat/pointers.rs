@@ -99,7 +99,9 @@ impl Checker {
             .resolve_type_expr(inner, span)
             .map_err(|error| self.width_position_type_error(inner, span, error))?;
         if packed_type_size(&inner_ty, &self.packed_classes).is_none() {
-            return Err(CompileError::new(span, message));
+            // An unknown name resolves to a class type now, as in php, so a misspelled width
+            // (`buffer<Int32>`) reaches this refusal rather than an `Unknown type` error.
+            return Err(self.width_position_type_error(inner, span, CompileError::new(span, message)));
         }
         Ok(inner_ty)
     }
