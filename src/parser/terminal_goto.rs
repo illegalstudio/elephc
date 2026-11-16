@@ -71,7 +71,7 @@ pub(super) fn desugar_scope(statements: &mut Vec<Stmt>) -> Result<(), CompileErr
     desugar_forward_segments(statements);
     let mut labels = HashMap::default();
     collect_labels(statements, &[], &mut labels)?;
-    rewrite_gotos(statements, &labels)
+    rewrite_gotos(statements, &labels, &mut Vec::new())
 }
 
 /// Turns each backward `goto` into the loop it actually is.
@@ -628,9 +628,15 @@ fn collect_nested_labels(
 }
 
 /// Replaces goto markers with their cloned terminal tails and removes label markers.
+///
+/// A cloned tail is rewritten in turn, so a `goto` nested in it reaches its own label's tail
+/// instead of staying a marker that would run as an empty statement. `active` lists the labels
+/// whose tails are being expanded: a jump back into one of them would expand forever, so it is
+/// refused.
 fn rewrite_gotos(
     statements: &mut Vec<Stmt>,
     labels: &HashMap<String, Vec<Stmt>>,
+    active: &mut Vec<String>,
 ) -> Result<(), CompileError> {
     let mut rewritten = Vec::with_capacity(statements.len());
     for mut statement in std::mem::take(statements) {
@@ -645,11 +651,22 @@ fn rewrite_gotos(
                     "no matching terminal label exists in this scope",
                 ));
             };
-            statement.kind = StmtKind::Synthetic(tail.clone());
+            if active.iter().any(|label| label == name) {
+                return Err(unsupported_goto_error(
+                    statement.span,
+                    name,
+                    "the jumps between terminal labels form a cycle",
+                ));
+            }
+            let mut tail = tail.clone();
+            active.push(name.to_string());
+            rewrite_gotos(&mut tail, labels, active)?;
+            active.pop();
+            statement.kind = StmtKind::Synthetic(tail);
             rewritten.push(statement);
             continue;
         }
-        rewrite_nested_gotos(&mut statement, labels)?;
+        rewrite_nested_gotos(&mut statement, labels, active)?;
         rewritten.push(statement);
     }
     *statements = rewritten;
@@ -660,6 +677,7 @@ fn rewrite_gotos(
 fn rewrite_nested_gotos(
     statement: &mut Stmt,
     labels: &HashMap<String, Vec<Stmt>>,
+    active: &mut Vec<String>,
 ) -> Result<(), CompileError> {
     match &mut statement.kind {
         StmtKind::If {
@@ -668,12 +686,12 @@ fn rewrite_nested_gotos(
             else_body,
             ..
         } => {
-            rewrite_gotos(then_body, labels)?;
+            rewrite_gotos(then_body, labels, active)?;
             for (_, body) in elseif_clauses {
-                rewrite_gotos(body, labels)?;
+                rewrite_gotos(body, labels, active)?;
             }
             if let Some(body) = else_body {
-                rewrite_gotos(body, labels)?;
+                rewrite_gotos(body, labels, active)?;
             }
         }
         StmtKind::IfDef {
@@ -681,9 +699,9 @@ fn rewrite_nested_gotos(
             else_body,
             ..
         } => {
-            rewrite_gotos(then_body, labels)?;
+            rewrite_gotos(then_body, labels, active)?;
             if let Some(body) = else_body {
-                rewrite_gotos(body, labels)?;
+                rewrite_gotos(body, labels, active)?;
             }
         }
         StmtKind::While { body, .. }
@@ -691,13 +709,13 @@ fn rewrite_nested_gotos(
         | StmtKind::For { body, .. }
         | StmtKind::Foreach { body, .. }
         | StmtKind::IncludeOnceGuard { body, .. }
-        | StmtKind::NamespaceBlock { body, .. } => rewrite_gotos(body, labels)?,
+        | StmtKind::NamespaceBlock { body, .. } => rewrite_gotos(body, labels, active)?,
         StmtKind::Switch { cases, default, .. } => {
             for (_, body) in cases {
-                rewrite_gotos(body, labels)?;
+                rewrite_gotos(body, labels, active)?;
             }
             if let Some(body) = default {
-                rewrite_gotos(body, labels)?;
+                rewrite_gotos(body, labels, active)?;
             }
         }
         StmtKind::Try {
@@ -705,15 +723,15 @@ fn rewrite_nested_gotos(
             catches,
             finally_body,
         } => {
-            rewrite_gotos(try_body, labels)?;
+            rewrite_gotos(try_body, labels, active)?;
             for catch in catches {
-                rewrite_gotos(&mut catch.body, labels)?;
+                rewrite_gotos(&mut catch.body, labels, active)?;
             }
             if let Some(body) = finally_body {
-                rewrite_gotos(body, labels)?;
+                rewrite_gotos(body, labels, active)?;
             }
         }
-        StmtKind::Synthetic(body) => rewrite_gotos(body, labels)?,
+        StmtKind::Synthetic(body) => rewrite_gotos(body, labels, active)?,
         _ => {}
     }
     Ok(())

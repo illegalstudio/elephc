@@ -196,3 +196,26 @@ echo forwardjump(5), "|", forwardjump(-1);
     );
     assert_eq!(out, "fallback 5|positive-path");
 }
+
+/// Verifies a `goto` nested inside a cloned terminal tail reaches its own label instead of
+/// staying an inert marker: jumping to `b` clones a tail whose inner `goto a` must throw `A`.
+#[test]
+fn test_goto_nested_in_a_cloned_terminal_tail() {
+    let out = compile_and_run(
+        r#"<?php
+class A extends Exception {}
+class B extends Exception {}
+function f($x, $y, $z) {
+    if ($x) { goto b; }
+    if ($z) { a: throw new A; }
+    return 0;
+    b: if ($y) { goto a; }
+    throw new B;
+}
+foreach ([[1, 1, 0], [1, 0, 0], [0, 0, 1], [0, 0, 0]] as [$x, $y, $z]) {
+    try { echo f($x, $y, $z), "\n"; } catch (Exception $e) { echo get_class($e), "\n"; }
+}
+"#,
+    );
+    assert_eq!(out, "A\nB\nA\n0\n");
+}
