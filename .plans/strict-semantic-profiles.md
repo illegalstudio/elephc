@@ -371,7 +371,7 @@ evidence and outstanding guarantees are recorded below.
 
 ## Implementation progress
 
-Verified through step107 (this commit), with original-kind admission audits in progress. Issue:
+Verified through step108 (this commit), with original-kind admission audits in progress. Issue:
 https://github.com/illegalstudio/elephc/issues/2347.
 
 The full task remains active. The user requested complete implementation, with a
@@ -382,7 +382,7 @@ but its stronger numeric/reference/eval binding contract is outstanding. All
 other guarantees and the complete umbrella remain explicitly gated until their
 whole contract is enforced.
 
-This progress ledger condenses verified implementation through step107.
+This progress ledger condenses verified implementation through step108.
 Detailed evidence remains in Git history, historical Code Journal plan revisions,
 the linked work logs, and the current agent-facing architecture document
 3739892b. The approved behavior and delivery requirements above are unchanged.
@@ -986,7 +986,8 @@ paths. Keep this plan, agent documentation and the current journal log synchroni
 | 104 | `018184aad7` | feat(strict): enforce native string and formatting contracts |
 | 105 | `9da37f1595` | feat(strict): enforce eval string and formatting contracts |
 | 106 | `2d69515576` | fix(strict): validate native string updates before mutation |
-| 107 | this commit | fix(strict): reject logical null string operands |
+| 107 | `73105c526a` | fix(strict): reject logical null string operands |
+| 108 | this commit | fix(runtime): preserve logical null string identity |
 
 
 ### Builtin comparison policy integration
@@ -1187,3 +1188,43 @@ formatting/cast controls. Compiler build passed. This107 commit excludes the
 new boxed-null probe and its module registration. That probe is now registered
 and queued as2892c6b5/session8050 for the next boundary audit. No execution result
 exists for it yet, and Strings admission remains closed.
+
+
+### Logical string identity through native Mixed boundaries (108, verified)
+
+Baseline2892c6b5 reproduced both Mixed argument and return paths accepting a
+missing typed string as an empty string in concat. Four permissive optimizer
+controls passed, strict noopt produced x|x|x|ax instead of T|T|x|ax, owners clean
+(factdadab672). Shared string-null helpers now classify the dedicated pointer
+marker without confusing genuine empty strings or sentinel-valued integers.
+Borrowed/owned Mixed construction publishes canonical null, unboxing supports
+legacy string-shaped null cells, and scalar/boxed kind predicates share that
+classification. Owned frontend boxing delegates to the existing runtime boxer.
+This replaces107's operation-local IsNull check with the reusable string-kind
+predicate. Raw gettype classification also uses the shared pointer rule.
+
+First verificationead5a1c6 passed both relocation modes through Clang on all five
+targets, the small all-target string fixture, and all8 native boxed-null concat
+optimizer/profile controls. A second control fixture used unsupported
+get_debug_type and was corrected to the existing gettype/is_null/is_string
+surface; no builtin was added. PHP reference stdout confirms kind, genuine
+empty-string, colliding-integer and owned strstr result controls. Retry7b8b9b68
+(session80352) selects that control, the direct missing-read regression, existing
+Stringable throw/owner and permissive print owner fixtures, then compiler build.
+Its results are pending; no108 commit or new feature admission yet.
+
+
+Final108 verification7b8b9b68 exited0. Both default and strict kind/boxing
+controls match reference PHP, including empty/owned strstr strings, gettype,
+is_null/is_string and a real integer whose bits equal the string sentinel. Direct
+missing reads, existing strict boundary/owner bundle, Stringable throws,
+permissive print owners and compiler build pass with clean heaps. Additional
+backend verificatione72aabe4 passed raw unboxed gettype emission on all5 targets.
+The earlier Clang runtime check covered all5 target triples in direct/PIC modes,
+and the small EIR string fixture passed both optimizer settings. Assembly comment
+and whitespace audits pass. Task-owned cross-assembly directories were removed
+by their RAII owner. Shared string-kind classification now replaces107's local
+concat null check, so the same rule serves other value consumers. No serialized
+shape or semantic ABI bit changed; the existing source-derived runtime identity
+covers the new helpers. Strings remains staged pending real opaque eval,
+callable/reference and remaining host-boundary audits.

@@ -196,9 +196,10 @@ original concatenation operands before conversion hooks, and refuses implicit
 array formatting in echo, print and interpolation. Explicit string casts retain
 their conversion contract. Walker echo, owned output and both binary consumers
 share the same tag checks while their existing owner finishers handle failures.
-AOT concatenation also checks logical null behind concrete string storage, such
-as a missing typed-array entry. Its null predicate precedes the string-kind
-predicate; explicit formatting and string casts still produce an empty string.
+AOT string-kind predicates also recognize logical null behind concrete string
+storage, such as a missing typed-array entry. Shared Mixed boxers preserve that
+logical kind, and unboxing recognizes legacy string-shaped null cells. Explicit
+formatting and string casts still produce an empty string.
 Native XML compound concatenation also checks the original property operand.
 The shared `ObjectProperty::UpdateRead` adapter validates the update name and
 returns a read-only selection before either consumer enters the writable update

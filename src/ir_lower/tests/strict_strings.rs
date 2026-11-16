@@ -75,8 +75,9 @@ function joinMissingText(int $index): string { $parts = ['a']; return $parts[$in
                 let guards = module.data.strings.iter().any(|message| message.contains("--strict-strings:"));
                 assert_eq!(guards, mode != SourceMode::Internal, "{name}, {mode:?}, opt={optimized}");
                 let missing = module.functions.iter().find(|function| function.name == "joinMissingText").unwrap();
-                assert_eq!(missing.instructions.iter().any(|inst| inst.op == crate::ir::Op::IsNull),
-                    mode != SourceMode::Internal, "{name}, {mode:?}, opt={optimized}: logical null guard");
+                assert_eq!(missing.instructions.iter().any(|inst| inst.op == crate::ir::Op::TypePredicate
+                    && inst.immediate == Some(crate::ir::Immediate::TypePredicate(crate::ir::PhpTypePredicate::String))),
+                    mode != SourceMode::Internal, "{name}, {mode:?}, opt={optimized}: logical string guard");
                 crate::ir::validate_module(&module).unwrap();
                 crate::codegen::generate_user_asm_from_ir(&module, false, false).unwrap();
             }

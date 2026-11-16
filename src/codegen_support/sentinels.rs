@@ -31,6 +31,11 @@ use std::cell::Cell;
 use super::emit::Emitter;
 use super::platform::Arch;
 
+mod string_null;
+pub(crate) use string_null::{
+    emit_branch_if_null_string, emit_compare_null_string, emit_normalize_boxed_string_tag,
+};
+
 /// Selects how codegen represents PHP `null` in scalar slots.
 ///
 /// `Tagged` (default) gives null-capable scalar slots the inline two-word
