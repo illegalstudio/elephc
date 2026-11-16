@@ -228,14 +228,16 @@ pub(crate) fn reference_parameter_needs_entry_guard(ty: &PhpType) -> bool {
     }))
 }
 
-/// Checks every element a `callable ...$name` variadic collected, on entry to the callee, raising
-/// php's `f(): Argument #N must be of type callable, T given` `TypeError` for the first element
-/// that is not callable. `first_position` is the 1-based argument number of the first element.
+/// Checks every element a `callable ...$name` variadic (or `?callable ...$name`, `callable|false
+/// ...$name`) collected, on entry to the callee, raising php's `f(): Argument #N must be of type
+/// T, U given` `TypeError` for the first element the declared element type does not accept.
+/// `first_position` is the 1-based argument number of the first element.
 pub(crate) fn guard_declared_callable_variadic_entry(
     ctx: &mut LoweringContext<'_, '_>,
     function: &str,
     first_position: usize,
     name: &str,
+    element_type: &PhpType,
 ) {
     let span = Span::synthetic();
     let key = ctx.declare_hidden_temp(PhpType::Mixed);
@@ -255,7 +257,7 @@ pub(crate) fn guard_declared_callable_variadic_entry(
     let message = concat(
         literal(format!("{function}(): Argument #")),
         concat(argument, concat(
-            literal(" must be of type callable, ".to_string()),
+            literal(format!(" must be of type {}, ", diagnostic_type(element_type))),
             concat(runtime_debug_type(&element, span), literal(" given".to_string()), span),
             span,
         ), span),
@@ -265,8 +267,10 @@ pub(crate) fn guard_declared_callable_variadic_entry(
         class_name: Name::unqualified("TypeError"),
         args: vec![message],
     }, span);
+    let accepted = accepts_type(element_type, &element, span)
+        .unwrap_or_else(|| predicate("is_callable", &element, span));
     let check = Stmt::new(StmtKind::If {
-        condition: Expr::new(ExprKind::Not(Box::new(predicate("is_callable", &element, span))), span),
+        condition: Expr::new(ExprKind::Not(Box::new(accepted)), span),
         then_body: vec![Stmt::new(StmtKind::Throw(exception), span)],
         elseif_clauses: Vec::new(),
         else_body: None,
@@ -279,6 +283,43 @@ pub(crate) fn guard_declared_callable_variadic_entry(
         body: vec![check],
     }, span);
     crate::ir_lower::stmt::lower_stmt(ctx, &guard);
+}
+
+/// Checks a value returned through a declared `callable` (or a union with `callable`) before
+/// it leaves the function, raising php's `f(): Return value must be of type T, U returned`
+/// `TypeError`. The value keeps its owner; the check reads a retained copy in a hidden temp.
+pub(crate) fn guard_declared_callable_return(
+    ctx: &mut LoweringContext<'_, '_>,
+    function: &str,
+    value: LoweredValue,
+    return_type: &PhpType,
+    span: Span,
+) {
+    let value_type = ctx.builder.value_php_type(value.value);
+    let temp = ctx.declare_hidden_temp(value_type.clone());
+    let copy = crate::ir_lower::ownership::acquire_if_refcounted(ctx, value, Some(span));
+    store_value_into_temp(ctx, &temp, value_type, copy, span);
+    let returned = Expr::new(ExprKind::Variable(temp), span);
+    let Some(accepted) = accepts_type(return_type, &returned, span) else { return; };
+    let accepted = lower_expr(ctx, &accepted);
+    let ok = ctx.builder.create_named_block("callable.return.ok", Vec::new());
+    let bad = ctx.builder.create_named_block("callable.return.bad", Vec::new());
+    ctx.builder.terminate(Terminator::CondBr {
+        cond: accepted.value, then_target: ok, then_args: Vec::new(),
+        else_target: bad, else_args: Vec::new(),
+    });
+    ctx.builder.position_at_end(bad);
+    let literal = |text: String| Expr::new(ExprKind::StringLiteral(text), span);
+    let message = concat(
+        literal(format!(
+            "{function}(): Return value must be of type {}, ",
+            diagnostic_type(return_type)
+        )),
+        concat(runtime_debug_type(&returned, span), literal(" returned".to_string()), span),
+        span,
+    );
+    throw_message(ctx, "TypeError", message, span);
+    ctx.builder.position_at_end(ok);
 }
 
 /// Checks a by-reference parameter's value against its declared union on entry to the callee,

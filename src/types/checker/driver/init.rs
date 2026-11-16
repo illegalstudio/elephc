@@ -105,6 +105,7 @@ impl Checker {
             current_function: None,
             current_method_is_static: false,
             current_by_ref_return: false,
+            current_return_declares_callable: false,
             closure_depth: 0,
             extern_functions: HashMap::new(),
             extern_classes: HashMap::new(),

@@ -285,6 +285,7 @@ pub(super) fn emit_eval_native_function_invoker_inline(
             .is_some_and(crate::codegen::runtime_callable_invoker::function_returns_owned_string),
         php_return_status: true,
         defaults: &defaults,
+        convert_eval_callables: true,
     };
     // See `Emitter::begin_out_of_line` for the branch-range failure that splicing caused.
     let scope = ctx.emitter.begin_out_of_line();

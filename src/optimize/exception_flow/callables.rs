@@ -109,15 +109,18 @@ pub(super) fn collect_object_reference_entry_checks(
 ) {
     for stmt in stmts {
         match &stmt.kind {
-            StmtKind::FunctionDecl { name, params, .. } => {
-                if params_have_object_reference(params) {
+            StmtKind::FunctionDecl { name, params, return_type, .. } => {
+                if params_have_object_reference(params) || returns_declared_callable(return_type.as_ref()) {
                     functions.insert(name.clone());
                 }
             }
             StmtKind::ClassDecl { name, methods, .. }
             | StmtKind::InterfaceDecl { name, methods, .. }
             | StmtKind::TraitDecl { name, methods, .. } => {
-                for method in methods.iter().filter(|method| params_have_object_reference(&method.params)) {
+                for method in methods.iter().filter(|method| {
+                    params_have_object_reference(&method.params)
+                        || returns_declared_callable(method.return_type.as_ref())
+                }) {
                     let key = method_effect_key(name, &method.name);
                     if method.is_static {
                         static_methods.insert(key, true);
@@ -132,6 +135,12 @@ pub(super) fn collect_object_reference_entry_checks(
             _ => {}
         }
     }
+}
+
+/// Returns whether a declared `callable` return type checks the returned value, which raises
+/// `TypeError` for a value that is not callable before it leaves the body.
+fn returns_declared_callable(return_type: Option<&TypeExpr>) -> bool {
+    return_type.is_some_and(type_hint_mentions_callable)
 }
 
 /// Finds parameter hints that can reject a `Class|false` / `Class|null` argument.

@@ -316,6 +316,10 @@ pub(crate) struct Checker {
     /// reference (`function &f()`). A `return $obj->prop` in such a body promotes the
     /// property to a reference property (see `reference_property_promotions`).
     pub current_by_ref_return: bool,
+    /// Whether the body currently being checked declares a `callable` return type. A string
+    /// literal it returns names a function the runtime callable dispatch must know, like a
+    /// literal bound to a declared `callable` parameter (see `declared_callable_names`).
+    pub current_return_declares_callable: bool,
     /// Nesting depth of closure bodies currently being type-checked. A non-zero
     /// depth means `$this` is allowed even outside a class method: such a
     /// closure can be bound to an object later via `Closure::bind` / `bindTo`.
@@ -1440,6 +1444,17 @@ pub struct CheckOptions {
     /// Make an incompatible local retype (e.g. a variable assigned `int` then later
     /// `string`) a compile error instead of a warning.
     pub strict_locals: bool,
+}
+
+/// Returns whether a declared type annotation names `callable`, alone, nullable or as a union
+/// member.
+pub(crate) fn type_expr_declares_callable(type_expr: &TypeExpr) -> bool {
+    match type_expr {
+        TypeExpr::Named(name) => name.as_str().eq_ignore_ascii_case("callable"),
+        TypeExpr::Nullable(inner) => type_expr_declares_callable(inner),
+        TypeExpr::Union(members) => members.iter().any(type_expr_declares_callable),
+        _ => false,
+    }
 }
 
 /// Returns whether a called name is PHP's `unset`, the only builtin that ends a local binding.

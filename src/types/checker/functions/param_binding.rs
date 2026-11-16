@@ -289,6 +289,23 @@ impl Checker {
         self.require_compatible_arg_type(expected, actual, arg.span, context)
     }
 
+    /// Records a function name a `callable` return type returns as a string literal.
+    ///
+    /// The value leaves the function as the plain string, so invoking it later resolves the
+    /// name at run time; the runtime dispatch only knows builtin names written as literals
+    /// where a declared callable keeps the string. An unknown name is left to the return
+    /// value's runtime `TypeError`, as PHP raises it.
+    pub(crate) fn record_declared_callable_literal_return(&mut self, returned: &Expr) {
+        let crate::parser::ast::ExprKind::StringLiteral(name) = &returned.kind else {
+            return;
+        };
+        if let Some(crate::parser::ast::CallableTarget::Function(function)) =
+            crate::types::param_binding::callable_target_from_name(name)
+        {
+            self.declared_callable_names.insert(function.as_str().to_string());
+        }
+    }
+
     fn register_bound_callable_param_sig(
         &mut self,
         owner: Option<(&str, &str)>,

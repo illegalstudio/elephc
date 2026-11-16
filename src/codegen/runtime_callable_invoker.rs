@@ -129,6 +129,9 @@ pub(super) struct RuntimeCallableInvoker<'a> {
     /// A declared default that could not be folded into a materializable value stays `None`, and
     /// the invoker keeps its fatal diagnostic for that slot rather than inventing a value.
     pub(super) defaults: &'a [Option<InvokerDefaultValue>],
+    /// Invokers called from eval convert eval-only callbacks bound to a declared `callable`
+    /// parameter (see `emit_owned_declared_callable_argument`).
+    pub(super) convert_eval_callables: bool,
 }
 
 /// Reports whether regular or variadic callable parameters can require runtime normalization.
@@ -158,7 +161,7 @@ struct InvokerEmitContext {
     defaults: InvokerDefaults,
     /// The declared literal parameter currently being decoded, before ABI coercion.
     literal_parameter: Option<(usize, String)>,
-    /// Eval-facing invokers convert eval-only callbacks bound to a declared `callable`.
+    /// Invokers reached from eval convert eval-only callbacks bound to a declared `callable`.
     convert_eval_callables: bool,
 }
 
@@ -280,7 +283,7 @@ fn emit_runtime_callable_invoker_impl(
     );
     ctx.mbstring_operation = invoker.mbstring_operation;
     ctx.mbstring_variable_ref_warnings = invoker.mbstring_variable_ref_warnings;
-    ctx.convert_eval_callables = catch_native_throws;
+    ctx.convert_eval_callables = invoker.convert_eval_callables || catch_native_throws;
 
     emitter.blank();
     emitter.comment(&format!("runtime callable invoker {}", invoker.label));
@@ -3817,6 +3820,7 @@ mod tests {
                     label, sig: &signature, captures: &[], mbstring_operation: None,
                     mbstring_variable_ref_warnings: false, owns_string_return: false,
                     php_return_status: false, defaults: &defaults,
+                    convert_eval_callables: false,
                 };
                 emit_runtime_callable_invoker_impl(&mut emitter, &mut data, &invoker, true);
             }
@@ -3972,6 +3976,7 @@ mod tests {
             owns_string_return: false,
             php_return_status: false,
             defaults: &[None],
+            convert_eval_callables: false,
         };
         for name in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
             let target = Target::parse(name).unwrap();
@@ -4329,6 +4334,7 @@ mod tests {
             owns_string_return: false,
             php_return_status: false,
             defaults: &defaults,
+            convert_eval_callables: false,
         };
         emit_runtime_callable_invoker_impl(&mut emitter, &mut DataSection::new(), &invoker, false);
         emitter.output()
