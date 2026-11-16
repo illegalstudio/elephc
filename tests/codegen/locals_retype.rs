@@ -3056,9 +3056,11 @@ fn test_by_ref_foreach_value_var_takes_an_int_into_a_string_array() {
 /// Control: a by-reference `foreach` that keeps the element type must NOT be boxed.
 ///
 /// `$n = 7` over an `array<int>` joins `int` with `int`, `representation_contract` answers `None`,
-/// and the loop keeps its raw element slots — a clean heap is the observable proof, because the
-/// boxed path always leaves the 48-byte residual the fixture above pins. This is what fails if the
-/// rule ever degrades to "a by-reference foreach boxes its source".
+/// and the loop keeps its raw element slots. Both representations now end with a clean heap and
+/// print the same thing, so the representation is read from the allocation count: the twin
+/// stores an `int|string` value through the reference, which boxes every element (one cell per
+/// element more than the raw array needs). This is what fails if the rule ever degrades to "a
+/// by-reference foreach boxes its source".
 ///
 /// `$n = $n * 10` is deliberately NOT the control: `infer_type` answers `Mixed` for `int * int`
 /// (PHP's arithmetic overflows to float), so that shape really does box — and it boxes for the
@@ -3080,6 +3082,21 @@ fn test_by_ref_foreach_without_a_retype_keeps_its_element_type() {
         out.stderr.contains("HEAP DEBUG: leak summary: clean"),
         "expected a clean heap, got: {}",
         out.stderr
+    );
+    let boxed = compile_and_run_with_heap_debug(
+        "<?php $nums = [1, 2, 3];
+         foreach ($nums as &$n) { $n = $argc > 5 ? \"x\" : 7; }
+         unset($n);
+         foreach ($nums as $x) { echo $x, \"|\"; }
+         echo \\gettype($nums[0]);",
+    );
+    assert!(boxed.success, "program failed: {}", boxed.stderr);
+    assert_eq!(boxed.stdout, out.stdout);
+    assert!(
+        heap_debug_allocs(&out.stderr) + 3 <= heap_debug_allocs(&boxed.stderr),
+        "expected the raw array to allocate no cell per element: raw {} vs boxed {}",
+        out.stderr,
+        boxed.stderr
     );
 
     let through_reference = compile_and_run_with_heap_debug(
@@ -3482,8 +3499,10 @@ echo implode(",", $r), "|", count($r), "|", gettype($r[0]);
 ///
 /// `$i = \strlen($s)` stores an `int` into an `int` cell, so `merged_assignment_type` keeps `Int`
 /// and the pre-pass records nothing — this fixture is what fails if the rule ever degrades to
-/// "any assignment to a by-reference parameter boxes it". A clean heap is the observable half:
-/// the boxed path leaves a residual, as the fixture above pins.
+/// "any assignment to a by-reference parameter boxes it". Both representations now end with a
+/// clean heap, so the representation is read from the allocation count: the twin stores an
+/// `int|false` value, which widens the cell to a boxed `Mixed` and allocates for it while printing
+/// the same thing.
 #[test]
 fn test_by_ref_param_that_keeps_its_type_is_not_widened() {
     let out = compile_and_run_with_heap_debug(
@@ -3497,6 +3516,28 @@ fn test_by_ref_param_that_keeps_its_type_is_not_widened() {
         "expected a clean heap, got: {}",
         out.stderr
     );
+    let widened = compile_and_run_with_heap_debug(
+        "<?php function measure(string $s, int &$i): void { $i = \\strlen($s) > 99 ? false : \\strlen($s); }
+         $n = 0; measure(\"abcd\", $n); echo $n, \"|\", \\gettype($n);",
+    );
+    assert!(widened.success, "program failed: {}", widened.stderr);
+    assert_eq!(widened.stdout, out.stdout);
+    assert!(
+        heap_debug_allocs(&out.stderr) < heap_debug_allocs(&widened.stderr),
+        "expected the unwidened cell to allocate no box: unwidened {} vs widened {}",
+        out.stderr,
+        widened.stderr
+    );
+}
+
+/// Reads the `allocs=` count from a heap-debug summary on stderr.
+fn heap_debug_allocs(stderr: &str) -> usize {
+    stderr
+        .split("allocs=")
+        .nth(1)
+        .and_then(|rest| rest.split_whitespace().next())
+        .and_then(|count| count.parse().ok())
+        .expect("heap-debug allocation count")
 }
 
 /// Verifies a local that holds `false` on one path and an `int` on another keeps both types.
