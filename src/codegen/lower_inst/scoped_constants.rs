@@ -11,7 +11,6 @@
 //!   is an object pointer, and every read of the same case returns the same one.
 
 use crate::codegen::abi;
-use crate::codegen_support;
 use crate::ir::Instruction;
 
 use super::super::context::FunctionContext;
@@ -70,13 +69,10 @@ pub(super) fn lower_scoped_constant_get(
     store_if_result(ctx, inst)
 }
 
-/// Emits PHP's runtime fatal for a scoped constant whose receiver class was unavailable during
-/// closed-world compilation, preserving lazy class resolution for paths that never execute.
+/// Throws php's catchable `Error` for a scoped constant whose receiver class was unavailable
+/// during closed-world compilation, preserving lazy class resolution for paths that never execute.
 fn emit_unknown_class_fatal(ctx: &mut FunctionContext<'_>, class_name: &str) {
-    let message = format!("Fatal error: Uncaught Error: Class \"{}\" not found\n", class_name);
-    let (message_label, message_len) = ctx.data.add_string(message.as_bytes());
-    codegen_support::emit_write_literal_stderr(ctx.emitter, &message_label, message_len);
-    abi::emit_exit(ctx.emitter, 1);
+    super::exceptions::emit_error(ctx, &format!("Class \"{}\" not found", class_name));
 }
 
 /// Resolves the string immediate `Enum::Case` attached to a scoped constant read.

@@ -88,6 +88,8 @@ mod class_relation_names;
 mod mixed_receiver_property_writes;
 #[path = "oop/static_receiver_lifetime.rs"]
 mod static_receiver_lifetime;
+#[path = "oop/static_property_runtime_name_writes.rs"]
+mod static_property_runtime_name_writes;
 #[path = "oop/static_receiver_dynamic.rs"]
 mod static_receiver_dynamic;
 #[path = "oop/reflection_attribute_filter.rs"]

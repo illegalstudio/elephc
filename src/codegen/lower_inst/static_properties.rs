@@ -330,8 +330,7 @@ where
     }
 
     ctx.emitter.label(&miss_label);
-    abi::emit_release_temporary_stack(ctx.emitter, 16);
-    emit_undefined_dynamic_static_property_fatal(ctx, &class_name);
+    emit_undeclared_dynamic_static_property_error(ctx, &class_name);
     ctx.emitter.label(&done_label);
     Ok(())
 }
@@ -387,7 +386,10 @@ fn value_is_same_dynamic_static_property_load(
     if def.op != crate::ir::Op::LoadDynamicStaticProperty {
         return Ok(false);
     }
-    Ok(static_property_label(ctx, def)? == static_property_label(ctx, inst)?)
+    // Same class AND same runtime name operand: `C::$$a = C::$$b` loads a DIFFERENT slot than it
+    // stores, so it is an ordinary store, not an in-place write-back.
+    Ok(static_property_label(ctx, def)? == static_property_label(ctx, inst)?
+        && expect_operand(def, 0)? == expect_operand(inst, 0)?)
 }
 
 /// Validates the materialized runtime property-name operand.
@@ -446,34 +448,29 @@ fn dynamic_static_property_candidates(
     Ok(slots)
 }
 
-/// Emits a PHP fatal when no declared static property matches the runtime name.
-fn emit_undefined_dynamic_static_property_fatal(
-    ctx: &mut FunctionContext<'_>,
-    class_name: &str,
-) {
-    let message = format!(
-        "Fatal error: Access to undefined static property {}::$\n",
-        class_name
-    );
-    let (message_label, message_len) = ctx.data.add_string(message.as_bytes());
+/// Throws the catchable `Error` php raises when no static property matches the runtime name,
+/// naming the property from the (ptr, len) pair `dispatch_dynamic_static_property` staged on the
+/// temporary stack.
+fn emit_undeclared_dynamic_static_property_error(ctx: &mut FunctionContext<'_>, class_name: &str) {
+    let prefix = format!("Access to undeclared static property {}::$", class_name);
+    let (prefix_label, prefix_len) = ctx.data.add_string(prefix.as_bytes());
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
-            ctx.emitter.instruction("mov x0, #2");
-            abi::emit_symbol_address(ctx.emitter, "x1", &message_label);
-            ctx.emitter
-                .instruction(&format!("mov x2, #{}", message_len));
-            ctx.emitter.syscall(4);
+            abi::emit_symbol_address(ctx.emitter, "x1", &prefix_label);
+            abi::emit_load_int_immediate(ctx.emitter, "x2", prefix_len as i64);
+            abi::emit_load_temporary_stack_slot(ctx.emitter, "x3", 0);
+            abi::emit_load_temporary_stack_slot(ctx.emitter, "x4", 8);
         }
         Arch::X86_64 => {
-            abi::emit_symbol_address(ctx.emitter, "rsi", &message_label);
-            ctx.emitter
-                .instruction(&format!("mov edx, {}", message_len));
-            ctx.emitter.instruction("mov edi, 2");
-            ctx.emitter.instruction("mov eax, 1");
-            ctx.emitter.instruction("syscall");
+            abi::emit_symbol_address(ctx.emitter, "rax", &prefix_label);
+            abi::emit_load_int_immediate(ctx.emitter, "rdx", prefix_len as i64);
+            abi::emit_load_temporary_stack_slot(ctx.emitter, "rdi", 0);
+            abi::emit_load_temporary_stack_slot(ctx.emitter, "rsi", 8);
         }
     }
-    abi::emit_exit(ctx.emitter, 1);
+    abi::emit_call_label(ctx.emitter, "__rt_concat");
+    abi::emit_release_temporary_stack(ctx.emitter, 16);
+    super::exceptions::emit_error_from_string_result(ctx);
 }
 
 /// Lowers a static-property initialization probe for ordinary PHP source.
