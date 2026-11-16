@@ -2188,7 +2188,7 @@ pub(super) fn lower_args_with_signature_options_for_capture(
                 }
             }).collect();
         }
-        return lower_args(ctx, args);
+        return lower_runtime_spread_args(ctx, sig, args);
     }
     let regular_param_count = crate::types::call_args::regular_param_count(sig);
     let fixed_arg_count = if sig.variadic.is_some() {
@@ -2505,4 +2505,36 @@ fn property_argument_is_declared(ctx: &LoweringContext<'_, '_>, arg: &Expr) -> b
                     matches!(ty.codegen_repr(), PhpType::Mixed | PhpType::Union(_))
                 })
         })
+}
+
+/// Lowers a call whose runtime spread the callee binds itself, then checks and converts the
+/// positional arguments written before the first spread.
+///
+/// PHP evaluates every argument, the spread included, before the callee checks any parameter,
+/// so the prefix is checked (in parameter order, like any other call) only after the spread
+/// source was evaluated. Without this the prefix reached a declared scalar parameter unchecked:
+/// `$o->m($null, ...side())` bound `null` as `""` instead of throwing `TypeError`.
+fn lower_runtime_spread_args(
+    ctx: &mut LoweringContext<'_, '_>,
+    sig: &FunctionSig,
+    args: &[Expr],
+) -> Vec<crate::ir::ValueId> {
+    let mut operands = lower_args(ctx, args);
+    let prefix_len = args
+        .iter()
+        .take_while(|arg| !is_spread_arg(arg) && !matches!(arg.kind, ExprKind::NamedArg { .. }))
+        .count()
+        .min(crate::types::call_args::regular_param_count(sig))
+        .min(operands.len());
+    if prefix_len == 0 {
+        return operands;
+    }
+    let rest = operands.split_off(prefix_len);
+    let sources = args[..prefix_len]
+        .iter()
+        .map(|arg| super::scalar_param_guards::GuardSource::Recorded(arg.span))
+        .collect::<Vec<_>>();
+    let mut operands = coerce_operands_to_params_guarded(ctx, sig, operands, Some(&sources), false);
+    operands.extend(rest);
+    operands
 }
