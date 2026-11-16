@@ -4902,3 +4902,24 @@ echo json_encode(array_map(fn ($a, $b) => $a . $b, ["x", "y"], ["1", "2"])), "\n
 "###);
     assert_eq!(out, "[1,\"side\"]\n1\n[\"a\",\"c\"]\n[\"x1\",\"y2\"]\n");
 }
+
+/// An omitted optional `mixed` parameter of a method called through an untyped receiver is staged
+/// as a fresh box the call site owns; it is released after the call (it leaked one cell, plus the
+/// string of a string default, per call).
+#[test]
+fn test_omitted_optional_mixed_argument_of_a_runtime_dispatched_call_does_not_leak() {
+    let out = compile_and_run_with_heap_debug(r###"<?php
+class A { function f($a, $b = null) { return $a; } }
+class B { function f($a, $b = 'x') { return $a + 1; } }
+class C { function f($a, $b = 5) { return $a + 2; } }
+function g($o) { return $o->f(1); }
+$sum = 0;
+for ($i = 0; $i < 30; $i++) {
+    $sum += g($i % 3 == 0 ? new A : ($i % 3 == 1 ? new B : new C));
+}
+echo $sum, "\n";
+"###);
+    assert!(out.success, "{}", out.stderr);
+    assert_eq!(out.stdout, "60\n");
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}

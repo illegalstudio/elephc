@@ -285,10 +285,13 @@ pub(super) fn materialize_method_call_args_with_receiver_reg_refs_defaults_and_t
     emit_ref_arg_cell_block(ctx, &mut no_writebacks, &mut ref_temp_cells)?;
     let mut cleanup_slots = plan_call_arg_temp_cleanups(ctx, operands, param_types, ref_params, &[])?;
     // An omitted array parameter with no literal default is a variadic tail (see
-    // `mixed_method_candidates`): the call passes a fresh array and releases it afterwards.
+    // `mixed_method_candidates`): the call passes a fresh array and releases it afterwards. An
+    // omitted `mixed` parameter is staged as a fresh box the caller owns, released the same way.
     for param_index in operands.len().max(1)..param_types.len() {
         if !ref_params[param_index]
-            && (Some(param_index) == tail_index || empty_array_default(param_index))
+            && (Some(param_index) == tail_index
+                || empty_array_default(param_index)
+                || param_types[param_index].codegen_repr() == PhpType::Mixed)
         {
             cleanup_slots.push(CallArgTempCleanup {
                 param_index,
@@ -444,6 +447,13 @@ pub(super) fn materialize_method_call_args_with_receiver_reg_refs_defaults_and_t
                         crate::codegen::emit_box_current_value_as_mixed(ctx.emitter, &PhpType::Str);
                     }
                     _ => objects::emit_boxed_null(ctx),
+                }
+                // The staged box is the caller's: a cleanup slot releases it after the call.
+                if let Some(cleanup) = cleanup_slots
+                    .iter()
+                    .find(|cleanup| cleanup.param_index == param_index)
+                {
+                    save_call_arg_temp_cleanup(ctx, cleanup, arg_temp_bytes);
                 }
                 abi::emit_push_result_value(ctx.emitter, &PhpType::Mixed);
             }
