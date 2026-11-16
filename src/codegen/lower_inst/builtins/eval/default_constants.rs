@@ -208,12 +208,7 @@ pub(super) fn resolve_eval_native_default_class<'a>(
     module: &'a Module,
     class_name: &str,
 ) -> Option<(&'a str, &'a ClassInfo)> {
-    let class_key = php_symbol_key(class_name.trim_start_matches('\\'));
-    module
-        .class_infos
-        .iter()
-        .find(|(candidate, _)| php_symbol_key(candidate.trim_start_matches('\\')) == class_key)
-        .map(|(name, info)| (name.as_str(), info))
+    resolve_case_insensitive_entry(&module.class_infos, class_name)
 }
 
 /// Looks up interface metadata by PHP-style case-insensitive name.
@@ -221,10 +216,76 @@ pub(super) fn resolve_eval_native_default_interface<'a>(
     module: &'a Module,
     interface_name: &str,
 ) -> Option<(&'a str, &'a InterfaceInfo)> {
-    let interface_key = php_symbol_key(interface_name.trim_start_matches('\\'));
-    module
-        .interface_infos
+    resolve_case_insensitive_entry(&module.interface_infos, interface_name)
+}
+
+#[cfg(test)]
+thread_local! {
+    /// Counts the linear fallback scans `resolve_case_insensitive_entry` had to make.
+    static CASE_INSENSITIVE_SCANS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// Finds `name` in a declaration table keyed by the declared spelling, ignoring ASCII case.
+///
+/// The spelling a reference carries is almost always the declared one, so the exact key is
+/// probed first. Only a differently cased reference falls back to a walk of the table, which
+/// compares in place instead of lowercasing every candidate into a fresh string: the registration
+/// collector asks once per class, constant and ancestor level, and that used to be quadratic in
+/// the class count with an allocation per step.
+fn resolve_case_insensitive_entry<'a, V, S: std::hash::BuildHasher>(
+    table: &'a std::collections::HashMap<String, V, S>,
+    name: &str,
+) -> Option<(&'a str, &'a V)> {
+    let wanted = name.trim_start_matches('\\');
+    if let Some((key, value)) = table.get_key_value(wanted) {
+        return Some((key.as_str(), value));
+    }
+    #[cfg(test)]
+    CASE_INSENSITIVE_SCANS.with(|scans| scans.set(scans.get() + 1));
+    table
         .iter()
-        .find(|(candidate, _)| php_symbol_key(candidate.trim_start_matches('\\')) == interface_key)
-        .map(|(name, info)| (name.as_str(), info))
+        .find(|(candidate, _)| candidate.trim_start_matches('\\').eq_ignore_ascii_case(wanted))
+        .map(|(key, value)| (key.as_str(), value))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::collections::HashMap;
+
+    /// Counts the fallback scans made while `lookup` runs.
+    fn scans_during(lookup: impl FnOnce()) -> usize {
+        let before = CASE_INSENSITIVE_SCANS.with(|scans| scans.get());
+        lookup();
+        CASE_INSENSITIVE_SCANS.with(|scans| scans.get()) - before
+    }
+
+    /// Verifies a lookup by the declared spelling never walks the table, so a registration pass
+    /// over N classes does N probes rather than N * N comparisons.
+    #[test]
+    fn exact_spelling_lookups_never_scan_the_table() {
+        let table: HashMap<String, usize> =
+            (0..2_000).map(|index| (format!("App\\Class{index}"), index)).collect();
+        let scans = scans_during(|| {
+            for index in 0..2_000 {
+                let (key, value) =
+                    resolve_case_insensitive_entry(&table, &format!("\\App\\Class{index}"))
+                        .expect("declared class");
+                assert_eq!((key, *value), (format!("App\\Class{index}").as_str(), index));
+            }
+        });
+        assert_eq!(scans, 0);
+    }
+
+    /// Verifies a differently cased reference still resolves, through exactly one scan.
+    #[test]
+    fn differently_cased_lookups_scan_once_and_still_resolve() {
+        let table: HashMap<String, usize> =
+            (0..50).map(|index| (format!("App\\Class{index}"), index)).collect();
+        let mut found = None;
+        let scans = scans_during(|| found = resolve_case_insensitive_entry(&table, "app\\CLASS7"));
+        assert_eq!(found.map(|(key, value)| (key, *value)), Some(("App\\Class7", 7)));
+        assert_eq!(scans, 1);
+        assert!(resolve_case_insensitive_entry(&table, "App\\Missing").is_none());
+    }
 }
