@@ -947,6 +947,7 @@ fn emit_ensure_capacity(emitter: &mut Emitter) {
     emitter.label("__rt_sprintf_ensure_capacity_prepare_x64");
     emitter.instruction("mov QWORD PTR [rbp - 696], r11");                      // save the new capacity across helper calls
     emitter.instruction("mov QWORD PTR [rbp - 704], r8");                       // save the written prefix length across helper calls
+    emitter.instruction("sub rsp, 8");                                          // the subroutine is entered by call (rsp % 16 == 8): realign for the nested calls
     emitter.instruction("mov rax, QWORD PTR [rbp - 48]");                       // publish the old reservation start pointer
     emitter.instruction("xor edx, edx");                                        // release an unfinalized scratch reservation before moving it
     emitter.instruction("call __rt_concat_publish");                            // restore concat scratch state; heap-backed reservations are already independent
@@ -955,7 +956,9 @@ fn emit_ensure_capacity(emitter: &mut Emitter) {
     emitter.instruction("mov rsi, QWORD PTR [rbp - 696]");                      // request the selected grown capacity
     emitter.instruction("call __rt_concat_grow");                               // allocate owned storage, copy the prefix, and release the old heap block if any
     emitter.instruction("mov QWORD PTR [rbp - 48], rax");                       // publish the new result start pointer
-    emitter.instruction("add rbx, QWORD PTR [rbp - 704]");                      // restore the write cursor at the same logical result offset
+    emitter.instruction("add rsp, 8");                                          // drop the alignment pad
+    emitter.instruction("add rax, QWORD PTR [rbp - 704]");                      // rebase the write cursor onto the NEW storage at the same logical offset
+    emitter.instruction("mov rbx, rax");                                        // the cursor continues in the grown block, not the old one
     emitter.instruction("mov r8, QWORD PTR [rbp - 696]");                       // reload the selected capacity
     emitter.instruction("mov QWORD PTR [rbp - 120], r8");                       // publish the capacity for later appends
     emitter.label("__rt_sprintf_ensure_capacity_done_x64");
