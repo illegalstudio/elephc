@@ -125,7 +125,9 @@ impl Checker {
                     }
                     Ok(result)
                 },
-                Some(PhpType::Int) => Ok(if self.has_fixed_tagged_reference_storage(name, env) {
+                Some(PhpType::Int) => Ok(if self.has_fixed_tagged_reference_storage(name, env)
+                    || (self.semantic_source_mode != crate::source::SourceMode::Internal
+                        && self.semantic_profile.contains(elephc_semantics::StrictFeature::Locals)) {
                     PhpType::Int
                 } else { PhpType::Mixed }),
                 Some(PhpType::Mixed) => Ok(PhpType::Mixed),

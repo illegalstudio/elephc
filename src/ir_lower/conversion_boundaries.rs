@@ -22,8 +22,14 @@ pub(super) fn active(ctx: &LoweringContext<'_, '_>, destination: &PhpType) -> bo
 /// Checks declared membership and returns the same value and ownership without conversion.
 pub(super) fn implicit(ctx: &mut LoweringContext<'_, '_>, value: LoweredValue,
     destination: &PhpType, span: Span) -> LoweredValue {
+    membership(ctx, value, destination, StrictFeature::Coercions, span)
+}
+
+/// Reuses rooted kind checks while retaining the local store's independently owning guarantee.
+fn membership(ctx: &mut LoweringContext<'_, '_>, value: LoweredValue,
+    destination: &PhpType, feature: StrictFeature, span: Span) -> LoweredValue {
     let actual = ctx.builder.value_php_type(value.value);
-    match crate::semantics::conversions::implicit(ctx.semantic_profile, ctx.source_mode, destination, &actual) {
+    match crate::semantics::conversions::membership(ctx.semantic_profile, ctx.source_mode, feature, destination, &actual) {
         ConversionPlan::ExistingBehavior | ConversionPlan::Identity => return value,
         _ => {}
     }
@@ -89,7 +95,7 @@ pub(super) fn implicit(ctx: &mut LoweringContext<'_, '_>, value: LoweredValue,
             Op::IBitOr.default_effects(), Some(span));
     }
     semantic_guards::require(ctx, accepted, Op::ThrowTypeError,
-        &format!("--strict-coercions requires {destination} without implicit conversion"), Some(span));
+        &format!("--{} requires {destination} without implicit conversion", feature.flag()), Some(span));
     super::expr::call_operand_owners::unpin_in_flight_owners(ctx, pins, span);
     if let Some(boxed) = guard_box { super::ownership::release_if_owned(ctx, boxed, Some(span)); }
     value
@@ -98,11 +104,12 @@ pub(super) fn implicit(ctx: &mut LoweringContext<'_, '_>, value: LoweredValue,
 /// Validates a later write using its checked declaration rather than a narrowed local read view.
 pub(super) fn local_store(ctx: &mut LoweringContext<'_, '_>, name: &str, value: LoweredValue,
     span: Span) -> Option<(LoweredValue, PhpType)> {
-    let destination = ctx.local_store_contracts.get(
+    let contract = ctx.local_store_contracts.get(
         &(ctx.loop_storage_scope.clone(), span, name.to_string()))?.clone();
-    if !active(ctx, &destination) { return None; }
-    let value = implicit(ctx, value, &destination, span);
-    Some((value_storage(ctx, value, &destination, span), destination))
+    if ctx.source_mode == crate::source::SourceMode::Internal
+        || !ctx.semantic_profile.contains(contract.feature) { return None; }
+    let value = membership(ctx, value, &contract.ty, contract.feature, span);
+    Some((value_storage(ctx, value, &contract.ty, span), contract.ty))
 }
 
 /// Extracts only a kind already accepted by the guard, preserving its PHP-visible value.

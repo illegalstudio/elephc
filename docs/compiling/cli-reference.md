@@ -310,7 +310,7 @@ services. See [Profiling](../beyond-php/profiling.md) for both in full.
 | `--emit-ir` | — | off | Print the EIR textual form and stop. |
 | `--check` | — | off | Run checks and write nothing; exported code also receives EIR cdylib call-graph safety validation. |
 | `--php-only` | - | off | Reject elephc extensions in every physical PHP-mode file; `.lfc` remains extension-enabled. See [PHP-only mode](#php-only-mode). |
-| `--strict-locals` | — | off | Make an incompatible local retype (e.g. int then string) a compile error instead of a warning. See [Strict locals mode](#strict-locals-mode). |
+| `--strict-locals` | - | off | Keep local binding types stable, including integer/float changes. See [Strict locals mode](#strict-locals-mode). |
 | `--source-map` | — | off | Emit a `.map` JSON sidecar next to the assembly ([schema](source-maps.md)). |
 | `--debug-info` | — | off | Embed DWARF `.file`/`.loc` line directives in the assembly for lldb/gdb/profilers. |
 | `--keep-symbols` | — | off | Keep the symbol table in the linked executable. It is stripped by default; `--debug-info` also implies keeping it. See [Symbol stripping](#symbol-stripping). |
@@ -766,7 +766,7 @@ without enabling strict-dynamic-code.
 
 | Flag | Values | Default | Description |
 |---|---|---|---|
-| `--strict-locals` | — | off | Make an incompatible local retype (e.g. int then string) a compile error instead of a warning. |
+| `--strict-locals` | - | off | Keep local binding types stable, including integer/float changes. |
 
 By default (permissive mode) an **untyped** local variable is allowed to
 change type during its lifetime in three shapes that would otherwise be a
@@ -797,8 +797,8 @@ compile error:
   fresh arithmetic result and the name is not a parameter: a counter name
   reused by a later loop
   (`for ($i = $n - 1; …)` after `for ($i = 0; …)`) then keeps one slot per
-  loop. This is a storage decision with no typing effect, so `--strict-locals`
-  does not change it.
+  loop. Under `--strict-locals`, a storage split must also preserve the original
+  numeric binding contract; an integer binding cannot widen to float.
 - **Branch-divergent assignment.** `if (…) { $a = 0; } else { $a = "ciao"; }`
   — and the same shape for a single-branch retype of an outer binding, or a
   heterogeneous loop-carried local — compiles instead of failing, as
@@ -838,9 +838,10 @@ this body binds with `global`, a `static` name, or a superglobal or seeded name
 A **declared type** always stays strict in both modes: a typed local
 (`int $x = 5;`) and a class property never retype or box to `Mixed` —
 reassigning one incompatibly is a compile error exactly as before. A
-**parameter type hint** is not such a declaration: it constrains the incoming
-argument, not the local, so a type-hinted parameter is exactly as eligible as an
-untyped one (a by-REFERENCE parameter stays excluded, by the rule above).
+**parameter type hint** in permissive mode constrains the incoming argument,
+so a type-hinted parameter is eligible like an untyped one (a by-REFERENCE
+parameter stays excluded, by the rule above). With `--strict-locals`, a numeric
+parameter also retains its numeric binding contract after entry.
 
 Beyond those shared exclusions the shapes are gated differently:
 
@@ -905,6 +906,20 @@ Beyond those shared exclusions the shapes are gated differently:
 ```text
 Type error: cannot reassign $a from int to string
 ```
+
+Numeric bindings also retain their original PHP kinds. `$count = $argc;
+$count = 1.5;` is rejected with `--strict-locals`. A dynamic assignment is checked
+before storage changes and throws `TypeError` on a wrong kind. The same rule
+covers compound assignments and prefix/postfix updates. When integer arithmetic
+promotes to float, storing the result in an integer binding throws `TypeError`
+and preserves the previous value. A standalone overflowing expression retains
+PHP promotion unless `--strict-overflow` is separately enabled.
+
+Explicit `int|float` declarations accept both numeric kinds, and explicit `mixed`
+declarations remain open. A legitimate `unset` ends the old binding and permits a
+new kind. These checks do not enable `--strict-coercions`, `--strict-arithmetic`,
+`--strict-casts` or `--strict-comparisons`. See
+[`examples/strict-locals/main.php`](https://github.com/illegalstudio/elephc/blob/main/examples/strict-locals/main.php).
 
 `eval()`'d code — whether AOT-lowered from a literal fragment or run through
 the optional Magician interpreter bridge — reads and writes its locals through

@@ -796,7 +796,9 @@ pub(super) fn lower_inc_dec(
     let existing_type = ctx.local_type(name);
     let update_policy = crate::semantics::numeric::operation_policy(ctx.semantic_profile, ctx.source_mode);
     let checked_update = update_policy.checked_overflow();
-    let guarded_update = !update_policy.is_permissive();
+    let guarded_update = !update_policy.is_permissive()
+        || (ctx.source_mode != crate::source::SourceMode::Internal
+            && ctx.semantic_profile.contains(elephc_semantics::StrictFeature::Locals));
     let op = if increment { BinOp::Add } else { BinOp::Sub };
     if let Some(plan) = crate::types::object_operators::binary_plan_with_classes(
         &op, &existing_type, &PhpType::Int, ctx.classes,
@@ -811,7 +813,7 @@ pub(super) fn lower_inc_dec(
                 |ctx| lower_str_inc_dec(ctx, old, increment, expr)));
         if let Some(new) = new {
             let stored_type = if plan.result_type(&op).is_int_float_union() { PhpType::Mixed } else { existing_type };
-            ctx.store_local(name, new, stored_type, Some(expr.span));
+            store_checked_update(ctx, name, new, stored_type, expr.span);
             unpin_in_flight_owners(ctx, old_pins, expr.span);
             return if post { return_old } else { ctx.load_local(name, Some(expr.span)) };
         }
@@ -823,7 +825,7 @@ pub(super) fn lower_inc_dec(
     if matches!(existing_type.codegen_repr(), PhpType::Void) {
         if increment {
             let one = lower_int_literal(ctx, 1, expr);
-            ctx.store_local(name, one, PhpType::Int, Some(expr.span));
+            store_checked_update(ctx, name, one, PhpType::Int, expr.span);
             return if post { old } else { ctx.load_local(name, Some(expr.span)) };
         }
         emit_null_decrement_warning(ctx, expr.span);
@@ -841,7 +843,7 @@ pub(super) fn lower_inc_dec(
         let new = object_operators::lower_dynamic_object_binary(ctx, old, &op, one, expr, true,
             |ctx| lower_str_inc_dec(ctx, old, increment, expr))
             .unwrap_or_else(|| lower_str_inc_dec(ctx, old, increment, expr));
-        ctx.store_local(name, new, PhpType::Mixed, Some(expr.span));
+        store_checked_update(ctx, name, new, PhpType::Mixed, expr.span);
         unpin_in_flight_owners(ctx, old_pins, expr.span);
         return if post {
             return_old
@@ -857,7 +859,7 @@ pub(super) fn lower_inc_dec(
     if checked_update {
         let operation = if increment { MixedNumericOp::Add } else { MixedNumericOp::Sub };
         let new = crate::ir_lower::checked_arithmetic::binary(ctx, operand, operation, one, expr.span);
-        ctx.store_local(name, new, PhpType::Int, Some(expr.span));
+        store_checked_update(ctx, name, new, PhpType::Int, expr.span);
         return if post { old } else { ctx.load_local(name, Some(expr.span)) };
     }
     // Guards and coalescing can prove an int read while its slot stays nullable.
@@ -898,10 +900,18 @@ pub(super) fn lower_inc_dec(
         )
         .expect("integer inc/dec produces a value");
     let new = LoweredValue { value: new, ir_type: result_ir_type };
-    ctx.store_local(name, new, result_php_type, Some(expr.span));
+    store_checked_update(ctx, name, new, result_php_type, expr.span);
     if post {
         old
     } else {
         ctx.load_local(name, Some(expr.span))
     }
+}
+
+/// Validates an update result before writing its original binding, preserving PHP arithmetic.
+fn store_checked_update(ctx: &mut LoweringContext<'_, '_>, name: &str,
+    value: LoweredValue, ty: PhpType, span: Span) {
+    let (value, ty) = crate::ir_lower::conversion_boundaries::local_store(ctx, name, value, span)
+        .unwrap_or((value, ty));
+    ctx.store_local(name, value, ty, Some(span));
 }

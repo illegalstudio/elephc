@@ -371,18 +371,18 @@ evidence and outstanding guarantees are recorded below.
 
 ## Implementation progress
 
-Verified through step115 (this commit), with remaining feature integration in progress. Issue:
+Verified through step116 (this commit), with remaining feature integration in progress. Issue:
 https://github.com/illegalstudio/elephc/issues/2347.
 
 The full task remains active. The user requested complete implementation, with a
 commit for every verified step and no partial delivery. Do not expose unfinished
 flags as successful no-ops. The public integrated mask contains Locals, Bools, DynamicCode, Opcache, Arithmetic,
-Overflow, Strings, Coercions, Casts and Comparisons. Existing Locals behavior remains available
-but its stronger numeric/reference/eval binding contract is outstanding. All
+Overflow, Strings, Coercions, Casts and Comparisons. Locals includes the verified116 ordinary numeric binding extension;
+its complete reference/global/eval and broader binding-flow contract remains outstanding. All
 other guarantees and the complete umbrella remain explicitly gated until their
 whole contract is enforced.
 
-This progress ledger condenses verified implementation through step115.
+This progress ledger condenses verified implementation through step116.
 Detailed evidence remains in Git history, historical Code Journal plan revisions,
 the linked work logs, and the current agent-facing architecture document
 3739892b. The approved behavior and delivery requirements above are unchanged.
@@ -612,7 +612,8 @@ paths. Keep this plan, agent documentation and the current journal log synchroni
 | 112 | `c30508e838` | fix(eval): validate comparator returns and retire sort owners |
 | 113 | `7a97ec5e68` | feat(strict): validate native comparator result kinds |
 | 114 | `82300f746f` | feat(strict): enable noncoercive comparisons across hosts |
-| 115 | this commit | fix(eval): publish only live native object binding contracts |
+| 115 | `6daf631e8b` | fix(eval): publish only live native object binding contracts |
+| 116 | this commit | feat(strict): enforce stable numeric local bindings |
 
 
 ### Latest verified admission checkpoint
@@ -645,9 +646,9 @@ are complete. These former Casts admission issues are not open work.
 ### Next: source-point bindings and stronger Locals
 
 The full authorized task continues with autonomous verified commits. Baseline
-knowledgea9725473 confirms that Locals alone still permits inferred integer
-reassignment to float and PHP overflow promotion; pin the binding without enabling
-Overflow. Step115 resolves knowledgeffd0deed and the original knowledgea7883b31:
+Step116 supersedes baseline knowledgea9725473: ordinary inferred integer
+reassignment to float is rejected, and PHP overflow promotion is checked before
+storing into an integer binding without enabling Overflow. Step115 resolves knowledgeffd0deed and the original knowledgea7883b31:
 a future native catch class no longer constrains an earlier opaque eval using the
 same name. The exact fixture tests/fixtures/strict/catch_scope_contract.php now
 prints PHP's TVN in both optimizer modes with clean heap accounting.
@@ -678,3 +679,32 @@ the catch-scope regression took 71.73s and existing typed native alias coverage
 took 86.79s. Heap accounting is clean in both optimizer modes. The task-owned
 verification directory is removed after evidence capture. This is preparatory
 correctness work for stronger Locals, not its admission.
+
+
+### Verified116: numeric local binding contracts
+
+Numeric local contracts are separate from read narrowing and physical storage in
+src/types/checker/numeric_local_contracts.rs. LocalStoreContract retains the
+owning feature; neutral/compiler membership plans and rooted EIR guards preserve
+Locals independence from Coercions and Overflow. Statement/expression writes and
+prefix/postfix updates validate before mutation. AST effects and exact TypeError
+summaries retain their handlers. Wrong numeric kinds produce source diagnostics
+when known, or TypeError on a dynamic write; the previous value remains intact.
+
+A closure's cloned enclosing environment is not binding evidence. Fresh locals
+use actual scope/binding facts, replaced reference targets retire their old
+inferred contract, self-alias preserves it, and diagnostic-only inference restores
+numeric origins. Proven bound non-null variables and intrinsic non-null values
+have nonexecuting coalesce defaults; absence-aware property/offset probes retain
+their real default effects. Explicit mixed/numeric unions and legitimate unset/
+rebind retain their contracts. Source/type origin still requires the broader
+reference/global/eval and scalar-flow audit described above.
+
+Job5705df4f passed the compiler build, twelve exact gates and builtin architecture
+audit in 2m52s. Both native IR modes have clean heap accounting. The expanded
+emitter/library gate covers all five targets; native execution is Linux x86_64.
+The [binding investigation history](strict-semantic-profile-bindings.md) retains
+intermediate failures, controls and the remaining source-point design notes.
+The owned verification directory is removed after evidence capture. Continue the
+full task: this is a numeric binding step, not completed stronger Locals or the
+full umbrella.

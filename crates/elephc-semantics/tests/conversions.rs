@@ -81,3 +81,20 @@ fn strict_conversion_nominal_union_keeps_scalar_members_exact() {
     assert_eq!(plan_implicit_kinds(profile, ValueKind::Dynamic, allowed),
         ConversionPlan::Guard { feature: StrictFeature::Coercions, allowed });
 }
+
+
+/// Local kind membership neither activates coercions nor changes the arithmetic overflow policy.
+#[test]
+fn strict_local_membership_selects_its_own_guarantee() {
+    use elephc_semantics::conversions::{plan_membership, plan_implicit_kinds};
+    let profile = SemanticProfile::PERMISSIVE.with(StrictFeature::Locals, true);
+    let integers = AllowedKinds::one(ValueKind::Integer);
+    assert_eq!(plan_membership(profile, StrictFeature::Locals, ValueKind::Float, integers),
+        ConversionPlan::Reject(StrictFeature::Locals));
+    assert_eq!(plan_membership(profile, StrictFeature::Locals, ValueKind::Dynamic, integers),
+        ConversionPlan::Guard { feature: StrictFeature::Locals, allowed: integers });
+    assert_eq!(plan_implicit_kinds(profile, ValueKind::Float, integers), ConversionPlan::ExistingBehavior);
+    assert_eq!(plan_membership(SemanticProfile::PERMISSIVE.with(StrictFeature::Coercions, true),
+        StrictFeature::Locals, ValueKind::Float, integers), ConversionPlan::ExistingBehavior);
+    assert!(!profile.contains(StrictFeature::Overflow));
+}

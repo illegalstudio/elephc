@@ -50,8 +50,17 @@ pub(crate) type LoopStorageTypes = HashMap<(String, Span), TypeEnv>;
 /// Value reads keyed by body scope, source span and local name; visits join conservatively.
 pub(crate) type LocalValueReadTypes = HashMap<(String, Span, String), PhpType>;
 
-/// Declared local write contracts keyed by body, original source span and local name.
-pub(crate) type LocalStoreContracts = HashMap<(String, Span, String), PhpType>;
+/// A checked local write retains its value contract and the independently owning guarantee.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct LocalStoreContract {
+    /// PHP-visible membership before storage adaptation.
+    pub ty: PhpType,
+    /// Restriction responsible for this store, independent of other selected guarantees.
+    pub feature: elephc_semantics::StrictFeature,
+}
+
+/// Local write contracts keyed by body, original source span and local name.
+pub(crate) type LocalStoreContracts = HashMap<(String, Span, String), LocalStoreContract>;
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 /// Describes a statically-known access violation that PHP raises as a catchable

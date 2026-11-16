@@ -140,8 +140,9 @@ impl Checker {
                 let fixed_tagged_reference = self.has_fixed_tagged_reference_storage(name, env);
                 let result_ty = self.infer_type(expr, env)?;
                 if let Some(updated) = incremented_local_type(self, old_ty.as_ref(), fixed_tagged_reference) {
-                    self.record_local_storage_effect(name, &updated);
-                    env.insert(name.clone(), updated);
+                    let stored = self.check_numeric_local_store(name, &updated, expr.span, env)?;
+                    self.record_local_storage_effect(name, &stored);
+                    env.insert(name.clone(), stored);
                 }
                 Ok(result_ty)
             }
@@ -152,8 +153,9 @@ impl Checker {
                 // Same retype as the pre-form: only the RESULT differs, and it was already
                 // computed above against the type the local held before the update.
                 if let Some(updated) = incremented_local_type(self, old_ty.as_ref(), fixed_tagged_reference) {
-                    self.record_local_storage_effect(name, &updated);
-                    env.insert(name.clone(), updated);
+                    let stored = self.check_numeric_local_store(name, &updated, expr.span, env)?;
+                    self.record_local_storage_effect(name, &stored);
+                    env.insert(name.clone(), stored);
                 }
                 Ok(result_ty)
             }
@@ -175,6 +177,13 @@ impl Checker {
                 let value_is_never_null = operand_is_never_null(self, value, &value_ty, env);
                 let default_ty = if value_ty == PhpType::Void {
                     self.infer_type_with_assignment_effects(default, env)?
+                } else if value_is_never_null || (matches!(value.kind, ExprKind::Variable(_))
+                    && self.stored_value_is_non_null(value, &value_ty, env)) {
+                    // Quiet property/offset probes can still be absent; only a proven bound
+                    // variable or an intrinsic non-null value makes this a diagnostic-only arm.
+                    let mut default_env = env.clone();
+                    self.with_preserved_binding_flow(|checker|
+                        checker.infer_type_with_assignment_effects(default, &mut default_env))?
                 } else {
                     let mut flow = self.snapshot_conditional_flow(env);
                     let mut default_env = env.clone();

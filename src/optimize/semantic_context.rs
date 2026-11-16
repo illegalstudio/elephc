@@ -51,6 +51,9 @@ pub(super) fn active_source_mode() -> SourceMode { SOURCE_MODE.with(Cell::get) }
 /// Implicit binding or store membership may fail independently of operand effects.
 pub(super) fn implicit_value_boundary_may_throw(expr: &crate::parser::ast::Expr) -> bool {
     use crate::parser::ast::ExprKind;
+    if enabled(StrictFeature::Locals) && matches!(expr.kind,
+        ExprKind::Assignment { .. } | ExprKind::PreIncrement(_) | ExprKind::PostIncrement(_)
+        | ExprKind::PreDecrement(_) | ExprKind::PostDecrement(_)) { return true; }
     enabled(StrictFeature::Coercions) && matches!(expr.kind,
         ExprKind::FunctionCall { .. } | ExprKind::ClosureCall { .. } | ExprKind::ExprCall { .. }
         | ExprKind::MethodCall { .. } | ExprKind::NullsafeMethodCall { .. }
@@ -82,7 +85,7 @@ pub(super) fn string_boundary_may_throw(expr: &crate::parser::ast::Expr) -> bool
 /// A declared store can reject its source independently of operand effects or retirement.
 pub(super) fn implicit_store_may_throw(stmt: &crate::parser::ast::Stmt) -> bool {
     if matches!(stmt.kind, crate::parser::ast::StmtKind::Assign { .. }) {
-        return enabled(StrictFeature::Coercions);
+        return enabled(StrictFeature::Coercions) || enabled(StrictFeature::Locals);
     }
     let crate::parser::ast::StmtKind::TypedAssign { type_expr, .. } = &stmt.kind else { return false; };
     enabled(StrictFeature::Coercions) && crate::semantics::conversions::implicit_contract(

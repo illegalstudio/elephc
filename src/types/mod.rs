@@ -102,6 +102,7 @@ pub(crate) use return_alias::{
     collect_return_alias_summaries, summarize_callable_return_alias, ReturnAliasSummaries,
     ReturnArgAlias,
 };
+pub use result::LocalStoreContract;
 pub(crate) use result::{LocalStoreContracts, LocalValueReadTypes, LoopStorageTypes, PromotableArrays};
 pub use checker::CheckOptions;
 // `check_with_target` is superseded by `check_with_target_and_options` on the

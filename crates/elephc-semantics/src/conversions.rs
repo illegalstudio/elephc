@@ -55,12 +55,18 @@ impl AllowedKinds {
 /// Plans exact scalar membership for a resolved declaration, including scalar unions.
 pub fn plan_implicit_kinds(profile: SemanticProfile, source: ValueKind, allowed: AllowedKinds)
     -> ConversionPlan {
-    if !profile.contains(StrictFeature::Coercions) { return ConversionPlan::ExistingBehavior; }
+    plan_membership(profile, StrictFeature::Coercions, source, allowed)
+}
+
+/// Shares exact kind membership while retaining the independently selected owning guarantee.
+pub fn plan_membership(profile: SemanticProfile, feature: StrictFeature,
+    source: ValueKind, allowed: AllowedKinds) -> ConversionPlan {
+    if !profile.contains(feature) { return ConversionPlan::ExistingBehavior; }
     if source == ValueKind::Dynamic {
-        return ConversionPlan::Guard { feature: StrictFeature::Coercions, allowed };
+        return ConversionPlan::Guard { feature, allowed };
     }
     if allowed.allows(source) { ConversionPlan::Identity }
-    else { ConversionPlan::Reject(StrictFeature::Coercions) }
+    else { ConversionPlan::Reject(feature) }
 }
 
 /// Semantic decision consumed by both static and runtime conversion adapters.

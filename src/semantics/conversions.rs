@@ -131,15 +131,21 @@ pub(crate) fn inferred_scalar_join(profile: SemanticProfile, source: SourceMode,
 /// Resolves one implicit scalar boundary independently of PHP's strict_types directive.
 pub(crate) fn implicit(profile: SemanticProfile, source: SourceMode, expected: &PhpType,
     actual: &PhpType) -> ConversionPlan {
+    membership(profile, source, elephc_semantics::StrictFeature::Coercions, expected, actual)
+}
+
+/// Projects an exact value contract without borrowing another guarantee's activation or diagnostics.
+pub(crate) fn membership(profile: SemanticProfile, source: SourceMode,
+    feature: elephc_semantics::StrictFeature, expected: &PhpType, actual: &PhpType) -> ConversionPlan {
     if source == SourceMode::Internal { return ConversionPlan::ExistingBehavior; }
     let Some(allowed) = implicit_contract(expected) else { return ConversionPlan::ExistingBehavior; };
     if let PhpType::Union(members) = actual {
-        let plans: Vec<_> = members.iter().map(|member| implicit(profile, source, expected, member)).collect();
+        let plans: Vec<_> = members.iter().map(|member| membership(profile, source, feature, expected, member)).collect();
         if plans.iter().all(|plan| *plan == ConversionPlan::Identity) { return ConversionPlan::Identity; }
         if plans.iter().all(|plan| matches!(plan, ConversionPlan::Reject(_))) {
-            return ConversionPlan::Reject(elephc_semantics::StrictFeature::Coercions);
+            return ConversionPlan::Reject(feature);
         }
-        return elephc_semantics::conversions::plan_implicit_kinds(profile, ValueKind::Dynamic, allowed);
+        return elephc_semantics::conversions::plan_membership(profile, feature, ValueKind::Dynamic, allowed);
     }
     if *actual == PhpType::Never { return ConversionPlan::Identity; }
     // Concrete string storage can carry logical null after a missing typed-array read.
@@ -147,16 +153,16 @@ pub(crate) fn implicit(profile: SemanticProfile, source: SourceMode, expected: &
     if super::numeric::value_kind(actual) == ValueKind::String
         && allowed.allows(ValueKind::String) && !allowed.allows(ValueKind::Null)
     {
-        return elephc_semantics::conversions::plan_implicit_kinds(profile, ValueKind::Dynamic, allowed);
+        return elephc_semantics::conversions::plan_membership(profile, feature, ValueKind::Dynamic, allowed);
     }
     let constraints = runtime_constraints(expected);
     if ((!nominal_members(expected).is_empty() || !constraints.is_empty())
             && super::numeric::value_kind(actual) == ValueKind::NonScalar)
         || (constraints.contains(&RuntimeConstraint::Callable) && *actual == PhpType::Str) {
-        return elephc_semantics::conversions::plan_implicit_kinds(profile, ValueKind::Dynamic, allowed);
+        return elephc_semantics::conversions::plan_membership(profile, feature, ValueKind::Dynamic, allowed);
     }
     if only_false(expected) && *actual == PhpType::Bool {
-        return elephc_semantics::conversions::plan_implicit_kinds(profile, ValueKind::Dynamic, allowed);
+        return elephc_semantics::conversions::plan_membership(profile, feature, ValueKind::Dynamic, allowed);
     }
-    elephc_semantics::conversions::plan_implicit_kinds(profile, super::numeric::value_kind(actual), allowed)
+    elephc_semantics::conversions::plan_membership(profile, feature, super::numeric::value_kind(actual), allowed)
 }

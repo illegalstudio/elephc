@@ -79,8 +79,8 @@ fn strict_typed_stores_emit_original_kind_checks_on_all_targets() {
     for name in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
         let target = Target::parse(name).unwrap();
         let checked = crate::types::checker::check_staged_semantics(&program, target, profile).unwrap();
-        assert!(checked.local_store_contracts.values().any(|ty| *ty == crate::types::PhpType::Float));
-        assert!(checked.local_store_contracts.values().any(|ty| *ty == crate::types::PhpType::Str));
+        assert!(checked.local_store_contracts.values().any(|contract| contract.ty == crate::types::PhpType::Float));
+        assert!(checked.local_store_contracts.values().any(|contract| contract.ty == crate::types::PhpType::Str));
         let module = crate::ir_lower::lower_program(&program, &checked, target, false).unwrap();
         let function = module.functions.iter().find(|f| f.name == "storeValues").unwrap();
         assert!(function.instructions.iter().filter(|i| i.op == crate::ir::Op::ThrowTypeError).count() >= 3, "{name}");

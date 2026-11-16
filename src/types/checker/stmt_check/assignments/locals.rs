@@ -281,9 +281,12 @@ fn check_assign_value_type(
                 elephc_semantics::conversions::ConversionPlan::Guard { .. }) {
                 ty = declared.clone();
             }
-            checker.local_store_contracts.insert(contract_key, declared);
+            checker.local_store_contracts.insert(contract_key, crate::types::LocalStoreContract {
+                ty: declared, feature: elephc_semantics::StrictFeature::Coercions,
+            });
         }
     }
+    ty = checker.check_numeric_local_store(name, &ty, span, env)?;
     let stored_non_null = checker.stored_value_is_non_null(value, &ty, env);
     // An array element or other unproved read can carry null even when its checker
     // type omits it. A nullable destination must not turn that store into a proof.
@@ -545,6 +548,10 @@ pub(super) fn check_ref_assign(
     if let Err(error) = result {
         poison_unbound_local(env, target);
         return Err(error);
+    }
+    // A new reference replaces this name's binding; a self-alias keeps its existing contract.
+    if !matches!(&source.kind, ExprKind::Variable(name) if name == target) {
+        checker.numeric_local_contracts.remove(target);
     }
     if crate::names::append_update_alias_kind(target).is_some() {
         // The parser's writable-cell lease is representation-neutral, not a value snapshot.

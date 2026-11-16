@@ -18,10 +18,12 @@ impl Checker {
         let bound = self.definitely_bound_locals.clone();
         let storage = self.guarded_union_types.clone();
         let origins = self.narrowed_local_origins.clone();
+        let numeric_contracts = self.numeric_local_contracts.clone();
         let result = body(self);
         self.definitely_bound_locals = bound;
         self.guarded_union_types = storage;
         self.narrowed_local_origins = origins;
+        self.numeric_local_contracts = numeric_contracts;
         result
     }
 
