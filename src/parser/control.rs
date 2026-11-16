@@ -332,12 +332,12 @@ pub fn parse_foreach(
     // element reference as if it were the array, which segfaults on the second one.
     //
     // Binding a hidden local to the source gives the walk a name the body cannot rebind, which is
-    // what PHP's own arrangement amounts to here. The bind is by VALUE, not by reference: a
-    // reference-aliased source is itself miscompiled by the by-reference element walk (it yields
-    // the cell pointers instead of the values), and the copy is not observable for THIS shape —
-    // the first iteration rebinds the only name the original array had, so nothing can read it
-    // again. `Symfony\Component\VarDumper\Caster\ReflectionCaster::castFunctionAbstract` is the
-    // shape (`foreach ($v as $k => &$v)` over `getStaticVariables()`).
+    // what PHP's own arrangement amounts to here. The bind is by REFERENCE: when the source is
+    // itself a reference (a by-reference parameter, `global`, a captured variable) the array is
+    // reachable through the caller's name, and PHP iterates and mutates that very array. A copy
+    // would write into the copy only. `Symfony\Component\VarDumper\Caster\ReflectionCaster::
+    // castFunctionAbstract` is the shape (`foreach ($v as $k => &$v)` over
+    // `getStaticVariables()`).
     if value_by_ref {
         if let ExprKind::Variable(source) = &array.kind {
             if source == &value_var || key_var.as_deref() == Some(source.as_str()) {
@@ -346,9 +346,9 @@ pub fn parse_foreach(
                     span.line, span.col
                 ));
                 let bind = Stmt::new(
-                    StmtKind::Assign {
-                        name: alias.clone(),
-                        value: array.clone(),
+                    StmtKind::RefAssign {
+                        target: alias.clone(),
+                        source: array.clone(),
                     },
                     span,
                 );

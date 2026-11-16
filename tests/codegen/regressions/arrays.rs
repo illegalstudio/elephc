@@ -4852,6 +4852,25 @@ echo shadow([10, 20, 30]);
     assert_eq!(out, "0=10,1=20,2=30");
 }
 
+/// The same self-naming `foreach` over a by-reference parameter mutates the caller's array.
+///
+/// The hidden source is bound by reference, so the array stays reachable through the caller's
+/// name, as in php.
+///
+/// Oracle: `php -n` prints the asserted line.
+#[test]
+fn test_by_ref_foreach_naming_its_own_source_writes_through_a_reference_parameter() {
+    let out = compile_and_run(
+        r#"<?php
+function f(array &$v) { foreach ($v as $k => &$v) { $v = $v * 10; } }
+$a = [1, 2, 3];
+f($a);
+echo json_encode($a);
+"#,
+    );
+    assert_eq!(out, "[10,20,30]");
+}
+
 
 /// An untyped property accepts `[]=` and auto-vivifies, as it does in PHP.
 ///
