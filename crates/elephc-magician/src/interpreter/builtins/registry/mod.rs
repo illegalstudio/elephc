@@ -478,6 +478,7 @@ pub(in crate::interpreter) fn eval_declared_builtin_values_call_from_scope(
     let Some(hook) = spec.values else {
         return Ok(None);
     };
+    let originals = evaluated_args;
     let coerced;
     let evaluated_args = if spec.has_string_param() {
         coerced = eval_coerce_string_param_objects(spec, evaluated_args.to_vec(), context, values)?;
@@ -485,16 +486,24 @@ pub(in crate::interpreter) fn eval_declared_builtin_values_call_from_scope(
     } else {
         evaluated_args
     };
-    if eval_builtin_is_backtrace_visible(spec.name) {
+    let result = if eval_builtin_is_backtrace_visible(spec.name) {
         let frame =
             EvalCallFrame::function(spec.name, Some(evaluated_args.to_vec()), context);
         context.push_call_frame(frame);
         let result = hook.call(spec.name, evaluated_args, lexical_scope, context, values);
         context.pop_call_frame();
-        return result.map(Some);
+        result
+    } else {
+        hook.call(spec.name, evaluated_args, lexical_scope, context, values)
+    };
+    // A `__toString()` replacement is a fresh string only this function holds: the caller knows
+    // (and releases) just its own argument cells, so the replacement is released here.
+    for (original, replacement) in originals.iter().zip(evaluated_args) {
+        if replacement != original && result.as_ref().ok() != Some(replacement) {
+            values.release(*replacement)?;
+        }
     }
-    hook.call(spec.name, evaluated_args, lexical_scope, context, values)
-        .map(Some)
+    result.map(Some)
 }
 
 /// Converts each object passed to a `string` parameter through `__toString()`.
