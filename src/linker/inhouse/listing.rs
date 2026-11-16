@@ -512,7 +512,7 @@ pub(crate) fn join_slices<'a>(
         let owner = definer[original];
         let layout = &mut slices[owner].0.layout;
         let place = layout.labels.remove(original).expect("the owner defines the promoted label");
-        layout.labels.insert(renamed, place);
+        layout.define(renamed, place);
         layout.exported.insert(renamed, true);
     }
     if !promoted.is_empty() {

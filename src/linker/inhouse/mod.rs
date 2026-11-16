@@ -166,6 +166,10 @@ struct Place {
 #[derive(Default)]
 struct Layout<'a> {
     labels: HashMap<&'a str, Place>,
+    /// The labels not spelled assembler-local (`L…`), as defined: each is a symbol of the object.
+    /// Kept beside `labels` so `write_object` need not read the name of every label (a Symfony demo
+    /// listing defines 4.4 M `L` labels against 3.3 M others) to find them.
+    symbols: Vec<(&'a str, Place)>,
     /// Per numeric label, its definitions in order: (index of the line, place).
     numeric: HashMap<&'a str, Vec<(usize, Place)>>,
     /// `.globl` (false) or `.private_extern` (true) names.
@@ -177,6 +181,25 @@ struct Layout<'a> {
     subsections_via_symbols: bool,
     /// Final size of each section, so the second pass allocates it once.
     sizes: [u64; 2],
+}
+
+impl<'a> Layout<'a> {
+    /// Records a label's place; false when the name was already defined.
+    fn define(&mut self, name: &'a str, place: Place) -> bool {
+        if self.labels.insert(name, place).is_some() {
+            return false;
+        }
+        if !is_assembler_local(name) {
+            self.symbols.push((name, place));
+        }
+        true
+    }
+}
+
+/// Whether a label is assembler-local: `as` keeps an `L` label out of the symbol table unless it
+/// is exported or a relocation needs a symbol for it.
+fn is_assembler_local(name: &str) -> bool {
+    name.as_bytes().first() == Some(&b'L')
 }
 
 /// Bytes a `.ascii` operand decodes to (`\n`, `\t`, `\\`, `\"`, `\NNN` octal), appended to `out`.
@@ -295,7 +318,7 @@ fn layout_parts<'a>(parts: &[&'a str], names: Names<'a>) -> Result<Layout<'a>> {
                 let place = Place { sect, offset: *offset };
                 if numeric_label(name) {
                     layout.numeric.entry(name).or_default().push((index, place));
-                } else if layout.labels.insert(names.get(name), place).is_some() {
+                } else if !layout.define(names.get(name), place) {
                     return unsupported("label defined twice", line);
                 }
             }
@@ -513,7 +536,7 @@ fn assemble_one_pass<'a>(parts: &[&'a str], names: Names<'a>) -> Result<Assemble
                 let place = Place { sect, offset: bytes.len() as u64 };
                 if numeric_label(name) {
                     layout.numeric.entry(name).or_default().push((index, place));
-                } else if layout.labels.insert(names.get(name), place).is_some() {
+                } else if !layout.define(names.get(name), place) {
                     return unsupported("label defined twice", line);
                 }
             }
@@ -917,8 +940,9 @@ pub(crate) fn assemble_parts_two_pass<'a>(parts: &[&'a str], names: Names<'a>) -
 
 /// Builds the Mach-O object from the placed sections, the labels and the relocations.
 thread_local! {
-    /// Name hashes `write_object` performed on this thread: one per relocation and two per label,
-    /// never one more per relocation in the loop that adds them (a regression test holds it).
+    /// Name hashes `write_object` performed on this thread: one per relocation not repeating the
+    /// previous one's target, two per symbol label, and none for an assembler-local label that is
+    /// neither exported nor relocated against (regression tests hold it).
     pub(crate) static WRITE_NAME_HASHES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
@@ -955,30 +979,55 @@ fn write_object(layout: &Layout<'_>, sections: [Vec<u8>; 2], relocs: Vec<Pending
     let mut slot_of: HashMap<&str, u32> = HashMap::default();
     let mut slot_names = 0u32;
     let mut reloc_slots: Vec<u32> = Vec::with_capacity(relocs.len());
+    let mut hashes = 0usize;
+    // An address load is an `adrp` and an `add`/`ldr` relocated against the same name, one after
+    // the other (6.2 M such pairs in a Symfony demo listing): the second reuses the first's slot.
+    let mut previous: Option<(&str, u32)> = None;
     for reloc in &relocs {
-        let slot = *slot_of.entry(reloc.target).or_insert(slot_names);
-        if slot == slot_names {
-            slot_names += 1;
-        }
+        let slot = match previous {
+            Some((name, slot)) if name == reloc.target => slot,
+            _ => {
+                hashes += 1;
+                let slot = *slot_of.entry(reloc.target).or_insert(slot_names);
+                if slot == slot_names {
+                    slot_names += 1;
+                }
+                slot
+            }
+        };
+        previous = Some((reloc.target, slot));
         reloc_slots.push(slot);
     }
-    count_name_hashes(relocs.len());
     let mut slot_symbols: Vec<Option<SymbolId>> = vec![None; slot_names as usize];
     // Defined labels, in a stable order: by section, then offset, then name. An `L` label is
     // assembler-local: `as` keeps it out of the symbol table unless it is exported or a
-    // relocation needs a symbol for it. That is most labels, so they are left out before the sort
-    // rather than after it.
+    // relocation needs a symbol for it. That is most labels, so they are never visited one by one:
+    // the others come from `layout.symbols`, and the few `L` labels that are symbols from the
+    // exported names and the relocation targets.
     let mut defined: Vec<(&str, Place, Option<bool>, Option<u32>)> = layout
-        .labels
+        .symbols
         .iter()
-        .filter_map(|(name, place)| {
-            let exported = layout.exported.get(*name).copied();
-            let slot = slot_of.get(*name).copied();
-            (name.as_bytes().first() != Some(&b'L') || exported.is_some() || slot.is_some())
-                .then_some((*name, *place, exported, slot))
-        })
+        .map(|&(name, place)| (name, place, layout.exported.get(name).copied(), slot_of.get(name).copied()))
         .collect();
-    count_name_hashes(2 * layout.labels.len());
+    hashes += 2 * layout.symbols.len();
+    for (&name, &exported) in &layout.exported {
+        if is_assembler_local(name) {
+            hashes += 2;
+            if let Some(&place) = layout.labels.get(name) {
+                hashes += 1;
+                defined.push((name, place, Some(exported), slot_of.get(name).copied()));
+            }
+        }
+    }
+    for (&name, &slot) in &slot_of {
+        if is_assembler_local(name) && !layout.exported.contains_key(name) {
+            hashes += 2;
+            if let Some(&place) = layout.labels.get(name) {
+                defined.push((name, place, None, Some(slot)));
+            }
+        }
+    }
+    count_name_hashes(hashes);
     defined.sort_by(|(left_name, left, ..), (right_name, right, ..)| {
         (left.sect as u8, left.offset, *left_name).cmp(&(right.sect as u8, right.offset, *right_name))
     });

@@ -25,6 +25,33 @@ fn object_writer_hashes_each_relocation_name_once() {
     );
 }
 
+/// An address load's two relocations share one name hash, and an assembler-local label nothing
+/// exports or relocates against costs none: 200 `adrp`/`add` pairs and 300 branch-target `L`
+/// labels hash about 200 names, not 400 plus two per label.
+#[test]
+fn object_writer_skips_local_labels_and_repeated_pair_targets() {
+    let pairs = 200;
+    let mut text = String::from(".globl _main\n.p2align 2\n_main:\n");
+    for index in 0..pairs {
+        text.push_str(&format!(
+            "    adrp x9, _sym{index}@PAGE\n    add x9, x9, _sym{index}@PAGEOFF\n"
+        ));
+    }
+    for index in 0..300 {
+        text.push_str(&format!("    b Lnext{index}\nLnext{index}:\n"));
+    }
+    text.push_str("    adrp x9, Ltable@PAGE\n    ret\n.data\nLtable:\n    .quad 0\n");
+    WRITE_NAME_HASHES.with(|cell| cell.set(0));
+    let object = assemble(&text).expect("the in-tree assembler handles the listing");
+    let hashes = WRITE_NAME_HASHES.with(|cell| cell.get());
+    assert!(hashes <= pairs + 10, "{hashes} name hashes for {pairs} address loads");
+    // The symbol string table: the relocated `L` label and every target are named, the branch
+    // targets are not.
+    let names = |name: &str| object.windows(name.len() + 1).any(|window| *window == [name.as_bytes(), b"\0"].concat());
+    assert!(names("_main") && names("Ltable") && names("_sym0") && names("_sym199"));
+    assert!(!names("Lnext0") && !names("Lnext299"));
+}
+
 /// `.ascii` operands decode the escapes the data section writes.
 /// An instruction text with no symbolic operand is parsed once per slice: repeats take the word
 /// from the cache, and a text with a fixup is parsed every time, since its target resolves per
