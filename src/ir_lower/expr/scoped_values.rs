@@ -136,6 +136,12 @@ pub(super) fn lower_object_class_name(
 ) -> LoweredValue {
     let object = lower_expr(ctx, object);
     let ty = ctx.builder.value_php_type(object.value).codegen_repr();
+    let mut operands = vec![object.value];
+    // A callable may be an implicit string or array callable, which `::class` rejects with its
+    // own message; a hidden literal `true` tells get_class() it lowers `::class`.
+    if ty == PhpType::Callable {
+        operands.push(emit_bool_literal(ctx, true, Some(expr.span)).value);
+    }
     // A nullable/mixed receiver can be null at run time. PHP raises its own TypeError
     // (`Cannot use "::class" on null`) instead of delegating to `get_class(null)`, whose
     // message names the builtin argument. A concrete object skips the branch entirely.
@@ -143,7 +149,7 @@ pub(super) fn lower_object_class_name(
         return emit_builtin_call_value(
             ctx,
             "get_class",
-            vec![object.value],
+            operands,
             PhpType::Str,
             expr.span,
             None,
@@ -185,7 +191,7 @@ pub(super) fn lower_object_class_name(
     let class = emit_builtin_call_value(
         ctx,
         "get_class",
-        vec![object.value],
+        operands,
         PhpType::Str,
         expr.span,
         None,

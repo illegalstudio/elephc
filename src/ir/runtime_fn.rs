@@ -1008,6 +1008,9 @@ impl RuntimeFnId {
             return Some((0, None));
         }
         match self {
+            // `$value::class` lowers to get_class() with a hidden literal second operand that
+            // selects the `::class` TypeError message; PHP callers still pass at most one.
+            RuntimeFnId::GetClass => Some((0, Some(2))),
             RuntimeFnId::ArrayPtrSeek => Some((3, Some(3))),
             RuntimeFnId::ArrayPtrKey | RuntimeFnId::ArrayPtrValue => Some((2, Some(2))),
             RuntimeFnId::ArrayMapSumAdd | RuntimeFnId::ArrayMapSumAddInt | RuntimeFnId::ArrayMapSumProbeInt | RuntimeFnId::ArrayFilterCountMod => Some((2, Some(2))),

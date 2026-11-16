@@ -498,11 +498,14 @@ pub(crate) fn lower_class_name_lookup(
     inst: &Instruction,
     name: &str,
 ) -> Result<()> {
-    super::ensure_arg_count_between(inst, name, 0, 1)?;
+    // `$value::class` lowers to get_class() with a hidden literal `true` second operand, so a
+    // non-object reports `Cannot use "::class" on <type>` rather than get_class()'s message.
+    super::ensure_arg_count_between(inst, name, 0, 2)?;
     if inst.operands.is_empty() {
         emit_no_arg_class_name_lookup(ctx, name);
         return store_if_result(ctx, inst);
     }
+    let class_constant = name == "get_class" && inst.operands.len() == 2;
 
     let value = expect_operand(inst, 0)?;
     let value_ty = ctx.value_php_type(value)?;
@@ -523,7 +526,7 @@ pub(crate) fn lower_class_name_lookup(
             let done = ctx.next_label("get_class_callable_done");
             let result_reg = abi::int_result_reg(ctx.emitter);
             ctx.load_value_to_reg(value, result_reg)?;
-            emit_implicit_callable_class_lookup_errors(ctx, name, result_reg, false);
+            emit_implicit_callable_class_lookup_errors(ctx, name, result_reg, class_constant);
             emit_branch_to_invokable_receiver(ctx, result_reg, &invokable);
             let result = if name == "get_class" {
                 b"Closure".as_slice()

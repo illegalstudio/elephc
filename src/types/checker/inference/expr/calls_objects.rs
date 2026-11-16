@@ -360,7 +360,10 @@ impl Checker {
             ExprKind::ObjectClassName { object } => {
                 let object_type = self.infer_type(object, env)?;
                 let object_only = match &object_type {
-                    PhpType::Object(_) => true,
+                    // A callable is a Closure object (or an invokable object) at runtime;
+                    // get_class() answers for it, and refuses an implicit string or array
+                    // callable the way PHP does.
+                    PhpType::Object(_) | PhpType::Callable => true,
                     // PHP allows `$value::class` through a nullable object type; a null value
                     // raises the same runtime error `get_class(null)` does, which the lowering
                     // already reaches. A union with any other non-object member stays refused.
