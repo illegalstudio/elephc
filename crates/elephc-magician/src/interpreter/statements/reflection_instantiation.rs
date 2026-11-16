@@ -330,11 +330,12 @@ pub(super) fn eval_reflection_class_new_lazy_object_result(
         }
         return Ok(Some(instance));
     }
-    // `call_user_func` transfers its by-value argument cells to the callback activation, which
-    // releases them when that activation ends. Keep the allocator's original instance owner
-    // separate: the proxy returns the factory's result and discards this uninitialized instance.
+    // `call_user_func` only borrows its argument cells (the callback activation takes a copy for
+    // its own scope), so the reference taken for the factory is given back after the call. The
+    // proxy returns the factory's result and discards the uninitialized instance.
     let factory_instance = values.retain(instance)?;
     let result = eval_call_user_func_with_values(vec![callback, factory_instance], context, values);
+    values.release(factory_instance)?;
     values.release(instance)?;
     result.map(Some)
 }
@@ -391,7 +392,10 @@ pub(in crate::interpreter) fn eval_initialize_lazy_ghost(
         return Ok(());
     };
     let argument = values.retain(object)?;
-    match eval_call_user_func_with_values(vec![initializer, argument], context, values) {
+    // The call only borrows its argument cells: this one is given back whatever the outcome.
+    let called = eval_call_user_func_with_values(vec![initializer, argument], context, values);
+    values.release(argument)?;
+    match called {
         Ok(result) => {
             values.release(result)?;
             values.release(initializer)

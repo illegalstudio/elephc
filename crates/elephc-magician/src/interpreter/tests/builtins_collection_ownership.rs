@@ -297,6 +297,39 @@ $alias = $holder->bag;"#,
     }
 }
 
+/// Initializing a lazy ghost gives back the reference it took to hand the ghost to its initializer.
+///
+/// `call_user_func` borrows its argument cells, so the retained ghost reference was never given
+/// back and every first property access kept the ghost alive for good.
+#[test]
+fn lazy_ghost_initialization_releases_the_argument_it_retained() {
+    let mut values = FakeOps::default();
+    let mut context = ElephcEvalContext::new();
+    let mut scope = ElephcEvalScope::new();
+    let program = parse_fragment(
+        br#"class Ghost {}
+$g = new Ghost();
+$f = function ($o) { return 1; };"#,
+    )
+    .unwrap();
+    execute_program_with_context(&mut context, &program, &mut scope, &mut values).unwrap();
+    let object = scope.visible_cell("g").unwrap();
+    let callback = scope.visible_cell("f").unwrap();
+    let before = values.cell_owners[&(object.as_ptr() as usize)];
+    let identity = values.object_identity(object).unwrap();
+    let initializer = values.retain(callback).unwrap();
+    assert!(context.register_lazy_ghost(identity, initializer).is_none());
+    crate::interpreter::statements::eval_initialize_lazy_ghost(
+        identity,
+        object,
+        &mut context,
+        &mut values,
+    )
+    .unwrap();
+    assert_eq!(values.cell_owners[&(object.as_ptr() as usize)], before);
+    assert_eq!(values.cell_owners[&(callback.as_ptr() as usize)], 1);
+}
+
 /// `==` over two arrays and `+` over an array release every key and element read they make.
 ///
 /// Every `array_iter_key`/`array_get`/`array_key_exists`/`compare` result is an owned cell, so
