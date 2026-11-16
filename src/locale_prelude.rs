@@ -104,10 +104,23 @@ fn system_default_body() -> Vec<crate::parser::ast::Stmt> {
             vec![],
             None,
         ),
+        // ICU spells the modifier after `__` when the id has no country (`sr__LATIN`) and after one
+        // `_` when it has one (`de_DE_EURO`).
+        s_assign("separator", e_str("_")),
+        s_if(
+            e_binop(
+                e_call("strpos", vec![e_var("id"), e_str("_")]),
+                BinOp::StrictEq,
+                e_bool(false),
+            ),
+            vec![s_assign("separator", e_str("__"))],
+            vec![],
+            None,
+        ),
         s_if(
             e_binop(e_var("modifier"), BinOp::StrictNotEq, e_str("")),
             vec![s_return(e_concat(
-                e_concat(e_var("id"), e_str("_")),
+                e_concat(e_var("id"), e_var("separator")),
                 e_call("strtoupper", vec![e_var("modifier")]),
             ))],
             vec![],
