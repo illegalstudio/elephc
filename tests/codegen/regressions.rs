@@ -21,6 +21,8 @@ mod closures_and_refs;
 mod string_memory;
 #[path = "regressions/pinned_fixed_issues.rs"]
 mod pinned_fixed_issues;
+#[path = "regressions/contract_widening_review.rs"]
+mod contract_widening_review;
 #[path = "regressions/builtins_misc.rs"]
 mod builtins_misc;
 #[path = "regressions/concat_buffer_args.rs"]
