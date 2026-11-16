@@ -2026,14 +2026,24 @@ echo "|", preg_match('#^a: (\d+)$#u', 'a: 1', $u), ($u[1] ?? '-');
     assert_eq!(out, "111111111111111111|11");
 }
 
-/// Verifies an alphanumeric leading byte still means "undelimited", the behaviour a raw payload
-/// depends on: a pattern that does not open with a delimiter is passed through unchanged.
+/// Verifies a pattern whose first byte is alphanumeric is refused as undelimited, as php does:
+/// `preg_match('abc', 'abc')` warns "Delimiter must not be alphanumeric, backslash, or NUL byte"
+/// and returns `false` instead of matching the bytes as a raw regex, `preg_last_error()` reports
+/// `PREG_INTERNAL_ERROR`, and `preg_replace()` returns `null`. A runtime pattern takes the same
+/// path as a literal one. Expected output is php 8.5.10's with the warnings silenced.
 #[test]
 fn test_preg_match_leaves_an_undelimited_pattern_alone() {
     let out = compile_and_run(
-        r#"<?php echo preg_match('/a/', 'a'), preg_match('#a#', 'a');"#,
+        r#"<?php
+$runtime = $argc > 5 ? '/x/' : 'abc';
+echo var_export(@preg_match('abc', 'abc'), true), "|", preg_last_error(), "|",
+    var_export(@preg_match($runtime, 'abc'), true), "|",
+    var_export(@preg_match('a/b/', 'a/b/'), true), "|",
+    var_export(@preg_replace('abc', 'x', 'abc'), true), "|",
+    preg_match('#a#', 'a');
+"#,
     );
-    assert_eq!(out, "11");
+    assert_eq!(out, "false|1|false|false|NULL|1");
 }
 
 /// Verifies `preg_match("/hello/", "hello world")` returns 1 (match found).
