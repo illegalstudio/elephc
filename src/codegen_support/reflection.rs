@@ -340,10 +340,44 @@ fn positional_constructor_args(
         if let Some((_, entry)) = named.iter().find(|(name, _)| name == param) {
             positional.push(attr_arg_expr(&entry.value));
         } else {
-            positional.push(signature.defaults.get(index)?.clone()?);
+            let default = signature.defaults.get(index)?.clone()?;
+            // A default written against the constructor's own class (`self::D`, `parent::D`,
+            // `new self`, `__CLASS__`) would be evaluated here, inside `ReflectionAttribute`,
+            // and name the wrong class. Keep the named form, which the constructor resolves.
+            if default_depends_on_class_scope(&default) {
+                return None;
+            }
+            positional.push(default);
         }
     }
     Some(positional)
+}
+
+/// Returns true when a constant default expression resolves against the lexical class that
+/// declares it: a `self`/`parent`/`static` receiver or a magic constant.
+fn default_depends_on_class_scope(default: &Expr) -> bool {
+    let scoped = |receiver: &StaticReceiver| {
+        matches!(
+            receiver,
+            StaticReceiver::Self_ | StaticReceiver::Static | StaticReceiver::Parent
+        )
+    };
+    let mut found = false;
+    crate::parser::ast::visit::walk_expr_nodes(default, &mut |node| {
+        if let crate::parser::ast::visit::Node::Expr(expr) = node {
+            found |= match &expr.kind {
+                ExprKind::ClassConstant { receiver }
+                | ExprKind::ScopedConstantAccess { receiver, .. }
+                | ExprKind::NewScopedObject { receiver, .. }
+                | ExprKind::StaticPropertyAccess { receiver, .. }
+                | ExprKind::DynamicStaticPropertyAccess { receiver, .. }
+                | ExprKind::StaticMethodCall { receiver, .. } => scoped(receiver),
+                ExprKind::MagicConstant(_) | ExprKind::This => true,
+                _ => false,
+            };
+        }
+    });
+    found
 }
 
 /// Throws php's `Error: Attribute class "X" not found` when the attribute names no class.

@@ -1300,6 +1300,35 @@ echo $obj->a, "-", $obj->b;
     assert_eq!(out, "7-9");
 }
 
+/// A named-argument attribute that skips a parameter whose default is written against the
+/// constructor's own class (`self::D`, `parent::D`, `__CLASS__`) takes the default of THAT class,
+/// including for an inherited constructor, not one resolved inside `ReflectionAttribute`.
+/// Output verified against `php -n`.
+#[test]
+fn test_reflection_attribute_named_arguments_keep_scope_relative_defaults() {
+    let out = compile_and_run(
+        r#"<?php
+class Base { const D = 4; }
+#[\Attribute]
+class A extends Base {
+    const D = 5;
+    public function __construct(public int $mode = self::D, public ?string $name = null, public string $cls = __CLASS__, public int $up = parent::D) {}
+}
+#[\Attribute]
+class B extends A { const D = 6; }
+#[A(name: 'x')]
+class T {}
+#[B(name: 'y')]
+class U {}
+$a = (new ReflectionClass(T::class))->getAttributes()[0]->newInstance();
+echo $a->mode, $a->name, $a->cls, $a->up, "\n";
+$b = (new ReflectionClass(U::class))->getAttributes()[0]->newInstance();
+echo $b->mode, $b->name, $b->cls, $b->up, "\n";
+"#,
+    );
+    assert_eq!(out, "5xA4\n5yA4\n");
+}
+
 /// Verifies that `ReflectionAttribute::newInstance()` constructs the attribute
 /// object with an array constructor argument.
 #[test]
