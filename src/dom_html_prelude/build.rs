@@ -15,7 +15,7 @@
 
 #![allow(clippy::all)]
 
-use crate::parser::ast::{BinOp, CastType, Program, Stmt, TypeExpr};
+use crate::parser::ast::{BinOp, CastType, Expr, ExprKind, Program, Stmt, TypeExpr};
 use crate::synthetic_class::*;
 
 /// `Dom\\NodeList` — transcribed from the PHP form.
@@ -282,6 +282,8 @@ fn decl_class_dom_elephchtmlparser() -> Stmt {
         .method(decl_class_dom_elephchtmlparser_m61())
         .method(decl_class_dom_elephchtmlparser_m62())
         .method(decl_class_dom_elephchtmlparser_m63())
+        .method(decl_class_dom_elephchtmlparser_decode_source())
+        .method(decl_class_dom_elephchtmlparser_decode_user_defined())
         .method(decl_class_dom_elephchtmlparser_m64())
         .method(decl_class_dom_elephchtmlparser_m65())
         .method(decl_class_dom_elephchtmlparser_m66())
@@ -3637,17 +3639,18 @@ fn decl_class_dom_htmldocument_m60() -> MethodBuilder {
         .keep_unread_params()
         .returns(t_class("\\Dom\\HTMLDocument"))
         .body(vec![
-            s_assign("document", e_new_fq("Dom\\HTMLDocument", vec![])),
-            s_prop_assign(e_var("document"), "nodeType", e_int(13)),
-            s_assign("encoding", e_static_call("\\Dom\\__ElephcHtmlParser", "sniffEncoding", vec![e_var("source"), e_var("overrideEncoding")])),
             s_if(
-                e_binop(e_var("encoding"), BinOp::StrictEq, e_str("windows-1252")),
+                e_binop(e_binop(e_var("overrideEncoding"), BinOp::StrictNotEq, e_null()), BinOp::And, e_binop(e_static_call("\\Dom\\__ElephcHtmlParser", "encodingForLabel", vec![e_var("overrideEncoding")]), BinOp::StrictEq, e_str(""))),
                 vec![
-                    s_assign("source", e_static_call("\\Dom\\__ElephcHtmlParser", "decodeWindows1252", vec![e_var("source")])),
+                    s_throw(e_new_fq("ValueError", vec![e_str("Dom\\HTMLDocument::createFromString(): Argument #3 ($overrideEncoding) must be a valid document encoding")])),
                 ],
                 vec![],
                 None,
             ),
+            s_assign("document", e_new_fq("Dom\\HTMLDocument", vec![])),
+            s_prop_assign(e_var("document"), "nodeType", e_int(13)),
+            s_assign("encoding", e_static_call("\\Dom\\__ElephcHtmlParser", "sniffEncoding", vec![e_var("source"), e_var("overrideEncoding")])),
+            s_assign("source", e_static_call("\\Dom\\__ElephcHtmlParser", "decodeSource", vec![e_var("source"), e_var("encoding")])),
             s_prop_assign(e_var("document"), "characterSet", e_var("encoding")),
             s_prop_assign(e_var("document"), "charset", e_var("encoding")),
             s_prop_assign(e_var("document"), "inputEncoding", e_var("encoding")),
@@ -3699,6 +3702,14 @@ fn decl_class_dom_elephchtmlparser_m62() -> MethodBuilder {
         .returns(TypeExpr::Str)
         .body(vec![
             s_if(
+                e_binop(e_var("override"), BinOp::StrictNotEq, e_null()),
+                vec![
+                    s_return(e_self_call("encodingForLabel", vec![e_var("override")])),
+                ],
+                vec![],
+                None,
+            ),
+            s_if(
                 e_binop(e_call("substr", vec![e_var("source"), e_int(0), e_int(3)]), BinOp::StrictEq, e_str("\u{e0ef}\u{e0bb}\u{e0bf}")),
                 vec![
                     s_return(e_str("UTF-8")),
@@ -3707,10 +3718,17 @@ fn decl_class_dom_elephchtmlparser_m62() -> MethodBuilder {
                 None,
             ),
             s_if(
-                e_binop(e_var("override"), BinOp::StrictNotEq, e_null()),
+                e_binop(e_call("substr", vec![e_var("source"), e_int(0), e_int(2)]), BinOp::StrictEq, e_str("\u{e0fe}\u{e0ff}")),
                 vec![
-                    s_assign("known", e_self_call("encodingForLabel", vec![e_var("override")])),
-                    s_return(e_ternary(e_binop(e_var("known"), BinOp::StrictEq, e_str("")), e_str("UTF-8"), e_var("known"))),
+                    s_return(e_str("UTF-16BE")),
+                ],
+                vec![],
+                None,
+            ),
+            s_if(
+                e_binop(e_call("substr", vec![e_var("source"), e_int(0), e_int(2)]), BinOp::StrictEq, e_str("\u{e0ff}\u{e0fe}")),
+                vec![
+                    s_return(e_str("UTF-16LE")),
                 ],
                 vec![],
                 None,
@@ -3790,31 +3808,126 @@ fn decl_class_dom_elephchtmlparser_m62() -> MethodBuilder {
 
 /// `encodingForLabel` lifted out of `decl_class_dom_elephchtmlparser` so it builds in its own stack frame.
 fn decl_class_dom_elephchtmlparser_m63() -> MethodBuilder {
+    let arms = ENCODING_LABELS
+        .iter()
+        .map(|(name, labels)| (labels.iter().map(|label| e_str(label)).collect(), e_str(name)))
+        .collect();
     method("encodingForLabel")
-        .private()
         .static_()
         .param("label", TypeExpr::Str)
         .returns(TypeExpr::Str)
         .body(vec![
-            s_assign("label", e_call("strtolower", vec![e_call("trim", vec![e_var("label"), e_str(" \t\n\u{c}\r")])])),
-            s_if(
-                e_call("in_array", vec![e_var("label"), e_array(vec![e_str("utf-8"), e_str("utf8"), e_str("unicode-1-1-utf-8"), e_str("unicode11utf8"), e_str("unicode20utf8"), e_str("x-unicode20utf8")]), e_bool(true)]),
-                vec![
-                    s_return(e_str("UTF-8")),
-                ],
-                vec![],
-                None,
-            ),
-            s_if(
-                e_call("in_array", vec![e_var("label"), e_array(vec![e_str("ansi_x3.4-1968"), e_str("ascii"), e_str("cp1252"), e_str("cp819"), e_str("csisolatin1"), e_str("ibm819"), e_str("iso-8859-1"), e_str("iso-ir-100"), e_str("iso8859-1"), e_str("iso88591"), e_str("iso_8859-1"), e_str("iso_8859-1:1987"), e_str("l1"), e_str("latin1"), e_str("us-ascii"), e_str("windows-1252"), e_str("x-cp1252")]), e_bool(true)]),
-                vec![
-                    s_return(e_str("windows-1252")),
-                ],
-                vec![],
-                None,
-            ),
-            s_return(e_str("")),
+            s_return(e_match(e_call("strtolower", vec![e_var("label")]), arms, Some(e_str("")))),
         ])
+}
+
+/// lexbor's encoding labels (php's `Dom\HTMLDocument` table), each with the name it resolves to.
+const ENCODING_LABELS: &[(&str, &[&str])] = &[
+    ("UTF-8", &["unicode-1-1-utf-8", "utf-8", "utf8"]),
+    ("IBM866", &["866", "cp866", "csibm866", "ibm866"]),
+    ("ISO-8859-2", &["csisolatin2", "iso-8859-2", "iso-ir-101", "iso8859-2", "iso88592", "iso_8859-2", "iso_8859-2:1987", "l2", "latin2"]),
+    ("ISO-8859-3", &["csisolatin3", "iso-8859-3", "iso-ir-109", "iso8859-3", "iso88593", "iso_8859-3", "iso_8859-3:1988", "l3", "latin3"]),
+    ("ISO-8859-4", &["csisolatin4", "iso-8859-4", "iso-ir-110", "iso8859-4", "iso88594", "iso_8859-4", "iso_8859-4:1988", "l4", "latin4"]),
+    ("ISO-8859-5", &["csisolatincyrillic", "cyrillic", "iso-8859-5", "iso-ir-144", "iso8859-5", "iso88595", "iso_8859-5", "iso_8859-5:1988"]),
+    ("ISO-8859-6", &["arabic", "asmo-708", "csiso88596e", "csiso88596i", "csisolatinarabic", "ecma-114", "iso-8859-6", "iso-8859-6-e", "iso-8859-6-i", "iso-ir-127", "iso8859-6", "iso88596", "iso_8859-6", "iso_8859-6:1987"]),
+    ("ISO-8859-7", &["csisolatingreek", "ecma-118", "elot_928", "greek", "greek8", "iso-8859-7", "iso-ir-126", "iso8859-7", "iso88597", "iso_8859-7", "iso_8859-7:1987", "sun_eu_greek"]),
+    ("ISO-8859-8", &["csiso88598e", "csisolatinhebrew", "hebrew", "iso-8859-8", "iso-8859-8-e", "iso-ir-138", "iso8859-8", "iso88598", "iso_8859-8", "iso_8859-8:1988", "visual"]),
+    ("ISO-8859-8-I", &["csiso88598i", "iso-8859-8-i", "logical"]),
+    ("ISO-8859-10", &["csisolatin6", "iso-8859-10", "iso-ir-157", "iso8859-10", "iso885910", "l6", "latin6"]),
+    ("ISO-8859-13", &["iso-8859-13", "iso8859-13", "iso885913"]),
+    ("ISO-8859-14", &["iso-8859-14", "iso8859-14", "iso885914"]),
+    ("ISO-8859-15", &["csisolatin9", "iso-8859-15", "iso8859-15", "iso885915", "iso_8859-15", "l9"]),
+    ("ISO-8859-16", &["iso-8859-16"]),
+    ("KOI8-R", &["cskoi8r", "koi", "koi8", "koi8-r", "koi8_r"]),
+    ("KOI8-U", &["koi8-ru", "koi8-u"]),
+    ("macintosh", &["csmacintosh", "mac", "macintosh", "x-mac-roman"]),
+    ("windows-874", &["dos-874", "iso-8859-11", "iso8859-11", "iso885911", "tis-620", "windows-874"]),
+    ("windows-1250", &["cp1250", "windows-1250", "x-cp1250"]),
+    ("windows-1251", &["cp1251", "windows-1251", "x-cp1251"]),
+    ("windows-1252", &["ansi_x3.4-1968", "ascii", "cp1252", "cp819", "csisolatin1", "ibm819", "iso-8859-1", "iso-ir-100", "iso8859-1", "iso88591", "iso_8859-1", "iso_8859-1:1987", "l1", "latin1", "us-ascii", "windows-1252", "x-cp1252"]),
+    ("windows-1253", &["cp1253", "windows-1253", "x-cp1253"]),
+    ("windows-1254", &["cp1254", "csisolatin5", "iso-8859-9", "iso-ir-148", "iso8859-9", "iso88599", "iso_8859-9", "iso_8859-9:1989", "l5", "latin5", "windows-1254", "x-cp1254"]),
+    ("windows-1255", &["cp1255", "windows-1255", "x-cp1255"]),
+    ("windows-1256", &["cp1256", "windows-1256", "x-cp1256"]),
+    ("windows-1257", &["cp1257", "windows-1257", "x-cp1257"]),
+    ("windows-1258", &["cp1258", "windows-1258", "x-cp1258"]),
+    ("x-mac-cyrillic", &["x-mac-cyrillic", "x-mac-ukrainian"]),
+    ("GBK", &["chinese", "csgb2312", "csiso58gb231280", "gb2312", "gb_2312", "gb_2312-80", "gbk", "iso-ir-58", "x-gbk"]),
+    ("gb18030", &["gb18030"]),
+    ("Big5", &["big5", "big5-hkscs", "cn-big5", "csbig5", "x-x-big5"]),
+    ("EUC-JP", &["cseucpkdfmtjapanese", "euc-jp", "x-euc-jp"]),
+    ("ISO-2022-JP", &["csiso2022jp", "iso-2022-jp"]),
+    ("Shift_JIS", &["csshiftjis", "ms932", "ms_kanji", "shift-jis", "shift_jis", "sjis", "windows-31j", "x-sjis"]),
+    ("EUC-KR", &["cseuckr", "csksc56011987", "euc-kr", "iso-ir-149", "korean", "ks_c_5601-1987", "ks_c_5601-1989", "ksc5601", "ksc_5601", "windows-949"]),
+    ("replacement", &["csiso2022kr", "hz-gb-2312", "iso-2022-cn", "iso-2022-cn-ext", "iso-2022-kr", "replacement"]),
+    ("UTF-16BE", &["utf-16be"]),
+    ("UTF-16LE", &["utf-16", "utf-16le"]),
+    ("x-user-defined", &["x-user-defined"]),
+];
+
+/// `decodeSource`: the document's bytes as UTF-8, by the sniffed encoding.
+fn decl_class_dom_elephchtmlparser_decode_source() -> MethodBuilder {
+    let returns_when = |encoding: &str, value: Expr| {
+        s_if(
+            e_binop(e_var("encoding"), BinOp::StrictEq, e_str(encoding)),
+            vec![
+                s_return(value),
+            ],
+            vec![],
+            None,
+        )
+    };
+    let charsets = [
+        (vec!["IBM866"], "CP866"),
+        (vec!["ISO-8859-8-I"], "ISO-8859-8"),
+        (vec!["macintosh"], "MACINTOSH"),
+        (vec!["windows-874"], "CP874"),
+        (vec!["x-mac-cyrillic"], "MAC-CYRILLIC"),
+        (vec!["GBK", "gb18030"], "GB18030"),
+        (vec!["Big5"], "BIG5-HKSCS"),
+        (vec!["Shift_JIS"], "CP932"),
+        (vec!["EUC-KR"], "CP949"),
+    ]
+    .into_iter()
+    .map(|(names, charset)| (names.into_iter().map(e_str).collect(), e_str(charset)))
+    .collect();
+    method("decodeSource")
+        .static_()
+        .param("source", TypeExpr::Str)
+        .param("encoding", TypeExpr::Str)
+        .returns(TypeExpr::Str)
+        .body(vec![
+            returns_when("UTF-8", e_var("source")),
+            returns_when("windows-1252", e_self_call("decodeWindows1252", vec![e_var("source")])),
+            returns_when("replacement", e_str("")),
+            returns_when("x-user-defined", e_self_call("decodeUserDefined", vec![e_var("source")])),
+            s_assign("charset", e_match(e_var("encoding"), charsets, Some(e_var("encoding")))),
+            s_assign("decoded", e_silenced(e_call("iconv", vec![e_var("charset"), e_str("UTF-8//IGNORE"), e_var("source")]))),
+            s_return(e_ternary(e_binop(e_var("decoded"), BinOp::StrictEq, e_bool(false)), e_var("source"), e_var("decoded"))),
+        ])
+}
+
+/// `decodeUserDefined`: x-user-defined keeps an ASCII byte and maps any other byte b to U+F780 + (b - 0x80).
+fn decl_class_dom_elephchtmlparser_decode_user_defined() -> MethodBuilder {
+    method("decodeUserDefined")
+        .private()
+        .static_()
+        .param("s", TypeExpr::Str)
+        .returns(TypeExpr::Str)
+        .body(vec![
+            s_assign("out", e_str("")),
+            s_assign("n", e_call("strlen", vec![e_var("s")])),
+            s_for(Some(s_assign("i", e_int(0))), Some(e_binop(e_var("i"), BinOp::Lt, e_var("n"))), Some(s_expr(e_post_inc("i"))), vec![
+                s_assign("b", e_call("ord", vec![e_index(e_var("s"), e_var("i"))])),
+                s_assign("out", e_binop(e_var("out"), BinOp::Concat, e_ternary(e_binop(e_var("b"), BinOp::Lt, e_int(128)), e_index(e_var("s"), e_var("i")), e_self_call("codepointText", vec![e_binop(e_binop(e_int(63360), BinOp::Add, e_var("b")), BinOp::Sub, e_int(128))])))),
+            ]),
+            s_return(e_var("out")),
+        ])
+}
+
+/// `@expr`: the expression with its diagnostics silenced.
+fn e_silenced(expr: Expr) -> Expr {
+    Expr::new(ExprKind::ErrorSuppress(Box::new(expr)), crate::span::Span::dummy())
 }
 
 /// `decodeWindows1252` lifted out of `decl_class_dom_elephchtmlparser` so it builds in its own stack frame.

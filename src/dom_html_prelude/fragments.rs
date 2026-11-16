@@ -750,12 +750,13 @@ final class Dom__HTMLDocument extends \Dom__Document
 
     public static function createFromString(string $source, int $options = 0, ?string $overrideEncoding = null): \Dom__HTMLDocument
     {
+        if ($overrideEncoding !== null && \Dom____ElephcHtmlParser::encodingForLabel($overrideEncoding) === '') {
+            throw new \ValueError('Dom\\HTMLDocument::createFromString(): Argument #3 ($overrideEncoding) must be a valid document encoding');
+        }
         $document = new \Dom__HTMLDocument();
         $document->nodeType = 13;
         $encoding = \Dom____ElephcHtmlParser::sniffEncoding($source, $overrideEncoding);
-        if ($encoding === 'windows-1252') {
-            $source = \Dom____ElephcHtmlParser::decodeWindows1252($source);
-        }
+        $source = \Dom____ElephcHtmlParser::decodeSource($source, $encoding);
         $document->characterSet = $encoding;
         $document->charset = $encoding;
         $document->inputEncoding = $encoding;
@@ -815,17 +816,21 @@ final class Dom____ElephcHtmlParser
         $this->len = strlen($source);
     }
 
-    // the document's encoding: a UTF-8 byte order mark, else the override, else a `<meta>` charset
-    // in the first 1024 bytes, else UTF-8; only UTF-8 and windows-1252 (latin1) are decoded, any
-    // other label is read as UTF-8
+    // the document's encoding: the (validated) override, else a byte order mark, else a `<meta>`
+    // charset in the first 1024 bytes, else UTF-8
     public static function sniffEncoding(string $source, ?string $override): string
     {
+        if ($override !== null) {
+            return self::encodingForLabel($override);
+        }
         if (substr($source, 0, 3) === "\xEF\xBB\xBF") {
             return 'UTF-8';
         }
-        if ($override !== null) {
-            $known = self::encodingForLabel($override);
-            return $known === '' ? 'UTF-8' : $known;
+        if (substr($source, 0, 2) === "\xFE\xFF") {
+            return 'UTF-16BE';
+        }
+        if (substr($source, 0, 2) === "\xFF\xFE") {
+            return 'UTF-16LE';
         }
         $head = strtolower(substr($source, 0, 1024));
         $at = 0;
@@ -864,16 +869,97 @@ final class Dom____ElephcHtmlParser
         return 'UTF-8';
     }
 
-    private static function encodingForLabel(string $label): string
+    // lexbor's encoding name for a label (ASCII case-insensitive, never trimmed), '' when unknown
+    public static function encodingForLabel(string $label): string
     {
-        $label = strtolower(trim($label, " \t\n\f\r"));
-        if (in_array($label, ['utf-8', 'utf8', 'unicode-1-1-utf-8', 'unicode11utf8', 'unicode20utf8', 'x-unicode20utf8'], true)) {
-            return 'UTF-8';
+        return match (strtolower($label)) {
+            'unicode-1-1-utf-8', 'utf-8', 'utf8' => 'UTF-8',
+            '866', 'cp866', 'csibm866', 'ibm866' => 'IBM866',
+            'csisolatin2', 'iso-8859-2', 'iso-ir-101', 'iso8859-2', 'iso88592', 'iso_8859-2', 'iso_8859-2:1987', 'l2', 'latin2' => 'ISO-8859-2',
+            'csisolatin3', 'iso-8859-3', 'iso-ir-109', 'iso8859-3', 'iso88593', 'iso_8859-3', 'iso_8859-3:1988', 'l3', 'latin3' => 'ISO-8859-3',
+            'csisolatin4', 'iso-8859-4', 'iso-ir-110', 'iso8859-4', 'iso88594', 'iso_8859-4', 'iso_8859-4:1988', 'l4', 'latin4' => 'ISO-8859-4',
+            'csisolatincyrillic', 'cyrillic', 'iso-8859-5', 'iso-ir-144', 'iso8859-5', 'iso88595', 'iso_8859-5', 'iso_8859-5:1988' => 'ISO-8859-5',
+            'arabic', 'asmo-708', 'csiso88596e', 'csiso88596i', 'csisolatinarabic', 'ecma-114', 'iso-8859-6', 'iso-8859-6-e', 'iso-8859-6-i', 'iso-ir-127', 'iso8859-6', 'iso88596', 'iso_8859-6', 'iso_8859-6:1987' => 'ISO-8859-6',
+            'csisolatingreek', 'ecma-118', 'elot_928', 'greek', 'greek8', 'iso-8859-7', 'iso-ir-126', 'iso8859-7', 'iso88597', 'iso_8859-7', 'iso_8859-7:1987', 'sun_eu_greek' => 'ISO-8859-7',
+            'csiso88598e', 'csisolatinhebrew', 'hebrew', 'iso-8859-8', 'iso-8859-8-e', 'iso-ir-138', 'iso8859-8', 'iso88598', 'iso_8859-8', 'iso_8859-8:1988', 'visual' => 'ISO-8859-8',
+            'csiso88598i', 'iso-8859-8-i', 'logical' => 'ISO-8859-8-I',
+            'csisolatin6', 'iso-8859-10', 'iso-ir-157', 'iso8859-10', 'iso885910', 'l6', 'latin6' => 'ISO-8859-10',
+            'iso-8859-13', 'iso8859-13', 'iso885913' => 'ISO-8859-13',
+            'iso-8859-14', 'iso8859-14', 'iso885914' => 'ISO-8859-14',
+            'csisolatin9', 'iso-8859-15', 'iso8859-15', 'iso885915', 'iso_8859-15', 'l9' => 'ISO-8859-15',
+            'iso-8859-16' => 'ISO-8859-16',
+            'cskoi8r', 'koi', 'koi8', 'koi8-r', 'koi8_r' => 'KOI8-R',
+            'koi8-ru', 'koi8-u' => 'KOI8-U',
+            'csmacintosh', 'mac', 'macintosh', 'x-mac-roman' => 'macintosh',
+            'dos-874', 'iso-8859-11', 'iso8859-11', 'iso885911', 'tis-620', 'windows-874' => 'windows-874',
+            'cp1250', 'windows-1250', 'x-cp1250' => 'windows-1250',
+            'cp1251', 'windows-1251', 'x-cp1251' => 'windows-1251',
+            'ansi_x3.4-1968', 'ascii', 'cp1252', 'cp819', 'csisolatin1', 'ibm819', 'iso-8859-1', 'iso-ir-100', 'iso8859-1', 'iso88591', 'iso_8859-1', 'iso_8859-1:1987', 'l1', 'latin1', 'us-ascii', 'windows-1252', 'x-cp1252' => 'windows-1252',
+            'cp1253', 'windows-1253', 'x-cp1253' => 'windows-1253',
+            'cp1254', 'csisolatin5', 'iso-8859-9', 'iso-ir-148', 'iso8859-9', 'iso88599', 'iso_8859-9', 'iso_8859-9:1989', 'l5', 'latin5', 'windows-1254', 'x-cp1254' => 'windows-1254',
+            'cp1255', 'windows-1255', 'x-cp1255' => 'windows-1255',
+            'cp1256', 'windows-1256', 'x-cp1256' => 'windows-1256',
+            'cp1257', 'windows-1257', 'x-cp1257' => 'windows-1257',
+            'cp1258', 'windows-1258', 'x-cp1258' => 'windows-1258',
+            'x-mac-cyrillic', 'x-mac-ukrainian' => 'x-mac-cyrillic',
+            'chinese', 'csgb2312', 'csiso58gb231280', 'gb2312', 'gb_2312', 'gb_2312-80', 'gbk', 'iso-ir-58', 'x-gbk' => 'GBK',
+            'gb18030' => 'gb18030',
+            'big5', 'big5-hkscs', 'cn-big5', 'csbig5', 'x-x-big5' => 'Big5',
+            'cseucpkdfmtjapanese', 'euc-jp', 'x-euc-jp' => 'EUC-JP',
+            'csiso2022jp', 'iso-2022-jp' => 'ISO-2022-JP',
+            'csshiftjis', 'ms932', 'ms_kanji', 'shift-jis', 'shift_jis', 'sjis', 'windows-31j', 'x-sjis' => 'Shift_JIS',
+            'cseuckr', 'csksc56011987', 'euc-kr', 'iso-ir-149', 'korean', 'ks_c_5601-1987', 'ks_c_5601-1989', 'ksc5601', 'ksc_5601', 'windows-949' => 'EUC-KR',
+            'csiso2022kr', 'hz-gb-2312', 'iso-2022-cn', 'iso-2022-cn-ext', 'iso-2022-kr', 'replacement' => 'replacement',
+            'utf-16be' => 'UTF-16BE',
+            'utf-16', 'utf-16le' => 'UTF-16LE',
+            'x-user-defined' => 'x-user-defined',
+            default => '',
+        };
+    }
+
+    // the document's bytes as UTF-8: windows-1252 and x-user-defined are mapped here,
+    // `replacement` reads as nothing, every other encoding goes through iconv (which drops an
+    // invalid sequence where lexbor writes U+FFFD)
+    public static function decodeSource(string $source, string $encoding): string
+    {
+        if ($encoding === 'UTF-8') {
+            return $source;
         }
-        if (in_array($label, ['ansi_x3.4-1968', 'ascii', 'cp1252', 'cp819', 'csisolatin1', 'ibm819', 'iso-8859-1', 'iso-ir-100', 'iso8859-1', 'iso88591', 'iso_8859-1', 'iso_8859-1:1987', 'l1', 'latin1', 'us-ascii', 'windows-1252', 'x-cp1252'], true)) {
-            return 'windows-1252';
+        if ($encoding === 'windows-1252') {
+            return self::decodeWindows1252($source);
         }
-        return '';
+        if ($encoding === 'replacement') {
+            return '';
+        }
+        if ($encoding === 'x-user-defined') {
+            return self::decodeUserDefined($source);
+        }
+        $charset = match ($encoding) {
+            'IBM866' => 'CP866',
+            'ISO-8859-8-I' => 'ISO-8859-8',
+            'macintosh' => 'MACINTOSH',
+            'windows-874' => 'CP874',
+            'x-mac-cyrillic' => 'MAC-CYRILLIC',
+            'GBK', 'gb18030' => 'GB18030',
+            'Big5' => 'BIG5-HKSCS',
+            'Shift_JIS' => 'CP932',
+            'EUC-KR' => 'CP949',
+            default => $encoding,
+        };
+        $decoded = @iconv($charset, 'UTF-8//IGNORE', $source);
+        return $decoded === false ? $source : $decoded;
+    }
+
+    // x-user-defined: an ASCII byte stays, any other byte b is U+F780 + (b - 0x80)
+    private static function decodeUserDefined(string $s): string
+    {
+        $out = '';
+        $n = strlen($s);
+        for ($i = 0; $i < $n; $i++) {
+            $b = ord($s[$i]);
+            $out .= $b < 0x80 ? $s[$i] : self::codepointText(0xF780 + $b - 0x80);
+        }
+        return $out;
     }
 
     public static function decodeWindows1252(string $s): string

@@ -112,6 +112,57 @@ echo $d->characterSet, ' ', bin2hex($d->body->textContent), "\n";
     );
 }
 
+/// `createFromString()` resolves lexbor's encoding labels: an unknown `$overrideEncoding` throws
+/// php's `ValueError`, and a legacy encoding (override, `<meta>` or byte order mark) is decoded.
+#[test]
+fn test_dom_html_document_decodes_the_legacy_encodings() {
+    let out = compile_and_run(
+        r#"<?php
+function show($src, $enc = null) {
+    try {
+        $d = $enc === null
+            ? Dom\HTMLDocument::createFromString($src, LIBXML_NOERROR)
+            : Dom\HTMLDocument::createFromString($src, LIBXML_NOERROR, $enc);
+        echo $d->charset, " ", bin2hex($d->body->textContent), "\n";
+    } catch (ValueError $e) {
+        echo get_class($e), ": ", $e->getMessage(), "\n";
+    }
+}
+show("<p>x</p>", 'bogus-enc');
+show("<p>x</p>", ' utf-8');
+show("<p>\x82\xa0</p>", 'SJIS');
+show("<meta charset=shift_jis><p>\x82\xa0</p>");
+show("<p>\xb1</p>", 'latin2');
+show("<p>\xc1</p>", 'KOI8-R');
+show("<p>\xe0</p>", 'cp1251');
+show("<p>\xa4\xa2</p>", 'EUC-JP');
+show("<p>\x80\xff</p>", 'x-user-defined');
+show("\xff\xfe<\0p\0>\0x\0");
+show("\xef\xbb\xbf<p>\xc3\xa9</p>", 'koi8-r');
+show("<p>\xe9</p>", 'LATIN1');
+"#,
+    );
+    let refusal = "ValueError: Dom\\HTMLDocument::createFromString(): Argument #3 ($overrideEncoding) must be a valid document encoding\n";
+    assert_eq!(
+        out,
+        [
+            refusal,
+            refusal,
+            "Shift_JIS e38182\n",
+            "Shift_JIS e38182\n",
+            "ISO-8859-2 c485\n",
+            "KOI8-R d0b0\n",
+            "windows-1251 d0b0\n",
+            "EUC-JP e38182\n",
+            "x-user-defined ef9e80ef9fbf\n",
+            "UTF-16LE 78\n",
+            "KOI8-R d09ee295a9c2a9d186e29598\n",
+            "windows-1252 c3a9\n",
+        ]
+        .concat()
+    );
+}
+
 /// `firstChild` is typed `?Dom\Node`: a property only `Dom\Element` or `Dom\Text` declares is
 /// read from the run-time node, as php does.
 #[test]
