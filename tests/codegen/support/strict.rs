@@ -57,11 +57,17 @@ impl StrictFixture {
         assert!(errors.contains(expected), "expected {expected:?}, received: {errors}");
     }
 
-    /// Compiles and executes a fixture, requiring successful compilation and execution.
-    pub(crate) fn capture(&self, flags: &[&str]) -> Output {
+    /// Requires successful compilation, including target-specific assembly-only checks.
+    pub(crate) fn assert_compiles(&self, flags: &[&str]) -> Output {
         let output = self.compile(flags);
         assert!(output.status.success(), "strict fixture compilation failed: {}",
             String::from_utf8_lossy(&output.stderr));
+        output
+    }
+
+    /// Compiles and executes a fixture, requiring successful compilation and execution.
+    pub(crate) fn capture(&self, flags: &[&str]) -> Output {
+        self.assert_compiles(flags);
         let output = run_binary(&self.directory.join("main"), &self.directory);
         assert!(output.status.success(), "strict fixture execution failed: status={} stdout={} stderr={}",
             output.status, String::from_utf8_lossy(&output.stdout), String::from_utf8_lossy(&output.stderr));

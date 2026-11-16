@@ -142,6 +142,13 @@ pub(crate) fn implicit(profile: SemanticProfile, source: SourceMode, expected: &
         return elephc_semantics::conversions::plan_implicit_kinds(profile, ValueKind::Dynamic, allowed);
     }
     if *actual == PhpType::Never { return ConversionPlan::Identity; }
+    // Concrete string storage can carry logical null after a missing typed-array read.
+    // A declaration excluding null must test the logical kind before storage adaptation.
+    if super::numeric::value_kind(actual) == ValueKind::String
+        && allowed.allows(ValueKind::String) && !allowed.allows(ValueKind::Null)
+    {
+        return elephc_semantics::conversions::plan_implicit_kinds(profile, ValueKind::Dynamic, allowed);
+    }
     let constraints = runtime_constraints(expected);
     if ((!nominal_members(expected).is_empty() || !constraints.is_empty())
             && super::numeric::value_kind(actual) == ValueKind::NonScalar)

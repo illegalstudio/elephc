@@ -46,3 +46,12 @@ fn test_repl_strict_strings_public_profile_and_recovery() {
     assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
     assert_eq!(String::from_utf8_lossy(&output.stdout), "int(7)\nT[7]");
 }
+
+/// Exact implicit bindings reach submitted functions while explicit casts remain intentional.
+#[test]
+fn test_repl_strict_coercions_public_profile_and_recovery() {
+    let fixture = Fixture::new();
+    let output = fixture.run("function replExactFloat(float $value): void { echo 'F'; }\ntry { replExactFloat(1); } catch (TypeError $contractError) { echo 'T'; } replExactFloat((float) 1);\n", &["--strict-coercions"]);
+    assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
+    assert_eq!(String::from_utf8_lossy(&output.stdout), "TF");
+}

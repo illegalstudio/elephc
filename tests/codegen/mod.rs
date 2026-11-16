@@ -183,5 +183,9 @@ mod strict_string_boxed_nulls;
 mod strict_string_eval_hosts;
 mod strict_string_public;
 mod strict_scope_snapshot_controls;
+mod strict_eval_property_references;
+mod strict_coercions_public;
+mod strict_coercion_hosts;
+mod strict_coercion_missing_values;
 
 mod strict_conversion_returns;

@@ -13,6 +13,7 @@ use super::*;
 pub(super) fn lower_reflection_method_invoke_call(
     ctx: &mut LoweringContext<'_, '_>,
     object_expr: Option<&Expr>,
+    reflector: LoweredValue,
     method: &str,
     args: &[Expr],
     expr: &Expr,
@@ -39,23 +40,28 @@ pub(super) fn lower_reflection_method_invoke_call(
             expr,
         ));
     };
-    match target_kind {
-        ReflectionMethodTargetKind::Static => Some(lower_reflection_static_method_invoke(
+    let (_, owner) = root_method_receiver(ctx, reflector, expr.span);
+    let result = match target_kind {
+        ReflectionMethodTargetKind::Static => lower_reflection_static_method_invoke(
             ctx,
             &class_name,
             &reflected_method,
             &object_arg,
             &forwarded_args,
             expr,
-        )),
-        ReflectionMethodTargetKind::Instance => Some(lower_reflection_instance_method_invoke(
+        ),
+        ReflectionMethodTargetKind::Instance => lower_reflection_instance_method_invoke(
             ctx,
             &reflected_method,
             &object_arg,
             &forwarded_args,
             expr,
-        )),
+        ),
+    };
+    if let Some(owner) = owner {
+        super::call_operand_owners::retire_owned_call_operand_preserving_result(ctx, owner, result, expr.span);
     }
+    Some(result)
 }
 
 /// Lowers a static reflected-method invocation after evaluating the ignored object slot.

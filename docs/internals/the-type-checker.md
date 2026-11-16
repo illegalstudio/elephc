@@ -302,8 +302,10 @@ reviewed native projections transfer pending native failures through
 `native_results::finish`. That helper also serves checked arithmetic and unary
 operations. Projection result kinds and ownership remain exact. Unreviewed host
 adapters cannot substitute an already narrowed result for original-value proof.
-Public feature
-admission stays gated while remaining consumers are integrated.
+Checked Casts admission stays gated while its remaining consumers are integrated.
+Coercions is admitted after native/eval reference, callable, Reflection and REPL
+checks. Concrete string storage retains a logical-kind guard when its declared
+contract excludes null, including missing typed-array reads.
 
 `CheckedRadixInt` carries an exact string/base runtime boundary. The neutral
 `integer_cast_base` kernel and native two-pass parser validate complete digits

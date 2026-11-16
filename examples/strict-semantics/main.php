@@ -1,5 +1,5 @@
 <?php
-// Compile with: elephc --strict-dynamic-code --strict-bools --strict-arithmetic --strict-overflow examples/strict-semantics/main.php
+// Compile with: elephc --strict-dynamic-code --strict-bools --strict-arithmetic --strict-overflow --strict-coercions examples/strict-semantics/main.php
 // Literal source is verified and compiled ahead of time.
 eval('echo "Verified at compilation", PHP_EOL;');
 
@@ -58,3 +58,13 @@ try {
 } catch (ArithmeticError $error) {
     echo "Integer overflow was rejected", PHP_EOL;
 }
+
+function showExactRate(float $rate): void {
+    echo "Rate: ", $rate, PHP_EOL;
+}
+function acceptRateInput(mixed $input): void {
+    try { showExactRate($input); }
+    catch (TypeError $error) { echo "Rate requires float", PHP_EOL; }
+}
+acceptRateInput(2);
+showExactRate((float) '2.5');

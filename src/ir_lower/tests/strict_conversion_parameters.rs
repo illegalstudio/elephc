@@ -147,3 +147,27 @@ fn strict_conversion_parameters_original_values_and_all_target_storage() {
         }
     }
 }
+
+/// Public library callers admit Coercions and retain original kind guards on every target.
+#[test]
+fn strict_conversion_parameters_public_profile_on_all_targets() {
+    let profile = SemanticProfile::PERMISSIVE.with(StrictFeature::Coercions, true);
+    let source = "<?php function exactPublicArgument(float $value): float { return $value; } function exactPublicReturn(mixed $value): float { return exactPublicArgument($value); } function exactPublicString(string $value): string { return $value; } function exactPublicStringRead(int $index): string { $parts = [\"a\"]; return exactPublicString($parts[$index]); }";
+    let program = crate::parser::parse(&crate::lexer::tokenize(source).unwrap()).unwrap();
+    for name in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+        let target = Target::parse(name).unwrap();
+        let checked = crate::types::check_with_target_and_options(&program, target,
+            crate::types::CheckOptions { semantic_profile: profile, ..Default::default() },
+            &crate::generics::GenericContext::default()).unwrap();
+        let module = crate::ir_lower::lower_program(&program, &checked, target, false).unwrap();
+        assert_eq!(module.semantic_profile, profile);
+        let read = module.functions.iter().find(|function| function.name == "exactPublicStringRead").unwrap();
+        assert!(read.instructions.iter().any(|inst| inst.op == crate::ir::Op::TypePredicate
+            && inst.immediate == Some(crate::ir::Immediate::TypePredicate(crate::ir::PhpTypePredicate::String))),
+            "{name}: concrete string storage retains logical kind validation");
+        assert!(module.functions.iter().any(|function| function.instructions.iter()
+            .any(|inst| inst.op == crate::ir::Op::ThrowTypeError)), "{name}: original input guard");
+        crate::ir::validate_module(&module).unwrap();
+        crate::codegen::generate_user_asm_from_ir(&module, false, false).unwrap();
+    }
+}

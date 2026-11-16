@@ -606,11 +606,33 @@ order. Repeating an explicit feature option uses the last value.
 
 Integration is in progress. This build accepts the existing strict-locals and
 strict-opcache rules plus strict-dynamic-code, strict-bools, strict-arithmetic,
-strict-overflow and strict-strings.
+strict-overflow, strict-strings and strict-coercions.
 Other registered guarantees,
 including the complete umbrella, fail explicitly until their enforcement is
 complete. Eval embedding entry points reject execution with those profiles too. The [implementation plan](https://github.com/illegalstudio/elephc/issues/2347)
 tracks the remaining work.
+
+### Strict value coercions
+
+`--strict-coercions` requires values to match their declared contract before
+implicit adaptation. An integer cannot satisfy a float declaration, and a number
+cannot satisfy a string or boolean declaration. Nullable and union declarations
+retain their explicitly accepted alternatives. These checks cover parameters,
+returns, defaults, typed locals/properties and builtin value inputs, including
+named arguments, unpacking, callables, Reflection, eval and reference writes.
+
+Known incompatible source produces a compile diagnostic before folding. Dynamic
+incompatibility throws `TypeError` before the callee runs or a failed write
+changes its destination. Argument side effects retain source order. A native
+write through an alias of an eval-declared property must satisfy every live
+property declaration before execution continues after the assignment.
+
+Explicit conversions such as `(float) $value`, `intval` and `strval` remain
+intentional conversions. Formatting and concatenation retain their independently
+selected contracts; use `--strict-strings` for string-only concatenation. This
+option applies regardless of `declare(strict_types=0)` or `strict_types=1`.
+The [strict semantics example](../../examples/strict-semantics/main.php)
+demonstrates an exact float parameter and an explicit conversion.
 
 ### Strict integer overflow
 

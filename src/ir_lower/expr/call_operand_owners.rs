@@ -933,6 +933,19 @@ pub(crate) fn retire_owned_call_operand(
     );
 }
 
+/// Retires an outer receiver after a nested call, keeping its completed result unwind-visible.
+/// Detach the operand record before publishing the result pin so cleanup remains strictly LIFO.
+pub(super) fn retire_owned_call_operand_preserving_result(
+    ctx: &mut LoweringContext<'_, '_>, slot: crate::ir::LocalSlotId,
+    result: LoweredValue, span: Span,
+) {
+    unregister_owned_call_operand(ctx, slot, span);
+    let pins = pin_in_flight_owners(ctx, &[result.value], span);
+    ctx.emit_void(Op::ReleaseLocalSlot, Vec::new(), Some(Immediate::LocalSlot(slot)),
+        Op::ReleaseLocalSlot.default_effects(), Some(span));
+    unpin_in_flight_owners(ctx, pins, span);
+}
+
 /// One temporary owner or provisional local view protected across a throwing window.
 ///
 /// Temporary pins use a non-retaining `OwnedTemp` store. Local views use guards whose

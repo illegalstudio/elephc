@@ -246,6 +246,7 @@ pub(super) fn reflection_member_constructor_expr(
 pub(super) fn lower_reflection_function_invoke_call(
     ctx: &mut LoweringContext<'_, '_>,
     object_expr: Option<&Expr>,
+    reflector: LoweredValue,
     method: &str,
     args: &[Expr],
     expr: &Expr,
@@ -264,17 +265,23 @@ pub(super) fn lower_reflection_function_invoke_call(
             expr,
         ));
     };
-    if let Some(signature) = first_class_builtin_signature(ctx, &function_name) {
-        return Some(lower_reflection_builtin_function_call(
+    let (_, owner) = root_method_receiver(ctx, reflector, expr.span);
+    let result = if let Some(signature) = first_class_builtin_signature(ctx, &function_name) {
+        lower_reflection_builtin_function_call(
             ctx,
             &function_name,
             &signature,
             &forwarded_args,
             expr,
-        ));
+        )
+    } else {
+        let name = Name::from(function_name);
+        lower_function_call(ctx, &name, &forwarded_args, expr)
+    };
+    if let Some(owner) = owner {
+        super::call_operand_owners::retire_owned_call_operand_preserving_result(ctx, owner, result, expr.span);
     }
-    let name = Name::from(function_name);
-    Some(lower_function_call(ctx, &name, &forwarded_args, expr))
+    Some(result)
 }
 
 /// Lowers reflected invocation of a supported callable builtin.
