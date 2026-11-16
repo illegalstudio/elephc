@@ -376,6 +376,13 @@ fn two_eager_files_guarded_by_the_profile_do_not_both_declare() {
         !stdout.is_empty(),
         "the entry produced nothing, so an eager file ended the program"
     );
+    // php returns from both files before either declaration, so the function never exists: a
+    // fold that dropped only one file's dead tail would link and still print `declared`.
+    assert_eq!(
+        stdout.trim(),
+        "absent",
+        "an eager file declared the polyfill php never reaches:\n{stdout}"
+    );
 }
 
 /// One half of the duplicate fixture: a polyfill below a profile guard php never passes.
