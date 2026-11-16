@@ -75,6 +75,8 @@ pub(crate) enum Op {
     DefineFn(u16),
     /// Increments or decrements a local using PHP's null-decrement rule.
     IncDec(u16, bool),
+    /// Formats one interpolation operand while preserving strict array checks.
+    FormatString,
 }
 
 /// Source arguments retained for context-sensitive calls that cannot use the positional fast path.

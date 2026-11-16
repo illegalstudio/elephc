@@ -9,6 +9,18 @@
 
 use super::support::*;
 
+/// Interpolation retains its formatting cast without consuming a following explicit concatenation.
+#[test]
+fn parse_fragment_interpolation_preserves_formatting_context() {
+    let program = parse_fragment(br#"return "row:$value" . 'tail';"#).unwrap();
+    let EvalStmt::Return(Some(EvalExpr::Binary { op: EvalBinOp::Concat, left, right })) =
+        &program.statements()[0] else { panic!("outer concat"); };
+    assert!(matches!(&**right, EvalExpr::Const(EvalConst::String(text)) if text == "tail"));
+    let EvalExpr::Binary { op: EvalBinOp::Concat, right, .. } = &**left else { panic!("interpolation"); };
+    assert!(matches!(&**right, EvalExpr::Cast { target: EvalCastType::StringFormat, expr }
+        if matches!(&**expr, EvalExpr::LoadVar(name) if name == "value")));
+}
+
 /// Verifies comparison operators parse with lower precedence than arithmetic.
 #[test]
 fn parse_fragment_accepts_comparison_source() {

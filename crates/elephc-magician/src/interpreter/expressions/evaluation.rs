@@ -62,6 +62,7 @@ fn eval_concat_result(
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
+    super::super::checked_strings::concatenation(left, right, context, values)?;
     let left_string = eval_string_context_value(left, context, values)?;
     let right_string = match eval_string_context_value(right, context, values) {
         Ok(value) => value,
@@ -168,6 +169,10 @@ pub(in crate::interpreter) fn eval_cast_value(
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
+    if *target == EvalCastType::StringFormat {
+        super::super::checked_strings::formatting(value, context, values)?;
+        return eval_cast_value(&EvalCastType::String, value, context, values);
+    }
     if context.semantic_profile().contains(elephc_semantics::StrictFeature::Casts)
         && matches!(target, EvalCastType::Int | EvalCastType::Float) {
         return super::super::checked_cast::numeric(target, value, context, values);
@@ -191,7 +196,7 @@ pub(in crate::interpreter) fn eval_cast_value(
                 None => values.cast_float(value),
             }
         }
-        EvalCastType::String => {
+        EvalCastType::String | EvalCastType::StringFormat => {
             if context.semantic_profile().contains(elephc_semantics::StrictFeature::Casts)
                 && values.is_array_like(value)? {
                 eval_dispatch_php_error("Array to string conversion", E_WARNING, context, values)?;

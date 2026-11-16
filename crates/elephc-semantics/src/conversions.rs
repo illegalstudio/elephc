@@ -10,6 +10,13 @@
 
 use crate::{SemanticProfile, StrictFeature};
 
+/// Reports an attempted implicit conversion at string concatenation.
+pub const STRING_CONCAT_MESSAGE: &str =
+    "--strict-strings: concatenation requires strings; use explicit formatting or a (string) cast";
+/// Reports an array reaching an intentional formatting context without an explicit conversion.
+pub const STRING_FORMAT_MESSAGE: &str =
+    "--strict-strings: arrays require an explicit string conversion or a formatter";
+
 /// Scalar categories sufficient to decide a value-conversion policy.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ValueKind { Integer, Float, Boolean, String, Null, Dynamic, NonScalar }

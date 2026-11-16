@@ -13,10 +13,9 @@ use elephc_semantics::{SemanticProfile, StrictFeature, conversions::{
     plan_conversion, ConversionPlan, ConversionSite, ValueKind,
 }};
 
-pub(crate) const CONCAT_MESSAGE: &str =
-    "--strict-strings: concatenation requires strings; use explicit formatting or a (string) cast";
-pub(crate) const FORMAT_MESSAGE: &str =
-    "--strict-strings: arrays require an explicit string conversion or a formatter";
+pub(crate) use elephc_semantics::conversions::{
+    STRING_CONCAT_MESSAGE as CONCAT_MESSAGE, STRING_FORMAT_MESSAGE as FORMAT_MESSAGE,
+};
 
 /// Preserves formatting when a prepared expression must be serialized back to PHP source.
 pub(crate) fn formatting_source(expression: &str) -> String {

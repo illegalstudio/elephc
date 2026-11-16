@@ -389,6 +389,10 @@ impl Parser {
 
     /// Parses right-associative unary prefix expressions.
     pub(in crate::parser) fn parse_unary(&mut self) -> Result<EvalExpr, EvalParseError> {
+        if self.consume(TokenKind::StringFormat) {
+            let expr = self.parse_unary()?;
+            return Ok(EvalExpr::Cast { target: EvalCastType::StringFormat, expr: Box::new(expr) });
+        }
         if let Some(target) = self.peek_scalar_cast_type() {
             self.advance();
             self.advance();

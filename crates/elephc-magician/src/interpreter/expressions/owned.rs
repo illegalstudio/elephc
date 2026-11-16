@@ -30,6 +30,7 @@ pub(in crate::interpreter) fn eval_output_value(
 ) -> Result<(), EvalStatus> {
     let mut converted = None;
     let mut result = (|| {
+        super::super::checked_strings::formatting(original, context, values)?;
         let value = eval_string_context_value(original, context, values)?;
         if value != original { converted = Some(value); }
         values.echo(value)

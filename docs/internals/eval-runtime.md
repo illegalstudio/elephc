@@ -189,6 +189,13 @@ no references, defaults, variadics, or types.
 Both consumers use the same object adapters for output and scalar casts, and
 the same cleanup helpers for operands and call arguments. The shared dispatcher
 owns fallback argument evaluation and cleanup, including binding failures.
+
+Interpolated operands retain `EvalCastType::StringFormat`, represented by a
+dedicated formatting opcode in the slice. The staged string guarantee checks
+original concatenation operands before conversion hooks, and refuses implicit
+array formatting in echo, print and interpolation. Explicit string casts retain
+their conversion contract. Walker echo, owned output and both binary consumers
+share the same tag checks while their existing owner finishers handle failures.
 Fast calls register ordinary PHP argument and
 backtrace metadata against boxed scopes, whose addresses stay stable as the
 explicit stack grows. Returns and errors remove that metadata before releasing
@@ -621,6 +628,8 @@ The format guard covers the combined serialized IR and its corresponding type so
 Format 28 records the source change for bytecode-backed function metadata. Executable
 images remain excluded from serialization, but the conservative source guard still
 requires a new cache identity.
+Format 31 retains interpolation formatting casts and lexer prefix tokens, so old
+entries cannot erase the distinction between formatting and ordinary concatenation.
 Retained token streams distinguish reserved words used as qualified-name segments, so
 entries written before that token variant was introduced must also be rejected.
 Format 24 also retains method reference-return flags and generic dimension-write

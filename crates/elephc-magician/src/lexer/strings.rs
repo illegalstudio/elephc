@@ -13,6 +13,7 @@
 //! - Shared literal markers preserve escaped bytes and avoid collisions with private-use source text.
 //! - Every synthetic token carries the line of the opening quote, keeping `__LINE__`
 //!   stable across multi-line literals.
+//! - Each interpolated operand carries a formatting prefix, distinct from ordinary concatenation.
 //! - PHP simple syntax allows exactly one `[offset]` or `->prop` after `$name`; anything
 //!   deeper requires the complex `{$expr}` form.
 //! - Malformed offsets (`"$a[]"`, `"$a[ 0]"`, `"$a['k']"`) are refused, matching PHP's
@@ -453,7 +454,10 @@ fn push_interp_part(
         ));
     }
     tokens.push(Token::new(TokenKind::Dot, line));
+    tokens.push(Token::new(TokenKind::StringFormat, line));
+    tokens.push(Token::new(TokenKind::LParen, line));
     tokens.extend(part);
+    tokens.push(Token::new(TokenKind::RParen, line));
 }
 
 /// Tokenizes captured `{$expr}` source as a standalone parenthesized expression.

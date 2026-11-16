@@ -103,7 +103,8 @@ use std::sync::atomic::{AtomicU64, Ordering};
 /// even though serde omits the executable cache from the stored payload.
 /// Format 29 adds checked integer tokens, overflow parse errors and semantic profile headers.
 /// Format 30 retains parser profile provenance inside EvalProgram.
-pub(crate) const FORMAT_VERSION: u32 = 30;
+/// Format 31 retains interpolation formatting casts and their lexer prefix tokens.
+pub(crate) const FORMAT_VERSION: u32 = 31;
 
 /// Identifies the writer, so one build never reads another's entries.
 ///
@@ -587,7 +588,8 @@ mod tests {
     /// Verifies a stored script comes back with the same segment shape.
     #[test]
     fn a_stored_script_round_trips() {
-        let (config, _dir) = configure("roundtrip", false);
+        let (config, dir) = configure("roundtrip", false);
+        let _owned_directory = OwnedTestDirectory(dir);
         let source = b"<?php $a = 1; ?>tail<?php $b = 2;";
         let segments = segment_script(source, ParseMode::Fresh);
         let path = Path::new("/tmp/elephc-file-store-roundtrip.php");
@@ -600,6 +602,24 @@ mod tests {
             Some(segments.len()),
             "the entry must come back with every segment"
         );
+    }
+
+    /// Serialized interpolation retains its formatting cast instead of becoming an implicit concat.
+    #[test]
+    fn strict_string_cached_interpolation_preserves_formatting_context() {
+        use crate::eval_ir::{EvalBinOp, EvalCastType, EvalExpr, EvalStmt};
+        let (config, dir) = configure("string_formatting", false);
+        let _owned_directory = OwnedTestDirectory(dir.clone());
+        let source = br#"<?php echo "$number";"#;
+        let segments = segment_script(source, ParseMode::Fresh);
+        let path = dir.join("formatting.php");
+        store(&config, &path, Some(42), source.len() as u64, &segments);
+        let loaded = load(&config, &path, Some(42), source.len() as u64).expect("cached formatting");
+        let ScriptSegment::Code(program) = &loaded[0] else { panic!("cached program"); };
+        let EvalStmt::Echo(EvalExpr::Binary { op: EvalBinOp::Concat, right, .. }) =
+            &program.statements()[0] else { panic!("interpolation"); };
+        assert!(matches!(&**right, EvalExpr::Cast { target: EvalCastType::StringFormat, expr }
+            if matches!(&**expr, EvalExpr::LoadVar(name) if name == "number")));
     }
 
     /// Verifies a source whose TIMESTAMP moved is refused, and one whose size alone moved is
@@ -722,6 +742,7 @@ mod tests {
     #[test]
     fn an_entry_from_an_older_format_version_is_refused() {
         let (config, dir) = configure("old_version", false);
+        let _owned_directory = OwnedTestDirectory(dir.clone());
         let source = b"<?php $a = 1;";
         let segments = segment_script(source, ParseMode::Fresh);
         let path = Path::new("/tmp/elephc-file-store-old-version.php");

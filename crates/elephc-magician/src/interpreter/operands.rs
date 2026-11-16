@@ -19,6 +19,7 @@ pub(in crate::interpreter) fn eval_echo_expr(
     values: &mut impl RuntimeValueOps,
 ) -> Result<(), EvalStatus> {
     with_eval_void_operands(&[expr], context, scope, values, |args, context, _, values| {
+        checked_strings::formatting(args[0], context, values)?;
         let value = eval_string_context_value(args[0].borrowed(), context, values)?;
         if value == args[0] {
             values.echo(value)

@@ -109,7 +109,8 @@ mod tests {
     /// requires a new identity even though the serialized field layout is unchanged.
     /// BUMPED TO 29: checked literals, profile-aware segments and semantic cache headers.
     /// BUMPED TO 30: parsed programs retain their semantic normalization provenance.
-    const RECORDED_FINGERPRINT: u64 = 3110961241602077184;
+    /// BUMPED TO 31: interpolation retains explicit formatting casts and prefix tokens.
+    const RECORDED_FINGERPRINT: u64 = 14787256250629008100;
 
     /// Returns a stable fingerprint of every source the stored format depends on.
     ///

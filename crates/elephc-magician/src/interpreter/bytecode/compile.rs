@@ -388,6 +388,7 @@ impl<'a> Compiler<'a> {
                     EvalCastType::Int => self.emit(Op::CastInt),
                     EvalCastType::Float => self.emit(Op::CastFloat),
                     EvalCastType::String => self.emit(Op::CastString),
+                    EvalCastType::StringFormat => self.emit(Op::FormatString),
                     EvalCastType::Bool => self.emit(Op::CastBool),
                 }
             }

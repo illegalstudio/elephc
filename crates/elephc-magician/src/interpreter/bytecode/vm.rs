@@ -233,12 +233,13 @@ fn step(
             let result = with_runtime_owners(&value, || eval_unary_value(op, value, context, values));
             vm.stack.push(finish_eval_argument_values(result, [value], context, values)?);
         }
-        Op::CastInt | Op::CastFloat | Op::CastString | Op::CastBool => {
+        Op::CastInt | Op::CastFloat | Op::CastString | Op::CastBool | Op::FormatString => {
             let value = pop(&mut vm.stack)?;
             let target = match op {
                 Op::CastInt => EvalCastType::Int,
                 Op::CastFloat => EvalCastType::Float,
                 Op::CastString => EvalCastType::String,
+                Op::FormatString => EvalCastType::StringFormat,
                 Op::CastBool => EvalCastType::Bool,
                 _ => unreachable!("cast opcode"),
             };

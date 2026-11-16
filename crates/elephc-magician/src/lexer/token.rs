@@ -125,4 +125,6 @@ pub(crate) enum TokenKind {
     Eof,
     /// Exact unsigned 2^63, pending direct unary-minus syntax under strict overflow.
     MinimumIntegerMagnitude,
+    /// Lexer-generated interpolation prefix that cannot be spelled as a source keyword.
+    StringFormat,
 }

@@ -105,6 +105,7 @@ mod trait_adaptations;
 
 mod strict_conversion_parameters;
 mod strict_comparisons;
+mod strict_strings;
 mod strict_conversion_properties;
 
 mod strict_conversion_returns;

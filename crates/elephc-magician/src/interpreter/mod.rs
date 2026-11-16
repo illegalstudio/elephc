@@ -34,6 +34,7 @@ mod include_exec;
 mod operands;
 mod checked_numeric;
 mod checked_comparisons;
+mod checked_strings;
 mod checked_cast;
 mod native_results;
 mod numeric_domains;
