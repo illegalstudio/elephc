@@ -1812,12 +1812,31 @@ fn operand_needs_param_coercion(
     if sig.ref_params.get(index).copied().unwrap_or(false) {
         return false;
     }
-    let Some((_, param_ty)) = sig.params.get(index) else {
+    let Some((_, declared_param_ty)) = sig.params.get(index) else {
         return false;
     };
+    let declared = sig.declared_params.get(index).copied().unwrap_or(false);
     let operand_ty = ctx.builder.value_php_type(operands[index]).codegen_repr();
-    let param_ty = param_ty.codegen_repr();
+    let param_ty = declared_param_ty.codegen_repr();
+    // The declared-parameter guards of the loop above can throw too: the nominal class check of
+    // an object parameter fed a gradual or other-class operand, the nullable-int check, and the
+    // nullable-string coercion of a gradual operand.
+    if declared
+        && ((crate::types::param_binding::nominal_object_boundary_target(declared_param_ty)
+            .is_some()
+            && operand_ty != param_ty)
+            || crate::types::param_binding::nullable_int_requires_runtime_param_guard(
+                declared_param_ty,
+                &operand_ty,
+            )
+            || (is_nullable_string_param(declared_param_ty)
+                && matches!(operand_ty, PhpType::Mixed | PhpType::Union(_))))
+    {
+        return true;
+    }
     (param_ty == PhpType::Float && matches!(operand_ty, PhpType::Int | PhpType::Bool))
+        || (matches!(param_ty, PhpType::Array(_) | PhpType::AssocArray { .. })
+            && operand_ty == PhpType::Iterable)
         || (param_ty == PhpType::Str
             && matches!(operand_ty, PhpType::Mixed | PhpType::Union(_)))
         || (param_ty == PhpType::Callable
@@ -1826,7 +1845,7 @@ fn operand_needs_param_coercion(
             && matches!(operand_ty, PhpType::Mixed | PhpType::Union(_)))
         || (matches!(param_ty, PhpType::Array(_) | PhpType::AssocArray { .. })
             && matches!(operand_ty, PhpType::Mixed | PhpType::Union(_)))
-        || (sig.declared_params.get(index).copied().unwrap_or(false)
+        || (declared
             && crate::types::param_binding::scalar_param_cast(&param_ty, &operand_ty).is_some())
 }
 

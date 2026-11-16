@@ -823,3 +823,37 @@ echo coercionCaller($argc);
         );
     }
 }
+
+/// A named-argument call whose declared object parameter is fed a gradual operand roots the
+/// evaluated operands before the nominal guard runs: the guard can throw `TypeError`, and the
+/// fresh array bound by name earlier must be in the unwind ledger then.
+#[test]
+fn reordered_operands_are_rooted_before_a_nominal_parameter_guard() {
+    use crate::ir::Op;
+    let source = r#"<?php
+class RootedFoo {}
+function rootedMake(): array { return [1, 2, 3]; }
+function rootedTarget(RootedFoo $a, array $b): int { return count($b); }
+function rootedCaller(array $values): int {
+    return rootedTarget(b: rootedMake(), a: $values[0]);
+}
+echo rootedCaller([new RootedFoo()]);
+"#;
+    let module = super::lower_source_at(
+        source,
+        std::path::Path::new("main.php"),
+        std::path::Path::new("."),
+    );
+    let function = module.functions.iter().find(|f| f.name == "rootedCaller").unwrap();
+    let make = function
+        .instructions
+        .iter()
+        .position(|inst| inst.op == Op::Call)
+        .expect("rootedMake() is called");
+    assert!(
+        function.instructions[make..]
+            .iter()
+            .any(|inst| inst.op == Op::PushCallOperandOwner),
+        "the evaluated operands of the reordered call must be rooted before its guards"
+    );
+}
