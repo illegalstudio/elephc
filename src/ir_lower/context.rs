@@ -237,6 +237,7 @@ pub(crate) struct LoweringSnapshot {
     insertion_block: Option<BlockId>,
     data: DataPoolLengths,
     local_slots: HashMap<String, LocalSlotId>,
+    place_array_pointer_cursors: Vec<(String, LocalSlotId)>,
     local_kinds: HashMap<String, LocalKind>,
     local_types: TypeEnv,
     initialized_slots: HashSet<LocalSlotId>,
@@ -545,6 +546,9 @@ pub(crate) struct LoweringContext<'m, 'f> {
     /// reads by name (see `store_unset_local`).
     pub body_contains_eval: bool,
     pub local_slots: HashMap<String, LocalSlotId>,
+    /// Frame cursors of internal-pointer calls on stable non-local places, by place spelling
+    /// (`LoweringContext::place_array_pointer_cursor_slot`), rewound when the place is rebound.
+    pub place_array_pointer_cursors: Vec<(String, LocalSlotId)>,
     pub local_kinds: HashMap<String, LocalKind>,
     pub local_types: TypeEnv,
     /// Number of synthetic include frames this function body has emitted so far; each
@@ -930,6 +934,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
             runtime_bound_functions: Default::default(),
             data,
             local_slots: HashMap::default(),
+            place_array_pointer_cursors: Vec::new(),
             local_kinds: HashMap::default(),
             local_types: env,
             include_frame_slots: 0,
@@ -1069,6 +1074,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
             insertion_block: self.builder.insertion_block(),
             data: DataPoolLengths::capture(self.data),
             local_slots: self.local_slots.clone(),
+            place_array_pointer_cursors: self.place_array_pointer_cursors.clone(),
             local_kinds: self.local_kinds.clone(),
             local_types: self.local_types.clone(),
             initialized_slots: self.initialized_slots.clone(),
@@ -1187,6 +1193,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         self.builder.restore_insertion_cursor(snapshot.insertion_block);
         snapshot.data.truncate(self.data);
         self.local_slots = snapshot.local_slots;
+        self.place_array_pointer_cursors = snapshot.place_array_pointer_cursors;
         self.local_kinds = snapshot.local_kinds;
         self.local_types = snapshot.local_types;
         self.initialized_slots = snapshot.initialized_slots;
@@ -2197,12 +2204,55 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
     /// pointer call see no slot yet and skip this, which is harmless: the cursor is still
     /// sitting on its entry-block seed of `0` at that point.
     pub(crate) fn reset_array_pointer_cursor(&mut self, variable: &str) {
+        // The arrays nested in the variable are replaced with it: `$cfg = [...]` rewinds the
+        // cursor of `$cfg['items']` too.
+        self.reset_place_array_pointer_cursors(&format!("${variable}"));
         let name = Self::array_pointer_cursor_name(variable);
         let Some(slot) = self.local_slots.get(&name).copied() else {
             return;
         };
         let zero = self.builder.emit_const_i64(0);
         self.builder.emit_store_local(slot, zero);
+    }
+
+    /// Returns the frame cursor of a stable non-local place (`Box::$queue`, `$cfg["items"]`),
+    /// created like a local's cursor (`array_pointer_cursor_slot`) on first use.
+    pub(crate) fn place_array_pointer_cursor_slot(&mut self, place: &str) -> LocalSlotId {
+        if let Some((_, slot)) = self
+            .place_array_pointer_cursors
+            .iter()
+            .find(|(known, _)| known == place)
+        {
+            return *slot;
+        }
+        let slot = self.array_pointer_cursor_slot(&format!("place {place}"));
+        self.place_array_pointer_cursors.push((place.to_string(), slot));
+        slot
+    }
+
+    /// Rewinds the frame cursors of `place` and of every place nested in it.
+    ///
+    /// php keeps the pointer in the array, so binding a place to a different array starts it at
+    /// the first element: `next(Box::$p); Box::$p = [7, 8]; current(Box::$p)` reads `7`. A place
+    /// whose first pointer call is lowered later has no cursor yet, and its entry seed is `0`.
+    pub(crate) fn reset_place_array_pointer_cursors(&mut self, place: &str) {
+        if self.place_array_pointer_cursors.is_empty() {
+            return;
+        }
+        let slots = self
+            .place_array_pointer_cursors
+            .iter()
+            .filter(|(known, _)| {
+                known
+                    .strip_prefix(place)
+                    .is_some_and(|rest| rest.is_empty() || rest.starts_with("->") || rest.starts_with('['))
+            })
+            .map(|(_, slot)| *slot)
+            .collect::<Vec<_>>();
+        for slot in slots {
+            let zero = self.builder.emit_const_i64(0);
+            self.builder.emit_store_local(slot, zero);
+        }
     }
 
     /// Builds the reserved frame-slot name holding one local's internal-array-pointer cursor.

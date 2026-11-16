@@ -197,3 +197,43 @@ nullable(new P);
         "a=1\nb=x\na=1\na=1\nin:a=1\nin:b=2\nin:c=3\ntop:a=1\n0=5\n1=6\ni=9\nn:a=1\n"
     );
 }
+
+/// Binding a non-local place (or a place it is nested in) to a different array rewinds its
+/// frame cursor, as php's pointer belongs to the new array; `self::` and the class name share it.
+#[test]
+fn test_internal_pointer_of_a_non_local_place_rewinds_when_the_place_is_rebound() {
+    let out = compile_and_run(
+        r#"<?php
+class Box {
+    public static $p = [1, 2, 3];
+    public $items = [10, 20, 30];
+    static function walk() {
+        next(self::$p);
+        echo current(Box::$p), "\n";
+        self::$p = [4, 5];
+        echo current(self::$p), "\n";
+    }
+}
+Box::walk();
+$box = new Box();
+next($box->items);
+echo current($box->items), "\n";
+$box->items = [40, 50];
+echo current($box->items), "\n";
+$cfg = ['items' => ['a' => 1, 'b' => 2]];
+end($cfg['items']);
+echo key($cfg['items']), "\n";
+$cfg = ['items' => ['c' => 3, 'd' => 4]];
+echo key($cfg['items']), "\n";
+end($cfg['items']);
+$cfg['items'] = ['e' => 5, 'f' => 6];
+echo key($cfg['items']), "\n";
+for ($i = 0; $i < 2; $i++) {
+    Box::$p = [7, 8, 9];
+    next(Box::$p);
+    echo current(Box::$p), "\n";
+}
+"#,
+    );
+    assert_eq!(out, "2\n4\n20\n40\nb\nc\ne\n8\n8\n");
+}

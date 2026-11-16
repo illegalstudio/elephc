@@ -1200,7 +1200,9 @@ fn rewrite_literal_param_bindings(sig: &FunctionSig, args: &[Expr]) -> Option<Ve
 ///
 /// A stable non-local place (`$cfg['items']`, `$box->items`, `self::$queue`) keeps a frame
 /// cursor named after its spelling (`array_pointer_place_cursor_key`), so a seek and a later
-/// read of the same place in one frame agree; a write to the place does not rewind it.
+/// read of the same place in one frame agree; binding the place (or a place it is nested in)
+/// to a different array rewinds it. The cursor stays in the frame: php's pointer lives in the
+/// array, which has no room for it here, so a call on the place in another frame starts over.
 /// Other receiver expressions are evaluated exactly once and start from the first position:
 /// read-only expression receivers and fresh call results need no persistent cursor, so a
 /// call-local zero cursor preserves their temporary-value semantics.
@@ -1237,7 +1239,7 @@ fn array_pointer_call_has_property_cursor(
 /// per place spelling: a variable or `$this` followed by literal property names and literal
 /// keys, or a named / `self` / `static` / `parent` static property. A computed key
 /// (`$rows[$i]`) or a call names a different array each time and keeps the call-local cursor.
-pub(super) fn array_pointer_place_cursor_key(
+pub(crate) fn array_pointer_place_cursor_key(
     ctx: &LoweringContext<'_, '_>,
     name: &str,
     args: &[Expr],
@@ -1256,36 +1258,67 @@ pub(super) fn array_pointer_place_cursor_key(
     {
         return None;
     }
-    stable_place_spelling(receiver).map(|place| format!("place {place}"))
+    stable_place_spelling(ctx, receiver)
 }
 
 /// Spells a place whose every step is fixed at compile time, or answers `None`.
-fn stable_place_spelling(expr: &Expr) -> Option<String> {
+///
+/// `self::` and `parent::` are spelled with the class they name, so `self::$queue` and
+/// `Box::$queue` inside `Box` share one cursor.
+pub(crate) fn stable_place_spelling(ctx: &LoweringContext<'_, '_>, expr: &Expr) -> Option<String> {
     match &expr.kind {
         ExprKind::Variable(name) => Some(format!("${name}")),
         ExprKind::This => Some("$this".to_string()),
         ExprKind::PropertyAccess { object, property } => {
-            Some(format!("{}->{property}", stable_place_spelling(object)?))
+            Some(format!("{}->{property}", stable_place_spelling(ctx, object)?))
         }
         ExprKind::StaticPropertyAccess { receiver, property } => {
-            let class = match receiver {
-                StaticReceiver::Named(name) => name.as_str().trim_start_matches('\\').to_string(),
-                StaticReceiver::Self_ => "self".to_string(),
-                StaticReceiver::Static => "static".to_string(),
-                StaticReceiver::Parent => "parent".to_string(),
-                StaticReceiver::Generic(_) => return None,
-            };
-            Some(format!("{class}::${property}"))
+            Some(format!("{}::${property}", static_place_class_spelling(ctx, receiver)?))
         }
-        ExprKind::ArrayAccess { array, index } => {
-            let key = match &index.kind {
-                ExprKind::StringLiteral(key) => format!("{key:?}"),
-                ExprKind::IntLiteral(key) => key.to_string(),
-                _ => return None,
-            };
-            Some(format!("{}[{key}]", stable_place_spelling(array)?))
-        }
+        ExprKind::ArrayAccess { array, index } => Some(format!(
+            "{}[{}]",
+            stable_place_spelling(ctx, array)?,
+            stable_place_key_spelling(index)?
+        )),
         _ => None,
+    }
+}
+
+/// Spells the class of a static-property place, resolving `self` and `parent` lexically.
+pub(crate) fn static_place_class_spelling(
+    ctx: &LoweringContext<'_, '_>,
+    receiver: &StaticReceiver,
+) -> Option<String> {
+    let current = || ctx.current_class.as_deref().map(|class| class.trim_start_matches('\\'));
+    let class = match receiver {
+        StaticReceiver::Named(name) => name.as_str().trim_start_matches('\\').to_string(),
+        StaticReceiver::Self_ => current()?.to_string(),
+        StaticReceiver::Parent => ctx
+            .classes
+            .get(current()?)
+            .and_then(|info| info.parent.clone())?
+            .trim_start_matches('\\')
+            .to_string(),
+        StaticReceiver::Static => return Some("static".to_string()),
+        StaticReceiver::Generic(_) => return None,
+    };
+    Some(php_symbol_key(&class))
+}
+
+/// Spells a literal array key of a stable place, or answers `None` for a computed one.
+pub(crate) fn stable_place_key_spelling(index: &Expr) -> Option<String> {
+    match &index.kind {
+        ExprKind::StringLiteral(key) => Some(format!("{key:?}")),
+        ExprKind::IntLiteral(key) => Some(key.to_string()),
+        _ => None,
+    }
+}
+
+/// Rewinds the frame cursors of a place that is about to be bound to a different array, and of
+/// every place nested in it (`LoweringContext::reset_place_array_pointer_cursors`).
+pub(crate) fn reset_place_array_pointer_cursors(ctx: &mut LoweringContext<'_, '_>, place: Option<String>) {
+    if let Some(place) = place {
+        ctx.reset_place_array_pointer_cursors(&place);
     }
 }
 
@@ -1337,7 +1370,7 @@ fn lower_array_internal_pointer(
             let key = array_pointer_place_cursor_key(ctx, &canonical, args)
                 .expect("the guard found a place key");
             let container = lower_expr(ctx, &args[0]);
-            let cursor_slot = ctx.array_pointer_cursor_slot(&key);
+            let cursor_slot = ctx.place_array_pointer_cursor_slot(&key);
             let cursor = ctx
                 .builder
                 .emit_load_local(cursor_slot, IrType::I64, PhpType::Int);

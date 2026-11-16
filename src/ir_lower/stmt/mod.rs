@@ -176,6 +176,39 @@ fn predeclare_loop_array_pointer_cursors(ctx: &mut LoweringContext<'_, '_>, stmt
     crate::ir_lower::array_pointer_scan::predeclare_loop_cursors(ctx, body);
 }
 
+/// Spells the stable non-local place a statement binds to a new value, if it is one.
+///
+/// php's internal pointer lives in the array, so the place's frame cursor (and those of the
+/// places nested in it) must start over; a plain local rewinds through `store_local` instead.
+fn assigned_place_spelling(ctx: &LoweringContext<'_, '_>, stmt: &Stmt) -> Option<String> {
+    use crate::ir_lower::expr::{
+        stable_place_key_spelling, stable_place_spelling, static_place_class_spelling,
+    };
+    match &stmt.kind {
+        StmtKind::PropertyAssign { object, property, .. } => {
+            Some(format!("{}->{property}", stable_place_spelling(ctx, object)?))
+        }
+        StmtKind::StaticPropertyAssign { receiver, property, .. } => {
+            Some(format!("{}::${property}", static_place_class_spelling(ctx, receiver)?))
+        }
+        StmtKind::ArrayAssign { array, index, .. } => {
+            Some(format!("${array}[{}]", stable_place_key_spelling(index)?))
+        }
+        StmtKind::NestedArrayAssign { target, .. } => stable_place_spelling(ctx, target),
+        StmtKind::PropertyArrayAssign { object, property, index, .. } => Some(format!(
+            "{}->{property}[{}]",
+            stable_place_spelling(ctx, object)?,
+            stable_place_key_spelling(index)?
+        )),
+        StmtKind::StaticPropertyArrayAssign { receiver, property, index, .. } => Some(format!(
+            "{}::${property}[{}]",
+            static_place_class_spelling(ctx, receiver)?,
+            stable_place_key_spelling(index)?
+        )),
+        _ => None,
+    }
+}
+
 /// Lowers one statement exactly once against the current local representations.
 ///
 /// The terminated-block guard that used to live here now sits in `lower_stmt`, above the
@@ -420,6 +453,10 @@ fn lower_stmt_once(ctx: &mut LoweringContext<'_, '_>, stmt: &Stmt) {
             index,
             value,
         } => lower_property_array_assign(ctx, object, property, index, value, stmt.span),
+    }
+    if !ctx.place_array_pointer_cursors.is_empty() && !ctx.builder.insertion_block_is_terminated() {
+        let place = assigned_place_spelling(ctx, stmt);
+        crate::ir_lower::expr::reset_place_array_pointer_cursors(ctx, place);
     }
     // The shared termination analysis already proves statically infinite loops without a matching
     // `break` cannot reach their synthetic exit. Preserve that loop-specific fact in EIR itself.

@@ -26,35 +26,62 @@ use crate::parser::ast::{Expr, ExprKind, Stmt, StmtKind};
 
 use super::context::LoweringContext;
 
-/// Declares a cursor slot for every plain-variable receiver of an internal-array-pointer
-/// builtin appearing inside `body`.
+/// Declares a cursor slot for every plain-variable or stable-place receiver of an
+/// internal-array-pointer builtin appearing inside `body`.
 ///
 /// Call this before lowering a loop body so that assignments inside the body see an
 /// existing cursor slot and emit their rewind.
 pub(crate) fn predeclare_loop_cursors(ctx: &mut LoweringContext<'_, '_>, body: &[Stmt]) {
     let mut receivers = Vec::new();
     scan_stmts(body, &mut receivers);
-    for name in receivers {
-        ctx.array_pointer_cursor_slot(&name);
+    for receiver in receivers {
+        match receiver {
+            Receiver::Local(name) => {
+                ctx.array_pointer_cursor_slot(name);
+            }
+            // A stable non-local place keeps a frame cursor too, rewound when the place is
+            // bound to a different array; the same holds for it inside a loop body.
+            Receiver::Place(name, args) => {
+                if let Some(place) =
+                    crate::ir_lower::expr::array_pointer_place_cursor_key(ctx, name, args)
+                {
+                    ctx.place_array_pointer_cursor_slot(&place);
+                }
+            }
+        }
     }
 }
 
-/// Records `name` as a pointer receiver unless it is already known.
-fn record(receivers: &mut Vec<String>, name: &str) {
-    if !receivers.iter().any(|known| known == name) {
-        receivers.push(name.to_string());
+/// The receiver of one internal-array-pointer call found in a loop body.
+enum Receiver<'a> {
+    /// A plain local, by name.
+    Local(&'a str),
+    /// Any other receiver: the builtin name and its arguments, which lowering spells.
+    Place(&'a str, &'a [Expr]),
+}
+
+/// Records a pointer receiver unless the same local is already known.
+fn record<'a>(receivers: &mut Vec<Receiver<'a>>, receiver: Receiver<'a>) {
+    if let Receiver::Local(name) = receiver {
+        if receivers
+            .iter()
+            .any(|known| matches!(known, Receiver::Local(known) if *known == name))
+        {
+            return;
+        }
     }
+    receivers.push(receiver);
 }
 
 /// Collects pointer receivers from a statement list.
-fn scan_stmts(stmts: &[Stmt], receivers: &mut Vec<String>) {
+fn scan_stmts<'a>(stmts: &'a [Stmt], receivers: &mut Vec<Receiver<'a>>) {
     for stmt in stmts {
         scan_stmt(stmt, receivers);
     }
 }
 
 /// Collects pointer receivers from one statement and every statement list it owns.
-fn scan_stmt(stmt: &Stmt, receivers: &mut Vec<String>) {
+fn scan_stmt<'a>(stmt: &'a Stmt, receivers: &mut Vec<Receiver<'a>>) {
     match &stmt.kind {
         StmtKind::Echo(expr) | StmtKind::Throw(expr) | StmtKind::ExprStmt(expr) => {
             scan_expr(expr, receivers)
@@ -150,11 +177,11 @@ fn scan_stmt(stmt: &Stmt, receivers: &mut Vec<String>) {
 ///
 /// The final catch-all is intentional: see the module preamble for why an incomplete walk
 /// is safe here.
-fn scan_expr(expr: &Expr, receivers: &mut Vec<String>) {
+fn scan_expr<'a>(expr: &'a Expr, receivers: &mut Vec<Receiver<'a>>) {
     match &expr.kind {
         ExprKind::FunctionCall { name, args } => {
-            if let Some(name) = pointer_receiver_name(name.as_str(), args) {
-                record(receivers, name);
+            if let Some(receiver) = pointer_receiver(name.as_str(), args) {
+                record(receivers, receiver);
             }
             for arg in args {
                 scan_expr(arg, receivers);
@@ -261,11 +288,11 @@ fn scan_expr(expr: &Expr, receivers: &mut Vec<String>) {
     }
 }
 
-/// Returns the receiver variable name when `name`/`args` is an internal-array-pointer call.
+/// Returns the receiver when `name`/`args` is an internal-array-pointer call.
 ///
 /// The builtin is recognized through the registry's typed argument-lowering descriptor, the
 /// same metadata EIR lowering dispatches on, rather than by matching PHP name strings here.
-fn pointer_receiver_name<'a>(name: &str, args: &'a [Expr]) -> Option<&'a str> {
+fn pointer_receiver<'a>(name: &'a str, args: &'a [Expr]) -> Option<Receiver<'a>> {
     if args.len() != 1 {
         return None;
     }
@@ -278,7 +305,7 @@ fn pointer_receiver_name<'a>(name: &str, args: &'a [Expr]) -> Option<&'a str> {
         return None;
     }
     match &args[0].kind {
-        ExprKind::Variable(variable) => Some(variable.as_str()),
-        _ => None,
+        ExprKind::Variable(variable) => Some(Receiver::Local(variable.as_str())),
+        _ => Some(Receiver::Place(name, args)),
     }
 }
