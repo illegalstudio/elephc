@@ -203,11 +203,6 @@ pub(crate) fn lower_spl_object_id(
     inst: &Instruction,
 ) -> Result<()> {
     super::ensure_arg_count(inst, "spl_object_id", 1)?;
-    let value = expect_operand(inst, 0)?;
-    if ctx.value_php_type(value)?.codegen_repr() == PhpType::Callable {
-        ctx.load_value_to_result(value)?;
-        return store_if_result(ctx, inst);
-    }
     load_object_operand(ctx, inst, "spl_object_id")?;
     abi::emit_call_label(ctx.emitter, "__rt_object_handle_of");
     store_if_result(ctx, inst)
@@ -723,26 +718,30 @@ fn load_object_operand(
     let ty = ctx.value_php_type(value)?.codegen_repr();
     ctx.load_value_to_result(value)?;
     match ty {
-        PhpType::Object(_) => Ok(()),
+        // A callable is a Closure object whose descriptor carries the shared handle.
+        PhpType::Object(_) | PhpType::Callable => Ok(()),
         PhpType::Mixed => {
             let object_label = ctx.next_label("spl_object_operand_object");
+            let wrong_label = ctx.next_label("spl_object_operand_wrong_tag");
             abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
             match ctx.emitter.target.arch {
                 Arch::AArch64 => {
                     ctx.emitter.instruction("cmp x0, #6");                      // require the boxed value to contain an object
                     ctx.emitter.instruction(&format!("b.eq {}", object_label)); // preserve PHP's runtime object check
+                    ctx.emitter.instruction("cmp x0, #10");                     // a boxed callable is a Closure object
+                    ctx.emitter.instruction(&format!("b.eq {}", object_label)); // its descriptor owns a handle like an object does
                 }
                 Arch::X86_64 => {
                     ctx.emitter.instruction("cmp rax, 6");                      // require the boxed value to contain an object
                     ctx.emitter.instruction(&format!("je {}", object_label));   // preserve PHP's runtime object check
+                    ctx.emitter.instruction("cmp rax, 10");                     // a boxed callable is a Closure object
+                    ctx.emitter.instruction(&format!("je {}", object_label));   // its descriptor owns a handle like an object does
                 }
             }
-            exceptions::emit_type_error(
+            super::arrays::union_type_guard::emit_mixed_wrong_tag_type_error_dispatch(
                 ctx,
-                &format!(
-                    "{}(): Argument #1 ($object) must be of type object",
-                    name
-                ),
+                &wrong_label,
+                &|given| format!("{}(): Argument #1 ($object) must be of type object, {} given", name, given),
             );
             ctx.emitter.label(&object_label);
             match ctx.emitter.target.arch {
