@@ -14,16 +14,28 @@ use crate::ir::{CoreBuiltinOp, ResourceCleanupKind, RuntimeFnId};
 pub(in crate::ir_lower) fn include_lowered_runtime_features(module: &mut Module) {
     let features = lowered_runtime_features(module);
     module.required_runtime_features.regex |= features.regex;
-    // A runtime string naming `preg_match` / `preg_match_all` (`$match = 'preg_match'; $match(...)`)
-    // dispatches to a descriptor wrapper that calls the regex runtime.
+    // A runtime string naming a `preg_*` function that needs the regex runtime
+    // (`$match = 'preg_match'; $match(...)`, `array_map('preg_grep', ...)`, `'\\preg_split'`)
+    // dispatches to a descriptor wrapper that calls the regex runtime. Mirrors
+    // `RuntimeFnId::uses_regex_runtime`, with the optional leading backslash a callable name allows.
     module.required_runtime_features.regex |= module
         .data
         .strings
         .iter()
         .any(|text| {
-            ["preg_match", "preg_match_all", "preg_replace", "preg_replace_callback"]
-                .iter()
-                .any(|name| text.eq_ignore_ascii_case(name))
+            let text = text.strip_prefix('\\').unwrap_or(text);
+            [
+                "preg_match",
+                "preg_match_all",
+                "preg_replace",
+                "preg_replace_callback",
+                "preg_split",
+                "preg_grep",
+                "preg_last_error",
+                "preg_last_error_msg",
+            ]
+            .iter()
+            .any(|name| text.eq_ignore_ascii_case(name))
         });
     module.required_runtime_features.mbstring |= features.mbstring;
     module.required_runtime_features.mbregex |= features.mbregex;

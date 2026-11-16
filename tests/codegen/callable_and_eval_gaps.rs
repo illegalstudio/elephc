@@ -728,3 +728,38 @@ try { call_user_func($arr, 7); } catch (TypeError $e) { echo str_contains($e->ge
     assert_eq!(out, "s1 p2\ns3 p4\np5,p6\nrefused\n");
 }
 
+/// Verifies `preg_split` named only by a runtime string links the regex runtime.
+#[test]
+fn test_string_callable_names_preg_split_without_a_direct_call() {
+    let out = compile_and_run(
+        r#"<?php
+$f = 'preg_split';
+echo implode("|", $f('/,/', 'a,b,c')), "\n";
+"#,
+    );
+    assert_eq!(out, "a|b|c\n");
+}
+
+/// Verifies `preg_grep` named by a runtime string links the regex runtime.
+#[test]
+fn test_string_callable_names_preg_grep_without_a_direct_call() {
+    let out = compile_and_run(
+        r#"<?php
+$g = 'preg_grep';
+echo implode("|", $g('/^b/', ['ab', 'bc', 'bd'])), "\n";
+"#,
+    );
+    assert_eq!(out, "bc|bd\n");
+}
+
+/// Verifies a leading backslash on a runtime `preg_*` name still links the regex runtime.
+#[test]
+fn test_string_callable_names_backslash_preg_grep_without_a_direct_call() {
+    let out = compile_and_run(
+        r#"<?php
+$g = '\\preg_grep';
+echo implode("|", $g('/^b/', ['ab', 'bc', 'bd'])), "\n";
+"#,
+    );
+    assert_eq!(out, "bc|bd\n");
+}
