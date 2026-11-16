@@ -36,6 +36,10 @@ pub(super) fn lower(
     }
     let target_key = php_symbol_key(target.trim_start_matches('\\'));
     let mut candidates = std::collections::BTreeSet::new();
+    // `Closure` has no class-info entry; as a name it is a class whose only ancestor is itself.
+    if !exclude_self && target_key == php_symbol_key("Closure") {
+        candidates.insert("Closure".to_string());
+    }
     for name in ctx.module.class_infos.keys() {
         let same = php_symbol_key(name.trim_start_matches('\\')) == target_key;
         if (!exclude_self && same) || parent_chain_contains(ctx, name, &target_key)
@@ -468,6 +472,10 @@ fn ancestor_table(
             parents.iter().map(|parent| parent.trim_start_matches('\\').to_string()).collect();
         if !exclude_self { ancestors.insert(name.clone()); }
         if !ancestors.is_empty() { table.insert(name, ancestors); }
+    }
+    // `Closure` has no class-info entry; as a name it is a class whose only ancestor is itself.
+    if !exclude_self && !table.keys().any(|name| php_symbol_key(name) == php_symbol_key("Closure")) {
+        table.insert("Closure".to_string(), std::collections::BTreeSet::from(["Closure".to_string()]));
     }
     table
 }

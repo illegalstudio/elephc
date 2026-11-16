@@ -617,7 +617,8 @@ Because elephc maps the `Closure` type hint onto its callable descriptor type, a
   name, an object's runtime class, or a `mixed` value holding either) selects the ancestor list
   of one compiled class or interface, and the target is compared with it. A `mixed` subject
   is dispatched the same way against a literal target, so a `mixed` value holding a class name
-  matches by name there too. A closure's only
+  matches by name there too. `Closure` is a class name like any other there
+  (`is_a('Closure', 'Closure', true)` is `true`). A closure's only
   ancestor is `Closure`, whether the target is a literal or a runtime name and whether the
   closure was compiled or created inside `eval()` (a function name or method array passed as
   a `callable` is no closure, so it matches no class), and a target holding a NUL byte,

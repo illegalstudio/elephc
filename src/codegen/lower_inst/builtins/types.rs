@@ -699,6 +699,11 @@ fn emit_dynamic_non_object_projection_fatal(ctx: &mut FunctionContext<'_>, cast_
     }
 }
 
+/// Whether a class name names PHP's built-in `Closure` (any case, with or without a leading `\`).
+fn is_closure_name(name: &str) -> bool {
+    name.trim_start_matches('\\').eq_ignore_ascii_case("Closure")
+}
+
 /// Lowers `is_a()` and `is_subclass_of()` for object operands and literal targets.
 pub(crate) fn lower_is_a_relation(
     ctx: &mut FunctionContext<'_>,
@@ -715,7 +720,11 @@ pub(crate) fn lower_is_a_relation(
     let exclude_self = name == "is_subclass_of";
     if matches!(ctx.value_php_type(object)?, PhpType::Str) {
         match optional_const_string_operand(ctx, target)? {
-            Some(target_class) if optional_const_string_operand(ctx, object)?.is_none() => {
+            // `Closure` has no class-info entry for the static walk, so even a literal name
+            // takes the runtime comparison (`is_a('Closure', 'Closure', true)`).
+            Some(target_class) if optional_const_string_operand(ctx, object)?.is_none()
+                || is_closure_name(&target_class) =>
+            {
                 return class_string_relation::lower(ctx, inst, object, &target_class, exclude_self);
             }
             _ => {}
