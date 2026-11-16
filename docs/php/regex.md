@@ -200,7 +200,8 @@ callback stays visible to `preg_last_error()` without failing the outer call.
 
 eval() keeps its own error state, like the JSON error state: `preg_last_error()`
 in eval'd code does not see an error recorded by compiled code, and compiled code
-does not see one recorded inside eval(). PHP has a single state.
+does not see one recorded inside eval(). PHP has a single state. Under `--web`,
+both states start clean for every request.
 
 `PCRE_VERSION`, `PCRE_VERSION_MAJOR` and `PCRE_VERSION_MINOR` describe the
 managed PCRE2 package (10.47), not the PHP build's library.
