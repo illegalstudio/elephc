@@ -176,11 +176,6 @@ fn array_chunk_result_inner_hash_value_type(result_elem_ty: &PhpType) -> Result<
     }
 }
 
-/// Returns the runtime element tag `__rt_array_count_values` needs for an indexed source.
-///
-/// Only `Int`, `Str`, and boxed `Mixed` elements can produce a PHP array key. Every other
-/// element type is reported with its own tag so the helper warns and skips each entry the way
-/// php-src does, instead of reading a float payload as a pointer.
 /// Tallies a gradual `array_count_values()` source, whose shape is known only at run time.
 ///
 /// A hash goes to `__rt_hash_count_values`; an indexed array to `__rt_array_count_values` with
@@ -225,15 +220,18 @@ fn emit_mixed_array_count_values(ctx: &mut FunctionContext<'_>, array: ValueId) 
             ctx.emitter.instruction(&format!("jmp {}", done_label));
         }
     }
-    ctx.emitter.label(&not_array_label);
-    super::super::exceptions::emit_type_error(
-        ctx,
-        "array_count_values(): Argument #1 ($array) must be of type array",
-    );
+    union_type_guard::emit_mixed_wrong_tag_type_error_dispatch(ctx, &not_array_label, &|given| {
+        format!("array_count_values(): Argument #1 ($array) must be of type array, {given} given")
+    });
     ctx.emitter.label(&done_label);
     Ok(())
 }
 
+/// Returns the runtime element tag `__rt_array_count_values` needs for an indexed source.
+///
+/// Only `Int`, `Str`, and boxed `Mixed` elements can produce a PHP array key. Every other
+/// element type is reported with its own tag so the helper warns and skips each entry the way
+/// php-src does, instead of reading a float payload as a pointer.
 fn array_count_values_element_tag(source_ty: &PhpType) -> Result<u8> {
     match source_ty {
         PhpType::Array(elem) => runtime_value_tag("array_count_values", &elem.codegen_repr()),
