@@ -647,7 +647,8 @@ pub(super) fn coerce_scalar_arg_to_param_storage(
         && !sig.ref_params.get(index).copied().unwrap_or(false)
         && matches!(source_ty, PhpType::Mixed | PhpType::Union(_))
     {
-        return unbox_iterable_param_storage(ctx, value, Some(arg.span));
+        let diagnostic = iterable_param_type_error(ctx, sig, index, arg);
+        return unbox_iterable_param_storage_with(ctx, value, Some(arg.span), Some(diagnostic));
     }
     // A `callable` parameter's storage is a DESCRIPTOR, and an `[$object, 'method']` pair is a
     // hash pointer: handing one straight over type-checks and then faults on the first call
@@ -1247,12 +1248,54 @@ fn unbox_iterable_param_storage(
     value: LoweredValue,
     span: Option<crate::span::Span>,
 ) -> LoweredValue {
+    unbox_iterable_param_storage_with(ctx, value, span, None)
+}
+
+/// [`unbox_iterable_param_storage`] carrying php's `TypeError` text for a wrong runtime type.
+///
+/// `diagnostic` is the `prefix\0suffix` the codegen guard wraps around the runtime type word;
+/// without it the guard raises its generic `Value must be of type iterable` text.
+fn unbox_iterable_param_storage_with(
+    ctx: &mut LoweringContext<'_, '_>,
+    value: LoweredValue,
+    span: Option<crate::span::Span>,
+    diagnostic: Option<String>,
+) -> LoweredValue {
+    let immediate = diagnostic.map(|text| Immediate::Data(ctx.intern_string(&text)));
     let result = ctx.emit_owned_value(
-        Op::MixedUnbox, vec![value.value], None, PhpType::Iterable,
+        Op::MixedUnbox, vec![value.value], immediate, PhpType::Iterable,
         Op::mixed_unbox_effects(&PhpType::Iterable), span,
     );
     release_coerced_source_if_owned(ctx, value, span);
     result
+}
+
+/// Builds php's `TypeError` text for a non-iterable value reaching a declared `iterable`
+/// parameter, as `prefix\0suffix` around the runtime type word: php 8.2+ spells the type
+/// `Traversable|array` and names the function, the parameter and the call site
+/// (`total(): Argument #1 ($values) must be of type Traversable|array, int given, called in
+/// /app.php on line 9`).
+fn iterable_param_type_error(
+    ctx: &LoweringContext<'_, '_>,
+    sig: &FunctionSig,
+    index: usize,
+    arg: &Expr,
+) -> String {
+    let param_name = sig
+        .params
+        .get(index)
+        .map(|(name, _)| name.as_str())
+        .unwrap_or("arg");
+    let callable = ctx.call_description.as_deref().unwrap_or("call");
+    let source = ctx.source_path().unwrap_or("unknown");
+    format!(
+        "{}(): Argument #{} (${}) must be of type Traversable|array, \0 given, called in {} on line {}",
+        callable,
+        index + 1,
+        param_name,
+        source,
+        arg.span.line
+    )
 }
 
 /// Returns the rejected alternative's PHP spelling when a union is exactly

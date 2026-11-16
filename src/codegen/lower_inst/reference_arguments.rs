@@ -1116,7 +1116,15 @@ pub(super) fn lower_mixed_unbox(ctx: &mut FunctionContext<'_>, inst: &Instructio
         (PhpType::Array(_), Some(Immediate::I64(4))) => {
             return lower_mixed_spread_source_unbox(ctx, inst, &result_ty);
         }
-        (PhpType::Iterable, _) => emit_mixed_iterable_unbox_guard(ctx),
+        (PhpType::Iterable, _) => match iterable_param_diagnostic(ctx, inst) {
+            Some((prefix, suffix)) => {
+                let (prefix, suffix) = (prefix.to_string(), suffix.to_string());
+                emit_mixed_iterable_unbox_guard_with(ctx, &|given| {
+                    format!("{prefix}{given}{suffix}")
+                });
+            }
+            None => emit_mixed_iterable_unbox_guard(ctx),
+        },
         // A `callable` parameter fed from a `mixed` slot (`function keep($cb) { return new
         // CallbackFilterIterator($it, $cb); }`) may hold a Closure the interpreter created: an
         // object, not a descriptor, which the callee jumped through (Twig's `|filter` arrow
@@ -1532,6 +1540,33 @@ fn lower_mixed_spread_source_unbox(
 
 /// Unboxes a gradual iterable after validating arrays or Traversable object payloads.
 pub(super) fn emit_mixed_iterable_unbox_guard(ctx: &mut FunctionContext<'_>) {
+    emit_mixed_iterable_unbox_guard_with(ctx, &|given| {
+        format!("Value must be of type iterable, {} given", given)
+    });
+}
+
+/// Splits the `prefix\0suffix` diagnostic a declared `iterable` parameter's unbox carries.
+///
+/// Call lowering interns php's whole message around the runtime type word
+/// (`f(): Argument #1 ($v) must be of type Traversable|array, ` + `int` + ` given, called in
+/// ...`); a NUL cannot occur in a function, parameter or file name, so it separates the halves.
+fn iterable_param_diagnostic<'a>(ctx: &'a FunctionContext<'_>, inst: &Instruction) -> Option<(&'a str, &'a str)> {
+    let Some(Immediate::Data(data)) = inst.immediate.as_ref() else {
+        return None;
+    };
+    ctx.module
+        .data
+        .strings
+        .get(data.as_raw() as usize)
+        .and_then(|template| template.split_once('\0'))
+}
+
+/// [`emit_mixed_iterable_unbox_guard`] with the `TypeError` message built by `message_for`
+/// from the runtime type word.
+fn emit_mixed_iterable_unbox_guard_with(
+    ctx: &mut FunctionContext<'_>,
+    message_for: &impl Fn(&str) -> String,
+) {
     abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
     let accepted_label = ctx.next_label("mixed_iterable_accepted");
     let object_label = ctx.next_label("mixed_iterable_object");
@@ -1596,7 +1631,7 @@ pub(super) fn emit_mixed_iterable_unbox_guard(ctx: &mut FunctionContext<'_>) {
     builtins::arrays::union_type_guard::emit_mixed_wrong_tag_type_error_dispatch(
         ctx,
         &wrong_label,
-        &|given| format!("Value must be of type iterable, {} given", given),
+        message_for,
     );
     ctx.emitter.label(&accepted_label);
 }

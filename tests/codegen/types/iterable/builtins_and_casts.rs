@@ -55,7 +55,9 @@ echo total(choose());
     assert_eq!(out, "11");
 }
 
-/// Verifies a non-iterable boxed gradual value raises a runtime type error at the boundary.
+/// Verifies a non-iterable boxed gradual value raises a runtime type error at the boundary,
+/// with php 8.2+'s text: the function and parameter are named and `iterable` is spelled
+/// `Traversable|array` (it used to read `Value must be of type iterable, int given`).
 #[test]
 fn test_mixed_scalar_rejected_by_iterable_parameter() {
     let err = compile_and_run_expect_failure(
@@ -71,7 +73,34 @@ function total(iterable $values): int {
 echo total(choose());
 "#,
     );
-    assert!(err.contains("Value must be of type iterable, int given"));
+    assert!(
+        err.contains("total(): Argument #1 ($values) must be of type Traversable|array, int given, called in "),
+        "{err}"
+    );
+}
+
+/// Verifies php's iterable-parameter `TypeError` text is catchable and names a method too:
+/// `Bag::sum(): Argument #1 ($items) must be of type Traversable|array, int given, called in
+/// ... on line N`, while an array still binds. Expected output is php 8.5.10's with the path cut.
+#[test]
+fn test_mixed_scalar_rejected_by_iterable_parameter_names_the_callee() {
+    let out = compile_and_run(
+        r#"<?php
+function choose(): mixed { return 42; }
+function total(iterable $values): int { return count($values); }
+class Bag { public function sum(iterable $items): int { return 0; } }
+function show(TypeError $e): void { echo explode(', called in', $e->getMessage())[0], "\n"; }
+try { echo total(choose()); } catch (TypeError $e) { show($e); }
+try { echo (new Bag())->sum(choose()); } catch (TypeError $e) { show($e); }
+echo total(choose() ? [1, 2] : []), "\n";
+"#,
+    );
+    assert_eq!(
+        out,
+        "total(): Argument #1 ($values) must be of type Traversable|array, int given\n\
+         Bag::sum(): Argument #1 ($items) must be of type Traversable|array, int given\n\
+         2\n"
+    );
 }
 
 /// Verifies that `iterable` typed parameter returns "array" from `gettype()` for both hash and indexed arrays.
