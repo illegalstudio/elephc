@@ -553,6 +553,7 @@ impl<'a> SplitPlan<'a> {
         Ok(())
     }
 
+    /// Returns the index of the slice that owns `line`: the number of cuts at or before it.
     fn slice_of(&self, line: usize) -> usize {
         self.cuts.partition_point(|&cut| cut <= line)
     }
@@ -689,6 +690,7 @@ struct SliceWriter<'w> {
 }
 
 impl SliceWriter<'_> {
+    /// Writes `text` to the slice and records whether it ended with a newline.
     fn put(&mut self, text: &str) -> std::io::Result<()> {
         if let Some(&last) = text.as_bytes().last() {
             self.ends_with_newline = last == b'\n';
@@ -1582,29 +1584,6 @@ mod tests {
     /// The Mach-O assembler-local prefix, the one the splitter is written for.
     const MACOS_LOCAL: &str = "L";
 
-    // TEMPORARY PROBE (remove before commit): real cut analysis over ELEPHC_PROBE_ASM.
-    #[test]
-    #[ignore]
-    fn probe_region_cuts() {
-        let path = std::env::var("ELEPHC_PROBE_ASM").unwrap();
-        let source = std::fs::read_to_string(path).unwrap();
-        let analysis = analyze(&source, MACOS_LOCAL);
-        let hard_cov: usize = 0;
-        eprintln!("lines {} candidates {} hard_cov {}", analysis.lines.len(), analysis.candidates.len(), hard_cov);
-        let mut gaps: Vec<(usize, usize)> = Vec::new();
-        let mut prev = 0usize;
-        for &c in analysis.candidates.iter().chain(std::iter::once(&analysis.lines.len())) {
-            gaps.push((c - prev, prev));
-            prev = c;
-        }
-        gaps.sort_unstable_by(|a, b| b.cmp(a));
-        for (gap, at) in gaps.iter().take(5) {
-            eprintln!("gap {gap} lines from {at}: {}", analysis.lines.get(*at).trim());
-        }
-        let cuts = choose_cuts(&analysis, 18);
-        eprintln!("cuts {:?}", cuts);
-    }
-
     /// Returns every identifier token on a line, for the scanner tests.
     fn identifiers(line: &str) -> Vec<&str> {
         let mut out = Vec::new();
@@ -1612,22 +1591,6 @@ mod tests {
         out
     }
 
-    /// A hand-written fixture shaped like real emitter output.
-    ///
-    /// Every shape here is one a split can break, and each is taken from the real
-    /// 8.8 MB assembly this module was checked against:
-    /// * `_second` branches conditionally to `L_second_retry`, so the two may never
-    ///   land in different slices;
-    /// * `_second_tail` is a plain, non-`.globl`, non-footer label INSIDE another
-    ///   atom that `_fourth` branches to — the shape that has to be published;
-    /// * `L_thunk` is an assembler temporary whose only reference is a `.quad` in
-    ///   `.data` — the shape that forces a rename, because `.globl` on an
-    ///   `L`-prefixed name is an assembler error;
-    /// * the `.data` tail exercises the section replay and the eight-byte alignment.
-    ///
-    /// The visibility footer names exactly the `.globl` symbols outside the export
-    /// allowlist, which is what `append_visibility_directives` produces
-    /// (src/codegen_support/visibility.rs:65-78) — `_main` is the only export.
     /// Lines the reference scan tokenizes over a listing whose `_first` holds `filler` plain
     /// instructions, with the touched spans and hard intervals it finds.
     fn tokenized_lines(filler: usize) -> (usize, Vec<(usize, usize)>, Vec<(usize, usize)>) {
@@ -1728,6 +1691,22 @@ mod tests {
         assert!(!small_hard.is_empty());
     }
 
+    /// A hand-written fixture shaped like real emitter output.
+    ///
+    /// Every shape here is one a split can break, and each is taken from the real
+    /// 8.8 MB assembly this module was checked against:
+    /// * `_second` branches conditionally to `L_second_retry`, so the two may never
+    ///   land in different slices;
+    /// * `_second_tail` is a plain, non-`.globl`, non-footer label INSIDE another
+    ///   atom that `_fourth` branches to — the shape that has to be published;
+    /// * `L_thunk` is an assembler temporary whose only reference is a `.quad` in
+    ///   `.data` — the shape that forces a rename, because `.globl` on an
+    ///   `L`-prefixed name is an assembler error;
+    /// * the `.data` tail exercises the section replay and the eight-byte alignment.
+    ///
+    /// The visibility footer names exactly the `.globl` symbols outside the export
+    /// allowlist, which is what `append_visibility_directives` produces
+    /// (src/codegen_support/visibility.rs:65-78) — `_main` is the only export.
     fn fixture() -> String {
         let mut asm = String::new();
         asm.push_str(".globl _main\n_main:\n    bl _first\n    ret\n");
@@ -1765,7 +1744,6 @@ mod tests {
         }
     }
 
-    /// See the module note: times `plan_split` and the slice rendering over a real listing.
     #[test]
     #[ignore]
     /// Runs only `plan_split` on a real listing, once, for an instruction count of the plan alone:
@@ -1782,6 +1760,7 @@ mod tests {
 
     #[test]
     #[ignore]
+    /// See the module note: times `plan_split` and the slice rendering over a real listing.
     fn split_bench() {
         let Ok(path) = std::env::var("ELEPHC_SPLIT_BENCH") else {
             return;
