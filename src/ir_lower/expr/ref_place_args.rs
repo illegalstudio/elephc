@@ -690,6 +690,38 @@ fn prepare_ref_place_args_for(
         return None;
     }
     let mut call_args: Vec<Expr> = args.to_vec();
+    // php binds a reference when it reaches that argument, after the arguments written to its
+    // left ran. The places are read below before the call lowers any argument, so a user
+    // callee's earlier by-value arguments with effects are evaluated into hidden locals first:
+    // their effects on a place are then in the place's read, and not overwritten by the
+    // write-back.
+    if !builtin_callee && !mb_variables {
+        let last = rewrite_indices.iter().copied().max().unwrap_or(0);
+        for index in 0..last {
+            if rewrite_indices.contains(&index) || ref_param_binding(sig, index, &args[index]).is_some() {
+                continue;
+            }
+            let (named, value) = match &args[index].kind {
+                ExprKind::NamedArg { name, value } => (Some(name.clone()), value.as_ref()),
+                _ => (None, &args[index]),
+            };
+            if !argument_has_effects(value) {
+                continue;
+            }
+            let lowered = lower_expr(ctx, value);
+            let value_type = normalize_value_php_type(ctx.builder.value_php_type(lowered.value));
+            let temp = ctx.declare_synthetic_php_local(value_type.clone());
+            ctx.store_local(&temp, lowered, value_type, Some(value.span));
+            let variable = Expr::new(ExprKind::Variable(temp), value.span);
+            call_args[index] = match named {
+                Some(name) => Expr::new(
+                    ExprKind::NamedArg { name, value: Box::new(variable) },
+                    args[index].span,
+                ),
+                None => variable,
+            };
+        }
+    }
     let mut plans: Vec<RefPlacePlan> = Vec::with_capacity(rewrite_indices.len());
     for index in rewrite_indices {
         let arg = &args[index];
@@ -788,6 +820,31 @@ fn prepare_ref_place_args_for(
         matches!(place.kind, ExprKind::Variable(_))
     }));
     Some((call_args, plans))
+}
+
+/// Returns whether evaluating an argument can run user code or write a variable, so that its
+/// position relative to a by-reference place is observable.
+fn argument_has_effects(expr: &Expr) -> bool {
+    let mut found = false;
+    crate::parser::ast::visit::walk_expr_nodes(expr, &mut |node| {
+        if let crate::parser::ast::visit::Node::Expr(inner) = node {
+            found |= matches!(
+                inner.kind,
+                ExprKind::FunctionCall { .. }
+                    | ExprKind::MethodCall { .. }
+                    | ExprKind::NullsafeMethodCall { .. }
+                    | ExprKind::StaticMethodCall { .. }
+                    | ExprKind::NewObject { .. }
+                    | ExprKind::ExprCall { .. }
+                    | ExprKind::Assignment { .. }
+                    | ExprKind::PreIncrement(_)
+                    | ExprKind::PostIncrement(_)
+                    | ExprKind::PreDecrement(_)
+                    | ExprKind::PostDecrement(_)
+            );
+        }
+    });
+    found
 }
 
 /// Writes every mutated hidden local back to its stabilized caller-visible place.
