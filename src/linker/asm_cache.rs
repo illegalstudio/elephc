@@ -108,6 +108,21 @@ pub(super) fn assembler_identity(command: &Command) -> String {
     identity
 }
 
+/// Identity of the assembler a build runs when the in-tree one (`inhouse`) may produce its objects.
+///
+/// That assembler is part of the elephc executable, so the executable's length and modification
+/// time join the system assembler's identity (kept because a slice it cannot handle still goes to
+/// `as`): a rebuilt compiler, say after an encoder fix, no longer reuses objects the previous one
+/// wrote. The tag also keeps these keys apart from objects `as` built from the same text.
+pub(super) fn inhouse_assembler_identity(command: &Command) -> String {
+    let mut identity = assembler_identity(command);
+    identity.push_str(":inhouse");
+    if let Ok(executable) = std::env::current_exe() {
+        identity.push_str(&tool_stamp(executable.as_os_str()));
+    }
+    identity
+}
+
 /// Returns the length and modification time of the assembler binary, when readable.
 ///
 /// A tool found on `PATH` rather than by absolute path has no metadata to read here;
@@ -135,6 +150,19 @@ pub(super) fn slice_key(slice: &str, identity: &str) -> u64 {
 /// The key of an empty slice under one assembler: what `extend_slice_key` starts from.
 pub(super) fn slice_key_seed(identity: &str) -> u64 {
     fnv1a(FNV_OFFSET_BASIS, identity.as_bytes())
+}
+
+/// The keys of the slices the in-tree assembler cut out of one whole listing, one per slice.
+///
+/// The cuts follow `parts` (the number of targets searched), not `count` (the cuts found: a
+/// target with no legal cut is dropped), so two job counts that yield the same slice count still
+/// cut at different offsets and must not share entries.
+pub(super) fn listing_slice_keys(identity: &str, source: &str, count: usize, parts: usize) -> Vec<u64> {
+    let seed = extend_slice_key(slice_key_seed(identity), b"inhouse-listing\n");
+    let whole = extend_slice_key(seed, source.as_bytes());
+    (0..count)
+        .map(|index| extend_slice_key(whole, format!("{index}/{count}/{parts}").as_bytes()))
+        .collect()
 }
 
 /// Extends a slice key with the slice's next bytes.
@@ -308,6 +336,36 @@ mod tests {
     //! Unit tests for the slice object cache.
 
     use super::*;
+
+    /// The in-tree assembler lives in the elephc executable, so its identity must differ from the
+    /// system assembler's and carry the executable's stamp.
+    #[test]
+    fn the_in_tree_assembler_identity_names_the_executable() {
+        let command = Command::new("as");
+        let system = assembler_identity(&command);
+        let inhouse = inhouse_assembler_identity(&command);
+        assert!(inhouse.starts_with(&system));
+        assert!(inhouse.contains(":inhouse:"), "no executable stamp in {inhouse}");
+        assert_ne!(
+            slice_key("        ret\n", &system),
+            slice_key("        ret\n", &inhouse)
+        );
+    }
+
+    /// Two target counts that end up with the same number of slices cut at different offsets, so
+    /// their slices must not share keys.
+    #[test]
+    fn self_cut_keys_depend_on_the_number_of_cut_targets() {
+        let listing = "        ret\n";
+        assert_ne!(
+            listing_slice_keys("v1:as", listing, 3, 16),
+            listing_slice_keys("v1:as", listing, 3, 8)
+        );
+        assert_eq!(
+            listing_slice_keys("v1:as", listing, 3, 16),
+            listing_slice_keys("v1:as", listing, 3, 16)
+        );
+    }
 
     /// A key must depend on the slice text.
     #[test]

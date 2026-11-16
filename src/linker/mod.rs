@@ -448,7 +448,14 @@ pub(crate) fn assemble_parallel(
     // as soon as its own slice is on disk, and no slice ever exists in memory whole: its cache
     // key is folded from the same chunks that are written.
     let caching = asm_cache::is_enabled();
-    let identity = caching.then(|| asm_cache::assembler_identity(&assembler_command(target)));
+    let identity = caching.then(|| {
+        let command = assembler_command(target);
+        if inhouse_enabled(target) {
+            asm_cache::inhouse_assembler_identity(&command)
+        } else {
+            asm_cache::assembler_identity(&command)
+        }
+    });
     let outcomes = run_slice_workers(slice_count, jobs, |index| -> std::io::Result<SliceOutcome> {
         let asm = slice_asm(index);
         let started = std::time::Instant::now();
@@ -635,8 +642,6 @@ pub(crate) fn assemble_parallel(
     }
 }
 
-/// Whether slices may carry pre-encoded instructions. `ELEPHC_ASM_ENCODE=0` hands `as` the
-/// generated text unchanged, which is also what the object-identity check compares against.
 /// Whether slices are written compact (`asm_split::SplitPlan::compact`). `ELEPHC_ASM_COMPACT=0`
 /// writes them as the `.s` has them, which keeps a failing slice readable.
 fn compact_enabled() -> bool {
@@ -648,8 +653,6 @@ fn trace_enabled() -> bool {
     std::env::var_os("ELEPHC_ASM_TRACE").is_some()
 }
 
-/// Whether the in-tree assembler reads each slice straight from the `.s` (the default) rather
-/// than from a rendered copy; `ELEPHC_ASM_DIRECT=0` keeps the rendered copy, for comparison.
 /// Whether the in-tree assembler cuts the listing itself (`inhouse::listing`).
 /// `ELEPHC_ASM_LISTING=0` keeps the analysed split (`asm_split`) for every listing.
 fn listing_enabled() -> bool {
@@ -675,12 +678,8 @@ fn assemble_listing_inhouse(
     let count = plan.slices();
     let objects: Vec<PathBuf> = (0..count).map(slice_obj).collect();
     let keys: Option<Vec<u64>> = asm_cache::is_enabled().then(|| {
-        let identity = asm_cache::assembler_identity(&assembler_command(target));
-        let seed = asm_cache::extend_slice_key(asm_cache::slice_key_seed(&identity), b"inhouse-listing\n");
-        let whole = asm_cache::extend_slice_key(seed, source.as_bytes());
-        (0..count)
-            .map(|index| asm_cache::extend_slice_key(whole, format!("{index}/{count}").as_bytes()))
-            .collect()
+        let identity = asm_cache::inhouse_assembler_identity(&assembler_command(target));
+        asm_cache::listing_slice_keys(&identity, source, count, parts)
     });
     if let Some(keys) = &keys {
         if keys.iter().zip(&objects).all(|(key, path)| asm_cache::reuse(*key, path)) {
@@ -762,10 +761,14 @@ fn assemble_listing_inhouse(
     })
 }
 
+/// Whether the in-tree assembler reads each slice straight from the `.s` (the default) rather
+/// than from a rendered copy; `ELEPHC_ASM_DIRECT=0` keeps the rendered copy, for comparison.
 fn direct_enabled() -> bool {
     !matches!(std::env::var("ELEPHC_ASM_DIRECT").as_deref(), Ok("0") | Ok("off"))
 }
 
+/// Whether slices may carry pre-encoded instructions. `ELEPHC_ASM_ENCODE=0` hands `as` the
+/// generated text unchanged, which is also what the object-identity check compares against.
 fn encode_enabled() -> bool {
     !matches!(std::env::var("ELEPHC_ASM_ENCODE").as_deref(), Ok("0") | Ok("off"))
 }
