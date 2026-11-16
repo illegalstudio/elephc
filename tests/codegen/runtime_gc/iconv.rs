@@ -43,10 +43,8 @@ echo "clean";
 /// refused-encoding path hands a persisted message to the exception, so a leak here means
 /// the copy, the bridge release, or the exception's ownership of its message broke.
 ///
-/// The conversions and the throw live in separate functions on purpose: a string local
-/// that is `unset()` after a `try`/`catch` inside the same top-level loop body currently
-/// trips a double free for ANY string builtin (`strtoupper()`, `str_repeat()` measured
-/// too), which is a separate defect this fixture must not depend on.
+/// The conversions and the throw live in separate functions; the same work inlined in one
+/// top-level loop body is `test_string_locals_unset_after_a_caught_value_error_are_heap_clean`.
 #[test]
 fn test_mb_case_results_and_value_errors_are_heap_clean() {
     let out = compile_and_run_with_heap_debug(
@@ -79,6 +77,57 @@ echo $total === 655 && strlen($message) === 81 ? "clean" : "wrong $total " . str
     assert!(
         out.stderr.contains("HEAP DEBUG: leak summary: clean"),
         "expected mb_strtoupper()/mb_strtolower() to leave a clean heap, got: {}",
+        out.stderr
+    );
+}
+
+/// Verifies string locals `unset()` after a caught `ValueError` in the same top-level loop body
+/// are released exactly once.
+///
+/// This shape (a `strtoupper()` / `str_repeat()` / `mb_strtoupper()` result, then a `try`/`catch`
+/// that catches a builtin's `ValueError` or a user `throw`, then `unset()`) was once documented
+/// as a double free; it pins the heap clean so a regression of that kind fails here.
+/// php 8.5.10 prints `81 79`.
+#[test]
+fn test_string_locals_unset_after_a_caught_value_error_are_heap_clean() {
+    let out = compile_and_run_with_heap_debug(
+        r##"<?php
+$encoding = $argc > 5 ? "UTF-8" : null;
+for ($i = 0; $i < 25; $i++) {
+    $upper = mb_strtoupper("straße éà " . $i);
+    $lower = mb_strtolower("ΣΑΣ " . $i, $encoding);
+    try {
+        mb_strtoupper("x", "nope" . $i);
+    } catch (ValueError $e) {
+        $message = $e->getMessage();
+    }
+    unset($upper, $lower);
+}
+for ($i = 0; $i < 25; $i++) {
+    $s = str_repeat("ab", $i + 1);
+    try {
+        $t = mb_strtoupper($s, "nope");
+    } catch (ValueError $e) {
+        $m = $e->getMessage();
+    }
+    unset($s);
+}
+for ($i = 0; $i < 25; $i++) {
+    $s = strtoupper("x" . $i);
+    try {
+        throw new ValueError("v" . $i);
+    } catch (ValueError $e) {
+    }
+    unset($s);
+}
+echo strlen($message), " ", strlen($m), "\n";
+"##,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "81 79\n");
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "expected the unset string locals to be released exactly once, got: {}",
         out.stderr
     );
 }
