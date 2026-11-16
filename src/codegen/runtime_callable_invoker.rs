@@ -142,10 +142,13 @@ pub(super) fn needs_callable_argument_normalizer(sig: &FunctionSig) -> bool {
     })
 }
 
-/// Returns whether an eval-facing invoker converts eval-only callbacks for a declared
-/// `callable` parameter, which calls the callable argument normalizer.
+/// Returns whether an eval-facing invoker converts eval-only callbacks for a parameter that
+/// declares `callable` (alone, nullable, in a union or as a variadic element), which calls the
+/// callable argument normalizer.
 pub(super) fn needs_declared_callable_argument_normalizer(sig: &FunctionSig) -> bool {
-    sig.params.iter().any(|(_, ty)| *ty == PhpType::DeclaredCallable)
+    sig.params.iter().any(|(_, ty)| {
+        ty.declares_callable() || matches!(ty, PhpType::Array(element) if element.declares_callable())
+    })
 }
 
 /// Minimal state needed by the descriptor invoker emitter.
@@ -2853,7 +2856,7 @@ fn coerce_current_value_to_target(
         tagged_args::coerce(emitter, ctx, source_ty);
         return (PhpType::TaggedScalar, false);
     }
-    if source_repr == PhpType::Mixed && target_ty == Some(&PhpType::DeclaredCallable) {
+    if source_repr == PhpType::Mixed && target_ty.is_some_and(PhpType::declares_callable) {
         if ctx.convert_eval_callables {
             emit_owned_declared_callable_argument(emitter, ctx);
         } else {
@@ -2898,28 +2901,44 @@ fn coerce_current_value_to_target(
     (pushed_ty, boxed_to_mixed)
 }
 
-/// Passes the current boxed argument to a declared-`callable` parameter with an owner of its own.
+/// Passes the current boxed argument to a parameter declaring `callable` with an owner of its own.
 ///
 /// A natively callable value keeps its PHP value (one extra reference). A value native code
-/// cannot resolve by itself, such as the name of a function declared inside `eval()`, is
-/// normalized to a descriptor (which consults eval) and boxed, so the callee's entry check and
-/// invocation see a callable. Both arms leave one owner for the invoker's argument cleanup.
+/// cannot resolve by itself but eval can, such as the name of a function declared inside
+/// `eval()`, is normalized to a descriptor (which consults eval) and boxed, so the callee's
+/// entry check and invocation see a callable. Any other value also keeps its PHP value: the
+/// callee's entry check decides, so `int|callable` still receives an int and a value no member
+/// accepts raises PHP's `must be of type ...` `TypeError`. Every arm leaves one owner for the
+/// invoker's argument cleanup.
 fn emit_owned_declared_callable_argument(emitter: &mut Emitter, ctx: &mut InvokerEmitContext) {
-    let native = ctx.next_label("declared_callable_native_arg");
+    let keep = ctx.next_label("declared_callable_native_arg");
     let done = ctx.next_label("declared_callable_arg_ready");
     let result = abi::int_result_reg(emitter);
-    // -- keep a natively callable value, convert an eval-only callback --
+    let (arg0, arg1) = (
+        abi::int_arg_reg_name(emitter.target, 0),
+        abi::int_arg_reg_name(emitter.target, 1),
+    );
+    // -- keep a natively callable value --
     abi::emit_push_reg(emitter, result);
-    if emitter.target.arch == Arch::X86_64 {
-        emitter.instruction("mov rdi, rax");                                    // pass the boxed argument to the runtime callable probe
-    }
+    abi::emit_reg_move(emitter, arg0, result);
     abi::emit_call_label(emitter, "__rt_is_callable_mixed");
-    abi::emit_branch_if_int_result_nonzero(emitter, &native);
+    abi::emit_branch_if_int_result_nonzero(emitter, &keep);
+    // -- convert only a value eval resolves; leave the rest to the callee's entry check --
+    abi::emit_load_int_immediate(emitter, arg0, 0);
+    abi::emit_load_temporary_stack_slot(emitter, arg1, 0);
+    let context_symbol = emitter.target.extern_symbol("__elephc_eval_object_context");
+    abi::emit_call_label(emitter, &context_symbol);
+    abi::emit_branch_if_int_result_zero(emitter, &keep);
+    abi::emit_reg_move(emitter, arg0, result);
+    abi::emit_load_temporary_stack_slot(emitter, arg1, 0);
+    let probe_symbol = emitter.target.extern_symbol("__elephc_eval_is_callable");
+    abi::emit_call_label(emitter, &probe_symbol);
+    abi::emit_branch_if_int_result_zero(emitter, &keep);
     abi::emit_pop_reg(emitter, result);
     owned_value_args::normalize_callable(emitter, ctx, &PhpType::Mixed);
     crate::codegen::emit_box_current_owned_value_as_mixed(emitter, &PhpType::Callable);
     abi::emit_jump(emitter, &done);
-    emitter.label(&native);
+    emitter.label(&keep);
     abi::emit_pop_reg(emitter, result);
     abi::emit_incref_if_refcounted(emitter, &PhpType::Mixed);
     emitter.label(&done);
