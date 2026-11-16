@@ -19,7 +19,10 @@
 //!   process-global ones (see `tests/ffi_buffer_hygiene.rs`).
 
 mod spawn;
+mod stream_path;
 mod wait;
+
+pub use stream_path::WARNING_SEPARATOR;
 
 pub use wait::{
     FIELD_CACHED, FIELD_EXITCODE, FIELD_RUNNING, FIELD_SIGNALED, FIELD_STOPPED, FIELD_STOPSIG,
@@ -199,6 +202,10 @@ pub unsafe extern "C" fn elephc_proc_builder_pipe(builder: i64, index: i64, mode
 
 /// Stages `['file', $path, $mode]` for child descriptor `index`.
 ///
+/// Answers 1 when staged, 0 on failure, or 2 when staged although php-src still warns
+/// (an unregistered wrapper's plain-file fallback). After 0 or 2,
+/// `elephc_proc_last_error()` holds the warnings joined with [`WARNING_SEPARATOR`].
+///
 /// # Safety
 /// `path` and `mode` must be null or NUL-terminated strings.
 #[no_mangle]
@@ -210,7 +217,18 @@ pub unsafe extern "C" fn elephc_proc_builder_file(
 ) -> i64 {
     let path = owned(path);
     let mode = owned(mode).to_string_lossy().into_owned();
-    with_builder(builder, |builder| builder.file(index, &path, &mode))
+    let mut warning = None;
+    let staged = with_builder(builder, |builder| {
+        warning = builder.file(index, &path, &mode)?;
+        Ok(())
+    });
+    match warning {
+        Some(warning) if staged == 1 => {
+            record_error(warning);
+            2
+        }
+        _ => staged,
+    }
 }
 
 /// Stages an existing stream's native descriptor `fd` for child descriptor `index`.

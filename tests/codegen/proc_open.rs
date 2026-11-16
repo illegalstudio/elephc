@@ -366,3 +366,46 @@ proc_close($process);
          bool(true)\n"
     );
 }
+
+/// A file spec's path goes through PHP's stream wrappers: `php://stdout`, `php://fd/1`,
+/// `file://` URLs, `data:` payloads and `php://temp` reach the child as descriptors, and
+/// the streams PHP cannot cast fail with its warnings.
+#[test]
+fn test_proc_open_file_specs_open_stream_urls() {
+    let out = compile_and_run_capture(
+        r#"<?php
+$path = sys_get_temp_dir() . '/elephc_proc_url_' . getmypid() . '.txt';
+foreach ([
+    ['echo stdout', [1 => ['file', 'php://stdout', 'w']]],
+    ['echo fd', [1 => ['file', 'PHP://fd/1', 'w']]],
+    ['echo url', [1 => ['file', 'file://' . $path, 'w']]],
+    ['cat', [0 => ['file', 'data:text/plain;base64,ZGF0YQo=', 'r'], 1 => ['file', 'php://stdout', 'w']]],
+    ['cat', [0 => ['file', 'data:,a+b%21%0A', 'r'], 1 => ['file', 'php://stdout', 'w']]],
+    ['echo temp', [1 => ['file', 'php://temp', 'w']]],
+    ['true', [1 => ['file', 'php://memory', 'w']]],
+    ['true', [0 => ['file', 'data:text,x', 'r']]],
+    ['true', [1 => ['file', 'php://bogus', 'w']]],
+    ['true', [1 => ['file', 'nope://x', 'w']]],
+] as [$command, $spec]) {
+    $process = proc_open($command, $spec, $pipes);
+    echo $process === false ? "false\n" : proc_close($process) . "\n";
+}
+echo file_get_contents($path);
+unlink($path);
+"#,
+    );
+    assert_eq!(
+        out.stdout,
+        "stdout\n0\nfd\n0\n0\ndata\n0\na b!\n0\n0\nfalse\nfalse\nfalse\nfalse\nurl\n"
+    );
+    for warning in [
+        "Warning: proc_open(): Cannot represent a stream of type MEMORY as a File Descriptor",
+        "Warning: proc_open(data:text,x): Failed to open stream: rfc2397: illegal media type",
+        "Warning: proc_open(): Invalid php:// URL specified",
+        "Warning: proc_open(php://bogus): Failed to open stream: operation failed",
+        "Warning: proc_open(): Unable to find the wrapper \"nope\" - did you forget to enable it when you configured PHP?",
+        "Warning: proc_open(nope://x): Failed to open stream: No such file or directory",
+    ] {
+        assert!(out.stderr.contains(warning), "{}", out.stderr);
+    }
+}
