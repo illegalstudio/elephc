@@ -892,6 +892,29 @@ fn runtime_compile_return() -> Vec<Stmt> {
         BinOp::Concat,
         e_str("' for inclusion\n"),
     );
+    // php names the open failure first, with the stream layer's `strerror` text: a path that
+    // exists but is not a readable file is the permission case, every other one is missing.
+    let open_failure = e_binop(
+        e_binop(
+            e_binop(
+                e_str("Warning: opcache_compile_file("),
+                BinOp::Concat,
+                e_var("filename"),
+            ),
+            BinOp::Concat,
+            e_str("): Failed to open stream: "),
+        ),
+        BinOp::Concat,
+        e_binop(
+            e_ternary(
+                e_call("file_exists", vec![e_var("filename")]),
+                e_str("Permission denied"),
+                e_str("No such file or directory"),
+            ),
+            BinOp::Concat,
+            e_str("\n"),
+        ),
+    );
     vec![
         s_if(
             e_call("is_file", vec![e_var("filename")]),
@@ -899,6 +922,7 @@ fn runtime_compile_return() -> Vec<Stmt> {
             vec![],
             None,
         ),
+        s_expr(e_call("fwrite", vec![e_const("STDERR"), open_failure])),
         s_expr(e_call("fwrite", vec![e_const("STDERR"), warning])),
         s_return(e_bool(false)),
     ]
