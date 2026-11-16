@@ -105,7 +105,11 @@ pub(in crate::codegen::lower_inst::builtins) fn lower_dynamic_include(
     abi::emit_reserve_temporary_stack(ctx.emitter, EVAL_STACK_BYTES);
     // Scope synchronization owns the generic temp-cell slot, so preserve the borrowed
     // path in the otherwise-unused saved-code pointer slot until the include call.
-    store_eval_mixed_operand_at(ctx, path, EVAL_CODE_PTR_OFFSET)?;
+    // A statically typed path is boxed for the bridge, which only borrows it: the cell stays
+    // this frame's to release once the include has run (or has thrown).
+    let boxed: EvalBoxedOperands = store_eval_mixed_operand_at(ctx, path, EVAL_CODE_PTR_OFFSET)?
+        .into_iter()
+        .collect();
     ensure_eval_context(ctx)?;
     mark_eval_strict_php_value(ctx, strict_php);
     mark_eval_php_version(ctx);
@@ -147,10 +151,11 @@ pub(in crate::codegen::lower_inst::builtins) fn lower_dynamic_include(
     let symbol = ctx.emitter.target.extern_symbol("__elephc_eval_include");
     abi::emit_call_label(ctx.emitter, &symbol);
     pop_eval_context_class_scope(ctx, pushed_class_scope);
-    emit_eval_status_check(ctx);
+    emit_eval_status_check_releasing(ctx, &boxed);
     let result_reg = abi::int_result_reg(ctx.emitter);
     abi::emit_load_temporary_stack_slot(ctx.emitter, result_reg, EVAL_RESULT_VALUE_CELL_OFFSET);
     abi::emit_store_to_sp(ctx.emitter, result_reg, EVAL_TEMP_CELL_OFFSET);
+    emit_release_eval_boxed_operands(ctx, &boxed);
     reload_eval_scope_locals(ctx, &sync_locals, None)?;
     reload_eval_global_bound_locals(ctx, &global_bound_locals, None)?;
     reload_eval_global_scope(ctx, &sync_globals, None)?;
