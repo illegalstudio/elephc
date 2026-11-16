@@ -484,7 +484,8 @@ fn emit_object_to_hash_x86_64(emitter: &mut Emitter) {
     emitter.instruction("jne 4f");                                              // typed payloads are boxed as they are
     emit_branch_if_null_container(emitter, "rdi", "r11", "__rt_object_to_hash_null_slot_x");
     emitter.instruction("mov rax, rdi");                                        // the slot's box becomes the unbox input
-    emitter.instruction("call __rt_mixed_unbox");                               // rax = concrete tag, rdi/rsi = payload words
+    emitter.instruction("call __rt_mixed_unbox");                               // rax = concrete tag, rdi = low word, rdx = high word
+    emitter.instruction("mov rsi, rdx");                                        // unbox reports the high word in rdx; boxing reads it from rsi
     emitter.instruction("jmp 4f");                                              // a live cell is boxed from its concrete value
     emitter.label("__rt_object_to_hash_null_slot_x");
     emitter.instruction("mov eax, 8");                                          // runtime tag 8 = canonical PHP null
