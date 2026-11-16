@@ -144,7 +144,14 @@ fn read_manifest(path: &Path) -> Manifest {
     }
 }
 
-/// Reads direct JSON documents in deterministic path order.
+/// The largest JSON file considered project metadata.
+///
+/// Discovery is structural, so every `.json` of every ancestor directory is a candidate; a data
+/// dump or build output in `$HOME` must not cost a compile a full read and parse. Project
+/// metadata files are kilobytes to a few megabytes.
+const MAX_MANIFEST_BYTES: u64 = 8 * 1024 * 1024;
+
+/// Reads direct JSON documents of a bounded size in deterministic path order.
 fn read_json_manifests(dir: &Path) -> Vec<Manifest> {
     let mut paths = std::fs::read_dir(dir)
         .into_iter()
@@ -152,7 +159,8 @@ fn read_json_manifests(dir: &Path) -> Vec<Manifest> {
         .flatten()
         .map(|entry| entry.path())
         .filter(|path| {
-            path.is_file()
+            std::fs::metadata(path)
+                .is_ok_and(|metadata| metadata.is_file() && metadata.len() <= MAX_MANIFEST_BYTES)
                 && path
                     .extension()
                     .and_then(|extension| extension.to_str())
@@ -471,6 +479,23 @@ mod tests {
             PhpVersion::MAINTAINED[PhpVersion::MAINTAINED.len() - 1]
         );
         assert_eq!(resolved.notes.len(), 1);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A JSON file above the size bound is never read, so a stray data dump cannot pin a profile
+    /// or slow a compile.
+    #[test]
+    fn oversized_json_is_not_read() {
+        let dir = temp_dir();
+        write(&dir, "prog.php", "<?php echo 1;");
+        let padding = " ".repeat(MAX_MANIFEST_BYTES as usize);
+        write(
+            &dir,
+            "dump.json",
+            &format!(r#"{{"config":{{"platform":{{"php":"8.3"}}}}}}{padding}"#),
+        );
+        let resolved = resolve(&dir.join("prog.php"));
+        assert_eq!(resolved.provenance, Provenance::Default);
         let _ = std::fs::remove_dir_all(&dir);
     }
 
