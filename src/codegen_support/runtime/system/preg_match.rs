@@ -91,11 +91,9 @@ pub(crate) fn emit_preg_match(emitter: &mut Emitter) {
     emitter.instruction(&format!("ldr x10, [sp, #{}]", subject_len_off));       // load subject byte length for negative normalization
     emitter.instruction("add x9, x10, x9");                                     // convert negative offset to an absolute byte offset
     emitter.label("__rt_preg_match_offset_nonnegative");
-    emitter.instruction("cmp x9, #0");                                          // reject offsets before the subject start
-    emitter.instruction("b.lt __rt_preg_match_cleanup_no");                     // invalid offset frees the compiled handle and reports no match
+    emitter.instruction("cmp x9, #0");                                          // php clamps a negative position to the subject start
+    emitter.instruction("csel x9, xzr, x9, lt");                                // a still-negative start becomes offset zero
     emitter.instruction(&format!("ldr x10, [sp, #{}]", subject_len_off));       // load subject byte length for upper-bound validation
-    emitter.instruction("cmp x9, x10");                                         // offset may point at the trailing byte boundary
-    emitter.instruction("b.gt __rt_preg_match_cleanup_no");                     // reject offsets beyond the subject after freeing the compiled handle
     emitter.instruction(&format!("str x9, [sp, #{}]", match_pair_off));         // REG_STARTEND start bound
     emitter.instruction(&format!("str x10, [sp, #{}]", match_pair_off + 8));    // REG_STARTEND end bound
 
@@ -105,10 +103,6 @@ pub(crate) fn emit_preg_match(emitter: &mut Emitter) {
     emitter.instruction("mov x2, #1");                                          // request only the full-match pair
     emitter.instruction(&format!("add x3, sp, #{}", match_pair_off));           // receive one fixed signed-64-bit offset pair
     emitter.instruction("mov x4, #128");                                        // REG_STARTEND preserves full-subject anchor semantics with offsets
-    emitter.instruction(&format!("ldr x9, [sp, #{}]", match_pair_off));         // reload the normalized starting offset
-    emitter.instruction("cmp x9, #0");                                          // a non-zero start is not the beginning of the full subject
-    emitter.instruction("orr x10, x4, #4");                                     // REG_NOTBOL keeps ^ anchored to the full subject
-    emitter.instruction("csel x4, x10, x4, gt");                                // add REG_NOTBOL only for positive offsets
     emitter.bl_c("elephc_pcre2_v1_exec");                                       // execute without exposing PCRE2-owned layouts
     emitter.instruction(&format!("str x0, [sp, #{}]", regexec_result_off));     // save regexec result
 
@@ -121,11 +115,6 @@ pub(crate) fn emit_preg_match(emitter: &mut Emitter) {
     emitter.instruction("cbnz x0, __rt_preg_match_no");                         // non-zero = no match
     emitter.instruction("mov x0, #1");                                          // matched → return 1
     emitter.instruction("b __rt_preg_match_ret");                               // return
-
-    emitter.label("__rt_preg_match_cleanup_no");
-    emitter.instruction(&format!("ldr x0, [sp, #{}]", handle_off));             // reload compiled handle for invalid-offset cleanup
-    emitter.bl_c("elephc_pcre2_v1_free");                                       // release compiled regex resources before reporting no match
-    emitter.instruction("b __rt_preg_match_no");                                // share the zero-result path
 
     emitter.label("__rt_preg_match_no");
     emitter.instruction("mov x0, #0");                                          // no match → return 0
@@ -161,7 +150,8 @@ fn emit_preg_offset_pair_arm64(emitter: &mut Emitter) {
     let text_ptr_off = pair_off + 8;
     let text_len_off = text_ptr_off + 8;
     let byte_offset_off = text_len_off + 8;
-    let stack_size = (byte_offset_off + 8 + 32 + 15) & !15;
+    let text_tag_off = byte_offset_off + 8;
+    let stack_size = (text_tag_off + 8 + 32 + 15) & !15;
     let save_off = stack_size - 16;
 
     emitter.blank();
@@ -174,20 +164,30 @@ fn emit_preg_offset_pair_arm64(emitter: &mut Emitter) {
     emitter.instruction(&format!("str x1, [sp, #{}]", text_ptr_off));           // hold the capture pointer across helper calls
     emitter.instruction(&format!("str x2, [sp, #{}]", text_len_off));           // hold the capture length across helper calls
     emitter.instruction(&format!("str x3, [sp, #{}]", byte_offset_off));        // hold the capture byte offset across helper calls
+    emitter.instruction(&format!("str x4, [sp, #{}]", text_tag_off));           // hold the runtime tag the text entry takes (string, or null under PREG_UNMATCHED_AS_NULL)
 
     emitter.instruction("mov x0, #2");                                          // PHP's offset pair has exactly two numeric keys
     emitter.instruction("mov x1, #7");                                          // mixed-valued hash: key 0 is a string and key 1 an int
     emitter.instruction("bl __rt_hash_new");                                    // allocate the ordered two-entry pair
     emitter.instruction(&format!("str x0, [sp, #{}]", pair_off));               // save the pair across the inserts
 
+    emitter.instruction(&format!("ldr x9, [sp, #{}]", text_tag_off));           // reload the runtime tag of the text entry
+    emitter.instruction("cmp x9, #8");                                          // PREG_UNMATCHED_AS_NULL stores null instead of a string
+    emitter.instruction("b.eq __rt_preg_offset_pair_null_text");                // a null text owns no bytes to persist
     emitter.instruction(&format!("ldr x1, [sp, #{}]", text_ptr_off));           // reload the capture pointer to persist
     emitter.instruction(&format!("ldr x2, [sp, #{}]", text_len_off));           // reload the capture length to persist
     emitter.instruction("bl __rt_str_persist");                                 // the pair owns its own copy of the capture bytes
     emitter.instruction("mov x3, x1");                                          // pass the persisted capture as the entry value payload
     emitter.instruction("mov x4, x2");                                          // pass the persisted capture length
+    emitter.instruction("mov x5, #1");                                          // runtime value tag 1 = string
+    emitter.instruction("b __rt_preg_offset_pair_text_ready");                  // publish the owned text
+    emitter.label("__rt_preg_offset_pair_null_text");
+    emitter.instruction("mov x3, xzr");                                         // a null entry has no payload
+    emitter.instruction("mov x4, xzr");                                         // a null entry has no high word
+    emitter.instruction("mov x5, #8");                                          // runtime value tag 8 = null
+    emitter.label("__rt_preg_offset_pair_text_ready");
     emitter.instruction("mov x1, xzr");                                         // numeric key 0 carries the captured text
     emitter.instruction("mov x2, #-1");                                         // a key discriminant of -1 marks an integer key
-    emitter.instruction("mov x5, #1");                                          // runtime value tag 1 = string
     emitter.instruction(&format!("ldr x0, [sp, #{}]", pair_off));               // reload the pair receiver
     emitter.instruction("bl __rt_hash_set");                                    // publish the captured text at key zero
     emitter.instruction(&format!("str x0, [sp, #{}]", pair_off));               // save a possibly-grown pair pointer
@@ -231,7 +231,9 @@ fn emit_preg_offset_matches_arm64(emitter: &mut Emitter) {
     let name_len_off = name_ptr_off + 8;
     let key_lo_off = name_len_off + 8;
     let key_hi_off = key_lo_off + 8;
-    let stack_size = (key_hi_off + 8 + 48 + 15) & !15;
+    let unmatched_tag_off = key_hi_off + 8;
+    let value_tag_off = unmatched_tag_off + 8;
+    let stack_size = (value_tag_off + 8 + 48 + 15) & !15;
     let save_off = stack_size - 16;
 
     emitter.blank();
@@ -245,6 +247,7 @@ fn emit_preg_offset_matches_arm64(emitter: &mut Emitter) {
     emitter.instruction(&format!("str x1, [sp, #{}]", pairs_off));              // hold the populated offset-pair vector
     emitter.instruction(&format!("str x2, [sp, #{}]", max_group_off));          // hold the highest capture index to materialize
     emitter.instruction(&format!("str x3, [sp, #{}]", subject_off));            // hold the subject base the offsets index into
+    emitter.instruction(&format!("str x4, [sp, #{}]", unmatched_tag_off));      // hold the runtime tag an unmatched group takes (string, or null under PREG_UNMATCHED_AS_NULL)
 
     emitter.instruction(&format!("ldr x0, [sp, #{}]", max_group_off));          // size the table from the emitted capture count
     emitter.instruction("add x0, x0, #1");                                      // the highest index is inclusive
@@ -270,12 +273,16 @@ fn emit_preg_offset_matches_arm64(emitter: &mut Emitter) {
     emitter.instruction(&format!("ldr x1, [sp, #{}]", subject_off));            // reload subject base
     emitter.instruction("add x1, x1, x15");                                     // compute capture string pointer
     emitter.instruction(&format!("str x15, [sp, #{}]", value_off_off));         // the capture start is PHP's reported byte offset
+    emitter.instruction("mov x9, #1");                                          // a participating group's text is always a string
+    emitter.instruction(&format!("str x9, [sp, #{}]", value_tag_off));          // remember the text tag for both key kinds
     emitter.instruction("b __rt_preg_offset_matches_value");                    // insert this capture under every key it owns
     emitter.label("__rt_preg_offset_matches_unmatched");
     emitter.instruction("mov x1, #0");                                          // an unmatched capture has an empty string
     emitter.instruction("mov x2, #0");                                          // an unmatched capture has zero length
     emitter.instruction("mov x15, #-1");                                        // PHP reports -1 as the unmatched capture offset
     emitter.instruction(&format!("str x15, [sp, #{}]", value_off_off));         // hold the unmatched offset for both key kinds
+    emitter.instruction(&format!("ldr x9, [sp, #{}]", unmatched_tag_off));      // an unmatched group reports the caller's tag
+    emitter.instruction(&format!("str x9, [sp, #{}]", value_tag_off));          // remember the text tag for both key kinds
     emitter.label("__rt_preg_offset_matches_value");
     emitter.instruction(&format!("str x1, [sp, #{}]", value_ptr_off));          // hold the capture pointer across helper calls
     emitter.instruction(&format!("str x2, [sp, #{}]", value_len_off));          // hold the capture length across helper calls
@@ -294,6 +301,7 @@ fn emit_preg_offset_matches_arm64(emitter: &mut Emitter) {
     emitter.instruction(&format!("ldr x1, [sp, #{}]", value_ptr_off));          // reload the capture pointer for this entry's pair
     emitter.instruction(&format!("ldr x2, [sp, #{}]", value_len_off));          // reload the capture length for this entry's pair
     emitter.instruction(&format!("ldr x3, [sp, #{}]", value_off_off));          // reload the capture byte offset for this entry's pair
+    emitter.instruction(&format!("ldr x4, [sp, #{}]", value_tag_off));          // reload the runtime tag of this entry's text
     emitter.instruction("bl __rt_preg_offset_pair");                            // the named entry owns its own [text, offset] pair
     emitter.instruction("mov x3, x0");                                          // pass the pair as the entry value payload
     emitter.instruction("mov x4, xzr");                                         // an array payload has no high word
@@ -308,6 +316,7 @@ fn emit_preg_offset_matches_arm64(emitter: &mut Emitter) {
     emitter.instruction(&format!("ldr x1, [sp, #{}]", value_ptr_off));          // reload the capture pointer for the numeric entry
     emitter.instruction(&format!("ldr x2, [sp, #{}]", value_len_off));          // reload the capture length for the numeric entry
     emitter.instruction(&format!("ldr x3, [sp, #{}]", value_off_off));          // reload the capture byte offset for the numeric entry
+    emitter.instruction(&format!("ldr x4, [sp, #{}]", value_tag_off));          // reload the runtime tag of this entry's text
     emitter.instruction("bl __rt_preg_offset_pair");                            // the numeric entry owns its own [text, offset] pair
     emitter.instruction("mov x3, x0");                                          // pass the pair as the entry value payload
     emitter.instruction("mov x4, xzr");                                         // an array payload has no high word
@@ -624,11 +633,9 @@ fn emit_preg_match_capture_arm64(emitter: &mut Emitter) {
     emitter.instruction(&format!("ldr x10, [sp, #{}]", subject_len_off));       // load subject length for negative normalization
     emitter.instruction("add x9, x10, x9");                                     // convert negative offset to absolute byte position
     emitter.label("__rt_preg_match_capture_offset_nonnegative");
-    emitter.instruction("cmp x9, #0");                                          // reject positions before the subject
-    emitter.instruction("b.lt __rt_preg_match_capture_invalid_offset");         // release capture resources on invalid offsets
+    emitter.instruction("cmp x9, #0");                                          // php clamps a negative position to the subject start
+    emitter.instruction("csel x9, xzr, x9, lt");                                // a still-negative start becomes offset zero
     emitter.instruction(&format!("ldr x10, [sp, #{}]", subject_len_off));       // load subject length for upper-bound validation
-    emitter.instruction("cmp x9, x10");                                         // allow the trailing byte boundary only
-    emitter.instruction("b.gt __rt_preg_match_capture_invalid_offset");         // reject offsets beyond the subject
     emitter.instruction(&format!("str x9, [sp, #{}]", offset_off));             // persist the normalized offset for execution flags and output offsets
     emitter.instruction(&format!("ldr x11, [sp, #{}]", regmatches_ptr_off));    // load dynamic pair buffer
     emitter.instruction("str x9, [x11]");                                       // seed REG_STARTEND start bound
@@ -638,10 +645,6 @@ fn emit_preg_match_capture_arm64(emitter: &mut Emitter) {
     emitter.instruction(&format!("ldr x2, [sp, #{}]", nmatch_off));             // request one regmatch slot for every capture group
     emitter.instruction(&format!("ldr x3, [sp, #{}]", regmatches_ptr_off));     // pass dynamic fixed offset-pair buffer
     emitter.instruction("mov x4, #128");                                        // REG_STARTEND searches from the normalized byte offset
-    emitter.instruction(&format!("ldr x9, [sp, #{}]", offset_off));             // reload the normalized starting offset
-    emitter.instruction("cmp x9, #0");                                          // a non-zero start is not the beginning of the full subject
-    emitter.instruction("orr x10, x4, #4");                                     // REG_NOTBOL keeps ^ anchored to the full subject
-    emitter.instruction("csel x4, x10, x4, gt");                                // add REG_NOTBOL only for positive offsets
     emitter.bl_c("elephc_pcre2_v1_exec");                                       // execute and initialize every requested offset pair
     emitter.instruction(&format!("str x0, [sp, #{}]", regexec_result_off));     // save regexec status across the matches construction
     emitter.instruction("cbnz x0, __rt_preg_match_capture_no_match");           // no match releases the pattern and capture storage
@@ -684,6 +687,11 @@ fn emit_preg_match_capture_arm64(emitter: &mut Emitter) {
     emitter.instruction(&format!("ldr x1, [sp, #{}]", regmatches_ptr_off));     // pass the populated offset-pair vector
     emitter.instruction(&format!("ldr x2, [sp, #{}]", max_group_off));          // pass the highest capture index to materialize
     emitter.instruction(&format!("ldr x3, [sp, #{}]", subject_cstr_off));       // pass the subject base those offsets index into
+    emitter.instruction(&format!("ldr x9, [sp, #{}]", php_flags_off));          // reload PHP's preg_match() flags
+    emitter.instruction("mov x4, #1");                                          // an unmatched group is an empty string by default
+    emitter.instruction("mov x10, #8");                                         // runtime value tag 8 = null
+    emitter.instruction("tst x9, #512");                                        // PREG_UNMATCHED_AS_NULL turns the unmatched text into null
+    emitter.instruction("csel x4, x10, x4, ne");                                // pass the tag an unmatched group takes
     emitter.instruction("bl __rt_preg_offset_matches");                         // build PHP's offset-capture hash under both key kinds
     emitter.instruction(&format!("str x0, [sp, #{}]", matches_array_off));      // the offset hash is the finished matches array
     emitter.instruction("b __rt_preg_match_capture_mark");                      // append `MARK` last when the match set one
@@ -742,7 +750,6 @@ fn emit_preg_match_capture_arm64(emitter: &mut Emitter) {
     emitter.instruction("add x12, x12, #1");                                    // advance to next capture index
     emitter.instruction(&format!("str x12, [sp, #{}]", group_idx_off));         // save next capture index
     emitter.instruction("b __rt_preg_match_capture_group_loop");                // continue materializing captures
-
 
     // -- named captures: PHP writes each name immediately before its own numeric key --
     emitter.label("__rt_preg_match_capture_named");
@@ -867,10 +874,6 @@ fn emit_preg_match_capture_arm64(emitter: &mut Emitter) {
     emitter.bl_c("elephc_pcre2_v1_free");                                       // release compiled regex resources
     emitter.instruction("b __rt_preg_match_capture_free_pairs");                // share the capture-buffer cleanup
 
-    emitter.label("__rt_preg_match_capture_invalid_offset");
-    emitter.instruction(&format!("ldr x0, [sp, #{}]", handle_off));             // reload compiled handle for invalid-offset cleanup
-    emitter.bl_c("elephc_pcre2_v1_free");                                       // release compiled regex resources
-
     emitter.label("__rt_preg_match_capture_free_pairs");
     emitter.instruction(&format!("ldr x0, [sp, #{}]", regmatches_ptr_off));     // reload dynamic capture buffer for cleanup
     emitter.bl_c("free");                                                       // free the dynamic offset-pair vector before returning an empty matches array
@@ -953,11 +956,10 @@ fn emit_preg_match_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("jge __rt_preg_match_offset_nonnegative_linux_x86_64"); // keep non-negative offsets unchanged
     emitter.instruction(&format!("add r9, QWORD PTR [rsp + {}]", subject_len_off)); // convert negative offset to an absolute byte position
     emitter.label("__rt_preg_match_offset_nonnegative_linux_x86_64");
-    emitter.instruction("cmp r9, 0");                                           // reject positions before the subject start
-    emitter.instruction("jl __rt_preg_match_cleanup_no_linux_x86_64");          // release the compiled handle on invalid offsets
+    emitter.instruction("xor r11d, r11d");                                      // php clamps a negative position to the subject start
+    emitter.instruction("cmp r9, 0");                                           // is the normalized start still before the subject?
+    emitter.instruction("cmovl r9, r11");                                       // a still-negative start becomes offset zero
     emitter.instruction(&format!("mov r10, QWORD PTR [rsp + {}]", subject_len_off)); // load subject byte length for upper-bound validation
-    emitter.instruction("cmp r9, r10");                                         // allow the trailing byte boundary only
-    emitter.instruction("jg __rt_preg_match_cleanup_no_linux_x86_64");          // reject positions beyond the subject
     emitter.instruction(&format!("mov QWORD PTR [rsp + {}], r9", match_pair_off)); // seed REG_STARTEND start bound
     emitter.instruction(&format!("mov QWORD PTR [rsp + {}], r10", match_pair_off + 8)); // seed REG_STARTEND end bound
     emitter.instruction(&format!("mov rdi, QWORD PTR [rsp + {}]", handle_off)); // pass compiled opaque handle
@@ -965,10 +967,6 @@ fn emit_preg_match_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov edx, 1");                                          // request only the full-match pair
     emitter.instruction(&format!("lea rcx, [rsp + {}]", match_pair_off));       // receive one fixed signed-64-bit offset pair
     emitter.instruction("mov r8d, 128");                                        // REG_STARTEND preserves full-subject anchor semantics with offsets
-    emitter.instruction(&format!("cmp QWORD PTR [rsp + {}], 0", match_pair_off)); // a non-zero start is not the beginning of the full subject
-    emitter.instruction("jle __rt_preg_match_exec_flags_ready_linux_x86_64");   // retain only REG_STARTEND at offset zero
-    emitter.instruction("or r8d, 4");                                           // REG_NOTBOL keeps ^ anchored to the full subject
-    emitter.label("__rt_preg_match_exec_flags_ready_linux_x86_64");
     emitter.bl_c("elephc_pcre2_v1_exec");                                       // execute without exposing PCRE2-owned layouts
     emitter.instruction(&format!("mov DWORD PTR [rsp + {}], eax", regexec_result_off)); // preserve the regexec() result code across the mandatory regfree() cleanup call
     emitter.instruction(&format!("mov rdi, QWORD PTR [rsp + {}]", handle_off)); // reload compiled opaque handle
@@ -978,11 +976,6 @@ fn emit_preg_match_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("jnz __rt_preg_match_no_linux_x86_64");                 // return zero when PCRE2 regex execution reports no match
     emitter.instruction("mov eax, 1");                                          // return one when PCRE2 regex execution reports a successful match
     emitter.instruction("jmp __rt_preg_match_ret_linux_x86_64");                // share the common epilogue after materializing the successful match result
-
-    emitter.label("__rt_preg_match_cleanup_no_linux_x86_64");
-    emitter.instruction(&format!("mov rdi, QWORD PTR [rsp + {}]", handle_off)); // reload compiled handle for invalid-offset cleanup
-    emitter.bl_c("elephc_pcre2_v1_free");                                       // release compiled regex resources before reporting no match
-    emitter.instruction("jmp __rt_preg_match_no_linux_x86_64");                 // share the zero-result path
 
     emitter.label("__rt_preg_match_no_linux_x86_64");
     emitter.instruction("xor eax, eax");                                        // return zero when the subject does not match
@@ -1072,11 +1065,10 @@ fn emit_preg_match_capture_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("jge __rt_preg_match_capture_offset_nonnegative_linux_x86_64"); // keep non-negative offsets unchanged
     emitter.instruction(&format!("add r9, QWORD PTR [rsp + {}]", subject_len_off)); // convert negative offset to an absolute byte position
     emitter.label("__rt_preg_match_capture_offset_nonnegative_linux_x86_64");
-    emitter.instruction("cmp r9, 0");                                           // reject positions before the subject start
-    emitter.instruction("jl __rt_preg_match_capture_invalid_offset_linux_x86_64"); // release capture resources on invalid offsets
+    emitter.instruction("xor r11d, r11d");                                      // php clamps a negative position to the subject start
+    emitter.instruction("cmp r9, 0");                                           // is the normalized start still before the subject?
+    emitter.instruction("cmovl r9, r11");                                       // a still-negative start becomes offset zero
     emitter.instruction(&format!("mov r10, QWORD PTR [rsp + {}]", subject_len_off)); // load subject length for upper-bound validation
-    emitter.instruction("cmp r9, r10");                                         // allow the trailing byte boundary only
-    emitter.instruction("jg __rt_preg_match_capture_invalid_offset_linux_x86_64"); // reject offsets beyond the subject
     emitter.instruction(&format!("mov QWORD PTR [rsp + {}], r9", offset_off));  // persist the normalized offset for execution flags and output offsets
     emitter.instruction(&format!("mov r11, QWORD PTR [rsp + {}]", regmatches_ptr_off)); // load dynamic pair buffer
     emitter.instruction("mov QWORD PTR [r11], r9");                             // seed REG_STARTEND start bound
@@ -1086,10 +1078,6 @@ fn emit_preg_match_capture_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction(&format!("mov rdx, QWORD PTR [rsp + {}]", nmatch_off)); // request one regmatch slot for every capture group
     emitter.instruction(&format!("mov rcx, QWORD PTR [rsp + {}]", regmatches_ptr_off)); // pass dynamic fixed offset-pair buffer
     emitter.instruction("mov r8d, 128");                                        // REG_STARTEND searches from the normalized byte offset
-    emitter.instruction(&format!("cmp QWORD PTR [rsp + {}], 0", offset_off));   // a non-zero start is not the beginning of the full subject
-    emitter.instruction("jle __rt_preg_match_capture_exec_flags_ready_linux_x86_64"); // retain only REG_STARTEND at offset zero
-    emitter.instruction("or r8d, 4");                                           // REG_NOTBOL keeps ^ anchored to the full subject
-    emitter.label("__rt_preg_match_capture_exec_flags_ready_linux_x86_64");
     emitter.bl_c("elephc_pcre2_v1_exec");                                       // execute and initialize every requested offset pair
     emitter.instruction(&format!("mov DWORD PTR [rsp + {}], eax", regexec_result_off)); // save regexec status across the matches construction
     emitter.instruction("test eax, eax");                                       // was there a successful regex match?
@@ -1134,6 +1122,10 @@ fn emit_preg_match_capture_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction(&format!("mov rsi, QWORD PTR [rsp + {}]", regmatches_ptr_off)); // pass the populated offset-pair vector
     emitter.instruction(&format!("mov rdx, QWORD PTR [rsp + {}]", max_group_off)); // pass the highest capture index to materialize
     emitter.instruction(&format!("mov rcx, QWORD PTR [rsp + {}]", subject_cstr_off)); // pass the subject base those offsets index into
+    emitter.instruction("mov r8d, 1");                                          // an unmatched group is an empty string by default
+    emitter.instruction("mov r10d, 8");                                         // runtime value tag 8 = null
+    emitter.instruction(&format!("test QWORD PTR [rsp + {}], 512", php_flags_off)); // PREG_UNMATCHED_AS_NULL turns the unmatched text into null
+    emitter.instruction("cmovnz r8, r10");                                      // pass the tag an unmatched group takes
     emitter.instruction("call __rt_preg_offset_matches");                       // build PHP's offset-capture hash under both key kinds
     emitter.instruction(&format!("mov QWORD PTR [rsp + {}], rax", matches_array_off)); // the offset hash is the finished matches array
     emitter.instruction("jmp __rt_preg_match_capture_mark_linux_x86_64");       // append `MARK` last when the match set one
@@ -1194,7 +1186,6 @@ fn emit_preg_match_capture_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction(&format!("mov QWORD PTR [rsp + {}], r9", group_idx_off)); // save next capture index
     emitter.instruction("jmp __rt_preg_match_capture_group_loop_linux_x86_64"); // continue materializing captures
 
-
     // -- named captures: PHP writes each name immediately before its own numeric key --
     emitter.label("__rt_preg_match_capture_named_linux_x86_64");
     emitter.instruction(&format!("mov rdi, QWORD PTR [rsp + {}]", nmatch_off)); // size the table from the compiled capture count
@@ -1249,7 +1240,7 @@ fn emit_preg_match_capture_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction(&format!("mov rdx, QWORD PTR [rsp + {}]", value_len_off)); // capture length, kept as-is for a null entry
     emitter.instruction(&format!("cmp QWORD PTR [rsp + {}], 8", value_tag_off)); // a null capture owns no string bytes
     emitter.instruction("je __rt_preg_match_capture_named_key_null_linux_x86_64"); // skip the persist for null entries
-    emitter.instruction(&format!("mov rdi, QWORD PTR [rsp + {}]", value_ptr_off)); // reload the capture pointer to persist
+    emitter.instruction(&format!("mov rax, QWORD PTR [rsp + {}]", value_ptr_off)); // reload the capture pointer to persist
     emitter.instruction(&format!("mov rdx, QWORD PTR [rsp + {}]", value_len_off)); // reload the capture length to persist
     emitter.instruction("call __rt_str_persist");                               // the named entry owns its own copy of the capture bytes
     emitter.label("__rt_preg_match_capture_named_key_null_linux_x86_64");
@@ -1266,7 +1257,7 @@ fn emit_preg_match_capture_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction(&format!("mov rdx, QWORD PTR [rsp + {}]", value_len_off)); // capture length, kept as-is for a null entry
     emitter.instruction(&format!("cmp QWORD PTR [rsp + {}], 8", value_tag_off)); // a null capture owns no string bytes
     emitter.instruction("je __rt_preg_match_capture_named_int_null_linux_x86_64"); // skip the persist for null entries
-    emitter.instruction(&format!("mov rdi, QWORD PTR [rsp + {}]", value_ptr_off)); // reload the capture pointer to persist
+    emitter.instruction(&format!("mov rax, QWORD PTR [rsp + {}]", value_ptr_off)); // reload the capture pointer to persist
     emitter.instruction(&format!("mov rdx, QWORD PTR [rsp + {}]", value_len_off)); // reload the capture length to persist
     emitter.instruction("call __rt_str_persist");                               // the numeric entry owns its own copy of the capture bytes
     emitter.label("__rt_preg_match_capture_named_int_null_linux_x86_64");
@@ -1294,7 +1285,7 @@ fn emit_preg_match_capture_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("call __rt_hash_normalize_key");                        // apply PHP's numeric-string key normalization
     emitter.instruction(&format!("mov QWORD PTR [rsp + {}], rax", key_lo_off)); // hold the normalized key across the value persist
     emitter.instruction(&format!("mov QWORD PTR [rsp + {}], rdx", key_hi_off)); // hold the key discriminant across the value persist
-    emitter.instruction(&format!("mov rdi, QWORD PTR [rsp + {}]", mark_ptr_off)); // the mark name is the entry value
+    emitter.instruction(&format!("mov rax, QWORD PTR [rsp + {}]", mark_ptr_off)); // the mark name is the entry value
     emitter.instruction(&format!("mov rdx, QWORD PTR [rsp + {}]", mark_len_off)); // pass the mark name length
     emitter.instruction("call __rt_str_persist");                               // the array owns its own copy of the mark bytes
     emitter.instruction("mov rcx, rax");                                        // pass the persisted mark as the entry value payload
@@ -1319,10 +1310,6 @@ fn emit_preg_match_capture_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction(&format!("mov rdi, QWORD PTR [rsp + {}]", handle_off)); // reload compiled handle for the no-match cleanup path
     emitter.bl_c("elephc_pcre2_v1_free");                                       // release compiled regex resources
     emitter.instruction("jmp __rt_preg_match_capture_free_pairs_linux_x86_64"); // share the capture-buffer cleanup
-
-    emitter.label("__rt_preg_match_capture_invalid_offset_linux_x86_64");
-    emitter.instruction(&format!("mov rdi, QWORD PTR [rsp + {}]", handle_off)); // reload compiled handle for invalid-offset cleanup
-    emitter.bl_c("elephc_pcre2_v1_free");                                       // release compiled regex resources
 
     emitter.label("__rt_preg_match_capture_free_pairs_linux_x86_64");
     emitter.instruction(&format!("mov rdi, QWORD PTR [rsp + {}]", regmatches_ptr_off)); // reload dynamic capture buffer for cleanup
@@ -1365,7 +1352,8 @@ fn emit_preg_offset_pair_linux_x86_64(emitter: &mut Emitter) {
     let text_ptr_off = pair_off + 8;
     let text_len_off = text_ptr_off + 8;
     let byte_offset_off = text_len_off + 8;
-    let stack_size = (byte_offset_off + 8 + 16 + 15) & !15;
+    let text_tag_off = byte_offset_off + 8;
+    let stack_size = (text_tag_off + 8 + 16 + 15) & !15;
 
     emitter.blank();
     emitter.comment("--- runtime: preg_offset_pair ---");
@@ -1377,20 +1365,29 @@ fn emit_preg_offset_pair_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction(&format!("mov QWORD PTR [rsp + {}], rdi", text_ptr_off)); // hold the capture pointer across helper calls
     emitter.instruction(&format!("mov QWORD PTR [rsp + {}], rsi", text_len_off)); // hold the capture length across helper calls
     emitter.instruction(&format!("mov QWORD PTR [rsp + {}], rdx", byte_offset_off)); // hold the capture byte offset across helper calls
+    emitter.instruction(&format!("mov QWORD PTR [rsp + {}], rcx", text_tag_off)); // hold the runtime tag the text entry takes (string, or null under PREG_UNMATCHED_AS_NULL)
 
     emitter.instruction("mov edi, 2");                                          // PHP's offset pair has exactly two numeric keys
     emitter.instruction("mov esi, 7");                                          // mixed-valued hash: key 0 is a string and key 1 an int
     emitter.instruction("call __rt_hash_new");                                  // allocate the ordered two-entry pair
     emitter.instruction(&format!("mov QWORD PTR [rsp + {}], rax", pair_off));   // save the pair across the inserts
 
-    emitter.instruction(&format!("mov rdi, QWORD PTR [rsp + {}]", text_ptr_off)); // reload the capture pointer to persist
+    emitter.instruction(&format!("cmp QWORD PTR [rsp + {}], 8", text_tag_off));   // PREG_UNMATCHED_AS_NULL stores null instead of a string
+    emitter.instruction("je __rt_preg_offset_pair_null_text_linux_x86_64");     // a null text owns no bytes to persist
+    emitter.instruction(&format!("mov rax, QWORD PTR [rsp + {}]", text_ptr_off)); // reload the capture pointer to persist
     emitter.instruction(&format!("mov rdx, QWORD PTR [rsp + {}]", text_len_off)); // reload the capture length to persist
     emitter.instruction("call __rt_str_persist");                               // the pair owns its own copy of the capture bytes
     emitter.instruction("mov rcx, rax");                                        // pass the persisted capture as the entry value payload
     emitter.instruction("mov r8, rdx");                                         // pass the persisted capture length
+    emitter.instruction("mov r9d, 1");                                          // runtime value tag 1 = string
+    emitter.instruction("jmp __rt_preg_offset_pair_text_ready_linux_x86_64");   // publish the owned text
+    emitter.label("__rt_preg_offset_pair_null_text_linux_x86_64");
+    emitter.instruction("xor ecx, ecx");                                        // a null entry has no payload
+    emitter.instruction("xor r8d, r8d");                                        // a null entry has no high word
+    emitter.instruction("mov r9d, 8");                                          // runtime value tag 8 = null
+    emitter.label("__rt_preg_offset_pair_text_ready_linux_x86_64");
     emitter.instruction("xor esi, esi");                                        // numeric key 0 carries the captured text
     emitter.instruction("mov rdx, -1");                                         // a key discriminant of -1 marks an integer key
-    emitter.instruction("mov r9d, 1");                                          // runtime value tag 1 = string
     emitter.instruction(&format!("mov rdi, QWORD PTR [rsp + {}]", pair_off));   // reload the pair receiver
     emitter.instruction("call __rt_hash_set");                                  // publish the captured text at key zero
     emitter.instruction(&format!("mov QWORD PTR [rsp + {}], rax", pair_off));   // save a possibly-grown pair pointer
@@ -1430,7 +1427,9 @@ fn emit_preg_offset_matches_linux_x86_64(emitter: &mut Emitter) {
     let name_len_off = name_ptr_off + 8;
     let key_lo_off = name_len_off + 8;
     let key_hi_off = key_lo_off + 8;
-    let stack_size = (key_hi_off + 8 + 32 + 15) & !15;
+    let unmatched_tag_off = key_hi_off + 8;
+    let value_tag_off = unmatched_tag_off + 8;
+    let stack_size = (value_tag_off + 8 + 32 + 15) & !15;
 
     emitter.blank();
     emitter.comment("--- runtime: preg_offset_matches ---");
@@ -1443,6 +1442,7 @@ fn emit_preg_offset_matches_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction(&format!("mov QWORD PTR [rsp + {}], rsi", pairs_off));  // hold the populated offset-pair vector
     emitter.instruction(&format!("mov QWORD PTR [rsp + {}], rdx", max_group_off)); // hold the highest capture index to materialize
     emitter.instruction(&format!("mov QWORD PTR [rsp + {}], rcx", subject_off)); // hold the subject base the offsets index into
+    emitter.instruction(&format!("mov QWORD PTR [rsp + {}], r8", unmatched_tag_off)); // hold the runtime tag an unmatched group takes (string, or null under PREG_UNMATCHED_AS_NULL)
 
     emitter.instruction(&format!("mov rdi, QWORD PTR [rsp + {}]", max_group_off)); // size the table from the emitted capture count
     emitter.instruction("add rdi, 1");                                          // the highest index is inclusive
@@ -1469,11 +1469,14 @@ fn emit_preg_offset_matches_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rdx, rcx");                                        // copy capture end offset before subtracting start
     emitter.instruction("sub rdx, r11");                                        // capture length = rm_eo - rm_so
     emitter.instruction(&format!("mov QWORD PTR [rsp + {}], r11", value_off_off)); // the capture start is PHP's reported byte offset
+    emitter.instruction(&format!("mov QWORD PTR [rsp + {}], 1", value_tag_off)); // a participating group's text is always a string
     emitter.instruction("jmp __rt_preg_offset_matches_value_linux_x86_64");     // insert this capture under every key it owns
     emitter.label("__rt_preg_offset_matches_unmatched_linux_x86_64");
     emitter.instruction("xor esi, esi");                                        // an unmatched capture has an empty string
     emitter.instruction("xor edx, edx");                                        // an unmatched capture has zero length
     emitter.instruction(&format!("mov QWORD PTR [rsp + {}], -1", value_off_off)); // PHP reports -1 as the unmatched capture offset
+    emitter.instruction(&format!("mov r9, QWORD PTR [rsp + {}]", unmatched_tag_off)); // an unmatched group reports the caller's tag
+    emitter.instruction(&format!("mov QWORD PTR [rsp + {}], r9", value_tag_off)); // remember the text tag for both key kinds
     emitter.label("__rt_preg_offset_matches_value_linux_x86_64");
     emitter.instruction(&format!("mov QWORD PTR [rsp + {}], rsi", value_ptr_off)); // hold the capture pointer across helper calls
     emitter.instruction(&format!("mov QWORD PTR [rsp + {}], rdx", value_len_off)); // hold the capture length across helper calls
@@ -1493,6 +1496,7 @@ fn emit_preg_offset_matches_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction(&format!("mov rdi, QWORD PTR [rsp + {}]", value_ptr_off)); // reload the capture pointer for this entry's pair
     emitter.instruction(&format!("mov rsi, QWORD PTR [rsp + {}]", value_len_off)); // reload the capture length for this entry's pair
     emitter.instruction(&format!("mov rdx, QWORD PTR [rsp + {}]", value_off_off)); // reload the capture byte offset for this entry's pair
+    emitter.instruction(&format!("mov rcx, QWORD PTR [rsp + {}]", value_tag_off)); // reload the runtime tag of this entry's text
     emitter.instruction("call __rt_preg_offset_pair");                          // the named entry owns its own [text, offset] pair
     emitter.instruction("mov rcx, rax");                                        // pass the pair as the entry value payload
     emitter.instruction("xor r8d, r8d");                                        // an array payload has no high word
@@ -1507,6 +1511,7 @@ fn emit_preg_offset_matches_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction(&format!("mov rdi, QWORD PTR [rsp + {}]", value_ptr_off)); // reload the capture pointer for the numeric entry
     emitter.instruction(&format!("mov rsi, QWORD PTR [rsp + {}]", value_len_off)); // reload the capture length for the numeric entry
     emitter.instruction(&format!("mov rdx, QWORD PTR [rsp + {}]", value_off_off)); // reload the capture byte offset for the numeric entry
+    emitter.instruction(&format!("mov rcx, QWORD PTR [rsp + {}]", value_tag_off)); // reload the runtime tag of this entry's text
     emitter.instruction("call __rt_preg_offset_pair");                          // the numeric entry owns its own [text, offset] pair
     emitter.instruction("mov rcx, rax");                                        // pass the pair as the entry value payload
     emitter.instruction("xor r8d, r8d");                                        // an array payload has no high word
@@ -1667,7 +1672,7 @@ fn emit_preg_match_row_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("call __rt_hash_normalize_key");                        // apply PHP's numeric-string key normalization
     emitter.instruction(&format!("mov QWORD PTR [rsp + {}], rax", key_lo_off)); // hold the normalized key across the value persist
     emitter.instruction(&format!("mov QWORD PTR [rsp + {}], rdx", key_hi_off)); // hold the key discriminant across the value persist
-    emitter.instruction(&format!("mov rdi, QWORD PTR [rsp + {}]", value_ptr_off)); // reload the capture pointer to persist
+    emitter.instruction(&format!("mov rax, QWORD PTR [rsp + {}]", value_ptr_off)); // reload the capture pointer to persist
     emitter.instruction(&format!("mov rdx, QWORD PTR [rsp + {}]", value_len_off)); // reload the capture length to persist
     emitter.instruction("call __rt_str_persist");                               // the named entry owns its own copy of the capture bytes
     emitter.instruction("mov rcx, rax");                                        // pass the persisted capture as the entry value payload
@@ -1680,7 +1685,7 @@ fn emit_preg_match_row_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction(&format!("mov QWORD PTR [rsp + {}], rax", out_off));    // save a possibly-grown row hash pointer
 
     emitter.label("__rt_preg_match_row_named_int_linux_x86_64");
-    emitter.instruction(&format!("mov rdi, QWORD PTR [rsp + {}]", value_ptr_off)); // reload the capture pointer to persist
+    emitter.instruction(&format!("mov rax, QWORD PTR [rsp + {}]", value_ptr_off)); // reload the capture pointer to persist
     emitter.instruction(&format!("mov rdx, QWORD PTR [rsp + {}]", value_len_off)); // reload the capture length to persist
     emitter.instruction("call __rt_str_persist");                               // the numeric entry owns its own copy of the capture bytes
     emitter.instruction("mov rcx, rax");                                        // pass the persisted capture as the entry value payload
@@ -1707,7 +1712,7 @@ fn emit_preg_match_row_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("call __rt_hash_normalize_key");                        // apply PHP's numeric-string key normalization
     emitter.instruction(&format!("mov QWORD PTR [rsp + {}], rax", key_lo_off)); // hold the normalized key across the value persist
     emitter.instruction(&format!("mov QWORD PTR [rsp + {}], rdx", key_hi_off)); // hold the key discriminant across the value persist
-    emitter.instruction(&format!("mov rdi, QWORD PTR [rsp + {}]", mark_ptr_off)); // the mark name is the entry value
+    emitter.instruction(&format!("mov rax, QWORD PTR [rsp + {}]", mark_ptr_off)); // the mark name is the entry value
     emitter.instruction(&format!("mov rdx, QWORD PTR [rsp + {}]", mark_len_off)); // pass the mark name length
     emitter.instruction("call __rt_str_persist");                               // the row owns its own copy of the mark bytes
     emitter.instruction("mov rcx, rax");                                        // pass the persisted mark as the entry value payload
@@ -1772,5 +1777,36 @@ mod tests {
                 "{name} never defines the offset pair builder"
             );
         }
+    }
+
+    /// Verifies the x86_64 emitters hand `__rt_str_persist` its string in `rax`/`rdx`.
+    ///
+    /// The helper reads the x86_64 string result pair, not the SysV argument registers: loading
+    /// the pointer into `rdi` made every MARK value and offset-capture text a copy of whatever
+    /// `rax` last held. Each `call __rt_str_persist` must follow a `mov rax, ...` load of the
+    /// source pointer and a `mov rdx, ...` load of its length, never a `mov rdi, ...`.
+    #[test]
+    fn test_x86_64_preg_helpers_pass_the_string_to_str_persist_in_rax() {
+        let mut emitter = Emitter::new(Target::new(Platform::Linux, Arch::X86_64));
+        emit_preg_match(&mut emitter);
+        let asm = emitter.output();
+        let lines: Vec<&str> = asm.lines().map(str::trim).collect();
+        let mut calls = 0;
+        for (index, line) in lines.iter().enumerate() {
+            if !line.starts_with("call __rt_str_persist") {
+                continue;
+            }
+            calls += 1;
+            let before = &lines[index - 2..index];
+            assert!(
+                before.iter().any(|l| l.starts_with("mov rax, QWORD PTR [rsp +")),
+                "call #{calls} does not load rax first: {before:?}"
+            );
+            assert!(
+                before.iter().all(|l| !l.starts_with("mov rdi,")),
+                "call #{calls} loads rdi: {before:?}"
+            );
+        }
+        assert!(calls >= 7, "expected the 7 persist call sites, saw {calls}");
     }
 }

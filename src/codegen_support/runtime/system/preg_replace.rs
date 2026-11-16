@@ -183,6 +183,9 @@ pub(crate) fn emit_preg_replace(emitter: &mut Emitter) {
     emitter.instruction("cmp w15, #36");                                        // `\$` escapes a dollar
     emitter.instruction("b.ne __rt_preg_replace_not_escape");
     emitter.label("__rt_preg_replace_escape");
+    emitter.instruction(&format!("ldr x14, [sp, #{}]", output_end_off));        // reload the output guard
+    emitter.instruction("cmp x11, x14");                                        // is there room for the escaped byte?
+    emitter.instruction("b.hs __rt_preg_replace_overflow");                     // fail closed instead of writing past the arena
     emitter.instruction("strb w15, [x11]");                                     // write the escaped byte alone
     emitter.instruction("add x11, x11, #1");                                    // advance output
     emitter.instruction("add x12, x12, #2");                                    // consume the backslash and the escaped byte
@@ -488,6 +491,8 @@ fn emit_preg_replace_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("cmp r9d, 36");                                         // `\$` escapes a dollar
     emitter.instruction("jne __rt_preg_replace_not_escape_linux_x86_64");
     emitter.label("__rt_preg_replace_escape_linux_x86_64");
+    emitter.instruction(&format!("cmp r11, QWORD PTR [rsp + {}]", output_end_off)); // is there room for the escaped byte?
+    emitter.instruction("jae __rt_preg_replace_overflow_linux_x86_64");         // fail closed instead of writing past the arena
     emitter.instruction("mov BYTE PTR [r11], r9b");                             // write the escaped byte alone
     emitter.instruction("add r11, 1");                                          // advance output
     emitter.instruction("add rcx, 2");                                          // consume the backslash and the escaped byte

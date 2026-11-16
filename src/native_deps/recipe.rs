@@ -58,7 +58,7 @@ enum BuiltInRecipe {
 fn built_in_recipe(package: &str, revision: u32) -> Option<BuiltInRecipe> {
     match (package, revision) {
         ("oniguruma", 3) => Some(BuiltInRecipe::Oniguruma),
-        ("pcre2", 12) => Some(BuiltInRecipe::Pcre2),
+        ("pcre2", 13) => Some(BuiltInRecipe::Pcre2),
         ("zlib", 1) => Some(BuiltInRecipe::Zlib),
         ("openssl", 1) => Some(BuiltInRecipe::Openssl),
         ("nghttp2", 2) => Some(BuiltInRecipe::Nghttp2),
@@ -137,12 +137,14 @@ mod tests {
     /// `Compilation failed: ... at offset N`) and adds `elephc_pcre2_v1_last_error_msg`.
     /// Revision 12 merges the main-line and Symfony-branch shim edits (PCRE2_EXTENDED ordering,
     /// global-match progression, capture write-back) under one identity.
+    /// Revision 13 reports a start offset past the subject as php's internal error and words the
+    /// bracket-delimiter and NUL-modifier pattern warnings as php does.
     #[test]
     fn previous_pcre2_recipe_revisions_are_not_dispatched() {
-        for revision in 1..=11 {
+        for revision in 1..=12 {
             assert!(built_in_recipe("pcre2", revision).is_none(), "revision {revision}");
         }
-        assert!(matches!(built_in_recipe("pcre2", 12), Some(BuiltInRecipe::Pcre2)));
+        assert!(matches!(built_in_recipe("pcre2", 13), Some(BuiltInRecipe::Pcre2)));
     }
 
     /// Verifies the dispatcher recognizes curl and every library it links by exact catalog

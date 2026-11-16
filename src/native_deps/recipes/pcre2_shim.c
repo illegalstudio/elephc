@@ -176,6 +176,8 @@ static char elephc_pcre2_v1_warning[512];
 #define ELEPHC_PCRE2_PATTERN_DELIMITER 2
 #define ELEPHC_PCRE2_PATTERN_NO_END 3
 #define ELEPHC_PCRE2_PATTERN_MODIFIER 4
+#define ELEPHC_PCRE2_PATTERN_NO_END_MATCHING 5
+#define ELEPHC_PCRE2_PATTERN_NUL_MODIFIER 6
 static int32_t elephc_pcre2_v1_pending_kind = 0;
 static uint32_t elephc_pcre2_v1_pending_byte = 0;
 static int32_t elephc_pcre2_v1_failure_kind = 0;
@@ -231,6 +233,16 @@ int32_t elephc_pcre2_v1_compile_warning(
         written = snprintf(elephc_pcre2_v1_warning, sizeof(elephc_pcre2_v1_warning),
                            "Warning: %.*s(): No ending delimiter '%c' found\n",
                            (int)function_length, function_name, (int)elephc_pcre2_v1_failure_byte);
+        break;
+    case ELEPHC_PCRE2_PATTERN_NO_END_MATCHING:
+        written = snprintf(elephc_pcre2_v1_warning, sizeof(elephc_pcre2_v1_warning),
+                           "Warning: %.*s(): No ending matching delimiter '%c' found\n",
+                           (int)function_length, function_name, (int)elephc_pcre2_v1_failure_byte);
+        break;
+    case ELEPHC_PCRE2_PATTERN_NUL_MODIFIER:
+        written = snprintf(elephc_pcre2_v1_warning, sizeof(elephc_pcre2_v1_warning),
+                           "Warning: %.*s(): NUL byte is not a valid modifier\n",
+                           (int)function_length, function_name);
         break;
     case ELEPHC_PCRE2_PATTERN_MODIFIER:
         written = snprintf(elephc_pcre2_v1_warning, sizeof(elephc_pcre2_v1_warning),
@@ -431,6 +443,12 @@ int32_t elephc_pcre2_v1_exec(
     if (use_startend) {
         start_offset = offset_pairs[0];
         end_offset = offset_pairs[1];
+        if (start_offset > end_offset && end_offset >= 0 && start_offset <= INT_MAX) {
+            /* A start past the subject is PCRE2's BADOFFSET: php reports false and
+               PREG_INTERNAL_ERROR rather than a plain "no match". */
+            elephc_pcre2_v1_error = 1;
+            return (int32_t)REG_NOMATCH;
+        }
         if (start_offset < 0 || end_offset < start_offset
             || start_offset > INT_MAX || end_offset > INT_MAX) {
             return (int32_t)REG_BADPAT;

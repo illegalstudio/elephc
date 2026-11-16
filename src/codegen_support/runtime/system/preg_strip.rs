@@ -24,6 +24,8 @@ const PATTERN_EMPTY: i64 = 1;
 const PATTERN_DELIMITER: i64 = 2;
 const PATTERN_NO_END: i64 = 3;
 const PATTERN_MODIFIER: i64 = 4;
+const PATTERN_NO_END_MATCHING: i64 = 5;
+const PATTERN_NUL_MODIFIER: i64 = 6;
 
 /// php modifiers and the shim compile flag each one sets (0: accepted, no flag).
 const MODIFIERS: &[(u8, i64)] = &[
@@ -187,10 +189,16 @@ pub(crate) fn emit_preg_strip(emitter: &mut Emitter) {
     emitter.instruction("b __rt_preg_strip_err_record");
     emitter.label("__rt_preg_strip_err_no_end");
     emitter.instruction(&format!("mov x0, #{PATTERN_NO_END}"));
+    emitter.instruction(&format!("mov x12, #{PATTERN_NO_END_MATCHING}"));       // a bracket delimiter reports its mate as "matching"
+    emitter.instruction("cmp w9, w11");                                         // opening and closing delimiter differ for brackets
+    emitter.instruction("csel x0, x12, x0, ne");                                // pick the bracket wording
     emitter.instruction("mov w1, w11");                                         // the delimiter php says it did not find
     emitter.instruction("b __rt_preg_strip_err_record");
     emitter.label("__rt_preg_strip_err_modifier");
     emitter.instruction(&format!("mov x0, #{PATTERN_MODIFIER}"));
+    emitter.instruction(&format!("mov x12, #{PATTERN_NUL_MODIFIER}"));          // a NUL modifier has its own wording
+    emitter.instruction("cmp w9, #0");                                          // is the offending modifier a NUL byte?
+    emitter.instruction("csel x0, x12, x0, eq");                                // pick the NUL wording
     emitter.instruction("mov w1, w9");                                          // the modifier php does not know
     emitter.label("__rt_preg_strip_err_record");
     emitter.instruction("stp x4, x5, [sp, #16]");                               // the C call may clobber what callers keep in x4-x8
@@ -331,9 +339,15 @@ fn emit_preg_strip_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("jmp __rt_preg_strip_err_record_linux_x86_64");
     emitter.label("__rt_preg_strip_err_no_end_linux_x86_64");
     emitter.instruction(&format!("mov r10d, {PATTERN_NO_END}"));                // r11 already holds the missing delimiter
+    emitter.instruction(&format!("mov r9d, {PATTERN_NO_END_MATCHING}"));        // a bracket delimiter reports its mate as "matching"
+    emitter.instruction("cmp r8d, r11d");                                       // opening and closing delimiter differ for brackets
+    emitter.instruction("cmovne r10d, r9d");                                    // pick the bracket wording
     emitter.instruction("jmp __rt_preg_strip_err_record_linux_x86_64");
     emitter.label("__rt_preg_strip_err_modifier_linux_x86_64");
     emitter.instruction(&format!("mov r10d, {PATTERN_MODIFIER}"));
+    emitter.instruction(&format!("mov r9d, {PATTERN_NUL_MODIFIER}"));           // a NUL modifier has its own wording
+    emitter.instruction("test ebx, ebx");                                       // is the offending modifier a NUL byte?
+    emitter.instruction("cmove r10d, r9d");                                     // pick the NUL wording
     emitter.instruction("mov r11d, ebx");                                       // the modifier php does not know
     emitter.label("__rt_preg_strip_err_record_linux_x86_64");
     emitter.instruction("push rax");                                            // the pattern goes on unchanged; its compile will fail
