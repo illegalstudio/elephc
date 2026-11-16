@@ -367,3 +367,21 @@ echo (new First())->show(), (new Second())->show(), (new Both())->show(), $req->
     );
     assert_eq!(out, "rphprqhq|<x><x><x>rxhx");
 }
+
+/// A class's own `use` list keeps an abstract trait method as a requirement even when another
+/// trait in it implements the method, and a wrapper trait's alias of the abstract method stays
+/// abstract: `#[\Override]` on the class method holds in both cases, as in php 8.5.12.
+#[test]
+fn test_trait_requirement_kept_by_class_use_list_and_abstract_alias() {
+    let out = compile_and_run(
+        r#"<?php
+trait NeedsFoo { abstract public function foo(): string; }
+trait GivesFoo { public function foo(): string { return "G"; } }
+trait W { use NeedsFoo, GivesFoo { NeedsFoo::foo as bar; } }
+final class Direct { use NeedsFoo, GivesFoo; #[\Override] public function foo(): string { return "D"; } }
+final class Wrapped { use W; #[\Override] public function bar(): string { return "B"; } }
+echo (new Direct())->foo(), (new Wrapped())->bar(), (new Wrapped())->foo(), "\n";
+"#,
+    );
+    assert_eq!(out, "DBG\n");
+}

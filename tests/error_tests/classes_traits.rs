@@ -196,6 +196,31 @@ final class C { use A, B; }
     );
 }
 
+/// A trait that uses one trait requiring a method and another implementing it has a concrete
+/// method: its users get no requirement, so `#[\Override]` on a class method of that name has
+/// no target, whether the wrapper's traits come in one `use` or in two (php 8.5.12).
+#[test]
+fn test_error_override_on_requirement_satisfied_inside_a_wrapper_trait() {
+    expect_error(
+        r#"<?php
+trait NeedsFoo { abstract public function foo(): string; }
+trait GivesFoo { public function foo(): string { return "G"; } }
+trait W { use NeedsFoo, GivesFoo; }
+class C { use W; #[\Override] public function foo(): string { return "C"; } }
+"#,
+        "C::foo() has #[\\Override] attribute, but no matching parent method was found",
+    );
+    expect_error(
+        r#"<?php
+trait NeedsFoo { abstract public function foo(): string; }
+trait GivesFoo { public function foo(): string { return "G"; } }
+trait W { use NeedsFoo; use GivesFoo; }
+class C { use W; #[\Override] public function foo(): string { return "C"; } }
+"#,
+        "C::foo() has #[\\Override] attribute, but no matching parent method was found",
+    );
+}
+
 /// Verifies that a class using two traits with a property of the same name but
 /// incompatible visibility reports "incompatible duplicate property".
 #[test]
