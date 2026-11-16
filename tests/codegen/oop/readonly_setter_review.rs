@@ -413,3 +413,19 @@ without_opt_test!(test_readonly_setter_tenth_review_nullable_argument_guard_no_i
 without_opt_test!(test_readonly_setter_tenth_review_aot_class_supertype_order_no_ir_opt, test_readonly_setter_tenth_review_aot_class_supertype_order);
 without_opt_test!(test_readonly_setter_tenth_review_eval_self_owner_no_ir_opt, test_readonly_setter_tenth_review_eval_self_owner);
 without_opt_test!(test_readonly_setter_grok_review_mixed_receiver_same_name_no_ir_opt, test_readonly_setter_grok_review_mixed_receiver_same_name);
+
+/// A property shadowing an ancestor's private property keeps its own `readonly` flag.
+#[test]
+fn test_readonly_property_shadowing_private_ancestor_stays_readonly() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+class P { public function __construct(private readonly int $id) {} }
+class C extends P {
+    public function __construct(public readonly int $id) { parent::__construct($id); }
+}
+$c = new C(1);
+try { $c->id = 2; } catch (Error $e) { echo $e->getMessage(), "|"; }
+echo $c->id, "|", var_export((new ReflectionProperty(C::class, 'id'))->isReadOnly(), true);
+"#);
+    assert!(out.success, "{}\n{}", out.stdout, out.stderr);
+    assert_eq!(out.stdout, "Cannot modify readonly property C::$id|1|true");
+}

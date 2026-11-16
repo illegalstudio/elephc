@@ -649,13 +649,15 @@ fn replace_active_property_flags(
     }
     if class.is_readonly_class || prop.readonly {
         state.readonly_properties.insert(prop.name.clone());
+    } else {
+        state.readonly_properties.remove(&prop.name);
     }
     // A hooked property whose hooks touch `$this-><prop>` keeps its backing slot; PHP only
     // refuses a write to a VIRTUAL one, whose hooks never name it.
     if prop.hooks.backed {
         state.backed_hooked_properties.insert(prop.name.clone());
     } else {
-        state.readonly_properties.remove(&prop.name);
+        state.backed_hooked_properties.remove(&prop.name);
     }
     if prop.by_ref {
         state.reference_properties.insert(prop.name.clone());
