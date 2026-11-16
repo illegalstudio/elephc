@@ -61,6 +61,9 @@ fn check_source_with_defines_and_options(
     let ast = parse(&tokens).map_err(|e| e.message.clone())?;
     let define_set: HashSet<String> = defines.iter().map(|define| (*define).to_string()).collect();
     let ast = elephc::conditional::apply(ast, &define_set);
+    // Mirrors `source::finalize_physical_program`: `goto` is lowered per physical file.
+    let ast = elephc::goto_lowering::lower_program(ast, "test.php")
+        .map_err(|error| error.message.clone())?;
     let ast = elephc::autoload::collect_aliases(ast).map_err(|error| error.message)?;
     // Mirrors `pipeline::compile`: the hash prelude declares `HashContext` and the
     // `hash_*` context wrappers, and is injected between alias collection and name

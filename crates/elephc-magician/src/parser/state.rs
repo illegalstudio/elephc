@@ -39,6 +39,9 @@ pub(super) struct Parser {
     pub(super) namespace: String,
     pub(super) imports: NamespaceImports,
     pub(super) allow_use_imports: bool,
+    /// Whether a `goto` or a label has been parsed so far, so jump validation is skipped for
+    /// the fragments that have none.
+    pub(super) saw_jump: bool,
 }
 
 /// A parsed PHP name plus whether it used a leading global namespace separator.
@@ -134,6 +137,7 @@ impl Parser {
             namespace: String::new(),
             imports: NamespaceImports::default(),
             allow_use_imports: true,
+            saw_jump: false,
         }
     }
 
@@ -142,6 +146,9 @@ impl Parser {
         let mut statements = Vec::new();
         while !matches!(self.current(), TokenKind::Eof) {
             statements.extend(self.parse_stmt()?);
+        }
+        if self.saw_jump {
+            super::jumps::validate_jump_scope(&statements)?;
         }
         let cli_superglobals = self.named_cli_superglobals();
         let scope_access_mask = self.scope_access_mask();

@@ -230,6 +230,16 @@ pub enum StmtKind {
     },
     Break(usize),
     Continue(usize),
+    /// `goto name;`: an unconditional jump to the label `name` of the same function or file.
+    ///
+    /// Exists only between the parser and `crate::goto_lowering`, which validates the jump and
+    /// rewrites it into structured control flow. No later pass may see one.
+    Goto(String),
+    /// `name:` at statement position: the target of a `goto`.
+    ///
+    /// `crate::goto_lowering` validates and removes every label. One that reaches a later
+    /// pass, in a tree built without that lowering, is a statement that does nothing.
+    GotoLabel(String),
     ExprStmt(Expr),
     NamespaceDecl {
         name: Option<Name>,

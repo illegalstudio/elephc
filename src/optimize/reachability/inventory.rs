@@ -186,6 +186,8 @@ fn record_statements(group: &mut PreludeGroup, statements: &[Stmt], namespace: O
             | StmtKind::TypedAssign { .. }
             | StmtKind::Throw(_)
             | StmtKind::Break(_)
+            | StmtKind::Goto(_)
+            | StmtKind::GotoLabel(_)
             | StmtKind::Continue(_)
             | StmtKind::ExprStmt(_)
             | StmtKind::UseDecl { .. }

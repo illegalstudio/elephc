@@ -166,8 +166,9 @@ pub(crate) fn declare_strict_types(enabled: bool) {
 /// Applies path-dependent post-parse processing shared by every physical source loader.
 ///
 /// Magic constants retain the real path, strict PHP audits the unfiltered physical
-/// program, and conditional compilation runs last so inactive extension syntax in a
-/// PHP file cannot evade the audit.
+/// program, and conditional compilation runs after it so inactive extension syntax in a
+/// PHP file cannot evade the audit. `goto` lowering closes the sequence, so no later pass
+/// ever sees a jump.
 pub fn finalize_physical_program(
     program: Program,
     source: &str,
@@ -186,7 +187,11 @@ pub fn finalize_physical_program(
     // source text by line: that only means anything while the file is still its own, before
     // include resolution splices every file into one program without rebasing line numbers.
     let program = crate::docblock::apply(program, source);
-    Ok(crate::conditional::apply(program, defines))
+    let program = crate::conditional::apply(program, defines);
+    // Last, on the statements that survive conditional compilation: a label inside an inactive
+    // `ifdef` branch does not exist, and one inside the active branch belongs to the enclosing
+    // statement list once the branch is spliced in.
+    crate::goto_lowering::lower_program(program, &path.display().to_string())
 }
 
 #[cfg(test)]

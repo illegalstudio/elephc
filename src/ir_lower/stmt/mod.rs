@@ -306,6 +306,18 @@ fn lower_stmt_once(ctx: &mut LoweringContext<'_, '_>, stmt: &Stmt) {
         }
         StmtKind::Break(level) => lower_break(ctx, *level),
         StmtKind::Continue(level) => lower_continue(ctx, *level),
+        // `crate::goto_lowering` rewrites every jump into structured control flow before the
+        // frontend runs. EIR lowering keeps per-local facts along structured joins only, so a
+        // jump that arrives here is refused rather than lowered as a bare branch.
+        StmtKind::Goto(_) => {
+            crate::ir_lower::diagnostics::refuse(
+                stmt.span,
+                "Internal compiler error: 'goto' reached EIR lowering without being lowered",
+            );
+            ctx.builder.terminate(Terminator::Unreachable);
+        }
+        // A label that survives belongs to a file without any `goto`: it emits nothing.
+        StmtKind::GotoLabel(_) => {}
         StmtKind::ExprStmt(expr) => {
             let boundary = super::scoped_writes::begin_expression(ctx, expr);
             let value = lower_expr(ctx, expr);

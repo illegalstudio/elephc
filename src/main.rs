@@ -24,6 +24,7 @@ mod exports;
 mod docblock;
 mod func_args;
 mod generics;
+mod goto_lowering;
 mod global_decls;
 mod hash_prelude;
 mod core_prelude;

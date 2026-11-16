@@ -85,7 +85,8 @@ pub(in crate::magic_constants) fn walk_class_method<P: Pass>(
             )
         })
         .collect();
-    let new_body = walk_program(method.body, pass);
+    let walked_body = walk_program(method.body, pass);
+    let new_body = pass.transform_scope_body(walked_body);
     // The return and variadic types are computed INSIDE the method's scope, before leaving it.
     // Inside a struct literal they would be evaluated after `leave_method()`, and a pass that
     // treats a generic method as a template would then see `Box<U>` with the guard already

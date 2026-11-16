@@ -234,6 +234,21 @@ pub(crate) fn is_reserved_class_like_name(name: &str) -> bool {
     .any(|keyword| ident_eq(name, keyword))
 }
 
+/// Returns true when PHP's grammar keeps a word as a keyword, so it cannot name a jump label.
+///
+/// Narrower than `is_reserved_class_like_name`: the scalar type names and `true`, `false`,
+/// `null`, `self` and `parent` are refused only as class-like names. To the grammar they are
+/// ordinary identifiers, and `goto int; int:` is valid PHP.
+pub(crate) fn is_reserved_keyword(name: &str) -> bool {
+    is_reserved_class_like_name(name)
+        && ![
+            "bool", "int", "float", "string", "object", "mixed", "never", "void", "iterable",
+            "self", "parent", "true", "false", "null",
+        ]
+        .iter()
+        .any(|word| ident_eq(name, word))
+}
+
 /// Returns true for PHP statement forms that the eval subset intentionally does not parse yet.
 pub(super) fn is_unsupported_statement_keyword(name: &str) -> bool {
     let _ = name;

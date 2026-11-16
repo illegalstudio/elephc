@@ -12,7 +12,7 @@ mod assign;
 mod blocks;
 mod declare;
 mod ffi;
-mod goto_unsupported;
+mod goto;
 mod names;
 mod namespace_use;
 mod oop;
@@ -238,9 +238,9 @@ fn parse_stmt_dispatch(
                 keyword, span,
             ))
         }
-        Token::Goto => Err(goto_unsupported::reject_goto_statement(span)),
-        Token::Identifier(label) if goto_unsupported::starts_goto_label(tokens, *pos) => {
-            Err(goto_unsupported::reject_goto_label(label, span))
+        Token::Goto => goto::parse_goto(tokens, pos, span),
+        Token::Identifier(label) if goto::starts_goto_label(tokens, *pos) => {
+            Ok(goto::parse_goto_label(label, pos, span))
         }
         Token::Static => {
             if *pos + 1 < tokens.len() && tokens[*pos + 1].0 == Token::DoubleColon {

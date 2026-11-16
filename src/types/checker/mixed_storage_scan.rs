@@ -1053,6 +1053,8 @@ fn collect_stmt_in_current_source_mode(checker: &Checker, stmt: &Stmt, depth: u3
         | StmtKind::ExternGlobalDecl { .. }
         // Leaves: no sub-statements and no sub-expressions.
         | StmtKind::Break(_)
+        | StmtKind::Goto(_)
+        | StmtKind::GotoLabel(_)
         | StmtKind::Continue(_)
         | StmtKind::IncludeOnceMark { .. }
         | StmtKind::NamespaceDecl { .. }

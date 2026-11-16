@@ -107,7 +107,8 @@ mod tests {
     /// BUMPED TO 27: SimpleXML property updates coexist with native variable increment statements.
     /// BUMPED TO 28: function metadata carries a skipped bytecode cache. The source guard
     /// requires a new identity even though the serialized field layout is unchanged.
-    const RECORDED_FINGERPRINT: u64 = 2892519213052870583;
+    /// BUMPED TO 29: `EvalStmt::Goto` and `EvalStmt::Label`, plus `EvalParseError::InvalidJump`.
+    const RECORDED_FINGERPRINT: u64 = 6592147583436788349;
 
     /// Returns a stable fingerprint of every source the stored format depends on.
     ///

@@ -46,6 +46,7 @@ PHP source
   -> Parser
   -> Magic constants
   -> Conditional compilation
+  -> goto lowering
   -> Resolver
   -> NameResolver
   -> Autoload insertion

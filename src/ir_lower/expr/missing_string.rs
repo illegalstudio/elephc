@@ -357,6 +357,8 @@ fn collect_stmt(
         StmtKind::ListUnpack { value, .. } => collect_expr(value, carried, ctx, found),
         StmtKind::Return(None)
         | StmtKind::Break(_)
+        | StmtKind::Goto(_)
+        | StmtKind::GotoLabel(_)
         | StmtKind::Continue(_)
         | StmtKind::Global { .. }
         | StmtKind::NamespaceDecl { .. }

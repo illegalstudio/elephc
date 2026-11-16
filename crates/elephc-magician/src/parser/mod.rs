@@ -17,6 +17,7 @@ pub(crate) mod generics;
 mod docblocks;
 mod cursor;
 mod expressions;
+mod jumps;
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 pub(crate) mod repl;
 pub(crate) mod state;
@@ -31,6 +32,7 @@ use crate::lexer::tokenize;
 use state::Parser;
 
 pub(crate) use cursor::is_reserved_class_like_name as is_reserved_word;
+pub(crate) use cursor::is_reserved_keyword;
 
 /// Parser frames must fit independently of the caller's native Fiber or host-thread stack.
 const PARSER_STACK_BYTES: usize = 16 * 1024 * 1024;

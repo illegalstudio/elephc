@@ -72,7 +72,8 @@ fn stmt_uses_backing_slot(stmt: &Stmt, property: &str) -> bool {
         }
         StmtKind::Synthetic(statements) | StmtKind::IncludeOnceGuard { body: statements, .. }
         | StmtKind::NamespaceBlock { body: statements, .. } => body(statements),
-        StmtKind::Break(_) | StmtKind::Continue(_) | StmtKind::Global { .. }
+        StmtKind::Break(_) | StmtKind::Continue(_) | StmtKind::Goto(_) | StmtKind::GotoLabel(_)
+        | StmtKind::Global { .. }
         | StmtKind::IncludeOnceMark { .. } | StmtKind::NamespaceDecl { .. }
         | StmtKind::UseDecl { .. } | StmtKind::FunctionDecl { .. }
         | StmtKind::FunctionVariantGroup { .. } | StmtKind::FunctionVariantMark { .. }
