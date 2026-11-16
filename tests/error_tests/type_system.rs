@@ -1749,15 +1749,6 @@ fn test_strict_types_numeric_string_into_float_parameter_is_a_run_time_type_erro
         .expect("php throws at run time; it does not refuse the program");
 }
 
-/// Verifies the directive reaches method calls, which php checks at run time too.
-#[test]
-fn test_error_strict_types_rejects_method_argument() {
-    expect_error(
-        "<?php declare(strict_types=1); class C { public function m(int $i) { return $i; } } $c = new C(); echo $c->m(true);",
-        "Method C::m parameter $i expects int, got bool",
-    );
-}
-
 /// Verifies the directive reaches method calls, not just plain functions: the call compiles and
 /// throws `TypeError` at run time.
 #[test]
