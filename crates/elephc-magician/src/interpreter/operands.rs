@@ -169,7 +169,7 @@ pub(in crate::interpreter) fn with_eval_call_arguments_with_modes<V: RuntimeValu
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     let (arguments, receiver_owners) = eval_owned_call_arg_values(args, modes, context, scope, values)?;
     let (borrowed_arguments, argument_owners) = own_evaluated_call_arguments(arguments,
-        |argument, index| modes.by_reference(argument.name.as_deref(), index));
+        |argument, index| modes.needs_evaluation_owner(argument.name.as_deref(), index));
     let receiver_owners = receiver_owners.into_iter().map(RuntimeOwnerSlot::new).collect::<Vec<_>>();
     with_runtime_owners(&(&argument_owners, &receiver_owners), || {
         let result = consume(borrowed_arguments, context, scope, values);

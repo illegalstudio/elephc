@@ -620,6 +620,11 @@ pub trait RuntimeValueOps {
         &mut self, _class_name: &str, _property: &str, _scope: &str,
     ) -> Result<Option<RuntimeCellHandle>, EvalStatus> { Ok(None) }
 
+    /// Physically rebinds an eligible native static declaration to a borrowed persistent reference.
+    fn static_property_reference_bind(
+        &mut self, _class_name: &str, _property: &str, _reference: RuntimeCellHandle,
+    ) -> Result<bool, EvalStatus> { Ok(false) }
+
     /// Checks whether a generated/AOT static property is initialized.
     fn static_property_is_initialized(
         &mut self,
@@ -634,6 +639,15 @@ pub trait RuntimeValueOps {
         property: &str,
         value: RuntimeCellHandle,
     ) -> Result<bool, EvalStatus>;
+
+    /// Consumes one ReflectionClass value argument, retiring conversions before publication when supported.
+    fn static_property_class_set(
+        &mut self, class_name: &str, property: &str, argument: RuntimeCellHandle,
+    ) -> Result<bool, EvalStatus> {
+        let result = self.static_property_set(class_name, property, argument);
+        let cleanup = self.release(argument);
+        match result { Err(status) => Err(status), Ok(updated) => cleanup.map(|()| updated) }
+    }
 
     /// Reads a generated/AOT class-like constant through the generated bridge.
     fn class_constant_get(
@@ -1021,6 +1035,9 @@ pub trait RuntimeValueOps {
 
     /// Reports whether the host stores PHP references independently of eval scope metadata.
     fn supports_persistent_references(&self) -> bool { false }
+
+    /// Native publishers coordinate eval and native declarations from the same original RHS.
+    fn coordinates_property_reference_candidates(&self) -> bool { false }
 
     /// Reports whether a boxed value is a writable persistent PHP reference.
     fn is_reference(&mut self, _value: RuntimeCellHandle) -> Result<bool, EvalStatus> { Ok(false) }

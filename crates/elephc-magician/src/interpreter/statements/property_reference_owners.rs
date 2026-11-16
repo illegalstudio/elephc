@@ -17,7 +17,7 @@ pub(in crate::interpreter) fn eval_property_reference_for_access(
     object: RuntimeCellHandle, property_name: &str,
     context: &mut ElephcEvalContext, values: &mut impl RuntimeValueOps,
 ) -> Result<Option<RuntimeCellHandle>, EvalStatus> {
-    if !context.semantic_profile().contains(elephc_semantics::StrictFeature::Coercions) {
+    if !context.semantic_profile().checked_property_references() {
         return Ok(None);
     }
     let identity = values.object_identity(object)?;
@@ -50,7 +50,7 @@ pub(in crate::interpreter) fn eval_static_property_reference_after_read(
     class_name: &str, property_name: &str, context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<Option<RuntimeCellHandle>, EvalStatus> {
-    if !context.semantic_profile().contains(elephc_semantics::StrictFeature::Coercions) { return Ok(None); }
+    if !context.semantic_profile().checked_property_references() { return Ok(None); }
     let class_name = resolve_eval_static_member_class_name(class_name, context)?;
     let Some((owner, property)) = context.class_property(&class_name, property_name) else { return Ok(None); };
     if !property.is_static() { return Ok(None); }

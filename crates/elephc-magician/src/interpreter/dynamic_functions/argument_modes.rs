@@ -5,7 +5,7 @@
 //! - Eval function, method, constructor, callable and mutating builtin dispatch.
 //!
 //! Key details:
-//! - This is a passing-mode view only; existing binders still own validation and defaults.
+//! - Binders own validation and defaults; this snapshot also identifies early argument retirement.
 //! - Native XML reference selections require write context at their source position.
 
 use super::*;
@@ -17,6 +17,7 @@ pub(in crate::interpreter) struct CallArgumentModes {
     references: Vec<bool>,
     variadic: Option<usize>,
     native_boxed_references: Vec<bool>,
+    converted_argument_retirement: Option<usize>,
 }
 
 impl CallArgumentModes {
@@ -34,7 +35,7 @@ impl CallArgumentModes {
             native_boxed_references: (0..function.param_count()).map(|index| function.param_by_ref(index) && function.param_boxed_ref(index)
                 && super::function_staging::native_reference_uses_boxed_staging(
                     function.param_type(index), function.param_tagged_scalar_ref(index))).collect(),
-            variadic: function.source_variadic_index() }
+            variadic: function.source_variadic_index(), ..Self::default() }
     }
 
     /// Captures a generated method's visible physical slots and source variadic.
@@ -44,7 +45,8 @@ impl CallArgumentModes {
             references: indexes.iter().map(|index| signature.param_by_ref(*index)).collect(),
             native_boxed_references: indexes.iter().map(|index| signature.param_by_ref(*index)
                 && super::function_staging::native_reference_uses_boxed_staging(signature.param_type(*index), false)).collect(),
-            variadic: signature.source_variadic_index().and_then(|physical| indexes.iter().position(|index| *index == physical)) }
+            variadic: signature.source_variadic_index().and_then(|physical| indexes.iter().position(|index| *index == physical)),
+            ..Self::default() }
     }
 
     /// Captures shared builtin reference flags, including named parameters.
@@ -62,6 +64,12 @@ impl CallArgumentModes {
     /// Chooses the declared parameter or the source variadic without rebinding values.
     pub(in crate::interpreter) fn by_reference(&self, name: Option<&str>, position: usize) -> bool {
         self.parameter_index(name, position).and_then(|index| self.references.get(index)).copied().unwrap_or(false)
+    }
+
+    /// Shares exact source ownership when binding or converted-argument retirement can consume it.
+    pub(in crate::interpreter) fn needs_evaluation_owner(&self, name: Option<&str>, position: usize) -> bool {
+        self.by_reference(name, position) || self.converted_argument_retirement.is_some_and(|index|
+            self.parameter_index(name, position) == Some(index))
     }
 
     /// Promotes fresh variables only for native boxed slots that may acquire a lasting cell owner.
@@ -102,6 +110,12 @@ impl CallArgumentModes {
             }
             return Self::default();
         }
+        if context.semantic_profile().checked_property_references()
+            && !is_static && class.eq_ignore_ascii_case("ReflectionClass")
+            && method.eq_ignore_ascii_case("setStaticPropertyValue") {
+            return Self { names: vec!["name".into(), "value".into()],
+                converted_argument_retirement: Some(1), ..Self::default() };
+        }
         let signature = if is_static { context.native_static_method_signature(class, method) }
             else { context.native_method_signature(class, method) };
         signature.map(Self::for_native_signature).unwrap_or_default()
@@ -128,7 +142,7 @@ impl CallArgumentModes {
                         references: signature.parameters.iter().map(|parameter| parameter.by_ref).collect(),
                         native_boxed_references: signature.parameters.iter().map(|parameter|
                             parameter.by_ref && parameter.type_tag == 7).collect(),
-                        variadic: signature.variadic_index },
+                        variadic: signature.variadic_index, ..Self::default() },
                     None => Self::default(),
                 }
             }

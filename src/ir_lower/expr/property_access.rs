@@ -251,11 +251,10 @@ fn bind_property_reference_cell(
     }
 }
 
-/// Binds a local alias directly to a native static property's process-lifetime storage slot.
+/// Binds a local alias to the selected raw or managed native static storage.
 ///
-/// The static symbol owns its payload, so the alias itself is borrowed. Container replacements
-/// written through the alias are immediately visible through `C::$property`, and the same alias
-/// gives `IterStart` a local origin that can reload the replacement after hash growth.
+/// Checked boxed declarations retain their managed cell, so rebinding the property leaves the
+/// original alias alive. Raw static symbols retain their borrowed process-lifetime ABI.
 pub(crate) fn lower_ref_assign_static_property(
     ctx: &mut LoweringContext<'_, '_>,
     target: &str,
@@ -276,7 +275,14 @@ pub(crate) fn lower_ref_assign_static_property(
         Op::LoadStaticPropertyRefCell.default_effects(),
         Some(span),
     );
-    ctx.bind_local_ref_cell_ptr(target, cell_ptr, value_type, Some(span));
+    let managed = static_receiver_class_name(ctx, receiver).and_then(|name| ctx.classes.get(&name))
+        .is_some_and(|class| {
+            let owner = class.static_property_declaring_classes.get(property)
+                .and_then(|name| ctx.classes.get(name)).unwrap_or(class);
+            crate::types::managed_static_property_binding(owner, property, ctx.semantic_profile)
+        });
+    if managed { ctx.bind_owned_local_ref_cell_ptr(target, cell_ptr, value_type, Some(span)); }
+    else { ctx.bind_local_ref_cell_ptr(target, cell_ptr, value_type, Some(span)); }
 }
 
 /// Lowers `$target = &call()`: binds `$target` to the reference cell returned by a

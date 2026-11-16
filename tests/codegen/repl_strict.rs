@@ -55,3 +55,12 @@ fn test_repl_strict_coercions_public_profile_and_recovery() {
     assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
     assert_eq!(String::from_utf8_lossy(&output.stdout), "TF");
 }
+
+/// Checked explicit conversions survive host caching and recover from a source-domain failure.
+#[test]
+fn test_repl_strict_casts_public_domains_and_recovery() {
+    let fixture = Fixture::new();
+    let output = fixture.run("try { echo (int) 'junk'; } catch (ValueError $castError) { echo 'V'; }\necho (int) '7.9';\n", &["--strict-casts"]);
+    assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
+    assert_eq!(String::from_utf8_lossy(&output.stdout), "V7");
+}

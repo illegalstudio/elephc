@@ -338,3 +338,13 @@ pub(in crate::codegen::lower_inst) fn lower_eval_static_property_set(
 ) -> Result<()> {
     eval::lower_eval_static_property_set(ctx, inst, value, class_name, property_name)
 }
+
+/// Probes a known boxed object through its live owning context without retaining or converting it.
+pub(in crate::codegen::lower_inst) fn emit_borrowed_eval_object_is_a(
+    ctx: &mut FunctionContext<'_>, object: ValueId, target: &str,
+) -> Result<()> {
+    ctx.load_value_to_reg(object, abi::int_arg_reg_name(ctx.emitter.target, 1))?;
+    abi::emit_load_int_immediate(ctx.emitter, abi::int_arg_reg_name(ctx.emitter.target, 0), 0);
+    eval::emit_object_relation_target(ctx, target, false);
+    Ok(())
+}

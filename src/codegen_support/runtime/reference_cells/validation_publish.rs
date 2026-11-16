@@ -26,6 +26,8 @@ const SNAPSHOT_PIN: usize = 112;
 const PREVIOUS: usize = 120;
 const INITIALIZATION: usize = 128;
 const ARGUMENT_OWNER: usize = 136;
+const ORIGINAL_SHARED: usize = 144;
+const PROPOSED: usize = 152;
 
 /// Emits publish(context, wrapper, owned_rhs, outcome) with the coordinator's status ABI.
 /// Context and outcome must be valid; the RHS is consumed even on a refused wrapper.
@@ -51,12 +53,30 @@ pub(in crate::codegen_support::runtime) fn emit(emitter: &mut Emitter) {
     abi::emit_reg_move(emitter, abi::int_arg_reg_name(emitter.target, 5), abi::int_arg_reg_name(emitter.target, 4));
     abi::emit_load_int_immediate(emitter, abi::int_arg_reg_name(emitter.target, 4), 0);
     abi::emit_jump(emitter, "__rt_reference_publish_native_body");
+    emitter.label_global("__rt_reference_publish_native_with_source");
+    abi::emit_frame_prologue(emitter, FRAME);
+    for (index, offset) in [CONTEXT, WRAPPER, ORIGINAL, OUTCOME, PROPOSED].into_iter().enumerate() {
+        abi::store_at_offset(emitter, abi::int_arg_reg_name(emitter.target, index), offset);
+    }
+    for offset in [PREVIOUS, INITIALIZATION, ARGUMENT_OWNER] {
+        abi::emit_store_zero_to_local_slot(emitter, offset);
+    }
+    abi::emit_jump(emitter, "__rt_reference_publish_native_initialized");
     emitter.label_global("__rt_reference_publish_native_static_call");
     abi::emit_frame_prologue(emitter, FRAME);
     for (index, offset) in [CONTEXT, WRAPPER, ORIGINAL, OUTCOME, INITIALIZATION, ARGUMENT_OWNER].into_iter().enumerate() {
         abi::store_at_offset(emitter, abi::int_arg_reg_name(emitter.target, index), offset);
     }
     abi::emit_store_zero_to_local_slot(emitter, PREVIOUS);
+    abi::emit_store_zero_to_local_slot(emitter, PROPOSED);
+    abi::load_at_offset(emitter, result, INITIALIZATION);
+    match emitter.target.arch {
+        Arch::AArch64 => emitter.instruction("sub x0, x0, #8"),                 // recover the selected binding before conversion can rebind it
+        Arch::X86_64 => emitter.instruction("sub rax, 8"),                      // recover the selected binding before conversion can rebind it
+    }
+    abi::emit_load_from_address(emitter, abi::int_arg_reg_name(emitter.target, 0), result, 0);
+    abi::emit_call_label(emitter, "__rt_reference_cell_is_shared");
+    abi::store_at_offset(emitter, result, ORIGINAL_SHARED);
     abi::emit_jump(emitter, "__rt_reference_publish_native_initialized");
     emitter.label("__rt_reference_publish_native_body");
     abi::emit_frame_prologue(emitter, FRAME);
@@ -66,6 +86,7 @@ pub(in crate::codegen_support::runtime) fn emit(emitter: &mut Emitter) {
     abi::store_at_offset(emitter, abi::int_arg_reg_name(emitter.target, 4), PREVIOUS);
     abi::store_at_offset(emitter, abi::int_arg_reg_name(emitter.target, 5), INITIALIZATION);
     abi::emit_store_zero_to_local_slot(emitter, ARGUMENT_OWNER);
+    abi::emit_store_zero_to_local_slot(emitter, PROPOSED);
     emitter.label("__rt_reference_publish_native_initialized");
     for offset in [CONTEXT, OUTCOME] {
         abi::load_at_offset(emitter, result, offset);
@@ -94,7 +115,8 @@ pub(in crate::codegen_support::runtime) fn emit(emitter: &mut Emitter) {
     for (index, offset) in [WRAPPER, SNAPSHOT, CONTEXT, OUTCOME].into_iter().enumerate() {
         abi::load_at_offset(emitter, abi::int_arg_reg_name(emitter.target, index), offset);
     }
-    abi::emit_call_label(emitter, "__rt_reference_validate_native");
+    abi::load_at_offset(emitter, abi::int_arg_reg_name(emitter.target, 4), PROPOSED);
+    abi::emit_call_label(emitter, "__rt_reference_validate_native_with_source");
     abi::store_at_offset(emitter, result, STATUS);
     abi::emit_branch_if_int_result_nonzero(emitter, validation_failure);
     abi::load_at_offset(emitter, scratch, OUTCOME);
@@ -132,6 +154,7 @@ pub(in crate::codegen_support::runtime) fn emit(emitter: &mut Emitter) {
     abi::emit_branch_if_zero_wide(emitter, previous, ordinary);
     abi::load_at_offset(emitter, scratch, ARGUMENT_OWNER);
     abi::emit_branch_if_zero_wide(emitter, scratch, ordinary_static);
+    abi::load_at_offset(emitter, abi::int_arg_reg_name(emitter.target, 5), ORIGINAL_SHARED);
     abi::emit_call_label(emitter, "__rt_reference_commit_native_static_call_rooted");
     abi::emit_jump(emitter, committed);
     emitter.label(ordinary_static);

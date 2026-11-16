@@ -88,12 +88,12 @@ mod tests {
     /// Incomplete feature integration is visible to library callers as well as the CLI.
     #[test]
     fn strict_profile_pending_features_are_not_silent_library_noops() {
-        let profile = SemanticProfile::PERMISSIVE.with(StrictFeature::Casts, true);
+        let profile = SemanticProfile::PERMISSIVE.with(StrictFeature::Comparisons, true);
         let error = crate::types::check_with_target_and_options(&Vec::new(),
             crate::codegen::platform::Target::detect_host(),
             crate::types::CheckOptions { semantic_profile: profile, ..Default::default() },
             &crate::generics::GenericContext::default()).unwrap_err();
-        assert!(error.message.contains("strict-casts"));
+        assert!(error.message.contains("strict-comparisons"));
     }
 }
 

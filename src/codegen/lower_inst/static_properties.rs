@@ -82,9 +82,9 @@ pub(super) fn lower_load_static_property(
 
 /// Lowers an addressable native static-property slot for a synthetic reference local.
 ///
-/// By-reference foreach uses the returned process-lifetime address as its relocation origin.
-/// Stores through the alias therefore replace the static property's container pointer directly,
-/// including copy-on-write and hash-growth replacements.
+/// Raw bindings expose their process-lifetime address. Checked bindings expose a managed cell
+/// retained by escaping aliases, so a later property rebind preserves the captured reference.
+/// Container replacements follow that selected cell through COW and hash growth.
 pub(super) fn lower_load_static_property_ref_cell(
     ctx: &mut FunctionContext<'_>,
     inst: &Instruction,

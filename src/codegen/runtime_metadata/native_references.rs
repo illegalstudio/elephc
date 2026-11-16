@@ -24,13 +24,11 @@ pub(in crate::codegen) fn descriptor_symbol(class_id: u64, slot: u32, is_static:
 pub(in crate::codegen) fn checked_boxed_static_descriptor(
     module: &Module, declaring_class: &str, property: &str,
 ) -> Option<String> {
-    if !crate::types::checked_property_references(module.semantic_profile) { return None; }
     let class = module.class_infos.get(declaring_class)?;
-    if class.is_internal || !class.declared_static_properties.contains(property) { return None; }
-    let (index, (_, ty)) = class.static_properties.iter().enumerate()
+    if !crate::types::managed_static_property_binding(class, property, module.semantic_profile) { return None; }
+    let (index, _) = class.static_properties.iter().enumerate()
         .find(|(_, (name, _))| name == property)?;
-    crate::types::canonical_property_reference_payload(ty).is_some()
-        .then(|| descriptor_symbol(class.class_id, index as u32, true))
+    Some(descriptor_symbol(class.class_id, index as u32, true))
 }
 
 /// Emits only selected native callback metadata, rejecting entries with a PHP argument ABI.

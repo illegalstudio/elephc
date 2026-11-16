@@ -368,6 +368,9 @@ impl ElephcEvalContext {
         self.abi_owner_count != 0
     }
 
+    /// Reports whether releasing the current activation can enter final context teardown.
+    pub(crate) fn is_last_abi_owner(&self) -> bool { self.abi_owner_count == 1 }
+
     /// Drops one opaque ABI owner and reports whether the heap context can be destroyed.
     pub(crate) fn release_abi_owner(&mut self) -> bool {
         if self.abi_owner_count == 0 {

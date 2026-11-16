@@ -207,6 +207,22 @@ fallback. After native writeback, activation copies retire through the bounded
 cleanup adapter, preserving interpreter-only bindings and transferring a copied
 lease to a surviving borrowed alias. Global scope remains materialized for
 callbacks between eval entries.
+Checked static reference rebinding uses the scoped declaration selector and a
+rooted staging cell. The version-two validator copies the proposed declaration
+without registering it, so a reentrant coercion can still modify the unbound
+source. Existing declarations and the proposed source see the original RHS.
+Successful publication installs the declaration and removes interpreter-only
+alias indirection; the version-one native validation ABI remains available.
+Native aliases own their managed cells, so replacing a static binding preserves
+aliases of its previous reference. Reflection class setters capture whether that
+reference was shared before conversion. Originally shared references remain the
+write target; otherwise the property receives the converted value even when
+argument retirement introduced another reference. Native and eval class setters
+share exact source-argument ownership and the protected static publisher.
+Eval backing-property unset removes the physical hash entry before releasing its
+owner. Writing null through a stored reference would also change a previously
+captured argument. The protected unset boundary installs any COW table first,
+then removes the entry without republishing storage after a destructor callback.
 Native XML compound concatenation also checks the original property operand.
 The shared `ObjectProperty::UpdateRead` adapter validates the update name and
 returns a read-only selection before either consumer enters the writable update

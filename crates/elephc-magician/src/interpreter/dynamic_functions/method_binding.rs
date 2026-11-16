@@ -1095,10 +1095,10 @@ fn eval_method_default_class_receiver_is_supported(class_name: &str) -> bool {
 }
 
 /// Binds one positional dynamic-call value to the next declared parameter slot.
-pub(in crate::interpreter) fn bind_dynamic_positional_arg(
-    bound_args: &mut [Option<RuntimeCellHandle>],
+pub(in crate::interpreter) fn bind_dynamic_positional_arg<T>(
+    bound_args: &mut [Option<T>],
     next_positional: &mut usize,
-    value: RuntimeCellHandle,
+    value: T,
 ) -> Result<(), EvalStatus> {
     if *next_positional >= bound_args.len() || bound_args[*next_positional].is_some() {
         return Err(EvalStatus::RuntimeFatal);
@@ -1109,11 +1109,11 @@ pub(in crate::interpreter) fn bind_dynamic_positional_arg(
 }
 
 /// Binds one named dynamic-call value to the matching declared parameter slot.
-pub(in crate::interpreter) fn bind_dynamic_named_arg(
+pub(in crate::interpreter) fn bind_dynamic_named_arg<T>(
     params: &[String],
-    bound_args: &mut [Option<RuntimeCellHandle>],
+    bound_args: &mut [Option<T>],
     name: &str,
-    value: RuntimeCellHandle,
+    value: T,
 ) -> Result<(), EvalStatus> {
     let Some(param_index) = params.iter().position(|param| param == name) else {
         return Err(EvalStatus::RuntimeFatal);

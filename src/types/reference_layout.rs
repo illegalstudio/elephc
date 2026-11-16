@@ -12,8 +12,17 @@ use super::{ClassInfo, PhpType};
 
 /// Selects managed declaration storage for independent checked conversion guarantees.
 pub(crate) fn checked_property_references(profile: elephc_semantics::SemanticProfile) -> bool {
-    profile.contains(elephc_semantics::StrictFeature::Casts)
-        || profile.contains(elephc_semantics::StrictFeature::Coercions)
+    profile.checked_property_references()
+}
+
+/// Selects static declarations whose reference aliases need an independent managed-cell owner.
+pub(crate) fn managed_static_property_binding(
+    class: &ClassInfo, property: &str, profile: elephc_semantics::SemanticProfile,
+) -> bool {
+    checked_property_references(profile) && !class.is_internal
+        && class.declared_static_properties.contains(property)
+        && class.static_properties.iter().any(|(name, ty)| name == property
+            && canonical_property_reference_payload(ty).is_some())
 }
 
 /// Keeps declaration types intact while selecting boxed storage for checked static references.
@@ -21,9 +30,7 @@ pub(crate) fn static_property_storage_type(
     class: &ClassInfo, property: &str, profile: elephc_semantics::SemanticProfile,
 ) -> Option<PhpType> {
     let (_, ty) = class.static_properties.iter().find(|(name, _)| name == property)?;
-    Some(if checked_property_references(profile) && !class.is_internal
-        && class.declared_static_properties.contains(property)
-        && canonical_property_reference_payload(ty).is_some()
+    Some(if managed_static_property_binding(class, property, profile)
     { PhpType::Mixed } else { ty.clone() })
 }
 

@@ -21,9 +21,16 @@ pub(super) fn emit(module: &Module, emitter: &mut Emitter, data: &mut DataSectio
     emitter.blank();
     label_c_global(module, emitter, "__elephc_eval_value_static_property_reference");
     match emitter.target.arch {
-        Arch::AArch64 => emit_aarch64(module, emitter, data, &slots),
-        Arch::X86_64 => emit_x86_64(module, emitter, data, &slots),
+        Arch::AArch64 => emit_aarch64(module, emitter, data, &slots, false),
+        Arch::X86_64 => emit_x86_64(module, emitter, data, &slots, false),
     }
+    let slots = slots.into_iter().filter(|slot| checked_descriptor(module, slot).is_some()).collect::<Vec<_>>();
+    label_c_global(module, emitter, "__elephc_eval_value_static_property_binding");
+    match emitter.target.arch {
+        Arch::AArch64 => emit_aarch64(module, emitter, data, &slots, true),
+        Arch::X86_64 => emit_x86_64(module, emitter, data, &slots, true),
+    }
+
 }
 
 /// Emits the scoped static reference lookup with the ordinary getter ABI.
@@ -32,8 +39,10 @@ fn emit_aarch64(
     emitter: &mut Emitter,
     data: &mut DataSection,
     slots: &[EvalStaticPropertySlot],
+    binding: bool,
 ) {
-    let done_label = "__elephc_eval_value_static_property_reference_done";
+    let mode = if binding { "binding" } else { "reference" };
+    let done_label = format!("__elephc_eval_value_static_property_{mode}_done");
     emitter.instruction("sub sp, sp, #64");                                     // reserve helper frame for class/property/scope slices and fp/lr
     emitter.instruction("stp x29, x30, [sp, #48]");                             // preserve the Rust caller frame across runtime calls
     emitter.instruction("add x29, sp, #48");                                    // establish a stable helper frame pointer
@@ -43,11 +52,12 @@ fn emit_aarch64(
     emitter.instruction("str x3, [sp, #24]");                                   // save the requested property-name length
     emitter.instruction("str x4, [sp, #32]");                                   // save the active eval class-scope pointer
     emitter.instruction("str x5, [sp, #40]");                                   // save the active eval class-scope length
-    emit_aarch64_static_property_dispatch(module, emitter, data, slots, "reference");
+    emit_aarch64_static_property_dispatch(module, emitter, data, slots, mode);
     emitter.instruction("mov x0, xzr");                                         // report bridge miss with a null pointer
     emitter.instruction(&format!("b {}", done_label));                          // join the helper epilogue after a miss
-    emit_slot_bodies(module, emitter, slots, done_label);
-    emitter.label(done_label);
+    if binding { emit_binding_bodies(module, emitter, data, slots, &done_label); }
+    else { emit_slot_bodies(module, emitter, slots, &done_label); }
+    emitter.label(&done_label);
     emitter.instruction("ldp x29, x30, [sp, #48]");                             // restore the Rust caller frame
     emitter.instruction("add sp, sp, #64");                                     // release the helper frame
     emitter.instruction("ret");                                                 // return the boxed static property value to Rust
@@ -59,8 +69,10 @@ fn emit_x86_64(
     emitter: &mut Emitter,
     data: &mut DataSection,
     slots: &[EvalStaticPropertySlot],
+    binding: bool,
 ) {
-    let done_label = "__elephc_eval_value_static_property_reference_done_x";
+    let mode = if binding { "binding" } else { "reference" };
+    let done_label = format!("__elephc_eval_value_static_property_{mode}_done_x");
     emitter.instruction("push rbp");                                            // preserve the Rust caller frame pointer
     emitter.instruction("mov rbp, rsp");                                        // establish a stable helper frame pointer
     emitter.instruction("sub rsp, 48");                                         // reserve aligned slots for class, property, and scope slices
@@ -70,11 +82,12 @@ fn emit_x86_64(
     emitter.instruction("mov QWORD PTR [rbp - 32], rcx");                       // save the requested property-name length
     emitter.instruction("mov QWORD PTR [rbp - 40], r8");                        // save the active eval class-scope pointer
     emitter.instruction("mov QWORD PTR [rbp - 48], r9");                        // save the active eval class-scope length
-    emit_x86_64_static_property_dispatch(module, emitter, data, slots, "reference");
+    emit_x86_64_static_property_dispatch(module, emitter, data, slots, mode);
     emitter.instruction("xor eax, eax");                                        // report bridge miss with a null pointer
     emitter.instruction(&format!("jmp {}", done_label));                        // join the helper epilogue after a miss
-    emit_slot_bodies(module, emitter, slots, done_label);
-    emitter.label(done_label);
+    if binding { emit_binding_bodies(module, emitter, data, slots, &done_label); }
+    else { emit_slot_bodies(module, emitter, slots, &done_label); }
+    emitter.label(&done_label);
     emitter.instruction("mov rsp, rbp");                                        // discard helper spill slots
     emitter.instruction("pop rbp");                                             // restore the Rust caller frame pointer
     emitter.instruction("ret");                                                 // return the boxed static property value to Rust
@@ -118,8 +131,22 @@ fn emit_slot_bodies(module: &Module, emitter: &mut Emitter, slots: &[EvalStaticP
     }
 }
 
+/// Returns immutable binding and declaration addresses after the existing scoped dispatch succeeds.
+fn emit_binding_bodies(module: &Module, emitter: &mut Emitter, data: &mut DataSection,
+    slots: &[EvalStaticPropertySlot], done: &str,
+) {
+    use crate::codegen_support::data_section::DataWord;
+    for slot in slots {
+        let descriptor = checked_descriptor(module, slot).expect("checked binding selector");
+        let record = data.add_words(vec![DataWord::Symbol(slot.symbol.clone()), DataWord::Symbol(descriptor)]);
+        emitter.label(&slot_body_label(module, slot, "binding"));
+        abi::emit_symbol_address(emitter, abi::int_result_reg(emitter), &record);
+        abi::emit_jump(emitter, done);
+    }
+}
+
 /// Resolves the same physical static declaration selected by ordinary native reference lowering.
-fn checked_descriptor(module: &Module, slot: &EvalStaticPropertySlot) -> Option<String> {
+pub(super) fn checked_descriptor(module: &Module, slot: &EvalStaticPropertySlot) -> Option<String> {
     crate::codegen::runtime_metadata::checked_boxed_static_descriptor(
         module, &slot.declaring_class, &slot.property)
 }

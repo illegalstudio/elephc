@@ -99,17 +99,19 @@ impl ArgumentValueOwner {
         release_expr_result(value, context, values)
     }
 
+    /// Transfers an exact source lease before a converted-argument publisher can retire it.
+    pub(super) fn take(&self, values: &mut impl RuntimeValueOps) -> Result<Option<RuntimeCellHandle>, EvalStatus> {
+        let Some(lease) = self.0.borrow_mut().take() else { return Ok(None); };
+        if let Some(pin) = lease.pin {
+            values.take_native_reference_argument_owner(pin.get().cast())
+        } else { Ok(Some(lease.value)) }
+    }
+
     /// Clears shared metadata before releasing its unique foreign owner, including on failure.
     pub(super) fn release(&self, context: &mut ElephcEvalContext, values: &mut impl RuntimeValueOps) -> Result<(), EvalStatus> {
-        let lease = self.0.borrow_mut().take();
-        let Some(lease) = lease else { return Ok(()); };
-        if let Some(pin) = lease.pin {
-            match values.take_native_reference_argument_owner(pin.get().cast())? {
-                Some(value) => release_expr_result(value, context, values),
-                None => Ok(()),
-            }
-        } else {
-            release_expr_result(lease.value, context, values)
+        match self.take(values)? {
+            Some(value) => release_expr_result(value, context, values),
+            None => Ok(()),
         }
     }
 }

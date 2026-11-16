@@ -606,7 +606,7 @@ order. Repeating an explicit feature option uses the last value.
 
 Integration is in progress. This build accepts the existing strict-locals and
 strict-opcache rules plus strict-dynamic-code, strict-bools, strict-arithmetic,
-strict-overflow, strict-strings and strict-coercions.
+strict-overflow, strict-strings, strict-coercions and strict-casts.
 Other registered guarantees,
 including the complete umbrella, fail explicitly until their enforcement is
 complete. Eval embedding entry points reject execution with those profiles too. The [implementation plan](https://github.com/illegalstudio/elephc/issues/2347)
@@ -646,6 +646,28 @@ Explicit float literals and floating-point operations keep IEEE 754 behavior,
 including infinity. This option alone preserves PHP numeric coercions and negative
 integer power; combine it with `--strict-arithmetic` for the separate numeric
 operand and result-kind rules. The same checks apply inside eval and the REPL.
+
+### Strict casts
+
+`--strict-casts` checks explicit numeric conversions through `(int)`, `(float)`,
+`intval`, `floatval` and numeric `settype` targets. Integer conversions truncate
+fractions toward zero and require a finite result in the signed 64-bit range.
+Decimal strings are checked exactly, including exponents and integer endpoints,
+without an intermediate float. Numeric strings must be complete; `intval` with
+an explicit base validates that base and the complete digit sequence.
+
+Known invalid conversions produce compile diagnostics before folding. Dynamic
+range and string-domain failures throw `ValueError`; unsupported original kinds,
+such as arrays and ordinary objects used numerically, throw `TypeError`.
+Reviewed native object conversion contracts retain their original input before
+checking. Floating results retain IEEE infinity, NaN and signed zero.
+A conversion rejected during validation leaves its destination unchanged.
+
+The contract applies through callables, Reflection, eval, REPL and library entry
+points. Typed property references retain their live declaration constraints.
+Implicit bindings keep their existing rules unless `--strict-coercions` is also
+selected. The [strict casts example](../../examples/strict-casts/main.php)
+demonstrates exact integer conversion and a caught string-domain error.
 
 ### Strict arithmetic
 

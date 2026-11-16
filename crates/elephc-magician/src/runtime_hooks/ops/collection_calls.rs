@@ -357,6 +357,24 @@ macro_rules! impl_collection_call_ops {
         }
     }
 
+    /// Replaces native binding storage instead of writing through its previous PHP reference.
+    fn static_property_reference_bind(
+        &mut self, class_name: &str, property: &str, reference: RuntimeCellHandle,
+    ) -> Result<bool, EvalStatus> {
+        let (scope_ptr, scope_len) = self.current_class_scope_abi();
+        let binding = unsafe { __elephc_eval_value_static_property_binding(
+            class_name.as_ptr(), class_name.len() as u64, property.as_ptr(), property.len() as u64,
+            scope_ptr, scope_len) };
+        if binding.is_null() { return Ok(false); }
+        let mut thrown = std::ptr::null_mut();
+        let status = unsafe { __elephc_eval_value_static_rebind_v1(binding, reference.as_ptr(), 0, &mut thrown) };
+        if status == 0 { return Ok(true); }
+        if !thrown.is_null() {
+            self.schedule_pending_throw(RuntimeCellHandle::from_raw(thrown))?;
+            Err(EvalStatus::UncaughtThrowable)
+        } else { Err(EvalStatus::RuntimeFatal) }
+    }
+
     /// Checks an AOT static property initialization marker through the generated helper.
     fn static_property_is_initialized(
         &mut self,
@@ -407,6 +425,28 @@ macro_rules! impl_collection_call_ops {
             }
             _ => Err(EvalStatus::RuntimeFatal),
         }
+    }
+
+    /// Shares native class-setter conversion and exact source retirement with compiled Reflection.
+    fn static_property_class_set(
+        &mut self, class_name: &str, property: &str, argument: RuntimeCellHandle,
+    ) -> Result<bool, EvalStatus> {
+        let (scope_ptr, scope_len) = self.current_class_scope_abi();
+        let binding = unsafe { __elephc_eval_value_static_property_binding(
+            class_name.as_ptr(), class_name.len() as u64, property.as_ptr(), property.len() as u64,
+            scope_ptr, scope_len) };
+        if binding.is_null() {
+            let result = self.static_property_set(class_name, property, argument);
+            let cleanup = self.release(argument);
+            return match result { Err(status) => Err(status), Ok(updated) => cleanup.map(|()| updated) };
+        }
+        let mut thrown = std::ptr::null_mut();
+        let status = unsafe { __elephc_eval_value_static_class_store_v1(binding, argument.as_ptr(), 0, &mut thrown) };
+        if status == 0 { return Ok(true); }
+        if !thrown.is_null() {
+            self.schedule_pending_throw(RuntimeCellHandle::from_raw(thrown))?;
+            Err(EvalStatus::UncaughtThrowable)
+        } else { Err(EvalStatus::RuntimeFatal) }
     }
 
     /// Reads an AOT class-like constant through the generated user helper.

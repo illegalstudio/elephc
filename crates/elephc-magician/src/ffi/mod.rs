@@ -23,6 +23,7 @@ pub(crate) mod ob_handlers;
 pub mod execute;
 #[cfg(not(test))]
 mod property_references;
+mod property_reference_context;
 #[cfg(not(test))]
 pub mod function_calls;
 pub mod native_catalog;

@@ -22,6 +22,7 @@ pub mod integer_power;
 pub mod numeric_string;
 pub mod integer_literals;
 pub mod conversions;
+pub mod weak_scalar_binding;
 pub mod comparisons;
 
 pub use catalog::{FeatureSpec, StrictFeature, FEATURES, INTEGRATED_FEATURE_BITS};

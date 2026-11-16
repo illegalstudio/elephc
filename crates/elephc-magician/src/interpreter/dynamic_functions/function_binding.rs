@@ -33,21 +33,23 @@ pub(in crate::interpreter) fn bind_evaluated_function_args(
     params: &[String],
     evaluated_args: Vec<EvaluatedCallArg>,
 ) -> Result<Vec<RuntimeCellHandle>, EvalStatus> {
+    bind_evaluated_function_arg_records(params, evaluated_args)
+        .map(|arguments| arguments.into_iter().map(|argument| argument.value).collect())
+}
+
+/// Shares named/positional binding while retaining exact source-owner provenance for consumers.
+pub(in crate::interpreter) fn bind_evaluated_function_arg_records(
+    params: &[String], evaluated_args: Vec<EvaluatedCallArg>,
+) -> Result<Vec<EvaluatedCallArg>, EvalStatus> {
     let mut bound_args = vec![None; params.len()];
     let mut next_positional = 0;
-
-    for arg in evaluated_args {
-        if let Some(name) = arg.name {
-            bind_dynamic_named_arg(params, &mut bound_args, &name, arg.value)?;
-        } else {
-            bind_dynamic_positional_arg(&mut bound_args, &mut next_positional, arg.value)?;
+    for argument in evaluated_args {
+        match argument.name.clone() {
+            Some(name) => bind_dynamic_named_arg(params, &mut bound_args, &name, argument)?,
+            None => bind_dynamic_positional_arg(&mut bound_args, &mut next_positional, argument)?,
         }
     }
-
-    bound_args
-        .into_iter()
-        .collect::<Option<Vec<_>>>()
-        .ok_or(EvalStatus::RuntimeFatal)
+    bound_args.into_iter().collect::<Option<Vec<_>>>().ok_or(EvalStatus::RuntimeFatal)
 }
 
 /// Binds already evaluated native AOT function args and fills omitted defaults.

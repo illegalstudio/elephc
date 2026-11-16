@@ -370,6 +370,7 @@ pub(super) use introspection::{
     lower_eval_object_class_name, lower_eval_object_is_a, lower_eval_object_is_a_dynamic,
 };
 pub(in crate::codegen::lower_inst) use introspection::lower_callable_parameter_is_by_ref;
+pub(in crate::codegen::lower_inst) use introspection::emit_object_relation_target;
 pub(super) use scope_access::{lower_eval_scope_get, lower_eval_scope_set};
 pub(super) use symbol_queries::{
     has_eval_context, lower_eval_class_constant_fetch, lower_eval_class_exists,

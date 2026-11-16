@@ -48,6 +48,7 @@ mod return_values;
 mod value_contracts;
 mod property_value_contracts;
 mod property_reference_contracts;
+mod property_reference_candidates;
 mod runtime_ops;
 pub(crate) use runtime_ops::{EVAL_TAG_BOOL, EVAL_TAG_FLOAT, EVAL_TAG_INT, EVAL_TAG_NULL, EVAL_TAG_STRING};
 mod scope_cells;
@@ -106,6 +107,8 @@ use property_value_contracts::*;
 use property_reference_contracts::*;
 #[cfg(not(test))]
 pub(crate) use property_reference_contracts::eval_validate_property_reference;
+pub(crate) use property_reference_candidates::{prepare_property_reference_candidates,
+    coerce_property_reference_candidates};
 pub use runtime_ops::{
     NativeCallableParameterMetadata, NativeCallableSignatureMetadata, RuntimeValueOps,
 };

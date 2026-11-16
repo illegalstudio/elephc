@@ -46,7 +46,6 @@ impl ElephcEvalContext {
             });
         }
         types.sort_by(|left, right| (&left.owner, &left.property).cmp(&(&right.owner, &right.property)));
-        types.dedup();
         types
     }
 }

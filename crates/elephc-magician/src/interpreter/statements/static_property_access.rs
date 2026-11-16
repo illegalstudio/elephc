@@ -642,6 +642,8 @@ pub(super) fn eval_static_property_reference_bind_result(
                         values,
                     );
                 }
+                if eval_native_static_property_reference_bind(&declaring_class, property_name,
+                    source_name, context, scope, values)? { return Ok(()); }
                 let target = eval_static_property_reference_target(
                     &declaring_class,
                     property_name,
@@ -691,6 +693,8 @@ pub(super) fn eval_static_property_reference_bind_result(
                 values,
             );
         }
+        if eval_native_static_property_reference_bind(&declaring_class, property_name,
+            source_name, context, scope, values)? { return Ok(()); }
         let target = eval_static_property_reference_target(
             &declaring_class,
             property_name,

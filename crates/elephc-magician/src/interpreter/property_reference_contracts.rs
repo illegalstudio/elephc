@@ -16,7 +16,7 @@ pub(in crate::interpreter) fn checked_property_reference_source(
     source: &str, context: &mut ElephcEvalContext, scope: &mut ElephcEvalScope,
     values: &mut impl RuntimeValueOps,
 ) -> Result<Option<EvalReferenceTarget>, EvalStatus> {
-    if !context.semantic_profile().contains(elephc_semantics::StrictFeature::Coercions) { return Ok(None); }
+    if !context.semantic_profile().checked_property_references() { return Ok(None); }
     let cell = eval_persistent_variable_reference(source, context, scope, values)?
         .ok_or(EvalStatus::UnsupportedConstruct)?;
     Ok(Some(EvalReferenceTarget::Cell { cell: cell.borrowed() }))
@@ -27,21 +27,25 @@ pub(in crate::interpreter) fn eval_replace_reference_value(
     reference: RuntimeCellHandle, value: RuntimeCellHandle,
     context: &mut ElephcEvalContext, values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
-    eval_validate_property_reference(reference, value, context, values)?;
-    // A reference may escape the eval activation that owns its property's declaration.
+    if values.coordinates_property_reference_candidates() {
+        return values.reference_replace(reference, value);
+    }
+    let mut prepared = prepare_property_reference_candidates(reference, value, context, values)?;
     let current = context as *mut ElephcEvalContext;
     for pointer in unsafe { crate::context::live_native_reference_contexts() } {
         if pointer == current { continue; }
         let Some(owner) = (unsafe { pointer.as_mut() }) else { continue; };
-        if let Err(status) = eval_validate_property_reference(reference, value, owner, values) {
-            if let Some(error) = owner.take_pending_throw() { context.set_pending_throw(error); }
-            return Err(status);
-        }
+        prepared.extend(prepare_property_reference_candidates(reference, value, owner, values)?);
+    }
+    if let Some(candidate) = coerce_property_reference_candidates(prepared, value, context, values)? {
+        let result = values.reference_replace(reference, candidate);
+        return finish_synthesized_method_arguments(result, [candidate], context, values);
     }
     values.reference_replace(reference, value)
 }
 
 /// Validates the current declaration set without publishing, retaining or consuming a candidate.
+#[cfg(not(test))]
 pub(crate) fn eval_validate_property_reference(
     reference: RuntimeCellHandle, value: RuntimeCellHandle,
     context: &mut ElephcEvalContext, values: &mut impl RuntimeValueOps,

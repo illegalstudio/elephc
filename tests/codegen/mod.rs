@@ -187,5 +187,9 @@ mod strict_eval_property_references;
 mod strict_coercions_public;
 mod strict_coercion_hosts;
 mod strict_coercion_missing_values;
+mod strict_cast_reflection_bindings;
+mod strict_casts_public;
+mod strict_cast_argument_aliases;
+mod strict_static_rebind_candidates;
 
 mod strict_conversion_returns;

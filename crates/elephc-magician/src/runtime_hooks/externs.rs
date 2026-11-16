@@ -226,6 +226,21 @@ unsafe extern "C" {
         scope_ptr: *const u8,
         scope_len: u64,
     ) -> *mut RuntimeCell;
+    /// Selects immutable native binding/declaration addresses using the ordinary access scope.
+    pub(super) fn __elephc_eval_value_static_property_binding(
+        class_ptr: *const u8, class_len: u64, name_ptr: *const u8, name_len: u64,
+        scope_ptr: *const u8, scope_len: u64,
+    ) -> *const usize;
+    /// Validates and physically replaces one static reference binding, containing PHP throws.
+    pub(super) fn __elephc_eval_value_static_rebind_v1(
+        binding: *const usize, reference: *mut RuntimeCell, flags: u64,
+        throwable: *mut *mut RuntimeCell,
+    ) -> i32;
+    /// Consumes a reflected class setter argument under the checked native publication policy.
+    pub(super) fn __elephc_eval_value_static_class_store_v1(
+        binding: *const usize, argument: *mut RuntimeCell, flags: u64,
+        throwable: *mut *mut RuntimeCell,
+    ) -> i32;
     /// Tests initialization of a scoped static property.
     pub(super) fn __elephc_eval_value_static_property_is_initialized(
         class_ptr: *const u8,

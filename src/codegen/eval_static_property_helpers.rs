@@ -582,18 +582,18 @@ fn emit_x86_64_static_property_scope_check(
 /// Returns ARM64 stack offsets for the class-scope pointer and length.
 fn aarch64_scope_offsets(mode: &str) -> (usize, usize) {
     match mode {
-        "get" | "reference" | "is_initialized" => (32, 40),
+        "get" | "reference" | "binding" | "is_initialized" => (32, 40),
         "set" => (40, 48),
-        _ => unreachable!("eval static property helpers only use get/set/is_initialized modes"),
+        _ => unreachable!("unknown eval static-property dispatcher ABI"),
     }
 }
 
 /// Returns x86_64 frame offsets for the class-scope pointer and length.
 fn x86_64_scope_offsets(mode: &str) -> (usize, usize) {
     match mode {
-        "get" | "reference" | "is_initialized" => (40, 48),
+        "get" | "reference" | "binding" | "is_initialized" => (40, 48),
         "set" => (48, 56),
-        _ => unreachable!("eval static property helpers only use get/set/is_initialized modes"),
+        _ => unreachable!("unknown eval static-property dispatcher ABI"),
     }
 }
 

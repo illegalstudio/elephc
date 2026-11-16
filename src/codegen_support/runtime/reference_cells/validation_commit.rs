@@ -12,7 +12,7 @@
 
 use super::*;
 
-const FRAME: usize = 64;
+const FRAME: usize = 80;
 
 /// Selects the owner transfer that must happen at publication, before any PHP cleanup.
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -45,6 +45,10 @@ fn emit_entry(emitter: &mut Emitter, entry: &str, take_snapshot: bool, retiremen
     if retirement != Retirement::Release {
         abi::store_at_offset(emitter, abi::int_arg_reg_name(emitter.target, 4), 48);
     }
+    if converted_argument {
+        abi::store_at_offset(emitter, abi::int_arg_reg_name(emitter.target, 5), 56);
+        abi::emit_store_zero_to_local_slot(emitter, 64);
+    }
     if !converted_argument {
         abi::load_at_offset(emitter, result, 8);
         abi::emit_load_from_address(emitter, result, result, 8);
@@ -68,6 +72,21 @@ fn emit_entry(emitter: &mut Emitter, entry: &str, take_snapshot: bool, retiremen
         abi::load_at_offset(emitter, wrapper, 48);
         abi::emit_store_zero_to_address(emitter, wrapper, 0);
     }
+    if converted_argument {
+        let captured = format!("{entry}_captured");
+        abi::load_at_offset(emitter, result, 56);
+        abi::emit_branch_if_int_result_nonzero(emitter, &captured);
+        abi::load_at_offset(emitter, result, 48);
+        match emitter.target.arch {
+            Arch::AArch64 => emitter.instruction("sub x0, x0, #8"),             // unaliased destinations follow the property rather than a later reference
+            Arch::X86_64 => emitter.instruction("sub rax, 8"),                  // unaliased destinations follow the property rather than a later reference
+        }
+        abi::emit_reg_move(emitter, abi::int_arg_reg_name(emitter.target, 0), result);
+        abi::load_at_offset(emitter, abi::int_arg_reg_name(emitter.target, 1), 16);
+        abi::emit_call_label(emitter, "__rt_reference_static_destination_restore");
+        abi::store_at_offset(emitter, result, 64);
+        emitter.label(&captured);
+    }
     // The wrapper now owns the candidate. Never release that transferred owner again.
     if take_snapshot {
         abi::load_at_offset(emitter, abi::int_arg_reg_name(emitter.target, 0), 40);
@@ -76,6 +95,18 @@ fn emit_entry(emitter: &mut Emitter, entry: &str, take_snapshot: bool, retiremen
         emit_release_slot(emitter, 24);
     }
     if retirement != Retirement::ReturnPrevious { emit_release_slot(emitter, 32); }
+    if converted_argument {
+        abi::emit_symbol_address(emitter, abi::int_arg_reg_name(emitter.target, 0), "__rt_reference_cell_release");
+        abi::load_at_offset(emitter, abi::int_arg_reg_name(emitter.target, 1), 64);
+        abi::load_at_offset(emitter, abi::int_arg_reg_name(emitter.target, 2), 8);
+        let pending = abi::int_arg_reg_name(emitter.target, 2);
+        match emitter.target.arch {
+            Arch::AArch64 => emitter.instruction(&format!("add {pending}, {pending}, #8")),// cleanup accumulates in the publisher's Throwable slot
+            Arch::X86_64 => emitter.instruction(&format!("add {pending}, 8")),  // cleanup accumulates in the publisher's Throwable slot
+        }
+        abi::emit_call_label(emitter, "__rt_cleanup_invoke");
+    }
+
     if take_snapshot {
         // A snapshot destructor may throw even when the displaced child's release succeeds.
         abi::load_at_offset(emitter, result, 8);

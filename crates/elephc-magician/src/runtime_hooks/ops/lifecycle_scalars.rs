@@ -139,6 +139,11 @@ macro_rules! impl_lifecycle_scalar_ops {
 
     /// Validates before publishing and transfers the previous owner for ordinary eval cleanup.
     fn reference_replace(&mut self, reference: RuntimeCellHandle, value: RuntimeCellHandle) -> Result<RuntimeCellHandle, EvalStatus> {
+        // The coordinator must see this activation, including non-registered Rust hosts and
+        // nested property writes while their owning context is already draining its values.
+        let _context = unsafe { self.context.as_ref() }
+            .filter(|context| context.semantic_profile().checked_property_references())
+            .map(|_| crate::context::push_native_frame_context(self.context.cast_mut()));
         let mut previous = std::ptr::null_mut();
         let mut thrown = std::ptr::null_mut();
         let status = unsafe { __elephc_eval_value_reference_replace_v2(
@@ -154,6 +159,9 @@ macro_rules! impl_lifecycle_scalar_ops {
             Err(EvalStatus::UncaughtThrowable)
         } else { Err(EvalStatus::RuntimeFatal) }
     }
+
+    /// The native publication boundary owns joint native/eval source normalization.
+    fn coordinates_property_reference_candidates(&self) -> bool { true }
 
     /// Detaches a reference before returning an ordinary PHP value copy.
     fn copy_value(&mut self, value: RuntimeCellHandle) -> Result<RuntimeCellHandle, EvalStatus> {

@@ -13,6 +13,43 @@ use super::super::*;
 use super::{support::*, strict_semantics::staged_numeric_execution};
 use elephc_semantics::{SemanticProfile, StrictFeature};
 
+/// Independent Casts preserves weak float contracts and detects independently incompatible unions.
+#[test]
+fn strict_cast_property_reference_candidates_preserve_weak_types_and_owners() {
+    let fixture = include_str!(concat!(env!("CARGO_MANIFEST_DIR"),
+        "/../../tests/fixtures/strict/weak_property_reference_sources.php"));
+    let fragment = fixture.split_once("$argc > 0 ? '").unwrap().1.rsplit_once("' : '';").unwrap().0;
+    crate::parser::parse_fragment_with_semantics(fragment.as_bytes(),
+        SemanticProfile::PERMISSIVE.with(StrictFeature::Casts, true)).expect("callback fixture uses supported eval syntax");
+    for (source, expected) in [
+        ("function weakCastRef(mixed &$value) { settype($value, 'int'); } \
+            weakCastRef($object->number); echo gettype($object->number), ':', $object->number;", "double:1"),
+        ("$alias = 1.5; $object->number =& $alias; \
+            $alias = 7; echo gettype($alias), ':', $object->number;", "double:7"),
+        ("$alias = 1.5; $object->number =& $alias; $object->open =& $alias; \
+            try { $alias = 7; } catch (TypeError $error) { echo 'T'; unset($error); } \
+            echo gettype($alias), ':', $alias;", "Tdouble:1.5"),
+        ("$alias = 1.5; $object->number =& $alias; $object->numeric =& $alias; \
+            try { $alias = 7; } catch (TypeError $error) { echo 'T'; unset($error); } \
+            echo gettype($alias), ':', $alias;", "Tdouble:1.5"),
+        ("function takeWeakCastRef(mixed &$value, int $unused) { \
+                settype($value, 'int'); echo gettype($value), ':', $value; } \
+            function detachWeakCastRef($owner): int { unset($owner->open); $owner->open = '7.9'; return 0; } \
+            $object->open = '42.9'; takeWeakCastRef($object->open, detachWeakCastRef($object)); \
+            echo '|', gettype($object->open), ':', $object->open;", "integer:42|string:7.9"),
+    ] {
+        let mut context = ElephcEvalContext::new();
+        context.install_semantic_profile(SemanticProfile::PERMISSIVE.with(StrictFeature::Casts, true)).unwrap();
+        let mut scope = ElephcEvalScope::new(); let mut values = FakeOps::default();
+        let setup = "class WeakCastProperty { public float $number = 1.5; \
+            public int|float $numeric = 1.5; public mixed $open = null; } $object = new WeakCastProperty();";
+        staged_numeric_execution(setup, false, &mut context, &mut scope, &mut values).unwrap();
+        staged_numeric_execution(source, false, &mut context, &mut scope, &mut values).unwrap();
+        assert_eq!(values.output, expected, "{source}");
+        clean_property_fixture(&mut context, &mut scope, &mut values, "weak Casts property candidates");
+    }
+}
+
 /// Instance, static and Reflection writes share exact scalar, union and structural membership.
 #[test]
 fn strict_conversion_properties_eval_engines_exact_values_and_owners() {

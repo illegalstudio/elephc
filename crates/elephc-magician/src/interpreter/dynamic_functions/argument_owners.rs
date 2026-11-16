@@ -109,7 +109,7 @@ fn eval_source_call_argument(
     values: &mut impl RuntimeValueOps,
 ) -> Result<(RuntimeCellHandle, Option<EvalReferenceTarget>), EvalStatus> {
     if modes.persistent_native_reference(argument.name(), position)
-        || (context.semantic_profile().contains(elephc_semantics::StrictFeature::Coercions)
+        || (context.semantic_profile().checked_property_references()
             && modes.by_reference(argument.name(), position))
     {
         if let EvalExpr::LoadVar(name) = argument.value() {

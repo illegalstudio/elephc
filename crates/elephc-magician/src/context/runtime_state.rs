@@ -179,6 +179,11 @@ impl ElephcEvalContext {
             .insert((normalize_class_name(class_name), name.to_string()), target)
     }
 
+    /// Removes interpreter-only indirection after the native binding itself becomes authoritative.
+    pub fn clear_static_property_alias(&mut self, class_name: &str, name: &str) {
+        self.static_property_aliases.remove(&(normalize_class_name(class_name), name.to_string()));
+    }
+
     /// Returns the persistent reference target bound to one eval static property slot.
     pub fn static_property_alias(
         &self,

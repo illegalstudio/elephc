@@ -26,6 +26,7 @@ use crate::parser::ast::Visibility;
 use crate::types::{ClassInfo, PhpType};
 
 mod dynamic_properties;
+mod dynamic_unset;
 mod private_shadow;
 mod replacement;
 mod unset;
