@@ -230,8 +230,20 @@ pub(crate) fn lower_body(
 ) {
     ctx.conditional_local_declarations =
         super::integer_local_contracts::conditional_declarations(body);
-    let checkpoint = ctx.snapshot();
+    let base = ctx.snapshot();
+    super::local_definedness::begin_body(ctx, body);
+    let mut checkpoint = ctx.snapshot();
     lower_stmts(ctx, body);
+    // A read that found a local possibly unassigned needs that local's every write to set its
+    // definedness flag, the writes lowered before the read included: lower the body again with
+    // the flag installed. Bodies whose reads all see a stored slot never get here.
+    if super::local_definedness::take_replay_request(ctx) {
+        ctx.restore(base);
+        super::local_definedness::begin_body(ctx, body);
+        checkpoint = ctx.snapshot();
+        lower_stmts(ctx, body);
+        let _ = super::local_definedness::take_replay_request(ctx);
+    }
     let scalar_force = loop_carried(ctx);
     let sites = ctx.numeric_closure_sites.clone();
     let tracked = ctx.numeric_tracked_locals.clone();

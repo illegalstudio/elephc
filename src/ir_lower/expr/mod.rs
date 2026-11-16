@@ -288,6 +288,7 @@ pub(in crate::ir_lower) use instanceof_coercions::{
 pub(crate) use callable_resolution::{
     is_bound_closure_assignment_shape, lower_bound_closure_for_assignment,
 };
+pub(in crate::ir_lower) use callable_resolution::call_signature;
 pub(crate) use pending_owners::lower_with_pending_owners;
 pub(crate) use branch_conditions::lower_condition;
 pub(crate) use call_operand_owners::{
@@ -423,7 +424,9 @@ fn lower_expr_inner(ctx: &mut LoweringContext<'_, '_>, expr: &Expr) -> LoweredVa
         ExprKind::FloatLiteral(value) => lower_float_literal(ctx, *value, expr),
         ExprKind::BoolLiteral(value) => lower_bool_literal(ctx, *value, expr),
         ExprKind::Null => lower_null(ctx, expr),
-        ExprKind::Variable(name) => ctx.load_local(name, Some(expr.span)),
+        ExprKind::Variable(name) => {
+            crate::ir_lower::local_definedness::lower_variable_read(ctx, name, expr.span)
+        }
         ExprKind::BinaryOp { left, op, right } => lower_binary(ctx, left, op, right, expr),
         ExprKind::InstanceOf { value, target } => lower_instanceof(ctx, value, target, expr),
         ExprKind::Negate(inner) => lower_numeric_unary(ctx, inner, Op::INeg, Op::FNeg, expr),
@@ -468,7 +471,10 @@ fn lower_expr_inner(ctx: &mut LoweringContext<'_, '_>, expr: &Expr) -> LoweredVa
         ExprKind::PostDecrement(name) => lower_inc_dec(ctx, name, false, true, expr),
         ExprKind::FunctionCall { name, args } => lower_function_call(ctx, name, args, expr),
         ExprKind::ArrayLiteral(items) => lower_array_literal(ctx, items, expr),
-        ExprKind::ArrayLiteralAssoc(pairs) => lower_assoc_array_literal(ctx, pairs, expr),
+        ExprKind::ArrayLiteralAssoc(pairs) => {
+            crate::ir_lower::local_definedness::lower_compact_literal(ctx, pairs, expr)
+                .unwrap_or_else(|| lower_assoc_array_literal(ctx, pairs, expr))
+        }
         ExprKind::ArrayReference(_) => {
             unreachable!("array-reference nodes are lowered by their containing literal")
         }

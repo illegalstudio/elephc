@@ -828,10 +828,11 @@ fn is_array_rand_function(name: &str) -> bool {
 /// `compact()` reads the CALLER's variables by name, which compiled code has no table for, so a
 /// call reached nothing (`Call to undefined function compact()`), and Laravel controllers build
 /// every view's data with it. Spelled out as reads, the variables stay visible to the checker,
-/// the optimizer and lowering, so a store only `compact` reads is not dead. The one difference
-/// from php: an UNDEFINED name yields a `null` entry, where php warns and leaves the key out.
-/// Duplicate names collapse to one key as in php. A name that is not a literal (`compact($n)`)
-/// keeps the call.
+/// the optimizer and lowering, so a store only `compact` reads is not dead. An UNDEFINED name
+/// must be left out with php's `compact(): Undefined variable $a` warning, which only lowering
+/// can decide (`crate::ir_lower::local_definedness`): it recognizes the entries this rewrite
+/// builds with [`compact_entry_variable`]. Duplicate names collapse to one key as in php. A name
+/// that is not a literal (`compact($n)`) keeps the call.
 fn rewrite_compact(name: &crate::names::Name, args: &[Expr], symbols: &Symbols) -> Option<ExprKind> {
     if !(name.is_unqualified() || name.is_fully_qualified())
         || !name
@@ -874,6 +875,31 @@ fn rewrite_compact(name: &crate::names::Name, args: &[Expr], symbols: &Symbols) 
             })
             .collect(),
     ))
+}
+
+/// Returns the variable a `compact()` entry built by [`rewrite_compact`] reads, or `None` for any
+/// other array entry.
+///
+/// The rewrite gives the key, the `??`, its variable and its `null` default ONE span, the span
+/// of the call's first argument. Source code cannot produce that: four distinct
+/// tokens never share one position. So the shape plus the shared span identifies the entry,
+/// and a hand-written `['a' => $a ?? null]` keeps ordinary `??` semantics.
+pub(crate) fn compact_entry_variable<'a>(key: &'a Expr, value: &'a Expr) -> Option<&'a str> {
+    let ExprKind::StringLiteral(key_name) = &key.kind else {
+        return None;
+    };
+    let ExprKind::NullCoalesce { value: read, default } = &value.kind else {
+        return None;
+    };
+    let ExprKind::Variable(name) = &read.kind else {
+        return None;
+    };
+    (name == key_name
+        && matches!(default.kind, ExprKind::Null)
+        && value.span == key.span
+        && read.span == key.span
+        && default.span == key.span)
+        .then_some(name.as_str())
 }
 
 fn rewrite_date_procedural_alias(

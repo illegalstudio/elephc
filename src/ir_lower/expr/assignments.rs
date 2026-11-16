@@ -418,7 +418,24 @@ pub(super) fn lower_non_local_assignment_write(
 }
 
 /// Writes an assignment target whose key may already have been diagnosed by its read half.
+///
+/// An element write creates its root variable, so a root with a run-time definedness flag is
+/// defined once the write has run.
 pub(super) fn lower_non_local_assignment_write_with_diagnosed_key(
+    ctx: &mut LoweringContext<'_, '_>,
+    target: &Expr,
+    value: &Expr,
+    span: Span,
+    key_already_diagnosed: bool,
+) {
+    write_non_local_assignment_target(ctx, target, value, span, key_already_diagnosed);
+    if let Some(root) = crate::ir_lower::local_definedness::element_write_root(target) {
+        crate::ir_lower::local_definedness::define_element_write_root(ctx, root);
+    }
+}
+
+/// Emits the write of `lower_non_local_assignment_write_with_diagnosed_key`.
+fn write_non_local_assignment_target(
     ctx: &mut LoweringContext<'_, '_>,
     target: &Expr,
     value: &Expr,
@@ -750,6 +767,7 @@ pub(super) fn lower_inc_dec(
     expr: &Expr,
 ) -> LoweredValue {
     crate::ir_lower::entry_locals::prepare_process_local_for_write(ctx, name);
+    crate::ir_lower::local_definedness::define_before_increment(ctx, name, expr.span);
     let old = ctx.load_local(name, Some(expr.span));
     let existing_type = ctx.local_type(name);
     if crate::types::object_operators::operator_class(&existing_type).is_some() {

@@ -79,9 +79,11 @@ pub(super) fn lower_try_catch(
     // `try` is nested in; recording the depth is what tells `terminate_throw` which loops it
     // really leaves (issue #690).
     ctx.push_try_loop_depth();
+    crate::ir_lower::local_definedness::begin_try(ctx);
     lower_block(ctx, try_body);
     ctx.pop_try_loop_depth();
     pop_finally_frame_if_active(ctx, depth);
+    crate::ir_lower::local_definedness::note_try_exit(ctx);
     if !ctx.builder.insertion_block_is_terminated() {
         emit_try_pop_handler(ctx, handler_token, span);
         branch_to(ctx, after_block);
@@ -94,6 +96,7 @@ pub(super) fn lower_try_catch(
     emit_try_pop_handler(ctx, handler_token, span);
     after_reachable |= lower_catch_dispatch(ctx, catches, after_block, &mut exit_types, span);
     ctx.builder.position_at_end(after_block);
+    crate::ir_lower::local_definedness::end_try(ctx);
     if !after_reachable {
         ctx.builder.terminate(Terminator::Unreachable);
     }
@@ -187,12 +190,14 @@ pub(super) fn lower_try_catch_finally(
     let depth = push_finally_frame(ctx, finally_body, false, Some((handler_token, span)));
     // See the twin in `lower_try_catch`: the handler is active for this body only.
     ctx.push_try_loop_depth();
+    crate::ir_lower::local_definedness::begin_try(ctx);
     lower_block(ctx, try_body);
     ctx.pop_try_loop_depth();
     pop_finally_frame_if_active(ctx, depth);
     if !ctx.builder.insertion_block_is_terminated() {
         emit_try_pop_handler(ctx, handler_token, span);
         lower_block(ctx, finally_body);
+        crate::ir_lower::local_definedness::note_try_exit(ctx);
         if !ctx.builder.insertion_block_is_terminated() {
             branch_to(ctx, after_block);
             after_reachable = true;
@@ -205,6 +210,7 @@ pub(super) fn lower_try_catch_finally(
     after_reachable |=
         lower_catch_dispatch_with_finally(ctx, catches, after_block, finally_body, span);
     ctx.builder.position_at_end(after_block);
+    crate::ir_lower::local_definedness::end_try(ctx);
     if !after_reachable {
         ctx.builder.terminate(Terminator::Unreachable);
     }
@@ -261,8 +267,10 @@ pub(super) fn lower_catch_dispatch(
         let next_catch = ctx.builder.create_named_block("try.catch_next", Vec::new());
         lower_catch_match(ctx, catch, catch_body, next_catch, span);
         ctx.builder.position_at_end(catch_body);
+        crate::ir_lower::local_definedness::enter_try_handler(ctx);
         lower_catch_bind(ctx, catch, span);
         lower_block(ctx, &catch.body);
+        crate::ir_lower::local_definedness::note_try_exit(ctx);
         if !ctx.builder.insertion_block_is_terminated() {
             branch_to(ctx, after_block);
             after_reachable = true;
@@ -294,6 +302,7 @@ pub(super) fn lower_catch_dispatch_with_finally(
         let next_catch = ctx.builder.create_named_block("try.catch_next", Vec::new());
         lower_catch_match(ctx, catch, catch_body, next_catch, span);
         ctx.builder.position_at_end(catch_body);
+        crate::ir_lower::local_definedness::enter_try_handler(ctx);
         lower_catch_bind(ctx, catch, span);
         // The catch body runs under its OWN handler. An exception leaving it — a `throw`, or a
         // call that throws — must still run the `finally`, with that exception pending. Without
@@ -319,6 +328,7 @@ pub(super) fn lower_catch_dispatch_with_finally(
         if !ctx.builder.insertion_block_is_terminated() {
             emit_try_pop_handler(ctx, body_token, span);
             lower_block(ctx, finally_body);
+            crate::ir_lower::local_definedness::note_try_exit(ctx);
             if !ctx.builder.insertion_block_is_terminated() {
                 branch_to(ctx, after_block);
                 after_reachable = true;

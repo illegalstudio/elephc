@@ -25,6 +25,7 @@ use crate::names::{php_symbol_key, Name, NameKind};
 use crate::parser::ast::{Expr, ExprKind, Program};
 
 pub(crate) use function_fallbacks::FunctionFallbacks;
+pub(crate) use expressions::compact_entry_variable;
 
 /// Tracks namespace use imports for classes, functions, and constants.
 /// Used during name resolution to map short names to their canonical fully-qualified names.

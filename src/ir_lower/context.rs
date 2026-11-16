@@ -596,6 +596,11 @@ pub(crate) struct LoweringContext<'m, 'f> {
     pub(crate) owned_string_offset_sites: HashSet<Span>,
     pub(crate) append_update_cell_aliases: HashSet<String>,
     initialized_slots: HashSet<LocalSlotId>,
+    /// Run-time definedness of the locals a read may find unassigned (`local_definedness`).
+    ///
+    /// Survives speculative rollback on purpose: the names it learns are a property of the
+    /// body, and each body lowering re-installs its flags from them.
+    pub(crate) definedness: crate::ir_lower::local_definedness::DefinednessState,
     /// Slots that have received a string still living in the shared concat scratch buffer.
     ///
     /// Kept as a MAY set that only ever grows: a slot that once held scratch-backed bytes is
@@ -944,6 +949,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
             local_types: env,
             include_frame_slots: 0,
             initialized_slots: HashSet::default(),
+            definedness: Default::default(),
             scratch_backed_slots: HashSet::default(),
             functions,
             extern_functions,
@@ -1874,8 +1880,68 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
     /// Marks a local slot as initialized by caller or synthetic setup.
     pub(crate) fn mark_local_initialized(&mut self, name: &str) {
         if let Some(slot) = self.local_slots.get(name) {
-            self.initialized_slots.insert(*slot);
+            self.note_slot_initialized(*slot);
         }
+    }
+
+    /// Records that a slot now holds its local's value on the current path.
+    ///
+    /// For a local with a run-time definedness flag, a slot that was NOT yet stored on this path
+    /// makes the PHP variable definitely DEFINED, so the flag's marker joins the set (merges then
+    /// intersect it like any slot) and, the first time on this path, the flag itself is set: an
+    /// initialization that filled the storage in place emitted no store for the builder to see.
+    /// A store into an already stored slot can be a representation change (a loop's storage
+    /// contract, a hash promotion) of a variable that still does not exist, such as the entry
+    /// seed of a local `$a[] = …` creates, so it decides nothing here.
+    pub(crate) fn note_slot_initialized(&mut self, slot: LocalSlotId) {
+        let newly = self.initialized_slots.insert(slot);
+        if self.definedness.is_inactive() {
+            return;
+        }
+        let Some(name) = self.php_name_of_slot(slot) else {
+            return;
+        };
+        if !crate::ir_lower::local_definedness::names_a_php_variable(&name)
+            || (!newly && self.definedness.is_seeded(&name))
+        {
+            return;
+        }
+        crate::ir_lower::local_definedness::note_defined(self, &name);
+    }
+
+    /// Returns the PHP variable a frame slot stores, seeing through a parameter's COW shadow.
+    fn php_name_of_slot(&self, slot: LocalSlotId) -> Option<String> {
+        let name = self
+            .builder
+            .function()
+            .locals
+            .get(slot.as_raw() as usize)?
+            .name
+            .as_deref()?;
+        Some(name.strip_suffix("#cow").unwrap_or(name).to_string())
+    }
+
+    /// Sets a definedness flag on the current path unless it is already known set there.
+    pub(crate) fn mark_definedness_flag(&mut self, flag: LocalSlotId) {
+        if self.initialized_slots.insert(flag) && !self.builder.insertion_block_is_terminated() {
+            self.builder.emit_definedness_flag_store(flag, true);
+        }
+    }
+
+    /// Records a definedness marker as known set on this path without storing anything.
+    pub(crate) fn assume_definedness_flag_set(&mut self, flag: LocalSlotId) {
+        self.initialized_slots.insert(flag);
+    }
+
+    /// Withdraws the static "definitely set" fact of a definedness flag; the run-time flag stays.
+    pub(crate) fn forget_definedness_flag(&mut self, flag: LocalSlotId) {
+        self.initialized_slots.remove(&flag);
+    }
+
+    /// Returns whether a definedness flag is definitely set on the current path, so a read of its
+    /// local needs no run-time test.
+    pub(crate) fn definedness_flag_is_known_set(&self, flag: LocalSlotId) -> bool {
+        self.initialized_slots.contains(&flag)
     }
 
     /// Captures the definitely-initialized local slots at a control-flow split.
@@ -2197,7 +2263,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         }
         let slot = self.declare_local_with_kind(&name, PhpType::Int, LocalKind::HiddenTemp);
         self.builder.seed_entry_int_local(slot, 0);
-        self.initialized_slots.insert(slot);
+        self.note_slot_initialized(slot);
         slot
     }
 
@@ -4243,12 +4309,12 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
             );
             self.reset_array_pointer_cursor(name);
             self.ref_cell_owner_locals.remove(name);
-            self.initialized_slots.insert(slot);
+            self.note_slot_initialized(slot);
             self.abandon_local_binding(name);
             return null;
         }
         self.set_local_type(name, PhpType::Void);
-        self.initialized_slots.insert(slot);
+        self.note_slot_initialized(slot);
         null
     }
 
@@ -4397,7 +4463,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
                 span,
             );
         }
-        self.initialized_slots.insert(slot);
+        self.note_slot_initialized(slot);
         self.abandon_local_binding(name);
     }
 
@@ -4575,8 +4641,8 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
             span,
         );
         self.mark_ref_bound_local(name);
-        self.initialized_slots.insert(slot);
-        self.initialized_slots.insert(owner_slot);
+        self.note_slot_initialized(slot);
+        self.note_slot_initialized(owner_slot);
         owner_slot
     }
 
@@ -4653,7 +4719,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
             Op::BindRefCellPtr, vec![cell.value], Some(Immediate::LocalSlot(owner)),
             Op::BindRefCellPtr.default_effects(), span,
         );
-        self.initialized_slots.insert(owner);
+        self.note_slot_initialized(owner);
         if let Some(previous) = previous {
             crate::ir_lower::ownership::release_if_owned(self, previous, span);
         }
@@ -4680,7 +4746,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
             Op::BindRefCellPtr, vec![cell.value], Some(Immediate::LocalSlot(owner)),
             Op::BindRefCellPtr.default_effects(), span,
         );
-        self.initialized_slots.insert(owner);
+        self.note_slot_initialized(owner);
         if let Some(previous) = previous {
             crate::ir_lower::ownership::release_if_owned(self, previous, span);
         }
@@ -4719,7 +4785,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
             Op::BindRefCellPtr, vec![cell.value], Some(Immediate::LocalSlot(owner)),
             Op::BindRefCellPtr.default_effects(), span,
         );
-        self.initialized_slots.insert(owner);
+        self.note_slot_initialized(owner);
     }
 
     /// Lowers `$obj->prop = &$_SERVER` (any request superglobal): binds the property to the
@@ -4750,7 +4816,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
             Op::BindRefCellPtr, vec![cell.value], Some(Immediate::LocalSlot(owner)),
             Op::BindRefCellPtr.default_effects(), span,
         );
-        self.initialized_slots.insert(owner);
+        self.note_slot_initialized(owner);
         let property_data = self.intern_string(property);
         self.emit_void(
             Op::BindPropRefCell,
@@ -4807,7 +4873,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
             Op::AcquireRefCell.default_effects(),
             span,
         );
-        self.initialized_slots.insert(owner);
+        self.note_slot_initialized(owner);
         let property_data = self.intern_string(property);
         self.emit_void(
             Op::BindPropRefCell,
@@ -4886,14 +4952,14 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         } else {
             self.borrowed_element_ref_locals.remove(target);
         }
-        self.initialized_slots.insert(target_slot);
+        self.note_slot_initialized(target_slot);
         if let Some((source_owner, target_owner)) = owner_pair {
             self.emit_void(
                 Op::RetainLocalRefCell, Vec::new(),
                 Some(Immediate::LocalSlotPair { first: source_owner, second: target_owner }),
                 Op::RetainLocalRefCell.default_effects(), span,
             );
-            self.initialized_slots.insert(target_owner);
+            self.note_slot_initialized(target_owner);
         }
     }
 
@@ -4969,7 +5035,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         self.set_local_type(target, value_type.clone());
         let immediate = if owns_cell {
             let owner = self.declare_ref_cell_owner(target, value_type.clone());
-            self.initialized_slots.insert(owner);
+            self.note_slot_initialized(owner);
             Immediate::LocalSlotPair { first: target_slot, second: owner }
         } else {
             Immediate::LocalSlot(target_slot)
@@ -4989,7 +5055,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         // The caller marks an interior binding explicitly; a plain rebinding clears the marker
         // so a name reused for a managed cell is not treated as borrowed storage.
         self.borrowed_element_ref_locals.remove(target);
-        self.initialized_slots.insert(target_slot);
+        self.note_slot_initialized(target_slot);
     }
 
     /// Binds `target` to a reference cell it OWNS a share of, e.g. the cell an array element
@@ -5026,7 +5092,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
             Op::BindRefCellPtr.default_effects(),
             span,
         );
-        self.initialized_slots.insert(owner);
+        self.note_slot_initialized(owner);
     }
 
     /// Gives `name` a fresh slot when its current one stores a different representation than the
@@ -6635,6 +6701,26 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         kind == LocalKind::StaticLocal || self.uses_global_storage(name, kind)
     }
 
+    /// Whether a read of `name` is an ordinary load from this frame's own slot: not an extern C
+    /// global, not an eval-scope name, not global or static storage. Only such a variable can be
+    /// unassigned in a way this frame alone decides.
+    pub(crate) fn variable_read_is_frame_local(&self, name: &str) -> bool {
+        let kind = self.local_kinds.get(name).copied().unwrap_or(LocalKind::PhpLocal);
+        kind == LocalKind::PhpLocal
+            && self.extern_global_type(name).is_none()
+            && !self.should_load_from_eval_scope(name)
+            && !self.uses_global_storage(name, kind)
+            && !self.eval_barrier_active
+            && self.eval_scope_read_param.is_none()
+    }
+
+    /// Whether the current path definitely stored `name`'s slot, as far as lowering knows.
+    pub(crate) fn local_slot_is_initialized_here(&self, name: &str) -> bool {
+        self.local_slots
+            .get(name)
+            .is_some_and(|slot| self.initialized_slots.contains(slot))
+    }
+
     /// Returns whether the named PHP variable should use program-global storage.
     ///
     /// Request superglobals (`$_SERVER`/`$_GET`/`$_POST`) route to the shared
@@ -6709,7 +6795,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
             Op::StoreGlobal.default_effects(),
             span,
         );
-        self.initialized_slots.insert(slot);
+        self.note_slot_initialized(slot);
     }
 
     /// Reports whether a string value may still point into the shared concat scratch buffer.
@@ -6798,7 +6884,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
             op.default_effects(),
             span,
         );
-        self.initialized_slots.insert(slot);
+        self.note_slot_initialized(slot);
     }
 
     /// Emits a ref-cell store that carries the alias target type for backend dereference.
@@ -6825,7 +6911,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
             Op::StoreRefCell.default_effects(),
             span,
         );
-        self.initialized_slots.insert(slot);
+        self.note_slot_initialized(slot);
     }
 
     /// Starts a call-local capture group without disturbing a surrounding argument evaluation.

@@ -21,6 +21,12 @@ use crate::types::PhpType;
 pub struct Builder<'f> {
     func: &'f mut Function,
     current: Option<BlockId>,
+    /// Run-time "is defined" flag slot of each PHP local whose definedness lowering tracks.
+    ///
+    /// Set by `crate::ir_lower::local_definedness` for the few locals a read may find
+    /// unassigned; every other function keeps the map empty and pays nothing. Lives on the
+    /// builder rather than the function so a snapshot restore keeps it.
+    definedness_flags: crate::fast_hash::FastMap<String, LocalSlotId>,
 }
 
 impl<'f> Builder<'f> {
@@ -29,7 +35,93 @@ impl<'f> Builder<'f> {
         Self {
             func,
             current: None,
+            definedness_flags: crate::fast_hash::FastMap::default(),
         }
+    }
+
+    /// Installs the run-time definedness flags: every later instruction that writes a slot of
+    /// one of these PHP locals first sets its flag to 1.
+    pub fn set_definedness_flags(&mut self, flags: crate::fast_hash::FastMap<String, LocalSlotId>) {
+        self.definedness_flags = flags;
+    }
+
+    /// Returns the definedness flag an instruction must set before it writes a tracked local.
+    ///
+    /// Every op that names the local's slot DEFINES the PHP variable, except the ones that only
+    /// read it, release it or pin it for a call: a store, an in-place string append, a reference
+    /// promotion or alias, a by-reference argument. Over-approximating here can only hide an
+    /// `Undefined variable` warning, never invent one. `UnsetLocal` is handled by its caller.
+    ///
+    /// A store of the slot's own value, converted (`array_to_mixed`, a box, a retain), changes
+    /// the representation of whatever the slot holds and defines nothing: a loop's storage
+    /// contract rewrites the entry seed of a local `$a[] = …` creates before php's variable
+    /// exists.
+    fn definedness_flag_written_by(
+        &self,
+        op: Op,
+        operands: &[ValueId],
+        immediate: Option<&Immediate>,
+    ) -> Option<LocalSlotId> {
+        if matches!(
+            op,
+            Op::LoadLocal
+                | Op::LoadRefCell
+                | Op::ReleaseLocalSlot
+                | Op::ReleaseLocalRefCell
+                | Op::RetainLocalRefCell
+                | Op::AcquireRefCell
+                | Op::PushCallOperandOwner
+                | Op::PopCallOperandOwner
+                | Op::IterEnd
+                | Op::UnsetLocal
+                | Op::ZeroLocalSlot
+        ) {
+            return None;
+        }
+        let slot = match immediate? {
+            Immediate::LocalSlot(slot) => *slot,
+            Immediate::LocalSlotPair { first, .. } => *first,
+            _ => return None,
+        };
+        let name = self.local_php_name(slot)?;
+        let flag = self.definedness_flags.get(name).copied()?;
+        if op == Op::StoreLocal && self.value_reloads_local(operands.first().copied(), name) {
+            return None;
+        }
+        Some(flag)
+    }
+
+    /// Returns the PHP variable a slot stores, seeing through a parameter's copy-on-write shadow.
+    fn local_php_name(&self, slot: LocalSlotId) -> Option<&str> {
+        let name = self.func.locals.get(slot.as_raw() as usize)?.name.as_deref()?;
+        Some(name.strip_suffix("#cow").unwrap_or(name))
+    }
+
+    /// Whether `value` is a load of the PHP variable `name`, possibly through single-operand
+    /// conversions.
+    fn value_reloads_local(&self, value: Option<ValueId>, name: &str) -> bool {
+        let Some(mut value) = value else {
+            return false;
+        };
+        for _ in 0..8 {
+            let Some(inst) = self.value_defining_instruction(value) else {
+                return false;
+            };
+            match (inst.op, &inst.immediate) {
+                (Op::LoadLocal | Op::LoadRefCell, Some(Immediate::LocalSlot(slot))) => {
+                    return self.local_php_name(*slot) == Some(name);
+                }
+                _ if inst.operands.len() == 1 => value = inst.operands[0],
+                _ => return false,
+            }
+        }
+        false
+    }
+
+    /// Stores a constant into a definedness flag slot at the insertion point.
+    pub fn emit_definedness_flag_store(&mut self, flag: LocalSlotId, defined: bool) {
+        let value = self.emit_const_i64(i64::from(defined));
+        self.emit_store_local(flag, value);
     }
 
     /// Borrows the function being built.
@@ -751,6 +843,11 @@ impl<'f> Builder<'f> {
         effects: Effects,
         span: Option<Span>,
     ) -> Option<ValueId> {
+        if !self.definedness_flags.is_empty() {
+            if let Some(flag) = self.definedness_flag_written_by(op, &operands, immediate.as_ref()) {
+                self.emit_definedness_flag_store(flag, true);
+            }
+        }
         let block_id = self.current_block();
         self.assert_can_append(block_id);
         for operand in &operands {

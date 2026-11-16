@@ -151,7 +151,12 @@ pub(crate) fn lower_stmt(ctx: &mut LoweringContext<'_, '_>, stmt: &Stmt) {
         let previous_strict_types =
             std::mem::replace(&mut ctx.php_strict_types, stmt.strict_types);
         if !ctx.builder.insertion_block_is_terminated() {
+            let loop_markers = crate::ir_lower::local_definedness::loop_entry_markers(ctx, stmt);
             repr_fixpoint::lower_stmt_at_type_fixpoint(ctx, stmt);
+            crate::ir_lower::local_definedness::define_after_statement(ctx, stmt);
+            if let Some(known) = loop_markers {
+                crate::ir_lower::local_definedness::restore_loop_markers(ctx, stmt, known);
+            }
         }
         ctx.php_strict_types = previous_strict_types;
     });

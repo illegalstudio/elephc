@@ -920,7 +920,7 @@ where
 }
 
 /// Returns the caller-visible signature used to normalize direct call operands.
-pub(super) fn call_signature(
+pub(in crate::ir_lower) fn call_signature(
     ctx: &LoweringContext<'_, '_>,
     name: &str,
     prefer_extension_builtin: bool,

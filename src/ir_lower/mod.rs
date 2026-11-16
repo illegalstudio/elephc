@@ -24,6 +24,7 @@ mod expr;
 mod fibers;
 mod function;
 mod integer_local_contracts;
+mod local_definedness;
 mod loop_closures;
 mod numeric_storage;
 pub(crate) mod gradual_coercions;
