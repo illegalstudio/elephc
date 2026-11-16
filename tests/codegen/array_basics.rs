@@ -2704,3 +2704,28 @@ echo $hits, "\n";
         out.stderr
     );
 }
+
+/// Verifies a nested unset over a boxed non-array child follows PHP instead of raising a TypeError.
+#[test]
+fn test_nested_unset_through_array_access_and_null_children() {
+    let out = compile_and_run(
+        r#"<?php
+$bags = ['a' => new ArrayObject(['x' => 1, 'y' => 2]), 'b' => 7];
+unset($bags['a']['x']);
+echo count($bags['a']), "\n";
+$f = ['n' => null, 'm' => 1];
+unset($f['n']['x']);
+var_dump($f['n']);
+$arrays = ['p' => ['q' => 1, 'r' => 2], 'z' => 'mixed'];
+unset($arrays['p']['q']);
+echo count($arrays['p']), "\n";
+try {
+    $s = ['t' => 'text', 'u' => 1];
+    unset($s['t'][0]);
+} catch (Error $e) {
+    echo $e->getMessage(), "\n";
+}
+"#,
+    );
+    assert_eq!(out, "1\nNULL\n1\nCannot unset string offsets\n");
+}
