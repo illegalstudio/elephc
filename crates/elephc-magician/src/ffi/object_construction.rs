@@ -744,6 +744,14 @@ unsafe fn eval_method_call_inner(
     {
         context.set_call_site(file, directory, line);
     }
+    // The argument pack is read BEFORE any scope is pushed: a failed read returns at once, and
+    // returning after the pushes left the caller's class on this context's scope stacks.
+    clear_result(out);
+    let mut values = ElephcRuntimeOps::with_context(context as *const ElephcEvalContext);
+    let (args, spliced) = match read_method_call_arg_pack(arg_pack, &mut values) {
+        Ok(pack) => pack,
+        Err(status) => return status.code(),
+    };
     let forwarded_scopes = caller_context
         .filter(|caller| !std::ptr::eq(*caller, context))
         .and_then(|caller| unsafe { caller.as_ref() })
@@ -773,12 +781,6 @@ unsafe fn eval_method_call_inner(
     if let Some(class_name) = &native_caller_class {
         context.push_class_scope(class_name.clone());
     }
-    clear_result(out);
-    let mut values = ElephcRuntimeOps::with_context(context as *const ElephcEvalContext);
-    let (args, spliced) = match read_method_call_arg_pack(arg_pack, &mut values) {
-        Ok(pack) => pack,
-        Err(status) => return status.code(),
-    };
     if crate::eval_trace::enabled() {
         let call_site = context.call_site();
         eprintln!(
