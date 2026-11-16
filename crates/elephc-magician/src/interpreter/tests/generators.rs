@@ -789,3 +789,48 @@ echo $g->getReturn();"#
         "12",
     );
 }
+
+/// Returns the live reference count of every fake string cell holding `text`.
+fn string_cell_counts(values: &FakeOps, text: &str) -> Vec<i64> {
+    values
+        .values
+        .iter()
+        .filter(|(_, value)| matches!(value, FakeValue::String(held) if held == text))
+        .map(|(id, _)| values.refcounts.get(id).copied().unwrap_or(0))
+        .collect()
+}
+
+/// Verifies a generator CLOSURE keeps its literal arguments and by-value captures alive.
+///
+/// The scope handed to the generator borrowed those cells from the call that built it, and that
+/// call released its temporaries as soon as the Generator object existed, so the body later read
+/// freed cells. `php -n` 8.5.6 prints `L1|L2` for the consumed generator; the counts pin that a
+/// suspended generator owns one reference of each cell.
+#[test]
+fn a_generator_closure_owns_its_arguments_and_captures() {
+    let program = parse_fragment(
+        br#"$cap = 'capval';
+$g = (function ($a) { yield $a; })('argval');
+$h = (function () use ($cap) { yield $cap; })();
+$cap = 'other';"#,
+    )
+    .expect("parse generator closure fragment");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+    execute_program(&program, &mut scope, &mut values).expect("execute generator closure fragment");
+    assert!(
+        string_cell_counts(&values, "argval").iter().any(|count| *count >= 1),
+        "the generator closure's argument cell must stay live",
+    );
+    assert!(
+        string_cell_counts(&values, "capval").iter().any(|count| *count >= 1),
+        "the generator closure's captured cell must stay live",
+    );
+    assert_eq!(
+        out(
+            br#"$g = (function ($a, $b) { yield $a . '|' . $b; })('L1', 'L2');
+foreach ($g as $v) { echo $v; }"#
+        ),
+        "L1|L2",
+    );
+}

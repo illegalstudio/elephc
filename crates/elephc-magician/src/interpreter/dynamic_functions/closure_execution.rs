@@ -819,6 +819,14 @@ fn eval_closure_with_optional_binding_inner(
     // bound arguments — becomes the generator's own.
     if eval_body_is_generator(function.body()) {
         let generator = binding_result.and_then(|()| {
+            retain_generator_scope_args(
+                &mut function_scope,
+                function.params(),
+                &scope_parameter_is_by_ref,
+                &evaluated_args,
+                values,
+            )?;
+            retain_generator_closure_scope(&mut function_scope, closure.captures(), backtrace_object, values)?;
             eval_generator_new(
                 function.body(),
                 std::mem::replace(&mut function_scope, ElephcEvalScope::new()),
@@ -971,6 +979,33 @@ fn bind_closure_captures(
         }
     }
     bound_cells
+}
+
+/// Makes a generator closure's by-value captures and `$this` owned by the generator's scope.
+///
+/// [`bind_closure_captures`] and the `$this` binding borrow the closure object's cells, and the
+/// generator's scope outlives the call that created it: once the closure object is released
+/// before the generator is consumed, the body would read freed cells. Each one gets its own
+/// reference here, given back when the generator's scope is torn down. By-reference captures
+/// alias the captured variable and are left as bound.
+fn retain_generator_closure_scope(
+    generator_scope: &mut ElephcEvalScope,
+    captures: &[EvalClosureCaptureBinding],
+    this_object: Option<RuntimeCellHandle>,
+    values: &mut impl RuntimeValueOps,
+) -> Result<(), EvalStatus> {
+    for capture in captures {
+        if capture.by_ref_target().is_some() {
+            continue;
+        }
+        let retained = values.retain(capture.value())?;
+        generator_scope.set(capture.name().to_string(), retained, ScopeCellOwnership::Owned);
+    }
+    if let Some(object) = this_object {
+        let retained = values.retain(object)?;
+        generator_scope.set("this", retained, ScopeCellOwnership::Owned);
+    }
+    Ok(())
 }
 
 /// Returns the cell a by-reference capture's variable holds, while its activation is alive.
