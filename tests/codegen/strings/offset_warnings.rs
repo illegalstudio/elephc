@@ -126,3 +126,25 @@ fn test_string_offset_integer_string_read_is_silent() {
     assert_eq!(out.stdout, "b");
     assert_eq!(out.stderr, "");
 }
+
+/// A diagnostic longer than the runtime's accumulator is truncated but still completes, so a
+/// registered handler receives it and every later diagnostic is delivered too (the lost newline
+/// used to leave the accumulator full and stall all of them).
+#[test]
+fn test_oversized_diagnostic_does_not_stall_later_handler_dispatch() {
+    let out = compile_and_run_capture(
+        r#"<?php
+set_error_handler(function ($no, $message) {
+    echo strlen($message) > 3000 ? "long" : "short", "\n";
+    return true;
+});
+$a = [];
+$k = str_repeat('k', 5000);
+echo $a[$k];
+echo $undefined;
+echo $a[$k];
+echo "done\n";
+"#,
+    );
+    assert_eq!(out.stdout, "long\nshort\nlong\ndone\n");
+}

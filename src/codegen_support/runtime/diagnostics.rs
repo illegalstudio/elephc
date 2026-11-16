@@ -142,14 +142,22 @@ fn emit_diag_buffered_path_aarch64(emitter: &mut Emitter) {
     abi::emit_symbol_address(emitter, "x9", "_rt_diag_buf");
     emitter.label("__rt_diag_warning_append");
     emitter.instruction("cbz x2, __rt_diag_warning_appended");                  // the whole fragment has been copied
-    emitter.instruction(&format!("mov x12, #{}", RT_DIAG_BUF_BYTES));           // x12 = accumulator capacity
-    emitter.instruction("cmp x10, x12");                                        // is the accumulator full?
-    emitter.instruction("b.hs __rt_diag_warning_appended");                     // truncate rather than overrun the accumulator
     emitter.instruction("ldrb w11, [x1], #1");                                  // read one fragment byte and advance the source cursor
+    emitter.instruction("sub x2, x2, #1");                                      // one fewer fragment byte to copy
+    emitter.instruction(&format!("mov x12, #{}", RT_DIAG_BUF_BYTES - 1));       // x12 = capacity left for ordinary bytes: the last slot is the newline's
+    emitter.instruction("cmp x10, x12");                                        // only the terminating newline fits from here on?
+    emitter.instruction("b.hs __rt_diag_warning_tail");                         // truncate, but keep the diagnostic's newline
+    emitter.label("__rt_diag_warning_store");
     emitter.instruction("strb w11, [x9, x10]");                                 // append the byte to the accumulated diagnostic
     emitter.instruction("add x10, x10, #1");                                    // advance the accumulator cursor
-    emitter.instruction("sub x2, x2, #1");                                      // one fewer fragment byte to copy
     emitter.instruction("b __rt_diag_warning_append");                          // continue copying the fragment
+    emitter.label("__rt_diag_warning_tail");
+    emitter.instruction("cmp w11, #10");                                        // is this the diagnostic's terminating newline?
+    emitter.instruction("b.ne __rt_diag_warning_append");                       // drop the byte: the truncated message still ends in a newline
+    emitter.instruction(&format!("mov x12, #{}", RT_DIAG_BUF_BYTES));           // x12 = accumulator capacity
+    emitter.instruction("cmp x10, x12");                                        // is the newline's own slot taken already?
+    emitter.instruction("b.lo __rt_diag_warning_store");                        // no: terminate the truncated diagnostic
+    emitter.instruction("b __rt_diag_warning_append");                          // yes: it already ends in a newline
     emitter.label("__rt_diag_warning_appended");
     abi::emit_store_reg_to_symbol(emitter, "x10", "_rt_diag_buf_len", 0);       // publish the accumulated length
 
@@ -306,14 +314,21 @@ fn emit_diag_buffered_path_x86_64(emitter: &mut Emitter) {
     emitter.label("__rt_diag_warning_append_linux_x86_64");
     emitter.instruction("test rsi, rsi");                                       // any fragment bytes left?
     emitter.instruction("jz __rt_diag_warning_appended_linux_x86_64");          // the whole fragment has been copied
-    emitter.instruction(&format!("cmp rax, {}", RT_DIAG_BUF_BYTES));            // is the accumulator full?
-    emitter.instruction("jae __rt_diag_warning_appended_linux_x86_64");         // truncate rather than overrun the accumulator
     emitter.instruction("mov dl, BYTE PTR [rdi]");                              // read one fragment byte
-    emitter.instruction("mov BYTE PTR [rcx + rax], dl");                        // append the byte to the accumulated diagnostic
     emitter.instruction("inc rdi");                                             // advance the source cursor
-    emitter.instruction("inc rax");                                             // advance the accumulator cursor
     emitter.instruction("dec rsi");                                             // one fewer fragment byte to copy
+    emitter.instruction(&format!("cmp rax, {}", RT_DIAG_BUF_BYTES - 1));        // only the terminating newline fits from here on?
+    emitter.instruction("jae __rt_diag_warning_tail_linux_x86_64");             // truncate, but keep the diagnostic's newline
+    emitter.label("__rt_diag_warning_store_linux_x86_64");
+    emitter.instruction("mov BYTE PTR [rcx + rax], dl");                        // append the byte to the accumulated diagnostic
+    emitter.instruction("inc rax");                                             // advance the accumulator cursor
     emitter.instruction("jmp __rt_diag_warning_append_linux_x86_64");           // continue copying the fragment
+    emitter.label("__rt_diag_warning_tail_linux_x86_64");
+    emitter.instruction("cmp dl, 10");                                          // is this the diagnostic's terminating newline?
+    emitter.instruction("jne __rt_diag_warning_append_linux_x86_64");           // drop the byte: the truncated message still ends in a newline
+    emitter.instruction(&format!("cmp rax, {}", RT_DIAG_BUF_BYTES));            // is the newline's own slot taken already?
+    emitter.instruction("jb __rt_diag_warning_store_linux_x86_64");             // no: terminate the truncated diagnostic
+    emitter.instruction("jmp __rt_diag_warning_append_linux_x86_64");           // yes: it already ends in a newline
     emitter.label("__rt_diag_warning_appended_linux_x86_64");
     abi::emit_store_reg_to_symbol(emitter, "rax", "_rt_diag_buf_len", 0);       // publish the accumulated length
 

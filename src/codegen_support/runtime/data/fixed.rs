@@ -48,8 +48,9 @@ use crate::types::checker::builtins::{
 ///
 /// Sized for the longest diagnostic the runtime renders — the `fopen()`/`file_get_contents()`
 /// failure lines carry no path today, and the undefined-key warning carries a key — with room
-/// to spare; a longer one is TRUNCATED at the boundary rather than overrunning, and the
-/// truncated bytes are what both the handler and the fallback write see.
+/// to spare; a longer one is TRUNCATED at the boundary rather than overrunning, keeping its
+/// terminating newline in the last slot so it still completes, and the truncated bytes are what
+/// both the handler and the fallback write see.
 pub(crate) const RT_DIAG_BUF_BYTES: usize = 4096;
 
 /// Emit the fixed runtime `.data` section as assembly text.
