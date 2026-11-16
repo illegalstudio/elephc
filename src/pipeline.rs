@@ -1049,7 +1049,7 @@ fn compile_config(config: CliConfig, entry: EntryKind<'_>) {
         web,
         &mut prelude_inventory,
     );
-    let ast = crate::assert_prelude::inject_if_used(ast);
+    let ast = crate::assert_prelude::inject_if_used(ast, &mut prelude_inventory);
     // PDO and mysqli, which php loads as extensions: Doctrine DBAL is autoloaded, so the early
     // gates saw only the entry program, and symfony/demo's `PDO::connect()` became a static call
     // to a class the closed world does not define. Both preludes carry `namespace`/`use`

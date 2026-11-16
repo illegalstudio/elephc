@@ -2,12 +2,8 @@
   "_comment": "Legacy sites that still hand PHP source text to elephc's parser on a production path. See AGENTS.md, 'PHP surfaces are built as AST, never parsed from PHP text'. This list may only SHRINK: convert a site, then re-record with --write in the same commit.",
   "sites": {
     "crates/elephc-phar/src/model.rs:99:php-text": "pub(super) const PHAR_DEFAULT_STUB: &[u8] = b\"<?php __HALT_COMPILER(); ?>\\r\\n\";",
-    "src/array_merge_prelude.rs:157:parser-call": "crate::lexer::tokenize(ARRAY_MERGE_PRELUDE_SRC).expect(\"array_merge prelude must tokenize\");",
-    "src/array_merge_prelude.rs:46:php-text": "pub const ARRAY_MERGE_PRELUDE_SRC: &str = r#\"<?php",
     "src/array_reduce_prelude.rs:19:php-text": "pub const ARRAY_REDUCE_PRELUDE_SRC: &str = r#\"<?php",
     "src/array_reduce_prelude.rs:34:parser-call": "let tokens = crate::lexer::tokenize(ARRAY_REDUCE_PRELUDE_SRC)",
-    "src/assert_prelude.rs:18:php-text": "pub const ASSERT_PRELUDE_SRC: &str = r#\"<?php",
-    "src/assert_prelude.rs:32:parser-call": "let tokens = crate::lexer::tokenize(ASSERT_PRELUDE_SRC).expect(\"assert prelude must tokenize\");",
     "src/autoload/walk.rs:483:php-text": "let source = format!(\"<?php\\n{source}\");",
     "src/autoload/walk.rs:484:parser-call": "let Ok(tokens) = crate::lexer::tokenize(&source) else {",
     "src/backend_gap_prelude.rs:115:php-text": "const LEVENSHTEIN_TWO_ARG_SRC: &str = r#\"<?php",
