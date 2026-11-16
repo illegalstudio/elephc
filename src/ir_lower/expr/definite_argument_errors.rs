@@ -9,7 +9,8 @@
 //! Key details:
 //! - php binds parameters when the call RUNS, so the build stands and the throw happens here.
 //! - The message gets php's `, called in FILE on line N` clause, which only lowering can name:
-//!   the checker has no file identity for a span, lowering has the path table.
+//!   the checker has no file identity for a span, lowering has the path table. A callee php
+//!   implements internally (a prelude stand-in such as GD's `imagepng()`) gets no clause.
 //! - The call's value is null after the throw (dead code), like every statically thrown call.
 
 use super::*;
@@ -31,16 +32,17 @@ pub(super) fn lower_definite_argument_mismatch(
         _ => return None,
     };
     let scope = ctx.loop_storage_scope.clone();
-    let message = args.iter().find_map(|arg| {
+    let (message, internal_callee) = args.iter().find_map(|arg| {
         let inner = match &arg.kind {
             ExprKind::NamedArg { value, .. } => value,
             _ => arg,
         };
         [arg.span, inner.span].into_iter().find_map(|span| {
             match ctx.throw_access_sites.get(&(scope.clone(), span)).map(|info| &info.kind) {
-                Some(crate::types::ThrowAccessKind::CallArgumentType { message }) => {
-                    Some(message.clone())
-                }
+                Some(crate::types::ThrowAccessKind::CallArgumentType {
+                    message,
+                    internal_callee,
+                }) => Some((message.clone(), *internal_callee)),
                 _ => None,
             }
         })
@@ -57,8 +59,13 @@ pub(super) fn lower_definite_argument_mismatch(
         &ReturnArgAlias::None,
         expr.span,
     );
-    let file = call_site_file(ctx, expr.span);
-    let message = format!("{}, called in {} on line {}", message, file, expr.span.line);
+    // php names no call site for a function it implements internally (`imagepng(123)`).
+    let message = if internal_callee {
+        message
+    } else {
+        let file = call_site_file(ctx, expr.span);
+        format!("{}, called in {} on line {}", message, file, expr.span.line)
+    };
     let thrown = crate::ir_lower::stmt::lower_throw_access_class_expr(
         ctx,
         "TypeError",

@@ -648,9 +648,8 @@ fn curl_handles_free_their_native_handle() {
 /// Verifies a `curl_*` function given a non-handle throws php's catchable `TypeError` when the
 /// call runs, for the easy, multi and share surfaces. `tests/error_tests/curl.rs` only asserts
 /// that these calls compile (php never refuses them at compile time); this pins what they do.
-/// Expected output is php 8.5.10's. The message is cut at `, called in`: php adds no call site
-/// for an internal function, and elephc's prelude-declared wrappers may (a known divergence
-/// shared with GD's `imagepng(123)`), which this fixture does not pin.
+/// Expected output is php 8.5.10's, compared whole: php adds no `, called in` call site for an
+/// internal function, and neither do elephc's prelude-declared stand-ins for one.
 #[test]
 fn test_curl_functions_throw_type_error_for_a_non_handle() {
     if skip_without_curl_native("test_curl_functions_throw_type_error_for_a_non_handle") {
@@ -659,7 +658,7 @@ fn test_curl_functions_throw_type_error_for_a_non_handle() {
     let out = compile_and_run(
         r#"<?php
 function t(callable $f) {
-    try { $f(); echo "no error\n"; } catch (TypeError $e) { echo explode(', called in', $e->getMessage())[0], "\n"; }
+    try { $f(); echo "no error\n"; } catch (TypeError $e) { echo $e->getMessage(), "\n"; }
 }
 t(fn() => curl_exec("not a handle"));
 t(fn() => curl_setopt(1, CURLOPT_URL, "http://127.0.0.1/"));

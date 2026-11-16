@@ -333,6 +333,7 @@ impl Checker {
             return false;
         };
         let callee = self.declaring_callee_label(callee);
+        let internal_callee = self.callee_is_php_internal(&callee);
         let prefix = format!(
             "{}(): Argument #{} (${}) must be of type int, ",
             callee, self.binding_position, param
@@ -343,7 +344,10 @@ impl Checker {
             arg.span,
             crate::types::ThrowAccessInfo {
                 span: arg.span,
-                kind: crate::types::ThrowAccessKind::CallArgumentIntCoercion { prefix },
+                kind: crate::types::ThrowAccessKind::CallArgumentIntCoercion {
+                    prefix,
+                    internal_callee,
+                },
             },
         );
         true
@@ -392,6 +396,7 @@ impl Checker {
             return false;
         };
         let callee = self.declaring_callee_label(callee);
+        let internal_callee = self.callee_is_php_internal(&callee);
         let message = format!(
             "{}(): Argument #{} (${}) must be of type {}, {} given",
             callee,
@@ -410,10 +415,35 @@ impl Checker {
             arg.span,
             crate::types::ThrowAccessInfo {
                 span: arg.span,
-                kind: crate::types::ThrowAccessKind::CallArgumentType { message },
+                kind: crate::types::ThrowAccessKind::CallArgumentType {
+                    message,
+                    internal_callee,
+                },
             },
         );
         true
+    }
+
+    /// Returns whether a binding `TypeError`'s declaring callee label (`f`, `Class::method`)
+    /// names a function or method php implements internally, whose argument errors carry no
+    /// `, called in` clause.
+    ///
+    /// elephc supplies part of php's internal surface as injected PHP (GD's `imagepng()`, curl's
+    /// `curl_exec()`, the classes of the PDO or tidy preludes), so those callees are user code to
+    /// the compiler. A function counts when a compiler-generated statement declared it and the
+    /// builtin contract files it as `PreludeProvided`; a method, when its class is internal.
+    /// `imagepng(123)` then reads `imagepng(): Argument #1 ($image) must be of type GdImage, int
+    /// given`, as in php.
+    fn callee_is_php_internal(&self, callee: &str) -> bool {
+        let callee = callee.trim_start_matches('\\');
+        if let Some((class_name, _)) = callee.split_once("::") {
+            return self.classes.get(class_name).is_some_and(|info| info.is_internal);
+        }
+        self.internal_function_decls.contains(&crate::names::php_symbol_key(callee))
+            && elephc_builtin_contract::lookup(callee).is_some_and(|contract| {
+                contract.kind == elephc_builtin_contract::BuiltinKind::PreludeProvided
+                    && !contract.internal
+            })
     }
 
     /// Rewrites `Receiver::method` to `Declaring::method`: php names the class that DECLARES the

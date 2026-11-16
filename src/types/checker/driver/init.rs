@@ -106,6 +106,7 @@ impl Checker {
             declared_class_parents: HashMap::default(),
             declared_class_interfaces: HashMap::default(),
             internal_class_decls: HashSet::default(),
+            internal_function_decls: HashSet::default(),
             enums: HashMap::default(),
             declared_interfaces: HashSet::default(),
             declared_traits: HashSet::default(),

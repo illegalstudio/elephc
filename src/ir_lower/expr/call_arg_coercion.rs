@@ -502,19 +502,26 @@ fn coerce_weak_int_argument(
     arg: &Expr,
 ) -> Option<LoweredValue> {
     let scope = ctx.loop_storage_scope.clone();
-    let prefix = match ctx.throw_access_sites.get(&(scope, arg.span)).map(|info| &info.kind) {
-        Some(crate::types::ThrowAccessKind::CallArgumentIntCoercion { prefix }) => prefix.clone(),
-        _ => return None,
-    };
-    let file = definite_argument_errors::call_site_file(ctx, arg.span);
+    let (prefix, internal_callee) =
+        match ctx.throw_access_sites.get(&(scope, arg.span)).map(|info| &info.kind) {
+            Some(crate::types::ThrowAccessKind::CallArgumentIntCoercion {
+                prefix,
+                internal_callee,
+            }) => (prefix.clone(), *internal_callee),
+            _ => return None,
+        };
     let given = match ctx.builder.value_php_type(value.value).codegen_repr() {
         PhpType::Float => "float",
         _ => "string",
     };
-    let data = ctx.intern_string(&format!(
-        "{}{} given, called in {} on line {}",
-        prefix, given, file, arg.span.line
-    ));
+    // php names no call site for a function it implements internally.
+    let message = if internal_callee {
+        format!("{}{} given", prefix, given)
+    } else {
+        let file = definite_argument_errors::call_site_file(ctx, arg.span);
+        format!("{}{} given, called in {} on line {}", prefix, given, file, arg.span.line)
+    };
+    let data = ctx.intern_string(&message);
     Some(ctx.emit_value(
         Op::ArgumentStringToInt,
         vec![value.value],

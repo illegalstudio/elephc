@@ -373,6 +373,11 @@ pub(crate) struct Checker {
     /// prelude, `SourceMode::Internal`). Together with the builtins that have no source span,
     /// these are the classes `ClassInfo::is_internal` marks as elephc's own.
     pub internal_class_decls: HashSet<String>,
+    /// Symbol keys of the functions declared by compiler-generated statements: GD's
+    /// `imagepng()` or curl's `curl_exec()` are php internal functions elephc supplies as
+    /// injected PHP. A user polyfill of the same name (declared when the extension is off) is
+    /// not in it.
+    pub internal_function_decls: HashSet<String>,
     /// Enum definitions collected during the first pass, keyed by canonical name.
     pub enums: HashMap<String, EnumInfo>,
     /// Canonical interface names declared in the program, available for forward references

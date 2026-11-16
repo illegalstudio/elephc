@@ -171,6 +171,14 @@ pub(super) fn check_types_impl(
             _ => None,
         })
         .collect();
+    checker.internal_function_decls = program
+        .iter()
+        .filter(|stmt| stmt.source_mode == crate::source::SourceMode::Internal)
+        .filter_map(|stmt| match &stmt.kind {
+            StmtKind::FunctionDecl { name, .. } => Some(crate::names::php_symbol_key(name)),
+            _ => None,
+        })
+        .collect();
     // Resolve the relative class types `self`/`static`/`parent` in every member type annotation
     // now that inheritance and trait flattening have settled the concrete enclosing class. This
     // single pass feeds the schema signatures, the body-check pass, and codegen (which all read

@@ -173,3 +173,30 @@ echo ($info === false ? "false" : "array");
     );
     assert_eq!(out, "false");
 }
+
+/// Verifies a GD function given a non-image throws php's `TypeError` with no `, called in`
+/// clause: php names no call site for an internal function, and GD's functions are elephc
+/// prelude stand-ins for php's. A user function with the same parameter keeps the clause.
+/// Expected output is `php -n` 8.5's.
+#[test]
+fn test_gd_type_error_names_no_call_site() {
+    let out = compile_and_run(
+        r#"<?php
+function needs_image(GdImage $image): int { return 1; }
+function t(callable $f) {
+    try { $f(); echo "no error\n"; } catch (TypeError $e) { echo str_replace(__DIR__ . "/", "", $e->getMessage()), "\n"; }
+}
+t(fn() => imagepng(123));
+t(fn() => imagesx("not an image"));
+t(fn() => imagecolorallocate(1.5, 0, 0, 0));
+t(fn() => needs_image(123));
+"#,
+    );
+    assert_eq!(
+        out,
+        "imagepng(): Argument #1 ($image) must be of type GdImage, int given\n\
+         imagesx(): Argument #1 ($image) must be of type GdImage, string given\n\
+         imagecolorallocate(): Argument #1 ($image) must be of type GdImage, float given\n\
+         needs_image(): Argument #1 ($image) must be of type GdImage, int given, called in test.php on line 9\n"
+    );
+}

@@ -77,10 +77,14 @@ pub enum ThrowAccessKind {
     ///
     /// php never refuses this at compile time: the call evaluates its arguments, then throws
     /// `TypeError`. Lowering finds the site from the call's arguments, evaluates all of them, and
-    /// appends php's `, called in FILE on line N` clause to `message`.
+    /// appends php's `, called in FILE on line N` clause to `message` -- unless the callee is one
+    /// php implements internally, whose binding errors carry no call site.
     CallArgumentType {
         /// The message without the `called in` clause.
         message: String,
+        /// Whether the callee stands for a php internal function or method
+        /// (`Checker::callee_is_php_internal`).
+        internal_callee: bool,
     },
     /// A weak-mode argument php coerces to an `int` parameter at run time: a string or float
     /// whose value only the call knows. Keyed by the ARGUMENT's span.
@@ -88,10 +92,14 @@ pub enum ThrowAccessKind {
     /// A numeric string or an integral float binds, a fractional one binds after php's
     /// `Deprecated:` precision notice, and anything else throws `TypeError`. Lowering converts
     /// the argument with the return-boundary int coercion, whose message is `prefix` followed by
-    /// the runtime type word and php's `given, called in FILE on line N` clause.
+    /// the runtime type word and php's `given, called in FILE on line N` clause (just ` given`
+    /// for a php internal callee).
     CallArgumentIntCoercion {
         /// `f(): Argument #N ($p) must be of type int, `
         prefix: String,
+        /// Whether the callee stands for a php internal function or method
+        /// (`Checker::callee_is_php_internal`).
+        internal_callee: bool,
     },
     /// A `self::`/`parent::` call naming a method the class does not have.
     ///
