@@ -3118,6 +3118,11 @@ pub(super) fn emit_publish_diag_location(ctx: &mut FunctionContext<'_>) {
 /// `declared_function_source_files`; top-level code and anything else falls back to the entry
 /// script, which is the file `__FILE__` resolves to there.
 fn diag_location_file(ctx: &FunctionContext<'_>) -> Option<String> {
+    // The instruction's own span knows its file, which covers class methods and closures of an
+    // included file (the function map lists plain functions only, under folded spellings).
+    if let Some(file) = ctx.span_source_file(ctx.current_instruction_span()) {
+        return Some(file.to_string());
+    }
     if let Some(file) = ctx
         .module
         .declared_function_source_files
