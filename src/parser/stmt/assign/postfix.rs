@@ -621,13 +621,18 @@ pub(crate) fn lower_nested_append_assignment(
 ) -> Result<Stmt, CompileError> {
     let mut lowerer = EffectfulTargetLowerer::new(span);
     let delayed_receiver = has_delayed_static_receiver(&target);
-    let (target, dynamic_root) = lowerer.hoist_dynamic_property_root(target);
+    // A delayed static receiver is fetched only after the right-hand side runs, as php does: a
+    // hoisted `Holder::$object->{name()}` root is read after `name()` and the RHS, so an RHS
+    // that replaces `Holder::$object` appends to the new object (php -n 8.5.10).
+    let mut value = value;
+    let (target, dynamic_root, settled) =
+        lowerer.hoist_dynamic_property_root(target, delayed_receiver.then_some(&mut value));
     // The fused-append recognizer (`ir_lower::stmt::nested_append::recognize`) matches the
     // read/push/write-back triple at the END of its own `Synthetic` group, so a hoisted root's
     // extra write-back must sit outside it.
     let group_start = lowerer.stmts.len();
     let target = lowerer.stabilize_array_target(target);
-    let value = if delayed_receiver {
+    let value = if delayed_receiver && !settled {
         lowerer.stabilize_unconditionally(value)
     } else {
         value
@@ -1626,14 +1631,19 @@ impl EffectfulTargetLowerer {
     /// never written back. `$this->{lcfirst($symbol) . 'AttributeConfigurators'}[$name][] =
     /// $callable` -- Symfony's attribute autoconfiguration -- registered nothing. The object and
     /// the name are each evaluated once, before the read, as php does.
+    ///
+    /// `settle_before_read` is a right-hand side to run between the name capture and the root
+    /// read; it is replaced by its settled temporary and the returned flag says it was.
     fn hoist_dynamic_property_root(
         &mut self,
         target: Expr,
-    ) -> (Expr, Option<HoistedDynamicPropertyRoot>) {
+        settle_before_read: Option<&mut Expr>,
+    ) -> (Expr, Option<HoistedDynamicPropertyRoot>, bool) {
         let span = target.span;
         match target.kind {
             ExprKind::ArrayAccess { array, index } => {
-                let (array, root) = self.hoist_dynamic_property_root(*array);
+                let (array, root, settled) =
+                    self.hoist_dynamic_property_root(*array, settle_before_read);
                 (
                     Expr::new(
                         ExprKind::ArrayAccess {
@@ -1643,11 +1653,20 @@ impl EffectfulTargetLowerer {
                         span,
                     ),
                     root,
+                    settled,
                 )
             }
             ExprKind::DynamicPropertyAccess { object, property } => {
                 let object = self.stabilize(*object);
                 let name = self.stabilize(*property);
+                let settled = match settle_before_read {
+                    Some(value) => {
+                        let raw = std::mem::replace(value, Expr::new(ExprKind::Null, span));
+                        *value = self.stabilize_unconditionally(raw);
+                        true
+                    }
+                    None => false,
+                };
                 let temp = self.next_temp_name();
                 self.stmts.push(Stmt::new(
                     StmtKind::Assign {
@@ -1665,9 +1684,10 @@ impl EffectfulTargetLowerer {
                 (
                     Expr::new(ExprKind::Variable(temp.clone()), span),
                     Some(HoistedDynamicPropertyRoot { object, name, temp }),
+                    settled,
                 )
             }
-            kind => (Expr::new(kind, span), None),
+            kind => (Expr::new(kind, span), None, false),
         }
     }
 

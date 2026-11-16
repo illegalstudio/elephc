@@ -113,6 +113,11 @@ fn test_parse_static_receiver_review_append_preludes() {
 }
 
 /// A computed runtime-name append captures only the name before settling the RHS.
+///
+/// The `Holder::$object->{name()}` root is read into a temporary, and that read is the receiver
+/// traversal: it must come after the RHS, so a `replace()` that assigns a new `Holder::$object`
+/// appends to the new object. php -n 8.5.10 prints `0 3` for that probe (the first object is left
+/// alone, the new one's `[1, 2]` gains the value).
 #[test]
 fn test_parse_static_receiver_dynamic_append_prelude_order() {
     let source = "<?php Holder::$object->{name()}[0][] = replace();";
@@ -125,7 +130,8 @@ fn test_parse_static_receiver_dynamic_append_prelude_order() {
         if matches!(&value.kind, ExprKind::FunctionCall { name, .. } if name == "replace")),
         "{source}: the RHS must precede receiver traversal: {body:?}");
     assert!(matches!(&body[2].kind, StmtKind::Assign { value, .. }
-        if matches!(&value.kind, ExprKind::ArrayAccess { .. })),
+        if matches!(&value.kind, ExprKind::DynamicPropertyAccess { object, .. }
+            if matches!(object.kind, ExprKind::StaticPropertyAccess { .. }))),
         "{source}: the receiver traversal must follow the RHS: {body:?}");
 }
 
