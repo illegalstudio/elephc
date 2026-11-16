@@ -69,6 +69,18 @@ fn emit_textual_date_arm64(emitter: &mut Emitter) {
     emitter.instruction("bl __rt_strtotime_parse_dec");                         // x5 = day
     emitter.instruction("cmp x3, x12");                                         // did the day consume any digit?
     emitter.instruction("b.eq __rt_strtotime_fail");                            // no day → fail
+    emitter.instruction("sub x13, x3, x12");                                    // digits the number after the month consumed
+    emitter.instruction("cmp x13, #4");                                         // four digits after a month name are a YEAR ("April 2024")
+    emitter.instruction("b.ne __rt_strtotime_textual_mf_day");                  // otherwise the number is a day
+    emitter.instruction("mov x3, x12");                                         // rewind to the year digits
+    emitter.instruction("mov w9, #1");                                          // the first of that month
+    emitter.instruction("str w9, [sp, #12]");                                   // tm_mday = 1
+    emitter.instruction("b __rt_strtotime_textual_year");                       // the common tail reads the year and an optional time
+    emitter.label("__rt_strtotime_textual_mf_day");
+    emitter.instruction("cmp x13, #2");                                         // a day has at most two digits
+    emitter.instruction("b.hi __rt_strtotime_fail");                            // "April 123" is no date
+    emitter.instruction("cmp x5, #31");                                         // nor can a day exceed 31
+    emitter.instruction("b.hi __rt_strtotime_fail");                            // "April 45" is no date
     emitter.instruction("str w5, [sp, #12]");                                   // tm_mday (mktime normalizes overflow)
     emitter.instruction("cmp x3, x4");                                          // need a year after the day
     emitter.instruction("b.ge __rt_strtotime_textual_noyear");                  // no year: the clock's own year ("1 april", "april 1")
@@ -232,6 +244,18 @@ fn emit_textual_date_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("call __rt_strtotime_parse_dec_linux_x86_64");          // rax = day
     emitter.instruction("cmp rdi, rdx");                                        // did the day consume any digit?
     emitter.instruction("je __rt_strtotime_fail_linux_x86_64");                 // no day → fail
+    emitter.instruction("mov rcx, rdi");                                        // cursor after the number ...
+    emitter.instruction("sub rcx, rdx");                                        // ... minus its start = digits consumed
+    emitter.instruction("cmp rcx, 4");                                          // four digits after a month name are a YEAR ("April 2024")
+    emitter.instruction("jne __rt_strtotime_textual_mf_day_linux_x86_64");      // otherwise the number is a day
+    emitter.instruction("mov rdi, rdx");                                        // rewind to the year digits
+    emitter.instruction("mov DWORD PTR [rsp + 12], 1");                         // tm_mday = 1: the first of that month
+    emitter.instruction("jmp __rt_strtotime_textual_year_linux_x86_64");        // the common tail reads the year and an optional time
+    emitter.label("__rt_strtotime_textual_mf_day_linux_x86_64");
+    emitter.instruction("cmp rcx, 2");                                          // a day has at most two digits
+    emitter.instruction("ja __rt_strtotime_fail_linux_x86_64");                 // "April 123" is no date
+    emitter.instruction("cmp rax, 31");                                         // nor can a day exceed 31
+    emitter.instruction("ja __rt_strtotime_fail_linux_x86_64");                 // "April 45" is no date
     emitter.instruction("mov DWORD PTR [rsp + 12], eax");                       // tm_mday (mktime normalizes overflow)
     emitter.instruction("cmp rdi, r10");                                        // need a year after the day
     emitter.instruction("jae __rt_strtotime_textual_noyear_linux_x86_64");      // no year: the clock's own year ("1 april", "april 1")

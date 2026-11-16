@@ -410,7 +410,19 @@ fn emit_dispatcher_arm64(emitter: &mut Emitter) {
     emitter.instruction("add x1, x3, x10");                                     // x1 = first byte after the keyword
     emitter.instruction("sub x2, x2, x10");                                     // x2 = remaining length
     emitter.instruction("mov x3, #1");                                          // the keyword timestamp is the base
+    emitter.adrp("x9", "_strtotime_depth");                                     // page of the keyword-chain depth counter
+    emitter.add_lo12("x9", "x9", "_strtotime_depth");                           // resolve the counter address
+    emitter.instruction("ldr x11, [x9]");                                       // current nesting of keyword chains
+    emitter.instruction("cmp x11, #256");                                       // a chain this long would overrun the stack
+    emitter.instruction("b.hs __rt_strtotime_fail");                            // php answers in constant stack; refuse instead of crashing
+    emitter.instruction("add x11, x11, #1");                                    // one level deeper
+    emitter.instruction("str x11, [x9]");                                       // publish the new depth
     emitter.instruction("bl __rt_strtotime");                                   // x0 = offset applied to the keyword timestamp, or the failure sentinel
+    emitter.adrp("x9", "_strtotime_depth");                                     // page of the keyword-chain depth counter
+    emitter.add_lo12("x9", "x9", "_strtotime_depth");                           // resolve the counter address
+    emitter.instruction("ldr x11, [x9]");                                       // nesting including this level
+    emitter.instruction("sub x11, x11, #1");                                    // the nested parse returned
+    emitter.instruction("str x11, [x9]");                                       // publish the restored depth
     emitter.instruction("cbz x1, __rt_strtotime_fail");                         // the nested parse failed: so does this one
     emitter.instruction("b __rt_strtotime_ret");                                // return through the shared epilogue
 
@@ -878,8 +890,14 @@ fn emit_dispatcher_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rsi, QWORD PTR [rbp - 72]");                       // reload the trimmed input length
     emitter.instruction("sub rsi, r10");                                        // rsi = remaining length
     emitter.instruction("mov rdx, rax");                                        // the keyword timestamp is the base
+    emitter.instruction("mov r8, QWORD PTR [rip + _strtotime_depth]");         // current nesting of keyword chains
+    emitter.instruction("cmp r8, 256");                                         // a chain this long would overrun the stack
+    emitter.instruction("jae __rt_strtotime_fail_linux_x86_64");                // php answers in constant stack; refuse instead of crashing
+    emitter.instruction("add r8, 1");                                           // one level deeper
+    emitter.instruction("mov QWORD PTR [rip + _strtotime_depth], r8");         // publish the new depth
     emitter.instruction("mov rcx, 1");                                          // the base timestamp is supplied
     emitter.instruction("call __rt_strtotime");                                 // rax = offset applied to the keyword timestamp, or the failure sentinel
+    emitter.instruction("sub QWORD PTR [rip + _strtotime_depth], 1");          // the nested parse returned
     emitter.instruction("test rdx, rdx");                                       // did the nested parse succeed?
     emitter.instruction("jz __rt_strtotime_fail_linux_x86_64");                 // the nested parse failed: so does this one
     emitter.instruction("jmp __rt_strtotime_ret_linux_x86_64");                 // return through the shared epilogue

@@ -375,6 +375,7 @@ pub(crate) fn emit_runtime_data_fixed(
     out.push_str(&comm_directive("_unser_count", 8, target));
     out.push_str(&comm_directive("_unser_values", 524288, target));
     out.push_str(&comm_directive("_strtotime_clock", 8, target));
+    out.push_str(&comm_directive("_strtotime_depth", 8, target));
     // Scratch copy a one-digit-month/day ISO date (`2020-1-5`) is zero-padded into before the
     // fixed-offset ISO parser reads it (see `system::strtotime::iso_date`).
     out.push_str(&comm_directive(
