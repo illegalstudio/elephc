@@ -763,12 +763,7 @@ fn finalize_user_asm(
     user_asm.push_str(&user_data);
     if module.required_runtime_features.const_introspection {
         let const_registry = scalar_const_registry(module);
-        let mut enum_names: Vec<String> = module
-            .enum_infos
-            .keys()
-            .map(|name| name.trim_start_matches('\\').to_string())
-            .collect();
-        enum_names.sort_by(|a, b| a.as_bytes().cmp(b.as_bytes()));
+        let enum_names = sorted_lowercased_registry_names(module.enum_infos.keys());
         let error_class_id = runtime_classes
             .get("Error")
             .map(|info| info.class_id)
