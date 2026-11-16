@@ -23,7 +23,7 @@
 mod encode;
 pub(crate) mod listing;
 
-use crate::fast_hash::{FastMap as HashMap, FastSet as HashSet};
+use crate::fast_hash::FastMap as HashMap;
 
 use object::write::{Object, Relocation, StandardSection, Symbol, SymbolId, SymbolSection};
 use object::{
@@ -916,6 +916,16 @@ pub(crate) fn assemble_parts_two_pass<'a>(parts: &[&'a str], names: Names<'a>) -
 }
 
 /// Builds the Mach-O object from the placed sections, the labels and the relocations.
+thread_local! {
+    /// Name hashes `write_object` performed on this thread: one per relocation and two per label,
+    /// never one more per relocation in the loop that adds them (a regression test holds it).
+    pub(crate) static WRITE_NAME_HASHES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+fn count_name_hashes(count: usize) {
+    WRITE_NAME_HASHES.with(|cell| cell.set(cell.get() + count));
+}
+
 fn write_object(layout: &Layout<'_>, sections: [Vec<u8>; 2], relocs: Vec<PendingReloc<'_>>) -> Result<Vec<u8>> {
     let mut object = Object::new(BinaryFormat::MachO, Architecture::Aarch64, Endianness::Little);
     // The listing already spells Mach-O names (`_main`); the writer must not prefix them again.
@@ -940,28 +950,39 @@ fn write_object(layout: &Layout<'_>, sections: [Vec<u8>; 2], relocs: Vec<Pending
         Sect::Data => data,
     };
 
-    let referenced: HashSet<&str> = relocs.iter().map(|reloc| reloc.target).collect();
-    let mut symbols: HashMap<&str, SymbolId> = HashMap::default();
-    // Defined labels, in a stable order: by section, then offset, then name. An unreferenced,
-    // unexported `L` label never reaches the symbol table (below), and it is most of them, so it
-    // is left out before the sort rather than after it.
-    let mut defined: Vec<(&&str, &Place)> = layout
+    // Each distinct relocation target gets a slot, found once per relocation here, so neither the
+    // label pass nor the relocation loop below hashes a relocation's name again.
+    let mut slot_of: HashMap<&str, u32> = HashMap::default();
+    let mut slot_names = 0u32;
+    let mut reloc_slots: Vec<u32> = Vec::with_capacity(relocs.len());
+    for reloc in &relocs {
+        let slot = *slot_of.entry(reloc.target).or_insert(slot_names);
+        if slot == slot_names {
+            slot_names += 1;
+        }
+        reloc_slots.push(slot);
+    }
+    count_name_hashes(relocs.len());
+    let mut slot_symbols: Vec<Option<SymbolId>> = vec![None; slot_names as usize];
+    // Defined labels, in a stable order: by section, then offset, then name. An `L` label is
+    // assembler-local: `as` keeps it out of the symbol table unless it is exported or a
+    // relocation needs a symbol for it. That is most labels, so they are left out before the sort
+    // rather than after it.
+    let mut defined: Vec<(&str, Place, Option<bool>, Option<u32>)> = layout
         .labels
         .iter()
-        .filter(|(name, _)| {
-            name.as_bytes().first() != Some(&b'L') || layout.exported.contains_key(**name) || referenced.contains(**name)
+        .filter_map(|(name, place)| {
+            let exported = layout.exported.get(*name).copied();
+            let slot = slot_of.get(*name).copied();
+            (name.as_bytes().first() != Some(&b'L') || exported.is_some() || slot.is_some())
+                .then_some((*name, *place, exported, slot))
         })
         .collect();
-    defined.sort_by(|(left_name, left), (right_name, right)| {
-        (left.sect as u8, left.offset, **left_name).cmp(&(right.sect as u8, right.offset, **right_name))
+    count_name_hashes(2 * layout.labels.len());
+    defined.sort_by(|(left_name, left, ..), (right_name, right, ..)| {
+        (left.sect as u8, left.offset, *left_name).cmp(&(right.sect as u8, right.offset, *right_name))
     });
-    for (name, place) in defined {
-        let exported = layout.exported.get(*name).copied();
-        // An `L` label is assembler-local: `as` keeps it out of the symbol table unless a
-        // relocation needs a symbol for it.
-        if exported.is_none() && name.as_bytes().first() == Some(&b'L') && !referenced.contains(*name) {
-            continue;
-        }
+    for (name, place, exported, slot) in defined {
         let Some(section) = section_of(place.sect) else {
             return unsupported("label in an empty section", name);
         };
@@ -970,17 +991,21 @@ fn write_object(layout: &Layout<'_>, sections: [Vec<u8>; 2], relocs: Vec<Pending
             Some(true) => SymbolScope::Linkage,
             None => SymbolScope::Compilation,
         };
+        // `Unknown`, not `Text`/`Data`: the Mach-O writer never emits the kind, and for those two
+        // `add_symbol` also clones the name into a by-name map (SipHash) this writer never reads.
         let id = object.add_symbol(Symbol {
             name: name.as_bytes().to_vec(),
             value: place.offset,
             size: 0,
-            kind: if place.sect == Sect::Text { SymbolKind::Text } else { SymbolKind::Data },
+            kind: SymbolKind::Unknown,
             scope,
             weak: false,
             section: SymbolSection::Section(section),
             flags: SymbolFlags::None,
         });
-        symbols.insert(name, id);
+        if let Some(slot) = slot {
+            slot_symbols[slot as usize] = Some(id);
+        }
     }
     for (name, size, align_log2) in &layout.commons {
         let scope = match layout.exported.get(name) {
@@ -998,11 +1023,14 @@ fn write_object(layout: &Layout<'_>, sections: [Vec<u8>; 2], relocs: Vec<Pending
             flags: SymbolFlags::None,
         };
         let id = object.add_common_symbol(symbol, *size, 1 << align_log2);
-        symbols.insert(name, id);
+        if let Some(slot) = slot_of.get(name) {
+            slot_symbols[*slot as usize] = Some(id);
+        }
     }
-    for reloc in relocs {
-        let symbol = match symbols.get(reloc.target) {
-            Some(id) => *id,
+    count_name_hashes(2 * layout.commons.len());
+    for (reloc, slot) in relocs.into_iter().zip(reloc_slots) {
+        let symbol = match slot_symbols[slot as usize] {
+            Some(id) => id,
             None => {
                 if !is_symbol(reloc.target) {
                     return unsupported("relocation target", reloc.target);
@@ -1017,7 +1045,7 @@ fn write_object(layout: &Layout<'_>, sections: [Vec<u8>; 2], relocs: Vec<Pending
                     section: SymbolSection::Undefined,
                     flags: SymbolFlags::None,
                 });
-                symbols.insert(reloc.target, id);
+                slot_symbols[slot as usize] = Some(id);
                 id
             }
         };
@@ -1045,6 +1073,14 @@ fn write_object(layout: &Layout<'_>, sections: [Vec<u8>; 2], relocs: Vec<Pending
 
 /// The `LC_BUILD_VERSION` the system assembler writes on this machine, read once from an object
 /// it produced for an empty source.
+/// Starts reading the build version `as` writes, on a thread of its own, so the slice workers
+/// that reach `write_object` find it read instead of waiting on the `as` run together.
+pub(crate) fn prefetch_build_version() {
+    std::thread::spawn(|| {
+        let _ = build_version();
+    });
+}
+
 fn build_version() -> Option<object::write::MachOBuildVersion> {
     static VERSION: std::sync::OnceLock<Option<(u32, u32, u32)>> = std::sync::OnceLock::new();
     let (platform, minos, sdk) = (*VERSION.get_or_init(read_assembler_build_version))?;

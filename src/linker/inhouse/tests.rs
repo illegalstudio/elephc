@@ -3,6 +3,28 @@
 
 use super::*;
 
+/// Writing the object hashes each relocation's target name once and each label's name twice
+/// (export, slot), however many relocations share a target: the loop that adds the relocations
+/// reads their symbols from slots. It used to hash every relocation twice more (a referenced
+/// set, then a by-name symbol map).
+#[test]
+fn object_writer_hashes_each_relocation_name_once() {
+    let relocations = 400;
+    let mut text = String::from(".globl _main\n.p2align 2\n_main:\n");
+    for index in 0..relocations {
+        text.push_str(if index % 2 == 0 { "    bl _external\n" } else { "    adrp x9, Ltable@PAGE\n" });
+    }
+    text.push_str("Llocal:\n    ret\n.data\nLtable:\n    .quad 0\n");
+    WRITE_NAME_HASHES.with(|cell| cell.set(0));
+    assemble(&text).expect("the in-tree assembler handles the listing");
+    let hashes = WRITE_NAME_HASHES.with(|cell| cell.get());
+    let labels = 3;
+    assert!(
+        hashes <= relocations + 2 * labels,
+        "{hashes} name hashes for {relocations} relocations and {labels} labels"
+    );
+}
+
 /// `.ascii` operands decode the escapes the data section writes.
 /// An instruction text with no symbolic operand is parsed once per slice: repeats take the word
 /// from the cache, and a text with a fixup is parsed every time, since its target resolves per
@@ -242,6 +264,8 @@ fn inhouse_bench() {
     let plan = super::super::asm_split::plan_split(&text, 6, "L", encode).expect("a legal cut");
     let (mut render, mut assemble_time, mut bytes) = (0f64, 0f64, 0usize);
     let mut two_pass_time = 0f64;
+    // A digest of every object, so a change to the writer can show it emits the same bytes.
+    let mut digest = std::hash::DefaultHasher::new();
     let direct = std::env::var_os("ELEPHC_INHOUSE_BENCH_RENDERED").is_none();
     let names = super::Names::promoted(plan.promoted(), plan.local_prefix());
     for part in 0..plan.slices() {
@@ -264,6 +288,9 @@ fn inhouse_bench() {
                     "slice {part}: the one-pass object differs from the two-pass one"
                 );
             }
+            if let Ok(object) = &object {
+                std::hash::Hash::hash(object, &mut digest);
+            }
             bytes += object.map(|object| object.len()).unwrap_or(0);
             continue;
         }
@@ -279,7 +306,8 @@ fn inhouse_bench() {
         assemble_time += mark.elapsed().as_secs_f64();
     }
     eprintln!(
-        "encode={encode} total {:.2}s render {render:.2}s assemble {assemble_time:.2}s two-pass {two_pass_time:.2}s object bytes {bytes}",
-        started.elapsed().as_secs_f64()
+        "encode={encode} total {:.2}s render {render:.2}s assemble {assemble_time:.2}s two-pass {two_pass_time:.2}s object bytes {bytes} digest {:016x}",
+        started.elapsed().as_secs_f64(),
+        std::hash::Hasher::finish(&digest)
     );
 }

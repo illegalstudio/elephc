@@ -690,6 +690,7 @@ fn assemble_listing_inhouse(
             });
         }
     }
+    inhouse::prefetch_build_version();
     let mut slices = Vec::with_capacity(count);
     for (index, outcome) in run_slice_workers(count, jobs, |index| inhouse::listing::assemble_slice(&plan, index))
         .into_iter()
