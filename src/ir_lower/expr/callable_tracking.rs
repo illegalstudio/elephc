@@ -411,8 +411,9 @@ pub(super) fn invoke_only_callback_args_with_static_method_callables(
 /// php validates the callback before running the builtin: `usort($xs, [$box, 'hidden'])` from
 /// outside `Box` throws `usort(): Argument #2 ($callback) must be a valid callback, cannot access
 /// protected method Box::hidden()`. The callback is known statically here, so the whole call
-/// becomes that throw. A class with `__call()` is left alone: php sends the call there.
-/// The arguments are not evaluated, which php does before validating.
+/// becomes that throw. A class with `__call()` is left alone: php sends the call there, and so
+/// is a class some other class extends, since the run-time object decides. The caller evaluates
+/// the arguments before the throw, as php does before validating.
 pub(super) fn inaccessible_callback_rejection(
     ctx: &LoweringContext<'_, '_>,
     name: &str,
@@ -448,6 +449,15 @@ pub(super) fn inaccessible_callback_rejection(
     };
     let inaccessible = inaccessible_instance_callable(ctx, object, method)?;
     if inaccessible.has_magic_call {
+        return None;
+    }
+    // php resolves the callback against the object's RUN-TIME class, which may be any class
+    // inheriting the receiver's static one: a subclass can widen the method to `public` or add
+    // `__call()`, and php's message names that class. Only a class nothing extends is decided here.
+    if ctx.classes.keys().any(|candidate| {
+        candidate.as_str() != inaccessible.class_name
+            && crate::types::class_inherits_from(ctx.classes, candidate, &inaccessible.class_name)
+    }) {
         return None;
     }
     // php's own spelling: most callbacks are `($callback)`, the `array_u*` comparators have no

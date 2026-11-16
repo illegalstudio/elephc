@@ -33,3 +33,26 @@ echo $a->rebind2(), "\n";
     );
     assert_eq!(out, "b-private\nfactory\n");
 }
+
+/// A `[$object, 'method']` callback is resolved on the object's run-time class, which may widen a
+/// protected method; an inaccessible one still throws php's `TypeError`, after the arguments ran.
+#[test]
+fn test_invoke_only_callback_is_resolved_on_the_run_time_class() {
+    let out = compile_and_run(
+        r#"<?php
+class Box { protected function cmp($a, $b) { return $a <=> $b; } }
+class OpenBox extends Box { public function cmp($a, $b) { return $a <=> $b; } }
+function s(Box $b, array $x) { usort($x, [$b, 'cmp']); return $x; }
+echo implode(',', s(new OpenBox(), [3, 1, 2])), "\n";
+function effect() { echo "effect\n"; return [2, 1]; }
+class Hidden { protected function h($a, $b) { return 0; } }
+$h = new Hidden();
+try { $r = effect(); usort($r, [$h, 'h']); } catch (TypeError $e) { echo $e->getMessage(), "\n"; }
+try { array_map([$h, 'h'], effect()); } catch (TypeError $e) { echo $e->getMessage(), "\n"; }
+"#,
+    );
+    assert_eq!(
+        out,
+        "1,2,3\neffect\nusort(): Argument #2 ($callback) must be a valid callback, cannot access protected method Hidden::h()\neffect\narray_map(): Argument #1 ($callback) must be a valid callback or null, cannot access protected method Hidden::h()\n"
+    );
+}

@@ -231,6 +231,18 @@ pub(super) fn lower_function_call(ctx: &mut LoweringContext<'_, '_>, name: &Name
         return value;
     }
     if let Some(rejection) = inaccessible_callback_rejection(ctx, canonical, args, expr.span) {
+        // php evaluates every argument before it validates the callback, so their effects
+        // (`usort(effect(), [$box, 'hidden'])`) happen ahead of the throw. A plain variable is
+        // left alone: reading it has no effect, and a by-reference parameter would not warn.
+        for arg in args {
+            if matches!(arg.kind, ExprKind::Variable(_)) {
+                continue;
+            }
+            let value = lower_expr(ctx, arg);
+            if ctx.value_is_owning_temporary(value) {
+                crate::ir_lower::ownership::release_if_owned(ctx, value, Some(arg.span));
+            }
+        }
         // The throw ends the block, but the call's own consumers still need a value of a type
         // they accept, and a bare `throw` yields `void`. A boxed null is the gradual stand-in.
         let thrown = lower_expr(ctx, &rejection);
