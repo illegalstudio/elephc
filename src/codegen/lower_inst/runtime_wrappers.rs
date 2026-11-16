@@ -56,7 +56,6 @@ pub(super) fn emit_runtime_builtin_invoker_inline(
             owns_string_return: false,
             php_return_status: false,
             defaults: &defaults,
-            convert_eval_callables: false,
         };
         // Out of line, not spliced into the function that first needed it: see
         // `Emitter::begin_out_of_line` for the branch-range failure that splicing caused.
@@ -80,7 +79,6 @@ pub(super) fn emit_runtime_builtin_invoker_inline(
         owns_string_return: sig.return_type.codegen_repr() == PhpType::Str,
         php_return_status: false,
         defaults: &defaults,
-        convert_eval_callables: false,
     };
     // Out of line, not spliced into the function that first needed it: see
     // `Emitter::begin_out_of_line` for the branch-range failure that splicing caused.
@@ -138,7 +136,6 @@ pub(super) fn emit_runtime_callable_invoker_in_class(
         owns_string_return,
         php_return_status,
         defaults: &defaults,
-        convert_eval_callables: false,
     };
     // Out of line, not spliced into the function that first needed it: see
     // `Emitter::begin_out_of_line` for the branch-range failure that splicing caused.

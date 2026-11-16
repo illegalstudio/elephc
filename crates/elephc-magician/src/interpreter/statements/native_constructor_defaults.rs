@@ -75,6 +75,9 @@ pub(super) fn eval_native_constructor_with_evaluated_args_and_ref_mode(
         values,
     )?;
     let result = with_runtime_owners(&bound_args, || {
+        // The constructor runs as a native frame of this eval context, so a callback only eval
+        // can resolve (a builtin or function named inside the evaluated code) still finds it.
+        let native_context = push_native_frame_context(context);
         let result = if let Some(scope) = bridge_scope.as_deref() {
             eval_with_native_bridge_scope(scope, context, values, |values| {
                 values.construct_object(object, native_bound_arg_values(&bound_args))
@@ -82,6 +85,7 @@ pub(super) fn eval_native_constructor_with_evaluated_args_and_ref_mode(
         } else {
             values.construct_object(object, native_bound_arg_values(&bound_args))
         };
+        drop(native_context);
         let writeback = write_back_native_callable_ref_args(&bound_args, context, values);
         result.and(writeback)
     });
