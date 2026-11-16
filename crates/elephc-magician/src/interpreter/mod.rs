@@ -182,6 +182,16 @@ pub fn execute_program_outcome_with_context(
     }
 }
 
+/// Clears the eval `preg_last_error()` code at a `--web` request boundary.
+///
+/// The code lives in a thread-local slot, and a worker serves every request on one reused
+/// thread, so an error recorded by one request's eval would otherwise be the next request's
+/// `preg_last_error()` before it ran any regex. The compiled side's `_preg_last_error` and
+/// `_preg_exec_error` are cleared by the generated request reset.
+pub(crate) fn reset_request_regex_state() {
+    builtins::eval_preg_set_last_error(0);
+}
+
 /// Returns the current interpreter availability status for the ABI stub.
 pub fn current_stub_status() -> EvalStatus {
     EvalStatus::UnsupportedConstruct

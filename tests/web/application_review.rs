@@ -474,3 +474,26 @@ Elephc\Web\Worker::register(new Application());
     assert_eq!(body(&addr, "/"), "1:4");
     assert_eq!(body(&addr, "/"), "2:0");
 }
+
+/// An eval regex error recorded by one worker request does not leak into the next request's
+/// eval `preg_last_error()`, which lives in its own slot on the reused worker thread.
+#[test]
+fn web_application_review_request_begin_clears_eval_preg_last_error() {
+    let fixture = Fixture(make_test_dir("web_application_review_eval_preg_error"));
+    let binary = compile_web_with_regex(&fixture.0, r#"<?php
+class Application implements Elephc\Web\WorkerApplication {
+    private int $count = 0;
+    public function handle(Elephc\Web\Request $_request): void {
+        $this->count++;
+        echo $this->count, ':';
+        eval(($this->count === 1 ? 'preg_match("/./u", "\xff"); ' : '') . 'echo preg_last_error();');
+    }
+    public function shutdown(): void {}
+}
+Elephc\Web\Worker::register(new Application());
+"#, "app", &["--web-lifecycle=application", "--strict-php", "--with-regex"]);
+    let addr = format!("127.0.0.1:{}", free_port());
+    let _server = spawn_server(&binary, &addr, "1");
+    assert_eq!(body(&addr, "/"), "1:4");
+    assert_eq!(body(&addr, "/"), "2:0");
+}

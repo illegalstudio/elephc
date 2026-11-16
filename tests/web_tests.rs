@@ -1021,6 +1021,29 @@ echo preg_last_error();
     assert_eq!(raw_response_body(&r2), "0", "second response leaked the regex error: {r2:?}");
 }
 
+/// Verifies that an eval regex error recorded by one request is not reported by the next one:
+/// the runtime-built eval keeps its own `preg_last_error()` slot, which the request boundary
+/// must clear as well.
+#[test]
+fn web_reset_clears_eval_preg_last_error_between_requests() {
+    let dir = make_test_dir("web_reset_eval_preg_error");
+    let src = r#"<?php
+$code = 'echo preg_last_error();';
+if (isset($_GET["bad"])) { $code = 'preg_match("/./u", "\xff"); ' . $code; }
+eval($code . ' // ' . count($_GET));
+"#;
+    // An opaque eval reaches PCRE2 only with the explicit regex capability.
+    let bin = compile_web_with_regex(&dir, src, "app", &["--with-regex"]);
+    let addr = format!("127.0.0.1:{}", free_port());
+    let mut child = spawn_server(&bin, &addr, "1");
+    let r1 = http_get(&addr, "/?bad=1");
+    let r2 = http_get(&addr, "/");
+    let _ = child.kill();
+    let _ = child.wait();
+    assert_eq!(raw_response_body(&r1), "4", "first response: {r1:?}");
+    assert_eq!(raw_response_body(&r2), "0", "second response leaked the eval regex error: {r2:?}");
+}
+
 /// the static re-initialized to 0, so each response ends with "1".
 #[test]
 fn web_reset_clears_function_static() {
