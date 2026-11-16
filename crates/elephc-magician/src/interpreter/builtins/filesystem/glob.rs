@@ -91,15 +91,25 @@ pub(in crate::interpreter) fn eval_glob_matches(pattern: &str, flags: i64) -> Ve
     } else {
         vec![pattern.to_string()]
     };
+    // libc's `glob(3)` runs each brace alternative as its own glob: its matches are sorted among
+    // themselves (unless `GLOB_NOSORT`), `GLOB_NOCHECK` answers that alternative's own pattern
+    // when it matched nothing, and the alternatives are concatenated in the order written
+    // (`{b,a}.txt` is `b.txt`, `a.txt`). php filters `GLOB_ONLYDIR` afterwards, over the
+    // `GLOB_NOCHECK` stand-ins too.
     let mut matches = Vec::new();
     for expanded in patterns {
-        eval_glob_collect_pattern(&expanded, flags, &mut matches);
+        let mut found = Vec::new();
+        eval_glob_collect_pattern(&expanded, flags, &mut found);
+        if flags & EVAL_GLOB_NOSORT == 0 {
+            found.sort();
+        }
+        if found.is_empty() && flags & EVAL_GLOB_NOCHECK != 0 {
+            found.push(expanded);
+        }
+        matches.extend(found);
     }
     if flags & EVAL_GLOB_ONLYDIR != 0 {
         matches.retain(|path| std::path::Path::new(path.trim_end_matches('/')).is_dir());
-    }
-    if flags & EVAL_GLOB_NOSORT == 0 {
-        matches.sort();
     }
     if flags & EVAL_GLOB_MARK != 0 {
         for path in &mut matches {
@@ -107,9 +117,6 @@ pub(in crate::interpreter) fn eval_glob_matches(pattern: &str, flags: i64) -> Ve
                 path.push('/');
             }
         }
-    }
-    if matches.is_empty() && flags & EVAL_GLOB_NOCHECK != 0 {
-        matches.push(pattern.to_string());
     }
     matches
 }
@@ -264,4 +271,35 @@ pub(in crate::interpreter) fn eval_glob_component_has_magic(component: &str) -> 
         .as_bytes()
         .iter()
         .any(|byte| matches!(byte, b'*' | b'?' | b'['))
+}
+
+#[cfg(test)]
+mod brace_order_tests {
+    use super::*;
+
+    /// `php -n` 8.5.10 (macOS) in a directory holding `a.txt`, `b.txt` and `c.yaml`: each brace
+    /// alternative is globbed and sorted on its own and the alternatives keep their written order
+    /// (`["b.txt","a.txt"]`, `["c.yaml","a.txt","b.txt"]`); `GLOB_NOCHECK` answers each empty
+    /// alternative's own pattern (`["a.txt","nope*"]`), and `GLOB_ONLYDIR` filters those too.
+    #[test]
+    fn brace_alternatives_keep_their_written_order() {
+        let dir = std::env::temp_dir().join(format!("elephc_glob_brace_{}", std::process::id()));
+        std::fs::create_dir_all(&dir).expect("create the glob fixture directory");
+        for name in ["a.txt", "b.txt", "c.yaml"] {
+            std::fs::write(dir.join(name), b"x").expect("write a glob fixture file");
+        }
+        let root = dir.to_string_lossy().into_owned();
+        let names = |pattern: &str, flags: i64| -> Vec<String> {
+            eval_glob_matches(&format!("{root}/{pattern}"), flags)
+                .into_iter()
+                .map(|path| path.rsplit('/').next().unwrap_or_default().to_string())
+                .collect()
+        };
+        let brace = EVAL_GLOB_BRACE;
+        assert_eq!(names("{b,a}.txt", brace), ["b.txt", "a.txt"]);
+        assert_eq!(names("*.{yaml,txt}", brace), ["c.yaml", "a.txt", "b.txt"]);
+        assert_eq!(names("{a,nope}*", brace | EVAL_GLOB_NOCHECK), ["a.txt", "nope*"]);
+        assert!(names("nope*", EVAL_GLOB_NOCHECK | EVAL_GLOB_ONLYDIR).is_empty());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 }
