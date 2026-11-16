@@ -120,6 +120,23 @@ echo get_debug_type($closed);"#,
     assert_eq!(values.output, "resource (stream):resource (closed)");
 }
 
+/// Verifies `declare(strict_types=1)` inside `eval()` does not leak into the code after it.
+///
+/// `php -n` 8.5.6 prints `5`: the weak caller's `function f(): int` still coerces `"5"`.
+#[test]
+fn nested_eval_strict_types_does_not_leak_to_the_caller() {
+    let program = parse_fragment(
+        br#"eval("declare(strict_types=1);");
+function weak_after_eval(): int { return "5"; }
+echo weak_after_eval();"#,
+    )
+    .expect("parse fragment");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+    execute_program(&program, &mut scope, &mut values).expect("execute fragment");
+    assert_eq!(values.output, "5");
+}
+
 /// Verifies a stream context resource is named `resource (stream-context)`, as php does.
 ///
 /// `php -n` 8.5.6: `resource (stream-context)` for `get_debug_type(stream_context_create())`.

@@ -77,7 +77,11 @@ pub(super) fn eval_nested_eval(
     let previous_file_magic = context.call_site().3;
     context.set_file_magic_override(None);
     let previous_site = context.enter_eval_code_site();
+    // `declare(strict_types=1)` inside eval()'d code binds that code only: it starts weak, as a
+    // file does, and the caller's mode is put back after, as an include does.
+    let previous_strict_types = context.set_strict_types(false);
     let result = execute_program_with_context(context, program.as_ref(), scope, values);
+    context.set_strict_types(previous_strict_types);
     context.leave_eval_code_site(previous_site);
     context.set_file_magic_override(previous_file_magic);
     context.pop_include_execution();
