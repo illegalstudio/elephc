@@ -38,10 +38,12 @@ pub(super) fn lower_reflection_method_invoke_call(
                     method: reflected_method,
                 }
             }
-            ReflectionMethodTargetKind::Instance => CallableTarget::Method {
-                object: Box::new(object_arg),
-                method: reflected_method,
-            },
+            ReflectionMethodTargetKind::Instance => {
+                CallableTarget::Method {
+                    object: Box::new(object_arg),
+                    method: reflected_method,
+                }
+            }
         };
         return Some(lower_first_class_callable(ctx, &target, expr));
     }
@@ -216,6 +218,20 @@ fn lower_reflection_instance_method_invoke_scoped(
         terminate_method_call_on_null(ctx, reflected_method);
         return null_value;
     }
+    // A `mixed` or untyped receiver would dispatch on its run-time class through the nullable
+    // path and miss the pinned implementation: narrow it to the reflected class first, as a
+    // typed parameter boundary does.
+    let object = match &direct_class {
+        Some(class) if matches!(ctx.builder.value_php_type(object.value).codegen_repr(), PhpType::Mixed) => {
+            crate::ir_lower::gradual_coercions::coerce_gradual_value_to_boundary(
+                ctx,
+                object,
+                &PhpType::Object(class.clone()),
+                Some(expr.span),
+            )
+        }
+        _ => object,
+    };
     if value_is_nullable(ctx, object.value) {
         return lower_nullable_regular_method_call(
             ctx,
