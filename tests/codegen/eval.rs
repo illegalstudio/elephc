@@ -11673,6 +11673,25 @@ for ($i = 0; $i < 5; $i++) { probe(); }
     assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
 }
 
+/// The same `global` reach holds when the eval'ing function and the top-level variable sit in
+/// braced `namespace` blocks.
+#[test]
+fn test_eval_in_namespaced_function_reaches_top_level_globals() {
+    let out = compile_and_run(
+        r#"<?php
+namespace App {
+    function reach() { eval('global $g; $g = 7;'); }
+}
+namespace {
+    $g = 1;
+    App\reach();
+    echo $g;
+}
+"#,
+    );
+    assert_eq!(out, "7");
+}
+
 /// Verifies unsetting an eval global alias does not unset the actual global value.
 #[test]
 fn test_eval_global_alias_unset_keeps_global_storage() {

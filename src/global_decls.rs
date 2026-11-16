@@ -80,6 +80,12 @@ fn declared_bodies_run_dynamic_php(statements: &[Stmt]) -> bool {
         let usage = crate::prelude_prune::usage::collect(body);
         usage.references("eval") || usage.includes_runtime_php
     };
+    declarations_run_dynamic_php(statements, &runs_dynamic)
+}
+
+/// Applies `runs_dynamic` to every function and method body declared in `statements`, descending
+/// into braced `namespace` blocks, whose declarations are as much a part of the file scope.
+fn declarations_run_dynamic_php(statements: &[Stmt], runs_dynamic: &dyn Fn(&[Stmt]) -> bool) -> bool {
     statements.iter().any(|stmt| match &stmt.kind {
         StmtKind::FunctionDecl { body, .. } => runs_dynamic(body),
         StmtKind::ClassDecl { methods, .. }
@@ -87,26 +93,27 @@ fn declared_bodies_run_dynamic_php(statements: &[Stmt]) -> bool {
         | StmtKind::TraitDecl { methods, .. } => {
             methods.iter().any(|method| runs_dynamic(&method.body))
         }
+        StmtKind::NamespaceBlock { body, .. } => declarations_run_dynamic_php(body, runs_dynamic),
         _ => false,
     })
 }
 
 /// Returns the top-level statements that run in the global scope (every declaration removed).
 fn top_level_code(statements: &[Stmt]) -> Vec<Stmt> {
-    statements
-        .iter()
-        .filter(|stmt| {
-            !matches!(
-                stmt.kind,
-                StmtKind::FunctionDecl { .. }
-                    | StmtKind::ClassDecl { .. }
-                    | StmtKind::EnumDecl { .. }
-                    | StmtKind::TraitDecl { .. }
-                    | StmtKind::InterfaceDecl { .. }
-            )
-        })
-        .cloned()
-        .collect()
+    let mut code = Vec::new();
+    for stmt in statements {
+        match &stmt.kind {
+            StmtKind::FunctionDecl { .. }
+            | StmtKind::ClassDecl { .. }
+            | StmtKind::EnumDecl { .. }
+            | StmtKind::TraitDecl { .. }
+            | StmtKind::InterfaceDecl { .. } => {}
+            // The statements of a braced namespace run in the global scope too.
+            StmtKind::NamespaceBlock { body, .. } => code.extend(top_level_code(body)),
+            _ => code.push(stmt.clone()),
+        }
+    }
+    code
 }
 
 /// Recursively scans statement bodies for `global` declarations.
