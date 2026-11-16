@@ -455,3 +455,33 @@ try { $c->m($v, ...box([])); } catch (Throwable $e) { show($e); }
     );
     assert_eq!(out, "TypeError: f(): Argument #1 ($s) must be of type string, null given, called in F on line 9\nArgumentCountError: Too few arguments to function f(), 1 passed in F on line 10 and exactly 3 expected\nTypeError: f(): Argument #1 ($s) must be of type string, null given, called in F on line 11\nTypeError: f(): Argument #2 ($n) must be of type int, null given, called in F on line 12\nTypeError: f(): Argument #1 ($s) must be of type string, null given, called in F on line 13\nArgumentCountError: f(): Argument #1 ($s) not passed\nArgumentCountError: f(): Argument #2 ($n) not passed\nTypeError: g(): Argument #1 ($n) must be of type int, null given, called in F on line 16\ng:7x\nTypeError: C::m(): Argument #1 ($s) must be of type string, null given, called in F on line 18\n");
 }
+
+/// A guard that throws after the other arguments were evaluated must not leak them: the
+/// freshly built array bound next to a rejected `int`/`string` argument (and the rejected box
+/// itself when it is a call result) used to stay live forever, because the deferred check ran
+/// before those operands were published for exception cleanup.
+#[test]
+fn test_guard_throw_releases_the_evaluated_arguments() {
+    let output = compile_and_run_with_heap_debug(
+        r#"<?php
+function box(mixed $v): mixed { return $v; }
+function ti(int $i, array $a): int { return 1; }
+function tf(array $a, float $f, string $s): int { return 1; }
+function ts(string $s, array $a): int { return 1; }
+class O { public function m(string $s, array $a): int { return 1; } }
+$o = new O();
+$null = box(null);
+for ($i = 0; $i < 3; $i++) {
+    try { ti($null, [$i, str_repeat("a", 40 + $i)]); } catch (TypeError $e) { echo "i"; }
+    try { ti(box(null), [str_repeat("b", 40)]); } catch (TypeError $e) { echo "b"; }
+    try { tf([str_repeat("c", 40)], box([1]), str_repeat("d", 30)); } catch (TypeError $e) { echo "f"; }
+    try { ts(box([2]), [str_repeat("e", 40)]); } catch (TypeError $e) { echo "s"; }
+    try { $o->m($null, [str_repeat("g", 40)]); } catch (TypeError $e) { echo "m"; }
+    echo ti(box("5"), [str_repeat("h", 40)]), "\n";
+}
+"#,
+    );
+    assert!(output.success, "{}", output.stderr);
+    assert_eq!(output.stdout, "ibfsm1\nibfsm1\nibfsm1\n");
+    assert!(output.stderr.contains("leak summary: clean"), "{}", output.stderr);
+}
