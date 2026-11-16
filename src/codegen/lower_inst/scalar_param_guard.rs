@@ -154,7 +154,7 @@ pub(in crate::codegen::lower_inst) fn lower_scalar_param_guard(
         ctx.emitter.label(&done);
         ctx.emit_cold_path(|ctx| {
             ctx.emitter.label(&cold);
-            emit_numeric_cold_check(ctx, value, target, strict, &done, &prefix, &suffix, release)
+            emit_numeric_cold_check(ctx, inst, value, target, strict, &done, &prefix, &suffix, release)
         })?;
         return store_if_result(ctx, inst);
     }
@@ -360,8 +360,10 @@ fn emit_numeric_hot_check(
 }
 
 /// Emits the numeric cold path: peel, convert by PHP's coercive (or strict) rules, or throw.
+#[allow(clippy::too_many_arguments)]
 fn emit_numeric_cold_check(
     ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
     value: crate::ir::ValueId,
     target: Numeric,
     strict: bool,
@@ -377,6 +379,10 @@ fn emit_numeric_cold_check(
     let string_label = ctx.next_label("scalar_param_guard_peeled_string");
     let payload = crate::codegen_support::mixed_unbox_payload_reg(ctx.emitter.target);
     let tag = abi::int_result_reg(ctx.emitter);
+    if target == Numeric::Int && !strict {
+        // The precision deprecation names the parameter's line (the instruction's span).
+        super::core_builtins::publish_diagnostic_site(ctx, inst);
+    }
     // -- cold path: peel nested cells and dispatch on the concrete tag --
     ctx.load_value_to_result(value)?;
     emit_branch_if_null_cell(ctx, &null_label);

@@ -605,3 +605,39 @@ foreach (['str', 'num', 'real', 'flag'] as $fn) {
     );
     assert_eq!(out, "str(): Argument #1 ($s) must be of type string, null given\nstr(): Argument #1 ($s) must be of type string, array given\nstr(): Argument #1 ($s) must be of type string, Plain given\ns:name\ns:1\ns:\ns:3\ns:2.5\ns:12\ns: 7 \ns:12abc\ns:1e3\ns:x\ns:1.0E+30\ns:9223372036854775807\nnum(): Argument #1 ($i) must be of type int, null given\nnum(): Argument #1 ($i) must be of type int, array given\nnum(): Argument #1 ($i) must be of type int, Plain given\nnum(): Argument #1 ($i) must be of type int, Name given\ni:1\ni:0\ni:3\n[diag] Implicit conversion from float 2.5 to int loses precision\ni:2\ni:12\ni:7\nnum(): Argument #1 ($i) must be of type int, string given\ni:1000\nnum(): Argument #1 ($i) must be of type int, string given\nnum(): Argument #1 ($i) must be of type int, float given\ni:9223372036854775807\nreal(): Argument #1 ($f) must be of type float, null given\nreal(): Argument #1 ($f) must be of type float, array given\nreal(): Argument #1 ($f) must be of type float, Plain given\nreal(): Argument #1 ($f) must be of type float, Name given\nf:1\nf:0\nf:3\nf:2.5\nf:12\nf:7\nreal(): Argument #1 ($f) must be of type float, string given\nf:1000\nreal(): Argument #1 ($f) must be of type float, string given\nf:1.0E+30\nf:9.2233720368548E+18\nflag(): Argument #1 ($b) must be of type bool, null given\nflag(): Argument #1 ($b) must be of type bool, array given\nflag(): Argument #1 ($b) must be of type bool, Plain given\nflag(): Argument #1 ($b) must be of type bool, Name given\nb:T\nb:F\nb:T\nb:T\nb:T\nb:T\nb:T\nb:T\nb:T\nb:T\nb:T\n");
 }
+
+/// PHP raises the `int` precision deprecation while binding the parameter, so it reports the
+/// PARAMETER's line (where its type starts, after any attribute), not the call's: for functions,
+/// methods, static methods with defaulted parameters and closures, with calls and declarations
+/// spread over several lines. The guard used to report the call's line.
+#[test]
+fn test_int_precision_deprecation_reports_the_parameter_line() {
+    let out = compile_and_run(
+        r#"<?php
+set_error_handler(function ($no, $msg, $file, $line) { echo "[$line] $msg\n"; return true; });
+function box(mixed $v): mixed { return $v; }
+function ti(
+    string $pad,
+    #[SensitiveParameter]
+    int
+    $i
+): int { return $i; }
+function one(int $i): int { return $i; }
+class C { public function m(
+  int $i) { return $i; } public static function s(string $a, int $b = 2,
+    int $c = 3) { return $c; } }
+echo ti(
+    "x",
+    box("1.5")
+), "\n";
+echo one(box(2.5)), "\n";
+echo (new C)->m(
+   box("3.5")), "\n";
+echo C::s("a", box(5.5), box(6.5)), "\n";
+$f = function (
+  int $i) { return $i; };
+echo $f(box(4.5)), "\n";
+"#,
+    );
+    assert_eq!(out, "[7] Implicit conversion from float-string \"1.5\" to int loses precision\n1\n[10] Implicit conversion from float 2.5 to int loses precision\n2\n[12] Implicit conversion from float-string \"3.5\" to int loses precision\n3\n[12] Implicit conversion from float 5.5 to int loses precision\n[13] Implicit conversion from float 6.5 to int loses precision\n6\n[23] Implicit conversion from float 4.5 to int loses precision\n4\n");
+}

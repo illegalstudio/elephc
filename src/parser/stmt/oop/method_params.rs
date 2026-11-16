@@ -59,6 +59,7 @@ pub(super) fn parse_method_params(
 ) -> Result<ParsedMethodParams, CompileError> {
     let mut params = Vec::new();
     let mut param_attributes = Vec::new();
+    let mut param_lines = Vec::new();
     let mut variadic = None;
     let mut variadic_by_ref = false;
     let mut variadic_type = None;
@@ -81,6 +82,7 @@ pub(super) fn parse_method_params(
         // PHP 8.0 parameter attributes — also covers attributes preceding a
         // promoted-property modifier such as `#[Inject] public Foo $f`.
         let attributes = crate::parser::parse_attribute_lists(tokens, pos)?;
+        param_lines.push(tokens.get(*pos).map_or(span.line, |(_, token)| token.span.line));
         if variadic.is_some() {
             return Err(CompileError::new(
                 span,
@@ -208,6 +210,7 @@ pub(super) fn parse_method_params(
             _ => return Err(CompileError::new(span, "Expected parameter variable")),
         }
     }
+    super::super::params::record_param_lines(span, param_lines);
 
     Ok((
         params,
