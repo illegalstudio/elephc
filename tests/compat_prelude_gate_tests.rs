@@ -434,12 +434,8 @@ fn an_autoloaded_class_gates_the_shutdown_prelude() {
 /// rewritten": without the literal-flag rewrite the call is typed `string|null` and the method
 /// does not compile at all.
 ///
-/// STILL BROKEN, deliberately not asserted here: a project where ONLY the autoloaded class names
-/// `var_export` and the entry does not. The early gate then injects nothing and the same call
-/// dies with `Call to undefined function var_export()` — the name now folds, the declaration is
-/// absent. A second, post-`autoload-run` injection site would declare it but could not re-run
-/// the literal-flag rewrite, so a `: string` method would trade a run-time error for a
-/// compile-time one. That is a real fix and a larger one.
+/// The project where ONLY the autoloaded class names `var_export` is
+/// `an_autoload_only_var_export_is_declared_after_autoload_run` below.
 #[test]
 fn an_autoloaded_class_reaches_var_export_through_the_global_fallback() {
     let (stdout, stderr) = compile_and_run_project(
@@ -455,6 +451,38 @@ fn an_autoloaded_class_reaches_var_export_through_the_global_fallback() {
     assert_eq!(
         stdout,
         "entry:array (\n  0 => 0,\n)\nautoloaded:array (\n  0 => 1,\n  1 => 2,\n)\n",
+        "got {stdout:?}"
+    );
+    assert!(stderr.is_empty(), "no warning is expected:\n{stderr}");
+}
+
+/// An entry that does not name `var_export` itself; only the autoloaded class does.
+const ENTRY_EXPORTER_WITHOUT_VAR_EXPORT: &str = r#"<?php
+$exporter = new App\Exporter();
+echo 'autoloaded:', $exporter->render(), "\n";
+"#;
+
+/// Verifies a `var_export()` that first appears in an autoloaded file is declared.
+///
+/// The early gate sees no `var_export` in the entry, so the declaration has to come from the
+/// pipeline's autoload-aware probe or its post-`autoload-run` injection; either missing used to
+/// end in `Call to undefined function var_export()`. The `: string` method also needs the
+/// literal-flag rewrite to type the call as a string. php 8.5.10 prints the same lines.
+#[test]
+fn an_autoload_only_var_export_is_declared_after_autoload_run() {
+    let (stdout, stderr) = compile_and_run_project(
+        "compatgate_var_export_autoload_only",
+        &[
+            ("module.json", MANIFEST),
+            ("src/Exporter.php", EXPORTER_USING_VAR_EXPORT),
+            ("main.php", ENTRY_EXPORTER_WITHOUT_VAR_EXPORT),
+        ],
+        "main.php",
+    );
+
+    assert_eq!(
+        stdout,
+        "autoloaded:array (\n  0 => 1,\n  1 => 2,\n)\n",
         "got {stdout:?}"
     );
     assert!(stderr.is_empty(), "no warning is expected:\n{stderr}");
