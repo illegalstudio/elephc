@@ -591,7 +591,11 @@ pub(super) fn lower_ref_place_function_call(
 ) -> Option<LoweredValue> {
     let canonical = name.as_str();
     // A property with a cursor moves its pointer in place: a temporary would move a copy's.
-    if super::array_pointer_call_has_property_cursor(ctx, canonical, args) {
+    // A stable place keeps a frame cursor of its own for the same reason, and a seek never
+    // writes the array, so there is nothing to write back.
+    if super::array_pointer_call_has_property_cursor(ctx, canonical, args)
+        || super::array_pointer_place_cursor_key(ctx, canonical, args).is_some()
+    {
         return None;
     }
     let prefer_extension = source_prefers_extension_builtin(canonical);

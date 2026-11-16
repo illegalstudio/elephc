@@ -75,3 +75,22 @@ echo f(new Base()), "\n";
     );
     assert_eq!(out, "kid\nnone\nmagic-extra\nd\n");
 }
+
+/// The internal pointer of a stable non-local place (`$cfg['items']`, `$box->items`,
+/// `Box::$queue`) is shared by the seeks and reads of one frame.
+#[test]
+fn test_internal_pointer_of_a_non_local_place_persists_in_the_frame() {
+    let out = compile_and_run(
+        r#"<?php
+function lastKey(array $cfg) { end($cfg['items']); return key($cfg['items']); }
+echo lastKey(['items' => ['a' => 1, 'b' => 2, 'c' => 3]]), "\n";
+class Box { public $items = [10, 20, 30]; public static $queue = [1, 2, 3]; }
+$box = new Box();
+next($box->items); echo current($box->items), "\n";
+reset(Box::$queue);
+while (($v = next(Box::$queue)) !== false) { echo $v, ";"; }
+echo "\n";
+"#,
+    );
+    assert_eq!(out, "c\n20\n2;3;\n");
+}

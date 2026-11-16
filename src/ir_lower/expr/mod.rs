@@ -1198,10 +1198,11 @@ fn rewrite_literal_param_bindings(sig: &FunctionSig, args: &[Expr]) -> Option<Ve
 /// loads that cursor and boxes the key/value at it; a seek (`next`/`prev`/`reset`/`end`)
 /// first calls `ArrayPtrSeek`, stores the new cursor, and then boxes the selected value.
 ///
-/// Other receiver expressions are evaluated exactly once and start from the first position.
-/// By-reference property and element calls reach this function through the shared place
-/// adapter, which presents a temporary plain local and writes its value back afterwards.
-/// Read-only expression receivers and fresh call results need no persistent cursor, so a
+/// A stable non-local place (`$cfg['items']`, `$box->items`, `self::$queue`) keeps a frame
+/// cursor named after its spelling (`array_pointer_place_cursor_key`), so a seek and a later
+/// read of the same place in one frame agree; a write to the place does not rewind it.
+/// Other receiver expressions are evaluated exactly once and start from the first position:
+/// read-only expression receivers and fresh call results need no persistent cursor, so a
 /// call-local zero cursor preserves their temporary-value semantics.
 ///
 /// Whether this is an internal-pointer call on a `$this` property whose class keeps its cursor.
@@ -1226,6 +1227,66 @@ fn array_pointer_call_has_property_cursor(
                 .get(class)
                 .is_some_and(|info| info.properties.iter().any(|(name, _)| *name == cursor))
         })
+}
+
+/// Names the frame-local cursor of an internal-pointer call on a stable non-local place.
+///
+/// php keeps the pointer in the array, so `end($cfg['items']); key($cfg['items'])` reads the
+/// last key and `reset(self::$queue)` followed by `next(self::$queue)` in a loop walks the
+/// queue. Such a place has no local of its own to put a cursor beside, so the frame keeps one
+/// per place spelling: a variable or `$this` followed by literal property names and literal
+/// keys, or a named / `self` / `static` / `parent` static property. A computed key
+/// (`$rows[$i]`) or a call names a different array each time and keeps the call-local cursor.
+pub(super) fn array_pointer_place_cursor_key(
+    ctx: &LoweringContext<'_, '_>,
+    name: &str,
+    args: &[Expr],
+) -> Option<String> {
+    let is_pointer_call = matches!(
+        crate::builtins::registry::lookup(&php_symbol_key(name.trim_start_matches('\\')))
+            .map(|def| def.spec.semantics.argument_lowering),
+        Some(crate::builtins::semantics::BuiltinArgumentLowering::ArrayInternalPointer(_))
+    );
+    let [receiver] = args else {
+        return None;
+    };
+    if !is_pointer_call
+        || matches!(receiver.kind, ExprKind::Variable(_))
+        || array_pointer_call_has_property_cursor(ctx, name, args)
+    {
+        return None;
+    }
+    stable_place_spelling(receiver).map(|place| format!("place {place}"))
+}
+
+/// Spells a place whose every step is fixed at compile time, or answers `None`.
+fn stable_place_spelling(expr: &Expr) -> Option<String> {
+    match &expr.kind {
+        ExprKind::Variable(name) => Some(format!("${name}")),
+        ExprKind::This => Some("$this".to_string()),
+        ExprKind::PropertyAccess { object, property } => {
+            Some(format!("{}->{property}", stable_place_spelling(object)?))
+        }
+        ExprKind::StaticPropertyAccess { receiver, property } => {
+            let class = match receiver {
+                StaticReceiver::Named(name) => name.as_str().trim_start_matches('\\').to_string(),
+                StaticReceiver::Self_ => "self".to_string(),
+                StaticReceiver::Static => "static".to_string(),
+                StaticReceiver::Parent => "parent".to_string(),
+                StaticReceiver::Generic(_) => return None,
+            };
+            Some(format!("{class}::${property}"))
+        }
+        ExprKind::ArrayAccess { array, index } => {
+            let key = match &index.kind {
+                ExprKind::StringLiteral(key) => format!("{key:?}"),
+                ExprKind::IntLiteral(key) => key.to_string(),
+                _ => return None,
+            };
+            Some(format!("{}[{key}]", stable_place_spelling(array)?))
+        }
+        _ => None,
+    }
 }
 
 /// Returns `None` only for named/spread arguments or a wrong argument count, leaving those
@@ -1271,6 +1332,16 @@ fn lower_array_internal_pointer(
             let cursor = lower_expr(ctx, &cursor_read).value;
             cursor_property = Some((object.clone(), name));
             (container, None, cursor)
+        }
+        _ if array_pointer_place_cursor_key(ctx, &canonical, args).is_some() => {
+            let key = array_pointer_place_cursor_key(ctx, &canonical, args)
+                .expect("the guard found a place key");
+            let container = lower_expr(ctx, &args[0]);
+            let cursor_slot = ctx.array_pointer_cursor_slot(&key);
+            let cursor = ctx
+                .builder
+                .emit_load_local(cursor_slot, IrType::I64, PhpType::Int);
+            (container, Some(cursor_slot), cursor)
         }
         _ => {
             let container = lower_expr(ctx, &args[0]);
@@ -1327,8 +1398,11 @@ fn lower_array_internal_pointer(
     );
     // A variable's load is owned too when its slot stores another representation (a local seeded
     // with a Mixed value, then assigned a list, is read as the list through an unboxing copy);
-    // `release_if_owned` leaves a borrowed load alone.
-    crate::ir_lower::ownership::release_if_owned(ctx, container, Some(args[0].span));
+    // A borrowed read of storage -- a static property's array -- is not released: it freed the
+    // array the property still held.
+    if ctx.value_is_owning_temporary(container) {
+        crate::ir_lower::ownership::release_if_owned(ctx, container, Some(args[0].span));
+    }
     Some(result)
 }
 
