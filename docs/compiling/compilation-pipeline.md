@@ -116,8 +116,8 @@ Physical source (.php or .lfc)
   rules exist, a probe (`src/autoload/prelude_probe.rs`) first runs name
   resolution and the autoload pass on a copy of the program, checks the PDO,
   mysqli, timezone, image, hash, tokenizer, curl, XML, fileinfo, `var_export`,
-  web-environment, Random, BcMath, GMP, `DateTimeZone::listIdentifiers`, and
-  Core `WeakMap`/`WeakReference` detectors against
+  web-environment, Random, BcMath, GMP, `DateTimeZone::listIdentifiers`,
+  `preg_grep()`, and Core `WeakMap`/`WeakReference` detectors against
   the result, and restores the thread-local source IDs
   and anonymous-class counter. Process-global synthetic spans and include
   temporaries stay monotonic, so discarding a probe cannot recycle identities
