@@ -568,20 +568,20 @@ function __elephc_array_rand_gradual(array $input) {
 /// `$next` reproduces php's own append key: a row with no usable index key takes the next integer,
 /// and an integer index key pushes that counter past itself, exactly as `$result[] =` would.
 const ARRAY_COLUMN_INDEXED_SRC: &str = r#"<?php
-function __elephc_array_column_indexed(array $input, $column, $index): array {
+function __elephc_array_column_indexed(array $array, $column_key, $index_key): array {
     $result = [];
     $next = 0;
-    foreach ($input as $row) {
+    foreach ($array as $row) {
         $row = (array) $row;
-        if (null === $column) {
+        if (null === $column_key) {
             $value = $row;
-        } elseif (array_key_exists($column, $row)) {
-            $value = $row[$column];
+        } elseif (array_key_exists($column_key, $row)) {
+            $value = $row[$column_key];
         } else {
             continue;
         }
-        if (null !== $index && array_key_exists($index, $row)) {
-            $key = $row[$index];
+        if (null !== $index_key && array_key_exists($index_key, $row)) {
+            $key = $row[$index_key];
             if (is_int($key) && $key >= $next) {
                 $next = $key + 1;
             }

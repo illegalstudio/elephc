@@ -341,6 +341,41 @@ pub(super) fn lower_backend_gap_builtin_shape(
             ));
         }
     }
+    // A call that names `double_encode:` or spreads its arguments reaches the double-encode helper
+    // too (it declares php's defaults): the native lowering reads only the subject and the flags,
+    // so it would double-encode regardless, and the guard below returns before any spread or
+    // named call is looked at.
+    if builtin == "htmlspecialchars"
+        && args.iter().any(|arg| {
+            is_spread_arg(arg)
+                || matches!(&arg.kind, ExprKind::NamedArg { name, .. } if name == "double_encode")
+        })
+    {
+        return Some(lower_function_call(
+            ctx,
+            &crate::names::Name::unqualified(
+                crate::htmlspecialchars_prelude::HTMLSPECIALCHARS_DOUBLE_ENCODE_NAME,
+            ),
+            args,
+            expr,
+        ));
+    }
+    // The three-argument `array_column()` helper declares php's own parameter names, so a call
+    // naming `column_key:`/`index_key:` binds by name through the ordinary named-argument plan.
+    if builtin == "array_column"
+        && args.len() == 3
+        && crate::types::call_args::has_named_args(args)
+        && !args.iter().any(is_spread_arg)
+    {
+        return Some(lower_function_call(
+            ctx,
+            &crate::names::Name::unqualified(
+                crate::backend_gap_prelude::ARRAY_COLUMN_INDEXED_NAME,
+            ),
+            args,
+            expr,
+        ));
+    }
     if crate::types::call_args::has_named_args(args)
         || (builtin != "array_unshift" && args.iter().any(is_spread_arg))
     {

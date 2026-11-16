@@ -20,7 +20,7 @@
 
 use crate::parser::ast::{BinOp, Expr, Program, Stmt, TypeExpr};
 use crate::synthetic_class::{
-    e_binop, e_bool, e_call, e_int, e_str, e_var, function, php_semantics_declarations, s_assign,
+    e_binop, e_bool, e_call, e_int, e_null, e_str, e_var, function, php_semantics_declarations, s_assign,
     s_if, s_return, s_while, t_nullable,
 };
 
@@ -152,9 +152,10 @@ fn double_encode_fn() -> Stmt {
     ];
     function(HTMLSPECIALCHARS_DOUBLE_ENCODE_NAME)
         .param("string", TypeExpr::Str)
-        .param("flags", TypeExpr::Int)
-        .param("encoding", t_nullable(TypeExpr::Str))
-        .param("double_encode", TypeExpr::Bool)
+        // php's own defaults, so a named or spread call that leaves some of them out binds.
+        .param_default("flags", TypeExpr::Int, e_int(11))
+        .param_default("encoding", t_nullable(TypeExpr::Str), e_null())
+        .param_default("double_encode", TypeExpr::Bool, e_bool(true))
         .returns(TypeExpr::Str)
         .body(body)
         .build()
