@@ -68,25 +68,37 @@ fn check(dir: &Path) -> Output {
 
 const COMPOSER: &str = r#"{"autoload":{"psr-4":{"App\\":"src/"}}}"#;
 
-/// Autoload registration warnings are emitted before include resolution and still name the entry.
+/// A closure autoloader that captures variables is kept for the run time, as php runs it, so it is
+/// checked without any diagnostic. The compiler used to strip such a registration with
+/// `warning: spl_autoload_register: closure rejected`; static rule extraction is now only an
+/// accelerator (`autoload::rule::collect_register_calls`), and php -n 8.5.10 prints `ok` for
+/// this program with nothing else.
 #[test]
-fn early_autoload_warning_names_the_entry_file() {
+fn capturing_closure_autoloader_is_checked_without_a_warning() {
     let dir = project(
         "elephc_early_autoload_warning",
         &[("main.php", "<?php\n$base = __DIR__;\nspl_autoload_register(function ($name) use ($base) {});\necho 'ok';\n")],
     );
     let output = check(&dir);
-    let stderr = String::from_utf8_lossy(&output.stderr).into_owned();
-    let expected = format!(
-        "warning[{}:3:1]: spl_autoload_register: closure rejected", dir.join("main.php").display(),
+    let log = format!(
+        "{}{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
     );
     fs::remove_dir_all(&dir).unwrap();
-    assert!(output.status.success(), "autoload warning must remain non-fatal:\n{stderr}");
-    assert!(stderr.contains(&expected),
-        "early warning should name the entry file ({expected}), got:\n{stderr}");
+    assert!(output.status.success(), "a capturing closure autoloader must check:\n{log}");
+    assert!(
+        !log.lines().any(|line| line.starts_with("warning")),
+        "php reports nothing for this program, got:\n{log}"
+    );
 }
 
 /// A checker error inside an autoloaded class file names that file, not just a line.
+///
+/// Such a file is no longer a fatal error: it is left out of the compiled world and loaded at run
+/// time, where php raises the fault itself (php -n 8.5.10: `Uncaught Error: Class "App\Missing"
+/// not found in .../src/Broken.php:4`). The warning that says so must name the file and the
+/// position of the refused construct.
 #[test]
 fn checker_error_in_an_autoloaded_file_names_the_file() {
     let dir = project(
@@ -97,13 +109,19 @@ fn checker_error_in_an_autoloaded_file_names_the_file() {
                 "src/Broken.php",
                 "<?php\nnamespace App;\nclass Broken {\n    public function run(): int { return new Missing(); }\n}\n",
             ),
-            ("main.php", "<?php\n$b = new App\\Broken();\necho $b->run();\n"),
+            (
+                "main.php",
+                "<?php\nspl_autoload_register(function (string $c): void {\n    $f = __DIR__ . '/src/' . substr($c, 4) . '.php';\n    if (str_starts_with($c, 'App\\\\') && is_file($f)) { require $f; }\n});\n$b = new App\\Broken();\necho $b->run();\n",
+            ),
         ],
     );
     let output = check(&dir);
     let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(!output.status.success(), "expected a checker error, got success");
-    let expected = format!("error[{}:4:", dir.join("src/Broken.php").display());
+    assert!(output.status.success(), "the refused file is deferred, not fatal:\n{stderr}");
+    let expected = format!(
+        "warning: autoload: '{}' is not compiled (4:5: ",
+        dir.join("src/Broken.php").display()
+    );
     assert!(
         stderr.contains(&expected),
         "diagnostic should name the autoloaded file ({expected}), got:\n{stderr}"
