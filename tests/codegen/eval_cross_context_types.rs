@@ -1168,3 +1168,24 @@ echo $pipe->run($container, 'Gu' . 'ard'), "\n";
     );
     assert_eq!(out, "[true,true,true]\n");
 }
+
+/// `static::class` inside a closure written in a compiled method names the class of the bound
+/// `$this` when that class was declared by the interpreter. A closure captures `$this` boxed,
+/// and the eval-class probe handed the box address to the bridge (which looks objects up by
+/// identity), so it fell back to the class id and named the compiled ancestor.
+#[test]
+fn test_static_class_in_compiled_closure_names_the_interpreted_subclass() {
+    let out = compile_and_run(
+        r#"<?php
+class LateBase {
+    public function name(): string { return static::class; }
+    public function namer(): \Closure { return function () { return static::class; }; }
+}
+$code = $argc > 0 ? 'class LateSub extends LateBase {} $s = new LateSub(); echo $s->name(), "\n"; $f = $s->namer(); echo $f(), "\n";' : '';
+eval($code);
+$g = (new LateBase())->namer();
+echo $g(), "\n";
+"#,
+    );
+    assert_eq!(out, "LateSub\nLateSub\nLateBase\n");
+}

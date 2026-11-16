@@ -163,9 +163,25 @@ fn emit_eval_this_dynamic_class_name_probe(ctx: &mut FunctionContext<'_>, done_l
     let offset = ctx.local_offset(slot)?;
     let native = ctx.next_label("static_class_this_native");
     let symbol = ctx.emitter.target.extern_symbol("__elephc_eval_dynamic_object_class_name");
+    // A method-defined closure captures `$this` boxed (see `emit_late_static_class_id_to_reg`):
+    // the bridge looks objects up by address, so it must see the object, not the Mixed cell.
+    let boxed_this = matches!(
+        ctx.local_php_type(slot)?.codegen_repr(),
+        PhpType::Mixed | PhpType::Union(_)
+    );
+    if boxed_this {
+        abi::load_at_offset(ctx.emitter, abi::int_result_reg(ctx.emitter), offset);
+        abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
+    }
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
-            abi::load_at_offset(ctx.emitter, "x0", offset);
+            if boxed_this {
+                ctx.emitter.instruction("cmp x0, #6");                          // runtime tag 6 = object; anything else has no eval class
+                ctx.emitter.instruction(&format!("b.ne {}", native));           // fall back to the class id
+                ctx.emitter.instruction("mov x0, x1");                          // the unboxed object pointer is the bridge's argument
+            } else {
+                abi::load_at_offset(ctx.emitter, "x0", offset);
+            }
             ctx.emitter.instruction(&format!("bl {}", symbol));                 // x0/x1 = $this's eval class name, or length 0
             ctx.emitter.instruction(&format!("cbz x1, {}", native));            // not an interpreter-declared instance
             ctx.emitter.instruction("mov x2, x1");                              // class-name length into the string result pair
@@ -173,7 +189,13 @@ fn emit_eval_this_dynamic_class_name_probe(ctx: &mut FunctionContext<'_>, done_l
             ctx.emitter.instruction(&format!("b {}", done_label));              // the eval class is the called class
         }
         Arch::X86_64 => {
-            abi::load_at_offset(ctx.emitter, "rdi", offset);
+            if boxed_this {
+                ctx.emitter.instruction("cmp rax, 6");                          // runtime tag 6 = object; anything else has no eval class
+                ctx.emitter.instruction(&format!("jne {}", native));            // fall back to the class id
+                // `__rt_mixed_unbox` left the object pointer in rdi, the bridge's argument.
+            } else {
+                abi::load_at_offset(ctx.emitter, "rdi", offset);
+            }
             ctx.emitter.instruction(&format!("call {}", symbol));               // rax/rdx = $this's eval class name, or length 0
             ctx.emitter.instruction("test rdx, rdx");                           // did the bridge name an interpreter-declared class?
             ctx.emitter.instruction(&format!("jz {}", native));                 // no: fall back to the class id
