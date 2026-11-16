@@ -385,17 +385,38 @@ pub(in crate::interpreter) fn eval_spread_traversable_array(
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     let entries = eval_spread_object_entries(object, 0, context, values)?;
-    let mut array = values.assoc_new(entries.len())?;
+    let mut array = match values.assoc_new(entries.len()) {
+        Ok(array) => array,
+        Err(status) => {
+            let _ = release_spread_entry_owners(entries, values);
+            return Err(status);
+        }
+    };
     let mut next = 0_i64;
-    for (key, value) in entries {
-        let key = if values.type_tag(key)? == EVAL_TAG_STRING {
-            key
-        } else {
-            let positional = values.int(next)?;
-            next += 1;
-            positional
-        };
-        array = values.array_set(array, key, value)?;
+    let mut entries = entries.into_iter();
+    while let Some((key, value)) = entries.next() {
+        let stored = (|| {
+            if values.type_tag(key)? == EVAL_TAG_STRING {
+                array = values.array_set(array, key, value)?;
+            } else {
+                let positional = values.int(next)?;
+                next += 1;
+                let stored = values.array_set(array, positional, value);
+                let released_positional = values.release(positional);
+                array = stored?;
+                released_positional?;
+            }
+            Ok(())
+        })();
+        // The pairs are owned reads of the iterator, as in `eval_spread_into_array`: the array
+        // retains the value and borrows the key, so both are released once stored. Keeping them
+        // left one extra reference on every yielded object.
+        let released = release_spread_entry_owners([(key, value)], values);
+        if let Err(status) = stored.and(released) {
+            let _ = release_spread_entry_owners(entries, values);
+            let _ = values.release(array);
+            return Err(status);
+        }
     }
     Ok(array)
 }
