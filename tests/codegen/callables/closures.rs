@@ -99,6 +99,41 @@ echo $cb(new Inv()), " ", m(new Inv()), " ", $kb(fn() => 1), "\n";
     assert_eq!(out, ["Inv/Base/Inv/Base Inv/Base Closure/Closure\n"]);
 }
 
+/// A function name or method array passed as a `callable` is the string or array PHP sees:
+/// `gettype()` names it and `get_class()` throws PHP's TypeError, held as a callable or forwarded
+/// into a `mixed`, whether a literal was bound at compile time or a runtime call converted it.
+/// It is still callable. Closures and invokable objects are objects. Expected output measured
+/// with php 8.5.12.
+#[test]
+fn test_implicit_callable_reports_its_string_or_array_origin() {
+    let out = compile_and_run_per_argv(
+        r#"<?php
+class Cls { public function m() { return 1; } public static function sm() { return 2; } }
+class Inv { public function __invoke() { return 3; } }
+function t(callable $f): string {
+    $out = gettype($f) . "/" . (is_object($f) ? "o" : "-") . (is_callable($f) ? "c" : "-") . "/";
+    try { $out .= get_class($f); } catch (TypeError $e) { $out .= $e->getMessage(); }
+    return $out . "/" . m($f) . "/" . $f();
+}
+function m(mixed $f): string {
+    $out = gettype($f) . "/";
+    try { $out .= get_class($f); } catch (TypeError $e) { $out .= $e->getMessage(); }
+    return $out;
+}
+$o = new Cls();
+echo t('Cls::sm'), "\n", t(['Cls', 'sm']), "\n", t([$o, 'm']), "\n", t(fn() => 4), "\n";
+$cb = $argv[1] ?? 't';
+echo $cb('Cls::sm'), "\n", $cb(['Cls', 'sm']), "\n", $cb([$o, 'm']), "\n", $cb(new Inv()), "\n", $cb(fn() => 6), "\n";
+"#,
+        &[&[]],
+    );
+    let string = "string/-c/get_class(): Argument #1 ($object) must be of type object, string given/string/get_class(): Argument #1 ($object) must be of type object, string given";
+    let array = "array/-c/get_class(): Argument #1 ($object) must be of type object, array given/array/get_class(): Argument #1 ($object) must be of type object, array given";
+    assert_eq!(out, [format!(
+        "{string}/2\n{array}/2\n{array}/1\nobject/oc/Closure/object/Closure/4\n{string}/2\n{array}/2\n{array}/1\nobject/oc/Inv/object/Inv/3\nobject/oc/Closure/object/Closure/6\n"
+    )]);
+}
+
 /// Verifies anonymous function with multiple parameters and a simple arithmetic body.
 #[test]
 fn test_closure_multiple_params() {

@@ -40,6 +40,13 @@ pub(crate) const CALLABLE_DESC_KIND_STATIC_METHOD: u64 =
 pub(crate) const CALLABLE_DESC_KIND_INSTANCE_METHOD: u64 =
     CallableDescriptorShape::InstanceMethod as u64;
 
+/// Mask selecting the descriptor kind from its kind word.
+pub(crate) const CALLABLE_DESC_KIND_MASK: u64 = 0xff;
+/// Kind-word flag: this implicit callable stands for a PHP string (`'strlen'`, `'Cls::m'`).
+pub(crate) const CALLABLE_DESC_ORIGIN_STRING: u64 = 1 << 8;
+/// Kind-word flag: this implicit callable stands for a PHP array (`[$obj, 'm']`, `['Cls', 'm']`).
+pub(crate) const CALLABLE_DESC_ORIGIN_ARRAY: u64 = 1 << 9;
+
 pub(crate) const CALLABLE_DESC_ENTRY_OFFSET: usize = 8;
 pub(crate) const CALLABLE_DESC_NAME_OFFSET: usize = 16;
 pub(crate) const CALLABLE_DESC_NAME_LENGTH_OFFSET: usize = 24;
@@ -326,6 +333,69 @@ pub(crate) fn emit_copy_descriptor_header_to_runtime(
         abi::emit_store_to_address(emitter, word_reg, dest_reg, offset);
     }
     emit_initialize_runtime_descriptor(emitter, dest_reg);
+}
+
+/// Records the PHP value an implicit callable stands for (`CALLABLE_DESC_ORIGIN_*`) in the
+/// kind word of the runtime descriptor held in `descriptor_reg`.
+///
+/// The origin flags sit above the 8-bit kind, which runtime readers mask with
+/// `CALLABLE_DESC_KIND_MASK`; `gettype()`, `get_class()` and `::class` read them.
+pub(crate) fn emit_mark_runtime_descriptor_origin(emitter: &mut Emitter, descriptor_reg: &str, origin: u64) {
+    use crate::codegen_support::platform::Arch;
+    match emitter.target.arch {
+        Arch::AArch64 => {
+            emitter.instruction(&format!("ldr x9, [{descriptor_reg}]"));        // load the descriptor kind word
+            emitter.instruction(&format!("orr x9, x9, #{origin}"));             // record which PHP value the callable stands for
+            emitter.instruction(&format!("str x9, [{descriptor_reg}]"));        // store the tagged kind word
+        }
+        Arch::X86_64 => {
+            emitter.instruction(&format!("or QWORD PTR [{descriptor_reg}], {origin}")); // record which PHP value the callable stands for
+        }
+    }
+}
+
+/// Branches to `string_label` or `array_label` when the descriptor in `descriptor_reg` stands for
+/// a PHP string or array (`CALLABLE_DESC_ORIGIN_*`); falls through for a Closure, an invokable
+/// object, or a descriptor without a recorded origin. Only scratch registers are clobbered.
+pub(crate) fn emit_branch_on_descriptor_origin(
+    emitter: &mut Emitter, descriptor_reg: &str, string_label: &str, array_label: &str,
+) {
+    use crate::codegen_support::platform::Arch;
+    match emitter.target.arch {
+        Arch::AArch64 => {
+            emitter.instruction(&format!("ldr x9, [{descriptor_reg}]"));        // load the descriptor kind word
+            emitter.instruction(&format!("tbnz x9, #8, {string_label}"));       // the callable stands for a PHP string
+            emitter.instruction(&format!("tbnz x9, #9, {array_label}"));        // the callable stands for a PHP array
+        }
+        Arch::X86_64 => {
+            emitter.instruction(&format!("test QWORD PTR [{descriptor_reg}], {CALLABLE_DESC_ORIGIN_STRING}")); // does the callable stand for a PHP string?
+            emitter.instruction(&format!("jnz {string_label}"));                // report the string it came from
+            emitter.instruction(&format!("test QWORD PTR [{descriptor_reg}], {CALLABLE_DESC_ORIGIN_ARRAY}")); // does the callable stand for a PHP array?
+            emitter.instruction(&format!("jnz {array_label}"));                 // report the array it came from
+        }
+    }
+}
+
+/// Replaces the shared static descriptor in the result register with a fresh runtime copy of
+/// its header that records the PHP value it stands for. A static descriptor is shared by every
+/// conversion of the same name, so only a private copy can carry the origin.
+pub(crate) fn emit_runtime_copy_with_origin(emitter: &mut Emitter, origin: u64) {
+    use crate::codegen_support::platform::Arch;
+    let result = abi::int_result_reg(emitter);
+    abi::emit_push_reg(emitter, result);
+    abi::emit_load_int_immediate(emitter, result, CALLABLE_DESC_STATIC_SIZE as i64);
+    abi::emit_call_label(emitter, "__rt_heap_alloc");
+    let (source, word) = match emitter.target.arch {
+        Arch::AArch64 => ("x12", "x13"),
+        Arch::X86_64 => ("rcx", "rdx"),
+    };
+    abi::emit_pop_reg(emitter, source);
+    for offset in (0..CALLABLE_DESC_STATIC_SIZE).step_by(8) {
+        abi::emit_load_from_address(emitter, word, source, offset);
+        abi::emit_store_to_address(emitter, word, result, offset);
+    }
+    emit_initialize_runtime_descriptor(emitter, result);
+    emit_mark_runtime_descriptor_origin(emitter, result, origin);
 }
 
 /// Clears capture storage before publishing a fresh allocation as a managed callable node.

@@ -742,6 +742,12 @@ fn emit_inline_mixed_callable_descriptor_value(
     )?;
     if fresh_closure {
         emit_fresh_closure_from_persistent_descriptor(ctx);
+    } else if retain_existing_descriptor {
+        // The name selected a shared static descriptor; an owned private copy records that PHP
+        // still sees a string here, for gettype(), get_class() and `::class`.
+        callable_descriptor::emit_runtime_copy_with_origin(
+            ctx.emitter, callable_descriptor::CALLABLE_DESC_ORIGIN_STRING,
+        );
     }
     abi::emit_jump(ctx.emitter, &done_label);
 
@@ -753,13 +759,20 @@ fn emit_inline_mixed_callable_descriptor_value(
         let selected_label = ctx.next_label("mixed_callable_value_array_done");
         let static_selected_label = ctx.next_label("mixed_callable_value_array_static_done");
         let static_label = ctx.next_label("mixed_callable_value_array_static");
+        let instance_bound_label = ctx.next_label("mixed_callable_value_array_instance_bound");
         selector_tables::emit_instance_target_table_lookup(
             ctx,
             &instance_targets,
             selector_tables::ReceiverSelector::CallableArray,
-            &selected_label,
+            &instance_bound_label,
             &static_label,
         )?;
+        ctx.emitter.label(&instance_bound_label);
+        // The receiver-bound copy is private to this value: PHP still sees an array here.
+        callable_descriptor::emit_mark_runtime_descriptor_origin(
+            ctx.emitter, abi::int_result_reg(ctx.emitter), callable_descriptor::CALLABLE_DESC_ORIGIN_ARRAY,
+        );
+        abi::emit_jump(ctx.emitter, &selected_label);
         ctx.emitter.label(&static_label);
         for case in &static_cases {
             let next_label = ctx.next_label("mixed_callable_value_array_static_next");
@@ -769,6 +782,12 @@ fn emit_inline_mixed_callable_descriptor_value(
                 abi::int_result_reg(ctx.emitter),
                 &case.case.descriptor_label,
             );
+            if retain_existing_descriptor && !fresh_closure {
+                // An owned private copy of the shared static descriptor records the array.
+                callable_descriptor::emit_runtime_copy_with_origin(
+                    ctx.emitter, callable_descriptor::CALLABLE_DESC_ORIGIN_ARRAY,
+                );
+            }
             abi::emit_jump(ctx.emitter, &static_selected_label);
             ctx.emitter.label(&next_label);
         }
