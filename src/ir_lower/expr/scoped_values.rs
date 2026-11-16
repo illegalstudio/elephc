@@ -16,9 +16,16 @@ pub(super) fn lower_first_class_callable(ctx: &mut LoweringContext<'_, '_>, targ
     lower_callable_descriptor(ctx, target, expr, Op::FirstClassCallableNew)
 }
 
-/// Lowers an implicit string or array callable without creating PHP Closure identity.
+/// Lowers an implicit string callable (`'strlen'`, `'Cls::m'`) without creating PHP Closure
+/// identity.
 pub(super) fn lower_callable_value(ctx: &mut LoweringContext<'_, '_>, target: &CallableTarget, expr: &Expr) -> LoweredValue {
     lower_callable_descriptor(ctx, target, expr, Op::CallableValueNew)
+}
+
+/// Lowers an implicit array callable (`[$obj, 'm']`, `['Cls', 'm']`) without creating PHP
+/// Closure identity; the descriptor remembers that PHP sees an array.
+pub(super) fn lower_callable_array_value(ctx: &mut LoweringContext<'_, '_>, target: &CallableTarget, expr: &Expr) -> LoweredValue {
+    lower_callable_descriptor(ctx, target, expr, Op::CallableArrayNew)
 }
 
 /// Shares invocation metadata while preserving whether the source created a PHP object.

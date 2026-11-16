@@ -523,6 +523,7 @@ pub(crate) fn lower_class_name_lookup(
             let done = ctx.next_label("get_class_callable_done");
             let result_reg = abi::int_result_reg(ctx.emitter);
             ctx.load_value_to_reg(value, result_reg)?;
+            emit_implicit_callable_class_lookup_errors(ctx, name, result_reg, false);
             emit_branch_to_invokable_receiver(ctx, result_reg, &invokable);
             let result = if name == "get_class" {
                 b"Closure".as_slice()
@@ -1156,6 +1157,38 @@ pub(in crate::codegen::lower_inst::builtins) fn emit_dynamic_object_class_name(c
     }
 }
 
+/// Throws PHP's TypeError when the callable descriptor in `descriptor_reg` is an implicit
+/// callable, which PHP still sees as the string or array it came from: get_class() rejects it
+/// (`get_class(): Argument #1 ($object) must be of type object, string given`), and so does
+/// `::class` (`Cannot use "::class" on string`). Falls through for a Closure or an invokable
+/// object. get_parent_class() keeps its existing answer.
+fn emit_implicit_callable_class_lookup_errors(
+    ctx: &mut FunctionContext<'_>, name: &str, descriptor_reg: &str, class_constant: bool,
+) {
+    if name != "get_class" {
+        return;
+    }
+    let string_error = ctx.next_label("get_class_callable_string");
+    let array_error = ctx.next_label("get_class_callable_array");
+    let object = ctx.next_label("get_class_callable_object");
+    crate::codegen_support::callable_descriptor::emit_branch_on_descriptor_origin(
+        ctx.emitter, descriptor_reg, &string_error, &array_error,
+    );
+    abi::emit_jump(ctx.emitter, &object);
+    for (label, type_name) in [(&string_error, "string"), (&array_error, "array")] {
+        ctx.emitter.label(label);
+        if class_constant {
+            super::super::exceptions::emit_type_error(
+                ctx, &format!("Cannot use \"::class\" on {type_name}"),
+            );
+        } else {
+            emit_class_lookup_type_error(ctx, name, type_name);
+        }
+        abi::emit_jump(ctx.emitter, &object);
+    }
+    ctx.emitter.label(&object);
+}
+
 /// Branches to `receiver_label` with the receiver object in the second payload register (`x1` /
 /// `rdi`) when the callable descriptor in `descriptor_reg` is an invokable object converted to a
 /// callable (kind `ObjectInvoke`); falls through otherwise.
@@ -1261,6 +1294,7 @@ fn emit_mixed_object_class_name(ctx: &mut FunctionContext<'_>, name: &str) {
         Arch::AArch64 => "x1",
         Arch::X86_64 => "rdi",
     };
+    emit_implicit_callable_class_lookup_errors(ctx, name, payload, false);
     emit_branch_to_invokable_receiver(ctx, payload, &object_label);
     if name == "get_class" {
         emit_string_result(ctx, b"Closure");
