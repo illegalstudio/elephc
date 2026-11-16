@@ -4397,8 +4397,8 @@ eval('function ser($a) {
 /// the holder's array one array.
 ///
 /// A native call copied the property into a temporary, so `$holder->push()` wrote a copy and the
-/// owner never saw it (php: `[1,2,3]`, compiled: `[1]`). Both classes come from the autoloader,
-/// so the compiler hands the pair to the runtime autoloader, where references are implemented.
+/// owner never saw it (php: `[1,2,3]`, compiled: `[1]`). Both classes come from the autoloader
+/// and stay compiled (see `spl::autoload::test_by_ref_promoted_constructor_over_properties_stays_compiled`).
 /// Symfony's `OrderedHashMap::getIterator()` builds its `OrderedHashMapIterator` this way, which
 /// killed every page that iterates a form.
 #[test]

@@ -15,11 +15,8 @@
 //! - Tests invoke the elephc CLI (CARGO_BIN_EXE_elephc) as a subprocess in an isolated temp
 //!   dir, compile a plain executable, run it, and assert stdout AND stderr — the same harness
 //!   style as `php_version_surface_tests` / `function_exists_tests`. Host-target only.
-//! - Every expected string here was captured from `php 8.5.10` on the same source. The one
-//!   deliberate divergence is `trigger_error()`'s `$file`/`$line`, which report the ENTRY file
-//!   and line 0 rather than the call site: the prelude is built as AST with no source position
-//!   of its own (`error_handling_prelude::e_magic_line`). The tests therefore assert the
-//!   handler's `$severity`/`$message` for `trigger_error()` and leave its location alone.
+//! - Every expected string here was captured from `php 8.5.10` on the same source, including
+//!   `trigger_error()`'s `$file`/`$line`, which report the call site as php's do.
 
 use std::fs;
 use std::path::{Path, PathBuf};

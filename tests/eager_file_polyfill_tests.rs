@@ -1,7 +1,7 @@
 //! Purpose:
 //! Guards the shape every PHP polyfill ships: an eager `autoload.files` entry that declares global
-//! functions behind `if (!function_exists('f'))`. One hop works; two hops do not, and the second
-//! test pins exactly where the boundary is.
+//! functions behind `if (!function_exists('f'))`. Both shapes work: the declarations in the eager
+//! file itself (one hop) and the ones in a file it includes (two hops).
 //!
 //! Called from:
 //! - `cargo test --test eager_file_polyfill_tests` through Rust's test harness.
@@ -114,7 +114,7 @@ return require __DIR__ . '/bootstrap72.php';
 /// Tests that an eager file's OWN guarded global functions are declared.
 ///
 /// One hop, and it works: the file is spliced whole and its conditional declarations are not on
-/// the include-stripping path that drops them. This is the green anchor for the ignored test
+/// the include-stripping path. This is the green anchor for the two-hop test
 /// below — without it, a failure there could just as well mean eager files do nothing at all.
 #[test]
 fn an_eager_file_declares_its_own_guarded_global_functions() {
