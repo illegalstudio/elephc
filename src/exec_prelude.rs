@@ -14,7 +14,7 @@
 //! - php-src's `php_exec` strips trailing whitespace (`isspace`: space, `\t`, `\n`, `\v`, `\f`,
 //!   `\r`) from every line it hands back, appends to an `$output` that already holds elements,
 //!   and answers the last line it read -- an empty string for a command that printed nothing.
-//! - The status is the exit code decoded from `pclose()`'s raw wait status (`-1` for a signal death).
+//! - The status is the exit code decoded from `pclose()`'s raw wait status (the raw status for a signal death, as php-src leaves it).
 //! - Every `exec()` call takes this route, the one-argument form included: the native helper
 //!   answered the whole output untrimmed, where php answers the last line.
 //! - Built as AST, never parsed from PHP source.
@@ -68,7 +68,7 @@ fn decl_fn_passthru_full() -> Stmt {
                         BinOp::BitAnd,
                         e_int(255),
                     ),
-                    e_int(-1),
+                    e_var("status"),
                 ),
             ),
             s_return(e_null()),
@@ -128,7 +128,7 @@ fn decl_fn_exec_full() -> Stmt {
                         BinOp::BitAnd,
                         e_int(255),
                     ),
-                    e_int(-1),
+                    e_var("status"),
                 ),
             ),
             s_return(e_var("last")),

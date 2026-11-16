@@ -2859,6 +2859,22 @@ fn test_exec() {
     assert_eq!(out, "test");
 }
 
+/// Verifies `exec()` and `passthru()` store the raw wait status of a signal-killed command, as php does.
+#[test]
+fn test_exec_result_code_of_a_signal_killed_command() {
+    let out = compile_and_run(
+        r#"<?php
+exec('kill -9 $$', $lines, $code);
+var_dump($code);
+exec('exit 3', $lines, $code);
+var_dump($code);
+passthru('kill -15 $$', $code);
+var_dump($code);
+"#,
+    );
+    assert_eq!(out, "int(9)\nint(3)\nint(15)\n");
+}
+
 // Tests `system("echo hi")` outputs "hi\n" (writes directly to stdout).
 /// Verifies that system.
 #[test]
