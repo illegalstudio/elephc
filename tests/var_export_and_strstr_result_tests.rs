@@ -575,9 +575,10 @@ fn strstr_accepts_two_or_three_arguments() {
     );
 }
 
-/// NOT-IMPLEMENTED PIN: the remaining unsupported `strstr` siblings never shared BUG 2 because elephc does not
-/// implement them at all — each is a hard "Undefined function" compile error rather than a
-/// silently wrong value.
+/// NOT-IMPLEMENTED PIN: `stristr` never shared BUG 2 because elephc does not implement it at all —
+/// it raises php's "Call to undefined function" `Error` when the call runs (an undefined function
+/// is no longer a compile error), rather than a silently wrong value. `strchr` is implemented now
+/// and is pinned to its `string|false` results instead.
 ///
 /// Reference PHP 8.5.6 for a miss on each: `stristr("hello","ZZZ")` and
 /// `strchr("hello","zzz")` return `bool(false)`, exactly like
@@ -586,12 +587,30 @@ fn strstr_accepts_two_or_three_arguments() {
 #[test]
 fn strstr_siblings_are_rejected_rather_than_silently_wrong() {
     let dir = make_test_dir("strstr_siblings");
-    for sibling in ["stristr", "strchr"] {
+    // `strchr` is implemented now and keeps strstr's `string|false` shape, as php does.
+    let strchr = compile(
+        &dir,
+        "<?php var_dump(strchr(\"hello\", \"z\")); var_dump(strchr(\"hello\", \"l\")); var_dump(strchr(\"hello\", \"l\", true));",
+        "strchr",
+    );
+    assert_eq!(
+        run_binary(&strchr),
+        "bool(false)\nstring(3) \"llo\"\nstring(2) \"he\"\n",
+        "php -n 8.5.10 output"
+    );
+    for sibling in ["stristr"] {
         let src = format!("<?php var_dump({sibling}(\"hello\", \"z\"));");
-        let diagnostics = compile_expecting_failure(&dir, &src, sibling);
+        let bin = compile(&dir, &src, sibling);
+        let output = Command::new(&bin).output().expect("failed to run compiled binary");
+        let report = format!(
+            "{}{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert_eq!(output.status.code(), Some(255), "{sibling}: {report}");
         assert!(
-            diagnostics.contains(&format!("Undefined function: {sibling}")),
-            "{sibling} no longer reports as undefined — implement it as string|false and pin it here instead: {diagnostics}"
+            report.contains(&format!("Uncaught Error: Call to undefined function {sibling}()")),
+            "{sibling} no longer reports as undefined — implement it as string|false and pin it here instead: {report}"
         );
     }
 }
