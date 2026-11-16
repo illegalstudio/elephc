@@ -2154,10 +2154,6 @@ fn emit_cleanup_locals(
         return;
     }
     let runnable = |ctx: &FunctionContext<'_>, slot: LocalSlotId, ty: &PhpType| -> Option<&'static str> {
-        // TEMP-AB-SWITCH
-        if std::env::var_os("ELEPHC_NO_RELEASE_RUN").is_some() {
-            return None;
-        }
         if ctx.unwinding_cleanup || ctx.ref_cell_state_offset(slot).is_some() {
             return None;
         }

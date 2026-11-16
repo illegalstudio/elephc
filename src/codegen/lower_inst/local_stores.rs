@@ -550,26 +550,6 @@ fn emit_refcounted_local_slot_retirement(
 ) -> Result<()> {
     let result = abi::int_result_reg(ctx.emitter);
     let mixed = matches!(ty, PhpType::Mixed | PhpType::Union(_));
-    // TEMP-AB-SWITCH
-    if std::env::var_os("ELEPHC_NO_RETIRE_HELPER").is_some() {
-        let done = ctx.next_label("release_local_slot_done");
-        abi::load_at_offset(ctx.emitter, result, offset);
-        abi::emit_branch_if_int_result_zero(ctx.emitter, &done);
-        abi::emit_store_zero_to_local_slot(ctx.emitter, offset);
-        if mixed {
-            if mixed_local_slot_is_statically_destructor_free(ctx, slot)? {
-                abi::emit_decref_if_refcounted(ctx.emitter, &PhpType::Mixed);
-                ctx.emitter.label(&done);
-                return Ok(());
-            }
-            emit_mixed_local_slot_retirement(ctx, &done);
-            return Ok(());
-        }
-        abi::emit_decref_preserving_exception(ctx.emitter, ty);
-        abi::emit_branch_if_int_result_nonzero(ctx.emitter, "__rt_throw_current");
-        ctx.emitter.label(&done);
-        return Ok(());
-    }
     if mixed && mixed_local_slot_is_statically_destructor_free(ctx, slot)? {
         let done = ctx.next_label("release_local_slot_done");
         abi::load_at_offset(ctx.emitter, result, offset);
@@ -666,45 +646,6 @@ fn mixed_value_is_statically_destructor_free(
         return mixed_value_is_statically_destructor_free(ctx, source, visited);
     }
     Ok(false)
-}
-
-/// Releases scalar Mixed payloads directly while preserving a bounded destructor path.
-///
-/// Tags 0 through 3 and tag 8 are int, string, float, bool, and null. Their deep release
-/// cannot invoke PHP code, so installing a `setjmp` cleanup boundary on every scalar rebind
-/// only penalizes hot numeric and string loops. Every aggregate, object, nested Mixed,
-/// resource, callable, and future tag keeps the exception-preserving path.
-fn emit_mixed_local_slot_retirement(ctx: &mut FunctionContext<'_>, done: &str) {
-    let result = abi::int_result_reg(ctx.emitter);
-    let tag = abi::secondary_scratch_reg(ctx.emitter);
-    let scalar = ctx.next_label("release_local_slot_scalar_mixed");
-    crate::codegen_support::sentinels::emit_branch_if_null_container(
-        ctx.emitter,
-        result,
-        tag,
-        done,
-    );
-    abi::emit_load_from_address(ctx.emitter, tag, result, 0);
-    match ctx.emitter.target.arch {
-        Arch::AArch64 => {
-            ctx.emitter.instruction(&format!("cmp {tag}, #3"));                 // classify int, string, float, and bool Mixed payloads
-            ctx.emitter.instruction(&format!("b.ls {scalar}"));                 // bypass the throwing-cleanup boundary for scalar tags 0 through 3
-            ctx.emitter.instruction(&format!("cmp {tag}, #8"));                 // classify the canonical null Mixed payload
-            ctx.emitter.instruction(&format!("b.eq {scalar}"));                 // null owns no destructor-capable child
-        }
-        Arch::X86_64 => {
-            ctx.emitter.instruction(&format!("cmp {tag}, 3"));                  // classify int, string, float, and bool Mixed payloads
-            ctx.emitter.instruction(&format!("jbe {scalar}"));                  // bypass the throwing-cleanup boundary for scalar tags 0 through 3
-            ctx.emitter.instruction(&format!("cmp {tag}, 8"));                  // classify the canonical null Mixed payload
-            ctx.emitter.instruction(&format!("je {scalar}"));                   // null owns no destructor-capable child
-        }
-    }
-    abi::emit_decref_preserving_exception(ctx.emitter, &PhpType::Mixed);
-    abi::emit_branch_if_int_result_nonzero(ctx.emitter, "__rt_throw_current");
-    abi::emit_jump(ctx.emitter, done);
-    ctx.emitter.label(&scalar);
-    abi::emit_decref_if_refcounted(ctx.emitter, &PhpType::Mixed);
-    ctx.emitter.label(done);
 }
 
 /// Lowers `unset($local)` by breaking any promoted alias and writing PHP null locally.

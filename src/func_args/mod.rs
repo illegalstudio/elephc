@@ -135,9 +135,7 @@ fn desugar_on_compiler_stack(program: Program) -> Result<Program, CompileError> 
     let mut program = program;
     // The gate walks the program in place: its detector mode performs no rewrite, so there is
     // no reason to hand it a full copy of the AST.
-    // TEMP-AB-SWITCH ELEPHC_NO_CAPTURE_ALL
-    let capture_all_frames = walk::program_uses_backtrace(&mut program)
-        && std::env::var_os("ELEPHC_NO_CAPTURE_ALL").is_none();
+    let capture_all_frames = walk::program_uses_backtrace(&mut program);
     let rewrite_introspection = !program_declares_introspection_name(&program);
     if !rewrite_introspection && !capture_all_frames {
         return Ok(program);
