@@ -3169,7 +3169,7 @@ foreach ($uasorted as $value) { echo $value; }
 "#;
     assert_eq!(
         compile_and_run_ir_backend("instance_method_sort_callbacks", source),
-        "321:321:123"
+        "321:231:123"
     );
 }
 
@@ -4282,8 +4282,8 @@ fn ir_backend_handles_basic_indexed_arrays() {
         ("array_set_int", "<?php $a = [10, 20]; $a[1] = 99; echo $a[1];", "99"),
         ("array_set_float", "<?php $a = [1.5, 2.5]; $a[0] = 3.5; echo $a[0];", "3.5"),
         ("array_set_string", "<?php $a = [\"a\", \"b\"]; $a[1] = \"z\"; echo $a[1];", "z"),
-        ("array_set_extends_int", "<?php $a = [1]; $a[3] = 9; echo count($a); echo \":\"; echo $a[0];", "4:1"),
-        ("array_set_extends_string", "<?php $a = [\"a\"]; $a[2] = \"z\"; echo count($a); echo \":\"; echo $a[2];", "3:z"),
+        ("array_set_extends_int", "<?php $a = [1]; $a[3] = 9; echo count($a); echo \":\"; echo $a[0];", "2:1"),
+        ("array_set_extends_string", "<?php $a = [\"a\"]; $a[2] = \"z\"; echo count($a); echo \":\"; echo $a[2];", "2:z"),
         ("array_set_empty_sparse_count", "<?php $a = []; $a[2] = 7; echo count($a);", "1"),
         (
             "array_literal_pushes_nullable_int_reads",
@@ -4525,12 +4525,12 @@ fn ir_backend_handles_indexed_array_sorting() {
         (
             "asort_indexed_ints",
             "<?php $a = [3, 1, 2]; asort($a); echo $a[0]; echo $a[1]; echo $a[2];",
-            "123",
+            "312",
         ),
         (
             "arsort_indexed_ints",
             "<?php $a = [1, 3, 2]; arsort($a); echo $a[0]; echo $a[1]; echo $a[2];",
-            "321",
+            "132",
         ),
         (
             "ksort_indexed_ints_preserves_slots",
@@ -4545,12 +4545,12 @@ fn ir_backend_handles_indexed_array_sorting() {
         (
             "natsort_indexed_ints",
             "<?php $a = [3, 1, 2]; natsort($a); echo $a[0]; echo $a[1]; echo $a[2];",
-            "123",
+            "312",
         ),
         (
             "natcasesort_indexed_ints",
             "<?php $a = [3, 1, 2]; natcasesort($a); echo $a[0]; echo $a[1]; echo $a[2];",
-            "123",
+            "312",
         ),
         (
             "shuffle_indexed_ints",
@@ -4883,12 +4883,12 @@ fn ir_backend_handles_indexed_array_set_operations() {
     for (name, source, expected) in [
         (
             "array_diff_indexed_ints",
-            "<?php $a = [1, 2, 3, 4]; $b = [2, 4]; $c = array_diff($a, $b); echo count($c); echo ':'; echo $c[0]; echo ':'; echo $c[1];",
+            "<?php $a = [1, 2, 3, 4]; $b = [2, 4]; $c = array_diff($a, $b); echo count($c); echo ':'; echo $c[0]; echo ':'; echo $c[2];",
             "2:1:3",
         ),
         (
             "array_intersect_indexed_ints",
-            "<?php $a = [1, 2, 3, 4]; $b = [2, 4, 6]; $c = array_intersect($a, $b); echo count($c); echo ':'; echo $c[0]; echo ':'; echo $c[1];",
+            "<?php $a = [1, 2, 3, 4]; $b = [2, 4, 6]; $c = array_intersect($a, $b); echo count($c); echo ':'; echo $c[1]; echo ':'; echo $c[3];",
             "2:2:4",
         ),
     ] {
@@ -5760,7 +5760,11 @@ fn ir_backend_handles_spl_autoload_helpers() {
     let source = r#"<?php
 echo spl_autoload_register() ? "reg" : "bad";
 echo ":";
-echo spl_autoload_unregister("missing") ? "unreg" : "bad";
+try {
+    echo spl_autoload_unregister("missing") ? "unreg" : "bad";
+} catch (TypeError $e) {
+    echo get_class($e);
+}
 echo ":";
 spl_autoload_call("MissingClass");
 spl_autoload("OtherClass");
@@ -5778,7 +5782,7 @@ echo count(spl_classes()) > 10 ? "classes" : "empty";
 "#;
     assert_eq!(
         compile_and_run_ir_backend("spl_autoload_helpers", source),
-        "reg:unreg:noop:0:.inc,.php:.inc,.php:.php,.inc:classes"
+        "reg:TypeError:noop:1:.inc,.php:.php,.inc:.php,.inc:classes"
     );
 }
 
@@ -6794,14 +6798,13 @@ fn ir_backend_requires_include_before_function_variant_dispatch() {
         !run.status.success(),
         "IR backend unloaded function-variant fixture unexpectedly succeeded"
     );
-    assert_eq!(
-        String::from_utf8(run.stdout).expect("fatal stdout should be utf8"),
-        ""
-    );
-    let stderr = String::from_utf8(run.stderr).expect("fatal stderr should be utf8");
+    // php displays an uncaught error on STDOUT (`php -n` 8.5.10), with its stack trace and tail.
+    let stdout = String::from_utf8(run.stdout).expect("fatal stdout should be utf8");
     assert!(
-        stderr.contains("Fatal error: Call to undefined function double()"),
-        "unexpected fatal stderr: {stderr}"
+        stdout.starts_with("\nFatal error: Uncaught Error: Call to undefined function double() in ")
+            && stdout.contains("main.php:1\nStack trace:\n#0 {main}\n  thrown in ")
+            && stdout.ends_with("main.php on line 1\n"),
+        "unexpected fatal stdout: {stdout}"
     );
 }
 
