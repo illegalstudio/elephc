@@ -132,7 +132,7 @@ fn emit_hash_to_hash_reverse_aarch64(emitter: &mut Emitter) {
 ///
 /// Same frame contents as the ARM64 form, at `[rbp - 8]` … `[rbp - 72]`. Helper ABIs are spelled
 /// out rather than deduced: `__rt_str_persist` reads its pointer from `rax` and its length from
-/// `rdx`, while `__rt_hash_new`, `__rt_hash_set` and `__rt_incref` take SysV argument registers.
+/// `rdx`, while `__rt_hash_new` and `__rt_hash_set` take SysV argument registers, and `__rt_incref` takes its pointer in `rax`.
 fn emit_hash_to_hash_reverse_x86_64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: hash_to_hash_reverse ---");
@@ -194,7 +194,7 @@ fn emit_hash_to_hash_reverse_x86_64(emitter: &mut Emitter) {
     emitter.instruction("jl __rt_h2h_rev_insert_x");                            // scalars need no retain
     emitter.instruction("cmp r10, 7");                                          // above the heap-backed tag range?
     emitter.instruction("jg __rt_h2h_rev_insert_x");                            // non-heap tags need no retain
-    emitter.instruction("mov rdi, QWORD PTR [rbp - 48]");                       // the heap-backed payload
+    emitter.instruction("mov rax, QWORD PTR [rbp - 48]");                       // the heap-backed payload, in the register __rt_incref reads
     emitter.instruction("call __rt_incref");                                    // retain it for the result
     emitter.instruction("jmp __rt_h2h_rev_insert_x");                           // payload retained: insert it
     emitter.label("__rt_h2h_rev_persist_x");

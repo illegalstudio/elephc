@@ -127,7 +127,6 @@ fn materialize_mixed_target_class_name(
     push_member_target_kind(ctx, 0);
     if ctx.emitter.target.arch == Arch::X86_64 {
         ctx.emitter.instruction("mov rax, rdi");                                // move the unboxed string pointer into result convention
-        ctx.emitter.instruction("mov rdx, rsi");                                // move the unboxed string length into result convention
     }
     ctx.emitter.label(&ready_label);
     Ok(())

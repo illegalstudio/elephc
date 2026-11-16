@@ -243,9 +243,9 @@ pub(super) fn release_array_map_source_preserving_result(
         return;
     }
     let result_reg = abi::int_result_reg(ctx.emitter);
-    let source_arg_reg = abi::int_arg_reg_name(ctx.emitter.target, 0);
     abi::emit_push_reg(ctx.emitter, result_reg);
-    abi::emit_load_temporary_stack_slot(ctx.emitter, source_arg_reg, 16);
+    // `__rt_decref_hash` takes the hash in the integer RESULT register; the result was just pushed.
+    abi::emit_load_temporary_stack_slot(ctx.emitter, result_reg, 16);
     abi::emit_call_label(ctx.emitter, "__rt_decref_hash");
     abi::emit_pop_reg(ctx.emitter, result_reg);
     abi::emit_release_temporary_stack(ctx.emitter, 16);

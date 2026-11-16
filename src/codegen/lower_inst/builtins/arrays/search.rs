@@ -592,7 +592,7 @@ fn emit_mixed_assoc_value_match_x86_64(
     ctx.emitter.instruction(&format!("je {}", concrete_label));                 // compare concrete payloads directly when the tags already match
     ctx.emitter.instruction("cmp r9, 7");                                       // check whether this mixed-capable entry stores a boxed Mixed cell
     ctx.emitter.instruction(&format!("jne {}", mismatch_label));                // skip entries with a different concrete runtime tag
-    ctx.emitter.instruction("mov rdi, rcx");                                    // pass the boxed Mixed entry value to the unbox helper
+    ctx.emitter.instruction("mov rax, rcx");                                    // pass the boxed Mixed entry value to the unbox helper
     abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
     abi::emit_load_int_immediate(ctx.emitter, "r10", expected_tag);
     ctx.emitter.instruction("cmp rax, r10");                                    // compare the entry runtime tag against the searched needle tag

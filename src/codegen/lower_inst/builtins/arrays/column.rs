@@ -151,7 +151,7 @@ fn lower_array_column_call(
                 ctx.emitter.instruction("ldr x0, [sp, #16]");                 // recover the owned indexed values array
             }
             Arch::X86_64 => {
-                ctx.emitter.instruction("mov rdi, QWORD PTR [rsp + 16]");     // recover the owned indexed values array
+                ctx.emitter.instruction("mov rax, QWORD PTR [rsp + 16]");     // recover the owned indexed values array
             }
         }
         abi::emit_call_label(ctx.emitter, "__rt_decref_array");
@@ -179,6 +179,13 @@ fn materialize_array_column_source(
     if let PhpType::AssocArray { value, .. } = source_ty {
         ctx.load_value_to_result(array)?;
         super::values::emit_loaded_assoc_array_values(ctx, &value.codegen_repr())?;
+        // The column helpers take the values array in the first ARGUMENT register; the values
+        // came back in the result register (`rax` on x86_64), which stays live for the release.
+        abi::emit_reg_move(
+            ctx.emitter,
+            abi::int_arg_reg_name(ctx.emitter.target, 0),
+            abi::int_result_reg(ctx.emitter),
+        );
         return Ok(true);
     }
 

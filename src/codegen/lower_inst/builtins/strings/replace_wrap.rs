@@ -324,7 +324,7 @@ fn emit_mixed_array_to_string_array(ctx: &mut FunctionContext<'_>) -> Result<()>
             ctx.emitter.instruction("mov rcx, QWORD PTR [r11]");                // load the source logical length
             ctx.emitter.instruction("cmp r10, rcx");                            // has every source element been converted?
             ctx.emitter.instruction(&format!("jge {}", end_label));
-            ctx.emitter.instruction("mov rdi, QWORD PTR [r11 + r10 * 8 + 24]"); // load the boxed Mixed element for this index
+            ctx.emitter.instruction("mov rax, QWORD PTR [r11 + r10 * 8 + 24]"); // load the boxed Mixed element for this index
             abi::emit_call_label(ctx.emitter, "__rt_mixed_cast_string");
             ctx.emitter.instruction("mov r10, QWORD PTR [rsp + 16]");           // reload the destination array pointer after the cast call
             ctx.emitter.instruction("mov r11, QWORD PTR [r10]");                // load the destination length before appending

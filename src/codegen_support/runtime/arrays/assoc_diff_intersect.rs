@@ -194,9 +194,9 @@ fn emit_assoc_diff_intersect_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rsi, QWORD PTR [rbp - 136]");                      // reload the hash1 string length as the str_eq left length
     emitter.instruction("call __rt_str_eq");                                    // compare the two cast strings, rax = equal
     emitter.instruction("mov QWORD PTR [rbp - 144], rax");                      // save the value-equality result across the box releases
-    emitter.instruction("mov rdi, QWORD PTR [rbp - 112]");                      // reload box1 for release
+    emitter.instruction("mov rax, QWORD PTR [rbp - 112]");                      // reload box1 for release
     emitter.instruction("call __rt_decref_mixed");                              // release the temporary hash1 value box
-    emitter.instruction("mov rdi, QWORD PTR [rbp - 120]");                      // reload box2 for release
+    emitter.instruction("mov rax, QWORD PTR [rbp - 120]");                      // reload box2 for release
     emitter.instruction("call __rt_decref_mixed");                              // release the temporary hash2 value box
     emitter.instruction("mov rax, QWORD PTR [rbp - 144]");                      // rax = pair matches (found and string-equal values)
     emitter.instruction("jmp __rt_assoc_diff_intersect_decide");                // decide whether to keep this entry

@@ -506,6 +506,8 @@ pub(super) fn lower_mixed_to_hash(ctx: &mut FunctionContext<'_>, inst: &Instruct
     let arg_reg = abi::int_arg_reg_name(ctx.emitter.target, 0);
     ctx.load_value_to_reg(source, arg_reg)?;
     abi::emit_push_reg(ctx.emitter, arg_reg);
+    // `__rt_mixed_unbox` reads the boxed cell from the integer RESULT register (`rax` on x86_64).
+    abi::emit_reg_move(ctx.emitter, abi::int_result_reg(ctx.emitter), arg_reg);
     abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
     let accepted = ctx.next_label("mixed_to_hash_array");
     let indexed = ctx.next_label("mixed_to_hash_indexed");

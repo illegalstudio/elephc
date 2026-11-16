@@ -642,6 +642,9 @@ fn lower_gradual_list_key_sort(
     let done = ctx.next_label("ksort_gradual_done");
     let arg = abi::int_arg_reg_name(ctx.emitter.target, 0);
     ctx.load_value_to_reg(array, arg)?;
+    // `__rt_heap_kind` probes the pointer in the integer RESULT register (`rax` on x86_64), not
+    // in the first argument register.
+    abi::emit_reg_move(ctx.emitter, abi::int_result_reg(ctx.emitter), arg);
     abi::emit_call_label(ctx.emitter, "__rt_heap_kind");
     match ctx.emitter.target.arch {
         Arch::AArch64 => {

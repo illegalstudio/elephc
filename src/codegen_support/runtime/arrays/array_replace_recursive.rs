@@ -271,12 +271,12 @@ fn emit_array_replace_recursive_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov QWORD PTR [rbp - 128], rax");                      // preserve the merged child while releasing conversions
     emitter.instruction("cmp QWORD PTR [rbp - 88], 0");                         // was the first child converted to an owned hash?
     emitter.instruction("je __rt_array_replace_recursive_release_second");      // skip borrowed first children
-    emitter.instruction("mov rdi, QWORD PTR [rbp - 80]");                       // reload the converted first child hash
+    emitter.instruction("mov rax, QWORD PTR [rbp - 80]");                       // reload the converted first child hash
     emitter.instruction("call __rt_decref_hash");                               // release the owned first child conversion
     emitter.label("__rt_array_replace_recursive_release_second");
     emitter.instruction("cmp QWORD PTR [rbp - 104], 0");                        // was the second child converted to an owned hash?
     emitter.instruction("je __rt_array_replace_recursive_children_released");   // skip borrowed second children
-    emitter.instruction("mov rdi, QWORD PTR [rbp - 96]");                       // reload the converted second child hash
+    emitter.instruction("mov rax, QWORD PTR [rbp - 96]");                       // reload the converted second child hash
     emitter.instruction("call __rt_decref_hash");                               // release the owned second child conversion
     emitter.label("__rt_array_replace_recursive_children_released");
     emitter.instruction("mov rcx, QWORD PTR [rbp - 128]");                      // restore the owned recursively merged child

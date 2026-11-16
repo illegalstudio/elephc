@@ -54,6 +54,8 @@ pub(crate) mod spl;
 /// emitted runtime and fails when a `call` would hand its callee a misaligned stack.
 #[cfg(test)]
 mod sysv_call_alignment;
+#[cfg(test)]
+mod rax_convention_tests;
 mod strings;
 pub(crate) use strings::concat_scratch::scratch_capacity as concat_scratch_capacity;
 mod system;

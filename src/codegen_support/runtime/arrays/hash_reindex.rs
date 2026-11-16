@@ -147,7 +147,7 @@ fn emit_hash_reindex_aarch64(emitter: &mut Emitter) {
 ///
 /// Same frame contents as the ARM64 form, at `[rbp - 8]` … `[rbp - 80]`. Helper ABIs are spelled
 /// out rather than deduced: `__rt_str_persist` reads its pointer from `rax` and its length from
-/// `rdx`, while `__rt_hash_new`, `__rt_hash_set` and `__rt_incref` take SysV argument registers.
+/// `rdx`, while `__rt_hash_new` and `__rt_hash_set` take SysV argument registers, and `__rt_incref` takes its pointer in `rax`.
 fn emit_hash_reindex_x86_64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: hash_reindex ---");
@@ -210,7 +210,7 @@ fn emit_hash_reindex_x86_64(emitter: &mut Emitter) {
     emitter.instruction("jl __rt_hash_reidx_key_x");                            // scalars need no retain
     emitter.instruction("cmp r10, 7");                                          // above the heap-backed tag range?
     emitter.instruction("jg __rt_hash_reidx_key_x");                            // non-heap tags need no retain
-    emitter.instruction("mov rdi, QWORD PTR [rbp - 48]");                       // the heap-backed payload
+    emitter.instruction("mov rax, QWORD PTR [rbp - 48]");                       // the heap-backed payload, in the register __rt_incref reads
     emitter.instruction("call __rt_incref");                                    // retain it for the result
     emitter.instruction("jmp __rt_hash_reidx_key_x");                           // payload retained: choose the key
     emitter.label("__rt_hash_reidx_persist_x");

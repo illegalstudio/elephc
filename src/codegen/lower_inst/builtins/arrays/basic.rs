@@ -333,7 +333,7 @@ fn lower_gradual_array_flip(
             abi::emit_call_label(ctx.emitter, "__rt_hash_flip");
             abi::emit_pop_reg(ctx.emitter, "rcx");                              // recover the normalized source hash after the flip
             abi::emit_push_reg(ctx.emitter, "rax");                             // preserve the fresh flipped result across source release
-            ctx.emitter.instruction("mov rdi, rcx");                            // release the independently owned normalized source hash
+            ctx.emitter.instruction("mov rax, rcx");                            // release the independently owned normalized source hash
             abi::emit_call_label(ctx.emitter, "__rt_decref_hash");
             abi::emit_pop_reg(ctx.emitter, "rax");                              // restore the fresh flipped hash for result boxing
         }
@@ -385,7 +385,7 @@ fn lower_mixed_indexed_flip(
             abi::emit_call_label(ctx.emitter, "__rt_hash_flip");
             abi::emit_pop_reg(ctx.emitter, "rcx");                              // recover the converted source hash
             abi::emit_push_reg(ctx.emitter, "rax");                             // preserve the fresh flipped result across release
-            ctx.emitter.instruction("mov rdi, rcx");                            // release the owned converted source hash
+            ctx.emitter.instruction("mov rax, rcx");                            // release the owned converted source hash
             abi::emit_call_label(ctx.emitter, "__rt_decref_hash");
             abi::emit_pop_reg(ctx.emitter, "rax");                              // restore the fresh flipped result
         }

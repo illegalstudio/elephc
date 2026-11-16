@@ -1746,7 +1746,7 @@ fn emit_serialize_x86_64(emitter: &mut Emitter) {
     emitter.instruction("jne __rt_serialize_object_eval_release_x");            // anything else is not a fragment to append
     emitter.instruction("call __rt_ser_append");                                // copy the rendered fragment into the output stream
     emitter.label("__rt_serialize_object_eval_release_x");
-    emitter.instruction("mov rdi, QWORD PTR [rbp - 24]");                       // reload the boxed fragment to give it back
+    emitter.instruction("mov rax, QWORD PTR [rbp - 24]");                       // reload the boxed fragment to give it back
     emitter.instruction("call __rt_decref_mixed");                              // release the fragment the callback handed over
     emitter.instruction("mov rsp, rbp");                                        // release the object frame
     emitter.instruction("pop rbp");                                             // restore the caller frame pointer

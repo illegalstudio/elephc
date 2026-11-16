@@ -347,6 +347,8 @@ fn emit_object_plan_check(
         // The bridge call clobbered the unboxed payload the class-id comparisons read.
         let box_arg = abi::int_arg_reg_name(ctx.emitter.target, 0);
         abi::emit_load_temporary_stack_slot(ctx.emitter, box_arg, BOX_OFFSET);
+        // `__rt_mixed_unbox` reads the boxed cell from the integer RESULT register.
+        abi::emit_reg_move(ctx.emitter, abi::int_result_reg(ctx.emitter), box_arg);
         abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
     }
     emit_accept_object_classes(ctx.emitter, &plan.accepted, accept_label);

@@ -299,7 +299,7 @@ fn emit_user_wrapper_opendir_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("jmp __rt_uwod_ret_x86");                               // return the synthetic directory descriptor
 
     emitter.label("__rt_uwod_fail_x86");
-    emitter.instruction("mov rdi, QWORD PTR [rbp - 24]");                       // reload the wrapper object
+    emitter.instruction("mov rax, QWORD PTR [rbp - 24]");                       // reload the wrapper object
     emitter.instruction("call __rt_decref_any");                                // free the instance before returning false
     emitter.label("__rt_uwod_failnoobj_x86");
     emitter.instruction("mov rax, -1");                                         // -1: matched wrapper failed → opendir() boxes false

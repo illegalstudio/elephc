@@ -516,6 +516,8 @@ fn materialize_runtime_array_storage_to_owned_mixed_hash(
     let arg_reg = abi::int_arg_reg_name(ctx.emitter.target, 0);
     ctx.load_value_to_reg(value, arg_reg)?;
     abi::emit_push_reg(ctx.emitter, arg_reg);
+    // `__rt_heap_kind` probes the pointer in the integer RESULT register (`rax` on x86_64).
+    abi::emit_reg_move(ctx.emitter, abi::int_result_reg(ctx.emitter), arg_reg);
     abi::emit_call_label(ctx.emitter, "__rt_heap_kind");
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
@@ -589,9 +591,9 @@ pub(super) fn lower_gradual_two_hash_arg_builtin(
             abi::emit_call_label(ctx.emitter, "__rt_decref_hash");
         }
         Arch::X86_64 => {
-            ctx.emitter.instruction("mov rdi, QWORD PTR [rsp + 16]");           // reload and release the second owned snapshot
+            ctx.emitter.instruction("mov rax, QWORD PTR [rsp + 16]");           // reload and release the second owned snapshot
             abi::emit_call_label(ctx.emitter, "__rt_decref_hash");
-            ctx.emitter.instruction("mov rdi, QWORD PTR [rsp + 32]");           // reload and release the first owned snapshot
+            ctx.emitter.instruction("mov rax, QWORD PTR [rsp + 32]");           // reload and release the first owned snapshot
             abi::emit_call_label(ctx.emitter, "__rt_decref_hash");
         }
     }
