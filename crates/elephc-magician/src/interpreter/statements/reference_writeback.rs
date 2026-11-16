@@ -393,7 +393,6 @@ pub(super) fn write_back_owned_variable_ref_target(
     result
 }
 
-/// Stores one by-reference result in the original caller-side target.
 /// Whether a variable whose writes travel through `target` must OWN the reference it stores.
 ///
 /// After `write_back_method_ref_target`, the local entry still holds the value the statement
@@ -418,6 +417,7 @@ pub(in crate::interpreter) fn written_value_is_owned_by_entry(
     })
 }
 
+/// Stores one by-reference result in the original caller-side target.
 pub(in crate::interpreter) fn write_back_method_ref_target(
     target: &EvalReferenceTarget,
     value: RuntimeCellHandle,

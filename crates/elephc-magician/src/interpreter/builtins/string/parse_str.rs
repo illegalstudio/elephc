@@ -337,6 +337,7 @@ fn flat_mangle_whole_name(name: &[u8]) -> Vec<u8> {
         .collect()
 }
 
+/// Decodes one `application/x-www-form-urlencoded` component: `+` is a space and `%XX` a byte.
 fn decode_form_component(input: &[u8]) -> Vec<u8> {
     let mut output = Vec::with_capacity(input.len());
     let mut index = 0;
@@ -359,6 +360,7 @@ fn decode_form_component(input: &[u8]) -> Vec<u8> {
     output
 }
 
+/// Returns the value of one hexadecimal digit, or `None` for any other byte.
 fn hex(byte: u8) -> Option<u8> {
     match byte {
         b'0'..=b'9' => Some(byte - b'0'),

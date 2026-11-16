@@ -555,11 +555,6 @@ fn eval_mixed_coalesce_return(
     }
 }
 
-/// Runs a `declare(ticks=N)` body, or turns ticking on for the rest of the enclosing scope.
-///
-/// The interval is saved and restored around a BLOCK body, because php scopes a block-form
-/// directive to that block: `declare(ticks=1) { … }` ticks inside the braces and nowhere after.
-/// The statement form has no body and simply runs to the end of the scope it was written in.
 /// Returns whether every value a returned expression can produce is a class-held member cell.
 ///
 /// A mixed `?:`/`??` (one side a member cell, the other a fresh value or a local) is left alone:
@@ -593,6 +588,11 @@ fn expr_returns_shared_member_cell(expr: &EvalExpr) -> bool {
     }
 }
 
+/// Runs a `declare(ticks=N)` body, or turns ticking on for the rest of the enclosing scope.
+///
+/// The interval is saved and restored around a BLOCK body, because php scopes a block-form
+/// directive to that block: `declare(ticks=1) { … }` ticks inside the braces and nowhere after.
+/// The statement form has no body and simply runs to the end of the scope it was written in.
 fn execute_declare_ticks_stmt(
     every: i64,
     body: Option<&[EvalStmt]>,
