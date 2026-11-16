@@ -134,6 +134,33 @@ echo $cb('Cls::sm'), "\n", $cb(['Cls', 'sm']), "\n", $cb([$o, 'm']), "\n", $cb(n
     )]);
 }
 
+/// `$f::class` on a `callable` names the class of a Closure or invokable object, as PHP does;
+/// it was rejected at compile time even for a closure. An implicit string or array callable
+/// throws PHP's TypeError (`Cannot use "::class" on string`), which a surrounding catch sees.
+/// Expected output measured with php 8.5.12.
+#[test]
+fn test_class_constant_on_callable() {
+    let out = compile_and_run_per_argv(
+        r#"<?php
+class Cls { public function m() { return 1; } public static function sm() { return 2; } }
+class Inv { public function __invoke() { return 3; } }
+function k(callable $f): string {
+    try { return $f::class; } catch (TypeError $e) { return get_class($e) . ": " . $e->getMessage(); }
+}
+$o = new Cls();
+echo k(fn() => 1), "|", k(strlen(...)), "|", k($o->m(...)), "|", k('Cls::sm'), "|", k(['Cls', 'sm']), "|", k([$o, 'm']), "\n";
+$kb = $argv[1] ?? 'k';
+echo $kb(new Inv()), "|", $kb('Cls::sm'), "|", $kb([$o, 'm']), "|", $kb(function () {}), "\n";
+"#,
+        &[&[]],
+    );
+    let string = "TypeError: Cannot use \"::class\" on string";
+    let array = "TypeError: Cannot use \"::class\" on array";
+    assert_eq!(out, [format!(
+        "Closure|Closure|Closure|{string}|{array}|{array}\nInv|{string}|{array}|Closure\n"
+    )]);
+}
+
 /// Verifies anonymous function with multiple parameters and a simple arithmetic body.
 #[test]
 fn test_closure_multiple_params() {
