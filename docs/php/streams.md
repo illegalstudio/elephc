@@ -391,7 +391,11 @@ macOS and Linux, so a command that cannot be started is PHP's
 `proc_open(): posix_spawn() failed: ...` warning plus `false`. Descriptor specs accept
 `['pipe', 'r'|'w']`, `['file', $path, $mode]`, `['null']`, `['redirect', $n]` and an
 open stream resource (a file, a socket, a pipe from an earlier `proc_open()`, or a
-variable holding `STDIN`/`STDOUT`/`STDERR`). The pipes are ordinary streams:
+variable holding `STDIN`/`STDOUT`/`STDERR`). A `file` spec's path goes through PHP's
+stream wrappers: `file://` URLs, `php://stdin`/`stdout`/`stderr`/`fd/N`, `php://temp` and
+`data:` URLs reach the child as descriptors, while `php://memory`, `php://output`,
+`php://input`, `php://filter` and `compress.zlib://` fail with PHP's "cannot represent"
+warnings. The pipes are ordinary streams:
 `fread()`, `fwrite()`, `fgets()`, `stream_get_contents()`, `stream_set_blocking()`,
 `stream_select()`, `feof()` and `fclose()` all work on them. `$cwd` and `$env_vars` apply
 to the child, and an `$env_vars` array replaces the environment. `$options` is accepted
@@ -411,6 +415,8 @@ Differences from PHP:
   and a later `fclose()` succeeds instead of PHP's `TypeError`. Close them with `fclose()`
   before `proc_close()`, as PHP's manual recommends.
 - A process resource dropped without `proc_close()` is not reaped.
+- A `file` spec naming an `http(s)://`, `ftp(s)://`, `phar://`, `zip://` or
+  `compress.bzip2://` URL is opened as a plain file path rather than through that wrapper.
 - `STDIN`/`STDOUT`/`STDERR` written directly inside an array literal that also holds
   arrays (`[0 => ['pipe', 'r'], 2 => STDERR]`) currently lose their resource type, so
   pass them through a variable there (`$err = STDERR;`). A spec made only of streams

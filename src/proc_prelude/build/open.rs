@@ -8,8 +8,9 @@
 //! Key details:
 //! - Transcribed from PHP with `crate::synthetic_class::transcribe`.
 //! - Descriptors are staged in spec order, so php-src's first failing entry wins; a
-//!   staging answer of 1 is success, 0 a bridge failure whose php-src warning text
-//!   `elephc_proc_last_error()` returns, and -1 a failure already warned about here.
+//!   staging answer of 1 is success, 0 a bridge failure whose php-src warning text(s)
+//!   `elephc_proc_last_error()` returns (joined by U+001F), 2 a staged file spec that
+//!   still warns (an unregistered wrapper), and -1 a failure already warned about here.
 //! - A stream spec must be a kind 0/1/3 resource with a real descriptor payload
 //!   (below the synthetic-wrapper base `0x40000000`).
 
@@ -311,16 +312,20 @@ pub(super) fn decl_fn_elephc_proc_open() -> Stmt {
                         s_throw(e_var("error")),
                     ]),
                 ], None),
+                // 0 is a failure and 2 a staged file spec that still warns; either way the
+                // bridge text holds one or more warnings joined by U+001F.
                 s_if(
-                    e_binop(e_var("staged"), BinOp::StrictEq, e_int(0)),
+                    e_binop(e_binop(e_var("staged"), BinOp::StrictEq, e_int(0)), BinOp::Or, e_binop(e_var("staged"), BinOp::StrictEq, e_int(2))),
                     vec![
-                        s_expr(e_call("__elephc_builtin_warning", vec![e_call("elephc_proc_last_error", vec![])])),
+                        s_foreach(e_call("explode", vec![e_str("\u{1f}"), e_call("elephc_proc_last_error", vec![])]), None, "warning", vec![
+                            s_expr(e_call("__elephc_builtin_warning", vec![e_var("warning")])),
+                        ]),
                     ],
                     vec![],
                     None,
                 ),
                 s_if(
-                    e_binop(e_var("staged"), BinOp::StrictNotEq, e_int(1)),
+                    e_binop(e_binop(e_var("staged"), BinOp::StrictNotEq, e_int(1)), BinOp::And, e_binop(e_var("staged"), BinOp::StrictNotEq, e_int(2))),
                     vec![
                         s_expr(e_call("elephc_proc_builder_free", vec![e_var("builder")])),
                         s_return(e_bool(false)),

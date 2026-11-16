@@ -136,23 +136,6 @@ fn dup_cloexec(fd: c_int, floor: c_int) -> Result<c_int, c_int> {
     }
 }
 
-/// Translates a PHP `fopen()` mode into `open(2)` flags, or `None` for an invalid mode.
-fn open_flags(mode: &str) -> Option<c_int> {
-    let mut chars = mode.chars();
-    let base = chars.next()?;
-    let plus = chars.as_str().contains('+');
-    let access = if plus { libc::O_RDWR } else if base == 'r' { libc::O_RDONLY } else { libc::O_WRONLY };
-    let extra = match base {
-        'r' => 0,
-        'w' => libc::O_CREAT | libc::O_TRUNC,
-        'a' => libc::O_CREAT | libc::O_APPEND,
-        'x' => libc::O_CREAT | libc::O_EXCL,
-        'c' => libc::O_CREAT,
-        _ => return None,
-    };
-    Some(access | extra | libc::O_CLOEXEC)
-}
-
 impl Builder {
     /// Records one staged descriptor.
     fn push(&mut self, index: i64, child_end: c_int, parent_end: Option<c_int>) {
@@ -172,24 +155,13 @@ impl Builder {
         Ok(())
     }
 
-    /// Stages `['file', $path, $mode]` by opening the file with fopen-mode semantics.
-    pub(crate) fn file(&mut self, index: i64, path: &CStr, mode: &str) -> Result<(), String> {
-        let display = path.to_string_lossy();
-        let Some(flags) = open_flags(mode) else {
-            return Err(format!(
-                "proc_open({display}): Failed to open stream: {}",
-                strerror(libc::EINVAL)
-            ));
-        };
-        let fd = unsafe { libc::open(path.as_ptr(), flags, 0o666 as libc::c_uint) };
-        if fd < 0 {
-            return Err(format!(
-                "proc_open({display}): Failed to open stream: {}",
-                strerror(last_errno())
-            ));
-        }
-        self.push(index, fd, None);
-        Ok(())
+    /// Stages `['file', $path, $mode]`: the path is opened through php-src's stream
+    /// wrappers (`crate::stream_path`) and the resulting descriptor handed to the child.
+    /// Answers the warning a successful open still raises (an unregistered wrapper).
+    pub(crate) fn file(&mut self, index: i64, path: &CStr, mode: &str) -> Result<Option<String>, String> {
+        let opened = crate::stream_path::open_file_spec(path, mode)?;
+        self.push(index, opened.fd, None);
+        Ok(opened.warning)
     }
 
     /// Stages an existing stream's descriptor: the child gets a duplicate of it.
