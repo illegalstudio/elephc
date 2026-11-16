@@ -1785,10 +1785,11 @@ fn module_has_unreachable_callable_methods(ctx: &FunctionContext<'_>) -> bool {
 
 /// Builds the lookup rows that name every non-public instance method of every compiled class.
 ///
-/// The row value is not a descriptor but a two-word record (pointer, length) of the text
-/// `protected method Box::hidden()`, so the miss path can word the diagnostic without a second
-/// table. The rows are independent of the call site's scope: they are only consulted AFTER the
-/// shared public table and the site's own scope table both missed, which is exactly "the class
+/// The row value is not a descriptor but a record of three (pointer, length) pairs: the
+/// receiver-class lead, the declared method name, and the declaring-class lead (the text
+/// `protected method Box::hidden()` is built from them), so the miss path can word either
+/// diagnostic without a second table. The rows are independent of the call site's scope: they
+/// are only consulted AFTER the shared public table and the site's own scope table both missed, which is exactly "the class
 /// declares this method and this scope cannot reach it". That keeps the table identical for every
 /// site (`DataSection::add_words` stores one copy per content) instead of a near-copy per scope.
 fn runtime_inaccessible_instance_method_cases(
@@ -1809,11 +1810,17 @@ fn runtime_inaccessible_instance_method_cases(
                 Some(Visibility::Private) => "private",
                 _ => continue,
             };
+            let declaring = class_info
+                .method_declaring_classes
+                .get(method_name)
+                .map(String::as_str)
+                .unwrap_or(class_name.as_str());
             rows.push((
                 class_info.class_id,
                 method_name.clone(),
                 format!("{word} method {}::", class_name.trim_start_matches('\\')),
                 spelled(method_name),
+                format!("{word} method {}::", declaring.trim_start_matches('\\')),
             ));
         }
         // A private method is not copied into the child's own tables here, but php still finds
@@ -1836,20 +1843,24 @@ fn runtime_inaccessible_instance_method_cases(
                     method_name.clone(),
                     format!("private method {}::", class_name.trim_start_matches('\\')),
                     spelled(method_name),
+                    format!("private method {}::", parent_name.trim_start_matches('\\')),
                 ));
             }
             ancestor = parent_info.parent.as_deref();
         }
     }
     rows.into_iter()
-        .map(|(class_id, method_name, lead, declared)| {
+        .map(|(class_id, method_name, lead, declared, declaring_lead)| {
             let (lead_label, lead_len) = ctx.data.add_string(lead.as_bytes());
             let (declared_label, declared_len) = ctx.data.add_string(declared.as_bytes());
+            let (declaring_label, declaring_len) = ctx.data.add_string(declaring_lead.as_bytes());
             let record = ctx.data.add_words(vec![
                 DataWord::Symbol(lead_label),
                 DataWord::U64(lead_len as u64),
                 DataWord::Symbol(declared_label),
                 DataWord::U64(declared_len as u64),
+                DataWord::Symbol(declaring_label),
+                DataWord::U64(declaring_len as u64),
             ]);
             InstanceLookupCase {
                 class_id,
@@ -1948,26 +1959,31 @@ fn emit_inaccessible_method_error(
 
 /// Words and throws the diagnostic for the inaccessible-method record in the result register.
 ///
-/// The record holds `protected method Box::` and the method as declared. php words the two
-/// diagnostics differently: the callback `TypeError` quotes the declared name, the direct-call
-/// `Error` quotes the name the caller wrote, which is still in the selector block.
+/// The record holds `protected method Box::` (receiver class), the method as declared, and
+/// `protected method Base::` (declaring class). php words the two diagnostics differently: the
+/// callback `TypeError` quotes the receiver class and the declared name, the direct-call `Error`
+/// quotes the declaring class and the name the caller wrote, which is still in the selector block.
 fn emit_inaccessible_method_throw(ctx: &mut FunctionContext<'_>, error: &InaccessibleMethodError) {
     let record_reg = abi::int_result_reg(ctx.emitter);
     let (lead_ptr, lead_len) = abi::string_result_regs(ctx.emitter);
     let (tail_ptr, tail_len) = super::runtime_class_messages::concat_right_operand_regs(ctx.emitter);
     // The tail is loaded first: on x86_64 the record register is also the lead's pointer register.
-    match error {
+    // The callback `TypeError` names the receiver's class (words 0/8); the direct-call `Error`
+    // names the method's declaring class (words 32/40), as php-src's `zend_bad_method_call` does.
+    let lead_offset = match error {
         InaccessibleMethodError::InvalidCallback(_) => {
             abi::emit_load_from_address(ctx.emitter, tail_ptr, record_reg, 16);
             abi::emit_load_from_address(ctx.emitter, tail_len, record_reg, 24);
+            0
         }
         _ => {
             abi::emit_load_temporary_stack_slot(ctx.emitter, tail_ptr, MIXED_METHOD_PAYLOAD_OFFSET);
             abi::emit_load_temporary_stack_slot(ctx.emitter, tail_len, MIXED_METHOD_PAYLOAD_OFFSET + 8);
+            32
         }
-    }
-    abi::emit_load_from_address(ctx.emitter, lead_len, record_reg, 8);
-    abi::emit_load_from_address(ctx.emitter, lead_ptr, record_reg, 0);
+    };
+    abi::emit_load_from_address(ctx.emitter, lead_len, record_reg, lead_offset + 8);
+    abi::emit_load_from_address(ctx.emitter, lead_ptr, record_reg, lead_offset);
     abi::emit_call_label(ctx.emitter, "__rt_concat");
     match error {
         InaccessibleMethodError::InvalidCallback(prefix) => {

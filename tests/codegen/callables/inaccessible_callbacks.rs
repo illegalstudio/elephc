@@ -336,3 +336,26 @@ try { $f = $h->pass(); $f("outside"); } catch (Throwable $e) { echo get_class($e
         "render boom\nrender boom2\nrender boom3\nrender boom4\nError: Call to private method Handler::render() from global scope\n"
     );
 }
+
+/// A direct call of an inherited non-public method through a callable array names the method's
+/// DECLARING class (`zend_bad_method_call` uses the function's scope), while the callback
+/// `TypeError` names the receiver's class. Expected output is `php -n`'s.
+#[test]
+fn test_inherited_inaccessible_method_direct_call_names_the_declaring_class() {
+    let out = compile_and_run(r##"<?php
+class P { protected function h() {} private function p() {} }
+class C extends P {}
+foreach (['h', 'p'] as $m) {
+    $f = [new C, $m];
+    try { $f(); } catch (Error $e) { echo get_class($e), ": ", $e->getMessage(), "\n"; }
+    try { call_user_func($f); } catch (Error $e) { echo get_class($e), ": ", $e->getMessage(), "\n"; }
+}
+"##);
+    assert_eq!(
+        out,
+        "Error: Call to protected method P::h() from global scope\n\
+         TypeError: call_user_func(): Argument #1 ($callback) must be a valid callback, cannot access protected method C::h()\n\
+         Error: Call to private method P::p() from global scope\n\
+         TypeError: call_user_func(): Argument #1 ($callback) must be a valid callback, cannot access private method C::p()\n"
+    );
+}
