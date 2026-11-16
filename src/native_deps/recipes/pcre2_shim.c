@@ -294,7 +294,7 @@ int32_t elephc_pcre2_v1_compile(
     if (match_slot_count_out != NULL) {
         *match_slot_count_out = 0;
     }
-    if (handle_out == NULL || match_slot_count_out == NULL || pattern_z == NULL) {
+    if (handle_out == NULL || match_slot_count_out == NULL || pattern_z == NULL || cflags > INT_MAX) {
         elephc_pcre2_v1_error = 1;
         return (int32_t)REG_BADPAT;
     }
