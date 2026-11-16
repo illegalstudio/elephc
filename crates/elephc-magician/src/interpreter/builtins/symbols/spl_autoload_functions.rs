@@ -72,11 +72,13 @@ pub(in crate::interpreter) fn eval_spl_autoload_functions_result(
     let mut result = values.array_new(callbacks.len())?;
     for (index, callback) in callbacks.into_iter().enumerate() {
         let index = values.int(index as i64)?;
-        // The array TAKES the value it is given. Handing it the cell the registry holds put a
-        // reference the registry still owns into userland, and the entries read back as integers
-        // rather than as the callables that were registered.
-        let callback = values.retain(callback)?;
-        result = values.array_set(result, index, callback)?;
+        // `array_set` borrows its key and value and the storage takes its own reference to the
+        // callback, so the registry's cell is handed over as it is (a second retain here was
+        // never given back) and only the temporary index cell is released.
+        let stored = values.array_set(result, index, callback);
+        let index_release = values.release(index);
+        result = stored?;
+        index_release?;
     }
     Ok(result)
 }
