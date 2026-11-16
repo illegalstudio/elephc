@@ -144,3 +144,26 @@ echo g(['ok' => 1, '1bad' => 2, 'bad-name' => 3, 7 => 4, '_u' => 5, "\u{e9}t\u{e
     );
     assert_eq!(out, "21\n3\n");
 }
+
+/// A property only the descendants of a nullable (or `|false`) class declare is read from the
+/// run-time object, with php's warnings for a null receiver and for a class lacking it.
+#[test]
+fn test_nullable_base_receiver_reads_a_property_only_a_subclass_declares() {
+    let out = compile_and_run_capture(
+        r#"<?php
+class N { public ?N $first = null; }
+class E extends N { public string $tag = 'T'; }
+class TX extends N { public int $len = 3; }
+function f(?N $n) { return $n->tag; }
+function g(N|false $n) { return $n->len; }
+echo f(new E()), "\n";
+echo g(new TX()), "\n";
+var_dump(f(null));
+var_dump(f(new TX()));
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "T\n3\nNULL\nNULL\n");
+    assert!(out.stderr.contains("Warning: Attempt to read property \"tag\" on null"), "{}", out.stderr);
+    assert!(out.stderr.contains("Warning: Undefined property: TX::$tag"), "{}", out.stderr);
+}

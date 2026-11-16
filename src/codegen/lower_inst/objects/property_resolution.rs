@@ -1300,17 +1300,29 @@ pub(super) fn property_abstract_receiver(
     let PhpType::Object(class_name) = ctx.value_php_type(object)?.codegen_repr() else {
         return Ok(None);
     };
+    Ok(class_property_runtime_receiver(ctx, &class_name, property))
+}
+
+/// Returns the class whose `property` read must dispatch on the run-time class of the object.
+///
+/// The declared class `class_name` is an upper bound: when it has no visible slot for the name
+/// but is abstract, or a descendant declares it, the slot belongs to whichever subclass the
+/// object is, so only the polymorphic read can find it. `None` means the declared class answers
+/// (or the name is missing everywhere, which the static resolver reports).
+pub(super) fn class_property_runtime_receiver(
+    ctx: &FunctionContext<'_>,
+    class_name: &str,
+    property: &str,
+) -> Option<String> {
     let normalized = class_name.trim_start_matches('\\');
     if normalized.is_empty() {
-        return Ok(Some(String::new()));
+        return Some(String::new());
     }
-    let Some(class_info) = ctx.module.class_infos.get(normalized) else {
-        return Ok(None);
-    };
+    let class_info = ctx.module.class_infos.get(normalized)?;
     let backing = reflection_backing(ctx, normalized, property)
         .unwrap_or(property);
     if class_info.visible_property(backing).is_some() {
-        return Ok(None);
+        return None;
     }
     // An ABSTRACT receiver never has an instance of its own, so the slot always belongs to a
     // descendant. A CONCRETE base is the same question whenever a descendant declares the
@@ -1320,7 +1332,7 @@ pub(super) fn property_abstract_receiver(
     // the two must agree, because the checker now types such a read as the descendants' declared
     // type rather than `null`, and a `null` type is what used to fold the access away.
     if class_info.is_abstract || module_descendant_declares_property(ctx, normalized, backing) {
-        return Ok(Some(normalized.to_string()));
+        return Some(normalized.to_string());
     }
     // The checker typed the read from a descendant that reachability then PRUNED (no instance of
     // it is ever created: symfony/http-client's `CurlClientState`, read through `ClientState` in
@@ -1329,9 +1341,9 @@ pub(super) fn property_abstract_receiver(
     if !class_info.dynamic_property_hash_is_name_addressable()
         && !module_class_or_descendant_has_magic_get(ctx, normalized)
     {
-        return Ok(Some(normalized.to_string()));
+        return Some(normalized.to_string());
     }
-    Ok(None)
+    None
 }
 
 /// Returns whether `ancestor` or a module class descending from it declares `__get`.

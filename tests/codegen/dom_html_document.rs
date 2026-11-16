@@ -111,3 +111,17 @@ echo $d->characterSet, ' ', bin2hex($d->body->textContent), "\n";
         )
     );
 }
+
+/// `firstChild` is typed `?Dom\Node`: a property only `Dom\Element` or `Dom\Text` declares is
+/// read from the run-time node, as php does.
+#[test]
+fn test_dom_html_document_reads_a_subclass_property_through_a_node() {
+    let out = compile_and_run(
+        r#"<?php
+$h = Dom\HTMLDocument::createFromString('<p>hi</p>', LIBXML_NOERROR);
+echo $h->body->firstChild->tagName, "\n";
+echo $h->body->firstChild->firstChild->length, "\n";
+"#,
+    );
+    assert_eq!(out, "P\n2\n");
+}

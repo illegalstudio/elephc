@@ -92,6 +92,10 @@ fn lower_polymorphic_object_prop_get_from_loaded_object(
     }
 
     ctx.emitter.label(&miss_label);
+    // The dispatch kept the object in the result register: php names its run-time class.
+    if property_fetch_mode(inst).is_read() {
+        emit_undefined_property_warning_for_loaded_object(ctx, property);
+    }
     emit_dynamic_property_miss_result(ctx, inst);
     store_if_result(ctx, inst)?;
     ctx.emitter.label(&done_label);
@@ -1700,8 +1704,12 @@ pub(super) fn lower_nullable_prop_get_with_warning(
     class_name: &str,
     property: &str,
 ) -> Result<()> {
-    if class_name.trim_start_matches('\\').is_empty() {
-        return lower_nullable_generic_object_prop_get(ctx, inst, object, property);
+    // A bare object, or a class whose descendants alone declare the name (`?Dom\Node` read for
+    // `tagName` while it holds a `Dom\Element`): the run-time class picks the slot.
+    if let Some(target) =
+        super::property_resolution::class_property_runtime_receiver(ctx, class_name, property)
+    {
+        return lower_nullable_polymorphic_object_prop_get(ctx, inst, object, &target, property);
     }
     let null_label = ctx.next_label("nullable_prop_warning_null");
     let done_label = ctx.next_label("nullable_prop_warning_done");
@@ -1751,18 +1759,20 @@ pub(super) fn lower_nullable_prop_get_with_warning(
     store_if_result(ctx, inst)
 }
 
-/// Lowers a nullable bare-object property read through concrete runtime class dispatch.
-fn lower_nullable_generic_object_prop_get(
+/// Lowers a nullable property read through run-time class dispatch among `target`'s classes
+/// (any object when `target` is empty), warning like php on a null receiver.
+fn lower_nullable_polymorphic_object_prop_get(
     ctx: &mut FunctionContext<'_>,
     inst: &Instruction,
     object: ValueId,
+    target: &str,
     property: &str,
 ) -> Result<()> {
     let null_label = ctx.next_label("nullable_generic_prop_null");
     let done_label = ctx.next_label("nullable_generic_prop_done");
     let object_reg = abi::int_result_reg(ctx.emitter);
     emit_nullable_receiver_object_payload(ctx, object, &null_label, object_reg)?;
-    lower_polymorphic_object_prop_get_from_loaded_object(ctx, inst, "", property)?;
+    lower_polymorphic_object_prop_get_from_loaded_object(ctx, inst, target, property)?;
     abi::emit_jump(ctx.emitter, &done_label);
 
     ctx.emitter.label(&null_label);

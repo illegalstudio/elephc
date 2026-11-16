@@ -240,7 +240,12 @@ fn lower_native_prop_get_nonnull(
         // A nullable INTERFACE (`?CacheEntry`) has no slot layout to resolve the property
         // against; its implementers do, and the boxed class-id ladder below reads whichever one
         // the run-time object is. Doctrine's second-level cache reads `$entry->class` that way.
-        if ctx.module.class_infos.contains_key(class_name.trim_start_matches('\\')) {
+        // A nullable CLASS answers from its own slot, unless the name lives only on its
+        // descendants (`?Dom\Node` holding a `Dom\Element`, read for `tagName`): then the run-time
+        // class decides, which is the boxed ladder below too.
+        if ctx.module.class_infos.contains_key(class_name.trim_start_matches('\\'))
+            && class_property_runtime_receiver(ctx, &class_name, property).is_none()
+        {
             return lower_union_object_prop_get(ctx, inst, object, &class_name, property);
         }
     }
