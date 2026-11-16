@@ -33,7 +33,9 @@ pub(in crate::interpreter) fn eval_compact_intrinsic(
     for arg in args {
         let value = eval_expr(arg.value(), context, scope, values)?;
         result = eval_compact_collect(value, result, scope, values)?;
-        values.release(value)?;
+        // A variable read is a borrowed view of the scope's own cell: only an owned result is
+        // this call's to give back.
+        release_expr_result(value, context, values)?;
     }
     Ok(result)
 }
