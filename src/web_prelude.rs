@@ -222,6 +222,10 @@ fn wrap_namespaced_program(program: Program, dispatch_handler: bool) -> Program 
 /// Set once an uncaught Throwable has been dispatched, so the later runs are skipped.
 const ABORTED_FLAG: &str = "__elephc_aborted";
 
+/// Set while a wrapped run executes; still set in the run's `finally` only when a top-level
+/// `return` left the handler from inside it.
+const RUN_OPEN_FLAG: &str = "__elephc_run_open";
+
 /// Wraps each maximal run of executable statements of `body` in a guarded catch-all `try`,
 /// leaving declarations, imports and namespace statements in place.
 fn wrap_runs_in_place(body: Program, dispatch_handler: bool) -> Program {
@@ -231,11 +235,27 @@ fn wrap_runs_in_place(body: Program, dispatch_handler: bool) -> Program {
         if run.is_empty() {
             return;
         }
-        let mut catch_body = vec![s_assign(ABORTED_FLAG, e_bool(true))];
+        // A top-level `return` in the run leaves the handler before the trailing request end,
+        // so the run's `finally` runs it then: the open flag is cleared only when the run falls
+        // through or throws, and both of those reach the trailing request end instead.
+        let mut try_body = std::mem::take(run);
+        try_body.push(s_assign(RUN_OPEN_FLAG, e_bool(false)));
+        let mut catch_body = vec![
+            s_assign(RUN_OPEN_FLAG, e_bool(false)),
+            s_assign(ABORTED_FLAG, e_bool(true)),
+        ];
         catch_body.extend(uncaught_dispatch(dispatch_handler));
+        let left_by_return = vec![s_if(e_var(RUN_OPEN_FLAG), request_end(), vec![], None)];
         out.push(s_if(
             e_not(e_var(ABORTED_FLAG)),
-            vec![s_try(std::mem::take(run), vec![(vec!["\\Throwable"], Some("__elephc_exc"), catch_body)], None)],
+            vec![
+                s_assign(RUN_OPEN_FLAG, e_bool(true)),
+                s_try(
+                    try_body,
+                    vec![(vec!["\\Throwable"], Some("__elephc_exc"), catch_body)],
+                    Some(left_by_return),
+                ),
+            ],
             vec![],
             None,
         ));

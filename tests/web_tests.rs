@@ -4136,6 +4136,29 @@ fn web_namespaced_uncaught_exception_keeps_the_worker_and_ends_the_script() {
     assert_eq!(raw_response_body(&after), "a;b", "the worker serves the next request");
 }
 
+/// A top-level `return` in a namespaced program still ends the request the way php does: the
+/// `register_shutdown_function()` callbacks run and print into the response. The namespaced
+/// wrap appended the request end after the runs, so a `return` left the handler before it; the
+/// same script without its `namespace` line always printed `hibye`. Body from php 8.5 `php -S`.
+#[test]
+fn web_namespaced_top_level_return_still_runs_the_request_end() {
+    let dir = make_test_dir("web_ns_return");
+    let src = "<?php namespace App; \
+        \\register_shutdown_function(function () { echo 'bye'; }); \
+        echo 'hi'; \
+        if (($_GET['r'] ?? '') === '1') { return; } \
+        echo ';tail';";
+    let bin = compile_web(&dir, src, "app");
+    let addr = format!("127.0.0.1:{}", free_port());
+    let mut child = spawn_server(&bin, &addr, "1");
+    let returned = http_request(&addr, "GET", "/?r=1", &[], "");
+    let plain = http_request(&addr, "GET", "/", &[], "");
+    let _ = child.kill();
+    let _ = child.wait();
+    assert_eq!(raw_response_body(&returned), "hibye", "a top-level return skipped the request end");
+    assert_eq!(raw_response_body(&plain), "hi;tailbye");
+}
+
 /// Verifies the OPcache `opcache_get_status()` prelude function under `--web`, where the
 /// cache is enabled (`opcache.enable` default). Spot-checks the enabled status array:
 /// `opcache_enabled` true; the class-B memory invariant (used + free + wasted ==
