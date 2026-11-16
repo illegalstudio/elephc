@@ -18,7 +18,8 @@
 //! - The files the copy parsed are kept for the real walk, which takes them instead of parsing
 //!   them again, so their source IDs and anonymous-class numbers stay taken and are not reused.
 //! - A probe failure is not reported here: the real pass hits the same error and reports it.
-//! - The web environment group retains process entries when an autoloaded file observes them.
+//! - The web groups (environment observers, exception handler registration) come from one usage
+//!   scan of the closure: `crate::web_prelude::autoloaded_web_groups`.
 
 use crate::fast_hash::FastSet as HashSet;
 use std::path::Path;
@@ -44,7 +45,6 @@ const PROBED_GROUPS: &[(&str, fn(&[Stmt]) -> bool)] = &[
     ("xml", crate::xml_prelude::program_uses_surface),
     ("fileinfo", crate::fileinfo_prelude::program_uses_surface),
     ("var_export", crate::var_export_prelude::program_uses_surface),
-    ("web_environment", crate::web_prelude::program_observes_environment),
 ];
 
 /// Returns the prelude groups some file of the autoload closure uses.
@@ -68,11 +68,14 @@ pub fn autoloaded_prelude_groups(
         })
     });
     let groups = closure.map_or_else(HashSet::default, |(closure, _)| {
-        PROBED_GROUPS
+        let mut groups: HashSet<&'static str> = PROBED_GROUPS
             .iter()
             .filter(|(_, detect)| detect(&closure))
             .map(|(group, _)| *group)
-            .collect()
+            .collect();
+        // The web groups share one usage scan of the closure.
+        groups.extend(crate::web_prelude::autoloaded_web_groups(&closure));
+        groups
     });
     groups
 }

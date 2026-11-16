@@ -164,6 +164,29 @@ fn probe_detects_fileinfo_in_autoloaded_classes() {
     }
 }
 
+/// An autoloaded class that can register an exception handler (by name, through a callable it
+/// cannot name, or `eval`) keeps the --web catch-all's handler call; one that cannot does not.
+#[test]
+fn probe_detects_exception_handler_registration_in_autoloaded_classes() {
+    let project = ProbeProject::new();
+    let defines = crate::fast_hash::FastSet::default();
+    for (body, registers) in [
+        (r"return set_exception_handler([$this, 'read']);", true),
+        (r"return \set_exception_handler(null);", true),
+        (r"return $source();", true),
+        (r"return eval($source);", true),
+        (r"return strlen($source);", false),
+        (r"return str_repeat($source, 2);", false),
+    ] {
+        fs::write(project.0.join("src/Probe.php"), format!(
+            "<?php namespace App; class Probe {{ public function read(string $source) {{ {body} }} }}",
+        )).unwrap();
+        let (registry, program) = Registry::build(&project.0, parse("<?php new App\\Probe();"));
+        let groups = autoloaded_prelude_groups(&program, &project.0, &registry, &defines);
+        assert_eq!(groups.contains(crate::web_prelude::EXCEPTION_HANDLER_GROUP), registers, "{body}");
+    }
+}
+
 /// Autoloaded observers retain web environment population while getenv remains independent.
 #[test]
 fn probe_detects_web_environment_observers_in_autoloaded_classes() {

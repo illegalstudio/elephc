@@ -72,8 +72,43 @@ pub(crate) mod build;
 mod environment;
 
 /// Detects environment observers in the discarded autoload probe before web injection.
+#[cfg(test)]
 pub(crate) fn program_observes_environment(program: &[Stmt]) -> bool {
     environment::is_observable(program, &usage::collect_environment(program))
+}
+
+/// The autoload probe group for a closure that observes the process environment.
+pub(crate) const ENVIRONMENT_GROUP: &str = "web_environment";
+/// The autoload probe group for a closure that can register an exception handler.
+pub(crate) const EXCEPTION_HANDLER_GROUP: &str = "web_exception_handler";
+
+/// The web groups an autoload closure needs, from ONE usage scan shared by both detectors.
+pub(crate) fn autoloaded_web_groups(program: &[Stmt]) -> impl Iterator<Item = &'static str> {
+    let usage = usage::collect_environment(program);
+    [
+        (environment::is_observable(program, &usage), ENVIRONMENT_GROUP),
+        (may_register_exception_handler(program, &usage), EXCEPTION_HANDLER_GROUP),
+    ]
+    .into_iter()
+    .filter_map(|(found, group)| found.then_some(group))
+}
+
+/// Whether `program` can register a handler with `set_exception_handler()`: it names the function
+/// (a call or a callable string), or it calls something this walk cannot name (`$f()`, an unknown
+/// callable, `eval`, a computed include).
+///
+/// A program that cannot gets the catch-all without the handler call, which is not just shorter:
+/// calling the handler is `$handler($exc)` on a mixed value, and that resolves callable strings,
+/// which keeps every function of the program reachable by name.
+fn may_register_exception_handler(program: &[Stmt], usage: &usage::Usage) -> bool {
+    const NAME: &str = "set_exception_handler";
+    usage.references(NAME)
+        || usage.literals.contains(NAME)
+        || usage.dynamic_function_call
+        || usage.opaque_eval
+        || usage.includes_runtime_php
+        || usage.references("eval")
+        || (usage.callable_names.has_unknown_target() && usage::has_reachable_unknown_callable(program, usage))
 }
 
 /// The catch-all wrapper: the whole handler body goes inside its `try` so an uncaught exception
@@ -99,10 +134,16 @@ pub(crate) fn program_observes_environment(program: &[Stmt]) -> bool {
 /// symbol, with no arguments to marshal. Calling it from here is also what keeps it REACHABLE
 /// under `--web`, where nothing forces its group.
 pub(crate) fn web_wrap_stmt() -> Stmt {
+    web_wrap_stmt_for(true)
+}
+
+/// [`web_wrap_stmt`], with the registered-handler call only when `dispatch_handler` (see
+/// [`uncaught_dispatch`]).
+fn web_wrap_stmt_for(dispatch_handler: bool) -> Stmt {
     crate::synthetic_class::internal_declarations(|| {
         vec![s_try(
             vec![s_assign("__elephc_wrap", e_int(0))],
-            vec![(vec!["\\Throwable"], Some("__elephc_exc"), uncaught_dispatch())],
+            vec![(vec!["\\Throwable"], Some("__elephc_exc"), uncaught_dispatch(dispatch_handler))],
             Some(request_end()),
         )]
     })
@@ -118,8 +159,14 @@ pub(crate) fn web_wrap_stmt() -> Stmt {
 ///
 /// Names are spelled fully qualified because the namespaced wrap places this inside the
 /// program's own namespaces.
-fn uncaught_dispatch() -> Vec<Stmt> {
+///
+/// Without `dispatch_handler` (a program that cannot register a handler, see
+/// `may_register_exception_handler`) there is no handler to call: it is the 500 alone.
+fn uncaught_dispatch(dispatch_handler: bool) -> Vec<Stmt> {
     let fail = || s_expr(e_call("\\elephc_web_handle_uncaught_exception", vec![]));
+    if !dispatch_handler {
+        return vec![fail()];
+    }
     vec![
         s_assign("__elephc_exc_handler", e_call("\\set_exception_handler", vec![e_null()])),
         s_if(
@@ -162,11 +209,11 @@ fn request_end() -> Vec<Stmt> {
 /// their place would leave them in the wrong namespace. Instead every run of executable
 /// statements is wrapped where it stands, in its own namespace. A run after an uncaught
 /// Throwable is skipped (PHP ends the script there), and the request end runs once, last.
-fn wrap_namespaced_program(program: Program) -> Program {
+fn wrap_namespaced_program(program: Program, dispatch_handler: bool) -> Program {
     crate::synthetic_class::internal_declarations(|| {
         // The web prelude's own statements already precede the program's first `namespace`.
         let mut wrapped = vec![s_assign(ABORTED_FLAG, e_bool(false))];
-        wrapped.extend(wrap_runs_in_place(program));
+        wrapped.extend(wrap_runs_in_place(program, dispatch_handler));
         wrapped.extend(request_end());
         wrapped
     })
@@ -177,7 +224,7 @@ const ABORTED_FLAG: &str = "__elephc_aborted";
 
 /// Wraps each maximal run of executable statements of `body` in a guarded catch-all `try`,
 /// leaving declarations, imports and namespace statements in place.
-fn wrap_runs_in_place(body: Program) -> Program {
+fn wrap_runs_in_place(body: Program, dispatch_handler: bool) -> Program {
     let mut out = Vec::with_capacity(body.len());
     let mut run: Program = Vec::new();
     let flush = |out: &mut Program, run: &mut Program| {
@@ -185,7 +232,7 @@ fn wrap_runs_in_place(body: Program) -> Program {
             return;
         }
         let mut catch_body = vec![s_assign(ABORTED_FLAG, e_bool(true))];
-        catch_body.extend(uncaught_dispatch());
+        catch_body.extend(uncaught_dispatch(dispatch_handler));
         out.push(s_if(
             e_not(e_var(ABORTED_FLAG)),
             vec![s_try(std::mem::take(run), vec![(vec!["\\Throwable"], Some("__elephc_exc"), catch_body)], None)],
@@ -197,7 +244,7 @@ fn wrap_runs_in_place(body: Program) -> Program {
         match &mut stmt.kind {
             StmtKind::NamespaceBlock { body, .. } => {
                 flush(&mut out, &mut run);
-                *body = wrap_runs_in_place(std::mem::take(body));
+                *body = wrap_runs_in_place(std::mem::take(body), dispatch_handler);
                 out.push(stmt);
             }
             kind if is_hoistable_decl(kind)
@@ -313,11 +360,20 @@ pub fn inject_if_web(
     preload_path: Option<&std::path::Path>,
 ) -> Program {
     inject_if_web_with_autoload_usage(
-        program, web, php_version, ini_overrides, entry_path, inventory, preload_path, false,
+        program, web, php_version, ini_overrides, entry_path, inventory, preload_path,
+        AutoloadedWebUsage::default(),
     )
 }
 
-/// Injects the web surface while retaining environment use discovered in autoloaded files.
+/// What the autoload probe found in files the program loads, which the web injection cannot see
+/// (see `autoloaded_web_groups`).
+#[derive(Clone, Copy, Default)]
+pub(crate) struct AutoloadedWebUsage {
+    pub(crate) observes_environment: bool,
+    pub(crate) registers_exception_handler: bool,
+}
+
+/// Injects the web surface while retaining what autoloaded files use.
 pub(crate) fn inject_if_web_with_autoload_usage(
     program: Program,
     web: bool,
@@ -326,7 +382,7 @@ pub(crate) fn inject_if_web_with_autoload_usage(
     entry_path: &Path,
     inventory: &mut crate::optimize::reachability::PreludeInventory,
     preload_path: Option<&std::path::Path>,
-    autoload_observes_environment: bool,
+    autoloaded: AutoloadedWebUsage,
 ) -> Program {
     crate::compiler_stack::with_compiler_stack(|| {
         inject_if_web_on_compiler_stack(
@@ -337,7 +393,7 @@ pub(crate) fn inject_if_web_with_autoload_usage(
             entry_path,
             inventory,
             preload_path,
-            autoload_observes_environment,
+            autoloaded,
         )
     })
 }
@@ -351,7 +407,7 @@ fn inject_if_web_on_compiler_stack(
     entry_path: &Path,
     inventory: &mut crate::optimize::reachability::PreludeInventory,
     preload_path: Option<&std::path::Path>,
-    autoload_observes_environment: bool,
+    autoloaded: AutoloadedWebUsage,
 ) -> Program {
     if !web {
         return program;
@@ -370,10 +426,12 @@ fn inject_if_web_on_compiler_stack(
     let user_usage = usage::collect_environment(&program);
     let needs_callable_session_handler = user_usage.references("session_set_save_handler")
         || user_usage.dynamic_function_call;
+    let dispatch_handler =
+        autoloaded.registers_exception_handler || may_register_exception_handler(&program, &user_usage);
     let combined = build::web_declarations_with_environment(
         php_version,
         ini_overrides,
-        autoload_observes_environment || environment::is_observable(&program, &user_usage),
+        autoloaded.observes_environment || environment::is_observable(&program, &user_usage),
     );
     // `$_SERVER['SCRIPT_FILENAME'] / ['DOCUMENT_ROOT'] / ['SCRIPT_NAME'] / ['PHP_SELF']` and
     // `trigger_error()`'s handler call are built with `__FILE__` / `__DIR__` / `__LINE__`, and
@@ -426,7 +484,7 @@ fn inject_if_web_on_compiler_stack(
             StmtKind::NamespaceDecl { .. } | StmtKind::NamespaceBlock { .. }
         )
     }) {
-        return wrap_namespaced_program(combined);
+        return wrap_namespaced_program(combined, dispatch_handler);
     }
 
     // Partition the top level: hoistable declarations (functions, classes, externs)
@@ -443,7 +501,7 @@ fn inject_if_web_on_compiler_stack(
         }
     }
 
-    let mut wrapper = web_wrap_stmt();
+    let mut wrapper = web_wrap_stmt_for(dispatch_handler);
     let StmtKind::Try { try_body, .. } = &mut wrapper.kind else {
         unreachable!("the catch-all wrapper is built as a Try");
     };
@@ -504,6 +562,40 @@ mod tests {
     fn parse(source: &str) -> Program {
         let tokens = crate::lexer::tokenize(source).expect("fixture must tokenize");
         crate::parser::parse(&tokens).expect("fixture must parse")
+    }
+
+    /// The catch-all calls a registered exception handler only when the program can register
+    /// one, flat or namespaced. Calling it is a call on a mixed value, which keeps every
+    /// function reachable by name (`test_cli_web_prunes_unused_session_surface_from_assembly`
+    /// went red when the call was unconditional), and the autoloaded half arrives as a flag.
+    #[test]
+    fn catch_all_calls_the_exception_handler_only_when_one_can_be_registered() {
+        let calls_handler = |source: &str, autoloaded: AutoloadedWebUsage| {
+            let injected = inject_if_web_with_autoload_usage(
+                parse(source),
+                true,
+                PhpVersion::Php85,
+                &[],
+                Path::new("index.php"),
+                &mut Default::default(),
+                None,
+                autoloaded,
+            );
+            usage::collect(&injected).references("set_exception_handler")
+        };
+        let none = AutoloadedWebUsage::default();
+        let registering = AutoloadedWebUsage { registers_exception_handler: true, ..none };
+        for (source, autoloaded, expected) in [
+            ("<?php echo 'ok';", none, false),
+            ("<?php namespace App; echo 'ok';", none, false),
+            ("<?php echo 'ok';", registering, true),
+            ("<?php namespace App; echo 'ok';", registering, true),
+            ("<?php set_exception_handler(fn($e) => print('h'));", none, true),
+            ("<?php namespace App; \\set_exception_handler('h'); function h($e) {}", none, true),
+            ("<?php $f = $argv[1]; $f();", none, true),
+        ] {
+            assert_eq!(calls_handler(source, autoloaded), expected, "{source}");
+        }
     }
 
     /// Every maintained profile in declaration order, for exhaustive table checks.

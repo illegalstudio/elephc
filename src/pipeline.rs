@@ -749,7 +749,7 @@ fn compile_config(config: CliConfig, entry: EntryKind<'_>) {
 
     crate::progress::phase("web-prelude");
     let phase_started = Instant::now();
-    let ast = if web_application && autoloaded("web_environment") {
+    let ast = if web_application && autoloaded(web_prelude::ENVIRONMENT_GROUP) {
         web_prelude::application::inject_with_autoload_usage(
             ast, php_version, &ini_overrides, Path::new(filename), &mut prelude_inventory,
             preload_startup_path.as_deref(), true,
@@ -759,20 +759,14 @@ fn compile_config(config: CliConfig, entry: EntryKind<'_>) {
             ast, php_version, &ini_overrides, Path::new(filename), &mut prelude_inventory,
             preload_startup_path.as_deref(),
         )
-    } else if autoloaded("web_environment") {
+    } else {
         web_prelude::inject_if_web_with_autoload_usage(
             ast, web, php_version, &ini_overrides, Path::new(filename), &mut prelude_inventory,
-            preload_startup_path.as_deref(), true,
-        )
-    } else {
-        web_prelude::inject_if_web(
-            ast,
-            web,
-            php_version,
-            &ini_overrides,
-            Path::new(filename),
-            &mut prelude_inventory,
             preload_startup_path.as_deref(),
+            web_prelude::AutoloadedWebUsage {
+                observes_environment: autoloaded(web_prelude::ENVIRONMENT_GROUP),
+                registers_exception_handler: autoloaded(web_prelude::EXCEPTION_HANDLER_GROUP),
+            },
         )
     };
     timings.record_since("web-prelude", phase_started);
