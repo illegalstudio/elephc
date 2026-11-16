@@ -122,6 +122,10 @@ fn emit_mixed_array_get_aarch64(emitter: &mut Emitter) {
     // `PhpDumper::export()` appended `.''` to every path that ends exactly at the target dir.
     emitter.instruction("ldr x13, [sp, #40]");                                  // reload whether this read reports missing offsets
     emitter.instruction("cbz x13, __rt_mixed_array_get_null");                  // quiet reads see an absent offset as null
+    emitter.instruction("ldr x0, [sp, #8]");                                    // the requested offset, as written (php prints it unnormalized)
+    emitter.instruction("bl __rt_warn_string_offset");                          // Warning: Uninitialized string offset N
+    emitter.instruction("ldr x0, [sp, #0]");                                    // reload the concrete string receiver the warning call spent
+    emitter.instruction("ldr x10, [x0, #8]");                                   // reload the boxed string pointer
     emitter.instruction("mov x1, x10");                                         // preserve a valid source pointer for the empty string
     emitter.instruction("mov x2, #0");                                          // out-of-bounds string offsets stringify to empty
     emitter.label("__rt_mixed_array_get_string_box");
@@ -568,6 +572,10 @@ fn emit_mixed_array_get_x86_64(emitter: &mut Emitter) {
     emitter.label("__rt_mixed_array_get_string_empty");
     emitter.instruction("cmp QWORD PTR [rbp - 32], 0");                         // does this read report missing offsets?
     emitter.instruction("je __rt_mixed_array_get_null");                        // quiet isset()/?? reads see an absent offset as null
+    emitter.instruction("mov rax, QWORD PTR [rbp - 16]");                       // the requested offset, as written (php prints it unnormalized)
+    emitter.instruction("call __rt_warn_string_offset");                        // Warning: Uninitialized string offset N
+    emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // reload the concrete string receiver the warning call spent
+    emitter.instruction("mov r10, QWORD PTR [rdi + 8]");                        // reload the boxed string pointer
     emitter.instruction("xor esi, esi");                                        // out-of-bounds string offsets stringify to empty
     emitter.label("__rt_mixed_array_get_string_box");
     emitter.instruction("mov rax, 1");                                          // runtime tag 1 identifies a string payload
