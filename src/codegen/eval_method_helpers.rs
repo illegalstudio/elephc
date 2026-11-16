@@ -1481,6 +1481,10 @@ fn emit_aarch64_builtin_throwable_method_bodies(
                 &PhpType::Mixed,
             );
             emitter.instruction("mov x1, x0");                                  // move the fresh array into the Mixed payload word
+            abi::emit_load_int_immediate(emitter, "x0", 4);
+            abi::emit_load_int_immediate(emitter, "x2", 0);
+            abi::emit_call_label(emitter, "__rt_mixed_box_raw");                // the box adopts the construction reference, no extra retain
+            abi::emit_jump(emitter, done_label);
             emitter.label(&stored_label);
             abi::emit_load_int_immediate(emitter, "x0", 4);
             abi::emit_load_int_immediate(emitter, "x2", 0);
@@ -1591,6 +1595,10 @@ fn emit_x86_64_builtin_throwable_method_bodies(
                 &PhpType::Mixed,
             );
             emitter.instruction("mov rdi, rax");                                // move the fresh array into the Mixed payload word
+            abi::emit_load_int_immediate(emitter, "rsi", 0);
+            abi::emit_load_int_immediate(emitter, "rax", 4);
+            abi::emit_call_label(emitter, "__rt_mixed_box_raw");                // the box adopts the construction reference, no extra retain
+            abi::emit_jump(emitter, done_label);
             emitter.label(&stored_label);
             abi::emit_load_int_immediate(emitter, "rsi", 0);
             abi::emit_load_int_immediate(emitter, "rax", 4);
@@ -3163,6 +3171,46 @@ mod tests {
             emitter.output(),
             concat!("    b.eq 1f\n", "    b _far_fail\n", "1:\n")
         );
+    }
+
+    /// The `getTrace()` bridge body boxes a FRESH empty trace with the non-retaining boxer, so the
+    /// box adopts the array's construction reference; only the stored-trace arm (a borrowed slot)
+    /// goes through the retaining `__rt_mixed_from_value`. Boxing the fresh array with the
+    /// retaining boxer left it one reference too high, leaking it on every call.
+    #[test]
+    fn get_trace_bridge_adopts_the_fresh_empty_trace_on_every_target() {
+        for target in [
+            Target::new(Platform::MacOS, Arch::AArch64),
+            Target::new(Platform::Linux, Arch::AArch64),
+            Target::new(Platform::Linux, Arch::X86_64),
+        ] {
+            let module = Module::new(target);
+            let mut emitter = Emitter::new(target);
+            let mut data = crate::codegen::data_section::DataSection::new();
+            match target.arch {
+                Arch::AArch64 => emit_aarch64_builtin_throwable_method_bodies(
+                    &module, &mut emitter, &mut data, "_done", "_fail",
+                ),
+                Arch::X86_64 => emit_x86_64_builtin_throwable_method_bodies(
+                    &module, &mut emitter, &mut data, "_done", "_fail",
+                ),
+            }
+            let asm = emitter.output();
+            let body = asm
+                .find("__elephc_eval_builtin_throwable_gettrace:")
+                .expect("getTrace body");
+            let stored = asm[body..]
+                .find("__elephc_eval_builtin_throwable_gettrace_stored:")
+                .map(|offset| body + offset)
+                .expect("stored-trace arm");
+            let fresh = &asm[body..stored];
+            assert!(fresh.contains("__rt_array_new"), "{target:?}: fresh arm allocates\n{fresh}");
+            assert!(fresh.contains("__rt_mixed_box_raw"), "{target:?}: fresh arm adopts\n{fresh}");
+            assert!(
+                !fresh.contains("__rt_mixed_from_value"),
+                "{target:?}: the fresh arm must not retain its own allocation\n{fresh}"
+            );
+        }
     }
 
     /// Verifies eval bridge slots box the physical EIR object return despite a Mixed signature.
