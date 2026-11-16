@@ -139,6 +139,8 @@ Each `Stmt` also carries a source `span` and an `attributes` list. The list is p
 | `Return(Option<Expr>)` | `return $x;` or `return;` |
 | `Break(usize)` | `break;`, `break 2;` |
 | `Continue(usize)` | `continue;`, `continue 2;` |
+| `Goto(String)` | `goto name;`. Exists only until `goto` lowering, which runs on each file right after conditional compilation and rewrites every jump into loops and `continue N` |
+| `GotoLabel(String)` | `name:` at statement position. Validated and removed by `goto` lowering; later passes treat one as a statement that does nothing |
 | `Include { path, once, required }` | `include 'file.php';` |
 | `IncludeOnceMark { label }` | Internal resolver lowering for regular `include` / `require`, marking the resolved file as loaded for later `*_once` guards |
 | `IncludeOnceGuard { label, body }` | Internal resolver lowering for `include_once` / `require_once`; codegen checks a per-file flag before emitting the guarded body |
@@ -510,6 +512,8 @@ Statement parsing is simpler — after `parse()` has peeled off top-level `exter
 | `Return` | Return with optional expression |
 | `Break` | Break statement with optional positive integer level |
 | `Continue` | Continue statement with optional positive integer level |
+| `Goto` | `goto` followed by a plain label name and `;` (`parser/stmt/goto.rs`) |
+| `Identifier` followed by `Colon` | A jump label (`name:`), checked before the expression-statement fallback |
 | `Include` / `Require` / `IncludeOnce` / `RequireOnce` | Include statement (path is parsed as an expression and later folded by the resolver when it is a compile-time string) |
 | `Const` | Constant declaration (`const NAME = value;`) |
 | `Namespace` | Namespace declaration (`namespace App\Core;` or `namespace App\Core { ... }`); `namespace` followed by `\` is a relative name instead (`namespace\helper();`) and parses as an expression statement |

@@ -39,6 +39,8 @@ pub(super) fn eval_stmt_uses_this_property(stmt: &EvalStmt, property_name: &str)
         }
         EvalStmt::Break
         | EvalStmt::Continue
+        | EvalStmt::Goto(_)
+        | EvalStmt::Label(_)
         | EvalStmt::ClassDecl(_)
         | EvalStmt::EnumDecl(_)
         | EvalStmt::GenericDecl(_)

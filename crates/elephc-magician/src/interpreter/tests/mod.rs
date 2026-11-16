@@ -72,6 +72,7 @@ mod dynamic_calls;
 mod enums;
 mod expressions;
 mod functions_namespaces;
+mod jumps;
 mod method_arguments;
 mod native_scope;
 mod null_object_boundaries;

@@ -579,6 +579,8 @@ fn stmt_refs_tidy(stmt: &Stmt) -> bool {
         | StmtKind::IncludeOnceMark { .. }
         | StmtKind::Break(_)
         | StmtKind::Continue(_)
+        | StmtKind::Goto(_)
+        | StmtKind::GotoLabel(_)
         | StmtKind::NamespaceDecl { .. }
         | StmtKind::FunctionVariantGroup { .. }
         | StmtKind::FunctionVariantMark { .. }

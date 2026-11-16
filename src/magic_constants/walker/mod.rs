@@ -187,6 +187,21 @@ pub(crate) trait Pass {
         stmt
     }
 
+    /// Transforms the walked statement list of one label and variable scope: a function,
+    /// method or closure body. A braced `namespace` block is not one: it shares the scope of
+    /// the list that holds it.
+    ///
+    /// Called after the body's own statements and nested scopes have been rebuilt, so a pass
+    /// that restructures a whole body (`crate::goto_lowering`) sees inner scopes already
+    /// processed and never has to find them inside expressions itself. The top-level program is
+    /// not routed through here: its caller owns that list. Default returns it unchanged.
+    fn transform_scope_body(
+        &self,
+        body: Vec<crate::parser::ast::Stmt>,
+    ) -> Vec<crate::parser::ast::Stmt> {
+        body
+    }
+
     /// Transforms the span of a rebuilt expression. Default returns it unchanged; a pass that
     /// copies a body under a new source identity retags every expression here.
     fn transform_expr_span(&self, span: Span) -> Span {

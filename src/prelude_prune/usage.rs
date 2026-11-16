@@ -979,6 +979,8 @@ fn scan_stmt(stmt: &Stmt, usage: &mut Usage) {
         }
         StmtKind::Return(None)
         | StmtKind::Break(_)
+        | StmtKind::Goto(_)
+        | StmtKind::GotoLabel(_)
         | StmtKind::Continue(_)
         | StmtKind::NamespaceDecl { .. }
         | StmtKind::FunctionVariantMark { .. }

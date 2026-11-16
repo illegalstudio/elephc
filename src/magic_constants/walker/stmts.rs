@@ -376,7 +376,8 @@ pub(super) fn walk_stmt<P: Pass>(stmt: Stmt, pass: &mut P) -> Stmt {
                     )
                 })
                 .collect();
-            let new_body = walk_program(body, pass);
+            let walked_body = walk_program(body, pass);
+            let new_body = pass.transform_scope_body(walked_body);
             // Transformed BEFORE leaving the scope. A struct literal's fields are evaluated
             // after the statements above it, so writing these inline below `leave_function`
             // handed them to the pass with the ENCLOSING scope active — the one type position
@@ -595,6 +596,8 @@ pub(super) fn walk_stmt<P: Pass>(stmt: Stmt, pass: &mut P) -> Stmt {
         // Statements with no Expr children or only simple data:
         other @ (StmtKind::Break(_)
         | StmtKind::Continue(_)
+        | StmtKind::Goto(_)
+        | StmtKind::GotoLabel(_)
         | StmtKind::UseDecl { .. }
         | StmtKind::Global { .. }
         | StmtKind::PackedClassDecl { .. }

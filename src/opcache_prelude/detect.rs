@@ -719,6 +719,8 @@ fn stmt_refs(stmt: &Stmt, target: Symbol<'_>) -> Option<Span> {
         StmtKind::RefAssign { .. }
         | StmtKind::IncludeOnceMark { .. }
         | StmtKind::Break(_)
+        | StmtKind::Goto(_)
+        | StmtKind::GotoLabel(_)
         | StmtKind::Continue(_)
         | StmtKind::NamespaceDecl { .. }
         | StmtKind::FunctionVariantGroup { .. }

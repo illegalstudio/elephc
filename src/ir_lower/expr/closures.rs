@@ -541,6 +541,8 @@ fn stmt_writes_local(stmt: &Stmt, name: &str) -> bool {
         | StmtKind::InterfaceDecl { .. }
         | StmtKind::EnumDecl { .. }
         | StmtKind::Break(_)
+        | StmtKind::Goto(_)
+        | StmtKind::GotoLabel(_)
         | StmtKind::Continue(_)
         | StmtKind::NamespaceDecl { .. }
         | StmtKind::UseDecl { .. }
@@ -843,6 +845,8 @@ pub(super) fn stmt_contains_eval_call(stmt: &Stmt) -> bool {
             .any(|case| case.value.as_ref().is_some_and(expr_contains_eval_call)),
         StmtKind::RefAssign { .. }
         | StmtKind::Break(_)
+        | StmtKind::Goto(_)
+        | StmtKind::GotoLabel(_)
         | StmtKind::Continue(_)
         | StmtKind::NamespaceDecl { .. }
         | StmtKind::UseDecl { .. }

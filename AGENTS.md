@@ -117,7 +117,7 @@ A fixture that contains an `eval()` whose source is known only at runtime (the `
 ## Architecture
 
 ```
-PHP source → Lexer → Parser → Magic constants → Conditional compilation → Resolver
+PHP source → Lexer → Parser → Magic constants → Conditional compilation → goto lowering → Resolver
 → NameResolver → Constant folding → Type Checker / warnings → AST optimizer passes
 → EIR lowering / validation → EIR optimization passes → EIR codegen → runtime cache
 → assembler/linker → binary
@@ -143,6 +143,7 @@ by EIR lowering and `src/codegen/`.
 | `src/parser/` | `parse()` | Tokens → `Program` (Vec of Stmt). Pratt parser for expressions |
 | `src/magic_constants/`, `src/magic_constants.rs` | `substitute_file_and_scope_constants()` | Lowers PHP magic constants before resolver/name-resolver/optimizer passes |
 | `src/conditional.rs` | `apply()` | Applies compiler `ifdef` conditional branches |
+| `src/goto_lowering.rs`, `src/goto_lowering/` | `lower_program()` | Validates each file's `goto` jumps and rewrites them into dispatch loops (`while` + `continue N`) before any pass that reads control flow; no `StmtKind::Goto` survives it |
 | `src/resolver/` | `resolve()` | Resolves `include`/`require`, discovers declarations, and tracks include-loaded function variants. Runs before namespace/name canonicalization |
 | `src/name_resolver/` | `resolve()` | Applies namespace/use rules, rewrites references to canonical fully-qualified names, handles PHP-style builtin fallback, and flattens namespace-only AST nodes before type checking |
 | `src/types/` | `check()` | Type checking, returns `CheckResult` with `TypeEnv`, function/class/interface/enum/FFI metadata, warnings, required libraries, and the internal `Mixed` type for heterogeneous assoc-array values |

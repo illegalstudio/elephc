@@ -30,7 +30,10 @@ pub(crate) fn parse_literal_fragment(fragment: &str, strict_php: bool) -> Option
     } else {
         crate::source::SourceMode::Lfc
     };
-    crate::parser::parse_with_mode(&tokens, source_mode).ok()
+    let program = crate::parser::parse_with_mode(&tokens, source_mode).ok()?;
+    // A fragment is a label scope of its own. An invalid jump or label leaves it unplanned, like a parse
+    // error, so the runtime bridge reports it when the `eval` actually runs.
+    crate::goto_lowering::lower_program(program, fragment).ok()
 }
 
 /// Parses a literal eval fragment and applies call-site magic-constant metadata when available.

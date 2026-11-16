@@ -170,6 +170,16 @@ impl Checker {
                 self.record_loop_control_exit(*levels, true, env);
                 Ok(())
             }
+            // The checker reads control flow from the statement tree and has no way to type a
+            // jump. `crate::goto_lowering` rewrites every `goto` of a parsed file before this
+            // pass, so one that arrives here came through a path that skipped it.
+            StmtKind::Goto(_) => Err(CompileError::new(
+                stmt.span,
+                "Internal compiler error: 'goto' reached the type checker without being lowered",
+            )),
+            // A label that survives lowering belongs to a file without any `goto`: nothing can
+            // jump to it, so it is an inert statement.
+            StmtKind::GotoLabel(_) => Ok(()),
             StmtKind::ExprStmt(expr) => {
                 // The one position an `unset(...)` may end a local binding from. elephc's parser
                 // accepts `unset` as an expression (PHP's grammar does not), so the kill has to

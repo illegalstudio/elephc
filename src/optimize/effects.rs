@@ -271,6 +271,8 @@ pub(super) fn stmt_effect(stmt: &Stmt) -> Effect {
         | StmtKind::TraitDecl { .. }
         | StmtKind::Return(None)
         | StmtKind::Break(_)
+        | StmtKind::Goto(_)
+        | StmtKind::GotoLabel(_)
         | StmtKind::Continue(_)
         | StmtKind::ExternFunctionDecl { .. }
         | StmtKind::ExternClassDecl { .. }
