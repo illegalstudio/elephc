@@ -279,6 +279,7 @@ mod scope_context;
 #[cfg(test)]
 mod scope_native_snapshot_tests;
 mod sync_inventory;
+mod native_local_contracts;
 mod scope_io;
 mod scope_reload;
 mod scope_reload_checks;

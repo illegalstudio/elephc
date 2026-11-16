@@ -63,6 +63,7 @@ mod eval;
 mod eval_native_string_context;
 mod eval_property_name_lifetimes;
 mod eval_reference_returns;
+mod eval_scope_contracts;
 mod descriptor_reference_layouts;
 mod eval_generics;
 mod symbol_catalog;

@@ -371,7 +371,7 @@ evidence and outstanding guarantees are recorded below.
 
 ## Implementation progress
 
-Verified through step114 (this commit), with remaining feature integration in progress. Issue:
+Verified through step115 (this commit), with remaining feature integration in progress. Issue:
 https://github.com/illegalstudio/elephc/issues/2347.
 
 The full task remains active. The user requested complete implementation, with a
@@ -382,7 +382,7 @@ but its stronger numeric/reference/eval binding contract is outstanding. All
 other guarantees and the complete umbrella remain explicitly gated until their
 whole contract is enforced.
 
-This progress ledger condenses verified implementation through step114.
+This progress ledger condenses verified implementation through step115.
 Detailed evidence remains in Git history, historical Code Journal plan revisions,
 the linked work logs, and the current agent-facing architecture document
 3739892b. The approved behavior and delivery requirements above are unchanged.
@@ -417,8 +417,8 @@ document3739892b; the complete signed commit ledger stays below.
 
 1. Strengthen Locals across numeric binding changes, parameters, captures, globals,
    by-reference writes, foreach aliases, loop joins, unset/rebind and eval scopes.
-   Locals alone must not enable Overflow. The permissive catch-name collision is
-   reproduced in both modes; fix its source-point contract before stronger rules.
+   Locals alone must not enable Overflow. Step115 repairs the permissive catch-name
+   collision using the native slot occupant before publishing its contract.
 2. Complete Nullability, Mixed and Initialization through source checking, EIR,
    runtime and all public hosts. Preserve intentional probes and explicit narrowing.
 3. Finish exact keys in every read/write/probe/unset/append/spread and producer,
@@ -465,9 +465,9 @@ Coercions and Casts are publicly admitted after signed110 and111. The completed
 Reflection, native/eval reference, callback and lifetime proofs. Comparator owner
 and native return/effect foundations are signed112 and113; public Comparisons
 admission is verified114. Its [detailed history](strict-semantic-profile-comparisons.md)
-retains the adapter, reference-storage, dispatch and method-owner corrections. Stronger Locals must revisit the original
-permissive native/eval catch-name collision (knowledgea7883b31) alongside numeric,
-reference, global and flow cases. Nullability/Mixed/Initialization, exact keys/
+retains the adapter, reference-storage, dispatch and method-owner corrections. Step115
+repairs the original permissive native/eval catch-name collision. Stronger Locals
+still needs numeric, reference, global and flow coverage. Nullability/Mixed/Initialization, exact keys/
 types/indexing and full host/cache/combination acceptance remain unfinished.
 
 ### Verification discipline
@@ -611,7 +611,8 @@ paths. Keep this plan, agent documentation and the current journal log synchroni
 | 111 | `4727b75ace` | feat(strict): enable checked casts across native hosts |
 | 112 | `c30508e838` | fix(eval): validate comparator returns and retire sort owners |
 | 113 | `7a97ec5e68` | feat(strict): validate native comparator result kinds |
-| 114 | this commit | feat(strict): enable noncoercive comparisons across hosts |
+| 114 | `82300f746f` | feat(strict): enable noncoercive comparisons across hosts |
+| 115 | this commit | fix(eval): publish only live native object binding contracts |
 
 
 ### Latest verified admission checkpoint
@@ -646,12 +647,10 @@ are complete. These former Casts admission issues are not open work.
 The full authorized task continues with autonomous verified commits. Baseline
 knowledgea9725473 confirms that Locals alone still permits inferred integer
 reassignment to float and PHP overflow promotion; pin the binding without enabling
-Overflow. Knowledgeffd0deed refines the original permissive catch-name collision:
-if an earlier TypeError catch does not execute, its unset does not detach the
-future native TypeError contract, and opaque eval cannot catch a ValueError in
-that name. PHP printsTVN; native printsT then exits255 in both modes. The exact
-fixture tests/fixtures/strict/catch_scope_contract.php is reserved for the next
-regression and repair, and is deliberately excluded from114 staging.
+Overflow. Step115 resolves knowledgeffd0deed and the original knowledgea7883b31:
+a future native catch class no longer constrains an earlier opaque eval using the
+same name. The exact fixture tests/fixtures/strict/catch_scope_contract.php now
+prints PHP's TVN in both optimizer modes with clean heap accounting.
 
 Native eval snapshot contracts must follow binding/value provenance at the eval
 site, not a future frame slot's inferred Object class. Reuse local-store contracts,
@@ -660,3 +659,22 @@ for the stronger Locals work. Preserve explicit union/mixed contracts, array-kin
 versus element-contract independence, parameter/capture/global/reference semantics,
 loop joins and legitimate unset/rebind behavior. The completed baseline and
 Comparisons temporary validation directories are removed after evidence capture.
+
+
+### Verified115: native eval binding presence
+
+The native snapshot publisher now lives in
+src/codegen/lower_inst/builtins/eval/native_local_contracts.rs. An Object slot
+with a zero occupant clears its snapshot contract instead of publishing a
+future inferred class. Existing object occupants keep their declared native
+contract. The shared target-aware load and branch helpers implement this on all
+five targets without a new runtime symbol or ABI. Non-object behavior is unchanged.
+
+Job487778c9 passed the compiler build and four exact gates: the all-target
+presence emitter, the original catch-scope TVN regression in both IR modes,
+existing typed native alias rejection/unset behavior, and Magician's pre-store
+object snapshot validator. The builtin EIR architecture audit also passed. Total duration was 5m23s;
+the catch-scope regression took 71.73s and existing typed native alias coverage
+took 86.79s. Heap accounting is clean in both optimizer modes. The task-owned
+verification directory is removed after evidence capture. This is preparatory
+correctness work for stronger Locals, not its admission.
