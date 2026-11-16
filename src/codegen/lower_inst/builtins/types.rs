@@ -719,6 +719,22 @@ pub(crate) fn lower_is_a_relation(
             return class_string_relation::lower_runtime_target(ctx, inst, object, target, exclude_self);
         }
     }
+    // `Closure` has no class-info entry, so the walks below answered `false` for every closure.
+    // It is final and implements nothing: is_a() matches exactly a Closure object, and
+    // is_subclass_of() never matches.
+    let object_ty = ctx.value_php_type(object)?;
+    if matches!(object_ty, PhpType::Callable | PhpType::Mixed | PhpType::Union(_)) {
+        if let Some(target_class) = optional_const_string_operand(ctx, target)? {
+            if target_class.trim_start_matches('\\').eq_ignore_ascii_case("Closure") {
+                if exclude_self {
+                    emit_bool_result(ctx, false);
+                } else {
+                    super::super::predicates::emit_closure_identity(ctx, object, &object_ty, false)?;
+                }
+                return store_if_result(ctx, inst);
+            }
+        }
+    }
     if matches!(ctx.value_php_type(object)?, PhpType::Mixed | PhpType::Union(_)) {
         if let Some(target_class) = optional_const_string_operand(ctx, target)? {
             if ctx.module.required_runtime_features.eval_bridge {

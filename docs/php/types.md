@@ -616,8 +616,9 @@ Because elephc maps the `Closure` type hint onto its callable descriptor type, a
   Either name may be known only at runtime (`is_a($name, $name, true)`): the subject (a class
   name, an object's runtime class, or a `mixed` value holding either) selects the ancestor list
   of one compiled class or interface, and the target is compared with it. A closure's only
-  ancestor is `Closure` (a function name or method array passed as a `callable` is no
-  closure, so it matches no class), and a target holding a NUL byte names no class. A class
+  ancestor is `Closure`, whether the target is a literal or a runtime name (a function name
+  or method array passed as a `callable` is no closure, so it matches no class), and a target
+  holding a NUL byte names no class. A class
   that only an autoloader could load and that the program never names is not compiled, so a
   runtime name cannot reach it. `class_parents()`, `class_implements()` and `class_exists()` still reject a
   non-literal name at compile time. One gap of its own: an enum declared in the compiled
