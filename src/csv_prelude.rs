@@ -266,7 +266,24 @@ fn decl_fn_fgetcsv_full() -> Stmt {
         .param_default("enclosure", TypeExpr::Str, e_str("\""))
         .param_default("escape", TypeExpr::Str, e_str("\\"))
         .body(vec![
-            s_assign("line", e_call("fgets", vec![e_var("stream")])),
+            // php reads the first line with `$length` as the limit (`length` bytes, not
+            // `length - 1` like fgets()); a null or non-positive length means no limit, and the
+            // continuation lines of a quoted field are read without one.
+            s_assign(
+                "line",
+                e_ternary(
+                    e_binop(
+                        e_binop(e_var("length"), BinOp::StrictNotEq, e_null()),
+                        BinOp::And,
+                        e_binop(e_var("length"), BinOp::Gt, e_int(0)),
+                    ),
+                    e_call(
+                        "fgets",
+                        vec![e_var("stream"), e_binop(e_var("length"), BinOp::Add, e_int(1))],
+                    ),
+                    e_call("fgets", vec![e_var("stream")]),
+                ),
+            ),
             s_if(
                 e_binop(e_var("line"), BinOp::StrictEq, e_bool(false)),
                 vec![s_return(e_bool(false))],

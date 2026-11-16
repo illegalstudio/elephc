@@ -622,6 +622,8 @@ fn scan_expr(expr: &Expr, usage: &mut Usage) {
             }
             if bare == "fgetcsv" && args.len() >= 4 {
                 record_name(usage, crate::csv_prelude::FGETCSV_FULL_NAME);
+                // Its first line is read through the length form of `fgets()`.
+                record_name(usage, crate::stream_args_prelude::FGETS_LENGTH_NAME);
             }
             // Every `stream_select()` call is lowered to its prelude helper, which accepts null,
             // hash and boxed arrays and keeps the ready entries' keys.
