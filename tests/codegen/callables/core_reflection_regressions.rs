@@ -9,6 +9,25 @@
 
 use crate::support::*;
 
+/// A discarded ternary preserves the selected Reflection target for the following live write.
+#[test]
+fn test_core_reflection_static_setter_after_discarded_ternary_preserves_selected_class() {
+    let source = r#"<?php
+class TernaryReflectedA { public static string $value = 'a'; }
+class TernaryReflectedB { public static string $value = 'b'; }
+function writeTernaryReflection(bool $flag, string $value): void {
+    $class = new ReflectionClass(TernaryReflectedA::class);
+    $flag ? ($class = new ReflectionClass(TernaryReflectedB::class)) : $class;
+    $class->setStaticPropertyValue('value', $value);
+}
+writeTernaryReflection(false, 'first');
+echo TernaryReflectedA::$value, ':', TernaryReflectedB::$value, '|';
+writeTernaryReflection(true, 'second');
+echo TernaryReflectedA::$value, ':', TernaryReflectedB::$value;
+"#;
+    assert_eq!(compile_and_run(source), "first:b|first:second");
+}
+
 /// Invalid class-introspection arguments remain catchable through opaque eval, CUF, CUFA, and FCC.
 #[test]
 fn test_core_eval_class_introspection_type_errors_are_catchable() {

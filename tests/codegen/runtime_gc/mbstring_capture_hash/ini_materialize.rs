@@ -15,6 +15,10 @@ use super::*;
 #[test]
 fn test_mbstring_ini_materialize_native_ownership() {
     let source = r#"<?php
+class IniLeaseCycle {
+    public mixed $self;
+    function __destruct() {}
+}
 function ini_test_result(int $mode): mixed {
     mb_internal_encoding("UTF-8");
     if ($mode == 0) { return "fixture"; }
@@ -39,6 +43,10 @@ function run_ini(int $mode): void {
     $value = ini_test_result($mode);
     $copy = $value;
     unset($value);
+    $cycle = new IniLeaseCycle();
+    $cycle->self = $cycle;
+    unset($cycle);
+    gc_collect_cycles();
     $index = 0;
     echo $mode, ":", ini_check_tree($copy, $index), ":", $index;
     if (is_string($copy)) { echo ":", bin2hex($copy); }
@@ -54,6 +62,9 @@ echo "done\n";
         "3:1:4:1\n", "4:1:8:1\n", "5:1:MB_STRINGS:1\n", "6:1:3:1\n", "7:1:0:1:1\n");
     let directory = make_cli_test_dir("mbstring_ini_materialize");
     let (assembly, runtime, libraries) = compile_source_to_asm_with_options(source, &directory, 8_388_608, true, true);
+    let call = if target().arch == Arch::AArch64 { "bl" } else { "call" };
+    assert!(assembly.contains(&format!("{call} {}", function_symbol(&assembly, "ini_test_retired"))),
+        "the native retirement probe must remain callable instead of inlining its PHP placeholder");
     let jump = if target().arch == Arch::AArch64 { "b" } else { "jmp" };
     let mut patched = assembly;
     for (name, native) in [("ini_test_result", "_ini_fixture_result"), ("ini_test_identity", "_ini_fixture_identity"),

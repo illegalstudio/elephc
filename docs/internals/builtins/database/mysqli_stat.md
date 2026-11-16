@@ -1,8 +1,6 @@
 ---
 title: "mysqli_stat() - internals"
 description: "Compiler internals for mysqli_stat(): lowering path, type checks, and runtime helpers."
-sidebar:
-  order: 159
 ---
 
 ## `mysqli_stat()` - internals
@@ -10,7 +8,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`crates/elephc-builtin-contract/src/catalog_data.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-builtin-contract/src/catalog_data.rs)
-- **Lowering**: [`src/mysqli_prelude/build/procedural.rs`:549](https://github.com/illegalstudio/elephc/blob/main/src/mysqli_prelude/build/procedural.rs#L549) (`mysqli_stat`)
+- **Lowering**: [`src/mysqli_prelude/build/procedural.rs`](https://github.com/illegalstudio/elephc/blob/main/src/mysqli_prelude/build/procedural.rs) (`mysqli_stat`)
 - **Function symbol**: `mysqli_stat()`
 
 

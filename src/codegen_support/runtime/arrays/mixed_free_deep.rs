@@ -156,6 +156,10 @@ pub fn emit_mixed_free_deep(emitter: &mut Emitter, features: RuntimeFeatures) {
     emitter.instruction("cmp x0, #2");                                          // standard-stream aliases borrow fd 0, 1, and 2
 
     emitter.instruction("b.ls __rt_mixed_free_deep_box");                       // release the resource box without closing process stdio
+    emitter.instruction("cmp x0, #0");                                          // explicit close leaves a negative identity sentinel
+    emitter.instruction("b.lt __rt_mixed_free_deep_box");                       // never dispatch an already closed stream to the application closer
+    crate::codegen_support::abi::emit_load_symbol_to_reg(emitter, "x9", crate::codegen_support::runtime::data::WEB_STREAM_CLOSE_SLOT, 0);
+    emitter.instruction("cbnz x9, __rt_mixed_free_deep_resource_stream_managed"); // application streams retire every descriptor side-table owner
 
     emitter.instruction("mov x9, #0x40000000");                                 // load the synthetic/sentinel handle threshold into a scratch register
 
@@ -165,6 +169,10 @@ pub fn emit_mixed_free_deep(emitter: &mut Emitter, features: RuntimeFeatures) {
 
     emitter.syscall(6);                                                         // close(fd) — AArch64 macOS x16=6/svc #0x80, Linux remapped to x8=57/svc #0
     emitter.instruction("b __rt_mixed_free_deep_box");                          // free the mixed box after closing the native fd
+
+    emitter.label("__rt_mixed_free_deep_resource_stream_managed");
+    super::deep_cleanup::invoke(emitter, "__rt_web_close_stream", "x0");
+    emitter.instruction("b __rt_mixed_free_deep_box");                          // free the resource cell before propagating a close-hook exception
 
 
     emitter.label("__rt_mixed_free_deep_resource_hash");
@@ -359,6 +367,11 @@ fn emit_mixed_free_deep_linux_x86_64(emitter: &mut Emitter, features: RuntimeFea
     emitter.instruction("cmp rdi, 2");                                          // standard-stream aliases borrow fd 0, 1, and 2
 
     emitter.instruction("jbe __rt_mixed_free_deep_box");                        // release the resource box without closing process stdio
+    emitter.instruction("test rdi, rdi");                                       // explicit close preserves identity in a negative payload
+    emitter.instruction("js __rt_mixed_free_deep_box");                         // closed aliases must not enter the application close callback
+    crate::codegen_support::abi::emit_load_symbol_to_reg(emitter, "r9", crate::codegen_support::runtime::data::WEB_STREAM_CLOSE_SLOT, 0);
+    emitter.instruction("test r9, r9");                                         // legacy binaries leave the optional callback slot empty
+    emitter.instruction("jnz __rt_mixed_free_deep_resource_stream_managed");    // retain full stream teardown only in application lifecycle
 
     emitter.instruction("cmp rdi, 0x40000000");                                 // synthetic/sentinel handle threshold (-1 marks an explicit close)
 
@@ -367,6 +380,10 @@ fn emit_mixed_free_deep_linux_x86_64(emitter: &mut Emitter, features: RuntimeFea
     emitter.instruction("call close");                                          // close(fd) via the C library on x86_64 Linux
 
     emitter.instruction("jmp __rt_mixed_free_deep_box");                        // free the mixed box after closing the native fd
+
+    emitter.label("__rt_mixed_free_deep_resource_stream_managed");
+    super::deep_cleanup::invoke(emitter, "__rt_web_close_stream", "rdi");
+    emitter.instruction("jmp __rt_mixed_free_deep_box");                        // retire the cell even when a PHP close hook has thrown
 
 
     emitter.label("__rt_mixed_free_deep_resource_hash");

@@ -6,6 +6,8 @@
 //!
 //! Key details:
 //! - Predicate results preserve Mixed boxing and target-aware ABI handling.
+//! - Named and dynamic object predicates recover escaped dynamic-object owners without a
+//!   callee-local eval context.
 
 use super::*;
 
@@ -35,6 +37,28 @@ pub(in crate::codegen::lower_inst::builtins) fn lower_eval_callable_call_array(
     emit_eval_status_check(ctx);
     let result_reg = abi::int_result_reg(ctx.emitter);
     abi::emit_load_temporary_stack_slot(ctx.emitter, result_reg, EVAL_RESULT_VALUE_CELL_OFFSET);
+    abi::emit_release_temporary_stack(ctx.emitter, EVAL_STACK_BYTES);
+    store_if_result(ctx, inst)
+}
+
+/// Captures a selected callback's reference flag before native argument effects.
+pub(in crate::codegen::lower_inst) fn lower_callable_parameter_is_by_ref(
+    ctx: &mut FunctionContext<'_>, inst: &Instruction,
+) -> Result<()> {
+    let callback = expect_operand(inst, 0)?;
+    let name = expect_operand(inst, 1)?;
+    let position = expect_operand(inst, 2)?;
+    abi::emit_reserve_temporary_stack(ctx.emitter, EVAL_STACK_BYTES);
+    ensure_eval_context(ctx)?;
+    let target = ctx.emitter.target;
+    let position_arg = abi::int_arg_reg_name(target, 4);
+    ctx.load_value_to_reg(position, position_arg)?;
+    let name_pointer = abi::int_arg_reg_name(target, 2);
+    let name_length = abi::int_arg_reg_name(target, 3);
+    ctx.load_string_value_to_regs(name, name_pointer, name_length)?;
+    ctx.load_value_to_reg(callback, abi::int_arg_reg_name(target, 1))?;
+    load_eval_context_to_arg(ctx, 0);
+    abi::emit_call_label(ctx.emitter, &target.extern_symbol("__elephc_eval_callable_parameter_is_by_ref"));
     abi::emit_release_temporary_stack(ctx.emitter, EVAL_STACK_BYTES);
     store_if_result(ctx, inst)
 }
@@ -132,6 +156,109 @@ pub(in crate::codegen::lower_inst::builtins) fn lower_eval_class_relation(
     store_if_result(ctx, inst)
 }
 
+/// Converts a borrowed boxed object through its eval owner and retires the discarded text.
+///
+/// The caller has already checked stringability and rooted the operand. The owning context
+/// takes precedence over native carrier metadata, so an eval override runs exactly once.
+pub(in crate::codegen::lower_inst::builtins) fn emit_discarded_object_string_context(
+    ctx: &mut FunctionContext<'_>,
+    object: ValueId,
+) -> Result<()> {
+    abi::emit_reserve_temporary_stack(ctx.emitter, EVAL_STACK_BYTES);
+    let scratch = abi::secondary_scratch_reg(ctx.emitter);
+    abi::emit_load_int_immediate(ctx.emitter, scratch, 0);
+    for offset in [0, EVAL_RESULT_VALUE_CELL_OFFSET, EVAL_RESULT_ERROR_OFFSET] {
+        abi::emit_store_to_sp(ctx.emitter, scratch, offset);
+    }
+    let value_arg = abi::int_arg_reg_name(ctx.emitter.target, 1);
+    ctx.load_value_to_reg(object, value_arg)?;
+    abi::emit_load_int_immediate(ctx.emitter, abi::int_arg_reg_name(ctx.emitter.target, 0), 0);
+    abi::emit_temporary_stack_address(ctx.emitter, abi::int_arg_reg_name(ctx.emitter.target, 2), 0);
+    let symbol = ctx.emitter.target.extern_symbol("__elephc_eval_string_context");
+    abi::emit_call_label(ctx.emitter, &symbol);
+    emit_eval_status_check(ctx);
+    abi::emit_load_temporary_stack_slot(ctx.emitter, abi::int_result_reg(ctx.emitter), EVAL_RESULT_VALUE_CELL_OFFSET);
+    abi::emit_call_label(ctx.emitter, "__rt_decref_any");
+    abi::emit_release_temporary_stack(ctx.emitter, EVAL_STACK_BYTES);
+    Ok(())
+}
+
+/// Resolves an object's class name through its owning eval context when one exists.
+///
+/// The object payload pointer is expected in the architecture's integer result register
+/// (`x0`/`rax`) and is restored there on the fallback path so the compiled class-name tables
+/// can answer for ordinary AOT objects. A successful lookup leaves the PHP string in the
+/// target's string result registers and jumps to `done_label`; `fallback_label` continues the
+/// caller's table lookup.
+pub(in crate::codegen::lower_inst::builtins) fn emit_context_free_object_class_name(
+    ctx: &mut FunctionContext<'_>,
+    lookup_kind: i64,
+    fallback_label: &str,
+    done_label: &str,
+) {
+    let arch = ctx.emitter.target.arch;
+    let status_reg = abi::int_result_reg(ctx.emitter);
+    let found_label = ctx.next_label("eval_dynamic_class_found");
+    let not_found_label = ctx.next_label("eval_dynamic_class_not_found");
+    abi::emit_reserve_temporary_stack(ctx.emitter, EVAL_STACK_BYTES);
+    abi::emit_store_to_sp(ctx.emitter, status_reg, EVAL_TEMP_CELL_OFFSET);
+    abi::emit_reg_move(
+        ctx.emitter,
+        abi::int_arg_reg_name(ctx.emitter.target, 0),
+        status_reg,
+    );
+    abi::emit_load_int_immediate(
+        ctx.emitter,
+        abi::int_arg_reg_name(ctx.emitter.target, 1),
+        lookup_kind,
+    );
+    abi::emit_temporary_stack_address(
+        ctx.emitter,
+        abi::int_arg_reg_name(ctx.emitter.target, 2),
+        0,
+    );
+    let symbol = ctx
+        .emitter
+        .target
+        .extern_symbol("__elephc_eval_dynamic_object_class_name");
+    abi::emit_call_label(ctx.emitter, &symbol);
+    match arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction(&format!("cmp {status_reg}, #0"));          // status 0 resolves an eval-declared class
+            ctx.emitter.instruction(&format!("b.eq {found_label}"));            // publish the eval class name
+            ctx.emitter.instruction(&format!("cmp {status_reg}, #1"));          // status 1 means no owning eval context
+            ctx.emitter.instruction(&format!("b.eq {not_found_label}"));        // restore the object and fall back
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction(&format!("cmp {status_reg}, 0"));           // status 0 resolves an eval-declared class
+            ctx.emitter.instruction(&format!("je {found_label}"));              // publish the eval class name
+            ctx.emitter.instruction(&format!("cmp {status_reg}, 1"));           // status 1 means no owning eval context
+            ctx.emitter.instruction(&format!("je {not_found_label}"));          // restore the object and fall back
+        }
+    }
+    emit_eval_status_check(ctx);
+    abi::emit_jump(ctx.emitter, &not_found_label);
+
+    ctx.emitter.label(&not_found_label);
+    abi::emit_load_temporary_stack_slot(
+        ctx.emitter,
+        status_reg,
+        EVAL_TEMP_CELL_OFFSET,
+    );
+    abi::emit_release_temporary_stack(ctx.emitter, EVAL_STACK_BYTES);
+    abi::emit_jump(ctx.emitter, fallback_label);
+
+    ctx.emitter.label(&found_label);
+    abi::emit_load_temporary_stack_slot(
+        ctx.emitter,
+        status_reg,
+        EVAL_RESULT_VALUE_CELL_OFFSET,
+    );
+    emit_owned_eval_class_name_string(ctx);
+    abi::emit_release_temporary_stack(ctx.emitter, EVAL_STACK_BYTES);
+    abi::emit_jump(ctx.emitter, done_label);
+}
+
 /// Transfers boxed class-name results or detaches native strings before retiring their bridge cell.
 pub(in crate::codegen::lower_inst::builtins) fn lower_eval_object_class_name(
     ctx: &mut FunctionContext<'_>,
@@ -210,12 +337,19 @@ pub(in crate::codegen::lower_inst::builtins) fn lower_eval_object_is_a(
 ) -> Result<()> {
     let false_label = ctx.next_label("eval_object_is_a_false");
     let done_label = ctx.next_label("eval_object_is_a_done");
+    let has_persistent_context = has_eval_context(ctx);
     abi::emit_reserve_temporary_stack(ctx.emitter, EVAL_STACK_BYTES);
-    ensure_eval_context(ctx)?;
+    if has_persistent_context {
+        ensure_eval_context(ctx)?;
+    }
     store_eval_object_operand(ctx, object)?;
     abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
     emit_branch_if_eval_unboxed_not_object(ctx, &false_label);
-    load_eval_context_to_arg(ctx, 0);
+    if has_persistent_context {
+        load_eval_context_to_arg(ctx, 0);
+    } else {
+        abi::emit_load_int_immediate(ctx.emitter, abi::int_arg_reg_name(ctx.emitter.target, 0), 0);
+    }
     let object_arg = abi::int_arg_reg_name(ctx.emitter.target, 1);
     abi::emit_load_temporary_stack_slot(ctx.emitter, object_arg, EVAL_TEMP_CELL_OFFSET);
     let (target_label, target_len) = ctx.data.add_string(target_class.as_bytes());
@@ -258,8 +392,11 @@ pub(in crate::codegen::lower_inst::builtins) fn lower_eval_object_is_a_dynamic(
     let false_label = ctx.next_label("eval_object_is_a_dynamic_false");
     let invalid_label = ctx.next_label("eval_object_is_a_dynamic_invalid");
     let done_label = ctx.next_label("eval_object_is_a_dynamic_done");
+    let has_persistent_context = has_eval_context(ctx);
     abi::emit_reserve_temporary_stack(ctx.emitter, EVAL_STACK_BYTES);
-    ensure_eval_context(ctx)?;
+    if has_persistent_context {
+        ensure_eval_context(ctx)?;
+    }
     store_eval_mixed_operand_at(ctx, object, EVAL_TEMP_CELL_OFFSET)?;
     store_eval_mixed_operand_at(ctx, target, EVAL_CODE_PTR_OFFSET)?;
     abi::emit_load_temporary_stack_slot(
@@ -276,7 +413,11 @@ pub(in crate::codegen::lower_inst::builtins) fn lower_eval_object_is_a_dynamic(
     );
     abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
     emit_branch_if_eval_unboxed_not_object(ctx, &false_label);
-    load_eval_context_to_arg(ctx, 0);
+    if has_persistent_context {
+        load_eval_context_to_arg(ctx, 0);
+    } else {
+        abi::emit_load_int_immediate(ctx.emitter, abi::int_arg_reg_name(ctx.emitter.target, 0), 0);
+    }
     let object_arg = abi::int_arg_reg_name(ctx.emitter.target, 1);
     abi::emit_load_temporary_stack_slot(ctx.emitter, object_arg, EVAL_TEMP_CELL_OFFSET);
     let target_arg = abi::int_arg_reg_name(ctx.emitter.target, 2);

@@ -1,8 +1,6 @@
 ---
 title: "mysqli_query()"
 description: "Runs one statement and returns a result set or a success flag."
-sidebar:
-  order: 147
 ---
 
 ## mysqli_query()
@@ -22,8 +20,9 @@ Runs one statement and returns a result set or a success flag.
 
 ## Availability
 
-- **Compiled (AOT)**: supported through an injected elephc-PHP prelude.
-- **`eval()` (magician interpreter)**: not available inside eval'd code.
+| Compiled (AOT) | Magician (eval) |
+|---|---|
+| Available | Not available yet |
 
 _No examples yet. Check `examples/` and `showcases/` for usage patterns._
 

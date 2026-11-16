@@ -96,8 +96,25 @@ pub fn compute(
         check_result,
     );
     state.apply_usage(executable_usage, true);
+    // An extern class is C struct layout metadata with no emitted code. Besides `ptr_cast<T>`
+    // (recorded by the usage scan) it is named through types the scan does not walk: `ptr<T>`
+    // in extern function signatures and in fields of other extern classes. Keeping every
+    // declared one costs nothing and keeps `$ptr->field` lowering able to find the layout.
+    state.reach.classes.extend(state.index.extern_classes.iter().cloned());
     for name in options.exported_functions {
         let name = php_symbol_key(name);
+        if let Some((class, method)) = name.split_once("::") {
+            state.reach.classes.insert(class.to_string());
+            state.behavioral.classes.insert(class.to_string());
+            if let Some(node) = state.index.classes.get(class) {
+                for (candidate, is_static) in node.methods.keys().filter(|(candidate, _)| candidate == method) {
+                    let key = (class.to_string(), candidate.clone(), *is_static);
+                    state.reach.methods.insert(key.clone());
+                    state.behavioral.methods.insert(key);
+                }
+            }
+            continue;
+        }
         state.reach.functions.insert(name.clone());
         state.behavioral.functions.insert(name);
     }
@@ -120,7 +137,74 @@ pub fn compute(
     }
     state.apply_global_hazards();
     state.fixed_point();
-    state.reach
+    let mut reach = state.reach;
+    retain_embedded_packed_classes(&mut reach, check_result);
+    reach
+}
+
+/// Keeps every packed class embedded in, or pointed to by, a field of a reachable packed class,
+/// and every packed class a reachable extern function, an extern global or an extern class field
+/// names as `ptr<T>`.
+///
+/// A nested packed field (`packed class Body { public Vec2 $pos; }`) or a typed pointer field
+/// (`public ptr<Vec2> $p;`) names its record type only in the outer declaration, which carries no
+/// code and no graph edges, so `Vec2` would be pruned while `Body` survives and `$b[0]->pos->x`
+/// or `$b[0]->p->x` would lower against a missing layout. Extern declarations name pointer
+/// targets the same way (`extern function make(): ptr<Vec2>;`, `extern global ptr<Vec2> $g;`,
+/// `extern class Holder { public ptr<Vec2> $p; }`, kept whole by `compute`), so their packed
+/// targets seed the closure too. Packed classes hold only POD fields, so closing
+/// over their field types after the fixed point is complete.
+fn retain_embedded_packed_classes(reach: &mut Reachability, check_result: &CheckResult) {
+    let packed: HashMap<String, &crate::types::PackedClassInfo> = check_result
+        .packed_classes
+        .iter()
+        .map(|(name, info)| (php_symbol_key(name), info))
+        .collect();
+    let mut pending: Vec<String> = reach
+        .classes
+        .iter()
+        .filter(|key| packed.contains_key(*key))
+        .cloned()
+        .collect();
+    let extern_types = check_result
+        .extern_functions
+        .iter()
+        .filter(|(name, _)| reach.externs.contains(&php_symbol_key(name)))
+        .flat_map(|(_, sig)| {
+            sig.params.iter().map(|(_, ty)| ty).chain(std::iter::once(&sig.return_type))
+        })
+        .chain(check_result.extern_globals.values())
+        .chain(
+            check_result
+                .extern_classes
+                .values()
+                .flat_map(|info| info.fields.iter().map(|field| &field.php_type)),
+        );
+    for ty in extern_types {
+        let crate::types::PhpType::Pointer(Some(inner)) = ty else {
+            continue;
+        };
+        let inner_key = php_symbol_key(crate::names::pointer_target_leaf(inner));
+        if packed.contains_key(&inner_key) && reach.classes.insert(inner_key.clone()) {
+            pending.push(inner_key);
+        }
+    }
+    while let Some(key) = pending.pop() {
+        let Some(info) = packed.get(&key) else {
+            continue;
+        };
+        for field in &info.fields {
+            let (crate::types::PhpType::Packed(inner)
+            | crate::types::PhpType::Pointer(Some(inner))) = &field.php_type
+            else {
+                continue;
+            };
+            let inner_key = php_symbol_key(crate::names::pointer_target_leaf(inner));
+            if packed.contains_key(&inner_key) && reach.classes.insert(inner_key.clone()) {
+                pending.push(inner_key);
+            }
+        }
+    }
 }
 
 struct GraphState {
@@ -144,7 +228,8 @@ struct GraphState {
     checker_interface_methods: HashMap<String, HashSet<(String, bool)>>,
     checker_method_implementations: HashMap<(String, String, bool), String>,
     vtable_slots: HashSet<(String, String, bool)>,
-    /// Every injected prelude group, rooted whole whenever a literal eval fragment runs. The
+    /// Injected prelude groups, rooted whole whenever a literal eval fragment runs except XML,
+    /// whose forwarding builtins and parsed fragment supply explicit declaration edges. The
     /// interpreter conjures core classes without the fragment naming them, and the builtin
     /// method bodies the eval-only lowering surfaces materialize (`DateTimeZone::getLocation`
     /// calling the `elephc_tz_location` extern, `listIdentifiers` calling the list-id prelude
@@ -277,6 +362,16 @@ impl GraphState {
     fn apply_global_hazards(&mut self) {
         if self.reach.hazards.literal_eval {
             for group in &self.literal_eval_baseline {
+                // XML eval calls have explicit fragment or builtin-helper edges. Keeping
+                // its SAX callback bodies unconditionally introduces user-call hazards.
+                // Retain the existing bridge-presence sentinel used by Magician; its
+                // constructor/destructor edges do not pull in parser callback dispatch.
+                if group.id == "xml" {
+                    let sentinel = php_symbol_key("xml_parser_create");
+                    self.reach.functions.insert(sentinel.clone());
+                    self.behavioral.functions.insert(sentinel);
+                    continue;
+                }
                 self.reach.functions.extend(group.functions.iter().cloned());
                 self.reach.classes.extend(group.classes.iter().cloned());
                 self.reach.methods.extend(group.methods.iter().cloned());
@@ -431,8 +526,19 @@ impl GraphState {
                     || operators.is_some_and(|operators| {
                         if *is_static {
                             operators.arithmetic.iter().any(|(_, adapter)| *adapter == method)
+                                || operators.bitwise.iter().any(|(_, adapter)| *adapter == method)
+                                || operators.shift.iter().any(|(_, adapter)| *adapter == method)
                                 || operators.compare == Some(method.as_str())
-                        } else { operators.boolean == Some(method.as_str()) }
+                        } else { operators.boolean == Some(method.as_str()) || operators.json == Some(method.as_str())
+                            || operators.bit_not == Some(method.as_str())
+                            || operators.native_clone == Some(method.as_str())
+                            || operators.properties.iter().any(|(_, adapter)| *adapter == method)
+                            || operators.dimensions.iter().any(|(_, adapter)| *adapter == method)
+                            || operators.native_casts.iter().any(|(_, adapter)| *adapter == method)
+                            || operators.casts.is_some_and(|casts| {
+                                [casts.to_int, casts.to_float, casts.to_number, casts.to_bool]
+                                    .into_iter().flatten().any(|adapter| adapter == method)
+                            }) }
                     })
                     || matches!(method.as_str(), "__call" | "__callstatic")
                     || self.behavioral.referenced_methods.contains(&reference)
@@ -932,6 +1038,8 @@ fn is_magic_method(method: &str) -> bool {
             | "__sleep"
             | "__wakeup"
             | "__debuginfo"
+            // A hosted extension wrapper's dump method, reached only through `_class_debuginfo_ptrs`.
+            | "__elephcdebuginfo"
             | "__set_state"
             | "__call"
             | "__callstatic"

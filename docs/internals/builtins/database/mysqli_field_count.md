@@ -1,8 +1,6 @@
 ---
 title: "mysqli_field_count() - internals"
 description: "Compiler internals for mysqli_field_count(): lowering path, type checks, and runtime helpers."
-sidebar:
-  order: 125
 ---
 
 ## `mysqli_field_count()` - internals
@@ -10,7 +8,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`crates/elephc-builtin-contract/src/catalog_data.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-builtin-contract/src/catalog_data.rs)
-- **Lowering**: [`src/mysqli_prelude/build/procedural.rs`:729](https://github.com/illegalstudio/elephc/blob/main/src/mysqli_prelude/build/procedural.rs#L729) (`mysqli_field_count`)
+- **Lowering**: [`src/mysqli_prelude/build/procedural.rs`](https://github.com/illegalstudio/elephc/blob/main/src/mysqli_prelude/build/procedural.rs) (`mysqli_field_count`)
 - **Function symbol**: `mysqli_field_count()`
 
 

@@ -314,3 +314,40 @@ fn unreachable_same_block_use_before_definition_is_invalid() {
         Err(ValidationError::UseNotDominated { .. })
     ));
 }
+
+
+/// Dominator membership beyond the first word must still reject a bypassed definition.
+#[test]
+fn dominance_membership_across_bitset_words() {
+    for bypass in [false, true] {
+        let mut function = Function::new("wide_dominance".into(), IrType::I64, PhpType::Int);
+        {
+            let mut builder = Builder::new(&mut function);
+            let blocks: Vec<_> = (0..72).map(|index| {
+                builder.create_named_block(&format!("block_{index}"), Vec::new())
+            }).collect();
+            builder.set_entry(blocks[0]);
+            for index in 0..69 {
+                builder.position_at_end(blocks[index]);
+                builder.terminate(Terminator::Br { target: blocks[index + 1], args: Vec::new() });
+            }
+            builder.position_at_end(blocks[69]);
+            let condition = builder.emit_const_bool(true);
+            builder.terminate(Terminator::CondBr { cond: condition,
+                then_target: blocks[70], then_args: Vec::new(),
+                else_target: blocks[if bypass { 71 } else { 70 }], else_args: Vec::new(),
+            });
+            builder.position_at_end(blocks[70]);
+            let value = builder.emit_const_i64(7);
+            builder.terminate(Terminator::Br { target: blocks[71], args: Vec::new() });
+            builder.position_at_end(blocks[71]);
+            builder.terminate(Terminator::Return { value: Some(value) });
+        }
+        let result = validate_function(&function);
+        if bypass {
+            assert!(matches!(result, Err(ValidationError::UseNotDominated { .. })), "{result:?}");
+        } else {
+            result.unwrap();
+        }
+    }
+}

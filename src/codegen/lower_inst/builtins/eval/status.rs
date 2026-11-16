@@ -62,8 +62,35 @@ pub(super) fn finish_eval_scope_reload(ctx: &mut FunctionContext<'_>) {
     ctx.emitter.label(&done);
 }
 
-/// Emits a fatal diagnostic when the eval bridge reports any non-zero status.
+/// Dispatches a non-zero eval bridge status to its throw or fatal handler.
+///
+/// The pending Throwable is passed in ARGUMENT REGISTER 1 (`x1` / `rsi`): it
+/// lives in the caller's eval scratch frame, which the helper cannot address,
+/// because inside the helper `sp` belongs to the helper.
 pub(super) fn emit_eval_status_check(ctx: &mut FunctionContext<'_>) {
+    let throwable_arg = abi::int_arg_reg_name(ctx.emitter.target, 1);
+    abi::emit_load_temporary_stack_slot(ctx.emitter, throwable_arg, EVAL_RESULT_ERROR_OFFSET);
+    let label = crate::codegen::eval_status_helper::EVAL_STATUS_LABEL;
+    abi::emit_call_label(ctx.emitter, label);
+}
+
+/// Raises the Throwable passed as the helper's first argument.
+fn emit_shared_eval_throw_current(ctx: &mut FunctionContext<'_>) {
+    let result_reg = abi::int_result_reg(ctx.emitter);
+    let throwable_arg = abi::int_arg_reg_name(ctx.emitter.target, 1);
+    abi::emit_reg_move(ctx.emitter, result_reg, throwable_arg);
+    abi::emit_call_label(ctx.emitter, "__rt_throwable_take_boxed");
+    abi::emit_store_reg_to_symbol(ctx.emitter, result_reg, "_exc_value", 0);
+    abi::emit_call_label(ctx.emitter, "__rt_throw_current");
+}
+
+/// Emits the body of the shared eval status dispatch.
+///
+/// The status arrives in the result register, exactly where the inline check
+/// expected it, and the pending Throwable arrives in the first argument
+/// register. The helper never returns for a non-zero status: every branch
+/// either throws or exits.
+pub(in crate::codegen) fn emit_eval_status_helper_body(ctx: &mut FunctionContext<'_>) {
     let ok_label = ctx.next_label("eval_status_ok");
     let parse_error_label = ctx.next_label("eval_status_parse_error");
     let throwable_label = ctx.next_label("eval_status_throwable");
@@ -84,7 +111,7 @@ pub(super) fn emit_eval_status_check(ctx: &mut FunctionContext<'_>) {
     ctx.emitter.label(&parse_error_label);
     emit_eval_fatal_message(ctx, EVAL_PARSE_ERROR_MESSAGE);
     ctx.emitter.label(&throwable_label);
-    emit_eval_throw_current(ctx);
+    emit_shared_eval_throw_current(ctx);
     ctx.emitter.label(&unsupported_label);
     emit_eval_fatal_message(ctx, EVAL_UNSUPPORTED_MESSAGE);
     ctx.emitter.label(&escaping_pcntl_label);
@@ -109,15 +136,6 @@ pub(super) fn emit_branch_if_eval_status(ctx: &mut FunctionContext<'_>, status: 
             ctx.emitter.instruction(&format!("je {}", label));                  // branch to the matching eval status handler
         }
     }
-}
-
-/// Transfers an eval-owned Throwable box into native exception ownership before unwinding.
-pub(super) fn emit_eval_throw_current(ctx: &mut FunctionContext<'_>) {
-    let result_reg = abi::int_result_reg(ctx.emitter);
-    abi::emit_load_temporary_stack_slot(ctx.emitter, result_reg, EVAL_RESULT_ERROR_OFFSET);
-    abi::emit_call_label(ctx.emitter, "__rt_throwable_take_boxed");
-    abi::emit_store_reg_to_symbol(ctx.emitter, result_reg, "_exc_value", 0);
-    abi::emit_call_label(ctx.emitter, "__rt_throw_current");
 }
 
 /// Returns the low payload register produced by `__rt_mixed_unbox` for eval status handling.

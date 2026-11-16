@@ -22,6 +22,7 @@ pub fn emit_buffer_registry_fail(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: buffer_registry_fail ---");
     emitter.label_global("__rt_buffer_registry_exhausted");
+    if emitter.phpext_output { abi::emit_cdylib_exit_escape(emitter); }
     abi::emit_symbol_address(emitter, "x1", "_buffer_registry_exhausted_msg");
     emitter.instruction("mov x2, #39");                                         // pass the exact diagnostic byte length
     emitter.instruction("mov x0, #2");                                          // write the diagnostic to standard error
@@ -36,6 +37,7 @@ fn emit_buffer_registry_fail_linux_x86_64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: buffer_registry_fail ---");
     emitter.label_global("__rt_buffer_registry_exhausted");
+    if emitter.phpext_output { abi::emit_cdylib_exit_escape(emitter); }
     abi::emit_symbol_address(emitter, "rsi", "_buffer_registry_exhausted_msg");
     emitter.instruction("mov rdx, 39");                                         // pass the exact diagnostic byte length
     emitter.instruction("mov rdi, 2");                                          // write the diagnostic to standard error

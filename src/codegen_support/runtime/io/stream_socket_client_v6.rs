@@ -163,6 +163,7 @@ pub fn emit_stream_socket_client_v6(emitter: &mut Emitter) {
         emitter.instruction("cmp x0, #0");                                      // Linux: a negative descriptor means failure
     }
     emitter.instruction(&plat.branch_on_syscall_success("__rt_sscv6_sock_ok")); // continue when socket succeeded
+    super::fileinfo_streams::capture_socket_error(emitter);
     emitter.instruction("b __rt_sscv6_fail");                                   // socket() failed
     emitter.label("__rt_sscv6_sock_ok");
     emitter.instruction("str x0, [sp, #32]");                                   // save the socket descriptor
@@ -185,6 +186,7 @@ pub fn emit_stream_socket_client_v6(emitter: &mut Emitter) {
     emitter.instruction("ret");                                                 // return the connected socket
 
     emitter.label("__rt_sscv6_fail_close");
+    super::fileinfo_streams::capture_socket_error(emitter);
     emitter.instruction("ldr x0, [sp, #32]");                                   // reload the socket descriptor
     emitter.syscall(6);
 
@@ -322,7 +324,7 @@ fn emit_stream_socket_client_v6_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov eax, 41");                                         // Linux x86_64 syscall 41 = socket
     emitter.instruction("syscall");                                             // create the IPv6 socket
     emitter.instruction("test rax, rax");                                       // did socket() fail?
-    emitter.instruction("js __rt_sscv6_fail_x86");                              // negative descriptor → failure
+    emitter.instruction("js __rt_sscv6_syscall_failed_x86");                    // retain the failed socket syscall before returning
     emitter.instruction("mov QWORD PTR [rbp - 24], rax");                       // save the socket descriptor
 
     // -- connect(fd, &sockaddr_in6, 28) --
@@ -340,6 +342,7 @@ fn emit_stream_socket_client_v6_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("ret");                                                 // return the connected socket
 
     emitter.label("__rt_sscv6_fail_close_x86");
+    super::fileinfo_streams::capture_socket_error(emitter);
     emitter.instruction("mov rdi, QWORD PTR [rbp - 24]");                       // reload the socket descriptor
     emitter.instruction("mov eax, 3");                                          // Linux x86_64 syscall 3 = close
     emitter.instruction("syscall");                                             // close the failed socket
@@ -349,4 +352,7 @@ fn emit_stream_socket_client_v6_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("add rsp, 112");                                        // release the frame
     emitter.instruction("pop rbp");                                             // restore the caller frame pointer
     emitter.instruction("ret");                                                 // return the failure result
+    emitter.label("__rt_sscv6_syscall_failed_x86");
+    super::fileinfo_streams::capture_socket_error(emitter);
+    emitter.instruction("jmp __rt_sscv6_fail_x86");                             // share the balanced failure cleanup with the captured cause
 }

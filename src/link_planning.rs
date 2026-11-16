@@ -17,6 +17,12 @@ use crate::link_plan::{LinkItem, LinkOrigin, LinkPlan};
 use crate::linker;
 use crate::native_deps::ResolvedNativePackage;
 
+/// Package name under which the hosted-extension engine (`libelephc_zend.a`) enters
+/// the plan as a managed package, so it can follow the extension archives.
+pub(crate) const HOSTED_ENGINE_PACKAGE: &str = "elephc-zend";
+/// Bridge identity of the engine archive: it is a Rust staticlib like every other bridge.
+const HOSTED_ENGINE_BRIDGE: &str = "elephc_zend";
+
 /// Inputs collected by the compile pipeline for one final native link.
 pub(crate) struct LinkPlanningInputs<'a> {
     /// Libraries supplied explicitly by `--link`/`-l`.
@@ -104,7 +110,17 @@ pub(crate) fn build(inputs: LinkPlanningInputs<'_>) -> LinkPlan {
     }
     for package in inputs.managed_packages {
         for archive in &package.archives {
-            plan.push(LinkItem::managed_archive(archive, &package.package));
+            if package.package == HOSTED_ENGINE_PACKAGE {
+                // The engine keeps its position after the extension archives but is
+                // still a Rust bridge: it bundles std/allocator members that a second
+                // bridge's archive duplicates, so GNU ld needs to count it.
+                plan.push(LinkItem::bridge_archive(archive, HOSTED_ENGINE_BRIDGE, false));
+            } else {
+                plan.push(LinkItem::managed_archive(archive, &package.package));
+            }
+        }
+        for path in &package.library_paths {
+            plan.push(LinkItem::SearchPath(path.clone()));
         }
         for library in &package.system_libraries {
             push_named_once(&mut plan, &mut named, library, LinkOrigin::Runtime);
@@ -163,6 +179,36 @@ mod tests {
         }
     }
 
+    /// The hosted engine archive keeps its place after the extension archives but
+    /// keeps its bridge identity, so a second Rust bridge makes the Linux link
+    /// allow the duplicate runtime members both archives carry.
+    #[test]
+    fn hosted_engine_archive_keeps_bridge_identity_after_extensions() {
+        let package = |name: &str, archive: &str| ResolvedNativePackage {
+            package: name.to_string(),
+            artifact_root: PathBuf::from("/cache"),
+            archives: vec![PathBuf::from(archive)],
+            system_libraries: Vec::new(),
+            library_paths: Vec::new(),
+            frameworks: Vec::new(),
+        };
+        let packages = [
+            package("extension:demo", "/cache/libdemo.a"),
+            package(HOSTED_ENGINE_PACKAGE, "/cache/libelephc_zend.a"),
+        ];
+        let plan = build(managed_inputs(&[], &packages));
+        let items = plan.items();
+        let extension = items
+            .iter()
+            .position(|item| matches!(item, LinkItem::StaticArchive { origin: LinkOrigin::ManagedNative { .. }, .. }))
+            .expect("extension archive");
+        let engine = items
+            .iter()
+            .position(|item| matches!(item, LinkItem::StaticArchive { origin: LinkOrigin::Bridge { name }, .. } if name == "elephc_zend"))
+            .expect("engine keeps bridge origin");
+        assert!(extension < engine);
+    }
+
     /// Verifies managed PCRE2 archives retain exact shim/POSIX/8-bit order and static mode.
     #[test]
     fn managed_pcre2_plan_preserves_catalog_archive_order() {
@@ -175,6 +221,7 @@ mod tests {
                 PathBuf::from("/cache/pcre2/lib/libpcre2-8.a"),
             ],
             system_libraries: Vec::new(),
+            library_paths: Vec::new(),
             frameworks: Vec::new(),
         };
         let requirements = [LinkRequirement::NativePackage("pcre2")];
@@ -221,6 +268,7 @@ mod tests {
             artifact_root: PathBuf::from(format!("/cache/{name}")),
             archives: archives.iter().map(PathBuf::from).collect(),
             system_libraries: Vec::new(),
+            library_paths: Vec::new(),
             frameworks: Vec::new(),
         };
         // The order `native_deps::resolver` produces for a lone `curl` requirement.
@@ -294,6 +342,7 @@ mod tests {
                 PathBuf::from("/cache/libxml2/lib/libxml2.a"),
             ],
             system_libraries: Vec::new(),
+            library_paths: Vec::new(),
             frameworks: Vec::new(),
         };
         let forced = ["elephc_xml".to_string()];

@@ -25,6 +25,9 @@ pub(super) struct BackendInputs<'a> {
     /// `extension_loaded()` alongside archive-derived bridge extensions. Needed
     /// because the shared `elephc_pdo` archive cannot identify a surface by itself.
     pub(super) linked_php_surfaces: &'a [String],
+    /// Real PHP extensions the project hosts: their archives, the Zend engine
+    /// archive they resolve against, and the C++ runtime when one needs it.
+    pub(super) hosted_php_ext: Option<&'a crate::php_ext::install::HostedExtensions>,
     pub(super) ir_module: ir::Module,
     pub(super) web: bool,
     pub(super) web_isolation: codegen::WebIsolation,
@@ -40,6 +43,8 @@ pub(super) struct BackendInputs<'a> {
     pub(super) instrument: crate::codegen::Instrumentation,
     pub(super) heap_debug: bool,
     pub(super) exported_functions: &'a HashMap<String, exports::ExportedFunction>,
+    pub(super) exported_constants: &'a [crate::phpext::ExportedConstant],
+    pub(super) exported_classes: &'a [crate::phpext::classes::ExportedClass],
     pub(super) regalloc_linear: bool,
     pub(super) emit_debug_info: bool,
     pub(super) keep_symbols: bool,
@@ -72,6 +77,7 @@ pub(super) fn emit_and_link(inputs: BackendInputs<'_>) {
         with_crates,
         ini_overrides,
         linked_php_surfaces,
+        hosted_php_ext,
         mut ir_module,
         web,
         web_isolation,
@@ -87,6 +93,8 @@ pub(super) fn emit_and_link(inputs: BackendInputs<'_>) {
         instrument,
         heap_debug,
         exported_functions,
+        exported_constants,
+        exported_classes,
         regalloc_linear,
         emit_debug_info,
         keep_symbols,
@@ -96,16 +104,13 @@ pub(super) fn emit_and_link(inputs: BackendInputs<'_>) {
         timings,
     } = inputs;
 
-    // Dynamic source is opaque to AOT feature detection. `--with-regex`
-    // explicitly enables the ordinary regex runtime/native requirement and
-    // lets eval setup register that managed provider with Magician.
-    if with_crates.contains("regex") {
-        ir_module.required_runtime_features.regex = true;
-    }
-    if with_crates.contains("mbstring") {
-        ir_module.required_runtime_features.mbstring = true;
-        ir_module.required_runtime_features.mbregex = true;
-        ir_module.required_runtime_features.mbstring_mime = true;
+    // Dynamic source is opaque to AOT feature detection, so `--with-regex` and
+    // `--with-mbstring` force their runtime families and native requirements.
+    for flag in with_crates.iter() {
+        crate::codegen_support::force_runtime_features_for_flag(
+            &mut ir_module.required_runtime_features,
+            flag,
+        );
     }
     let probe = with_crates.contains("probe");
     if probe {
@@ -186,6 +191,11 @@ pub(super) fn emit_and_link(inputs: BackendInputs<'_>) {
         }
     }
 
+    if emit == Emit::Phpext && (hosted_php_ext.is_some() || !planned_link_libraries.is_empty()) {
+        eprintln!("{PHPEXT_CORE_RUNTIME_ONLY}");
+        process::exit(1);
+    }
+
     let requires_elephc_tls = planned_link_libraries
         .iter()
         .any(|library| library == "elephc_tls");
@@ -243,6 +253,12 @@ pub(super) fn emit_and_link(inputs: BackendInputs<'_>) {
     } else {
         generated_user_asm.asm
     };
+    let user_asm = if emit == Emit::Phpext {
+        match crate::phpext::build::assembly(&user_asm, heap_size, target, runtime_features) {
+            Ok(asm) => asm,
+            Err(error) => { eprintln!("PHP extension error: {error}"); process::exit(1); }
+        }
+    } else { user_asm };
     timings.record_since("codegen", phase_started);
 
     crate::progress::phase("write-asm");
@@ -286,6 +302,21 @@ pub(super) fn emit_and_link(inputs: BackendInputs<'_>) {
         return;
     }
 
+    if emit == Emit::Phpext {
+        crate::progress::phase("php-extension-link");
+        let phase_started = Instant::now();
+        if let Err(error) = crate::phpext::build::link(&user_asm, exported_functions, exported_constants, exported_classes, target, &output_paths.bin) {
+            crate::progress::clear();
+            eprintln!("PHP extension error: {error}");
+            process::exit(1);
+        }
+        timings.record_since("php-extension-link", phase_started);
+        crate::progress::clear();
+        timings.report();
+        crate::progress::finish_ok(&format!("Compiled '{}' -> '{}'", filename, output_paths.bin.display()), timings.elapsed());
+        return;
+    }
+
     crate::progress::phase("runtime-cache");
     let phase_started = Instant::now();
     let runtime_object = match runtime_cache::prepare_runtime_object_for_emit(
@@ -313,42 +344,20 @@ pub(super) fn emit_and_link(inputs: BackendInputs<'_>) {
             LinkRequirement::Bridge(_) | LinkRequirement::SystemLibrary(_) => None,
         })
         .collect();
-    // The curl bridge is a Rust `staticlib` (`elephc_curl`, planned above like any
-    // other bridge) that itself links against the managed native `curl` package
-    // (which pulls in `openssl`/`zlib` transitively through the catalog). Unlike
-    // `regex`, curl has no `RuntimeFeatures` bit: `elephc_curl` reaches
-    // `planned_link_libraries` either because the program actually uses curl (every
-    // curl `RuntimeFnId` declares `BuiltinRequirement::Bridge("elephc_curl")`, and the
-    // curl prelude is injected only when `src/curl_prelude/detect.rs` finds a `curl_*`
-    // reference) or because `--with-curl` forces it explicitly with no such reference;
-    // this mirrors that into the native requirement so the
-    // final link resolves `libcurl.a`/`libssl.a`/`libcrypto.a`/`libz.a` instead of
-    // failing on `elephc_curl`'s undefined libcurl symbols.
-    if planned_link_libraries
-        .iter()
-        .any(|library| library == "elephc_curl")
-    {
-        native_requirements.push(NativeRequirement::package("curl"));
-    }
-    // The xml bridge is the same shape as curl: `elephc_xml` is a Rust `staticlib`
-    // whose parser is libxml2 itself, reached through the Elephc-owned C shim the
-    // managed `libxml2` package builds and archives next to `libxml2.a`. It has no
-    // `RuntimeFeatures` bit either: `elephc_xml` reaches `planned_link_libraries`
-    // because the program names part of the surface (the xml prelude is injected
-    // only when `src/xml_prelude` detects an `xml_*`/`xmlwriter_*` call or an
-    // `XMLParser`/`XMLWriter` reference, and its `extern "elephc_xml"` block is what
-    // requires the bridge) or because `--with-xml` forces it. Mirroring that into
-    // the native requirement makes the final link resolve
-    // `libelephc_libxml2_shim.a` + `libxml2.a` from the project's catalog package
-    // instead of failing on the bridge's undefined `elephc_libxml2_v1_*`/`xml*`
-    // symbols — and, exactly like curl, there is no system `-lxml2` fallback.
-    if planned_link_libraries
-        .iter()
-        .any(|library| library == "elephc_xml")
-    {
-        native_requirements.push(NativeRequirement::package("libxml2"));
-    }
-    let resolved_native = match crate::native_deps::resolve_for_compilation(
+    // Bridges that are thin adapters over a C library declare that library's
+    // symbols without linking them. A bridge reaches `planned_link_libraries`
+    // either because the program uses its surface (its prelude's `extern` block
+    // or a `BuiltinRequirement::Bridge`) or because `--with-<name>` forces it,
+    // and in both cases the final link resolves the library from the project's
+    // managed native package instead of failing on undefined symbols.
+    // `crate::linker::native_packages` owns the bridge-to-package table and its
+    // link order; `--print-capabilities` reports the same table.
+    native_requirements.extend(
+        crate::linker::native_packages_for_libraries(&planned_link_libraries)
+            .into_iter()
+            .map(NativeRequirement::package),
+    );
+    let mut resolved_native = match crate::native_deps::resolve_for_compilation(
         Path::new(filename),
         target,
         &native_requirements,
@@ -359,6 +368,12 @@ pub(super) fn emit_and_link(inputs: BackendInputs<'_>) {
             process::exit(1);
         }
     };
+    if let Some(hosted) = hosted_php_ext {
+        if let Err(error) = append_hosted_extensions(&mut resolved_native, hosted, target) {
+            eprintln!("{error}");
+            process::exit(1);
+        }
+    }
     let link_plan = crate::link_planning::build(crate::link_planning::LinkPlanningInputs {
         user_libraries: extra_link_libs,
         user_search_paths: extra_link_paths,
@@ -488,4 +503,51 @@ pub(super) fn emit_and_link(inputs: BackendInputs<'_>) {
             timings.elapsed(),
         );
     }
+}
+
+/// Appends each hosted PHP extension's archive to the link, then the engine
+/// they all resolve Zend symbols from (`libelephc_zend.a`, the elephc-zend
+/// bridge). Static archives resolve in command-line order on GNU ld, so the
+/// engine must come after every extension, and after the bridges a program
+/// links by name (which precede managed archives). A C++ extension also needs
+/// the platform's C++ runtime, which nothing else in a compiled program links.
+fn append_hosted_extensions(
+    resolved: &mut Vec<crate::native_deps::ResolvedNativePackage>,
+    hosted: &crate::php_ext::install::HostedExtensions,
+    target: Target,
+) -> Result<(), String> {
+    let engine = crate::linker::bridge_archive("elephc_zend").map_err(|error| error.to_string())?;
+    let cxx_runtime = match target.platform {
+        crate::codegen_support::platform::Platform::Linux => "stdc++",
+        _ => "c++",
+    };
+    let packages = hosted.extensions.iter().map(|extension| {
+        let mut system_libraries = extension.record.libraries.clone();
+        if extension.record.cxx {
+            system_libraries.push(cxx_runtime.to_string());
+        }
+        crate::native_deps::ResolvedNativePackage {
+            package: format!("extension:{}", extension.name),
+            artifact_root: extension.artifact_dir.clone(),
+            archives: vec![extension.archive()],
+            system_libraries,
+            library_paths: extension.record.library_dirs.iter().map(std::path::PathBuf::from).collect(),
+            frameworks: Vec::new(),
+        }
+    });
+    resolved.extend(packages);
+    resolved.push(crate::native_deps::ResolvedNativePackage {
+        package: crate::link_planning::HOSTED_ENGINE_PACKAGE.to_string(),
+        artifact_root: engine.parent().map(Path::to_path_buf).unwrap_or_default(),
+        archives: vec![engine],
+        library_paths: Vec::new(),
+        // The engine's `php_iconv_string` uses the system iconv, a separate
+        // library on Apple targets (part of the C library on Linux).
+        system_libraries: match target.platform {
+            crate::codegen_support::platform::Platform::Linux => vec!["dl".to_string(), "pthread".to_string(), "m".to_string()],
+            _ => vec!["iconv".to_string()],
+        },
+        frameworks: Vec::new(),
+    });
+    Ok(())
 }

@@ -110,8 +110,15 @@ pub(super) fn normalize_materialized_element_type(item_type: PhpType) -> PhpType
 }
 
 /// Normalizes indexed-array write payloads to storage shapes Phase 04 can lower.
+///
+/// A payload whose storage is the inline tagged scalar (`int|null`) becomes a boxed `mixed`
+/// cell: a hash has no tagged entry and the tagged indexed array is an append-only
+/// specialization, so a string-key write of `$n ?? null` or a `?int` parameter widens the
+/// container to `mixed` values (see `box_tagged_scalar_element`).
 pub(super) fn normalize_array_write_element_type(item_type: PhpType) -> PhpType {
-    let item_type = normalize_materialized_element_type(item_type);
+    let item_type = crate::ir_lower::expr::box_tagged_scalar_element(
+        normalize_materialized_element_type(item_type),
+    );
     if item_type.is_refcounted() && !matches!(item_type, PhpType::Str) {
         PhpType::Mixed
     } else {
@@ -143,11 +150,11 @@ pub(super) fn lower_static_var(ctx: &mut LoweringContext<'_, '_>, name: &str, in
 
     ctx.builder.position_at_end(init_block);
     let value = lower_expr(ctx, init);
-    let slot = ctx.declare_local_with_kind(
-        name,
-        ctx.builder.value_php_type(value.value),
-        LocalKind::StaticLocal,
-    );
+    // The initializer runs once; subsequent calls may enter with an object or another value.
+    // A null initializer therefore requires boxed persistent storage and no null-only flow fact.
+    let initialized_type = ctx.builder.value_php_type(value.value);
+    let storage_type = if initialized_type == PhpType::Void { PhpType::Mixed } else { initialized_type };
+    let slot = ctx.declare_local_with_kind(name, storage_type.clone(), LocalKind::StaticLocal);
     ctx.builder.emit_with_effects(
         Op::InitStaticLocal,
         vec![value.value],
@@ -182,5 +189,6 @@ pub(super) fn lower_static_var(ctx: &mut LoweringContext<'_, '_>, name: &str, in
         else_args: Vec::new(),
     });
     ctx.builder.position_at_end(after_block);
+    ctx.set_local_type(name, storage_type);
     ctx.clear_static_callable_locals();
 }

@@ -65,6 +65,16 @@ pub(super) fn eval_native_static_syntax_method_result(
         if let Some(object) =
             eval_static_syntax_instance_receiver(class_name, lexical_scope, context, values)?
         {
+            if method_name.eq_ignore_ascii_case("__construct") {
+                eval_native_constructor_with_evaluated_args(
+                    class_name,
+                    object,
+                    evaluated_args,
+                    context,
+                    values,
+                )?;
+                return values.null().map(Some);
+            }
             return eval_native_method_with_evaluated_args_bridge_scope(
                 object,
                 class_name,

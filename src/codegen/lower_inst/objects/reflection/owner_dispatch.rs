@@ -26,22 +26,72 @@ pub(in crate::codegen::lower_inst::objects) fn is_reflection_owner_class(class_n
     )
 }
 
+/// Returns the builtin Reflection owner ancestor represented by a user subclass.
+pub(in crate::codegen::lower_inst::objects) fn reflection_owner_base_class(
+    ctx: &FunctionContext<'_>,
+    class_name: &str,
+) -> Option<String> {
+    let mut current = class_name.trim_start_matches('\\');
+    for _ in 0..=ctx.module.class_infos.len() {
+        if is_reflection_owner_class(current) {
+            return Some(current.to_string());
+        }
+        let class_info = ctx.module.class_infos.get(current)?;
+        current = class_info.parent.as_deref()?;
+    }
+    None
+}
+
 /// Lowers builtin Reflection owner allocation by populating compile-time metadata slots.
 pub(in crate::codegen::lower_inst::objects) fn lower_reflection_owner_new(
     ctx: &mut FunctionContext<'_>,
     inst: &Instruction,
     class_name: &str,
 ) -> Result<()> {
-    if let Some(object_operand) = reflection_object_operand(ctx, class_name, inst)? {
+    let owner_class_name = reflection_owner_base_class(ctx, class_name).ok_or_else(|| {
+        CodegenIrError::unsupported(format!(
+            "{} is not a builtin Reflection owner or subclass",
+            class_name
+        ))
+    })?;
+    if let Some(object_operand) = reflection_object_operand(ctx, &owner_class_name, inst)? {
         emit_reflection_owner_from_runtime_object(ctx, class_name, object_operand)?;
     } else {
-        let metadata = reflection_owner_metadata(ctx, class_name, inst)?;
+        let metadata = reflection_owner_metadata(ctx, &owner_class_name, inst)?;
         emit_reflection_owner_object(ctx, class_name, &metadata)?;
     }
     let result = inst
         .result
         .ok_or_else(|| CodegenIrError::invalid_module("reflection object_new missing result"))?;
     ctx.store_result_value(result)
+}
+
+/// Populates Reflection metadata after the generic object path has allocated a user subclass.
+pub(in crate::codegen::lower_inst::objects) fn populate_reflection_owner_new(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+    class_name: &str,
+    result: ValueId,
+) -> Result<()> {
+    let owner_class_name = reflection_owner_base_class(ctx, class_name).ok_or_else(|| {
+        CodegenIrError::unsupported(format!(
+            "{} is not a builtin Reflection owner or subclass",
+            class_name
+        ))
+    })?;
+    clear_reflection_owner_prefix(ctx, &owner_class_name, result)?;
+    if let Some(object_operand) = reflection_object_operand(ctx, &owner_class_name, inst)? {
+        emit_reflection_owner_from_runtime_object_into(
+            ctx,
+            class_name,
+            object_operand,
+            Some(result),
+        )
+    } else {
+        let metadata = reflection_owner_metadata(ctx, &owner_class_name, inst)?;
+        ctx.load_value_to_result(result)?;
+        emit_reflection_owner_metadata(ctx, class_name, &metadata)
+    }
 }
 
 /// Returns the constructor object operand for ReflectionClass/Object object reflection.
@@ -69,6 +119,16 @@ pub(super) fn emit_reflection_owner_from_runtime_object(
     class_name: &str,
     object_operand: ValueId,
 ) -> Result<()> {
+    emit_reflection_owner_from_runtime_object_into(ctx, class_name, object_operand, None)
+}
+
+/// Selects runtime metadata and either allocates an owner or populates an existing subclass.
+fn emit_reflection_owner_from_runtime_object_into(
+    ctx: &mut FunctionContext<'_>,
+    class_name: &str,
+    object_operand: ValueId,
+    existing_object: Option<ValueId>,
+) -> Result<()> {
     let candidates = reflection_runtime_class_candidates(ctx, object_operand)?;
     if candidates.is_empty() {
         return Err(CodegenIrError::unsupported(format!(
@@ -87,18 +147,33 @@ pub(super) fn emit_reflection_owner_from_runtime_object(
     emit_runtime_object_class_dispatch(ctx, object_operand, &candidates, &case_labels, &fallback_label)?;
 
     let fallback_metadata = reflection_class_metadata_for_name(ctx, &candidates[0].class_name)?;
-    emit_reflection_owner_object(ctx, class_name, &fallback_metadata)?;
+    emit_reflection_owner_candidate(ctx, class_name, &fallback_metadata, existing_object)?;
     emit_reflection_dispatch_jump(ctx, &done_label);                            // skip runtime reflection candidates after fallback allocation
 
     for (candidate, label) in candidates.iter().zip(case_labels.iter()) {
         ctx.emitter.label(label);
         let metadata = reflection_class_metadata_for_name(ctx, &candidate.class_name)?;
-        emit_reflection_owner_object(ctx, class_name, &metadata)?;
+        emit_reflection_owner_candidate(ctx, class_name, &metadata, existing_object)?;
         emit_reflection_dispatch_jump(ctx, &done_label);                        // finish after materializing the matched runtime class
     }
 
     ctx.emitter.label(&done_label);
     Ok(())
+}
+
+/// Materializes one selected metadata candidate into a fresh or preallocated Reflection object.
+fn emit_reflection_owner_candidate(
+    ctx: &mut FunctionContext<'_>,
+    class_name: &str,
+    metadata: &ReflectionOwnerMetadata,
+    existing_object: Option<ValueId>,
+) -> Result<()> {
+    if let Some(object) = existing_object {
+        ctx.load_value_to_result(object)?;
+        emit_reflection_owner_metadata(ctx, class_name, metadata)
+    } else {
+        emit_reflection_owner_object(ctx, class_name, metadata)
+    }
 }
 
 /// Emits an unconditional jump for the reflection runtime-class dispatch.
@@ -277,4 +352,3 @@ pub(super) fn reflection_interface_extends_interface(
         .iter()
         .any(|parent| reflection_interface_extends_interface(ctx, parent, target_interface))
 }
-

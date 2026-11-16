@@ -1,8 +1,6 @@
 ---
 title: "image_type_to_mime_type() - internals"
 description: "Compiler internals for image_type_to_mime_type(): lowering path, type checks, and runtime helpers."
-sidebar:
-  order: 455
 ---
 
 ## `image_type_to_mime_type()` - internals
@@ -10,7 +8,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`crates/elephc-builtin-contract/src/catalog_data.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-builtin-contract/src/catalog_data.rs)
-- **Lowering**: [`src/image_prelude.rs`:3666](https://github.com/illegalstudio/elephc/blob/main/src/image_prelude.rs#L3666) (`image_type_to_mime_type`)
+- **Lowering**: [`src/image_prelude.rs`](https://github.com/illegalstudio/elephc/blob/main/src/image_prelude.rs) (`image_type_to_mime_type`)
 - **Function symbol**: `image_type_to_mime_type()`
 
 

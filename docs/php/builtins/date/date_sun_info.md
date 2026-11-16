@@ -1,8 +1,6 @@
 ---
 title: "date_sun_info()"
 description: "Returns the sunrise, sunset, and twilight times for a day and location."
-sidebar:
-  order: 209
 ---
 
 ## date_sun_info()
@@ -22,8 +20,9 @@ Returns the sunrise, sunset, and twilight times for a day and location.
 
 ## Availability
 
-- **Compiled (AOT)**: supported through the Elephc compiler.
-- **`eval()` (magician interpreter)**: supported through the procedural date/time alias dispatcher.
+| Compiled (AOT) | Magician (eval) |
+|---|---|
+| Available | Available |
 
 _No examples yet. Check `examples/` and `showcases/` for usage patterns._
 

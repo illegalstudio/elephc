@@ -116,6 +116,25 @@ pub(in crate::interpreter) fn set_scope_cell(
     result
 }
 
+/// Marks an in-place write in the scope that actually owns the visible binding.
+pub(in crate::interpreter) fn mark_scope_binding_changed(
+    context: &mut ElephcEvalContext, scope: &mut ElephcEvalScope, name: &str,
+) -> Result<(), EvalStatus> {
+    if let Some(global) = eval_superglobal_scope(context, scope, name) {
+        unsafe { global.as_mut() }.ok_or(EvalStatus::RuntimeFatal)?.mark_reference_changed(name);
+    } else if let Some(global_name) = scope.global_alias_target(name).map(str::to_string) {
+        let global = context.global_scope_ptr().ok_or(EvalStatus::RuntimeFatal)?;
+        if global == scope as *mut ElephcEvalScope {
+            scope.mark_reference_changed(&global_name);
+        } else {
+            unsafe { global.as_mut() }.ok_or(EvalStatus::RuntimeFatal)?.mark_reference_changed(&global_name);
+        }
+    } else {
+        scope.mark_reference_changed(name);
+    }
+    Ok(())
+}
+
 /// Applies a validated write without repeating the destination's contract checks.
 fn set_scope_cell_unchecked(
     context: &mut ElephcEvalContext, scope: &mut ElephcEvalScope, name: String,
@@ -123,21 +142,13 @@ fn set_scope_cell_unchecked(
 ) -> Result<Vec<RuntimeCellHandle>, EvalStatus> {
     if let Some(reference) = visible_scope_cell(context, scope, &name) {
         if values.is_reference(reference)? {
-            if reference == cell { return Ok(Vec::new()); }
+            if reference == cell {
+                mark_scope_binding_changed(context, scope, &name)?;
+                return Ok(Vec::new());
+            }
             let previous = values.reference_replace(reference, cell)?;
             context.copy_array_metadata(cell, reference);
-            if let Some(global) = eval_superglobal_scope(context, scope, &name) {
-                unsafe { global.as_mut() }.ok_or(EvalStatus::RuntimeFatal)?.mark_reference_changed(&name);
-            } else if let Some(global_name) = scope.global_alias_target(&name).map(str::to_string) {
-                let global = context.global_scope_ptr().ok_or(EvalStatus::RuntimeFatal)?;
-                if global == scope as *mut ElephcEvalScope {
-                    scope.mark_reference_changed(&global_name);
-                } else {
-                    unsafe { global.as_mut() }.ok_or(EvalStatus::RuntimeFatal)?.mark_reference_changed(&global_name);
-                }
-            } else {
-                scope.mark_reference_changed(&name);
-            }
+            mark_scope_binding_changed(context, scope, &name)?;
             let mut released = vec![previous];
             if ownership == ScopeCellOwnership::Owned { released.push(cell); }
             return Ok(released);

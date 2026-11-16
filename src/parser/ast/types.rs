@@ -40,7 +40,7 @@ pub struct TypeParam {
     ///
     /// Read by the variance check, which demotes a PHPDoc variance marker the declaration
     /// breaks to invariant (php-src never enforces one) instead of rejecting the file, and by
-    /// `crate::generics::dispatch`, which erases a PHPDoc template's class parameters from its
+    /// `crate::generics::erasure`, which erases a PHPDoc template's class parameters from its
     /// dynamically dispatched methods. Native parameters keep both checks strict.
     /// Excluded from equality, so an annotated declaration and its native spelling stay the
     /// same AST.
@@ -66,7 +66,8 @@ impl Eq for TypeParam {}
 /// Under monomorphization `Box<Dog>` and `Box<Animal>` are two real classes, so it is a
 /// statement about two of them — and it holds only where they share storage, which is why
 /// `Box<Dog>` may widen to `Box<Animal>` (both fields are pointers) while `Box<int>` may not
-/// widen to `Box<mixed>` (a register against a boxed tagged cell). See `.plans/generics.md`.
+/// widen to `Box<mixed>` (a register against a boxed tagged cell). See
+/// `docs/beyond-php/generics.md` for the storage-compatible variance contract.
 pub enum Variance {
     /// The default: `Box<Dog>` and `Box<Animal>` are unrelated.
     #[default]

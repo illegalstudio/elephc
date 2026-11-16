@@ -1,8 +1,6 @@
 ---
 title: "mysqli_get_server_version()"
 description: "Returns the server version as an integer."
-sidebar:
-  order: 135
 ---
 
 ## mysqli_get_server_version()
@@ -20,8 +18,9 @@ Returns the server version as an integer.
 
 ## Availability
 
-- **Compiled (AOT)**: supported through an injected elephc-PHP prelude.
-- **`eval()` (magician interpreter)**: not available inside eval'd code.
+| Compiled (AOT) | Magician (eval) |
+|---|---|
+| Available | Not available yet |
 
 _No examples yet. Check `examples/` and `showcases/` for usage patterns._
 

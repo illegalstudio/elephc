@@ -45,7 +45,7 @@ fn emit_aarch64(emitter: &mut Emitter) {
     emitter.instruction("mov x10, sp");                                         // address this invocation's handler record
     abi::emit_store_reg_to_symbol(emitter, "x10", "_exc_handler_top", 0);
     emitter.instruction(&format!("add x0, sp, #{TRY_HANDLER_JMP_BUF_OFFSET}")); // address the handler's opaque jump buffer
-    emitter.bl_c("setjmp");                                                     // catch escaping PHP throws inside the native collector loop
+    emitter.save_exception_handler();                                           // catch escaping PHP throws inside the native collector loop
     emitter.instruction("cbnz x0, __rt_gc_destructor_caught");                  // resume here rather than bypassing pins and collector flags
     emitter.instruction(&format!("ldr x0, [sp, #{receiver}]"));                 // recover the snapshot-owned receiver for normal destructor dispatch
     emitter.instruction("bl __rt_call_object_destructor");                      // execute user code with the local exception boundary installed
@@ -107,7 +107,7 @@ fn emit_x86_64(emitter: &mut Emitter) {
     emitter.instruction(&format!("lea r10, [rbp - {frame}]"));                  // address the complete handler record
     abi::emit_store_reg_to_symbol(emitter, "r10", "_exc_handler_top", 0);
     emitter.instruction(&format!("lea rdi, [rbp - {}]", frame - TRY_HANDLER_JMP_BUF_OFFSET)); // pass the handler's opaque jump buffer to libc
-    emitter.bl_c("setjmp");                                                     // contain PHP throws below the surviving collector activation
+    emitter.save_exception_handler();                                           // contain PHP throws below the surviving collector activation
     emitter.instruction("test eax, eax");                                       // distinguish a throw from the initial boundary setup
     emitter.instruction("jnz __rt_gc_destructor_caught");                       // catch without skipping collector cleanup
     emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // recover the snapshot-owned receiver
@@ -162,7 +162,7 @@ mod tests {
             let mut emitter = Emitter::new(target);
             emit_gc_exception_helpers(&mut emitter);
             let asm = emitter.output();
-            assert!(asm.find(&target.extern_symbol("setjmp")).unwrap() < asm.find("__rt_call_object_destructor").unwrap(), "{name}");
+            assert!(asm.find(&target.extern_symbol("_setjmp")).unwrap() < asm.find("__rt_call_object_destructor").unwrap(), "{name}");
             let catch = asm.split("__rt_gc_destructor_caught:\n").nth(1).unwrap();
             assert!(catch.find("_gc_pending_throw").unwrap() < catch.find("__rt_exception_chain").unwrap(), "{name}");
             assert!(asm.contains("_rt_diag_suppression") && asm.contains("_exc_call_frame_top"), "{name}");

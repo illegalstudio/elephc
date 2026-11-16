@@ -31,11 +31,11 @@ fn gc_incoming_cache_all_targets_define_unique_edge_helpers() {
             assert!(labels.contains("__rt_gc_eval_object_children_count_all"), "{name}, pic={pic}");
             if name == "linux-x86_64" {
                 assert!(assembly.contains("__rt_gc_collect_cycles_cache_init:"));
-                assert!(assembly.contains("cmp QWORD PTR [rbp - 48], 8191"));
+                assert!(assembly.contains("cmp QWORD PTR [rbp - 48], 4095"));
                 assert!(assembly.contains("jne __rt_gc_collect_cycles_root_compare"));
                 assert!(assembly.contains("add DWORD PTR [rax - 8], 524288"));
-                assert!(assembly.contains("cmp r10d, 8191"));
-                assert!(assembly.contains("mov rcx, 0xffffffff0007ffff"));
+                assert!(assembly.contains("cmp r10d, 4095"));
+                assert!(assembly.contains("mov rcx, 0xffffffff8007ffff"));
             } else {
                 assert!(!assembly.contains("__rt_gc_collect_cycles_cache_init:"));
                 assert!(assembly.contains("bl __rt_gc_note_child_ref"));

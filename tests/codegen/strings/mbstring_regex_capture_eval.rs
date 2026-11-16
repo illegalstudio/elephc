@@ -157,8 +157,7 @@ catch (ArgumentCountError $error) { echo $error->getMessage(), "\n"; }
         "bool(true)\nbool(true)\nint(7)\nbool(true)\nA\n",
         "mb_ereg(): Argument #1 ($pattern) must not be empty\nint(9)\nextra\n",
         "mb_ereg() expects at most 3 arguments, 4 given\n"));
-    assert_eq!(output.stderr,
-        "Warning: mb_ereg(): Argument #3 ($matches) must be passed by reference, value given\n".repeat(3));
+    assert_eq!(normalize_diagnostic_text(&output.stderr), "Warning: mb_ereg(): Argument #3 ($matches) must be passed by reference, value given\n".repeat(3));
 }
 
 /// Releases the original temporary output before capture initialization can invoke its destructor.
@@ -186,8 +185,7 @@ echo "done\n";
     assert!(output.success, "{}", output.stderr);
     assert_eq!(output.stdout, concat!("old\nbool(true)\nold\ncallback capture\nold\n",
         "mb_ereg(): Argument #1 ($pattern) must not be empty\ndone\n"));
-    assert_eq!(output.stderr,
-        "Warning: mb_ereg(): Argument #3 ($matches) must be passed by reference, value given\n".repeat(3));
+    assert_eq!(normalize_diagnostic_text(&output.stderr), "Warning: mb_ereg(): Argument #3 ($matches) must be passed by reference, value given\n".repeat(3));
 }
 
 /// Balances temporary callback wrappers and explicit call-array reference pins on success and errors.

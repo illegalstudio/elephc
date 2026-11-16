@@ -25,7 +25,11 @@ use crate::codegen_support::abi;
 ///
 /// All four helpers are no-ops when the active flags do not include `JSON_PRETTY_PRINT`
 /// (flag bit 128), leaving buffer state and depth unchanged.
+///
+/// Also emits the two JSON output-buffer entry points, `__rt_json_buf_ensure` and
+/// `__rt_json_buf_append` (see [`emit_json_buf_helpers`]).
 pub(crate) fn emit_json_pretty_helpers(emitter: &mut Emitter) {
+    emit_json_buf_helpers(emitter);
     if emitter.target.arch == Arch::X86_64 {
         emit_json_pretty_helpers_x86_64(emitter);
         return;
@@ -151,4 +155,59 @@ fn emit_json_pretty_helpers_x86_64(emitter: &mut Emitter) {
     emitter.instruction("add r11, 1");                                          // advance past the separator space
     emitter.label("__rt_json_pretty_colon_space_done_x");
     emitter.instruction("ret");                                                 // return r11 as the updated write pointer
+}
+
+/// Bytes every JSON output-buffer reservation keeps free beyond the caller's own request.
+///
+/// A container encoder writes a handful of punctuation bytes between reservations, and hands
+/// the scratch at its cursor to `__rt_itoa` (21 bytes) and `__rt_json_encode_float` (at most
+/// 27) before it can measure what they produced. 80 bounds all of that; the pretty-print line
+/// (`1 + 4 × depth` bytes) is added on top at run time from `_json_indent_depth`.
+const JSON_BUF_HEADROOM: usize = 80;
+
+/// Emits `__rt_json_buf_ensure` and `__rt_json_buf_append`, the JSON encoders' entry points
+/// into the shared `__rt_strbuf_*` output buffer.
+///
+/// Both add [`JSON_BUF_HEADROOM`] plus the current pretty-print indentation width to the
+/// caller's request and tail-jump to `__rt_strbuf_ensure` / `__rt_strbuf_append`, so after
+/// either call an encoder may write its separators, one pretty-print line, and run one scalar
+/// formatter without another check.
+///
+/// - `__rt_json_buf_ensure`: `x0`/`rdi` = descriptor, `x1`/`rsi` = bytes about to be written.
+/// - `__rt_json_buf_append`: `x0`/`rdi` = descriptor, `x1`/`rsi` = slice pointer,
+///   `x2`/`rdx` = slice length.
+///
+/// Both return the cursor in `x11`/`r11`.
+fn emit_json_buf_helpers(emitter: &mut Emitter) {
+    emitter.blank();
+    emitter.comment("--- runtime: json_buf_helpers ---");
+    match emitter.target.arch {
+        Arch::AArch64 => {
+            emitter.label_global("__rt_json_buf_ensure");
+            abi::emit_load_symbol_to_reg(emitter, "x9", "_json_indent_depth", 0);
+            emitter.instruction("lsl x9, x9, #2");                              // four spaces per pretty-print level
+            emitter.instruction("add x1, x1, x9");                              // room for one indented line on top of the request
+            emitter.instruction(&format!("add x1, x1, #{}", JSON_BUF_HEADROOM)); // room for separators and one scalar formatter
+            emitter.instruction("b __rt_strbuf_ensure");                        // grow through the shared output buffer
+
+            emitter.label_global("__rt_json_buf_append");
+            abi::emit_load_symbol_to_reg(emitter, "x9", "_json_indent_depth", 0);
+            emitter.instruction("lsl x9, x9, #2");                              // four spaces per pretty-print level
+            emitter.instruction(&format!("add x3, x9, #{}", JSON_BUF_HEADROOM)); // headroom kept free after the appended slice
+            emitter.instruction("b __rt_strbuf_append");                        // copy through the shared output buffer
+        }
+        Arch::X86_64 => {
+            emitter.label_global("__rt_json_buf_ensure");
+            abi::emit_load_symbol_to_reg(emitter, "r8", "_json_indent_depth", 0);
+            emitter.instruction("shl r8, 2");                                   // four spaces per pretty-print level
+            emitter.instruction(&format!("lea rsi, [rsi + r8 + {}]", JSON_BUF_HEADROOM)); // room for one indented line, separators, and one scalar formatter
+            emitter.instruction("jmp __rt_strbuf_ensure");                      // grow through the shared output buffer
+
+            emitter.label_global("__rt_json_buf_append");
+            abi::emit_load_symbol_to_reg(emitter, "rcx", "_json_indent_depth", 0);
+            emitter.instruction("shl rcx, 2");                                  // four spaces per pretty-print level
+            emitter.instruction(&format!("add rcx, {}", JSON_BUF_HEADROOM));    // headroom kept free after the appended slice
+            emitter.instruction("jmp __rt_strbuf_append");                      // copy through the shared output buffer
+        }
+    }
 }

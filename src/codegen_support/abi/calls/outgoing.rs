@@ -249,7 +249,8 @@ fn materialize_outgoing_args_with_layout(
             | PhpType::Callable
             | PhpType::Object(_)
             | PhpType::Packed(_)
-            | PhpType::Pointer(_) => {
+            | PhpType::Pointer(_)
+            | PhpType::Narrow(_) => {
                 emit_load_temporary_stack_slot(
                     emitter,
                     int_arg_reg_name(emitter.target, assignment.start_reg),

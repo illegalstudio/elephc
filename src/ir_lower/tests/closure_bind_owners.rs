@@ -326,9 +326,9 @@ echo $bound();
     }
 }
 
-/// A receiver loaded from global Mixed storage is detached before the runtime binder sees it.
+/// A global receiver snapshot is validated by the backend before the runtime binder sees it.
 #[test]
-fn suspended_generator_bind_unboxes_global_receiver_on_every_target() {
+fn suspended_generator_bind_validates_global_receiver_on_every_target() {
     let source = r#"<?php
 class Vault {
     private string $code = "old";
@@ -370,28 +370,14 @@ $generator->next();
             .iter()
             .find(|instruction| instruction.op == Op::ClosureBind)
             .unwrap_or_else(|| panic!("{name}: runtime closure bind was emitted"));
-        let mut receiver = bind.operands[1];
-        while let Some(producer) = generator.instructions.iter().find(|instruction| {
-            instruction.result == Some(receiver)
-                && matches!(instruction.op, Op::Acquire | Op::Borrow)
-        }) {
-            receiver = producer.operands[0];
-        }
-        let extraction = generator
-            .instructions
-            .iter()
-            .find(|instruction| instruction.result == Some(receiver))
-            .unwrap_or_else(|| panic!("{name}: bound receiver has a producer"));
+        let receiver = bind.operands[1];
         assert_eq!(
-            extraction.op,
-            Op::MixedUnbox,
-            "{name}: the binder receives the object payload, not its Mixed cell",
+            generator.value(receiver).unwrap().php_type.codegen_repr(),
+            PhpType::Mixed,
+            "{name}: the backend validates the rooted object/null snapshot before binding",
         );
-        assert_eq!(
-            extraction.result_php_type,
-            PhpType::Object("Vault".to_string()),
-            "{name}: explicit scope supplies the detached receiver representation",
-        );
+        assert!(matches!(bind.immediate, Some(Immediate::ClosureBindScope(Some(_)))),
+            "{name}: runtime closure selection retains the requested Vault visibility");
         crate::codegen::generate_user_asm_from_ir(&module, false, false)
             .unwrap_or_else(|error| panic!("{name}: {error:?}"));
     }

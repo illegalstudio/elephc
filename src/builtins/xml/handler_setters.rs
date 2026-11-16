@@ -218,7 +218,7 @@ fn check_handler_closure_shape(
     hints: &[PhpType],
     span: crate::span::Span,
 ) -> Result<(), CompileError> {
-    if variadic.is_some() {
+    if variadic.as_deref().is_some_and(|name| name != crate::func_args::HIDDEN_ARGS_PARAM) {
         return Err(CompileError::new(
             span,
             &format!(
@@ -229,7 +229,7 @@ fn check_handler_closure_shape(
     }
     let required = params
         .iter()
-        .filter(|(_, _, default, _)| default.is_none())
+        .filter(|(name, _, default, _)| name != crate::func_args::HIDDEN_ARGC_PARAM && default.is_none())
         .count();
     if required > hints.len() {
         return Err(CompileError::new(

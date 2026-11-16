@@ -31,6 +31,60 @@ pub(super) fn emit_reflection_constant_value_as_mixed(
             crate::codegen::enum_singletons::emit_lazy_case_load(ctx, enum_name, case_name);
             emit_box_current_value_as_mixed(ctx.emitter, &PhpType::Object(enum_name.clone()));
         }
+        ReflectionConstantValue::Evaluated { value, enum_cases } => {
+            for (enum_name, case_name) in enum_cases {
+                crate::codegen::enum_singletons::emit_lazy_case_load(ctx, enum_name, case_name);
+            }
+            emit_reflection_constant_value_as_mixed(ctx, value);
+        }
+        ReflectionConstantValue::Array(elements) => {
+            emit_reflection_constant_array_to_result(ctx, elements);
+            emit_box_current_owned_value_as_mixed(
+                ctx.emitter,
+                &PhpType::Array(Box::new(PhpType::Mixed)),
+            );
+        }
+        ReflectionConstantValue::AssocArray(entries) => {
+            emit_reflection_constant_assoc_array_to_result(ctx, entries);
+            emit_box_current_owned_value_as_mixed(
+                ctx.emitter,
+                &PhpType::AssocArray {
+                    key: Box::new(PhpType::Mixed),
+                    value: Box::new(PhpType::Mixed),
+                },
+            );
+        }
+    }
+}
+
+/// Allocates and populates an indexed array whose slots hold boxed constant values.
+pub(super) fn emit_reflection_constant_array_to_result(
+    ctx: &mut FunctionContext<'_>,
+    elements: &[ReflectionConstantValue],
+) {
+    emit_reflection_mixed_array_allocation(ctx, elements.len());
+    abi::emit_push_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
+    for element in elements {
+        emit_reflection_constant_value_as_mixed(ctx, element);
+        append_reflection_mixed_array_default_element(ctx);
+    }
+    abi::emit_pop_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
+}
+
+/// Allocates and populates an associative array whose values hold boxed constant values.
+///
+/// The per-entry push is consumed by `emit_reflection_assoc_array_default_insert` (it pops
+/// the stacked array pointer into the hash-set register), so the loop is stack-balanced
+/// without a final pop, unlike the indexed emitter whose append helper re-pushes.
+pub(super) fn emit_reflection_constant_assoc_array_to_result(
+    ctx: &mut FunctionContext<'_>,
+    entries: &[ReflectionConstantAssocEntry],
+) {
+    emit_reflection_assoc_array_to_result(ctx, &PhpType::Mixed, entries.len());
+    for entry in entries {
+        abi::emit_push_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
+        emit_reflection_constant_value_as_mixed(ctx, &entry.value);
+        emit_reflection_assoc_array_default_insert(ctx, &entry.key);
     }
 }
 
@@ -40,6 +94,18 @@ pub(super) fn emit_reflection_default_value_as_mixed(
     value: &ReflectionParameterDefaultValue,
 ) {
     match value {
+        ReflectionParameterDefaultValue::EnumCase(value) => {
+            for (enum_name, case_name) in &value.evaluated {
+                crate::codegen::enum_singletons::emit_lazy_case_load(ctx, enum_name, case_name);
+            }
+            emit_box_current_value_as_mixed(ctx.emitter, &PhpType::Object(value.enum_name.clone()));
+        }
+        ReflectionParameterDefaultValue::Evaluated { value, enum_cases } => {
+            for (enum_name, case_name) in enum_cases {
+                crate::codegen::enum_singletons::emit_lazy_case_load(ctx, enum_name, case_name);
+            }
+            emit_reflection_default_value_as_mixed(ctx, value);
+        }
         ReflectionParameterDefaultValue::Int(value) => {
             emit_boxed_int_literal_to_result(ctx, *value)
         }
@@ -162,7 +228,7 @@ pub(super) fn emit_reflection_assoc_array_default_to_result(
     ctx: &mut FunctionContext<'_>,
     entries: &[ReflectionDefaultAssocEntry],
 ) {
-    emit_empty_assoc_array_literal_to_result(ctx, &PhpType::Mixed);
+    emit_reflection_assoc_array_to_result(ctx, &PhpType::Mixed, entries.len());
     for entry in entries {
         abi::emit_push_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
         emit_reflection_default_value_as_mixed(ctx, &entry.value);
@@ -215,7 +281,8 @@ pub(super) fn emit_reflection_default_array_key_aarch64(
             abi::emit_load_int_immediate(ctx.emitter, "x2", -1);
         }
         ReflectionDefaultArrayKey::Str(value) => {
-            let (key_label, key_len) = ctx.data.add_string(value.as_bytes());
+            let bytes = elephc_builtin_contract::string_literal::literal_bytes(value);
+            let (key_label, key_len) = ctx.data.add_string(&bytes);
             abi::emit_symbol_address(ctx.emitter, "x1", &key_label);
             abi::emit_load_int_immediate(ctx.emitter, "x2", key_len as i64);
         }
@@ -233,7 +300,8 @@ pub(super) fn emit_reflection_default_array_key_x86_64(
             abi::emit_load_int_immediate(ctx.emitter, "rdx", -1);
         }
         ReflectionDefaultArrayKey::Str(value) => {
-            let (key_label, key_len) = ctx.data.add_string(value.as_bytes());
+            let bytes = elephc_builtin_contract::string_literal::literal_bytes(value);
+            let (key_label, key_len) = ctx.data.add_string(&bytes);
             abi::emit_symbol_address(ctx.emitter, "rsi", &key_label);
             abi::emit_load_int_immediate(ctx.emitter, "rdx", key_len as i64);
         }
@@ -259,40 +327,6 @@ pub(super) fn emit_reflection_constant_hash_insert(ctx: &mut FunctionContext<'_>
         }
         Arch::X86_64 => {
             ctx.emitter.instruction("mov rcx, rax");                            // pass the boxed Reflection constant value as the hash payload
-            ctx.emitter.instruction("xor r8, r8");                              // boxed Mixed hash payloads do not use the high word
-            abi::emit_pop_reg(ctx.emitter, "rdi");
-            abi::emit_symbol_address(ctx.emitter, "rsi", &key_label);
-            abi::emit_load_int_immediate(ctx.emitter, "rdx", key_len as i64);
-            abi::emit_load_int_immediate(
-                ctx.emitter,
-                "r9",
-                runtime_value_tag(&PhpType::Mixed) as i64,
-            );
-            abi::emit_call_label(ctx.emitter, "__rt_hash_set");
-        }
-    }
-}
-
-/// Inserts the current boxed Mixed static-property value into the stacked associative array.
-#[rustfmt::skip]
-pub(super) fn emit_reflection_static_property_hash_insert(ctx: &mut FunctionContext<'_>, key: &str) {
-    let (key_label, key_len) = ctx.data.add_string(key.as_bytes());
-    match ctx.emitter.target.arch {
-        Arch::AArch64 => {
-            ctx.emitter.instruction("mov x3, x0");                              // pass the boxed Reflection static value as the hash payload
-            ctx.emitter.instruction("mov x4, xzr");                             // boxed Mixed hash payloads do not use the high word
-            abi::emit_pop_reg(ctx.emitter, "x0");
-            abi::emit_symbol_address(ctx.emitter, "x1", &key_label);
-            abi::emit_load_int_immediate(ctx.emitter, "x2", key_len as i64);
-            abi::emit_load_int_immediate(
-                ctx.emitter,
-                "x5",
-                runtime_value_tag(&PhpType::Mixed) as i64,
-            );
-            abi::emit_call_label(ctx.emitter, "__rt_hash_set");
-        }
-        Arch::X86_64 => {
-            ctx.emitter.instruction("mov rcx, rax");                            // pass the boxed Reflection static value as the hash payload
             ctx.emitter.instruction("xor r8, r8");                              // boxed Mixed hash payloads do not use the high word
             abi::emit_pop_reg(ctx.emitter, "rdi");
             abi::emit_symbol_address(ctx.emitter, "rsi", &key_label);

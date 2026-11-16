@@ -5,6 +5,227 @@ Releases are listed newest first.
 
 ## [Unreleased]
 
+## [0.27.8] - 2026-11-13
+
+- Added SimpleXML in compiled and `eval()` code, including live document views, XPath, namespaces, subclass hooks and DOM interoperability through the managed libxml2 package.
+- Added the complete selected-profile mysqli function, class, method and constant surface, including TLS, reference-bound statements, streamed results, asynchronous queries and client statistics.
+- Added the OpenSSL 3.6.4 default-provider symmetric-cipher catalog, including authenticated encryption, through the managed `openssl-crypto` package.
+- Added HAVAL, Tiger, Snefru, GOST, MurmurHash3 and xxHash variants to the hashing bridge.
+- Added a guarded bytecode execution path for eligible runtime `eval()` fragments, with cached executable bodies and an explicit call stack.
+- Added managed native-package requirements to `--print-capabilities`, allowing packaged bridge probes to prepare their dependencies automatically.
+- Added complete development downloads for the latest main commit, including the compiler, bridge archives, checksums and provenance.
+- Improved integer accumulators and nested loop counters by keeping eligible values and seeds out of heap boxes while preserving overflow-to-float behavior.
+- Reduced allocations in checked arithmetic stored into integer properties, passed to float parameters, or used in numeric identity and null comparisons.
+- Improved typed-array fills, reductions and callbacks, plus string, multibyte, encoding, JSON, hashing and scalar builtin hot paths.
+- Improved element writes through typed and inferred array properties by mutating their separated container in place while preserving copy-on-write and destructor visibility.
+- Reduced object-hash iteration allocations and automatic cycle-collection work after leaf unsets, with collection budgets proportional to heap size.
+- Reduced compilation cost for opaque eval programs and deeply nested array literals by sharing operator dispatch and callable metadata.
+- Changed benchmark PHP baselines to require OPcache and tracing JIT, reporting unavailable JIT configurations explicitly.
+- Reduced allocations in eligible variadic `min()` and `max()` results, including numeric winners from runtime-typed arguments.
+- Reduced integer `foreach` key allocations by reusing exclusively owned cells while preserving copied keys.
+- Improved loops using local packed element views by hoisting buffer descriptors and forwarding record addresses.
+- Fixed variadic `min()` and `max()` preserving the winning argument's value and type, including mixed operands, ties, NaN and signed zero; heterogeneous argument lists now infer `mixed`.
+- Fixed loose comparisons and `switch` dispatch for booleans, iterable arrays, objects and NaN/null, preserving warning-handler mutations, exceptions and callable identity.
+- Fixed scalar `??` and `?:` results with null defaults losing nullability, including typed-array misses, literals and property writes.
+- Fixed local values being read through stale storage types after divergent branches, switches, loop breaks and continues.
+- Fixed sparse integer and static string-key array writes losing keys or filling gaps with zeroes, while retaining packed storage for proven dense writes.
+- Fixed typed array builders, subclass elements and hash-foreach appends losing their declared layout, and converted list arguments to declared `array<K, V>` parameter storage.
+- Fixed typed local and array-element writeback through broader by-reference parameters, preserving value validation, argument order and cleanup.
+- Fixed enum-case property defaults and their Reflection values, including scoped aliases, constant expressions and lazy branches.
+- Fixed valid function-body errors being discarded during checker recovery, including functions reached through callbacks and first-class callables.
+- Fixed lazily initialized nullable object locals remaining nullable after their initialization guard.
+- Fixed loop counters reseeded from non-null packed fields being rejected after intervening control flow.
+- Fixed dynamic method results, `__call` forwarding and catchable errors on non-object receivers, including user methods named like Fiber state predicates.
+- Fixed complete, fresh declaring-class reflectors across compiled and eval code, enum reflector identity, typed member collections and public mirror reference storage.
+- Fixed leaks in throwing property setters, generated array keys, coalesced writes and scalar branch merges.
+- Fixed literal scalar `settype()` calls on mixed locals losing mutations or retaining replaced values across loops and shared storage.
+- Fixed native mbstring and iconv shortcuts bypassing argument checks, callbacks, live encoding settings, regex limits or observable state updates.
+- Fixed `trim()`, `ltrim()` and `rtrim()` character-range expansion and invalid-range warnings in compiled and eval code.
+- Fixed PHP regex delimiters beyond slash and braced `${n}` replacement backreferences.
+- Fixed Linux x86_64 interface dispatch corrupting fifth and sixth argument words, including string arguments.
+- Fixed x86_64 web workers losing host registers across handler calls, and enabled per-request `--heap-debug` reports under `--web`.
+- Fixed nested array-property appends emitting a missing-key warning for silently created buckets while preserving warnings from key expressions.
+- Fixed autoload-only Random, BCMath, GMP and timezone-list usage missing its prelude, including namespaced global function fallback.
+- Fixed recursive iterator traversal, Countable return validation, object projections in recursive array merges and SimpleXML stream-wrapper failures.
+- Fixed property-backed reference views and ownership becoming stale across compiled and runtime eval boundaries.
+- Fixed managed native downloads failing on transient GitHub release errors by retrying the exact verified release asset through the public API.
+- Security: updated bundled SQLite to 3.54.1, addressing the crafted database/WAL information disclosure described by CVE-2026-119375.
+
+## [0.27.7] - 2026-11-03
+
+- Added `--emit phpext` to export functions, final classes and selected constants as real PHP 8.5 NTS/ZTS extensions on Linux x86_64/ARM64 and macOS ARM64.
+- Added `elephc extension` commands to build and statically link supported PECL, PIE and local C extensions, including their classes, callbacks, constants and INI settings.
+- Added opt-in persistent web applications with `--web-lifecycle=application` in worker isolation, bootstrapping once per worker while preserving application state across fresh requests.
+- Added GMP arbitrary-precision integers, including all 51 functions, operators, casts and serialization in compiled and `eval()` code, backed by the managed `gmp` package.
+- Added PHP fileinfo functions and `finfo` in compiled and `eval()` code, using the managed `libmagic` package with its database embedded in the binary.
+- Added PHP Random engines and `Random\Randomizer`, seeded procedural generators, secure random bytes, and associative and multi-key `array_rand()` support.
+- Added `token_get_all()`, `token_name()`, `PhpToken` and PHP 8.5 token constants in compiled and `eval()` code, with byte-preserving tokens and catchable `TOKEN_PARSE` errors.
+- Added `memory_get_usage()`, `memory_get_peak_usage()` and `memory_reset_peak_usage()`, plus elephc-only allocation/free counters, in compiled and `eval()` code.
+- Added PHP 8.5 `array_first()` and `array_last()` in compiled code, returning values in insertion order without moving the internal pointer.
+- Added `array_push()` support for associative receivers, preserving automatic integer keys, copy-on-write and the updated count.
+- Added string-offset assignment for concrete string locals and boxed storage, including negative offsets, space padding, copy-on-write and assignment-expression results.
+- Added whole packed-record copies between compatible buffer elements, including embedded records and padding.
+- Added nested native pointer types such as `ptr<ptr<u8>>` and typed pointer buffers for C output parameters.
+- Changed native-width generic specializations to accept PHP `int` and `float` values while retaining element widths and conversions in buffer storage.
+- Added assignment expressions inside runtime `eval()` call arguments, conditions and returns.
+- Changed the default runtime heap from 8 MB to 128 MB, with unused pages left untouched.
+- Improved small-block allocation and reuse with exact size classes, splitting and consolidation before reporting heap exhaustion.
+- Improved buffer-heavy code by hoisting stable object-buffer reads across numeric accumulators and inlining checked scalar accessors, packed writers and throwing guards.
+- Improved reused, nested and dynamically bounded numeric loops with guarded integer paths while preserving overflow-to-float behavior.
+- Reduced arithmetic allocations at integer destinations and in numeric comparisons and casts by retaining eligible values in scalar or stack storage.
+- Reduced generated code for short-circuit conditions and runtime `eval()` calls by branching directly and sharing equivalent callable invokers.
+- Reduced per-request overhead by skipping unobservable `$_ENV` copies and reusing mbstring INI string-identity metadata.
+- Reduced unnecessary automatic cycle collection after callback-free array unsets that remove no key.
+- Improved uncaught exception reports with user-frame stack traces and previous exception chains, and corrected backtrace call-site locations.
+- Improved dead-code optimization in generators while preserving generator identity when their last `yield` becomes unreachable.
+- Reduced compilation work for statically known `eval()` callables with literal source.
+- Fixed nullable fallback assignments and compound guards losing proven value types across control flow, including typed returns and property arguments.
+- Fixed catch-variable and global rebinding cleanup, preserving replacement values and reachable outer handlers when displaced owners throw.
+- Fixed `foreach` value/key binding order and ownership across iterator callbacks, reference aliases and throwing destructors.
+- Fixed nullable integer closure captures losing their null flag and guarded local reads misinterpreting nullable or reference storage.
+- Fixed optimization dropping output, exceptions, argument checks or catch-only stores around static calls, including lexical and late-static dispatch.
+- Fixed `array_intersect_key()` and `array_diff_key()` result hashes leaking after use.
+- Fixed callable descriptors and Fiber wrappers losing generator classification, defaults, declared return types, deprecation and by-reference return metadata.
+- Fixed web handlers crashing after successful JSON responses in pool and per-request isolation by preserving host registers through request reset and cleanup.
+- Fixed destructors being skipped for objects retained only by reference cycles at program or web-request shutdown.
+- Fixed calls returning borrowed string parameters or builtin string views freeing the caller's source string.
+- Fixed subclass-only methods and properties after `instanceof` narrowing, preserving dynamic dispatch and ownership of call arguments and results.
+- Fixed `stream_select()` crashing on null descriptor sets, including nullable arrays.
+- Fixed predefined Core attributes on promoted constructor parameters being assigned to unsupported property or parameter targets, including Reflection metadata.
+- Fixed guarded readonly `$this` property types being lost across calls when the property cannot change.
+- Fixed runtime buffer overruns and truncated or corrupted large-output operations, including printing, JSON, serialization, regex replacements, shell output, string transforms and numeric formatting.
+- Fixed ownership tracing through closure captures, native containers and suspended Generator/Fiber frames, including cycle collection and `finally` cleanup of abandoned coroutines.
+- Fixed leaks and premature frees in scalar casts, array probes, method arguments, nullable static objects, stream filters and converted array/hash builtins.
+- Fixed `preg_replace_callback()` leaking private buffers and match owners when callbacks throw, while preserving retained matches and the original exception.
+- Fixed `var_dump()` and `print_r()` ignoring computed `__debugInfo()`, including nested output, invalid returns and exceptions.
+- Fixed JSON handling of malformed UTF-8 and long number tokens, including substitute and ignore recovery.
+- Fixed regex failure return values, invalid `preg_match_all()` flags, capture preservation on failed `preg_match()`, and extended-mode modifiers and leading verbs.
+- Fixed element unsets through supported instance and static array properties, preserving keys, copy-on-write, ArrayAccess callbacks and readonly checks.
+- Fixed captured closures passed to extern C callbacks using the wrong entry point, and released retained callback descriptors at shutdown and request reset.
+- Fixed untyped closure parameters being treated as integers and by-reference variadic writes or named arguments corrupting caller storage.
+- Fixed magic property reads and `isset()`/`empty()`/`??` on boxed receivers, preserving accessor selection and evaluating coalescing receivers once.
+- Fixed heterogeneous hash writes and indexed arrays promoted to hashes, preserving runtime value types, keys and printed or serialized output.
+- Fixed static associative-property element writes being lost when a key or value expression reassigns the property.
+- Fixed Reflection array constants and parameter defaults, preserving nested values, PHP key rules, binary strings and constant names; class array defaults are resolved before typed metadata.
+- Fixed Reflection public property views and supported subclass initialization, keeping compiler backing slots hidden and metadata protected from writes.
+- Fixed guarded interface receivers losing concrete property and method types during reads, writes, probes and unsets.
+- Fixed typed instance and static properties passed to by-reference user calls, including constructors, nullsafe calls and supported variadic arguments.
+- Fixed standalone `null` parameter and return declarations, keeping their return requirements distinct from `void`.
+- Fixed runtime class checks for nullable or false-valued object arguments and preserved eval-declared class names in compiled diagnostics.
+- Fixed generic class and function specializations disappearing behind terminal statements or failing through include dispatch, including `elephc test` suites.
+- Fixed string casts of stored missing typed-array elements, producing real empty strings without losing ownership through loops and calls.
+- Fixed multi-case `switch` statements with `case null` on non-pointer subjects, preserving PHP loose-comparison rules.
+- Fixed ordering and spaceship comparisons between strings and `mixed` values being rejected after type narrowing.
+- Fixed array literals containing method results from dynamically dispatched receivers being stamped with an unrelated integer type.
+- Fixed incomplete-class identity checks and Linux x86_64 dumps of objects created by restricted `unserialize()`.
+- Fixed explicit visibility scopes for runtime-selected `Closure::bind()` and `bindTo()` calls, preserving bound copies and callback operand lifetimes.
+- Fixed `sort()` and `rsort()` on float arrays, including stable signed-zero ordering and PHP-compatible `NAN` placement; inconsistent comparator loops now terminate.
+- Fixed reserved words inside qualified namespace names in compiled and `eval()` code.
+
+## [0.27.6] - 2026-10-25
+
+- Added C-width integer and floating-point storage for packed fields and `buffer<T>` elements, with natural C alignment and width-preserving reads and writes.
+- Added arrays and hashes of pointers and packed-record addresses, including nullable elements, iteration, spreads, and array mutation.
+- Added arrays, hashes, and variadic parameters of buffer handles.
+- Added static `buffer<T>`, `ptr`, and `ptr<T>` properties, including buffer element and packed-field access.
+- Added `buffer_ptr()` to pass scalar, width-specific, and packed buffer payloads to C; available in compiled and `eval()` code.
+- Added extern `?string` parameters and returns so C NULL strings map to PHP `null`.
+- Added PHP relative `namespace\` names in compiled and `eval()` code.
+- Added relational string comparisons with PHP numeric-string ordering, preserving exact large-integer comparisons and byte ordering for nonnumeric pairs.
+- Improved statically bound method calls through direct final-class dispatch and inlining of eligible small methods, including nested calls, property writes, and string construction.
+- Improved buffer access by reusing stable property reads and record addresses, hoisting eligible property-buffer loops, and removing proven redundant bounds checks and float spills.
+- Reduced allocations for scalar buffer element `++` and `--`, including narrow integer and floating-point buffers.
+- Improved bounded numeric loops, including resolved method calls, reused counter names, checked bounds, and counters seeded from another proven counter.
+- Reduced allocations in typed numeric reductions and arithmetic chains by reusing nonescaping stack cells.
+- Reduced argument allocations for eligible direct numeric closure calls while preserving overflow promotion and callable identity.
+- Reduced protected-cleanup overhead by avoiding signal-mask saves at internal exception boundaries while preserving explicit PHP signal-mask changes.
+- Reduced string copying in `substr()` and `strpos()` when later arguments cannot invalidate the subject.
+- Reduced compilation work for eval-heavy programs, large autoloaded class trees, and nested array spreads.
+- Changed positioned error and warning messages to include the source filename, including diagnostics in the entry file.
+- Fixed unnecessary array copies and ownership errors in appends and mutations through boxed, reference-bound, or captured locals.
+- Fixed type predicates failing to compile for tagged nullable scalar parameters.
+- Fixed numeric locals that promote from integer to float inside a loop being read back with the previous integer representation.
+- Fixed whole-element writes through instance buffer properties and initialization of readonly buffer and pointer properties.
+- Fixed `buffer_new<T>()` rejecting integer-arithmetic lengths; runtime lengths must convert exactly to a nonnegative in-range integer.
+- Fixed self-referential and forward-declared packed pointer fields, packed-record addresses used as pointers, and extern declarations inside braced namespaces.
+- Fixed nullable pointer values and locals that alternate between null and record addresses, preserving pointer access, null checks, calls, and returns.
+- Fixed branch merges and array literals losing buffer handles, scalar element types, packed/extern field types, or nullsafe short-circuit behavior.
+- Fixed packed and extern scalar field stores receiving boxed values, with catchable type checks and balanced cleanup instead of storing box addresses or coercing invalid values.
+- Fixed missing typed-array elements losing their null value in lazy merges and returns, including nullable receiver reads and their cleanup.
+- Fixed `array_reverse()`, `array_shift()`, `array_unshift()`, and `rsort()` on mixed-valued associative arrays, preserving numeric-key rules, copies, and value ownership.
+- Fixed null-valued assignment expressions being treated as true, and corrected sorting, shuffle, and array-walk results to return booleans.
+- Fixed `declare(strict_types=1)` after complete leading top-level declare statements, preserving declaration scope and rejecting invalid placement.
+- Fixed use-after-free and cleanup errors when transient strings or string-offset bytes pass through calls, stores, comparisons, and throwing expressions.
+- Fixed `unserialize()` duplicate-key references reading freed values and object hydration leaking replaced property defaults.
+- Fixed destructors that invoke methods or callables crashing during exception unwinding, and generator state corrupted by nested method calls.
+- Fixed stale buffer aliases in `eval()` accessing freed or reused storage; eval buffers now use generation-checked handles.
+- Fixed owned merge temporaries leaking when a match or ternary result is returned as a declared array or iterable.
+- Fixed `preg_replace_callback()` crashing on an empty subject on Linux x86_64.
+- Fixed anonymous classes in included files, source-location collisions between autoloaded classes, missing preludes used only by autoloaded classes, and narrowed method variadic storage.
+- Fixed Reflection callable and parameter string dumps, inherited prototypes and defaults, and union member ordering in compiled and `eval()` code.
+- Fixed inferred all-null array returns from user functions failing to compile or being misread after appending a non-null value.
+
+## [0.27.5] - 2026-10-21
+
+- Security: blocked session-file injection through `--web` upload-progress keys and filenames, which could cause a later `session_start()` to hydrate attacker-supplied objects; `php` and `php_binary` readers also refuse `php_serialize` files.
+- Security: cleared request-scoped state between `--web` worker and pool requests to prevent use-after-free and stale output buffers, including state recreated by cleanup destructors.
+- Changed `extern class` fields to use natural C sizes and alignment (**breaking** for `bool`, now one byte), with narrow integer and `f32` fields and reads/writes through typed pointers.
+- Improved function-local loops by keeping boxed counters as integers when every update is proven to stay in range.
+- Improved local numeric reductions by storing nonescaping checked arithmetic results in stack cells instead of allocating on the heap.
+- Improved `buffer<T>` loops by resolving stable handles outside the loop and sharing repeated packed-element addresses, while preserving bounds and stale-handle diagnostics.
+- Fixed pointer concatenation, interpolation, casts, and `printf` formatting to use consistent hexadecimal addresses, including scratch-buffer overruns and truncated digits on Linux x86_64.
+- Fixed packed and extern class names in class-member signatures, including `buffer<T>` and `ptr<T>` properties, promoted parameters, method signatures, and generic type arguments.
+- Fixed nested packed record reads, writes, compound assignments, and whole-record copies through buffers and typed pointers, including forward declarations and namespaced pointer targets.
+
+## [0.27.4] - 2026-10-21
+
+- Changed extern C integer handling (**breaking**): `int`/`i64` now preserve 64-bit values, and explicit signed/unsigned 8-, 16-, 32-, and 64-bit widths control argument and return conversion; declarations for C `int` and `unsigned` must use `i32` and `u32`.
+- Added `f32` extern function parameters and returns for C `float`, with single-precision rounding and widening at the ABI boundary; `f64` aliases the existing `float` declaration for C `double`.
+- Added `ptr_read_f32()`, `ptr_write_f32()`, `ptr_read_f64()`, and `ptr_write_f64()` for floating-point memory access in compiled and `eval()` code.
+- Added PHP `strip_tags()` in compiled and `eval()` code, with string or array allow-lists and PHP-compatible handling of comments and PHP tags.
+- Added immutable `BcMath\Number` objects with decimal methods, arithmetic and comparison operators, serialization, and matching native-object behavior in `eval()`.
+- Added missing PHP 8.5 Core classes and constants, including `WeakReference`, `WeakMap`, `Serializable`, `ErrorException`, enum interfaces, and runtime `PHP_BINARY`, in compiled and `eval()` code.
+- Added a pay-for-use DOM HTML fragment walker for Termwind-style rendering, including `DOMDocument::loadHTML()`, node traversal, attributes, and `saveXML()`; this remains an HTML-only subset.
+- Added `JSON_UNESCAPED_LINE_TERMINATORS` and `JSON_ERROR_NON_BACKED_ENUM`, with corresponding line-separator and enum encoding behavior, including enum `JsonSerializable` overrides, in compiled and `eval()` code.
+- Added `elephc test` to compile and run native test suites, with Composer test autoloading, a PHPUnit-compatible assertion subset, data providers, per-test process isolation and timeouts, filtering, and JUnit reports.
+- Added Developer ID signing and required Apple notarization for macOS release and nightly binaries before packaging and publication.
+- Added bounded-stack lowering for eligible direct self- and mutually tail-recursive scalar functions, preserving each public entry point and argument evaluation order.
+- Reduced duplicate code and immutable data for equivalent generic instantiations while preserving nominal identities and callable contracts, and added `--report-generics`.
+- Improved eligible same-local string append by reusing unique capacity and growing geometrically while preserving copy-on-write for shared values.
+- Improved numeric loops by calling proven closure targets directly and transferring fresh boxed arithmetic results instead of cloning them.
+- Reduced dynamic `eval()` setup and scope-sync costs by sharing immutable native catalogs, synchronizing only directly accessed scalar names when safe, and skipping escape scans before foreign callable metadata is present.
+- Improved packed-array growth and scalar writes by extending unique heap-tail allocations in place and using a shorter path for unique in-bounds `int`, `float`, and `bool` slots.
+- Reduced heap and cleanup overhead by reusing small split remainders, avoiding protected release for proven scalar cells and empty indexed arrays, and skipping string-identity lookup for Mixed wrappers.
+- Improved Linux x86_64 cycle collection with cached incoming-edge counts and an exact fallback when those counts saturate.
+- Reduced mbstring bridge and executable size by sharing one immutable encoding catalog instead of duplicating codec tables.
+- Improved JSON parsing by deferring source-location scans until an error and avoiding legacy string decoding for non-string tokens.
+- Reduced startup costs for eligible short numeric dynamic `eval()` fragments by deferring native catalog initialization, with guarded fallback and a bounded deferral budget.
+- Reduced allocations for boxed add/subtract/multiply and increment/decrement by borrowing constant integer operands while keeping results independently owned.
+- Reduced heap-release and `gc_mem_caches()` overhead by skipping free-list tail scans when a freed block cannot reach the heap frontier.
+- Improved `json_decode()` memory use for integer arrays by keeping initial signed 64-bit values packed and widening to mixed storage only when needed.
+- Reduced native string-append metadata allocations by reusing unique unresolved mbstring origins, while preserving replacement behavior for shared, resolved, and literal origins.
+- Reduced compilation work and generated code for literal `eval()` fragments by retaining only the declarations and builtin surfaces they can reach, with conservative fallback for runtime source and dynamic lookups.
+- Security: updated `webpki-roots` to `1.0.10` and `rustls-webpki` to `0.103.16` to reject distrusted emSign certificate paths, addressing RUSTSEC-2026-0381 and RUSTSEC-2026-0382.
+- Fixed property and parameter defaults to bind `self::` and `parent::` in their declaring or trait-consuming scope, defer catchable default errors until use, and preserve those defaults in Reflection and `eval()`; invalid late-static property defaults are rejected.
+- Fixed literal `false` and `null` parameter contracts across inherited methods and runtime callables so invalid arguments raise `TypeError` before coercion or receiver mutation.
+- Fixed `(array)` casts of scalar, string, null, packed-array, mixed, and union values, including returns declared as `array`.
+- Fixed by-reference `foreach` so elements appended after yielding the current tail are visited, including after hash growth.
+- Fixed `unserialize()` accepting values that violate declared property types; mismatches now raise catchable `TypeError` with declaring-class diagnostics and balanced cleanup.
+- Fixed asymmetric setter visibility, readonly writes and `??=` behavior, property override validation, and Reflection modifier filtering in compiled and `eval()` code.
+- Fixed write-only array appends in assignment expressions, compound writes, and prefix/postfix increments, preserving sparse keys, evaluation order, and invalid-read diagnostics.
+- Fixed object writes through named, lexical, and late-static property receivers, preserving RHS ordering, nested append ownership, and catchable null-write errors.
+- Fixed leaks in nullable and mixed-receiver property writes, including Stringable sources and cleanup when destructors throw.
+- Fixed `json_decode()` retaining construction owners, temporary keys, and source arguments, including cleanup of partial graphs before throwing.
+- Fixed `array_unshift()` through references freeing packed-array storage still owned by a value copy, including when prepending multiple values or growing the array.
+- Fixed prefix increment and decrement of static array elements, including `self::`, `parent::`, and `static::` receivers, string values, computed keys, and copy-on-write aliases.
+- Fixed nested array writes and updates to create missing parents, preserve key and RHS evaluation order, handle false-to-array diagnostics and throwing handlers, and dispatch appended object children through `ArrayAccess` without losing ownership.
+- Fixed enum metadata and validation for imported trait constants, declaration-order Reflection, final and abstract methods, lexical magic constants, and trait/interface method contracts.
+- Fixed enum interface calls to bind the selected implementation's names and defaults, preserve unpacked and variadic arguments, check types before coercion, and transfer compatible returned references; interface adapters also honor added optional parameters.
+- Fixed boxed `iterable` argument ownership and reference-return rebinding, so payloads stay alive and replacement aliases remain visible when cleanup throws, including repeated bindings in loops.
+- Fixed stream notification callbacks in heterogeneous literal parameter arrays being lost behind compiler temporaries, including named arguments and conditional entries inside `try` blocks.
+- Fixed buffer overruns when encoding large top-level indexed-array trees containing integers by sizing and allocating the complete JSON output before writing.
+- Fixed extern C `bool` returns using unspecified upper register bits, which could turn an ABI-valid false into true on AArch64 and x86_64.
+
 ## [0.27.3] - 2026-10-15
 
 - Added `elephc repl`, an interactive PHP session driven by `eval()` that keeps variables, references, functions, classes, and constants between submissions, with multiline input, line editing, history, and a cached native host.
@@ -769,7 +990,12 @@ Releases are listed newest first.
 ## [0.1.0] - 2026-03-22
 - Initial compiler: echo, variables, integers, arithmetic and string concatenation, comparison operators, control flow (`if`/`while`/`for`/`break`/`continue`), functions, logical/assignment/increment operators.
 
-[Unreleased]: https://github.com/illegalstudio/elephc/compare/v0.27.3...HEAD
+[Unreleased]: https://github.com/illegalstudio/elephc/compare/v0.27.8...HEAD
+[0.27.8]: https://github.com/illegalstudio/elephc/compare/v0.27.7...v0.27.8
+[0.27.7]: https://github.com/illegalstudio/elephc/compare/v0.27.6...v0.27.7
+[0.27.6]: https://github.com/illegalstudio/elephc/compare/v0.27.5...v0.27.6
+[0.27.5]: https://github.com/illegalstudio/elephc/compare/v0.27.4...v0.27.5
+[0.27.4]: https://github.com/illegalstudio/elephc/compare/v0.27.3...v0.27.4
 [0.27.3]: https://github.com/illegalstudio/elephc/compare/v0.27.2...v0.27.3
 [0.27.2]: https://github.com/illegalstudio/elephc/compare/v0.27.1...v0.27.2
 [0.27.1]: https://github.com/illegalstudio/elephc/compare/v0.27.0...v0.27.1

@@ -91,7 +91,17 @@ use std::sync::atomic::{AtomicU64, Ordering};
 /// BUMPED TO 20 to combine deferred-default errors with main's caller-scope access mask.
 /// BUMPED TO 21 to combine those deferred-default errors with retained readonly setter
 /// contracts, generic declarations, and caller-scope access masks from both branches.
-pub(crate) const FORMAT_VERSION: u32 = 21;
+/// BUMPED TO 22 because retained generic token streams now include ReservedNameHead.
+/// Older token variant indexes must not be decoded as this layout.
+/// Format 23 on the SimpleXML branch added array casts to EvalIR.
+/// Format 24 retained method reference-return flags and dimension-write statements.
+/// Format 23 on main added assignment expressions. Format 25 combines those distinct
+/// serialized layouts, so neither branch's earlier entries can decode as this build.
+/// Format 26 adds property update expressions and preserves computed property name staging.
+/// Format 27 combines SimpleXML property updates with native variable increment statements.
+/// Format 28 records bytecode-backed function metadata in the conservative source guard,
+/// even though serde omits the executable cache from the stored payload.
+pub(crate) const FORMAT_VERSION: u32 = 28;
 
 /// Identifies the writer, so one build never reads another's entries.
 ///

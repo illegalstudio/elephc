@@ -482,12 +482,18 @@ impl IntrinsicCall {
         INTRINSICS[self.spec_index].runtime_helper
     }
 
-    /// Lists visible boxed argument positions whose owners the SPL helper consumes.
+    /// Identifies static runtime helpers whose ABI omits PHP's hidden called-class word.
+    pub fn omits_called_class_id(self) -> bool {
+        matches!(self.kind, IntrinsicCallKind::FiberSuspend | IntrinsicCallKind::FiberGetCurrent)
+    }
+
+    /// Lists visible boxed argument positions whose owners the runtime helper consumes.
     /// Offset readers release their index cells, while writers also consume stored values.
     pub fn consumed_mixed_parameters(self) -> &'static [usize] {
         use IntrinsicCallKind::*;
         match self.kind {
-            SplDllPush | SplDllUnshift | SplQueueEnqueue
+            FiberResume | FiberSuspend
+            | SplDllPush | SplDllUnshift | SplQueueEnqueue
             | SplDllOffsetExists | SplDllOffsetGet | SplDllOffsetUnset
             | SplFixedOffsetExists | SplFixedOffsetGet | SplFixedOffsetUnset => &[0],
             SplDllAdd => &[1],

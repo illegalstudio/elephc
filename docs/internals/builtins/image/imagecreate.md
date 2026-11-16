@@ -1,8 +1,6 @@
 ---
 title: "imagecreate() - internals"
 description: "Compiler internals for imagecreate(): lowering path, type checks, and runtime helpers."
-sidebar:
-  order: 486
 ---
 
 ## `imagecreate()` - internals
@@ -10,7 +8,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`crates/elephc-builtin-contract/src/catalog_data.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-builtin-contract/src/catalog_data.rs)
-- **Lowering**: [`src/image_prelude.rs`:2210](https://github.com/illegalstudio/elephc/blob/main/src/image_prelude.rs#L2210) (`imagecreate`)
+- **Lowering**: [`src/image_prelude.rs`](https://github.com/illegalstudio/elephc/blob/main/src/image_prelude.rs) (`imagecreate`)
 - **Function symbol**: `imagecreate()`
 
 

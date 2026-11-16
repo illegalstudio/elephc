@@ -441,7 +441,7 @@ echo implode(",", $a), "\n";
 fn test_array_splice_replacement_rebound_away_from_the_receiver_is_not_snapshotted() {
     let out = compile_and_run(
         r#"<?php
-$a = [1,2,3]; $b = &$a; $x = 9; $b = &$x; array_splice($a, 1, 1, $b); echo implode(",",$a), "\n";
+$a = [1,2,3]; $b = &$a; echo $b[0], "|"; $x = 9; $b = &$x; array_splice($a, 1, 1, $b); echo implode(",",$a), "\n";
 $c = [1,2,3]; $d = &$c; $other = [7,8]; $d = &$other; array_splice($c, 1, 1, $d); echo implode(",",$c), "|", implode(",",$other), "\n";
 $e = [1,2,3]; $f = &$e; $spare = [0]; $f = &$spare; $f = &$e; array_splice($e, 1, 1, $f); echo implode(",",$e), "\n";
 "#,
@@ -449,7 +449,7 @@ $e = [1,2,3]; $f = &$e; $spare = [0]; $f = &$spare; $f = &$e; array_splice($e, 1
     assert_eq!(
         out,
         concat!(
-            "1,9,3\n",
+            "1|1,9,3\n",
             "1,7,8,3|7,8\n",
             "1,1,2,3,3\n",
         )

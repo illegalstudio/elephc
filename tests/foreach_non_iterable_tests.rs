@@ -150,10 +150,21 @@ fn union_probe(pick_len: usize) -> String {
 fn assert_skipped_with_warning(bin: &Path, type_name: &str) {
     let (stdout, stderr) = run_binary(bin);
     assert_eq!(stdout, "before\nafter\n", "loop body must not run");
+    let source_path = bin.with_extension("php");
+    let source = fs::read_to_string(&source_path).expect("fixture source");
+    let line = source
+        .lines()
+        .position(|line| line.contains("foreach ("))
+        .map(|index| index + 1)
+        .expect("fixture has a foreach");
+    let path = fs::canonicalize(&source_path).expect("canonical fixture source");
     assert_eq!(
         stderr,
-        format!("{WARNING_PREFIX}{type_name} given\n"),
-        "runtime warning must match reference PHP's message body"
+        format!(
+            "\n{WARNING_PREFIX}{type_name} given in {} on line {line}\n",
+            path.display()
+        ),
+        "runtime warning must match reference PHP's message and caller location"
     );
 }
 
@@ -300,9 +311,13 @@ fn statements_after_the_loop_still_run() {
     let (bin, _) = compile(&dir, source, "sequence_probe");
     let (stdout, stderr) = run_binary(&bin);
     assert_eq!(stdout, "one\ntwo\nthree=7\nfour\n");
+    let source_path = fs::canonicalize(&dir).expect("canonical test dir").join("sequence_probe.php");
     assert_eq!(
         stderr,
-        format!("{WARNING_PREFIX}false given\n{WARNING_PREFIX}int given\n")
+        format!(
+            "\n{WARNING_PREFIX}false given in {path} on line 4\n\n{WARNING_PREFIX}int given in {path} on line 6\n",
+            path = source_path.display()
+        )
     );
 }
 

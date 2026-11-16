@@ -11,6 +11,44 @@
 use super::*;
 use crate::ir::{Effects, Immediate, Op};
 
+/// A generator's eager parameter validation remains a throwing barrier for catch liveness.
+#[test]
+fn generator_calls_include_eager_validator_effects() {
+    let module = lower_source(r#"<?php
+function guardedXmlGenerator(SimpleXMLElement $node): Generator { yield 1; }
+function guardXmlProbe(SimpleXMLElement $root): void {
+    $missing = $root->missing->child;
+    $state = 0;
+    try { $state = 1; guardedXmlGenerator($missing); $state = 2; }
+    catch (TypeError $error) { echo $state; }
+}
+guardXmlProbe(new SimpleXMLElement('<r/>'));
+"#);
+    let probe = module.functions.iter().find(|function| function.name == "guardXmlProbe").unwrap();
+    assert!(named_call(probe, &module, "guardedXmlGenerator").effects.contains(Effects::MAY_THROW));
+}
+
+/// Both direct and visibility-bypassing static stores retain their catchable refusal effects.
+#[test]
+fn native_static_stores_keep_throw_effects() {
+    let module = lower_source(r#"<?php
+class XmlEffectBox { public static SimpleXMLElement $node; }
+function directXmlStore(SimpleXMLElement $root): void { XmlEffectBox::$node = $root->missing->child; }
+function reflectedXmlStore(SimpleXMLElement $root): void {
+    $property = new ReflectionProperty(XmlEffectBox::class, 'node');
+    $property->setValue(null, $root->missing->child);
+}
+$root = new SimpleXMLElement('<r/>');
+try { directXmlStore($root); } catch (TypeError $error) {}
+try { reflectedXmlStore($root); } catch (TypeError $error) {}
+"#);
+    for (name, op) in [("directXmlStore", Op::StoreStaticProperty), ("reflectedXmlStore", Op::StoreReflectionStaticProperty)] {
+        let function = module.functions.iter().find(|function| function.name == name).unwrap();
+        let store = function.instructions.iter().find(|instruction| instruction.op == op).unwrap();
+        assert!(store.effects.contains(Effects::MAY_THROW | Effects::WRITES_GLOBAL));
+    }
+}
+
 /// Static calls use the inherited implementation's summary and keep visible side effects.
 #[test]
 fn static_calls_receive_inherited_effect_summaries() {
@@ -28,7 +66,7 @@ echo Child::relay();
     let main = module.functions.iter().find(|function| function.name == "main").unwrap();
     for (name, expected) in [
         ("Child::pure", Effects::PURE),
-        ("Child::noisy", Effects::OUTPUT),
+        ("Child::noisy", Effects::OUTPUT | Effects::MAY_THROW),
     ] {
         let call = main.instructions.iter().find(|instruction| {
             instruction.op == Op::StaticMethodCall
@@ -39,7 +77,7 @@ echo Child::relay();
     }
     let relay = module.class_methods.iter().find(|function| function.name == "Base::relay").unwrap();
     let forwarding = relay.instructions.iter().find(|instruction| instruction.op == Op::StaticMethodCall).unwrap();
-    assert_eq!(forwarding.effects, Op::StaticMethodCall.default_effects());
+    assert_eq!(forwarding.effects, Effects::PURE);
 }
 
 /// Returns the named direct-call instruction from one lowered function.
@@ -118,10 +156,7 @@ echo noisy_len("b");
     let noisy = named_call(main, &module, "noisy_len");
 
     assert_eq!(pure.effects, Effects::PURE);
-    assert_eq!(
-        noisy.effects,
-        Effects::OUTPUT
-    );
+    assert_eq!(noisy.effects, Effects::OUTPUT | Effects::MAY_THROW);
     assert!(!pure.effects.contains(Effects::READS_FS));
     assert!(!pure.effects.contains(Effects::MAY_THROW));
 }
@@ -333,4 +368,32 @@ function relay(LockedBox $box): int { return reveal($box); }
             .any(|instruction| instruction.op == Op::ThrowException)
     );
     assert!(reveal_call.effects.contains(Effects::MAY_THROW));
+}
+
+/// Only unchanged concrete parameters make an extra receiver root non-destructing.
+#[test]
+fn receiver_root_summaries_keep_mutable_cleanup_conservative() {
+    let module = lower_source(r#"<?php
+class RootEffect {
+    public function value(int $argument): int { return $argument; }
+    public function __destruct() { echo "destroyed"; }
+}
+function stableRoot(RootEffect $value): int { return $value->value(1); }
+function mutableRoot(RootEffect $value): int {
+    return $value->value(($value = null) === null ? 1 : 0);
+}
+echo stableRoot(new RootEffect()), mutableRoot(new RootEffect());
+"#);
+    let main = module.functions.iter().find(|function| function.name == "main").unwrap();
+    let stable = named_call(main, &module, "stableRoot");
+    let mutable = named_call(main, &module, "mutableRoot");
+    assert!(!stable.effects.contains(Effects::READS_FS));
+    assert!(!stable.effects.contains(Effects::WRITES_PROCESS));
+    assert!(mutable.effects.contains(Effects::READS_FS));
+    assert!(mutable.effects.contains(Effects::OUTPUT));
+    let function = module.functions.iter().find(|function| function.name == "stableRoot").unwrap();
+    let releases = function.instructions.iter()
+        .filter(|instruction| instruction.op == Op::ReleaseLocalSlot).collect::<Vec<_>>();
+    assert!(!releases.is_empty());
+    assert!(releases.iter().all(|instruction| instruction.effects == Effects::all()));
 }

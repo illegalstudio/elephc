@@ -26,6 +26,11 @@ pub(in crate::interpreter) fn eval_persistent_variable_reference(
             promote_array_reference_variable(target_scope, &name, context, values)?
         },
         EvalReferenceTarget::Cell { cell } if values.is_reference(cell)? => cell,
+        target if reference_target_has_object_root(&target) => {
+            let Some(cell) = scope.visible_cell(local) else { return Ok(None); };
+            if !values.is_reference(cell)? { return Ok(None); }
+            cell
+        },
         _ => return Ok(None),
     };
     if scope.visible_cell(local) != Some(reference) {
@@ -92,5 +97,14 @@ pub(in crate::interpreter) fn persistent_reference_target(mut target: EvalRefere
             },
             _ => return Ok(target),
         }
+    }
+}
+
+/// Identifies property-backed parameters whose call-local reference cell can safely escape.
+pub(in crate::interpreter) fn reference_target_has_object_root(target: &EvalReferenceTarget) -> bool {
+    match target {
+        EvalReferenceTarget::ObjectProperty { .. } => true,
+        EvalReferenceTarget::NestedArrayElement { array_target, .. } => reference_target_has_object_root(array_target),
+        _ => false,
     }
 }

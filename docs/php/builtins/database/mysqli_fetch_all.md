@@ -1,8 +1,6 @@
 ---
 title: "mysqli_fetch_all()"
 description: "Returns every remaining row of a result at once."
-sidebar:
-  order: 115
 ---
 
 ## mysqli_fetch_all()
@@ -21,8 +19,9 @@ Returns every remaining row of a result at once.
 
 ## Availability
 
-- **Compiled (AOT)**: supported through an injected elephc-PHP prelude.
-- **`eval()` (magician interpreter)**: not available inside eval'd code.
+| Compiled (AOT) | Magician (eval) |
+|---|---|
+| Available | Not available yet |
 
 _No examples yet. Check `examples/` and `showcases/` for usage patterns._
 

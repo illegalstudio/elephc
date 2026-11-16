@@ -46,13 +46,18 @@ try { missing_runtime(G::A, ['a' => 1]); } catch (ArgumentCountError $e) { echo 
             for local in roots.iter().filter(|local|
                 local.php_type == PhpType::Str && local.kind == LocalKind::OwnedTemp)
             {
-                let publish = function.instructions.iter().position(|instruction|
-                    instruction.op == Op::PushCallOperandOwner
-                        && instruction.immediate == Some(Immediate::LocalSlot(local.id))).unwrap();
-                assert!(function.instructions[..publish].iter().any(|instruction|
-                    instruction.op == Op::ZeroLocalSlot
-                        && instruction.immediate == Some(Immediate::LocalSlot(local.id))),
-                    "{target}: initialize store-free string result before publishing its owner");
+                let (block, publish) = function.blocks.iter().find_map(|block| {
+                    block.instructions.iter().position(|id| {
+                        let instruction = function.instruction(*id).unwrap();
+                        instruction.op == Op::PushCallOperandOwner
+                            && instruction.immediate == Some(Immediate::LocalSlot(local.id))
+                    }).map(|position| (block, position))
+                }).unwrap();
+                assert!(block.instructions[..publish].iter().any(|id| {
+                    let instruction = function.instruction(*id).unwrap();
+                    matches!(instruction.op, Op::ZeroLocalSlot | Op::StoreLocal)
+                        && instruction.immediate == Some(Immediate::LocalSlot(local.id))
+                }), "{target}: initialize every string owner before publishing it, including argument copies");
             }
         }
     }

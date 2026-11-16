@@ -1,8 +1,6 @@
 ---
 title: "usort()"
 description: "Sorts an array by values using a user-defined comparison function."
-sidebar:
-  order: 71
 ---
 
 ## usort()
@@ -21,8 +19,9 @@ Sorts an array by values using a user-defined comparison function.
 
 ## Availability
 
-- **Compiled (AOT)**: supported by the Elephc code generator.
-- **`eval()` (magician interpreter)**: supported through a declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/array/usort.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/array/usort.rs)).
+| Compiled (AOT) | Magician (eval) |
+|---|---|
+| Available | Available |
 
 _No examples yet. Check `examples/` and `showcases/` for usage patterns._
 

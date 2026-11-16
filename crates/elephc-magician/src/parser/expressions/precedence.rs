@@ -17,6 +17,62 @@ impl Parser {
         self.parse_keyword_or()
     }
 
+    /// Continues a statement-level keyword logical expression from an already parsed left side.
+    ///
+    /// `$x = true and false;` binds as `($x = true) and false;` because assignment binds
+    /// tighter than `and`. The statement parser consumes the assignment itself, so it resumes
+    /// here with the assignment expression as the left operand.
+    pub(in crate::parser) fn parse_keyword_logical_from(
+        &mut self,
+        expr: EvalExpr,
+    ) -> Result<EvalExpr, EvalParseError> {
+        let expr = self.parse_keyword_and_from(expr)?;
+        let expr = self.parse_keyword_xor_from(expr)?;
+        self.parse_keyword_or_from(expr)
+    }
+
+    /// Parses the `and` tail after an already parsed left operand.
+    fn parse_keyword_and_from(&mut self, mut expr: EvalExpr) -> Result<EvalExpr, EvalParseError> {
+        while matches!(self.current(), TokenKind::Ident(name) if ident_eq(name, "and")) {
+            self.advance();
+            let right = self.parse_assignment()?;
+            expr = EvalExpr::Binary {
+                op: EvalBinOp::LogicalAnd,
+                left: Box::new(expr),
+                right: Box::new(right),
+            };
+        }
+        Ok(expr)
+    }
+
+    /// Parses the `xor` tail after an already parsed left operand.
+    fn parse_keyword_xor_from(&mut self, mut expr: EvalExpr) -> Result<EvalExpr, EvalParseError> {
+        while matches!(self.current(), TokenKind::Ident(name) if ident_eq(name, "xor")) {
+            self.advance();
+            let right = self.parse_keyword_and()?;
+            expr = EvalExpr::Binary {
+                op: EvalBinOp::LogicalXor,
+                left: Box::new(expr),
+                right: Box::new(right),
+            };
+        }
+        Ok(expr)
+    }
+
+    /// Parses the `or` tail after an already parsed left operand.
+    fn parse_keyword_or_from(&mut self, mut expr: EvalExpr) -> Result<EvalExpr, EvalParseError> {
+        while matches!(self.current(), TokenKind::Ident(name) if ident_eq(name, "or")) {
+            self.advance();
+            let right = self.parse_keyword_xor()?;
+            expr = EvalExpr::Binary {
+                op: EvalBinOp::LogicalOr,
+                left: Box::new(expr),
+                right: Box::new(right),
+            };
+        }
+        Ok(expr)
+    }
+
     /// Parses PHP keyword `or`, whose precedence is lower than `xor`, `and`, and ternary.
     pub(in crate::parser) fn parse_keyword_or(&mut self) -> Result<EvalExpr, EvalParseError> {
         let mut expr = self.parse_keyword_xor()?;
@@ -47,12 +103,12 @@ impl Parser {
         Ok(expr)
     }
 
-    /// Parses PHP keyword `and`, whose precedence is lower than ternary and `&&`.
+    /// Parses PHP keyword `and`, whose precedence is lower than assignment and `&&`.
     pub(in crate::parser) fn parse_keyword_and(&mut self) -> Result<EvalExpr, EvalParseError> {
-        let mut expr = self.parse_ternary()?;
+        let mut expr = self.parse_assignment()?;
         while matches!(self.current(), TokenKind::Ident(name) if ident_eq(name, "and")) {
             self.advance();
-            let right = self.parse_ternary()?;
+            let right = self.parse_assignment()?;
             expr = EvalExpr::Binary {
                 op: EvalBinOp::LogicalAnd,
                 left: Box::new(expr),
@@ -60,6 +116,40 @@ impl Parser {
             };
         }
         Ok(expr)
+    }
+
+    /// Parses PHP's right-associative assignment expression.
+    ///
+    /// PHP places assignment below the ternary operators and above `and`/`xor`/`or`.
+    /// Variable assignments and property compound updates yield values in expression position.
+    /// Plain property, array-element and static-property stores keep their statement forms.
+    pub(in crate::parser) fn parse_assignment(&mut self) -> Result<EvalExpr, EvalParseError> {
+        let left = self.parse_ternary()?;
+        let Some(op) = assignment_op(self.current()) else {
+            return Ok(left);
+        };
+        if !matches!(left, EvalExpr::LoadVar(_))
+            && (op.is_none() || !matches!(left,
+                EvalExpr::PropertyGet { .. } | EvalExpr::DynamicPropertyGet { .. }))
+        {
+            return Ok(left);
+        }
+        self.advance();
+        let value = self.parse_assignment()?;
+        Ok(match left {
+            EvalExpr::LoadVar(name) => EvalExpr::Assign {
+                value: Box::new(assignment_value(&name, op, value)), name,
+            },
+            EvalExpr::PropertyGet { object, property } => EvalExpr::PropertyCompoundAssign {
+                object, property: Box::new(EvalExpr::Const(EvalConst::String(property))),
+                dynamic: false,
+                op: op.expect("compound property operator"), value: Box::new(value),
+            },
+            EvalExpr::DynamicPropertyGet { object, property } => EvalExpr::PropertyCompoundAssign {
+                object, property, dynamic: true, op: op.expect("compound property operator"), value: Box::new(value),
+            },
+            _ => unreachable!("validated expression assignment target"),
+        })
     }
 
     /// Parses PHP ternary expressions, including the short `expr ?: fallback` form.
@@ -347,6 +437,19 @@ impl Parser {
         self.parse_instanceof()
     }
 
+    /// Captures the property place represented by a prefix or postfix expression.
+    pub(in crate::parser) fn property_inc_dec_expression(
+        target: EvalExpr, increment: bool, prefix: bool,
+    ) -> Result<EvalExpr, EvalParseError> {
+        let (object, property, dynamic) = match target {
+            EvalExpr::PropertyGet { object, property } =>
+                (object, Box::new(EvalExpr::Const(EvalConst::String(property))), false),
+            EvalExpr::DynamicPropertyGet { object, property } => (object, property, true),
+            _ => return Err(EvalParseError::UnsupportedConstruct),
+        };
+        Ok(EvalExpr::PropertyIncDec { object, property, dynamic, increment, prefix })
+    }
+
     /// Returns the scalar cast target represented by the current `(type)` token window.
     pub(super) fn peek_scalar_cast_type(&self) -> Option<EvalCastType> {
         if !matches!(self.current(), TokenKind::LParen) {
@@ -358,7 +461,9 @@ impl Parser {
         if !matches!(self.tokens.get(self.pos + 2), Some(TokenKind::RParen)) {
             return None;
         }
-        if ident_eq(name, "int") || ident_eq(name, "integer") {
+        if ident_eq(name, "array") {
+            Some(EvalCastType::Array)
+        } else if ident_eq(name, "int") || ident_eq(name, "integer") {
             Some(EvalCastType::Int)
         } else if ident_eq(name, "float") || ident_eq(name, "double") || ident_eq(name, "real") {
             Some(EvalCastType::Float)

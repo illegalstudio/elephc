@@ -29,6 +29,8 @@ pub(crate) fn emit_array_value_type_stamp(
         PhpType::Union(_) => 7,
         PhpType::Void => 8,
         PhpType::Callable => 10,
+        // A `?ptr<T>` word: dynamic readers show 0 as PHP null and any other word as an integer.
+        PhpType::Pointer(_) => crate::codegen_support::sentinels::POINTER_ARRAY_VALUE_TYPE,
         _ => return,
     };
     match emitter.target.arch {

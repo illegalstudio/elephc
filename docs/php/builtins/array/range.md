@@ -1,8 +1,6 @@
 ---
 title: "range()"
 description: "Create an array containing a range of elements."
-sidebar:
-  order: 63
 ---
 
 ## range()
@@ -22,8 +20,9 @@ Create an array containing a range of elements.
 
 ## Availability
 
-- **Compiled (AOT)**: supported by the Elephc code generator.
-- **`eval()` (magician interpreter)**: supported through a declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/array/range.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/array/range.rs)).
+| Compiled (AOT) | Magician (eval) |
+|---|---|
+| Available | Available |
 
 _No examples yet. Check `examples/` and `showcases/` for usage patterns._
 

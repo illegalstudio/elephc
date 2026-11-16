@@ -77,12 +77,14 @@ pub fn emit_exit(emitter: &mut Emitter, code: u32) {
         (super::super::platform::Platform::MacOS, Arch::AArch64)
         | (super::super::platform::Platform::Linux, Arch::AArch64) => {
             emitter.instruction("bl __rt_ob_flush_all");                        // drain still-active output buffers to stdout before terminating
+            emit_exit_hook(emitter);
             emitter.instruction(&format!("mov x0, #{}", code));                 // load the requested process exit code into the ABI return register
             emitter.syscall(1);
         }
         (super::super::platform::Platform::Linux, Arch::X86_64) => {
             emitter.instruction("and rsp, -16");                                // realign the stack for the flush call (this path never returns)
             emitter.instruction("call __rt_ob_flush_all");                      // drain still-active output buffers to stdout before terminating
+            emit_exit_hook(emitter);
             emitter.instruction(&format!("mov edi, {}", code));                 // load the requested process exit code into the SysV first-argument register
             emitter.instruction("mov eax, 231");                                // Linux x86_64 syscall 231 = exit_group
             emitter.instruction("syscall");                                     // terminate the process through the Linux x86_64 syscall ABI
@@ -92,6 +94,26 @@ pub fn emit_exit(emitter: &mut Emitter, code: u32) {
         }
         (super::super::platform::Platform::Windows, _) => {
             panic!("Windows target is not yet supported (see issue #379)");
+        }
+    }
+}
+
+/// Calls the hosted-extension shutdown routine on a process-exit path, after output buffers are
+/// flushed and before the exit syscall; emits nothing for a program that hosts no extension.
+///
+/// The routine is a C function that preserves the callee-saved registers the callers rely on
+/// (`x19` / `rbx` carry the exit code across it), and the stack is already 16-byte aligned for
+/// the flush call that precedes it.
+pub fn emit_exit_hook(emitter: &mut Emitter) {
+    let Some(symbol) = emitter.exit_hook.clone() else {
+        return;
+    };
+    match emitter.target.arch {
+        Arch::AArch64 => {
+            emitter.instruction(&format!("bl {symbol}"));                       // run request and module shutdown of the hosted PHP extensions
+        }
+        Arch::X86_64 => {
+            emitter.instruction(&format!("call {symbol}"));                     // run request and module shutdown of the hosted PHP extensions
         }
     }
 }
@@ -163,6 +185,7 @@ pub fn emit_exit_with_result_reg(emitter: &mut Emitter) {
         | (super::super::platform::Platform::Linux, Arch::AArch64) => {
             emitter.instruction("mov x19, x0");                                 // stash the exit code in a callee-saved register (this path never returns)
             emitter.instruction("bl __rt_ob_flush_all");                        // drain still-active output buffers to stdout before terminating
+            emit_exit_hook(emitter);
             emitter.instruction("mov x0, x19");                                 // restore the exit code into the syscall argument register
             emitter.syscall(1);
         }
@@ -170,6 +193,7 @@ pub fn emit_exit_with_result_reg(emitter: &mut Emitter) {
             emitter.instruction("mov rbx, rax");                                // stash the exit code in a callee-saved register (this path never returns)
             emitter.instruction("and rsp, -16");                                // realign the stack for the flush call (this path never returns)
             emitter.instruction("call __rt_ob_flush_all");                      // drain still-active output buffers to stdout before terminating
+            emit_exit_hook(emitter);
             emitter.instruction("mov edi, ebx");                                // move the stashed return value into the SysV exit argument register
             emitter.instruction("mov eax, 231");                                // Linux x86_64 syscall 231 = exit_group
             emitter.instruction("syscall");                                     // terminate the process with the bridge return code

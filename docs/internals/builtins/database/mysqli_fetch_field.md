@@ -1,8 +1,6 @@
 ---
 title: "mysqli_fetch_field() - internals"
 description: "Compiler internals for mysqli_fetch_field(): lowering path, type checks, and runtime helpers."
-sidebar:
-  order: 119
 ---
 
 ## `mysqli_fetch_field()` - internals
@@ -10,7 +8,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`crates/elephc-builtin-contract/src/catalog_data.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-builtin-contract/src/catalog_data.rs)
-- **Lowering**: [`src/mysqli_prelude/build/procedural.rs`:1109](https://github.com/illegalstudio/elephc/blob/main/src/mysqli_prelude/build/procedural.rs#L1109) (`mysqli_fetch_field`)
+- **Lowering**: [`src/mysqli_prelude/build/procedural.rs`](https://github.com/illegalstudio/elephc/blob/main/src/mysqli_prelude/build/procedural.rs) (`mysqli_fetch_field`)
 - **Function symbol**: `mysqli_fetch_field()`
 
 

@@ -36,6 +36,7 @@ pub(super) fn reflection_property_metadata(
                 type_metadata.as_ref(),
             );
             Some(ReflectionOwnerMetadata {
+                rendered_to_string: None,
                 reflected_name: Some(property_name.clone()),
                 attr_names: info
                     .property_attribute_names
@@ -56,7 +57,6 @@ pub(super) fn reflection_property_metadata(
                 constant_names: Vec::new(),
                 constant_members: Vec::new(),
                 default_property_members: Vec::new(),
-                static_property_members: Vec::new(),
                 constant_reflection_members: Vec::new(),
                 enum_case_members: Vec::new(),
                 method_members: Vec::new(),

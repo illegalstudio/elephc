@@ -113,7 +113,6 @@ pub(super) fn index_is_foreach_int_key(ctx: &LoweringContext<'_, '_>, index: &Ex
 pub(super) fn int_case_value(expr: &Expr) -> Option<i64> {
     match &expr.kind {
         ExprKind::IntLiteral(value) => Some(*value),
-        ExprKind::BoolLiteral(value) => Some(i64::from(*value)),
         _ => None,
     }
 }

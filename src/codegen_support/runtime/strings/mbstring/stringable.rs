@@ -41,7 +41,7 @@ fn emit_aarch64(emitter: &mut Emitter) {
     emitter.instruction("mov x10, sp");                                         // use the local record as this callback's exception boundary
     abi::emit_store_reg_to_symbol(emitter, "x10", "_exc_handler_top", 0);
     emitter.instruction(&format!("add x0, sp, #{TRY_HANDLER_JMP_BUF_OFFSET}")); // pass the opaque handler jump buffer to the platform C library
-    emitter.bl_c("setjmp");
+    emitter.save_exception_handler();
     emitter.instruction("cbnz x0, __rt_mbstring_stringable_throw");             // convert an escaping PHP throw into a returned runtime status
     emitter.instruction("mov x0, #7");                                          // select the formatter's borrowed boxed-value entry
     emitter.instruction(&format!("ldr x1, [sp, #{}]", locals + 8));             // reload the original boxed Stringable receiver
@@ -91,7 +91,7 @@ fn emit_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov r10, rsp");                                        // publish this callback's local exception record
     abi::emit_store_reg_to_symbol(emitter, "r10", "_exc_handler_top", 0);
     emitter.instruction(&format!("lea rdi, [rsp + {TRY_HANDLER_JMP_BUF_OFFSET}]")); // pass the opaque jump buffer through the SysV C ABI
-    emitter.bl_c("setjmp");
+    emitter.save_exception_handler();
     emitter.instruction("test eax, eax");                                       // distinguish initial execution from an escaping PHP throw
     emitter.instruction("jnz __rt_mbstring_stringable_throw");                  // return a pending throwable after restoring native state
     emitter.instruction("mov edi, 7");                                          // select borrowed boxed-value conversion

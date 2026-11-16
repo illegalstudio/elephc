@@ -1,8 +1,6 @@
 ---
 title: "image_type_to_extension()"
 description: "Returns the filename extension for an IMAGETYPE_* constant."
-sidebar:
-  order: 454
 ---
 
 ## image_type_to_extension()
@@ -21,8 +19,9 @@ Returns the filename extension for an IMAGETYPE_* constant.
 
 ## Availability
 
-- **Compiled (AOT)**: supported through the compiler-injected image prelude.
-- **`eval()` (magician interpreter)**: not available inside eval'd code.
+| Compiled (AOT) | Magician (eval) |
+|---|---|
+| Available | Not available yet |
 
 _No examples yet. Check `examples/` and `showcases/` for usage patterns._
 

@@ -261,6 +261,32 @@ foreach ($a as $k => $v) {
     assert_eq!(out, "2|3=x;5=y;");
 }
 
+/// Sparse writes to an already non-empty packed array preserve PHP keys instead of filling
+/// holes, for both literal and runtime integer keys, and keep the next append/insertion order.
+#[test]
+fn test_sparse_integer_keys_after_a_contiguous_prefix() {
+    let out = compile_and_run(
+        r#"<?php
+$a = [];
+$a[0] = 1;
+$a[5] = 2;
+echo count($a), "|", isset($a[1]) ? "y" : "n", "|", implode(",", array_keys($a)), "|";
+foreach ($a as $k => $v) { echo $k, "=", $v, ","; }
+$a[] = 3;
+$a[1] = 4;
+echo "|", implode(",", array_keys($a)), "|", implode(",", $a), "\n";
+$b = [0];
+$i = $argc > 0 ? 5 : 1;
+$b[$i] = 2;
+echo count($b), "|", isset($b[1]) ? "y" : "n", "|", implode(",", array_keys($b)), "\n";
+"#,
+    );
+    assert_eq!(
+        out,
+        "2|n|0,5|0=1,5=2,|0,5,6,1|1,2,3,4\n2|n|0,5\n"
+    );
+}
+
 /// Compiles a PHP script that performs array union (+) with two assoc arrays sharing a key "a" and verifies the left operand's value is retained for the duplicate key.
 #[test]
 fn test_assoc_array_union_keeps_left_duplicate_keys() {
@@ -1333,4 +1359,52 @@ echo json_encode($a), "|", json_encode($b);
 "#,
     );
     assert_eq!(out, "{\"7\":7}|{\"7\":7}");
+}
+
+/// A runtime value written into a hash whose value stamp came from a literal widens the
+/// storage instead of casting the value into the stamp. PHP's untyped arrays keep the value
+/// (#1951).
+#[test]
+fn test_hash_literal_stamp_widens_for_a_runtime_value() {
+    let out = compile_and_run(
+        r#"<?php
+function h(int $v): string {
+    $m = ["a" => "x"];
+    $m["k"] = $v;
+    return json_encode($m) . "|" . gettype($m["k"]);
+}
+echo h(5), "\n";
+"#,
+    );
+    assert_eq!(out, "{\"a\":\"x\",\"k\":5}|integer\n");
+}
+
+/// The widening covers both directions, null/array values and the append form; a hash stamped
+/// by a literal keeps PHP's runtime values instead of casting them (#1951).
+#[test]
+fn test_hash_literal_stamp_widening_covers_values_and_append() {
+    let out = compile_and_run(
+        r#"<?php
+function a(string $v): string { $m = ["a" => 1]; $m["k"] = $v; return json_encode($m); }
+function b(): string { $m = ["a" => 1]; $m["k"] = null; return json_encode($m); }
+function c(): string { $m = ["a" => 1]; $m["k"] = [1, 2]; return json_encode($m); }
+function d(string $v): string { $m = ["a" => 1]; $m[] = $v; return json_encode($m); }
+echo a("s"), "|", b(), "|", c(), "|", d("s"), "\n";
+"#,
+    );
+    assert_eq!(out, "{\"a\":1,\"k\":\"s\"}|{\"a\":1,\"k\":null}|{\"a\":1,\"k\":[1,2]}|{\"a\":1,\"0\":\"s\"}\n");
+}
+
+/// A reference-bound local widens through its alias: `HashToMixed` gets its own owner before
+/// consuming it, so the write through the alias lands in the widened storage (#1951).
+#[test]
+fn test_hash_literal_stamp_widens_through_a_reference_alias() {
+    let out = compile_and_run(
+        r#"<?php
+function f(int $v): string { $m = ["a" => "x"]; $r = &$m; $r["k"] = $v; return json_encode($m); }
+function g(string $v): string { $m = ["a" => 1]; $r = &$m; $r[] = $v; return json_encode($m); }
+echo f(5), "|", g("s"), "\n";
+"#,
+    );
+    assert_eq!(out, "{\"a\":\"x\",\"k\":5}|{\"a\":1,\"0\":\"s\"}\n");
 }

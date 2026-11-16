@@ -1,0 +1,17 @@
+name: Forbid consumer Rust builds
+description: Reject and record implicit Cargo builds while allowing archive execution.
+runs:
+  using: composite
+  steps:
+    - name: Install the consumer build guard
+      shell: bash
+      run: |
+        if [[ -n ${ELEPHC_CI_BUILD_GUARD_LOG:-} ]]; then exit 0; fi
+        real_cargo=$(command -v cargo || true)
+        directory="$RUNNER_TEMP/elephc-consumer-bin"
+        mkdir -p "$directory"
+        cp scripts/ci/consumer_cargo.sh "$directory/cargo"
+        chmod +x "$directory/cargo"
+        echo "ELEPHC_CI_REAL_CARGO=$real_cargo" >> "$GITHUB_ENV"
+        echo "ELEPHC_CI_BUILD_GUARD_LOG=$RUNNER_TEMP/elephc-consumer-builds.log" >> "$GITHUB_ENV"
+        echo "$directory" >> "$GITHUB_PATH"

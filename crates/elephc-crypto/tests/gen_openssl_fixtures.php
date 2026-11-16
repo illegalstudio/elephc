@@ -7,7 +7,7 @@
 //       > crates/elephc-crypto/tests/fixtures/openssl_php_fixtures.rs
 //
 // The generated file locks the observed behavior of the local PHP build for
-// the cipher matrix supported by elephc (see .plans/openssl-encrypt-decrypt.md).
+// the cipher matrix documented in docs/php/strings.md, Symmetric encryption.
 // Regenerate only when intentionally re-baselining against a new PHP version;
 // bump FIXTURE_PHP_VERSION notes in the output when doing so.
 

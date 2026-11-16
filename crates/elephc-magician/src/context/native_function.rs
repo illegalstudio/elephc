@@ -25,9 +25,12 @@ pub struct NativeFunction {
     pub(super) param_defaults: Vec<Option<NativeCallableDefault>>,
     pub(super) param_default_constant_names: Vec<Option<String>>,
     pub(super) param_by_ref: Vec<bool>,
+    pub(super) param_tagged_scalar_ref: Vec<bool>,
+    pub(super) param_boxed_ref: Vec<bool>,
     pub(super) variadic_index: Option<usize>,
     pub(super) return_type: Option<EvalParameterType>,
     pub(super) returns_reference: bool,
+    pub(super) attributes: Vec<EvalAttribute>,
     pub(super) bridge_supported: bool,
     pub(super) shape: Option<NativeCallableShape>,
 }
@@ -49,9 +52,12 @@ impl NativeFunction {
             param_defaults: Vec::new(),
             param_default_constant_names: Vec::new(),
             param_by_ref: Vec::new(),
+            param_tagged_scalar_ref: Vec::new(),
+            param_boxed_ref: Vec::new(),
             variadic_index: None,
             return_type: None,
             returns_reference: false,
+            attributes: Vec::new(),
             bridge_supported: true,
             shape: None,
         }
@@ -60,6 +66,16 @@ impl NativeFunction {
     /// Returns the lowercase name this callback was registered under, empty until registered.
     pub fn name(&self) -> &str {
         &self.name
+    }
+
+    /// Returns declaration attributes retained for native function reflection.
+    pub fn attributes(&self) -> &[EvalAttribute] {
+        &self.attributes
+    }
+
+    /// Appends one declaration attribute in source order, including repeated attributes.
+    pub fn add_attribute(&mut self, attribute: EvalAttribute) {
+        self.attributes.push(attribute);
     }
 
     /// Returns whether the generated registration identifies a compiler-internal declaration.
@@ -178,6 +194,32 @@ impl NativeFunction {
     /// Returns whether one registered parameter is by-reference.
     pub fn param_by_ref(&self, index: usize) -> bool {
         self.param_by_ref.get(index).copied().unwrap_or(false)
+    }
+
+    /// Records the compiled two-word nullable-integer layout independently of PHP type metadata.
+    pub fn set_param_tagged_scalar_ref(&mut self, index: usize, tagged: bool) -> bool {
+        if index >= self.param_count { return false; }
+        self.param_tagged_scalar_ref.resize(self.param_count, false);
+        self.param_tagged_scalar_ref[index] = tagged;
+        true
+    }
+
+    /// Returns whether a reference slot uses the compiled inline payload/tag scalar layout.
+    pub fn param_tagged_scalar_ref(&self, index: usize) -> bool {
+        self.param_tagged_scalar_ref.get(index).copied().unwrap_or(false)
+    }
+
+    /// Records the physical boxed layout independently of a parameter's declared PHP class or array type.
+    pub fn set_param_boxed_ref(&mut self, index: usize, boxed: bool) -> bool {
+        if index >= self.param_count { return false; }
+        self.param_boxed_ref.resize(self.param_count, false);
+        self.param_boxed_ref[index] = boxed;
+        true
+    }
+
+    /// Reports whether the compiled invoker exposes a writable Mixed pointer slot.
+    pub fn param_boxed_ref(&self, index: usize) -> bool {
+        self.param_boxed_ref.get(index).copied().unwrap_or(false)
     }
 
     /// Returns whether one registered parameter is the variadic parameter.

@@ -280,7 +280,7 @@ pub fn function_sig(name: &str) -> Option<FunctionSig> {
         ref_params: def.ref_params.clone(),
         declared_params: vec![false; def.params.len()],
         variadic: def.variadic.clone(),
-        deprecation: def.spec.deprecation.map(str::to_string),
+        deprecation: def.spec.deprecation.map(|deprecation| deprecation.message.to_string()),
         is_generator: false,
     })
 }
@@ -1105,7 +1105,8 @@ mod tests {
         for (name, expected) in [
             ("count", BuiltinArgumentLowering::Count),
             ("date", BuiltinArgumentLowering::Date),
-            ("json_decode", BuiltinArgumentLowering::JsonDecode),
+            ("json_decode", BuiltinArgumentLowering::JsonSource),
+            ("json_validate", BuiltinArgumentLowering::JsonSource),
             ("getenv", BuiltinArgumentLowering::Getenv),
             ("pcntl_exec", BuiltinArgumentLowering::PcntlPreserveOmitted),
             ("pcntl_signal", BuiltinArgumentLowering::PcntlPreserveOmitted),

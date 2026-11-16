@@ -263,6 +263,7 @@ pub(super) fn reflection_property_hook_parameter_member(
         type_metadata,
         default_value: None,
         default_value_constant_name: None,
+        default_value_export: None,
     }
 }
 
@@ -310,12 +311,24 @@ pub(super) fn reflection_property_slot_default_value(
         None if !is_declared => Some(ReflectionParameterDefaultValue::Null),
         None => None,
     }
-    .map(|value| match value {
+    .map(|value| coerce_reflection_property_default(value, php_type))
+}
+
+/// Applies a float slot's integer coercion, including beneath retained enum reads.
+fn coerce_reflection_property_default(
+    value: ReflectionParameterDefaultValue, php_type: &PhpType,
+) -> ReflectionParameterDefaultValue {
+    match value {
         ReflectionParameterDefaultValue::Int(value) if php_type.coerces_integer_to_float() => {
             ReflectionParameterDefaultValue::Float(value as f64)
         }
+        ReflectionParameterDefaultValue::Evaluated { value, enum_cases } => {
+            ReflectionParameterDefaultValue::Evaluated {
+                value: Box::new(coerce_reflection_property_default(*value, php_type)), enum_cases,
+            }
+        }
         value => value,
-    })
+    }
 }
 
 /// Formats retained generated property metadata for `ReflectionProperty::__toString()`.
@@ -370,22 +383,12 @@ pub(super) fn reflection_property_visibility_label(flags: ReflectionMemberFlags)
 pub(super) fn reflection_type_metadata_to_string(type_metadata: &ReflectionParameterTypeMetadata) -> String {
     match type_metadata {
         ReflectionParameterTypeMetadata::Named(named) => {
-            if named.allows_null && named.name != "mixed" {
-                format!("?{}", named.name)
-            } else {
-                named.name.clone()
-            }
+            elephc_builtin_contract::reflection_format::named_type(&named.name, named.allows_null)
         }
         ReflectionParameterTypeMetadata::Union(union) => {
-            let mut names = union
-                .types
-                .iter()
-                .map(|type_metadata| type_metadata.name.clone())
-                .collect::<Vec<_>>();
-            if union.allows_null && names.iter().all(|name| name != "null") {
-                names.push(String::from("null"));
-            }
-            names.join("|")
+            elephc_builtin_contract::reflection_format::union(
+                union.types.iter().map(|ty| ty.name.clone()).collect(), union.allows_null,
+            )
         }
         ReflectionParameterTypeMetadata::Intersection(intersection) => intersection
             .types
@@ -401,10 +404,14 @@ pub(super) fn reflection_default_value_to_string(
     default: &ReflectionParameterDefaultValue,
 ) -> Option<String> {
     match default {
+        ReflectionParameterDefaultValue::EnumCase(_) => Some(reflection_dump_default_value(default)),
+        ReflectionParameterDefaultValue::Evaluated { value, .. } => reflection_default_value_to_string(value),
         ReflectionParameterDefaultValue::Int(value) => Some(value.to_string()),
         ReflectionParameterDefaultValue::Bool(value) => Some(value.to_string()),
         ReflectionParameterDefaultValue::Float(value) => Some(value.to_string()),
-        ReflectionParameterDefaultValue::Str(value) => Some(format!("'{value}'")),
+        ReflectionParameterDefaultValue::Str(value) => Some(elephc_builtin_contract::reflection_format::string(
+            &elephc_builtin_contract::string_literal::literal_bytes(value),
+        )),
         ReflectionParameterDefaultValue::Null => Some(String::from("NULL")),
         ReflectionParameterDefaultValue::Object { .. }
         | ReflectionParameterDefaultValue::DeferredError(_)

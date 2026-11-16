@@ -16,6 +16,324 @@ const TARGETS: [&str; 5] = [
     "macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64",
 ];
 
+/// A recursive capture keeps its boxed cell ABI while the closure body sees a callable view.
+#[test]
+fn recursive_by_ref_capture_separates_physical_and_logical_types() {
+    let source = r#"<?php
+$callback = function (int $value) use (&$callback): int {
+    return $value <= 1 ? 1 : $value * $callback($value - 1);
+};
+echo $callback(5);
+"#;
+    for target in TARGETS {
+        let module = super::lower_source_at_for_target(
+            source, Path::new("main.php"), Path::new("."), Target::parse(target).unwrap(),
+        );
+        let closure = module.closures.first().unwrap_or_else(|| panic!("{target}: missing closure"));
+        let capture = closure.params.iter().find(|param| param.name == "callback")
+            .unwrap_or_else(|| panic!("{target}: missing capture parameter"));
+        assert!(capture.by_ref, "{target}: recursive capture must remain by-reference");
+        assert_eq!(capture.php_type.codegen_repr(), crate::types::PhpType::Mixed, "{target}: hidden ABI parameter");
+        let local = closure.locals.iter().find(|local| local.name.as_deref() == Some("callback"))
+            .unwrap_or_else(|| panic!("{target}: missing logical capture local"));
+        assert_eq!(local.php_type.codegen_repr(), crate::types::PhpType::Callable, "{target}: body view");
+        let main = module.functions.iter().find(|function| function.name == "main")
+            .unwrap_or_else(|| panic!("{target}: missing main function"));
+        let callback = main.locals.iter().find(|local| local.name.as_deref() == Some("callback"))
+            .unwrap_or_else(|| panic!("{target}: missing callback local"));
+        let store = main.instructions.iter().find(|instruction| {
+            instruction.op == Op::StoreRefCell
+                && instruction.immediate == Some(Immediate::LocalSlot(callback.id))
+        }).unwrap_or_else(|| panic!("{target}: missing recursive callback store"));
+        assert_eq!(
+            store.result_php_type.codegen_repr(),
+            crate::types::PhpType::Mixed,
+            "{target}: recursive assignment must preserve the capture cell payload ABI",
+        );
+        crate::codegen::generate_user_asm_from_ir(&module, false, false)
+            .unwrap_or_else(|error| panic!("{target}: {error:?}"));
+    }
+}
+
+/// Object-reference closure descriptors preserve the concrete payload ABI used by their body.
+#[test]
+fn closure_object_reference_keeps_its_concrete_payload_abi() {
+    let source = r#"<?php
+interface ClosureObjectReferenceContract { public function label(): string; }
+$callback = function (ClosureObjectReferenceContract &$value): string {
+    return $value->label();
+};
+"#;
+    for target in TARGETS {
+        let module = super::lower_source_at_for_target(
+            source,
+            Path::new("main.php"),
+            Path::new("."),
+            Target::parse(target).unwrap(),
+        );
+        let closure = module
+            .closures
+            .first()
+            .unwrap_or_else(|| panic!("{target}: missing closure"));
+        let parameter = closure
+            .params
+            .first()
+            .unwrap_or_else(|| panic!("{target}: missing closure parameter"));
+        assert!(parameter.by_ref, "{target}: parameter must remain by-reference");
+        assert_eq!(
+            parameter.php_type.codegen_repr(),
+            crate::types::PhpType::Object("ClosureObjectReferenceContract".to_string()),
+            "{target}: the callee must receive the concrete object payload slot",
+        );
+        let signature = closure
+            .signature
+            .as_ref()
+            .unwrap_or_else(|| panic!("{target}: missing closure signature"));
+        assert_eq!(
+            signature.params[0].1.codegen_repr(),
+            parameter.php_type.codegen_repr(),
+            "{target}: descriptor and callee payload layouts must agree",
+        );
+        crate::codegen::generate_user_asm_from_ir(&module, false, false)
+            .unwrap_or_else(|error| panic!("{target}: {error:?}"));
+    }
+}
+
+/// Named object references keep a boxed entry ABI while the body reads a concrete object view.
+#[test]
+fn named_object_reference_separates_physical_and_logical_types() {
+    let source = r#"<?php
+interface NamedObjectReferenceContract { public function label(): string; }
+function readNamedObjectReference(NamedObjectReferenceContract &$value): string {
+    $label = $value->label();
+    $value = "changed";
+    return $label;
+}
+"#;
+    for target in TARGETS {
+        let module = super::lower_source_at_for_target(
+            source,
+            Path::new("main.php"),
+            Path::new("."),
+            Target::parse(target).unwrap(),
+        );
+        let function = module
+            .functions
+            .iter()
+            .find(|function| function.name == "readNamedObjectReference")
+            .unwrap_or_else(|| panic!("{target}: missing named function"));
+        let parameter = function
+            .params
+            .first()
+            .unwrap_or_else(|| panic!("{target}: missing function parameter"));
+        assert!(parameter.by_ref, "{target}: parameter must remain by-reference");
+        assert_eq!(
+            parameter.php_type.codegen_repr(),
+            crate::types::PhpType::Mixed,
+            "{target}: the runtime entry keeps its boxed reference ABI",
+        );
+        let local = function
+            .locals
+            .iter()
+            .find(|local| local.name.as_deref() == Some("value"))
+            .unwrap_or_else(|| panic!("{target}: missing logical parameter local"));
+        assert_eq!(
+            local.php_type.codegen_repr(),
+            crate::types::PhpType::Mixed,
+            "{target}: the local must retain the boxed ref-cell payload ABI",
+        );
+        let loads = function
+            .instructions
+            .iter()
+            .filter(|instruction| instruction.op == Op::LoadRefCell)
+            .collect::<Vec<_>>();
+        assert!(!loads.is_empty(), "{target}: missing reference-cell loads");
+        assert!(
+            loads.iter().all(|load| {
+                load.result_php_type.codegen_repr()
+                    == crate::types::PhpType::Object(
+                        "NamedObjectReferenceContract".to_string(),
+                    )
+            }),
+            "{target}: every body read must expose the concrete object view",
+        );
+        let store = function
+            .instructions
+            .iter()
+            .find(|instruction| {
+                instruction.op == Op::StoreRefCell
+                    && instruction.immediate == Some(Immediate::LocalSlot(local.id))
+            })
+            .unwrap_or_else(|| panic!("{target}: missing replacement ref-cell store"));
+        assert_eq!(
+            store.result_php_type.codegen_repr(),
+            crate::types::PhpType::Mixed,
+            "{target}: replacement stores must follow the boxed physical payload ABI",
+        );
+        crate::codegen::generate_user_asm_from_ir(&module, false, false)
+            .unwrap_or_else(|error| panic!("{target}: {error:?}"));
+    }
+}
+
+/// A hidden Mixed owner does not change the string payload ABI of its returned ref-cell.
+#[test]
+fn bound_string_reference_store_keeps_its_physical_payload_type() {
+    let source = r#"<?php
+class BoundStringReferenceHost { public string $value = 'initial'; }
+$host = new BoundStringReferenceHost();
+$bound = \Closure::bind(fn &() => $this->value, $host, $host);
+$reference = &$bound();
+$reference = 'changed';
+echo $host->value;
+"#;
+    for target in TARGETS {
+        let module = super::lower_source_at_for_target(
+            source,
+            Path::new("main.php"),
+            Path::new("."),
+            Target::parse(target).unwrap(),
+        );
+        let main = module
+            .functions
+            .iter()
+            .find(|function| function.name == "main")
+            .unwrap_or_else(|| panic!("{target}: missing main function"));
+        let reference = main
+            .locals
+            .iter()
+            .find(|local| local.name.as_deref() == Some("reference"))
+            .unwrap_or_else(|| panic!("{target}: missing reference local"));
+        let store = main
+            .instructions
+            .iter()
+            .find(|instruction| {
+                instruction.op == Op::StoreRefCell
+                    && instruction.immediate == Some(Immediate::LocalSlot(reference.id))
+            })
+            .unwrap_or_else(|| panic!("{target}: missing string reference store"));
+        assert_eq!(
+            store.result_php_type.codegen_repr(),
+            crate::types::PhpType::Str,
+            "{target}: the cell payload remains a raw string despite its hidden Mixed owner",
+        );
+        crate::codegen::generate_user_asm_from_ir(&module, false, false)
+            .unwrap_or_else(|error| panic!("{target}: {error:?}"));
+    }
+}
+
+/// A borrowed static-property cell keeps its declared raw array payload after alias widening.
+#[test]
+fn borrowed_static_ref_cell_store_keeps_its_declared_payload_type() {
+    let source = r#"<?php
+class StaticReferencePayloadHost { public static array<mixed> $items = [[5], [7]]; }
+function bumpStaticReferencePayload(string $key): void {
+    ++StaticReferencePayloadHost::$items[$key][0];
+}
+"#;
+    for target in TARGETS {
+        let module = super::lower_source_at_for_target(
+            source,
+            Path::new("main.php"),
+            Path::new("."),
+            Target::parse(target).unwrap(),
+        );
+        let function = module
+            .functions
+            .iter()
+            .find(|function| function.name == "bumpStaticReferencePayload")
+            .unwrap_or_else(|| panic!("{target}: missing static update function"));
+        let store = function
+            .instructions
+            .iter()
+            .find(|instruction| {
+                instruction.op == Op::StoreRefCell
+                    && instruction.operands.first().is_some_and(|value| {
+                        function
+                            .value(*value)
+                            .and_then(|metadata| match metadata.def {
+                                crate::ir::ValueDef::Instruction { inst, .. } => {
+                                    function.instruction(inst)
+                                }
+                                _ => None,
+                            })
+                            .is_some_and(|source| source.op == Op::ArrayToHash)
+                    })
+            })
+            .unwrap_or_else(|| panic!("{target}: missing static array promotion write-back"));
+        assert!(
+            matches!(store.result_php_type.codegen_repr(),
+                crate::types::PhpType::Array(_) | crate::types::PhpType::AssocArray { .. }),
+            "{target}: a borrowed static cell must not receive a boxed Mixed payload",
+        );
+        assert_eq!(store.result_php_type.codegen_repr(),
+            function.value(store.operands[0]).unwrap().php_type.codegen_repr(),
+            "{target}: the static cell must keep the promoted container's raw payload type");
+        crate::codegen::generate_user_asm_from_ir(&module, false, false)
+            .unwrap_or_else(|error| panic!("{target}: {error:?}"));
+    }
+}
+
+/// Rebindable method closures keep their boxed receiver type in both ABI and body storage.
+#[test]
+fn rebindable_this_capture_separates_body_storage_from_signature_inference() {
+    let source = r#"<?php
+class RebindableCaptureHost {
+    public int $value = 42;
+    public function reader(): callable {
+        return function (): int { return $this->value; };
+    }
+}
+echo (new RebindableCaptureHost())->reader()();
+"#;
+    for target in TARGETS {
+        let module = super::lower_source_at_for_target(
+            source, Path::new("main.php"), Path::new("."), Target::parse(target).unwrap(),
+        );
+        let closure = module.closures.first().unwrap_or_else(|| panic!("{target}: missing closure"));
+        let capture = closure.params.iter().find(|param| param.name == "this")
+            .unwrap_or_else(|| panic!("{target}: missing receiver capture parameter"));
+        assert_eq!(capture.php_type.codegen_repr(), crate::types::PhpType::Mixed, "{target}: hidden ABI parameter");
+        let local = closure.locals.iter().find(|local| local.name.as_deref() == Some("this"))
+            .unwrap_or_else(|| panic!("{target}: missing receiver capture local"));
+        assert_eq!(local.php_type.codegen_repr(), crate::types::PhpType::Mixed, "{target}: body storage");
+        crate::codegen::generate_user_asm_from_ir(&module, false, false)
+            .unwrap_or_else(|error| panic!("{target}: {error:?}"));
+    }
+}
+
+/// Alternative captures each publish the same fallback owner before their closure is built.
+#[test]
+fn alternative_mutating_captures_publish_cell_owners_on_every_target() {
+    let source = r#"<?php
+class AlternativeCaptureOwner { public string $name = 'old'; }
+function alternativeCaptureOwners(int $mode): void {
+    $item = new AlternativeCaptureOwner();
+    if ($mode === 0) {
+        $change = function() use (&$item): int { $item = new AlternativeCaptureOwner(); return 1; };
+    } else {
+        $change = function() use (&$item): int { $item = new AlternativeCaptureOwner(); return 2; };
+    }
+    echo $change();
+}
+alternativeCaptureOwners($argc);
+"#;
+    for target in TARGETS {
+        let (module, function) = lower_function(source, target, "alternativeCaptureOwners");
+        let item = function.locals.iter().find(|local| local.name.as_deref() == Some("item")).unwrap();
+        let owners = function.instructions.iter().filter_map(|inst| {
+            if inst.op != Op::PromoteLocalRefCell { return None; }
+            match inst.immediate {
+                Some(Immediate::LocalSlotPair { first, second }) if first == item.id => Some(second),
+                _ => None,
+            }
+        }).collect::<Vec<_>>();
+        assert_eq!(owners.len(), 2, "{target}: both alternatives must promote their raw path");
+        assert_eq!(owners[0], owners[1], "{target}: alternatives share a single owner slot");
+        assert_eq!(function.locals[owners[0].as_raw() as usize].kind, LocalKind::RefCell, "{target}");
+        crate::codegen::generate_user_asm_from_ir(&module, false, false).unwrap();
+    }
+}
+
 /// Lowers one source and returns the named function beside its complete module.
 fn lower_function(source: &str, target: &str, name: &str) -> (crate::ir::Module, Function) {
     let module = super::lower_source_at_for_target(

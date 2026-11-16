@@ -70,6 +70,10 @@ pub(crate) fn lower_gettype(ctx: &mut FunctionContext<'_>, inst: &Instruction) -
         emit_tagged_scalar_gettype(ctx, value)?;
         return store_if_result(ctx, inst);
     }
+    if crate::types::is_nullable_pointer_type(&ty) {
+        emit_nullable_pointer_gettype(ctx, value)?;
+        return store_if_result(ctx, inst);
+    }
     if matches!(ty, PhpType::Mixed | PhpType::Union(_)) {
         emit_mixed_gettype(ctx, value)?;
         return store_if_result(ctx, inst);
@@ -82,6 +86,23 @@ pub(crate) fn lower_gettype(ctx: &mut FunctionContext<'_>, inst: &Instruction) -
     };
     emit_type_name_result(ctx, type_name);
     store_if_result(ctx, inst)
+}
+
+/// Emits `gettype()` for a `?ptr<T>` word: `NULL` for 0, `integer` otherwise.
+///
+/// A direct call boxes the `?ptr<T>` argument into `mixed` first, where a live address is an
+/// integer; this unboxed path (a dynamic callable) answers the same.
+fn emit_nullable_pointer_gettype(ctx: &mut FunctionContext<'_>, value: ValueId) -> Result<()> {
+    let null_case = ctx.next_label("gettype_nullable_pointer_null");
+    let done = ctx.next_label("gettype_nullable_pointer_done");
+    ctx.load_value_to_result(value)?;
+    abi::emit_branch_if_int_result_zero(ctx.emitter, &null_case);
+    emit_type_name_result(ctx, b"integer");
+    abi::emit_jump(ctx.emitter, &done);
+    ctx.emitter.label(&null_case);
+    emit_type_name_result(ctx, b"NULL");
+    ctx.emitter.label(&done);
+    Ok(())
 }
 
 /// Emits `gettype()` for an inline tagged scalar by dispatching on its tag word.
@@ -170,9 +191,11 @@ pub(in crate::codegen::lower_inst) fn static_gettype_name(ty: &PhpType) -> Optio
         PhpType::Object(_) => Some(b"object".as_slice()),
         PhpType::Pointer(_) => Some(b"pointer".as_slice()),
         PhpType::Buffer(_) => Some(b"buffer".as_slice()),
-        PhpType::Packed(_) => Some(b"packed".as_slice()),
+        // A packed value is a record address (a buffer element or nested record), which the
+        // checker types `ptr<T>`, so it names itself like a pointer.
+        PhpType::Packed(_) => Some(b"pointer".as_slice()),
         PhpType::Resource(_) => Some(b"resource".as_slice()),
-        PhpType::Mixed | PhpType::Union(_) | PhpType::TaggedScalar => None,
+        PhpType::Mixed | PhpType::Union(_) | PhpType::TaggedScalar | PhpType::Narrow(_) => None,
     }
 }
 
@@ -335,6 +358,7 @@ pub(crate) const CORE_LOADED_EXTENSIONS: &[&str] = &[
     "date",
     "ctype",
     "mbstring",
+    "random",
     "Reflection",
     "Zend OPcache",
 ];

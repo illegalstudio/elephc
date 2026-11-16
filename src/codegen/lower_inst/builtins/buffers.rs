@@ -3,7 +3,7 @@
 //! Keeps registry semantics separate from physical buffer layout and runtime symbols.
 //!
 //! Called from:
-//! - `crate::codegen::lower_inst::runtime_functions` for `BufferLen` and `BufferFree`.
+//! - `crate::codegen::lower_inst::runtime_functions` for `BufferLen`, `BufferPtr` and `BufferFree`.
 //!
 //! Key details:
 //! - Buffer helpers use shared runtime symbols so fatal behavior and buffer
@@ -18,6 +18,11 @@ use super::super::super::context::FunctionContext;
 /// Lowers `buffer_len()` through the direct buffer opcode helper.
 pub(crate) fn lower_buffer_len(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     buffers::lower_buffer_len(ctx, inst)
+}
+
+/// Lowers `buffer_ptr()` through the direct buffer opcode helper.
+pub(crate) fn lower_buffer_ptr(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+    buffers::lower_buffer_ptr(ctx, inst)
 }
 
 /// Lowers `buffer_free()` through the direct buffer opcode helper.

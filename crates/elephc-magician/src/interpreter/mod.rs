@@ -12,8 +12,10 @@
 //!   to `RuntimeValueOps`, which will be backed by elephc runtime hooks.
 
 mod array_literals;
+mod argument_value_owners;
 mod call_argument_owners;
 
+use argument_value_owners::*;
 use call_argument_owners::*;
 pub(crate) mod array_references;
 pub mod builtin_metadata;
@@ -23,6 +25,7 @@ mod constant_eval;
 mod constants;
 mod context_calls;
 pub use context_calls::*;
+mod bytecode;
 mod control;
 mod dynamic_functions;
 mod expressions;
@@ -30,6 +33,7 @@ mod generics;
 mod include_exec;
 mod operands;
 mod libc_shims;
+mod null_object_boundaries;
 mod reflection;
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 pub(crate) mod repl;
@@ -71,6 +75,7 @@ use builtin_interfaces::*;
 use builtins::*;
 use constant_eval::*;
 use constants::*;
+pub(crate) use bytecode::with_executable_cache_key;
 pub use control::EvalOutcome;
 use control::{
     BoundMethodArg, BoundNativeFunctionArgs, BoundNativeFunctionRefSlot, EvalArraySpliceDirectArgs,
@@ -83,10 +88,13 @@ use generics::*;
 use include_exec::*;
 use operands::*;
 use libc_shims::*;
+use null_object_boundaries::*;
 use reflection::*;
 use return_type_compat::*;
 use return_values::*;
-pub use runtime_ops::RuntimeValueOps;
+pub use runtime_ops::{
+    NativeCallableParameterMetadata, NativeCallableSignatureMetadata, RuntimeValueOps,
+};
 use runtime_ops::*;
 #[cfg(not(test))]
 pub(crate) use pcntl_escape::value_contains_foreign_pcntl_callable;
@@ -139,13 +147,21 @@ pub fn execute_program_with_context(
 }
 
 /// Executes an EvalIR program and preserves escaping Throwable cells.
+///
+/// A fragment that fits the bytecode slice runs there. Any named gap, or a cached
+/// gap for the same source, keeps the tree walker.
 pub fn execute_program_outcome_with_context(
     context: &mut ElephcEvalContext,
     program: &EvalProgram,
     scope: &mut ElephcEvalScope,
     values: &mut impl RuntimeValueOps,
 ) -> Result<EvalOutcome, EvalStatus> {
-    match execute_program_statements(program, context, scope, values) {
+    let executed = match bytecode::try_execute(context, program, scope, values) {
+        Ok(Some(control)) => Ok(control),
+        Ok(None) => execute_program_statements(program, context, scope, values),
+        Err(status) => Err(status),
+    };
+    match executed {
         Ok(EvalControl::None | EvalControl::ReturnVoid) => values.null().map(EvalOutcome::Value),
         Ok(EvalControl::Return(result)) => {
             let result = if result.is_borrowed() { values.retain(result)? } else { result };

@@ -13,9 +13,11 @@
 //! - Every handler-owning process executes PHP serially, so request/response
 //!   data lives in process statics without cross-thread mutation.
 
+mod forwarded;
 mod handler_broker;
 mod handler_ipc;
 mod isolated_worker;
+mod listener;
 mod multipart;
 mod probe_route;
 mod request_state;
@@ -23,6 +25,9 @@ mod server;
 mod session;
 mod trans_sid;
 mod worker;
+mod process;
+
+pub use process::{elephc_web_application_popen, elephc_web_application_system};
 
 // Re-exported so the compiled `--web` runtime's `__rt_stdout_write` capture
 // branch links against the real per-request output sink (defined in
@@ -37,8 +42,9 @@ pub use request_state::{
     elephc_web_method, elephc_web_multipart_count, elephc_web_multipart_filename,
     elephc_web_multipart_name, elephc_web_multipart_type, elephc_web_multipart_value_len,
     elephc_web_multipart_value_ptr, elephc_web_path, elephc_web_protocol, elephc_web_query_string,
-    elephc_web_remote_addr, elephc_web_remote_port, elephc_web_request_time, elephc_web_server_addr,
-    elephc_web_server_port, elephc_web_uri,
+    elephc_web_remote_addr, elephc_web_remote_port, elephc_web_request_scheme,
+    elephc_web_request_time, elephc_web_server_addr, elephc_web_server_port, elephc_web_is_https,
+    elephc_web_uri,
 };
 
 // Re-exported so the compiled `--web` runtime routines (`__rt_header`,

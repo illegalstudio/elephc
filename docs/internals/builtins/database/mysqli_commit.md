@@ -1,8 +1,6 @@
 ---
 title: "mysqli_commit() - internals"
 description: "Compiler internals for mysqli_commit(): lowering path, type checks, and runtime helpers."
-sidebar:
-  order: 104
 ---
 
 ## `mysqli_commit()` - internals
@@ -10,7 +8,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`crates/elephc-builtin-contract/src/catalog_data.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-builtin-contract/src/catalog_data.rs)
-- **Lowering**: [`src/mysqli_prelude/build/procedural.rs`:291](https://github.com/illegalstudio/elephc/blob/main/src/mysqli_prelude/build/procedural.rs#L291) (`mysqli_commit`)
+- **Lowering**: [`src/mysqli_prelude/build/procedural.rs`](https://github.com/illegalstudio/elephc/blob/main/src/mysqli_prelude/build/procedural.rs) (`mysqli_commit`)
 - **Function symbol**: `mysqli_commit()`
 
 

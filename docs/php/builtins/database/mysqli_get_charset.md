@@ -1,8 +1,6 @@
 ---
 title: "mysqli_get_charset()"
 description: "Returns the connection character set as an object."
-sidebar:
-  order: 129
 ---
 
 ## mysqli_get_charset()
@@ -20,8 +18,9 @@ Returns the connection character set as an object.
 
 ## Availability
 
-- **Compiled (AOT)**: supported through an injected elephc-PHP prelude.
-- **`eval()` (magician interpreter)**: not available inside eval'd code.
+| Compiled (AOT) | Magician (eval) |
+|---|---|
+| Available | Not available yet |
 
 _No examples yet. Check `examples/` and `showcases/` for usage patterns._
 

@@ -61,6 +61,7 @@ pub fn emit_hash_new(emitter: &mut Emitter) {
     emitter.instruction("add sp, sp, #48");                                     // release constructor state
     emitter.instruction("ret");                                                 // return the stable hash header
     emitter.label("__rt_hash_cap_overflow");
+    if emitter.phpext_output { abi::emit_cdylib_exit_escape(emitter); }
     emitter.instruction("mov x0, #2");                                          // send the allocation diagnostic to stderr
     abi::emit_symbol_address(emitter, "x1", "_arr_cap_err_msg");
     emitter.instruction(&format!("mov x2, #{}", ARRAY_ALLOC_SIZE_MSG.len()));   // provide the exact diagnostic length
@@ -116,6 +117,7 @@ fn emit_x86_64(emitter: &mut Emitter) {
     emitter.instruction("pop rbp");                                             // restore caller linkage
     emitter.instruction("ret");                                                 // return the stable hash header
     emitter.label("__rt_hash_cap_overflow");
+    if emitter.phpext_output { abi::emit_cdylib_exit_escape(emitter); }
     emitter.instruction("mov edi, 2");                                          // send the allocation diagnostic to stderr
     abi::emit_symbol_address(emitter, "rsi", "_arr_cap_err_msg");
     emitter.instruction(&format!("mov edx, {}", ARRAY_ALLOC_SIZE_MSG.len()));   // provide the exact diagnostic length

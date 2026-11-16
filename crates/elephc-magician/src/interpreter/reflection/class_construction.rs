@@ -204,8 +204,15 @@ pub(super) fn eval_reflection_enum_new(
             values,
         );
     }
-    if eval_reflection_class_like_or_runtime_exists(&reflected_name, context, values)? {
-        return Ok(None);
+    if let Some((flags, _)) = eval_reflection_aot_class_flags(&reflected_name, values)? {
+        if flags & EVAL_REFLECTION_CLASS_FLAG_ENUM == 0 {
+            return eval_throw_reflection_exception(
+                &format!("Class \"{}\" is not an enum", reflected_name), context, values,
+            );
+        }
+        return eval_reflection_class_owner_object_result(
+            EVAL_REFLECTION_OWNER_ENUM, &reflected_name, context, values,
+        );
     }
     eval_throw_reflection_exception(
         &format!("Class \"{}\" does not exist", reflected_name),

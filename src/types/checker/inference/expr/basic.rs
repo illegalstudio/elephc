@@ -6,7 +6,10 @@
 //!
 //! Key details:
 //! - Preserves PHP array widening, nullability, match joins, and string-offset validation.
+//! - Ternary, `?:` and `match` arms that hold a buffer keep its exact `buffer<T>` type or are
+//!   rejected (`buffer_merges`), since a boxed buffer can no longer be indexed.
 
+use super::buffer_merges::buffer_merge_result_type;
 use super::{merge_match_arm_result_type, Checker};
 use crate::errors::CompileError;
 use crate::parser::ast::{ArrayEntry, Expr, ExprKind};
@@ -29,11 +32,32 @@ impl Checker {
             ExprKind::StringLiteral(_) => Ok(PhpType::Str),
             ExprKind::IntLiteral(_) => Ok(PhpType::Int),
             ExprKind::FloatLiteral(_) => Ok(PhpType::Float),
-            ExprKind::Variable(name) => self.variable_type_or_eval_dynamic(name, expr.span, env),
+            // `$GLOBALS` is the program's global symbol table projected as an array. It is
+            // not an ordinary variable, so it never produces the undefined-variable warning.
+            ExprKind::Variable(name) if name == "GLOBALS" => Ok(PhpType::AssocArray {
+                key: Box::new(PhpType::Str),
+                value: Box::new(PhpType::Mixed),
+            }),
+            ExprKind::Variable(name) => {
+                let ty = match self.variable_type_or_eval_dynamic(name, expr.span, env) {
+                    Ok(ty) => ty,
+                    // PHP 8 reads an undefined variable as `null` and raises E_WARNING. The
+                    // warning is emitted by EIR lowering at the read site so it carries the
+                    // caller's file/line and participates in `@` suppression and handlers.
+                    Err(error) if !self.strict_locals
+                        && error.message.starts_with("Undefined variable: $") => PhpType::Void,
+                    Err(error) => return Err(error),
+                };
+                let ty = self.promotable_array_value_view(name, expr.span, ty);
+                self.record_local_value_read(name, expr.span, &ty, env);
+                Ok(ty)
+            }
             ExprKind::Negate(inner) => {
                 let ty = self.infer_type(inner, env)?;
-                if crate::types::object_operators::binary_plan(&crate::parser::ast::BinOp::Sub, &PhpType::Int, &ty).is_some() {
-                    return Ok(ty);
+                if let Some(plan) = crate::types::object_operators::binary_plan_with_classes(
+                    &crate::parser::ast::BinOp::Sub, &PhpType::Int, &ty, &self.classes,
+                ) {
+                    return Ok(plan.result_type(&crate::parser::ast::BinOp::Sub));
                 }
                 match ty {
                     PhpType::Int => {
@@ -67,8 +91,22 @@ impl Checker {
                 Ok(PhpType::Int)
             }
             ExprKind::PreIncrement(name) | ExprKind::PreDecrement(name) => match env.get(name) {
-                Some(ty) if crate::types::object_operators::operator_class(ty).is_some() => Ok(ty.clone()),
-                Some(PhpType::Int) => Ok(PhpType::Mixed),
+                Some(ty) if crate::types::object_operators::binary_plan_with_classes(
+                    &crate::parser::ast::BinOp::Add, ty, &PhpType::Int, &self.classes,
+                ).is_some() => {
+                    let plan = crate::types::object_operators::binary_plan_with_classes(
+                        &crate::parser::ast::BinOp::Add, ty, &PhpType::Int, &self.classes,
+                    ).unwrap();
+                    let result = plan.result_type(&crate::parser::ast::BinOp::Add);
+                    if result.is_int_float_union() {
+                        self.reject_unboxable_native_incdec(name, ty, expr.span)?;
+                        self.record_string_incdec_local(name);
+                    }
+                    Ok(result)
+                },
+                Some(PhpType::Int) => Ok(if self.has_fixed_tagged_reference_storage(name, env) {
+                    PhpType::Int
+                } else { PhpType::Mixed }),
                 Some(PhpType::Mixed) => Ok(PhpType::Mixed),
                 // PHP's string increment can change the value's type (`"9"++` is
                 // `int(10)`), so the pre-form's value is dynamically tagged. EIR lowering
@@ -97,7 +135,18 @@ impl Checker {
                 )),
             },
             ExprKind::PostIncrement(name) | ExprKind::PostDecrement(name) => match env.get(name) {
-                Some(ty) if crate::types::object_operators::operator_class(ty).is_some() => Ok(ty.clone()),
+                Some(ty) if crate::types::object_operators::binary_plan_with_classes(
+                    &crate::parser::ast::BinOp::Add, ty, &PhpType::Int, &self.classes,
+                ).is_some() => {
+                    let plan = crate::types::object_operators::binary_plan_with_classes(
+                        &crate::parser::ast::BinOp::Add, ty, &PhpType::Int, &self.classes,
+                    ).unwrap();
+                    if plan.result_type(&crate::parser::ast::BinOp::Add).is_int_float_union() {
+                        self.reject_unboxable_native_incdec(name, ty, expr.span)?;
+                        self.record_string_incdec_local(name);
+                    }
+                    Ok(ty.clone())
+                },
                 Some(PhpType::Int)
                 | Some(PhpType::Bool)
                 | Some(PhpType::False)
@@ -144,7 +193,10 @@ impl Checker {
                     });
                     val_ty = Some(match val_ty {
                         Some(current) if current == vt => current,
-                        Some(_) => PhpType::Mixed,
+                        // Pointers and `null` share one pointer-word element, as in an indexed
+                        // literal; anything else widens to `mixed`.
+                        Some(current) => crate::types::merge_pointer_elements(&current, &vt)
+                            .unwrap_or(PhpType::Mixed),
                         None => vt,
                     });
                 }
@@ -175,7 +227,9 @@ impl Checker {
                     };
                     val_ty = Some(match val_ty {
                         Some(acc) if acc == next => acc,
-                        Some(_) => PhpType::Mixed,
+                        // Pointers and `null` share one pointer-word element.
+                        Some(acc) => crate::types::merge_pointer_elements(&acc, &next)
+                            .unwrap_or(PhpType::Mixed),
                         None => next,
                     });
                 }
@@ -191,11 +245,13 @@ impl Checker {
             } => {
                 self.infer_type(subject, env)?;
                 let mut result_ty: Option<PhpType> = None;
+                let mut arm_types: Vec<(&Expr, PhpType)> = Vec::new();
                 for (conditions, result) in arms {
                     for c in conditions {
                         self.infer_type(c, env)?;
                     }
                     let ty = self.match_arm_result_type(result, env)?;
+                    arm_types.push((result, ty.clone()));
                     result_ty = Some(match result_ty {
                         Some(acc) => merge_match_arm_result_type(self, acc, ty),
                         None => ty,
@@ -203,10 +259,14 @@ impl Checker {
                 }
                 if let Some(d) = default {
                     let ty = self.match_arm_result_type(d, env)?;
+                    arm_types.push((&**d, ty.clone()));
                     result_ty = Some(match result_ty {
                         Some(acc) => merge_match_arm_result_type(self, acc, ty),
                         None => ty,
                     });
+                }
+                if let Some(buffer) = buffer_merge_result_type("a match", &arm_types, expr.span)? {
+                    return Ok(buffer);
                 }
                 Ok(result_ty.unwrap_or(PhpType::Void))
             }
@@ -214,34 +274,59 @@ impl Checker {
                 if elems.is_empty() {
                     return Ok(PhpType::Array(Box::new(PhpType::Never)));
                 }
-                if elems.iter().any(|elem| {
-                    matches!(
-                        &elem.kind,
-                        ExprKind::Spread(inner)
-                            if matches!(
-                                self.infer_type(inner, env).map(|ty| ty.codegen_repr()),
-                                Ok(PhpType::AssocArray { .. } | PhpType::Mixed)
-                            )
-                    )
-                }) {
-                    let value_ty = self.assoc_spread_literal_value_type(elems, env);
+                // Every spread source is typed ONCE. The hash-spread scan types the sources in
+                // order, up to the first one that makes the literal a hash, and whichever merge
+                // follows reuses those results. Typing a source again in the merge doubled the
+                // work at every nesting level, so `[...($m ?? [...E, null]), null]` grew
+                // exponentially with its depth.
+                let mut scanned_sources: Vec<Result<PhpType, CompileError>> = Vec::new();
+                let mut has_hash_spread = false;
+                for elem in elems {
+                    let ExprKind::Spread(inner) = &elem.kind else {
+                        continue;
+                    };
+                    let source_ty = self.infer_type(inner, env);
+                    has_hash_spread = matches!(
+                        source_ty.as_ref().map(|ty| ty.codegen_repr()),
+                        Ok(PhpType::AssocArray { .. } | PhpType::Mixed)
+                    );
+                    scanned_sources.push(source_ty);
+                    if has_hash_spread {
+                        break;
+                    }
+                }
+                if has_hash_spread {
+                    let value_ty =
+                        self.assoc_spread_literal_value_type(elems, scanned_sources, env);
                     return Ok(PhpType::AssocArray {
                         key: Box::new(PhpType::Mixed),
                         value: Box::new(value_ty),
                     });
                 }
-                let mut elem_ty = self.infer_type(&elems[0], env)?;
-                for elem in &elems[1..] {
-                    let ty = self.infer_type(elem, env)?;
-                    if ty != elem_ty {
-                        if let Some(merged_ty) = self.merge_array_element_type(&elem_ty, &ty) {
-                            elem_ty = merged_ty;
-                            continue;
+                // No source is a hash, so the scan typed every spread source, in the order the
+                // spreads appear: each spread element takes the next recorded result, and keeps
+                // the diagnostic a spread reports at its own span.
+                let mut scanned_sources = scanned_sources.into_iter();
+                let mut elem_ty: Option<PhpType> = None;
+                for elem in elems {
+                    let ty = match &elem.kind {
+                        ExprKind::Spread(inner) => {
+                            let source_ty = scanned_sources
+                                .next()
+                                .unwrap_or_else(|| self.infer_type(inner, env))?;
+                            self.spread_source_element_type(source_ty, elem.span, false)?
                         }
-                        elem_ty = PhpType::Mixed;
-                    }
+                        _ => self.infer_type(elem, env)?,
+                    };
+                    elem_ty = Some(match elem_ty {
+                        None => ty,
+                        Some(current) if current == ty => current,
+                        Some(current) => self
+                            .merge_array_element_type(&current, &ty)
+                            .unwrap_or(PhpType::Mixed),
+                    });
                 }
-                Ok(PhpType::Array(Box::new(elem_ty)))
+                Ok(PhpType::Array(Box::new(elem_ty.unwrap_or(PhpType::Never))))
             }
             ExprKind::ArrayAccess { .. } => self.infer_array_access_type(expr, env),
             ExprKind::Ternary {
@@ -254,23 +339,20 @@ impl Checker {
                 // recognized guards) narrow `$x` — or a simple `$x->prop` — in the then/else
                 // branches. A ternary is a single expression (no intervening writes), so the
                 // narrowing is safe to scope to each branch's inference.
-                let (then_ty, else_ty) = if let Some(guard) =
-                    self.guard_narrowing(condition, env)?
-                {
-                    let mut then_env = env.clone();
-                    then_env.insert(guard.var.clone(), guard.then_ty);
-                    let mut else_env = env.clone();
-                    else_env.insert(guard.var, guard.else_ty);
-                    (
-                        self.match_arm_result_type(then_expr, &then_env)?,
-                        self.match_arm_result_type(else_expr, &else_env)?,
-                    )
-                } else {
-                    (
-                        self.match_arm_result_type(then_expr, env)?,
-                        self.match_arm_result_type(else_expr, env)?,
-                    )
-                };
+                let mut then_env = env.clone();
+                let mut else_env = env.clone();
+                let guards = self.guard_narrowings(condition, env)?;
+                let then_ty = self.with_preserved_binding_flow(|checker|
+                    checker.with_flow_narrowings(&guards, true, &mut then_env,
+                        |checker, env| checker.match_arm_result_type(then_expr, env)))?;
+                let else_ty = self.with_preserved_binding_flow(|checker|
+                    checker.with_flow_narrowings(&guards, false, &mut else_env,
+                        |checker, env| checker.match_arm_result_type(else_expr, env)))?;
+                let arms = [(&**then_expr, then_ty), (&**else_expr, else_ty)];
+                if let Some(buffer) = buffer_merge_result_type("a ternary", &arms, expr.span)? {
+                    return Ok(buffer);
+                }
+                let [(_, then_ty), (_, else_ty)] = arms;
                 // Same Mixed/nullable merge as match arms: heterogeneous heap
                 // types must not collapse through the Str-absorbing syntactic join.
                 Ok(merge_match_arm_result_type(self, then_ty, else_ty))
@@ -278,27 +360,17 @@ impl Checker {
             ExprKind::ShortTernary { value, default } => {
                 let value_ty = self.match_arm_result_type(value, env)?;
                 let default_ty = self.match_arm_result_type(default, env)?;
-                Ok(merge_match_arm_result_type(self, value_ty, default_ty))
+                let arms = [(&**value, value_ty), (&**default, default_ty)];
+                if let Some(buffer) = buffer_merge_result_type("a `?:`", &arms, expr.span)? {
+                    return Ok(buffer);
+                }
+                let [(_, value_ty), (_, default_ty)] = arms;
+                Ok(merge_match_arm_result_type(self, super::truthy_short_ternary_type(self, value_ty), default_ty))
             }
             ExprKind::Throw(inner) => {
                 let thrown_ty = self.infer_type(inner, env)?;
-                match thrown_ty {
-                    PhpType::Object(type_name)
-                        if self.object_type_implements_throwable(&type_name)
-                            || self.object_type_may_be_eval_declared(&type_name) =>
-                    {
-                        Ok(PhpType::Void)
-                    }
-                    PhpType::Mixed if self.eval_barrier_active => Ok(PhpType::Void),
-                    PhpType::Object(_) => Err(CompileError::new(
-                        expr.span,
-                        "Type error: throw requires an object implementing Throwable",
-                    )),
-                    _ => Err(CompileError::new(
-                        expr.span,
-                        "Type error: throw requires an object value",
-                    )),
-                }
+                self.validate_finally_throw_type(&thrown_ty, expr.span)?;
+                Ok(PhpType::Void)
             }
             ExprKind::Cast { target, expr } => {
                 let source_ty = self.infer_type(expr, env)?;

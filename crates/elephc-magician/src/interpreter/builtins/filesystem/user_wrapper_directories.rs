@@ -36,7 +36,7 @@ pub(in crate::interpreter) fn eval_user_wrapper_opendir_result(
     let object = eval_dynamic_class_new_object(&class, Vec::new(), context, &mut scope, values)?;
     let path_arg = values.string(path)?;
     let options = values.int(0)?;
-    let result = eval_dynamic_method_with_values(
+    let result = eval_dynamic_method_with_owned_values(
         &declaring_class,
         class.name(),
         &dir_opendir,
@@ -44,9 +44,17 @@ pub(in crate::interpreter) fn eval_user_wrapper_opendir_result(
         positional_args(vec![path_arg, options]),
         context,
         values,
-    )?;
-    let opened = values.truthy(result)?;
-    values.release(result)?;
+    );
+    let result = match result {
+        Ok(value) => value,
+        Err(status) => { let _ = release_expr_result(object, context, values); return Err(status); }
+    };
+    let opened = values.truthy(result);
+    let released = release_expr_result(result, context, values);
+    let opened = match opened.and_then(|opened| released.map(|()| opened)) {
+        Ok(opened) => opened,
+        Err(status) => { let _ = release_expr_result(object, context, values); return Err(status); }
+    };
     if !opened {
         values.release(object)?;
         return values.bool_value(false).map(Some);
@@ -69,7 +77,7 @@ pub(in crate::interpreter) fn eval_user_wrapper_closedir_result(
     if let Some((declaring_class, dir_closedir)) =
         eval_user_wrapper_method(&info.class_name, "dir_closedir", context)
     {
-        let result = eval_dynamic_method_with_values(
+        let result = eval_dynamic_method_with_owned_values(
             &declaring_class,
             &info.class_name,
             &dir_closedir,
@@ -103,7 +111,7 @@ pub(in crate::interpreter) fn eval_user_wrapper_readdir_result(
     else {
         return values.bool_value(false).map(Some);
     };
-    let result = eval_dynamic_method_with_values(
+    let result = eval_dynamic_method_with_owned_values(
         &declaring_class,
         &info.class_name,
         &dir_readdir,
@@ -131,7 +139,7 @@ pub(in crate::interpreter) fn eval_user_wrapper_rewinddir_result(
     if let Some((declaring_class, dir_rewinddir)) =
         eval_user_wrapper_method(&info.class_name, "dir_rewinddir", context)
     {
-        let result = eval_dynamic_method_with_values(
+        let result = eval_dynamic_method_with_owned_values(
             &declaring_class,
             &info.class_name,
             &dir_rewinddir,

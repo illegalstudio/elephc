@@ -9,6 +9,14 @@ elephc manages memory without calling `malloc`/`free` for PHP values directly. S
 
 This page explains where every value lives in memory at runtime.
 
+For `--emit phpext`, each PHP request owns a snapshot of these native writable
+regions. The adapter restores snapshots at stable addresses under a module-local
+mutex, preserving internal pointers while isolating request heaps and statics.
+Native strings and arrays are copied through private transport storage, then
+converted using real Zend APIs. Zend allocations and native allocations never
+share ownership. Snapshot buffers and partial transport allocations are freed
+at their request/call boundaries. See [PHP extensions](../beyond-php/phpext.md).
+
 ## Runtime memory regions
 
 ```
@@ -18,18 +26,21 @@ This page explains where every value lives in memory at runtime.
 ├─────────────────────────────┤
 │         (unused)             │
 ├─────────────────────────────┤
-│       Heap buffer            │  _heap_buf: 8MB default (--heap-size)
+│       Heap buffer            │  _heap_buf: 128MB default (--heap-size)
 │  (arrays, hash tables,       │  Free-list + bump allocator
 │   objects, persisted strings) │
 ├─────────────────────────────┤
 │ Buffer descriptor registry   │  _buffer_registry: 4097 x 48B
 │  (generation-safe handles)   │  index 0 reserved; 4096 usable slots
 ├─────────────────────────────┤
-│     String buffer            │  _concat_buf: 64KB, scratch pad
+│     String buffer            │  _concat_buf: heap-sized, scratch pad
 │  (temporary string results)  │  Reset at each statement
 ├─────────────────────────────┤
-│   Output capture buffers     │  _print_r_buf: 64KB return-mode capture,
-│  (print_r return mode, ob_*  │  _ob_ptrs/_lens/_caps + handler tables:
+│ Numeric formatter spill rings│  _itoa_spill_ring: 8 x 32B
+│  (bounded scratch windows)   │  _float_spill_ring: 4 x 64B
+├─────────────────────────────┤
+│   Output capture buffers     │  _print_r_ptr/_cap: growable heap capture,
+│  (print_r rendering, ob_*    │  _ob_ptrs/_lens/_caps + handler tables:
 │   buffer-stack bookkeeping)  │  64 slots x 8B each (ob buffer bodies
 │                              │  are heap-allocated)
 ├─────────────────────────────┤
@@ -49,6 +60,8 @@ This page explains where every value lives in memory at runtime.
 │                              │  _rt_diag_suppression, _rt_diag_pending_*,
 │                              │  _php_diagnostic_*,
 │                              │  _rt_unmanaged_ref_borrow_top,
+│                              │  _obj_handle_index, _obj_handle_free/_top,
+│                              │  _obj_weak_reference_index,
 │                              │  _resource_inventory_head/_tail,
 │                              │  _json_last_error, _json_active_*,
 │                              │  _json_indent_depth, _json_validate_*,
@@ -96,9 +109,45 @@ Each function has a stack frame. The [code generator](the-codegen.md) calculates
 
 On the EIR backend the frame also reserves one save slot per callee-saved register that the linear-scan register allocator uses. Eligible scalar PHP locals are promoted to SSA values, so their repeated loads and stores can disappear and loop-carried values can live in registers. The frame still reserves local slots, and address-taken, by-reference, global/static, refcounted, and volatile locals continue to use them. See [The IR](the-ir.md) for scalar promotion and register allocation.
 
+Native return paths share their emitted epilogue by static or dynamic return
+ownership. Functions with multiple returns reserve a frame word selecting the
+local whose owner escapes. Cleanup skips that local without clearing storage
+that a sibling destructor can observe. Dynamic ownership markers move from
+their individual spill slots to an aligned temporary stack slot before cleanup,
+then return to the private status register after cleanup. This bounds the
+number of cleanup plans independently of the number of returns, while keeping
+the selected owner, cleanup order and exception handling intact.
+
+### Frame-local numeric cells
+
+Checked integer add/subtract/multiply results may use a 24-byte `mixed` cell in
+the current stack frame when codegen proves the entire lifetime cannot escape.
+The cell has the ordinary runtime tag and payload but no heap header, and it
+must never reach a heap release or outlive its producing activation. Its
+overflow branch computes the operation's float result from the original
+operands. A proven numeric local also owns one seed cell for raw integer or float
+stores, so re-entering a counter loop does not box its seed. References, `eval`, suspension, delayed reads and unknown consumers
+retain ordinary heap storage. See
+[Frame-local checked numeric cells](the-codegen.md#frame-local-checked-numeric-cells).
+
+### Reused foreach key cells
+
+The key variable of a by-value `foreach` is a boxed `mixed` cell, because a hash key can be
+an integer or a string. Binding a new key used to allocate one cell per entry and release
+the previous one. For an integer key of a source that is statically a PHP array,
+`__rt_mixed_reuse_int_cell` now rewrites the previous cell in place when the key variable
+is its only owner (reference count one) and it holds a scalar, so a keyed loop costs one
+cell in total. A key that was
+copied into an array, another variable, a closure or a property has a higher reference
+count and keeps its value while the loop allocates a new cell for the next entry.
+
 ### Variable allocation
 
-Variables are allocated stack slots when the [code generator](the-codegen.md) scans the function body (`collect_local_vars`). The allocation is determined at compile time — there's no dynamic stack growth.
+EIR lowering declares PHP locals and hidden temporary slots before codegen.
+`src/codegen/frame.rs::layout_for_function()` then assigns their fixed offsets
+from the EIR metadata, alongside SSA backing slots, frame-local numeric cells
+and saved registers. The allocation is determined at compile time; there is no
+dynamic stack growth for these slots.
 
 For heap-backed values, stack slots also carry compile-time ownership metadata in codegen: `Owned`, `Borrowed`, `MaybeOwned`, or `NonHeap`. This metadata is not stored in the generated binary; it only guides when codegen must retain a borrowed heap value before storing it into a new owner, and which local aliases must not be blindly decreffed yet.
 
@@ -111,7 +160,7 @@ For heap-backed values, stack slots also carry compile-time ownership metadata i
 | `Array` | 8 bytes | Pointer to heap-allocated header |
 | `AssocArray` | 8 bytes | Pointer to heap-allocated hash table |
 | `Iterable` | 8 bytes | Type-erased heap pointer for arrays or Traversable objects |
-| `Mixed` | 8 bytes | Pointer to heap-allocated boxed mixed cell |
+| `Mixed` | 8 bytes | Pointer to a boxed Mixed cell, normally heap-allocated |
 | `Void` (null) | 8 bytes | Sentinel value `0x7FFFFFFFFFFFFFFE` |
 | `Object` | 8 bytes | Pointer to heap-allocated object |
 | `Callable` | 8 bytes | Function pointer |
@@ -121,6 +170,65 @@ For heap-backed values, stack slots also carry compile-time ownership metadata i
 | `Packed` | 8 bytes | Metadata-only nominal type, accessed via pointer |
 | `Union` | 8 bytes | Boxed runtime-tagged payload (same storage as Mixed) |
 | `TaggedScalar` | 16 bytes | 8-byte payload + 8-byte runtime tag (tagged null representation) |
+
+### Nonescaping checked numeric results
+
+Checked integer add, subtract and multiply can use a 24-byte cell reserved in the
+current function's frame. The cell retains the ordinary Mixed tag and two payload
+words. Overflow converts both original integers to double and writes a float tag;
+the optimization does not narrow the arithmetic domain or replace promotion with
+a fatal error. Frame sizing and instruction emission support all five targets.
+
+Transient producers in one block may reuse a cell after its last payload read,
+including reads through transparent ownership copies. A numeric emitter reads
+both inputs before writing its result, allowing reuse at that boundary. Values
+stored in any local retain dedicated cells, and different blocks do not share.
+This limits additional stack use to simultaneously live transient values instead
+of the total number of operations in a long expression.
+
+`src/codegen/stack_numeric.rs` proves the complete use graph before frame layout.
+Only same-block scalar observations (including the key position of an array or
+hash access, which copies the payload into key registers), numeric ordered or
+strict identity comparisons, closed numeric producers, ownership scaffolding and
+one ordinary local or owned operand slot may consume a selected pointer. Declared
+integer returns copy the payload and retain their type check.
+Every access to the owning slot must preserve the numeric storage contract. A
+borrowed pointer must be converted before that slot is stored or released, or any
+producer that can back it executes again. Independent cells may intervene.
+Published operand slots require one same-block store, balanced owner records and
+final retirement. Their cleanup records remain intact when a property read can
+throw, and the dispatcher rejects frame addresses. Returns of the cell,
+pointer-valued block arguments, a second
+local, container stores and unknown consumers retain heap storage. A string
+conversion of the final scalar is an observation: the formatter reads the tag and
+payload and numeric tags render into concat scratch without adopting the cell.
+Parameters, globals, statics, references, eval storage and suspended activations
+do not receive this local storage optimization. Private slots in the executable
+main frame use the same complete lifetime proof; global-visible values still retain
+heap storage.
+
+Loop-carried numeric slots are lowered with their final Mixed representation from
+entry, including arithmetic results copied through another local. Closed numeric
+add/subtract/multiply and increment inputs preserve an existing float tag on later
+iterations. Counters retain scalar lowering only after a discarded SSA/range trial
+proves every update safe; mutually observed counters are proved together, and nested
+loop invariants are simplified before the range check. Unknown aliases and dynamic
+scope access reject the proof. The proof is per frame slot, and a slot is per
+binding: a straight-line reassignment between two different numeric types starts a
+new binding (see [Local retyping](the-type-checker.md#local-retyping-and-strict-locals-mode)),
+so a counter name reused by a later loop with a boxed seed does not widen the slot of
+an earlier, provably integer loop.
+
+A `MixedClone` of a proven numeric value, such as the key snapshot that
+`$starts[$cell]--` takes of `$cell`, copies only a tag and payload. Reading a
+numeric local into such a clone is therefore an observation, and a clone stored
+into one proven local writes that local's own frame cell instead of a heap box.
+
+These frame cells have no heap header and cannot own children. Proven retains and
+releases of their SSA pointers emit no refcount calls. A selected local may still
+hold a numeric heap seed; its direct Mixed cleanup releases that seed and ignores
+frame addresses through the runtime's existing heap-range check. This avoids a
+protected destructor callback for values that cannot execute PHP cleanup code.
 
 ### Eval subclass property storage
 
@@ -220,6 +328,8 @@ no heap reference, and tag 7 there had handed the payload to decref, clone and c
 
 Pointers are stored as raw 64-bit addresses. An opaque pointer and a typed `ptr<T>` value have the same runtime representation; the type tag only exists in the checker. Null pointers use address `0x0`, and dereference helpers explicitly trap on null via `__rt_ptr_check_nonnull`.
 
+A `?ptr<T>` uses the same word, with PHP `null` as address `0x0`. A PHP local that receives `null`, packed record addresses and pointers at different points gets that pointer-word frame slot too (`pointer_word_storage` in `src/ir/builder.rs`) instead of a boxed Mixed cell. The slot type is final only after the whole body is lowered, so codegen writes a `null` stored into such a slot as `0x0` and reads the slot back as the null sentinel where lowering knows the local holds `null`. Lowering types the local `?ptr<T>` where it can be either: at `if` merges, from a `?ptr<T>` loop contract the checker records for a local that enters a loop holding `null`, and after a null-only local is bound to a `?ptr<T>` by-reference parameter.
+
 ### Buffer handles, descriptors, and payloads
 
 A `buffer<T>` local stores an opaque 64-bit handle rather than a payload or header pointer:
@@ -243,11 +353,36 @@ Offset  Size  Field
 
 `__rt_buffer_resolve` validates the handle index, non-zero generation, active marker, and exact generation match before length, read, write, or free paths use descriptor metadata. `buffer_new<T>()` allocates exactly `length * stride` payload bytes from the compiler-managed heap and zeroes only that payload. `buffer_free()` marks the descriptor inactive before releasing the detached payload. Reusable descriptors enter the `_buffer_registry_free` list and receive a new generation for their next lifetime, which keeps stale aliases invalid after slot or heap reuse. A descriptor whose u32 generation reaches its maximum is retired instead of wrapping to zero.
 
+Whole packed-element assignment lowers to `BufferSet` (or `BufferSetResolved` after
+optimization) and copies the packed class's complete stride through
+`src/codegen/lower_inst/packed_record_copy.rs`, shared with nested packed-field stores.
+The assignment checks the destination handle and index; a source element read checks its
+own handle and index before supplying its address. The copy allocates nothing and does no
+reference counting: nested records and padding are bytes, while pointer fields retain their
+addresses. Typed pointer sources use the null guard and require caller-managed liveness.
+Resolved packed stores remain call-clobbering for register allocation, unlike scalar stores.
+
+Buffers created inside `eval()` do not use `_buffer_registry`. Magician keeps its own thread-local registry (`crates/elephc-magician/src/interpreter/builtins/raw_memory/buffer_registry.rs`) with the same lifecycle: `buffer_new()` publishes a zeroed `calloc` payload of `length * 8` bytes in a slot and answers the handle `(generation << 32) | (1 << 31) | slot`, `buffer_len()` and `buffer_ptr()` resolve the handle before reading the slot, and `buffer_free()` unpublishes the slot before freeing the payload, so a stale alias dies with the same `use of buffer after buffer_free()` fatal. Bit 31 keeps eval handles disjoint from compiled descriptor indices, generations stop at `2^31 - 1` so every handle is a positive PHP integer, and a slot that reaches that generation is retired.
+
 ### Fiber stacks and scheduler state
 
 `Fiber` objects own native stacks rather than borrowing the caller's stack. The runtime allocates each fiber stack through `mmap` (256 KiB usable by default, plus the guard page), protects the bottom 16 KiB with `mprotect(PROT_NONE)` as a guard page, and stores both the mapping base and total mapped size in the Fiber object so `__rt_fiber_free_stack` can later return it with `munmap`.
 
-The currently running fiber is tracked in `_fiber_current`. When execution switches away from the main stack, `_fiber_main_saved_sp`, `_fiber_main_saved_exc`, and `_fiber_main_saved_call_frame` preserve the main stack pointer, exception-handler chain, and activation-record cleanup chain. A suspended Fiber stores the same state inside its object payload (`saved_sp`, `own_exc_head`, and `own_call_frame`), so `__rt_fiber_switch` can swap between main and fiber contexts without mixing exception or cleanup chains.
+Saved native frames also enumerate the actual owning entries of their materialized
+eval scopes through `__elephc_eval_scope_visit_owners_v1`. The Rust handle itself
+is opaque foreign storage. Each visible owned entry exposes the address of its
+native cell-pointer field, while borrowed and unset entries contribute no edge.
+The callback shares the collector's slot-identity context, invokes no PHP and
+changes no owner counts. Its inventory matches scope cleanup's owned entries.
+
+Magician's byte-fragment and included-token parser entry points use a temporary
+16 MiB stack through `stacker::grow`. Cold parsing can therefore start on a small
+native Fiber stack. The stack is selected explicitly because native context
+switches do not update the operating-system thread's stack bounds. Parsing calls
+no PHP and returns its owned program before interpreter execution begins; PHP
+suspension and saved-frame ownership continue on the native coroutine stack.
+
+The currently running fiber is tracked in `_fiber_current`. When execution switches away from the main stack, `_fiber_main_saved_sp`, `_fiber_main_saved_exc`, and `_fiber_main_saved_call_frame` preserve the main stack pointer, exception-handler chain, and activation-record cleanup chain. The main context also saves its magic-setter guard and deep-release GC suppression. A suspended Fiber stores the same state inside its object payload (`saved_sp`, `own_exc_head`, `own_call_frame`, `own_magic_set_guard`, and `own_gc_release_suppressed`), so `__rt_fiber_switch` restores the execution context belonging to the selected stack.
 
 Every compiled function prologue also consults `_stack_limit`. The main-thread
 floor, derived from `RLIMIT_STACK`, is retained in `_stack_limit_main`; Fiber and
@@ -255,14 +390,44 @@ Generator switches replace the active value with their guarded-stack floor and
 restore the main value on return. Reaching the floor raises the compiler's
 maximum-call-stack fatal instead of falling through to a raw guard-page fault.
 
+String offset reads return a borrowed one-byte view into their receiver. If the receiver is an
+owned temporary, EIR lowering acquires the selected byte before releasing the receiver, so a
+property, array element, or call result can be indexed without leaving a dangling view.
+A byte needed after another expression is materialized before that expression runs, so
+replacing the source cannot invalidate a pending key, comparison, dispatch, or call operand.
+When acquiring or persisting a present byte view, the backend stages that byte on the stack
+before calling the string helper. This prevents preceding payload bytes from masquerading as
+a transferable concat allocation header. Empty and missing views bypass byte staging so the
+string helper preserves its sentinel behavior.
+For a byte selected from a heap-backed concat temporary, acquisition copies that byte
+independently and the receiver release frees the concat block only while it still carries
+`CONCAT_TEMP_HEAP_KIND`. A full-string store that already adopted and retagged the block
+keeps its owner. Explicit yielded keys are boxed before their temporary byte owner retires;
+the resulting single-use Mixed box transfers into the generator before suspension.
+Silent `empty()` string probes use PHP string truthiness, including the one-byte string `"0"`.
+
+Pending concat operands and computed array keys are published across an operand window when
+its EIR effects include a catchable throw or a warning that can call a throwing user error
+handler, or the window contains a direct throw terminator. Lowering
+first discovers those effects, then persists fresh transient strings and places the owner
+records before the window, retiring them after the consumer. This covers whole strings as well as persisted byte views;
+non-throwing scalar windows introduce no owner slots that could inhibit integer sinking or CSE.
+
+Ordinary property increment/decrement captures a boxed scalar union, such as
+`?float` or `int|float`, in compiler-managed hidden storage. The capture clones
+the old scalar cell before the property changes, and an operand-owner record
+protects it across a throwing write. A postfix result acquires its own owner
+before the snapshot is retired. Concrete scalar captures keep their existing
+storage, and opaque or object operands retain their ordinary dispatch path.
+
 ## The string buffer (scratch pad)
 
 ```asm
-.comm _concat_buf, 65536    ; 64KB scratch buffer
+.comm _concat_buf, <heap-size>  ; heap-sized scratch buffer (default 128 MB)
 .comm _concat_off, 8        ; current write offset (reset per statement, to the frame base)
 ```
 
-The string buffer (`_concat_buf`) is a 64KB scratch region used by all string operations — `itoa`, `ftoa`, `concat`, `strtolower`, `str_replace`, etc. Each operation writes its result at the current offset and advances the offset.
+The string buffer (`_concat_buf`) is a heap-sized scratch region (default 128 MB, matching the configured heap budget) used by string operations such as `itoa`, `ftoa`, `concat`, `strtolower` and `str_replace`. Each operation writes its result at the current offset and advances the offset.
 
 **The buffer is reset at the start of every statement — to the frame's inherited base, not necessarily 0.** Strings in the buffer are temporary: they live only for the duration of one statement's evaluation, *plus* (for an argument passed into a call) the lifetime of the callee. See [Cross-call slice arguments](#cross-call-slice-arguments) below.
 
@@ -286,7 +451,7 @@ A string operation returns a *borrowed slice* into `_concat_buf` (a pointer + le
 
 To prevent that, each frame records, on entry, the `_concat_off` value it inherited from the caller (the high-water mark below which the caller's live slices sit). That value is the frame's **base**: per-statement resets restore `_concat_off` to the base rather than 0, so the callee's own concatenations append *above* the caller's slices instead of clobbering them. `main` (and other root contexts) have a base of 0, so their behaviour is unchanged. The cursor is also saved/restored around each nested call so the caller can keep concatenating after the call returns.
 
-A consequence is that `_concat_buf` usage grows with the depth of nested calls that are *holding live slice arguments* (each frame reserves its caller's region). In practice this depth is shallow; deeply recursive string builders that would accumulate are a separate, pre-existing compile-time limitation, so the 64KB budget is not a concern for ordinary code.
+A consequence is that `_concat_buf` usage grows with the depth of nested calls that are *holding live slice arguments* (each frame reserves its caller's region). The arena tracks `--heap-size`, so this is bounded by the program's configured memory budget rather than a fixed 64 KiB cap.
 
 ### Copy-on-store
 
@@ -296,25 +461,37 @@ When a string result is stored to a variable (e.g., `$x = "a" . "b";`), the code
 - **The buffer can safely reset** without invalidating stored values
 - **Hash table keys** are also persisted to heap (via `str_persist`)
 
+Transient adoption accepts only an exact live allocation base. The allocator records each
+8-byte payload granule in `_heap_live_bases`, a bitmap using one byte per 64 heap bytes.
+Allocation sets the base bit, free clears it before reuse or coalescing, and web arena reset
+clears the used bitmap range before resetting `_heap_off`. The probe checks alignment, range,
+the complete transient kind and the live-base bit in constant time. User-controlled bytes
+before an interior substring cannot impersonate a heap header, and unrelated heap blocks
+never need to be scanned.
+
 ### Outgrowing the buffer
 
-64KB is where results *prefer* to live, not a ceiling on how large one can be. Every runtime producer reserves its destination through `__rt_concat_reserve`, which hands back scratch while the result still fits and an owned heap block when it does not; `__rt_concat_publish` then advances `_concat_off` only for the scratch case, deciding which it was from the pointer's own address rather than a flag. A producer whose size is not known until it has run — `implode()`, `stream_get_contents()` — starts in scratch and moves the bytes it has already written into a larger owned block with `__rt_concat_grow` when the next piece no longer fits.
+The shared arena is where results *prefer* to live, not a ceiling on how large one can be. Every runtime producer reserves its destination through `__rt_concat_reserve`, which hands back scratch while the result still fits and an owned heap block when it does not; `__rt_concat_publish` then advances `_concat_off` only for the scratch case, deciding which it was from the pointer's own address rather than a flag. A producer whose size is not known until it has run — `implode()`, `stream_get_contents()` — starts in scratch and moves the bytes it has already written into a larger owned block with `__rt_concat_grow` when the next piece no longer fits.
 
-This is a bounds check, not an optimization. A producer that skips it writes straight past `_concat_buf` into the adjacent BSS globals, which corrupts data silently in a CLI program and faults in a `--web` worker, at a size no `--heap-size` can change — `_concat_buf` is a fixed array. `implode()` was the last one still doing that (issue #515).
+A `.` result (and the `__rt_concat_grow` producers) that outgrows the buffer is stamped `CONCAT_TEMP_HEAP_KIND` instead of heap kind 1: like a scratch slice it has no owner that frees it, and the first consumer that persists it, a store or an `Acquire`, adopts the block in place by retagging it as an owned string rather than copying it, which is what keeps `$s .= ...` from duplicating a large accumulator on every append. That takeover is only safe while nothing else will release the same block. A user function that may return its argument hands the block back as its call result, an owning temporary the caller releases, so before such a call the caller claims a fresh transient argument (a `.`, interpolation or scalar-to-string result, never a builtin view such as `substr($s, 0)` or `$s[0]`, which points into a live string) with `EnsureOwned` (`__rt_str_claim`): the block is retagged as owned without a copy, every later persist duplicates it, and the argument is released after the call unless the callee returned it (`ReleaseUnlessAliases`). Without the claim, `$x = id($big . "b")` stored a block that the release of the call result then freed.
+
+This is a bounds check, not an optimization. A producer that skips it writes straight past the current reservation into adjacent runtime state, which corrupts data silently in a CLI program and faults in a `--web` worker. The arena is sized by `--heap-size`, but it is still a fixed budget for one statement: every producer must reserve or grow instead of writing at a pointer it did not own. `implode()` used to do that (issue #515).
 
 ### Implications
 
-- **Bounded usage.** Because the buffer resets each statement, only one statement's worth of string operations needs to fit in 64KB — plus the slice arguments held by any enclosing calls on the current stack (see [Cross-call slice arguments](#cross-call-slice-arguments)). For ordinary code this is comfortably within 64KB, and a result that does not fit takes the heap fallback above rather than overflowing.
+- **Bounded usage.** Because the buffer resets each statement, only one statement's worth of string operations needs to fit in the configured arena, plus the slice arguments held by any enclosing calls on the current stack (see [Cross-call slice arguments](#cross-call-slice-arguments)). The arena follows `--heap-size` (default 128 MB), and a result that does not fit takes the heap fallback above rather than overflowing. A result larger than the configured budget reports a controlled capacity fatal.
 - **Scratch copies.** Concatenation writes a new slice into `_concat_buf`, or a new heap block when the result outgrows the buffer. That scratch path leaves existing string bytes unchanged. In-place extension is the consuming heap append in [Performance characteristics](#performance-characteristics): a unique kind-1 buffer whose right-hand side does not overlap it.
 - **Scratch only.** The buffer is strictly temporary. Anything that needs to survive goes to the heap.
 
 ## The heap
 
 ```asm
-.comm _heap_buf, 8388608    ; 8MB buffer (configurable via --heap-size)
+.comm _heap_buf, 134217728  ; 128MB buffer (configurable via --heap-size)
 .comm _heap_off, 8          ; current bump allocation offset
 .comm _heap_free_list, 8    ; head of the general free block linked list
-.comm _heap_small_bins, 32  ; 4 x 8-byte heads for <=8/16/32/64-byte cached blocks
+.comm _heap_small_bins, 2048 ; 256 x 8-byte heads, one per exact payload size 8..2048
+.comm _heap_bin_marks, N     ; heap/16 + 2 bytes: one "parked in a bin" byte per granule
+.comm _heap_consolidated_frees, 8 ; _gc_frees at the end of the last allocator consolidation
 .comm _heap_debug_enabled, 8 ; heap-debug toggle
 .comm _gc_collecting, 8     ; cycle collector re-entry guard
 .comm _gc_release_suppressed, 8 ; suppress nested collection during deep free
@@ -324,7 +501,7 @@ This is a bounds check, not an optimization. A producer that skips it writes str
 .comm _gc_peak, 8           ; heap high-water mark
 ```
 
-The heap (`_heap_buf`) is an 8MB region (by default) for dynamically-sized data — arrays, hash tables, objects, and persisted strings. It uses a **free-list + bump hybrid allocator** with segregated small-block bins for the hottest tiny allocations.
+The heap (`_heap_buf`) is a 128 MB region by default (PHP's default `memory_limit`) for dynamically-sized data — arrays, hash tables, objects, and persisted strings. It uses a **free-list + bump hybrid allocator** with segregated small-block bins for the hottest tiny allocations.
 
 ### How heap allocation works
 
@@ -337,7 +514,7 @@ Every allocation has a **16-byte header**: two 32-bit fields for block size and 
        header (16 bytes total)          ← pointer returned to caller
 ```
 
-The size is stored at header offset `+0`, the reference count at `+4`, and the heap kind tag at `+8`. New allocations start with refcount `1`; typed constructors then stamp the kind as `1=string`, `2=indexed array`, `3=assoc/hash`, `4=object`, `5=boxed mixed`, while raw helper buffers remain `0`. Compact runtime-thrown Throwable payloads (exception/error objects allocated by throw paths) are stamped kind `6=throwable`; the uniform release dispatchers (`__rt_decref_any`, `__rt_object_free_deep`) accept kind `6` and release it through the object path. Generator frames are stamped as kind `4` object blocks because `Generator` is a built-in class with a custom payload layout.
+The size is stored at header offset `+0`, the reference count at `+4`, and the heap kind tag at `+8`. New allocations start with refcount `1`; typed constructors then stamp the kind as `1=string`, `2=indexed array`, `3=assoc/hash`, `4=object`, `5=boxed mixed`, `7=concat temporary`, `8=reference cell`, and `9=callable descriptor`, while raw helper buffers remain `0`. Compact runtime-thrown Throwable payloads (exception/error objects allocated by throw paths) are stamped kind `6=throwable`; the uniform release dispatchers (`__rt_decref_any`, `__rt_object_free_deep`) accept kind `6` and release it through the object path. Generator frames are stamped as kind `4` object blocks because `Generator` is a built-in class with a custom payload layout.
 
 On x86_64 the 8-byte kind word also carries an ownership marker: the ASCII bytes `"ELPH"` in its high 32 bits. Every x86_64 heap stamp goes through the shared `codegen_support::sentinels` helpers — `x86_64_heap_kind_word(low_bits)` builds the full word (magic + packed kind/COW/value_type low bits) and checkers compare against `X86_64_HEAP_MAGIC_HI32` — instead of hand-typed immediates. Refcount and free helpers ignore pointers whose header does not carry the marker, so foreign or static pointers silently opt out of refcounting. For array/hash containers, the low 16 bits of the kind word are persistent metadata: the low byte is still the heap kind, indexed arrays still pack their runtime `value_type` in the next byte, and bit 15 is reserved as the persistent copy-on-write container flag. Higher bits remain transient collector metadata.
 
@@ -367,6 +544,13 @@ releases, frees its container, and restores the enclosing GC suppression state
 before propagating. The typed-property unset bridge has a versioned Throwable
 output argument so this propagation returns to Magician as an eval exception
 instead of jumping across Rust frames.
+
+Deep-release GC suppression is saved with its Fiber or Generator when that
+coroutine suspends. The resuming caller regains its own suppression state, so a
+paused destructor cannot block collection on the caller's stack. Resuming the
+coroutine restores its pending release protection before cleanup continues.
+The collector-wide `_gc_collecting` flag remains global across stack switches
+to prevent reentrant collection while the collector itself closes a coroutine.
 
 `__rt_cleanup_invoke` can release a validated scalar Mixed cell without creating
 a new jump buffer. It first authenticates the exact `__rt_decref_any` callback,
@@ -414,14 +598,332 @@ reentrant unwinding from consuming a retired scope or local owner twice.
 Promoted local reference cells follow the same rule: detach the owner before
 releasing the payload, contain any payload exception, and free the cell before
 propagating. This applies both to explicit retirement and function epilogues.
-Object-owned property reference cells use heap kind `7`, with their payload type
+Object-owned property reference cells use heap kind `8`, with their payload type
 in header bits `8..14`. Their two payload words remain the value's low word and
 its high word or string length. Class GC descriptor tag `11` identifies these
-owned cells; constructor-promoted borrowed reference addresses stay non-owning.
+owned cells. Exact `mixed` constructor-promoted references acquire an object owner
+for the actual caller cell. Borrowed eval argument slots first share a persistent
+PHP reference wrapper with a new owned native cell. The constructor publishes the
+retained binding before releasing its allocation-time placeholder. Other typed
+constructor reference payloads retain their separate borrowed representation.
+When eval stages an existing PHP reference for a native boxed reference parameter,
+an unconstrained binding uses a managed descriptor-`7` cell retaining that same
+wrapper. Duplicate arguments share one cell lease. Native reference returns and
+constructors can retain the cell beyond the staging frame. Retirement uses the
+protected generic release boundary; it never frees a Rust pointer slot retained
+by a callee. Generic contracts and by-value fallback arguments keep detached
+temporary staging and validate their writeback before publishing it.
+Numeric and named variadic marker writes update the wrapper's child, as do native
+builtin outputs. A property write fetch clones and replaces that child before
+releasing the old box, preserving the wrapper used by escaping eval aliases.
 Each alias owns the cell separately from the contained value. Rebinding acquires
 the new cell before retiring the previous local, which may own the source object.
 Cloning separates a singleton cell and shares one with live aliases, excluding
 temporary collector pins when making that decision.
+Object-to-array projection follows the same visible-owner rule. A shared owned
+`mixed` cell acquires its persistent PHP wrapper before `get_object_vars()` or an
+array cast retains that wrapper. This also preserves native aliases in programs
+that never export the property to eval. A singleton reference projects an
+independent value when neither the native cell nor its PHP wrapper has another
+visible owner.
+The serialization row separately marks eligible exact `mixed` backing storage.
+Projection uses that capability before creating a wrapper; a constrained union
+that also uses boxed storage retains its existing representation until its
+property type sources can accompany the shared reference.
+
+Scalar reference readers authenticate a canonical cell through the allocator's
+exact live-base index, heap kind `8`, descriptor `7`, and a live kind-`5` wrapper
+with nested tag `7` and reference marker `1`. Raw frames, interior addresses,
+uninitialized cells and raw `Iterable` payloads retain their existing ABI.
+The shape probe returns a borrowed wrapper and runs again on every read rather
+than caching a result across PHP callbacks. Typed scalar and union promotion
+still requires the matching assignment validators and property-source lifecycle.
+JSON and serialization/rendering rows separately mark owned scalar cells eligible
+for that shape check. Borrowed constructor slots have no such flag. These leaf
+walkers preserve their raw payload path and resolve a canonical scalar child as
+Mixed, without calls or unrelated register clobbers. Object projections recover
+the original managed cell before testing its visible owners; an interior wrapper
+child address must never be used as a cell header. Shared canonical scalars then
+retain the wrapper, while singleton wrappers copy their PHP value. Raw scalar
+projection never creates a wrapper through this path.
+A separated canonical cell contains a new persistent wrapper. Its descriptor
+remains `7`, so flattening the wrapper into a scalar value box would violate the
+physical shape required by scalar readers.
+
+The native type-source metadata ABI identifies each physical property binding
+with a distinct generation token. Clone bindings remain separate even when they
+name the same cell and validator. Rebinding, unset and arena reset invalidate old
+tokens. The native rebind ABI preserves a registered binding's immutable
+declaration while moving it to a newly published cell, without registering
+unknown storage or retaining the displaced cell. Native iteration copies records
+without keeping a borrowed iterator across PHP re-entry. Records own and
+dereference no receiver, cell, value or validator address. Binding hooks must
+remove each source after the receiver destructor and before releasing its cell;
+ordinary reference parameters add no property source. Publisher and lifecycle
+wiring is required before this registry can enforce typed canonical references.
+Selected EIR declaration callbacks have an explicit native-validator function role.
+User assembly emits immutable, aligned descriptors containing the native entry,
+class identifier, physical slot index and static flag. Owned instance binding
+rows contain a byte offset and descriptor pointer for each physical slot,
+including hidden parent-private slots. Borrowed slots have no owned-instance row;
+static declarations keep a separate descriptor namespace. Metadata emission
+rejects callbacks with PHP argument conventions. These rows are available for
+native lifecycle hooks to register the physical bindings.
+Weak indexes select sources by exact native cell or canonical PHP wrapper. Several
+cells may name one wrapper, and each physical property still contributes its own
+source token. Native hooks bind a property before reporting its authenticated
+wrapper shape. An unknown cell retains no address association, and removing its
+last binding clears that association before allocator reuse. Shape changes update
+the metadata epoch. A subsequent assignment queries from the start so an older
+source that joined the target wrapper after the previous snapshot is visited.
+A cursor from an earlier physical state does not describe the current source set.
+An unchanged metadata epoch does not prove that a native cell stayed raw across
+PHP re-entry; callers must recheck physical shape and previously unmatched cells.
+
+In a selected native-validation runtime, Mixed promotion authenticates the cell's
+current wrapper and reports that association to every registered binding of the
+cell. Property unset publishes its fresh uninitialized cell, rebinds the existing
+physical declaration to that cell, reports its current shape, then retires the
+displaced cell. The old wrapper therefore loses that property's constraint
+before a displaced destructor can assign through a surviving alias. Promotion of
+the replacement reports its new wrapper without registering unknown storage.
+These index mutations run no PHP and own no values. A rejected mutation aborts
+instead of allowing assignment with stale constraints. Runtimes without the
+capability emit none of these registry calls.
+
+Selected object allocation registers physical rows after all owned cells are
+initialized. Runtime by-name allocation registers after its property initializer
+thunk and before returning the object to hydration or reflection callers. Clone
+registers the completed copied cells as distinct bindings in both the shared
+boxed runtime adapter used by PHP `clone` and eval, and direct EIR clone emission,
+including when an external alias makes both objects share one cell. The final
+object walk unregisters each owned reference row immediately before releasing
+its cell. Other properties retain their constraints until their own iteration.
+The walk begins after resurrection checks, so a destructor that saves `$this`
+retains its original sources. The web boundary resets the registry after PHP
+shutdown callbacks and before recycling arena addresses. Static storage and the
+remaining typed native/eval call surfaces still need their complete lifecycle
+and ownership handoff before automatic canonical activation is enabled.
+
+The versioned native validation coordinator prepares property candidates without
+publishing a destination. It copies and physically checks the initial matching
+source set before PHP, then each selected property receives the same detached
+original RHS exactly once. Removing a property during its `__toString` does not
+undo that assignment's coercion or the already selected property checks. Newly
+attached sources constrain later assignments. The coordinator never rereads a
+receiver or cell after PHP; copied declaration validators outlive their receivers.
+It checks agreement after each coercion, before invoking a later source, and
+transfers one owned result to the publisher. Failure and conflict retire every
+candidate. Unchanged type acceptance
+retains the original cell so accepted `NaN` and recursive arrays do not require a
+non-reflexive or recursive value comparison. Native callbacks must contain throws
+before returning through Rust, keep probes/comparison free of PHP re-entry, and
+consume discarded candidates without starting a collection safe point. The caller
+keeps the original RHS and reference alive throughout validation. The generated
+publishers, protected callbacks, invisible keepalive pins and binding lifecycle
+still need integration before typed canonical references can be enabled.
+
+Native validation roots use caller-owned 32-byte records containing previous and
+next links, an owner pointer, and its authenticated allocation kind. Static boxed
+constants have kind zero and never grant permission to read an allocation header. Each record retains one boxed
+value or native cell owner. Cell clone and projection checks exclude native-cell
+roots as well as the wrapper roots excluded by value-sharing checks. Sharing
+checks subtract these artificial owners before deciding whether a PHP reference
+has another visible owner. The checks scan only
+active validation records and do not call PHP or acquire another owner. Records
+can retire in any order, allowing interleaved suspended activations. A record is
+unlinked before protected generic release can run a destructor. A final native
+cell root releases its descriptor-selected child and allocation. A cell kept alive
+only by temporary pins also contributes no visible owner of its boxed child.
+Sharing checks count each such cell once, even with several pins, and continue to
+count its child while a real native parameter or property binding owns the cell. Web request reset clears
+the registry before cleanup can inspect a retired request stack. Generated
+publishers still need to enter and leave these roots on every path; cancellation
+must retire a record before releasing its activation's stack.
+
+The native coercion adapter invokes a descriptor's explicit two-argument C entry
+inside `__rt_cleanup_invoke`. It clears the candidate output before calling user
+code, transfers one owned Mixed result on success, and contains a thrown native
+exception in the context's second word. The caller's active exception is restored
+separately. A context that already owns a contained Throwable stops before another
+validator runs. The descriptor entry must return a boxed owner without PHP hidden
+argument collectors or scalar-result markers. Scalar, array, iterable and native
+object declarations, including nullable and union types, have callbacks generated through the typed EIR
+`reference.property_coerce` operation when
+`ir_lower::enable_native_reference_validation` selects the capability. Ordinary
+lowering emits no unused callbacks for the opaque-eval class catalog. Selection
+is idempotent and validates the resulting EIR. They borrow their two inputs and return one
+owned boxed candidate. Context bit zero selects assignment-site strictness;
+strict assignments preserve exact members and permit integer-to-float widening.
+Weak candidates reuse the property guard's coercions and diagnostics. An explicit
+`mixed` declaration contributes the unchanged original candidate: it can conflict
+with a float or string source that would coerce that original value. An untyped
+property contributes no declaration constraint. Reference
+object candidates use the shared native class-acceptance plan; eval-defined
+class ancestry remains part of the activation audit. Reference
+errors name the original physical declaration independently of candidate storage
+or receiver class, including hidden parent-private slots and inherited statics. The
+native ABI harness calls a generated callback through the protected adapter.
+Instance binding hooks register these callbacks for completed physical cells.
+Canonical store lowering transfers a contained raw Throwable back to the native
+exception chain only after the publisher has retired its temporary roots.
+
+The native operation callbacks authenticate a source's current physical binding
+through `__rt_reference_cell_canonical`, compare borrowed PHP candidates, and
+retire discarded candidates through `__rt_cleanup_invoke`. The comparison output
+is a four-byte C `int`. Protected retirement accumulates a contained Throwable in
+the same context slot as coercion and returns status two across the Rust ABI.
+
+The optional `native_reference_validation` capability emits
+`__rt_reference_validate_native` and links the standalone `elephc_reference`
+bridge independently of the eval runtime. Its cache identity uses bit 16. The native bridge builds the
+version-one 48-byte operation table and borrows the publisher's context, roots
+and 72-byte outcome through the Rust call. The ABI fixture registers a real weak
+source and exercises weak success and strict failure through generated EIR.
+Production publishers still need to select this capability when their lifecycle
+and commit paths are connected.
+
+`__rt_reference_commit_native` consumes a validated boxed candidate and publishes
+its owner before protected retirement of the previous child. A pending validation
+exception consumes the supplied candidate without changing the wrapper. Failed
+wrapper checks also retire the candidate. The caller keeps its context, wrapper
+and original RHS rooted through the operation and propagates a contained
+Throwable only after retiring those roots. The ABI fixture checks successful
+publication and an unchanged value after strict rejection; generated property
+publishers still need to call this primitive from their complete lifecycle paths.
+
+`__rt_reference_publish_native(context, wrapper, owned_rhs, outcome)` combines validation
+and commit for a canonical reference. It consumes and detaches the original RHS before
+callbacks, roots that snapshot and the wrapper with invisible leases, and passes
+the same snapshot to every declaration validator. With no matching source, it
+publishes a separate owner of the snapshot. A chosen candidate is removed from
+the outcome before commit consumes it. The rooted commit entry publishes the
+candidate, then takes and releases the snapshot lease before retiring the old
+child. Keeping an extra RHS owner across that retirement can delay an incoming
+object's destructor when the displaced destructor overwrites the new value.
+Callers must transfer their RHS owner and clear its unwind parking slot before
+entry. Both roots are unlinked and retired under the protected context on every
+completed validation path. The helper returns the
+status and conflict metadata without raising a PHP exception across Rust or
+leaving stack records linked. The ABI fixture checks weak coercion, strict
+rejection, unchanged RHS representation, source removal and an empty root list.
+Two executable regressions also verify incoming destruction inside the displaced
+destructor and a Stringable snapshot destructor observing the published string
+before its exception returns through the protected context.
+On an inconsistent conversion, the publisher constructs an owned `TypeError` in
+`context.pending` before releasing the last RHS snapshot lease. A throwing RHS
+destructor can then chain that error as its previous exception. A conflict returns
+status three with that pending error; a newer cleanup throw returns status two.
+
+When an attached native reference is flushed into eval, codegen first probes its
+current canonical wrapper. Eval retains that wrapper directly, preserving its
+actual PHP tag and shared identity even when the native parameter's legacy
+physical payload type is scalar. Raw or unpromoted cells still box their typed
+payload through the ordinary fallback.
+
+AST effect and exception analysis treats writes through reference parameters or
+known aliases as fallible. Their property constraints can reject the original RHS
+or invoke a Stringable callback. Callable summaries, constant-flow pruning and
+catch elimination install the same lexical reference-parameter scope, so a
+same-frame handler survives even when the RHS itself is a scalar literal.
+Pre/post increments and decrements preserve those validation catches too.
+Direct closure calls and closure aliases install their own reference parameter
+and capture scope while summarizing the body.
+
+This helper remains behind the explicit capability until property lifecycle and
+store lowering select it together.
+
+Lowered `StoreRefCell` instructions preserve the original RHS and carry an
+explicit PHP bool operand for assignment-site strictness. The physical alias
+type remains separate. With the explicit capability selected, lowering first
+authenticates a managed canonical cell and passes the original boxed RHS and
+source mode to the publisher. Unpromoted and borrowed raw cells retain the
+legacy conversion path; hand-built EIR with only the RHS retains that path too.
+An optional third operand borrows the source expression's unwind parking slot.
+The canonical path clears and retires that extra owner while the replacement
+box still keeps its payload alive, before publication can run a displaced
+destructor. Normal post-store cleanup then observes the empty parking slot.
+Optimizers preserve this slot's address identity. Mutating container writeback
+keeps its existing consuming or acquired-owner convention.
+
+Native function parameter flags carry physical boxed-reference storage separately
+from declared PHP types and tagged nullable integers. Normal function object
+references use the normalized Mixed ABI. A closure descriptor can instead expose
+a raw object or container payload and receives detached concrete-box adaptation.
+Only a physical Mixed pointer slot can share the live staging wrapper.
+
+Eval-to-native Mixed argument staging initially keeps each temporary cell through
+an invisible root whose stable record is owned by Rust. Foreign mutation of the
+record uses `UnsafeCell`; the record remains allocated until the root is unlinked.
+Cleanup takes the root owner without running PHP, then retires that owner inside
+the eval ABI's boxed Throwable accumulator. A destructor cannot bypass Rust
+cleanup or leave a record referring to retired foreign storage.
+
+Eval method and constructor bridges share one callable argument resolver. Each
+site supplies its borrowed boxed callback and active eval context explicitly;
+the resolver preserves the existing static, receiver-bound and dynamic adapter
+ownership rules. A selected native invokable descriptor returns directly without
+falling through into dynamic adapter allocation. A successful cast transfers its
+fresh descriptor owner into a private bridge collection. The normalized argument
+array keeps the original callback alive; its owner does not cover that descriptor.
+The collection has a fixed native cleanup record, so it survives partial argument
+staging and is drained when a suspended Fiber frame is retired. Normal and failed
+bridge exits unlink this record and drain every descriptor under a protected
+cleanup boundary. Each node detaches before retirement, and cleanup exceptions
+return as pending native Throwables through the Rust bridge's usual failure path.
+The record's pure GC visitor enumerates each node's descriptor slot. The native
+kind-zero nodes themselves are outside the cycle collector's graph. Counting
+their descriptor owners as edges of the saved Fiber prevents an unreachable
+Fiber cycle from appearing to retain an external descriptor root.
+
+Source argument evaluation has its own owner in addition to native staging.
+Reference candidates carry shared Rust provenance for that exact owner; ordinary
+value arguments use their existing cleanup without a shared allocation. After
+binding and argument-container construction, registered AOT functions and callable
+descriptors replace matching source leases with pending owned roots. These roots
+remain PHP-visible through adapter coercion. After acquiring a formal parameter,
+native entry consumes the extra source owners naming that exact cell and retires
+its staging root. The parameter now owns the cell independently, so unsetting the
+last PHP binding runs its destructor at the unset, inside the native callee.
+A nested call using another native cell over the same PHP reference cannot claim
+the pending outer argument. Retiring the exact staging root cancels pending
+associations before its cell address can be reused. Pending bindings remain
+visible while later argument expressions and coercion callbacks execute.
+The original argument boundary unlinks consumed source records or retires still
+pending owners in the original cleanup position, including after throws and while
+other arguments run destructors. Repeated take of a consumed staging record is
+inert. Eager generator parameter validators acquire a temporary owner without
+claiming source or staging roots before the constructor captures the arguments.
+Repeated values keep distinct lease records, while forwarded metadata can refer
+to the same lease without retaining or releasing it twice.
+
+A native frame owns an incoming managed reference cell in a hidden owner slot
+for each regular by-reference parameter. The cell is authenticated before its
+owner is acquired; borrowed frame addresses leave the hidden owner empty.
+`unset`, normal return and unwinding retire that parameter binding independently
+of the caller and property owners. Hidden owners are appended after every ABI
+parameter slot, preserving argument positions. Variadic reference marker arrays
+keep their existing container path.
+
+Direct source-function calls pass eligible plain exact-Mixed properties through
+their live cell. A synthetic argument owner is visible while later arguments
+evaluate, so a later `clone` observes the pending PHP reference. Its tagged
+48-byte cleanup record keeps the owner-slot address at offset 16 and the final
+call's incoming stack pointer at offset 32. The record has no backtrace reader.
+Immediately before native entry, codegen activates only the owners named by that
+call's EIR operands. Parameter acquisition authenticates the cell and transfers
+the matching owner by clearing the caller slot before publishing the callee's
+owner. `unset` can therefore detach the formal parameter without an artificial
+caller binding preserving sharing. Nested calls use distinct activation keys;
+an exception before entry retires the pending owner through normal unwinding.
+Other call surfaces retain the existing independent parameter-owner path.
+
+Constructor, instance-method and static-method bridges likewise preserve an
+existing Mixed PHP wrapper instead of copying its child into detached staging.
+Native stores update that wrapper's child, and return cleanup releases the
+activation lease without legacy payload copyback. Call-local exact-Mixed
+reference defaults acquire a persistent wrapper before a constructor can retain
+them. Raw typed bridge slots keep their concrete-value writeback path.
 
 Resolved reference-returning callees produce two distinct things at the `return`,
 and keeping them apart is what makes the boundary correct. `AcquireRefCell`
@@ -429,9 +931,21 @@ materializes the returned cell address ONCE and publishes it as a typed `Pointer
 SSA result; the return terminator transports that snapshot. Separately, when the
 address owns a managed cell, the retained owner goes into a `ReturnRefCell` lease
 slot: normal return transfers it, while an exception during epilogue cleanup
-releases it, and a second `return` inside a `finally` publishes its replacement
-before retiring the superseded lease, because that retirement can run a throwing
-payload destructor.
+releases it. Each return site has its own lease, so a caught exception from an inner
+return's `finally` can resume the outer return without losing its owner. Normal
+epilogue cleanup transfers only the lease named by the selected snapshot and retires
+the cancelled pending returns; exceptional cleanup retires every lease.
+
+A reference return acquired under a native handler or `finally` also publishes its
+lease slot through a fixed 48-byte cleanup record in the PHP frame. An exception
+that cancels this return clears and releases the lease before entering a surviving
+same-frame catch. An outer pending return lies below the inner handler's saved
+activation boundary, so an inner cancellation leaves that outer lease attached.
+The record uses the ordinary owner-slot cleanup and GC visitor. It does not move
+the temporary stack: receiver and foreach records retain their original addresses.
+Removing one of those older temporary records splices its exact address out of the
+activation chain while preserving newer fixed return records. Normal frame teardown
+removes the remaining records after transferring the selected lease.
 
 Because the returned reference is the snapshot rather than a re-read of the
 variable, a `finally` that rebinds the returned variable and falls through cannot
@@ -448,8 +962,14 @@ the variable's identity.
 That promotion uses the DECLARED result's payload representation, not the local's
 narrower inferred storage: a concretely typed array local inside an `: array` function
 widens to `Mixed` before its cell exists, because the caller dereferences the cell with
-the declared shape and a later write through either alias has to keep meaning. Storage
-that other aliases ALREADY share cannot be re-shaped that way, so it is checked instead
+the declared shape and a later write through either alias has to keep meaning.
+For a concrete declared result, storage is staged in a dedicated typed local before promotion,
+then the original name is attached to that cell. This keeps the payload independent of
+the source slot's final frame layout, which can become `Mixed` after a nullable store
+lowered earlier or later in the function. A consuming container conversion receives an
+independent retained payload; alias publication can then retire the source slot without
+releasing the conversion's result a second time. Storage that other aliases ALREADY share cannot
+be re-shaped that way, so it is checked instead
 of widened:
 
 - A by-reference parameter's storage belongs to the caller. A payload representation
@@ -466,6 +986,78 @@ of widened:
 Compatibility is representation, not identity: two object classes share one pointer
 layout and are interchangeable here, while container element layouts are part of the
 payload and are compared recursively.
+
+Eval-to-native reference arguments also carry their physical storage shape. Native free
+function parameter registration uses reference flag bit0 for by-reference binding and
+bit1 for the compiled inline nullable-integer layout. A nullable PHP type alone does not
+select that layout, because the legacy null representation can use boxed storage instead.
+Inline nullable integers stage both `[payload, tag]` words under invoker source shape12.
+Marker value reads box the actual tag from the second word; writes publish the replacement
+value's tag there. Native writeback rebuilds the caller's boxed value and marks it dirty,
+including a change between integer zero and null. Ordinary reference flags0/1 retain their
+existing storage policy.
+
+Before materializing an eval scope, visible ref-bound locals are checked for unboxed
+indexed-array and associative-array value layouts in both their logical type and preserved frame type. A container
+conversion can change the logical view while another native alias still expects the original
+element representation. Such aliases receive an explicit lowering refusal; a top-level PHP
+array tag is insufficient proof that a normalized replacement has compatible elements.
+Union members and nested container views are checked, while already boxed Mixed aliases keep
+their supported path. Literal scope barriers restrict this check to their actual write names.
+
+Signature-unknown descriptor calls widen fresh, promotable caller locals to boxed `Mixed`
+before making their reference markers, including arguments of runtime-named methods. Existing
+shared aliases keep their physical layout. The selected invoker checks that layout before
+publishing an address: inline nullable integers require source shape12; a `Mixed` parameter
+requires a real box. Legacy source tag7 also describes raw `Iterable` pointers, so heap kind5
+selects a box and kinds2 through4 select raw iterable storage. A layout mismatch raises a
+catchable `Error`, rather than interpreting a box's `[low, high]` words as `[payload, tag]`.
+In particular, signature-unknown calls box fresh array/object locals too. A runtime-selected
+`Iterable` reference parameter refuses those boxes; existing raw `Iterable` aliases still pass.
+Forwarding just `box+8` would lose the PHP tag when the callee replaces the container with a
+different iterable kind, so supporting boxed callers requires a persistent adapter and retagging.
+When a variadic marker points at existing shape12 storage, indexed and named writes accept
+only actual PHP tags0 and8. Rejected replacements retire their owned payload before the error,
+and neither word of the caller's slot is modified. These refusals are compiler subset limits;
+PHP reference parameter types do not constrain later assignments to an untyped local alias.
+Shared hashes select shape12 marker writes before copy-on-write can consume the caller's old
+hash owner. The write leaves the marker and hash unchanged, so both success and refusal can
+use the original header. Unique hashes avoid the preliminary lookup. Callback-capable EIR stores
+retain full user-code effects because replacement cleanup can invoke PHP destructors or throw.
+Proven typed stores with destructor-free elements, scalar keys and matching replacements refine
+those defaults to storage effects before callable summaries are computed. Unknown Mixed stores
+keep their callback effects; concat reset analysis still applies its precise operand proof.
+For packed arrays with a runtime key, shape12 marker writes also validate and publish directly
+before indexed-to-hash promotion, including numeric strings normalized to integer keys.
+A refusal therefore leaves the destination owner intact;
+successful integer/null writes retain the same marker and retire the full replacement box.
+Reference-cell, static and global storebacks acquire a separate container owner for the
+consuming helper. Their setter entry marks that owner for retirement on shape12 refusal;
+ordinary raw-local transfers leave their stored owner intact. The flag follows already-hash
+destinations into the hash setter and stays independent from float-key diagnostic and shared
+payload flags, so successful writes retain their existing COW behavior.
+Concrete string keys use the same mixed-key writer for every Mixed-element local, including
+value copies of reference variadics. Marker validation therefore precedes any consuming
+indexed-to-hash conversion, leaving the copy and its owner intact after a refused write.
+The refusal creates its pending Error before retiring the rejected value or extra container
+owner. Both releases use protected cleanup, preserving the original Error in the previous
+chain if a destructor throws and completing the remaining cleanup before propagation.
+
+Native nested writes through ArrayObject and ArrayIterator use a private storage selector
+when the concrete offset getter is inherited from the internal SPL implementation. It first
+locates or inserts a boxed null slot, separates the raw values array in its property, and then
+detaches and returns the stored Mixed child for write. No PHP reference is created in the
+backing arrays, so getArrayCopy and object clones keep their normal value semantics. The
+runtime table checks the actual getter owner; an overridden offsetSet alone does not change
+the selector, while a user offsetGet keeps its own value or reference behavior. Read warnings
+and attached selection use independent mode bits, including across the boxed-key owner record.
+
+A nullable local returned by reference with a non-null object result is checked before
+promotion to an object-payload cell. The original local name stays attached, including
+during `finally`. A boxed replacement is checked and unboxed before publication, with
+its own object lease. This fixed representation cannot accept a later null or other
+incompatible replacement: it raises an explicit `TypeError` instead of changing the
+cell layout behind the caller's reference.
 
 A source that is none of the accepted shapes is refused during lowering with a source
 diagnostic instead of being lowered as a value. Those refusals describe this lowering's
@@ -532,7 +1124,7 @@ expression is lowered, so the record nests outside every argument root the call
 publishes and is detached only once the alias owns the cell. A same-frame `catch`,
 which runs no whole-frame cleanup, still releases the payload exactly once. The
 record's cleanup discipline follows the slot: a ref-cell owner always uses the
-generic `__rt_decref_any` entry, which dispatches heap kind 7 to
+generic `__rt_decref_any` entry, which dispatches heap kind 8 to
 `__rt_reference_cell_release`, never the callable-descriptor entry its payload type
 would otherwise select.
 
@@ -647,6 +1239,55 @@ property aliases retain directly without this scan.
 Plain local overwrites and `unset()` also retire the previous slot owner before
 calling its release helper. The EIR retirement operation records that local
 mutation and the observable effects of a potentially throwing destructor.
+
+Property element removal fetches separated storage with `PropGetForWrite` and
+removes the key in place. It never stores a container back after releasing the
+removed value, because that value's destructor may replace the property or throw.
+Owned receiver expressions and keys stay in unwind-visible EIR operand slots.
+If key conversion can invoke a warning handler, native lowering retains a snapshot
+owner of the selected hash in a temporary cleanup scope. After conversion, another
+live owner allows this snapshot to be retired before deletion, preserving ordinary
+destructor interleaving. A detached hash keeps its snapshot through deletion or
+exception unwinding. The old property value is never stored back.
+
+Property element writes (`$o->items[$k] = $v`, `$o->items[] = $v`) into an indexed
+array or hash slot use the same fetch. `PropGetForWrite` lends the property's own
+separated container, borrowed, and the write helper mutates it in place. The
+previous lowering read the property, took a second reference and stored the result
+back, so every write found a shared container, copied all of it and freed the old
+one: filling a property was quadratic. The slot's reference is now the one a split
+or growth consumes, so the backend only publishes the pointer the helper returns,
+without retaining or releasing anything, and only when it differs from the pointer
+the helper was given. An indexed array that grew or a table a warning handler
+shared during key conversion is relocated before any element is released, so a
+changed pointer is always safe to publish. An unchanged pointer is not written
+back: an overwrite releases the replaced element last, and that element's
+destructor may write or replace the same property. A hash key whose conversion
+can report a diagnostic re-reads the property after the conversion, so the write
+targets the container the property holds then. One write keeps the copying shape: a
+boxed `mixed` value stored into concrete element storage (`array<string, string>`,
+`array<int>`) is converted inside the write itself, and that conversion can call
+`__toString` or raise a warning whose handler replaces the property and frees the
+borrowed container. That write therefore takes its own reference, writes to the
+private copy and stores it back with `PropSet`.
+
+The runtime element writers keep the matching order. `__rt_hash_set`,
+`__rt_array_set_refcounted` and `__rt_array_set_mixed` store the replacement into
+the entry or slot before they release the overwritten value, and do not touch the
+container afterwards. A destructor that runs from that release therefore reads the
+new element, and may grow or replace the container, as it can in PHP.
+
+When a boxed property holds an `ArrayAccess` object, the native
+`__rt_mixed_object_offset_unset` helper retains the selected object across dispatch.
+A callback may clear the supplying property while still using its receiver. The
+helper guards this receiver before entering PHP or an SPL offset conversion that
+can invoke an error handler. PHP methods borrow the original boxed key, so a
+second guard protects that key during the method call. Normal cleanup retires the
+key before the receiver; an escaping throw releases both through the shared
+activation chain. SPL helpers consume the original key themselves and apply
+their own offset conversion rules. `OffsetUnset` carries conservative callback
+effects because these methods and warning handlers can observe or mutate PHP state.
+
 Ordinary executable PHP frames and library frames both publish exception-cleanup
 activations. Each PHP catch saves the current activation as the unwind stop, so
 the catching function and its callers keep their live local owners. The unwinder
@@ -684,12 +1325,22 @@ call, even when the return-alias summary is conservative. Returning a raw
 
 The runtime routine `__rt_heap_alloc`:
 
-1. **Probe the segregated small bins** — requests up to 64 bytes first check `_heap_small_bins` (`<=8`, `<=16`, `<=32`, `<=64`) and reuse a cached block from the smallest fitting class available.
-2. **Walk the general free list** — if no cached small block fits, check the address-ordered free list (first-fit). If a block with `size >= requested` is found, either unlink it whole or split it. A split remainder with payload up to 64 bytes enters the same small-bin class as an ordinary freed block; a larger remainder stays in address order on the general free list. Then reset the allocated block's refcount to 1 and return it.
+1. **Pop the exact size-class bin** — `_heap_small_bins` holds one chain head per 8-byte payload class from 8 to 2048 bytes (`HEAP_BIN_MAX`); the head for payload `n` sits at offset `n - 8`. A request up to 2048 bytes pops the head of its own class: one load, no scan.
+2. **Walk the general free list** — if the bin is empty, or the request is larger, check the address-ordered free list (first-fit). If a block with `size >= requested` is found, either unlink it whole or split it. A split remainder with payload up to 2048 bytes enters its exact bin, like an ordinary freed block; a larger remainder stays in address order on the general free list. Then reset the allocated block's refcount to 1 and return it.
 3. **Bump allocate** — if neither free path fits, allocate from the end of the heap: write size and refcount=1 to the header, advance `_heap_off`, return user pointer.
-4. **Bounds check** — if the bump would exceed `_heap_max`, print a fatal error and exit.
+4. **Split a larger binned block** — if the bump would exceed `_heap_max`, the bins above the request are searched (at most one load per class) and the first valid block is split like a free-list block. Exact bins never split on their own, so without this step free memory parked in other size classes could not serve the request.
+5. **Consolidate and retry** — if no larger binned block exists, `__rt_heap_consolidate` merges every free block (see below) and the allocation is retried from step 1. The pass is skipped when `_gc_frees` still equals `_heap_consolidated_frees` (nothing freed since the previous pass, so nothing to merge). Only a skipped pass, or one that changes nothing, ends in the fatal "heap memory exhausted" error.
 
-Minimum allocation is 8 bytes (to fit the next pointer when the block is later freed). A split requires room for a new 16-byte header and at least eight payload bytes. Its free header has reference count and kind zero and belongs to exactly one chain. Moving that already-free remainder into a bin does not count as an allocation or free and does not change live bytes. `gc_mem_caches()` drains these entries through the existing coalescing path, including tail trimming, without adding free events.
+Minimum allocation is 8 bytes (to fit the next pointer when the block is later freed). A split requires room for a new 16-byte header and at least eight payload bytes. Its free header has reference count and kind zero and belongs to exactly one chain. Moving that already-free remainder into a bin does not count as an allocation or free and does not change live bytes.
+
+### Consolidation
+
+Binned blocks are not coalesced when they are freed, which is what keeps allocation and free O(1) however many blocks are free. `__rt_heap_consolidate` merges them later, in one pass linear in the heap:
+
+1. Every block reachable from a bin or the ordered list is marked free (a sentinel in its kind word), and the bins and the list are emptied.
+2. One walk over the tiled heap, from `_heap_buf` to the bump end, merges each maximal run of marked blocks under one header. A run reaching the bump end lowers `_heap_off`; any other run goes back to its exact bin (on an allocation retry) or onto the address-ordered list.
+
+Only blocks reached from the bins or the list are merged. A live block whose refcount is momentarily zero during a release is never marked, so it is never touched. `gc_mem_caches()` runs the same pass, listing every run so the bins end up empty, and returns the bytes it took out of the bins; it adds no free events.
 
 ### How heap freeing works
 
@@ -697,35 +1348,137 @@ The runtime routine `__rt_heap_free`:
 
 1. Read the block size (32-bit) from the 16-byte header at `user_pointer - 16`
 2. If the block is exactly at the bump tail, shrink `_heap_off` immediately
-3. Otherwise, payloads up to 64 bytes are cached into one of four segregated small-bin heads (`<=8`, `<=16`, `<=32`, `<=64`) so later tiny allocations can reuse them without scanning the larger free list
-4. Larger non-tail blocks are inserted into the general free list in address order and merged with adjacent free neighbors. Only a merged block ending at the bump frontier starts a tail search; other insertions skip that scan. Direct bump-tail frees still search for and repeatedly reclaim newly exposed free tail blocks. Cache draining uses the same merged-end check, so a cached block that now touches the tail is reclaimed without adding a free event.
+3. Otherwise, payloads up to 2048 bytes are pushed onto the exact bin for their size, so a later allocation of the same size reuses them without scanning anything
+   Web-mode frees first validate exact membership in the allocator live-base bitmap;
+   duplicate detection does not scan the cached chain. Heap-debug bin marks and full
+   chain validation remain available for diagnostics.
+4. Larger non-tail blocks are inserted into the general free list in address order and merged with adjacent free neighbors. Only a merged block ending at the bump frontier starts a tail search, which repeatedly trims the now-free tail chain back into `_heap_off`; other insertions skip that scan
 5. Free blocks reuse the same 16-byte header, clear the kind back to `0`, and then store the next pointer immediately after it: `[size:4][refcnt:4][kind:8][next_ptr:8][...unused...]`
 
 The variant `__rt_heap_free_safe` validates that the pointer is within `_heap_buf` range before freeing — safe to call with garbage, null, or `.data` section pointers.
+
+### Reading heap usage inside a program
+
+`memory_get_usage(bool $real_usage = false): int` returns live native heap bytes.
+`memory_get_peak_usage(bool $real_usage = false): int` returns their high watermark.
+Both include allocator rounding and the 16-byte header of each live block, including
+internal runtime allocations. Released blocks stop contributing to live usage even
+when cached for reuse. In-place growth updates the same byte counters without
+counting as a new allocation.
+
+With `real_usage: true`, both functions return the full fixed arena capacity selected
+by `--heap-size`, including its free space. The arena is reserved in BSS for the
+lifetime of the program. This value is neither resident set size nor the bump offset.
+`memory_reset_peak_usage(): void` resets the live-byte watermark to current live
+usage. It cannot shrink the arena, so the reserved-byte peak stays constant.
+
+The elephc extensions `memory_get_allocations(): int` and `memory_get_frees(): int`
+read cumulative successful allocation and release counts. Reusing a cached or
+free-list block counts as an allocation. These counters survive peak resets and
+are hidden by `--strict-php`. All five native operations take constant time and
+allocate no memory, allowing before/after samples around frame phases. See
+`examples/memory-phases/main.php` for a 10,000-entity example.
+
+These measurements cover `_heap_buf`, not concat scratch, stack storage, other
+BSS buffers, libc allocations, or Rust bridge and interpreter allocations. In
+`eval()`, the functions sample the same native heap before boxing their result.
+Eval argument/result cells and callable machinery can themselves allocate, so
+interpreted measurements include that overhead where it uses the native heap.
 
 ### Heap debug mode
 
 Passing `--heap-debug` enables additional runtime verification without changing normal ownership behavior:
 
-- `__rt_heap_free` rejects duplicate insertion of the same block into the free list (`double free`)
+- `__rt_heap_free` rejects duplicate insertion of the same block into the free list (`double free`). For a binned size this check is O(1): `_heap_bin_marks` keeps one byte per 16-byte heap granule, set when a guarded free parks a block in a bin and cleared when the block leaves it (allocation, consolidation, the `--web` reset). The bin is scanned only when the mark is already set, which a double free and a rare stale mark both explain. The `--web` heap guard uses the same check.
 - `__rt_incref` / `__rt_decref_*` reject zero-refcount heap blocks before mutating them (`bad refcount`)
-- `__rt_heap_alloc` / `__rt_heap_free` validate the ordered free list plus the segregated small-bin chains and trap on out-of-range, overlapping, cyclic, mis-sized, or merely-adjacent free blocks (`free-list corruption`)
+- `__rt_heap_alloc` / `__rt_heap_free` validate the ordered free list plus every exact size-class bin chain and trap on out-of-range, overlapping, cyclic, mis-sized, or merely-adjacent free blocks (`free-list corruption`)
 - `__rt_heap_free` poisons freed payload bytes with `0xA5`, so stale raw reads stand out immediately in debug repros
-- process exit prints a heap-debug summary with alloc/free counts, live blocks, live bytes, a leak summary line, and the peak live-byte watermark
+- process exit prints a heap-debug summary with alloc/free counts, live blocks, live bytes, a leak summary line, and the live-byte watermark since the latest explicit or request reset
 - non-clean summaries also report up to 64 live block headers: heap-relative offset, total bytes, heap kind, and reference count, without printing payload contents
 
 When one of these checks trips, the program exits with a fatal heap-debug error instead of continuing with corrupted allocator state.
 
-In full-reset `--web` mode, the next request reclaims the previous PHP heap arena after typed cleanup. This bulk release brings cumulative frees up to cumulative allocations and resets live bytes to zero; the process peak watermark is retained. Per-request counter differences therefore describe the current arena, not blocks already reclaimed by earlier resets.
+In full-reset `--web` mode, the next request reclaims the previous PHP heap arena after typed cleanup. This bulk release brings cumulative frees up to cumulative allocations and resets live bytes and their peak watermark to zero for the next request. Per-request counter differences therefore describe the current arena, not blocks already reclaimed by earlier resets.
 
 ### When memory is freed
 
-- **Variable reassignment**: when a heap-backed local/global/static slot is overwritten, codegen releases the previous owner through the appropriate runtime path (`__rt_heap_free_safe` for persisted strings, `__rt_decref_*` for refcounted arrays / hashes / objects). When a store inside a loop is lowered before a later store has widened the slot to boxed storage, lowering emits a deferred `release_local_slot` and the backend decides against the slot's FINAL widened storage type. This covers two shapes. The slot may look untracked at the earlier store — an inner `for` counter re-initialized by the outer body but widened Int→Mixed by its `++` update (issue #534) — or it may already be tracked and still not final: a local typed `Object("Shape")` is widened to `Mixed` by a later store of a different class, since `widened_local_storage_type` has no arm for a pair of object types (issue #479). The second one is the more dangerous of the two, because the eager release it replaces is not a no-op but an unbox WITH RETAIN: typed at the concrete slot against boxed storage, it hands back the inner pointer holding a fresh reference, the release cancels exactly that reference, and the box is never freed — leaking the box and the value it pins, once per iteration. `Mixed`/`Union` storage keeps the eager path because it is terminal, and `Str` keeps it deliberately: its eager release runs through the ownership analysis, which knows a `.rodata` literal pointer must not be freed, and the slot-typed cleanup does not model that
+- **Variable reassignment**: when a heap-backed local/global/static slot is overwritten, codegen releases the previous owner through the appropriate runtime path (`__rt_heap_free_safe` for persisted strings, `__rt_decref_*` for refcounted arrays / hashes / objects). When a store inside a loop is lowered before a later store has widened the slot to boxed storage, lowering emits a deferred `release_local_slot` and the backend decides against the slot's FINAL widened storage type. This covers two shapes. The slot may look untracked at the earlier store — an inner `for` counter re-initialized by the outer body but widened Int→Mixed by its `++` update (issue #534) — or it may already be tracked and still not final: a local typed `Object("Shape")` is widened to `Mixed` by a later store of a different class, since `widened_local_storage_type` has no arm for a pair of object types (issue #479). The second one is the more dangerous of the two, because the eager release it replaces is not a no-op but an unbox WITH RETAIN: typed at the concrete slot against boxed storage, it hands back the inner pointer holding a fresh reference, the release cancels exactly that reference, and the box is never freed — leaking the box and the value it pins, once per iteration. `Mixed`/`Union` storage keeps the eager path because it is terminal, and `Str` keeps it deliberately: its eager release runs through the ownership analysis, which knows a `.rodata` literal pointer must not be freed, and the slot-typed cleanup does not model that. A PHP local overwritten while its slot still looks scalar gets the same deferred release outside loops too, because an `if` join can widen it afterwards: when the arms of an `if` leave a local in representations that no single scalar slot can tell apart (`null` against an int or a string, `false` against an int, `null` against an object or an array), EIR lowering joins it to `Mixed` and boxes each arm's value on its merge edge, which makes the backend box the earlier scalar stores as well (issue #771). The arms of a ternary, `match` (including each condition of a multi-condition arm), `&&`/`||`, `?:` and `??` are joined the same way, as are the edges into a `switch` body (dispatch and fall-through) and into its exit (every `break` and the last body), and, for a loop whose body may `break` or `continue` it, the edges into the next iteration (the body's end and every `continue`) and into the exit (the loop's own exit edge and every `break`, including `break N`). The loop's own exit edge is also taken by a loop that never iterates, so a local whose facts at the loop entry and at the end of the body disagree is retyped there (boxed `Mixed` storage, the pointer word, or the inline nullable int) instead of being read through either fact. Finally, a local that enters a loop with a `null` fact the checker does not share gets boxed `Mixed` frame storage from the loop head, so every store into it is boxed and the head never reads it through a possibly stale `null` fact. The prune turns the deferred op into a `nop` wherever the slot stayed scalar
 - **`unset()`**: releases the current heap-backed value before nulling the slot
 - **Targeted cycle collection**: `__rt_gc_collect_cycles` counts heap-only incoming edges and marks externally reachable blocks. Before sweeping an unreachable graph containing objects, it snapshots and pins its candidate nodes, runs their destructors while their data remains intact, then repeats root analysis to observe mutations and resurrection. Pin owners are discounted from root counts. Surviving nodes lose only their temporary pins; unreachable nodes are deep-freed, and the separately allocated snapshot chunks are discarded without reading reclaimed PHP storage
 - **Generator frame release**: Generator frames are object-kind heap blocks, but their custom Mixed slots and active `yield from` delegate are released by a Generator-specific branch in object deep-free
 - **Object destructors (`__destruct`)**: `__rt_call_object_destructor` dispatches through the eval hook or class-id-indexed `_class_destruct_ptrs` table with a borrowed `$this`. Refcount bit 31 guards active execution. For collector-triggered destruction, heap-kind bit 14 remembers completion after that temporary guard is cleared, so a resurrected object is not destructed again on later collection or final release. Eval class/property metadata survives until actual object release. Ordinary last-owner destruction still runs at the top of `__rt_object_free_deep`, before property release; resurrection on that ordinary path remains unsupported
 - **Process exit**: all memory is reclaimed by the OS
+
+Native array and hash `isset` probes, ordinary hash reads, and indexed-array
+string-key reads borrow their keys for the lookup. Lowering releases independent key-expression owners after the
+lookup. This includes a string read whose local slot is boxed by a later
+`foreach` binding: the earlier read creates an independent string copy even if
+that loop is empty. Final storage analysis removes the provisional release when
+the local keeps the same representation. Global keys and other borrowed key
+operands remain owned by their existing storage.
+
+Branch-result temporaries retain an incoming heap value only when the
+destination itself keeps an owner. An inline nullable-integer temporary instead
+borrows a boxed branch result while converting its tag and payload, then
+releases that source expression's owner. Taking an extra reference before this
+scalar store would leak the box, because the inline slot cannot carry or retire
+it. Heap-backed merge results keep their existing transfer semantics.
+
+EIR array-element removal instructions report whether the removal may have
+stranded a cycle. `__rt_hash_unset` reads the removed entry's own runtime tag:
+an int, float, bool, string or null value owns no PHP children and clears the
+flag, while a container, object, boxed `Mixed`, reference, callable or resource
+keeps it. EIR combines these flags for an array-only unset list and runs its
+final automatic cycle collection only if one of them is set. Missing keys and
+leaf removals therefore avoid a full heap graph scan. The decision never trusts
+a declared element type, only the entry's own tag. The flag lives in
+the runtime call's stack frame so reentrant destructors cannot overwrite another
+removal's result. Copy-on-write publication, sparse-array promotion, and normal
+key evaluation still precede removal.
+
+This gate applies to scalar key literals, plain locals and pure unary string
+builtins applied to concrete strings, such as `unset($fields[strtolower($name)])`.
+A plain local key (an `int|float` loop counter, say) may reach a
+key-normalization diagnostic handler; garbage that handler strands is not this
+removal's and waits for the next safe point. Keys that can invoke user code or
+other effects keep unconditional collection. It covers local arrays, declared
+hook-free writable properties of `$this` or a non-nullable local object, and
+declared PHP `array` static properties, so `unset($this->ids[$i])` over integer
+ids runs no collector scan. Unsets of local roots, whole properties, magic or
+hooked properties, nullable receivers and `ArrayAccess` offsets keep their
+existing safe point, including lists mixing those targets with array offsets.
+Explicit `gc_collect_cycles()` remains independent of the removal flags.
+When a boxed reference holds a non-array value, its runtime fallback conservatively
+requests collection, preserving `ArrayAccess` and false-conversion callback effects.
+Float and boxed-key diagnostic snapshots preserve the removal flag across their
+temporary hash-owner cleanup.
+
+Outside candidate mode a collection walks the whole bump heap up to `_heap_off`,
+so the automatic safe point runs through `__rt_gc_collect_cycles_budgeted`. Each
+safe point adds a fixed 64 KiB scan credit to `_gc_safe_point_credit`, and the
+collector runs (spending the whole credit) once the credit covers `_heap_off`.
+Programs whose heap fits in one credit still collect at every safe point. A larger
+heap collects once every `_heap_off / 64 KiB` safe points, so removing open-class
+elements from a big scene in a loop costs a bounded amortized scan per unset
+instead of a full heap walk each time.
+
+The credit alone cannot bound garbage: one removal may strand far more than 64 KiB,
+and no allocation path collects in non-web builds. Stranded garbage still counts in
+`_gc_live`, so a safe point also collects once `_gc_live` reaches
+`_gc_safe_point_live_limit`. After every budgeted collection that limit becomes twice
+the surviving live bytes, capped at half of `_heap_max`; it starts at zero, so the
+first safe point always collects. Garbage therefore never outgrows the reachable
+heap, and a nearly full arena collects at every safe point as before. A safe point reached
+while `gc_disable()` is active, or from a destructor or container cleanup during a
+collection, would not scan; it defers instead, keeping the saved credit and the live
+limit for the next safe point that can collect.
+
+Garbage stranded by a deferred safe point, and its destructors, wait for a later safe
+point, an explicit `gc_collect_cycles()`, or the shutdown collection that the main
+epilogue runs after releasing locals, globals and statics. `exit()`, `die()` and fatal
+errors terminate without that shutdown collection, so destructors of a cycle still
+pending at that moment do not run. Web application candidate mode already scales with
+lost owners and always collects.
 
 Collector-triggered destructors run under individual native exception handlers.
 Both explicit collection and automatic EIR safe points have conservative callback
@@ -747,7 +1500,7 @@ partial result: those remain that helper's responsibility.
 
 ### Configurable heap size
 
-The default heap is 8MB. For programs that need more (or less), use:
+The default heap is 128 MB (134217728 bytes, PHP's default `memory_limit`). For programs that need more (or less), use:
 
 ```bash
 elephc --heap-size=16777216 heavy.php    # 16MB heap
@@ -956,7 +1709,7 @@ Unlike arrays, objects are not resizable. The number of properties is fixed by t
 ## Generator coroutine layout
 
 `Generator` objects are heap-allocated object-kind blocks that reuse the
-232-byte Fiber payload. The first word is the built-in Generator class id, so
+248-byte Fiber payload. The first word is the built-in Generator class id, so
 ordinary `instanceof Generator` and `Iterator` checks still work. Offsets
 `8..176` retain the Fiber state, native stack ownership, saved stack pointer,
 callable/wrapper, caller, transfer and exception state, and seven boxed
@@ -971,6 +1724,8 @@ Offset  Size  Field
 208      8    auto_key_counter
 216      8    delegated_iter pointer used by `yield from`
 224      8    unused reserved word
+232      8    saved magic-setter guard head
+240      8    saved deep-release GC suppression
 ```
 
 The constructor boxes the generator's parameters and closure captures into the
@@ -1008,14 +1763,16 @@ The runtime data layer is split into fixed shared data, user-program data, and d
 - `_b64_decode_tbl` — 256-byte Base64 decoding lookup table
 - `_spl_autoload_exts_default`, `_spl_autoload_exts_ptr`, `_spl_autoload_exts_len` — mutable SPL autoload extension state
 - `_heap_err_msg`, `_arr_cap_err_msg`, `_ptr_null_err_msg` — fatal runtime error strings
-- `_buffer_bounds_msg`, `_buffer_uaf_msg`, `_buffer_alloc_size_msg`, `_buffer_registry_exhausted_msg`, `_match_unhandled_msg`, `_static_prop_private_access_msg`, `_instanceof_target_type_msg`, `_iterable_unsupported_kind_msg` — fatal runtime error strings for buffers, `match`, late-bound private static-property access, dynamic `instanceof` target validation, and iterable dispatch
+- `_buffer_bounds_msg`, `_buffer_uaf_msg`, `_buffer_alloc_size_msg`, `_buffer_registry_exhausted_msg`, `_match_unhandled_msg`, `_static_prop_private_access_msg`, `_instanceof_target_type_msg`, `_iterable_unsupported_kind_msg`: runtime error strings for buffers, `match`, late-bound private static-property access, dynamic `instanceof` target validation, and iterable dispatch
 - `_fiber_msg_*` — Fiber state-error message strings used when constructing `FiberError`
 - `_rt_diag_suppression`, `_diag_fopen_failed_msg`, `_diag_file_get_contents_failed_msg`, `_diag_define_already_defined_msg` — runtime warning suppression depth and warning strings used by `@`
 - `_resource_id_prefix` — prefix used by resource display helpers
 - `_obj_handle_index`, `_obj_handle_free`, `_obj_handle_free_top` — direct heap-granule-to-object-handle index plus the LIFO pool of reusable PHP object handles
+- `_obj_weak_reference_index` - one non-owning wrapper pointer per 16-byte heap granule, cleared before referent or wrapper reuse; `_weak_map_key_retire_fn` selects the live WeakMap retirement callback, and `_weak_reference_class_id` / `_weak_map_class_id` identify the emitted classes
 - `_web_heap_guard_enabled` — enables per-request live-block accounting for persistent `--web` workers
 - `_resource_id_keys`, `_resource_id_vals` — open-addressed native-resource-to-PHP-id map; resource ids and object handles deliberately use separate numbering spaces
 - `_vd_indent`, `_vd_seen`, `_vd_seen_n` — current `var_dump()` indentation and its bounded recursion-detection stack
+- `_debuginfo_guard`, `_debuginfo_pad` — set around a run-time `__debugInfo()` call made by `var_dump()`/`print_r()`. `_debuginfo_guard` holds the exception-handler top at the call (tagged with bit 0): a throw that reaches it without a newer handler is reported as PHP's uncaught warning, then `__debuginfo() must return an array`, exit 255, as in PHP. `_debuginfo_pad` says whether `var_dump()` had already written the value's indent before that report. `__rt_obj_debuginfo_fetch` saves both, with `_debuginfo_call_line`, in its frame and restores them after the call, so a dump nested inside `__debugInfo()` does not leak its values into the enclosing one.
 - `_callable_strict_profile` — selects the strict-PHP callable builtin table when `--strict-php` is active
 - `_php_uname_mode_len_msg`, `_php_uname_mode_value_msg` — fatal `php_uname()` diagnostics for invalid mode arguments
 - `_filetype_*`, `_stat_key_*`, `_dirname_*`, `_pathinfo_key_*`, `_tmpfile_template` — file metadata, path, stat-array, and temporary-file lookup strings used by I/O helpers
@@ -1030,6 +1787,7 @@ The runtime data layer is split into fixed shared data, user-program data, and d
 - `_generator_class_id` — per-program class id used to recognize Generator frames during object deep-free
 - `_json_exception_class_id`, `_stdclass_class_id` — per-program class ids used by JSON throw paths and stdClass dynamic-property helpers
 - `_class_gc_desc_count`, `_class_gc_desc_ptrs`, `_class_gc_desc_<id>` — per-class property traversal descriptors used by object deep-free and cycle collection
+- `_class_array_projection_ptrs`: native property projection callbacks for SimpleXML objects and subclasses. Both `get_object_vars()` and `(array)` call the adapter with a borrowed receiver and receive an owned hash.
 - `_class_json_desc_ptrs`, `_class_json_desc_<id>`, `_class_json_pname_<id>_<slot>` — per-class JSON descriptors used by object encoding and JsonSerializable dispatch
 - `_class_tostring_count`, `_class_tostring_ptrs` — dense per-class `__toString` method table used by runtime string coercions of boxed `mixed` objects
 - `_class_iface_method_count` (plus per-interface method tables), `_class_serprop_declaring_ptrs`, `_class_serprop_declaring_missing`, `_class_serprop_declaring_<id>` — interface-method ordering and property declaring-class tables used by `get_object_vars()` visibility filtering and object-to-array projection
@@ -1042,7 +1800,7 @@ The runtime data layer is split into fixed shared data, user-program data, and d
 - `_zlib_fwrite_fn`, `_zlib_close_fn`, `_bz2_fwrite_fn`, `_bz2_close_fn`, `_iconv_fwrite_fn`, `_iconv_close_fn` — late-bound stream compression and iconv bridge entry points
 - `_phar_zlib_inflate_init2_fn`, `_phar_zlib_inflate_fn`, `_phar_zlib_inflate_end_fn`, `_phar_bz2_decompress_fn` — late-bound PHAR decompression entry points
 - `_elephc_tls_connect_fn`, `_elephc_tls_connect_insecure_fn`, `_elephc_tls_connect_cafile_fn`, `_elephc_tls_connect_capath_fn`, `_elephc_tls_connect_peer_name_fn`, `_elephc_tls_connect_client_cert_fn`, `_elephc_tls_attach_fd_fn`, `_elephc_tls_attach_fd_client_cert_fn`, `_elephc_tls_read_fn`, `_elephc_tls_write_fn`, `_elephc_tls_close_fn` — late-bound TLS session entry points
-- `_elephc_crypto_hash_fn`, `_elephc_crypto_hmac_fn`, `_elephc_crypto_init_fn`, `_elephc_crypto_update_fn`, `_elephc_crypto_final_fn`, `_elephc_crypto_clone_fn`, `_elephc_crypto_free_fn`, `_elephc_crypto_is_finalized_fn`, `_elephc_crypto_cipher_iv_length_fn`, `_elephc_crypto_cipher_methods_fn`, `_elephc_crypto_encrypt_fn`, `_elephc_crypto_decrypt_fn` — late-bound hashing, incremental-context, and OpenSSL-compatible symmetric-crypto entry points
+- `_elephc_crypto_hash_fn`, `_elephc_crypto_hmac_fn`, `_elephc_crypto_init_fn`, `_elephc_crypto_update_fn`, `_elephc_crypto_final_fn`, `_elephc_crypto_clone_fn`, `_elephc_crypto_free_fn`, `_elephc_crypto_is_finalized_fn`, `_elephc_openssl_cipher_iv_length_fn`, `_elephc_openssl_cipher_methods_fn`, `_elephc_openssl_encrypt_fn`, `_elephc_openssl_decrypt_fn` — late-bound hashing, incremental-context, and OpenSSL-compatible symmetric-crypto entry points
 - `_elephc_bcmath_add_fn`, `_elephc_bcmath_sub_fn`, `_elephc_bcmath_mul_fn`, `_elephc_bcmath_div_fn`, `_elephc_bcmath_mod_fn`, `_elephc_bcmath_divmod_fn`, `_elephc_bcmath_pow_fn`, `_elephc_bcmath_powmod_fn`, `_elephc_bcmath_sqrt_fn`, `_elephc_bcmath_comp_fn`, `_elephc_bcmath_ceil_fn`, `_elephc_bcmath_floor_fn`, `_elephc_bcmath_round_fn`, `_elephc_bcmath_get_scale_fn`, `_elephc_bcmath_set_scale_fn`, `_elephc_bcmath_last_error_fn`, `_elephc_bcmath_free_fn` — late-bound decimal bridge entry points shared by arithmetic lowering and error/result marshalling
 - `_elephc_iconv_call_fn`, `_elephc_iconv_release_fn`, and `_elephc_curl_*_fn`: late-bound character-set conversion and curl easy, multi, share, callback, and multipart bridge entry points
 - enum-case `.comm` symbols produced via `enum_case_symbol(...)` — one 8-byte singleton storage slot per declared enum case
@@ -1071,6 +1829,24 @@ and heap counters described above.
 | `_php_error_handler_context`, `_php_error_handler_context_release`, `_php_error_handler_stack` | Eval handler context, its release callback, and prior error-handler registrations |
 | `_php_exception_handler_value`, `_php_exception_handler_callable` | Original PHP exception-handler value and normalized callable |
 | `_php_exception_handler_context`, `_php_exception_handler_context_release`, `_php_exception_handler_stack` | Eval handler context, its release callback, and prior exception-handler registrations |
+
+### Additional fixed runtime state
+
+The fixed data emitter also reserves these scalar slots. Each listed slot is
+8 bytes unless the size column states otherwise; they hold cursors, flags or
+borrowed pointers rather than a second copy of the runtime heap.
+
+| Symbols | Size | Purpose |
+|---|---|---|
+| `_itoa_spill_ring`, `_float_spill_ring` | 256 bytes each | Eight 32-byte integer-formatting slots and four 64-byte float-formatting slots when the concat arena cannot reserve a formatter window |
+| `_itoa_spill_index`, `_float_spill_index` | 8 bytes each | Current positions in the integer and floating-point formatting spill rings |
+| `_ser_stream`, `_unser_call_line` | 8 bytes each | Active growable serialization-stream descriptor and source line for unserialization diagnostics |
+| `_elephc_eval_inventory_context` | 8 bytes | Eval context used while registering the module's native metadata |
+| `_elephc_random_mt_uniform_fn` | 8 bytes | Optional Mt19937 bridge entry used by `array_rand()` and `shuffle()` |
+| `_elephc_tls_last_error_fn`, `_elephc_tls_clear_error_fn` | 8 bytes each | Late-bound TLS error-query and error-reset callbacks |
+| `_stream_error_code`, `_stream_error_tls`, `_stream_close_silent` | 8 bytes each | Stream error state and silent-close flag |
+| `_stream_empty_error` | 1 byte | Empty stream-error string storage |
+| `_php_exit_hook`, `_uncaught_report_mode` | 8 bytes each | Hosted-extension shutdown callback and uncaught `__debugInfo()` report mode |
 
 ### Global variables
 
@@ -1113,13 +1889,40 @@ The naming pattern is `_static_FUNCNAME_VARNAME`. The init flag ensures the init
 
 ### Static properties (`ClassName::$prop`)
 
-Static properties are class-scoped storage rather than object fields. During `emit_runtime_data_user()`, each effective declaring class property gets one 16-byte BSS slot:
+Static properties are class-scoped storage rather than object fields. During `emit_runtime_data_user()`, each effective declaring class property gets one 24-byte BSS slot:
 
 ```asm
-.comm _static_prop_Counter_count, 16, 3 ; 16 bytes for Counter::$count
+.comm _static_prop_Counter_count, 24, 3 ; value, initialization and reference-layout words
 ```
 
 The naming pattern comes from `static_property_symbol(...)`. Inherited static properties point back to the declaring class slot, so `Base::$count` and `Child::$count` share storage when the property is declared only on `Base`. When a subclass redeclares the static property, that subclass receives its own slot and `static::$count` dispatches to it through the called-class id at runtime. `_main` evaluates static-property defaults before user statements run, and later reads/writes load from or store to the resolved slot directly.
+
+The optional native-reference runtime provides three C-ABI primitives for Mixed
+static bindings. `__rt_reference_static_mixed_promote(binding)` transfers the raw
+Mixed owner into an allocated managed cell and sets the layout word at byte 16.
+Repeated promotion returns the same cell. `__rt_reference_static_mixed_payload`
+returns either the raw binding or the managed cell as a borrowed payload address.
+`__rt_reference_static_mixed_release` clears the binding and layout word, restores
+the uninitialized marker and removes its weak type source before retiring the
+cell. Escaped native aliases keep that cell alive independently. The BSS address
+itself never has a managed header. With the capability selected, native,
+inherited, eval and Reflection reads resolve this layout before exposing the
+current borrowed PHP child. Process shutdown, request reset and application
+shutdown retire the static binding through its cell-aware release helper.
+Application root discovery already borrows the actual low-word owner, which is
+the cell for a promoted binding. Automatic promotion remains deferred until
+static writers and reference exports also use the validated publication path.
+Native and native Reflection Mixed stores already dispatch an existing managed
+binding through the canonical publisher, preserving the original boxed RHS.
+Their EIR carries the source-file strictness (weak for Reflection's internal
+setter) and an optional third operand identifying the transferred unwind owner.
+Raw bindings keep the existing store path; no writer promotes them automatically.
+Direct Mixed assignments box concrete temporaries and retire their source lease
+before publication. Reflection keeps a separate boxed argument owner through the
+setter call, then clears its unwind slot before releasing it. This preserves PHP's
+different destructor timing for an assignment and an internal method argument.
+
+A `buffer<T>`, `ptr` or `ptr<T>` static property keeps its handle or address in the slot's low word, as an instance property does. The word owns nothing: overwriting it frees no buffer, and shutdown releases nothing for it. Element writes (`Class::$buf[$i] = $v`) resolve the handle the slot holds and store into the buffer payload without writing the slot back. A typed pointer slot whose default is `null` is initialized to the zero word, while a typed buffer or pointer slot without a default carries the uninitialized marker in its high word until the first store.
 
 Converting a boxed `Mixed` value into a concrete scalar, string, or object property does not transfer the source box. EIR releases an owning temporary after the store and leaves borrowed boxes untouched. Scalar payloads need no owner; strings are persisted exactly once and object payloads are independently retained. Matching boxed-to-boxed storage instead transfers an owned box, or acquires a borrowed source before storing it.
 
@@ -1181,19 +1984,22 @@ read the same uniform heap header, including on the iOS targets.
 | Resource | Size | What happens when full |
 |---|---|---|
 | Stack | OS default (~8MB) | Stack overflow (crash) |
-| String buffer | 64KB | Resets each statement — effectively unlimited |
-| print_r capture | `_print_r_buf` = 64KB; `_print_r_mode`, `_print_r_off` = 8 bytes each | `print_r($value, true)` renders into the capture buffer; oversized captures truncate at 64KB instead of overflowing adjacent data |
+| String buffer | `--heap-size` (default 128 MB) | Resets each statement, bounded by the program budget |
+| Numeric formatting spill rings | `_itoa_spill_ring` and `_float_spill_ring` = 256 bytes each; their indices = 8 bytes each | Slots wrap after eight integer or four float results; escaping results need ordinary owned string storage |
+| print_r capture | `_print_r_ptr`, `_print_r_cap`, `_print_r_mode`, `_print_r_off` = 8 bytes each | Both return and echo modes render into growable raw heap storage. Finish persists the result with string metadata, frees the raw buffer, and clears state; cleanup releases abandoned captures |
 | Output-buffer (`ob_*`) stack | `_ob_level`, `_ob_in_handler`, `_ob_flushing`, `_ob_implicit_flush` = 8 bytes each; `_ob_ptrs`, `_ob_lens`, `_ob_caps`, `_ob_handler_stubs`, `_ob_handler_envs`, `_ob_name_ptrs`, `_ob_name_lens`, `_ob_chunk_sizes`, `_ob_flags`, `_ob_started` = 512 bytes each (64 slots) | Up to 64 nested `ob_start()` levels; the buffer bodies themselves are heap-allocated (16KB default capacity, page-aligned chunk size + 1 when a chunk size is set, grown by doubling) |
 | Web capture flag | `elephc_web_capture` = 8 bytes | `--web` bridge output-capture flag read by `__rt_stdout_write`; zero selects the plain `write(1, ...)` syscall path |
 | Eval bridge hook slots | `_elephc_eval_ob_handler_fn`, `_elephc_eval_dynamic_object_destruct_fn`, `_elephc_eval_closure_bind_fn`, `_elephc_eval_wrap_callback_fn`, `_elephc_eval_object_gc_child_fn`, `_elephc_eval_object_release_fn`, `_elephc_eval_array_reference_retire_fn`, `_elephc_eval_object_clone_fn` = 8 bytes each | Late-bound Magician callbacks for eval-managed handlers, closures, callbacks, objects, references, and cloning |
-| Heap | 8MB (configurable) | Fatal error: "heap memory exhausted" |
-| Heap and GC metadata | `_heap_off`, `_heap_free_list`, `_heap_debug_enabled`, `_heap_max`, and each `_gc_*` flag, counter, pointer, or timer = 8 bytes each; `_heap_small_bins` = 32 bytes | Fixed-size allocator, cycle-collector, destructor, pin, and timing bookkeeping |
+| Heap | 128 MB (configurable) | Fatal error: "heap memory exhausted" |
+| Heap and GC metadata | `_heap_off`, `_heap_free_list`, `_heap_debug_enabled`, `_heap_max`, and each `_gc_*` flag, counter, pointer, or timer = 8 bytes each; `_heap_small_bins` = 2048 bytes; `_heap_bin_marks` = heap size / 16 + 2 bytes | Fixed-size allocator, cycle-collector, destructor, pin, and timing bookkeeping |
+| Weak-reference identity index | `_obj_weak_reference_index` = `(heap_size / 16 + 2) * 8` bytes, or 64 MiB plus 16 bytes for the default 128 MiB heap | One non-owning wrapper pointer per heap granule; it neither keeps keys alive nor acts as a collector root |
 | Buffer descriptors | `_buffer_registry` = 196656 bytes (4097 descriptors × 48 bytes), `_buffer_registry_free` = 8 bytes, `_buffer_registry_next` = 8 bytes | Up to 4096 live buffers; freed descriptors are recycled with a new generation, while exhaustion aborts with `Fatal error: buffer registry exhausted` (an invalid requested size aborts earlier with `Fatal error: buffer_new() length is negative or exceeds the maximum buffer size`) |
 | Exception and user-handler state | `_exc_handler_top`, `_exc_call_frame_top`, `_exc_value`, `_magic_set_guard_head`, and every `_php_error_handler_*` / `_php_exception_handler_*` slot = 8 bytes each | Active exception state and current user handlers; nested handler registrations use heap-backed linked stacks |
 | Fiber scheduler state | `_fiber_current`, `_fiber_main_saved_sp`, `_fiber_main_saved_exc`, `_fiber_main_saved_call_frame`, `_fiber_main_saved_magic_set_guard` = 40 bytes total | Current-fiber and main-frame resume bookkeeping, including the magic-set recursion guard |
 | Runtime diagnostics | `_rt_diag_suppression`, `_rt_diag_pending_ptr`, `_rt_diag_pending_len`, `_php_diagnostic_file`, `_php_diagnostic_file_len`, `_php_diagnostic_line` = 8 bytes each | Warning suppression plus deferred diagnostic message and source-location state |
 | Resource inventory | `_resource_inventory_head`, `_resource_inventory_tail` = 16 bytes total | Heap-backed history used by `get_resources()`, including closed incarnations after descriptor reuse |
 | Unmanaged reference-borrow state | `_rt_unmanaged_ref_borrow_top` = 8 bytes | Active boxed array-walk borrow chain used to reject escaping unmanaged element references |
+| Reference validation roots | `_rt_reference_validation_pins_top` = 8 bytes | Active caller-owned root records excluded from PHP-visible reference-sharing counts |
 | JSON state | `_json_last_error`, `_json_active_flags`, `_json_active_depth`, `_json_indent_depth`, `_json_depth_limit`, `_json_validate_idx`, `_json_validate_ptr`, `_json_validate_len`, `_json_decode_assoc`, `_json_error_source_ptr`, `_json_error_source_len`, `_json_error_candidate_ptr`, `_json_error_location_active`, `_json_error_line`, `_json_error_column`, `_json_error_scan_count`, `_json_error_scan_bytes` = 136 bytes total | Fixed-size bookkeeping for JSON calls and decode error locations. The candidate pointer is recorded in constant time; line and column are scanned from the original source only when an error is recorded. |
 | Serialize/unserialize state | `_ser_value_counter`, `_ser_obj_count`, `_ser_legacy_active`, `_unser_count`, `_unser_legacy_active` = 8 bytes each; `_ser_obj_ptrs`, `_ser_obj_idxs`, `_unser_values` = 512KB each; `_unser_depth`, `_unser_allowed_mode`, `_unser_allowed_list`, `_unser_allowed_list_mixed`, `_unser_active`, `_unser_context` = 8 bytes each | `serialize()` object-dedup counters/maps and `unserialize()` reference registry, plus the decode depth limit, `allowed_classes` policy/list, active flag, and reentrancy snapshot; overflow degrades gracefully (serialize stops deduping, unserialize fails the ref) and reentrant decodes restore the outer context while legacy Serializable callbacks share references |
 | Date/time state | `_strtotime_clock`, `_php_default_tz_len` = 8 bytes each; `_strtotime_iso_buf` = 64 bytes; `_php_tz_env`, `_php_tz_save` = 264 bytes each | `strtotime()` clock override, the scratch copy a one-digit-month/day ISO date is zero-padded into, plus default-timezone (`date_default_timezone_*`) env/save buffers and stored identifier length |
@@ -1204,8 +2010,8 @@ read the same uniform heap header, including on the iOS targets.
 | Array capacity | Fixed at creation until grow/re-hash logic runs | `__rt_array_new` / `__rt_hash_new` validate the requested size first: negative capacities allocate an empty payload region, and a `capacity * elem_size` (or `capacity * 64`) that does not fit in a non-negative machine word aborts with "Fatal error: requested array size exceeds the maximum allowed array size" instead of wrapping to a small allocation |
 | Range element count | `range()` sizes its result from `\|end - start\| + 1` | An interval needing more than 1073741823 elements never reaches the allocator: the lowering guard raises reference PHP's catchable `ValueError` ("The supplied range exceeds the maximum array size: start=… end=… step=…") first, naming the ordered endpoints and `abs($step)`. The runtime's own overflow abort remains as the backstop |
 | Fill element count | `array_fill()` sizes its result from `$count` | A `$count` past `INT_MAX` (2147483647) never reaches the allocator: the lowering guard raises reference PHP's catchable `ValueError` ("array_fill(): Argument #2 ($count) is too large"). Counts at or below the bound whose payload does not fit the heap still report "Fatal error: heap memory exhausted", which is what reference PHP reports as a memory-limit fatal too |
-| Buffer length | Fixed at `buffer_new<T>()` | A negative length, or a `length * stride` that does not fit in a non-negative machine word, aborts with "Fatal error: buffer_new() length is negative or exceeds the maximum buffer size" |
-| C-string buffers | `_cstr_buf`, `_cstr_buf2` = 4KB each, `_empty_str` = 1 byte | Long converted paths/strings are truncated to buffer size; `_empty_str` is a safe zero-length string pointer |
+| Buffer length | Fixed at `buffer_new<T>()` | A negative length, a `length * stride` that does not fit in a non-negative machine word, or a runtime-converted length (int arithmetic, `mixed`, `int\|float`) that is not a whole number in the `int` range, aborts with "Fatal error: buffer_new() length is negative or exceeds the maximum buffer size" |
+| C-string buffers | `_cstr_buf`, `_cstr_buf2` = 4KB inline each; `_cstr_base`/`_cstr_cap` and `_cstr2_base`/`_cstr2_cap` track the current block; `_empty_str` = 1 byte | A path, pattern, or command longer than 4KB grows into an owned block through `__rt_cstr_grow`/`__rt_cstr2_grow` instead of being truncated or overwriting adjacent runtime state; `_empty_str` is a safe zero-length string pointer |
 | File descriptor state | `_eof_flags`, `_stream_read_filters`, `_stream_write_filters` = 256 bytes each; `_popen_files`, `_dir_handles`, `_glob_handles`, `_zstream_handles`, `_bzstream_handles`, `_iconv_handles`, `_tls_sessions`, `_stream_chunk_size` = 2048 bytes each; on Apple targets only, `_iconv_write_options` = 256 bytes | Per-fd stream, process, directory, compression, iconv, TLS, and chunk-size bookkeeping for up to 256 descriptors; `_iconv_write_options` holds each `convert.iconv` write filter's own `//TRANSLIT`/`//IGNORE` bits |
 | Stream filter scratch | `_stream_filter_buf`, `_stream_grow_scratch` = 64KB each | Scratch space for stream filters, including length-growing filters such as base64 and quoted-printable encoders |
 | Stream context and callbacks | `_stream_context_options`, `_stream_notification_callback`, `_stream_connect_host`, `_stream_open_opened_path_scratch`, `_url_stat_matched` | Current stream-context options hash, notification callback, TLS peer host, wrapper opened-path scratch, and wrapper url_stat match flag |
@@ -1220,6 +2026,16 @@ read the same uniform heap header, including on the iOS targets.
 | Data section | No fixed limit | Grows with number of unique literals |
 
 ## Memory management strategy
+
+The opt-in web application lifecycle keeps this heap valid for the worker.
+Its registered application, ordinary globals, and statics remain owning roots.
+Request functions release local owners, the boundary detaches and releases
+superglobals, then explicit cycle collection and resource inventory pruning
+retire remaining request graphs. Newly stored application values follow normal
+string persistence, reference counting, and COW; no boot-allocation immortality
+or request-arena pointer escape is involved. The default web request lifecycle
+continues to reclaim its entire arena. See
+[Persistent Web Applications](../beyond-php/web-application.md).
 
 elephc uses a **free-list allocator with reference counting plus a targeted cycle collector** — not pure bump-allocation, and not a whole-heap tracing runtime either. Memory is reclaimed in specific situations:
 
@@ -1303,13 +2119,149 @@ The runtime now includes a targeted collector for heap-backed `array`, associati
 `__rt_gc_collect_cycles` is intentionally narrower than a full tracing GC: it ignores strings and raw helper buffers as candidates, clears transient marks, counts heap-only incoming edges, and marks externally reachable container/object blocks. An object-destructor phase pins graph candidates before running PHP, then repeats root analysis before freeing the unmarked remainder. Heap-kind bit 18 identifies an artificial pin, distinct from snapshot membership bit 17, destructor completion bit 14, and reachability bit 16. `_gc_collecting` suppresses recursive collection throughout these phases; `_gc_freeing_unreachable` suppresses decrements of doomed graph children only during the final sweep. Destructor-side writes therefore update real ownership normally. `_gc_pin_head` links C-allocated snapshot chunks outside the PHP heap. This remains a non-moving collector for structural cycles, not Zend collector-buffer parity.
 
 On x86_64, one outgoing-edge traversal caches incoming counts in transient
-kind-word bits 19 through 31. The high 32-bit ELPH marker and actual refcounts
-remain intact. Counts saturate at 8191; a saturated candidate uses the original
-full-precision heap rescan before any root decision. Already reachable nodes
+kind-word bits 19 through 30. The high 32-bit ELPH marker and actual refcounts
+remain intact. Counts saturate at 4095; a saturated candidate uses the original
+full-precision rescan of the selected graph before any root decision. Already reachable nodes
 need no additional root classification. Each root scan clears cached fields
 before destructor callbacks, and destructor mutations trigger fresh counting.
 The ARM64 collector continues using its existing 32-bit incoming-count field.
 Both ABIs enumerate retained eval-object children through the same callback.
+
+Native callable descriptors are managed kind-9 graph nodes. Every dynamic producer
+initializes capture storage and stamps that kind; static descriptors remain outside
+the live heap. Callable slots (value tag 10) in arrays, hashes, object properties,
+Mixed boxes and reference cells contribute real ownership edges. The shared capture
+visitor mirrors final release metadata, including nested descriptors and by-reference
+capture cells normalized through `__rt_reference_cell_owner`. This helper validates
+the exact live allocation through the allocator bitmap before checking its kind,
+with constant work independent of heap size. Nonfinal descriptor
+releases queue candidates. Final sweep invokes protected descriptor teardown and
+suppresses only doomed snapshot child owners; strings and excluded children still
+release normally. Weak observers, throwing destructors and resurrection keep the
+same lifetime rules as other graph nodes.
+
+`__rt_gc_object_children` combines retained eval edges with native Fiber, Generator
+and SPL owners, plus incomplete-object property hashes. The Fiber walk follows its callable, transfer value, pending
+throwable, and any owned legacy trailing capture slots. Its visible start arguments,
+caller pointers and saved frame pointers are borrowed and never contribute incoming
+owner counts. Generator start arguments are independently owned boxed values;
+its visitor also follows transfer, pending throwable, last key, last value and return
+value slots. SplDoublyLinkedList, SplStack, SplQueue and SplFixedArray own their
+internal storage array. Incomplete objects use class sentinel `-2` and own one
+property hash at offset 24; their persisted name is a string, excluded from graph
+edges. The visitor requires at least 32 payload bytes for that layout. Class identities and allocation bounds guard native layout
+accesses. Structural work estimates inspect the same slots, and teardown routes
+these owners through the common dispatcher to suppress doomed selected children.
+Suspended coroutine activations publish pure typed owner visitors. Ordinary PHP
+activation records retain their cleanup/frame/backtrace prefix and add a visitor
+at offset 40 (48 bytes total). Compact 32-byte transferred-owner guards keep their
+self-data prefix; native call-operand records already have 48 bytes. Frame walks
+recognize these layouts before reading extended metadata. Saved registers and
+caller pointers remain borrowed; the owned locals represented by activations are
+real coroutine children.
+Warning dispatch publishes the same complete 48-byte layout and visits its owned
+argument and result boxes. Suspended error-handler registrations use a specialized
+compact-record visitor for their saved PHP value, callable and initialized result
+slot. Borrowed callback arguments and opaque eval-context handles are excluded.
+Native cleanup clears each released slot before executing callbacks.
+
+The generated visitor uses the same slot inventory, moved/borrowed exclusions,
+reference-state predicates and initialized zero slots as exceptional frame cleanup.
+Managed reference cells remain nodes; raw fallback cells expose their owned payload.
+A private native hash set deduplicates physical owner-slot addresses across local
+and call-operand relay records, while distinct slots still count as distinct owners.
+Nested coroutine walks have separate contexts. Pure-cost mode allocates no set and
+counts both activation records and inspected slots without following PHP values.
+
+Native Fiber/Generator destructor entries force-close a suspended body before stack
+release. A private class-sentinel unwind marker cannot match PHP catches; ordinary
+finally lowering and exceptional cleanup retire the body locals. The entry boundary
+absorbs only this marker. Real finally exceptions use protected destructor cleanup,
+and the marker is never attached as a PHP-visible previous exception. Yield during
+forced Generator close raises Error; Fiber suspension during forced Fiber close raises FiberError. Other Fiber
+operations and nested engine-driven close retain PHP semantics. Doomed coroutine nodes run this stage with the collector's destructor pins
+before a fresh reachability recount, so finally mutations and resurrection precede
+sweep. Never-started or completed coroutines require no forced body execution.
+The AST destruction-effect model accounts for these implicit callback throws even
+when the class declares no PHP __destruct.
+Eval catch clauses use the ordinary dynamic/native class and interface matcher,
+including for `Throwable`, so they cannot consume the private unwind object.
+Eval `finally` blocks still run and retain PHP control-override semantics.
+
+`GeneratorYieldFrom` publishes an owning temporary through the ordinary EIR
+call-operand ledger. Exceptional unwinding releases that owner before entering a
+same-frame `finally`; borrowed local and external aliases keep their existing
+lifetime. Its result is staged before argument cleanup so throwing teardown does
+not strand the returned cell. `Fiber::start()` also boxes wire arguments explicitly
+in EIR, under source-evaluation and call-operand owners. The native start buffer
+continues to borrow those cells; callback parameter owners survive suspension,
+while caller cleanup retires fresh wire boxes on return and throw.
+
+Native callable proofs store logical capture indexes and validate current capacity,
+environment binding counts, value tags and child identities. Reference bindings prove
+the normalized owning cell; its changing payload is validated by the next typed edge.
+Opaque eval callbacks and native object slots remain outside the proof cache and use
+ordinary immediate collection when no separate rooted proof exists.
+
+Application lifecycle enables a candidate queue instead of the physical heap scan.
+Nonfinal graph decrements, including COW owner retirement, queue borrowed identities
+with kind bit 31 for deduplication. The exact allocator live-base bitmap rejects
+retired or interior addresses before a header is read. Reused storage participates
+only if independently queued again. Discovery visits the forward closure iteratively
+through the same typed child layouts used by ordinary marking.
+
+A per-program visitor reads initialized owning globals and statics before expansion.
+It anchors those roots, normalized Mixed/reference payloads, and direct object children,
+without traversing array/hash contents. A non-owning spanning forest additionally records
+paths through typed object, array, hash, Mixed and reference slots. Each lookup validates
+exact live bases, current layout tags, bounds and child identities until it reaches a
+fresh root anchor. Hash records store logical indexes and reacquire current entry storage
+after rehashing. No mutation barrier is required: stale proofs fail validation and the
+ordinary collector handles the affected graph. Opaque callback edges remain outside this
+native-slot cache. Bootstrap builds and sorts the forest. Before path validation,
+candidate discovery checks current snapshot membership to avoid duplicate work.
+A parallel memo word records either a successful or an unproved path for the
+current preparation epoch. An iterative second parent walk stamps every checked
+prefix, including failures, so shared ancestors are not repeatedly revalidated.
+No PHP callbacks run during preparation. Every prepare, including destructor
+recounts, advances the epoch; wrapping clears all stamps before reuse. A negative
+memo means only that this cached path does not prove liveness, never that the
+node is unreachable. The ordinary collector still determines its ownership.
+
+Every surviving unproved snapshot member adds its structural scan cost to the
+saturating `_gc_proofs_debt` counter. `__rt_gc_node_scan_cost` charges one node plus
+the child slots actually inspected: graph-array length, full hash capacity
+(including holes and scalar/string entries), fixed and dynamic object properties,
+and native retained-child slots. The native enumeration mode counts without
+marking or acquiring owners. A request boundary rebuilds only after debt reaches
+`max(256, _gc_proofs_cost)` of the preceding forest. Rebuilding resets the debt.
+This amortizes reconstruction against candidate scan work and prevents each
+small retained write from triggering a global walk and sort. Unproved values
+still participate in the ordinary collector immediately; only proof-cache
+maintenance waits for its budget. Newly retained large services can earn reusable
+proofs through repeated closure work. A refresh can still cause an individual
+request latency spike, and opaque ownership paths retain their conservative fallback.
+
+Records use three machine words plus one parallel epoch word in reusable libc
+storage, with geometric capacity. Within a preparation pass, lookup work depends
+on the number of distinct validated prefixes and queries, each using logarithmic
+record searches, instead of repeatedly walking shared paths. Rebuilding visits
+and sorts the rooted graph. Diagnostic visited counts include structural slots,
+validation, memo propagation and cache reconstruction. Native cache capacity
+follows its largest recorded graph.
+
+Anchor bit 20 is temporary and is removed before incoming-edge counting reuses that
+field. References from excluded roots remain external to the candidate subset.
+Destructor recounts retain previously pinned nodes even when resurrection gives them
+a new global owner, so pin removal remains balanced. Only snapshot members suppress
+child decrements during the final sweep; scalar/string array leaves always retire
+through ordinary ownership.
+
+Pending roots, anchors, and snapshot vectors use reusable libc buffers that own no PHP
+references. Their counts are reset after use; capacities follow their largest observed
+working sets. Surviving snapshot membership is cleared before a pending exception is
+re-thrown. Candidate collection runs at the same safe points and request boundaries,
+with the same destructor timing. Default request lifecycle retains physical heap scans.
 
 ### Performance characteristics
 
@@ -1370,6 +2322,36 @@ skips the string-registry lookup; the child's release still retires its own
 identity before allocator reuse. Eval array-reference observers retire before
 this skip, including when a Mixed cell no longer contains its former array
 value. Other allocation kinds retain their existing identity retirement path.
+
+Heap identity registration marks its destination for final retirement, including
+explicit INI binding and metadata copies. Collector metadata clears and
+destructor-triggered rescans leave string and raw-buffer headers untouched:
+these allocations have no cyclic graph edges, and their identity flag must
+survive collection until the final owner releases the allocation.
+
+The native INI registry records origins before the first INI call so copies made
+earlier still share their logical identity. Initially, fresh strings and literals
+store only their kind and length in the allocation-address map. Copying a tracked
+full string or resolving it for INI promotes that origin to shared metadata;
+fresh replacement detaches the source while existing aliases keep the old
+origin. Repeated literal observations preserve both unresolved and resolved
+origins. Scratch pointers and different-length views never inherit a tracked
+identity.
+
+Once a promoted fresh origin has no remaining copied aliases and has never been
+resolved, refresh reuses that metadata allocation. Repeated update/copy/release
+loops therefore avoid allocating shared metadata again on each update. Interned
+or resolved origins and origins with live aliases still detach on replacement.
+
+The map hashes internal allocation addresses with an integer mixer, independently
+of PHP string-key hashing. Request reset releases every origin and identity lease
+outside the map borrow, then reuses the empty table. Its capacity therefore follows
+the worker thread's largest request instead of being allocated again each request.
+No native byte storage is retained by that capacity. The callback benchmark
+`cargo run -p elephc-mbstring --release --example native_ini_tracking` reports
+allocation calls and timing for fresh strings, refreshes, literals, copies, and
+256-string request resets. It measures the Rust callbacks; generated register
+preservation hooks and HTTP request handling add separate costs.
 
 ### Packed integer prefixes in JSON arrays
 

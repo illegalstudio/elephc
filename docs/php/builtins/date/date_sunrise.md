@@ -1,8 +1,6 @@
 ---
 title: "date_sunrise()"
 description: "Returns the sunrise time for a day and location. Deprecated since PHP 8.1."
-sidebar:
-  order: 210
 ---
 
 ## date_sunrise()
@@ -25,8 +23,9 @@ Returns the sunrise time for a day and location. Deprecated since PHP 8.1.
 
 ## Availability
 
-- **Compiled (AOT)**: supported through the Elephc compiler.
-- **`eval()` (magician interpreter)**: supported through the procedural date/time alias dispatcher.
+| Compiled (AOT) | Magician (eval) |
+|---|---|
+| Available | Available |
 
 _No examples yet. Check `examples/` and `showcases/` for usage patterns._
 

@@ -19,6 +19,35 @@
 //! }
 //! ```
 
+/// Generates a backend-neutral EIR lowering that forwards raw normalized operands to a
+/// typed runtime target.
+///
+/// The target owns argument ABI normalization and result typing; the surrounding call site
+/// still applies the contract's result ownership and source-order temporary cleanup. This is
+/// the read-only runtime-call path: it avoids materializing builtin-call operand pins and
+/// copies that a leaf helper does not need.
+#[macro_export]
+macro_rules! eir_runtime_lowering {
+    ($lower:ident, $target:expr) => {
+        /// Lowers this builtin through its typed runtime target with raw operands.
+        fn $lower(
+            ctx: &mut dyn $crate::builtins::semantics::BuiltinLoweringContext,
+            call: &$crate::builtins::semantics::NormalizedBuiltinCall<'_>,
+        ) -> Result<
+            $crate::builtins::semantics::LoweredBuiltinValue,
+            $crate::builtins::semantics::BuiltinLoweringError,
+        > {
+            Ok(ctx.emit_runtime_call(
+                $crate::ir::RuntimeCallTarget::Function($target),
+                call.operands.to_vec(),
+                call.result_type.clone(),
+                $target.effects(),
+                Some(call.span),
+            ))
+        }
+    };
+}
+
 /// Registers a PHP builtin descriptor into the `inventory`-based registry.
 ///
 /// Production fields are `contract`, optional `check`, optional `lazy_check`,

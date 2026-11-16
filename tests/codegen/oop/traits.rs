@@ -158,6 +158,69 @@ echo $demo->reveal();
     assert_eq!(out, "hello");
 }
 
+/// Trait adaptations accept a semi-reserved keyword wherever they name a method: the bare target
+/// (`match as …`), the `Trait::list` target and the alias (`as print`), with or without a
+/// visibility change — as tempest/highlight's `use IsPattern { match as matchContent; }` does.
+#[test]
+fn test_trait_adaptation_keyword_method_names() {
+    let out = compile_and_run(
+        r#"<?php
+trait Patterns {
+    public function match(string $s): string { return "m:" . $s; }
+    public function list(): string { return "l"; }
+}
+
+final class Highlighter {
+    use Patterns {
+        match as protected matchContent;
+        Patterns::list as print;
+    }
+
+    public function match(string $s): string { return "[" . $this->matchContent($s) . "]"; }
+}
+
+$h = new Highlighter();
+echo $h->match("x"), "|", $h->print(), "|", $h->list();
+"#,
+    );
+    assert_eq!(out, "[m:x]|l|l");
+}
+
+/// Keyword method names also resolve conflicts: `A::print insteadof B` and `B::list insteadof A`
+/// pick each trait's keyword method, `B::print as function` keeps the excluded one under a keyword
+/// alias, and after a visibility the alias may itself be a modifier (`as protected static`), as in
+/// PHP's `member_modifier identifier` rule.
+#[test]
+fn test_trait_insteadof_and_modifier_alias_with_keyword_names() {
+    let out = compile_and_run(
+        r#"<?php
+trait A {
+    public function print(): string { return "A"; }
+    public function list(): string { return "Al"; }
+}
+trait B {
+    public function print(): string { return "B"; }
+    public function list(): string { return "Bl"; }
+}
+
+class C {
+    use A, B {
+        A::print insteadof B;
+        B::list insteadof A;
+        B::print as function;
+        A::list as protected static;
+    }
+
+    public function viaStatic(): string { return $this->static(); }
+}
+
+$c = new C();
+echo $c->print(), "|", $c->list(), "|", $c->function(), "|", $c->viaStatic();
+"#,
+    );
+    assert_eq!(out, "A|Bl|B|Al");
+}
+
 /// Verifies that a child class can satisfy an abstract property declaration from a trait it inherits via an abstract class.
 #[test]
 fn test_abstract_trait_property_can_be_satisfied_by_concrete_child() {
@@ -180,4 +243,100 @@ echo $box->value;
 "#,
     );
     assert_eq!(out, "9");
+}
+
+/// A used trait's abstract methods are requirements on the class, and an INHERITED method
+/// satisfies one — even a final one, an instance one or a static one, and through a nested trait
+/// use. The method that implements a requirement may carry `#[\Override]`, as PHP 8.3 accepts.
+#[test]
+fn test_trait_requirements_satisfied_by_inherited_methods_and_override() {
+    let out = compile_and_run(
+        r#"<?php
+abstract class Widget {
+    final public function invalidate(): string { return "inv"; }
+    public static function make(): string { return "made"; }
+}
+trait Rows {
+    abstract public function invalidate(): string;
+    abstract public static function make(): string;
+    abstract protected function rowPath(int $i): ?string;
+    public function rows(): string { return $this->invalidate() . ":" . static::make() . ":" . $this->rowPath(2); }
+}
+trait Nested { use Rows; }
+final class Panel extends Widget {
+    use Nested;
+    #[\Override]
+    protected function rowPath(int $i): ?string { return "r$i"; }
+}
+echo (new Panel())->rows(), "\n";
+"#,
+    );
+    assert_eq!(out, "inv:made:r2\n");
+}
+
+/// An `as` alias of an abstract trait method is a requirement too, so an inherited final method
+/// of the alias name satisfies it, directly and through a nested trait's own `use` block. An
+/// inherited protected method satisfies a public requirement and stays protected, as in PHP.
+#[test]
+fn test_trait_requirement_aliases_and_visibility_satisfied_by_inherited_methods() {
+    let out = compile_and_run(
+        r#"<?php
+class P {
+    final public function foo(): int { return 1; }
+    final public function bar(): int { return 2; }
+    protected function hidden(): int { return 3; }
+}
+trait T {
+    abstract public function foo(): int;
+    abstract public function hidden(): int;
+    public function viaT(): int { return $this->hidden(); }
+}
+trait U { use T { foo as bar; } }
+final class C extends P { use T { foo as bar; } }
+final class D extends P { use U; }
+echo (new C())->bar(), (new D())->bar(), (new C())->viaT(), "\n";
+"#,
+    );
+    assert_eq!(out, "223\n");
+}
+
+/// Thirty levels of traits where each level's two traits both use the previous level's two
+/// traits: the class-level requirement walk reaches the bottom traits along 2^30 `use` paths,
+/// so each trait's requirement set must be memoized for this to compile at all. The abstract
+/// method of a sibling trait is still found as a requirement, so `#[\Override]` on its
+/// implementation holds.
+#[test]
+fn test_trait_requirements_of_shared_nested_traits_are_walked_once() {
+    let mut source = String::from("<?php\ntrait T0a {}\ntrait T0b {}\n");
+    for level in 1..=30 {
+        for side in ["a", "b"] {
+            source.push_str(&format!("trait T{level}{side} {{ use T{prev}a, T{prev}b; }}\n", prev = level - 1));
+        }
+    }
+    source.push_str(
+        "trait Needs { abstract public function need(): string; }\n\
+         final class C { use T30a, T30b, Needs; #[\\Override] public function need(): string { return 'need'; } }\n\
+         echo (new C())->need(), \"\\n\";\n",
+    );
+    let out = compile_and_run(&source);
+    assert_eq!(out, "need\n");
+}
+
+/// A trait that implements a method a used trait declares abstract satisfies it for its users:
+/// aliasing that method gives a concrete alias. An alias taken inside the trait's own `use`
+/// block, from the abstract method itself, stays a requirement, so a class method of that name
+/// may carry `#[\Override]`.
+#[test]
+fn test_trait_aliases_follow_the_abstractness_of_the_selected_method() {
+    let out = compile_and_run(
+        r#"<?php
+trait N { abstract public function foo(): string; }
+trait A { use N; public function foo(): string { return "A::foo"; } }
+trait B { use N { foo as bar; } public function foo(): string { return "B::foo"; } }
+final class C { use A { foo as bar; } }
+final class D { use B; #[\Override] public function bar(): string { return "D::bar"; } }
+echo (new C())->bar(), (new C())->foo(), "|", (new D())->bar(), (new D())->foo(), "\n";
+"#,
+    );
+    assert_eq!(out, "A::fooA::foo|D::barB::foo\n");
 }

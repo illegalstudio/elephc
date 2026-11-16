@@ -15,7 +15,8 @@ use std::path::Path;
 
 use crate::names::{php_symbol_key, Name};
 use crate::parser::ast::{
-    BinOp, CallableTarget, CastType, Expr, ExprKind, Program, StaticReceiver, Stmt, StmtKind,
+    ArrayEntry, BinOp, CallableTarget, CastType, Expr, ExprKind, Program, StaticReceiver, Stmt,
+    StmtKind,
 };
 use crate::span::Span;
 use crate::types::call_args::{has_named_args, plan_call_args};

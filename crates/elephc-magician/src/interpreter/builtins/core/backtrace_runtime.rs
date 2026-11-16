@@ -185,7 +185,7 @@ fn build_backtrace_args(
             let object = values.new_object("SensitiveParameterValue")?;
             let initialized = eval_native_constructor_with_evaluated_args(
                 "SensitiveParameterValue", object,
-                vec![EvaluatedCallArg { name: None, value, ref_target: None }], context, values,
+                vec![EvaluatedCallArg { evaluation_owner: None, name: None, value, ref_target: None }], context, values,
             );
             let released = values.release(value);
             match initialized.and(released) {

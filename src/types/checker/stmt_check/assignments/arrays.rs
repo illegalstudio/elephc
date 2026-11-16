@@ -9,25 +9,26 @@
 //! - Assignment checking must distinguish value writes, by-reference mutation, nullable access, and declared property contracts.
 
 use crate::errors::CompileError;
-use crate::parser::ast::{Expr, ExprKind};
+use crate::parser::ast::{BinOp, Expr, ExprKind, NESTED_APPEND_TEMP_PREFIX};
 use crate::span::Span;
 use crate::types::{
-    array_key_contiguity_is_unproven, merge_array_key_types, normalized_array_key_type,
+    array_key_contiguity_is_unproven, merge_array_key_types, nonempty_array_key_forces_hash_storage,
+    nonempty_array_key_stays_in_range, normalized_array_key_type,
     static_array_key_forces_hash_storage, PhpType, TypeEnv,
 };
 
-use super::super::super::Checker;
+use super::super::super::{Checker, GuardedLocalStorage};
 
 /// Validates and updates the type environment for `$array[$index] = $value` assignments.
 ///
-/// Validates that the target is not a string, merges element types for arrays/assoc-arrays,
+/// Checks direct string offset writes and merges element types for arrays/assoc-arrays,
 /// checks buffer index type and element type compatibility, and requires ArrayAccess for objects.
 /// Updates `env` with the merged key/value types; returns an error for invalid targets or type mismatches.
 ///
 /// Errors:
 /// - Undefined variable
-/// - String offset assignment
-/// - Buffer element type mismatch or packed buffer assignment via index
+/// - Invalid direct string offset or unsupported update operator
+/// - Buffer element type mismatch
 /// - Object assignment without ArrayAccess
 pub(super) fn check_array_assign(
     checker: &mut Checker,
@@ -37,18 +38,37 @@ pub(super) fn check_array_assign(
     span: Span,
     env: &mut TypeEnv,
 ) -> Result<(), CompileError> {
-    let arr_ty = env
-        .get(array)
-        .cloned()
-        .ok_or_else(|| CompileError::new(span, &format!("Undefined variable: ${}", array)))?;
+    // PHP auto-vivifies an undefined variable on `$a[$k] = ...`: the write creates an
+    // array (associative for a string key, indexed for an integer key). Mirror that
+    // instead of rejecting the target, exactly as the append form already does.
+    if !env.contains_key(array) {
+        let idx_ty = checker.infer_type_with_assignment_effects(index, env)?;
+        let val_ty = checker.infer_type_with_assignment_effects(value, env)?;
+        let key_ty = normalized_array_key_type(index, idx_ty);
+        let created = if key_ty == PhpType::Int {
+            PhpType::Array(Box::new(val_ty))
+        } else {
+            PhpType::AssocArray {
+                key: Box::new(key_ty),
+                value: Box::new(val_ty),
+            }
+        };
+        env.insert(array.to_string(), created);
+        return Ok(());
+    }
     let idx_ty = checker.infer_type_with_assignment_effects(index, env)?;
     let val_ty = checker.infer_type_with_assignment_effects(value, env)?;
     super::locals::update_callable_assignment_metadata(checker, array, value, &val_ty, env)?;
+    // The write selects its container after index/RHS effects, which may rebind it.
+    let storage = checker.guarded_local_storage_type(&Expr::var(array), env).cloned()
+        .or_else(|| env.get(array).cloned());
+    let current = env.get(array).cloned().unwrap_or(PhpType::Mixed);
+    let nullable = nullable_array_write_view(&current);
+    let had_nullable_read = nullable.is_some();
+    let arr_ty = nullable.unwrap_or(current);
+    if matches!(arr_ty, PhpType::Array(_) | PhpType::AssocArray { .. }) || arr_ty.is_php_array() { env.insert(array.to_string(), arr_ty.clone()); }
     if arr_ty == PhpType::Str {
-        return Err(CompileError::new(
-            span,
-            "String offset assignment is not supported",
-        ));
+        return check_string_offset_assign(array, index, &idx_ty, value, span);
     }
     if let PhpType::Array(elem_ty) = &arr_ty {
         let normalized_idx_ty = normalized_array_key_type(index, idx_ty.clone());
@@ -82,7 +102,53 @@ pub(super) fn check_array_assign(
                         && !index_is_foreach_key
                         && !checker.index_is_packed_loop_counter(array, index)
                         && array_key_contiguity_is_unproven(index))));
-        if forces_hash {
+        // The same gap exists past the end of a NON-empty packed array: `$a = [1, 2]; $a[5] = 3;`
+        // zero-filled slots 2..4 where php has `{"0":1,"1":2,"5":3}`, and a negative key cannot
+        // live in packed storage at all. A literal key is decided below (only `0` and `1` are
+        // always in range). A non-literal key the checker cannot bound takes hash storage here
+        // too, and the site is recorded so lowering promotes the packed value it holds there.
+        // Boxed `Mixed` elements are left out: `Op::ArraySetMixedKey` already promotes an
+        // out-of-range integer key at run time. A foreach key or a boxed key (`Mixed`, or the
+        // `int|float` every `$i++` counter carries) keeps the existing runtime-tagged route, which
+        // reaches that same helper, so loop counters need no range proof here. The bare
+        // packed-counter exemption above is not reused: an existing array can shrink under it
+        // (`array_pop($a)` in the body), and its counter is boxed anyway.
+        // A candidate `array<int>` local written under a key nothing bounds stays typed instead:
+        // codegen keeps the packed write for a key in range and promotes the storage to a hash
+        // only when the key really skips a slot, so the loop keeps raw integer slots where
+        // widening to `Array(Mixed)` would box every one of them.
+        let promotable = !forces_hash
+            && checker.promotable_array_write(
+                array, index, elem_ty, &idx_ty, &normalized_idx_ty, index_is_foreach_key, &val_ty,
+            );
+        // A literal key past `1` may skip a slot of any non-empty packed array, and a negative one
+        // never fits packed storage: the static type moves to a hash, unless the local is a
+        // promotable candidate, whose codegen decides at run time whether the key really skips.
+        let forces_hash = forces_hash
+            || (!promotable
+                && !matches!(elem_ty.as_ref(), PhpType::Never)
+                && nonempty_array_key_forces_hash_storage(index));
+        if promotable {
+            checker.record_promotable_array_local(array);
+        }
+        let skips_nonempty_slot = !forces_hash
+            && !promotable
+            && !matches!(elem_ty.as_ref(), PhpType::Never)
+            && elem_ty.codegen_repr() != PhpType::Mixed
+            && matches!(normalized_idx_ty, PhpType::Int)
+            && !index_is_foreach_key
+            && !matches!(idx_ty, PhpType::Mixed | PhpType::Union(_))
+            && !nonempty_array_key_stays_in_range(index);
+        if skips_nonempty_slot {
+            checker
+                .sparse_key_write_sites
+                .entry(span)
+                .or_default()
+                .insert(array.to_string());
+        }
+        if promotable {
+            // The local keeps its `array<int>` storage; nothing in its static type changes.
+        } else if forces_hash || skips_nonempty_slot {
             let merged_key = if matches!(elem_ty.as_ref(), PhpType::Never) {
                 normalized_idx_ty
             } else {
@@ -139,7 +205,8 @@ pub(super) fn check_array_assign(
         let merged_value = if **existing_value == val_ty {
             *existing_value.clone()
         } else {
-            PhpType::Mixed
+            // Pointers and `null` share the pointer word (`?ptr<T>` values).
+            crate::types::merge_pointer_elements(existing_value, &val_ty).unwrap_or(PhpType::Mixed)
         };
         // Same contract as the indexed form, and guarded the same way — on the MERGE RESULT,
         // so a declared `array<string, mixed>` stays writable with anything while
@@ -156,36 +223,140 @@ pub(super) fn check_array_assign(
             },
         );
     } else if let PhpType::Buffer(elem_ty) = &arr_ty {
-        if !matches!(idx_ty, PhpType::Int | PhpType::Mixed) && !idx_ty.is_int_float_union() {
-            return Err(CompileError::new(span, "Buffer index must be integer"));
-        }
-        match elem_ty.as_ref() {
-            PhpType::Packed(_) => {
-                return Err(CompileError::new(
-                    span,
-                    "Assign packed buffer elements through field access like $buf[$i]->field",
-                ))
-            }
-            inner if !buffer_element_accepts_assignment(inner, &val_ty) => {
-                return Err(CompileError::new(
-                    span,
-                    &format!(
-                        "Buffer element type mismatch: expected {}, got {}",
-                        inner, val_ty
-                    ),
-                ));
-            }
-            _ => {}
-        }
+        validate_buffer_element_write(elem_ty, &idx_ty, &val_ty, span)?;
     } else if let PhpType::Object(class_name) = &arr_ty {
-        if !checker.object_type_implements_interface(class_name, "ArrayAccess") {
+        if !checker.object_type_supports_dimensions(class_name) {
             return Err(CompileError::new(
                 span,
                 "Object array assignment requires ArrayAccess",
             ));
         }
     }
+    finish_array_write_view(checker, array, &arr_ty, had_nullable_read, storage.as_ref(), env);
     Ok(())
+}
+
+/// Diagnostic for a string offset write whose string lives in a property.
+pub(super) const STRING_OFFSET_ON_PROPERTY_UNSUPPORTED: &str =
+    "String offset assignment on a property is not supported; copy the property into a local \
+     variable, assign the offset there, and store the local back";
+
+/// Validates a string offset write `$s[$i] = $v` on a local typed `string`.
+///
+/// The offset must be one a string read also accepts (integer, float, `mixed`, or a numeric
+/// string literal). PHP refuses a compound operator on a string offset
+/// (`$s[0] .= "x"`) with a runtime `Error`; that shape always fails, so it is refused here
+/// with PHP's wording. The local keeps its `string` type.
+fn check_string_offset_assign(
+    array: &str,
+    index: &Expr,
+    idx_ty: &PhpType,
+    value: &Expr,
+    span: Span,
+) -> Result<(), CompileError> {
+    if let Some(message) = string_offset_read_modify_write_error(array, index, value, span) {
+        return Err(CompileError::new(span, message));
+    }
+    if !crate::types::checker::inference::is_valid_string_offset_index(index, idx_ty) {
+        return Err(CompileError::new(span, "String index must be integer"));
+    }
+    Ok(())
+}
+
+/// Returns PHP's error for a desugared read-modify-write of a string offset, if `value` is one.
+///
+/// The parser rewrites `$s[$i] <op>= $v` and the statement form of `$s[$i]++` / `--$s[$i]`
+/// into `$s[$i] = $s[$i] <op> <rhs>`, giving the synthesized value the statement's own span;
+/// that separates it from a user-written `$s[0] = $s[0] . "x"`, which PHP allows. An
+/// increment's synthesized `1` also carries the statement span, whereas the `1` of a written
+/// `$s[0] += 1` carries its own. `??=` desugars to a null-coalesce and stays allowed, as in PHP.
+fn string_offset_read_modify_write_error(
+    array: &str,
+    index: &Expr,
+    value: &Expr,
+    span: Span,
+) -> Option<&'static str> {
+    if value.span != span {
+        return None;
+    }
+    if let ExprKind::Assignment { value: step, prelude, .. } = &value.kind {
+        if prelude.iter().any(|stmt| matches!(&stmt.kind,
+            crate::parser::ast::StmtKind::Assign { value: read, .. }
+                if expr_is_string_offset_target(read, array, index)))
+        {
+            return Some("Cannot increment/decrement string offsets");
+        }
+        if prelude.is_empty() {
+            return string_offset_read_modify_write_error(array, index, step, span);
+        }
+    }
+    let ExprKind::BinaryOp { left, op, right } = &value.kind else {
+        return None;
+    };
+    if !expr_is_string_offset_target(left, array, index) {
+        return None;
+    }
+    let synthesized_step = right.span == span && matches!(right.kind, ExprKind::IntLiteral(1));
+    if synthesized_step && matches!(op, BinOp::Add | BinOp::Sub) {
+        Some("Cannot increment/decrement string offsets")
+    } else {
+        Some("Cannot use assign-op operators with string offsets")
+    }
+}
+
+/// Returns whether `expr` is exactly the string offset target `$array[index]`.
+pub(in crate::types::checker) fn expr_is_string_offset_target(
+    expr: &Expr,
+    array: &str,
+    index: &Expr,
+) -> bool {
+    matches!(
+        &expr.kind,
+        ExprKind::ArrayAccess { array: receiver, index: read_index }
+            if matches!(&receiver.kind, ExprKind::Variable(name) if name == array)
+                && read_index.as_ref() == index
+    )
+}
+
+/// Validates the index and value types for a whole-element buffer write.
+///
+/// A width-declared element (`buffer<u8>`, `buffer<f32>`) takes exactly what an `int` or
+/// `float` element takes; the store narrows the value to the element width. A packed element
+/// copies a record of the same class from a packed address or typed pointer.
+pub(super) fn validate_buffer_element_write(
+    elem_ty: &PhpType,
+    idx_ty: &PhpType,
+    val_ty: &PhpType,
+    span: Span,
+) -> Result<(), CompileError> {
+    if !matches!(idx_ty, PhpType::Int | PhpType::Mixed) && !idx_ty.is_int_float_union() {
+        return Err(CompileError::new(span, "Buffer index must be integer"));
+    }
+    match &elem_ty.storage_value_type() {
+        PhpType::Packed(record) => {
+            let same_record = matches!(val_ty,
+                PhpType::Packed(source) | PhpType::Pointer(Some(source))
+                    if source.trim_start_matches('\\')
+                        .eq_ignore_ascii_case(record.trim_start_matches('\\'))
+            );
+            if same_record {
+                Ok(())
+            } else {
+                Err(CompileError::new(span, &format!(
+                    "Buffer element type mismatch: expected {} record, got {}",
+                    record, val_ty,
+                )))
+            }
+        },
+        inner if !buffer_element_accepts_assignment(inner, val_ty) => Err(CompileError::new(
+            span,
+            &format!(
+                "Buffer element type mismatch: expected {}, got {}",
+                inner, val_ty
+            ),
+        )),
+        _ => Ok(()),
+    }
 }
 
 /// Returns whether a buffer element accepts an assignment value after runtime coercion.
@@ -248,12 +419,17 @@ pub(super) fn check_nested_array_assign(
             if matches!(array.kind, ExprKind::ArrayAccess { .. })
                 && members.iter().all(|member| matches!(member,
                     PhpType::Bool | PhpType::False | PhpType::Void)) => Ok(()),
+        PhpType::Union(members) if members.iter().all(|member| match member {
+            PhpType::Void => true,
+            PhpType::Object(name) => crate::types::builtin_classes::has_native_dimensions(name, &checker.classes),
+            _ => false,
+        }) => Ok(()),
         PhpType::Str => Err(CompileError::new(
             span,
             "String offset assignment is not supported",
         )),
         PhpType::Object(class_name)
-            if checker.object_type_implements_interface(&class_name, "ArrayAccess") =>
+            if checker.object_type_supports_dimensions(&class_name) =>
         {
             Ok(())
         }
@@ -354,12 +530,29 @@ pub(super) fn check_array_push(
     span: Span,
     env: &mut TypeEnv,
 ) -> Result<(), CompileError> {
-    let arr_ty = env
-        .get(array)
-        .cloned()
-        .ok_or_else(|| CompileError::new(span, &format!("Undefined variable: ${}", array)))?;
+    // PHP 8 auto-vivifies an undefined variable on `$a[] = ...`: the append creates an
+    // empty array and stores the value. Mirror that here instead of rejecting the write;
+    // the generic Mixed element keeps subsequent pushes of other types representable.
+    if !env.contains_key(array) {
+        let _ = checker.infer_type_with_assignment_effects(value, env)?;
+        env.insert(array.to_string(), PhpType::Array(Box::new(PhpType::Mixed)));
+        return Ok(());
+    }
     let val_ty = checker.infer_type_with_assignment_effects(value, env)?;
     super::locals::update_callable_assignment_metadata(checker, array, value, &val_ty, env)?;
+    // The write selects its container after index/RHS effects, which may rebind it.
+    let storage = checker.guarded_local_storage_type(&Expr::var(array), env).cloned()
+        .or_else(|| env.get(array).cloned());
+    let current = env.get(array).cloned().unwrap_or(PhpType::Mixed);
+    let nullable = nullable_array_write_view(&current);
+    let had_nullable_read = nullable.is_some();
+    let arr_ty = nullable.unwrap_or(current);
+    if matches!(arr_ty, PhpType::Array(_) | PhpType::AssocArray { .. }) || arr_ty.is_php_array() { env.insert(array.to_string(), arr_ty.clone()); }
+    // Nested appends retain their catchable runtime Error through the generated temporary.
+    if arr_ty == PhpType::Str && !array.starts_with(NESTED_APPEND_TEMP_PREFIX) {
+        return Err(CompileError::new(span, "[] operator not supported for strings"));
+    }
+    record_array_append_element_type(checker, array, &arr_ty, value, &val_ty, span, env);
     if let PhpType::Array(elem_ty) = &arr_ty {
         if **elem_ty != val_ty {
             let merged_ty = checker
@@ -376,7 +569,8 @@ pub(super) fn check_array_push(
         let merged_value = if **existing_value == val_ty {
             *existing_value.clone()
         } else {
-            PhpType::Mixed
+            // Pointers and `null` share the pointer word, as in the keyed write above.
+            crate::types::merge_pointer_elements(existing_value, &val_ty).unwrap_or(PhpType::Mixed)
         };
         env.insert(
             array.to_string(),
@@ -391,14 +585,45 @@ pub(super) fn check_array_push(
             "buffer<T> does not support push; allocate with buffer_new<T>(len)",
         ));
     } else if let PhpType::Object(class_name) = &arr_ty {
-        if !checker.object_type_implements_interface(class_name, "ArrayAccess") {
+        if !checker.object_type_supports_dimensions(class_name) {
             return Err(CompileError::new(
                 span,
                 "Object array push requires ArrayAccess",
             ));
         }
     }
+    finish_array_write_view(checker, array, &arr_ty, had_nullable_read, storage.as_ref(), env);
     Ok(())
+}
+
+/// Records an exact append contract without changing existing widening or diagnostics.
+///
+/// Only a stable variable storage type proves a boxed scalar's representation. Narrowed
+/// mixed/nullable views, arbitrary expressions and conflicting authoritative visits do not.
+fn record_array_append_element_type(
+    checker: &mut Checker, array: &str, receiver: &PhpType, value: &Expr,
+    value_ty: &PhpType, span: Span, env: &TypeEnv,
+) {
+    if !span.identifies_a_node() || checker.member_receiver_analysis_scopes.iter().any(|(function, scope)| {
+        function == &checker.current_function
+            && crate::types::loop_storage_scope_is_within(&checker.current_loop_storage_scope, scope)
+    }) { return; }
+    let proof = match (checker.typed_local_names.get(array), receiver, &value.kind) {
+        (Some(PhpType::Array(declared)), PhpType::Array(current), ExprKind::Variable(name))
+            if declared.as_ref() == current.as_ref() && declared.as_ref() == value_ty
+                && matches!(value_ty, PhpType::Int | PhpType::Float | PhpType::Bool | PhpType::Str | PhpType::Callable)
+                && checker.local_flow_read_is_stable(name)
+                && checker.definitely_bound_locals.contains(name)
+                && checker.guarded_local_storage_type(value, env).or_else(|| env.get(name)) == Some(value_ty) =>
+        {
+            Some(value_ty.clone())
+        }
+        _ => None,
+    };
+    let key = (checker.current_loop_storage_scope.clone(), span);
+    checker.array_append_element_types.entry(key)
+        .and_modify(|previous| { if *previous != proof { *previous = None; } })
+        .or_insert(proof);
 }
 
 /// Rejects an element write that would widen a local's DECLARED element type.
@@ -433,4 +658,36 @@ fn reject_declared_element_widening(
             val_ty, array, declared
         ),
     ))
+}
+
+/// Removes only null from a concrete array or the shared PHP array contract before a write.
+fn nullable_array_write_view(ty: &PhpType) -> Option<PhpType> {
+    let PhpType::Union(members) = ty else { return None; };
+    if !members.contains(&PhpType::Void) { return None; }
+    let mut arrays: Vec<_> = members.iter().filter(|member| **member != PhpType::Void)
+        .cloned().collect();
+    let array = if arrays.len() == 1 { arrays.pop()? } else { PhpType::Union(arrays) };
+    (matches!(array, PhpType::Array(_) | PhpType::AssocArray { .. }) || array.is_php_array())
+        .then_some(array)
+}
+
+/// Publishes the updated element view while preserving the nullable container's boxed slot.
+fn finish_array_write_view(
+    checker: &mut Checker, array: &str, target: &PhpType, had_nullable_read: bool,
+    previous_storage: Option<&PhpType>, env: &mut TypeEnv,
+) {
+    if !matches!(target, PhpType::Array(_) | PhpType::AssocArray { .. })
+        && !target.is_php_array() { return; }
+    let Some(view) = env.get(array).cloned() else { return; };
+    let nullable_storage = previous_storage.is_some_and(|ty| nullable_array_write_view(ty).is_some());
+    checker.record_local_storage_effect(array, &view);
+    if nullable_storage {
+        let storage = checker.normalize_union_type(vec![view.clone(), PhpType::Void]);
+        checker.guarded_union_types.insert(array.to_string(),
+            GuardedLocalStorage { ty: storage.clone(), coalesced: false });
+        // A mutation has not introduced an EIR unbox for a formerly nullable read.
+        if had_nullable_read || !checker.local_flow_read_is_stable(array) {
+            env.insert(array.to_string(), storage);
+        }
+    }
 }

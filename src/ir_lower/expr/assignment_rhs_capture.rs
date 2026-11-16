@@ -1,8 +1,9 @@
 //! Purpose:
-//! Gives delayed static-write RHS captures an expression-scoped lifetime.
+//! Gives delayed non-local write RHS captures an expression-scoped lifetime.
 //!
 //! Called from:
 //! - `super::assignments::lower_assignment_expr()` after the parser's RHS prelude.
+//! - `super::string_offset_assign::lower_string_offset_assignment_expr()`.
 //!
 //! Key details:
 //! - The actual generated PHP slot is rooted, not a second copy that leaves it alive.
@@ -11,7 +12,7 @@
 use super::*;
 
 /// Publishes the final generated RHS slot before a delayed non-local write can throw.
-pub(super) fn publish_static_assignment_rhs(
+pub(super) fn publish_assignment_rhs(
     ctx: &mut LoweringContext<'_, '_>, target: &Expr, value: &Expr,
     result: &Expr, prelude: &[Stmt], span: Span,
 ) -> Option<crate::ir::LocalSlotId> {
@@ -27,6 +28,9 @@ pub(super) fn publish_static_assignment_rhs(
         ExprKind::StaticPropertyAccess { .. } => true,
         ExprKind::PropertyAccess { object, .. } | ExprKind::DynamicPropertyAccess { object, .. } =>
             is_static_property_write_chain(object),
+        ExprKind::Variable(name) if matches!(target.kind, ExprKind::ArrayAccess { .. }) =>
+            crate::ir_lower::stmt::local_is_string_offset_target(ctx, name)
+                || crate::ir_lower::stmt::local_may_hold_boxed_string(ctx, name),
         _ => false,
     };
     if !delayed || !Ownership::php_type_needs_lifetime_tracking(&ctx.local_type(name)) {
@@ -38,7 +42,7 @@ pub(super) fn publish_static_assignment_rhs(
 }
 
 /// Transfers the result's lifetime out of its capture and retires that real slot safely.
-pub(super) fn finish_static_assignment_rhs(
+pub(super) fn finish_assignment_rhs(
     ctx: &mut LoweringContext<'_, '_>, slot: Option<crate::ir::LocalSlotId>,
     result: LoweredValue, span: Span,
 ) -> LoweredValue {

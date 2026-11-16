@@ -16,7 +16,7 @@ use crate::parser::ast::{
 };
 use crate::span::Span;
 
-use super::{ExternAbiType, FunctionSig, PhpType};
+use super::{ExternAbiType, FunctionSig, PhpType, ScalarWidth};
 
 mod abstract_setters;
 
@@ -385,6 +385,8 @@ pub struct ClassInfo {
     /// caller). The object allocates a cell per such property at construction and releases
     /// it on destruction.
     pub owned_reference_properties: HashSet<String>,
+    /// Physical indices of object-owned reference cells, including hidden ancestor slots.
+    pub owned_reference_property_slots: HashSet<usize>,
     pub promoted_properties: HashSet<String>,
     /// Per-layout-slot by-reference flags for instance properties.
     ///
@@ -439,6 +441,9 @@ pub struct ClassInfo {
     pub abstract_static_methods: HashSet<String>,
     pub static_vtable_methods: Vec<String>,
     pub static_vtable_slots: HashMap<String, usize>,
+    /// Direct interface clauses in source order, including implicit enum contracts.
+    /// Reflection prototype selection needs this before inheritance flattening and deduplication.
+    pub declared_interfaces: Vec<String>,
     pub interfaces: Vec<String>,
     /// Maps constructor param index -> property name (for type propagation from new ClassName(args))
     pub constructor_param_to_prop: Vec<Option<String>>,
@@ -788,6 +793,11 @@ impl ClassInfo {
             .unwrap_or_else(|| self.declared_properties.contains(property))
     }
 
+    /// Returns whether this physical slot owns its native reference-cell allocation.
+    pub fn property_slot_owns_reference(&self, index: usize) -> bool {
+        self.owned_reference_property_slots.contains(&index)
+    }
+
     /// Returns whether the property visible by name has a declared PHP type.
     pub fn visible_property_is_declared(&self, property: &str) -> bool {
         self.visible_property(property)
@@ -855,8 +865,8 @@ pub struct ExternFunctionSig {
     pub library: Option<String>,
 }
 
-/// Extern (FFI) class metadata with name, fields, total size, and field offsets
-/// for codegen to emit packed struct layout.
+/// Extern (FFI) class metadata: the C struct's fields in declaration order with their natural
+/// offsets, and `total_size`, the C `sizeof` (padded to the largest field alignment).
 #[derive(Debug, Clone)]
 #[allow(dead_code)]
 pub struct ExternClassInfo {
@@ -865,29 +875,39 @@ pub struct ExternClassInfo {
     pub total_size: usize,
 }
 
-/// Extern (FFI) field metadata with name, PHP type, and offset into the
-/// containing extern class struct for codegen layout.
+/// Extern (FFI) field metadata: name, PHP-visible type, byte offset into the C struct, and the
+/// declared C shape (`abi`) that decides the access width, extension, and float precision.
 #[derive(Debug, Clone)]
 #[allow(dead_code)]
 pub struct ExternFieldInfo {
     pub name: String,
     pub php_type: PhpType,
     pub offset: usize,
+    pub abi: ExternAbiType,
 }
 
 /// Packed (non-nullable) class metadata with fields, total size, and per-field
 /// offsets for codegen to emit a packed struct layout.
+///
+/// `total_size` is the record's stride (padded to `align`, the alignment of its widest
+/// field), so an array of records and an embedded record keep every field naturally aligned.
 #[derive(Debug, Clone)]
 pub struct PackedClassInfo {
     pub fields: Vec<PackedFieldInfo>,
     pub total_size: usize,
+    pub align: usize,
 }
 
 /// Packed field metadata with name, PHP type, and offset into the containing
 /// packed class struct for codegen layout.
+///
+/// `php_type` is the type the field reads as and is written from (`int` for every integer
+/// width, `float` for `f32`); `width` is the narrower storage format a field declared with a
+/// C width name keeps in memory, `None` for the 8-byte word types and embedded records.
 #[derive(Debug, Clone)]
 pub struct PackedFieldInfo {
     pub name: String,
     pub php_type: PhpType,
     pub offset: usize,
+    pub width: Option<ScalarWidth>,
 }

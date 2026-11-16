@@ -1,8 +1,6 @@
 ---
 title: "imageconvolution()"
 description: "Applies a 3x3 convolution matrix to an image."
-sidebar:
-  order: 480
 ---
 
 ## imageconvolution()
@@ -23,8 +21,9 @@ Applies a 3x3 convolution matrix to an image.
 
 ## Availability
 
-- **Compiled (AOT)**: supported through the compiler-injected image prelude.
-- **`eval()` (magician interpreter)**: not available inside eval'd code.
+| Compiled (AOT) | Magician (eval) |
+|---|---|
+| Available | Not available yet |
 
 _No examples yet. Check `examples/` and `showcases/` for usage patterns._
 

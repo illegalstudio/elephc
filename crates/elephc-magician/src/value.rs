@@ -34,6 +34,12 @@ impl RuntimeCellHandle {
         self.ptr
     }
 
+    /// Borrows the actual pointer field for a pure collector owner-slot callback.
+    /// The enclosing owner must stay immobile and unchanged through the callback.
+    pub(crate) fn owner_slot(&self) -> *const *mut RuntimeCell {
+        &self.ptr
+    }
+
     /// Returns true when this handle does not reference a runtime cell.
     pub const fn is_null(self) -> bool {
         self.ptr.is_null()

@@ -32,7 +32,8 @@ pub(super) fn static_callable_call_lowers_directly(
     match target {
         StaticCallableBinding::InstanceMethod { direct_call, .. } => *direct_call,
         StaticCallableBinding::Closure { captures, .. } => !captures.iter().any(|capture| {
-            ctx.builder.value_defining_op(capture.value) == Some(Op::LoadRefCell)
+            capture.by_ref_local.is_some()
+                || ctx.builder.value_defining_op(capture.value) == Some(Op::LoadRefCell)
         }),
         _ => true,
     }
@@ -65,7 +66,9 @@ pub(super) fn lower_static_callable_call(
                 ctx, sig.as_ref(), &return_alias, &php_type, expr.span,
             );
             begin_call_argument_evaluation(ctx);
+            let previous_description = ctx.call_description.replace(function_name.clone());
             let mut operands = lower_args_with_signature(ctx, sig.as_ref(), callback_args);
+            ctx.call_description = previous_description;
             let evaluation_intermediates = finish_call_argument_evaluation(ctx, &mut operands);
             let roots = root_user_call_operands(
                 ctx, &mut operands, sig.as_ref(), &return_alias, &php_type, expr.span,
@@ -109,17 +112,13 @@ pub(super) fn lower_static_callable_call(
                 Op::ExternCall.default_effects(),
                 Some(expr.span),
             );
-            // A statically resolved extern callable consumes its operands exactly like the
-            // direct extern call in `lower_function_call`, so a fresh owned argument, such
-            // as a string built for a `call_user_func('c_fn', ...)` or a first-class callable
-            // invocation, is released here instead of leaking once per call. The alias guard
-            // keeps a pass-through result alive, because an extern result may point into the
-            // very buffer this call passed in.
+            // The extern ABI copies returned C strings before freeing C argument copies,
+            // so the PHP result never borrows an owned PHP argument temporary.
             release_owned_call_arg_temporaries(
                 ctx,
                 &operands,
                 Some(call.value),
-                &ReturnArgAlias::Unknown,
+                &ReturnArgAlias::None,
                 expr.span,
             );
             retire_call_argument_intermediates(ctx, &evaluation_intermediates);
@@ -154,6 +153,7 @@ pub(super) fn lower_static_callable_call(
             begin_call_argument_evaluation(ctx);
             let mut operands =
                 lower_builtin_call_args(ctx, &function_name, sig.as_ref(), callback_args);
+            box_nullable_pointer_builtin_operands(ctx, sig.as_ref(), &mut operands, expr.span);
             let php_type = static_callable_builtin_result_type(
                 ctx,
                 &function_name,
@@ -161,13 +161,15 @@ pub(super) fn lower_static_callable_call(
                 expr.span,
             );
             let evaluation_intermediates = finish_call_argument_evaluation(ctx, &mut operands);
+            // Keep literal eval demand instead of requesting the full runtime catalog.
+            let eval_literal = eval_literal_fragment(&function_name, callback_args);
             let call = emit_builtin_call_value(
                 ctx,
                 &function_name,
                 operands,
                 php_type,
                 expr.span,
-                None,
+                eval_literal,
             );
             retire_call_argument_intermediates(ctx, &evaluation_intermediates);
             Some(call)
@@ -182,7 +184,7 @@ pub(super) fn lower_static_callable_call(
             // A capture without a stable cell already refused this binding above, so the direct
             // call below can be lowered without abandoning any emitted instruction.
             let reference_staging = begin_reference_return_call(ctx, Some(&signature), expr.span);
-            let php_type = normalize_value_php_type(signature.return_type.codegen_repr());
+            let php_type = normalize_value_php_type(crate::types::eir_value_php_type(&signature.return_type));
             let result_staging = prepublish_user_call_result(
                 ctx,
                 Some(&signature),
@@ -191,7 +193,13 @@ pub(super) fn lower_static_callable_call(
                 expr.span,
             );
             begin_call_argument_evaluation(ctx);
+            let label = ctx.closure_function(&name).and_then(|function| function.display_name.clone())
+                .or_else(|| (ctx.builder.function().name == name)
+                    .then(|| ctx.builder.function().display_name.clone()).flatten())
+                .unwrap_or_else(|| "{closure}".to_string());
+            let previous_description = ctx.call_description.replace(label);
             let mut arg_values = lower_args_with_signature(ctx, Some(&signature), callback_args);
+            ctx.call_description = previous_description;
             let evaluation_intermediates = finish_call_argument_evaluation(ctx, &mut arg_values);
             let roots = root_user_call_operands(
                 ctx, &mut arg_values, Some(&signature), &return_alias, &php_type, expr.span,
@@ -469,7 +477,7 @@ pub(super) fn prepublish_static_callable_call_result(
     let result_type = match target {
         StaticCallableBinding::UserFunction(name) => call_return_type(ctx, name, &[]),
         StaticCallableBinding::Closure { signature, .. } => {
-            normalize_value_php_type(signature.return_type.codegen_repr())
+            normalize_value_php_type(crate::types::eir_value_php_type(&signature.return_type))
         }
         _ => return None,
     };
@@ -695,6 +703,20 @@ pub(super) fn instance_callable_object_class_and_nullability(
                 let target = static_callable_binding_for_expr(ctx, callee)?;
                 static_callable_return_type(ctx, &target)
             }
+        }
+        // `($t = $s)->buf` reads through the value the assignment evaluates to.
+        ExprKind::Assignment {
+            value,
+            result_target,
+            prelude,
+            ..
+        } => {
+            let result = assignment_result_expr(value, result_target.as_deref(), prelude);
+            return instance_callable_object_class_and_nullability(ctx, result);
+        }
+        // `(clone $block)->component()` has the same receiver class as `$block`.
+        ExprKind::Clone(inner) => {
+            return instance_callable_object_class_and_nullability(ctx, inner);
         }
         _ => infer_expr_type_syntactic(object),
     };

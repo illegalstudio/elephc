@@ -115,7 +115,7 @@ impl Checker {
                 ));
             }
         }
-        self.functions.insert(name.to_string(), first_sig);
+        self.publish_function_signature(name.to_string(), first_sig);
         Ok(true)
     }
 
@@ -246,6 +246,19 @@ impl Checker {
                     param_types[seen_idx].1 = PhpType::Mixed;
                     changed = true;
                 }
+                seen_idx += 1;
+                continue;
+            }
+            // A written by-reference array type (`array<T> &`, `array<K, V> &`) is a storage
+            // contract the caller's variable is converted to or refused against; it is never
+            // sharpened or joined with what a call site passes.
+            if seen_idx < regular_param_count
+                && Self::is_written_reference_array_param(
+                    &stored_sig.ref_params,
+                    &stored_sig.param_type_exprs,
+                    seen_idx,
+                )
+            {
                 seen_idx += 1;
                 continue;
             }

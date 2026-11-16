@@ -1,8 +1,6 @@
 ---
 title: "date_diff()"
 description: "Returns the DateInterval between two dates."
-sidebar:
-  order: 198
 ---
 
 ## date_diff()
@@ -22,8 +20,9 @@ Returns the DateInterval between two dates.
 
 ## Availability
 
-- **Compiled (AOT)**: supported through the Elephc compiler.
-- **`eval()` (magician interpreter)**: supported through the procedural date/time alias dispatcher.
+| Compiled (AOT) | Magician (eval) |
+|---|---|
+| Available | Available |
 
 _No examples yet. Check `examples/` and `showcases/` for usage patterns._
 

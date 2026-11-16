@@ -376,6 +376,41 @@ return $box->events;"#,
     );
 }
 
+/// Verifies eval null coalescing asks `__isset()` before dispatching `__get()`.
+#[test]
+fn execute_program_null_coalesce_respects_eval_magic_isset() {
+    let program = parse_fragment(
+        br#"class EvalMagicCoalesceBox {
+    public bool $answer = false;
+    public string $events = "";
+    public function &__isset($name): bool {
+        $this->events = $this->events . "isset:" . $name . ";";
+        return $this->answer;
+    }
+    public function __get($name) {
+        $this->events = $this->events . "get:" . $name . ";";
+        return 5;
+    }
+}
+$box = new EvalMagicCoalesceBox();
+echo $box->missing ?? "fallback"; echo ":";
+$box->answer = true;
+echo $box->missing ?? "fallback"; echo ":";
+return $box->events;"#,
+    )
+    .expect("parse eval fragment");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+
+    let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+    assert_eq!(values.output, "fallback:5:");
+    assert_eq!(
+        values.get(result),
+        FakeValue::String("isset:missing;isset:missing;get:missing;".to_string())
+    );
+}
+
 /// Verifies eval objects stringify through public `__toString()` in PHP string contexts.
 #[test]
 fn execute_program_dispatches_eval_magic_tostring_for_string_contexts() {

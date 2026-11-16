@@ -49,6 +49,7 @@ fn injected_prelude_programs() -> Vec<(&'static str, crate::parser::ast::Program
         ("bcmath_prelude", crate::bcmath_prelude::bcmath_declarations()),
         ("hash_prelude", crate::hash_prelude::hash_declarations()),
         ("core_prelude", crate::core_prelude::core_declarations()),
+        ("random_prelude", crate::random_prelude::random_declarations()),
         ("tz_prelude", crate::tz_prelude::tz_declarations()),
         (
             "var_export_prelude",
@@ -68,6 +69,10 @@ fn injected_prelude_programs() -> Vec<(&'static str, crate::parser::ast::Program
         ("image_prelude", crate::image_prelude::image_declarations()),
         ("curl_prelude", parsed_curl_prelude()),
         ("xml_prelude", crate::xml_prelude::xml_declarations()),
+        ("simplexml_prelude", crate::simplexml_prelude::declarations()),
+        ("tidy_prelude", crate::tidy_prelude::tidy_declarations()),
+        ("fileinfo_prelude", crate::fileinfo_prelude::fileinfo_declarations()),
+        ("tokenizer_prelude", crate::tokenizer_prelude::tokenizer_declarations()),
         ("testing_prelude", crate::testing_prelude::testing_declarations()),
         (
             "version_prelude",
@@ -104,17 +109,21 @@ fn injected_prelude_programs() -> Vec<(&'static str, crate::parser::ast::Program
             crate::web_prelude::build::web_declarations(
                 crate::web_prelude::PhpVersion::Php85,
                 &[],
+                crate::web_prelude::SuperglobalNeeds::ALL,
             ),
         ),
         ("web_prelude(wrap)", vec![crate::web_prelude::web_wrap_stmt()]),
+        ("web_application", crate::web_prelude::application::declarations()),
     ];
     // The mysqli prelude is a second bridge surface built as Rust AST like the others; the
     // gate must cover its `__elephc_*` internal-alias discipline too. The shared `elephc_pdo`
     // extern block declares only symbols and calls nothing, and the PDO build above already
-    // carries it, so it needs no separate entry.
+    // carries it, so it needs no separate entry. The NEWEST profile is audited: the mysqli
+    // surface only ever grows (`mysqli_quote_string` is PHP 8.6+), so it declares every
+    // contracted function.
     built.push((
         "mysqli_prelude",
-        crate::mysqli_prelude::build::mysqli_declarations(crate::php_version::PhpVersion::default()),
+        crate::mysqli_prelude::build::mysqli_declarations(crate::php_version::PhpVersion::Php86),
     ));
     built
 }
@@ -181,6 +190,11 @@ fn prelude_sources() -> Vec<(&'static str, String)> {
         .map(|(name, program)| {
             let source = if name == "curl_prelude" {
                 crate::curl_prelude::CURL_PRELUDE_SRC.to_string()
+            } else if name == "web_application" {
+                // The source is already PHP and includes an explicitly global namespace block.
+                // The built-prelude printer deliberately does not model that parsed construct.
+                format!("{}\n{}", crate::web_prelude::application::CONTRACT_SOURCE,
+                    crate::web_prelude::application::ADAPTER_SOURCE.replacen("<?php", "", 1))
             } else {
                 crate::synthetic_class::print::print_program(&program)
             };
@@ -209,16 +223,25 @@ fn catalog_hosted_preludes() -> Vec<(&'static str, String, bool)> {
 
 /// PHP-visible functions a catalog-hosted prelude declares WITHOUT a shared contract,
 /// with the reason each exclusion is correct rather than an oversight.
-const UNCONTRACTED_PRELUDE_DECLARATIONS: &[(&str, &str)] = &[(
-    "curl_file_create",
-    "a plain alias of the CURLFile constructor. It has no `builtin!` binding (the prelude \
-     is the whole implementation) and no `eval_builtin!` home either — inside eval() it \
-     resolves through the native-class fallback, see elephc-magician's \
-     interpreter::builtins::curl module doc. A contract would need an eval binding that \
-     does not exist, or an EvalImplementationPending label that would be false because \
-     eval() can already call it. Consequence, accepted: the PHP comparison page counts \
-     the curl module 34/35 rather than 35/35.",
-)];
+const UNCONTRACTED_PRELUDE_DECLARATIONS: &[(&str, &str)] = &[
+    (
+        "curl_file_create",
+        "a plain alias of the CURLFile constructor. It has no `builtin!` binding (the prelude \
+         is the whole implementation) and no `eval_builtin!` home either — inside eval() it \
+         resolves through the native-class fallback, see elephc-magician's \
+         interpreter::builtins::curl module doc. A contract would need an eval binding that \
+         does not exist, or an EvalImplementationPending label that would be false because \
+         eval() can already call it. Consequence, accepted: the PHP comparison page counts \
+         the curl module 34/35 rather than 35/35.",
+    ),
+    (
+        "ob_tidyhandler",
+        "the output-buffering callback registered by ob_start('ob_tidyhandler'). php-src \
+         exposes it as an output-handler alias, not as a function in ext/tidy's stub, so \
+         the shared builtin catalog has no row for it. The tidy prelude declares it so the \
+         handler string resolves at compile time and eval() sees the same name.",
+    ),
+];
 
 /// Verifies no injected compiler prelude calls a PHP-visible extension builtin.
 ///
@@ -236,12 +259,18 @@ const UNCONTRACTED_PRELUDE_DECLARATIONS: &[(&str, &str)] = &[(
 /// `curl_prelude` is parsed rather than built (see `injected_prelude_programs`); it is audited
 /// through the same AST path, because the gate is about what a prelude CALLS, not about how
 /// its declarations were produced.
+///
+/// The extension-hosting prelude is audited too, on a sample hosted surface: it depends on the
+/// project's installed extensions, and its extern declarations have no PHP text, so it sits
+/// outside `injected_prelude_programs`.
 #[test]
 fn injected_preludes_never_call_php_visible_extension_builtins() {
     let extension_names = php_visible_extension_builtins();
 
+    let mut programs = injected_prelude_programs();
+    programs.push(("php_ext_prelude", crate::php_ext::prelude::sample_declarations()));
     let mut violations: Vec<String> = Vec::new();
-    for (prelude, program) in &injected_prelude_programs() {
+    for (prelude, program) in &programs {
         let called = crate::synthetic_class::called_function_names(program);
         for name in &extension_names {
             if called.iter().any(|call| call.eq_ignore_ascii_case(name)) {
@@ -390,8 +419,15 @@ fn prelude_contracts_match_their_injected_signatures() {
             let at = format!("{name}(${}) in {prelude}", param.name);
             assert_eq!(actual.by_ref, param.by_ref, "{at}: by-reference marker");
             assert!(!actual.variadic, "{at}: fixed parameter declared variadic");
+            // Tidy's prelude widens its configuration and encoding parameters to `mixed`
+            // so its explicit adapter can reproduce internal Tidy's weak scalar coercion
+            // and TypeError ordering. The public contract keeps PHP's documented union
+            // types; docs/php/tidy.md records the reflection difference.
+            let tidy_adapter = name.starts_with("tidy_")
+                && matches!(param.name, "config" | "encoding")
+                && actual.php_type == "mixed";
             assert!(
-                php_type_matches(param.ty, &actual.php_type),
+                tidy_adapter || php_type_matches(param.ty, &actual.php_type),
                 "{at}: declared type `{}` is not the contract's {:?}",
                 actual.php_type,
                 param.ty

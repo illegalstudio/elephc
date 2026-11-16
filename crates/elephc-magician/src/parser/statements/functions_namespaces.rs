@@ -152,8 +152,12 @@ impl Parser {
     pub(in crate::parser) fn parse_use_name_or_group_start(
         &mut self,
     ) -> Result<(String, bool), EvalParseError> {
+        // PHP refuses a relative name in an import: `use namespace\Foo;` is a syntax error.
+        if self.at_relative_name() {
+            return Err(EvalParseError::UnexpectedToken);
+        }
         let _ = self.consume(TokenKind::Backslash);
-        let TokenKind::Ident(first) = self.current() else {
+        let (TokenKind::Ident(first) | TokenKind::ReservedNameHead(first)) = self.current() else {
             return Err(EvalParseError::UnexpectedToken);
         };
         let mut name = first.clone();
@@ -162,7 +166,7 @@ impl Parser {
             if self.consume(TokenKind::LBrace) {
                 return Ok((name, true));
             }
-            let TokenKind::Ident(part) = self.current() else {
+            let (TokenKind::Ident(part) | TokenKind::ReservedNameHead(part)) = self.current() else {
                 return Err(EvalParseError::UnexpectedToken);
             };
             name.push('\\');

@@ -13,6 +13,7 @@
 mod archive_dedup;
 mod bridges;
 mod command;
+mod native_packages;
 mod pdo;
 mod sdk;
 
@@ -152,11 +153,23 @@ pub(crate) fn archive_filename_for_flag(flag: &str) -> Option<String> {
     bridges::archive_filename_for_flag(flag)
 }
 
+/// Returns the managed native packages a planned library set needs, in link order.
+pub(crate) fn native_packages_for_libraries(link_libraries: &[String]) -> Vec<&'static str> {
+    native_packages::native_packages_for_libraries(link_libraries)
+}
+
 /// Returns bridge library/flag pairs present in one planned named-library set.
 pub(crate) fn bridges_in(
     link_libraries: &[String],
 ) -> Vec<(&'static str, &'static str)> {
     bridges::bridges_in(link_libraries)
+}
+
+/// The archive of the bridge named `lib_name` (`libelephc_<name>.a`), auto-built in a
+/// source checkout. Hosted PHP extensions link the `elephc_zend` engine through it, after
+/// their own archives.
+pub(crate) fn bridge_archive(lib_name: &str) -> Result<std::path::PathBuf, LinkError> {
+    bridges::locate_archive(lib_name)
 }
 
 /// Maps one bridge library name to the PHP extensions identified by linking that bridge.

@@ -32,7 +32,7 @@ pub(super) fn lower_arguments(
     ).expect("selected enum runtime binding consumes the validated shared plan");
     // The plan validates last-wins binding, but its projection can omit overwritten
     // array values. Construct the original arrays so every source effect still runs.
-    let container = lower_named_descriptor_invoker_arg_container(ctx, args, Some(signature), span);
+    let container = lower_named_descriptor_invoker_arg_container(ctx, args, Some(signature), true, span);
     let container = unbox_array_param_storage(ctx, container, PhpType::AssocArray {
         key: Box::new(PhpType::Mixed), value: Box::new(PhpType::Mixed),
     }, Some(span));
@@ -131,6 +131,7 @@ pub(super) fn call_intermediate(ctx: &mut LoweringContext<'_, '_>, value: Lowere
     let owner = crate::ir_lower::context::CallArgumentEvaluationOwner {
         value: Some(snapshot.value), borrow: Some(snapshot.value), temp_name: slot.clone(),
         slot: ctx.local_slots[&slot], span, ref_cell_payload: None, scoped_receiver_alias: false,
+        pins_borrowed_source: false,
     };
     ctx.call_argument_evaluation_scopes.last_mut().expect("selected method argument scope")
         .owners.push(owner);

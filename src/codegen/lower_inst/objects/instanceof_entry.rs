@@ -9,6 +9,26 @@
 
 use super::*;
 
+/// Tests a boxed `is_a` subject through the same class metadata as named `instanceof`.
+pub(in crate::codegen::lower_inst) fn lower_mixed_is_a_literal_target(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+    value: ValueId,
+    class_name: &str,
+) -> Result<()> {
+    let normalized = class_name.trim_start_matches('\\');
+    let canonical = ctx.module.class_infos.keys().chain(ctx.module.interface_infos.keys())
+        .find(|name| name.eq_ignore_ascii_case(normalized))
+        .map(String::as_str).unwrap_or(normalized);
+    if let Some((target_id, target_kind)) = classify_named_target(ctx, canonical) {
+        ctx.load_value_to_reg(value, abi::int_arg_reg_name(ctx.emitter.target, 0))?;
+        emit_match_call(ctx, target_id, target_kind, "__rt_mixed_instanceof");
+    } else {
+        emit_false(ctx);
+    }
+    store_if_result(ctx, inst)
+}
+
 /// Lowers named `instanceof` using runtime class/interface metadata.
 pub(in crate::codegen::lower_inst) fn lower_instanceof(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     let value = expect_operand(inst, 0)?;
@@ -28,7 +48,15 @@ pub(in crate::codegen::lower_inst) fn lower_instanceof(ctx: &mut FunctionContext
         emit_false(ctx);
         return store_if_result(ctx, inst);
     }
-    if builtins::has_eval_context(ctx) {
+    if class_name
+        .trim_start_matches('\\')
+        .eq_ignore_ascii_case("__PHP_Incomplete_Class")
+    {
+        emit_incomplete_class_instanceof(ctx, value, &value_ty)?;
+        return store_if_result(ctx, inst);
+    }
+    if ctx.module.required_runtime_features.eval_bridge {
+        // An escaped eval-declared object carries its owner independently of this AOT frame.
         return builtins::lower_eval_object_is_a(ctx, inst, value, &class_name, false);
     }
     let Some((target_id, target_kind)) = classify_named_target(ctx, &class_name) else {
@@ -79,6 +107,70 @@ fn emit_closure_instanceof(
     Ok(())
 }
 
+/// Tests the synthetic `__PHP_Incomplete_Class` identity carried by class id `-2`.
+///
+/// `unserialize(..., ['allowed_classes' => false])` stores refused objects with a reserved
+/// class id and the original class name; PHP still reports them as instances of the internal
+/// `__PHP_Incomplete_Class`. No declared class-info entry exists for that name, so the normal
+/// target classifier would answer false before looking at the object.
+fn emit_incomplete_class_instanceof(
+    ctx: &mut FunctionContext<'_>,
+    value: crate::ir::ValueId,
+    value_ty: &PhpType,
+) -> Result<()> {
+    match value_ty {
+        PhpType::Object(_) => {
+            ctx.load_value_to_reg(value, abi::int_result_reg(ctx.emitter))?;
+            match ctx.emitter.target.arch {
+                Arch::AArch64 => {
+                    ctx.emitter.instruction("ldr x0, [x0]");                    // object header class id
+                    ctx.emitter.instruction("cmn x0, #2");                      // class id -2 marks an incomplete object
+                    ctx.emitter.instruction("cset x0, eq");                     // return whether this is the synthetic class
+                }
+                Arch::X86_64 => {
+                    ctx.emitter.instruction("mov rax, QWORD PTR [rax]");        // object header class id
+                    ctx.emitter.instruction("cmp rax, -2");                     // class id -2 marks an incomplete object
+                    ctx.emitter.instruction("sete al");                         // materialize the identity comparison
+                    ctx.emitter.instruction("movzx rax, al");                   // widen the boolean result to the integer ABI
+                }
+            }
+        }
+        PhpType::Mixed | PhpType::Union(_) => {
+            ctx.load_value_to_reg(value, abi::int_result_reg(ctx.emitter))?;
+            abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
+            let false_label = ctx.next_label("incomplete_instanceof_false");
+            let done = ctx.next_label("incomplete_instanceof_done");
+            match ctx.emitter.target.arch {
+                Arch::AArch64 => {
+                    ctx.emitter.instruction("cmp x0, #6");                      // runtime tag 6 = object payload
+                    ctx.emitter.instruction(&format!("b.ne {}", false_label));  // non-objects are not instances
+                    ctx.emitter.instruction("ldr x1, [x1]");                    // object header class id
+                    ctx.emitter.instruction("cmn x1, #2");                      // class id -2 marks an incomplete object
+                    ctx.emitter.instruction("cset x0, eq");                     // return the synthetic-class identity
+                    ctx.emitter.instruction(&format!("b {}", done));            // skip the false arm
+                    ctx.emitter.label(&false_label);
+                    ctx.emitter.instruction("mov x0, #0");                      // scalar payloads are not instances
+                    ctx.emitter.label(&done);
+                }
+                Arch::X86_64 => {
+                    ctx.emitter.instruction("cmp rax, 6");                      // runtime tag 6 = object payload
+                    ctx.emitter.instruction(&format!("jne {}", false_label));   // non-objects are not instances
+                    ctx.emitter.instruction("mov rdi, QWORD PTR [rdi]");        // object header class id
+                    ctx.emitter.instruction("cmp rdi, -2");                     // class id -2 marks an incomplete object
+                    ctx.emitter.instruction("sete al");                         // materialize the identity comparison
+                    ctx.emitter.instruction("movzx rax, al");                   // widen the boolean result to the integer ABI
+                    ctx.emitter.instruction(&format!("jmp {}", done));          // skip the false arm
+                    ctx.emitter.label(&false_label);
+                    ctx.emitter.instruction("xor eax, eax");                    // scalar payloads are not instances
+                    ctx.emitter.label(&done);
+                }
+            }
+        }
+        _ => emit_false(ctx),
+    }
+    Ok(())
+}
+
 /// Lowers dynamic `instanceof` where the target is resolved from a runtime string or object.
 pub(in crate::codegen::lower_inst) fn lower_instanceof_dynamic(
     ctx: &mut FunctionContext<'_>,
@@ -86,7 +178,7 @@ pub(in crate::codegen::lower_inst) fn lower_instanceof_dynamic(
 ) -> Result<()> {
     let value = expect_operand(inst, 0)?;
     let target = expect_operand(inst, 1)?;
-    if builtins::has_eval_context(ctx) {
+    if ctx.module.required_runtime_features.eval_bridge {
         return builtins::lower_eval_object_is_a_dynamic(ctx, inst, value, target, false);
     }
     let value_ty = ctx.value_php_type(value)?;

@@ -1,8 +1,6 @@
 ---
 title: "cairo_new_sub_path() - internals"
 description: "Compiler internals for cairo_new_sub_path(): lowering path, type checks, and runtime helpers."
-sidebar:
-  order: 421
 ---
 
 ## `cairo_new_sub_path()` - internals
@@ -10,7 +8,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`crates/elephc-builtin-contract/src/catalog_data.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-builtin-contract/src/catalog_data.rs)
-- **Lowering**: [`src/image_prelude.rs`:13588](https://github.com/illegalstudio/elephc/blob/main/src/image_prelude.rs#L13588) (`cairo_new_sub_path`)
+- **Lowering**: [`src/image_prelude.rs`](https://github.com/illegalstudio/elephc/blob/main/src/image_prelude.rs) (`cairo_new_sub_path`)
 - **Function symbol**: `cairo_new_sub_path()`
 
 

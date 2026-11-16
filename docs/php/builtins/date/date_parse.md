@@ -1,8 +1,6 @@
 ---
 title: "date_parse()"
 description: "Parses a date/time string into its components, warnings, and errors."
-sidebar:
-  order: 206
 ---
 
 ## date_parse()
@@ -20,8 +18,9 @@ Parses a date/time string into its components, warnings, and errors.
 
 ## Availability
 
-- **Compiled (AOT)**: supported through the Elephc compiler.
-- **`eval()` (magician interpreter)**: supported through the procedural date/time alias dispatcher.
+| Compiled (AOT) | Magician (eval) |
+|---|---|
+| Available | Available |
 
 _No examples yet. Check `examples/` and `showcases/` for usage patterns._
 

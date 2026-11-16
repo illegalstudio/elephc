@@ -36,12 +36,14 @@ pub(super) fn lower_store_global(ctx: &mut FunctionContext<'_>, inst: &Instructi
     } else {
         let source_ty = ty.codegen_repr();
         if source_ty != PhpType::Mixed {
+            // The declared type for a `?ptr<T>`, so address 0 boxes as PHP null.
+            let box_ty = ctx.mixed_box_type(value)?;
             if ctx.value_can_transfer_ownership_to_consumer(value)?
                 || global_store_owns_persisted_string(ctx, value, &source_ty)
             {
-                emit_box_current_owned_value_as_mixed(ctx.emitter, &source_ty);
+                emit_box_current_owned_value_as_mixed(ctx.emitter, &box_ty);
             } else {
-                emit_box_current_value_as_mixed(ctx.emitter, &source_ty);
+                emit_box_current_value_as_mixed(ctx.emitter, &box_ty);
             }
         }
         PhpType::Mixed
@@ -197,11 +199,14 @@ pub(super) fn lower_const_null(ctx: &mut FunctionContext<'_>, inst: &Instruction
 
 /// Lowers explicit Mixed boxing for scalar, string, object, and existing Mixed operands.
 pub(super) fn lower_mixed_box(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+    if let Some(cell) = inst.result.and_then(|value| ctx.numeric_cell_offsets.get(&value).copied()) {
+        return super::arithmetic::stack_cell::lower_box(ctx, inst, cell);
+    }
     let value = expect_operand(inst, 0)?;
     let source_ty = ctx.load_value_to_result(value)?;
     let raw_source_ty = ctx.raw_value_php_type(value)?;
     let box_ty = mixed_box_payload_type(source_ty, raw_source_ty);
-    emit_box_current_value_as_mixed(ctx.emitter, &box_ty);
+    box_loaded_value_as_mixed(ctx, value, &box_ty);
     store_if_result(ctx, inst)
 }
 
@@ -211,6 +216,10 @@ pub(super) fn lower_mixed_box(ctx: &mut FunctionContext<'_>, inst: &Instruction)
 /// producer to a scalar constant. The final SSA storage type is authoritative: clone an existing
 /// Mixed cell, otherwise box the current scalar, string, heap payload, or tagged nullable value.
 pub(super) fn lower_mixed_clone(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+    // A proven numeric clone owns a frame cell; it copies the tag and payload there.
+    if let Some(cell) = inst.result.and_then(|value| ctx.numeric_cell_offsets.get(&value).copied()) {
+        return super::arithmetic::stack_cell::lower_clone(ctx, inst, cell);
+    }
     let value = expect_operand(inst, 0)?;
     let source_ir_type = ctx.value_ir_type(value)?;
     if matches!(
@@ -223,9 +232,25 @@ pub(super) fn lower_mixed_clone(ctx: &mut FunctionContext<'_>, inst: &Instructio
         let source_ty = ctx.load_value_to_result(value)?;
         let raw_source_ty = ctx.raw_value_php_type(value)?;
         let box_ty = mixed_box_payload_type(source_ty, raw_source_ty);
-        emit_box_current_value_as_mixed(ctx.emitter, &box_ty);
+        box_loaded_value_as_mixed(ctx, value, &box_ty);
     }
     store_if_result(ctx, inst)
+}
+
+/// Boxes a loaded value while keeping borrowed string-offset bytes outside managed heap headers.
+fn box_loaded_value_as_mixed(
+    ctx: &mut FunctionContext<'_>,
+    value: crate::ir::ValueId,
+    box_ty: &PhpType,
+) {
+    let staged = if box_ty.codegen_repr() == PhpType::Str {
+        let (pointer_reg, length_reg) = abi::string_result_regs(ctx.emitter);
+        super::ownership::stage_string_byte_view(ctx, value, pointer_reg, length_reg)
+    } else {
+        false
+    };
+    emit_box_current_value_as_mixed(ctx.emitter, box_ty);
+    super::ownership::release_string_byte_stage(ctx, staged);
 }
 
 /// Selects the runtime boxing strategy without losing erased array-layout metadata.
@@ -238,7 +263,10 @@ fn mixed_box_payload_type(source_ty: PhpType, raw_source_ty: PhpType) -> PhpType
         // be associative. Reuse the iterable boxer so the owned Mixed cell records tag 4 or 5
         // from the payload's heap kind instead of stamping every value as indexed storage.
         PhpType::Iterable
-    } else if matches!(raw_source_ty, PhpType::Resource(_)) {
+    } else if matches!(raw_source_ty, PhpType::Resource(_))
+        || crate::types::is_nullable_pointer_type(&raw_source_ty)
+    {
+        // A resource keeps its tag, and a `?ptr<T>` its null member (address 0 boxes as null).
         raw_source_ty
     } else {
         source_ty
@@ -261,7 +289,9 @@ pub(super) fn lower_invoker_ref_arg(ctx: &mut FunctionContext<'_>, inst: &Instru
     abi::emit_load_int_immediate(
         ctx.emitter,
         source_tag_reg,
-        crate::codegen::runtime_value_tag(&source_ty) as i64,
+        if matches!(source_ty, PhpType::TaggedScalar) {
+            callable_invoker_args::INVOKER_ARG_TAGGED_SCALAR_SOURCE
+        } else { crate::codegen::runtime_value_tag(&source_ty) as i64 },
     );
     ctx.emitter.comment("cufa_invoker_ref_cell");
     emit_box_runtime_payload_as_mixed(ctx.emitter, marker_tag_reg, ref_cell_reg, source_tag_reg);

@@ -1,8 +1,6 @@
 ---
 title: "timezone_transitions_get()"
 description: "Returns a timezone's DST transitions in a time range."
-sidebar:
-  order: 251
 ---
 
 ## timezone_transitions_get()
@@ -22,8 +20,9 @@ Returns a timezone's DST transitions in a time range.
 
 ## Availability
 
-- **Compiled (AOT)**: supported through the compiler-injected tz prelude.
-- **`eval()` (magician interpreter)**: supported through the procedural date/time alias dispatcher.
+| Compiled (AOT) | Magician (eval) |
+|---|---|
+| Available | Available |
 
 _No examples yet. Check `examples/` and `showcases/` for usage patterns._
 

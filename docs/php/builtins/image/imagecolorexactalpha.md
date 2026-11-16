@@ -1,8 +1,6 @@
 ---
 title: "imagecolorexactalpha()"
 description: "Returns the palette index of an exact color with alpha, or -1."
-sidebar:
-  order: 472
 ---
 
 ## imagecolorexactalpha()
@@ -24,8 +22,9 @@ Returns the palette index of an exact color with alpha, or -1.
 
 ## Availability
 
-- **Compiled (AOT)**: supported through the compiler-injected image prelude.
-- **`eval()` (magician interpreter)**: not available inside eval'd code.
+| Compiled (AOT) | Magician (eval) |
+|---|---|
+| Available | Not available yet |
 
 _No examples yet. Check `examples/` and `showcases/` for usage patterns._
 

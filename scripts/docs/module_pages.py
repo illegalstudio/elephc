@@ -15,6 +15,7 @@ MODULE_PAGES: dict[str, str] = {
     "dom": "dom-html.md",
     "exif": "image.md",
     "gd": "image.md",
+    "fileinfo": "fileinfo.md",
     "gmagick": "image.md",
     "iconv": "iconv.md",
     "imagick": "image.md",
@@ -32,7 +33,10 @@ MODULE_PAGES: dict[str, str] = {
     "posix": "pcntl.md",
     "session": "sessions.md",
     "spl": "spl.md",
+    "simplexml": "xml.md",
+    "tokenizer": "tokenizer.md",
     "xml": "xml.md",
+    "tidy": "tidy.md",
     "xmlwriter": "xml.md",
     "zend opcache": "opcache.md",
 }

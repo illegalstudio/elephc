@@ -251,6 +251,36 @@ fn lower_container_min_max(
         }
     }
     materialize_container_result(ctx, &result_ty, name)?;
+    // The reduction materializes an independent result for scalars and boxed Mixed
+    // values. Retire the owned container there instead of leaving it to the conservative
+    // MayAliasArguments contract, which leaks one array per call. A static string/object/
+    // array result keeps the container alive: its materialized payload can still borrow
+    // the container storage, and releasing here corrupts the winning string on AArch64.
+    let releasable = matches!(
+        result_ty.codegen_repr(),
+        PhpType::Int
+            | PhpType::Float
+            | PhpType::Bool
+            | PhpType::Void
+            | PhpType::Never
+            | PhpType::Mixed
+            | PhpType::Union(_)
+    );
+    // A local load is only `MaybeOwned`: its frame slot still owns the array and the scope
+    // exit retires it. Releasing it here would free the caller's local after the first
+    // min()/max(), so only an actually owned temporary (the array_values copy created for a
+    // property or element place) is retired.
+    if releasable && ctx.value_ownership(array)? == crate::ir::Ownership::Owned {
+        abi::emit_push_result_value(ctx.emitter, &result_ty);
+        crate::codegen::lower_inst::ownership::release_value_if_owned(ctx, array)?;
+        match result_ty.codegen_repr() {
+            PhpType::Float => {
+                abi::emit_pop_float_reg(ctx.emitter, abi::float_result_reg(ctx.emitter))
+            }
+            PhpType::Void | PhpType::Never => {}
+            _ => abi::emit_pop_reg(ctx.emitter, abi::int_result_reg(ctx.emitter)),
+        }
+    }
     abi::emit_jump(ctx.emitter, &done_label);
     ctx.emitter.label(&empty_label);
     super::emit_throw_value_error(ctx, &message_label, message_len);

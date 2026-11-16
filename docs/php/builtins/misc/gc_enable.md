@@ -1,8 +1,6 @@
 ---
 title: "gc_enable()"
 description: "Enables automatic collection of circular references."
-sidebar:
-  order: 617
 ---
 
 ## gc_enable()
@@ -19,8 +17,9 @@ Enables automatic collection of circular references.
 
 ## Availability
 
-- **Compiled (AOT)**: supported by the Elephc code generator.
-- **`eval()` (magician interpreter)**: supported through a declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/core/gc_enable.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/core/gc_enable.rs)).
+| Compiled (AOT) | Magician (eval) |
+|---|---|
+| Available | Available |
 
 _No examples yet. Check `examples/` and `showcases/` for usage patterns._
 

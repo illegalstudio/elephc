@@ -1,8 +1,6 @@
 ---
 title: "imagecolorsforindex() - internals"
 description: "Compiler internals for imagecolorsforindex(): lowering path, type checks, and runtime helpers."
-sidebar:
-  order: 477
 ---
 
 ## `imagecolorsforindex()` - internals
@@ -10,7 +8,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`crates/elephc-builtin-contract/src/catalog_data.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-builtin-contract/src/catalog_data.rs)
-- **Lowering**: [`src/image_prelude.rs`:2348](https://github.com/illegalstudio/elephc/blob/main/src/image_prelude.rs#L2348) (`imagecolorsforindex`)
+- **Lowering**: [`src/image_prelude.rs`](https://github.com/illegalstudio/elephc/blob/main/src/image_prelude.rs) (`imagecolorsforindex`)
 - **Function symbol**: `imagecolorsforindex()`
 
 

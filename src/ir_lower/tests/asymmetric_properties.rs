@@ -12,6 +12,32 @@ use crate::codegen::platform::Target;
 use crate::ir::{Op, Terminator};
 use std::path::Path;
 
+/// Finds a successful store through intervening null/type guards on the initialization branch.
+fn initialization_reaches_property_store(function: &crate::ir::Function, entry: crate::ir::BlockId) -> bool {
+    let mut pending = vec![entry];
+    let mut seen = std::collections::HashSet::new();
+    while let Some(id) = pending.pop() {
+        if !seen.insert(id) { continue; }
+        let block = function.block(id).unwrap();
+        if block.instructions.iter().any(|id| function.instruction(*id).unwrap().op == Op::PropSet) {
+            return true;
+        }
+        match block.terminator.as_ref() {
+            Some(Terminator::Br { target, .. }) => pending.push(*target),
+            Some(Terminator::CondBr { then_target, else_target, .. }) => {
+                pending.push(*then_target);
+                pending.push(*else_target);
+            }
+            Some(Terminator::Switch { cases, default, .. }) => {
+                pending.extend(cases.iter().map(|case| case.target));
+                pending.push(*default);
+            }
+            _ => {}
+        }
+    }
+    false
+}
+
 /// Verifies the readonly fallback graph and target-aware reflection emission.
 fn check_conditional_readonly_write(target: &str) {
     let source = r#"<?php
@@ -188,7 +214,7 @@ echo count($properties);
     ] {
         assert!(function.instructions.iter().any(|inst| inst.op == Op::PropInitialized), "{target}");
         let initialize = function.blocks.iter().find(|block| block.name == "readonly.write.uninitialized").unwrap();
-        assert!(initialize.instructions.iter().any(|id| function.instruction(*id).unwrap().op == Op::PropSet),
+        assert!(initialization_reaches_property_store(function, initialize.id),
             "{target}: authorized first initialization publishes the property");
         let overwrite = function.blocks.iter().find(|block| block.name == "readonly.write.initialized").unwrap();
         assert!(matches!(overwrite.terminator, Some(Terminator::Throw { .. })),

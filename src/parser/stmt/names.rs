@@ -6,6 +6,8 @@
 //!
 //! Key details:
 //! - `enum` remains a soft keyword in class-like name positions.
+//! - A leading `namespace\` is a relative name and resolves to a fully qualified name against
+//!   the namespace being parsed (see `crate::parser::relative_names`).
 
 use crate::errors::CompileError;
 use crate::lexer::{SpannedToken, Token, TokenMetadata};
@@ -28,6 +30,7 @@ pub(crate) fn name_part_from_token(
 pub(crate) fn name_starts_at(tokens: &[SpannedToken], pos: usize) -> bool {
     match tokens.get(pos) {
         Some((Token::Backslash, _)) => true,
+        Some((Token::Namespace, _)) => crate::parser::relative_name_starts_at(tokens, pos),
         Some((token, metadata)) => name_part_from_token(token, metadata).is_some(),
         None => false,
     }
@@ -57,12 +60,20 @@ pub(crate) fn parse_name(
     first_error: &str,
 ) -> Result<Name, CompileError> {
     let mut kind = NameKind::Unqualified;
-    if *pos < tokens.len() && tokens[*pos].0 == Token::Backslash {
+    let mut parts = Vec::new();
+    // `namespace\foo` is the relative name "foo in the current namespace" (#825), so it resolves
+    // here to the fully qualified `\Current\Ns\foo`: no import alias or global fallback applies.
+    let relative = crate::parser::relative_name_starts_at(tokens, *pos);
+    if relative {
+        kind = NameKind::FullyQualified;
+        parts = crate::parser::current_namespace_parts();
+        *pos += 2;
+    } else if *pos < tokens.len() && tokens[*pos].0 == Token::Backslash {
         kind = NameKind::FullyQualified;
         *pos += 1;
     }
 
-    let mut parts = Vec::new();
+    let namespace_len = parts.len();
     loop {
         match tokens.get(*pos) {
             Some((token, metadata)) if name_part_from_token(token, metadata).is_some() => {
@@ -72,7 +83,9 @@ pub(crate) fn parse_name(
                 );
                 *pos += 1;
             }
-            _ if parts.is_empty() => return Err(CompileError::new(span, first_error)),
+            _ if !relative && parts.len() == namespace_len => {
+                return Err(CompileError::new(span, first_error))
+            }
             _ => {
                 return Err(CompileError::new(
                     span,

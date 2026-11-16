@@ -99,7 +99,9 @@ pass1_pid_file=$log_dir/pass1.pid
 # timing stable libtest allows (see EVAL_SHARD_JUNIT_FILE above). perl rather than awk:
 # the macOS runners' awk has no systime(), and both runners ship perl.
 {
-    "$test_binary" codegen::eval "${skipped[@]}" --test-threads 2 2>&1 &
+    # `${skipped[@]+...}`: a single-shard run skips nothing, and macOS's bash 3.2 treats an
+    # empty "${skipped[@]}" as an unbound variable under `set -u`.
+    "$test_binary" codegen::eval ${skipped[@]+"${skipped[@]}"} --test-threads 2 2>&1 &
     echo $! > "$pass1_pid_file"
     if wait $!; then echo 0 > "$pass1_status_file"; else echo $? > "$pass1_status_file"; fi
 } | tee "$pass1_log" | perl -pe 'BEGIN { $| = 1 } $_ = time . "\t" . $_' > "$pass1_times" &
@@ -126,6 +128,14 @@ last_completed=$(completed_count)
 watchdog_reason=""
 while kill -0 "$tee_pid" 2>/dev/null; do
     sleep 5
+    # The pass may have exited on its own during the sleep. Judging the budget then would stop
+    # a process that already finished and replace its real status with 124: macOS shards
+    # reported "75 passed ... finished in 1797.91s" and failed with 124 exactly that way.
+    kill -0 "$tee_pid" 2>/dev/null || break
+    # The subshell writes the status file as soon as it reaps libtest, so the file means libtest
+    # already ended even while a child it left behind still holds the pipe open. Its status is its
+    # own, whatever ended it (an outside SIGKILL included), and the watchdog has nothing to stop.
+    [[ -e $pass1_status_file ]] && break
     now=$(date +%s)
     completed=$(completed_count)
     if [[ $completed -ne $last_completed ]]; then
@@ -152,7 +162,16 @@ done
 wait "$tee_pid" || true
 pass1_status=$(cat "$pass1_status_file" 2>/dev/null || echo 1)
 if [[ -n $watchdog_reason ]]; then
-    pass1_status=124
+    # 143 and 137 are the watchdog's own TERM and KILL. Any other status is one the pass returned
+    # by itself after the checks above but before the signal landed, and it stands: a crash
+    # racing the budget must not become the all-passed warning below.
+    case $pass1_status in
+        137 | 143) pass1_status=124 ;;
+        *)
+            echo "eval shard: the single-process pass exited with status $pass1_status before the watchdog's signal; keeping that status" >&2
+            watchdog_reason=""
+            ;;
+    esac
 fi
 
 # --- pass 1 JUnit report ------------------------------------------------------
@@ -211,6 +230,14 @@ for test_name in "${selected[@]}"; do
 done
 
 if [[ ${#remaining[@]} -eq 0 ]]; then
+    # The watchdog stopped a pass that had already reported every selected test ok but did not
+    # exit, e.g. because something it started still holds its output open. No test failed, so
+    # report the stop as a warning instead of failing the shard. A non-zero status the pass
+    # returned on its own (a crash after the last test, for one) still fails the shard.
+    if [[ -n $watchdog_reason ]]; then
+        echo "::warning::eval shard $shard/$shard_count: every selected test passed before the watchdog stopped the single-process pass ($watchdog_reason)"
+        exit 0
+    fi
     echo "single-process pass exited with status $pass1_status but every selected test passed" >&2
     exit "$pass1_status"
 fi

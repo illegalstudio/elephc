@@ -1,5 +1,5 @@
 //! Purpose:
-//! Branch simplification over EIR functions: fold constant-condition `CondBr`
+//! Branch simplification over EIR functions: fold constant or previously tested `CondBr`
 //! and `Switch` terminators to unconditional `Br`, thread empty forwarding
 //! blocks with SSA argument composition, neutralize unreachable blocks, and merge
 //! single-predecessor update blocks within natural loops.
@@ -48,6 +48,7 @@ impl IrPass for BranchSimplify {
             return false;
         }
         let mut changed = false;
+        changed |= super::guard_facts::fold(function);
         changed |= fold_constant_terminators(function);
         changed |= thread_empty_forwarding_blocks(function);
         changed |= neutralize_unreachable_blocks(function);

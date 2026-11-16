@@ -18,9 +18,12 @@ pub(in crate::interpreter) fn eval_builtin_call(
     scope: &mut ElephcEvalScope,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
-    // Direct count/strlen reads need no writable array-element target. Capture the value
-    // itself so its temporary key is released with source evaluation.
-    if matches!(name, "count" | "strlen") || eval_builtin_uses_owned_arguments(name) {
+    // Value parameters need no writable target. Evaluating their values directly also
+    // retires computed receivers and keys instead of stranding them in borrowed metadata.
+    let value_only = eval_declared_builtin_spec(name).is_some_and(|spec| !spec.source_arguments)
+        && elephc_builtin_contract::lookup(name)
+            .is_some_and(|contract| contract.params.iter().all(|parameter| !parameter.by_ref));
+    if value_only || eval_builtin_uses_owned_arguments(name) {
         return eval_owned_builtin_call(name, args, false, context, scope, values);
     }
     with_eval_call_arguments(args, context, scope, values, |arguments, context, scope, values| {

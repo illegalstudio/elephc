@@ -1,8 +1,6 @@
 ---
 title: "mysqli_close() - internals"
 description: "Compiler internals for mysqli_close(): lowering path, type checks, and runtime helpers."
-sidebar:
-  order: 103
 ---
 
 ## `mysqli_close()` - internals
@@ -10,7 +8,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`crates/elephc-builtin-contract/src/catalog_data.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-builtin-contract/src/catalog_data.rs)
-- **Lowering**: [`src/mysqli_prelude/build/procedural.rs`:133](https://github.com/illegalstudio/elephc/blob/main/src/mysqli_prelude/build/procedural.rs#L133) (`mysqli_close`)
+- **Lowering**: [`src/mysqli_prelude/build/procedural.rs`](https://github.com/illegalstudio/elephc/blob/main/src/mysqli_prelude/build/procedural.rs) (`mysqli_close`)
 - **Function symbol**: `mysqli_close()`
 
 

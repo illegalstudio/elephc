@@ -1,8 +1,6 @@
 ---
 title: "timezone_name_from_abbr()"
 description: "Resolves a timezone abbreviation and offset to an identifier."
-sidebar:
-  order: 247
 ---
 
 ## timezone_name_from_abbr()
@@ -22,8 +20,9 @@ Resolves a timezone abbreviation and offset to an identifier.
 
 ## Availability
 
-- **Compiled (AOT)**: supported through the Elephc compiler.
-- **`eval()` (magician interpreter)**: supported through the procedural date/time alias dispatcher.
+| Compiled (AOT) | Magician (eval) |
+|---|---|
+| Available | Available |
 
 _No examples yet. Check `examples/` and `showcases/` for usage patterns._
 

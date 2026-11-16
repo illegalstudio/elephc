@@ -47,6 +47,19 @@ pub(super) fn lower_static_settype(
     }
     let (var_arg, type_arg) = static_settype_arg_exprs(ctx, name, args)?;
     let target_ty = static_settype_target_type(&type_arg)?;
+    if super::call_arg_coercion::is_native_selection_reference_argument(ctx, &var_arg) {
+        let target = match target_ty {
+            PhpType::Int => CastType::Int,
+            PhpType::Float => CastType::Float,
+            PhpType::Str => CastType::String,
+            PhpType::Bool => CastType::Bool,
+            _ => unreachable!("static settype targets are scalar"),
+        };
+        let selection = property_access::lower_property_reference_receiver(ctx, &var_arg);
+        let converted = super::ternary_cast::lower_scalar_cast_value(ctx, &target, selection, expr);
+        crate::ir_lower::ownership::release_if_owned(ctx, converted, Some(expr.span));
+        return Some(emit_bool_literal(ctx, true, Some(expr.span)));
+    }
     if matches!(&var_arg.kind, ExprKind::ArrayAccess { array, .. }
         if instance_object_class_for_ir(ctx, array)
             .is_some_and(|class| class.eq_ignore_ascii_case("WeakMap")))
@@ -61,7 +74,20 @@ pub(super) fn lower_static_settype(
     let ExprKind::Variable(local_name) = &var_arg.kind else {
         return None;
     };
-    if ctx.is_ref_bound_local(local_name) && ctx.local_type(local_name).codegen_repr() == PhpType::Mixed {
+    if ctx.boxed_reference_promotion_is_authorized(local_name, var_arg.span)
+        && !ctx.is_ref_bound_local(local_name)
+        && ctx.local_is_promotable_to_ref_cell(local_name)
+    {
+        ctx.promote_local_mixed_ref_cell(local_name, Some(var_arg.span));
+    }
+    // A narrowed value view still occupies its boxed slot after an earlier conversion.
+    // Every replacement must publish an EIR store and retire the previous occupant.
+    let boxed_storage = ctx.local_slots.get(local_name)
+        .is_some_and(|slot| ctx.builder.local_php_type(*slot).codegen_repr() == PhpType::Mixed);
+    if ctx.local_type(local_name).codegen_repr() == PhpType::Mixed || boxed_storage {
+        if boxed_storage {
+            ctx.set_local_logical_type(local_name, PhpType::Mixed);
+        }
         let target = match target_ty {
             PhpType::Int => CastType::Int,
             PhpType::Float => CastType::Float,
@@ -476,8 +502,8 @@ pub(super) fn lower_date_args(
     vec![format.value, lower_expr(ctx, &args[1]).value]
 }
 
-/// Stabilizes positional JSON sources in owned roots before evaluating later arguments.
-pub(super) fn lower_json_decode_args(
+/// Roots JSON sources and owns boxed string conversions on normal and exceptional paths.
+pub(super) fn lower_json_source_args(
     ctx: &mut LoweringContext<'_, '_>,
     sig: Option<&FunctionSig>,
     args: &[Expr],
@@ -486,7 +512,9 @@ pub(super) fn lower_json_decode_args(
         || crate::types::call_args::has_named_args(args)
         || args.iter().any(is_spread_arg)
     {
-        return lower_args_with_signature(ctx, sig, args);
+        let mut operands = lower_args_with_signature(ctx, sig, args);
+        own_json_source_conversion(ctx, &mut operands, args.first().map(|arg| arg.span));
+        return operands;
     }
     let source = lower_expr(ctx, &args[0]);
     let source = root_evaluated_call_argument(ctx, source, args[0].span);
@@ -509,7 +537,31 @@ pub(super) fn lower_json_decode_args(
         let value = lower_expr(ctx, arg);
         operands.push(root_evaluated_call_argument(ctx, value, arg.span).value);
     }
+    own_json_source_conversion(ctx, &mut operands, Some(args[0].span));
     operands
+}
+
+/// Makes a detached Mixed-to-string buffer visible to ordinary call cleanup and unwinding.
+fn own_json_source_conversion(
+    ctx: &mut LoweringContext<'_, '_>,
+    operands: &mut [crate::ir::ValueId],
+    span: Option<crate::span::Span>,
+) {
+    let (Some(source), Some(span)) = (operands.first_mut(), span) else { return; };
+    if !matches!(ctx.builder.value_php_type(*source).codegen_repr(), PhpType::Mixed | PhpType::Union(_)) {
+        return;
+    }
+    // Conversion can invoke __toString. All source-order arguments are already evaluated,
+    // and their owners remain published if conversion throws before the JSON call starts.
+    let string = ctx.emit_owned_value(
+        Op::Cast,
+        vec![*source],
+        Some(Immediate::CastTarget(IrType::Str)),
+        PhpType::Str,
+        Op::Cast.default_effects(),
+        Some(span),
+    );
+    *source = root_evaluated_call_argument(ctx, string, span).value;
 }
 
 /// Emits `StrPersist` for already-string call operands before later arguments can reuse string scratch storage.

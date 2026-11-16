@@ -19,7 +19,7 @@ builtin! {
     check: check,
     semantics: crate::builtins::semantics::with_argument_lowering(
         crate::builtins::semantics::runtime_fn_semantics(crate::ir::RuntimeFnId::JsonDecode),
-        crate::builtins::semantics::BuiltinArgumentLowering::JsonDecode,
+        crate::builtins::semantics::BuiltinArgumentLowering::JsonSource,
     ),
 }
 

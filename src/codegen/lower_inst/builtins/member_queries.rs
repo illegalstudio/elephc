@@ -197,6 +197,7 @@ pub(crate) fn lower_is_callable(ctx: &mut FunctionContext<'_>, inst: &Instructio
         | PhpType::Float
         | PhpType::Void
         | PhpType::Never
+        | PhpType::Narrow(_)
         | PhpType::Pointer(_)
         | PhpType::Buffer(_)
         | PhpType::Packed(_)
@@ -330,6 +331,20 @@ pub(in crate::codegen::lower_inst) fn static_method_exists_on_class_info(
     target_is_object: bool,
 ) -> bool {
     let method_key = php_symbol_key(method_name);
+    // A builtin's reviewed surface hides its implementation methods (mysqli's `__destruct`,
+    // `__elephc*` helpers) — also when they are inherited by a user subclass.
+    let declaring_class = class_info
+        .method_declaring_classes
+        .get(&method_key)
+        .or_else(|| class_info.static_method_declaring_classes.get(&method_key))
+        .map(String::as_str)
+        .unwrap_or(resolved_class);
+    if [resolved_class, declaring_class].iter().any(|class_name| {
+        elephc_builtin_contract::lookup_class(class_name)
+            .is_some_and(|class| !class.method_is_php_visible(&method_key))
+    }) {
+        return false;
+    }
     if class_info.methods.contains_key(&method_key) {
         return target_is_object
             || method_visible_from_class_string(
@@ -403,6 +418,11 @@ pub(in crate::codegen::lower_inst) fn static_property_exists_on_class_info(
     property_name: &str,
     _target_is_object: bool,
 ) -> bool {
+    if elephc_builtin_contract::lookup_class(resolved_class)
+        .is_some_and(|class| class.property_is_hidden(property_name))
+    {
+        return false;
+    }
     property_visible_from_class_string(
         resolved_class,
         property_name,

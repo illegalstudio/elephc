@@ -296,7 +296,7 @@ fn finish_array_multisort(
     abi::emit_load_int_immediate(
         ctx.emitter,
         abi::int_result_reg(ctx.emitter),
-        0x7fff_ffff_ffff_fffe,
+        1,
     );
     store_if_result(ctx, inst)
 }

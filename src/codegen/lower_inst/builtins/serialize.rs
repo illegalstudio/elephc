@@ -238,6 +238,14 @@ pub(crate) fn lower_unserialize(ctx: &mut FunctionContext<'_>, inst: &Instructio
             _ => unreachable!("invalid static unserialize options were rejected before begin"),
         }
     }
+    // The runtime warning for malformed wire data names the unserialize() call site.
+    let line_reg = abi::symbol_scratch_reg(ctx.emitter);
+    abi::emit_load_int_immediate(
+        ctx.emitter,
+        line_reg,
+        i64::from(inst.span.map_or(0, |span| span.line)),
+    );
+    abi::emit_store_reg_to_symbol(ctx.emitter, line_reg, "_unser_call_line", 0);
     let (ptr_reg, len_reg) = abi::string_result_regs(ctx.emitter);
     match ctx.value_php_type(data)?.codegen_repr() {
         PhpType::Str => {
@@ -274,7 +282,7 @@ fn unserialize_static_type_name(ty: &PhpType) -> &str {
         PhpType::Callable => "Closure",
         PhpType::Iterable => "object",
         PhpType::Buffer(_) | PhpType::Pointer(_) => "resource",
-        PhpType::Mixed | PhpType::Union(_) | PhpType::TaggedScalar => "unknown",
+        PhpType::Mixed | PhpType::Union(_) | PhpType::TaggedScalar | PhpType::Narrow(_) => "unknown",
     }
 }
 

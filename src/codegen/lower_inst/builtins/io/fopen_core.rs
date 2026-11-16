@@ -20,7 +20,7 @@ pub(crate) fn lower_fopen(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> 
             return lower_literal_php_filter_fopen(ctx, inst, path);
         }
         if let Some(fd) = php_standard_stream_fd(path).or_else(|| php_fd_stream(path)) {
-            emit_fd_result(ctx, fd);
+            emit_owned_descriptor(ctx, fd);
             box_stream_fd_or_false_result(ctx, "fopen");
             return store_if_result(ctx, inst);
         }
@@ -78,6 +78,22 @@ pub(crate) fn lower_fopen(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> 
     store_if_result(ctx, inst)
 }
 
+/// Opens an independently owned duplicate for php standard-stream and fd wrapper literals.
+fn emit_owned_descriptor(ctx: &mut FunctionContext<'_>, fd: i64) {
+    let argument = abi::int_arg_reg_name(ctx.emitter.target, 0);
+    abi::emit_load_int_immediate(ctx.emitter, argument, fd);
+    let symbol = ctx.emitter.target.extern_symbol("dup");
+    abi::emit_call_label(ctx.emitter, &symbol);
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction("sxtw x0, w0");                             // preserve a negative C int failure for resource boxing
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("movsxd rax, eax");                         // preserve a negative C int failure for resource boxing
+        }
+    }
+}
+
 /// Emits the boxed `fopen()` result for a compile-time literal path without storing it.
 pub(super) fn emit_literal_fopen_result(
     ctx: &mut FunctionContext<'_>,
@@ -86,7 +102,7 @@ pub(super) fn emit_literal_fopen_result(
 ) -> Result<()> {
     let mode = expect_operand(inst, 1)?;
     if let Some(fd) = php_standard_stream_fd(path).or_else(|| php_fd_stream(path)) {
-        emit_fd_result(ctx, fd);
+        emit_owned_descriptor(ctx, fd);
         box_stream_fd_or_false_result(ctx, "fopen");
         return Ok(());
     }

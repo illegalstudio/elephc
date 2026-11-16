@@ -9,6 +9,17 @@
 
 use super::*;
 
+/// Inferred nullable scalar properties cannot keep a scalar type after an array append.
+#[test]
+fn test_error_untyped_nullable_scalar_property_append_keeps_refusal() {
+    for value in ["$argc", "$argc > 5 ? 1 : null"] {
+        expect_error(
+            &format!("<?php class InferredScalarAppend {{ public $n; }} $c = new InferredScalarAppend(); $c->n = {value}; $c->n[] = 7;"),
+            "Array push requires an array property",
+        );
+    }
+}
+
 /// A mixed literal spread unwraps its source once, preserving nested container element types.
 #[test]
 fn test_mixed_literal_spread_preserves_nested_element_type() {
@@ -30,15 +41,74 @@ fn test_mixed_literal_spread_preserves_nested_element_type() {
     }
 }
 
+/// The checker types each spread source of an indexed literal once. `[...E, null]` typed `E` in
+/// its hash-spread scan and again in the element merge that followed, so nesting the literal
+/// under a lazy merge (`$maybe ?? [...E, null]`, `$flag ? [...E, null] : []`) doubled the work at
+/// every level. Indexed sources reach the list merge; hash sources (`["k" => ...]`) reach the
+/// associative one, which the codegen timing tests do not cover. Checking alone, each 24-deep
+/// nesting must finish well inside the bound with the type a single level already settles on.
+#[test]
+fn test_nested_spread_literal_merges_type_in_linear_time() {
+    let mut indexed_coalesce = String::from("[$argc]");
+    let mut indexed_ternary = String::from("[$argc]");
+    let mut hash_coalesce = String::from("[\"k\" => $argc]");
+    let mut hash_ternary = String::from("[\"k\" => $argc]");
+    for _ in 0..24 {
+        indexed_coalesce = format!("($maybe ?? [...{indexed_coalesce}, null])");
+        indexed_ternary = format!("($flag ? [...{indexed_ternary}, null] : [])");
+        hash_coalesce = format!("($maybe ?? [...{hash_coalesce}, null])");
+        hash_ternary = format!("($flag ? [...{hash_ternary}, null] : [])");
+    }
+    let source = format!(
+        "<?php\n$maybe = $argc > 100 ? null : [];\n$flag = $argc > 0;\n$a = {indexed_coalesce};\n$b = {indexed_ternary};\n$c = {hash_coalesce};\n$d = {hash_ternary};\n"
+    );
+    let started = std::time::Instant::now();
+    let checked = check_source_full(&source).expect("nested spread literals type-check");
+    let elapsed = started.elapsed();
+    let mixed_list = PhpType::Array(Box::new(PhpType::Mixed));
+    assert_eq!(checked.global_env.get("a"), Some(&mixed_list));
+    assert_eq!(checked.global_env.get("b"), Some(&mixed_list));
+    // A hash spread makes each level a hash, and joining a hash with the `[]` arm (or with the
+    // `array<never>` left of `??`) widens to `mixed`; spreading `mixed` keeps it a hash.
+    assert_eq!(checked.global_env.get("c"), Some(&PhpType::Mixed));
+    assert_eq!(checked.global_env.get("d"), Some(&PhpType::Mixed));
+    assert!(
+        elapsed < std::time::Duration::from_secs(30),
+        "nested spread literal typing took {elapsed:?}"
+    );
+}
+
 /// Direct scalar property references need writeback support distinct from nested array origins.
 #[test]
 fn test_error_by_ref_argument_rejects_direct_property_storage() {
     for source in [
-        "<?php function setv(mixed &$value): void {} class Box { public mixed $value = 1; } $box = new Box(); setv($box->value);",
-        "<?php function setv(mixed &$value): void {} class Box { public static mixed $value = 1; } setv(Box::$value);",
+        "<?php function setv(mixed &$value): void {} class Box { public iterable $value = []; } $box = new Box(); setv($box->value);",
+        "<?php function setv(mixed &$value): void {} class Box { public static iterable $value = []; } setv(Box::$value);",
     ] {
         expect_error(source, "must be passed a variable");
     }
+}
+
+/// Method by-reference parameters reject property storage the rewrite cannot narrow back.
+///
+/// Union and callable properties need a runtime type dispatch the current write-back does not
+/// provide; they keep their pre-existing rejection instead of silently passing a copy.
+#[test]
+fn test_error_method_by_ref_argument_rejects_unsupported_property_storage() {
+    for source in [
+        "<?php class Sink { public function setv(mixed &$value): void {} } class Box { public iterable $value = []; } $sink = new Sink(); $box = new Box(); $sink->setv($box->value);",
+    ] {
+        expect_error(source, "must be passed a variable");
+    }
+}
+
+/// A by-reference variadic cannot bind an array property through the scalar place rewrite.
+#[test]
+fn test_error_variadic_by_ref_argument_rejects_array_property_storage() {
+    expect_error(
+        "<?php function collect(&...$refs): void {} class Box { public array $items = [1]; } $box = new Box(); collect($box->items);",
+        "cannot bind an array property by reference",
+    );
 }
 
 /// Mixed property storage cannot provide the declared array slot needed by nested ref writeback.
@@ -89,14 +159,94 @@ fn test_error_string_index_requires_integer() {
     );
 }
 
-/// Verifies that assigning to a string offset (character replacement) is rejected.
-/// Input: `$s = "hello"; $s[0] = "H";` — offset assignment on a string is unsupported.
+/// Verifies a string offset write keeps the string read's offset rule: a non-numeric string
+/// literal or an array offset is refused.
 #[test]
-fn test_error_string_offset_assignment_is_not_supported() {
+fn test_error_string_offset_write_requires_integer_offset() {
     expect_error(
-        "<?php $s = \"hello\"; $s[0] = \"H\";",
-        "String offset assignment is not supported",
+        "<?php $s = \"hello\"; $s[\"x\"] = \"H\";",
+        "String index must be integer",
     );
+    expect_error(
+        "<?php $s = \"hello\"; $s[[1]] = \"H\";",
+        "String index must be integer",
+    );
+}
+
+/// Verifies compound operators on a string offset are refused with PHP's `Error` text, in the
+/// statement and the expression form; `$s[0] = $s[0] . "x"` written out stays valid.
+#[test]
+fn test_error_string_offset_compound_assignment() {
+    expect_error(
+        "<?php $s = \"hello\"; $s[0] .= \"H\";",
+        "Cannot use assign-op operators with string offsets",
+    );
+    expect_error(
+        "<?php $s = \"hello\"; $s[0] += 1;",
+        "Cannot use assign-op operators with string offsets",
+    );
+    expect_error(
+        "<?php $s = \"hello\"; $r = ($s[0] .= \"H\");",
+        "Cannot use assign-op operators with string offsets",
+    );
+}
+
+/// Verifies `++`/`--` on a string offset are refused with PHP's `Error` text.
+#[test]
+fn test_error_string_offset_increment_decrement() {
+    expect_error(
+        "<?php $s = \"hello\"; $s[0]++;",
+        "Cannot increment/decrement string offsets",
+    );
+    expect_error(
+        "<?php $s = \"hello\"; --$s[1];",
+        "Cannot increment/decrement string offsets",
+    );
+    expect_error(
+        "<?php $s = \"hello\"; $r = $s[0]++;",
+        "Cannot increment/decrement string offsets",
+    );
+}
+
+/// Verifies `$s[] = $v` on a string is refused with PHP's `Error` text.
+#[test]
+fn test_error_string_push_is_not_supported() {
+    expect_error(
+        "<?php $s = \"hello\"; $s[] = \"H\";",
+        "[] operator not supported for strings",
+    );
+}
+
+/// Verifies string offset writes into a property are refused with a
+/// diagnostic that names the workaround (they are valid PHP, not lowered yet).
+#[test]
+fn test_error_string_offset_write_on_property() {
+    expect_error(
+        "<?php class B { public string $s = \"abc\"; } $o = new B(); $o->s[0] = \"X\";",
+        "String offset assignment on a property is not supported",
+    );
+    expect_error(
+        "<?php class B { public static string $s = \"abc\"; } B::$s[0] = \"X\";",
+        "Array index assignment requires an array static property",
+    );
+}
+
+/// A key that is not provably an integer on a declared packed `array<T>` property, instance or
+/// static, is refused: the slot keeps packed storage, so the write used to coerce the key into
+/// an index and a string key overwrote element 0 in silence (`$o->xs["s"] = 2` printed `[2]`).
+#[test]
+fn test_error_non_int_key_on_declared_packed_array_property() {
+    let expected = "is a packed array<int>; cast the key with (int) or declare it array<K, V>";
+    for source in [
+        "<?php class O { public array<int> $xs = []; } $o = new O; $o->xs[\"s\"] = 2;",
+        "<?php class O { public array<int> $xs = []; } function f(O $o, mixed $k): void { $o->xs[$k] = 1; } f(new O, 0);",
+        "<?php class O { public array<int> $xs = []; } function f(O $o, string $k): void { $o->xs[$k] = 1; } f(new O, \"a\");",
+        "<?php class C { public static array<int> $xs = []; } function f(mixed $k): void { C::$xs[$k] = 1; } f(0);",
+        "<?php class C { public static array<int> $xs = []; } function f(?int $k): void { C::$xs[$k] = 1; } f(null);",
+        "<?php class C { public static array<int> $xs = []; } C::$xs[\"s\"] = 1;",
+    ] {
+        expect_error(source, expected);
+    }
 }
 
 /// Verifies that by-reference foreach over a parameter typed `iterable` is rejected.
@@ -201,15 +351,6 @@ fn test_error_union_typed_local_rejects_invalid_initializer() {
     expect_error("<?php int|string $value = 1.5;", "cannot initialize $value");
 }
 
-/// Verifies a boxed `mixed` value cannot enter an object parameter without a runtime tag check.
-#[test]
-fn test_error_mixed_rejected_at_object_parameter_boundary() {
-    expect_error(
-        "<?php final class Box {} function take(Box $box): void {} function relay(mixed $value): void { take($value); }",
-        "Function 'take' parameter $box expects Box, got mixed",
-    );
-}
-
 /// Verifies a boxed `mixed` value cannot leave a function through an array return boundary.
 #[test]
 fn test_error_mixed_rejected_at_array_return_boundary() {
@@ -219,16 +360,26 @@ fn test_error_mixed_rejected_at_array_return_boundary() {
     );
 }
 
-/// Verifies that referencing an undefined variable produces an "Undefined variable" error.
+/// Verifies that referencing an undefined variable type-checks and warns at run time.
 #[test]
-fn test_error_undefined_variable() {
-    expect_error("<?php echo $x;", "Undefined variable: $x");
+fn test_undefined_variable_read_warns_at_runtime() {
+    expect_no_error("<?php echo $x;");
 }
 
-/// Verifies that a plain self-referential assignment is not mistaken for `+=`.
+/// Verifies a nullable object union is accepted at an `object` parameter: PHP only throws
+/// when the value is actually null at run time, while a nullable return stays a compile error.
 #[test]
-fn test_error_plain_self_read_assignment_remains_undefined() {
-    expect_error("<?php $x = $x + 1;", "Undefined variable: $x");
+fn test_nullable_object_union_is_accepted_at_an_object_parameter() {
+    expect_no_error(
+        "<?php function take_object(object $value): void {} function maybe(): ?stdClass { return null; } take_object(maybe());",
+    );
+}
+
+/// Verifies that a plain self-referential assignment is not mistaken for `+=`; the self-read
+/// is PHP 8's null-plus-warning read, not a compile error.
+#[test]
+fn test_plain_self_read_assignment_warns_at_runtime() {
+    expect_no_error("<?php $x = $x + 1;");
 }
 
 /// Verifies that reassigning an inferred local to an incompatible type is diagnosed.
@@ -376,13 +527,17 @@ fn test_error_negate_string() {
     );
 }
 
-/// Verifies that comparison operators on strings produce an error.
-/// Input: `$x = "a"; echo $x < 1;` — string vs int comparison is invalid.
+/// Verifies that a relational comparison MIXING a string and a number is still rejected.
+///
+/// Two strings order fine since issue #507 — PHP's own rule, through the runtime ordering
+/// helper. A string against a number is a different conversion (PHP casts the number to a
+/// string when the string is non-numeric) and stays unsupported, so the diagnostic now names
+/// both accepted shapes.
 #[test]
-fn test_error_comparison_on_string() {
+fn test_error_comparison_mixing_string_and_number() {
     expect_error(
         "<?php $x = \"a\"; echo $x < 1;",
-        "Comparison operators require numeric operands",
+        "Comparison operators require numeric or string operands",
     );
 }
 
@@ -401,13 +556,11 @@ fn test_error_assignment_expression_rejects_non_lvalue() {
 
 /// Verifies that a variable assigned inside a short-circuit `&&` is flagged as possibly undefined
 /// when referenced after the `&&` expression that did not execute.
-/// Input: `echo false && ($x = 1); echo $x;` — `$x` may not be defined.
+/// Input: `echo false && ($x = 1); echo $x;` — `$x` is not definitely assigned, so the read
+/// warns at run time instead of being a compile error.
 #[test]
-fn test_error_short_circuit_assignment_effect_is_not_definite() {
-    expect_error(
-        "<?php echo false && ($x = 1); echo $x;",
-        "Undefined variable: $x",
-    );
+fn test_short_circuit_assignment_effect_is_not_definite() {
+    expect_no_error("<?php echo false && ($x = 1); echo $x;");
 }
 
 /// Verifies that the short ternary (`?:`) with no default expression produces an error.
@@ -807,6 +960,98 @@ class Config {
 }
 "#,
         "Property Config::$level default expects Level, got string",
+    );
+}
+
+/// The declared-ancestry fallback that lets a covariant return name a class built later does
+/// not relate unrelated classes: the override is still rejected.
+#[test]
+fn test_error_override_return_to_unrelated_later_class() {
+    expect_error(
+        r#"<?php
+class Scalar {}
+class ADef { protected function make(): Scalar { return new Scalar(); } }
+class BDef extends ADef { protected function make(): ZUnrelated { return new ZUnrelated(); } }
+class ZUnrelated {}
+"#,
+        "Cannot override method BDef::make with incompatible return type ZUnrelated (parent returns Scalar)",
+    );
+}
+
+/// A pure enum implements `UnitEnum` but not `BackedEnum`: its declared ancestry must not
+/// relate it to `BackedEnum` while class schemas are built.
+#[test]
+fn test_error_override_return_pure_enum_for_backed_enum() {
+    expect_error(
+        r#"<?php
+enum Kind { case A; }
+abstract class Base { abstract public function make(): BackedEnum; }
+class Child extends Base { public function make(): Kind { return Kind::A; } }
+"#,
+        "Cannot override method Child::make with incompatible return type Kind (parent returns BackedEnum)",
+    );
+}
+
+/// The declared-ancestry fallback for `iterable` returns does not accept a later class that
+/// implements neither `Iterator` nor `IteratorAggregate`.
+#[test]
+fn test_error_override_iterable_return_to_unrelated_later_class() {
+    expect_error(
+        r#"<?php
+class ZPlain {}
+class AFactory { public function make(): iterable { return []; } }
+class BFactory extends AFactory { public function make(): ZPlain { return new ZPlain(); } }
+"#,
+        "Cannot override method BFactory::make with incompatible return type ZPlain (parent returns iterable)",
+    );
+}
+
+/// A deferred `->value` default is still checked once enum cases exist: a string-backed case's
+/// value is a string, so an `int` property rejects it.
+#[test]
+fn test_error_enum_case_value_default_type_mismatch() {
+    expect_error(
+        r#"<?php
+enum Keymap: string {
+    case Linux = 'linux';
+}
+class Settings {
+    public int $keymap = Keymap::Linux->value;
+}
+"#,
+        "Property Settings::$keymap default expects int, got string",
+    );
+}
+
+/// A pure enum case has no `->value`: the deferred default reports the missing property rather
+/// than the syntactic guess's misleading `got int`.
+#[test]
+fn test_error_pure_enum_case_value_default() {
+    expect_error(
+        r#"<?php
+enum Mode {
+    case Fast;
+}
+class Settings {
+    public function __construct(public string $mode = Mode::Fast->value) {}
+}
+"#,
+        "Undefined property: Mode::value",
+    );
+}
+
+/// A deferred enum-case read whose object holds a lazy branch keeps the syntactic fallback: PHP
+/// never evaluates the untaken `W::Missing`, so the property and method defaults type-check.
+#[test]
+fn test_enum_case_value_default_with_untaken_missing_case() {
+    expect_no_error(
+        r#"<?php
+enum W: int { case A = 7; }
+class C {
+    public int $p = (W::A ? W::A : W::Missing)->value;
+    public function m(int $x = (W::A ? W::A : W::Missing)->value): int { return $x; }
+}
+"#,
     );
 }
 
@@ -1255,6 +1500,45 @@ fn test_null_coalesce_this_keeps_the_receiver_type() {
         PhpType::Object("SelfRepo".to_string()));
 }
 
+/// An uninitialized non-null property can still select the fallback through `??`.
+#[test]
+fn test_null_coalesce_uninitialized_property_keeps_the_fallback_type() {
+    let result = check_source_full(&format!(
+        "<?php {NULL_COALESCE_CLASSES} class PropertyRepo {{ \
+         public Implementation $value; \
+         public function pick() {{ return $this->value ?? new Other(); }} }}"
+    )).expect("uninitialized property coalesce must type-check");
+    assert_eq!(
+        result.classes["PropertyRepo"].methods["pick"].return_type,
+        PhpType::Union(vec![
+            PhpType::Object("Implementation".to_string()),
+            PhpType::Object("Other".to_string()),
+        ]),
+    );
+}
+
+/// Calls on `$this` discard a fallback only when the declared return excludes null.
+#[test]
+fn test_null_coalesce_this_method_uses_the_declared_return_nullability() {
+    let result = check_source_full(&format!(
+        "<?php {NULL_COALESCE_CLASSES} class ThisRepo extends Repo {{ \
+         public function maybeFind(): ?Implementation {{ return null; }} \
+         public function pick() {{ return $this->find() ?? new Other(); }} \
+         public function pickMaybe() {{ return $this->maybeFind() ?? new Other(); }} }}"
+    )).expect("this method coalesces must type-check");
+    assert_eq!(
+        result.classes["ThisRepo"].methods["pick"].return_type,
+        PhpType::Union(vec![PhpType::Object("Implementation".to_string()), PhpType::False]),
+    );
+    assert_eq!(
+        result.classes["ThisRepo"].methods["pickmaybe"].return_type,
+        PhpType::Union(vec![
+            PhpType::Object("Implementation".to_string()),
+            PhpType::Object("Other".to_string()),
+        ]),
+    );
+}
+
 /// All lexical static-call spellings trust the same declared non-null return contract.
 #[test]
 fn test_null_coalesce_lexical_static_calls_drop_the_default() {
@@ -1333,18 +1617,19 @@ fn test_scalar_match_merge_stays_mixed_with_checked_array_use() {
     assert_eq!(result.global_env.get("r"), Some(&PhpType::Mixed));
 }
 
-/// Verifies the `Undefined variable` diagnostic still fires for an ordinary read, so the null-probe
-/// tolerance is scoped to `isset`/`empty`/`unset`/`??` and nothing else.
+/// Verifies an ordinary undefined read type-checks and is emitted as PHP 8's runtime warning,
+/// while the null-probe constructs stay silent.
 #[test]
-fn test_undefined_variable_read_is_still_rejected() {
-    expect_error("<?php echo $neverDefined;", "Undefined variable: $neverDefined");
+fn test_undefined_variable_read_is_a_runtime_warning() {
+    expect_no_error("<?php echo $neverDefined;");
 }
 
-/// Verifies only the probe's chain SPINE is tolerated: PHP warns about `$b` in `isset($a[$b])`
-/// but not about `$a`, so the index subexpression keeps the diagnostic.
+/// Verifies only the probe's chain SPINE is silent: `isset($a[$b])` warns about `$b` at run
+/// time while `$a` is the tolerated null-probe root.
 #[test]
-fn test_null_probe_index_subexpression_still_requires_a_defined_variable() {
-    expect_error("<?php var_dump(isset($a[$b]));", "Undefined variable: $b");
+fn test_null_probe_index_subexpression_warns_at_runtime() {
+    // `$a` is the silent probe spine; `$b` is an index expression and warns at run time.
+    expect_no_error("<?php var_dump(isset($a[$b]));");
 }
 
 /// Verifies `isset()`, `empty()`, `unset()` and `??` accept a never-declared variable, which is
@@ -1652,10 +1937,12 @@ fn test_unset_then_retype_is_accepted() {
     expect_no_error("<?php $a = 1; unset($a); $a = \"ciao\"; echo $a;");
 }
 
-/// `unset` at top level kills the binding: a later read is an undefined variable.
+/// `unset` at top level kills the binding: a later read is PHP 8's null-plus-warning read.
 #[test]
-fn test_read_after_unset_is_undefined() {
-    expect_error("<?php $a = 1; unset($a); echo $a;", "Undefined variable");
+fn test_read_after_unset_warns_at_runtime() {
+    // PHP 8 reads the variable as null and raises E_WARNING at run time; EIR lowering
+    // emits that warning at the read site, so this is no longer a compile error.
+    expect_no_error("<?php $a = 1; unset($a); echo $a;");
 }
 
 /// Multi-arg unset kills every plain-variable binding.
@@ -3489,4 +3776,59 @@ fn test_declared_union_local_accepts_the_other_member_after_a_guard() {
          if ($x instanceof A) { $x = new B(); } \
          echo \"ok\";",
     );
+}
+
+
+/// Accepted placement still activates strict parameter checking, including an earlier body.
+#[test]
+fn test_error_strict_types_after_bare_declare_is_effective() {
+    for source in [
+        "<?php declare(ticks=1) echo 0; declare(strict_types=1); function number(int $v): int { return $v; } echo number(true);",
+        "<?php declare(ticks=1) echo number(true); declare(strict_types=1); function number(int $v): int { return $v; }",
+        "<?php declare(ticks=1) if (true) { echo number(true); } declare(strict_types=1); function number(int $v): int { return $v; }",
+        "<?php declare(ticks=1) { $a = [0]; echo ($a[number(true)] += 1); } declare(strict_types=1); function number(int $v): int { return $v; }",
+    ] { expect_error(source, "`declare(strict_types=1)` is active in this file"); }
+}
+
+/// Once a script declares strict typing, a later zero does not clear its op-array flag.
+#[test]
+fn test_error_strict_types_later_zero_does_not_disable_one() {
+    expect_error("<?php declare(strict_types=1); declare(strict_types=0); function number(int $v): int { return $v; } echo number(true);",
+        "`declare(strict_types=1)` is active in this file");
+}
+
+/// Null-only returns require an explicit null value; genuine void still rejects every value.
+#[test]
+fn test_standalone_null_return_requirements() {
+    for source in [
+        "<?php function invalid(): null {}",
+        "<?php function invalid(): null { return; }",
+        "<?php function invalid(): null { return 1; }",
+        "<?php function invalid(): void { return null; }",
+        "<?php function invalid(void $value): void {}",
+    ] {
+        assert!(check_source_full(source).is_err(), "unexpectedly accepted: {source}");
+    }
+}
+
+/// The tentative Countable return attribute cannot weaken an ordinary interface contract.
+#[test]
+fn test_simplexml_followup_count_attribute_keeps_user_interface_returns_strict() {
+    expect_error(r#"<?php
+interface FollowupCounter { public function count(): int; }
+class FollowupBadCounter implements FollowupCounter {
+    #[\ReturnTypeWillChange] public function count(): string { return "5"; }
+}
+"#, "incompatible return type string (interface returns int)");
+}
+
+/// Redeclaring count in a user interface makes its return a strict source contract.
+#[test]
+fn test_simplexml_followup_count_attribute_keeps_redeclared_returns_strict() {
+    expect_error(r#"<?php
+interface FollowupStrictCounter extends Countable { public function count(): int; }
+class FollowupBadStrictCounter implements FollowupStrictCounter {
+    #[\ReturnTypeWillChange] public function count(): string { return "5"; }
+}
+"#, "incompatible return type string (interface returns int)");
 }

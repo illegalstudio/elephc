@@ -36,8 +36,7 @@ return $box->read(name: "A", name: "B");"#,
 /// Verifies defaults before required eval method parameters raise a catchable argument error.
 #[test]
 fn execute_program_rejects_eval_method_default_before_required_omission() {
-    let program = parse_fragment(
-        br#"class EvalRequiredAfterDefaultBox {
+    let source = r#"class EvalRequiredAfterDefaultBox {
     public function read($left = "A", $right) {
         return $left . $right;
     }
@@ -45,22 +44,25 @@ fn execute_program_rejects_eval_method_default_before_required_omission() {
 $box = new EvalRequiredAfterDefaultBox();
 try {
     $box->read(right: "B");
-} catch (Throwable $error) {
+} catch (__CATCH_TYPE__ $error) {
     return get_class($error);
 }
-return "missed";"#,
-    )
-    .expect("parse eval fragment");
-    let mut scope = ElephcEvalScope::new();
-    let mut values = FakeOps::default();
+return "missed";"#;
+    for catch_type in ["Throwable", "Error", "TypeError"] {
+        let program = parse_fragment(source.replace("__CATCH_TYPE__", catch_type).as_bytes())
+            .expect("parse eval fragment");
+        let mut scope = ElephcEvalScope::new();
+        let mut values = FakeOps::default();
 
-    let result = execute_program(&program, &mut scope, &mut values)
-        .expect("catch default before required parameter omission");
+        let result = execute_program(&program, &mut scope, &mut values)
+            .expect("catch default before required parameter omission");
 
-    assert_eq!(
-        values.get(result),
-        FakeValue::String("ArgumentCountError".to_string())
-    );
+        assert_eq!(
+            values.get(result),
+            FakeValue::String("ArgumentCountError".to_string()),
+            "catch {catch_type}",
+        );
+    }
 }
 
 /// Verifies eval-declared method scalar type hints coerce weak scalar arguments.

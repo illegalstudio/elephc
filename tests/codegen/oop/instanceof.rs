@@ -295,8 +295,7 @@ echo ($user instanceof (User::class)) ? "T" : "F";
     assert_eq!(out, "T");
 }
 
-/// Tests that dynamic instanceof with a non-string, non-object target (integer) fails
-/// with a Fatal error when the LHS is an object.
+/// Tests that an uncaught invalid dynamic target terminates when the LHS is an object.
 #[test]
 fn test_dynamic_instanceof_invalid_target_fails_for_object_lhs() {
     let out = compile_and_run_capture(
@@ -309,14 +308,15 @@ echo ($user instanceof $target) ? "T" : "F";
     );
     assert!(!out.success, "program unexpectedly succeeded: {}", out.stdout);
     assert!(
-        out.stderr
-            .contains("Fatal error: Class name must be a valid object or a string"),
-        "unexpected stderr: {}",
-        out.stderr
+        out.stdout
+            .contains("Class name must be a valid object or a string"),
+        "unexpected stdout: {}",
+        out.stdout
     );
+    assert_eq!(out.stderr, "");
 }
 
-/// Verifies that when an invalid target causes a Fatal error, both the LHS and
+/// Verifies that when an invalid target raises an `Error`, both the LHS and
 /// the target expression are evaluated in source order before the error is raised.
 #[test]
 fn test_dynamic_instanceof_invalid_target_evaluates_lhs_then_target() {
@@ -336,17 +336,17 @@ echo (lhs() instanceof (rhs())) ? "T" : "F";
 "#,
     );
     assert!(!out.success, "program unexpectedly succeeded: {}", out.stdout);
-    assert_eq!(out.stdout, "LR");
+    assert!(out.stdout.starts_with("LR"), "unexpected stdout: {}", out.stdout);
     assert!(
-        out.stderr
-            .contains("Fatal error: Class name must be a valid object or a string"),
-        "unexpected stderr: {}",
-        out.stderr
+        out.stdout
+            .contains("Class name must be a valid object or a string"),
+        "unexpected stdout: {}",
+        out.stdout
     );
+    assert_eq!(out.stderr, "");
 }
 
-/// Tests that dynamic instanceof with a null target (from a nullable return) fails
-/// with a Fatal error.
+/// Tests that an uncaught null dynamic target terminates the program.
 #[test]
 fn test_dynamic_instanceof_null_object_target_fails() {
     let out = compile_and_run_capture(
@@ -367,15 +367,15 @@ echo ($user instanceof $target) ? "T" : "F";
     );
     assert!(!out.success, "program unexpectedly succeeded: {}", out.stdout);
     assert!(
-        out.stderr
-            .contains("Fatal error: Class name must be a valid object or a string"),
-        "unexpected stderr: {}",
-        out.stderr
+        out.stdout
+            .contains("Class name must be a valid object or a string"),
+        "unexpected stdout: {}",
+        out.stdout
     );
+    assert_eq!(out.stderr, "");
 }
 
-/// Tests that dynamic instanceof with an invalid target (integer) fails with a Fatal
-/// error when the LHS is a scalar.
+/// Tests that an uncaught invalid dynamic target terminates when the LHS is a scalar.
 #[test]
 fn test_dynamic_instanceof_invalid_target_fails_for_scalar_lhs() {
     let out = compile_and_run_capture(
@@ -387,11 +387,30 @@ echo ($value instanceof $target) ? "T" : "F";
     );
     assert!(!out.success, "program unexpectedly succeeded: {}", out.stdout);
     assert!(
-        out.stderr
-            .contains("Fatal error: Class name must be a valid object or a string"),
-        "unexpected stderr: {}",
-        out.stderr
+        out.stdout
+            .contains("Class name must be a valid object or a string"),
+        "unexpected stdout: {}",
+        out.stdout
     );
+    assert_eq!(out.stderr, "");
+}
+
+/// Invalid dynamic targets raise a catchable `Error` with PHP's diagnostic message.
+#[test]
+fn test_dynamic_instanceof_invalid_target_is_catchable() {
+    let out = compile_and_run(
+        r#"<?php
+class DynamicTargetValue {}
+$value = new DynamicTargetValue();
+$target = 42;
+try {
+    echo $value instanceof $target ? "bad" : "bad";
+} catch (Error $error) {
+    echo $error->getMessage();
+}
+"#,
+    );
+    assert_eq!(out, "Class name must be a valid object or a string");
 }
 
 /// The class operand of `instanceof` may be any variable expression holding a class name:

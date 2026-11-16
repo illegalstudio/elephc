@@ -19,6 +19,9 @@ use std::path::PathBuf;
 use std::process::Command;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
+#[path = "support/bounded_output.rs"]
+mod bounded_output;
+
 static TEST_ID: AtomicUsize = AtomicUsize::new(0);
 
 /// Creates an isolated temp dir unique across parallel test threads/processes.
@@ -104,6 +107,7 @@ fn a_close_tag_in_eval_switches_to_inline_html_as_php_does() {
     let dir = make_test_dir("eval_inline_html");
     fs::write(dir.join("main.php"), HARNESS).unwrap();
     fs::write(dir.join("cases.txt"), CASES.join("\n") + "\n").unwrap();
+    eprintln!("inline HTML fixture: compiling");
     let output = Command::new(elephc_bin())
         .env("XDG_CACHE_HOME", dir.join("cache-root"))
         .current_dir(&dir)
@@ -111,7 +115,9 @@ fn a_close_tag_in_eval_switches_to_inline_html_as_php_does() {
         .output()
         .expect("failed to spawn elephc");
     assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
-    let run = Command::new(dir.join("main")).output().expect("failed to run binary");
+    eprintln!("inline HTML fixture: executing");
+    let run = bounded_output::output(&mut Command::new(dir.join("main")));
+    eprintln!("inline HTML fixture: completed");
     assert_eq!(
         String::from_utf8_lossy(&run.stdout),
         concat!(

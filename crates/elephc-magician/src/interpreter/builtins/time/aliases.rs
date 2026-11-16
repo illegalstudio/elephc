@@ -61,6 +61,7 @@ pub(in crate::interpreter) fn eval_date_procedural_alias_with_values(
         .iter()
         .copied()
         .map(|value| EvaluatedCallArg {
+            evaluation_owner: None,
             name: None,
             value,
             ref_target: None,

@@ -43,6 +43,7 @@ pub(super) fn emit_error_handler_invoke(emitter: &mut Emitter) {
     abi::emit_store_reg_to_symbol(emitter, scratch, "_exc_call_frame_top", 0);
     abi::emit_load_int_immediate(emitter, scratch, 0);
     abi::emit_store_to_address(emitter, scratch, stack, 24);
+    abi::emit_store_to_address(emitter, scratch, stack, 72);
     abi::emit_load_from_address(emitter, arg0, stack, 40);
     abi::emit_load_from_address(emitter, arg1, stack, 64);
     abi::emit_load_from_address(
@@ -58,6 +59,9 @@ pub(super) fn emit_error_handler_invoke(emitter: &mut Emitter) {
     abi::emit_load_from_address(emitter, result, stack, 72);
     emit_frame_leave(emitter, 96);
     emit_restore(emitter);
+    // The saved PHP value and descriptor are independent owners. The optional
+    // eval context uses its external release callback rather than a PHP heap slot.
+    super::arrays::emit_native_frame_owners(emitter, "__rt_gc_error_handler_frame_owners", &[32, 40, 72]);
 }
 
 /// Restores suspended owners or releases them when PHP installed a replacement handler.
@@ -90,6 +94,8 @@ fn emit_restore(emitter: &mut Emitter) {
     for (offset, helper) in [(32, "__rt_decref_mixed"), (40, "__rt_callable_descriptor_release")] {
         abi::emit_load_from_address(emitter, record, stack, 0);
         abi::emit_load_from_address(emitter, result, record, offset);
+        abi::emit_load_int_immediate(emitter, scratch, 0);
+        abi::emit_store_to_address(emitter, scratch, record, offset);
         abi::emit_call_label(emitter, helper);
     }
     abi::emit_load_from_address(emitter, record, stack, 0);

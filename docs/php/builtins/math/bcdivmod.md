@@ -1,8 +1,6 @@
 ---
 title: "bcdivmod()"
 description: "Returns the quotient and remainder of arbitrary-precision division."
-sidebar:
-  order: 556
 ---
 
 ## bcdivmod()
@@ -22,8 +20,9 @@ Returns the quotient and remainder of arbitrary-precision division.
 
 ## Availability
 
-- **Compiled (AOT)**: supported by the Elephc code generator.
-- **`eval()` (magician interpreter)**: supported through a declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/math/bcdivmod.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/math/bcdivmod.rs)).
+| Compiled (AOT) | Magician (eval) |
+|---|---|
+| Available | Available |
 
 _No examples yet. Check `examples/` and `showcases/` for usage patterns._
 

@@ -54,7 +54,7 @@ pub unsafe extern "C" fn __elephc_eval_context_new_with_native_catalog(
         if let Some(generation) = unsafe { module_generation(token) } {
             context.use_native_catalog(generation);
         }
-        Box::into_raw(context)
+        super::context::publish_eval_context(context)
     }).unwrap_or(std::ptr::null_mut())
 }
 

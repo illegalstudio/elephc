@@ -7,7 +7,8 @@
 //! Key details:
 //! - A `check` hook is required because the return type depends on argument types:
 //!   the single-array form returns the array's element type, while the variadic
-//!   form widens to Float as soon as any argument is Float.
+//!   form is `int` for all-`int` arguments, `float` for all-`float` arguments and `mixed`
+//!   for every other comparable mix (`min_max_gmp::check`).
 //! - `min_args: 1` matches PHP: `max()` with no argument is an ArgumentCountError,
 //!   one argument must be an array, and two or more arguments compare the values.
 
@@ -19,9 +20,7 @@ builtin! {
     contract: "max",
     check: check,
     semantics: crate::builtins::semantics::with_argument_lowering(
-        crate::builtins::semantics::runtime_fn_semantics(
-            crate::ir::RuntimeFnId::Max,
-        ),
+        super::min_max_gmp::semantics(crate::ir::RuntimeFnId::Max),
         crate::builtins::semantics::BuiltinArgumentLowering::BareArrayValues {
             arg: 0,
             sole: true,
@@ -29,22 +28,7 @@ builtin! {
     ),
 }
 
-/// Returns the array element type for the single-array form; otherwise returns Float
-/// when any argument is Float and Int in every other case.
+/// Types the call through the shared `min()` / `max()` rule.
 fn check(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
-    if cx.args.len() == 1 {
-        return super::min_max_array_element_type(cx, "max");
-    }
-    let mut has_float = false;
-    for arg in cx.args {
-        let t = cx.checker.infer_type(arg, cx.env)?;
-        if t == PhpType::Float {
-            has_float = true;
-        }
-    }
-    if has_float {
-        Ok(PhpType::Float)
-    } else {
-        Ok(PhpType::Int)
-    }
+    super::min_max_gmp::check(cx, "max")
 }

@@ -39,9 +39,32 @@ pub(in crate::interpreter) enum EvalDebugPropertyVisibilityKind {
 #[derive(Clone)]
 pub(in crate::interpreter) struct EvalDebugObjectProperty {
     pub(in crate::interpreter) name: String,
+    /// Original integer dynamic key, when the property hash stored one instead of a string.
+    pub(in crate::interpreter) numeric_key: Option<i64>,
     pub(in crate::interpreter) visibility: EvalDebugPropertyVisibility,
     pub(in crate::interpreter) value: RuntimeCellHandle,
     pub(in crate::interpreter) is_reference: bool,
+}
+
+/// Returns the integer key PHP's dump walker would print for one object-property key.
+///
+/// Dynamic-property hashes may store a numeric name as text even when PHP's visible
+/// property key is an integer; canonical numeric strings therefore render unquoted.
+fn eval_debug_numeric_key(
+    key: RuntimeCellHandle,
+    key_bytes: &[u8],
+    values: &mut impl RuntimeValueOps,
+) -> Result<Option<i64>, EvalStatus> {
+    if values.type_tag(key)? == EVAL_TAG_INT {
+        return Ok(Some(values.raw_value_word(key)? as i64));
+    }
+    let Ok(text) = std::str::from_utf8(key_bytes) else {
+        return Ok(None);
+    };
+    Ok(text
+        .parse::<i64>()
+        .ok()
+        .filter(|numeric| numeric.to_string() == text))
 }
 
 /// Evaluates PHP `print_r()` over one value and an optional return flag.
@@ -105,7 +128,10 @@ fn eval_print_r_value_result(
     if return_output {
         Ok(output)
     } else {
-        values.echo(output)?;
+        let echoed = values.echo(output);
+        let released = eval_release_value(context, values, output);
+        echoed?;
+        released?;
         values.bool_value(true)
     }
 }
@@ -155,22 +181,15 @@ fn eval_print_r_append_array(
     output.extend_from_slice(b"(\n");
     let len = values.array_len(value)?;
     for position in 0..len {
-        let key = values.array_iter_key(value, position)?;
-        let element = values.array_get(value, key)?;
-        eval_print_r_append_indent(depth + 1, output);
-        output.extend_from_slice(b"[");
-        output.extend_from_slice(&values.string_bytes(key)?);
-        output.extend_from_slice(b"] => ");
-        eval_print_r_append_value(
-            element,
-            context,
-            values,
-            depth + 1,
-            arrays_seen,
-            objects_seen,
-            output,
-        )?;
-        output.extend_from_slice(b"\n");
+        super::native_debug::with_entry(value, position, context, values, |key, element, context, values| {
+            eval_print_r_append_indent(depth + 1, output);
+            output.extend_from_slice(b"[");
+            output.extend_from_slice(&values.string_bytes(key)?);
+            output.extend_from_slice(b"] => ");
+            eval_print_r_append_value(element, context, values, depth + 2, arrays_seen, objects_seen, output)?;
+            output.extend_from_slice(b"\n");
+            Ok(())
+        })?;
     }
     eval_print_r_append_indent(depth, output);
     output.extend_from_slice(b")\n");
@@ -190,6 +209,9 @@ fn eval_print_r_append_object(
 ) -> Result<(), EvalStatus> {
     let identity = eval_debug_object_identity(value, values);
     let object_key = identity.unwrap_or(value.as_ptr() as usize as u64) as usize;
+    if runtime_ops::simplexml_properties::is_native(values, value, "")? {
+        return eval_print_r_append_native_object(value, identity, object_key, context, values, depth, arrays_seen, objects_seen, output);
+    }
     if objects_seen.contains(&object_key) {
         output.extend_from_slice(b"*RECURSION*");
         return Ok(());
@@ -209,7 +231,7 @@ fn eval_print_r_append_object(
             property.value,
             context,
             values,
-            depth + 1,
+            depth + 2,
             arrays_seen,
             objects_seen,
             output,
@@ -220,6 +242,52 @@ fn eval_print_r_append_object(
     output.extend_from_slice(b")\n");
     objects_seen.pop();
     Ok(())
+}
+
+/// Renders native debug properties after an unprotected hook, matching PHP print_r.
+fn eval_print_r_append_native_object(
+    value: RuntimeCellHandle,
+    identity: Option<u64>,
+    object_key: usize,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+    depth: usize,
+    arrays_seen: &mut Vec<usize>,
+    objects_seen: &mut Vec<usize>,
+    output: &mut Vec<u8>,
+) -> Result<(), EvalStatus> {
+    let class_name = eval_debug_object_class_name(value, identity, context, values)?;
+    if objects_seen.contains(&object_key) || values.debug_guard_find(value)? {
+        output.extend_from_slice(class_name.as_bytes());
+        output.extend_from_slice(b" Object\n *RECURSION*");
+        return Ok(());
+    }
+    super::native_debug::with_projection(value, context, values, |hash, context, values| {
+        objects_seen.push(object_key);
+        let result = super::native_debug::with_guard(value, context, values, |context, values| {
+            output.extend_from_slice(class_name.as_bytes());
+            output.extend_from_slice(b" Object\n");
+            eval_print_r_append_indent(depth, output);
+            output.extend_from_slice(b"(\n");
+            let len = values.array_len(hash)?;
+            for position in 0..len {
+                super::native_debug::with_entry(hash, position, context, values, |key, element, context, values| {
+                    eval_print_r_append_indent(depth + 1, output);
+                    output.extend_from_slice(b"[");
+                    output.extend_from_slice(&values.string_bytes(key)?);
+                    output.extend_from_slice(b"] => ");
+                    eval_print_r_append_value(element, context, values, depth + 2, arrays_seen, objects_seen, output)?;
+                    output.extend_from_slice(b"\n");
+                    Ok(())
+                })?;
+            }
+            eval_print_r_append_indent(depth, output);
+            output.extend_from_slice(b")\n");
+            Ok(())
+        });
+        objects_seen.pop();
+        result
+    })
 }
 
 /// Appends one object property key for `print_r()`.
@@ -280,12 +348,87 @@ pub(in crate::interpreter) fn eval_debug_object_properties(
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<Vec<EvalDebugObjectProperty>, EvalStatus> {
+    if let Some(properties) = eval_debug_info_properties(object, class_name, context, values)? {
+        return Ok(properties);
+    }
     if let Some(identity) = identity {
         if context.dynamic_object_class(identity).is_some() {
             return eval_debug_dynamic_object_properties(object, identity, class_name, context, values);
         }
     }
     eval_debug_public_object_properties(object, values)
+}
+
+/// Replaces the object's visible properties with `__debugInfo()`'s returned array, as PHP's
+/// `var_dump()` and `print_r()` do. Returns `None` when the object has no such method.
+fn eval_debug_info_properties(
+    object: RuntimeCellHandle,
+    class_name: &str,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<Option<Vec<EvalDebugObjectProperty>>, EvalStatus> {
+    let declared = context.class_method(class_name, "__debugInfo").is_some()
+        || context
+            .native_method_signature(class_name, "__debugInfo")
+            .is_some()
+        || eval_aot_method_dispatch_metadata_in_hierarchy(
+            class_name,
+            "__debugInfo",
+            context,
+            values,
+        )?
+        .is_some();
+    if !declared {
+        return Ok(None);
+    }
+    let result = eval_method_call_result(object, "__debugInfo", Vec::new(), context, values)?;
+    let tag = values.type_tag(result)?;
+    if tag == EVAL_TAG_NULL {
+        // PHP 8.5 deprecates `null` but keeps the empty property table it produces.
+        values.release(result)?;
+        return Ok(Some(Vec::new()));
+    }
+    if tag != EVAL_TAG_ARRAY && tag != EVAL_TAG_ASSOC {
+        values.release(result)?;
+        return Err(EvalStatus::RuntimeFatal);
+    }
+    let len = values.array_len(result)?;
+    let mut properties = Vec::with_capacity(len);
+    for position in 0..len {
+        let key = values.array_iter_key(result, position)?;
+        let key_bytes = values.string_bytes(key)?;
+        let numeric_key = eval_debug_numeric_key(key, &key_bytes, values)?;
+        values.release(key)?;
+        let name = String::from_utf8(key_bytes).map_err(|_| EvalStatus::RuntimeFatal)?;
+        let value = values.array_iter_value(result, position)?;
+        properties.push(EvalDebugObjectProperty {
+            name,
+            numeric_key,
+            visibility: EvalDebugPropertyVisibility {
+                kind: EvalDebugPropertyVisibilityKind::Public,
+            },
+            value,
+            is_reference: false,
+        });
+    }
+    values.release(result)?;
+    if elephc_builtin_contract::lookup_class(class_name)
+        .is_some_and(|class| class.dump_dynamic_properties_first)
+    {
+        // GMP's internal debug handler prints the dynamic-property tail first and then its
+        // virtual `num` row, unlike a userland `__debugInfo()` that replaces the table.
+        let mut properties_with_dynamic = Vec::new();
+        eval_debug_append_dynamic_public_properties(
+            object,
+            &HashSet::new(),
+            &HashSet::new(),
+            &mut properties_with_dynamic,
+            values,
+        )?;
+        properties_with_dynamic.extend(properties);
+        return Ok(Some(properties_with_dynamic));
+    }
+    Ok(Some(properties))
 }
 
 /// Collects eval-declared object properties plus public dynamic properties.
@@ -322,6 +465,7 @@ fn eval_debug_dynamic_object_properties(
             }
             properties.push(EvalDebugObjectProperty {
                 name: property.name().to_string(),
+                numeric_key: None,
                 visibility: eval_debug_property_visibility(class.name(), property.visibility()),
                 value,
                 is_reference: alias.is_some(),
@@ -351,6 +495,7 @@ fn eval_debug_append_dynamic_public_properties(
     for position in 0..property_count {
         let key = values.object_property_iter_key(object, position)?;
         let key_bytes = values.string_bytes(key)?;
+        let numeric_key = eval_debug_numeric_key(key, &key_bytes, values)?;
         values.release(key)?;
         let key_name = String::from_utf8(key_bytes).map_err(|_| EvalStatus::RuntimeFatal)?;
         if key_name.contains('\0')
@@ -362,6 +507,7 @@ fn eval_debug_append_dynamic_public_properties(
         let value = values.property_get(object, &key_name)?;
         properties.push(EvalDebugObjectProperty {
             name: key_name,
+            numeric_key,
             visibility: EvalDebugPropertyVisibility {
                 kind: EvalDebugPropertyVisibilityKind::Public,
             },
@@ -382,11 +528,13 @@ fn eval_debug_public_object_properties(
     for position in 0..property_count {
         let key = values.object_property_iter_key(object, position)?;
         let key_bytes = values.string_bytes(key)?;
+        let numeric_key = eval_debug_numeric_key(key, &key_bytes, values)?;
         values.release(key)?;
         let key_name = String::from_utf8(key_bytes).map_err(|_| EvalStatus::RuntimeFatal)?;
         let value = values.property_get(object, &key_name)?;
         properties.push(EvalDebugObjectProperty {
             name: key_name,
+            numeric_key,
             visibility: EvalDebugPropertyVisibility {
                 kind: EvalDebugPropertyVisibilityKind::Public,
             },

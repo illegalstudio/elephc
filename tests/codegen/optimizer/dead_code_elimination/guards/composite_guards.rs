@@ -67,17 +67,17 @@ run(true, true);
     assert_eq!(out, "ab");
 }
 
-/// Verifies that a nested `if` contradicting an outer loose comparison guard (`== 0`) is
-/// pruned from assembly. Confirms "ab" with "dead-loose" absent.
+/// Verifies that a nested `if` contradicting an outer strict comparison guard (`=== 0`) is
+/// pruned from assembly. Confirms "ab" with "dead-strict" absent.
 #[test]
-fn test_dead_code_elimination_prunes_nested_if_region_from_loose_comparison_guard() {
-    let dir = make_cli_test_dir("elephc_dead_code_elimination_loose_comparison_guard");
+fn test_dead_code_elimination_prunes_nested_if_region_from_strict_comparison_guard() {
+    let dir = make_cli_test_dir("elephc_dead_code_elimination_strict_comparison_guard");
     let (user_asm, _runtime_asm, required_libraries) = compile_source_to_asm_with_options(
         r#"<?php
 function run($value) {
-    if ($value == 0) {
-        if ($value != 0) {
-            echo "dead-loose";
+    if ($value === 0) {
+        if ($value !== 0) {
+            echo "dead-strict";
         } else {
             echo "a";
         }
@@ -105,7 +105,7 @@ run(2);
     );
 
     assert_eq!(out, "ab");
-    assert!(!user_asm.contains("dead-loose"));
+    assert!(!user_asm.contains("dead-strict"));
 }
 
 /// Verifies that a nested `if` contradicting an outer relational guard (`> 10`) is pruned

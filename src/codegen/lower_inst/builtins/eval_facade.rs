@@ -17,6 +17,19 @@ pub(in crate::codegen::lower_inst) fn append_eval_inventory(
     eval::append_eval_inventory(ctx, constants)
 }
 
+/// Emits the body of the shared eval status dispatch helper.
+pub(in crate::codegen) fn emit_eval_status_helper_body(ctx: &mut FunctionContext<'_>) {
+    eval::emit_eval_status_helper_body(ctx)
+}
+
+/// Registers the native catalog into the eval context passed in argument register 0.
+///
+/// This is the body of the module-level catalog helper; it reads the handle from
+/// the module-level parking symbol rather than from a caller frame slot.
+pub(in crate::codegen) fn register_eval_inventory(ctx: &mut FunctionContext<'_>) -> Result<()> {
+    eval::register_eval_inventory(ctx)
+}
+
 /// Lowers a statically-known eval fragment through the current bridge fallback path.
 pub(in crate::codegen::lower_inst) fn lower_eval_literal_call(
     ctx: &mut FunctionContext<'_>,
@@ -74,6 +87,20 @@ pub(in crate::codegen::lower_inst) fn lower_eval_object_new_dynamic_fallback(
     eval::lower_eval_object_new_dynamic_fallback(ctx, inst, miss_label)
 }
 
+/// Probes constructorless allocation through the active eval activation.
+pub(in crate::codegen::lower_inst) fn lower_eval_constructorless_fallback(
+    ctx: &mut FunctionContext<'_>, miss_label: &str, native_factory: bool,
+) -> Result<()> {
+    eval::lower_eval_constructorless_fallback(ctx, miss_label, native_factory)
+}
+
+/// Rejects an eval-owned abstract method before any call arguments are evaluated.
+pub(in crate::codegen::lower_inst) fn lower_eval_abstract_method_guard(
+    ctx: &mut FunctionContext<'_>, inst: &Instruction, object: ValueId, method: Option<&str>,
+) -> Result<()> {
+    eval::lower_eval_abstract_method_guard(ctx, inst, object, method)
+}
+
 /// Lowers a post-eval method call that may target an eval-created object.
 pub(in crate::codegen::lower_inst) fn lower_eval_method_call(
     ctx: &mut FunctionContext<'_>,
@@ -82,6 +109,25 @@ pub(in crate::codegen::lower_inst) fn lower_eval_method_call(
     method_name: &str,
 ) -> Result<()> {
     eval::lower_eval_method_call(ctx, inst, object, method_name)
+}
+
+/// Tries an eval-owned object method before continuing with native interface dispatch.
+pub(in crate::codegen::lower_inst) fn lower_eval_context_free_method_call(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+    object: ValueId,
+    method_name: &str,
+    native_fallback_label: &str,
+    done_label: &str,
+) -> Result<()> {
+    eval::lower_eval_context_free_method_call(
+        ctx,
+        inst,
+        object,
+        method_name,
+        native_fallback_label,
+        done_label,
+    )
 }
 
 /// Lowers a post-eval static method call to an eval-declared class.

@@ -8,14 +8,13 @@
 //! Key details:
 //! - String helpers use PHP pointer/length pairs and target ABI return registers; heap-backed results must remain refcount-compatible.
 //! - Destination storage comes from `__rt_concat_reserve`, so a result that no longer fits the
-//!   fixed 64 KiB `_concat_buf` scratch buffer lands in an owned heap block instead of running
+//!   heap-sized `_concat_buf` result arena lands in an owned heap block instead of running
 //!   past the buffer end into the adjacent BSS globals.
 //! - A heap-backed result is stamped with `CONCAT_TEMP_HEAP_KIND` so `__rt_str_persist` can
 //!   take it over in place rather than allocating a second copy of it.
 //! - `left_len + right_len` is checked for unsigned wrap before the reservation, so a wrapped
 //!   total can never size a destination smaller than the bytes the copy loops write.
 
-use crate::codegen_support::runtime::strings::concat_scratch::CONCAT_BUF_CAPACITY;
 use crate::codegen_support::sentinels::CONCAT_TEMP_HEAP_KIND;
 use crate::codegen_support::{emit::Emitter, platform::Arch};
 
@@ -34,6 +33,7 @@ use crate::codegen_support::{emit::Emitter, platform::Arch};
 /// A wrapped `left_len + right_len` reports PHP's allocation-overflow fatal through
 /// `__rt_alloc_overflow` instead of under-sizing the destination.
 pub fn emit_concat(emitter: &mut Emitter) {
+    let cap = emitter.concat_capacity;
     if emitter.target.arch == Arch::X86_64 {
         emit_concat_linux_x86_64(emitter);
         return;
@@ -63,7 +63,7 @@ pub fn emit_concat(emitter: &mut Emitter) {
     // -- stamp heap-backed results so __rt_str_persist can take them over in place --
     crate::codegen_support::abi::emit_symbol_address(emitter, "x6", "_concat_buf");
     emitter.instruction("sub x7, x0, x6");                                      // compute the candidate scratch offset of the reservation
-    emitter.instruction(&format!("mov x8, #{}", CONCAT_BUF_CAPACITY));          // load the concat scratch capacity in bytes
+    crate::codegen_support::abi::emit_load_int_immediate(emitter, "x8", cap as i64); // load the concat scratch capacity in bytes
     emitter.instruction("cmp x7, x8");                                          // is the reservation outside the shared scratch window (unsigned)?
     emitter.instruction("b.lo __rt_concat_dest_ready");                         // scratch-backed reservations carry no heap header to stamp
     emitter.instruction(&format!("mov x8, #{}", CONCAT_TEMP_HEAP_KIND));        // heap kind 7 = transient `.` operator temporary
@@ -112,6 +112,7 @@ pub fn emit_concat(emitter: &mut Emitter) {
 /// heap block, a heap-backed result is stamped as a transient `.` temporary, and
 /// `__rt_concat_publish` advances `_concat_off` only for scratch-backed results.
 fn emit_concat_linux_x86_64(emitter: &mut Emitter) {
+    let cap = emitter.concat_capacity;
     emitter.blank();
     emitter.comment("--- runtime: concat ---");
     emitter.label_global("__rt_concat");
@@ -138,7 +139,8 @@ fn emit_concat_linux_x86_64(emitter: &mut Emitter) {
     crate::codegen_support::abi::emit_symbol_address(emitter, "r8", "_concat_buf");
     emitter.instruction("mov r9, rax");                                         // copy the reservation before deriving its candidate scratch offset
     emitter.instruction("sub r9, r8");                                          // compute the candidate scratch offset of the reservation
-    emitter.instruction(&format!("cmp r9, {}", CONCAT_BUF_CAPACITY));           // is the reservation outside the shared scratch window (unsigned)?
+    crate::codegen_support::abi::emit_load_int_immediate(emitter, "r10", cap as i64); // load the shared scratch capacity
+    emitter.instruction("cmp r9, r10");                                         // is the reservation outside the shared scratch window (unsigned)?
     emitter.instruction("jb __rt_concat_dest_ready_x86");                       // scratch-backed reservations carry no heap header to stamp
     emitter.instruction(&format!("mov r8, 0x{:x}", crate::codegen_support::sentinels::x86_64_heap_kind_word(CONCAT_TEMP_HEAP_KIND))); // materialize the transient-concat heap kind word with the x86_64 heap marker
     emitter.instruction("mov QWORD PTR [rax - 8], r8");                         // stamp the heap reservation as a concat temporary

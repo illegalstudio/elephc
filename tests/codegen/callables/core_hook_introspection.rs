@@ -87,9 +87,8 @@ eval($source);
     assert_eq!(compile_and_run(source), "caught:2:private:read-only:write-only:7");
 }
 
-/// AOT, opaque eval, and native-by-name defaults populate backing storage without calling setters.
-#[test]
-fn test_core_hook_defaults_initialize_backing_storage_without_setter() {
+/// Returns the shared declaration and probes for direct and opaque-eval hook defaults.
+fn hook_default_fixture() -> (&'static str, &'static str) {
     let declaration = r#"
 class HookDefault {
     public int $value = 7 { get => $this->value; set { echo "set:"; $this->value = $value; } }
@@ -102,17 +101,39 @@ echo $object->value, ":";
 $object->value = 9;
 echo $object->value;
 "#;
+    (declaration, probes)
+}
+
+/// AOT defaults populate backing storage without calling setters.
+#[test]
+fn test_core_hook_defaults_initialize_backing_storage_without_setter() {
+    let (declaration, probes) = hook_default_fixture();
     assert_eq!(compile_and_run(&format!("<?php {declaration} {probes}")), "7:7:set:9");
-    for native in [false, true] {
-        let (native_source, body) = if native {
-            (declaration, probes.to_string())
-        } else {
-            ("", format!("{declaration} {probes}"))
-        };
-        let quoted = body.replace('\\', "\\\\").replace('\'', "\\'");
-        let source = format!("<?php {native_source} $source = '{quoted}' . ' // ' . $argc; eval($source);");
-        assert_eq!(compile_and_run(&source), "7:7:set:9", "native={native}");
-    }
+}
+
+/// Verifies one opaque-eval hook-default boundary without sharing a compile timeout.
+fn assert_hook_defaults_eval(native: bool) {
+    let (declaration, probes) = hook_default_fixture();
+    let (native_source, body) = if native {
+        (declaration, probes.to_string())
+    } else {
+        ("", format!("{declaration} {probes}"))
+    };
+    let quoted = body.replace('\\', "\\\\").replace('\'', "\\'");
+    let source = format!("<?php {native_source} $source = '{quoted}' . ' // ' . $argc; eval($source);");
+    assert_eq!(compile_and_run(&source), "7:7:set:9", "native={native}");
+}
+
+/// Opaque-eval declarations initialize backing defaults without calling setters.
+#[test]
+fn test_core_hook_defaults_initialize_backing_storage_without_setter_eval_declarations() {
+    assert_hook_defaults_eval(false);
+}
+
+/// Opaque eval observes native class defaults without calling setters.
+#[test]
+fn test_core_hook_defaults_initialize_backing_storage_without_setter_eval_native_metadata() {
+    assert_hook_defaults_eval(true);
 }
 
 /// Returns a declaration whose virtual and backed hooks must not appear as ordinary methods.

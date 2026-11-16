@@ -1,8 +1,6 @@
 ---
 title: "imagecrop()"
 description: "Returns the given rectangle of an image as a new image."
-sidebar:
-  order: 495
 ---
 
 ## imagecrop()
@@ -21,8 +19,9 @@ Returns the given rectangle of an image as a new image.
 
 ## Availability
 
-- **Compiled (AOT)**: supported through the compiler-injected image prelude.
-- **`eval()` (magician interpreter)**: not available inside eval'd code.
+| Compiled (AOT) | Magician (eval) |
+|---|---|
+| Available | Not available yet |
 
 _No examples yet. Check `examples/` and `showcases/` for usage patterns._
 

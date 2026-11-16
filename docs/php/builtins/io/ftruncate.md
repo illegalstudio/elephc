@@ -1,8 +1,6 @@
 ---
 title: "ftruncate()"
 description: "Truncates a file to a given length."
-sidebar:
-  order: 331
 ---
 
 ## ftruncate()
@@ -21,8 +19,9 @@ Truncates a file to a given length.
 
 ## Availability
 
-- **Compiled (AOT)**: supported by the Elephc code generator.
-- **`eval()` (magician interpreter)**: supported through a declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/filesystem/ftruncate.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/filesystem/ftruncate.rs)).
+| Compiled (AOT) | Magician (eval) |
+|---|---|
+| Available | Available |
 
 _No examples yet. Check `examples/` and `showcases/` for usage patterns._
 

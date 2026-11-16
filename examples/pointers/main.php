@@ -15,6 +15,11 @@ echo "Null pointer: ";
 echo $null;
 echo "\n";
 
+// Pointers convert to the same "0x..." text in concatenation and interpolation
+$label = "p = " . $p;
+echo $label === "p = $p" ? "Concatenation matches interpolation\n" : "mismatch\n";
+echo "Null as string: " . (string)$null . "\n";
+
 // Checking for null
 echo "Is null? ";
 echo ptr_is_null($null) ? "yes" : "no";
@@ -79,3 +84,33 @@ for ($i = 0; $i < 5; $i++) {
 echo "Counter after 5 increments: ";
 echo $counter;
 echo "\n";
+
+// Arrays and hashes of pointers hold the raw addresses: here, records of a packed buffer
+packed class Point { public int $x; public int $y; }
+
+$points = buffer_new<Point>(3);
+$picked = [$points[0], $points[2]];
+$picked[] = null;                       // a null element is the null pointer
+foreach ($picked as $point) {
+    if ($point !== null) {
+        $point->x += 10;                // writes through to the buffer
+    }
+}
+echo "Point x values: ", $points[0]->x, " ", $points[1]->x, " ", $points[2]->x, "\n";
+echo "Third element is null? ", $picked[2] === null ? "yes" : "no", "\n";
+
+$byName = ["origin" => $points[0], "far" => $points[2]];
+$byName["far"]->y = 7;
+echo "far.y = ", $points[2]->y, ", missing key is null? ", ($byName["nope"] ?? null) === null ? "yes" : "no", "\n";
+
+// A local that starts as null and later holds a record is one pointer word (null is address 0)
+$points[1]->x = 25;
+$widest = null;
+for ($i = 0; $i < buffer_len($points); $i++) {
+    if ($widest === null || $points[$i]->x > $widest->x) {
+        $widest = $points[$i];
+    }
+}
+if ($widest !== null) {
+    echo "Largest x = ", $widest->x, "\n";
+}

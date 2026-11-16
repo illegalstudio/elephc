@@ -13,7 +13,7 @@
 //!   default and an explicit set share this single scan. The previous hard-coded
 //!   space/tab/newline test also silently failed PHP's `\r`, `\f`, and `\v` defaults.
 
-use crate::codegen_support::emit::Emitter;
+use crate::codegen_support::{abi, emit::Emitter};
 use crate::codegen_support::platform::Arch;
 
 /// Emits the `__rt_ucwords` runtime helper for ARM64.
@@ -50,6 +50,40 @@ pub fn emit_ucwords(emitter: &mut Emitter) {
     emitter.instruction("mov x9, x1");                                          // cursor pointer
     emitter.instruction("mov x10, x2");                                         // remaining length
     emitter.instruction("mov x11, #1");                                         // word_start flag (1 = next char starts a word)
+
+    // -- default separator fast path: PHP's space plus the five whitespace controls --
+    abi::emit_symbol_address(emitter, "x13", "_ucwords_default_seps");
+    emitter.instruction("cmp x3, x13");                                         // is this the default separator set?
+    emitter.instruction("b.ne __rt_ucwords_loop");                              // explicit sets keep the generic membership scan
+    emitter.instruction("cmp x4, #6");                                          // does the default set have its six bytes?
+    emitter.instruction("b.ne __rt_ucwords_loop");                              // an unusual default-looking set stays generic
+    emitter.instruction("mov x9, x1");                                          // restart the cursor on the copied string
+    emitter.instruction("mov x10, x2");                                         // restart the remaining byte count
+    emitter.instruction("mov x11, #1");                                         // restart in word-start mode
+    emitter.label("__rt_ucwords_default_loop");
+    emitter.instruction("cbz x10, __rt_ucwords_done");                          // no bytes left → done
+    emitter.instruction("ldrb w12, [x9]");                                      // load the current byte
+    emitter.instruction("cmp w12, #32");                                        // is the byte a space?
+    emitter.instruction("b.eq __rt_ucwords_default_sep");                       // spaces separate words
+    emitter.instruction("sub w13, w12, #9");                                    // map tab, LF, VT, FF, and CR onto 0..4
+    emitter.instruction("cmp w13, #4");                                         // is the byte one of those five controls?
+    emitter.instruction("b.ls __rt_ucwords_default_sep");                       // controls separate words
+    emitter.instruction("cbz x11, __rt_ucwords_default_next");                  // not word start → skip uppercasing
+    emitter.instruction("cmp w12, #97");                                        // check if char >= 'a'
+    emitter.instruction("b.lt __rt_ucwords_default_clear");                     // not lowercase → just clear flag
+    emitter.instruction("cmp w12, #122");                                       // check if char <= 'z'
+    emitter.instruction("b.gt __rt_ucwords_default_clear");                     // not lowercase → just clear flag
+    emitter.instruction("sub w12, w12, #32");                                   // convert a-z to A-Z
+    emitter.instruction("strb w12, [x9]");                                      // store uppercased byte
+    emitter.label("__rt_ucwords_default_clear");
+    emitter.instruction("mov x11, #0");                                         // clear word-start flag
+    emitter.instruction("b __rt_ucwords_default_next");                         // advance past the processed byte
+    emitter.label("__rt_ucwords_default_sep");
+    emitter.instruction("mov x11, #1");                                         // set word_start flag for the byte after this separator
+    emitter.label("__rt_ucwords_default_next");
+    emitter.instruction("add x9, x9, #1");                                      // advance cursor
+    emitter.instruction("sub x10, x10, #1");                                    // decrement remaining
+    emitter.instruction("b __rt_ucwords_default_loop");                         // process next byte
 
     emitter.label("__rt_ucwords_loop");
     emitter.instruction("cbz x10, __rt_ucwords_done");                          // no bytes left → done
@@ -130,6 +164,40 @@ fn emit_ucwords_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rdi, QWORD PTR [rsp + 8]");                        // reload the separator set length for the membership scans
     emitter.instruction("mov r9, 1");                                           // start in word-start mode so the first non-separator byte can be uppercased when appropriate
 
+    // -- default separator fast path: PHP's space plus the five whitespace controls --
+    abi::emit_symbol_address(emitter, "rax", "_ucwords_default_seps");
+    emitter.instruction("cmp r11, rax");                                        // is this the default separator set?
+    emitter.instruction("jne __rt_ucwords_loop_linux_x86_64");                  // explicit sets keep the generic membership scan
+    emitter.instruction("cmp rdi, 6");                                          // does the default set have its six bytes?
+    emitter.instruction("jne __rt_ucwords_loop_linux_x86_64");                  // an unusual default-looking set stays generic
+    emitter.label("__rt_ucwords_default_loop_linux_x86_64");
+    emitter.instruction("test rcx, rcx");                                       // no bytes left?
+    emitter.instruction("jz __rt_ucwords_done_linux_x86_64");                   // finish once the copied string has been processed
+    emitter.instruction("movzx r10d, BYTE PTR [r8]");                           // load the current byte
+    emitter.instruction("cmp r10d, 32");                                        // is the byte a space?
+    emitter.instruction("je __rt_ucwords_default_sep_linux_x86_64");            // spaces separate words
+    emitter.instruction("mov eax, r10d");                                       // copy the byte before mapping the control range
+    emitter.instruction("sub eax, 9");                                          // map tab, LF, VT, FF, and CR onto 0..4
+    emitter.instruction("cmp eax, 4");                                          // is the byte one of those five controls?
+    emitter.instruction("jbe __rt_ucwords_default_sep_linux_x86_64");           // controls separate words
+    emitter.instruction("test r9, r9");                                         // is this the first byte of a word?
+    emitter.instruction("jz __rt_ucwords_default_next_linux_x86_64");           // skip uppercasing inside an existing word
+    emitter.instruction("cmp r10b, 97");                                        // is the byte at least 'a'?
+    emitter.instruction("jb __rt_ucwords_default_clear_linux_x86_64");          // bytes below 'a' are not lowercase letters
+    emitter.instruction("cmp r10b, 122");                                       // is the byte at most 'z'?
+    emitter.instruction("ja __rt_ucwords_default_clear_linux_x86_64");          // bytes above 'z' are not lowercase letters
+    emitter.instruction("sub r10b, 32");                                        // convert a-z to A-Z
+    emitter.instruction("mov BYTE PTR [r8], r10b");                             // store the uppercased byte
+    emitter.label("__rt_ucwords_default_clear_linux_x86_64");
+    emitter.instruction("xor r9d, r9d");                                        // clear word-start mode after the first byte of the word
+    emitter.instruction("jmp __rt_ucwords_default_next_linux_x86_64");          // advance past the processed byte
+    emitter.label("__rt_ucwords_default_sep_linux_x86_64");
+    emitter.instruction("mov r9d, 1");                                          // mark the next byte as the start of a new word
+    emitter.label("__rt_ucwords_default_next_linux_x86_64");
+    emitter.instruction("add r8, 1");                                           // advance the mutable string cursor
+    emitter.instruction("sub rcx, 1");                                          // decrement the remaining byte count
+    emitter.instruction("jmp __rt_ucwords_default_loop_linux_x86_64");          // process the next byte
+
     emitter.label("__rt_ucwords_loop_linux_x86_64");
     emitter.instruction("test rcx, rcx");                                       // stop once every byte of the concat-backed copy has been classified
     emitter.instruction("jz __rt_ucwords_done_linux_x86_64");                   // finish once the full copied string has been processed
@@ -172,4 +240,23 @@ fn emit_ucwords_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("add rsp, 32");                                         // release the ucwords spill slots before returning the mutated copy
     emitter.instruction("pop rbp");                                             // restore the caller frame pointer before returning the mutated copy
     emitter.instruction("ret");                                                 // return the mutated concat-backed copy in the standard x86_64 string result registers
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::codegen_support::platform::Target;
+
+    /// Verifies both targets keep the inline default-separator fast path.
+    #[test]
+    fn ucwords_emits_the_default_separator_path_on_all_targets() {
+        for name in ["macos-aarch64", "linux-x86_64"] {
+            let target = Target::parse(name).expect("supported target");
+            let mut emitter = Emitter::new(target);
+            emit_ucwords(&mut emitter);
+            let assembly = emitter.output();
+            assert!(assembly.contains("__rt_ucwords_default_loop"), "{name}: {assembly}");
+            assert!(assembly.contains("_ucwords_default_seps"), "{name}: {assembly}");
+        }
+    }
 }

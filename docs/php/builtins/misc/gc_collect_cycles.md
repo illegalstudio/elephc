@@ -1,8 +1,6 @@
 ---
 title: "gc_collect_cycles()"
 description: "Forces collection of any existing garbage cycles."
-sidebar:
-  order: 615
 ---
 
 ## gc_collect_cycles()
@@ -19,8 +17,9 @@ Forces collection of any existing garbage cycles.
 
 ## Availability
 
-- **Compiled (AOT)**: supported by the Elephc code generator.
-- **`eval()` (magician interpreter)**: supported through a declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/core/gc_collect_cycles.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/core/gc_collect_cycles.rs)).
+| Compiled (AOT) | Magician (eval) |
+|---|---|
+| Available | Available |
 
 _No examples yet. Check `examples/` and `showcases/` for usage patterns._
 

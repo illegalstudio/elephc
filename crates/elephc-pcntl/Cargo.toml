@@ -10,4 +10,5 @@ publish = false
 crate-type = ["staticlib", "rlib"]
 
 [dependencies]
+elephc-process-context = { path = "../elephc-process-context" }
 libc = "0.2"

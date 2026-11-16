@@ -28,6 +28,9 @@ fn aarch64(emitter: &mut Emitter) {
     emitter.instruction("add x29, sp, #32");                                    // establish stable chain traversal linkage
     emitter.instruction("mov x19, x1");                                         // retain the enclosing pending-exception state
     emitter.instruction("mov x20, x0");                                         // retain the consumed prior exception owner
+    emitter.instruction("ldr x9, [x20]");                                       // inspect the prior owner before exposing it to PHP exception chains
+    emitter.instruction("cmn x9, #3");                                          // private forced-unwind markers are not PHP Throwable ancestors
+    emitter.instruction("b.eq __rt_cleanup_chain_previous_duplicate");          // consume the marker through the protected redundant-owner path
     abi::emit_load_symbol_to_reg(emitter, "x21", "_exc_value", 0);
     emitter.label("__rt_cleanup_chain_previous_outer");
     emitter.instruction("mov x22, x20");                                        // restart the old ancestor scan for each new-chain node
@@ -75,6 +78,8 @@ fn x86_64(emitter: &mut Emitter) {
     emitter.instruction("push r15");                                            // preserve the old-chain cursor and maintain SysV call alignment
     emitter.instruction("mov r12, rsi");                                        // retain the enclosing pending-exception state
     emitter.instruction("mov r13, rdi");                                        // retain the consumed suspended exception owner
+    emitter.instruction("cmp QWORD PTR [r13], -3");                             // private forced-unwind markers must never become getPrevious results
+    emitter.instruction("je __rt_cleanup_chain_previous_duplicate");            // release the marker while preserving the active cleanup exception
     abi::emit_load_symbol_to_reg(emitter, "r14", "_exc_value", 0);
     emitter.label("__rt_cleanup_chain_previous_outer");
     emitter.instruction("mov r15, r13");                                        // restart the old ancestor scan for this new-chain node

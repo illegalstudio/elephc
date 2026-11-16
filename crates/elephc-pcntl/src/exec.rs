@@ -221,6 +221,7 @@ pub unsafe extern "C" fn elephc_pcntl_exec_run(builder: *mut libc::c_void) -> li
     argv.push(builder.path.as_ptr());
     argv.extend(builder.args.iter().map(|argument| argument.as_ptr()));
     argv.push(std::ptr::null());
+    let _signals = elephc_process_context::SpawnPermit::new();
     match &builder.env {
         Some(environment) => {
             let mut envp = Vec::with_capacity(environment.len() + 1);

@@ -1,8 +1,6 @@
 ---
 title: "json_decode()"
 description: "Decodes a JSON string."
-sidebar:
-  order: 541
 ---
 
 ## json_decode()
@@ -23,8 +21,9 @@ Decodes a JSON string.
 
 ## Availability
 
-- **Compiled (AOT)**: supported by the Elephc code generator.
-- **`eval()` (magician interpreter)**: supported through a declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/json/json_decode.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/json/json_decode.rs)).
+| Compiled (AOT) | Magician (eval) |
+|---|---|
+| Available | Available |
 
 _No examples yet. Check `examples/` and `showcases/` for usage patterns._
 

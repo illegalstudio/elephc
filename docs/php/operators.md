@@ -58,9 +58,64 @@ runtime-value case.
 
 This coercion is scoped to the arithmetic operators above. Unary negation (`-"5"`) and the
 bitwise operators (`"6" << 1`, `&`, `|`, `^`) still require a numeric or integer operand and
-reject `string` at compile time, and relational comparison (`< > <= >= <=>`) does **not** widen
-to string operands either — see
+reject `string` at compile time.
+
+### Relational comparison between two strings
+
+`<`, `<=`, `>` and `>=` accept **two string operands** and follow PHP's own ordering rule:
+when *both* sides are numeric strings they compare numerically, otherwise they compare
+byte-wise. That is not the same as `strcmp()`, which is always lexicographic:
+
+```php
+var_dump("10" > "9");        // true  — both numeric, so 10 > 9
+var_dump("10" < "9a");       // true  — "9a" is not numeric, so bytes: "1" < "9"
+var_dump("1e2" == "100");    // true  — exponent notation counts as numeric
+var_dump("1.5" <= "1.50");   // true  — numerically equal
+var_dump("0x1A" < "26");     // true  — hex is NOT numeric, so bytes: "0" < "2"
+
+$c = "5";
+if ($c >= '0' && $c <= '9') { echo "digit\n"; }   // the character-range idiom
+```
+
+`<`, `<=`, `>`, `>=` and `<=>` also accept a string beside a `mixed` value, in either operand
+position. They use PHP's runtime comparison rules for the mixed value's actual type. A single
+`is_string($left)` guard therefore allows `$left <=> $right` while `$right` remains `mixed`.
+
+Mixing a string with a *concrete number* (`$s < 1`) is still rejected at compile time. Use a
+`mixed` operand when runtime comparison with a number is required. See
 [Known incompatibilities with PHP](types.md#known-incompatibilities-with-php).
+
+Two **integer** strings compare exactly, as `int`, not by rounding both through a `float`
+first. That is what makes a difference past 2^53 survive, and it applies to `==` as well:
+
+```php
+var_dump("9007199254740993" > "9007199254740992");    // true  — both round to the same float
+var_dump("9007199254740993" == "9007199254740992");   // false
+```
+
+Integer text too large for `int` follows PHP's own fallbacks rather than the float value.
+Two sides that overflowed the same way and round to the same float compare **by bytes**, and
+an in-range integer against an overflowed one is ordered by the overflow's sign alone:
+
+```php
+var_dump("99999999999999999999" > "100000000000000000000");   // true  — byte order decides
+var_dump("9223372036854775807" == "9223372036854775808");     // false — the right side overflowed
+```
+
+PHP stops reading the integer part after 20 significant digits and records the overflow
+there, before it reaches a `.` or an exponent. A float spelling with a 20-digit integer part
+therefore overflows like the plain integer, while 19 digits stay an ordinary float:
+
+```php
+var_dump("99999999999999999999.0" > "100000000000000000000.0");  // true:  byte order decides
+var_dump("10000000000000000000" == "10000000000000000000e0");    // false: byte order decides
+var_dump("9999999999999999999.5" == "9999999999999999999.4");    // true:  equal floats
+```
+
+Numeric classification uses the full PHP byte length, including embedded NUL bytes.
+`is_numeric("2\0")` is `false`, and `"2\0" > "10"` uses byte ordering and is `true`,
+matching PHP. Boxed `mixed` strings use the same numeric-string and byte-order rules
+for loose equality as statically typed strings.
 
 ## Comparison
 

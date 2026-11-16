@@ -44,14 +44,15 @@ pub(super) fn lower_descriptor_invoker_arg_container_for_call_user_func(
     ctx: &mut LoweringContext<'_, '_>,
     args: &[Expr],
     sig: Option<&FunctionSig>,
+    native_references: bool,
     span: Span,
 ) -> LoweredValue {
     if crate::types::call_args::has_named_args(args)
         || descriptor_args_need_runtime_unpack_keys(args)
     {
-        return lower_named_descriptor_invoker_arg_container(ctx, args, sig, span);
+        return lower_named_descriptor_invoker_arg_container(ctx, args, sig, native_references, span);
     }
-    lower_indexed_descriptor_invoker_arg_array(ctx, args, sig, span)
+    lower_indexed_descriptor_invoker_arg_array(ctx, args, sig, native_references, span)
 }
 
 /// Builds an indexed `array<mixed>` container for spread-free positional arguments.
@@ -64,6 +65,7 @@ pub(super) fn lower_indexed_descriptor_invoker_arg_array(
     ctx: &mut LoweringContext<'_, '_>,
     args: &[Expr],
     sig: Option<&FunctionSig>,
+    native_references: bool,
     span: Span,
 ) -> LoweredValue {
     let elem_ty = PhpType::Mixed;
@@ -79,7 +81,7 @@ pub(super) fn lower_indexed_descriptor_invoker_arg_array(
     let owner = publish_constructed_container(ctx, array, span);
     let mut positional_index = 0usize;
     for arg in args {
-        let value = lower_signature_invoker_ref_arg_marker(ctx, sig, positional_index, arg)
+        let value = lower_signature_invoker_ref_arg_marker(ctx, sig, positional_index, arg, native_references)
             .unwrap_or_else(|| {
                 let value = lower_expr(ctx, arg);
                 coerce_variadic_tail_value(ctx, value, &array_ty, arg.span)
@@ -110,6 +112,7 @@ pub(super) fn lower_named_descriptor_invoker_arg_container(
     ctx: &mut LoweringContext<'_, '_>,
     args: &[Expr],
     sig: Option<&FunctionSig>,
+    native_references: bool,
     span: Span,
 ) -> LoweredValue {
     let hash_ty = PhpType::AssocArray {
@@ -154,7 +157,9 @@ pub(super) fn lower_named_descriptor_invoker_arg_container(
                         })
                 });
                 let value = if let Some(index) = param_index {
-                    lower_signature_invoker_ref_arg_marker(ctx, sig, index, value)
+                    lower_signature_invoker_ref_arg_marker(ctx, sig, index, value, native_references)
+                } else if sig.is_none() {
+                    lower_signature_invoker_ref_arg_marker(ctx, None, 0, value, native_references)
                 } else {
                     None
                 }
@@ -167,6 +172,7 @@ pub(super) fn lower_named_descriptor_invoker_arg_container(
                     sig,
                     positional_index,
                     arg,
+                    native_references,
                 )
                 .unwrap_or_else(|| lower_expr(ctx, arg));
                 positional_index += 1;
@@ -206,8 +212,24 @@ pub(super) fn lower_signature_invoker_ref_arg_marker(
     sig: Option<&FunctionSig>,
     index: usize,
     item: &Expr,
+    native_references: bool,
 ) -> Option<LoweredValue> {
+    if native_references && sig.is_some_and(|sig| {
+        let regular = crate::types::call_args::regular_param_count(sig);
+        (index >= regular && variadic_param_is_by_ref(sig))
+            || sig.ref_params.get(index).copied().unwrap_or(false)
+    }) && is_native_selection_reference_argument(ctx, item)
+    {
+        let alias = stage_native_selection_reference(ctx, item);
+        return Some(lower_invoker_ref_variadic_arg_marker(ctx, &alias, item.span));
+    }
     let var_name = invoker_ref_arg_variable(ctx, sig, index, item)?;
+    if sig.is_none() && !ctx.is_ref_bound_local(var_name)
+        && ctx.local_is_promotable_to_ref_cell(var_name)
+    {
+        // An unknown target can accept an untyped reference or a variadic tail and retype it.
+        return Some(lower_invoker_ref_variadic_arg_marker(ctx, var_name, item.span));
+    }
     if let Some(sig) = sig {
         let regular_param_count = crate::types::call_args::regular_param_count(sig);
         let expects_mixed = (index >= regular_param_count && variadic_param_is_by_ref(sig))
@@ -257,8 +279,8 @@ pub(super) fn invoker_ref_arg_storage_compatible(
 /// Emits an invoker reference-cell marker for a local variable argument.
 ///
 /// The marker points at the local's own storage, so the callee writes straight back into the
-/// caller's slot at the slot's declared type. That is right for a NAMED by-reference parameter:
-/// `f(&$v)` declares what it writes, and the checker holds the caller's local to it.
+/// caller's slot using the selected compiled parameter ABI. PHP only checks a parameter's
+/// type at entry; a later incompatible retyping needs boxed storage or an explicit refusal.
 pub(super) fn lower_invoker_ref_arg_marker(
     ctx: &mut LoweringContext<'_, '_>,
     var_name: &str,
@@ -270,7 +292,7 @@ pub(super) fn lower_invoker_ref_arg_marker(
 /// Emits the marker for an argument absorbed by a BY-REFERENCE VARIADIC tail, widening the
 /// local to a boxed `Mixed` reference cell first.
 ///
-/// `&...$items` is the one by-reference form PHP does not constrain. The callee writes through
+/// `&...$items` writes through
 /// `$items[n]`, an untyped element of an `array<mixed>`, so it may store a value of any type
 /// into a caller local currently holding something else -- `function r(&...$items) { $items[0] =
 /// "s"; }` called with an `int` local is ordinary PHP. Pointing the marker at the local's
@@ -278,9 +300,8 @@ pub(super) fn lower_invoker_ref_arg_marker(
 /// written over an `I64` slot read back as the string's pointer and printed as an integer, with
 /// no diagnostic (issue #1062).
 ///
-/// Widening is confined to this form on purpose. A named by-reference parameter keeps concrete
-/// storage on both sides, and boxing the caller's local there would hand the callee a box
-/// pointer where it expects the value itself.
+/// A known signature can preserve its selected concrete ABI. An unknown target uses the same
+/// widening because its storage contract is unavailable until descriptor dispatch.
 ///
 /// `promote_local_mixed_ref_cell` is idempotent and is the same helper PDO's `bindColumn` /
 /// `bindParam` use for exactly this situation.

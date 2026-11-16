@@ -1,8 +1,6 @@
 ---
 title: "cairo_scale()"
 description: "Scales the context's transformation by the given x and y factors."
-sidebar:
-  order: 433
 ---
 
 ## cairo_scale()
@@ -22,8 +20,9 @@ Scales the context's transformation by the given x and y factors.
 
 ## Availability
 
-- **Compiled (AOT)**: supported through the compiler-injected image prelude.
-- **`eval()` (magician interpreter)**: not available inside eval'd code.
+| Compiled (AOT) | Magician (eval) |
+|---|---|
+| Available | Not available yet |
 
 _No examples yet. Check `examples/` and `showcases/` for usage patterns._
 

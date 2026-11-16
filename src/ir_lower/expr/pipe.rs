@@ -48,7 +48,10 @@ pub(super) fn lower_pipe(ctx: &mut LoweringContext<'_, '_>, value: &Expr, callab
             lower_expr(ctx, &synthetic)
         }
         ExprKind::Variable(name) => lower_pipe_callable_variable(ctx, value, name, expr),
-        _ => lower_pipe_runtime_call(ctx, value, callable, expr),
+        _ => {
+            let arg = lower_pipe_value_temp(ctx, value, expr);
+            lower_pipe_runtime_call(ctx, &arg, callable, expr)
+        }
     }
 }
 
@@ -109,15 +112,22 @@ pub(super) fn lower_pipe_runtime_call(
 ) -> LoweredValue {
     let result_type = pipe_runtime_result_type(ctx, callable, expr);
     let value = lower_expr(ctx, value);
+    let result_staging = prepublish_call_result(ctx, &result_type, expr.span);
     let callable = lower_expr(ctx, callable);
-    emit_descriptor_invoker_value(
+    let (callable, callable_owner) = root_owned_call_operand(ctx, callable, expr.span);
+    let result = emit_descriptor_invoker_value(
         ctx,
         Op::PipeCall,
         vec![value.value, callable.value],
         None,
         result_type,
         expr.span,
-    )
+    );
+    stage_call_result(ctx, result_staging.as_ref(), result, expr.span);
+    if let Some(owner) = callable_owner {
+        retire_owned_call_operand(ctx, owner, expr.span);
+    }
+    take_prepublished_call_result(ctx, result_staging, result, expr.span)
 }
 
 /// Returns the best known result type for a runtime-lowered pipe call.

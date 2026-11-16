@@ -82,6 +82,9 @@ pub(in crate::interpreter) fn eval_mutating_builtin_with_call_array_args(
         _ if eval_xml_builtin_name(name) => {
             Some(eval_xml_evaluated_call(name, evaluated_args, context, values)?)
         }
+        _ if eval_tidy_builtin_name(name) => {
+            Some(eval_tidy_evaluated_call(name, evaluated_args, context, values)?)
+        }
         _ => return Ok(None),
     };
     Ok(result)
@@ -353,6 +356,7 @@ fn eval_dynamic_preg_match_all_call(
         return Ok(None);
     };
     let flags = optional_evaluated_ref_arg(&bound, 3).map(|arg| arg.value);
+    let flags = eval_preg_match_all_require_supported_flags(flags, context, values)?;
     let (result, matches_array) =
         eval_preg_match_all_capture_result(pattern.value, subject.value, flags, values)?;
     eval_write_preg_matches_target(target, matches_array, context, values)?;

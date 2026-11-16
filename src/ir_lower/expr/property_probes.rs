@@ -29,6 +29,8 @@ pub(super) fn property_can_be_uninitialized(
     object: crate::ir::ValueId,
     property: &str,
 ) -> bool {
+    if native_property_method_for_value(ctx, object, property,
+        elephc_builtin_contract::ObjectProperty::Get).is_some() { return false; }
     let object_ty = ctx.builder.value_php_type(object);
     let Some(class_name) = property_probe_object_class(&object_ty) else {
         return false;
@@ -68,6 +70,47 @@ pub(super) fn property_can_be_uninitialized(
     // returns a typed property to the uninitialized state whatever its default, and the
     // ordinary read then raises where PHP's `??` answers the default. The runtime probe
     // settles both cases, so the gate asks only whether the property is TYPED.
+    info.property_slot_is_declared(index, property)
+        || (!info.property_slot_is_reference(index, property)
+            && property_ty.codegen_repr() == PhpType::Mixed)
+}
+
+/// Returns whether a syntactic property receiver needs a typed initialization guard.
+pub(super) fn property_expr_can_be_uninitialized(
+    ctx: &LoweringContext<'_, '_>,
+    object: &Expr,
+    property: &str,
+) -> bool {
+    let Some(class_name) = instance_callable_object_class(ctx, object) else {
+        return false;
+    };
+    let class_name = class_name.trim_start_matches('\\');
+    if crate::types::builtin_classes::native_property_method(
+        class_name,
+        property,
+        elephc_builtin_contract::ObjectProperty::Get,
+        ctx.classes,
+    )
+    .is_some()
+    {
+        return false;
+    }
+    let Some(info) = ctx.classes.get(class_name) else {
+        return false;
+    };
+    if !property_is_accessible_for_ir(ctx, class_name, info, property) {
+        return false;
+    }
+    if info
+        .methods
+        .contains_key(&php_symbol_key(&property_hook_get_method(property)))
+        && !ctx.in_own_property_accessor(property)
+    {
+        return false;
+    }
+    let Some((index, (_, property_ty))) = info.visible_property(property) else {
+        return false;
+    };
     info.property_slot_is_declared(index, property)
         || (!info.property_slot_is_reference(index, property)
             && property_ty.codegen_repr() == PhpType::Mixed)

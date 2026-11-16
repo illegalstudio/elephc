@@ -391,3 +391,31 @@ foreach ($parents as $key => $value) {
     );
     assert_eq!(out, "0:a=array;0:c=array;1:y=array;");
 }
+
+
+/// Verifies the traversal re-queries the active sub-iterator's `valid()` and probes
+/// `hasChildren()` once per visited element, matching php-src's RS_START/RS_NEXT protocol.
+#[test]
+fn test_recursive_iterator_iterator_requeries_valid_and_has_children() {
+    let out = compile_and_run(
+        r#"<?php
+class CountingValidIterator extends RecursiveArrayIterator {
+    public int $calls = 0;
+    public function valid(): bool { $this->calls++; return parent::valid(); }
+}
+class CountingChildrenIterator extends RecursiveArrayIterator {
+    public int $calls = 0;
+    public function hasChildren(): bool { $this->calls++; return parent::hasChildren(); }
+}
+$validRoot = new CountingValidIterator(["a" => ["x" => 1], "b" => 2]);
+$valid = new RecursiveIteratorIterator($validRoot, RecursiveIteratorIterator::SELF_FIRST);
+foreach ($valid as $key => $value) { echo $key, ';'; }
+echo '|', $validRoot->calls, '|';
+$childrenRoot = new CountingChildrenIterator(["a" => ["x" => 1], "b" => 2]);
+$children = new RecursiveIteratorIterator($childrenRoot, RecursiveIteratorIterator::SELF_FIRST);
+foreach ($children as $key => $value) { echo $key, ';'; }
+echo '|', $childrenRoot->calls;
+"#,
+    );
+    assert_eq!(out, "a;x;b;|6|a;x;b;|2");
+}

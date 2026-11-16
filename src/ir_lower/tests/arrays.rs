@@ -391,7 +391,7 @@ echo implode(",", $values);
         );
         let asm = crate::codegen::generate_user_asm_from_ir(&module, false, false).unwrap();
         for helper in ["__rt_array_cell_ensure_unique", "__rt_array_to_mixed", "__rt_array_ensure_unique",
-            "__rt_mixed_sort_require_scalars", "__rt_php_compare_slots", "__rt_php_compare_slots_desc"]
+            "__rt_mixed_sort_require_scalars", "__rt_sort_mixed"]
         {
             assert!(asm.contains(helper), "{target}: {helper}");
         }

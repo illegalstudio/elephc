@@ -418,3 +418,23 @@ var_dump($two ** ($argc + 2), $two ** ($argc + 61), $two ** ($argc + 62), $ten *
     assert_eq!(lines[0], "int(8)");
     assert_eq!(lines[2], "float(9.223372036854776E+18)");
 }
+
+/// A nullable scalar parameter is stored as the inline tagged pair; the `is_*` predicates and
+/// `is_numeric` must answer from its runtime tag instead of treating the pair as a Mixed cell
+/// (#1999). PHP: null is null and nothing else; 0 and -3 are int/scalar/numeric.
+#[test]
+fn test_tagged_nullable_scalar_type_predicates_match_php() {
+    let out = compile_and_run(
+        r#"<?php
+function n(?int $x): string {
+    return (is_null($x) ? "n" : "-") . (is_int($x) ? "i" : "-") . (is_scalar($x) ? "S" : "-")
+        . (is_numeric($x) ? "N" : "-") . (is_callable($x) ? "c" : "-")
+        . (is_resource($x) ? "r" : "-") . (is_object($x) ? "o" : "-")
+        . (is_array($x) ? "a" : "-") . (is_string($x) ? "s" : "-")
+        . (is_bool($x) ? "b" : "-") . (is_float($x) ? "f" : "-");
+}
+echo n(null), "|", n(0), "|", n(-3), "\n";
+"#,
+    );
+    assert_eq!(out, "n----------|-iSN-------|-iSN-------\n");
+}

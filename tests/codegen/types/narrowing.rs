@@ -10,8 +10,41 @@
 //!   chains, and `: never`-function divergence that keeps the complement after an exhaustive chain.
 //!   The guarded variables are untyped parameters that are unions at runtime (heterogeneous calls),
 //!   so these tests depend on both the union parameter inference and the narrowing. Outputs match PHP.
+//! - Receivers typed by an interface or a parent class and narrowed to a class with a method the
+//!   declared type lacks dispatch on the runtime class.
 
 use super::*;
+
+/// Null guard spellings join a locally initialized nullable object on both reachable exits.
+#[test]
+fn test_nullable_object_lazy_local_join_guard_spellings() {
+    for guard in ["$service === null", "null === $service", "is_null($service)", "!isset($service)"] {
+        let source = format!(r#"<?php
+class Service {{ public function value(): int {{ return 7; }} }}
+final class SpecializedService extends Service {{}}
+function ensure(?Service $service): Service {{
+    if ({guard}) {{ $service = new Service(); }}
+    return $service;
+}}
+function ensureSpecialized(?Service $service): Service {{
+    if ({guard}) {{ $service = new SpecializedService(); }}
+    return $service;
+}}
+function ensureBoth(?Service $service): Service {{
+    if ({guard}) {{ $service = new Service(); }}
+    else {{ $service = new Service(); }}
+    return $service;
+}}
+$existing = new Service();
+echo ensure(null)->value(), "|", ensure($existing)->value(), "|";
+echo ensure($existing) === $existing ? "same" : "different";
+echo "|", ensureSpecialized(null)->value(), "|";
+echo ensureSpecialized($existing) === $existing ? "same" : "different";
+echo "|", ensureBoth(null)->value(), "|", ensureBoth($existing)->value();
+"#);
+        assert_eq!(compile_and_run(&source), "7|7|same|7|same|7|7", "guard: {guard}");
+    }
+}
 
 /// Verifies the literal `false` subtype remains callable and uses the normal boolean runtime
 /// representation while `int|false` narrows to int after a divergent strict-false guard.
@@ -168,6 +201,67 @@ fn test_instanceof_narrowing_two_object_union() {
         "#,
     );
     assert_eq!(out, "A|notA");
+}
+
+/// Verifies a parameter typed by an interface, narrowed by `instanceof` to a class, can call a
+/// method only the class declares; the other branch still calls the interface method.
+#[test]
+fn test_instanceof_narrowed_interface_receiver_calls_class_method() {
+    let out = compile_and_run(
+        r#"<?php
+        interface Shape { public function name(): string; }
+        final class Square implements Shape {
+            public function name(): string { return "square"; }
+            public function side(): int { return 3; }
+        }
+        final class Circle implements Shape { public function name(): string { return "circle"; } }
+        function describe(Shape $shape): string {
+            if ($shape instanceof Square) { return $shape->name() . " " . $shape->side(); }
+            return $shape->name();
+        }
+        echo describe(new Square()), "|", describe(new Circle());
+        "#,
+    );
+    assert_eq!(out, "square 3|circle");
+}
+
+/// Verifies a parameter typed by a parent class, narrowed by `instanceof` to a subclass, can call
+/// a method only the subclass declares.
+#[test]
+fn test_instanceof_narrowed_parent_receiver_calls_subclass_method() {
+    let out = compile_and_run(
+        r#"<?php
+        class Animal { public function kind(): string { return "animal"; } }
+        class Dog extends Animal { public function bark(): string { return "woof"; } }
+        function speak(Animal $animal): string {
+            if ($animal instanceof Dog) { return $animal->bark(); }
+            return $animal->kind();
+        }
+        echo speak(new Dog()), "|", speak(new Animal());
+        "#,
+    );
+    assert_eq!(out, "woof|animal");
+}
+
+/// Verifies the early-return form narrows an interface-typed receiver for the rest of the body.
+#[test]
+fn test_negated_instanceof_early_return_narrows_interface_receiver() {
+    let out = compile_and_run(
+        r#"<?php
+        interface Shape { public function name(): string; }
+        final class Square implements Shape {
+            public function name(): string { return "square"; }
+            public function side(): int { return 4; }
+        }
+        final class Circle implements Shape { public function name(): string { return "circle"; } }
+        function side(Shape $shape): int {
+            if (!$shape instanceof Square) { return 0; }
+            return $shape->side();
+        }
+        echo side(new Square()), "|", side(new Circle());
+        "#,
+    );
+    assert_eq!(out, "4|0");
 }
 
 /// Verifies the full overload pattern: an `is_int` guard stores the int into a typed property,
@@ -723,4 +817,37 @@ echo S::get()->v;
 "#,
     );
     assert_eq!(out, "7");
+}
+
+/// A guard on a `readonly` property of `$this` survives a call: `$this->plugin->name()` inside
+/// `if ($this->plugin instanceof Sold)` cannot write `$this->plugin` again, and `$this` cannot
+/// be rebound, so a later `$this->plugin->count()` still reads it as `Sold`. Every call used to
+/// drop all property narrowings, and the second read failed with "Undefined method:
+/// Plugin::count".
+#[test]
+fn test_readonly_property_narrowing_survives_a_call() {
+    let out = compile_and_run(
+        r#"<?php
+interface Plugin { public function name(): string; }
+final readonly class Sold implements Plugin
+{
+    public function name(): string { return "sold"; }
+    public function count(): int { return 7; }
+}
+final readonly class Other implements Plugin { public function name(): string { return "other"; } }
+final readonly class Report
+{
+    public function __construct(private Plugin $plugin) {}
+    public function line(): string
+    {
+        if ($this->plugin instanceof Sold) {
+            return $this->plugin->name() . " " . $this->plugin->count();
+        }
+        return $this->plugin->name();
+    }
+}
+echo (new Report(new Sold()))->line(), "|", (new Report(new Other()))->line(), "\n";
+"#,
+    );
+    assert_eq!(out, "sold 7|other\n");
 }

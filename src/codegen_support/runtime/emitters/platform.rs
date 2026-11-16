@@ -28,6 +28,8 @@ pub(super) fn emit_platform_runtime(emitter: &mut Emitter, features: RuntimeFeat
     io::emit_cstr(emitter);
     io::emit_disk_space(emitter);
     io::emit_fopen(emitter);
+    io::emit_simplexml_wrapper_failure(emitter);
+    io::emit_fileinfo_streams(emitter);
     io::emit_fgets(emitter);
     io::emit_feof(emitter);
     io::emit_stream_isatty(emitter);
@@ -56,6 +58,7 @@ pub(super) fn emit_platform_runtime(emitter: &mut Emitter, features: RuntimeFeat
     io::emit_fsockopen(emitter);
     io::emit_stream_wrapper_register(emitter);
     io::emit_stream_wrapper_unregister(emitter);
+    io::emit_stream_registry(emitter);
     io::emit_stream_socket_server(emitter);
     io::emit_stream_socket_client(emitter);
     io::emit_unix_socket_server(emitter);
@@ -66,7 +69,7 @@ pub(super) fn emit_platform_runtime(emitter: &mut Emitter, features: RuntimeFeat
     io::emit_stream_socket_recvfrom(emitter);
     io::emit_stream_socket_get_name(emitter);
     io::emit_stream_socket_pair(emitter);
-    io::emit_popen(emitter);
+    io::emit_popen(emitter, features.web);
     io::emit_pclose(emitter);
     io::emit_opendir(emitter);
     io::emit_readdir(emitter);
@@ -95,6 +98,7 @@ pub(super) fn emit_platform_runtime(emitter: &mut Emitter, features: RuntimeFeat
     io::emit_fread(emitter);
     io::emit_fwrite(emitter);
     io::emit_wrapper_unbox_int(emitter);
+    io::emit_stream_close_mode(emitter);
     io::emit_user_wrapper_fclose(emitter);
     io::emit_user_wrapper_fread(emitter);
     io::emit_user_wrapper_fwrite(emitter);
@@ -252,6 +256,7 @@ pub(super) fn emit_platform_runtime(emitter: &mut Emitter, features: RuntimeFeat
     fibers::emit_fiber_free_stack(emitter);
     fibers::emit_fiber_switch(emitter);
     fibers::emit_fiber_entry(emitter);
+    fibers::force_close::emit(emitter);
     fibers::emit_fiber_construct(emitter);
     fibers::emit_fiber_throw_state_error(emitter);
     fibers::emit_fiber_start(emitter);

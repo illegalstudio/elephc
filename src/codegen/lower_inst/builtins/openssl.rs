@@ -48,7 +48,7 @@ pub(crate) fn lower_openssl_encrypt(
     stage_openssl_int_field(ctx, inst, 7, 88, 16, "openssl_encrypt tag_length")?;
     stage_openssl_empty_string_field(ctx, 96);
     stage_openssl_flag_field(ctx, 112, tag_slot.is_some());
-    crate::codegen::hash_crypto::publish_elephc_cipher_function_pointers(ctx.emitter);
+    crate::codegen::hash_crypto::publish_elephc_openssl_function_pointers(ctx.emitter);
     stage_openssl_frame_pointer(ctx);
     abi::emit_call_label(ctx.emitter, "__rt_openssl_encrypt");
     preserve_openssl_string_result(ctx, 112);
@@ -81,7 +81,7 @@ pub(crate) fn lower_openssl_decrypt(
     stage_openssl_optional_string_field(ctx, inst, 4, 56, "openssl_decrypt iv")?;
     stage_openssl_optional_string_field(ctx, inst, 6, 72, "openssl_decrypt aad")?;
     stage_openssl_optional_string_field(ctx, inst, 5, 88, "openssl_decrypt tag")?;
-    crate::codegen::hash_crypto::publish_elephc_cipher_function_pointers(ctx.emitter);
+    crate::codegen::hash_crypto::publish_elephc_openssl_function_pointers(ctx.emitter);
     stage_openssl_frame_pointer(ctx);
     abi::emit_call_label(ctx.emitter, "__rt_openssl_decrypt");
     abi::emit_release_temporary_stack(ctx.emitter, FRAME_SIZE);
@@ -95,7 +95,7 @@ pub(crate) fn lower_openssl_cipher_iv_length(
     inst: &Instruction,
 ) -> Result<()> {
     load_single_string_arg(ctx, inst, "openssl_cipher_iv_length")?;
-    crate::codegen::hash_crypto::publish_elephc_cipher_function_pointers(ctx.emitter);
+    crate::codegen::hash_crypto::publish_elephc_openssl_function_pointers(ctx.emitter);
     abi::emit_call_label(ctx.emitter, "__rt_openssl_cipher_iv_length");
     box_openssl_int_or_false_result(ctx, "openssl_iv_length");
     store_if_result(ctx, inst)
@@ -113,7 +113,7 @@ pub(crate) fn lower_openssl_get_cipher_methods(
         )));
     }
     materialize_truthy_flag(ctx, inst, 0, "openssl_get_cipher_methods")?;
-    crate::codegen::hash_crypto::publish_elephc_cipher_function_pointers(ctx.emitter);
+    crate::codegen::hash_crypto::publish_elephc_openssl_function_pointers(ctx.emitter);
     if ctx.emitter.target.arch == Arch::X86_64 {
         ctx.emitter.instruction("mov rdi, rax");                                // pass aliases flag to the method-list helper
     }
@@ -235,7 +235,7 @@ fn openssl_output_local_slot(
         .function
         .instruction(inst)
         .ok_or_else(|| CodegenIrError::missing_entry("instruction", inst.as_raw()))?;
-    if !matches!(inst_ref.op, Op::LoadLocal | Op::LoadRefCell) {
+    if !matches!(inst_ref.op, Op::LoadLocal | Op::LoadRefCell | Op::LoadRefCellValue) {
         return Err(CodegenIrError::unsupported(
             "openssl_encrypt tag argument that is not a local variable",
         ));
@@ -291,12 +291,11 @@ fn store_openssl_tag_writeback(
         }
     }
     let storage_ty = ctx.local_php_type(slot)?.codegen_repr();
-    ctx.release_local_before_string_writeback(slot)?;
     restore_openssl_string_result(ctx, 96);
     if storage_ty == PhpType::Mixed {
         crate::codegen::emit_box_current_owned_value_as_mixed(ctx.emitter, &PhpType::Str);
     }
-    ctx.store_current_result_to_local(slot)?;
+    super::super::local_stores::publish_current_owned_output(ctx, slot, &PhpType::Str)?;
     ctx.emitter.label(&no_tag);
     Ok(())
 }

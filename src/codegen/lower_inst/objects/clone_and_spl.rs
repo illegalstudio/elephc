@@ -91,6 +91,9 @@ pub(in crate::codegen::lower_inst) fn lower_object_clone_shallow(
             dynamic_property_hash_offset(property_count),
         );
     }
+    if !owned_reference_property_offsets.is_empty() {
+        emit_native_reference_bindings(ctx, dest_reg);
+    }
     Ok(())
 }
 
@@ -261,7 +264,7 @@ pub(super) fn lower_callback_filter_iterator_new(
             class_info.class_id,
             class_info.properties.len(),
             uninitialized_property_marker_offsets(class_info),
-            collect_property_initialization(class_info, inst),
+            collect_property_initialization(ctx.module, class_info, inst),
             class_info.property_offsets.get("callbackEnv").copied(),
         )
     };

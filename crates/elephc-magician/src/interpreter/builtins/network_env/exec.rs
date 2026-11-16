@@ -128,6 +128,7 @@ const EVAL_SHELL_SPAWN_ATTEMPTS: u32 = 5;
 fn eval_shell_command_output(command: &str) -> EvalShellOutcome {
     eval_shell_run_with(
         || {
+            let _signals = elephc_process_context::SpawnPermit::new();
             Command::new("/bin/sh")
                 .arg("-c")
                 .arg(command)
@@ -191,6 +192,17 @@ mod tests {
     use super::{eval_shell_run_with, eval_shell_spawn_is_transient, EvalShellOutcome};
     use std::io::{Error, ErrorKind};
     use std::time::Duration;
+
+    /// A shell launched from evaluated PHP receives the original callback signal mask.
+    #[test]
+    fn deferred_web_callbacks_spawn_terminable_eval_shells() {
+        let _callback = elephc_process_context::Deferral::new();
+        let outcome = super::eval_shell_command_output("kill -TERM $$; printf survived");
+        match outcome {
+            EvalShellOutcome::Ran(output) => assert!(output.is_empty(), "child survived SIGTERM"),
+            _ => panic!("eval shell failed to launch"),
+        }
+    }
 
     /// Retries failed spawns with bounded backoff and collects a successful child exactly once.
     #[test]

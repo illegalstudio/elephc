@@ -59,8 +59,13 @@ pub(super) fn parse_expr_bp(
     // linux-aarch64 was thin enough that adding a handful of locals to parser
     // frames tipped it over.
     stacker::maybe_grow(64 * 1024, 4 * 1024 * 1024, || {
-        parse_expr_bp_inner(tokens, pos, min_bp, None)
+        parse_expr_bp_inner(tokens, pos, min_bp, None, false)
     })
+}
+
+/// Applies scoped capture naming only to the outer statement assignment, never nested expressions.
+pub(super) fn parse_scoped_write_expr(tokens: &[SpannedToken], pos: &mut usize) -> Result<Expr, CompileError> {
+    stacker::maybe_grow(64 * 1024, 4 * 1024 * 1024, || parse_expr_bp_inner(tokens, pos, 0, None, true))
 }
 
 /// Identifies whether the prefix operand increments an append or a property of its null value.
@@ -72,7 +77,7 @@ pub(super) fn parse_prefix_increment_operand(
 ) -> Result<(Expr, PrefixIncrementTarget), CompileError> {
     let mut appended = PrefixIncrementTarget::Regular;
     let expression = stacker::maybe_grow(64 * 1024, 4 * 1024 * 1024, || {
-        parse_expr_bp_inner(tokens, pos, 35, Some(&mut appended))
+        parse_expr_bp_inner(tokens, pos, 35, Some(&mut appended), false)
     })?;
     Ok((expression, appended))
 }
@@ -83,6 +88,7 @@ fn parse_expr_bp_inner(
     pos: &mut usize,
     min_bp: u8,
     mut prefix_increment: Option<&mut PrefixIncrementTarget>,
+    scoped_write: bool,
 ) -> Result<Expr, CompileError> {
     let mut lhs = parse_prefix(tokens, pos)?;
 
@@ -294,7 +300,7 @@ fn parse_expr_bp_inner(
                         )?;
                         let rendered = args
                             .iter()
-                            .map(crate::generics::describe_type)
+                            .map(crate::generics::describe_written_type)
                             .collect::<Vec<_>>()
                             .join(", ");
                         format!("{}<{}>", member, rendered)
@@ -482,12 +488,14 @@ fn parse_expr_bp_inner(
             }
             if is_non_local_assignment_target(&lhs) {
                 if let AssignmentOperator::Compound(op) = op {
-                    lhs = super::compound_assignment_expression(lhs, op, rhs, span);
+                    lhs = if scoped_write {
+                        super::assignment_targets::scoped_compound_assignment_expression(lhs, op, rhs, span)
+                    } else { super::compound_assignment_expression(lhs, op, rhs, span) };
                     continue;
                 }
                 let null_coalesce_assign = matches!(op, AssignmentOperator::NullCoalesce);
 
-                let mut lowerer = AssignmentExpressionLowerer::new(span);
+                let mut lowerer = if scoped_write { AssignmentExpressionLowerer::new_scoped(span) } else { AssignmentExpressionLowerer::new(span) };
                 let target = lowerer.stabilize_non_local_target(lhs, &rhs);
                 let conditional_value_temp =
                     null_coalesce_assign.then(|| lowerer.reserve_value_temp());
@@ -710,6 +718,7 @@ pub(in crate::parser) fn reject_named_args_in_dynamic_call(
     args: &[Expr],
     span: Span,
 ) -> Result<(), CompileError> {
+    crate::types::checker::validate_unresolved_call_argument_order(args, "Dynamic method call")?;
     if args
         .iter()
         .any(|arg| matches!(arg.kind, ExprKind::NamedArg { .. }))
@@ -951,16 +960,22 @@ fn called_instanceof_target_error(span: Span) -> CompileError {
 }
 
 /// Returns true when the tokens at `pos` are a class reference followed by `::$name`, the
-/// static-property form of an `instanceof` target.
+/// static-property form of an `instanceof` target. Name segments are the ones the shared name
+/// parser accepts, so classes named `enum` or after a predefined constant (`NAN`) qualify too.
 fn names_static_property(tokens: &[SpannedToken], pos: usize) -> bool {
     let mut cursor = pos;
     match tokens.get(cursor).map(|(token, _)| token) {
         Some(Token::Self_ | Token::Parent | Token::Static) => cursor += 1,
         _ => {
-            while matches!(
-                tokens.get(cursor).map(|(token, _)| token),
-                Some(Token::Identifier(_) | Token::Backslash)
-            ) {
+            // `$x instanceof namespace\Cfg::$cls` reads a static property of a class named
+            // relative to the current namespace (#825).
+            if crate::parser::relative_name_starts_at(tokens, cursor) {
+                cursor += 2;
+            }
+            while tokens.get(cursor).is_some_and(|(token, metadata)| {
+                matches!(token, Token::Backslash)
+                    || crate::parser::stmt::name_part_from_token(token, metadata).is_some()
+            }) {
                 cursor += 1;
             }
             if cursor == pos {

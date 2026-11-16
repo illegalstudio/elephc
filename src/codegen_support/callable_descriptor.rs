@@ -13,7 +13,11 @@
 //!   capture/receiver metadata available to runtime dispatch without changing the
 //!   one-word callable ABI.
 //! - The optional invoker slot points at a generated uniform runtime adapter whose
-//!   ABI is `(descriptor, argument array) -> Mixed`.
+//!   ABI is `(descriptor, argument array, invocation scope) -> Mixed`.
+
+mod object_identity;
+
+pub(crate) use object_identity::emit_require_object_handle;
 
 use crate::codegen_support::abi;
 use crate::codegen_support::data_section::{DataSection, DataWord};
@@ -51,6 +55,9 @@ pub(crate) const CALLABLE_DESC_STATIC_SIZE: usize = 64;
 pub(crate) const CALLABLE_DESC_RUNTIME_CAPTURE_OFFSET: usize = CALLABLE_DESC_STATIC_SIZE;
 
 const CALLABLE_DESC_VARIADIC_NONE: u64 = u64::MAX;
+
+/// Inline scalar pairs own no heap child, unlike the boxed Mixed binding tag 7.
+const CALLABLE_BINDING_TAG_TAGGED_SCALAR: u64 = 16;
 
 const CALLABLE_DESC_DEFAULT_NONE: u64 = 0;
 const CALLABLE_DESC_DEFAULT_INT: u64 = 1;
@@ -307,6 +314,41 @@ pub(crate) fn emit_copy_static_descriptor_to_runtime(
         abi::emit_load_from_address(emitter, word_reg, source_reg, offset);
         abi::emit_store_to_address(emitter, word_reg, dest_reg, offset);
     }
+    emit_initialize_runtime_descriptor(emitter, dest_reg);
+}
+
+/// Clears capture storage before publishing a fresh allocation as a managed callable node.
+pub(crate) fn emit_initialize_runtime_descriptor(emitter: &mut Emitter, dest: &str) {
+    use crate::codegen_support::{platform::Arch, sentinels::{CALLABLE_HEAP_KIND, x86_64_heap_kind_word}};
+    // -- recycled captures must be null before any later allocation or ownership cleanup --
+    match emitter.target.arch {
+        Arch::AArch64 => {
+            emitter.instruction(&format!("ldr w9, [{dest}, #-16]"));            // bound initialization by the allocator's actual payload capacity
+            emitter.instruction("mov x10, #64");                                // preserve the copied fixed descriptor header
+            emitter.label("1");
+            emitter.instruction("cmp x10, x9");                                 // stop before crossing the allocated descriptor payload
+            emitter.instruction("b.hs 2f");                                     // descriptors without captures need no slot initialization
+            emitter.instruction(&format!("str xzr, [{dest}, x10]"));            // leave every not-yet-written capture null for nested cleanup
+            emitter.instruction("add x10, x10, #8");                            // initialize the next capture word, including metadata halves
+            emitter.instruction("b 1b");                                        // finish initialization before publishing the graph kind
+            emitter.label("2");
+            emitter.instruction(&format!("mov x9, #{CALLABLE_HEAP_KIND}"));     // register callable ownership independently from raw helper buffers
+            emitter.instruction(&format!("str x9, [{dest}, #-8]"));             // publish the canonical managed callable kind
+        }
+        Arch::X86_64 => {
+            emitter.instruction(&format!("mov r11d, DWORD PTR [{dest} - 16]")); // bound initialization by the allocator's actual payload capacity
+            emitter.instruction("mov r10d, 64");                                // preserve the copied fixed descriptor header
+            emitter.label("1");
+            emitter.instruction("cmp r10, r11");                                // stop before crossing the allocated descriptor payload
+            emitter.instruction("jae 2f");                                      // descriptors without captures need no slot initialization
+            emitter.instruction(&format!("mov QWORD PTR [{dest} + r10], 0"));   // leave every not-yet-written capture null for nested cleanup
+            emitter.instruction("add r10, 8");                                  // initialize the next capture word, including metadata halves
+            emitter.instruction("jmp 1b");                                      // finish initialization before publishing the graph kind
+            emitter.label("2");
+            emitter.instruction(&format!("mov r10, 0x{:x}", x86_64_heap_kind_word(CALLABLE_HEAP_KIND))); // preserve canonical heap magic while registering callable ownership
+            emitter.instruction(&format!("mov QWORD PTR [{dest} - 8], r10"));   // publish the canonical managed callable kind
+        }
+    }
 }
 
 /// Stores the current result registers into a runtime descriptor capture slot.
@@ -318,6 +360,11 @@ pub(crate) fn emit_store_current_result_to_runtime_capture(
 ) {
     let offset = CALLABLE_DESC_RUNTIME_CAPTURE_OFFSET + capture_index * 16;
     match capture_ty.codegen_repr() {
+        PhpType::TaggedScalar => {
+            abi::emit_store_to_address(emitter, abi::int_result_reg(emitter), descriptor_reg, offset);
+            abi::emit_store_to_address(emitter,
+                crate::codegen_support::sentinels::tagged_scalar_tag_reg(emitter), descriptor_reg, offset + 8);
+        }
         PhpType::Float => {
             abi::emit_store_to_address(emitter, abi::float_result_reg(emitter), descriptor_reg, offset);
         }
@@ -342,6 +389,11 @@ pub(crate) fn emit_load_runtime_capture_to_result(
 ) {
     let offset = CALLABLE_DESC_RUNTIME_CAPTURE_OFFSET + capture_index * 16;
     match capture_ty.codegen_repr() {
+        PhpType::TaggedScalar => {
+            abi::emit_load_from_address(emitter, abi::int_result_reg(emitter), descriptor_reg, offset);
+            abi::emit_load_from_address(emitter,
+                crate::codegen_support::sentinels::tagged_scalar_tag_reg(emitter), descriptor_reg, offset + 8);
+        }
         PhpType::Float => {
             abi::emit_load_from_address(emitter, abi::float_result_reg(emitter), descriptor_reg, offset);
         }
@@ -359,29 +411,43 @@ pub(crate) fn emit_load_runtime_capture_to_result(
 
 /// Builds the signature side record for runtime arity and argument planning.
 fn signature_record(data: &mut DataSection, sig: &FunctionSig) -> String {
-    let visible_param_count = sig.params.len();
-    let regular_param_count = if sig.variadic.is_some() {
-        visible_param_count.saturating_sub(1)
-    } else {
-        visible_param_count
-    };
-    let required_count = (0..regular_param_count)
-        .filter(|idx| sig.defaults.get(*idx).and_then(|default| default.as_ref()).is_none())
-        .map(|idx| idx + 1)
-        .max()
-        .unwrap_or(0);
-    let variadic_index = sig
+    let regular_param_count = crate::types::call_args::regular_param_count(sig);
+    let source_variadic_index = sig
         .variadic
         .as_ref()
-        .and_then(|variadic| sig.params.iter().position(|(name, _)| name == variadic))
-        .map(|idx| idx as u64)
+        .filter(|_| !crate::func_args::sig_collects_surplus_args(sig))
+        .and_then(|variadic| sig.params.iter().position(|(name, _)| name == variadic));
+    let mut public_indices = (0..regular_param_count).collect::<Vec<_>>();
+    if let Some(index) = source_variadic_index {
+        public_indices.push(index);
+    }
+    let public_params = public_indices
+        .iter()
+        .filter_map(|index| sig.params.get(*index).cloned())
+        .collect::<Vec<_>>();
+    let public_defaults = public_indices
+        .iter()
+        .map(|index| sig.defaults.get(*index).cloned().unwrap_or(None))
+        .collect::<Vec<_>>();
+    let public_ref_flags = public_indices
+        .iter()
+        .map(|index| sig.ref_params.get(*index).copied().unwrap_or(false))
+        .collect::<Vec<_>>();
+    let public_declared_flags = public_indices
+        .iter()
+        .map(|index| sig.declared_params.get(*index).copied().unwrap_or(false))
+        .collect::<Vec<_>>();
+    let visible_param_count = public_params.len();
+    let required_count = crate::types::call_args::required_param_count(sig);
+    let variadic_index = source_variadic_index
+        .map(|_| regular_param_count as u64)
         .unwrap_or(CALLABLE_DESC_VARIADIC_NONE);
     let flags = u64::from(sig.declared_return);
-    let param_names = optional_symbol(param_name_table(data, &sig.params));
-    let param_types = optional_symbol(param_type_table(data, &sig.params));
-    let defaults = optional_symbol(default_table(data, &sig.defaults));
-    let ref_flags = optional_symbol(flag_table(data, &sig.ref_params));
-    let declared_flags = optional_symbol(flag_table(data, &sig.declared_params));
+    let param_names = optional_symbol(param_name_table(data, &public_params));
+    let param_types = optional_symbol(param_type_table(data, &public_params));
+    let defaults = optional_symbol(default_table(data, &public_defaults));
+    let ref_flags = optional_symbol(flag_table(data, &public_ref_flags));
+    let declared_flags = optional_symbol(flag_table(data, &public_declared_flags));
 
     data.add_words(vec![
         DataWord::U64(visible_param_count as u64),
@@ -504,7 +570,10 @@ fn binding_table(
         let (name_word, name_len) = optional_string_word(data, Some(name));
         words.push(name_word);
         words.push(DataWord::U64(name_len));
-        words.push(DataWord::U64(type_tag(&ty.codegen_repr())));
+        let tag = if ty.codegen_repr() == PhpType::TaggedScalar {
+            CALLABLE_BINDING_TAG_TAGGED_SCALAR
+        } else { type_tag(&ty.codegen_repr()) };
+        words.push(DataWord::U64(tag));
         words.push(DataWord::U64(u64::from(*by_ref)));
     }
     Some(data.add_words(words))
@@ -583,7 +652,7 @@ fn encoded_default(kind: u64, lo: DataWord, hi: u64) -> EncodedDefault {
 /// Returns the callable descriptor type tag for a PHP codegen type.
 fn type_tag(ty: &PhpType) -> u64 {
     match ty.codegen_repr() {
-        PhpType::Int => 0,
+        PhpType::Int | PhpType::Narrow(_) => 0,
         PhpType::Str => 1,
         PhpType::Float => 2,
         PhpType::Bool | PhpType::False => 3,
@@ -608,6 +677,18 @@ mod tests {
     use super::*;
     use crate::codegen_support::platform::{Arch, Platform, Target};
     use crate::span::Span;
+
+    /// Nullable integer captures must never be traced or released as boxed heap pointers.
+    #[test]
+    fn test_nullable_fallback_flow_tagged_capture_metadata() {
+        let mut data = DataSection::new();
+        binding_table(&mut data, &[("value".into(), PhpType::TaggedScalar, false)]).unwrap();
+        for target in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+            let asm = data.emit(Target::parse(target).unwrap());
+            assert!(asm.contains("    .quad 0x0000000000000010\n"), "{asm}");
+            assert!(!asm.contains("    .quad 0x0000000000000007\n"), "{asm}");
+        }
+    }
 
     /// Verifies that descriptor records contain signature, environment, and invocation pointers.
     #[test]
@@ -699,5 +780,40 @@ mod tests {
         assert!(asm.contains(&format!(".globl {}\n{}:\n", descriptor, descriptor)));
         assert!(asm.contains("    .quad _call_entry\n"));
         assert!(asm.contains("    .quad _call_invoker\n"));
+    }
+
+    /// Public descriptor signatures omit compiler-generated argc and collector parameters.
+    #[test]
+    fn descriptor_signature_hides_introspection_parameters() {
+        let mut data = DataSection::new();
+        let sig = FunctionSig {
+            params: vec![
+                ("value".to_string(), PhpType::Int),
+                (
+                    "rest".to_string(),
+                    PhpType::Array(Box::new(PhpType::Mixed)),
+                ),
+                (crate::func_args::HIDDEN_ARGC_PARAM.to_string(), PhpType::Int),
+            ],
+            param_type_exprs: vec![None, None, None],
+            param_attributes: Vec::new(),
+            defaults: vec![None, None, Some(Expr::new(ExprKind::IntLiteral(0), Span::dummy()))],
+            return_type: PhpType::Int,
+            declared_return: true,
+            by_ref_return: false,
+            ref_params: vec![true, true, false],
+            declared_params: vec![true, true, false],
+            variadic: Some("rest".to_string()),
+            deprecation: None,
+            is_generator: false,
+        };
+
+        signature_record(&mut data, &sig);
+        let asm = data.emit(Target::new(Platform::MacOS, Arch::AArch64));
+
+        assert!(asm.contains(".ascii \"value\"\n"));
+        assert!(asm.contains(".ascii \"rest\"\n"));
+        assert!(!asm.contains(crate::func_args::HIDDEN_ARGC_PARAM));
+        assert!(!asm.contains(crate::func_args::HIDDEN_ARGS_PARAM));
     }
 }

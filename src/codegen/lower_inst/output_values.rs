@@ -21,10 +21,19 @@ pub(super) fn lower_echo_value(ctx: &mut FunctionContext<'_>, inst: &Instruction
     }
     let ty = ctx.load_value_to_result(value)?;
     let raw_ty = ctx.raw_value_php_type(value)?;
-    let output_ty = if matches!(raw_ty, PhpType::Resource(_)) {
-        raw_ty
-    } else {
-        ty
+    // A null `?ptr<T>` (pointer word 0) echoes nothing, like PHP `null`.
+    if crate::types::is_nullable_pointer_type(&raw_ty) {
+        let skip = ctx.next_label("echo_skip_null_pointer");
+        abi::emit_branch_if_int_result_zero(ctx.emitter, &skip);
+        emit_loaded_value_to_stdout(ctx, &ty)?;
+        ctx.emitter.label(&skip);
+        return Ok(());
+    }
+    let output_ty = match raw_ty {
+        PhpType::Resource(_) => raw_ty,
+        // A packed record address prints like the `ptr<T>` the checker types it as.
+        PhpType::Packed(class_name) => PhpType::Pointer(Some(class_name)),
+        _ => ty,
     };
     emit_loaded_value_to_stdout(ctx, &output_ty)
 }
@@ -46,7 +55,19 @@ pub(super) fn lower_object_echo_value(
         return Ok(());
     }
     let return_ty = emit_object_tostring_call(ctx, value, normalized)?;
-    emit_loaded_value_to_stdout(ctx, &return_ty.codegen_repr())
+    emit_owned_tostring_result_to_stdout(ctx, &return_ty.codegen_repr())
+}
+
+/// Writes an owned method string while preserving its pointer for the matching release.
+pub(super) fn emit_owned_tostring_result_to_stdout(
+    ctx: &mut FunctionContext<'_>, ty: &PhpType,
+) -> Result<()> {
+    let (ptr, len) = abi::string_result_regs(ctx.emitter);
+    abi::emit_push_reg_pair(ctx.emitter, ptr, len);
+    emit_loaded_value_to_stdout(ctx, ty)?;
+    abi::emit_pop_reg_pair(ctx.emitter, ptr, len);
+    super::ownership::release_loaded_string(ctx);
+    Ok(())
 }
 
 /// Emits the zero-argument `__toString()` method call for an object value.
@@ -157,6 +178,9 @@ pub(super) fn emit_loaded_value_to_stdout(ctx: &mut FunctionContext<'_>, ty: &Ph
         | PhpType::Iterable
         | PhpType::Resource(_)
         | PhpType::Pointer(_) => {
+            if matches!(ty, PhpType::Float) {
+                super::predicates::emit_nan_string_coercion_probe(ctx);
+            }
             abi::emit_write_stdout(ctx.emitter, ty);
             Ok(())
         }

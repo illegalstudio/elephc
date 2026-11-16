@@ -1,0 +1,111 @@
+name: Build PDO test variants
+
+on:
+  workflow_call:
+    inputs:
+      ci-image:
+        type: string
+        required: true
+      variants:
+        type: string
+        required: true
+      host-attempt:
+        type: string
+        required: true
+    outputs:
+      artifact-attempts:
+        value: ${{ jobs.inventory.outputs.attempts }}
+      artifact-attempt:
+        value: ${{ jobs.build.outputs.artifact-attempt }}
+
+permissions:
+  contents: read
+  actions: read
+  packages: read
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_MIN_STACK: '33554432'
+
+jobs:
+  build:
+    name: Build PDO (${{ matrix.variant }})
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    env:
+      ELEPHC_CI_IMAGE: ${{ inputs.ci-image }}
+    container:
+      image: ${{ inputs.ci-image }}
+      credentials:
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN }}
+    defaults:
+      run:
+        shell: bash
+    strategy:
+      fail-fast: false
+      matrix:
+        variant: ${{ fromJSON(inputs.variants) }}
+    outputs:
+      artifact-attempt: ${{ steps.publish.outputs.attempt }}
+    steps:
+      - uses: actions/checkout@v7
+      - name: Require the pinned producer environment
+        run: '[[ "$ELEPHC_CI_IMAGE" =~ ^ghcr\.io/illegalstudio/elephc-ci@sha256:[0-9a-f]{64}$ ]]'
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2, 2026-08-06
+        with:
+          prefix-key: rust-deps-pdo-build-${{ matrix.variant }}
+          cache-bin: false
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+      - name: Restore common bridges
+        uses: ./.github/actions/restore-build-artifact
+        with:
+          target: linux-x86_64
+          kind: bridges
+          export-bridge-env: 'false'
+          allow-builds: 'true'
+          attempt: ${{ inputs.host-attempt }}
+      - name: Build the selected driver and tests
+        env:
+          VARIANT: ${{ matrix.variant }}
+        run: |
+          case "$VARIANT" in
+            libpq-gss|sqlsrv|oci|cubrid|dblib|firebird|odbc|informix|ibm) ;;
+            *) echo "Unexpected PDO variant: $VARIANT" >&2; exit 1 ;;
+          esac
+          python3 -B scripts/ci/prepare_variant_config.py pdo "$RUNNER_TEMP/variant-nextest.toml"
+          cargo build --locked -p elephc-pdo --features "$VARIANT"
+          printf '%s\n' "$VARIANT" > target/debug/elephc-pdo-features.txt
+          mkdir -p "target/ci-pdo/$VARIANT"
+          cargo nextest archive --config-file "$RUNNER_TEMP/variant-nextest.toml" --locked --profile ci \
+            -p elephc -p elephc-pdo --lib --test codegen_tests \
+            --features "elephc/pdo-$VARIANT" \
+            --archive-file "target/ci-pdo/$VARIANT/nextest-archive.tar.zst"
+          cp "$(command -v cargo-nextest)" "target/ci-pdo/$VARIANT/cargo-nextest"
+          (cd "target/ci-pdo/$VARIANT" && sha256sum cargo-nextest > cargo-nextest.sha256)
+      - name: Publish validated test variant
+        id: publish
+        uses: ./.github/actions/publish-build-artifact
+        with:
+          target: linux-x86_64
+          kind: tests
+          variant: pdo-${{ matrix.variant }}
+          features: pdo-${{ matrix.variant }}
+          files: |
+            target/ci-pdo/${{ matrix.variant }}/nextest-archive.tar.zst
+            target/ci-pdo/${{ matrix.variant }}/cargo-nextest
+            target/ci-pdo/${{ matrix.variant }}/cargo-nextest.sha256
+
+  inventory:
+    needs: build
+    runs-on: ubuntu-24.04
+    outputs:
+      attempts: ${{ steps.inventory.outputs.attempts }}
+    steps:
+      - uses: actions/checkout@v7
+      - name: Resolve each successful matrix payload
+        id: inventory
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VARIANTS: ${{ inputs.variants }}
+        run: python3 -B scripts/ci/artifact_attempts.py pdo "$VARIANTS"

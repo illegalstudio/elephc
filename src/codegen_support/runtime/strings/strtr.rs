@@ -187,8 +187,8 @@ fn emit_strtr_pairwise_aarch64(emitter: &mut Emitter) {
 
     // -- the result is always exactly as long as the subject --
     emitter.instruction("ldr x0, [sp, #264]");                                  // request exactly the subject byte count
-    emitter.instruction("bl __rt_concat_reserve");                              // reserve scratch or heap storage for the translated result
-    emitter.instruction("str x0, [sp, #272]");                                  // save the reservation start
+    emitter.instruction("bl __rt_str_new_owned");                               // allocate the exact owned result up front
+    emitter.instruction("str x0, [sp, #272]");                                  // save the owned result start
     emitter.instruction("mov x13, x0");                                         // destination cursor
     emitter.instruction("mov x10, sp");                                         // restore the translation table base after the reservation call
     emitter.instruction("ldr x1, [sp, #256]");                                  // reload the borrowed subject pointer
@@ -205,16 +205,8 @@ fn emit_strtr_pairwise_aarch64(emitter: &mut Emitter) {
     emitter.instruction("b __rt_strtr_pairwise_translate");                     // keep translating subject bytes
 
     emitter.label("__rt_strtr_pairwise_translate_done");
-    emitter.instruction("ldr x1, [sp, #272]");                                  // the translated result starts at the reservation
+    emitter.instruction("ldr x1, [sp, #272]");                                  // the translated result starts at the owned allocation
     emitter.instruction("ldr x2, [sp, #264]");                                  // the translated result is as long as the subject
-    emitter.instruction("bl __rt_concat_publish");                              // advance the concat scratch offset only for scratch-backed results
-    emitter.instruction("bl __rt_str_persist");                                 // hand back owned heap storage, matching the Fresh ownership contract
-    emitter.instruction("str x1, [sp, #280]");                                  // save the owned result pointer across the reservation release
-    emitter.instruction("str x2, [sp, #288]");                                  // save the owned result length across the reservation release
-    emitter.instruction("ldr x0, [sp, #272]");                                  // reload the superseded reservation
-    emitter.instruction("bl __rt_heap_free_safe");                              // release a heap-backed reservation; concat-scratch pointers are skipped
-    emitter.instruction("ldr x1, [sp, #280]");                                  // restore the owned result pointer
-    emitter.instruction("ldr x2, [sp, #288]");                                  // restore the owned result length
     emitter.instruction("ldp x29, x30, [sp, #304]");                            // restore the frame pointer and return address
     emitter.instruction("add sp, sp, #320");                                    // release the translation frame
     emitter.instruction("ret");                                                 // return the translated string as a PHP string pair
@@ -555,8 +547,8 @@ fn emit_strtr_pairwise_x86_64(emitter: &mut Emitter) {
 
     // -- the result is always exactly as long as the subject --
     emitter.instruction("mov rax, QWORD PTR [rbp - 40]");                       // request exactly the subject byte count
-    emitter.instruction("call __rt_concat_reserve");                            // reserve scratch or heap storage for the translated result
-    emitter.instruction("mov QWORD PTR [rbp - 48], rax");                       // save the reservation start
+    emitter.instruction("call __rt_str_new_owned");                             // allocate the exact owned result up front
+    emitter.instruction("mov QWORD PTR [rbp - 48], rax");                       // save the owned result start
     emitter.instruction("mov rsi, rax");                                        // destination cursor
     emitter.instruction("mov rdi, QWORD PTR [rbp - 32]");                       // reload the borrowed subject pointer
     emitter.instruction("mov rcx, QWORD PTR [rbp - 40]");                       // reload the subject length
@@ -572,16 +564,8 @@ fn emit_strtr_pairwise_x86_64(emitter: &mut Emitter) {
     emitter.instruction("jmp __rt_strtr_pairwise_translate_x86");               // keep translating subject bytes
 
     emitter.label("__rt_strtr_pairwise_translate_done_x86");
-    emitter.instruction("mov rax, QWORD PTR [rbp - 48]");                       // the translated result starts at the reservation
+    emitter.instruction("mov rax, QWORD PTR [rbp - 48]");                       // the translated result starts at the owned allocation
     emitter.instruction("mov rdx, QWORD PTR [rbp - 40]");                       // the translated result is as long as the subject
-    emitter.instruction("call __rt_concat_publish");                            // advance the concat scratch offset only for scratch-backed results
-    emitter.instruction("call __rt_str_persist");                               // hand back owned heap storage, matching the Fresh ownership contract
-    emitter.instruction("mov QWORD PTR [rbp - 56], rax");                       // save the owned result pointer across the reservation release
-    emitter.instruction("mov QWORD PTR [rbp - 64], rdx");                       // save the owned result length across the reservation release
-    emitter.instruction("mov rax, QWORD PTR [rbp - 48]");                       // reload the superseded reservation
-    emitter.instruction("call __rt_heap_free_safe");                            // release a heap-backed reservation; concat-scratch pointers are skipped
-    emitter.instruction("mov rax, QWORD PTR [rbp - 56]");                       // restore the owned result pointer
-    emitter.instruction("mov rdx, QWORD PTR [rbp - 64]");                       // restore the owned result length
     emitter.instruction("add rsp, 320");                                        // release the translation frame
     emitter.instruction("pop rbp");                                             // restore the caller frame pointer
     emitter.instruction("ret");                                                 // return the translated string as a PHP string pair

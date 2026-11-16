@@ -35,7 +35,19 @@ pub(in crate::codegen::lower_inst) fn emit_value_truthiness(
     op_name: &str,
 ) -> Result<()> {
     match ctx.raw_value_php_type(value)? {
-        PhpType::Bool | PhpType::False | PhpType::Int | PhpType::Pointer(_) => {
+        // A packed record address (buffer element or nested record) is one pointer word, and so
+        // is a `?ptr<T>` (null is 0); its union must not reach the Mixed cell arm below. A buffer
+        // handle is one word too: every issued handle is nonzero, and the invalid handle 0 that a
+        // missed array read answers is falsy, as `empty()` and `??` already treat it.
+        ty if matches!(
+            ty,
+            PhpType::Bool
+                | PhpType::False
+                | PhpType::Int
+                | PhpType::Pointer(_)
+                | PhpType::Packed(_)
+                | PhpType::Buffer(_)
+        ) || crate::types::is_nullable_pointer_type(&ty) => {
             ctx.load_value_to_result(value)?;
             emit_int_result_nonzero_bool(ctx);
         }
@@ -47,7 +59,9 @@ pub(in crate::codegen::lower_inst) fn emit_value_truthiness(
             emit_float_result_nonzero_bool(ctx);
         }
         PhpType::Str => emit_string_truthiness(ctx, value)?,
-        PhpType::TaggedScalar => emit_tagged_scalar_truthiness(ctx, value)?,
+        ty if ty.codegen_repr() == PhpType::TaggedScalar => {
+            emit_tagged_scalar_truthiness(ctx, value)?;
+        }
         PhpType::Array(_) | PhpType::AssocArray { .. } | PhpType::Iterable => {
             emit_array_truthiness(ctx, value)?;
         }
@@ -83,13 +97,13 @@ fn emit_tagged_scalar_truthiness(ctx: &mut FunctionContext<'_>, value: ValueId) 
     Ok(())
 }
 
-/// Emits PHP object truthiness: every object is `true`, PHP null is `false`.
+/// Emits whether an object-typed value is a live object rather than PHP null.
 ///
 /// An object-typed slot still carries PHP null as a zero pointer or as the in-band
 /// null-container sentinel a missed read produces (the same pair `is_null()` tests), so the
-/// answer is "not null" rather than a constant. Used by conditions such as
-/// `if ($row = $it->next())` and by `(bool)` / `boolval()` on an object (issue #1492).
-fn emit_object_truthiness(ctx: &mut FunctionContext<'_>, value: ValueId) -> Result<()> {
+/// answer is "not null" rather than a constant. Used by object truthiness (conditions such as
+/// `if ($row = $it->next())` and by `(bool)` / `boolval()`, issue #1492) and by `is_object()`.
+pub(super) fn emit_object_truthiness(ctx: &mut FunctionContext<'_>, value: ValueId) -> Result<()> {
     ctx.load_value_to_result(value)?;
     let result_reg = abi::int_result_reg(ctx.emitter);
     let null_label = ctx.next_label("object_truthy_null");
@@ -140,8 +154,21 @@ pub(super) fn lower_is_null(ctx: &mut FunctionContext<'_>, inst: &Instruction) -
 
 /// Emits an `is_null` boolean result for static nulls and boxed Mixed payloads.
 pub(super) fn emit_is_null_result(ctx: &mut FunctionContext<'_>, value: ValueId) -> Result<()> {
+    // A `?ptr<T>` is one pointer word where 0 is null.
+    if crate::types::is_nullable_pointer_type(&ctx.raw_value_php_type(value)?) {
+        ctx.load_value_to_result(value)?;
+        super::builtins::emit_int_result_zero_bool(ctx);
+        return Ok(());
+    }
     match ctx.value_php_type(value)? {
         PhpType::Mixed | PhpType::Union(_) => emit_mixed_tag_eq(ctx, value, 8),
+        // A buffer handle is one raw word and 0 is never issued: a missed element or key read
+        // and an empty `array_pop()`/`array_shift()` answer it, so `??` takes its default.
+        PhpType::Buffer(_) => {
+            ctx.load_value_to_result(value)?;
+            super::builtins::emit_int_result_zero_bool(ctx);
+            Ok(())
+        }
         PhpType::Void | PhpType::Never => {
             abi::emit_load_int_immediate(ctx.emitter, abi::int_result_reg(ctx.emitter), 1);
             Ok(())
@@ -287,26 +314,72 @@ pub(super) fn emit_mixed_tag_eq(
     value: ValueId,
     tag: u8,
 ) -> Result<()> {
-    let ty = ctx.load_value_to_result(value)?;
-    if !matches!(ty, PhpType::Mixed | PhpType::Union(_)) {
-        return Err(CodegenIrError::unsupported(format!(
-            "mixed tag predicate for PHP type {:?}",
-            ty
-        )));
-    }
-    abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
+    let tag_reg = emit_concrete_mixed_tag(ctx, value, "mixed tag predicate")?;
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
-            ctx.emitter.instruction(&format!("cmp x0, #{}", tag));              // compare the unboxed Mixed runtime tag against the expected tag
-            ctx.emitter.instruction("cset x0, eq");                             // materialize the Mixed tag predicate as boolean 1 on match
+            ctx.emitter.instruction(&format!("cmp {}, #{}", tag_reg, tag));     // compare the runtime tag against the expected tag
+            ctx.emitter.instruction("cset x0, eq");                             // materialize the tag predicate as boolean 1 on match
         }
         Arch::X86_64 => {
-            ctx.emitter.instruction(&format!("cmp rax, {}", tag));              // compare the unboxed Mixed runtime tag against the expected tag
-            ctx.emitter.instruction("sete al");                                 // materialize the Mixed tag predicate in the low byte
-            ctx.emitter.instruction("movzx rax, al");                           // widen the Mixed tag predicate byte into the integer result register
+            ctx.emitter.instruction(&format!("cmp {}, {}", tag_reg, tag));      // compare the runtime tag against the expected tag
+            ctx.emitter.instruction("sete al");                                 // materialize the tag predicate in the low byte
+            ctx.emitter.instruction("movzx rax, al");                           // widen the tag predicate byte into the integer result register
         }
     }
     Ok(())
+}
+
+/// Loads a concrete runtime tag without paying for `__rt_mixed_unbox` on ordinary cells.
+///
+/// A boxed cell's first word is its concrete tag. A null pointer means the null tag (8), and
+/// only a nested Mixed wrapper (tag 7) needs the peeling helper, which can reach an integer,
+/// string, array, or null payload. The returned register holds the concrete tag.
+fn emit_concrete_mixed_tag(
+    ctx: &mut FunctionContext<'_>,
+    value: ValueId,
+    context: &str,
+) -> Result<String> {
+    let ty = ctx.load_value_to_result(value)?;
+    // An inline tagged scalar already carries its runtime tag in the second word; the tag
+    // space is the Mixed one (int 0, null 8), so no cell load or helper call is needed (#1999).
+    match ty.codegen_repr() {
+        PhpType::TaggedScalar => Ok(
+            crate::codegen_support::sentinels::tagged_scalar_tag_reg(ctx.emitter).to_string(),
+        ),
+        PhpType::Mixed | PhpType::Union(_) => {
+            let peeled = ctx.next_label("mixed_tag_peeled");
+            match ctx.emitter.target.arch {
+                Arch::AArch64 => {
+                    ctx.emitter.instruction("mov x10, x0");                     // keep the cell across the fast tag load
+                    ctx.emitter.instruction("mov x0, #8");                      // a null pointer unboxes to the null tag
+                    ctx.emitter.instruction(&format!("cbz x10, {peeled}"));     // stop once null already carries the tag
+                    ctx.emitter.instruction("ldr x0, [x10]");                   // read the concrete tag from the cell's first word
+                    ctx.emitter.instruction("cmp x0, #7");                      // does this cell wrap another Mixed value?
+                    ctx.emitter.instruction(&format!("b.ne {peeled}"));         // an ordinary cell already carries its concrete tag
+                    ctx.emitter.instruction("mov x0, x10");                     // pass the nested wrapper to the peeling helper
+                    abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");     // peel nested wrappers to their concrete tag
+                    ctx.emitter.label(&peeled);
+                }
+                Arch::X86_64 => {
+                    ctx.emitter.instruction("mov r10, rax");                    // keep the cell across the fast tag load
+                    ctx.emitter.instruction("mov eax, 8");                      // a null pointer unboxes to the null tag
+                    ctx.emitter.instruction("test r10, r10");                   // is the boxed cell pointer null?
+                    ctx.emitter.instruction(&format!("jz {peeled}"));           // stop once null already carries the tag
+                    ctx.emitter.instruction("mov rax, QWORD PTR [r10]");        // read the concrete tag from the cell's first word
+                    ctx.emitter.instruction("cmp rax, 7");                      // does this cell wrap another Mixed value?
+                    ctx.emitter.instruction(&format!("jne {peeled}"));          // an ordinary cell already carries its concrete tag
+                    ctx.emitter.instruction("mov rax, r10");                    // pass the nested wrapper to the peeling helper
+                    abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");     // peel nested wrappers to their concrete tag
+                    ctx.emitter.label(&peeled);
+                }
+            }
+            Ok(abi::int_result_reg(ctx.emitter).to_string())
+        }
+        other => Err(CodegenIrError::unsupported(format!(
+            "{context} for PHP type {:?}",
+            other
+        ))),
+    }
 }
 
 /// Emits a boolean result that is 1 when a boxed Mixed value's unboxed runtime tag is one
@@ -317,24 +390,17 @@ pub(super) fn emit_mixed_tag_membership(
     value: ValueId,
     true_tags: &[u8],
 ) -> Result<()> {
-    let ty = ctx.load_value_to_result(value)?;
-    if !matches!(ty, PhpType::Mixed | PhpType::Union(_)) {
-        return Err(CodegenIrError::unsupported(format!(
-            "mixed kind predicate for PHP type {:?}",
-            ty
-        )));
-    }
+    let tag_reg = emit_concrete_mixed_tag(ctx, value, "mixed kind predicate")?;
     let true_label = ctx.next_label("mixed_kind_true");
     let done_label = ctx.next_label("mixed_kind_done");
-    abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
     for &tag in true_tags {
         match ctx.emitter.target.arch {
             Arch::AArch64 => {
-                ctx.emitter.instruction(&format!("cmp x0, #{}", tag));          // compare the unboxed Mixed runtime tag against an accepted kind
+                ctx.emitter.instruction(&format!("cmp {}, #{}", tag_reg, tag)); // compare the runtime tag against an accepted kind
                 ctx.emitter.instruction(&format!("b.eq {}", true_label));       // accept the value when its runtime tag matches this kind
             }
             Arch::X86_64 => {
-                ctx.emitter.instruction(&format!("cmp rax, {}", tag));          // compare the unboxed Mixed runtime tag against an accepted kind
+                ctx.emitter.instruction(&format!("cmp {}, {}", tag_reg, tag));  // compare the runtime tag against an accepted kind
                 ctx.emitter.instruction(&format!("je {}", true_label));         // accept the value when its runtime tag matches this kind
             }
         }
@@ -417,6 +483,17 @@ pub(super) fn emit_nan_bool_coercion_probe(ctx: &mut FunctionContext<'_>) {
     }
     let skip_label = ctx.next_label("nan_bool_warn_skip");
     crate::codegen_support::runtime::emit_nan_bool_coercion_probe(ctx.emitter, &skip_label);
+}
+
+/// Emits PHP 8.5's `unexpected NAN value was coerced to string` probe ahead of a float's
+/// `__rt_ftoa`, with the float already in `d0` / `xmm0`. Like the bool probe it emits nothing
+/// on pre-8.5 profiles and warns once per conversion reached.
+pub(super) fn emit_nan_string_coercion_probe(ctx: &mut FunctionContext<'_>) {
+    if !crate::codegen_support::runtime::nan_bool_coercion_warning_enabled() {
+        return;
+    }
+    let skip_label = ctx.next_label("nan_string_warn_skip");
+    crate::codegen_support::runtime::emit_nan_string_coercion_probe(ctx.emitter, &skip_label);
 }
 
 /// Emits PHP string truthiness, where `""` and `"0"` are false.

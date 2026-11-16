@@ -1,8 +1,6 @@
 ---
 title: "cairo_get_current_point()"
 description: "Returns the current point of the path as an [x, y] pair."
-sidebar:
-  order: 406
 ---
 
 ## cairo_get_current_point()
@@ -20,8 +18,9 @@ Returns the current point of the path as an [x, y] pair.
 
 ## Availability
 
-- **Compiled (AOT)**: supported through the compiler-injected image prelude.
-- **`eval()` (magician interpreter)**: not available inside eval'd code.
+| Compiled (AOT) | Magician (eval) |
+|---|---|
+| Available | Not available yet |
 
 _No examples yet. Check `examples/` and `showcases/` for usage patterns._
 

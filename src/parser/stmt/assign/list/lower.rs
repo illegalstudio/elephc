@@ -54,7 +54,7 @@ fn simple_local_positional_vars(pattern: &ListPattern) -> Option<Vec<String>> {
 /// Stateful lowerer that accumulates `Stmt`s as it walks a `ListPattern`, generating
 /// temporary variable bindings to anchor intermediate values.
 struct ListLowerer {
-    /// Span used for all emitted statements and expressions.
+    /// Source span used for synthetic temporaries and value reads.
     span: Span,
     /// Counter for generating unique temporary variable names.
     next_temp: usize,
@@ -63,7 +63,7 @@ struct ListLowerer {
 }
 
 impl ListLowerer {
-    /// Initialises the lowerer with the span to use for all emitted statements and a
+    /// Initialises the lowerer with the span to use for synthetic temporaries and a
     /// zero-initialized temp counter.
     fn new(span: Span) -> Self {
         Self {
@@ -121,12 +121,12 @@ impl ListLowerer {
                 self.lower_pattern(pattern, nested_source);
             }
             ListTarget::Expr(expr) => {
-                if let Some(stmt) = lower_assignment_target(expr.clone(), value, self.span) {
+                if let Some(stmt) = lower_assignment_target(expr.clone(), value, expr.span) {
                     self.stmts.push(stmt);
                 }
             }
             ListTarget::Append(base) => {
-                if let Some(stmt) = lower_append_target(base.clone(), value, self.span) {
+                if let Some(stmt) = lower_append_target(base.clone(), value, base.span) {
                     self.stmts.push(stmt);
                 }
             }

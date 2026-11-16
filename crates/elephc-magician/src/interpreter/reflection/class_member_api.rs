@@ -57,8 +57,7 @@ pub(in crate::interpreter) fn eval_reflection_class_get_reflection_constants_res
         return Ok(None);
     };
     let names = eval_reflection_constant_names(&reflected_name, context, values)?;
-    let mut result = values.array_new(names.len())?;
-    let mut index = 0;
+    let mut result = values.object_array_new(names.len())?;
     for name in &names {
         if !eval_reflection_constant_matches_filter(reflected_name.as_str(), name, filter, context, values)?
         {
@@ -66,9 +65,7 @@ pub(in crate::interpreter) fn eval_reflection_class_get_reflection_constants_res
         }
         let object =
             eval_reflection_class_constant_object_result(&reflected_name, name, context, values)?;
-        let key = values.int(index)?;
-        result = values.array_set(result, key, object)?;
-        index += 1;
+        result = crate::interpreter::reflection::owned_collections::push_owned_object(values, result, object)?;
     }
     Ok(Some(result))
 }

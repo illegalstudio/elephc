@@ -1,8 +1,6 @@
 ---
 title: "mysqli_num_fields()"
 description: "Returns how many columns a result has."
-sidebar:
-  order: 142
 ---
 
 ## mysqli_num_fields()
@@ -20,8 +18,9 @@ Returns how many columns a result has.
 
 ## Availability
 
-- **Compiled (AOT)**: supported through an injected elephc-PHP prelude.
-- **`eval()` (magician interpreter)**: not available inside eval'd code.
+| Compiled (AOT) | Magician (eval) |
+|---|---|
+| Available | Not available yet |
 
 _No examples yet. Check `examples/` and `showcases/` for usage patterns._
 

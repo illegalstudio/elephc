@@ -29,6 +29,12 @@ pub(super) fn lower_array_shift(ctx: &mut FunctionContext<'_>, inst: &Instructio
     if ctx.value_php_type(array)?.codegen_repr() == PhpType::Mixed {
         return super::boxed_mutation::lower_boxed_array_take(ctx, inst, array, true);
     }
+    // A concrete associative source: `array_shift` renumbers the surviving integer keys, so it
+    // needs the hash-rebuilding path rather than the indexed slot compactor. The rebuilt table
+    // keeps the source's value representation while the removed value is boxed to `mixed`.
+    if let PhpType::AssocArray { .. } = ctx.value_php_type(array)?.codegen_repr() {
+        return super::boxed_mutation::lower_assoc_array_shift(ctx, inst, array);
+    }
     let elem_ty = array_shift_element_type(ctx.value_php_type(array)?)?;
     require_array_shift_result_type(&inst.result_php_type.codegen_repr())?;
     let receiver = ReceiverPlace::resolve(ctx, array)?;
@@ -56,6 +62,8 @@ fn array_shift_element_type(ty: PhpType) -> Result<PhpType> {
                     | PhpType::Mixed
                     | PhpType::Void
                     | PhpType::Never
+                    | PhpType::Pointer(_)
+                    | PhpType::Buffer(_)
             ) || elem.is_refcounted()
             {
                 return Ok(elem);
@@ -73,7 +81,7 @@ fn array_shift_element_type(ty: PhpType) -> Result<PhpType> {
 }
 
 /// Verifies the lowered `array_shift()` result uses PHP's `mixed` shape.
-fn require_array_shift_result_type(result_ty: &PhpType) -> Result<()> {
+pub(super) fn require_array_shift_result_type(result_ty: &PhpType) -> Result<()> {
     if result_ty == &PhpType::Mixed {
         return Ok(());
     }
@@ -152,7 +160,12 @@ fn emit_array_shift_save_first_aarch64(
     elem_ty: &PhpType,
 ) -> Result<()> {
     match elem_ty {
-        PhpType::Int | PhpType::Bool | PhpType::Callable | PhpType::Mixed => {
+        PhpType::Int
+        | PhpType::Bool
+        | PhpType::Callable
+        | PhpType::Mixed
+        | PhpType::Pointer(_)
+        | PhpType::Buffer(_) => {
             ctx.emitter.instruction("add x10, x0, #24");                        // compute the first pointer-sized payload slot in the indexed array
             ctx.emitter.instruction("ldr x11, [x10]");                          // preserve the removed first pointer-sized payload across compaction
         }
@@ -189,7 +202,12 @@ fn emit_array_shift_save_first_x86_64(
     elem_ty: &PhpType,
 ) -> Result<()> {
     match elem_ty {
-        PhpType::Int | PhpType::Bool | PhpType::Callable | PhpType::Mixed => {
+        PhpType::Int
+        | PhpType::Bool
+        | PhpType::Callable
+        | PhpType::Mixed
+        | PhpType::Pointer(_)
+        | PhpType::Buffer(_) => {
             ctx.emitter.instruction("lea r11, [rax + 24]");                     // compute the first pointer-sized payload slot in the indexed array
             ctx.emitter.instruction("mov r8, QWORD PTR [r11]");                 // preserve the removed first pointer-sized payload across compaction
         }
@@ -284,7 +302,12 @@ fn emit_array_shift_restore_first_aarch64(
     elem_ty: &PhpType,
 ) -> Result<()> {
     match elem_ty {
-        PhpType::Int | PhpType::Bool | PhpType::Callable | PhpType::Mixed => {
+        PhpType::Int
+        | PhpType::Bool
+        | PhpType::Callable
+        | PhpType::Mixed
+        | PhpType::Pointer(_)
+        | PhpType::Buffer(_) => {
             ctx.emitter.instruction("mov x0, x11");                             // restore the removed pointer-sized payload into the result register
         }
         PhpType::Float => {
@@ -316,7 +339,12 @@ fn emit_array_shift_restore_first_x86_64(
     elem_ty: &PhpType,
 ) -> Result<()> {
     match elem_ty {
-        PhpType::Int | PhpType::Bool | PhpType::Callable | PhpType::Mixed => {
+        PhpType::Int
+        | PhpType::Bool
+        | PhpType::Callable
+        | PhpType::Mixed
+        | PhpType::Pointer(_)
+        | PhpType::Buffer(_) => {
             ctx.emitter.instruction("mov rax, r8");                             // restore the removed pointer-sized payload into the result register
         }
         PhpType::Float => {

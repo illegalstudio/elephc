@@ -17,6 +17,10 @@ pub enum EvalClosureObjectTarget {
         target: Box<EvalClosureObjectTarget>,
         owner: pcntl_runtime::EvalPcntlContextLease,
     },
+    NativeDescriptor {
+        callback: RuntimeCellHandle,
+        display_name: String,
+    },
     Named(String),
     BoundNamed {
         name: String,
@@ -47,6 +51,7 @@ impl EvalClosureObjectTarget {
     pub(crate) fn receiver_mut(&mut self) -> Option<&mut RuntimeCellHandle> {
         match self {
             Self::ForeignContext { target, .. } => target.receiver_mut(),
+            Self::NativeDescriptor { callback, .. } => Some(callback),
             Self::BoundNamed { bound_this, .. } => bound_this.as_mut(),
             Self::InvokableObject { object } | Self::ObjectMethod { object, .. } => Some(object),
             Self::Named(_) | Self::StaticMethod { .. } => None,

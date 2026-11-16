@@ -146,7 +146,7 @@ pub fn emit_object_free_deep(emitter: &mut Emitter, features: RuntimeFeatures) {
     // -- release runtime-owned Fiber transfer and pending exception values --
     emitter.instruction("ldr x0, [sp, #0]");                                    // reload the saved Fiber object pointer before releasing transfer_value
     emitter.instruction(&format!("ldr x0, [x0, #{}]", crate::codegen_support::runtime::FIBER_TRANSFER_VALUE_OFFSET)); // x0 = boxed Mixed transfer_value owned by the Fiber
-    super::deep_cleanup::invoke(emitter, "__rt_decref_mixed", "x0");
+    super::deep_cleanup::invoke(emitter, "__rt_decref_any", "x0");
     emitter.instruction("ldr x0, [sp, #0]");                                    // reload the saved Fiber object pointer after transfer cleanup
     emitter.instruction(&format!("str xzr, [x0, #{}]", crate::codegen_support::runtime::FIBER_TRANSFER_VALUE_OFFSET)); // clear transfer_value.lo after releasing it
     emitter.instruction(&format!("str xzr, [x0, #{}]", crate::codegen_support::runtime::FIBER_TRANSFER_VALUE_OFFSET + 8)); // clear transfer_value.hi to match the empty slot
@@ -217,7 +217,7 @@ pub fn emit_object_free_deep(emitter: &mut Emitter, features: RuntimeFeatures) {
     emitter.label("__rt_object_free_deep_spl_dll");
     emitter.instruction("ldr x0, [sp, #0]");                                    // reload the saved SPL list object pointer
     emitter.instruction(&format!("ldr x0, [x0, #{}]", crate::codegen_support::runtime::spl::SPL_DLL_STORAGE_OFFSET)); // load the owned internal Mixed storage array
-    super::deep_cleanup::invoke(emitter, "__rt_decref_array", "x0");
+    super::deep_cleanup::invoke(emitter, "__rt_decref_any", "x0");
     emitter.instruction("ldr x0, [sp, #0]");                                    // reload the saved SPL list object pointer after storage release
     emitter.instruction(&format!("str xzr, [x0, #{}]", crate::codegen_support::runtime::spl::SPL_DLL_STORAGE_OFFSET)); // clear the storage pointer after release
     emitter.instruction("b __rt_object_free_deep_no_dyn_props");                // free the custom object storage without generic descriptor walking
@@ -230,7 +230,7 @@ pub fn emit_object_free_deep(emitter: &mut Emitter, features: RuntimeFeatures) {
     emitter.instruction("b.ne __rt_object_free_deep_not_spl_fixed");            // skip fixed-array cleanup for ordinary objects
     emitter.instruction("ldr x0, [sp, #0]");                                    // reload the saved SplFixedArray object pointer
     emitter.instruction(&format!("ldr x0, [x0, #{}]", crate::codegen_support::runtime::spl::SPL_FIXED_STORAGE_OFFSET)); // load the owned fixed-array storage
-    super::deep_cleanup::invoke(emitter, "__rt_decref_array", "x0");
+    super::deep_cleanup::invoke(emitter, "__rt_decref_any", "x0");
     emitter.instruction("ldr x0, [sp, #0]");                                    // reload the saved SplFixedArray object pointer after storage release
     emitter.instruction(&format!("str xzr, [x0, #{}]", crate::codegen_support::runtime::spl::SPL_FIXED_STORAGE_OFFSET)); // clear storage pointer after release
     emitter.instruction("b __rt_object_free_deep_no_dyn_props");                // free custom fixed-array storage without generic descriptor walking
@@ -262,6 +262,10 @@ pub fn emit_object_free_deep(emitter: &mut Emitter, features: RuntimeFeatures) {
     emitter.instruction("ldr x13, [sp, #16]");                                  // reload the total property count
     emitter.instruction("cmp x12, x13");                                        // have we visited every property slot?
     emitter.instruction("b.ge __rt_object_free_deep_struct");                   // finish once every property has been scanned
+
+    if features.native_reference_validation {
+        super::native_reference_source_retirement::emit(emitter);
+    }
 
     emitter.instruction("ldr x9, [sp, #0]");                                    // reload the object pointer
     emitter.instruction("mov x10, #16");                                        // each property slot occupies 16 bytes
@@ -324,6 +328,10 @@ pub fn emit_object_free_deep(emitter: &mut Emitter, features: RuntimeFeatures) {
     super::deep_cleanup::invoke(emitter, "__rt_decref_any", "x0");
 
     emitter.label("__rt_object_free_deep_no_dyn_props");
+    if features.eval_bridge {
+        emitter.instruction("ldr x0, [sp, #0]");                                // remove eval identity metadata immediately before storage can be reused
+        emitter.bl_c("__elephc_eval_dynamic_object_forget");
+    }
     emitter.instruction("ldr x0, [sp, #0]");                                    // reload the object pointer before freeing it
     emitter.instruction("bl __rt_heap_free");                                   // return the object storage to the heap allocator
     emitter.label("__rt_object_free_deep_resurrected");
@@ -437,7 +445,7 @@ fn emit_object_free_deep_linux_x86_64(emitter: &mut Emitter, features: RuntimeFe
     // -- release runtime-owned Fiber transfer and pending exception values --
     emitter.instruction("mov rax, QWORD PTR [rbp - 8]");                        // reload the saved Fiber object pointer before releasing transfer_value
     emitter.instruction(&format!("mov rax, QWORD PTR [rax + {}]", crate::codegen_support::runtime::FIBER_TRANSFER_VALUE_OFFSET)); // rax = boxed Mixed transfer_value owned by the Fiber
-    super::deep_cleanup::invoke(emitter, "__rt_decref_mixed", "rax");
+    super::deep_cleanup::invoke(emitter, "__rt_decref_any", "rax");
     emitter.instruction("mov rax, QWORD PTR [rbp - 8]");                        // reload the saved Fiber object pointer after transfer cleanup
     emitter.instruction(&format!("mov QWORD PTR [rax + {}], 0", crate::codegen_support::runtime::FIBER_TRANSFER_VALUE_OFFSET)); // clear transfer_value.lo after releasing it
     emitter.instruction(&format!("mov QWORD PTR [rax + {}], 0", crate::codegen_support::runtime::FIBER_TRANSFER_VALUE_OFFSET + 8)); // clear transfer_value.hi to match the empty slot
@@ -501,7 +509,7 @@ fn emit_object_free_deep_linux_x86_64(emitter: &mut Emitter, features: RuntimeFe
     emitter.label("__rt_object_free_deep_spl_dll");
     emitter.instruction("mov rax, QWORD PTR [rbp - 8]");                        // reload the saved SPL list object pointer
     emitter.instruction(&format!("mov rax, QWORD PTR [rax + {}]", crate::codegen_support::runtime::spl::SPL_DLL_STORAGE_OFFSET)); // load the owned internal Mixed storage array
-    super::deep_cleanup::invoke(emitter, "__rt_decref_array", "rax");
+    super::deep_cleanup::invoke(emitter, "__rt_decref_any", "rax");
     emitter.instruction("mov rax, QWORD PTR [rbp - 8]");                        // reload the saved SPL list object pointer after storage release
     emitter.instruction(&format!("mov QWORD PTR [rax + {}], 0", crate::codegen_support::runtime::spl::SPL_DLL_STORAGE_OFFSET)); // clear the storage pointer after release
     emitter.instruction("jmp __rt_object_free_deep_no_dyn_props");              // free the custom object storage without generic descriptor walking
@@ -514,7 +522,7 @@ fn emit_object_free_deep_linux_x86_64(emitter: &mut Emitter, features: RuntimeFe
     emitter.instruction("jne __rt_object_free_deep_not_spl_fixed");             // skip fixed-array cleanup for ordinary objects
     emitter.instruction("mov rax, QWORD PTR [rbp - 8]");                        // reload the saved SplFixedArray object pointer
     emitter.instruction(&format!("mov rax, QWORD PTR [rax + {}]", crate::codegen_support::runtime::spl::SPL_FIXED_STORAGE_OFFSET)); // load the owned fixed-array storage
-    super::deep_cleanup::invoke(emitter, "__rt_decref_array", "rax");
+    super::deep_cleanup::invoke(emitter, "__rt_decref_any", "rax");
     emitter.instruction("mov rax, QWORD PTR [rbp - 8]");                        // reload the saved SplFixedArray object pointer after storage release
     emitter.instruction(&format!("mov QWORD PTR [rax + {}], 0", crate::codegen_support::runtime::spl::SPL_FIXED_STORAGE_OFFSET)); // clear storage pointer after release
     emitter.instruction("jmp __rt_object_free_deep_no_dyn_props");              // free custom fixed-array storage without generic descriptor walking
@@ -541,6 +549,9 @@ fn emit_object_free_deep_linux_x86_64(emitter: &mut Emitter, features: RuntimeFe
     emitter.instruction("mov r10, QWORD PTR [rbp - 32]");                       // reload the current object-property index at the top of every loop iteration
     emitter.instruction("cmp r10, QWORD PTR [rbp - 24]");                       // have we already scanned every property slot owned by this object?
     emitter.instruction("jae __rt_object_free_deep_struct");                    // finish once the property index reaches the saved property count
+    if features.native_reference_validation {
+        super::native_reference_source_retirement::emit(emitter);
+    }
     emitter.instruction("mov r11, QWORD PTR [rbp - 8]");                        // reload the object pointer after any nested helper call
     emitter.instruction("mov rcx, r10");                                        // copy the current property index before scaling it into a byte offset
     emitter.instruction("shl rcx, 4");                                          // convert the property index into a 16-byte property-slot offset
@@ -608,7 +619,7 @@ fn emit_object_free_deep_linux_x86_64(emitter: &mut Emitter, features: RuntimeFe
     emitter.instruction("ret");                                                 // return to the caller after releasing the object and any owned heap-backed properties
 }
 
-/// Emits a single `__rt_decref_mixed` call to release one boxed Mixed field from a Generator frame on ARM64.
+/// Emits a single `__rt_decref_any` call to release one boxed Mixed field from a Generator frame on ARM64.
 /// Used for last_key, last_value, return_value, and sent_value fields.
 ///
 /// Input:  x0 = Generator frame pointer (reloaded from [sp, #0])
@@ -618,11 +629,11 @@ fn emit_object_free_deep_linux_x86_64(emitter: &mut Emitter, features: RuntimeFe
 fn emit_generator_mixed_field_release_aarch64(emitter: &mut Emitter, offset: usize, name: &str) {
     emitter.instruction("ldr x0, [sp, #0]");                                    // reload the saved Generator frame pointer before field cleanup
     emitter.instruction(&format!("ldr x0, [x0, #{}]", offset));                 // load the Generator frame's boxed Mixed field for release
-    super::deep_cleanup::invoke(emitter, "__rt_decref_mixed", "x0");
+    super::deep_cleanup::invoke(emitter, "__rt_decref_any", "x0");
     emitter.comment(&format!("released Generator::{}", name));
 }
 
-/// Emits a single `__rt_decref_mixed` call to release one boxed Mixed field from a Generator frame on x86_64.
+/// Emits a single `__rt_decref_any` call to release one boxed Mixed field from a Generator frame on x86_64.
 /// Used for last_key, last_value, return_value, and sent_value fields.
 ///
 /// Input:  rax = Generator frame pointer (reloaded from [rbp - 8])
@@ -632,7 +643,7 @@ fn emit_generator_mixed_field_release_aarch64(emitter: &mut Emitter, offset: usi
 fn emit_generator_mixed_field_release_x86_64(emitter: &mut Emitter, offset: usize, name: &str) {
     emitter.instruction("mov rax, QWORD PTR [rbp - 8]");                        // reload the saved Generator frame pointer before field cleanup
     emitter.instruction(&format!("mov rax, QWORD PTR [rax + {}]", offset));     // load the Generator frame's boxed Mixed field for release
-    super::deep_cleanup::invoke(emitter, "__rt_decref_mixed", "rax");
+    super::deep_cleanup::invoke(emitter, "__rt_decref_any", "rax");
     emitter.comment(&format!("released Generator::{}", name));
 }
 
@@ -667,7 +678,7 @@ fn emit_generator_coroutine_release_aarch64(emitter: &mut Emitter) {
     // -- release the boxed transfer value and any pending Throwable --
     emitter.instruction("ldr x0, [sp, #0]");                                    // reload the Generator pointer before transfer cleanup
     emitter.instruction(&format!("ldr x0, [x0, #{}]", transfer));               // x0 = boxed Mixed transfer_value
-    super::deep_cleanup::invoke(emitter, "__rt_decref_mixed", "x0");
+    super::deep_cleanup::invoke(emitter, "__rt_decref_any", "x0");
     emitter.instruction("ldr x0, [sp, #0]");                                    // reload the Generator pointer after transfer cleanup
     emitter.instruction(&format!("str xzr, [x0, #{}]", transfer));              // clear transfer_value after releasing it
     emitter.instruction(&format!("ldr x0, [x0, #{}]", pending));                // x0 = pending Throwable object, if any
@@ -715,7 +726,7 @@ fn emit_generator_coroutine_release_x86_64(emitter: &mut Emitter) {
     // -- release the boxed transfer value and any pending Throwable --
     emitter.instruction("mov rax, QWORD PTR [rbp - 8]");                        // reload the Generator pointer before transfer cleanup
     emitter.instruction(&format!("mov rax, QWORD PTR [rax + {}]", transfer));   // rax = boxed Mixed transfer_value
-    super::deep_cleanup::invoke(emitter, "__rt_decref_mixed", "rax");
+    super::deep_cleanup::invoke(emitter, "__rt_decref_any", "rax");
     emitter.instruction("mov rax, QWORD PTR [rbp - 8]");                        // reload the Generator pointer after transfer cleanup
     emitter.instruction(&format!("mov QWORD PTR [rax + {}], 0", transfer));     // clear transfer_value after releasing it
     emitter.instruction(&format!("mov rax, QWORD PTR [rax + {}]", pending));    // rax = pending Throwable object, if any
@@ -756,6 +767,35 @@ mod tests {
         assert!(asm.contains("cmp x15, #10\n"));
         assert!(asm.contains("__rt_object_free_deep_release_callable:\n"));
         assert!(asm.contains("__rt_callable_descriptor_release") && asm.contains("__rt_cleanup_invoke"));
+    }
+
+    /// Both targets clear a freed object's eval metadata (dynamic objects and registered
+    /// reflectors) before its storage can be reused, and only when the program links the eval
+    /// bridge, so a program without Magician references no `__elephc_eval_*` symbol.
+    #[test]
+    fn object_free_forgets_eval_identity_only_with_the_eval_bridge() {
+        for (platform, arch, call) in [
+            (Platform::MacOS, Arch::AArch64, "bl ___elephc_eval_dynamic_object_forget\n"),
+            (Platform::Linux, Arch::AArch64, "bl __elephc_eval_dynamic_object_forget\n"),
+            (Platform::Linux, Arch::X86_64, "call __elephc_eval_dynamic_object_forget\n"),
+        ] {
+            let mut with = Emitter::new(Target::new(platform, arch));
+            emit_object_free_deep(&mut with, RuntimeFeatures::all());
+            let with = with.output();
+            let forget = with.find(call).unwrap_or_else(|| panic!("{arch:?}: forget call missing"));
+            assert!(
+                with[forget..].contains("__rt_heap_free"),
+                "{arch:?}: the forget call must precede the heap free"
+            );
+            let mut without = Emitter::new(Target::new(platform, arch));
+            let mut features = RuntimeFeatures::all();
+            features.eval_bridge = false;
+            emit_object_free_deep(&mut without, features);
+            assert!(
+                !without.output().contains("__elephc_eval_dynamic_object_forget"),
+                "{arch:?}: no eval symbol without the bridge"
+            );
+        }
     }
 
     /// The stack-releasing arms appear only for a program that has the classes, and the guard has

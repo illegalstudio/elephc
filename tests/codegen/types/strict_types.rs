@@ -116,3 +116,62 @@ fn test_strict_types_does_not_reach_an_engine_invoked_callback() {
     );
     assert_eq!(out, "1,0,2");
 }
+
+
+/// Strict types after a bare or compound declare preserves executable body order.
+#[test]
+fn test_strict_types_after_leading_declare_runs_complete_bodies() {
+    for prefix in [
+        "declare(ticks=1) echo 0;",
+        "declare(ticks=1) if (true) { echo 0; } else { echo 2; }",
+        "declare(ticks=1) for ($i = 0; $i < 1; $i++) { echo $i; }",
+        "declare(ticks=1) declare(ticks=1) echo 0;",
+        "declare(ticks=1) { echo 0; }",
+        "declare(ticks=1): echo 0; enddeclare;",
+    ] {
+        assert_eq!(compile_and_run(&format!("<?php {prefix} declare(strict_types=1); echo 1;")), "01");
+    }
+}
+
+/// A closure compiled before the strict directive retains its original coercive body.
+#[test]
+fn test_strict_types_after_declare_preserves_earlier_closure_scope() {
+    assert_eq!(compile_and_run(r#"<?php
+ declare(ticks=1) $before = function(): int { return number(true); };
+ declare(strict_types=1);
+ function number(int $v): int { return $v; }
+ echo $before();
+"#), "1");
+}
+
+/// A prior function or class method retains its own op-array's weak typing.
+#[test]
+fn test_strict_types_after_declare_preserves_earlier_declaration_scopes() {
+    assert_eq!(compile_and_run(r#"<?php
+ declare(ticks=1) {
+     function before(): int { return number(true); }
+     class Before { public static function call(): int { return number(true); } }
+ }
+ declare(strict_types=1);
+ function number(int $v): int { return $v; }
+ echo before(), Before::call();
+"#), "11");
+}
+
+/// A zero directive after a bare declare keeps PHP's ordinary weak binding.
+#[test]
+fn test_strict_types_zero_after_bare_declare_keeps_coercive_binding() {
+    assert_eq!(compile_and_run(r#"<?php
+ declare(ticks=1) echo 0;
+ declare(strict_types=0);
+ function number(int $v): int { return $v; }
+ echo number(true);
+"#), "01");
+}
+
+
+/// Empty statements are no-ops, while their presence before a strict directive stays illegal.
+#[test]
+fn test_strict_types_empty_statements_after_directive_are_noops() {
+    assert_eq!(compile_and_run("<?php declare(strict_types=1); ; if (false); while (false); echo 1;"), "1");
+}

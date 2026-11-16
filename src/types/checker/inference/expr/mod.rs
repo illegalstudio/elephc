@@ -15,10 +15,16 @@ use crate::types::{PhpType, TypeEnv};
 mod assignments;
 mod array_access;
 mod basic;
+mod buffer_merges;
 mod class_refs;
+mod conditional_flow;
+mod conditional_operands;
+pub(in crate::types::checker) use conditional_flow::{ConditionalFlow, FlowSnapshot};
 mod effects;
+mod eager_operands;
 mod calls_objects;
 mod null_coalesce;
+mod stored_value_proofs;
 mod static_closure;
 use super::super::Checker;
 use super::syntactic::null_coalesce_merge_type;
@@ -108,27 +114,45 @@ impl Checker {
         env: &TypeEnv,
     ) -> Result<PhpType, CompileError> {
         env.get(name)
-            .cloned()
+            .map(|ty| self.binding_read_type(name, ty, env))
             .or_else(|| self.eval_barrier_active.then_some(PhpType::Mixed))
             .ok_or_else(|| CompileError::new(span, &format!("Undefined variable: ${}", name)))
     }
 
     /// Merges ordinary elements and spread values for a literal that may carry string keys.
-    fn assoc_spread_literal_value_type(&mut self, elems: &[Expr], env: &TypeEnv) -> PhpType {
+    ///
+    /// `scanned_sources` holds, in order, the results for the spread sources the caller's
+    /// hash-spread scan typed already: always a leading run of the literal's spreads, up to the
+    /// first hash source. Those results are reused, so no spread source is typed twice; typing
+    /// it again doubled the work at every level of a nested literal.
+    fn assoc_spread_literal_value_type(
+        &mut self,
+        elems: &[Expr],
+        scanned_sources: Vec<Result<PhpType, CompileError>>,
+        env: &TypeEnv,
+    ) -> PhpType {
+        let mut scanned_sources = scanned_sources.into_iter();
         let mut value_ty = PhpType::Never;
         for elem in elems {
             let next = match &elem.kind {
-                ExprKind::Spread(inner) => match self.infer_type(inner, env) {
-                    Ok(PhpType::Array(elem)) => *elem,
-                    Ok(PhpType::AssocArray { value, .. }) => *value,
-                    _ => PhpType::Mixed,
-                },
+                ExprKind::Spread(inner) => {
+                    match scanned_sources
+                        .next()
+                        .unwrap_or_else(|| self.infer_type(inner, env))
+                    {
+                        Ok(PhpType::Array(elem)) => *elem,
+                        Ok(PhpType::AssocArray { value, .. }) => *value,
+                        _ => PhpType::Mixed,
+                    }
+                }
                 _ => self.infer_type(elem, env).unwrap_or(PhpType::Mixed),
             };
             if matches!(value_ty, PhpType::Never) {
                 value_ty = next;
             } else if value_ty != next {
-                value_ty = PhpType::Mixed;
+                // Pointers and `null` share one pointer-word element.
+                value_ty = crate::types::merge_pointer_elements(&value_ty, &next)
+                    .unwrap_or(PhpType::Mixed);
             }
         }
         if matches!(value_ty, PhpType::Never) {
@@ -145,6 +169,9 @@ impl Checker {
     /// to the `ArrayAccess` interface. Used when indexing an `Object` that
     /// implements `ArrayAccess`.
     fn array_access_offset_get_type(&self, class_name: &str) -> PhpType {
+        if crate::types::builtin_classes::has_native_dimensions(class_name, &self.classes) {
+            return PhpType::Union(vec![PhpType::Object(class_name.to_string()), PhpType::Void]);
+        }
         self.classes
             .get(class_name)
             .and_then(|class_info| class_info.methods.get("offsetget"))
@@ -178,8 +205,9 @@ impl Checker {
 /// Returns `true` if `index` is a valid string offset index for a string receiver.
 ///
 /// A valid index is an integer or float type, or a string literal whose value
-/// can be parsed as a PHP string offset (e.g. `"0"`, `"-1"`, `"10"`).
-fn is_valid_string_offset_index(index: &Expr, idx_ty: &PhpType) -> bool {
+/// can be parsed as a PHP string offset (e.g. `"0"`, `"-1"`, `"10"`). Shared by string offset
+/// reads and writes (`$s[$i] = $v`), so both accept the same offsets.
+pub(crate) fn is_valid_string_offset_index(index: &Expr, idx_ty: &PhpType) -> bool {
     *idx_ty == PhpType::Int
         || *idx_ty == PhpType::Float
         // A boxed offset is decided at runtime, and a union IS boxed — `int|float`, what an
@@ -191,6 +219,19 @@ fn is_valid_string_offset_index(index: &Expr, idx_ty: &PhpType) -> bool {
             ExprKind::StringLiteral(value)
                 if crate::types::parse_php_string_offset_literal(value).is_some()
         )
+}
+
+/// Removes null and false from the arm a short ternary selects only when truthy.
+fn truthy_short_ternary_type(checker: &Checker, ty: PhpType) -> PhpType {
+    match ty {
+        PhpType::Void | PhpType::False => PhpType::Never,
+        PhpType::Union(members) => {
+            let members: Vec<_> = members.into_iter()
+                .filter(|ty| !matches!(ty, PhpType::Void | PhpType::False)).collect();
+            if members.is_empty() { PhpType::Never } else { checker.normalize_union_type(members) }
+        }
+        other => other,
+    }
 }
 
 /// Merges two match arm result types: identical arms keep their type,
@@ -511,6 +552,16 @@ impl Checker {
                 name, storage
             ),
         ))
+    }
+
+    /// Rejects native object counters whose referenced or static storage cannot change shape.
+    fn reject_unboxable_native_incdec(&self, name: &str, ty: &PhpType, span: Span) -> Result<(), CompileError> {
+        let storage = if self.active_ref_params.contains(name) { "a by-reference parameter" }
+            else if self.active_statics.contains(name) { "a static local" }
+            else { return Ok(()); };
+        Err(CompileError::new(span, &format!(
+            "Cannot increment/decrement ${name} of type {ty}: it is {storage}, and the native operator replaces the object with a number, which that storage cannot hold. Copy it into a plain local first.",
+        )))
     }
 
     /// Records that `name` is a local whose `++` / `--` can RETYPE it, in the function-like

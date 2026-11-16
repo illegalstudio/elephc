@@ -337,6 +337,23 @@ fn test_postfix_incdec_desugar_evaluates_a_computed_index_once() {
     );
 }
 
+/// Computed instance element value updates retain one scoped write and two result captures.
+#[test]
+fn test_computed_instance_incdec_values_share_scoped_update_kernel() {
+    for expression in ["root()->{name()}[key()]++", "++root()->{name()}[key()]",
+        "root()->node[0][0]--", "--root()->node[0][0]"] {
+        let statements = parse_source(&format!("<?php echo {expression};"));
+        let ExprKind::Assignment { prelude, .. } = echoed_expr(&statements) else {
+            panic!("{expression}: expected scoped expression");
+        };
+        assert_eq!(prelude.len(), 1, "{expression}: no separate read traversal");
+        let rendered = format!("{prelude:?}");
+        assert_eq!(rendered.matches("text: \"root\"").count(), 1, "{expression}: {rendered}");
+        assert!(rendered.contains("__elephc_incdec_work_"), "{expression}: {rendered}");
+        assert!(!rendered.contains("BinaryOp"), "{expression}: preserve the PHP incdec kernel");
+    }
+}
+
 /// Verifies the statement-level postfix scan declines when a top-level assignment comes first.
 ///
 /// `$t += $b[0]++;` increments `$b[0]`; it does not increment `$t += $b[0]`. The scan used to
@@ -409,6 +426,16 @@ fn test_bitwise_not_parses() {
         echoed_expr(&stmts),
         &ExprKind::BitNot(Box::new(Expr::var("x")))
     );
+}
+
+/// A discarded complement still reaches unary lowering and its runtime TypeError checks.
+#[test]
+fn test_bitwise_not_expression_statement_parses() {
+    let statements = parse_source("<?php ~$x;");
+    assert!(matches!(&statements[0].kind, StmtKind::ExprStmt(Expr {
+        kind: ExprKind::BitNot(operand), ..
+    }) if matches!(&operand.kind, ExprKind::Variable(name) if name == "x")));
+    assert!(parse_fails("<?php ~;"));
 }
 
 /// Verifies that `<?php echo $arr[0]();` parses as an ExprCall node whose callee is an

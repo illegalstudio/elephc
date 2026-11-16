@@ -1,8 +1,6 @@
 ---
 title: "mysqli_fetch_row()"
 description: "Returns the next row as a numeric array."
-sidebar:
-  order: 124
 ---
 
 ## mysqli_fetch_row()
@@ -20,8 +18,9 @@ Returns the next row as a numeric array.
 
 ## Availability
 
-- **Compiled (AOT)**: supported through an injected elephc-PHP prelude.
-- **`eval()` (magician interpreter)**: not available inside eval'd code.
+| Compiled (AOT) | Magician (eval) |
+|---|---|
+| Available | Not available yet |
 
 _No examples yet. Check `examples/` and `showcases/` for usage patterns._
 

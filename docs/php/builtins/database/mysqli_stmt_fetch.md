@@ -1,0 +1,29 @@
+---
+title: "mysqli_stmt_fetch()"
+description: "Fetches the next row into the bound result variables."
+---
+
+## mysqli_stmt_fetch()
+
+```php
+function mysqli_stmt_fetch(mixed $statement): ?bool
+```
+
+Fetches the next row into the bound result variables.
+
+**Parameters**:
+- `$statement` (`mixed`)
+
+**Returns**: `?bool`
+
+## Availability
+
+| Compiled (AOT) | Magician (eval) |
+|---|---|
+| Available | Not available yet |
+
+_No examples yet. Check `examples/` and `showcases/` for usage patterns._
+
+## Internals
+
+For how `mysqli_stmt_fetch` is implemented in the compiler, see [the internals page](../../../internals/builtins/database/mysqli_stmt_fetch.md).

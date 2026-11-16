@@ -211,6 +211,7 @@ impl ClassBuildState {
             readonly_properties: self.readonly_properties,
             reference_properties: self.reference_properties,
             owned_reference_properties: HashSet::new(),
+            owned_reference_property_slots: HashSet::new(),
             promoted_properties: self.promoted_properties,
             property_reference_slots: self.property_reference_slots,
             abstract_properties: self.abstract_properties,
@@ -243,6 +244,7 @@ impl ClassBuildState {
             abstract_static_methods: self.abstract_static_methods,
             static_vtable_methods: self.static_vtable_methods,
             static_vtable_slots: self.static_vtable_slots,
+            declared_interfaces: class.implements.clone(),
             interfaces: self.interfaces,
             constructor_param_to_prop,
         })

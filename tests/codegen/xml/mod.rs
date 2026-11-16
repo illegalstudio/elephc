@@ -15,6 +15,7 @@
 mod clone;
 mod divergences;
 mod eval;
+mod eval_bundles;
 mod handlers;
 mod into_struct;
 mod parser;

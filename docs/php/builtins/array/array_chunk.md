@@ -1,8 +1,6 @@
 ---
 title: "array_chunk()"
 description: "Splits an array into chunks of the given size."
-sidebar:
-  order: 3
 ---
 
 ## array_chunk()
@@ -22,8 +20,9 @@ Splits an array into chunks of the given size.
 
 ## Availability
 
-- **Compiled (AOT)**: supported by the Elephc code generator.
-- **`eval()` (magician interpreter)**: supported through a declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/array/array_chunk.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/array/array_chunk.rs)).
+| Compiled (AOT) | Magician (eval) |
+|---|---|
+| Available | Available |
 
 _No examples yet. Check `examples/` and `showcases/` for usage patterns._
 

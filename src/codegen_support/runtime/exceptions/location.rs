@@ -13,6 +13,7 @@ use crate::codegen_support::{abi, emit::Emitter, platform::Arch};
 
 /// Emits a borrowed location lookup and the PHP-visible ownership adapters.
 pub(crate) fn emit_location(emitter: &mut Emitter) {
+    super::scanned_location::emit_setter(emitter);
     emitter.blank();
     emitter.label_global("__rt_throwable_location_borrowed");
     match emitter.target.arch {
@@ -57,6 +58,13 @@ fn emit_borrowed_aarch64(emitter: &mut Emitter) {
     emitter.instruction("cset x3, ne");                                         // record whether a native allocation supplied a line
     emitter.instruction("cmp x2, #0");                                          // an absent default filename cannot identify a source location
     emitter.instruction("csel x3, xzr, x3, eq");                                // require a default filename unless an override establishes a location
+    // -- decode an explicit tokenizer source-buffer location --
+    emitter.instruction("tbz x0, #63, __rt_location_native_source");            // ordinary source lines have no scanned-buffer flag
+    emitter.instruction(&format!("and x0, x0, #{}", !crate::codegen_support::sentinels::THROWABLE_SCANNED_LOCATION_FLAG)); // remove private metadata from the PHP-visible line
+    emitter.instruction("mov x2, #0");                                          // tokenized buffers have an explicitly empty filename
+    emitter.instruction("mov x3, #1");                                          // the parser supplied a known buffer location
+    emitter.instruction("b __rt_location_return");                              // tokenizer ParseErrors have no ErrorException overrides
+    emitter.label("__rt_location_native_source");
     abi::emit_symbol_address(emitter, "x11", "_error_exception_class_id");
     emitter.instruction("ldr x11, [x11]");                                      // obtain the ErrorException root id or its absent sentinel
     abi::emit_symbol_address(emitter, "x12", "_class_gc_desc_count");
@@ -107,6 +115,14 @@ fn emit_borrowed_x86_64(emitter: &mut Emitter) {
     emitter.instruction("xor r11d, r11d");                                      // prepare the unknown-location value
     emitter.instruction("test rdx, rdx");                                       // an absent default filename cannot identify a source location
     emitter.instruction("cmovz r8, r11");                                       // require a default filename unless an override establishes a location
+    // -- decode an explicit tokenizer source-buffer location --
+    emitter.instruction("test rcx, rcx");                                       // the private scanned-buffer bit is the sign bit
+    emitter.instruction("jns __rt_location_native_source");                     // ordinary source lines are nonnegative u32 values
+    emitter.instruction("btr rcx, 63");                                         // remove private metadata from the PHP-visible line
+    emitter.instruction("xor edx, edx");                                        // tokenized buffers have an explicitly empty filename
+    emitter.instruction("mov r8, 1");                                           // the parser supplied a known buffer location
+    emitter.instruction("jmp __rt_location_return");                            // tokenizer ParseErrors have no ErrorException overrides
+    emitter.label("__rt_location_native_source");
     abi::emit_symbol_address(emitter, "r11", "_error_exception_class_id");
     emitter.instruction("mov r11, QWORD PTR [r11]");                            // obtain the ErrorException root id or its absent sentinel
     abi::emit_symbol_address(emitter, "rdi", "_class_gc_desc_count");

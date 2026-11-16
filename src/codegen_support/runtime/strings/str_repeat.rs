@@ -74,24 +74,57 @@ pub fn emit_str_repeat(emitter: &mut Emitter) {
     emitter.instruction("str x0, [sp, #32]");                                   // save result start pointer for the return pair
     emitter.instruction("mov x9, x0");                                          // initialize the destination cursor at the reserved payload start
 
-    // -- outer loop: repeat N times --
-    emitter.label("__rt_str_repeat_copy_start");
-    emitter.instruction("ldr x10, [sp, #16]");                                  // initialize repetition counter from the saved repeat count
-    emitter.label("__rt_str_repeat_loop");
-    emitter.instruction("cbz x10, __rt_str_repeat_done");                       // if counter is 0, done repeating
-    emitter.instruction("ldp x1, x2, [sp]");                                    // reload source pointer and length
-    emitter.instruction("mov x11, x2");                                         // copy length as inner loop counter
+    // -- copy the first source instance, then double the result until it is complete --
+    emitter.instruction("str x0, [sp, #32]");                                   // save the repeated-string start pointer
+    emitter.instruction("ldr x1, [sp, #0]");                                    // reload the source pointer for the first instance
+    emitter.instruction("ldr x2, [sp, #8]");                                    // reload the source length for the first instance
+    emitter.instruction("mov x9, x0");                                          // initialize the destination cursor at the reserved payload
+    emitter.label("__rt_str_repeat_first_words");
+    emitter.instruction("cmp x2, #8");                                          // can the first instance copy a full word?
+    emitter.instruction("b.lt __rt_str_repeat_first_tail");                     // short first instances copy their remaining bytes
+    emitter.instruction("ldr x3, [x1], #8");                                    // load eight source bytes
+    emitter.instruction("str x3, [x9], #8");                                    // store eight destination bytes
+    emitter.instruction("sub x2, x2, #8");                                      // account for the copied word
+    emitter.instruction("b __rt_str_repeat_first_words");                       // continue copying full source words
+    emitter.label("__rt_str_repeat_first_tail");
+    emitter.instruction("cbz x2, __rt_str_repeat_first_done");                  // stop once the first instance is copied
+    emitter.instruction("ldrb w3, [x1], #1");                                   // load one trailing source byte
+    emitter.instruction("strb w3, [x9], #1");                                   // store one trailing destination byte
+    emitter.instruction("sub x2, x2, #1");                                      // account for the copied byte
+    emitter.instruction("b __rt_str_repeat_first_tail");                        // continue copying trailing source bytes
+    emitter.label("__rt_str_repeat_first_done");
+    emitter.instruction("ldr x10, [sp, #8]");                                   // initialize the copied length to one source instance
+    emitter.instruction("str x10, [sp, #40]");                                  // publish the copied-length cursor
 
-    // -- inner loop: copy one instance of the string --
-    emitter.label("__rt_str_repeat_copy");
-    emitter.instruction("cbz x11, __rt_str_repeat_next");                       // if no bytes remain, move to next repetition
-    emitter.instruction("ldrb w12, [x1], #1");                                  // load byte from source, advance src ptr
-    emitter.instruction("strb w12, [x9], #1");                                  // store byte to dest, advance dest ptr
-    emitter.instruction("sub x11, x11, #1");                                    // decrement inner byte counter
-    emitter.instruction("b __rt_str_repeat_copy");                              // continue copying bytes
-    emitter.label("__rt_str_repeat_next");
-    emitter.instruction("sub x10, x10, #1");                                    // decrement repetition counter
-    emitter.instruction("b __rt_str_repeat_loop");                              // continue to next repetition
+    emitter.label("__rt_str_repeat_double_loop");
+    emitter.instruction("ldr x10, [sp, #40]");                                  // reload the copied length
+    emitter.instruction("ldr x11, [sp, #24]");                                  // reload the requested result length
+    emitter.instruction("cmp x10, x11");                                        // has the destination reached the requested length?
+    emitter.instruction("b.ge __rt_str_repeat_done");                           // finish once every requested byte is present
+    emitter.instruction("sub x12, x11, x10");                                   // compute the still-missing byte count
+    emitter.instruction("cmp x12, x10");                                        // can the whole copied prefix be doubled?
+    emitter.instruction("csel x12, x12, x10, lo");                              // copy min(missing, copied) bytes
+    emitter.instruction("ldr x13, [sp, #32]");                                  // reload the repeated-string start pointer
+    emitter.instruction("mov x14, x13");                                        // source cursor = the already copied prefix
+    emitter.instruction("add x13, x13, x10");                                   // destination cursor = the end of the copied prefix
+    emitter.instruction("mov x15, x12");                                        // initialize the doubling copy counter
+    emitter.label("__rt_str_repeat_double_words");
+    emitter.instruction("cmp x15, #8");                                         // can the doubling copy a full word?
+    emitter.instruction("b.lt __rt_str_repeat_double_tail");                    // short tails copy their remaining bytes
+    emitter.instruction("ldr x3, [x14], #8");                                   // load eight already copied bytes
+    emitter.instruction("str x3, [x13], #8");                                   // append eight doubled bytes
+    emitter.instruction("sub x15, x15, #8");                                    // account for the copied word
+    emitter.instruction("b __rt_str_repeat_double_words");                      // continue doubling full words
+    emitter.label("__rt_str_repeat_double_tail");
+    emitter.instruction("cbz x15, __rt_str_repeat_double_done");                // stop once this doubling chunk is copied
+    emitter.instruction("ldrb w3, [x14], #1");                                  // load one trailing copied byte
+    emitter.instruction("strb w3, [x13], #1");                                  // append one trailing doubled byte
+    emitter.instruction("sub x15, x15, #1");                                    // account for the copied byte
+    emitter.instruction("b __rt_str_repeat_double_tail");                       // continue doubling trailing bytes
+    emitter.label("__rt_str_repeat_double_done");
+    emitter.instruction("add x10, x10, x12");                                   // extend the copied length by this chunk
+    emitter.instruction("str x10, [sp, #40]");                                  // publish the extended copied length
+    emitter.instruction("b __rt_str_repeat_double_loop");                       // double again until the request is complete
 
     // -- finalize: return the repeated string --
     emitter.label("__rt_str_repeat_done");
@@ -160,29 +193,69 @@ fn emit_str_repeat_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov QWORD PTR [rbp - 40], rax");                       // preserve the repeated-string start pointer for the return pair
     emitter.instruction("mov r11, rax");                                        // initialize the destination cursor at the reserved payload start
 
-    // -- outer loop: repeat N times --
-    emitter.label("__rt_str_repeat_copy_start_linux_x86_64");
-    emitter.instruction("mov r10, QWORD PTR [rbp - 24]");                       // seed the outer repetition counter from the saved repeat-count argument
-    emitter.label("__rt_str_repeat_loop_linux_x86_64");
-    emitter.instruction("test r10, r10");                                       // stop once every requested repetition has been copied into result storage
-    emitter.instruction("jz __rt_str_repeat_done_linux_x86_64");                // jump to finalization when the repeat counter reaches zero
-    emitter.instruction("mov r8, QWORD PTR [rbp - 8]");                         // reload the source string pointer before copying the next repeated instance
-    emitter.instruction("mov rsi, QWORD PTR [rbp - 16]");                       // reload the source string length before copying the next repeated instance
+    // -- copy the first source instance, then double the result until it is complete --
+    emitter.instruction("mov QWORD PTR [rbp - 40], rax");                       // save the repeated-string start pointer
+    emitter.instruction("mov r8, QWORD PTR [rbp - 8]");                         // reload the source pointer for the first instance
+    emitter.instruction("mov r9, rax");                                         // initialize the destination cursor at the reserved payload
+    emitter.instruction("mov r10, QWORD PTR [rbp - 16]");                       // reload the source length for the first instance
+    emitter.label("__rt_str_repeat_first_words_linux_x86_64");
+    emitter.instruction("cmp r10, 8");                                          // can the first instance copy a full word?
+    emitter.instruction("jl __rt_str_repeat_first_tail_linux_x86_64");          // short first instances copy their remaining bytes
+    emitter.instruction("mov r11, QWORD PTR [r8]");                             // load eight source bytes
+    emitter.instruction("mov QWORD PTR [r9], r11");                             // store eight destination bytes
+    emitter.instruction("add r8, 8");                                           // advance the source cursor by one word
+    emitter.instruction("add r9, 8");                                           // advance the destination cursor by one word
+    emitter.instruction("sub r10, 8");                                          // account for the copied word
+    emitter.instruction("jmp __rt_str_repeat_first_words_linux_x86_64");        // continue copying full source words
+    emitter.label("__rt_str_repeat_first_tail_linux_x86_64");
+    emitter.instruction("test r10, r10");                                       // stop once the first instance is copied
+    emitter.instruction("jz __rt_str_repeat_first_done_linux_x86_64");          // continue to the doubling loop
+    emitter.instruction("mov r11b, BYTE PTR [r8]");                             // load one trailing source byte
+    emitter.instruction("mov BYTE PTR [r9], r11b");                             // store one trailing destination byte
+    emitter.instruction("inc r8");                                              // advance the source cursor by one byte
+    emitter.instruction("inc r9");                                              // advance the destination cursor by one byte
+    emitter.instruction("dec r10");                                             // account for the copied byte
+    emitter.instruction("jmp __rt_str_repeat_first_tail_linux_x86_64");         // continue copying trailing source bytes
+    emitter.label("__rt_str_repeat_first_done_linux_x86_64");
+    emitter.instruction("mov r10, QWORD PTR [rbp - 16]");                       // initialize the copied length to one source instance
+    emitter.instruction("mov QWORD PTR [rbp - 48], r10");                       // publish the copied-length cursor
 
-    // -- inner loop: copy one instance of the string --
-    emitter.label("__rt_str_repeat_copy_linux_x86_64");
-    emitter.instruction("test rsi, rsi");                                       // stop copying the current source instance once every source byte has been consumed
-    emitter.instruction("jz __rt_str_repeat_next_linux_x86_64");                // continue with the next repetition after the full source string has been copied
-    emitter.instruction("mov dl, BYTE PTR [r8]");                               // load one source byte before appending it to the result destination cursor
-    emitter.instruction("mov BYTE PTR [r11], dl");                              // append one source byte into result storage before advancing both cursors
-    emitter.instruction("add r8, 1");                                           // advance the source string pointer after copying one byte from the current repetition
-    emitter.instruction("add r11, 1");                                          // advance the result destination cursor after storing one byte from the current repetition
-    emitter.instruction("sub rsi, 1");                                          // decrement the remaining source byte count for the current repetition
-    emitter.instruction("jmp __rt_str_repeat_copy_linux_x86_64");               // continue copying bytes from the current source string instance until it is exhausted
-
-    emitter.label("__rt_str_repeat_next_linux_x86_64");
-    emitter.instruction("sub r10, 1");                                          // decrement the remaining repetition count after copying one full source instance
-    emitter.instruction("jmp __rt_str_repeat_loop_linux_x86_64");               // continue with the next repetition until the requested count is exhausted
+    emitter.label("__rt_str_repeat_double_loop_linux_x86_64");
+    emitter.instruction("mov r10, QWORD PTR [rbp - 48]");                       // reload the copied length
+    emitter.instruction("mov r11, QWORD PTR [rbp - 32]");                       // reload the requested result length
+    emitter.instruction("cmp r10, r11");                                        // has the destination reached the requested length?
+    emitter.instruction("jge __rt_str_repeat_done_linux_x86_64");               // finish once every requested byte is present
+    emitter.instruction("mov rcx, r11");                                        // compute the still-missing byte count
+    emitter.instruction("sub rcx, r10");                                        // remaining = requested - copied
+    emitter.instruction("cmp rcx, r10");                                        // can the whole copied prefix be doubled?
+    emitter.instruction("cmova rcx, r10");                                      // chunk = min(missing, copied)
+    emitter.instruction("mov rax, QWORD PTR [rbp - 40]");                       // reload the repeated-string start pointer
+    emitter.instruction("mov r8, rax");                                         // source cursor = the already copied prefix
+    emitter.instruction("add rax, r10");                                        // destination cursor = the end of the copied prefix
+    emitter.instruction("mov r9, rax");                                         // keep the doubling destination cursor
+    emitter.instruction("mov rdx, rcx");                                        // initialize the doubling copy counter
+    emitter.label("__rt_str_repeat_double_words_linux_x86_64");
+    emitter.instruction("cmp rdx, 8");                                          // can the doubling copy a full word?
+    emitter.instruction("jl __rt_str_repeat_double_tail_linux_x86_64");         // short tails copy their remaining bytes
+    emitter.instruction("mov r11, QWORD PTR [r8]");                             // load eight already copied bytes
+    emitter.instruction("mov QWORD PTR [r9], r11");                             // append eight doubled bytes
+    emitter.instruction("add r8, 8");                                           // advance the source cursor by one word
+    emitter.instruction("add r9, 8");                                           // advance the destination cursor by one word
+    emitter.instruction("sub rdx, 8");                                          // account for the copied word
+    emitter.instruction("jmp __rt_str_repeat_double_words_linux_x86_64");       // continue doubling full words
+    emitter.label("__rt_str_repeat_double_tail_linux_x86_64");
+    emitter.instruction("test rdx, rdx");                                       // stop once this doubling chunk is copied
+    emitter.instruction("jz __rt_str_repeat_double_done_linux_x86_64");         // continue with the next doubling chunk
+    emitter.instruction("mov r11b, BYTE PTR [r8]");                             // load one trailing copied byte
+    emitter.instruction("mov BYTE PTR [r9], r11b");                             // append one trailing doubled byte
+    emitter.instruction("inc r8");                                              // advance the source cursor by one byte
+    emitter.instruction("inc r9");                                              // advance the destination cursor by one byte
+    emitter.instruction("dec rdx");                                             // account for the copied byte
+    emitter.instruction("jmp __rt_str_repeat_double_tail_linux_x86_64");        // continue doubling trailing bytes
+    emitter.label("__rt_str_repeat_double_done_linux_x86_64");
+    emitter.instruction("add r10, rcx");                                        // extend the copied length by this chunk
+    emitter.instruction("mov QWORD PTR [rbp - 48], r10");                       // publish the extended copied length
+    emitter.instruction("jmp __rt_str_repeat_double_loop_linux_x86_64");        // double again until the request is complete
 
     // -- finalize: return the repeated string --
     emitter.label("__rt_str_repeat_done_linux_x86_64");

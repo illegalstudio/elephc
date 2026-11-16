@@ -20,6 +20,7 @@ pub(super) fn builtin_reflection_class() -> FlattenedClass {
         is_final: false,
         is_readonly_class: false,
         properties: vec![
+            builtin_property("name", Visibility::Public, Some(TypeExpr::Str), empty_string()),
             builtin_property(
                 "__name",
                 Visibility::Private,
@@ -385,9 +386,7 @@ pub(super) fn builtin_reflection_object_class() -> FlattenedClass {
 pub(super) fn builtin_reflection_enum_class() -> FlattenedClass {
     let mut class = builtin_reflection_class();
     class.name = "ReflectionEnum".to_string();
-    class
-        .methods
-        .retain(|method| reflection_enum_inherited_method_is_supported(&method.name));
+    class.extends = Some("ReflectionClass".to_string());
     class.properties.extend([
         builtin_property(
             "__case_names",
@@ -419,38 +418,4 @@ pub(super) fn builtin_reflection_enum_class() -> FlattenedClass {
         builtin_reflection_class_mixed_method("getBackingType", "__backing_type"),
     ]);
     class
-}
-
-/// Returns whether a flattened ReflectionClass method is safe on ReflectionEnum.
-pub(super) fn reflection_enum_inherited_method_is_supported(method_name: &str) -> bool {
-    matches!(
-        method_name.to_ascii_lowercase().as_str(),
-        "__construct"
-            | "__tostring"
-            | "getname"
-            | "getshortname"
-            | "getnamespacename"
-            | "innamespace"
-            | "isfinal"
-            | "isabstract"
-            | "isinterface"
-            | "istrait"
-            | "isenum"
-            | "isreadonly"
-            | "isanonymous"
-            | "isinstantiable"
-            | "iscloneable"
-            | "isiterable"
-            | "isiterateable"
-            | "isinternal"
-            | "isuserdefined"
-            | "getmodifiers"
-            | "getattributes"
-            | "getdoccomment"
-            | "getextensionname"
-            | "getextension"
-            | "getfilename"
-            | "getstartline"
-            | "getendline"
-    )
 }

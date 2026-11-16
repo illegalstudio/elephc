@@ -341,6 +341,11 @@ pub(super) fn indexed_spread_source_type(
     let ty = match &expr.kind {
         ExprKind::Variable(name) => ctx.local_type(name),
         ExprKind::ArrayLiteral(items) => array_literal_type_for_ir(ctx, items, expr),
+        // Unpacking consumes the getter's native container, rather than an ordinary
+        // literal element whose logical type must still include a missing read's null.
+        ExprKind::ArrayAccess { .. } | ExprKind::ErrorSuppress(_) => {
+            spread_source_storage_type_for_ir(ctx, expr)
+        }
         _ => array_literal_element_type_for_ir(ctx, expr),
     }
     .codegen_repr();

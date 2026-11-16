@@ -1,8 +1,6 @@
 ---
 title: "json_last_error()"
 description: "Returns the last error (if any) occurred during the last JSON encoding/decoding."
-sidebar:
-  order: 543
 ---
 
 ## json_last_error()
@@ -19,8 +17,9 @@ Returns the last error (if any) occurred during the last JSON encoding/decoding.
 
 ## Availability
 
-- **Compiled (AOT)**: supported by the Elephc code generator.
-- **`eval()` (magician interpreter)**: supported through a declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/json/json_last_error.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/json/json_last_error.rs)).
+| Compiled (AOT) | Magician (eval) |
+|---|---|
+| Available | Available |
 
 _No examples yet. Check `examples/` and `showcases/` for usage patterns._
 

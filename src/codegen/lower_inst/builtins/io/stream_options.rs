@@ -209,11 +209,14 @@ pub(crate) fn lower_stream_select(
 ) -> Result<()> {
     ensure_arg_count_between(inst, "stream_select", 4, 5)?;
     let result_reg = abi::int_result_reg(ctx.emitter);
-    for idx in 0..4 {
+    for idx in 0..3 {
         let value = expect_operand(inst, idx)?;
-        ctx.load_value_to_result(value)?;
+        load_stream_select_set_to_result(ctx, value)?;
         abi::emit_push_reg(ctx.emitter, result_reg);
     }
+    let seconds = expect_operand(inst, 3)?;
+    ctx.load_value_to_result(seconds)?;
+    abi::emit_push_reg(ctx.emitter, result_reg);
     if inst.operands.len() == 5 {
         let microseconds = expect_operand(inst, 4)?;
         ctx.load_value_to_result(microseconds)?;
@@ -245,6 +248,43 @@ pub(crate) fn lower_stream_select(
     }
     abi::emit_call_label(ctx.emitter, "__rt_stream_select");
     store_if_result(ctx, inst)
+}
+
+/// Loads one `stream_select()` descriptor set into the result register as the array pointer the
+/// runtime walks, or zero for an absent set: a `null` argument (`$write = null`, PHP's usual
+/// idiom), or a boxed `?array` holding no indexed array. A null set used to reach the runtime as
+/// the null sentinel, which it read as an array header and crashed on.
+fn load_stream_select_set_to_result(ctx: &mut FunctionContext<'_>, value: ValueId) -> Result<()> {
+    let ty = ctx.load_value_to_result(value)?;
+    match ty.codegen_repr() {
+        PhpType::Array(_) | PhpType::AssocArray { .. } => {}
+        PhpType::Mixed | PhpType::Union(_) => {
+            abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
+            match ctx.emitter.target.arch {
+                Arch::AArch64 => {
+                    ctx.emitter.instruction("cmp x0, #4");                      // runtime tag 4 = indexed-array payload
+                    ctx.emitter.instruction("csel x0, x1, xzr, eq");            // keep the array pointer, or pass no set
+                }
+                Arch::X86_64 => {
+                    let kept = ctx.next_label("stream_select_set_kept");
+                    ctx.emitter.instruction("cmp rax, 4");                      // runtime tag 4 = indexed-array payload
+                    ctx.emitter.instruction("mov rax, rdi");                    // take the unboxed array pointer
+                    ctx.emitter.instruction(&format!("je {kept}"));             // an indexed array is a descriptor set
+                    ctx.emitter.instruction("xor eax, eax");                    // anything else (null) passes no set
+                    ctx.emitter.label(&kept);
+                }
+            }
+        }
+        _ => match ctx.emitter.target.arch {
+            Arch::AArch64 => {
+                ctx.emitter.instruction("mov x0, #0");                          // a null argument passes no set
+            }
+            Arch::X86_64 => {
+                ctx.emitter.instruction("xor eax, eax");                        // a null argument passes no set
+            }
+        },
+    }
+    Ok(())
 }
 
 /// Lowers `stream_resolve_include_path(filename)` as realpath-backed `string|false`.

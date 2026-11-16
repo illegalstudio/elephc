@@ -81,6 +81,7 @@ pub(crate) fn plan_call_args_with_regular_param_count(
         return Ok(CallArgPlan {
             passthrough_args: Some(source_args.clone()),
             source_args,
+            source_origins,
             regular_args: Vec::new(),
             variadic_args: Vec::new(),
             source_values: Vec::new(),
@@ -139,6 +140,7 @@ pub(crate) fn plan_call_args_with_regular_param_count_and_assoc_spreads(
         return Ok(CallArgPlan {
             passthrough_args: Some(source_args.clone()),
             source_args,
+            source_origins,
             regular_args: Vec::new(),
             variadic_args: Vec::new(),
             source_values: Vec::new(),
@@ -176,10 +178,8 @@ pub(crate) fn plan_call_args_with_regular_param_count_and_assoc_spreads(
 /// `plan_named_call_args`. Only literal `name:` syntax counts as a preceding
 /// named argument, matching PHP: `f(...["a" => 1], ...$rest)` stays legal.
 ///
-/// Exposed so call surfaces whose callee is unknown at compile time (string
-/// callables, `new $class(...)`) can enforce the same rule without a signature
-/// to plan against; every other surface gets it through `plan_call_args*`.
-pub(crate) fn validate_no_spread_after_named(args: &[Expr]) -> Result<(), CallArgPlanError> {
+/// Shared by signature-backed planning and the unresolved-call ordering validator.
+fn validate_no_spread_after_named(args: &[Expr]) -> Result<(), CallArgPlanError> {
     let mut seen_named = false;
     for arg in args {
         match &arg.kind {
@@ -188,6 +188,22 @@ pub(crate) fn validate_no_spread_after_named(args: &[Expr]) -> Result<(), CallAr
                 return Err(CallArgPlanError::SpreadAfterNamed { span: arg.span });
             }
             _ => {}
+        }
+    }
+    Ok(())
+}
+
+/// Validates syntactic ordering even when no callee signature is available for planning.
+pub(crate) fn validate_unresolved_call_argument_order(args: &[Expr]) -> Result<(), CallArgPlanError> {
+    validate_no_spread_after_named(args)?;
+    validate_positional_spread_order(args)?;
+    validate_static_unpack_order(args)?;
+    let mut seen_named = false;
+    for arg in args {
+        if matches!(arg.kind, ExprKind::NamedArg { .. }) {
+            seen_named = true;
+        } else if seen_named {
+            return Err(CallArgPlanError::PositionalAfterNamed { span: arg.span });
         }
     }
     Ok(())
@@ -507,6 +523,7 @@ fn plan_named_call_args(
 
     Ok(CallArgPlan {
         source_args,
+        source_origins: source_origins.to_vec(),
         regular_args,
         variadic_args,
         source_values: source_values.into_iter().flatten().collect(),

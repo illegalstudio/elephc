@@ -1,8 +1,6 @@
 ---
 title: "call_user_func_array()"
 description: "Calls a callback with an array of parameters."
-sidebar:
-  order: 51
 ---
 
 ## call_user_func_array()
@@ -21,8 +19,9 @@ Calls a callback with an array of parameters.
 
 ## Availability
 
-- **Compiled (AOT)**: supported by the Elephc code generator.
-- **`eval()` (magician interpreter)**: supported through a declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/core/call_user_func_array.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/core/call_user_func_array.rs)).
+| Compiled (AOT) | Magician (eval) |
+|---|---|
+| Available | Available |
 
 _No examples yet. Check `examples/` and `showcases/` for usage patterns._
 

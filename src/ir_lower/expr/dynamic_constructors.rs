@@ -56,6 +56,7 @@ pub(super) fn lower_new_dynamic_planned_value(
     let merge = ctx
         .builder
         .create_named_block("new.dynamic.planned.merge", Vec::new());
+    let mut initialized_exits = Vec::new();
 
     for class_name in candidates {
         let match_block = ctx
@@ -79,22 +80,33 @@ pub(super) fn lower_new_dynamic_planned_value(
             else_target: next_block,
             else_args: Vec::new(),
         });
+        let split_initialized = ctx.initialized_slots_snapshot();
 
         ctx.builder.position_at_end(match_block);
         let class = Name::unqualified(class_name.clone());
         let object = lower_new_object(ctx, &class, args, expr);
         store_value_into_temp(ctx, &result_temp, PhpType::Mixed, object, expr.span);
+        initialized_exits.push(ctx.initialized_slots_snapshot());
         branch_to(ctx, merge);
 
         ctx.builder.position_at_end(next_block);
+        // Ref-bound aliases are MAY facts, but an owner created by a different class arm
+        // is not initialized on this miss path. Restore MUST facts so each selected arm
+        // emits its own idempotent promotion before a constructor can retain the binding.
+        ctx.restore_initialized_slots(split_initialized);
     }
 
     let name_value = ctx.load_local(&name_temp, Some(expr.span));
     let fallback = super::object_construction::lower_new_dynamic_generic(ctx, name_value, args, expr);
     store_value_into_temp(ctx, &result_temp, PhpType::Mixed, fallback, expr.span);
+    let mut joined_initialized = ctx.initialized_slots_snapshot();
+    for arm in initialized_exits {
+        joined_initialized.retain(|slot| arm.contains(slot));
+    }
     branch_to(ctx, merge);
 
     ctx.builder.position_at_end(merge);
+    ctx.restore_initialized_slots(joined_initialized);
     retire_owned_call_operand(ctx, ctx.local_slots[&name_temp], expr.span);
     take_owned_temp(ctx, &result_temp, expr.span)
 }
@@ -220,20 +232,41 @@ fn dynamic_new_class_is_planning_candidate(
     if class_info.declaration_span == Span::dummy() {
         return false;
     }
-    if !class_info
+    let Some((owner_name, constructor_owner)) = crate::types::constructor_owner(ctx.classes, class_name) else {
+        return false;
+    };
+    let implementation = constructor_owner.method_impl_classes.get(constructor_key)
+        .map(String::as_str).unwrap_or(owner_name);
+    let Some(body_owner) = ctx.classes.get(implementation) else { return false; };
+    if body_owner.declaration_span == Span::dummy() || !body_owner
         .method_decls
         .iter()
         .any(|method| php_symbol_key(&method.name) == constructor_key && method.has_body)
     {
         return false;
     }
-    let Some(sig) = class_info.methods.get(constructor_key) else {
+    let Some(sig) = constructor_owner.methods.get(constructor_key) else {
         return false;
     };
+    let owns_promoted_references = body_owner.constructor_param_to_prop.iter().flatten()
+        .any(|property| body_owner.visible_property_index(property)
+            .is_some_and(|slot| body_owner.property_slot_owns_reference(slot)));
+    // Eval and backtraces append a hidden collector even to nonvariadic constructors.
+    // The generic padding thunk refuses references, so these constructors must retain the
+    // fixed-class argument planner that promotes and transfers their caller-owned cells.
+    if owns_promoted_references && crate::func_args::sig_collects_surplus_args(sig)
+        && !args.iter().any(is_spread_arg)
+    {
+        if crate::types::call_args::has_named_args(args) {
+            return crate::types::call_args::plan_call_args(sig, args, args[0].span, false, false).is_ok();
+        }
+        let regular = crate::types::call_args::regular_param_count(sig);
+        return args.len() >= regular || sig.defaults[args.len()..regular].iter().all(Option::is_some);
+    }
     if sig.variadic.is_some() {
         return false;
     }
-    if !dynamic_new_args_need_planning(sig, args) {
+    if !dynamic_new_args_need_planning(sig, args) && !owns_promoted_references {
         return false;
     }
     dynamic_new_args_lower_to_exact_arity(ctx, sig, args)

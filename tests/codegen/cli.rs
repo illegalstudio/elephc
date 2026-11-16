@@ -644,6 +644,43 @@ fn test_cli_with_xml_final_link_requires_managed_libxml2_project() {
     let _ = fs::remove_dir_all(&dir);
 }
 
+/// Verifies a final `--with-tidy` link without a project fails closed with the
+/// managed-`libtidy` recovery. The source never names a tidy symbol; the explicit
+/// flag forces `elephc_tidy` into the plan, which must emit the `libtidy` native
+/// requirement and never fall back to a system `-ltidy`.
+#[test]
+fn test_cli_with_tidy_final_link_requires_managed_libtidy_project() {
+    let dir = make_cli_test_dir("elephc_cli_tidy_requires_native");
+    let cache = dir.join("native-cache-must-not-exist");
+    let php_path = dir.join("main.php");
+    fs::write(&php_path, "<?php echo 1;").unwrap();
+
+    let output = elephc_cli_command(&dir)
+        .arg("--with-tidy")
+        .arg(&php_path)
+        .env("ELEPHC_NATIVE_CACHE", &cache)
+        .output()
+        .expect("failed to run --with-tidy compilation");
+    assert!(!output.status.success(), "--with-tidy link without a project must fail");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("tidy support requires managed native package libtidy"),
+        "unexpected missing-project diagnostic: {stderr}"
+    );
+    assert!(stderr.contains("project: not found"), "missing project context: {stderr}");
+    assert!(
+        stderr.contains("recovery: cd --") && stderr.contains("elephc native add libtidy"),
+        "missing copy-paste recovery command: {stderr}"
+    );
+    assert!(
+        !stderr.contains("-ltidy") && !stderr.contains("required Elephc bridge"),
+        "the managed-package diagnostic must fire before any link attempt: {stderr}"
+    );
+    assert!(!cache.exists(), "failed compilation must not create the native cache");
+
+    let _ = fs::remove_dir_all(&dir);
+}
+
 /// Verifies `--check` stops after type-checking and produces "Checked" output
 /// without emitting any assembly (.s), object (.o), or binary files.
 #[test]
@@ -946,6 +983,62 @@ fn test_cli_web_isolation_selects_entry_symbol_at_compile_time() {
     let _ = fs::remove_dir_all(&dir);
 }
 
+/// Verifies the x86_64 web bridge reaches the handler and the application callbacks through
+/// entries that preserve rbx and r12-r15: an optimized bridge keeps its worker loop state in
+/// them across the handler call, and the worker died after its first request.
+#[test]
+fn test_cli_web_x86_64_bridge_calls_preserve_callee_saved_registers() {
+    let dir = make_cli_test_dir("elephc_cli_web_x86_rust_entries");
+    let php_path = dir.join("main.php");
+    // `--web` refuses `--emit-asm`, so this is a full build. `main.s` is written before the
+    // assembler runs, which is as far as a host without an x86_64 toolchain gets.
+    let compile = |source: &str, flags: &[&str]| {
+        fs::write(&php_path, source).unwrap();
+        let _ = fs::remove_file(dir.join("main.s"));
+        let output = elephc_cli_command(&dir)
+            .args(["--target", "linux-x86_64"])
+            .args(flags)
+            .arg(&php_path)
+            .output()
+            .expect("failed to compile web entry fixture");
+        fs::read_to_string(dir.join("main.s")).unwrap_or_else(|_| {
+            panic!("web entry compile wrote no assembly: {}", String::from_utf8_lossy(&output.stderr))
+        })
+    };
+    let preserving_entry = |asm: &str, body: &str| {
+        let entry = format!(
+            "{body}_rust_entry:\n    push rbx\n    push r12\n    push r13\n    push r14\n    push r15\n    call {body}\n    pop r15\n    pop r14\n    pop r13\n    pop r12\n    pop rbx\n    ret\n"
+        );
+        assert!(asm.contains(&entry), "missing the preserving entry for {body}");
+    };
+
+    let worker = compile("<?php echo 'ok';", &["--web"]);
+    preserving_entry(&worker, "_elephc_web_handler");
+    assert!(worker.contains("lea rdx, [rip + _elephc_web_handler_rust_entry]"), "the worker bridge must get the entry");
+
+    let application = compile(
+        r#"<?php
+final class App implements Elephc\Web\WorkerApplication {
+    public function handle(Elephc\Web\Request $request): void { echo 'ok'; }
+    public function shutdown(): void {}
+}
+Elephc\Web\Worker::register(new App());
+"#,
+        &["--web", "--web-lifecycle=application"],
+    );
+    for body in [
+        "_elephc_web_handler",
+        "_fn__u__u_elephc_u_web_u_application_u_ready",
+        "_fn__u__u_elephc_u_web_u_application_u_request",
+        "_fn__u__u_elephc_u_web_u_application_u_shutdown",
+    ] {
+        preserving_entry(&application, body);
+        assert!(application.contains(&format!(".quad {body}_rust_entry")), "the callback table must hold the entry for {body}");
+    }
+
+    let _ = fs::remove_dir_all(&dir);
+}
+
 /// Verifies web-isolation is rejected without web mode and reports invalid model names.
 #[test]
 fn test_cli_web_isolation_validation_errors_are_focused() {
@@ -1102,14 +1195,17 @@ echo second('plus_one');
     );
 
     let asm = fs::read_to_string(dir.join("main.s")).expect("failed to read callable assembly");
-    assert!(
-        asm.contains("_eir_first_callable_invoker"),
-        "the first dynamic call site must emit shared invokers"
-    );
-    assert!(
-        !asm.contains("_eir_second_callable_invoker"),
-        "the second equivalent call site must reuse the first site's invokers"
-    );
+    assert_eq!(asm.matches("_eir_callable_argument_normalizer:\n").count(), 1,
+        "unrestricted call sites must share one candidate resolver");
+    assert!(asm.contains("_callable_invoker_"), "the shared resolver emits native invokers");
+    for name in ["first", "second"] {
+        let body = asm.split_once(&format!("@fn name={name} symbol=")).unwrap().1
+            .split_once(&format!("@endfn name={name}")).unwrap().0;
+        assert_eq!(body.matches("_eir_callable_argument_normalizer").count(), 1,
+            "{name}: each call site reuses the module resolver");
+        assert!(!asm.contains(&format!("_eir_{name}_callable_invoker")),
+            "{name}: candidate invokers must not be attributed to a call site");
+    }
 
     let run = run_binary(&dir.join("main"), &dir);
     assert!(
@@ -1555,7 +1651,10 @@ greet();
     )
     .unwrap();
 
+    // This probes a standalone subprogram anchor, so retain greet's call boundary even
+    // when the optimizer can inline a discarded void call and the linker can remove it.
     let output = elephc_cli_command(&dir)
+        .arg("--no-ir-opt")
         .arg("--debug-info")
         .arg(&php_path)
         .output()
@@ -1830,6 +1929,11 @@ fn exact_incl_percent(report: &str, name: &str) -> f64 {
 /// of magnitude — a coroutine that runs microseconds against a consumer that runs
 /// milliseconds — so anything under 10% passes and every shape of the defect
 /// lands far above it.
+///
+/// `heavy` runs 1,200,000 rounds per call so its work keeps dominating the fixed
+/// drain and dispatch overhead: at 120,000 rounds a faster loop left it at about
+/// 4 ms in total, and the consumer's own share fell to 85-89.5% on loaded CI
+/// runners, failing the >90% control while the coroutines stayed far below 10%.
 #[test]
 fn test_cli_monitor_does_not_charge_a_coroutine_for_its_consumer() {
     let dir = make_cli_test_dir("elephc_cli_monitor_coroutine");
@@ -1842,10 +1946,10 @@ fn test_cli_monitor_does_not_charge_a_coroutine_for_its_consumer() {
          function body(): int { Fiber::suspend(1); return 7; }\n\
          function drain(): int {\n\
          $t = 0;\n\
-         foreach (outer() as $v) { $t += heavy(120000); }\n\
+         foreach (outer() as $v) { $t += heavy(1200000); }\n\
          $f = new Fiber('body');\n\
          $f->start();\n\
-         $t += heavy(120000);\n\
+         $t += heavy(1200000);\n\
          $f->resume(0);\n\
          return $t + $f->getReturn();\n\
          }\n\

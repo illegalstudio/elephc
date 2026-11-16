@@ -214,13 +214,17 @@ impl DiscoveryOutput {
         let (groups, function_variants) =
             function_variants::rewrite_include_loaded_function_variants(&mut self.entries);
         let mut declarations = groups;
+        let mut anonymous_classes = HashSet::new();
         declarations.extend(self.entries
             .into_iter()
             .map(|entry| {
                 Stmt::new(
                     StmtKind::NamespaceBlock {
                         name: None,
-                        body: entry.declarations,
+                        body: without_repeated_anonymous_classes(
+                            entry.declarations,
+                            &mut anonymous_classes,
+                        ),
                     },
                     entry.span,
                 )
@@ -255,4 +259,36 @@ impl DiscoveryOutput {
         }
         Ok(())
     }
+}
+
+/// Drops each anonymous class `seen` already holds, recording the others.
+///
+/// A file an ordinary `require` loads twice contributes one entry per load, and both declare its
+/// anonymous classes under the same name (the name is derived from the file and the class's
+/// position in it). PHP accepts the repeat, so the class is declared once and both bodies
+/// construct it; a repeated named class still reaches the checker as a duplicate.
+fn without_repeated_anonymous_classes(stmts: Vec<Stmt>, seen: &mut HashSet<String>) -> Vec<Stmt> {
+    stmts
+        .into_iter()
+        .filter_map(|stmt| {
+            let span = stmt.span;
+            match stmt.kind {
+                StmtKind::ClassDecl { ref name, .. } if crate::parser::is_anonymous_class_name(name) => {
+                    seen.insert(name.clone()).then_some(stmt)
+                }
+                StmtKind::NamespaceBlock { name, body } => Some(Stmt::new(
+                    StmtKind::NamespaceBlock {
+                        name,
+                        body: without_repeated_anonymous_classes(body, seen),
+                    },
+                    span,
+                )),
+                StmtKind::Synthetic(body) => Some(Stmt::new(
+                    StmtKind::Synthetic(without_repeated_anonymous_classes(body, seen)),
+                    span,
+                )),
+                _ => Some(stmt),
+            }
+        })
+        .collect()
 }

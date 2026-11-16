@@ -1,0 +1,53 @@
+name: PHP extension host SDK
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: read
+  actions: read
+
+concurrency:
+  group: phpext-host-sdk-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-linux-x86_64:
+    uses: ./.github/workflows/ci-build-host.yml
+    with:
+      target: linux-x86_64
+
+  test-linux-x86_64:
+    needs: build-linux-x86_64
+    uses: ./.github/workflows/ci-test-php-sdk.yml
+    with:
+      target: linux-x86_64
+      runner: ubuntu-24.04
+      artifact-attempt: ${{ needs.build-linux-x86_64.outputs.artifact-attempt }}
+
+  build-linux-aarch64:
+    uses: ./.github/workflows/ci-build-host.yml
+    with:
+      target: linux-aarch64
+
+  test-linux-aarch64:
+    needs: build-linux-aarch64
+    uses: ./.github/workflows/ci-test-php-sdk.yml
+    with:
+      target: linux-aarch64
+      runner: ubuntu-24.04-arm
+      artifact-attempt: ${{ needs.build-linux-aarch64.outputs.artifact-attempt }}
+
+  build-macos-aarch64:
+    uses: ./.github/workflows/ci-build-host.yml
+    with:
+      target: macos-aarch64
+
+  test-macos-aarch64:
+    needs: build-macos-aarch64
+    uses: ./.github/workflows/ci-test-php-sdk.yml
+    with:
+      target: macos-aarch64
+      runner: macos-15
+      artifact-attempt: ${{ needs.build-macos-aarch64.outputs.artifact-attempt }}

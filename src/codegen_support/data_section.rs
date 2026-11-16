@@ -107,6 +107,8 @@ pub struct DataSection {
     comm_dedup: HashMap<String, String>,
     static_locals: Vec<StaticLocalRecord>,
     static_local_dedup: HashMap<String, usize>,
+    extern_callback_slots: Vec<String>,
+    invoker_owner_visitors: HashMap<usize, String>,
 }
 
 impl DataSection {
@@ -125,7 +127,29 @@ impl DataSection {
             comm_dedup: HashMap::new(),
             static_locals: Vec::new(),
             static_local_dedup: HashMap::new(),
+            extern_callback_slots: Vec::new(),
+            invoker_owner_visitors: HashMap::new(),
         }
+    }
+
+    /// Shares one physical-slot visitor among invokers with the same argument count.
+    pub(crate) fn invoker_owner_visitor(&mut self, count: usize, proposed: String) -> (String, bool) {
+        if let Some(label) = self.invoker_owner_visitors.get(&count) {
+            return (label.clone(), false);
+        }
+        self.invoker_owner_visitors.insert(count, proposed.clone());
+        (proposed, true)
+    }
+
+    /// Records one extern callback descriptor slot, so program exit and the `--web` request
+    /// reset can release the descriptor it retains.
+    pub fn record_extern_callback_slot(&mut self, label: String) {
+        self.extern_callback_slots.push(label);
+    }
+
+    /// Returns the recorded extern callback descriptor slots in emission order.
+    pub fn extern_callback_slots(&self) -> &[String] {
+        &self.extern_callback_slots
     }
 
     /// Records one function static local's storage metadata for the `--web`

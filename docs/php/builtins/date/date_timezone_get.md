@@ -1,8 +1,6 @@
 ---
 title: "date_timezone_get()"
 description: "Returns a date's timezone."
-sidebar:
-  order: 215
 ---
 
 ## date_timezone_get()
@@ -20,8 +18,9 @@ Returns a date's timezone.
 
 ## Availability
 
-- **Compiled (AOT)**: supported through the Elephc compiler.
-- **`eval()` (magician interpreter)**: supported through the procedural date/time alias dispatcher.
+| Compiled (AOT) | Magician (eval) |
+|---|---|
+| Available | Available |
 
 _No examples yet. Check `examples/` and `showcases/` for usage patterns._
 

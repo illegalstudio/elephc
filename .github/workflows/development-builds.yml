@@ -1,0 +1,114 @@
+name: Development artifacts
+run-name: Development artifacts ${{ inputs.source-sha }}
+
+on:
+  workflow_dispatch:
+    inputs:
+      source-sha:
+        description: Full main commit SHA to build
+        required: true
+        type: string
+
+permissions:
+  contents: read
+  actions: read
+  packages: read
+
+concurrency:
+  group: development-artifacts-${{ inputs.source-sha }}
+  cancel-in-progress: false
+
+jobs:
+  validate:
+    runs-on: ubuntu-24.04
+    outputs:
+      sha: ${{ steps.source.outputs.sha }}
+      ci-image: ${{ steps.image.outputs.image }}
+      reuse-run: ${{ steps.reuse.outputs.run-id }}
+      reuse-attempts: ${{ steps.reuse.outputs.attempts }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: main
+          fetch-depth: 0
+      - name: Require a retained main commit after rollout
+        id: source
+        env:
+          SOURCE_SHA: ${{ inputs.source-sha }}
+        run: python3 -B scripts/ci/reconcile_development.py validate "$SOURCE_SHA" >> "$GITHUB_OUTPUT"
+
+      - name: Resolve immutable build environment
+        id: image
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: bash scripts/ci/resolve_ci_image.sh
+      - name: Reuse this commit's own verified queue outputs when available
+        id: reuse
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ELEPHC_CI_IMAGE: ${{ steps.image.outputs.image }}
+          SOURCE_SHA: ${{ steps.source.outputs.sha }}
+        run: python3 -B scripts/ci/resolve_main_build.py --main-sha "$SOURCE_SHA"
+
+  build-linux-x86_64:
+    if: needs.validate.outputs.reuse-run == ''
+    needs: validate
+    uses: ./.github/workflows/ci-build-host.yml
+    with:
+      target: linux-x86_64
+      ci-image: ${{ needs.validate.outputs.ci-image }}
+      scope: development
+      source-sha: ${{ needs.validate.outputs.sha }}
+
+  package-linux-x86_64:
+    if: always() && needs.validate.result == 'success' && (needs.build-linux-x86_64.result == 'success' || needs.validate.outputs.reuse-run != '')
+    needs: [validate, build-linux-x86_64]
+    uses: ./.github/workflows/ci-package-development.yml
+    with:
+      target: linux-x86_64
+      runner: ubuntu-24.04
+      source-sha: ${{ needs.validate.outputs.sha }}
+      producer-run: ${{ needs.validate.outputs.reuse-run || github.run_id }}
+      producer-attempt: ${{ needs.validate.outputs.reuse-run != '' && fromJSON(needs.validate.outputs.reuse-attempts)['linux-x86_64'] || needs.build-linux-x86_64.outputs.artifact-attempt }}
+
+  build-linux-aarch64:
+    if: needs.validate.outputs.reuse-run == ''
+    needs: validate
+    uses: ./.github/workflows/ci-build-host.yml
+    with:
+      target: linux-aarch64
+      ci-image: ${{ needs.validate.outputs.ci-image }}
+      scope: development
+      source-sha: ${{ needs.validate.outputs.sha }}
+
+  package-linux-aarch64:
+    if: always() && needs.validate.result == 'success' && (needs.build-linux-aarch64.result == 'success' || needs.validate.outputs.reuse-run != '')
+    needs: [validate, build-linux-aarch64]
+    uses: ./.github/workflows/ci-package-development.yml
+    with:
+      target: linux-aarch64
+      runner: ubuntu-24.04-arm
+      source-sha: ${{ needs.validate.outputs.sha }}
+      producer-run: ${{ needs.validate.outputs.reuse-run || github.run_id }}
+      producer-attempt: ${{ needs.validate.outputs.reuse-run != '' && fromJSON(needs.validate.outputs.reuse-attempts)['linux-aarch64'] || needs.build-linux-aarch64.outputs.artifact-attempt }}
+
+  build-macos-aarch64:
+    if: needs.validate.outputs.reuse-run == ''
+    needs: validate
+    uses: ./.github/workflows/ci-build-host.yml
+    with:
+      target: macos-aarch64
+      ci-image: ${{ needs.validate.outputs.ci-image }}
+      scope: development
+      source-sha: ${{ needs.validate.outputs.sha }}
+
+  package-macos-aarch64:
+    if: always() && needs.validate.result == 'success' && (needs.build-macos-aarch64.result == 'success' || needs.validate.outputs.reuse-run != '')
+    needs: [validate, build-macos-aarch64]
+    uses: ./.github/workflows/ci-package-development.yml
+    with:
+      target: macos-aarch64
+      runner: macos-15
+      source-sha: ${{ needs.validate.outputs.sha }}
+      producer-run: ${{ needs.validate.outputs.reuse-run || github.run_id }}
+      producer-attempt: ${{ needs.validate.outputs.reuse-run != '' && fromJSON(needs.validate.outputs.reuse-attempts)['macos-aarch64'] || needs.build-macos-aarch64.outputs.artifact-attempt }}

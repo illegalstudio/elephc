@@ -171,7 +171,8 @@ fn assert_capture(operation: RuntimeBuiltinId, source: &str, pattern: &str, coun
     let _ = std::fs::remove_dir_all(directory);
     assert!(output.success, "{}\n{}", output.stdout, output.stderr);
     assert_eq!(output.stdout, expected);
-    let diagnostics = output.stderr.lines().filter(|line| line.starts_with("Warning:")).collect::<Vec<_>>().join("\n");
+    let normalized = normalize_diagnostic_text(&output.stderr);
+    let diagnostics = normalized.lines().filter(|line| line.starts_with("Warning:")).collect::<Vec<_>>().join("\n");
     assert_eq!(diagnostics, warning.trim_end());
     assert!(output.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", output.stderr);
 }

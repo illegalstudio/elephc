@@ -65,6 +65,38 @@ writeInt("1");
 "#, "Error:Cannot use a scalar value as an array|[10,20,30]|[10,20,30]");
 }
 
+/// Branching keys and same-local replacement retire each Mixed source slot exactly once.
+#[test]
+fn test_variadic_fifth_review_branching_mixed_source_slot_cleanup() {
+    assert_key_write(r#"<?php
+function branchingKey(int $condition): void {
+    $items = [10, 20, 30]; $copy = $items;
+    try { $items[$condition ? "1" : "0"]["x"] = 1; echo 'wrong'; }
+    catch (Throwable $error) { echo get_class($error), ':', $error->getMessage(); }
+    echo '|', json_encode($items), '|', json_encode($copy), "\n";
+}
+function republishedKey(int $condition): void {
+    $items = [[0], [0]];
+    $items["seed"] = [0]; $copy = $items;
+    $items[($items = [[0], [0]]) ? ($condition ? 1 : 0) : 0][0] = 1;
+    echo json_encode($items), '|', json_encode($copy), "\n";
+}
+branchingKey($argc);
+republishedKey($argc);
+"#, concat!(
+        "Error:Cannot use a scalar value as an array|[10,20,30]|[10,20,30]\n",
+        "[[0],[1]]|{\"0\":[0],\"1\":[0],\"seed\":[0]}\n",
+    ));
+}
+
+/// Source-slot retirement remains balanced without optional EIR optimization.
+#[test]
+fn test_variadic_fifth_review_branching_mixed_source_slot_cleanup_without_ir_opt() {
+    crate::support::without_ir_opt(
+        test_variadic_fifth_review_branching_mixed_source_slot_cleanup,
+    );
+}
+
 /// Appending to a selected string raises a catchable Error, not a codegen diagnostic.
 #[test]
 fn test_variadic_fifth_review_numeric_string_append() {

@@ -24,12 +24,33 @@ pub(super) fn builtin_reflection_owner_class(
     )];
     if has_name {
         properties.push(builtin_property(
+            "name",
+            Visibility::Public,
+            Some(TypeExpr::Str),
+            empty_string(),
+        ));
+        properties.push(builtin_property(
             "__name",
             Visibility::Private,
             Some(TypeExpr::Str),
             empty_string(),
         ));
         methods.push(builtin_reflection_class_string_method("getName", "__name"));
+    }
+    if matches!(
+        name,
+        "ReflectionMethod"
+            | "ReflectionProperty"
+            | "ReflectionClassConstant"
+            | "ReflectionEnumUnitCase"
+            | "ReflectionEnumBackedCase"
+    ) {
+        properties.push(builtin_property(
+            "class",
+            Visibility::Public,
+            Some(TypeExpr::Str),
+            empty_string(),
+        ));
     }
     if reflection_owner_has_doc_comment_method(name) {
         methods.push(builtin_reflection_constant_false_union_method(
@@ -60,10 +81,18 @@ pub(super) fn builtin_reflection_owner_class(
             Some(mixed_type()),
             false_bool(),
         ));
+        // An enum case's declaring class is always an enum, so its getter is typed with the
+        // `ReflectionEnum` php's class factory builds; the other owners' declaring class may or
+        // may not be an enum and keep the `ReflectionClass` base type.
+        let declaring_class = if matches!(name, "ReflectionEnumUnitCase" | "ReflectionEnumBackedCase") {
+            "ReflectionEnum"
+        } else {
+            "ReflectionClass"
+        };
         methods.push(builtin_reflection_class_object_method(
             "getDeclaringClass",
             "__declaring_class",
-            "ReflectionClass",
+            declaring_class,
         ));
     }
     if matches!(

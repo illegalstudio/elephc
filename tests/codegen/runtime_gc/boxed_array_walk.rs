@@ -38,7 +38,7 @@ echo "done";
     assert_eq!(compile_and_run_tagged(source), expected);
 }
 
-/// Constructor-promoted reference properties reject a possibly borrowed walk entry statically.
+/// Constructor-promoted reference properties reject an active borrowed walk entry at runtime.
 #[test]
 fn test_core_boxed_array_walk_rejects_promoted_reference_property_escape() {
     let source = r#"<?php
@@ -62,13 +62,12 @@ try {
 unset($items);
 echo "done";
 "#;
-    let error = compile_expect_type_error(source);
-    assert!(
-        error.contains(
-            "cannot retain managed or already-reference-bound storage in a promoted property"
-        ),
-        "{error}"
-    );
+    let expected = "Escaping a borrowed boxed array_walk() element reference is not supported|property|done";
+    let (out, assembly) = compile_and_run_with_heap_debug_and_asm(source);
+    assert!(out.success, "stdout={:?}\nstderr={}\n{assembly}", out.stdout, out.stderr);
+    assert_eq!(out.stdout, expected, "{}\n{assembly}", out.stderr);
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}\n{assembly}", out.stderr);
+    assert_eq!(compile_and_run_tagged(source), expected);
 }
 
 /// An active element borrow relayed through a nested by-reference return is still copied out.

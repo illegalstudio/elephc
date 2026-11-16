@@ -1,8 +1,6 @@
 ---
 title: "hypot()"
 description: "Calculates the length of the hypotenuse of a right-angle triangle."
-sidebar:
-  order: 580
 ---
 
 ## hypot()
@@ -21,8 +19,9 @@ Calculates the length of the hypotenuse of a right-angle triangle.
 
 ## Availability
 
-- **Compiled (AOT)**: supported by the Elephc code generator.
-- **`eval()` (magician interpreter)**: supported through a declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/math/hypot.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/math/hypot.rs)).
+| Compiled (AOT) | Magician (eval) |
+|---|---|
+| Available | Available |
 
 _No examples yet. Check `examples/` and `showcases/` for usage patterns._
 

@@ -225,7 +225,7 @@ fn emit_runtime_call_wrapper_inline(
             ctx.shared.cache_runtime_extern_wrapper(name, sig, &label)
         }
     }
-    let mut wrapper_module = ctx.module.clone();
+    let mut wrapper_module = ctx.shared.take_wrapper_module(ctx.module);
     let wrapper = build_runtime_call_wrapper_function(&mut wrapper_module, &label, name, sig, kind)?;
     ctx.shared.record_generated_runtime_features(&wrapper);
     // Out of line, not spliced into the function that first needed it: see
@@ -243,6 +243,7 @@ fn emit_runtime_call_wrapper_inline(
     // Closed on the error path too: the scope holds the caller's text, and returning early with
     // it would drop everything the caller had emitted so far.
     ctx.emitter.end_out_of_line(scope);
+    ctx.shared.recycle_wrapper_module(wrapper_module);
     emitted?;
     Ok(label)
 }
@@ -256,7 +257,21 @@ fn build_runtime_call_wrapper_function(
     kind: RuntimeCallWrapperKind,
 ) -> Result<Function> {
     if let RuntimeCallWrapperKind::Builtin { strict_php } = kind {
-        if crate::builtins::registry::lookup(name).is_some_and(|def| matches!(
+        // GMP's homes lower through the prelude helper graph, which first-class callable
+        // wrappers must reproduce. Other EIR-graph homes already build their own callable
+        // body through the generic wrapper path, so widening this predicate would duplicate
+        // their allocation graph (for example `gc_status`).
+        let prepared_eir_lowering = crate::builtins::registry::lookup(name).is_some_and(|def| {
+            def.spec.semantics.runtime_functions
+                == crate::builtins::semantics::BuiltinRuntimeFunctions::None
+                && matches!(
+                    def.spec.semantics.lowering,
+                    crate::builtins::semantics::BuiltinLowering::Eir(_)
+                )
+                && elephc_builtin_contract::lookup(name)
+                    .is_some_and(|contract| contract.module == elephc_builtin_contract::PhpModule::Gmp)
+        });
+        if prepared_eir_lowering || crate::builtins::registry::lookup(name).is_some_and(|def| matches!(
             def.spec.semantics.argument_lowering,
             crate::builtins::semantics::BuiltinArgumentLowering::WeakStringUnion { .. }
         )) {

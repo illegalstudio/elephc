@@ -1,8 +1,6 @@
 ---
 title: "ob_get_flush()"
 description: "Flushes the output buffer, returns it as a string and turns off output buffering."
-sidebar:
-  order: 347
 ---
 
 ## ob_get_flush()
@@ -19,8 +17,9 @@ Flushes the output buffer, returns it as a string and turns off output buffering
 
 ## Availability
 
-- **Compiled (AOT)**: supported by the Elephc code generator.
-- **`eval()` (magician interpreter)**: supported through a declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/core/ob_get_flush.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/core/ob_get_flush.rs)).
+| Compiled (AOT) | Magician (eval) |
+|---|---|
+| Available | Available |
 
 _No examples yet. Check `examples/` and `showcases/` for usage patterns._
 

@@ -6,16 +6,72 @@
 //! - `crate::name_resolver::resolve()` before rewriting references.
 //!
 //! Key details:
-//! - Builtin class-like symbols are seeded so unresolved user names can still bind to PHP builtins.
+//! - Builtin class-like symbols and public prelude functions use the shared contracts so
+//!   independently resolved autoloaded files retain PHP builtin fallback.
 
 use crate::names::{canonical_name_for_decl, php_symbol_key};
 use crate::parser::ast::{Stmt, StmtKind};
 
 use super::{canonical_builtin_function_name, namespace_name, Symbols};
 
+#[cfg(test)]
+mod tests {
+    use crate::parser::ast::{ExprKind, StmtKind};
+
+    /// Resolves and target-folds a standalone file, then reads its final function call bindings.
+    fn resolved_calls(source: &str) -> Vec<String> {
+        let tokens = crate::lexer::tokenize(source).unwrap();
+        let program = crate::parser::parse(&tokens).unwrap();
+        let resolved = crate::name_resolver::resolve(program).unwrap();
+        let target = crate::codegen_support::platform::Target::new(
+            crate::codegen_support::platform::Platform::Linux,
+            crate::codegen_support::platform::Arch::X86_64,
+        );
+        crate::optimize::fold_constants_for_target(resolved, target)
+            .into_iter()
+            .filter_map(|stmt| {
+                let StmtKind::ExprStmt(expr) = stmt.kind else { return None; };
+                let ExprKind::FunctionCall { name, .. } = expr.kind else { return None; };
+                Some(name.as_canonical())
+            })
+            .collect()
+    }
+
+    /// Prelude names have global PHP fallback even when the file declares no prelude itself.
+    #[test]
+    fn prelude_function_fallback_without_injected_declarations() {
+        let _strict = crate::strict_php::scoped_enable();
+        assert_eq!(
+            resolved_calls("<?php namespace App; Mt_SrAnD(42); lcg_value(); getrandmax();"),
+            ["mt_srand", "lcg_value", "getrandmax"],
+        );
+    }
+
+    /// Local declarations, function imports, and explicit namespace references keep precedence.
+    #[test]
+    fn prelude_function_fallback_preserves_explicit_and_local_bindings() {
+        assert_eq!(
+            resolved_calls(r"<?php namespace App;
+                use function Vendor\lcg_value;
+                function mt_srand(int $seed): void {}
+                mt_srand(42); lcg_value(); namespace\getrandmax(); Other\getrandmax();"),
+            ["App\\mt_srand", "Vendor\\lcg_value", "App\\getrandmax", "App\\Other\\getrandmax"],
+        );
+    }
+
+    /// Global fallback excludes internal helpers and extensions hidden by strict PHP.
+    #[test]
+    fn prelude_function_fallback_respects_contract_visibility() {
+        let source = "<?php namespace App; read_exif_data('photo.jpg'); __elephc_array_rand([1]);";
+        assert_eq!(resolved_calls(source), ["read_exif_data", "App\\__elephc_array_rand"]);
+        let _strict = crate::strict_php::scoped_enable();
+        assert_eq!(resolved_calls(source), ["App\\read_exif_data", "App\\__elephc_array_rand"]);
+    }
+}
+
 
 impl Symbols {
-    /// canonical_function
+    /// Resolves declared functions first, then registered builtins and visible prelude contracts.
     pub(super) fn canonical_function(&self, name: &str) -> Option<String> {
         let key = php_symbol_key(name);
         let extension_builtin =
@@ -33,6 +89,13 @@ impl Symbols {
             .or_else(|| self.extern_functions.get(&key))
             .cloned()
             .or_else(|| canonical_builtin_function_name(name))
+            .or_else(|| {
+                let contract = elephc_builtin_contract::lookup(name)?;
+                (contract.kind == elephc_builtin_contract::BuiltinKind::PreludeProvided
+                    && !contract.internal
+                    && (!contract.extension || !crate::strict_php::is_enabled()))
+                    .then(|| contract.name.to_string())
+            })
     }
 
     /// Returns whether `name` resolves to a user-declared (or extern) function,

@@ -40,6 +40,16 @@ fn quoted(value: &str) -> String {
     format!("'{}'", value.replace('\\', "\\\\").replace('\'', "\\'"))
 }
 
+/// Quotes literal PHP bytes separately from ordinary UTF-8 scope names and diagnostics.
+fn quoted_literal(value: &str) -> String {
+    let bytes = elephc_builtin_contract::string_literal::literal_bytes(value);
+    if let Ok(text) = std::str::from_utf8(&bytes) {
+        return quoted(text);
+    }
+    let escaped = bytes.iter().map(|byte| format!("\\x{byte:02x}")).collect::<String>();
+    format!("\"{escaped}\"")
+}
+
 /// Resolves a lexical class receiver before its default crosses into runtime eval metadata.
 fn receiver_name(receiver: &StaticReceiver, context: &EvalNativeDefaultContext<'_>) -> Option<String> {
     const_default_values::resolve_static_receiver_name(
@@ -67,7 +77,7 @@ fn expression(expr: &Expr, context: &EvalNativeDefaultContext<'_>) -> Option<Str
         ExprKind::FloatLiteral(value) if value.is_infinite() =>
             if value.is_sign_negative() { "-\\INF" } else { "\\INF" }.to_string(),
         ExprKind::FloatLiteral(value) => format!("{value:?}"),
-        ExprKind::StringLiteral(value) => quoted(value),
+        ExprKind::StringLiteral(value) => quoted_literal(value),
         ExprKind::ConstRef(name) => format!("\\{}", name.as_str().trim_start_matches('\\')),
         ExprKind::ClassConstant { receiver } => quoted(&receiver_name(receiver, context)?),
         ExprKind::ScopedConstantAccess { receiver, name } =>

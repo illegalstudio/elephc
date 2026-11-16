@@ -19,6 +19,7 @@ use crate::eval_ir;
 use crate::eval_ir::EVAL_SCOPE_ACCESS_ALL;
 #[cfg(not(test))]
 use crate::interpreter;
+use crate::interpreter::with_executable_cache_key;
 #[cfg(not(test))]
 use crate::interpreter::RuntimeValueOps;
 use crate::parse_cache;
@@ -156,7 +157,9 @@ unsafe fn execute_eval_inner(
     };
     let program = parse_cache::parse_fragment_cached(code).map_err(|error| error.status());
     clear_result(out);
-    execute_parsed_eval(ctx, scope, program.as_deref().map_err(|status| *status), out, allow_deferred_catalog)
+    with_executable_cache_key(code, || {
+        execute_parsed_eval(ctx, scope, program.as_deref().map_err(|status| *status), out, allow_deferred_catalog)
+    })
 }
 
 /// Executes a parsed eval program in production builds using elephc runtime hooks.

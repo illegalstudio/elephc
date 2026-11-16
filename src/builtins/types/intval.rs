@@ -73,6 +73,45 @@ fn lower(
     ctx: &mut dyn BuiltinLoweringContext,
     call: &NormalizedBuiltinCall<'_>,
 ) -> Result<LoweredBuiltinValue, BuiltinLoweringError> {
+    let value = call.operand(0)?;
+    if matches!(
+        ctx.value_php_type(value).codegen_repr(),
+        PhpType::Object(name) if name.eq_ignore_ascii_case("GMP")
+    ) {
+        let method = ctx.intern_string("__elephc_to_int");
+        return Ok(ctx.emit_value(
+            Op::MethodCall,
+            vec![value],
+            Some(Immediate::Data(method)),
+            call.result_type.clone(),
+            Op::MethodCall.default_effects(),
+            Some(call.span),
+        ));
+    }
+    let value_type = ctx.value_php_type(value);
+    if matches!(value_type.codegen_repr(), PhpType::Mixed | PhpType::Union(_))
+        && ctx.has_class("GMP")
+    {
+        let base = if call.operands.len() >= 2 {
+            call.operand(1)?
+        } else {
+            ctx.emit_value(
+                Op::ConstI64,
+                Vec::new(),
+                Some(Immediate::I64(10)),
+                PhpType::Int,
+                Op::ConstI64.default_effects(),
+                Some(call.span),
+            )
+            .value
+        };
+        return Ok(ctx.emit_user_call(
+            "__elephc_gmp_intval_cast",
+            vec![value, base],
+            call.result_type.clone(),
+            Some(call.span),
+        ));
+    }
     if call.operands.len() >= 2 {
         return Ok(ctx.emit_runtime_call(
             RuntimeCallTarget::Function(RuntimeFnId::IntvalBase),

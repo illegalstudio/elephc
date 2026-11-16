@@ -13,17 +13,84 @@ use super::*;
 pub(super) fn reflection_class_method_names(ctx: &FunctionContext<'_>, class_name: &str) -> Vec<String> {
     let mut names = Vec::new();
     let mut seen = std::collections::HashSet::new();
-    let mut current = Some(class_name.to_string());
-    while let Some(current_name) = current {
-        let Some((resolved_name, info)) = resolve_reflection_class(ctx, &current_name) else {
-            break;
-        };
-        push_unique_method_names(info.methods.keys(), &mut names, &mut seen);
-        push_unique_method_names(info.static_methods.keys(), &mut names, &mut seen);
-        current = info.parent.clone();
-        if current.as_deref() == Some(resolved_name) {
-            break;
+    let visible = |info: &crate::types::ClassInfo, resolved_name: &str, method: &str, is_static: bool| {
+        // Inherited builtin implementation methods stay hidden in subclasses too.
+        let declaring = if is_static {
+            info.static_method_declaring_classes.get(method)
+        } else {
+            info.method_declaring_classes.get(method)
         }
+        .map(String::as_str)
+        .unwrap_or(resolved_name);
+        [resolved_name, declaring].iter().all(|owner| {
+            elephc_builtin_contract::lookup_class(owner)
+                .is_none_or(|class| class.method_is_php_visible(method))
+        })
+    };
+    // Zend's function-table order (`crate::types::method_order`), restricted to the
+    // methods this class actually has and php exposes.
+    if let Some((resolved_name, _)) = resolve_reflection_class(ctx, class_name) {
+        let ordered = crate::types::method_order::zend_method_table_order(
+            resolved_name,
+            &ctx.module.class_infos,
+            &|class| {
+                crate::types::method_order::trait_imported_method_keys(
+                    class,
+                    &ctx.module.declared_trait_methods,
+                    &|method: &crate::ir::TraitMethodInfo| method.span,
+                )
+            },
+        );
+        // A method is present when this class or an ancestor has it (a parent's
+        // private methods are not in the child's tables, yet php reports them).
+        let mut chain = Vec::new();
+        let mut current = Some(resolved_name.to_string());
+        while let Some(current_name) = current {
+            let Some((level_name, level)) = resolve_reflection_class(ctx, &current_name) else {
+                break;
+            };
+            chain.push((level_name, level));
+            current = level.parent.clone();
+            if current.as_deref() == Some(level_name) || chain.len() > 64 {
+                break;
+            }
+        }
+        let filtered: Vec<String> = ordered
+            .into_iter()
+            .filter(|key| {
+                chain.iter().any(|(level_name, level)| {
+                    let is_static = !level.methods.contains_key(key);
+                    (level.methods.contains_key(key) || level.static_methods.contains_key(key))
+                        && visible(level, level_name, key, is_static)
+                })
+            })
+            .collect();
+        push_unique_method_names(filtered.iter(), &mut names, &mut seen);
+        // Anything the declarations did not cover keeps its table order after them,
+        // level by level up the parent chain.
+        for (level_name, level) in &chain {
+            for (map, is_static) in [(&level.methods, false), (&level.static_methods, true)] {
+                push_unique_method_names(
+                    map.keys().filter(|method| visible(level, level_name, method, is_static)),
+                    &mut names,
+                    &mut seen,
+                );
+            }
+        }
+    }
+    // A reviewed internal surface reports php-src's declaration order. GMP's synthetic
+    // method tables are hash-ordered, so filter in the contract's list order instead.
+    if let Some(visible) = elephc_builtin_contract::lookup_class(class_name)
+        .and_then(|class| class.php_visible_methods)
+    {
+        let mut ordered = Vec::with_capacity(visible.len());
+        for method in visible {
+            let key = crate::names::php_symbol_key(method);
+            if let Some(position) = names.iter().position(|name| crate::names::php_symbol_key(name) == key) {
+                ordered.push(names.remove(position));
+            }
+        }
+        return ordered;
     }
     names
 }
@@ -40,11 +107,21 @@ pub(super) fn reflection_class_property_names(
         push_unique_property_name("name", &mut names, &mut seen);
     }
     for (name, _) in &info.properties {
+        if elephc_builtin_contract::lookup_class(class_name)
+            .is_some_and(|class| class.property_is_hidden(name))
+        {
+            continue;
+        }
         if reflection_property_visible_from_class(info, class_name, name, false) {
             push_unique_property_name(name, &mut names, &mut seen);
         }
     }
     for (name, _) in &info.static_properties {
+        if elephc_builtin_contract::lookup_class(class_name)
+            .is_some_and(|class| class.property_is_hidden(name))
+        {
+            continue;
+        }
         if reflection_property_visible_from_class(info, class_name, name, true) {
             push_unique_property_name(name, &mut names, &mut seen);
         }
@@ -201,29 +278,6 @@ pub(super) fn reflection_class_default_property_members(
                     value,
                 }
             })
-        })
-        .collect()
-}
-
-/// Returns static-property storage slots for `ReflectionClass::getStaticProperties()`.
-pub(super) fn reflection_class_static_property_members(
-    class_name: &str,
-    info: &crate::types::ClassInfo,
-) -> Vec<ReflectionStaticPropertyMember> {
-    info.static_properties
-        .iter()
-        .map(|(property_name, php_type)| {
-            let declaring_class_name = info
-                .static_property_declaring_classes
-                .get(property_name)
-                .cloned()
-                .unwrap_or_else(|| class_name.to_string());
-            ReflectionStaticPropertyMember {
-                name: property_name.clone(),
-                declaring_class_name,
-                php_type: php_type.clone(),
-                is_declared: info.declared_static_properties.contains(property_name),
-            }
         })
         .collect()
 }
@@ -555,4 +609,3 @@ pub(super) fn push_unique_listed_constant_member(
         members.push(member);
     }
 }
-

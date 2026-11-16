@@ -425,3 +425,63 @@ fn deferred_local_guard_pruning_preserves_true_temporary_ownership() {
         1
     );
 }
+
+/// Gives a PHP local that holds `null`, packed record addresses and pointers one pointer word in
+/// either store order (two targets share an untyped `ptr`, a typed one wins over an untyped one),
+/// while other slot roles and other shapes keep their boxed widening.
+#[test]
+fn null_and_pointer_stores_share_pointer_word_storage() {
+    let record = PhpType::Packed("Vec2".to_string());
+    let pointer = PhpType::Pointer(Some("Vec2".to_string()));
+    let mut function = Function::new("pointer_words".to_string(), IrType::Void, PhpType::Void);
+    {
+        let mut builder = Builder::new(&mut function);
+        let null_first = builder.add_local(
+            Some("a".to_string()),
+            IrType::I64,
+            PhpType::Void,
+            LocalKind::PhpLocal,
+        );
+        builder.widen_local_storage_type(null_first, record.clone());
+        let record_first = builder.add_local(
+            Some("b".to_string()),
+            IrType::Heap(IrHeapKind::Object),
+            record.clone(),
+            LocalKind::PhpLocal,
+        );
+        builder.widen_local_storage_type(record_first, PhpType::Void);
+        let two_targets = builder.add_local(
+            Some("c".to_string()),
+            IrType::I64,
+            pointer.clone(),
+            LocalKind::PhpLocal,
+        );
+        builder
+            .widen_local_storage_type(two_targets, PhpType::Pointer(Some("Rect".to_string())));
+        let untyped = builder.add_local(
+            Some("e".to_string()),
+            IrType::I64,
+            PhpType::Pointer(None),
+            LocalKind::PhpLocal,
+        );
+        builder.widen_local_storage_type(untyped, record.clone());
+        let temp = builder.add_local(None, IrType::I64, PhpType::Void, LocalKind::HiddenTemp);
+        builder.widen_local_storage_type(temp, pointer.clone());
+        let scalar = builder.add_local(
+            Some("d".to_string()),
+            IrType::I64,
+            PhpType::Void,
+            LocalKind::PhpLocal,
+        );
+        builder.widen_local_storage_type(scalar, PhpType::Str);
+    }
+
+    assert_eq!(function.locals[0].php_type, pointer);
+    assert_eq!(function.locals[0].ir_type, IrType::I64);
+    assert_eq!(function.locals[1].php_type, pointer);
+    assert_eq!(function.locals[1].ir_type, IrType::I64);
+    assert_eq!(function.locals[2].php_type, PhpType::Pointer(None));
+    assert_eq!(function.locals[3].php_type, pointer);
+    assert_eq!(function.locals[4].php_type, PhpType::Mixed);
+    assert_eq!(function.locals[5].php_type, PhpType::Mixed);
+}

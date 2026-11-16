@@ -173,7 +173,7 @@ fn type_refs_curl(type_expr: &TypeExpr) -> bool {
         | TypeExpr::Void
         | TypeExpr::Never
         | TypeExpr::Iterable => false,
-        TypeExpr::Ptr(target) => target.as_ref().is_some_and(name_is_curl_class),
+        TypeExpr::Ptr(target) => target.as_ref().is_some_and(|name| name_is_curl_class(&crate::names::pointer_target_leaf_name(name))),
         TypeExpr::Array(inner) | TypeExpr::Buffer(inner) | TypeExpr::Nullable(inner) => {
             type_refs_curl(inner)
         }
@@ -679,6 +679,15 @@ mod tests {
                 "{class} must trigger curl prelude injection"
             );
         }
+    }
+
+    /// Detects a curl class named only as a nested pointer target after name resolution.
+    #[test]
+    fn detects_nested_pointer_class_type_hint() {
+        let ast = parse("<?php function f(ptr<ptr<CurlHandle>> $p): void {} f(ptr_null());");
+        assert!(program_uses_curl(&ast));
+        let unrelated = parse("<?php namespace App; class CurlHandle {} function f(ptr<ptr<CurlHandle>> $p): void {}");
+        assert!(!program_uses_curl(&unrelated));
     }
 
     /// An `instanceof CurlHandle` check is detected.

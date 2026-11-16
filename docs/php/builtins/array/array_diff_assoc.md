@@ -1,8 +1,6 @@
 ---
 title: "array_diff_assoc()"
 description: "Computes the difference of arrays with additional index check."
-sidebar:
-  order: 8
 ---
 
 ## array_diff_assoc()
@@ -21,8 +19,9 @@ Computes the difference of arrays with additional index check.
 
 ## Availability
 
-- **Compiled (AOT)**: supported by the Elephc code generator.
-- **`eval()` (magician interpreter)**: not available inside eval'd code.
+| Compiled (AOT) | Magician (eval) |
+|---|---|
+| Available | Not available yet |
 
 _No examples yet. Check `examples/` and `showcases/` for usage patterns._
 

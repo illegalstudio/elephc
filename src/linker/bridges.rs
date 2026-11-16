@@ -55,6 +55,30 @@ pub(super) struct BridgeStaticlib {
 /// Every Elephc bridge known to discovery and CLI flag validation.
 pub(super) const BRIDGES: &[BridgeStaticlib] = &[
     BridgeStaticlib {
+        lib_name: "elephc_tokenizer",
+        env_var: "ELEPHC_TOKENIZER_LIB_DIR",
+        crate_name: "elephc-tokenizer",
+        flag_name: "tokenizer",
+        whole_archive: false,
+        apple_frameworks: &[],
+        apple_libraries: &[],
+        needs_libdl: true,
+        php_extensions: &["tokenizer"],
+        monitoring: MonitoringPolicy::GenericTiming,
+    },
+    BridgeStaticlib {
+        lib_name: "elephc_fileinfo",
+        env_var: "ELEPHC_FILEINFO_LIB_DIR",
+        crate_name: "elephc-fileinfo",
+        flag_name: "fileinfo",
+        whole_archive: false,
+        apple_frameworks: &[],
+        apple_libraries: &[],
+        needs_libdl: true,
+        php_extensions: &["fileinfo"],
+        monitoring: MonitoringPolicy::GenericTiming,
+    },
+    BridgeStaticlib {
         lib_name: "elephc_tls",
         env_var: "ELEPHC_TLS_LIB_DIR",
         crate_name: "elephc-tls",
@@ -101,6 +125,19 @@ pub(super) const BRIDGES: &[BridgeStaticlib] = &[
         monitoring: MonitoringPolicy::GenericTiming,
     },
     BridgeStaticlib {
+        lib_name: "elephc_openssl",
+        env_var: "ELEPHC_OPENSSL_BRIDGE_LIB_DIR",
+        crate_name: "elephc-openssl",
+        flag_name: "openssl",
+        whole_archive: false,
+        apple_frameworks: &[],
+        apple_libraries: &[],
+        needs_libdl: true,
+        // The cipher bridge implements PHP's OpenSSL cipher catalog and EVP path.
+        php_extensions: &["openssl"],
+        monitoring: MonitoringPolicy::GenericTiming,
+    },
+    BridgeStaticlib {
         lib_name: "elephc_bcmath",
         env_var: "ELEPHC_BCMATH_LIB_DIR",
         crate_name: "elephc-bcmath",
@@ -111,6 +148,34 @@ pub(super) const BRIDGES: &[BridgeStaticlib] = &[
         needs_libdl: true,
         // The decimal bridge implements PHP's procedural `bcmath` extension.
         php_extensions: &["bcmath"],
+        monitoring: MonitoringPolicy::GenericTiming,
+    },
+    BridgeStaticlib {
+        lib_name: "elephc_gmp",
+        env_var: "ELEPHC_GMP_LIB_DIR",
+        crate_name: "elephc-gmp",
+        flag_name: "gmp",
+        whole_archive: false,
+        apple_frameworks: &[],
+        apple_libraries: &[],
+        needs_libdl: true,
+        // The bridge is a thin adapter over libgmp (the managed `gmp` catalog
+        // package, spliced in by `src/pipeline/backend.rs` whenever this bridge is
+        // planned). It owns PHP's `gmp` extension surface.
+        php_extensions: &["gmp"],
+        monitoring: MonitoringPolicy::GenericTiming,
+    },
+    BridgeStaticlib {
+        lib_name: "elephc_random",
+        env_var: "ELEPHC_RANDOM_LIB_DIR",
+        crate_name: "elephc-random",
+        flag_name: "random",
+        whole_archive: false,
+        apple_frameworks: &[],
+        apple_libraries: &[],
+        needs_libdl: true,
+        // The random bridge implements PHP's always-compiled `random` extension.
+        php_extensions: &["random"],
         monitoring: MonitoringPolicy::GenericTiming,
     },
     BridgeStaticlib {
@@ -258,7 +323,23 @@ pub(super) const BRIDGES: &[BridgeStaticlib] = &[
         needs_libdl: true,
         // The libxml2-backed XML bridge implements PHP's `xml` (SAX parser) and
         // `xmlwriter` extensions; both surfaces are declared by the same injected prelude.
-        php_extensions: &["xml", "xmlwriter"],
+        php_extensions: &["xml", "xmlwriter", "SimpleXML"],
+        monitoring: MonitoringPolicy::GenericTiming,
+    },
+    BridgeStaticlib {
+        lib_name: "elephc_tidy",
+        env_var: "ELEPHC_TIDY_LIB_DIR",
+        crate_name: "elephc-tidy",
+        flag_name: "tidy",
+        whole_archive: false,
+        apple_frameworks: &[],
+        // The bridge's parser IS libtidy (the managed `libtidy` catalog package,
+        // spliced in by `src/pipeline/backend.rs` whenever this bridge is planned).
+        // libtidy is plain C and needs neither a framework nor iconv.
+        apple_libraries: &[],
+        needs_libdl: true,
+        // The libtidy-backed bridge implements PHP's `tidy` extension.
+        php_extensions: &["tidy"],
         monitoring: MonitoringPolicy::GenericTiming,
     },
     BridgeStaticlib {
@@ -279,6 +360,20 @@ pub(super) const BRIDGES: &[BridgeStaticlib] = &[
         // The eval interpreter is an internal compiler facility, not an extension.
         php_extensions: &[],
         monitoring: MonitoringPolicy::GenericTiming,
+    },
+    BridgeStaticlib {
+        lib_name: "elephc_reference",
+        env_var: "ELEPHC_REFERENCE_LIB_DIR",
+        crate_name: "elephc-reference",
+        flag_name: "reference",
+        whole_archive: false,
+        apple_frameworks: &[],
+        apple_libraries: &[],
+        needs_libdl: true,
+        php_extensions: &[],
+        monitoring: MonitoringPolicy::Infrastructure {
+            reason: "native reference metadata and protected validation coordination",
+        },
     },
     BridgeStaticlib {
         lib_name: "elephc_curl",
@@ -302,7 +397,35 @@ pub(super) const BRIDGES: &[BridgeStaticlib] = &[
             trace_context: TraceContextPolicy::Automatic,
         },
     },
+    BridgeStaticlib {
+        lib_name: "elephc_zend",
+        env_var: "ELEPHC_ZEND_LIB_DIR",
+        crate_name: "elephc-zend",
+        flag_name: "zend",
+        whole_archive: false,
+        apple_frameworks: &[],
+        // `php_iconv_string` uses the system iconv, its own library on Apple targets.
+        apple_libraries: &["iconv"],
+        needs_libdl: true,
+        // The engine hosted PECL/PIE extensions run on; the extensions themselves
+        // report their own names.
+        php_extensions: &[],
+        monitoring: MonitoringPolicy::GenericTiming,
+    },
 ];
+
+/// Locates (auto-building in a source checkout) the archive of the bridge
+/// named `lib_name`, for links planned outside the named-library path.
+pub(super) fn locate_archive(lib_name: &str) -> Result<PathBuf, LinkError> {
+    let bridge = bridge_for_library(lib_name).ok_or_else(|| LinkError::MissingBridge {
+        name: lib_name.to_string(),
+        archive: None,
+        env_var: None,
+        searched: Vec::new(),
+        override_dir: None,
+    })?;
+    bridge.archive_path()
+}
 
 /// A typed plan after known bridge names have been resolved as far as possible.
 #[derive(Debug)]
@@ -1440,12 +1563,16 @@ mod tests {
     fn every_bridge_crate_is_in_the_build_lists() {
         let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
         let lists = [
-            ".github/workflows/ci.yml",
-            ".github/workflows/release.yml",
-            ".github/workflows/nightly.yml",
+            ".github/workflows/ci-build-host.yml",
+            ".github/actions/build-release-artifacts/action.yml",
             "scripts/test-linux-arm64.sh",
             "scripts/test-linux-x86_64.sh",
         ];
+        for rel in [".github/workflows/release.yml", ".github/workflows/nightly.yml"] {
+            let body = std::fs::read_to_string(root.join(rel)).expect("read publishing workflow");
+            assert!(body.contains("/.github/actions/build-release-artifacts"),
+                "{rel} must use the shared release build producer");
+        }
         for rel in lists {
             let path = root.join(rel);
             let Ok(body) = std::fs::read_to_string(&path) else {
@@ -1547,6 +1674,38 @@ mod tests {
         }
     }
 
+    /// Every bridge cross-built by `ci-build-ios.yml` must also be published in its
+    /// artifact file list; a bridge can compile successfully and still be missing from
+    /// every restored iOS link job.
+    #[test]
+    fn every_ios_bridge_build_is_published_in_the_artifact() {
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+        let rel = ".github/workflows/ci-build-ios.yml";
+        let body = std::fs::read_to_string(root.join(rel)).expect("read ci-build-ios workflow");
+        let build_start = body
+            .find("cargo build --locked --target \"$triple\"")
+            .unwrap_or_else(|| panic!("{rel} has no cross-target bridge build"));
+        let build_tail = &body[build_start..];
+        let build_end = build_tail
+            .find("echo \"triple=")
+            .unwrap_or_else(|| panic!("{rel} bridge build has no closing echo"));
+        let build = &build_tail[..build_end];
+        let files_start = body
+            .find("files: |")
+            .unwrap_or_else(|| panic!("{rel} has no iOS artifact file list"));
+        let files = &body[files_start..];
+        for bridge in BRIDGES {
+            if build.contains(&format!("-p {}", bridge.crate_name)) {
+                let archive = format!("lib{}.a", bridge.lib_name);
+                assert!(
+                    files.contains(&archive),
+                    "{rel} builds {} but never publishes `{archive}`",
+                    bridge.crate_name
+                );
+            }
+        }
+    }
+
     /// The workflows that publish an artifact must actually run the packaging probe.
     ///
     /// Every other packaging test here checks one list against the bridge
@@ -1577,24 +1736,39 @@ mod tests {
                  bridge missing from the tarball ships unnoticed again"
             );
             assert!(
-                body.contains("~/.cache/elephc/native"),
+                body.contains("uses: actions/cache@")
+                    && body.contains("path: ${{ runner.temp }}/verify-native"),
                 "{rel} runs {probe} without caching managed native packages, so \
                  a cold native add curl rebuilds openssl/libcurl from source \
                  on every nightly instead of reusing a verified cache"
             );
+            assert!(
+                body.contains("ELEPHC_NATIVE_CACHE=$RUNNER_TEMP/verify-native"),
+                "{rel} caches native packages outside the execution image's shared cache"
+            );
         }
         let script = std::fs::read_to_string(root.join(probe))
             .unwrap_or_else(|_| panic!("cannot read {probe}"));
-        let curl_case = script.find("curl) native_packages=\"curl\" ;;")
-            .unwrap_or_else(|| panic!("{probe} must map curl to its managed native package"));
+        // The packages come from the packaged binary's own `native:` fields
+        // (`crate::linker::native_packages`), never from a list in the script.
+        let native_fields = script.find("native:*) native_packages=")
+            .unwrap_or_else(|| panic!("{probe} must read native packages from --print-capabilities"));
         let native_loop = script.find("for native_package in $native_packages")
-            .unwrap_or_else(|| panic!("{probe} must iterate selected managed native packages"));
+            .unwrap_or_else(|| panic!("{probe} must iterate the reported managed native packages"));
         let native_add = script.find("native add \"$native_package\"")
-            .unwrap_or_else(|| panic!("{probe} must install the selected managed native package"));
+            .unwrap_or_else(|| panic!("{probe} must install each reported managed native package"));
         let bridge_compile = script.find("\"--with-$name\" probe.php")
             .unwrap_or_else(|| panic!("{probe} must compile each packed bridge probe"));
-        assert!(curl_case < native_loop && native_loop < native_add && native_add < bridge_compile,
-            "{probe} must select, install, then compile curl in that order");
+        assert!(native_fields < native_loop && native_loop < native_add && native_add < bridge_compile,
+            "{probe} must read, install, then compile each bridge's packages in that order");
+        for (bridge, package) in [("curl", "curl"), ("xml", "libxml2"), ("openssl", "openssl-crypto")] {
+            assert!(
+                !script.contains(&format!("{bridge}) native_packages="))
+                    && !script.contains(&format!("native add {package}"))
+                    && !script.contains(&format!("[ \"$name\" = \"{bridge}\" ]")),
+                "{probe} hard-codes {bridge}'s native package again; the binary reports it"
+            );
+        }
         assert!(
             !script.contains("missing_native_package")
                 && !script.contains("requires managed native package")
@@ -1604,27 +1778,6 @@ mod tests {
         assert!(
             script.contains("needs no archive from this tarball"),
             "{probe} must keep the empty-archive skip for regex/mysqli"
-        );
-        // xml is the second packed-archive capability that also needs a catalog
-        // package (`libxml2`: the bridge's parser is libxml2 itself, reached through
-        // the package's shim), and gets the identical add-first branch.
-        assert!(
-            script.contains("[ \"$name\" = \"xml\" ]") && script.contains("native add libxml2"),
-            "{probe} must run native add libxml2 before --with-xml; xml is a \
-             packed-archive capability that also needs a catalog package"
-        );
-        assert!(
-            script.contains("adding managed native package libxml2 before --with-xml"),
-            "{probe} must native-add libxml2 first, not after a failed compile"
-        );
-        let after_xml = script
-            .split_once("[ \"$name\" = \"xml\" ]")
-            .map(|(_, rest)| rest)
-            .unwrap_or("");
-        assert!(
-            after_xml.contains("native add libxml2")
-                && !after_xml.contains("needs no archive from this tarball"),
-            "{probe} must not skip xml the way regex is skipped"
         );
     }
 
@@ -1644,8 +1797,11 @@ mod tests {
             .unwrap_or_else(|| panic!("{rel} no longer has an `{marker}` step to split on"));
         let (tarball, formula) = body.split_at(split);
 
+        let producer = std::fs::read_to_string(root.join(".github/actions/build-release-artifacts/action.yml"))
+            .expect("read shared release producer");
         assert!(
-            tarball.contains("-p elephc-magician --features curl")
+            tarball.contains("uses: ./.github/actions/build-release-artifacts")
+                && producer.contains("-p elephc-magician --features curl")
                 && tarball.contains("libelephc_magician_curl.a"),
             "{rel} must build and pack the curl-aware Magician archive"
         );
@@ -1663,6 +1819,9 @@ mod tests {
         }
         assert_eq!(bridge_lib_for_flag("bogus"), None);
         assert_eq!(crate_flag_names().len(), BRIDGES.len());
+        assert_eq!(bridge_lib_for_flag("reference"), Some("elephc_reference"));
+        assert_eq!(archive_filename_for_flag("reference").as_deref(), Some("libelephc_reference.a"));
+        assert!(php_extensions_for_lib("elephc_reference").is_empty());
     }
 
     /// Verifies adding a bridge requires an explicit, machine-audited monitoring decision.
@@ -1732,7 +1891,7 @@ mod tests {
         assert!(!xml.whole_archive);
         assert!(xml.apple_frameworks.is_empty());
         assert_eq!(xml.apple_libraries, &["iconv"]);
-        assert_eq!(xml.php_extensions, &["xml", "xmlwriter"]);
+        assert_eq!(xml.php_extensions, &["xml", "xmlwriter", "SimpleXML"]);
 
         let magician = bridge_for_library("elephc_magician").expect("eval bridge");
         assert_eq!(magician.crate_name, "elephc-magician");
@@ -1920,6 +2079,8 @@ mod tests {
         assert!(php_extensions_for_lib("elephc_pdo").is_empty());
         assert_eq!(php_extensions_for_lib("elephc_crypto"), ["hash"]);
         assert_eq!(php_extensions_for_lib("elephc_bcmath"), ["bcmath"]);
+        assert_eq!(php_extensions_for_lib("elephc_gmp"), ["gmp"]);
+        assert_eq!(php_extensions_for_lib("elephc_random"), ["random"]);
         assert_eq!(php_extensions_for_lib("elephc_phar"), ["Phar"]);
         assert_eq!(php_extensions_for_lib("elephc_image"), ["gd"]);
         assert_eq!(php_extensions_for_lib("elephc_web"), ["session"]);

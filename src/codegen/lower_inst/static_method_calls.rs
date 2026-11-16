@@ -14,7 +14,24 @@ use super::*;
 /// A late-bound `static::` call that can still be overridden checks literal parameters
 /// against the runtime called class. Early-bound and final calls keep the resolved signature.
 pub(super) fn lower_static_method_call(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
-    let target = method_name_data(ctx, inst)?.to_string();
+    let raw_target = method_name_data(ctx, inst)?.to_string();
+    let object_static = raw_target.starts_with("@object@");
+    let target = raw_target
+        .strip_prefix("@object@")
+        .unwrap_or(&raw_target)
+        .to_string();
+    let adjusted;
+    let (inst, object_value) = if object_static {
+        let object = *inst.operands.first().ok_or_else(|| {
+            CodegenIrError::invalid_module("object static method call without a receiver")
+        })?;
+        let mut adjusted_inst = inst.clone();
+        adjusted_inst.operands = inst.operands[1..].to_vec();
+        adjusted = adjusted_inst;
+        (&adjusted, Some(object))
+    } else {
+        (inst, None)
+    };
     let (receiver_label, method_name) = parse_static_method_target(&target)?;
     let receiver = resolve_static_method_receiver(ctx, receiver_label)?;
     if is_static_fiber_get_current_call(&receiver, method_name) {
@@ -28,7 +45,10 @@ pub(super) fn lower_static_method_call(ctx: &mut FunctionContext<'_>, inst: &Ins
     {
         return Ok(());
     }
-    let called_class_id = resolve_static_called_class_arg(ctx, receiver_label, &receiver)?;
+    let called_class_id = match object_value {
+        Some(object) => CalledClassIdArg::Object(object),
+        None => resolve_static_called_class_arg(ctx, receiver_label, &receiver)?,
+    };
     if let Some(intrinsic) = runtime_backed_static_intrinsic(receiver.as_str(), method_name) {
         return lower_static_runtime_intrinsic(
             ctx,
@@ -39,7 +59,7 @@ pub(super) fn lower_static_method_call(ctx: &mut FunctionContext<'_>, inst: &Ins
             intrinsic,
         );
     }
-    let late_bound_static = is_late_bound_static_receiver(receiver_label);
+    let late_bound_static = object_value.is_some() || is_late_bound_static_receiver(receiver_label);
     let Some(receiver_info) = ctx.module.class_infos.get(receiver.as_str()) else {
         if builtins::has_eval_context(ctx) {
             return builtins::lower_eval_static_method_call(
@@ -100,6 +120,13 @@ pub(super) fn lower_static_method_call(ctx: &mut FunctionContext<'_>, inst: &Ins
     } else {
         None
     };
+    let reference_entries = if dynamic_static_slot.is_some() {
+        super::reference_return_dispatch::entries(
+            ctx, impl_class, &method_key, callee_sig.by_ref_return,
+            crate::codegen_support::source_method_adapters::MethodKind::Static,
+            !crate::codegen_support::source_method_adapters::uses_physical_func_args_abi(callee_sig),
+        )?
+    } else { Vec::new() };
     let overridable_late_static = late_bound_static
         && dynamic_static_slot.is_some()
         && !receiver_info.final_static_methods.contains(&method_key);
@@ -119,7 +146,13 @@ pub(super) fn lower_static_method_call(ctx: &mut FunctionContext<'_>, inst: &Ins
             &format!("{impl_class}::{method_key}"),
         )?;
     }
-    let eval_done_label = if late_bound_static && ctx.module.required_runtime_features.eval_bridge {
+    // Object-based static calls dispatch through the receiver's runtime class and must not
+    // enter the caller's eval late-static override: a native Base object stays on Base::method
+    // even while an eval-declared Child override is active.
+    let eval_done_label = if late_bound_static
+        && object_value.is_none()
+        && ctx.module.required_runtime_features.eval_bridge
+    {
         let no_override_label = ctx.next_label("eval_late_static_no_override");
         let done_label = ctx.next_label("eval_late_static_done");
         builtins::lower_eval_native_frame_static_method_call(
@@ -151,16 +184,18 @@ pub(super) fn lower_static_method_call(ctx: &mut FunctionContext<'_>, inst: &Ins
             !crate::codegen_support::source_method_adapters::uses_physical_func_args_abi(
                 callee_sig,
             ),
-        );
+            &reference_entries,
+            &callee_sig.return_type,
+        )?;
     } else {
         abi::emit_call_label(ctx.emitter, &static_method_symbol(impl_class, &method_key));
     }
     abi::emit_release_temporary_stack(ctx.emitter, caller_stack_pad_bytes);
     abi::emit_release_temporary_stack(ctx.emitter, call_args.overflow_bytes);
-    store_call_result(ctx, inst, &callee_sig.return_type)?;
+    store_compiled_call_result(ctx, inst, &callee_sig.return_type, callee_sig.by_ref_return)?;
     // User callees return an owner independent of the caller's materialized Mixed arguments.
     emit_call_arg_temp_cleanups(ctx, &call_args, None)?;
-    emit_ref_arg_writebacks(ctx, &call_args)?;
+    emit_ref_arg_writebacks_guarding_result(ctx, &call_args, inst.result, false)?;
     if let Some(done_label) = eval_done_label {
         ctx.emitter.label(&done_label);
     }
@@ -222,12 +257,7 @@ pub(super) fn lower_lexical_instance_static_method_call(
     store_method_call_result(ctx, inst, &target)?;
     // The callee's parameter shadows keep any returned Mixed value independently owned.
     emit_call_arg_temp_cleanups(ctx, &call_args, None)?;
-    emit_ref_arg_writebacks(ctx, &call_args)
-}
-
-/// Emits an indirect static-vtable call for a late-bound `static::method()` receiver.
-pub(super) fn emit_dynamic_static_method_call(ctx: &mut FunctionContext<'_>, slot: usize) {
-    emit_dynamic_static_method_call_with_abi(ctx, slot, false);
+    emit_ref_arg_writebacks_guarding_result(ctx, &call_args, inst.result, target.by_ref_return)
 }
 
 /// Emits late-static dispatch through either the physical or source-ABI table.
@@ -235,7 +265,9 @@ pub(super) fn emit_dynamic_static_method_call_with_abi(
     ctx: &mut FunctionContext<'_>,
     slot: usize,
     source_abi: bool,
-) {
+    reference_entries: &[super::reference_return_dispatch::ReferenceReturnEntry],
+    return_ty: &PhpType,
+) -> Result<()> {
     let hidden_called_class_reg = abi::int_arg_reg_name(ctx.emitter.target, 0);
     let class_id_scratch = abi::temp_int_reg(ctx.emitter.target);
     let dispatch_scratch = abi::symbol_scratch_reg(ctx.emitter);
@@ -262,7 +294,7 @@ pub(super) fn emit_dynamic_static_method_call_with_abi(
         }
     }
     abi::emit_load_from_address(ctx.emitter, dispatch_scratch, dispatch_scratch, slot * 8);
-    abi::emit_call_reg(ctx.emitter, dispatch_scratch);
+    super::reference_return_dispatch::emit_call(ctx, dispatch_scratch, reference_entries, return_ty)
 }
 
 /// Lowers static `Fiber::suspend($value = null)` through the shared runtime helper.

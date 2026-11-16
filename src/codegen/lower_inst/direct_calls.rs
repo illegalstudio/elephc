@@ -73,6 +73,7 @@ pub(super) fn lower_direct_call(ctx: &mut FunctionContext<'_>, inst: &Instructio
     )?;
     let caller_stack_pad_bytes = direct_call_stack_pad_bytes(ctx, call_args.overflow_bytes);
     abi::emit_reserve_temporary_stack(ctx.emitter, caller_stack_pad_bytes);
+    super::reference_argument_handoff::activate(ctx, &inst.operands, &ref_params)?;
     abi::emit_call_label(ctx.emitter, &function_symbol(&function_name));
     abi::emit_release_temporary_stack(ctx.emitter, caller_stack_pad_bytes);
     abi::emit_release_temporary_stack(ctx.emitter, call_args.overflow_bytes);
@@ -94,7 +95,7 @@ pub(super) fn lower_direct_call(ctx: &mut FunctionContext<'_>, inst: &Instructio
     // User callees own their Mixed parameter shadows, including an aliased resource return.
     emit_call_arg_temp_cleanups(ctx, &call_args, None)?;
     emit_borrowed_stack_mixed_arg_release(ctx, &call_args);
-    emit_ref_arg_writebacks(ctx, &call_args)
+    emit_ref_arg_writebacks_guarding_result(ctx, &call_args, inst.result, callee_by_ref_return)
 }
 
 /// Loads SSA operands into ABI argument registers and caller-stack slots for a direct call.
@@ -370,6 +371,21 @@ pub(super) fn materialize_called_class_id(
             if !matches!(source_ty.codegen_repr(), PhpType::Object(_)) {
                 return Err(CodegenIrError::invalid_module(format!(
                     "this local has PHP type {:?} for forwarded called-class id",
+                    source_ty
+                )));
+            }
+            abi::emit_load_from_address(
+                ctx.emitter,
+                abi::int_result_reg(ctx.emitter),
+                abi::int_result_reg(ctx.emitter),
+                0,
+            );
+        }
+        CalledClassIdArg::Object(value) => {
+            let source_ty = ctx.load_value_to_reg(*value, abi::int_result_reg(ctx.emitter))?;
+            if !matches!(source_ty.codegen_repr(), PhpType::Object(_)) {
+                return Err(CodegenIrError::invalid_module(format!(
+                    "object receiver has PHP type {:?} for forwarded called-class id",
                     source_ty
                 )));
             }

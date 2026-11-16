@@ -8,7 +8,7 @@
 //! - Fragments are joined before dispatch, and detached before a reentrant warning.
 //! - Producers explicitly finish a diagnostic; newlines inside data never delimit it.
 //! - Volatile registers are preserved because legacy producers used a leaf writer.
-//! - An unwind activation releases owned message and argument storage on throws.
+//! - Every completed diagnostic publishes cleanup before native or host callbacks can throw.
 
 use crate::codegen_support::{abi, emit::Emitter, platform::Arch,
     emit_box_current_owned_value_as_mixed, emit_box_current_value_as_mixed};
@@ -131,6 +131,7 @@ pub(super) fn emit_warning_dispatch(e: &mut Emitter) {
         abi::emit_load_int_immediate(e, result, 0);
         save(e, offset);
     }
+    emit_activation(e);
     abi::emit_load_int_immediate(e, result, 2);
     save(e, LEVEL);
     // Match complete prefixes before stripping them from the handler's message.
@@ -162,7 +163,6 @@ pub(super) fn emit_warning_dispatch(e: &mut Emitter) {
     ins(e, "and x0, x0, x10", "and rax, r10");
     abi::emit_branch_if_int_result_zero(e, "__rt_warning_default");
     emit_arguments(e);
-    emit_activation(e);
     abi::emit_load_symbol_to_reg(e, a0, "_php_error_handler_callable", 0);
     arg(e, 1, ARGS);
     abi::emit_call_label(e, "__rt_error_handler_invoke");
@@ -172,14 +172,13 @@ pub(super) fn emit_warning_dispatch(e: &mut Emitter) {
     ins(e, "cmp x10, #3", "cmp r10, 3");
     ins(e, "b.ne __rt_warning_handled", "jne __rt_warning_handled");
     ins(e, "ldr x10, [x0, #8]", "mov r10, QWORD PTR [rax + 8]");
-    ins(e, "cbz x10, __rt_warning_unpublish", "test r10, r10");
-    if !arm { e.instruction("jz __rt_warning_unpublish"); } // boolean false falls through to default output
+    ins(e, "cbz x10, __rt_warning_default", "test r10, r10");
+    if !arm {
+        e.instruction("jz __rt_warning_default");                              // boolean false selects default output with its cleanup still published
+    }
     e.label("__rt_warning_handled");
     abi::emit_load_int_immediate(e, result, 1);
     save(e, HANDLED);
-    e.label("__rt_warning_unpublish");
-    abi::emit_load_temporary_stack_slot(e, scratch, ACTIVATION);
-    abi::emit_store_reg_to_symbol(e, scratch, "_exc_call_frame_top", 0);
     e.label("__rt_warning_default");
     abi::emit_load_temporary_stack_slot(e, result, HANDLED);
     abi::emit_branch_if_int_result_nonzero(e, "__rt_warning_release");
@@ -187,6 +186,59 @@ pub(super) fn emit_warning_dispatch(e: &mut Emitter) {
     abi::emit_load_temporary_stack_slot(e, scratch, LEVEL);
     ins(e, "and x0, x0, x10", "and rax, r10");
     abi::emit_branch_if_int_result_zero(e, "__rt_warning_release");
+    if e.phpext_output {
+        // Under `--emit phpext`, `__rt_diag_write` forwards each write to the host
+        // PHP error handler. The host adds the newline and source location itself,
+        // exactly as for an internal PHP diagnostic, so send only the raw message.
+        abi::emit_jump(e, "__rt_warning_plain_message");
+    } else {
+    // php-src prefixes every displayed diagnostic with one newline.
+    if arm {
+        abi::emit_symbol_address(e, a1, "_rt_diag_leading_newline");
+        abi::emit_load_int_immediate(e, abi::int_arg_reg_name(e.target, 2), 1);
+    } else {
+        abi::emit_symbol_address(e, a0, "_rt_diag_leading_newline");
+        abi::emit_load_int_immediate(e, a1, 1);
+    }
+    abi::emit_call_label(e, "__rt_diag_write");
+    // A warning producer's message is a complete line. PHP adds the caller location itself,
+    // so append it here when the compiler published a source line for this instruction.
+    abi::emit_load_symbol_to_reg(e, result, "_php_diagnostic_line", 0);
+    abi::emit_branch_if_int_result_zero(e, "__rt_warning_plain_message");
+    if arm {
+        arg(e, 1, BUFFER);
+        arg(e, 2, LENGTH);
+        e.instruction("sub x2, x2, #1");                                    // omit the line terminator before the location suffix
+    } else {
+        arg(e, 0, BUFFER);
+        arg(e, 1, LENGTH);
+        e.instruction("sub rsi, 1");                                        // omit the line terminator before the location suffix
+    }
+    abi::emit_call_label(e, "__rt_diag_write");
+    abi::emit_load_temporary_stack_slot(e, scratch, LENGTH);
+    ins(e, "sub x10, x10, #1", "sub r10, 1");
+    abi::emit_store_reg_to_symbol(e, scratch, "_rt_diag_warning_message_len", 0);
+    emit_diag_static(e, "_rt_diag_in", 4);
+    if arm {
+        abi::emit_load_symbol_to_reg(e, "x1", "_php_diagnostic_file", 0);
+        abi::emit_load_symbol_to_reg(e, "x2", "_php_diagnostic_file_len", 0);
+    } else {
+        abi::emit_load_symbol_to_reg(e, "rdi", "_php_diagnostic_file", 0);
+        abi::emit_load_symbol_to_reg(e, "rsi", "_php_diagnostic_file_len", 0);
+    }
+    abi::emit_call_label(e, "__rt_diag_write");
+    emit_diag_static(e, "_rt_diag_on_line", 9);
+    abi::emit_load_symbol_to_reg(e, result, "_php_diagnostic_line", 0);
+    abi::emit_call_label(e, "__rt_itoa");
+    if !arm {
+        e.instruction("mov rdi, rax");                                      // pass the formatted line-number pointer
+        e.instruction("mov rsi, rdx");                                      // pass its byte length
+    }
+    abi::emit_call_label(e, "__rt_diag_write");
+    emit_diag_static(e, "_rt_diag_newline", 1);
+    abi::emit_jump(e, "__rt_warning_release");
+    }
+    e.label("__rt_warning_plain_message");
     if arm {
         arg(e, 1, BUFFER);
         arg(e, 2, LENGTH);
@@ -196,6 +248,9 @@ pub(super) fn emit_warning_dispatch(e: &mut Emitter) {
     }
     abi::emit_call_label(e, "__rt_diag_write");
     e.label("__rt_warning_release");
+    abi::emit_store_zero_to_symbol(e, "_rt_diag_warning_message_len", 0);
+    abi::emit_load_temporary_stack_slot(e, scratch, ACTIVATION);
+    abi::emit_store_reg_to_symbol(e, scratch, "_exc_call_frame_top", 0);
     abi::emit_temporary_stack_address(e, a0, 0);
     abi::emit_call_label(e, "__rt_warning_cleanup");
     e.label("__rt_warning_done");
@@ -213,7 +268,23 @@ pub(super) fn emit_warning_dispatch(e: &mut Emitter) {
     e.label("__rt_warning_allocation_failed");
     abi::emit_jump(e, "__rt_heap_allocation_failed");
     emit_cleanup(e);
+    super::arrays::emit_native_frame_owners(e, "__rt_gc_warning_frame_owners", &[ARGS, RESULT]);
     emit_reset(e);
+}
+
+/// Writes one static diagnostic fragment through the target's diagnostic ABI.
+fn emit_diag_static(e: &mut Emitter, symbol: &str, len: usize) {
+    match e.target.arch {
+        Arch::AArch64 => {
+            abi::emit_symbol_address(e, "x1", symbol);
+            abi::emit_load_int_immediate(e, "x2", len as i64);
+        }
+        Arch::X86_64 => {
+            abi::emit_symbol_address(e, "rdi", symbol);
+            abi::emit_load_int_immediate(e, "rsi", len as i64);
+        }
+    }
+    abi::emit_call_label(e, "__rt_diag_write");
 }
 
 /// Builds the four handler arguments with copied strings and owned boxed cells.
@@ -236,7 +307,16 @@ fn emit_arguments(e: &mut Emitter) {
             1 => {
                 let (ptr, len) = abi::string_result_regs(e);
                 abi::emit_load_temporary_stack_slot(e, ptr, BUFFER);
-                abi::emit_load_temporary_stack_slot(e, len, LENGTH);
+                // A producer may append ` in <file> on line <n>` for the default output.
+                // PHP's error handler receives the message alone, so prefer the length the
+                // producer recorded before appending that suffix; otherwise use the whole
+                // buffered diagnostic.
+                abi::emit_load_symbol_to_reg(e, scratch, "_rt_diag_warning_message_len", 0);
+                ins(e, "cbnz x10, __rt_warning_message_length_ready", "test r10, r10");
+                if !arm { e.instruction("jnz __rt_warning_message_length_ready"); } // keep a recorded message length
+                abi::emit_load_temporary_stack_slot(e, scratch, LENGTH);
+                e.label("__rt_warning_message_length_ready");
+                abi::emit_reg_move(e, len, scratch);
                 abi::emit_load_temporary_stack_slot(e, scratch, PREFIX);
                 ins(e, "add x1, x1, x10", "add rax, r10");
                 ins(e, "sub x2, x2, x10", "sub rdx, r10");
@@ -284,6 +364,9 @@ fn emit_activation(e: &mut Emitter) {
     abi::emit_store_to_sp(e, scratch, ACTIVATION + 16);
     abi::emit_load_int_immediate(e, scratch, 0);
     abi::emit_store_to_sp(e, scratch, ACTIVATION + 24);
+    abi::emit_store_to_sp(e, scratch, ACTIVATION + 32);
+    abi::emit_symbol_address(e, scratch, "__rt_gc_warning_frame_owners");
+    abi::emit_store_to_sp(e, scratch, ACTIVATION + 40);
     abi::emit_temporary_stack_address(e, scratch, ACTIVATION);
     abi::emit_store_reg_to_symbol(e, scratch, "_exc_call_frame_top", 0);
 }
@@ -297,7 +380,11 @@ fn emit_cleanup(e: &mut Emitter) {
     abi::emit_store_to_sp(e, a0, 0);
     for (offset, helper) in [(ARGS, "__rt_decref_mixed"), (RESULT, "__rt_decref_mixed")] {
         abi::emit_load_temporary_stack_slot(e, result, 0);
-        abi::emit_load_from_address(e, result, result, offset);
+        let record = if e.target.arch == Arch::AArch64 { "x10" } else { "r10" };
+        abi::emit_reg_move(e, record, result);
+        abi::emit_load_from_address(e, result, record, offset);
+        abi::emit_load_int_immediate(e, if e.target.arch == Arch::AArch64 { "x11" } else { "r11" }, 0);
+        abi::emit_store_to_address(e, if e.target.arch == Arch::AArch64 { "x11" } else { "r11" }, record, offset);
         abi::emit_call_label(e, helper);
     }
     abi::emit_load_temporary_stack_slot(e, a0, 0);

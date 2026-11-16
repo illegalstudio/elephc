@@ -1,8 +1,6 @@
 ---
 title: "jddayofweek()"
 description: "Returns the day of the week for a Julian Day count, as a number or a name."
-sidebar:
-  order: 228
 ---
 
 ## jddayofweek()
@@ -21,8 +19,9 @@ Returns the day of the week for a Julian Day count, as a number or a name.
 
 ## Availability
 
-- **Compiled (AOT)**: supported through the Elephc compiler.
-- **`eval()` (magician interpreter)**: supported through the procedural date/time alias dispatcher.
+| Compiled (AOT) | Magician (eval) |
+|---|---|
+| Available | Available |
 
 _No examples yet. Check `examples/` and `showcases/` for usage patterns._
 

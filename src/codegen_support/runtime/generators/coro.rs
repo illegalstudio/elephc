@@ -1,6 +1,6 @@
 //! Purpose:
 //! Fiber-backed generator coroutine runtime. A PHP `Generator` is a coroutine
-//! object that reuses the Fiber 240-byte layout (so it can reuse
+//! object that reuses the Fiber 248-byte layout (so it can reuse
 //! `__rt_fiber_switch`/`suspend`/`resume`/`throw`/`start`) plus a small block of
 //! generator-specific fields in the otherwise-unused reserved region. This file
 //! owns those field offsets and the `yield` suspension primitive

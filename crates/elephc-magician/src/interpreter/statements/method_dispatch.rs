@@ -517,10 +517,10 @@ pub(in crate::interpreter) fn eval_method_call_result_with_evaluated_args(
     if let Some((class_name, method)) =
         eval_dynamic_method_for_call(&called_class_name, method_name, context)
     {
-        if method.is_abstract() {
-            return Err(EvalStatus::RuntimeFatal);
-        }
         if validate_eval_member_access(&class_name, method.visibility(), context).is_ok() {
+            if method.is_abstract() {
+                return eval_throw_abstract_method_call_error(&class_name, method.name(), context, values);
+            }
             if method.is_static() {
                 return eval_dynamic_static_method_with_values(
                     &class_name,
@@ -636,6 +636,7 @@ pub(super) fn eval_closure_object_method_result(
                 *target,
                 "call",
                 std::iter::once(EvaluatedCallArg {
+                    evaluation_owner: None,
                     name: None,
                     value: bound_this,
                     ref_target: None,
@@ -646,6 +647,11 @@ pub(super) fn eval_closure_object_method_result(
                 values,
             )
         }
+        EvalClosureObjectTarget::NativeDescriptor { .. } => eval_closure_call_warning_null(
+            "Cannot rebind scope of closure created from function",
+            values,
+        )
+        .map(Some),
         EvalClosureObjectTarget::Named(name) => {
             if context.closure(&name).is_some() {
                 let callable = EvaluatedCallable::BoundClosure {
@@ -751,6 +757,9 @@ pub(super) fn eval_closure_object_invoke_result(
                 owner_context,
                 values,
             );
+        }
+        EvalClosureObjectTarget::NativeDescriptor { callback, display_name } => {
+            EvaluatedCallable::NativeDescriptor { callback, display_name }
         }
         EvalClosureObjectTarget::Named(name) => EvaluatedCallable::Named {
             display_name: name.clone(),

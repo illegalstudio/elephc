@@ -1,8 +1,6 @@
 ---
 title: "mysqli_thread_safe()"
 description: "Reports whether the client library is thread-safe."
-sidebar:
-  order: 180
 ---
 
 ## mysqli_thread_safe()
@@ -19,8 +17,9 @@ Reports whether the client library is thread-safe.
 
 ## Availability
 
-- **Compiled (AOT)**: supported through an injected elephc-PHP prelude.
-- **`eval()` (magician interpreter)**: not available inside eval'd code.
+| Compiled (AOT) | Magician (eval) |
+|---|---|
+| Available | Not available yet |
 
 _No examples yet. Check `examples/` and `showcases/` for usage patterns._
 

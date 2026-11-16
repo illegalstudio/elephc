@@ -1,0 +1,13 @@
+name: Audit consumer Rust builds
+description: Fail even when a test or linker ignored an implicit Cargo build failure.
+runs:
+  using: composite
+  steps:
+    - name: Require zero consumer Rust builds
+      shell: bash
+      run: |
+        : "${ELEPHC_CI_BUILD_GUARD_LOG:?the artifact consumer guard was not installed}"
+        if [[ -s "$ELEPHC_CI_BUILD_GUARD_LOG" ]]; then
+          cat "$ELEPHC_CI_BUILD_GUARD_LOG"
+          exit 1
+        fi

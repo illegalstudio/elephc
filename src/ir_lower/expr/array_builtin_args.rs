@@ -9,6 +9,27 @@
 
 use super::*;
 
+/// Reports source-located storage incompatibility when boxed parameters reach a typed hash push.
+pub(super) fn validate_typed_array_push_operands(
+    ctx: &LoweringContext<'_, '_>, def: &crate::builtins::registry::BuiltinDef,
+    operands: &[crate::ir::ValueId], span: Span,
+) {
+    if !matches!(def.spec.semantics.lowering,
+        crate::builtins::semantics::BuiltinLowering::Runtime(
+            crate::ir::RuntimeCallTarget::Function(crate::ir::RuntimeFnId::ArrayPush)))
+    { return; }
+    let Some(receiver) = operands.first() else { return; };
+    let PhpType::AssocArray { value, .. } = ctx.builder.value_php_type(*receiver).codegen_repr()
+        else { return; };
+    if matches!(value.codegen_repr(), PhpType::Mixed | PhpType::Iterable) { return; }
+    if operands.iter().skip(1).any(|value|
+        ctx.builder.value_php_type(*value).codegen_repr() == PhpType::Mixed)
+    {
+        crate::ir_lower::diagnostics::refuse(span,
+            "array_push() values must match the associative receiver entry type; use mixed entries for boxed values");
+    }
+}
+
 /// Lowers `array_push($local, $value…)` as direct indexed-array mutations.
 ///
 /// The fast path for the common receiver: a plain local already typed as an indexed array, where
@@ -46,46 +67,8 @@ pub(super) fn lower_static_array_push(
     // Interleaving the two loops was invisible while the arity was pinned at one value.
     let values: Vec<LoweredValue> = args[1..].iter().map(|arg| lower_expr(ctx, arg)).collect();
     for value in values {
-        // Re-read the local for every append: an earlier one may have replaced the slot's
-        // pointer, and appending into the stale one would write to freed storage.
-        let array_value = ctx.load_local(array_name, Some(args[0].span));
-        let (array_value, updated_ty, needs_storeback) =
-            if crate::ir_lower::stmt::ref_bound_mixed_indexed_array_write(ctx, array_name, value) {
-                (array_value, Some(ctx.local_type(array_name)), true)
-            } else {
-                crate::ir_lower::stmt::prepare_indexed_array_local_write(
-                    ctx,
-                    array_value,
-                    value,
-                    expr.span,
-                )
-            };
-        ctx.emit_void(
-            Op::ArrayPush,
-            vec![array_value.value, value.value],
-            None,
-            Op::ArrayPush.default_effects(),
-            Some(expr.span),
-        );
-        let elem_ty = crate::ir_lower::stmt::indexed_array_write_element_type(
-            ctx,
-            array_value,
-            updated_ty.as_ref(),
-        );
-        crate::ir_lower::stmt::finish_indexed_array_local_write(
-            ctx,
-            array_name,
-            array_value,
-            updated_ty,
-            needs_storeback,
-            expr.span,
-        );
-        crate::ir_lower::stmt::release_indexed_array_write_operand(
-            ctx,
-            elem_ty.as_ref(),
-            value,
-            expr.span,
-        );
+        let appended = try_append_indexed_array_local_value(ctx, array_name, value, expr.span);
+        debug_assert!(appended, "static array_push receiver stopped being an indexed array");
     }
     // PHP returns the new element count. Reading it from the final array rather than tracking it
     // across the appends also gives the value-less form its answer for free.
@@ -100,6 +83,70 @@ pub(super) fn lower_static_array_push(
     ))
 }
 
+/// Appends one value to an indexed local while preserving its evolving storage type.
+///
+/// A heterogeneous append converts typed storage to Mixed before the write, republishes a
+/// relocated pointer, updates the local type fact, and releases only an operand the write owned.
+/// Returning `false` leaves non-indexed or boxed receivers for their ordinary builtin path.
+pub(super) fn try_append_indexed_array_local_value(
+    ctx: &mut LoweringContext<'_, '_>,
+    array_name: &str,
+    value: LoweredValue,
+    span: Span,
+) -> bool {
+    if !matches!(ctx.local_type(array_name).codegen_repr(), PhpType::Array(_)) {
+        return false;
+    }
+    // Re-read the local for every append: an earlier one may have replaced the slot's pointer,
+    // and appending into the stale one would write to freed storage.
+    let array_value = ctx.load_local(array_name, Some(span));
+    if array_value.ir_type != IrType::Heap(IrHeapKind::Array) {
+        return false;
+    }
+    // A packed record address or `null` appended to pointers is the pointer word, as in the
+    // `$a[] = ...` statement.
+    let array_ty = ctx.builder.value_php_type(array_value.value);
+    let value = ctx.retype_value_for_container_element(&array_ty, value, Some(span));
+    let (array_value, updated_ty, needs_storeback) =
+        if crate::ir_lower::stmt::ref_bound_mixed_indexed_array_write(ctx, array_name, value) {
+            (array_value, Some(ctx.local_type(array_name)), true)
+        } else {
+            crate::ir_lower::stmt::prepare_indexed_array_local_write(
+                ctx,
+                array_value,
+                value,
+                span,
+            )
+        };
+    ctx.emit_void(
+        Op::ArrayPush,
+        vec![array_value.value, value.value],
+        None,
+        Op::ArrayPush.default_effects(),
+        Some(span),
+    );
+    let elem_ty = crate::ir_lower::stmt::indexed_array_write_element_type(
+        ctx,
+        array_value,
+        updated_ty.as_ref(),
+    );
+    crate::ir_lower::stmt::finish_indexed_array_local_write(
+        ctx,
+        array_name,
+        array_value,
+        updated_ty,
+        needs_storeback,
+        span,
+    );
+    crate::ir_lower::stmt::release_indexed_array_write_operand(
+        ctx,
+        elem_ty.as_ref(),
+        value,
+        span,
+    );
+    true
+}
+
 /// Lowers builtin call operands, applying builtin-specific preservation where source order matters.
 pub(super) fn lower_builtin_call_args(
     ctx: &mut LoweringContext<'_, '_>,
@@ -109,11 +156,12 @@ pub(super) fn lower_builtin_call_args(
 ) -> Vec<crate::ir::ValueId> {
     let rewritten = builtin_string_callbacks_as_first_class(sig, args);
     let args = rewritten.as_deref().unwrap_or(args);
-    let operands = lower_planned_builtin_call_args(ctx, name, sig, args);
+    let operands = borrowed_string_args::try_lower(ctx, name, sig, args)
+        .unwrap_or_else(|| lower_planned_builtin_call_args(ctx, name, sig, args));
     let canonical = php_symbol_key(name.trim_start_matches('\\'));
-    let lowering = crate::builtins::registry::lookup(&canonical)
-        .map(|def| def.spec.semantics.argument_lowering);
-    match lowering {
+    let def = crate::builtins::registry::lookup(&canonical);
+    let lowering = def.map(|def| def.spec.semantics.argument_lowering);
+    let operands = match lowering {
         Some(crate::builtins::semantics::BuiltinArgumentLowering::BareArrayValues { arg, sole }) => {
             lower_bare_array_values_operand(ctx, sig, args, operands, arg, sole)
         }
@@ -121,6 +169,28 @@ pub(super) fn lower_builtin_call_args(
             lower_weak_string_union_operand(ctx, args, operands, arg)
         }
         _ => operands,
+    };
+    if let Some(def) = def {
+        validate_array_chunk_element_layout(ctx, def, &operands,
+            args.first().map_or_else(Span::dummy, |arg| arg.span));
+    }
+    operands
+}
+
+/// Reports the existing indexed-string chunking limitation before target codegen.
+fn validate_array_chunk_element_layout(
+    ctx: &LoweringContext<'_, '_>, def: &crate::builtins::registry::BuiltinDef,
+    operands: &[crate::ir::ValueId], span: Span,
+) {
+    if !matches!(def.spec.semantics.lowering,
+        crate::builtins::semantics::BuiltinLowering::Runtime(
+            crate::ir::RuntimeCallTarget::Function(crate::ir::RuntimeFnId::ArrayChunk)))
+    { return; }
+    if operands.first().is_some_and(|value| matches!(ctx.builder.value_php_type(*value),
+        PhpType::Array(element) if element.codegen_repr() == PhpType::Str))
+    {
+        crate::ir_lower::diagnostics::refuse(span,
+            "array_chunk() on indexed string arrays is not supported in AOT mode");
     }
 }
 
@@ -201,9 +271,10 @@ fn builtin_string_callbacks_as_first_class(
 
 /// Replaces a bare-`array` operand with the owned `array<mixed>` list of its values.
 ///
-/// See `BuiltinArgumentLowering::BareArrayValues` for why. Only an operand the checker typed as the
-/// bare declaration — `array<mixed>|array<mixed, mixed>` — is converted: a typed array already
-/// reaches the builtin's own path and needs nothing, and converting it would only copy it.
+/// See `BuiltinArgumentLowering::BareArrayValues` for why. A checked array read may still
+/// have boxed nullable storage after a guard or coalescing assignment. A single concrete
+/// container payload keeps its element/key contract through the existing typed unbox. Only
+/// runtime-layout arrays use the generic values list; native typed arrays remain direct.
 ///
 /// Ownership follows `coerce_operands_to_params`, which makes the same kind of substitution: every
 /// by-value operand is rooted FIRST, because `array_values()` may throw and an unrooted owned
@@ -223,7 +294,9 @@ fn lower_bare_array_values_operand(
     let Some(&operand) = operands.get(arg) else {
         return operands;
     };
-    if !ctx.builder.value_php_type(operand).is_php_array() {
+    if !ctx.builder.value_php_type(operand).is_php_array()
+        && ctx.builder.value_type(operand) != IrType::Heap(crate::ir::IrHeapKind::Mixed)
+    {
         return operands;
     }
     let span = args.first().map_or_else(crate::span::Span::dummy, |first| first.span);
@@ -241,19 +314,35 @@ fn lower_bare_array_values_operand(
         value: operands[arg],
         ir_type: ctx.builder.value_type(operands[arg]),
     };
-    let values = ctx.emit_owned_value(
-        crate::ir::Op::RuntimeCall,
-        vec![source.value],
-        Some(crate::ir::Immediate::RuntimeCall(crate::ir::RuntimeCallTarget::Function(
-            crate::ir::RuntimeFnId::ArrayValues,
-        ))),
-        PhpType::Array(Box::new(PhpType::Mixed)),
-        crate::ir_lower::effects_lookup::runtime_effects(),
-        Some(span),
-    );
-    release_coerced_source_if_owned(ctx, source, Some(span));
+    let source_ty = ctx.builder.value_php_type(source.value).clone();
+    let values = if let Some(payload_ty) = nullable_concrete_container_payload(&source_ty) {
+        coerce_container_to_mixed_payload(ctx, source, &source_ty.codegen_repr(), &payload_ty, span)
+    } else {
+        let values = ctx.emit_owned_value(
+            crate::ir::Op::RuntimeCall,
+            vec![source.value],
+            Some(crate::ir::Immediate::RuntimeCall(crate::ir::RuntimeCallTarget::Function(
+                crate::ir::RuntimeFnId::ArrayValues,
+            ))),
+            PhpType::Array(Box::new(PhpType::Mixed)),
+            crate::ir_lower::effects_lookup::runtime_effects(),
+            Some(span),
+        );
+        release_coerced_source_if_owned(ctx, source, Some(span));
+        values
+    };
     operands[arg] = root_evaluated_call_argument(ctx, values, span).value;
     operands
+}
+
+/// Keeps the sole concrete container alternative of nullable physical storage.
+fn nullable_concrete_container_payload(ty: &PhpType) -> Option<PhpType> {
+    let PhpType::Union(members) = ty else { return None; };
+    let mut non_null = members.iter().filter(|member| !matches!(member, PhpType::Void | PhpType::Never));
+    let payload = non_null.next()?;
+    if non_null.next().is_none() && matches!(payload, PhpType::Array(_) | PhpType::AssocArray { .. }) {
+        Some(payload.clone())
+    } else { None }
 }
 
 /// Lowers builtin operands through the builtin's own argument-lowering strategy.
@@ -263,6 +352,10 @@ fn lower_planned_builtin_call_args(
     sig: Option<&FunctionSig>,
     args: &[Expr],
 ) -> Vec<crate::ir::ValueId> {
+    // The checker uses this shared projection for literal positional unpacks. Builtins consume
+    // individual values, so a projected tail must not be packed as a user-function variadic array.
+    let expanded = crate::types::call_args::expand_planned_positional_spreads(args);
+    let args = expanded.as_deref().unwrap_or(args);
     if is_empty_static_indexed_spread_arg(args) && zero_arity_call_signature(name, sig) {
         return Vec::new();
     }
@@ -280,12 +373,14 @@ fn lower_planned_builtin_call_args(
         crate::builtins::semantics::BuiltinArgumentLowering::Standard
         | crate::builtins::semantics::BuiltinArgumentLowering::MaterializeDefaults
         | crate::builtins::semantics::BuiltinArgumentLowering::PreserveValues
+        | crate::builtins::semantics::BuiltinArgumentLowering::PreserveUncoerced
         | crate::builtins::semantics::BuiltinArgumentLowering::BareArrayValues { .. }
         | crate::builtins::semantics::BuiltinArgumentLowering::WeakStringUnion { .. }
     ) {
         if let Some(sig) = sig {
             if let Some(operands) = dynamic_spreads::lower_boxed_spread_args(ctx, sig, args, name,
-                argument_lowering == crate::builtins::semantics::BuiltinArgumentLowering::PreserveValues) {
+                matches!(argument_lowering, crate::builtins::semantics::BuiltinArgumentLowering::PreserveValues
+                    | crate::builtins::semantics::BuiltinArgumentLowering::PreserveUncoerced)) {
                 return operands;
             }
         }
@@ -294,7 +389,8 @@ fn lower_planned_builtin_call_args(
         && !capture_regex_output
         && !matches!(argument_lowering,
             crate::builtins::semantics::BuiltinArgumentLowering::PcntlPreserveOmitted
-            | crate::builtins::semantics::BuiltinArgumentLowering::PreserveValues)
+            | crate::builtins::semantics::BuiltinArgumentLowering::PreserveValues
+            | crate::builtins::semantics::BuiltinArgumentLowering::PreserveUncoerced)
     {
         if let Some(sig) = sig {
             if let Some(operands) = lower_positional_spread_args_with_signature(
@@ -308,6 +404,13 @@ fn lower_planned_builtin_call_args(
         }
     }
     let lowered = match argument_lowering {
+        crate::builtins::semantics::BuiltinArgumentLowering::PreserveUncoerced => {
+            let storage = sig.cloned().map(|mut sig| {
+                sig.declared_params.fill(false);
+                sig
+            });
+            lower_args_with_signature_options(ctx, storage.as_ref(), args, true, false)
+        }
         crate::builtins::semantics::BuiltinArgumentLowering::PreserveValues => {
             lower_builtin_args_preserving_values(ctx, &canonical, sig, args)
         }
@@ -320,8 +423,8 @@ fn lower_planned_builtin_call_args(
         crate::builtins::semantics::BuiltinArgumentLowering::Date => {
             lower_date_args(ctx, sig, args)
         }
-        crate::builtins::semantics::BuiltinArgumentLowering::JsonDecode => {
-            lower_json_decode_args(ctx, sig, args)
+        crate::builtins::semantics::BuiltinArgumentLowering::JsonSource => {
+            lower_json_source_args(ctx, sig, args)
         }
         crate::builtins::semantics::BuiltinArgumentLowering::Getenv => {
             lower_getenv_args(ctx, sig, args)
@@ -403,6 +506,9 @@ fn lower_planned_builtin_call_args(
         {
             lower_positional_builtin_args_with_signature(ctx, sig, args)
         }
+        _ if !args.iter().any(is_spread_arg) => {
+            lower_named_builtin_args_with_signature(ctx, sig, args)
+        }
         _ => lower_args_with_signature(ctx, sig, args),
     };
     for (name, ty) in output_locals {
@@ -469,10 +575,19 @@ fn prepare_write_only_output_local(
     parameter_index: usize,
     value: &Expr,
 ) -> Option<(String, PhpType)> {
-    let ty = match (canonical, parameter_index) {
-        ("preg_match", 2) => PhpType::Array(Box::new(PhpType::Str)),
-        ("preg_match_all", 2) => PhpType::Array(Box::new(PhpType::Mixed)),
-        _ => pcntl_output_type(canonical, parameter_index)?,
+    let boxed_output = crate::builtins::registry::lookup(canonical).is_some_and(|def| {
+        matches!(def.spec.semantics.argument_lowering,
+            crate::builtins::semantics::BuiltinArgumentLowering::WriteOnlyMixedOutputs(indices)
+                if indices.contains(&parameter_index))
+    });
+    let ty = if boxed_output {
+        PhpType::Mixed
+    } else {
+        match (canonical, parameter_index) {
+            ("preg_match", 2) => PhpType::Array(Box::new(PhpType::Str)),
+            ("preg_match_all", 2) => PhpType::Array(Box::new(PhpType::Mixed)),
+            _ => pcntl_output_type(canonical, parameter_index)?,
+        }
     };
     let ExprKind::Variable(name) = &value.kind else {
         return None;
@@ -489,7 +604,7 @@ fn prepare_write_only_output_local(
         // output argument. Earlier arguments must still see its original type.
         // Frame representation is whole-function metadata, not an evaluation:
         // expose it now so earlier narrowed loads receive their detached owner.
-        if ctx.local_type(name).codegen_repr() != ty.codegen_repr() {
+        if !ctx.is_ref_bound_local(name) && ctx.local_type(name).codegen_repr() != ty.codegen_repr() {
             if let Some(slot) = ctx.local_slots.get(name).copied() {
                 ctx.builder.widen_local_storage_type(slot, PhpType::Mixed);
             }
@@ -573,7 +688,11 @@ fn prepare_openssl_encrypt_tag_local(ctx: &mut LoweringContext<'_, '_>, args: &[
     else {
         return;
     };
-    ctx.set_local_type(name, PhpType::Str);
+    // A native reference can already expose a canonical value whose runtime tag differs
+    // from its entry declaration. Output preparation must preserve that boxed view.
+    if !ctx.is_ref_bound_local(name) || ctx.local_type(name).codegen_repr() != PhpType::Mixed {
+        ctx.set_local_type(name, PhpType::Str);
+    }
 }
 
 /// Lowers plain positional builtin operands without materializing omitted defaults or packing tails.
@@ -879,6 +998,17 @@ pub(super) fn lower_count_args(
         .filter(|(index, arg)| !count_arg_is_static_default_mode(*index, arg))
         .map(|(_, arg)| arg.clone())
         .collect();
+    // A promotable `array<int>` local is counted in its own storage, packed or promoted: both
+    // headers keep the element count in their first word, so the `array<mixed>` copy a
+    // whole-value read would build (every iteration of a `$i < count($a)` loop) is never needed.
+    if let [Expr { kind: ExprKind::Variable(name), span, .. }] = pruned.as_slice() {
+        if ctx.is_promotable_array_local(name)
+            && matches!(ctx.local_type(name).codegen_repr(),
+                PhpType::Array(element) if element.codegen_repr() == PhpType::Int)
+        {
+            return vec![ctx.load_local(name, Some(*span)).value];
+        }
+    }
     let mut operands = lower_args_with_signature(ctx, sig, &pruned);
     // Named and spread plans re-materialize the optional `mode` default even
     // after the AST prune; a trailing constant-zero mode stays a no-op for

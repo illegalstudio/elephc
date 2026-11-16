@@ -36,15 +36,19 @@ pub fn contracts() -> &'static [BuiltinContract] {
             let curl_capacity = 0;
             let mut contracts = Vec::with_capacity(
                 crate::catalog_data::CONTRACTS.len()
+                    + crate::catalog_gmp::CONTRACTS.len()
                     + crate::catalog_mbstring::CONTRACTS.len()
                     + crate::catalog_pcntl::CONTRACTS.len()
+                    + crate::catalog_tidy::CONTRACTS.len()
                     + crate::catalog_xml::CONTRACTS.len()
                     + crate::catalog_surfaces::SURFACE_CONTRACTS.len()
                     + curl_capacity,
             );
             contracts.extend_from_slice(crate::catalog_data::CONTRACTS);
+            contracts.extend_from_slice(crate::catalog_gmp::CONTRACTS);
             contracts.extend_from_slice(crate::catalog_mbstring::CONTRACTS);
             contracts.extend_from_slice(crate::catalog_pcntl::CONTRACTS);
+            contracts.extend_from_slice(crate::catalog_tidy::CONTRACTS);
             contracts.extend_from_slice(crate::catalog_xml::CONTRACTS);
             contracts.extend_from_slice(crate::catalog_surfaces::SURFACE_CONTRACTS);
             #[cfg(feature = "curl")]
@@ -159,9 +163,34 @@ mod tests {
         // +11 over main: the `__elephc_opcache_rt_*` runtime script-cache helpers this
         // branch adds (see `support.rs` for the roll-call).
         // +4: the `ptr_read_f32`/`ptr_write_f32`/`ptr_read_f64`/`ptr_write_f64` pointer builtins.
-        assert_eq!(contracts().len(), 1165 + curl_surface);
+        // +1: `buffer_ptr`, the payload address of a buffer.
+        // +5: SimpleXML loaders/import plus internal allocation and diagnostic helpers.
+        // +5: native heap usage, peak reset, and allocation/free counters.
+        // +8: FileInfo procedures and shared warning/deprecation helpers.
+        // +4: internal pointer/zval aliases used by extension hosting.
+        // +2: PHP 8.5 array value-edge functions.
+        // +23: the rest of the mysqli procedural surface (bind_result/fetch, async poll,
+        // statistics, warnings, change_user, ssl_set, statement attributes, and so on).
+        // +1: `__elephc_reflection_class_build`, the internal call that runs a compiled
+        // per-class `ReflectionClass` builder for `getDeclaringClass()`.
+        // +1: `__elephc_eval_reflection_class_build`, its eval twin for the class names
+        // eval-built member reflectors store.
+        // +24: the `tidy_*` procedures of the tidy prelude.
+        assert_eq!(contracts().len(), 1302 + curl_surface);
         assert_eq!(lookup("STRLEN").map(|contract| contract.name), Some("strlen"));
         assert_eq!(lookup("\\parse_url").map(|contract| contract.name), Some("parse_url"));
+    }
+
+    /// Array value-edge functions became available in PHP 8.5, after the find/any/all family.
+    #[test]
+    fn array_edge_value_contracts_match_php_85() {
+        for name in ["array_first", "array_last"] {
+            let contract = lookup(name).expect("array value-edge contract");
+            assert_eq!(contract.since, Some(crate::PhpVersion::Php85), "{name}");
+            assert_eq!(contract.signature().required_param_count(), 1, "{name}");
+            assert!(!contract.params[0].by_ref, "{name}");
+            assert_eq!(contract.returns, crate::TypeSpec::Mixed, "{name}");
+        }
     }
 
     /// Verifies the PHP 8.5 clone function keeps its object and override-array contract.
@@ -211,7 +240,7 @@ mod tests {
             lookup("openssl_encrypt")
                 .expect("openssl_encrypt contract")
                 .requirements,
-            &[crate::BuiltinRequirement::Bridge("elephc_crypto")]
+            &[crate::BuiltinRequirement::Bridge("elephc_openssl")]
         );
         assert_eq!(
             lookup("preg_match").expect("preg_match contract").requirements,

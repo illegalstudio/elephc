@@ -44,6 +44,7 @@ pub(super) fn emit_aarch64_runtime_builtin_dispatch(emitter: &mut Emitter, featu
     emit_aarch64_unary_case(emitter, RuntimeBuiltinId::Boolval, "boolval", "__elephc_eval_value_cast_bool");
     emit_aarch64_unary_case(emitter, RuntimeBuiltinId::Floatval, "floatval", "__elephc_eval_value_cast_float");
     emit_aarch64_unary_case(emitter, RuntimeBuiltinId::Intval, "intval", "__elephc_eval_value_cast_int");
+    emit_tokenizer_location_case(emitter, Arch::AArch64);
     emit_aarch64_is_array_case(emitter);
     emit_aarch64_bool_predicate_case(emitter, RuntimeBuiltinId::IsNull, "is_null", "__elephc_eval_value_is_null");
     emit_aarch64_unary_case(emitter, RuntimeBuiltinId::Abs, "abs", "__elephc_eval_value_abs");
@@ -62,6 +63,10 @@ pub(super) fn emit_aarch64_runtime_builtin_dispatch(emitter: &mut Emitter, featu
     emit_aarch64_zero_arg_boxed_bool_case(emitter, RuntimeBuiltinId::ObFlush, "ob_flush");
     emit_aarch64_zero_arg_boxed_bool_case(emitter, RuntimeBuiltinId::ObEndClean, "ob_end_clean");
     emit_aarch64_zero_arg_boxed_bool_case(emitter, RuntimeBuiltinId::ObEndFlush, "ob_end_flush");
+    emit_aarch64_unary_case(emitter, RuntimeBuiltinId::Serialize, "serialize", "__elephc_eval_value_serialize");
+    emit_aarch64_unary_case(emitter, RuntimeBuiltinId::Unserialize, "unserialize", "__elephc_eval_value_unserialize");
+
+    super::memory::emit_cases(emitter);
 
     if features.mbstring || features.eval_bridge {
         super::mbstring::emit_aarch64_mbstring(emitter, features.mbregex);
@@ -121,6 +126,7 @@ pub(super) fn emit_x86_64_runtime_builtin_dispatch(emitter: &mut Emitter, featur
     emit_x86_64_unary_case(emitter, RuntimeBuiltinId::Boolval, "boolval", "__elephc_eval_value_cast_bool");
     emit_x86_64_unary_case(emitter, RuntimeBuiltinId::Floatval, "floatval", "__elephc_eval_value_cast_float");
     emit_x86_64_unary_case(emitter, RuntimeBuiltinId::Intval, "intval", "__elephc_eval_value_cast_int");
+    emit_tokenizer_location_case(emitter, Arch::X86_64);
     emit_x86_64_is_array_case(emitter);
     emit_x86_64_bool_predicate_case(emitter, RuntimeBuiltinId::IsNull, "is_null", "__elephc_eval_value_is_null");
     emit_x86_64_unary_case(emitter, RuntimeBuiltinId::Abs, "abs", "__elephc_eval_value_abs");
@@ -139,6 +145,10 @@ pub(super) fn emit_x86_64_runtime_builtin_dispatch(emitter: &mut Emitter, featur
     emit_x86_64_zero_arg_boxed_bool_case(emitter, RuntimeBuiltinId::ObFlush, "ob_flush");
     emit_x86_64_zero_arg_boxed_bool_case(emitter, RuntimeBuiltinId::ObEndClean, "ob_end_clean");
     emit_x86_64_zero_arg_boxed_bool_case(emitter, RuntimeBuiltinId::ObEndFlush, "ob_end_flush");
+    emit_x86_64_unary_case(emitter, RuntimeBuiltinId::Serialize, "serialize", "__elephc_eval_value_serialize");
+    emit_x86_64_unary_case(emitter, RuntimeBuiltinId::Unserialize, "unserialize", "__elephc_eval_value_unserialize");
+
+    super::memory::emit_cases(emitter);
 
     if features.mbstring || features.eval_bridge {
         super::mbstring::emit_x86_64_mbstring(emitter, features.mbregex);
@@ -169,6 +179,7 @@ pub(super) fn emit_x86_64_runtime_builtin_dispatch(emitter: &mut Emitter, featur
 /// Returns stable branch labels for every version-one runtime builtin ID.
 fn runtime_dispatch_labels() -> Vec<(RuntimeBuiltinId, String)> {
     let labels = [
+        (RuntimeBuiltinId::TokenizerErrorLocation, "__elephc_runtime_builtin_v1_tokenizer_location"),
         (RuntimeBuiltinId::Boolval, "__elephc_runtime_builtin_v1_boolval"),
         (RuntimeBuiltinId::Floatval, "__elephc_runtime_builtin_v1_floatval"),
         (RuntimeBuiltinId::Intval, "__elephc_runtime_builtin_v1_intval"),
@@ -190,8 +201,12 @@ fn runtime_dispatch_labels() -> Vec<(RuntimeBuiltinId, String)> {
         (RuntimeBuiltinId::ObFlush, "__elephc_runtime_builtin_v1_ob_flush"),
         (RuntimeBuiltinId::ObEndClean, "__elephc_runtime_builtin_v1_ob_end_clean"),
         (RuntimeBuiltinId::ObEndFlush, "__elephc_runtime_builtin_v1_ob_end_flush"),
+        (RuntimeBuiltinId::Serialize, "__elephc_runtime_builtin_v1_serialize"),
+        (RuntimeBuiltinId::Unserialize, "__elephc_runtime_builtin_v1_unserialize"),
     ];
     let mut labels: Vec<_> = labels.into_iter().map(|(id, label)| (id, label.to_owned())).collect();
+    labels.extend(super::memory::OPERATIONS.iter().map(|(id, name)|
+        (*id, format!("__elephc_runtime_builtin_v1_{name}"))));
     labels.extend(crate::builtins::registry::eval_runtime_builtin_ids().filter(|id| id.is_mbstring()).map(|id|
         (id, format!("__elephc_runtime_builtin_v1_mbstring_{}", id.as_u32()))));
     for &(runtime_id, _) in &labels {
@@ -203,6 +218,49 @@ fn runtime_dispatch_labels() -> Vec<(RuntimeBuiltinId, String)> {
         );
     }
     labels
+}
+
+/// Adapts borrowed object/integer cells to the shared scanned-source location setter.
+fn emit_tokenizer_location_case(emitter: &mut Emitter, arch: Arch) {
+    match arch {
+        Arch::AArch64 => {
+            // -- validate the boxed receiver and source-line arguments --
+            emitter.label("__elephc_runtime_builtin_v1_tokenizer_location");
+            emitter.instruction("cmp x21, #2");                                 // require the receiver and source line cells
+            emitter.instruction("b.ne __elephc_runtime_builtin_v1_unsupported"); // reject unsupported arities before reading cells
+            emitter.instruction("ldp x0, x1, [x20]");                           // borrow the receiver and integer cells
+            emitter.instruction("ldr x9, [x0]");                                // inspect the receiver tag before dereferencing its payload
+            emitter.instruction("cmp x9, #6");                                  // the location setter accepts object cells only
+            emitter.instruction("b.ne __elephc_runtime_builtin_v1_fatal");      // reject malformed internal calls
+            emitter.instruction("ldr x9, [x1]");                                // inspect the source line tag
+            emitter.instruction("cbnz x9, __elephc_runtime_builtin_v1_fatal");  // zero is the integer tag
+            // -- stamp borrowed native metadata and box the plain result --
+            emitter.instruction("ldr x0, [x0, #8]");                            // extract the borrowed object payload
+            emitter.instruction("ldr x1, [x1, #8]");                            // extract the integer source line
+            abi::emit_call_label(emitter, "__rt_tokenizer_error_location");
+            emitter.bl_c("__elephc_eval_value_int");
+            emitter.instruction("b __elephc_runtime_builtin_v1_result");        // transfer a fresh boxed integer result
+        }
+        Arch::X86_64 => {
+            // -- validate the boxed receiver and source-line arguments --
+            emitter.label("__elephc_runtime_builtin_v1_tokenizer_location_x86");
+            emitter.instruction("cmp r13, 2");                                  // require the receiver and source line cells
+            emitter.instruction("jne __elephc_runtime_builtin_v1_unsupported_x86"); // reject unsupported arities before reading cells
+            emitter.instruction("mov rax, QWORD PTR [r12]");                    // borrow the receiver cell
+            emitter.instruction("mov rcx, QWORD PTR [r12 + 8]");                // borrow the source line cell
+            emitter.instruction("cmp QWORD PTR [rax], 6");                      // accept object receivers only
+            emitter.instruction("jne __elephc_runtime_builtin_v1_fatal_x86");   // reject malformed internal calls
+            emitter.instruction("cmp QWORD PTR [rcx], 0");                      // zero is the integer tag
+            emitter.instruction("jne __elephc_runtime_builtin_v1_fatal_x86");   // preserve the setter's raw integer contract
+            // -- stamp borrowed native metadata and box the plain result --
+            emitter.instruction("mov rax, QWORD PTR [rax + 8]");                // extract the borrowed object payload
+            emitter.instruction("mov rcx, QWORD PTR [rcx + 8]");                // extract the integer source line
+            abi::emit_call_label(emitter, "__rt_tokenizer_error_location");
+            emitter.instruction("mov rdi, rax");                                // adapt the plain line to the C integer boxing ABI
+            emitter.bl_c("__elephc_eval_value_int");
+            emitter.instruction("jmp __elephc_runtime_builtin_v1_result_x86");  // transfer a fresh boxed integer result
+        }
+    }
 }
 
 /// Emits one AArch64 unary boxed-result dispatch arm.
@@ -520,17 +578,17 @@ mod tests {
     /// `ob_get_length()` when no output buffer is active on both architectures.
     #[test]
     fn ob_get_length_boxes_false_without_an_active_buffer() {
-        for (target, label, next_label, zero_instruction) in [
+        for (target, label, exit_branch, zero_instruction) in [
             (
                 Target::new(Platform::Linux, Arch::AArch64),
                 "__elephc_runtime_builtin_v1_ob_length_false:\n",
-                "__elephc_runtime_builtin_v1_result:\n",
+                "b __elephc_runtime_builtin_v1_result",
                 "mov x0, #0",
             ),
             (
                 Target::new(Platform::Linux, Arch::X86_64),
                 "__elephc_runtime_builtin_v1_ob_length_false_x86:\n",
-                "__elephc_runtime_builtin_v1_result_x86:\n",
+                "jmp __elephc_runtime_builtin_v1_result_x86",
                 "xor edi, edi",
             ),
         ] {
@@ -539,9 +597,9 @@ mod tests {
                 .split(label)
                 .nth(1)
                 .unwrap_or_else(|| panic!("missing false arm for {target:?}:\n{asm}"))
-                .split(next_label)
-                .next()
-                .expect("false arm precedes the shared result arm");
+                .split_once(exit_branch)
+                .expect("false arm must exit through the shared result branch")
+                .0;
             let bool_boxer = target.extern_symbol("__elephc_eval_value_bool");
             let null_boxer = target.extern_symbol("__elephc_eval_value_null");
             assert!(

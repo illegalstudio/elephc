@@ -127,6 +127,18 @@ fn interface_self_return_conforms(
     actual_return: &PhpType,
 ) -> bool {
     match (required_return, actual_return) {
+        (PhpType::Union(expected), PhpType::Union(actual)) => actual.iter().all(|actual| {
+            expected.iter().any(|expected| interface_self_return_conforms(checker, class, interface_name, expected, actual)
+                || declared_return_type_compatible(checker, expected, actual))
+        }),
+        (PhpType::Union(expected), actual) => expected.iter().any(|expected| {
+            interface_self_return_conforms(checker, class, interface_name, expected, actual)
+                || declared_return_type_compatible(checker, expected, actual)
+        }),
+        (expected, PhpType::Union(actual)) => actual.iter().all(|actual| {
+            interface_self_return_conforms(checker, class, interface_name, expected, actual)
+                || declared_return_type_compatible(checker, expected, actual)
+        }),
         (PhpType::Object(expected_name), PhpType::Object(actual_name)) => {
             actual_name == &class.name
                 && (expected_name == interface_name
@@ -501,7 +513,7 @@ fn validate_interface_method(
                 .insert(method_name.to_string(), Visibility::Public);
             state
                 .method_declaring_classes
-                .insert(method_name.to_string(), class.name.clone());
+                .insert(method_name.to_string(), interface_name.to_string());
             state.method_impl_classes.remove(method_name);
             state.abstract_methods.insert(method_name.to_string());
             if !state.vtable_slots.contains_key(method_name) {
@@ -527,7 +539,29 @@ fn validate_interface_method(
         .find(|m| php_symbol_key(&m.name) == method_name);
     let required_owner = interface_info.method_declaring_interfaces
         .get(method_name).map(String::as_str).unwrap_or(interface_name);
-    let tentative_return = php_symbol_key(required_owner) == "serializable";
+    let has_return_type_will_change = actual_method.is_some_and(|method| {
+        method.attributes.iter().any(|group| {
+            group.attributes.iter().any(|attribute| {
+                attribute.name.as_str().trim_start_matches('\\')
+                    .eq_ignore_ascii_case("ReturnTypeWillChange")
+            })
+        })
+    });
+    // PHP allows `__toString` to omit its declared return, and `Countable::count()` carries a
+    // tentative `int` return: any implementor may replace it under
+    // `#[ReturnTypeWillChange]`, not only a SimpleXMLElement subclass. Limit the relaxation to
+    // the representations count() can coerce without an object conversion warning.
+    let count_scalar_return = matches!(
+        actual_sig.return_type.codegen_repr(),
+        PhpType::Int | PhpType::Bool | PhpType::Float | PhpType::Str | PhpType::Mixed
+    );
+    let tentative_return = php_symbol_key(required_owner) == "serializable"
+        || (method_name == "__tostring" && !actual_sig.declared_return)
+        || (php_symbol_key(required_owner) == "countable"
+            && !declaration_is_source(checker, required_owner)
+            && method_name == "count"
+            && has_return_type_will_change
+            && count_scalar_return);
     validate_signature_compatibility(
         actual_method.map(|m| m.span).unwrap_or(class.span),
         &class.name,

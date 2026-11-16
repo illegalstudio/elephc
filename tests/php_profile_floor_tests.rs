@@ -166,6 +166,32 @@ fn new_function_call_under_82_is_rejected() {
     );
 }
 
+/// PHP 8.5 array value-edge calls reject every older supported profile and compile at 8.5.
+#[test]
+fn array_first_and_last_require_85() {
+    for name in ["array_first", "array_last"] {
+        let source = format!("<?php\nvar_dump({name}([1, 2]));\n");
+        for profile in ["8.2", "8.3", "8.4"] {
+            let out = compile(&format!("{name}{profile}"), &source, Some(profile));
+            let stderr = String::from_utf8_lossy(&out.stderr);
+            assert!(
+                !out.status.success(),
+                "calling {name} for the {profile} profile must fail, stderr:\n{stderr}"
+            );
+            assert!(
+                stderr.contains("needs PHP 8.5") && stderr.contains(name),
+                "the error must name the required profile and {name}, got:\n{stderr}"
+            );
+        }
+        let out = compile(&format!("{name}85"), &source, Some("8.5"));
+        assert!(
+            out.status.success(),
+            "{name} must compile for the 8.5 profile, stderr:\n{}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+    }
+}
+
 /// An ordinary program is untouched at the oldest profile.
 #[test]
 fn plain_program_compiles_at_the_oldest_profile() {

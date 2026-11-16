@@ -212,3 +212,42 @@ echo $c[0], $c[1], "|", $n[0], $n[1], "|", $f[0];
     );
     assert_eq!(out, "ABcd|34|2");
 }
+
+/// A literal holding a method call on a receiver of no single class (a `foreach` element of
+/// an untyped array) takes the type the call returns: the signature every declaring class
+/// shares, `Component` here. The literal typer read the syntactic `int`, and the backend refused
+/// it with "int cast for PHP type Object(\"Component\")".
+#[test]
+fn test_literal_element_from_a_dynamic_receiver_call_takes_the_shared_return_type() {
+    let out = compile_and_run(
+        r#"<?php
+interface Component { public function render(): string; }
+final class Html implements Component
+{
+    public function __construct(private string $m) {}
+    public function render(): string { return $this->m; }
+}
+interface Block { public function component(string $path): Component; }
+final class Nav implements Block
+{
+    public function component(string $path): Component { return new Html("<nav>" . $path); }
+}
+final class Foot implements Block
+{
+    public function component(string $path): Component { return new Html("<foot>" . $path); }
+}
+function render(array $blocks): string
+{
+    $out = "";
+    foreach ($blocks as $block) {
+        $list = [$block->component("/x"), $block->component("/y")];
+        $keyed = ["a" => $block->component("/z")];
+        $out .= count($list) . ":" . $list[0]->render() . $list[1]->render() . $keyed["a"]->render() . "|";
+    }
+    return $out;
+}
+echo render([new Nav(), new Foot()]), "\n";
+"#,
+    );
+    assert_eq!(out, "2:<nav>/x<nav>/y<nav>/z|2:<foot>/x<foot>/y<foot>/z|\n");
+}

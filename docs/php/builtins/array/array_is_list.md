@@ -1,8 +1,6 @@
 ---
 title: "array_is_list()"
 description: "Checks whether an array is a list (sequential 0-based integer keys)."
-sidebar:
-  order: 18
 ---
 
 ## array_is_list()
@@ -20,8 +18,9 @@ Checks whether an array is a list (sequential 0-based integer keys).
 
 ## Availability
 
-- **Compiled (AOT)**: supported by the Elephc code generator.
-- **`eval()` (magician interpreter)**: not available inside eval'd code.
+| Compiled (AOT) | Magician (eval) |
+|---|---|
+| Available | Not available yet |
 
 _No examples yet. Check `examples/` and `showcases/` for usage patterns._
 

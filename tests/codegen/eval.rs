@@ -13,8 +13,16 @@
 
 use crate::support::*;
 
+mod buffers;
+mod declaring_class_reflectors;
+mod invoker_sharing;
 mod json_enums;
 mod literal_catalog;
+mod native_false_returns;
+mod reflection_class_members;
+mod reflection_constant_collections;
+mod reflection_default_properties;
+mod reflection_mirror_references;
 
 /// Asserts an eval failure stayed inside the C ABI/error-status contract.
 fn assert_no_rust_panic_leaked(stderr: &str) {
@@ -5506,7 +5514,7 @@ fn test_eval_float_pointer_builtins_keep_full_precision() {
     let out = compile_and_run(
         r#"<?php
 echo eval('$buf = buffer_new(4);
-$payload = ptr_offset($buf, 16);
+$payload = buffer_ptr($buf);
 ptr_write_f64($payload, 1.2345678901234567);
 var_dump(ptr_read_f64($payload) === 1.2345678901234567);
 ptr_write_f32($payload, 1.2345678901234567);
@@ -5527,7 +5535,7 @@ fn test_eval_dispatches_raw_memory_builtins() {
     let out = compile_and_run(
         r#"<?php
 echo eval('$buf = buffer_new(4);
-$payload = ptr_offset($buf, 16);
+$payload = buffer_ptr($buf);
 echo buffer_len($buf) . ":";
 ptr_set($payload, 123456789);
 echo ptr_get($payload) . ":";
@@ -7650,6 +7658,22 @@ echo call_user_func("gc_mem_caches") >= 0 ? "cache" : "bad";');
     assert_eq!(out, "on:off:on:shape:unbuffered:timed:cache");
 }
 
+/// Verifies eval memory builtins read the generated-runtime heap counters.
+#[test]
+fn test_eval_memory_usage_builtins_read_runtime_counters() {
+    let out = compile_and_run(
+        r#"<?php
+eval('$u = memory_get_usage(); $r = memory_get_usage(true); $p = memory_get_peak_usage();
+echo is_int($u) && $u > 0 ? "int" : "bad"; echo ":";
+echo $r >= $u ? "real" : "bad"; echo ":";
+echo $p >= $u && memory_get_peak_usage(true) >= $r ? "peak" : "bad"; echo ":";
+echo call_user_func("memory_get_usage", true) > 0 ? "callable" : "bad"; echo ":";
+echo memory_reset_peak_usage() === null ? "void" : "bad";');
+"#,
+    );
+    assert_eq!(out, "int:real:peak:callable:void");
+}
+
 /// Verifies eval realpath-cache builtins expose elephc's empty-cache convention.
 #[test]
 fn test_eval_dispatches_realpath_cache_builtin_calls() {
@@ -8063,6 +8087,130 @@ return preg_replace_callback("/[m]/", $static, "mm");');
     assert_eq!(out, "OAOB:S1S2:SCSC:OxOy:SmSm");
 }
 
+/// Verifies eval `preg_replace_callback()` returns real PHP null for a bad pattern and `/e`.
+///
+/// A valid replacement and an empty subject stay strings.
+#[test]
+fn test_eval_preg_replace_callback_invalid_pattern_returns_real_null() {
+    let out = compile_and_run_with_regex(
+        r#"<?php
+echo eval('function eval_bad_repl($matches) {
+    return "x";
+}
+$invalid = preg_replace_callback("/[/", "eval_bad_repl", "a");
+$evalmod = preg_replace_callback("/a/e", "eval_bad_repl", "a");
+$empty = preg_replace_callback("/x/", "eval_bad_repl", "");
+$ok = preg_replace_callback("/a/", "eval_bad_repl", "a");
+return ($invalid === null ? "1" : "0")
+    . (is_string($invalid) ? "1" : "0")
+    . (is_null($invalid) ? "1" : "0")
+    . gettype($invalid) . ":"
+    . ($evalmod === null ? "1" : "0")
+    . (is_string($evalmod) ? "1" : "0")
+    . gettype($evalmod) . ":"
+    . ($empty === "" ? "empty" : "other")
+    . (is_string($empty) ? "s" : "n") . ":"
+    . $ok;
+');
+"#,
+    );
+    assert_eq!(out, "101NULL:10NULL:emptys:x");
+}
+
+/// Verifies eval returns null for unknown modifiers and a missing delimiter.
+///
+/// `/x` is extended mode, so `"a b"` is unchanged and `"ab"` is replaced. A
+/// missing callback is a TypeError even when the pattern is also invalid,
+/// because the callback is checked first.
+#[test]
+fn test_eval_preg_replace_callback_invalid_patterns_and_callback_order() {
+    let invalid = compile_and_run_with_regex(
+        r#"<?php
+echo eval('function eval_order_repl($matches) { return "X"; }
+$unknown = preg_replace_callback("/a/z", "eval_order_repl", "a");
+$missing = preg_replace_callback("/abc", "eval_order_repl", "abc");
+$evalmod = preg_replace_callback("/a/e", "eval_order_repl", "a");
+return (is_null($unknown) ? "1" : "0")
+    . (is_string($unknown) ? "1" : "0")
+    . (is_null($missing) ? "1" : "0")
+    . (is_null($evalmod) ? "1" : "0");
+');
+"#,
+    );
+    assert_eq!(invalid, "1011");
+
+    let callback = compile_and_run_capture_with_regex(
+        r#"<?php
+echo eval('try {
+    preg_replace_callback("/[/", "missing_cb", "a");
+    return "bad";
+} catch (TypeError $e) {
+    return get_class($e) . ":" . $e->getMessage();
+}');
+"#,
+    );
+    assert!(
+        callback.success,
+        "program failed: stdout={:?} stderr={}",
+        callback.stdout, callback.stderr
+    );
+    assert_eq!(
+        callback.stdout,
+        "TypeError:preg_replace_callback(): Argument #2 ($callback) must be a valid callback, function \"missing_cb\" not found or invalid function name"
+    );
+
+    let extended = compile_and_run_with_regex(
+        r#"<?php
+echo eval('function eval_extended_repl($matches) { return "X"; }
+$spaced = preg_replace_callback("/a b/x", "eval_extended_repl", "a b");
+$compact = preg_replace_callback("/a b/x", "eval_extended_repl", "ab");
+$class = preg_replace_callback("/[a b]/x", "eval_extended_repl", " ");
+return $spaced . ":" . $compact . ":" . $class;
+');
+"#,
+    );
+    assert_eq!(extended, "a b:X:X");
+}
+
+/// Verifies eval ignores space, LF, and CR in the modifier suffix.
+///
+/// A tab stays an invalid modifier and returns null. The same bytes are covered
+/// by the compiled regression.
+#[test]
+fn test_eval_preg_replace_callback_modifier_whitespace_is_ignored() {
+    let out = compile_and_run_with_regex(
+        r#"<?php
+echo eval('function eval_ws_repl($matches) { return "X"; }
+$nl = preg_replace_callback("/a/\n", "eval_ws_repl", "a");
+$sp = preg_replace_callback("/a/ i", "eval_ws_repl", "A");
+$cr = preg_replace_callback("/a/\r", "eval_ws_repl", "a");
+$tab = preg_replace_callback("/a/\t", "eval_ws_repl", "a");
+return $nl . ":" . $sp . ":" . $cr . ":" . (is_null($tab) ? "n" : "s");
+');
+"#,
+    );
+    assert_eq!(out, "X:X:X:n");
+}
+
+/// Verifies eval `/x` keeps leading PCRE2 verbs at the start of the pattern.
+///
+/// Eval compiles through the same shim as compiled code. `(*UTF)` and
+/// `(*ANYCRLF)` stay valid, and the replacements match PHP.
+#[test]
+fn test_eval_preg_extended_leading_verbs_stay_at_pattern_start() {
+    let out = compile_and_run_with_regex(
+        r#"<?php
+echo eval('function eval_verb_repl($matches) { return "X"; }
+$match = preg_match("/(*UTF)a/x", "a");
+$replaced = preg_replace("/(*ANYCRLF)a/x", "Y", "ab");
+$callback = preg_replace_callback("/(*UTF)a/x", "eval_verb_repl", "ab");
+return $match . ":" . $replaced . ":" . $callback;
+');
+"#,
+    );
+    assert_eq!(out, "1:Yb:Xb");
+}
+
 /// Verifies dynamic eval preg callables write by-reference `$matches` arrays.
 #[test]
 fn test_eval_dynamic_preg_callables_write_matches_by_ref() {
@@ -8435,6 +8583,44 @@ eval($code);
          bool(false)\nbool(false)\nint(1)\nint(1)\nint(1)\nbool(false)\n\
          bool(false)\nbool(false)\nbool(false)\nint(1)\nint(1)\nbool(false)\n\
          bool(false)\nbool(false)\nbool(false)\n"
+    );
+}
+
+/// Verifies compiled helpers resolve eval-declared class names through the eval bridge.
+#[test]
+fn test_dynamic_eval_compiled_get_class_sees_eval_declared_classes() {
+    let out = compile_and_run(
+        r#"<?php
+class AotClass {}
+function name_of($value) {
+    return get_class($value);
+}
+$code = $argc > 1 ? $argv[1] : 'class EvalClass {} $object = new EvalClass(); var_dump(name_of($object));';
+eval($code);
+var_dump(name_of(new AotClass()));
+"#,
+    );
+    assert_eq!(out, "string(9) \"EvalClass\"\nstring(8) \"AotClass\"\n");
+}
+
+/// Verifies an assignment expression inside a call argument stores and yields its value.
+#[test]
+fn test_dynamic_eval_assignment_expression_in_call_argument() {
+    let out = compile_and_run(
+        r#"<?php
+$code = $argc > 1 ? $argv[1] : '$n = 1;
+var_dump($n = 42);
+var_dump($n);
+var_dump($n += 8);
+var_dump($n);
+var_dump(($n = 5) + 1);
+var_dump($n);';
+eval($code);
+"#,
+    );
+    assert_eq!(
+        out,
+        "int(42)\nint(42)\nint(50)\nint(50)\nint(6)\nint(5)\n"
     );
 }
 
@@ -9165,9 +9351,7 @@ try {
 Error:Object of class EvalBuiltinSprintfPlain could not be converted to string|\
 Error:Object of class Closure could not be converted to string|"
     );
-    assert_eq!(
-        output.stderr,
-        "Warning: Array to string conversion\n\
+    assert_eq!(normalize_diagnostic_text(&output.stderr), "Warning: Array to string conversion\n\
 Warning: Object of class EvalBuiltinSprintfPlain could not be converted to int\n\
 Warning: Object of class EvalBuiltinSprintfPlain could not be converted to float\n\
 Warning: Object of class Closure could not be converted to int\n\
@@ -9187,9 +9371,7 @@ echo sprintf("%d|%f", $box, $box);
     );
     assert!(output.success, "{}", output.stderr);
     assert_eq!(output.stdout, "1|1.000000");
-    assert_eq!(
-        output.stderr,
-        "Warning: Object of class EvalSprintfNumericWarning could not be converted to int\n\
+    assert_eq!(normalize_diagnostic_text(&output.stderr), "Warning: Object of class EvalSprintfNumericWarning could not be converted to int\n\
 Warning: Object of class EvalSprintfNumericWarning could not be converted to float\n"
     );
 }
@@ -11081,6 +11263,7 @@ class NativeEvalRefBox {
         $this->name = $name;
     }
 }
+class NativeEvalRefWrong {}
 
 function native_eval_ref_array_heap(array &$items): string {
     $items = ["A", "B"];
@@ -11106,11 +11289,19 @@ $iter = [0];
 $iterFirst = native_eval_ref_iterable_heap($iter);
 $box = new NativeEvalRefBox("start");
 $objectFirst = native_eval_ref_object_heap($box);
-native_eval_ref_object_heap(box: $box);
-return $first . ":" . $items[0] . ":" . $items[1] . ":" . $iterFirst . ":" . $iter["right"] . ":" . $objectFirst . ":" . $box->name;');
+$objectNamed = native_eval_ref_object_heap(box: $box);
+$objectCallable = native_eval_ref_object_heap(...);
+$objectDynamic = $objectCallable($box);
+$wrong = new NativeEvalRefWrong();
+try { native_eval_ref_object_heap($wrong); }
+catch (TypeError $error) { $wrongMessage = $error->getMessage(); unset($error); }
+return $first . ":" . $items[0] . ":" . $items[1] . ":" . $iterFirst . ":" . $iter["right"] . ":" . $objectFirst . ":" . $objectNamed . ":" . $objectDynamic . ":" . $box->name . "|" . $wrongMessage;');
 "#,
     );
-    assert_eq!(out, "array:A:B:iter:R:start!:start!!");
+    assert_eq!(
+        out,
+        "array:A:B:iter:R:start!:start!!:start!!!:start!!!|native_eval_ref_object_heap(): Argument #1 ($box) must be of type NativeEvalRefBox, NativeEvalRefWrong given",
+    );
 }
 
 /// Eval keeps an object reference alias when an AOT function changes the value type.
@@ -19724,9 +19915,11 @@ fn test_eval_rejects_invalid_magic_unserialize_arity_contract() {
     );
 }
 
-/// Verifies AOT and dynamic eval OpenSSL calls share Magician's embedded crypto objects.
+/// Verifies AOT and dynamic eval OpenSSL calls link and run together. AOT uses
+/// the libcrypto-backed `elephc_openssl` bridge for the full provider catalog;
+/// eval keeps Magician's embedded pure-Rust hash/cipher bridge.
 #[test]
-fn test_eval_and_aot_openssl_share_one_crypto_bridge() {
+fn test_eval_and_aot_openssl_link_and_run() {
     let dir = make_cli_test_dir("elephc_eval_aot_openssl_bridge_dedup");
     fs::write(
         dir.join("main.php"),
@@ -19740,8 +19933,12 @@ eval($code);
     )
     .expect("write AOT and eval OpenSSL fixture");
 
-    let compile = elephc_cli_command(&dir)
-        .args(["--quiet", "main.php"])
+    let Some(mut command) = openssl_cli_command(&dir) else {
+        eprintln!("ELEPHC_OPENSSL_NATIVE_SKIP_GATE skipping test_eval_and_aot_openssl_link_and_run");
+        return;
+    };
+    let compile = command
+        .args(["--php-version", "8.5", "--quiet", "main.php"])
         .output()
         .expect("compile AOT and eval OpenSSL fixture");
     assert!(
@@ -23146,7 +23343,7 @@ echo $untyped->getType() === null ? "N" : "n";
     );
     assert_eq!(
         out.stdout,
-        "H:intB,stringB:n:D?EvalAotReflectPropertyTypeDepC:S?intB:B?stringB:uN"
+        "H:stringB,intB:n:D?EvalAotReflectPropertyTypeDepC:S?intB:B?stringB:uN"
     );
 }
 
@@ -24081,24 +24278,24 @@ return $target->join("1", "2", "3", "4", "5", "6", "7", "8", "9")
     assert_eq!(out, "123456789|abcdefghi|ABCDEFGHI");
 }
 
-/// Verifies generated/AOT variadic bridge rejects named arguments captured by the tail.
+/// Generated user-method variadic tails retain positional and named entries through eval.
 #[test]
-fn test_eval_aot_variadic_method_rejects_named_tail() {
-    let err = compile_and_run_expect_failure(
+fn test_eval_aot_variadic_methods_preserve_named_tail() {
+    let out = compile_and_run(
         r#"<?php
 class EvalAotVariadicNamedTailTarget {
-    public function collect(...$items): int {
-        return count($items);
+    public function collect(...$items): string {
+        return count($items) . ":" . json_encode($items);
+    }
+    public static function collectStatic(...$items): string {
+        return count($items) . ":" . json_encode($items);
     }
 }
-eval('$target = new EvalAotVariadicNamedTailTarget();
-$target->collect(named: "A");');
+echo eval('$target = new EvalAotVariadicNamedTailTarget();
+return $target->collect("head", named: "A") . "|" . EvalAotVariadicNamedTailTarget::collectStatic(named: "B");');
 "#,
     );
-    assert!(
-        err.contains("Fatal error: eval() runtime failed"),
-        "stderr did not contain eval runtime fatal diagnostic: {err}"
-    );
+    assert_eq!(out, r#"2:{"0":"head","named":"A"}|1:{"named":"B"}"#);
 }
 
 /// Verifies eval ReflectionMethod exposes generated/AOT declared type metadata.
@@ -24148,7 +24345,7 @@ foreach ($intersection->getTypes() as $type) {
     );
     assert_eq!(
         out.stdout,
-        "U2:intB:stringB:D?:EvalAotReflectTypeDepC:R?:stringB:S!:EvalAotReflectTypeDepC:I2:EvalAotReflectTypeLeftC:EvalAotReflectTypeRightC"
+        "U2:stringB:intB:D?:EvalAotReflectTypeDepC:R?:stringB:S!:EvalAotReflectTypeDepC:I2:EvalAotReflectTypeLeftC:EvalAotReflectTypeRightC"
     );
 }
 
@@ -24863,7 +25060,7 @@ foreach ($params as $param) {
     );
     assert_eq!(
         out.stdout,
-        "7/3:first@0rvRNTnac:int!B:A1:EvalParamTag:first:d|union@1rvbYTnac:union!:intB:stringB:A0:d|both@2rvbYTnac:intersection!:EvalReflectLeftC:EvalReflectRightC:A1:EvalParamTag:both:d|items@3OvbYTNAc:array?B:A0:D=null|callback@4OvbYTNaC:callable?B:A0:D=null|second@5OvbYTNac:App\\Name?C:A0:D=null|rest@6OVRNtNac:null:A0:d|"
+        "7/3:first@0rvRNTnac:int!B:A1:EvalParamTag:first:d|union@1rvbYTnac:union!:stringB:intB:A0:d|both@2rvbYTnac:intersection!:EvalReflectLeftC:EvalReflectRightC:A1:EvalParamTag:both:d|items@3OvbYTNAc:array?B:A0:D=null|callback@4OvbYTNaC:callable?B:A0:D=null|second@5OvbYTNac:App\\Name?C:A0:D=null|rest@6OVRNtNac:null:A0:d|"
     );
 }
 
@@ -24899,7 +25096,7 @@ echo $unionType;
     );
     assert_eq!(
         out.stdout,
-        "dep:?EvalReflectTypeStringDep|union:int|string|null|both:EvalReflectTypeStringLeft&EvalReflectTypeStringRight|mixed:mixed|items:?array|cast:int|string|null|concat:int|string|null|echo:int|string|null"
+        "dep:?EvalReflectTypeStringDep|union:string|int|null|both:EvalReflectTypeStringLeft&EvalReflectTypeStringRight|mixed:mixed|items:?array|cast:string|int|null|concat:string|int|null|echo:string|int|null"
     );
 }
 
@@ -25244,7 +25441,7 @@ echo ":unionSet:" . count($directUnion->getSettableType()->getTypes());');
     );
     assert_eq!(
         out.stdout,
-        "id:T:int!B|name:T:string?B|dep:T:EvalReflectPropertyTypeDep!C|plain:t:null|union:T:union!:intB:stringB|direct:T:EvalReflectPropertyTypeDep:set:EvalReflectPropertyTypeDep:plainSet:N:unionSet:2"
+        "id:T:int!B|name:T:string?B|dep:T:EvalReflectPropertyTypeDep!C|plain:t:null|union:T:union!:stringB:intB|direct:T:EvalReflectPropertyTypeDep:set:EvalReflectPropertyTypeDep:plainSet:N:unionSet:2"
     );
 }
 
@@ -25281,7 +25478,7 @@ echo ":" . $box->value;');
         "program failed: stdout={:?} stderr={}",
         out.stdout, out.stderr
     );
-    assert_eq!(out.stdout, "string:2:intB:stringB:2:7");
+    assert_eq!(out.stdout, "string:2:stringB:intB:2:7");
 }
 
 /// Verifies eval ReflectionProperty materializes property default metadata through the bridge.
@@ -25706,7 +25903,7 @@ echo $typed->getValue($object);
     assert_eq!(
         out.stdout,
         "Ada:\nFatal error: Uncaught Error: Typed property \
-EvalAotReflectUninitializedGetTarget::$typed must not be accessed before initialization\n"
+EvalAotReflectUninitializedGetTarget::$typed must not be accessed before initialization\nStack trace:\n#0 {main}\n"
     );
     assert_eq!(out.stderr, "");
 }
@@ -26039,6 +26236,175 @@ echo $declaring->getName();');
     );
 }
 
+/// Eval-created Reflection owners populate the same public metadata mirrors as AOT owners.
+#[test]
+fn test_eval_reflection_public_name_and_class_mirrors_are_populated() {
+    let out = compile_and_run_capture(
+        r#"<?php
+#[Attribute]
+class EvalReflectionMirrorAttribute {}
+#[EvalReflectionMirrorAttribute]
+class EvalReflectionMirrorTarget {
+    public const FLAG = 7;
+    public int $field = 1;
+    public function action(): void {}
+}
+$code = $argc > 1 ? $argv[1] : '$class = new ReflectionClass("EvalReflectionMirrorTarget");
+$method = new ReflectionMethod("EvalReflectionMirrorTarget", "action");
+$property = new ReflectionProperty("EvalReflectionMirrorTarget", "field");
+$constant = new ReflectionClassConstant("EvalReflectionMirrorTarget", "FLAG");
+$attribute = $class->getAttributes()[0];
+echo $class->name . "|";
+echo $method->name . ":" . $method->class . "|";
+echo $property->name . ":" . $property->class . "|";
+echo $constant->name . ":" . $constant->class . "|";
+echo $attribute->name . ":" . $attribute->getName();';
+eval($code);
+"#,
+    );
+    assert!(
+        out.success,
+        "program failed: stdout={:?} stderr={}",
+        out.stdout, out.stderr
+    );
+    assert_eq!(
+        out.stdout,
+        "EvalReflectionMirrorTarget|action:EvalReflectionMirrorTarget|field:EvalReflectionMirrorTarget|FLAG:EvalReflectionMirrorTarget|EvalReflectionMirrorAttribute:EvalReflectionMirrorAttribute"
+    );
+}
+
+/// Eval Reflection mirrors own independent strings across unset and reference mutation.
+#[test]
+fn test_eval_reflection_public_mirror_mutation_preserves_private_metadata() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+#[Attribute]
+class EvalReflectionMutableMirrorAttribute {}
+#[EvalReflectionMutableMirrorAttribute]
+class EvalReflectionMutableMirrorTarget {
+    public function action(string $value): void {}
+}
+function inspectEvalReflectionMethod(ReflectionMethod $method): void {
+    unset($method->name);
+    echo $method->getName(), '|';
+    $classAlias =& $method->class;
+    $classAlias = 'changed';
+    echo $method->getDeclaringClass()->getName(), '|';
+}
+function inspectEvalReflectionParameter(ReflectionParameter $parameter): void {
+    $parameterAlias =& $parameter->name;
+    $parameterAlias = 'changed';
+    echo $parameter->getName(), '|';
+}
+function inspectEvalReflectionAttributeReference(ReflectionAttribute $attribute): void {
+    $attributeAlias =& $attribute->name;
+    $attributeAlias = 'changed';
+    echo $attribute->getName();
+}
+$methodCode = $argc > 1 ? $argv[1] : 'return new ReflectionMethod("EvalReflectionMutableMirrorTarget", "action");';
+$method = eval($methodCode);
+if ($method instanceof ReflectionMethod) { inspectEvalReflectionMethod($method); }
+$parameterCode = $argc > 1 ? $argv[1] : 'return (new ReflectionMethod("EvalReflectionMutableMirrorTarget", "action"))->getParameters()[0];';
+$parameter = eval($parameterCode);
+if ($parameter instanceof ReflectionParameter) { inspectEvalReflectionParameter($parameter); }
+$attributeCode = $argc > 1 ? $argv[1] : 'return (new ReflectionClass("EvalReflectionMutableMirrorTarget"))->getAttributes()[0];';
+$attribute = eval($attributeCode);
+if ($attribute instanceof ReflectionAttribute) { inspectEvalReflectionAttributeReference($attribute); }
+"#,
+    );
+    assert!(
+        out.success,
+        "program failed: stdout={:?} stderr={}",
+        out.stdout,
+        out.stderr
+    );
+    assert_eq!(
+        out.stdout,
+        "action|EvalReflectionMutableMirrorTarget|value|EvalReflectionMutableMirrorAttribute"
+    );
+
+    let unset_out = compile_and_run_with_heap_debug(
+        r#"<?php
+#[Attribute]
+class EvalReflectionUnsetMirrorAttribute {}
+#[EvalReflectionUnsetMirrorAttribute]
+class EvalReflectionUnsetMirrorTarget {}
+function inspectEvalReflectionAttributeUnset(ReflectionAttribute $attribute): void {
+    unset($attribute->name);
+    echo $attribute->getName();
+}
+$attributeCode = $argc > 1 ? $argv[1] : 'return (new ReflectionClass("EvalReflectionUnsetMirrorTarget"))->getAttributes()[0];';
+$attribute = eval($attributeCode);
+if ($attribute instanceof ReflectionAttribute) { inspectEvalReflectionAttributeUnset($attribute); }
+"#,
+    );
+    assert!(
+        unset_out.success,
+        "program failed: stdout={:?} stderr={}",
+        unset_out.stdout,
+        unset_out.stderr
+    );
+    assert_eq!(
+        unset_out.stdout,
+        "EvalReflectionUnsetMirrorAttribute"
+    );
+}
+
+/// Eval mirrors reject direct writes after RHS effects but permit compound writes and unset.
+#[test]
+fn test_eval_reflection_public_mirror_write_rules() {
+    let out = compile_and_run(
+        r#"<?php
+class EvalMirrorWriteTarget {
+    public function action(string $value): void {}
+}
+class EvalMirrorWriteBase extends ReflectionClass {}
+class EvalMirrorWriteSubclass extends EvalMirrorWriteBase {
+    public string $class = '';
+}
+class EvalMirrorPlainNative {
+    public string $name = '';
+    public string $class = '';
+}
+$fromAot = new EvalMirrorWriteSubclass(EvalMirrorWriteTarget::class);
+$plainNative = new EvalMirrorPlainNative();
+$code = $argc > 1 ? $argv[1] : <<<'PHP'
+function evalMirrorWriteRhs(): string { echo 'rhs|'; return 'changed'; }
+try { $fromAot->name = evalMirrorWriteRhs(); }
+catch (ReflectionException $error) { echo $error->getMessage(), '|'; }
+try { $fromAot->class = 'changed'; }
+catch (ReflectionException $error) { echo $error->getMessage(), '|'; }
+$fromAot->name .= '!';
+echo $fromAot->name, '|', $fromAot->getName(), '|';
+$created = new ReflectionMethod('EvalMirrorWriteTarget', 'action');
+try { $created->class = evalMirrorWriteRhs(); }
+catch (ReflectionException $error) { echo $error->getMessage(), '|'; }
+$created->name .= '?';
+echo $created->name, '|';
+$property = 'name';
+try { $created->{$property} = 'changed'; }
+catch (ReflectionException $error) { echo $error->getMessage(), '|'; }
+echo $created->name, '|';
+unset($created->name);
+echo $created->getName(), '|', $created->getDeclaringClass()->getName(), '|';
+$plainNative->name = 'native';
+$plainNative->class = 'class';
+class EvalMirrorPlainDynamic {
+    public string $name = '';
+    public string $class = '';
+}
+$plainDynamic = new EvalMirrorPlainDynamic();
+$plainDynamic->name = 'dynamic';
+$plainDynamic->class = 'class';
+echo $plainNative->name, ':', $plainNative->class, '|', $plainDynamic->name, ':', $plainDynamic->class;
+PHP;
+eval($code);
+"#,
+    );
+    assert_eq!(out,
+        "rhs|Cannot set read-only property EvalMirrorWriteSubclass::$name|Cannot set read-only property EvalMirrorWriteSubclass::$class|EvalMirrorWriteTarget!|EvalMirrorWriteTarget|rhs|Cannot set read-only property ReflectionMethod::$class|action?|Cannot set read-only property ReflectionMethod::$name|action?|action|EvalMirrorWriteTarget|native:class|dynamic:class");
+}
+
 /// Verifies eval ReflectionFunction preserves rich eval-declared function signatures.
 #[test]
 fn test_eval_reflection_function_reports_signature_metadata() {
@@ -26119,7 +26485,7 @@ echo $plain->getReturnType() === null ? "Q" : "q";');
         "program failed: stdout={:?} stderr={}",
         out.stdout, out.stderr
     );
-    assert_eq!(out.stdout, "T:int:N:B:2:intBstringB:never:n:B:p:Q");
+    assert_eq!(out.stdout, "T:int:N:B:2:stringBintB:never:n:B:p:Q");
 }
 
 /// Verifies eval ReflectionFunction and ReflectionMethod stringify retained signatures.
@@ -26149,7 +26515,7 @@ echo str_replace("\n", "|", $method->__toString());');
     );
     assert_eq!(
         out.stdout,
-        "Function [ <user> function eval_reflect_string_text ] {|  - Parameters [3] {|    Parameter #0 [ <required> string $name ]|    Parameter #1 [ <optional> int $count = 3 ]|    Parameter #2 [ <optional> &...$items ]|  }|  - Return [ ?string ]|}|::Method [ <user> final static public method run ] {|  - Parameters [2] {|    Parameter #0 [ <required> ?int $id ]|    Parameter #1 [ <optional> string $label = 'ok' ]|  }|  - Return [ ?string ]|}|"
+        "Function [ <user> function eval_reflect_string_text ] {||  - Parameters [3] {|    Parameter #0 [ <required> string $name ]|    Parameter #1 [ <optional> int $count = 3 ]|    Parameter #2 [ <optional> &...$items ]|  }|  - Return [ ?string ]|}|::Method [ <user> final static public method run ] {||  - Parameters [2] {|    Parameter #0 [ <required> ?int $id ]|    Parameter #1 [ <optional> string $label = 'ok' ]|  }|  - Return [ ?string ]|}|"
     );
 }
 
@@ -26359,10 +26725,9 @@ echo ($static->isStatic() ? "S" : "s");');
 /// Verifies eval ReflectionFunction/Method `returnsReference()` reads the reflected declaration
 /// instead of a baked `false` (#1260).
 ///
-/// Eval cannot declare `function &f()` itself, so its functions, closures, and methods report
-/// `false`; the by-reference declarations it can see are a compiled `function &f()` or
-/// `function &m()`, and an eval-declared `&get` property hook. Expected output measured on
-/// PHP 8.5.10.
+/// Eval functions and closures cannot declare reference returns. Eval methods and `&get` hooks
+/// retain their declaration flags, as do compiled functions and methods. Expected output
+/// cross-checked against PHP 8.5.
 #[test]
 fn test_eval_reflection_returns_reference_reads_declarations() {
     let out = compile_and_run_capture(
@@ -26379,6 +26744,7 @@ eval('class EvalHooked {
     public array $items = [] { &get { return $this->items; } }
     public int $n { get => 1; }
     public function plain() { return 1; }
+    public function &refItems() { return $this->items; }
 }
 function eval_value() { return 1; }
 echo (new ReflectionFunction("aot_ref"))->returnsReference() ? "R" : "r";
@@ -26389,6 +26755,7 @@ echo ":";
 echo (new ReflectionMethod("AotStore", "items"))->returnsReference() ? "R" : "r";
 echo (new ReflectionMethod("AotStore", "count"))->returnsReference() ? "R" : "r";
 echo (new ReflectionMethod("EvalHooked", "plain"))->returnsReference() ? "R" : "r";
+echo (new ReflectionMethod("EvalHooked", "refItems"))->returnsReference() ? "R" : "r";
 echo ":";
 echo (new ReflectionProperty("EvalHooked", "items"))->getHook(PropertyHookType::Get)->returnsReference() ? "R" : "r";
 echo (new ReflectionProperty("EvalHooked", "n"))->getHook(PropertyHookType::Get)->returnsReference() ? "R" : "r";');
@@ -26399,7 +26766,7 @@ echo (new ReflectionProperty("EvalHooked", "n"))->getHook(PropertyHookType::Get)
         "program failed: stdout={:?} stderr={}",
         out.stdout, out.stderr
     );
-    assert_eq!(out.stdout, "Rrrr:Rrr:Rr");
+    assert_eq!(out.stdout, "Rrrr:RrrR:Rr");
 }
 
 /// Verifies eval `returnsReference()` reads an abstract or interface `&get` hook contract, which
@@ -28689,7 +29056,7 @@ echo $box instanceof $target ? "bad" : "bad";
 "#,
     );
     assert!(
-        err.contains("Fatal error: Class name must be a valid object or a string"),
+        err.contains("Class name must be a valid object or a string"),
         "{err}"
     );
 }
@@ -28706,7 +29073,7 @@ echo $value instanceof $target ? "bad" : "bad";
 "#,
     );
     assert!(
-        err.contains("Fatal error: Class name must be a valid object or a string"),
+        err.contains("Class name must be a valid object or a string"),
         "{err}"
     );
 }
@@ -30567,4 +30934,179 @@ if ($w instanceof Wide) { echo readwide($w); }
 "#,
     );
     assert_eq!(out, "2|7s");
+}
+
+/// Counts how many times a symbol is DEFINED as a label in the user assembly.
+fn count_symbol_definitions(user_asm: &str, symbol: &str) -> usize {
+    let definition = format!("{symbol}:");
+    user_asm
+        .lines()
+        .filter(|line| line.trim() == definition)
+        .count()
+}
+
+/// Counts the direct calls to a symbol, on any supported call encoding.
+///
+/// AArch64 emits `bl`; x86_64 emits `call`. Mach-O prefixes an external name
+/// with `_` and the other targets do not, so the callee is compared with that
+/// one prefix optional. Comparing EXACTLY rather than by suffix keeps a future
+/// `..._native_method_extra` from inflating the count of
+/// `..._native_method`.
+fn count_direct_calls(user_asm: &str, symbol: &str) -> usize {
+    let prefixed = format!("_{symbol}");
+    user_asm
+        .lines()
+        .filter(|line| {
+            let line = line.trim();
+            ["bl ", "call "].iter().any(|opcode| {
+                line.strip_prefix(opcode).is_some_and(|callee| {
+                    let callee = callee.trim_end();
+                    callee == symbol || callee == prefixed
+                })
+            })
+        })
+        .count()
+}
+
+/// Asserts a helper label is emitted as a GLOBAL symbol, not an assembler-local one.
+///
+/// `count_symbol_definitions` cannot tell the two apart: both produce the same
+/// `name:` line. `label_global` additionally emits `.globl <name>` (and, on ELF,
+/// its own `.text.<name>` section), which is what keeps the helper out of a
+/// neighbouring function's section under `--gc-sections`/`-dead_strip`.
+fn assert_global_label(user_asm: &str, symbol: &str, context: &str) {
+    let globl = format!(".globl {symbol}");
+    assert!(
+        user_asm.lines().any(|line| line.trim() == globl),
+        "{context}: {symbol} must be emitted with a global label"
+    );
+}
+
+/// Builds a program whose method performs an eval that needs the BRIDGE, repeated `sites` times.
+///
+/// `$GLOBALS` inside the fragment is what forces the bridge path: a plain literal
+/// fragment compiles to an internal EIR function and never registers an inventory.
+fn eval_bridge_source(sites: usize) -> String {
+    let mut source = String::from("<?php\nclass Demo {\n    public int $n = 0;\n    public function run(): void {\n");
+    for index in 0..sites {
+        source.push_str(&format!(
+            "        eval('$GLOBALS[\"slot{index}\"] = {index};');\n"
+        ));
+    }
+    source.push_str("    }\n}\n$d = new Demo();\n$d->run();\necho $d->n, \"\\n\";\n");
+    source
+}
+
+/// Verifies the eval inventory is registered by ONE module-level helper, not once per eval site.
+///
+/// This is the regression guard for the quadratic blowup that made
+/// `examples/eval/main.php` emit 747 MB of assembly: every eval call site
+/// re-emitted the whole native inventory, so the registration count scaled with
+/// the number of SITES. With one helper it is a function of the INVENTORY alone,
+/// which is the same for both programs here, so the counts must be EQUAL.
+#[test]
+fn test_eval_inventory_is_registered_once_not_once_per_call_site() {
+    let single_dir = make_cli_test_dir("elephc_eval_inventory_single_site");
+    let (single_asm, _, _) =
+        compile_source_to_asm_with_options(&eval_bridge_source(1), &single_dir, 8_388_608, false, false);
+
+    let many_dir = make_cli_test_dir("elephc_eval_inventory_many_sites");
+    let (many_asm, _, _) =
+        compile_source_to_asm_with_options(&eval_bridge_source(8), &many_dir, 8_388_608, false, false);
+
+    assert_eq!(
+        count_symbol_definitions(&single_asm, "__elephc_eval_register_inventory"),
+        1,
+        "the native inventory helper must be emitted exactly once"
+    );
+    assert_global_label(&single_asm, "__elephc_eval_register_inventory", "one eval site");
+    assert_eq!(
+        count_symbol_definitions(&many_asm, "__elephc_eval_register_inventory"),
+        1,
+        "the native inventory helper must be emitted exactly once"
+    );
+    assert_global_label(&many_asm, "__elephc_eval_register_inventory", "eight eval sites");
+
+    let single_registrations = count_direct_calls(&single_asm, "__elephc_eval_register_native_method");
+    let many_registrations = count_direct_calls(&many_asm, "__elephc_eval_register_native_method");
+    assert!(
+        single_registrations > 0,
+        "an eval that takes the bridge path must register native methods"
+    );
+    assert_eq!(
+        single_registrations, many_registrations,
+        "the inventory is per PROGRAM, not per eval call site: 8 sites must not register \
+         8x the methods (single={single_registrations}, many={many_registrations})"
+    );
+}
+
+/// Verifies the eval status dispatch is one module-level helper shared by every call site.
+///
+/// Every bridge call reports a status, and the dispatch that turns one into a
+/// fatal diagnostic is identical at each of them. Inlining it gave a program
+/// thousands of copies of the same six-label block.
+#[test]
+fn test_eval_status_dispatch_is_a_single_shared_helper() {
+    let dir = make_cli_test_dir("elephc_eval_status_helper");
+    let (user_asm, _, _) =
+        compile_source_to_asm_with_options(&eval_bridge_source(4), &dir, 8_388_608, false, false);
+
+    assert_eq!(
+        count_symbol_definitions(&user_asm, "__elephc_eval_check_status"),
+        1,
+        "the eval status dispatch must be emitted exactly once"
+    );
+    assert_global_label(&user_asm, "__elephc_eval_check_status", "status dispatch");
+    assert!(
+        count_direct_calls(&user_asm, "__elephc_eval_check_status") > 0,
+        "eval call sites must reach the shared status dispatch"
+    );
+}
+
+/// Verifies a scope-aware literal eval still emits the status dispatch it needs.
+///
+/// A literal fragment compiles to an internal EIR function and does NOT link the
+/// bridge, but its scope accessors still report statuses through the shared
+/// helper. Gating that helper on the bridge alone left the program with an
+/// undefined `__elephc_eval_check_status` at link time.
+#[test]
+fn test_literal_eval_scope_program_defines_the_status_dispatch() {
+    let dir = make_cli_test_dir("elephc_eval_status_helper_literal");
+    let (user_asm, _, _) =
+        compile_source_to_asm_with_options(
+            r#"<?php
+eval('$created = "yes";');
+echo $created;
+"#,
+            &dir,
+            8_388_608,
+            false,
+            false,
+        );
+
+    assert!(
+        user_asm.contains("__elephc_eval_scope_set"),
+        "the literal eval must still lower through the eval scope accessor"
+    );
+    assert_eq!(
+        count_symbol_definitions(&user_asm, "__elephc_eval_check_status"),
+        1,
+        "a bridge-free literal eval still needs the shared status dispatch defined"
+    );
+    assert_global_label(&user_asm, "__elephc_eval_check_status", "literal eval");
+}
+
+/// Verifies statement-level keyword `and` binds below the completed assignment.
+///
+/// `$x = true and false;` is `($x = true) and false;` in PHP, so `$x` remains true. The
+/// expression-position parser already had the right precedence; the statement assignment
+/// fast path used the full expression grammar and swallowed the keyword.
+#[test]
+fn test_eval_statement_assignment_stops_before_keyword_and() {
+    let out = compile_and_run(
+        r#"<?php
+eval('$x = true and false; var_dump($x); $y = 1 or 0; var_dump($y);');
+"#,
+    );
+    assert_eq!(out, "bool(true)\nint(1)\n");
 }

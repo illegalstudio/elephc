@@ -1,6 +1,6 @@
 <?php
-// The startup integration exposed existing ownership debt in this eval array path.
-// The same leak occurs without startup overrides; scalar state getters are balanced.
+// Historical startup integration probe for eval-array ownership; current behavior needs qualification.
+// The earlier leak also appeared without startup overrides; scalar state getters were balanced.
 mb_strlen("");
 $source = $argc > 0 ? '
 function show_detect_order(): void {

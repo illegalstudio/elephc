@@ -35,7 +35,9 @@ pub(super) fn eval_nested_eval(
     let code = code.and_then(|code| released.map(|()| code))?;
     let program = parse_fragment_cached(&code).map_err(EvalParseError::status)?;
     context.push_eval_backtrace_boundary();
-    let outcome = execute_program_with_context(context, program.as_ref(), scope, values);
+    let outcome = with_executable_cache_key(&code, || {
+        execute_program_with_context(context, program.as_ref(), scope, values)
+    });
     context.pop_eval_backtrace_boundary();
     outcome
 }

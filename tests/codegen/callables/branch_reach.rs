@@ -33,8 +33,8 @@ pcntl_signal(SIGUSR1, $callback);
 const WIDE_EDGE_STEMS: &[&str] = &[
     "array_map_null_callback",
     "array_filter_null_callback",
-    "mixed_callable_array",
-    "mixed_callable_object",
+    "mixed_callable_value_array",
+    "mixed_callable_value_object",
     "pcntl_signal_mixed_scalar",
     "pcntl_signal_mixed_bool_error",
 ];

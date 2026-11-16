@@ -35,6 +35,13 @@ pub(super) fn stage_argument(
     if !variadic && !reference_contract(ctx, signature, index).is_some_and(|ty| needs_captured_guard(&ty)) {
         return None;
     }
+    if is_native_selection_reference_argument(ctx, source) {
+        let alias = stage_native_selection_reference(ctx, source);
+        let value = if variadic { lower_invoker_ref_arg_marker(ctx, &alias, span) }
+            else { ctx.load_local(&alias, Some(span)) };
+        let value = if variadic { root_evaluated_call_argument(ctx, value, span) } else { value };
+        return Some((value.value, alias));
+    }
     if let ExprKind::Variable(name) = &source.kind {
         // A branch can restore a concrete hint after another branch widened the cell.
         // Inherit its real payload layout before capturing the alias.
@@ -55,7 +62,7 @@ pub(super) fn stage_argument(
         ctx.call_argument_evaluation_scopes.last_mut().expect("selected reference argument scope")
             .owners.push(crate::ir_lower::context::CallArgumentEvaluationOwner {
                 value: None, borrow: None, temp_name: alias.clone(), slot, span,
-                ref_cell_payload: Some(payload), scoped_receiver_alias: true,
+                ref_cell_payload: Some(payload), scoped_receiver_alias: true, pins_borrowed_source: false,
             });
     }
     let value = if variadic { lower_invoker_ref_arg_marker(ctx, &alias, span) }

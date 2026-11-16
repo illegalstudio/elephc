@@ -488,7 +488,8 @@ fn parse_optional_property_type(
             | Some(Token::False)
             | Some(Token::True)
             | Some(Token::Null)
-    ) {
+    ) && !crate::parser::relative_name_starts_at(tokens, *pos)
+    {
         return Ok(None);
     }
     Ok(Some(parse_property_type_expr(tokens, pos, span)?))

@@ -14,7 +14,8 @@
 //!   freshly allocated string/array children.
 //! - elephc indexed-array layout: `length@0`, `capacity@8`, `elem_size@16`,
 //!   elements at `+24`; the element `value_type` is byte 1 of the kind word at
-//!   `arr - 8` (0=int, 1=string, 2=float, 3=bool, 7=mixed cell ptr, 11=tagged).
+//!   `arr - 8` (0=int, 1=string, 2=float, 3=bool, 7=mixed cell ptr, 11=tagged,
+//!   13=raw `?ptr<T>` word, packed as null for 0 and as an integer otherwise).
 //! - Emits both ARM64 and x86_64 variants gated on `emitter.target.arch`.
 
 use crate::codegen_support::emit::Emitter;
@@ -104,7 +105,16 @@ pub fn emit_zval_pack_array_packed(emitter: &mut Emitter) {
     emitter.instruction("b.eq __rt_zval_pack_array_packed_vt_hasharr");         // stage the nested associative array for pack_element
     emitter.instruction("cmp x15, #11");                                        // value_type 11 = tagged scalar
     emitter.instruction("b.eq __rt_zval_pack_array_packed_vt_tagged");          // stage the tagged scalar for pack_element
+    emitter.instruction(&format!("cmp x15, #{}", crate::codegen_support::sentinels::POINTER_ARRAY_VALUE_TYPE)); // value_type 13 = raw ?ptr<T> word
+    emitter.instruction("b.eq __rt_zval_pack_array_packed_vt_pointer");         // stage the pointer word as null or an integer
     emitter.instruction("b __rt_zval_pack_array_packed_vt_null");               // unknown kinds pack as null
+
+    emitter.label("__rt_zval_pack_array_packed_vt_pointer");
+    emitter.instruction("ldr x1, [x14]");                                       // lo = the raw pointer word
+    emitter.instruction("cbz x1, __rt_zval_pack_array_packed_vt_null");         // the null pointer word packs as PHP null
+    emitter.instruction("mov x2, xzr");                                         // hi = 0
+    emitter.instruction("mov x0, #0");                                          // tag = 0 (a live address is an integer)
+    emitter.instruction("b __rt_zval_pack_array_packed_call_elem");             // pack the staged element
 
     emitter.label("__rt_zval_pack_array_packed_vt_int");
     emitter.instruction("ldr x1, [x14]");                                       // lo = integer value
@@ -197,6 +207,9 @@ pub fn emit_zval_pack_array_packed(emitter: &mut Emitter) {
     emitter.instruction("mov x9, #-1");                                         // HT_INVALID_IDX for the internal pointer
     emitter.instruction("str w9, [x0, #32]");                                   // store nInternalPointer at offset 32 (32-bit)
     emitter.instruction("ldr x9, [sp, #8]");                                    // reload the length for nNextFreeElement
+    emitter.instruction("cbnz x9, __rt_zval_pack_array_packed_next_ready");     // nonempty packed arrays append after their final integer key
+    emitter.instruction("movz x9, #0x8000, lsl #48");                           // an empty table has no integer key yet: ZEND_LONG_MIN
+    emitter.label("__rt_zval_pack_array_packed_next_ready");
     emitter.instruction("str x9, [x0, #40]");                                   // store nNextFreeElement at offset 40 (64-bit)
     emitter.instruction("str xzr, [x0, #48]");                                  // store pDestructor = NULL at offset 48
     emitter.instruction("ldr x0, [sp, #72]");                                   // return the HashTable pointer
@@ -284,7 +297,17 @@ fn emit_zval_pack_array_packed_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("je __rt_zval_pack_array_packed_vt_hasharr");           // stage the nested associative array for pack_element
     emitter.instruction("cmp r15, 11");                                         // value_type 11 = tagged scalar
     emitter.instruction("je __rt_zval_pack_array_packed_vt_tagged");            // stage the tagged scalar for pack_element
+    emitter.instruction(&format!("cmp r15, {}", crate::codegen_support::sentinels::POINTER_ARRAY_VALUE_TYPE)); // value_type 13 = raw ?ptr<T> word
+    emitter.instruction("je __rt_zval_pack_array_packed_vt_pointer");           // stage the pointer word as null or an integer
     emitter.instruction("jmp __rt_zval_pack_array_packed_vt_null");             // unknown kinds pack as null
+
+    emitter.label("__rt_zval_pack_array_packed_vt_pointer");
+    emitter.instruction("mov rdi, QWORD PTR [r14]");                            // lo = the raw pointer word
+    emitter.instruction("test rdi, rdi");                                       // is this the null pointer word?
+    emitter.instruction("jz __rt_zval_pack_array_packed_vt_null");              // the null pointer word packs as PHP null
+    emitter.instruction("xor rsi, rsi");                                        // hi = 0
+    emitter.instruction("xor eax, eax");                                        // tag = 0 (a live address is an integer)
+    emitter.instruction("jmp __rt_zval_pack_array_packed_call_elem");           // pack the staged element
 
     emitter.label("__rt_zval_pack_array_packed_vt_int");
     emitter.instruction("mov rdi, QWORD PTR [r14]");                            // lo = integer value
@@ -372,10 +395,37 @@ fn emit_zval_pack_array_packed_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov DWORD PTR [rax + 28], ecx");                       // store nNumOfElements at offset 28 (32-bit)
     emitter.instruction("mov DWORD PTR [rax + 32], -1");                        // nInternalPointer = HT_INVALID_IDX (32-bit)
     emitter.instruction("mov rcx, QWORD PTR [rbp - 16]");                       // reload the length for nNextFreeElement
+    emitter.instruction("test rcx, rcx");                                       // distinguish an empty table from one ending at key length - 1
+    emitter.instruction("jnz __rt_zval_pack_array_packed_next_ready");          // nonempty packed arrays append at their element count
+    emitter.instruction("mov rcx, 1");                                          // materialize ZEND_LONG_MIN without an out-of-range immediate
+    emitter.instruction("shl rcx, 63");                                         // an empty table has no integer key yet
+    emitter.label("__rt_zval_pack_array_packed_next_ready");
     emitter.instruction("mov QWORD PTR [rax + 40], rcx");                       // store nNextFreeElement at offset 40 (64-bit)
     emitter.instruction("mov QWORD PTR [rax + 48], 0");                         // pDestructor = NULL
     emitter.instruction("mov rax, QWORD PTR [rbp - 72]");                       // return the HashTable pointer
     emitter.instruction("add rsp, 96");                                         // release the local slots
     emitter.instruction("pop rbp");                                             // restore the caller frame pointer
     emitter.instruction("ret");                                                 // return the zend_array pointer in rax
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::codegen_support::platform::Target;
+
+    /// Empty packed arrays publish Zend's sentinel before crossing any supported target boundary.
+    #[test]
+    fn empty_packed_arrays_keep_zend_negative_append_semantics_on_all_targets() {
+        for name in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+            let mut emitter = Emitter::new(Target::parse(name).unwrap());
+            emit_zval_pack_array_packed(&mut emitter);
+            let asm = emitter.output();
+            assert!(asm.contains("__rt_zval_pack_array_packed_next_ready:"), "{name}: {asm}");
+            if name == "linux-x86_64" {
+                assert!(asm.contains("shl rcx, 63"), "{name}: {asm}");
+            } else {
+                assert!(asm.contains("movz x9, #0x8000, lsl #48"), "{name}: {asm}");
+            }
+        }
+    }
 }

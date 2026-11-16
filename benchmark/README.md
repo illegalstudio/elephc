@@ -24,8 +24,9 @@ beforehand, as CI does. `--compiler PATH` selects an explicitly managed compiler
 without building. Neither mode rewrites the selected compiler.
 
 `--require-baselines` fails before building if PHP or a C compiler needed by the
-selected cases is missing. CI enables this flag and explicitly installs PHP 8.5
-without coverage drivers. Local runs can still skip unavailable comparison tools.
+selected cases is missing, or if PHP cannot run with its JIT on. CI enables this
+flag and explicitly installs PHP 8.5 without coverage drivers. Local runs can
+still skip unavailable comparison tools.
 
 PHP, elephc, and C are measured again in every CI run. Each case gets one warmup
 and three measured executions in CI; PHP results are not cached between runs.
@@ -36,11 +37,40 @@ execution must produce `expected.txt` exactly. Temporary sources and binaries
 are removed on success and failure. Use `--timeout SECONDS` to bound individual
 compilation/execution commands (default: 120 seconds).
 
-Missing PHP or C tools appear as skipped baselines, never zero times. PHP CLI
-OPcache and JIT are explicitly disabled for new measurements. The compiler,
-Rust, C, PHP, runner, architecture, iterations, warmup, and fixture hash are
-recorded with available raw samples. A result's commit identifies the measured
-source, not the later statistics publication commit.
+Missing PHP or C tools appear as skipped baselines, never zero times. The
+compiler, Rust, C, PHP version and mode, runner, architecture, iterations,
+warmup, and fixture hash are recorded with available raw samples. A result's
+commit identifies the measured source, not the later statistics publication
+commit.
+
+### PHP configuration
+
+PHP baselines run with OPcache and the tracing JIT, the configuration PHP is
+deployed with for speed. Every PHP execution receives these flags, which
+override the host `php.ini`:
+
+```bash
+php -d opcache.enable=1 -d opcache.enable_cli=1 -d opcache.jit=tracing \
+  -d opcache.jit_buffer_size=128M -d opcache.file_update_protection=0
+```
+
+Both JIT settings are needed: PHP 8.4 and later default to `opcache.jit=disable`,
+and earlier versions default to a zero JIT buffer. By default OPcache also
+refuses to cache a script modified in the last two seconds, so a freshly written
+fixture would run in the interpreter without any warning. Some setups turn the JIT off
+without an error, for example when Xdebug is loaded. The runner therefore asks
+`opcache_get_status()` with the same flags before measuring. If the JIT is not
+on, the PHP variants are skipped with the reason, and `--require-baselines`
+fails. A PHP time is never recorded under the wrong mode.
+
+The CLI cannot share OPcache memory between processes. Each PHP execution
+therefore compiles the script and warms the JIT inside its measured process
+time, like PHP startup itself.
+
+Samples recorded before this configuration ran with `opcache.enable_cli=0` and
+`opcache.jit=0`. Their environment says `php_mode: CLI; OPcache/JIT disabled`.
+The reports start a new line where the mode changes, and the SVG header names
+the mode of the latest sample.
 
 The hot-path variants include initialization and final checksum computation in
 their process time. They replace the former combined in-process stopwatch and
@@ -97,8 +127,8 @@ tests; they do not append performance samples to the product history.
 
 Historical native and Magician artifacts have no PHP timings because the old
 macOS job did not install PHP. Those values cannot be recovered by fetching the
-old artifacts again. New CI runs calculate the PHP baseline once with
-OPcache/JIT disabled in each run and record its installed version.
+old artifacts again. New CI runs measure the PHP baseline in each run with the
+[PHP configuration](#php-configuration) above and record its version and mode.
 
 The first available PHP measurement also supplies a reference for earlier points
 that lack PHP timings. Reports use this reference to fill historical gaps. The
@@ -110,8 +140,15 @@ origin on hover. Known platform or fixture mismatches are never backfilled. Unkn
 metadata can use the first available reference. Existing PHP measurements and
 references are preserved; each new CI run adds its own freshly measured PHP data.
 
-The existing nightly `Repository Stats` workflow fetches available benchmark
-artifacts, merges them into `data/{native,magician,hot-path}.json`, regenerates
+Before artifact retention deletes a main benchmark artifact, it validates the
+source run, commit, suite measurements and metadata, then saves its JSON records
+under `benchmark-results/<artifact-id>.json` on the
+`ci/development-artifact-ledger` branch. A failed save leaves the artifact intact.
+These small data files are Git history, not Actions artifacts or releases.
+
+The existing nightly `Repository Stats` workflow reads those durable records and
+any still-available benchmark artifacts, merges them into
+`data/{native,magician,hot-path}.json`, regenerates
 `assets/*.svg`, and publishes them together with repository statistics. It uses
 the existing Illegal Bot installation identity for a `[skip ci]` commit. Artifact
 reads use an Actions-read workflow token. Publication uses an isolated checkout
@@ -122,7 +159,7 @@ Each suite keeps the latest sample per **UTC artifact-upload day and platform**.
 A newer run can replace the existing sample for that day. Older dates remain
 saved after artifact expiry. Selection happens after reading each artifact's
 suite and platform. `data/imports.json` checkpoints sample metadata for each
-artifact, so unchanged or superseded artifacts and legacy archives lacking
+artifact and the exact durable Git blob, so unchanged or superseded artifacts and legacy archives lacking
 newer suites are not downloaded again every night. Fetch failures or malformed
 saved results fail the refresh before replacing any history.
 
@@ -150,6 +187,17 @@ Magician history explains each case's intended path.
 
 ## Internal measurements
 
+The [PR2090 follow-up comparison](diagnostics/pr2090-audit.md) records controlled
+revision measurements, semantic checks and compiler-cost diagnostics for PR2247,
+with raw samples kept separately from the CI benchmark history.
+
+For an isolated numeric accumulator, compile `benchmark/diagnostics/numeric_local.php`
+and pass the iteration count at runtime. Run the same source and arguments with
+`php -n` plus the [OPcache/JIT flags](#php-configuration). Output is
+`checksum|body_ns`; argument parsing and process startup precede the body clock. Measure several iteration
+counts with alternating compiler/PHP executions and report dispersion. Collect
+`--gc-stats` in separate diagnostic binaries so timings use ordinary code generation.
+
 For controlled revision comparisons of the mixed workload, select each compiler
 explicitly and supply its source revision. This diagnostic runner is separate
 from the historical process-only suites:
@@ -167,8 +215,9 @@ archives using `--bridge-dir` when they are not adjacent to that compiler. Opaqu
 eval can also link callbacks from other bridges, so supply their matching
 archives in the same directory. Every supplied archive is fingerprinted and its
 library-directory override replaces inherited overrides from other builds.
-Compilation happens before timing. PHP is required and runs with `-n`, OPcache
-and JIT disabled. Two warmups precede 21 measured rounds with rotating variant
+Compilation happens before timing. PHP is required and runs with `-n` plus the
+[OPcache/JIT flags](#php-configuration); the comparison stops if the JIT is not
+on. Two warmups precede 21 measured rounds with rotating variant
 order. On Linux, `--cpu N` pins every measured child to an available CPU.
 
 The output separates arithmetic, closure, append, dynamic eval, JSON decode with
@@ -193,8 +242,8 @@ body ratios must be reported separately, and isolated speedups must not be multi
 
 To separate JSON decode from explicit value release, compile
 `benchmark/diagnostics/json_lifecycle.php` and pass `INPUT_JSON REPEATS DRAIN_CACHES`.
-The last argument is `0` or `1`. Run the same source with `php -n` and the same
-arguments. Its output is `outer_count_sum|decode_ns:release_ns:drain_ns`; input
+The last argument is `0` or `1`. Run the same source with `php -n`, the
+[OPcache/JIT flags](#php-configuration) and the same arguments. Its output is `outer_count_sum|decode_ns:release_ns:drain_ns`; input
 loading is outside all three clocks. With cache draining disabled, the last
 clock only measures stopwatch overhead. `unset` includes any collector work
 triggered by the normal lowering. Repeat counts and explicit cache draining
@@ -224,9 +273,80 @@ These manual measurements have different scopes (including parse/deserialize or
 compile/link time). They do not join the process-execution histories or run in
 the trend CI job.
 
+## HTTP server (`--web`)
+
+The process suites above time short-lived programs. A `--web` binary is a
+long-running prefork HTTP server, so it has its own bash runner and is **not**
+part of the historical dashboard. The rest of `benchmark/` remains Python; the
+two web scripts are bash so the long-running-server path needs no Python
+runtime:
+
+```bash
+./benchmark/web/run.sh
+./benchmark/web/run.sh --workers 4 --threads 4 --connections 100 --duration 10s
+./benchmark/web/run.sh --isolation pool --workers 8 --threads 4 --connections 32
+./benchmark/web/run.sh --workers 8 --clients 3 --threads 4 --connections 200
+./benchmark/web/run.sh --workers 1 --cpu
+./benchmark/web/run.sh --no-build --compiler target/release/elephc \
+  --json web-results.json --markdown web-results.md
+./benchmark/web/run.sh --k6 vus --k6 constant
+```
+
+The default fixture, `benchmark/web/hello.php`, is the minimal handler from the
+[FrankenPHP vs PHP-FPM article](https://vulovic.me/frankenphp-vs-php-fpm-benchmarks-surprises-and-one-clear-winner-173231cb1ad5):
+one `echo` and one `$_SERVER['SERVER_SOFTWARE']` read. The runner compiles it
+with `--web`, starts the server on an ephemeral port, warms up with `wrk`, then
+takes repeated measurements and reports the median. `--clients N` starts N
+concurrent `wrk` processes and reports aggregate throughput (useful for proving
+whether one load generator is the bottleneck); `--cpu` samples the server
+master and workers (`ps -o utime,stime` on macOS, `/proc` on Linux) and reports
+server CPU per request, which stays meaningful when the host is busy;
+`--php-baseline` measures the same fixture under `php -S` (single process, not
+PHP-FPM), and `--k6` runs the article's 100-VU and 5,000 req/s shapes.
+`--isolation` selects the compiled `--web-isolation` mode: `worker` is the
+fastest in-process path but a blocking PHP handler pins a keep-alive connection
+to one worker; `pool` and `request` move PHP behind the handler broker and are
+the relevant modes for concurrent real workloads.
+
+`wrk` is required. `--k6` requires `k6` and `jq`; `--php-baseline` requires
+`php`. Results depend heavily on host load: run on an otherwise idle machine,
+and keep the worker count and load-generator shape identical across
+comparisons. The JSON result records the load average, platform, compiler
+version, and every raw round.
+
+To compare the origin with an already-running Nginx + PHP-FPM reference, use
+the separate comparison client:
+
+```bash
+./benchmark/web/fpm_compare.sh \
+  --elephc-url http://127.0.0.1:8080/ \
+  --fpm-url http://127.0.0.1:8081/ \
+  --threads 4 --connections 100 --duration 10s --repeat 3
+```
+
+Both URLs must serve the same fixture. The comparison runner measures
+keep-alive throughput/latency with `wrk` and a sequential new-connection path
+with a fresh TCP connection per request (`curl`); it does not start or configure
+either server. It alternates the two endpoints between repeats to reduce
+load-drift bias, and its JSON output keeps every raw round. `jq` is required for
+the comparison report. A run with non-2xx responses, socket errors, or failed
+new connections is invalid: the runner writes the reports for diagnosis and
+then exits non-zero, so a saturated or misconfigured endpoint cannot be
+published as a benchmark result.
+
+Use a quiet machine: a busy shared host can make high-concurrency FPM numbers
+unusable even when the Elephc side remains stable. On macOS,
+`kern.ipc.somaxconn` (128 by default) caps PHP-FPM's accept queue. A
+400-connection FPM run then returns `Connection refused`, which the runner now
+rejects; raise the limit for the run or compare at a concurrency at or below
+it. The c=64 reference used PHP-FPM `pm=static`, `pm.max_children=64`, and
+`listen.backlog=65535`, with Nginx `worker_processes 8`,
+`fastcgi_keep_conn on`, and an upstream `keepalive 64`.
+
 ## Tooling checks
 
 ```bash
+bash benchmark/tests/test_web_bash.sh
 python3 -B -m unittest discover -s benchmark/tests -v
 python3 -B benchmark/report.py
 git diff --check

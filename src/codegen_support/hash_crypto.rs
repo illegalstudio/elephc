@@ -65,22 +65,22 @@ pub(crate) fn publish_elephc_crypto_function_pointers(emitter: &mut Emitter) {
     }
 }
 
-/// Publishes the symmetric-cipher bridge entries used by the OpenSSL runtime helpers.
+/// Publishes the libcrypto-backed cipher entries used by the OpenSSL runtime helpers.
 ///
 /// Keeping these entries separate from the hash publisher prevents ordinary hash calls
-/// from referencing cipher symbols while preserving late binding for the shared runtime.
-pub(crate) fn publish_elephc_cipher_function_pointers(emitter: &mut Emitter) {
+/// from referencing the `elephc_openssl` archive while preserving late binding.
+pub(crate) fn publish_elephc_openssl_function_pointers(emitter: &mut Emitter) {
     const ENTRIES: &[(&str, &str)] = &[
         (
-            "elephc_crypto_cipher_iv_length",
-            "_elephc_crypto_cipher_iv_length_fn",
+            "elephc_openssl_cipher_iv_length",
+            "_elephc_openssl_cipher_iv_length_fn",
         ),
         (
-            "elephc_crypto_cipher_methods",
-            "_elephc_crypto_cipher_methods_fn",
+            "elephc_openssl_cipher_methods",
+            "_elephc_openssl_cipher_methods_fn",
         ),
-        ("elephc_crypto_encrypt", "_elephc_crypto_encrypt_fn"),
-        ("elephc_crypto_decrypt", "_elephc_crypto_decrypt_fn"),
+        ("elephc_openssl_encrypt", "_elephc_openssl_encrypt_fn"),
+        ("elephc_openssl_decrypt", "_elephc_openssl_decrypt_fn"),
     ];
     match emitter.target.arch {
         Arch::AArch64 => {
@@ -88,14 +88,14 @@ pub(crate) fn publish_elephc_cipher_function_pointers(emitter: &mut Emitter) {
                 let extern_sym = emitter.target.extern_symbol(c_name);
                 abi::emit_extern_symbol_address(emitter, "x9", &extern_sym);
                 abi::emit_symbol_address(emitter, "x10", slot);
-                emitter.instruction("str x9, [x10]");                           // publish the elephc-crypto cipher entry into its runtime slot
+                emitter.instruction("str x9, [x10]");                           // publish the libcrypto cipher entry into its runtime slot
             }
         }
         Arch::X86_64 => {
             for (c_name, slot) in ENTRIES {
                 let extern_sym = emitter.target.extern_symbol(c_name);
                 abi::emit_extern_symbol_address(emitter, "r9", &extern_sym);
-                abi::emit_store_reg_to_symbol(emitter, "r9", slot, 0);          // publish the elephc-crypto cipher entry into its runtime slot
+                abi::emit_store_reg_to_symbol(emitter, "r9", slot, 0);          // publish the libcrypto cipher entry into its runtime slot
             }
         }
     }

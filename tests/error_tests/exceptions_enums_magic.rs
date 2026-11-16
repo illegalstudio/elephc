@@ -771,14 +771,11 @@ fn test_error_enum_method_return_type_mismatch() {
     );
 }
 
-/// Verifies that an undefined variable referenced inside an enum method body is reported.
+/// Verifies that an undefined variable inside an enum method body is a runtime warning.
 /// Regression test — enum method bodies previously skipped name/variable checking.
 #[test]
-fn test_error_enum_method_undefined_variable() {
-    expect_error(
-        "<?php enum E { case A; public function f(): int { return $missing; } }",
-        "Undefined variable: $missing",
-    );
+fn test_enum_method_undefined_variable_is_a_runtime_warning() {
+    expect_no_error("<?php enum E { case A; public function f(): mixed { return $missing; } }");
 }
 
 /// Verifies that the hidden argument collector `func_args` appends to a scope that uses

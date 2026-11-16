@@ -44,6 +44,13 @@ pub(super) fn emit_reflection_member_object(
         .ok_or_else(|| CodegenIrError::missing_entry("class", 0))?;
     let name_offset = reflection_property_offset(class_info, "__name")?;
     emit_reflection_string_property(ctx, &member.name, name_offset, name_offset + 8);
+    let public_name_offset = reflection_property_offset(class_info, "name")?;
+    emit_reflection_literal_string_property(
+        ctx,
+        &member.name,
+        public_name_offset,
+        public_name_offset + 8,
+    );
     emit_reflection_attrs_property(
         ctx,
         member_class_name,
@@ -56,6 +63,14 @@ pub(super) fn emit_reflection_member_object(
         member.declaring_class_name.as_deref(),
     )?;
     if member_class_name == "ReflectionMethod" {
+        // The same `__string` slot the standalone `new ReflectionMethod(...)` path fills, for the
+        // entries `ReflectionClass::getMethods()` hands back (#1080).
+        let method_string = reflection_listed_method_to_string(ctx, member);
+        emit_reflection_owner_dump_property(
+            ctx,
+            member_class_name,
+            &method_string,
+        )?;
         emit_reflection_parameter_array_property_by_name(
             ctx,
             member_class_name,

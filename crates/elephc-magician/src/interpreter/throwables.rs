@@ -118,7 +118,10 @@ pub(in crate::interpreter) fn eval_given_type_name(
             return Ok(name);
         }
         let class_name = values.object_class_name(value)?;
-        let bytes = values.string_bytes(class_name)?;
+        let copied = values.string_bytes(class_name);
+        let retired = values.release(class_name);
+        let bytes = copied?;
+        retired?;
         return Ok(String::from_utf8_lossy(&bytes).into_owned());
     }
     let name = match tag {

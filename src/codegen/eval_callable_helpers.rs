@@ -19,7 +19,7 @@ use crate::codegen::abi;
 use crate::codegen::callable_descriptor::{
     self, CallableDescriptorInvocation, CallableDescriptorShape,
 };
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 use crate::codegen::callable_dispatch::{
     self, RuntimeCallableCase, RuntimeCallableSelector, RuntimeStaticMethodCallableCase,
@@ -34,6 +34,9 @@ use crate::types::{callable_wrapper_sig, FunctionSig, PhpType};
 
 #[cfg(test)]
 mod tests;
+mod shared_cast;
+pub(super) mod argument_owners;
+pub(super) use shared_cast::{emit_aarch64_cast_eval_callable_arg, emit_x86_64_cast_eval_callable_arg};
 
 const EVAL_RECEIVER_CAPTURE_PARAM: &str = "__elephc_eval_callable_receiver";
 const MIXED_METHOD_TAG_OFFSET: usize = 0;
@@ -78,16 +81,38 @@ enum EvalInstanceCallableShape {
     ObjectInvoke,
 }
 
+/// Label an eval invoker is emitted under until its text is known to be new.
+const PENDING_INVOKER_LABEL: &str = "__elephc_eval_callable_invoker_pending";
+
 /// Stable label allocator for eval bridge helper bodies emitted outside `FunctionContext`.
 struct EvalCallableEmitState {
     next_id: usize,
     argument_normalizer_needed: bool,
+    /// Emitted invoker bodies, as written under [`PENDING_INVOKER_LABEL`], mapped to the label
+    /// that carries that body.
+    invoker_bodies: HashMap<String, String>,
 }
 
 impl EvalCallableEmitState {
     /// Creates an empty label state for one eval callable-support emission pass.
     fn new() -> Self {
-        Self { next_id: 0, argument_normalizer_needed: false }
+        Self { next_id: 0, argument_normalizer_needed: false, invoker_bodies: HashMap::new() }
+    }
+
+    /// Returns the label carrying `body`, an invoker emitted under [`PENDING_INVOKER_LABEL`],
+    /// naming and recording it the first time that text is seen.
+    ///
+    /// The placeholder names the invoker and prefixes each of its local labels, so two bodies
+    /// share a label exactly when their instructions are the same. `filed` receives the body
+    /// under its real label only when it is new.
+    fn emitted_invoker(&mut self, body: String, filed: impl FnOnce(&str)) -> String {
+        if let Some(existing) = self.invoker_bodies.get(&body) {
+            return existing.clone();
+        }
+        let label = self.next_label("callable_invoker");
+        filed(&body.replace(PENDING_INVOKER_LABEL, &label));
+        self.invoker_bodies.insert(body, label.clone());
+        label
     }
 
     /// Returns a unique global/local label for generated eval callable support.
@@ -181,14 +206,17 @@ pub(super) fn emit_eval_callable_descriptor_support(
     if let Some(label) = dynamic_descriptor_label.as_deref() {
         emit_eval_callback_wrapper(module, emitter, label);
     }
-    EvalCallableDescriptorSupport {
+    let support = EvalCallableDescriptorSupport {
         argument_normalizer_needed: state.argument_normalizer_needed,
         string_cases,
         instance_array_cases,
         static_array_cases,
         object_cases,
         dynamic_descriptor_label,
-    }
+    };
+    shared_cast::emit(module, emitter, data, &support);
+    argument_owners::emit(emitter);
+    support
 }
 
 /// Emits the static descriptor template for eval-owned callback values.
@@ -465,7 +493,8 @@ fn eval_user_function_sigs(module: &Module) -> Vec<(String, FunctionSig)> {
         .functions
         .iter()
         .filter(|function| {
-            !function.flags.is_main && !function.name.starts_with("_class_propinit_")
+            function.has_source_identity()
+                && !function.flags.is_main && !function.name.starts_with("_class_propinit_")
         })
         .map(|function| {
             (
@@ -615,7 +644,8 @@ fn eval_static_method_callable_cases(
                 .get(&method_key)
                 .map(String::as_str)
                 .unwrap_or(class_name);
-            if emitted_methods.contains(&(impl_class.to_string(), method_key.clone(), true)) {
+            if emitted_methods.contains(&(impl_class.to_string(), method_key.clone(), true))
+                || super::intrinsic_static_descriptor_entry_supported(impl_class, &method_key) {
                 candidates.push((
                     class_name.clone(),
                     method_name.clone(),
@@ -773,14 +803,13 @@ fn emit_eval_runtime_callable_invoker_inline(
 ) -> String {
     state.argument_normalizer_needed |=
         super::runtime_callable_invoker::needs_callable_argument_normalizer(sig);
-    let label = state.next_label("callable_invoker");
     let defaults = super::runtime_callable_invoker::resolve_invoker_defaults(
         module,
         current_class,
         sig,
     );
     let invoker = RuntimeCallableInvoker {
-        label: &label,
+        label: PENDING_INVOKER_LABEL,
         sig,
         captures,
         mbstring_operation: None,
@@ -789,11 +818,20 @@ fn emit_eval_runtime_callable_invoker_inline(
         php_return_status: true,
         defaults: &defaults,
     };
+    // Owner callbacks outlive this placeholder body, including when an identical body is dropped.
+    // Allocate their real label before detaching so body renaming cannot invalidate the cache.
+    let owner_label = state.next_label("callable_argument_owners");
+    let _ = super::runtime_callable_invoker::prepare_invoker_owner_visitor(
+        emitter, data, sig.params.len(), &owner_label);
     // See `Emitter::begin_out_of_line` for the branch-range failure that splicing caused.
     let scope = emitter.begin_out_of_line();
     super::runtime_callable_invoker::emit_runtime_callable_invoker(emitter, data, &invoker);
-    emitter.end_out_of_line(scope);
-    label
+    let body = emitter.end_detached(scope);
+    // Most callees share a few shapes: an `eval()` program emitted 633 of these invokers with
+    // 148 distinct bodies. Shared owner callbacks are already filed under stable labels, and
+    // data entries are content-deduplicated strings and floats, so a body whose text matches
+    // an earlier one is dropped for that one's label.
+    state.emitted_invoker(body, |body| emitter.push_out_of_line(body))
 }
 
 /// Returns a hidden receiver parameter name that cannot collide with visible parameters.
@@ -1242,7 +1280,7 @@ fn align16(value: usize) -> usize {
 }
 
 /// Converts the ARM64 boxed eval argument slot into a callable descriptor pointer.
-pub(super) fn emit_aarch64_cast_eval_callable_arg(
+fn emit_aarch64_cast_eval_callable_arg_inline(
     module: &Module,
     emitter: &mut Emitter,
     data: &mut DataSection,
@@ -1302,6 +1340,7 @@ pub(super) fn emit_aarch64_cast_eval_callable_arg(
         miss_label,
         "x0",
     );
+    abi::emit_jump(emitter, &format!("{}_callable_cast_done", label_prefix));
     if support.has_dynamic_descriptor() {
         emitter.label(&dynamic_label);
         emit_aarch64_eval_dynamic_callable_descriptor(
@@ -1317,7 +1356,7 @@ pub(super) fn emit_aarch64_cast_eval_callable_arg(
 }
 
 /// Converts the x86_64 boxed eval argument slot into a callable descriptor pointer.
-pub(super) fn emit_x86_64_cast_eval_callable_arg(
+fn emit_x86_64_cast_eval_callable_arg_inline(
     module: &Module,
     emitter: &mut Emitter,
     data: &mut DataSection,
@@ -1378,6 +1417,7 @@ pub(super) fn emit_x86_64_cast_eval_callable_arg(
         miss_label,
         "rax",
     );
+    abi::emit_jump(emitter, &format!("{}_callable_cast_done", label_prefix));
     if support.has_dynamic_descriptor() {
         emitter.label(&dynamic_label);
         emit_x86_64_eval_dynamic_callable_descriptor(
@@ -1406,10 +1446,7 @@ fn emit_aarch64_eval_dynamic_callable_descriptor(
         .as_deref()
         .expect("dynamic eval callable descriptor must exist");
     let is_callable_symbol = module.target.extern_symbol("__elephc_eval_is_callable");
-    emitter.instruction(&format!(                                               // load the active eval context for dynamic callable validation
-        "ldr x0, [x29, #{}]",
-        AARCH64_EVAL_CONTEXT_FROM_FP_OFFSET
-    ));
+    abi::load_at_offset(emitter, "x0", shared_cast::CONTEXT_SLOT);
     emitter.instruction(&format!("cbz x0, {}", fail_label));                    // reject dynamic eval callables when no context is active
     emitter.instruction("ldr x1, [x29, #-16]");                                 // pass the original boxed eval callback value
     abi::emit_call_label(emitter, &is_callable_symbol);
@@ -1426,10 +1463,7 @@ fn emit_aarch64_eval_dynamic_callable_descriptor(
     );
     emitter.instruction("bl __rt_heap_alloc");                                  // allocate runtime descriptor storage with eval captures
     callable_descriptor::emit_copy_static_descriptor_to_runtime(emitter, "x0", descriptor_label);
-    emitter.instruction(&format!(                                               // reload the active eval context for descriptor capture 0
-        "ldr x10, [x29, #{}]",
-        AARCH64_EVAL_CONTEXT_FROM_FP_OFFSET
-    ));
+    abi::load_at_offset(emitter, "x10", shared_cast::CONTEXT_SLOT);
     abi::emit_store_to_address(
         emitter,
         "x10",

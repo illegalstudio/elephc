@@ -109,6 +109,12 @@ fn test_strict_error_buffer_len_is_undefined() {
     expect_strict_error("<?php $x = buffer_len(1);", "Undefined function: buffer_len");
 }
 
+/// Verifies the buffer payload pointer builtin is hidden like every other extension.
+#[test]
+fn test_strict_error_buffer_ptr_is_undefined() {
+    expect_strict_error("<?php $x = buffer_ptr(1);", "Undefined function: buffer_ptr");
+}
+
 /// Verifies zval bridge builtins are hidden under strict mode.
 #[test]
 fn test_strict_error_zval_pack_is_undefined() {

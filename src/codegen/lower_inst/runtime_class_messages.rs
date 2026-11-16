@@ -4,6 +4,7 @@
 //!
 //! Called from:
 //! - `count()`'s non-`Countable` refusal in `builtins::count_empty`.
+//! - The boxed array-edge argument guard in `builtins::arrays::mixed_array_argument_guard`.
 //! - The weak-mode typed-property guard in `objects::mixed_property_type_guard`.
 //!
 //! Key details:
@@ -99,10 +100,7 @@ fn emit_class_name_table_read(
             emitter.instruction("lea r10, [rip + _class_name_entries]");        // materialize the class-name metadata table base
             emitter.instruction("shl r9, 4");                                   // scale the class id to the 16-byte class-name row
             emitter.instruction(&format!("mov {}, QWORD PTR [r10 + r9]", name_ptr_reg)); // borrow the class-name pointer
-            emitter.instruction(&format!(
-                "mov {}, QWORD PTR [r10 + r9 + 8]",
-                name_len_reg
-            ));                                                                 // borrow the class-name byte length
+            emitter.instruction(&format!("mov {}, QWORD PTR [r10 + r9 + 8]", name_len_reg)); // borrow the class-name byte length
         }
     }
     abi::emit_jump(emitter, done_label);

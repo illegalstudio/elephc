@@ -118,6 +118,8 @@ pub(crate) fn expr_invalidation(expr: &Expr) -> Invalidation {
                 Invalidation::none()
             }
         },
+        ExprKind::Cast { target: CastType::String, expr: inner } => expr_invalidation(inner)
+            .union(top_level_globals_guard(expr_effect(expr))),
         ExprKind::Negate(inner)
         | ExprKind::Not(inner)
         | ExprKind::BitNot(inner)

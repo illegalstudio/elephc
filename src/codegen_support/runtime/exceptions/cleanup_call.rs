@@ -56,7 +56,7 @@ pub fn emit_cleanup_invoke(emitter: &mut Emitter) {
     abi::emit_frame_slot_address(emitter, result, HANDLER);
     abi::emit_store_reg_to_symbol(emitter, result, "_exc_handler_top", 0);
     abi::emit_frame_slot_address(emitter, arg0, HANDLER - TRY_HANDLER_JMP_BUF_OFFSET);
-    emitter.bl_c("setjmp");                                                     // retain cleanup control when the unary callback throws
+    emitter.save_exception_handler();                                           // retain cleanup control when the unary callback throws
     abi::emit_branch_if_int_result_nonzero(emitter, "__rt_cleanup_invoke_caught");
     abi::load_at_offset(emitter, result, PAYLOAD);
     if emitter.target.arch == Arch::X86_64 {
@@ -112,6 +112,30 @@ mod tests {
     use super::*;
     use crate::codegen_support::platform::Target;
 
+    /// Cleanup boundaries and throws use the same mask-free libc jump family on every target.
+    #[test]
+    fn cleanup_jump_boundaries_do_not_save_or_restore_signal_masks() {
+        for name in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+            let target = Target::parse(name).unwrap();
+            for pic in [false, true] {
+                let mut emitter = Emitter::new(target);
+                emitter.pic_data_refs = pic;
+                emit_cleanup_invoke(&mut emitter);
+                crate::codegen_support::runtime::exceptions::emit_throw_current(&mut emitter);
+                let asm = emitter.output();
+                let call = if target.arch == Arch::AArch64 { "bl" } else { "call" };
+                for symbol in ["_setjmp", "_longjmp"] {
+                    assert!(asm.contains(&format!("{call} {}\n", target.extern_symbol(symbol))),
+                        "{name}, pic={pic}: missing mask-free {symbol}");
+                }
+                for symbol in ["setjmp", "longjmp"] {
+                    assert!(!asm.contains(&format!("{call} {}\n", target.extern_symbol(symbol))),
+                        "{name}, pic={pic}: internal boundaries must not use mask-saving {symbol}");
+                }
+            }
+        }
+    }
+
     /// Every supported target captures callback exceptions and restores native state before returning.
     #[test]
     fn cleanup_invocation_is_bounded_on_all_targets() {
@@ -120,7 +144,7 @@ mod tests {
             let mut emitter = Emitter::new(target);
             emit_cleanup_invoke(&mut emitter);
             let asm = emitter.output();
-            let enter = asm.find(&target.extern_symbol("setjmp")).unwrap();
+            let enter = asm.find(&target.extern_symbol("_setjmp")).unwrap();
             let invoke = asm.find(if target.arch == Arch::AArch64 { "blr x10" } else { "call r10" }).unwrap();
             let caught = asm.find("__rt_cleanup_invoke_caught:").unwrap();
             let chain = asm.find("__rt_exception_chain").unwrap();
@@ -157,7 +181,7 @@ mod tests {
                 };
                 assert!(fast.contains(callback.0) && fast.contains(callback.1),
                     "{name}, pic={pic}: invoke the authenticated callback pointer unchanged");
-                assert!(protected.contains(&target.extern_symbol("setjmp")), "{name}, pic={pic}");
+                assert!(protected.contains(&target.extern_symbol("_setjmp")), "{name}, pic={pic}");
                 assert!(protected.contains("__rt_cleanup_invoke_caught"), "{name}, pic={pic}");
                 let (tag, branch) = if target.arch == Arch::AArch64 { ("cmp x10, #", "b.eq") }
                     else { ("cmp r10, ", "je") };

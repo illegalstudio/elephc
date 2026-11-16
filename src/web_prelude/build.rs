@@ -7,11 +7,12 @@
 //! Called from:
 //! - `crate::web_prelude::inject_if_web`, which prunes what the program cannot reach and wraps
 //!   the result in the catch-all `try`.
+//! - `crate::web_prelude::application::inject_on_compiler_stack` for per-request preparation.
 //!
 //! Key details:
 //! - Each helper below is one declaration of the former `WEB_PRELUDE_SRC`, transcribed from its
-//!   own parse and checked against it node for node before the text was deleted. The order in
-//!   `web_declarations` is the order the source had, which matters for the executable BOOTSTRAP
+//!   own parse and checked against it node for node before the text was deleted. The
+//!   `web_declarations_with_environment` builder preserves source order for executable BOOTSTRAP
 //!   statements interleaved with the declarations (they populate the superglobals and may start
 //!   the session, and they run where they sit).
 //! - THE THREE `__PLACEHOLDER__` SLOTS ARE NOW PARAMETERS. `__ELEPHC_PHP_VERSION_ID__` is an
@@ -110,6 +111,20 @@ fn decl_extern_elephc_web_remote_addr() -> Stmt {
 /// `elephc_web_remote_port` — transcribed from the PHP form.
 fn decl_extern_elephc_web_remote_port() -> Stmt {
     extern_fn("elephc_web_remote_port", "elephc_web")
+        .returns(CType::Int)
+        .build()
+}
+
+/// `elephc_web_request_scheme` — transcribed from the PHP form.
+fn decl_extern_elephc_web_request_scheme() -> Stmt {
+    extern_fn("elephc_web_request_scheme", "elephc_web")
+        .returns(CType::Str)
+        .build()
+}
+
+/// `elephc_web_is_https` — transcribed from the PHP form.
+fn decl_extern_elephc_web_is_https() -> Stmt {
+    extern_fn("elephc_web_is_https", "elephc_web")
         .returns(CType::Int)
         .build()
 }
@@ -970,7 +985,21 @@ fn decl_stmt_bootstrap_15() -> Stmt {
 
 /// `bootstrap 16` — transcribed from the PHP form.
 fn decl_stmt_bootstrap_16() -> Stmt {
-    s_array_assign("_SERVER", e_str("REQUEST_SCHEME"), e_str("http"))
+    s_array_assign(
+        "_SERVER",
+        e_str("REQUEST_SCHEME"),
+        e_call("elephc_web_request_scheme", vec![]),
+    )
+}
+
+/// `bootstrap 45` — sets the PHP `HTTPS` convention only for a trusted https request.
+fn decl_stmt_bootstrap_45() -> Stmt {
+    s_if(
+        e_call("elephc_web_is_https", vec![]),
+        vec![s_array_assign("_SERVER", e_str("HTTPS"), e_str("on"))],
+        vec![],
+        None,
+    )
 }
 
 /// `bootstrap 17` — transcribed from the PHP form.
@@ -1181,19 +1210,28 @@ fn decl_stmt_bootstrap_29() -> Stmt {
 }
 
 /// `bootstrap 30` — transcribed from the PHP form.
-fn decl_stmt_bootstrap_30() -> Stmt {
+fn decl_stmt_bootstrap_30(populate_request: bool) -> Stmt {
+    if !populate_request {
+        return s_expr(e_int(0));
+    }
     s_assign("_REQUEST", e_array(vec![]))
 }
 
 /// `bootstrap 31` — transcribed from the PHP form.
-fn decl_stmt_bootstrap_31() -> Stmt {
+fn decl_stmt_bootstrap_31(populate_request: bool) -> Stmt {
+    if !populate_request {
+        return s_expr(e_int(0));
+    }
     s_foreach(e_var("_GET"), Some("__elephc_rqk"), "__elephc_rqv", vec![
         s_array_assign("_REQUEST", e_var("__elephc_rqk"), e_var("__elephc_rqv")),
     ])
 }
 
 /// `bootstrap 32` — transcribed from the PHP form.
-fn decl_stmt_bootstrap_32() -> Stmt {
+fn decl_stmt_bootstrap_32(populate_request: bool) -> Stmt {
+    if !populate_request {
+        return s_expr(e_int(0));
+    }
     s_foreach(e_var("_POST"), Some("__elephc_rqk"), "__elephc_rqv", vec![
         s_array_assign("_REQUEST", e_var("__elephc_rqk"), e_var("__elephc_rqv")),
     ])
@@ -5131,10 +5169,24 @@ fn decl_stmt_bootstrap_44() -> Stmt {
     )
 }
 
-/// Builds the whole `--web` surface, one declaration per helper above, in source order.
+/// Builds the complete web surface for declaration audits and prelude tooling.
+#[cfg(test)]
 pub(crate) fn web_declarations(
     php_version: PhpVersion,
     ini_overrides: &[(String, String)],
+    needs: super::SuperglobalNeeds,
+) -> Program {
+    web_declarations_with_environment(php_version, ini_overrides, needs.env, needs.request)
+}
+
+/// Builds the web surface, copying the environment and merging `$_REQUEST` only
+/// when user code can observe them. The empty `$_ENV` array remains available for
+/// internal session callback storage in either case.
+pub(crate) fn web_declarations_with_environment(
+    php_version: PhpVersion,
+    ini_overrides: &[(String, String)],
+    populate_environment: bool,
+    populate_request: bool,
 ) -> Program {
     internal_declarations(|| {
         let mut declarations: Program = vec![
@@ -5149,6 +5201,8 @@ pub(crate) fn web_declarations(
             decl_extern_elephc_web_body_len(),
             decl_extern_elephc_web_remote_addr(),
             decl_extern_elephc_web_remote_port(),
+            decl_extern_elephc_web_request_scheme(),
+            decl_extern_elephc_web_is_https(),
             decl_extern_elephc_web_server_addr(),
             decl_extern_elephc_web_server_port(),
             decl_extern_elephc_web_protocol(),
@@ -5264,6 +5318,7 @@ pub(crate) fn web_declarations(
             decl_stmt_bootstrap_16(),
             decl_stmt_bootstrap_17(),
             decl_stmt_bootstrap_18(),
+            decl_stmt_bootstrap_45(),
             decl_stmt_bootstrap_19(),
             decl_stmt_bootstrap_20(),
             decl_stmt_bootstrap_21(),
@@ -5275,12 +5330,15 @@ pub(crate) fn web_declarations(
             decl_stmt_bootstrap_27(),
             decl_stmt_bootstrap_28(),
             decl_stmt_bootstrap_29(),
-            decl_stmt_bootstrap_30(),
-            decl_stmt_bootstrap_31(),
-            decl_stmt_bootstrap_32(),
+            decl_stmt_bootstrap_30(populate_request),
+            decl_stmt_bootstrap_31(populate_request),
+            decl_stmt_bootstrap_32(populate_request),
             decl_stmt_bootstrap_33(),
-            decl_stmt_bootstrap_34(),
-            decl_stmt_bootstrap_35(),
+        ];
+        if populate_environment {
+            declarations.extend([decl_stmt_bootstrap_34(), decl_stmt_bootstrap_35()]);
+        }
+        declarations.extend([
             decl_fn_elephc_emit_cookie(),
             decl_fn_setcookie(),
             decl_fn_setrawcookie(),
@@ -5331,7 +5389,7 @@ pub(crate) fn web_declarations(
             decl_fn_elephc_ini_session_keys(),
             decl_fn_elephc_is_session_ini(),
             decl_fn_elephc_ini_get_raw(),
-        ];
+        ]);
 
         // The shared `opcache.*` INI helpers (`__elephc_opcache_ini_string` / `_access` / `_keys`
         // / `_all_details` / `_all_plain`), baked for the compile target so `ini_get`/`ini_set`/

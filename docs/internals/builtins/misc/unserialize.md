@@ -1,8 +1,6 @@
 ---
 title: "unserialize() - internals"
 description: "Compiler internals for unserialize(): lowering path, type checks, and runtime helpers."
-sidebar:
-  order: 690
 ---
 
 ## `unserialize()` - internals
@@ -10,7 +8,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/system/unserialize.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/system/unserialize.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:704](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L704) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 
@@ -48,7 +46,9 @@ function unserialize(string $data, mixed $options = []): mixed
 
 ## Eval interpreter (magician)
 
-_Not callable from eval'd code - the magician interpreter has no entry for this builtin._
+- **Declaration**: [`crates/elephc-magician/src/interpreter/builtins/core/unserialize.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/core/unserialize.rs) (`eval_builtin!`)
+- **Execution**: shared generated-runtime ABI (`RuntimeBuiltinId(95)`).
+- **Dispatch hooks**: _none_ (shared runtime dispatch)
 
 ## Cross-references
 

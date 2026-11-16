@@ -1,8 +1,6 @@
 ---
 title: "cairo_image_surface_get_height() - internals"
 description: "Compiler internals for cairo_image_surface_get_height(): lowering path, type checks, and runtime helpers."
-sidebar:
-  order: 410
 ---
 
 ## `cairo_image_surface_get_height()` - internals
@@ -10,7 +8,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`crates/elephc-builtin-contract/src/catalog_data.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-builtin-contract/src/catalog_data.rs)
-- **Lowering**: [`src/image_prelude.rs`:13331](https://github.com/illegalstudio/elephc/blob/main/src/image_prelude.rs#L13331) (`cairo_image_surface_get_height`)
+- **Lowering**: [`src/image_prelude.rs`](https://github.com/illegalstudio/elephc/blob/main/src/image_prelude.rs) (`cairo_image_surface_get_height`)
 - **Function symbol**: `cairo_image_surface_get_height()`
 
 

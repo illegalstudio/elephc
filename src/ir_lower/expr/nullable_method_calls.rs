@@ -11,7 +11,21 @@ use super::*;
 
 /// Emits the PHP fatal terminator for an ordinary method call on null.
 pub(super) fn terminate_method_call_on_null(ctx: &mut LoweringContext<'_, '_>, method: &str) {
-    let message = format!("Call to a member function {}() on null", method);
+    terminate_method_call_on_non_object(ctx, method, "null");
+}
+
+/// Emits the PHP fatal terminator for an ordinary method call on `false`.
+pub(super) fn terminate_method_call_on_false(ctx: &mut LoweringContext<'_, '_>, method: &str) {
+    terminate_method_call_on_non_object(ctx, method, "false");
+}
+
+/// Emits the PHP fatal terminator naming the runtime receiver type.
+fn terminate_method_call_on_non_object(
+    ctx: &mut LoweringContext<'_, '_>,
+    method: &str,
+    receiver: &str,
+) {
+    let message = format!("Call to a member function {}() on {}", method, receiver);
     let message = ctx.intern_string(&message);
     ctx.emit_void(
         Op::ThrowError,
@@ -32,11 +46,25 @@ pub(super) fn lower_nullsafe_method_call(
     expr: &Expr,
 ) -> LoweredValue {
     let object = lower_expr(ctx, object);
+    lower_nullsafe_method_call_from_receiver(ctx, object, method, args, expr)
+}
+
+/// Guards a prepared receiver, including missing elements whose declared type excludes null.
+pub(super) fn lower_nullsafe_method_call_from_receiver(
+    ctx: &mut LoweringContext<'_, '_>,
+    object: LoweredValue,
+    method: &str,
+    args: &[Expr],
+    expr: &Expr,
+) -> LoweredValue {
     let object_ty = ctx.builder.value_php_type(object.value);
     if value_is_definitely_null(ctx, object.value) {
+        release_owning_receiver_temporary(ctx, object, expr.span);
         return lower_boxed_null(ctx, expr);
     }
-    let Some((_, true)) = singular_object_class(&object_ty) else {
+    let nullable = singular_object_class(&object_ty).is_some_and(|(_, nullable)| nullable);
+    let container_miss = value_may_carry_container_miss(ctx, object.value);
+    if !nullable && !container_miss {
         return lower_method_call_with_receiver(
             ctx,
             object,
@@ -45,7 +73,7 @@ pub(super) fn lower_nullsafe_method_call(
             Op::NullsafeMethodCall,
             expr,
         );
-    };
+    }
     let result_type = method_call_result_type(
         ctx,
         object.value,
@@ -53,6 +81,22 @@ pub(super) fn lower_nullsafe_method_call(
         Op::NullsafeMethodCall,
         expr,
     );
+    let result_type = if container_miss && !nullable && result_type.codegen_repr() != PhpType::Mixed {
+        nullable_result_type(result_type)
+    } else { result_type };
+    lower_guarded_nullsafe_receiver(ctx, object, result_type, expr, |ctx, object| {
+        lower_method_call_with_receiver(ctx, object, method, args, Op::NullsafeMethodCall, expr)
+    })
+}
+
+/// Runs an already prepared call only for a non-null receiver, merging into nullable storage.
+pub(super) fn lower_guarded_nullsafe_receiver(
+    ctx: &mut LoweringContext<'_, '_>,
+    object: LoweredValue,
+    result_type: PhpType,
+    expr: &Expr,
+    emit_call: impl FnOnce(&mut LoweringContext<'_, '_>, LoweredValue) -> LoweredValue,
+) -> LoweredValue {
     let temp_name = ctx.declare_hidden_temp(result_type.clone());
     let null_block = ctx.builder.create_named_block("nullsafe.method.null", Vec::new());
     let call_block = ctx.builder.create_named_block("nullsafe.method.call", Vec::new());
@@ -74,6 +118,7 @@ pub(super) fn lower_nullsafe_method_call(
     });
 
     ctx.builder.position_at_end(null_block);
+    release_owning_receiver_temporary(ctx, object, expr.span);
     let null_value = lower_null(ctx, expr);
     let null_value = if result_type.codegen_repr() == PhpType::Mixed {
         ctx.box_value_as_mixed(null_value, result_type.clone(), Some(expr.span))
@@ -84,14 +129,7 @@ pub(super) fn lower_nullsafe_method_call(
     branch_to(ctx, merge);
 
     ctx.builder.position_at_end(call_block);
-    let call = lower_method_call_with_receiver(
-        ctx,
-        object,
-        method,
-        args,
-        Op::NullsafeMethodCall,
-        expr,
-    );
+    let call = emit_call(ctx, object);
     store_value_into_temp(ctx, &temp_name, result_type.clone(), call, expr.span);
     branch_to(ctx, merge);
 
@@ -108,10 +146,59 @@ pub(super) fn lower_method_call_with_receiver(
     op: Op,
     expr: &Expr,
 ) -> LoweredValue {
+    // The ordinary call path checks the recorded private/protected access before
+    // dispatching; the nullsafe call reaches this helper directly after its own null
+    // check, so it must reject the inaccessible call here instead of running the method.
+    if let Some(message) = recorded_method_access_message(ctx, expr, op) {
+        release_owning_receiver_temporary(ctx, object, expr.span);
+        return crate::ir_lower::stmt::lower_throw_access_error_expr(ctx, &message, expr.span);
+    }
+    // The ordinary call path applies this gate before dispatching; the nullsafe call reaches
+    // this helper directly after its own null check, so it needs the same static-only reroute.
+    if op == Op::NullsafeMethodCall {
+        if let Some(result) = try_static_only_method_through_receiver(
+            ctx, object, method, args, expr,
+        ) {
+            return result;
+        }
+    }
+    let object = refine_member_receiver(ctx, object, expr);
     if let Some(call) = enum_interface_calls::lower_enum_interface_call(ctx, object, method, args, op, expr) {
         return call;
     }
+    if let Some(call) = selected_native_methods::lower(ctx, object, method, args, op, expr) {
+        return call;
+    }
     lower_method_call_with_receiver_direct(ctx, object, method, args, op, expr)
+}
+
+/// Redirects `$receiver->method()` to the static-method path when only a static method exists.
+///
+/// The receiver has already been evaluated and, for a nullsafe chain, has already passed its
+/// null guard. Returns `None` when the class declares an instance method of the same name, so
+/// the caller keeps ordinary instance dispatch.
+pub(super) fn try_static_only_method_through_receiver(
+    ctx: &mut LoweringContext<'_, '_>,
+    object: LoweredValue,
+    method: &str,
+    args: &[Expr],
+    expr: &Expr,
+) -> Option<LoweredValue> {
+    // A rerouted static call must still honor the access check the checker recorded for
+    // the receiver form; otherwise `(new Box)->privateStatic()` would run the method.
+    if let Some(message) = recorded_method_access_message(ctx, expr, Op::MethodCall) {
+        release_owning_receiver_temporary(ctx, object, expr.span);
+        return Some(crate::ir_lower::stmt::lower_throw_access_error_expr(
+            ctx, &message, expr.span,
+        ));
+    }
+    let class_name = static_only_method_class(ctx, object.value, method)?;
+    let receiver = static_receiver_for_class_name(&class_name);
+    let pins = pin_in_flight_owners(ctx, &[object.value], expr.span);
+    let result = lower_object_static_method_call(ctx, object.value, &receiver, method, args, expr);
+    unpin_in_flight_owners(ctx, pins, expr.span);
+    release_owning_receiver_temporary(ctx, object, expr.span);
+    Some(result)
 }
 
 /// Lowers an already selected concrete or fallback receiver without redispatching its interface.
@@ -135,6 +222,9 @@ fn lower_method_call_with_binding(
     ctx: &mut LoweringContext<'_, '_>, object: LoweredValue, method: &str,
     args: &[Expr], op: Op, expr: &Expr, selected_enum: bool,
 ) -> LoweredValue {
+    if let Some(call) = magic_method_calls::lower(ctx, object, method, args, op, expr) {
+        return call;
+    }
     if op == Op::MethodCall && is_reflection_class_new_instance_call(ctx, object.value, method) {
         return lower_reflection_class_new_instance(ctx, None, object, args, expr);
     }
@@ -147,14 +237,7 @@ fn lower_method_call_with_binding(
     {
         return lower_reflection_class_new_instance_without_constructor(ctx, object, args, expr);
     }
-    let magic_args;
-    let (dispatch_method, args) =
-        if let Some(args) = magic_call_dispatch_args(ctx, object.value, method, args, expr.span) {
-            magic_args = args;
-            ("__call", magic_args.as_slice())
-        } else {
-            (method, args)
-        };
+    let dispatch_method = method;
     let result_type = method_call_result_type(ctx, object.value, dispatch_method, op, expr);
     let sig = method_signature(ctx, object.value, dispatch_method);
     promote_pdo_binding_ref_argument(ctx, object.value, dispatch_method, args);
@@ -169,15 +252,14 @@ fn lower_method_call_with_binding(
     let result_staging = prepublish_user_call_result(
         ctx, sig.as_ref(), &return_alias, &result_type, expr.span,
     );
-    // Nullable and nullsafe dispatch need the same pre-default receiver root as direct calls.
-    let (object, default_receiver_owner) = if sig.as_ref().is_some_and(|signature| {
-        signature.defaults.iter().flatten()
-            .any(crate::types::deferred_defaults::contains_deferred_error)
-    }) {
-        root_owned_call_operand(ctx, object, expr.span)
-    } else {
-        (object, None)
+    let receiver_class = match ctx.builder.value_php_type(object.value).codegen_repr() {
+        PhpType::Object(class_name) => Some(class_name.trim_start_matches('\\').to_string()),
+        _ => None,
     };
+    // A concrete local load may later unbox physical Mixed storage after eval widens
+    // its slot. Acquiring a root is safe for both borrowed and independently owned loads.
+    let (object, receiver_owner) = root_method_receiver(ctx, object, expr.span);
+    emit_native_factory_method_lookup(ctx, object, method, expr.span);
     let mut operands = vec![object.value];
     begin_call_argument_evaluation(ctx);
     let enum_args = singular_object_class(&ctx.builder.value_php_type(object.value))
@@ -187,7 +269,23 @@ fn lower_method_call_with_binding(
                 .or_else(|| selected_enum.then(|| enum_static_args::lower_arguments(
                     ctx, signature, args, &class, dispatch_method, expr.span,
                 )).flatten())));
-    let arg_values = enum_args.unwrap_or_else(|| lower_args_with_signature(ctx, sig.as_ref(), args));
+    let call_description = receiver_class
+        .map(|class_name| format!("{class_name}::{dispatch_method}"))
+        .unwrap_or_else(|| dispatch_method.to_string());
+    let previous_description = ctx.call_description.replace(call_description);
+    let ref_place_rewrite = if enum_args.is_none() {
+        sig.as_ref().and_then(|signature| {
+            super::ref_place_args::rewrite_typed_property_ref_args(ctx, signature, args)
+        })
+    } else {
+        None
+    };
+    let call_args = ref_place_rewrite
+        .as_ref()
+        .map_or(args, |rewrite| rewrite.args.as_slice());
+    let arg_values =
+        enum_args.unwrap_or_else(|| lower_args_with_signature(ctx, sig.as_ref(), call_args));
+    ctx.call_description = previous_description;
     let mut arg_values = arg_values;
     let evaluation_intermediates = finish_call_argument_evaluation(ctx, &mut arg_values);
     let roots = root_user_call_operands(
@@ -198,11 +296,9 @@ fn lower_method_call_with_binding(
         &result_type,
         expr.span,
     );
-    // Selected enum implementations may have fewer parameters than another implementor.
-    // PHP ignores surplus positionals, but their values still belong to ordinary cleanup.
+    // PHP ignores surplus positionals on user methods. Their values still participate in
+    // argument evaluation and cleanup, but must not reach the fixed native parameter ABI.
     let operand_limit = sig.as_ref().filter(|sig| sig.variadic.is_none())
-        .filter(|_| singular_object_class(&ctx.builder.value_php_type(object.value))
-            .is_some_and(|(class, _)| ctx.enums.contains_key(class)))
         .map_or(arg_values.len(), |sig| sig.params.len());
     operands.extend(arg_values.iter().take(operand_limit).copied());
     let data = ctx.intern_string(dispatch_method);
@@ -228,7 +324,10 @@ fn lower_method_call_with_binding(
         expr.span,
     );
     retire_call_argument_intermediates(ctx, &evaluation_intermediates);
-    if let Some(owner) = default_receiver_owner {
+    if let Some(rewrite) = ref_place_rewrite {
+        super::ref_place_args::finish_ref_place_rewrite(ctx, rewrite, expr.span);
+    }
+    if let Some(owner) = receiver_owner {
         retire_owned_call_operand(ctx, owner, expr.span);
     } else {
         release_owning_receiver_temporary(ctx, object, expr.span);
@@ -260,9 +359,22 @@ pub(in crate::ir_lower) fn lower_dynamic_method_call_with_receiver(
     }
     let receiver_slot = ctx.local_slots[&receiver_name];
     register_owned_call_operand(ctx, receiver_slot, expr.span);
+    let (method, method_slot) = if ctx.classes.contains_key("SimpleXMLElement") {
+        let method_value = lower_expr(ctx, method);
+        let method_type = ctx.builder.value_php_type(method_value.value);
+        let method_name = ctx.declare_hidden_temp(method_type.clone());
+        store_value_into_temp(ctx, &method_name, method_type, method_value, expr.span);
+        let method_slot = ctx.local_slots[&method_name];
+        register_owned_call_operand(ctx, method_slot, expr.span);
+        let receiver = ctx.load_local(&receiver_name, Some(expr.span));
+        let method = ctx.load_local(&method_name, Some(expr.span));
+        ctx.emit_void(Op::MethodLookup, vec![receiver.value, method.value], None,
+            Op::MethodLookup.default_effects(), Some(expr.span));
+        (Expr::new(ExprKind::Variable(method_name), expr.span), Some(method_slot))
+    } else { (method.clone(), None) };
     let receiver = Expr::new(ExprKind::Variable(receiver_name), expr.span);
     let callback = Expr::new(
-        ExprKind::ArrayLiteral(vec![receiver, method.clone()]),
+        ExprKind::ArrayLiteral(vec![receiver, method]),
         Span::dummy(),
     );
     let mut call_args = Vec::with_capacity(args.len() + 1);
@@ -276,6 +388,7 @@ pub(in crate::ir_lower) fn lower_dynamic_method_call_with_receiver(
         expr.span,
     );
     let result = lower_expr(ctx, &call);
+    if let Some(slot) = method_slot { retire_owned_call_operand(ctx, slot, expr.span); }
     retire_owned_call_operand(ctx, receiver_slot, expr.span);
     result
 }
@@ -322,13 +435,19 @@ pub(super) fn release_owned_call_arg_temporaries_with_roots(
     roots: &[(usize, crate::ir::LocalSlotId)],
     span: Span,
 ) {
-    let owned_object_result = result.is_some_and(|result| {
-        matches!(ctx.builder.value_php_type(result).codegen_repr(), PhpType::Object(_))
+    let independently_owned_result = result.is_some_and(|result| {
+        let representation = ctx.builder.value_php_type(result).codegen_repr();
+        let operation = ctx.builder.value_defining_op(result);
+        (matches!(representation, PhpType::Object(_))
+            && matches!(operation, Some(Op::Call | Op::MethodCall | Op::NullsafeMethodCall | Op::StaticMethodCall))
+            // Method return normalization persists a borrowed string before publishing it.
+            // Even a passthrough therefore returns an owner separate from the argument.
+            || matches!(representation, PhpType::Callable | PhpType::Str)
+                && matches!(operation, Some(Op::MethodCall | Op::NullsafeMethodCall | Op::StaticMethodCall)))
+
             && signature.is_some_and(|signature| !signature.by_ref_return)
-            && matches!(ctx.builder.value_defining_op(result),
-                Some(Op::Call | Op::MethodCall | Op::NullsafeMethodCall | Op::StaticMethodCall))
     });
-    let guarded_result = result.filter(|_| owned_object_result && args.iter().any(|value| {
+    let guarded_result = result.filter(|_| independently_owned_result && args.iter().any(|value| {
         ctx.value_is_owning_temporary(LoweredValue {
             value: *value,
             ir_type: ctx.builder.value_type(*value),
@@ -343,10 +462,25 @@ pub(super) fn release_owned_call_arg_temporaries_with_roots(
     for (parameter_index, value) in args.iter().enumerate() {
         ctx.unguard_call_argument(*value, span);
         if let Some((_, slot)) = roots.iter().find(|(index, _)| *index == parameter_index) {
-            retire_owned_call_operand(ctx, *slot, span);
-            continue;
+            let pin_only = ctx.builder.value_defining_op(*value) == Some(Op::EnsureOwned)
+                || ctx.builder.local_kind(*slot) == LocalKind::OwnedTemp;
+            if !pin_only {
+                retire_owned_call_operand(ctx, *slot, span);
+                continue;
+            }
+            // OwnedTemp records only pin an existing operand owner. Detach that record without
+            // releasing, then apply the same result-alias decision to the original producer.
+            unregister_owned_call_operand(ctx, *slot, span);
+            ctx.emit_void(
+                Op::UnsetLocal,
+                Vec::new(),
+                Some(Immediate::LocalSlot(*slot)),
+                Op::UnsetLocal.default_effects(),
+                Some(span),
+            );
         }
-        let reference_place_view_already_released = signature.is_some_and(|signature| {
+        let native_reference_value_view = ctx.builder.value_defining_op(*value) == Some(Op::LoadRefCellValue);
+        let reference_place_view_already_released = (native_reference_value_view || signature.is_some_and(|signature| {
             signature
                 .ref_params
                 .get(parameter_index)
@@ -355,7 +489,7 @@ pub(super) fn release_owned_call_arg_temporaries_with_roots(
         }) && matches!(
             ctx.builder.value_defining_op(*value),
             Some(Op::LoadLocal | Op::LoadRefCell)
-        ) && ctx.builder.function().instructions.iter().any(|inst| {
+        )) && ctx.builder.function().instructions.iter().any(|inst| {
             inst.op == Op::Release && inst.operands == [*value]
         });
         if reference_place_view_already_released {
@@ -425,7 +559,15 @@ pub(super) fn release_owned_call_arg_temporaries_with_roots(
                         && conditionally_releasable
                         && ctx.arg_and_result_types_can_alias(*value, result))
             });
-            if !owned_object_result && !callee_owns && !independently_boxed && result_reuses_arg {
+            // A by-value scalar parameter receives a converted word, never the caller's
+            // owning box. Even an unknown return summary cannot make that box an alias.
+            let scalar_parameter_copy = signature.is_some_and(|signature| {
+                !signature.ref_params.get(parameter_index).copied().unwrap_or(false)
+                    && signature.params.get(parameter_index).is_some_and(|(_, ty)|
+                        matches!(ty.codegen_repr(), PhpType::Int | PhpType::Float | PhpType::Bool | PhpType::Void))
+            });
+            if !independently_owned_result && !callee_owns && !independently_boxed
+                && !scalar_parameter_copy && result_reuses_arg {
                 // Both suppression reasons above are MAY facts, so an unconditional skip is
                 // right only on the calls that actually hand the payload back. Emitting a
                 // conditional release instead lets each call decide at runtime: the codegen
@@ -438,11 +580,66 @@ pub(super) fn release_owned_call_arg_temporaries_with_roots(
                 // pointer than the container itself, so comparing them would read "not aliased"
                 // for a value the result does own, and release it twice. Same restriction the
                 // ABI-side cleanup slots already apply via `call_result_can_alias_mixed_temp`.
+                // A string argument the caller owns outright (claimed with `EnsureOwned`, an
+                // acquired copy, or a `StrPersist` of a normalized string cast) is decided the
+                // same way when a USER function produced the result. A `Str` result compares
+                // by payload pointer, the string's whole
+                // identity: a PHP function persists every builtin result it returns, so an equal
+                // pointer means the callee handed the block back and a different one means the
+                // caller still owns it. Any other result that can alias it is a boxed `Mixed`
+                // (`: mixed`, `?string`, `string|int`), whose return coercion persists the string
+                // into a cell of its own, so the argument is never the result's storage and is
+                // released outright. A builtin result is excluded: `ltrim`, `substr` and friends
+                // answer with a view INTO the argument, a different pointer that still borrows
+                // the argument's bytes.
                 if let Some(result) = result {
                     let arg_repr = ctx.builder.value_php_type(lowered.value).codegen_repr();
                     let result_repr = ctx.builder.value_php_type(result).codegen_repr();
-                    let comparable = matches!(arg_repr, PhpType::Mixed | PhpType::Union(_))
-                        && matches!(result_repr, PhpType::Mixed | PhpType::Union(_));
+                    // The enclosing gate includes provisional local reads and owned
+                    // user returns; final backend ownership still skips borrowed storage.
+                    let owned_string_arg = arg_repr == PhpType::Str;
+                    let user_call_result = matches!(
+                        ctx.builder.value_defining_op(result),
+                        Some(
+                            Op::Call
+                                | Op::FunctionVariantCall
+                                | Op::MethodCall
+                                | Op::NullsafeMethodCall
+                                | Op::StaticMethodCall
+                                | Op::ClosureCall
+                                | Op::ExprCall
+                                | Op::CallableDescriptorInvoke
+                        )
+                    );
+                    // A boxed user return owns its persisted string independently of the raw
+                    // argument, including temporary calls and string casts from Mixed storage.
+                    // Provisional local releases remain subject to backend ownership filtering.
+                    if arg_repr == PhpType::Str && result_repr == PhpType::Mixed && user_call_result {
+                        crate::ir_lower::ownership::release_if_owned(ctx, lowered, Some(span));
+                        continue;
+                    }
+                    if owned_string_arg && user_call_result {
+                        if result_repr == PhpType::Str {
+                            // A runtime view has no releasing owner of its own. Retire the
+                            // normalized cast it borrows unless that owner became the result.
+                            release_marked_cast_copies_unless_returned(ctx, lowered, result, span);
+                            ctx.emit_void(
+                                Op::ReleaseUnlessAliases,
+                                vec![lowered.value, result],
+                                None,
+                                Op::ReleaseUnlessAliases.default_effects(),
+                                Some(span),
+                            );
+                        } else {
+                            crate::ir_lower::ownership::release_if_owned(ctx, lowered, Some(span));
+                        }
+                        continue;
+                    }
+                    let comparable = (matches!(arg_repr, PhpType::Mixed | PhpType::Union(_))
+                        && matches!(result_repr, PhpType::Mixed | PhpType::Union(_)))
+                        // Callable descriptors also have a single pointer identity. A new
+                        // binding owns its captures independently of the source descriptor.
+                        || arg_repr == PhpType::Callable && result_repr == PhpType::Callable;
                     if comparable {
                         ctx.emit_void(
                             Op::ReleaseUnlessAliases,
@@ -452,6 +649,11 @@ pub(super) fn release_owned_call_arg_temporaries_with_roots(
                             Some(span),
                         );
                     }
+                    // `trim((string)$s)` is not itself the owned copy. The copy is the
+                    // cast underneath it. A user call that may return its argument skips
+                    // releasing `trim`'s result, so the copy has to be released here
+                    // unless that call handed the same block back.
+                    release_marked_cast_copies_unless_returned(ctx, lowered, result, span);
                 }
                 continue;
             }
@@ -460,6 +662,48 @@ pub(super) fn release_owned_call_arg_temporaries_with_roots(
     }
     if let Some(value) = guarded_result {
         ctx.unguard_call_argument(value, span);
+    }
+}
+
+/// Releases a normalized string-cast copy nested under a call argument.
+///
+/// `id(trim((string)$s))` skips releasing `trim`'s result because the callee may
+/// return that argument. The owned copy is the cast underneath `trim`. Free that
+/// copy when the callee returned a different block, and leave it alone when the
+/// callee handed the same block back.
+fn release_marked_cast_copies_unless_returned(
+    ctx: &mut LoweringContext<'_, '_>,
+    argument: LoweredValue,
+    result: ValueId,
+    span: Span,
+) {
+    let Some(inst) = ctx.builder.value_defining_instruction(argument.value) else {
+        return;
+    };
+    if inst.op != Op::RuntimeCall {
+        return;
+    }
+    let copies = inst
+        .operands
+        .iter()
+        .copied()
+        .filter(|operand| {
+            ctx.builder
+                .value_defining_instruction(*operand)
+                .is_some_and(|producer| {
+                    producer.op == Op::StrPersist
+                        && producer.immediate == Some(Immediate::Bool(true))
+                })
+        })
+        .collect::<Vec<_>>();
+    for copy in copies {
+        ctx.emit_void(
+            Op::ReleaseUnlessAliases,
+            vec![copy, result],
+            None,
+            Op::ReleaseUnlessAliases.default_effects(),
+            Some(span),
+        );
     }
 }
 
@@ -502,7 +746,9 @@ pub(super) fn stabilize_borrowed_result_and_release_receiver(
     result: LoweredValue,
     span: Span,
 ) -> LoweredValue {
-    if !ctx.value_is_owning_temporary(receiver) {
+    let boxed_local_read = ctx.builder.value_php_type(receiver.value).codegen_repr() == PhpType::Mixed
+        && ctx.value_needs_release_after_use(receiver);
+    if !ctx.value_is_owning_temporary(receiver) && !boxed_local_read {
         return result;
     }
     let result = if ctx.value_is_owning_temporary(result) {

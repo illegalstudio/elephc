@@ -11,9 +11,9 @@
 
 use std::collections::HashSet;
 
-use crate::parser::ast::{BinOp, Expr, ExprKind, InstanceOfTarget, Stmt, StmtKind};
+use crate::parser::ast::{BinOp, CastType, Expr, ExprKind, InstanceOfTarget, Stmt, StmtKind};
 use crate::parser::stmt::{
-    can_replay_assignment_target, lower_postfix_incdec_assignment,
+    can_replay_assignment_target, lower_postfix_incdec_assignment, lower_scoped_instance_dimension_incdec,
     update_dimension_base_is_snapshotted, update_index_needs_snapshot,
 };
 use crate::span::Span;
@@ -77,9 +77,22 @@ pub(crate) fn plain_assignment_expression(target: Expr, value: Expr, span: Span)
 
 /// Builds a compound expression whose captured dimensions are shared by its read and write.
 pub(crate) fn compound_assignment_expression(target: Expr, op: BinOp, rhs: Expr, span: Span) -> Expr {
-    let mut lowerer = AssignmentExpressionLowerer::new(span);
+    compound_assignment_expression_with_scope(target, op, rhs, span, false)
+}
+
+/// Marks only discarded statement captures for bounded write-operand ownership.
+pub(crate) fn scoped_compound_assignment_expression(target: Expr, op: BinOp, rhs: Expr, span: Span) -> Expr {
+    compound_assignment_expression_with_scope(target, op, rhs, span, true)
+}
+
+/// Shares compound planning while preserving the caller's capture lifetime contract.
+fn compound_assignment_expression_with_scope(target: Expr, op: BinOp, rhs: Expr, span: Span, scoped: bool) -> Expr {
+    let mut lowerer = if scoped { AssignmentExpressionLowerer::new_scoped(span) } else { AssignmentExpressionLowerer::new(span) };
     let target = lowerer.stabilize_non_local_target(target, &rhs);
-    let rhs = if delayed_static_assignment_target(&target) {
+    let runtime_property_name = matches!(&target.kind,
+        ExprKind::DynamicPropertyAccess { property, .. }
+            if !matches!(property.kind, ExprKind::StringLiteral(_)));
+    let rhs = if delayed_static_assignment_target(&target) || runtime_property_name {
         lowerer.bind_result_value(rhs)
     } else {
         lowerer.bind_value(&target, rhs)
@@ -111,11 +124,25 @@ pub(crate) fn compound_assignment_expression(target: Expr, op: BinOp, rhs: Expr,
 ///
 /// A target that is still not replayable after stabilization is declined rather than guessed at,
 /// which leaves the caller's original error in place.
-pub(super) fn desugar_lvalue_incdec(
+pub(crate) fn desugar_lvalue_incdec(
     target: Expr,
     increment: bool,
     prefix: bool,
     span: Span,
+) -> Option<Expr> {
+    desugar_lvalue_incdec_with_scope(target, increment, prefix, span, false)
+}
+
+/// Keeps statement incdec captures bounded without changing expression-position captures.
+pub(crate) fn desugar_scoped_lvalue_incdec(
+    target: Expr, increment: bool, prefix: bool, span: Span,
+) -> Option<Expr> {
+    desugar_lvalue_incdec_with_scope(target, increment, prefix, span, true)
+}
+
+/// Stabilizes one increment target with either frame or statement capture lifetime.
+fn desugar_lvalue_incdec_with_scope(
+    target: Expr, increment: bool, prefix: bool, span: Span, scoped: bool,
 ) -> Option<Expr> {
     if matches!(target.kind, ExprKind::Variable(_)) {
         // A bare variable already has a dedicated node; only the shapes it cannot name reach here.
@@ -124,7 +151,17 @@ pub(super) fn desugar_lvalue_incdec(
     if !is_non_local_assignment_target(&target) {
         return None;
     }
-    let mut lowerer = AssignmentExpressionLowerer::new(span);
+    if let Some(mut write) = lower_scoped_instance_dimension_incdec(&target, increment, span) {
+        let value = nested_incdec_result(&mut write, prefix)?;
+        let result = crate::names::generated_local_name(&format!(
+            "__elephc_incdec_result_{}_{}", span.line, span.col));
+        return Some(Expr::new(ExprKind::Assignment {
+            target: Box::new(Expr::new(ExprKind::Variable(result), span)),
+            value: Box::new(value), result_target: None, prelude: vec![write],
+            conditional_value_temp: None,
+        }, span));
+    }
+    let mut lowerer = if scoped { AssignmentExpressionLowerer::new_scoped(span) } else { AssignmentExpressionLowerer::new(span) };
     // The increment reads and writes the same place, so the place itself is what the stabilizer
     // measures the target's parts against.
     let probe = target.clone();
@@ -192,6 +229,28 @@ pub(super) fn desugar_lvalue_incdec(
             }, span));
         }
     }
+    if matches!(target.kind, ExprKind::PropertyAccess { .. } | ExprKind::DynamicPropertyAccess { .. }) {
+        let stem = if scoped { crate::parser::ast::SCOPED_WRITE_TEMP_PREFIX } else { "" };
+        let old = crate::names::generated_local_name(&format!("{stem}__elephc_incdec_old_{}_{}", span.line, span.col));
+        let new = crate::names::generated_local_name(&format!("{stem}__elephc_incdec_new_{}_{}", span.line, span.col));
+        prelude.push(Stmt::new(StmtKind::Assign { name: old.clone(), value: target.clone() }, span));
+        prelude.push(Stmt::new(StmtKind::Assign {
+            name: new.clone(),
+            value: Expr::new(ExprKind::BinaryOp {
+                left: Box::new(Expr::new(ExprKind::Variable(old.clone()), span)),
+                op: if increment { BinOp::Add } else { BinOp::Sub },
+                right: Box::new(Expr::new(ExprKind::IntLiteral(1), span)),
+            }, span),
+        }, span));
+        let result = if prefix { target.clone() } else { Expr::new(ExprKind::Variable(old), span) };
+        return Some(Expr::new(ExprKind::Assignment {
+            target: Box::new(target),
+            value: Box::new(Expr::new(ExprKind::Variable(new), span)),
+            result_target: Some(Box::new(result)),
+            prelude,
+            conditional_value_temp: None,
+        }, span));
+    }
     let mut write = lower_postfix_incdec_assignment(target.clone(), increment, span).ok()?;
     let value = if prefix {
         // Nested static incdec already captures its new value. Re-reading the place
@@ -238,12 +297,12 @@ pub(super) fn desugar_lvalue_incdec(
 /// Selects a nested update's capture without re-reading the place or mutating its old result.
 fn nested_incdec_result(write: &mut Stmt, prefix: bool) -> Option<Expr> {
     let value = match &mut write.kind {
-        StmtKind::NestedArrayAssign { value, .. } => value,
+        StmtKind::NestedArrayAssign { value, .. } | StmtKind::PropertyArrayAssign { value, .. } => value,
         StmtKind::Synthetic(statements) => return nested_incdec_result(statements.last_mut()?, prefix),
         _ => return None,
     };
     let ExprKind::Assignment { target, value: operation, prelude, .. } = &mut value.kind else { return None; };
-    if prefix { return Some(target.as_ref().clone()); }
+    let next = target.as_ref().clone();
     let StmtKind::Assign { name, .. } = &prelude.first()?.kind else { return None; };
     let old = name.clone();
     let working = crate::names::generated_local_name(&format!(
@@ -258,7 +317,7 @@ fn nested_incdec_result(write: &mut Stmt, prefix: bool) -> Option<Expr> {
     prelude.push(Stmt::new(StmtKind::Assign {
         name: working, value: Expr::new(ExprKind::Variable(old.clone()), value.span),
     }, value.span));
-    Some(Expr::new(ExprKind::Variable(old), value.span))
+    Some(if prefix { next } else { Expr::new(ExprKind::Variable(old), value.span) })
 }
 
 /// Returns true if the expression is a non-local assignment target (array-access,
@@ -310,6 +369,7 @@ fn is_array_assignment_base(expr: &Expr) -> bool {
 /// multiple evaluation of the same expression.
 pub(super) struct AssignmentExpressionLowerer {
     span: Span,
+    scoped: bool,
     next_temp: usize,
     prelude: Vec<Stmt>,
 }
@@ -319,9 +379,15 @@ impl AssignmentExpressionLowerer {
     pub(super) fn new(span: Span) -> Self {
         Self {
             span,
+            scoped: false,
             next_temp: 0,
             prelude: Vec::new(),
         }
+    }
+
+    /// Creates captures whose owners are retired by their enclosing statement.
+    pub(super) fn new_scoped(span: Span) -> Self {
+        Self { scoped: true, ..Self::new(span) }
     }
 
     /// Stabilizes a non-local target expression (array-access, property-access,
@@ -338,6 +404,20 @@ impl AssignmentExpressionLowerer {
     pub(super) fn snapshot_update_dimension(&mut self, target: Expr) -> Expr {
         let span = target.span;
         match target.kind {
+            ExprKind::DynamicPropertyAccess { object, property } => {
+                let property = if matches!(property.kind, ExprKind::StringLiteral(_)) {
+                    *property
+                } else {
+                    // RHS evaluation precedes conversion; both update halves share its string.
+                    let name_span = property.span;
+                    self.bind_temp(Expr::new(ExprKind::Cast {
+                        target: CastType::String, expr: property,
+                    }, name_span))
+                };
+                Expr::new(ExprKind::DynamicPropertyAccess {
+                    object, property: Box::new(property),
+                }, span)
+            }
             ExprKind::ArrayAccess { array, index }
                 if update_dimension_base_is_snapshotted(&array) =>
             {
@@ -543,7 +623,8 @@ impl AssignmentExpressionLowerer {
     /// `__elephc_assign_expr_{line}_{col}_{counter}`.
     fn next_temp_name(&mut self) -> String {
         let name = crate::names::generated_local_name(&format!(
-            "__elephc_assign_expr_{}_{}_{}",
+            "{}{}_{}_{}",
+            if self.scoped { crate::parser::ast::SCOPED_WRITE_TEMP_PREFIX } else { "__elephc_assign_expr_" },
             self.span.line, self.span.col, self.next_temp
         ));
         self.next_temp += 1;

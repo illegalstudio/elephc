@@ -18,6 +18,18 @@ ROOT = Path(__file__).resolve().parent
 REPO = ROOT.parent
 SUITES = ("native", "magician", "hot-path")
 SCHEMA_VERSION = 2
+# PHP baselines run the way PHP is deployed for speed: OPcache with the tracing JIT.
+# PHP 8.4+ defaults to opcache.jit=disable and 8.0-8.3 to a zero JIT buffer, so both
+# are pinned here, overriding whatever the host php.ini says. OPcache also refuses to
+# cache (and so to JIT) a script modified in the last two seconds by default, which
+# would silently run a freshly copied fixture in the interpreter.
+PHP_FLAGS = ("-d", "opcache.enable=1", "-d", "opcache.enable_cli=1",
+             "-d", "opcache.jit=tracing", "-d", "opcache.jit_buffer_size=128M",
+             "-d", "opcache.file_update_protection=0")
+PHP_MODE = "CLI; OPcache and tracing JIT enabled"
+JIT_PROBE = ("$s = function_exists('opcache_get_status') ? opcache_get_status(false) : false;"
+             "echo !is_array($s) || empty($s['opcache_enabled']) ? 'OPcache off'"
+             " : (empty($s['jit']['on']) ? 'JIT off' : 'on');")
 
 
 def command_output(command: list[str]) -> str | None:
@@ -58,13 +70,31 @@ def skipped(detail: str) -> dict:
     return {"median_ms": None, "samples_ms": [], "skipped": True, "detail": detail}
 
 
+def php_command(php: str, *arguments: str, isolated: bool = False) -> list[str]:
+    """Build a PHP baseline command with OPcache and the tracing JIT pinned on."""
+    return [php, *(["-n"] if isolated else []), *PHP_FLAGS, *arguments]
+
+
+def php_jit_problem(php: str, isolated: bool = False, timeout: float = 30) -> str | None:
+    """Explain why the pinned JIT configuration is inactive, or return None when it runs."""
+    result = subprocess.run(php_command(php, "-r", JIT_PROBE, isolated=isolated), cwd=REPO,
+                            capture_output=True, text=True, timeout=timeout)
+    if result.returncode == 0 and result.stdout == "on" and not result.stderr:
+        return None
+    detail = " ".join((result.stdout + result.stderr).split()) or f"exit {result.returncode}"
+    return f"OPcache tracing JIT inactive for {php} ({detail})"
+
+
 def require_baselines(cases: dict[str, list[dict]]) -> None:
     """Reject missing comparison tools before CI builds or records partial results."""
     kinds = {kind for fixtures in cases.values() for case in fixtures
              for _, kind, _ in case["variants"]}
     missing = []
-    if "php" in kinds and not shutil.which("php"):
-        missing.append("PHP interpreter (php)")
+    if "php" in kinds:
+        php = shutil.which("php")
+        problem = php_jit_problem(php) if php else "PHP interpreter (php)"
+        if problem:
+            missing.append(problem)
     if "c" in kinds and not any(shutil.which(tool) for tool in ("cc", "clang", "gcc")):
         missing.append("C compiler (cc, clang, or gcc)")
     if missing:
@@ -96,11 +126,12 @@ def run_case(case: dict, compiler: Path, iterations: int, warmup: int,
         for label, kind, source in case["variants"]:
             if kind == "php":
                 php = shutil.which("php")
-                if not php:
-                    results[label] = skipped("PHP interpreter unavailable")
+                problem = php_jit_problem(php) if php else "PHP interpreter unavailable"
+                if problem:
+                    # Never record an interpreter-only PHP time as the JIT baseline.
+                    results[label] = skipped(problem)
                     continue
-                # Pin OPcache/JIT mode, regardless of the host's php.ini.
-                command = [php, "-d", "opcache.enable_cli=0", "-d", "opcache.jit=0", source]
+                command = php_command(php, source)
             elif kind == "c":
                 cc = shutil.which("cc") or shutil.which("clang") or shutil.which("gcc")
                 if not cc:
@@ -131,7 +162,7 @@ def result_metadata(iterations: int, warmup: int) -> dict:
                             "rust": command_output(["rustc", "--version"]),
                             "php": command_output(["php", "--version"]),
                             "cc": command_output(["cc", "--version"]),
-                            "php_mode": "CLI; OPcache/JIT disabled",
+                            "php_mode": PHP_MODE,
                             "measurement": "process-wall", "iterations": iterations, "warmup": warmup}}
 
 

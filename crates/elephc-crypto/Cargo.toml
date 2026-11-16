@@ -26,6 +26,14 @@ sha3 = "0.10"
 # 0.1.x is digest-0.10 compatible. Do not "fix" this to 0.10.
 ripemd = "0.1"
 whirlpool = "0.10"
+# PHP-compatible legacy hashes (HAVAL, Tiger, Snefru, GOST94) whose
+# pure-Rust implementations live in the preimage project's audited-by-PHP
+# vectors crate. The crate is not security-reviewed; it is used here only
+# for PHP interoperability, matching the rest of this bridge.
+allthehashes = "0.1.3"
+# Murmur3 and xxHash are PHP's non-cryptographic hash() checksums.
+murmur3 = "0.5"
+xxhash-rust = { version = "0.8", features = ["xxh32", "xxh64", "xxh3"] }
 # Non-crypto checksums PHP's hash() exposes. crc32fast = crc32b (ISO-HDLC);
 # the `crc` crate covers PHP's non-`b` "crc32" variant. adler2 is the
 # maintained successor to the archived `adler` crate (same Adler32 API).

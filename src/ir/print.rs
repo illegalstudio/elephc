@@ -183,6 +183,12 @@ fn print_immediate(out: &mut String, data: &DataPool, immediate: &Immediate) {
         Immediate::ImplicitIntCast => {
             let _ = write!(out, " implicit_int_cast");
         }
+        Immediate::PromotableArray => {
+            let _ = write!(out, " promotable_array");
+        }
+        Immediate::ReflectionConstruction => {
+            let _ = write!(out, " reflection_construction");
+        }
         Immediate::Data(id) => {
             let _ = write!(out, " data[{}]", id.as_raw());
         }
@@ -219,6 +225,9 @@ fn print_immediate(out: &mut String, data: &DataPool, immediate: &Immediate) {
         }
         Immediate::RuntimeCall(target) => {
             let _ = write!(out, " runtime.{}", target.as_eir());
+            if let crate::ir::RuntimeCallTarget::ReferencePropertyCoerce { class_id, slot, is_static } = target {
+                let _ = write!(out, " class={class_id} slot={slot} static={is_static}");
+            }
             if let crate::ir::RuntimeCallTarget::ProfiledFunction { target, strict_types, arguments, .. } = target {
                 if *arguments == crate::ir::RuntimeArgumentLayout::IndexedArray {
                     let _ = write!(out, " arguments=indexed-array");
@@ -235,6 +244,14 @@ fn print_immediate(out: &mut String, data: &DataPool, immediate: &Immediate) {
         Immediate::ClassRef(id) => {
             let _ = write!(out, " class#{}", id);
         }
+        Immediate::ClosureBindScope(class) => match class {
+            Some(id) => { let _ = write!(out, " scope=class#{}", id); }
+            None => out.push_str(" scope=global"),
+        },
+        Immediate::ClosureBindObjectScope(class) => match class {
+            Some(id) => { let _ = write!(out, " scope=object(class#{})", id); }
+            None => out.push_str(" scope=object"),
+        },
         Immediate::EnumCaseRef { enum_id, case_id } => {
             let _ = write!(out, " enum#{}::case#{}", enum_id, case_id);
         }

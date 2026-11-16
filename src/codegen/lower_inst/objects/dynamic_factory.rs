@@ -48,7 +48,7 @@ pub(super) fn dynamic_new_candidates(
             continue;
         }
         if let Some(candidate) =
-            dynamic_new_candidate(ctx, class_name, class_info, Some(arg_count), inst)?
+            dynamic_new_candidate(ctx, class_name, class_info, Some(arg_count), inst, false)?
         {
             candidates.push(candidate);
         }
@@ -85,6 +85,7 @@ pub(super) fn dynamic_new_candidate(
     class_info: &ClassInfo,
     arg_count: Option<usize>,
     inst: &Instruction,
+    allow_non_public_constructor: bool,
 ) -> Result<Option<DynamicNewCandidate>> {
     if let Some(arg_count) = arg_count {
         if let Some(candidate) =
@@ -94,6 +95,16 @@ pub(super) fn dynamic_new_candidate(
         }
     }
     if class_interfaces_require_missing_method_symbols(ctx, class_name, class_info) {
+        return Ok(None);
+    }
+    if !allow_non_public_constructor
+        && super::dynamic_mixed_candidates::constructor_visibility_refusal(
+            ctx,
+            class_name,
+            class_info,
+        )
+        .is_some()
+    {
         return Ok(None);
     }
     let constructor_key = php_symbol_key("__construct");
@@ -191,12 +202,12 @@ pub(super) fn dynamic_new_candidate(
     } else {
         return Ok(None);
     };
-    let property_initialization = collect_property_initialization(class_info, inst);
+    let property_initialization = collect_property_initialization(ctx.module, class_info, inst);
     Ok(Some(DynamicNewCandidate {
         class_name: class_name.to_string(),
         class_id: class_info.class_id,
         property_count: class_info.properties.len(),
-        allow_dynamic_properties: class_info.has_property_hash_storage(),
+        allow_dynamic_properties: class_name == "stdClass" || class_info.has_property_hash_storage(),
         uninitialized_marker_offsets: uninitialized_property_marker_offsets(class_info),
         owned_reference_property_offsets: owned_reference_property_offsets(class_info),
         property_initialization,
@@ -211,7 +222,8 @@ pub(super) fn dynamic_new_without_constructor_candidate(
     class_info: &ClassInfo,
     inst: &Instruction,
 ) -> Result<Option<DynamicNewCandidate>> {
-    if class_info.is_abstract || ctx.module.enum_infos.contains_key(class_name) {
+    let native_factory = matches!(inst.immediate, Some(Immediate::Bool(true)));
+    if (class_info.is_abstract && !native_factory) || ctx.module.enum_infos.contains_key(class_name) {
         return Ok(None);
     }
     if class_name != "stdClass" && known_dynamic_new_builtin_class_names().contains(&class_name) {
@@ -220,15 +232,16 @@ pub(super) fn dynamic_new_without_constructor_candidate(
     if class_name == "SplFixedArray" || is_spl_doubly_linked_list_family(class_name) {
         return Ok(None);
     }
-    if class_interfaces_require_missing_method_symbols(ctx, class_name, class_info) {
+    if !(native_factory && class_info.is_abstract)
+        && class_interfaces_require_missing_method_symbols(ctx, class_name, class_info) {
         return Ok(None);
     }
-    let property_initialization = collect_property_initialization(class_info, inst);
+    let property_initialization = collect_property_initialization(ctx.module, class_info, inst);
     Ok(Some(DynamicNewCandidate {
         class_name: class_name.to_string(),
         class_id: class_info.class_id,
         property_count: class_info.properties.len(),
-        allow_dynamic_properties: class_info.has_property_hash_storage(),
+        allow_dynamic_properties: class_name == "stdClass" || class_info.has_property_hash_storage(),
         uninitialized_marker_offsets: uninitialized_property_marker_offsets(class_info),
         owned_reference_property_offsets: owned_reference_property_offsets(class_info),
         property_initialization,

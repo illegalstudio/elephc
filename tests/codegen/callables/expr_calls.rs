@@ -32,11 +32,13 @@ fn asm_has_invokable_object_call(user_asm: &str, class_name: &str) -> bool {
         || user_asm.contains(&eir_method)
 }
 
-/// Counts globally emitted callable artifacts whose assembly labels contain `kind`.
+/// Counts callable entry points without treating their GC visitor/cleanup callbacks as invokers.
 fn global_callable_artifact_count(user_asm: &str, kind: &str) -> usize {
     user_asm
         .lines()
         .filter(|line| line.starts_with(".globl ") && line.contains(kind))
+        .filter(|line| !line.ends_with("__gc_argument_owners")
+            && !line.ends_with("__gc_argument_owners_cleanup"))
         .count()
 }
 
@@ -1736,10 +1738,10 @@ echo dispatch(["Handler", "greet"]);
 }
 
 /// Regression: a boxed callable array shorter than two elements must take a
-/// deterministic fatal path before codegen reads receiver/method slots out of bounds.
+/// catchable TypeError path before reading receiver/method slots out of bounds.
 #[test]
 fn test_call_user_func_rejects_short_boxed_mixed_callable_array_without_oob() {
-    let out = compile_and_run_capture(
+    let out = compile_and_run_with_heap_debug(
         r#"<?php
 class Handler {
     public function greet(string $id): string { return $id; }
@@ -1751,15 +1753,17 @@ class Adapter {
 }
 $handler = new Handler();
 $adapter = new Adapter([$handler]);
-echo $adapter->run();
+try { echo $adapter->run(); }
+catch (TypeError $error) { echo 'caught:', get_class($error), '|'; }
+unset($adapter, $handler, $error);
 "#,
     );
 
-    assert!(!out.success, "short callable array unexpectedly ran: {}", out.stdout);
+    assert!(out.success, "short callable array error was not caught: stdout={} stderr={}", out.stdout, out.stderr);
+    assert_eq!(out.stdout, "caught:TypeError|");
     assert!(
-        out.stderr
-            .contains("Fatal error: callable array did not resolve to an invokable target"),
-        "short callable array should fail cleanly, got: {}",
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "short callable array must retire its temporary owners: {}",
         out.stderr
     );
 }

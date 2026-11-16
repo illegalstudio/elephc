@@ -461,3 +461,79 @@ fn test_malformed_file_scope_const_declarator_lists_are_rejected() {
     assert!(parse_fails("<?php const A = 1, ;"));
     assert!(parse_fails("<?php const A = 1, B;"));
 }
+
+
+/// Every complete leading declare form can precede the strict directive.
+#[test]
+fn test_declare_strict_types_after_leading_declare_forms() {
+    for prefix in [
+        "declare(ticks=1);", "declare(ticks=1) { echo 0; }",
+        "declare(ticks=1): echo 0; enddeclare;", "declare(ticks=1) echo 0;",
+        "declare(ticks=1) declare(ticks=1) echo 0;",
+        "declare(ticks=1) declare(ticks=1);",
+        "declare(ticks=1) if (true) { echo 0; } else { echo 2; }",
+    ] {
+        let stmts = parse_source(&format!("<?php {prefix} declare(strict_types=1); echo 1;"));
+        assert_eq!(stmts.len(), 3, "{prefix}");
+        assert!(stmts[0].strict_types, "main script prefix: {prefix}");
+        assert!(stmts[2].strict_types, "main script suffix: {prefix}");
+        assert!(matches!(stmts[2].kind, StmtKind::Echo(_)));
+    }
+}
+
+/// Prefix tracking consumes each declare once, even in a long flat sequence.
+#[test]
+fn test_declare_strict_types_after_many_leading_declares() {
+    let source = format!("<?php {} declare(strict_types=1); echo 1;", "declare(ticks=1); ".repeat(128));
+    let stmts = parse_source(&source);
+    assert_eq!(stmts.len(), 130);
+    assert!(stmts.iter().all(|stmt| stmt.strict_types));
+}
+
+
+/// An ordinary empty statement is parsed but is not a leading declare directive.
+#[test]
+fn test_declare_related_empty_statements_parse_as_noops() {
+    let stmts = parse_source("<?php ; if (false); echo 1;");
+    assert!(matches!(&stmts[0].kind, StmtKind::Synthetic(body) if body.is_empty()));
+    assert!(matches!(&stmts[1].kind, StmtKind::If { then_body, .. }
+        if matches!(&then_body[0].kind, StmtKind::Synthetic(body) if body.is_empty())));
+}
+
+/// Returns the single statement a bare leading `declare` body produced.
+fn declare_body_stmt(stmt: &Stmt) -> &Stmt {
+    match &stmt.kind {
+        StmtKind::Synthetic(body) if body.len() == 1 => &body[0],
+        _ => stmt,
+    }
+}
+
+/// Assignment preludes in the main-script prefix take the final strict flag; closures keep theirs.
+#[test]
+fn test_declare_strict_types_marks_prefix_assignment_preludes() {
+    let stmts = parse_source(
+        "<?php declare(ticks=1) echo ($a[f()] += 1); \
+         declare(ticks=1) $g = function () { return f(); }; declare(strict_types=1);",
+    );
+    let echo = declare_body_stmt(&stmts[0]);
+    let StmtKind::Echo(Expr { kind: ExprKind::Assignment { prelude, .. }, .. }) = &echo.kind else {
+        panic!("expected an echoed compound assignment, got {:?}", echo.kind);
+    };
+    assert!(!prelude.is_empty(), "the computed index is captured in a prelude");
+    assert!(prelude.iter().all(|stmt| stmt.strict_types), "{prelude:?}");
+    let assign = declare_body_stmt(&stmts[1]);
+    let StmtKind::Assign { value: Expr { kind: ExprKind::Closure { body, .. }, .. }, .. } = &assign.kind else {
+        panic!("expected a closure assignment, got {:?}", assign.kind);
+    };
+    assert!(assign.strict_types);
+    assert!(body.iter().all(|stmt| !stmt.strict_types), "closure bodies stay lexical");
+}
+
+/// A relative-name call is an ordinary statement body, unlike a namespace declaration.
+#[test]
+fn test_declare_single_statement_accepts_relative_name_call() {
+    let stmts = parse_source("<?php declare(ticks=1) namespace\\f();");
+    let call = declare_body_stmt(&stmts[0]);
+    assert!(matches!(&call.kind, StmtKind::ExprStmt(Expr { kind: ExprKind::FunctionCall { .. }, .. })),
+        "{:?}", call.kind);
+}

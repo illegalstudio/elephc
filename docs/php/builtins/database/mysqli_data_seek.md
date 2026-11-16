@@ -1,8 +1,6 @@
 ---
 title: "mysqli_data_seek()"
 description: "Moves a buffered result's row cursor to an offset."
-sidebar:
-  order: 108
 ---
 
 ## mysqli_data_seek()
@@ -21,8 +19,9 @@ Moves a buffered result's row cursor to an offset.
 
 ## Availability
 
-- **Compiled (AOT)**: supported through an injected elephc-PHP prelude.
-- **`eval()` (magician interpreter)**: not available inside eval'd code.
+| Compiled (AOT) | Magician (eval) |
+|---|---|
+| Available | Not available yet |
 
 _No examples yet. Check `examples/` and `showcases/` for usage patterns._
 

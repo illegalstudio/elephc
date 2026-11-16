@@ -1,8 +1,6 @@
 ---
 title: "mysqli_multi_query() - internals"
 description: "Compiler internals for mysqli_multi_query(): lowering path, type checks, and runtime helpers."
-sidebar:
-  order: 140
 ---
 
 ## `mysqli_multi_query()` - internals
@@ -10,7 +8,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`crates/elephc-builtin-contract/src/catalog_data.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-builtin-contract/src/catalog_data.rs)
-- **Lowering**: [`src/mysqli_prelude/build/procedural.rs`:835](https://github.com/illegalstudio/elephc/blob/main/src/mysqli_prelude/build/procedural.rs#L835) (`mysqli_multi_query`)
+- **Lowering**: [`src/mysqli_prelude/build/procedural.rs`](https://github.com/illegalstudio/elephc/blob/main/src/mysqli_prelude/build/procedural.rs) (`mysqli_multi_query`)
 - **Function symbol**: `mysqli_multi_query()`
 
 

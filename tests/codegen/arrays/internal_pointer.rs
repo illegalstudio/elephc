@@ -343,3 +343,18 @@ echo $t;
         out.stderr
     );
 }
+
+/// A temporary call result owns no caller-visible pointer, so lowering materializes it into a
+/// hidden local; `current`/`key` read that copy exactly as PHP reads the temporary.
+#[test]
+fn test_pointer_family_accepts_temporary_call_results() {
+    let out = compile_and_run(
+        r#"<?php
+function pointer_source(): array { return ["b" => 2, "a" => 1]; }
+class PointerBox { public function values(): array { return [10, 20, 30]; } }
+var_dump(current(pointer_source()), key(pointer_source()));
+var_dump(current((new PointerBox())->values()), key((new PointerBox())->values()));
+"#,
+    );
+    assert_eq!(out, "int(2)\nstring(1) \"b\"\nint(10)\nint(0)\n");
+}

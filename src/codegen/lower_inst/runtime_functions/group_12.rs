@@ -34,11 +34,17 @@ pub(super) fn lower(
         RuntimeFnId::ChunkSplit => Some({
             crate::codegen::lower_inst::builtins::strings::lower_chunk_split(ctx, inst)
         }),
+        RuntimeFnId::ChunkSplitLen => Some({
+            crate::codegen::lower_inst::builtins::strings::lower_chunk_split_len(ctx, inst)
+        }),
         RuntimeFnId::StrWordCount => Some({
             crate::codegen::lower_inst::builtins::strings::lower_str_word_count(ctx, inst)
         }),
         RuntimeFnId::CountChars => Some({
             crate::codegen::lower_inst::builtins::strings::lower_count_chars(ctx, inst)
+        }),
+        RuntimeFnId::CountCharsDistinct => Some({
+            crate::codegen::lower_inst::builtins::strings::lower_count_chars_distinct(ctx, inst)
         }),
         RuntimeFnId::Strtr => Some({
             crate::codegen::lower_inst::builtins::strings::lower_strtr(ctx, inst)

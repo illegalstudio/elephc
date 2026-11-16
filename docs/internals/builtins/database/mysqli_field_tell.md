@@ -1,8 +1,6 @@
 ---
 title: "mysqli_field_tell() - internals"
 description: "Compiler internals for mysqli_field_tell(): lowering path, type checks, and runtime helpers."
-sidebar:
-  order: 127
 ---
 
 ## `mysqli_field_tell()` - internals
@@ -10,7 +8,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`crates/elephc-builtin-contract/src/catalog_data.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-builtin-contract/src/catalog_data.rs)
-- **Lowering**: [`src/mysqli_prelude/build/procedural.rs`:1641](https://github.com/illegalstudio/elephc/blob/main/src/mysqli_prelude/build/procedural.rs#L1641) (`mysqli_field_tell`)
+- **Lowering**: [`src/mysqli_prelude/build/procedural.rs`](https://github.com/illegalstudio/elephc/blob/main/src/mysqli_prelude/build/procedural.rs) (`mysqli_field_tell`)
 - **Function symbol**: `mysqli_field_tell()`
 
 

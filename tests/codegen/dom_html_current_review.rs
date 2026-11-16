@@ -9,6 +9,80 @@
 
 use crate::support::*;
 
+/// HTML-only documents expose descendant text while document writes coerce and then do nothing.
+#[test]
+fn dom_html_document_text_content_is_text_and_ignores_writes() {
+    let out = compile_and_run(r#"<?php
+class IgnoredDocumentText {
+    public function __toString(): string { echo 'cast|'; return 'ignored'; }
+}
+$document = new DOMDocument();
+var_dump($document->nodeValue, $document->textContent);
+$document->loadHTML('<p>a<b>c</b><!--note--><?work data?></p>');
+echo $document->textContent, '|';
+$document->nodeValue = new IgnoredDocumentText();
+$document->textContent = new IgnoredDocumentText();
+var_dump($document->nodeValue);
+echo $document->textContent;
+"#);
+    assert_eq!(out, "NULL\nstring(0) \"\"\nac|cast|cast|NULL\nac");
+}
+
+/// Default declarations are immutable and serialize before literal HTML attributes.
+#[test]
+fn dom_html_default_namespace_declaration_survives_repeated_writes() {
+    let out = compile_and_run(r#"<?php
+foreach (['urn:q', '', 'urn:é&"', 'urn:' . chr(255), "urn:nul\0tail"] as $uri) {
+    $document = new DOMDocument();
+    $document->loadHTML('<p class="c">x</p>');
+    $element = $document->getElementsByTagName('p')->item(0);
+    var_dump($element->setAttribute('xmlns', $uri), $element->setAttribute('xmlns', 'ignored'));
+    echo bin2hex($element->getAttribute("xmlns\0tail")), ':', bin2hex($document->saveXML($element)), '|';
+}
+$document = new DOMDocument();
+$document->loadHTML('<p xmlns="urn:raw" xmlns:p="urn:raw:p" class="c">x</p>');
+$element = $document->getElementsByTagName('p')->item(0);
+echo '[', $element->getAttribute('xmlns'), ']:[', $element->getAttribute('xmlns:p'), ']|';
+$element->setAttribute('xmlns', 'urn:decl');
+$element->setAttribute('data-nul', "a\0b");
+echo $element->getAttribute("data-nul\0tail"), ':', $document->saveXML($element);
+"#);
+    assert_eq!(out, "bool(true)\nbool(false)\n75726e3a71:3c7020786d6c6e733d2275726e3a712220636c6173733d2263223e783c2f703e|bool(true)\nbool(false)\n:3c7020786d6c6e733d222220636c6173733d2263223e783c2f703e|bool(true)\nbool(false)\n75726e3ac3a92622:3c7020786d6c6e733d2275726e3ac3a926616d703b2671756f743b2220636c6173733d2263223e783c2f703e|bool(true)\nbool(false)\n75726e3aff:3c7020786d6c6e733d2275726e3aff2220636c6173733d2263223e783c2f703e|bool(true)\nbool(false)\n75726e3a6e756c:3c7020786d6c6e733d2275726e3a6e756c2220636c6173733d2263223e783c2f703e|[]:[]|a:<p xmlns=\"urn:decl\" xmlns=\"urn:raw\" xmlns:p=\"urn:raw:p\" class=\"c\" data-nul=\"a\">x</p>");
+}
+
+/// HTML-only writes validate names and throw without loading the native XML bridge.
+#[test]
+fn dom_html_set_attribute_rejects_invalid_names() {
+    let out = compile_and_run(r#"<?php
+$document = new DOMDocument();
+$document->loadHTML('<html><body><p>value</p></body></html>');
+$element = $document->getElementsByTagName('p')->item(0);
+foreach (['', '1bad', 'a b', chr(255), chr(0), chr(192) . chr(175), chr(237) . chr(160) . chr(128), chr(244) . chr(144) . chr(128) . chr(128)] as $name) {
+    try { $element->setAttribute($name, 'wrong'); echo 'wrong|'; }
+    catch (ValueError $error) { echo get_class($error), ':', $error->getMessage(), '|'; }
+    catch (DOMException $error) { echo get_class($error), ':', $error->getCode(), ':', $error->getMessage(), '|'; }
+}
+foreach (['é', '名', 'a' . chr(204) . chr(129), chr(240) . chr(144) . chr(128) . chr(128)] as $name) { $element->setAttribute($name, 'valid'); echo $element->getAttribute($name), '|'; }
+$element->setAttribute("nul\0tail", 'truncated');
+echo $element->getAttribute('nul'), '|', $document->saveXML($element);
+"#);
+    assert_eq!(out, "ValueError:DOMElement::setAttribute(): Argument #1 ($qualifiedName) must not be empty|DOMException:5:Invalid Character Error|DOMException:5:Invalid Character Error|DOMException:5:Invalid Character Error|DOMException:5:Invalid Character Error|DOMException:5:Invalid Character Error|DOMException:5:Invalid Character Error|DOMException:5:Invalid Character Error|valid|valid|valid|valid|truncated|<p é=\"valid\" 名=\"valid\" á=\"valid\" 𐀀=\"valid\" nul=\"truncated\">value</p>");
+}
+
+/// HTML-only attribute writes replace existing values and append new literal names.
+#[test]
+fn dom_html_set_attribute_updates_unbound_tree() {
+    let out = compile_and_run(r#"<?php
+$document = new DOMDocument();
+$document->loadHTML('<html><body><p id="old">value</p></body></html>');
+$element = $document->getElementsByTagName('p')->item(0);
+$element->setAttribute('id', 'new & value');
+$element->setAttribute('data-name', 'added');
+echo $element->getAttribute('id'), '|', $element->getAttribute('data-name'), '|', $document->saveXML($element);
+"#);
+    assert_eq!(out, "new & value|added|<p id=\"new &amp; value\" data-name=\"added\">value</p>");
+}
+
 /// An old implied-root flag must not trim whitespace inside a later unclosed element.
 #[test]
 fn dom_html_body_boundary_review_later_element_blanks() {

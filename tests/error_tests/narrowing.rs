@@ -10,6 +10,26 @@
 
 use super::*;
 
+/// A nullable local stays nullable when either conditional exit can still carry null.
+#[test]
+fn test_nullable_object_lazy_local_join_rejects_nullable_exits() {
+    for branch in [
+        "if ($service === null) {}",
+        "if ($service === null) { if ($flag) { $service = new Service(); } }",
+        "if ($service === null) { $service = new Service(); } else { $service = null; }",
+        "if ($service === null) { $service = new Service(); } else { $service = new Service(); $service = null; }",
+        "if ($service === null) { $service = new Service(); } else { $service = new Service(); $service = $replacement; }",
+        "if ($service === null) { $service = new Service(); } else { $service = new Service(); if ($flag) { $service = null; } }",
+        "if ($service === null) { $service = $replacement; }",
+        "if ($service === null) { $service = new Service(); $service = null; }",
+        "if ($service === null) { $service = new Service(); } $service = null;",
+    ] {
+        let source = format!("<?php final class Service {{}} function get(?Service $service, ?Service $replacement, bool $flag): Service {{ {branch} return $service; }}");
+        let error = check_source(&source).expect_err(branch);
+        assert!(error.contains("return type expects Service, got Service|null"), "{branch}: {error}");
+    }
+}
+
 /// Keeps guarded union writes within the original contract and isolates contracts between function frames.
 #[test]
 fn test_guarded_union_assignment_preserves_declared_boundaries() {
@@ -278,9 +298,50 @@ fn test_the_guard_stops_governing_after_the_region_stores() {
 fn a_store_in_a_nested_guard_ends_the_enclosing_guards_authority() {
     let source =
         "<?php $a = 1; if (is_string($a)) { if (is_float($a)) { $a = 1.5; } $a = 2; } echo $a;";
-    // The same answer in both modes, and the same one HEAD gave before this feature: the outer
-    // region is not transparent, but its replay from `$a`'s own `int` sees no conflict either,
-    // so `mixed_storage_scan` does not mark the name and the checker reports.
-    expect_error(source, "cannot reassign $a from string to int");
-    expect_error_strict(source, "cannot reassign $a from string to int");
+    // The nested branch can leave either its float store or the enclosing string view.
+    // Neither alternative permits the later integer store, in either locals mode.
+    expect_error(source, "cannot reassign $a from string|float to int");
+    expect_error_strict(source, "cannot reassign $a from string|float to int");
+}
+
+/// Shared classes for the readonly-narrowing fixtures: `Box::$plugin` is readonly, and only
+/// `Sold` declares `count()`, so a dropped `instanceof Sold` fact reports `Plugin::count`.
+const READONLY_PLUGIN_CLASSES: &str = "<?php
+interface Plugin { public function name(): string; }
+final class Sold implements Plugin { public function name(): string { return 'sold'; } public function count(): int { return 7; } }
+final class Other implements Plugin { public function name(): string { return 'other'; } }
+final class Box { public function __construct(public readonly Plugin $plugin) {} }
+";
+
+/// Verifies a call still drops a readonly property's narrowing whenever the call can rebind the
+/// object it is read through: a local (a `=&` alias or a by-reference closure capture can
+/// replace it) and a global. PHP then calls `count()` on whatever object
+/// the local holds after the call, so keeping the `Sold` fact compiled the wrong call.
+#[test]
+fn test_readonly_property_narrowing_drops_for_a_rebindable_root() {
+    for body in [
+        "function f(Box $box): string { if ($box->plugin instanceof Sold) { $box->plugin->name(); return (string) $box->plugin->count(); } return ''; }",
+        "function f(Box $box): void { $alias = &$box; if ($box->plugin instanceof Sold) { $swap = function () use (&$alias): void { $alias = new Box(new Other()); }; $swap(); echo $box->plugin->count(); } }",
+        "$box = new Box(new Sold());
+function swap(): void { global $box; $box = new Box(new Other()); }
+function g(): void { global $box; if ($box->plugin instanceof Sold) { swap(); echo $box->plugin->count(); } }",
+    ] {
+        expect_error(&format!("{READONLY_PLUGIN_CLASSES}{body}"), "Undefined method: Plugin::count");
+    }
+}
+
+/// Verifies a call drops a `$this` readonly narrowing when the hierarchy declares `__clone`
+/// (PHP 8.3+ can reinitialize a readonly property while cloning, from `__clone` or any method
+/// it calls), and when the property is not readonly at all.
+#[test]
+fn test_this_property_narrowing_drops_when_the_property_can_change() {
+    for classes in [
+        "class Holder { public function __construct(protected readonly Plugin $plugin) {}
+    public function line(): string { if ($this->plugin instanceof Sold) { $this->plugin->name(); return (string) $this->plugin->count(); } return ''; } }
+final class Copy extends Holder { public function __clone() {} }",
+        "final class Holder { public function __construct(private Plugin $plugin) {}
+    public function line(): string { if ($this->plugin instanceof Sold) { $this->plugin->name(); return (string) $this->plugin->count(); } return ''; } }",
+    ] {
+        expect_error(&format!("{READONLY_PLUGIN_CLASSES}{classes}"), "Undefined method: Plugin::count");
+    }
 }

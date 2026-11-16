@@ -1,8 +1,6 @@
 ---
 title: "date_offset_get()"
 description: "Returns a date's UTC offset in seconds."
-sidebar:
-  order: 205
 ---
 
 ## date_offset_get()
@@ -20,8 +18,9 @@ Returns a date's UTC offset in seconds.
 
 ## Availability
 
-- **Compiled (AOT)**: supported through the Elephc compiler.
-- **`eval()` (magician interpreter)**: supported through the procedural date/time alias dispatcher.
+| Compiled (AOT) | Magician (eval) |
+|---|---|
+| Available | Available |
 
 _No examples yet. Check `examples/` and `showcases/` for usage patterns._
 

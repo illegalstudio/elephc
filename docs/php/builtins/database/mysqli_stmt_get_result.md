@@ -1,8 +1,6 @@
 ---
 title: "mysqli_stmt_get_result()"
 description: "Returns a prepared statement's result as a mysqli_result."
-sidebar:
-  order: 169
 ---
 
 ## mysqli_stmt_get_result()
@@ -20,8 +18,9 @@ Returns a prepared statement's result as a mysqli_result.
 
 ## Availability
 
-- **Compiled (AOT)**: supported through an injected elephc-PHP prelude.
-- **`eval()` (magician interpreter)**: not available inside eval'd code.
+| Compiled (AOT) | Magician (eval) |
+|---|---|
+| Available | Not available yet |
 
 _No examples yet. Check `examples/` and `showcases/` for usage patterns._
 

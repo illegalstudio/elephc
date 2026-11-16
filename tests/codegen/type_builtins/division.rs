@@ -160,3 +160,20 @@ fn test_intdiv_int_min_div_neg_two_no_overflow() {
     let out = compile_and_run("<?php echo intdiv(PHP_INT_MIN, -2);");
     assert_eq!(out, "4611686018427387904");
 }
+
+/// Literal divisors skip the zero/overflow checks while keeping PHP's results and errors.
+#[test]
+fn test_intdiv_literal_divisor_matches_php() {
+    let out = compile_and_run(
+        r#"<?php
+echo intdiv(PHP_INT_MIN, 3), '|', intdiv(7, -2), '|', intdiv(0, 5), '|';
+try { intdiv(1, 0); } catch (DivisionByZeroError $e) { echo 'zero|'; }
+try { intdiv(PHP_INT_MIN, -1); } catch (ArithmeticError $e) { echo 'overflow|'; }
+echo intdiv(PHP_INT_MIN, -2);
+"#,
+    );
+    assert_eq!(
+        out,
+        "-3074457345618258602|-3|0|zero|overflow|4611686018427387904"
+    );
+}

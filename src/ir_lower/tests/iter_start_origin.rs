@@ -141,16 +141,20 @@ echo count($a);
                 ("cmp r11, r10", "je", "cmp rax, 3", "cmp rax, 2")
             }
         };
-        let compare_at = asm
-            .find(compare)
-            .unwrap_or_else(|| panic!("{name}: missing snapshot pointer compare"));
-        let after_compare = &asm[compare_at..];
-        let window = &after_compare[..after_compare.len().min(240)];
+        // Anchor on the fast-path label: `cmp r11, r10` also appears in the exception-frame
+        // helper emitted earlier, so the first raw match is not necessarily the loop compare.
+        let stable_at = asm
+            .find("iter_source_stable")
+            .unwrap_or_else(|| panic!("{name}: missing fast-path label"));
+        let window = &asm[stable_at.saturating_sub(240)..stable_at];
+        assert!(
+            window.contains(compare),
+            "{name}: missing snapshot pointer compare before the fast-path branch"
+        );
         assert!(
             window.contains(branch),
             "{name}: the snapshot compare is not followed by its fast-path branch"
         );
-        assert!(asm.contains("iter_source_stable"), "{name}: missing fast-path label");
         assert!(asm.contains(hash_gate), "{name}: resync must be gated on associative storage");
         assert!(
             asm.contains(indexed_gate),

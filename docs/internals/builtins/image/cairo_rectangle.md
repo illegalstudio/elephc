@@ -1,8 +1,6 @@
 ---
 title: "cairo_rectangle() - internals"
 description: "Compiler internals for cairo_rectangle(): lowering path, type checks, and runtime helpers."
-sidebar:
-  order: 429
 ---
 
 ## `cairo_rectangle()` - internals
@@ -10,7 +8,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`crates/elephc-builtin-contract/src/catalog_data.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-builtin-contract/src/catalog_data.rs)
-- **Lowering**: [`src/image_prelude.rs`:13519](https://github.com/illegalstudio/elephc/blob/main/src/image_prelude.rs#L13519) (`cairo_rectangle`)
+- **Lowering**: [`src/image_prelude.rs`](https://github.com/illegalstudio/elephc/blob/main/src/image_prelude.rs) (`cairo_rectangle`)
 - **Function symbol**: `cairo_rectangle()`
 
 

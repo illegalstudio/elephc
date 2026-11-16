@@ -1,8 +1,6 @@
 ---
 title: "cairo_close_path() - internals"
 description: "Compiler internals for cairo_close_path(): lowering path, type checks, and runtime helpers."
-sidebar:
-  order: 401
 ---
 
 ## `cairo_close_path()` - internals
@@ -10,7 +8,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`crates/elephc-builtin-contract/src/catalog_data.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-builtin-contract/src/catalog_data.rs)
-- **Lowering**: [`src/image_prelude.rs`:13566](https://github.com/illegalstudio/elephc/blob/main/src/image_prelude.rs#L13566) (`cairo_close_path`)
+- **Lowering**: [`src/image_prelude.rs`](https://github.com/illegalstudio/elephc/blob/main/src/image_prelude.rs) (`cairo_close_path`)
 - **Function symbol**: `cairo_close_path()`
 
 

@@ -31,11 +31,18 @@ The generated process entry calls a different bridge symbol for each model, so
 the default worker request path does not pay an isolation branch or IPC cost.
 `--web-isolation` without `--web` (or its `--with-web` alias) is an error.
 
+The independent `--web-lifecycle=request|application` option controls PHP state
+lifetime. `request` is the default. Opt into `application` with worker isolation
+to bootstrap one typed application after fork and reuse it across requests.
+See [Persistent Web Applications](web-application.md) for registration,
+ownership, failure, shutdown, and recycling semantics.
+
 The produced binary has no PHP runtime dependency. Run it with `--listen`:
 
 ```bash
 ./app --listen 127.0.0.1:8080
 ./app --listen 127.0.0.1:8080 --workers 4
+./app --listen unix:/run/elephc/app.sock
 ```
 
 ## Runtime arguments
@@ -44,7 +51,8 @@ The produced binary accepts these arguments at runtime:
 
 | Argument | Required | Default | Description |
 |---|---|---|---|
-| `--listen host:port` | Yes | — | Address and port to bind. Missing `--listen` prints an error to stderr and exits non-zero. |
+| `--listen host:port \| unix:/path` | Yes | — | TCP address to bind, or a Unix-domain socket path. Missing `--listen` prints an error to stderr and exits non-zero. Unix socket paths are limited to 100 bytes; a stale socket file is replaced, but a regular file at the path is refused. |
+| `--trusted-proxy LIST` | No | — | Comma-separated IPv4/IPv6 addresses, CIDRs, or `unix` allowed to supply `Forwarded` / `X-Forwarded-*`; repeatable. Without it, forwarded headers do not change `$_SERVER`. |
 | `--workers N` | No | CPU count | Number of worker processes to prefork. Minimum 1. |
 | `--max-body-size N` | No | `8388608` (8 MiB) | Max request body in bytes. A request whose body exceeds the cap gets `413 Payload Too Large` and the PHP handler never runs. `0` removes the cap in `worker` only: `pool` and `request` hand the body to a separate handler process over the broker protocol, which refuses anything above its own 64 MiB frame limit with the same `413`. |
 | `--max-requests N` | No | `0` (never) | Recycle each worker after N completed requests. It stops accepting, drains active HTTP connections, and exits after isolated handlers/brokers are reaped; the master then respawns it. |
@@ -62,7 +70,7 @@ them; they are never silently ignored.
 
 ## HTTP request lifecycle
 
-The request model follows PHP-FPM / `php -S`: each incoming HTTP request
+The default request lifecycle follows PHP-FPM / `php -S`: each incoming HTTP request
 re-runs the program's top-level code from a completely fresh state. Whatever
 the script writes via `echo` or `print` becomes the HTTP response body. The
 default response is `200 OK` with no `Content-Type` set; the program controls
@@ -102,7 +110,24 @@ every request and readable inside any function scope (no `global` needed):
   (values percent-decoded).
 - **`$_REQUEST`** — `$_GET` overlaid with `$_POST` (POST wins on key collision),
   matching PHP's default `request_order = "GP"`.
-- **`$_ENV`** — the process environment.
+- **`$_ENV`** - the process environment. The compiler omits the environment
+  copy when the program cannot observe it. Direct access, global-table access,
+  variable-table inspection, and eval retain a fresh copy for every request.
+  This detection includes Composer and SPL autoloaded code.
+  Calls through computed or escaped callable values conservatively retain the copy.
+  Opaque callback calls in unreferenced helpers do not force a copy. This proof
+  keeps referenced or escaped helper names, magic methods, and methods with
+  inheritance, interface, or trait obligations conservative. Reflection and
+  runtime symbol discovery also disable this exclusion.
+  A callable parameter can also avoid the copy when every possible source call
+  supplies a literal closure, first-class callable, or simple callable name.
+  This proof checks all source callers and isolates local bindings by callable
+  scope. Escaped helper identities, implicit method entries, by-reference
+  parameters, mutations, and unresolved named/spread inputs remain conservative.
+  Captures account for writes throughout their enclosing callable, including loop
+  back edges. Mutating a callable array through dimensions or references also
+  invalidates its proof.
+  `getenv()` reads the process environment independently of this copy.
 - **`php://input`** — `file_get_contents('php://input')` returns the raw request
   body (e.g. a JSON payload). An empty body returns `false`.
 
@@ -172,6 +197,9 @@ pieces fit together in a real-ish application.
 
 ## Per-request fresh state
 
+This section describes the default `--web-lifecycle=request`. Application
+lifecycle preserves application owners and prepares request state separately.
+
 Between requests, the generated PHP runtime resets its request-visible state so
 request N+1 sees the same PHP environment request N did:
 
@@ -180,6 +208,15 @@ request N+1 sees the same PHP environment request N did:
   initializers re-run on first call.
 - **Static class properties** — released; their initializers re-run at the
   start of the handler body.
+- **Output buffers and `print_r(..., true)` capture** — discarded, so a request
+  that ends with an open buffer cannot route the next request's output into
+  reclaimed request memory.
+- **Request-scoped extension state** — stream context options and notification
+  callbacks, user wrapper/filter registrations and instances, per-descriptor
+  stream tables, and abandoned JSON/serialize/exception parser state are cleared
+  before the request heap is reclaimed. The clears are repeated after the
+  cleanup destructors run, so a destructor cannot republish request memory into
+  the next request.
 
 This matches PHP-FPM for PHP globals and statics in all three models. Native
 bridge state that intentionally lives outside the PHP heap follows the selected
@@ -187,8 +224,18 @@ process lifetime; see [Concurrency model](#concurrency-model).
 
 ## Concurrency model
 
-All models start with a prefork master and `--workers N` `SO_REUSEPORT` web
-workers. The compile-time isolation model decides where PHP executes:
+All models start with a prefork master and `--workers N` web workers. On Linux,
+each worker binds its own `SO_REUSEPORT` socket and the kernel hashes new
+connections across the group. On Apple targets the master binds the only TCP
+listener and accepts every connection itself, then passes the descriptor to a
+worker over a per-worker Unix datagram channel with `SCM_RIGHTS`. Each
+descriptor carries an id; the master holds its copy until the worker
+acknowledges installation, drains acknowledgements between accepts, and releases
+a reaped worker's pending descriptors so clients retry instead of hanging.
+Handoff is round-robin and skips a worker whose channel is full, which avoids
+both Darwin's per-client-address `SO_REUSEPORT` hash and a shared accept queue
+that lets one worker pin its keep-alive connections. The compile-time isolation
+model decides where PHP executes:
 
 | Model | PHP process lifetime | Maximum parallel handlers | Response | Operational trade-off |
 |---|---|---:|---|---|
@@ -198,7 +245,7 @@ workers. The compile-time isolation model decides where PHP executes:
 
 ### Choosing a model
 
-If in doubt, start with `worker`. All three models reset PHP globals, function
+If in doubt, start with `worker`. With the default request lifecycle, all three models reset PHP globals, function
 statics, and static properties between requests; selecting `request` is necessary
 only when state outside that PHP heap must also disappear after every response.
 
@@ -246,7 +293,8 @@ worker so the master reconstructs a clean worker/broker pair.
 
 - **Graceful shutdown** — the master shuts down cleanly on `SIGINT` (Ctrl-C) and
   `SIGTERM`: it forwards termination to the workers, reaps them, and exits `0`. An
-  in-flight request may be dropped when shutdown arrives.
+  in-flight request may be dropped with the default request lifecycle. The
+  [application lifecycle](web-application.md) drains active requests before its shutdown hook.
 - **Process supervision** — the master replaces failed web workers. In isolated
   modes, the broker separately tracks, reaps, and replaces handler children.
 - **Planned recycling** — `--max-requests` stops new accepts at the quota, asks
@@ -313,23 +361,91 @@ available. The following are not yet available:
 - **Default worker mode has no intra-worker concurrency** — `handler()` runs
   synchronously. Use more workers or compile with `pool`/`request` and set
   `--handler-concurrency`.
-- **In-flight requests may drop on shutdown** — `SIGINT`/`SIGTERM` terminate
-  workers promptly; there is no graceful connection drain yet.
+- **In-flight requests may drop on shutdown with the default request lifecycle**:
+  `SIGINT`/`SIGTERM` terminate workers promptly. The application lifecycle drains
+  active requests before shutdown.
 - **Worker mode does not stream responses** — `pool` and `request` do.
 - **Execution is intentionally unbounded when `--max-execution-time 0`** — a
   handler that never returns keeps its process slot while its client remains
   connected. Client disconnect and response-write timeout cancellation still
   reclaim isolated handlers.
-- **`--listen` is TCP only** — Unix-domain-socket listening is not yet supported.
 - **Not supported in this release:** static file serving, in-process
   TLS, HTTP/2–3 — front the server with a reverse proxy for these (below).
 
 ## Behind a reverse proxy
 
-elephc-web speaks HTTP/1.1 in cleartext only. For TLS, HTTP/2/3, static asset
-serving, or virtual hosting, run it behind a reverse proxy (nginx, Caddy,
-HAProxy) that terminates TLS and forwards to `--listen`. A typical setup binds
-the server to `127.0.0.1:8080` and points the proxy at it.
+elephc-web speaks HTTP/1.1 in cleartext only. For TLS, HTTP/2-3, static asset
+serving, or virtual hosting, run it behind an edge (Ferron, nginx, Caddy,
+HAProxy) that terminates TLS and forwards to `--listen`. See
+[Edge Deployment (Ferron)](web-edge.md) for the full two-process profile, Unix
+socket setup, trust boundary, systemd, and containers.
+
+A Unix-domain socket avoids exposing a TCP port:
+
+```bash
+./app --listen unix:/run/elephc/app.sock
+```
+
+The origin creates the socket with owner/group read-write permissions (`0660`),
+so run the origin and the edge under the same group (or a shared runtime
+directory). A Unix-domain peer has no IP
+address, so `REMOTE_ADDR` and `SERVER_ADDR` are empty and `REMOTE_PORT` /
+`SERVER_PORT` are `0`; use the `--trusted-proxy` section below to derive the
+client facts from forwarded headers.
+
+## Trusted proxies
+
+By default the origin trusts only the socket peer. Forwarded headers are
+accepted from that peer but do not change `$_SERVER`: behind a proxy,
+`REMOTE_ADDR` is the proxy address (or empty for a Unix socket),
+`REQUEST_SCHEME` stays `http`, `HTTPS` is absent, and `SERVER_PORT` is the bound
+port (or `0`). This is the same baseline as PHP-FPM behind a proxy that does not
+pass real-IP parameters; frameworks such as Symfony and Laravel can still
+resolve the client from `HTTP_X_FORWARDED_*` with their own trusted-proxy
+configuration.
+
+Opt in when the origin should derive the facts itself:
+
+```bash
+./app --listen 127.0.0.1:8080 --trusted-proxy 127.0.0.1/32
+./app --listen unix:/run/elephc/app.sock --trusted-proxy unix
+```
+
+`--trusted-proxy` is repeatable and accepts comma-separated IPv4/IPv6
+addresses, CIDRs, or the token `unix` for a Unix-domain peer. Only peers in the
+allowlist may supply `Forwarded` or `X-Forwarded-*`; headers from any other peer
+are ignored entirely. A present RFC 7239 `Forwarded` header is authoritative:
+`X-Forwarded-*` is only consulted when no `Forwarded` header is present. The
+chain is walked right-to-left, so trusted intermediates are skipped and the
+rightmost untrusted client address is used. An entry that does not parse ends
+the walk and keeps the socket peer instead of discarding the whole chain;
+`ip:port` and `[v6]:port` entries are accepted. When the selected client address
+has no source port, `REMOTE_PORT` is `0` rather than the proxy's ephemeral port.
+`X-Forwarded-Proto` drives `REQUEST_SCHEME` and `HTTPS=on` (`HTTPS` is absent for
+HTTP), while `X-Forwarded-Port`, a forwarded `host=` port, or the scheme default
+(443/80) drives `SERVER_PORT`. Repeated scalar headers use the last line and its
+rightmost token, so a proxy that appends wins over the client-supplied value.
+`X-Forwarded-Host` is not used as a port authority. `HTTP_HOST` is not rewritten;
+the raw `HTTP_FORWARDED` and `HTTP_X_FORWARDED_*` keys remain visible exactly as
+sent. The edge must overwrite or remove client-supplied forwarded headers,
+including `Forwarded`, `X-Forwarded-Port`, `X-Forwarded-Host`, and `X-Real-IP`;
+otherwise a client can choose `REMOTE_ADDR`, `SERVER_PORT`, or the apparent
+authority.
+
+The closest PHP-FPM/nginx equivalents are:
+
+| PHP-FPM / nginx | elephc |
+|---|---|
+| `set_real_ip_from 10.0.0.0/8; real_ip_header X-Forwarded-For; real_ip_recursive on;` | `--trusted-proxy 10.0.0.0/8` |
+| `fastcgi_param REMOTE_ADDR $remote_addr;` after `realip` | `--trusted-proxy <proxy CIDR>` |
+| `fastcgi_param HTTPS $https if_not_empty;` | `--trusted-proxy <proxy CIDR>` with `X-Forwarded-Proto: https` |
+| `fastcgi_param SERVER_PORT $server_port;` | `--trusted-proxy <proxy CIDR>` with `X-Forwarded-Port` or the scheme default |
+| PHP-FPM over a Unix socket | `--trusted-proxy unix` |
+
+Do not trust a broad range such as `0.0.0.0/0`: any client that can reach the
+origin could then forge its own address and scheme. Use the narrowest CIDR that
+contains the proxy, or `unix` when the proxy connects over a socket. Without the
+flag, behavior is unchanged byte for byte.
 
 ## Mutual exclusions
 

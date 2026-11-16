@@ -19,8 +19,82 @@ pub(super) fn lower(
     target: RuntimeFnId,
 ) -> Option<Result<()>> {
     match target {
-        RuntimeFnId::MbStrlen
-        | RuntimeFnId::MbStrwidth
+        RuntimeFnId::MbStrposInt
+        | RuntimeFnId::MbStriposInt
+        | RuntimeFnId::MbStrrposInt
+        | RuntimeFnId::MbStrriposInt => Some({
+            crate::codegen::lower_inst::builtins::strings::lower_mb_position_int(ctx, inst, target)
+        }),
+        RuntimeFnId::MbStrstrLen
+        | RuntimeFnId::MbStristrLen
+        | RuntimeFnId::MbStrrchrLen
+        | RuntimeFnId::MbStrrichrLen => Some({
+            crate::codegen::lower_inst::builtins::strings::lower_mb_strstr_len(ctx, inst, target)
+        }),
+        RuntimeFnId::MbEncodingAliasesCount => Some({
+            crate::codegen::lower_inst::builtins::strings::lower_mb_encoding_aliases_count(ctx, inst, target)
+        }),
+        RuntimeFnId::MbInternalEncodingInt
+        | RuntimeFnId::MbLanguageInt
+        | RuntimeFnId::MbHttpOutputInt
+        | RuntimeFnId::MbRegexEncodingInt
+        | RuntimeFnId::MbSubstituteCharacterInt => Some({
+            crate::codegen::lower_inst::builtins::strings::lower_mb_setting_int(ctx, inst, target)
+        }),
+        RuntimeFnId::MbHttpInputLen => Some({
+            crate::codegen::lower_inst::builtins::strings::lower_mb_http_input_len(ctx, inst, target)
+        }),
+        RuntimeFnId::MbRegexSetOptionsLen => Some({
+            crate::codegen::lower_inst::builtins::strings::lower_mb_regex_set_options_len(ctx, inst, target)
+        }),
+        RuntimeFnId::MbGetInfoLen => Some({
+            crate::codegen::lower_inst::builtins::strings::lower_mb_get_info_len(ctx, inst, target)
+        }),
+        RuntimeFnId::MbListEncodingsCount => Some({
+            crate::codegen::lower_inst::builtins::strings::lower_mb_list_encodings_count(ctx, inst, target)
+        }),
+        RuntimeFnId::MbPreferredMimeNameLen => Some({
+            crate::codegen::lower_inst::builtins::strings::lower_mb_preferred_mime_name_len(ctx, inst, target)
+        }),
+        RuntimeFnId::MbSplitCount => Some({
+            crate::codegen::lower_inst::builtins::strings::lower_mb_split_count(ctx, inst, target)
+        }),
+        RuntimeFnId::MbEregReplaceLen => Some({
+            crate::codegen::lower_inst::builtins::strings::lower_mb_ereg_replace_len(ctx, inst, target)
+        }),
+        RuntimeFnId::MbEncodeNumericentityLen => Some({
+            crate::codegen::lower_inst::builtins::strings::lower_mb_encode_numericentity_len(ctx, inst, target)
+        }),
+        RuntimeFnId::MbDecodeNumericentityLen => Some({
+            crate::codegen::lower_inst::builtins::strings::lower_mb_decode_numericentity_len(ctx, inst, target)
+        }),
+        RuntimeFnId::MbConvertEncodingLen => Some({
+            crate::codegen::lower_inst::builtins::strings::lower_mb_convert_encoding_len(ctx, inst, target)
+        }),
+        RuntimeFnId::MbStrSplitCount => Some({
+            crate::codegen::lower_inst::builtins::strings::lower_mb_str_split_count(ctx, inst, target)
+        }),
+        RuntimeFnId::MbOrdInt => Some({
+            crate::codegen::lower_inst::builtins::strings::lower_mb_ord_int(ctx, inst, target)
+        }),
+        RuntimeFnId::MbDetectOrderSingle => Some({
+            crate::codegen::lower_inst::builtins::strings::lower_mb_detect_order_single(ctx, inst, target)
+        }),
+        RuntimeFnId::MbDetectEncodingLen => Some({
+            crate::codegen::lower_inst::builtins::strings::lower_mb_detect_encoding_len(ctx, inst, target)
+        }),
+        RuntimeFnId::MbChrLen => Some({
+            crate::codegen::lower_inst::builtins::strings::lower_mb_chr_len(ctx, inst, target)
+        }),
+        RuntimeFnId::MbStrimwidthLen => Some({
+            crate::codegen::lower_inst::builtins::strings::lower_mb_strimwidth_len(ctx, inst, target)
+        }),
+        RuntimeFnId::MbStrlen => Some({
+            crate::codegen::lower_inst::builtins::strings::lower_mb_strlen(
+                ctx, inst, target.mbstring_operation().expect("mbstring runtime operation"),
+            )
+        }),
+        RuntimeFnId::MbStrwidth
         | RuntimeFnId::MbStrtoupper
         | RuntimeFnId::MbStrtolower
         | RuntimeFnId::MbConvertCase
@@ -198,6 +272,9 @@ pub(super) fn lower(
         RuntimeFnId::StripTags => Some({
             crate::codegen::lower_inst::builtins::strings::lower_strip_tags(ctx, inst)
         }),
+        RuntimeFnId::StripTagsLen => Some({
+            crate::codegen::lower_inst::builtins::strings::lower_strip_tags_len(ctx, inst)
+        }),
         RuntimeFnId::Stripos => Some({
             crate::codegen::lower_inst::builtins::strings::lower_string_position(
                     ctx,
@@ -206,6 +283,42 @@ pub(super) fn lower(
                     "__rt_stripos",
                     crate::codegen::lower_inst::builtins::strings::StringPositionDirection::Forward,
                 )
+        }),
+        RuntimeFnId::StrposInt => Some({
+            crate::codegen::lower_inst::builtins::strings::lower_string_position_int(
+                ctx,
+                inst,
+                "strpos",
+                "__rt_strpos",
+                crate::codegen::lower_inst::builtins::strings::StringPositionDirection::Forward,
+            )
+        }),
+        RuntimeFnId::StriposInt => Some({
+            crate::codegen::lower_inst::builtins::strings::lower_string_position_int(
+                ctx,
+                inst,
+                "stripos",
+                "__rt_stripos",
+                crate::codegen::lower_inst::builtins::strings::StringPositionDirection::Forward,
+            )
+        }),
+        RuntimeFnId::StrrposInt => Some({
+            crate::codegen::lower_inst::builtins::strings::lower_string_position_int(
+                ctx,
+                inst,
+                "strrpos",
+                "__rt_strrpos",
+                crate::codegen::lower_inst::builtins::strings::StringPositionDirection::Reverse,
+            )
+        }),
+        RuntimeFnId::StrriposInt => Some({
+            crate::codegen::lower_inst::builtins::strings::lower_string_position_int(
+                ctx,
+                inst,
+                "strripos",
+                "__rt_strripos",
+                crate::codegen::lower_inst::builtins::strings::StringPositionDirection::Reverse,
+            )
         }),
         RuntimeFnId::Strripos => Some({
             crate::codegen::lower_inst::builtins::strings::lower_string_position(
@@ -234,11 +347,23 @@ pub(super) fn lower(
                     crate::codegen::lower_inst::builtins::strings::StringPositionDirection::Reverse,
                 )
         }),
+        RuntimeFnId::StrSplitCount => Some({
+            crate::codegen::lower_inst::builtins::strings::lower_str_split_count(ctx, inst)
+        }),
+        RuntimeFnId::Bin2HexLen => Some({
+            crate::codegen::lower_inst::builtins::strings::lower_bin2hex_len(ctx, inst)
+        }),
+        RuntimeFnId::StrstrLen => Some({
+            crate::codegen::lower_inst::builtins::strings::lower_strstr_len(ctx, inst)
+        }),
         RuntimeFnId::Strstr => Some({
             crate::codegen::lower_inst::builtins::strings::lower_strstr(ctx, inst)
         }),
         RuntimeFnId::ParseUrl => Some({
             crate::codegen::lower_inst::builtins::strings::lower_parse_url(ctx, inst)
+        }),
+        RuntimeFnId::ParseUrlCount => Some({
+            crate::codegen::lower_inst::builtins::strings::lower_parse_url_count(ctx, inst)
         }),
         RuntimeFnId::Substr => Some({
             crate::codegen::lower_inst::builtins::strings::lower_substr(ctx, inst)

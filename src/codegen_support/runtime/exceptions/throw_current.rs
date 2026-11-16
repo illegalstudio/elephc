@@ -84,6 +84,13 @@ pub fn emit_throw_current(emitter: &mut Emitter) {
     emitter.instruction("add x29, sp, #32");                                    // install the throw helper's frame pointer
     emit_instr_throw_hook(emitter);
     abi::emit_load_symbol_to_reg(emitter, "x19", "_exc_handler_top", 0);
+    abi::emit_load_symbol_to_reg(emitter, "x10", "_debuginfo_guard", 0);
+    emitter.instruction("cbz x10, __rt_throw_current_no_debuginfo");            // no run-time __debugInfo() call in flight: ordinary dispatch
+    emitter.instruction("orr x11, x19, #1");                                    // tag the handler top so an empty stack still compares non-zero
+    emitter.instruction("cmp x10, x11");                                        // did the exception escape the __debugInfo() call without a newer handler?
+    emitter.instruction("b.ne __rt_throw_current_no_debuginfo");                // a newer handler (a `try` inside the method) catches it as usual
+    emitter.instruction("b __rt_report_debuginfo_exception");                   // PHP: `Warning: Uncaught ...` then `__debuginfo() must return an array`
+    emitter.label("__rt_throw_current_no_debuginfo");
     emitter.instruction("cbz x19, __rt_throw_current_uncaught");                // fall back to a fatal uncaught-exception path when no handler exists
     emitter.instruction("bl __rt_pcntl_abort_dispatch");                        // restore PCNTL mask/guard state before a handler exception longjmps
     emitter.instruction("ldr x0, [x19, #8]");                                   // x0 = activation record that should survive this catch
@@ -91,7 +98,7 @@ pub fn emit_throw_current(emitter: &mut Emitter) {
     abi::emit_store_reg_to_symbol(emitter, "xzr", "_concat_off", 0);
     emitter.instruction(&format!("add x0, x19, #{}", TRY_HANDLER_JMP_BUF_OFFSET)); // x0 = jmp_buf base stored inside the active handler record
     emitter.instruction("mov x1, #1");                                          // longjmp return value = 1 to indicate exceptional control flow
-    emitter.bl_c("longjmp"); // transfer control directly back to the saved catch resume point
+    emitter.resume_exception_handler();                                         // transfer control directly back to the saved catch resume point
 
     // -- uncaught exceptions terminate the process with a fatal message --
     emitter.label("__rt_throw_current_uncaught");
@@ -114,8 +121,17 @@ fn emit_throw_current_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rbp, rsp");                                        // establish a stable frame base for the x86_64 throw helper
     emitter.instruction("push r12");                                            // preserve the active handler record pointer across helper calls
     emitter.instruction("push r13");                                            // preserve the scratch callee-saved register used for the fatal path
+    emitter.instruction("and rsp, -16");                                        // align nested calls for both called and tail-entered throw paths
     emit_instr_throw_hook(emitter);
     abi::emit_load_symbol_to_reg(emitter, "r12", "_exc_handler_top", 0);
+    abi::emit_load_symbol_to_reg(emitter, "r10", "_debuginfo_guard", 0);
+    emitter.instruction("test r10, r10");                                       // is a run-time __debugInfo() call in flight?
+    emitter.instruction("jz __rt_throw_current_no_debuginfo");                  // no: ordinary dispatch
+    emitter.instruction("mov r11, r12");                                        // copy the handler top
+    emitter.instruction("or r11, 1");                                           // tag it so an empty stack still compares non-zero
+    emitter.instruction("cmp r10, r11");                                        // did the exception escape the __debugInfo() call without a newer handler?
+    emitter.instruction("je __rt_report_debuginfo_exception");                  // PHP: `Warning: Uncaught ...` then `__debuginfo() must return an array`
+    emitter.label("__rt_throw_current_no_debuginfo");
     emitter.instruction("test r12, r12");                                       // is there an active exception handler to receive this throw?
     emitter.instruction("jz __rt_throw_current_uncaught");                      // fall back to a fatal uncaught-exception path when no handler exists
     emitter.instruction("call __rt_pcntl_abort_dispatch");                      // restore PCNTL mask/guard state before a handler exception longjmps
@@ -124,7 +140,7 @@ fn emit_throw_current_linux_x86_64(emitter: &mut Emitter) {
     abi::emit_store_zero_to_symbol(emitter, "_concat_off", 0);
     emitter.instruction(&format!("lea rdi, [r12 + {}]", TRY_HANDLER_JMP_BUF_OFFSET)); // rdi = jmp_buf base stored inside the active handler record
     emitter.instruction("mov esi, 1");                                          // longjmp return value = 1 to indicate exceptional control flow
-    emitter.bl_c("longjmp"); // transfer control directly back to the saved catch resume point
+    emitter.resume_exception_handler();                                         // transfer control directly back to the saved catch resume point
 
     emitter.label("__rt_throw_current_uncaught");
     emitter.instruction("jmp __rt_dispatch_uncaught_exception");                // invoke a registered PHP handler or report the uncaught Throwable
@@ -250,6 +266,29 @@ mod tests {
         let mut emitter = Emitter::new(Target::new(platform, arch));
         emit_throw_current(&mut emitter);
         emitter.output()
+    }
+
+    /// Tail branches and ordinary calls both enter an unwinder that makes aligned SysV calls.
+    #[test]
+    fn x86_unwinder_aligns_nested_calls_from_both_entry_shapes() {
+        let asm = emitted(Platform::Linux, Arch::X86_64);
+        let body = asm.split_once("__rt_throw_current:").unwrap().1
+            .split_once("call __rt_pcntl_abort_dispatch").unwrap().0;
+        for initial in [0i64, 8] {
+            let mut stack = initial;
+            let mut calls = 0;
+            for line in body.lines() {
+                let instruction = line.split("//").next().unwrap().trim();
+                if instruction.starts_with("push ") { stack -= 8; }
+                else if instruction == "and rsp, -16" { stack &= -16; }
+                else if instruction.starts_with("call ") {
+                    assert_eq!(stack.rem_euclid(16), 0, "entry alignment {initial}: {instruction}");
+                    calls += 1;
+                }
+            }
+            assert!(calls > 0, "the instrumentation hook must be covered");
+            assert_eq!(stack.rem_euclid(16), 0, "PCNTL cleanup alignment for entry {initial}");
+        }
     }
 
     /// Every throw tells the profiler, and pays nothing when there is none.

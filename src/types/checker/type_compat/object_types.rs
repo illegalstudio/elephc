@@ -63,24 +63,82 @@ impl Checker {
     /// Returns true if `class_name` is or inherits from `ancestor_name` (excluding self equality).
     /// Walks the parent chain via `class_info.parent`.
     pub(crate) fn is_subclass_of(&self, class_name: &str, ancestor_name: &str) -> bool {
-        let mut current = self
-            .classes
-            .get(class_name)
-            .and_then(|class| class.parent.clone());
+        // A class under construction is absent from `classes` but its parent is already known;
+        // override covariance is validated during that window.
+        let mut current = self.parent_of(class_name);
+        let mut seen = std::collections::HashSet::new();
         while let Some(parent_name) = current {
             if parent_name == ancestor_name {
                 return true;
             }
-            current = self
-                .classes
-                .get(&parent_name)
-                .and_then(|class| class.parent.clone());
+            if !seen.insert(parent_name.clone()) {
+                return false;
+            }
+            current = self.parent_of(&parent_name);
         }
         false
     }
 
-    /// Returns true if `class_name` directly implements `interface_name` (not via inheritance).
+    /// The parent of `class_name`: from its built `ClassInfo`, else from the class being built
+    /// (`pending_class_parents`), else from its declaration while schemas are still being built
+    /// (`declared_class_ancestry`).
+    fn parent_of(&self, class_name: &str) -> Option<String> {
+        if let Some(class) = self.classes.get(class_name) {
+            return class.parent.clone();
+        }
+        self.pending_class_parents.get(class_name).cloned().or_else(|| {
+            self.declared_class_ancestry.get(class_name).and_then(|(parent, _)| parent.clone())
+        })
+    }
+
+    /// Whether a class that is declared but not built yet implements `interface_name`, through
+    /// its own declaration or an ancestor's (built or declared).
+    fn declared_class_implements_interface(&self, class_name: &str, interface_name: &str) -> bool {
+        let mut current = Some(class_name.to_string());
+        let mut seen = HashSet::new();
+        while let Some(name) = current {
+            if !seen.insert(name.clone()) {
+                return false;
+            }
+            if self.classes.contains_key(&name) {
+                return self.class_implements_interface(&name, interface_name);
+            }
+            let Some((parent, implements)) = self.declared_class_ancestry.get(&name) else {
+                return false;
+            };
+            if implements.iter().any(|implemented| {
+                implemented == interface_name
+                    || self.interface_extends_interface(implemented, interface_name)
+            }) {
+                return true;
+            }
+            current = parent.clone();
+        }
+        false
+    }
+
+    /// Returns true when `class_name` is `ancestor_name` or nominally extends or implements it.
+    ///
+    /// These are the relations for which `common_object_type` keeps the ancestor side, so an
+    /// object slot typed as the ancestor can hold the class without changing its view. Generic
+    /// variance and the non-nominal `object` type are deliberately excluded: EIR lowering keeps
+    /// an indexed object element only for this same nominal relation
+    /// (`ir_lower::stmt::array_write_storage`).
+    pub(crate) fn object_is_a(&self, class_name: &str, ancestor_name: &str) -> bool {
+        class_name == ancestor_name
+            || self.is_subclass_of(class_name, ancestor_name)
+            || (self.interfaces.contains_key(ancestor_name)
+                && (self.class_implements_interface(class_name, ancestor_name)
+                    || self.interface_extends_interface(class_name, ancestor_name)))
+    }
+
+    /// Returns true if `class_name` implements `interface_name`: from the built class's
+    /// flattened interface list (parents and interface parents included), or, for a class the
+    /// build walk has not reached yet, from its declared ancestry.
     pub(crate) fn class_implements_interface(&self, class_name: &str, interface_name: &str) -> bool {
+        if !self.classes.contains_key(class_name) {
+            return self.declared_class_implements_interface(class_name, interface_name);
+        }
         self.classes.get(class_name).is_some_and(|class_info| {
             class_info
                 .interfaces
@@ -103,7 +161,13 @@ impl Checker {
             return type_name == interface_name
                 || self.interface_extends_interface(type_name, interface_name);
         }
-        false
+        self.class_implements_interface(type_name, interface_name)
+    }
+
+    /// Accepts ordinary ArrayAccess objects and reviewed internal dimension handlers.
+    pub(crate) fn object_type_supports_dimensions(&self, type_name: &str) -> bool {
+        crate::types::builtin_classes::has_native_dimensions(type_name, &self.classes)
+            || self.object_type_implements_interface(type_name, "ArrayAccess")
     }
 
     /// Returns true if `interface_name` is or transitively extends `ancestor_name`.
@@ -157,20 +221,19 @@ impl Checker {
 
     /// Returns true if `type_name` (a class or interface) implements `Iterator` or
     /// `IteratorAggregate`, which are the interfaces that make a type usable in `foreach`.
+    /// A class the build walk has not reached yet answers from its declared ancestry, so an
+    /// `iterable` return may be narrowed to it.
     pub(crate) fn object_type_implements_iterable(&self, type_name: &str) -> bool {
         let type_name = type_name.trim_start_matches('\\');
         if canonical_builtin_iterable_interface_name(type_name).is_some() {
             return true;
         }
-        if self.classes.contains_key(type_name) {
-            return self.class_implements_interface(type_name, "Iterator")
-                || self.class_implements_interface(type_name, "IteratorAggregate");
-        }
         if self.interfaces.contains_key(type_name) {
             return self.interface_extends_interface(type_name, "Iterator")
                 || self.interface_extends_interface(type_name, "IteratorAggregate");
         }
-        false
+        self.class_implements_interface(type_name, "Iterator")
+            || self.class_implements_interface(type_name, "IteratorAggregate")
     }
 
     /// Finds the most specific common ancestor object type shared by all type names in
@@ -359,6 +422,34 @@ impl Checker {
         None
     }
 
+    /// The classes whose `prop_name` slot is the one `declaring_class` declares (see
+    /// `Checker::property_sharers_index`).
+    fn property_sharers(&mut self, prop_name: &str, declaring_class: &str) -> Vec<String> {
+        let class_count = self.classes.len();
+        if self
+            .property_sharers_index
+            .as_ref()
+            .is_none_or(|(built_for, _)| *built_for != class_count)
+        {
+            let mut index: std::collections::HashMap<(String, String), Vec<String>> =
+                std::collections::HashMap::new();
+            for (name, info) in &self.classes {
+                for (property, owner) in &info.property_declaring_classes {
+                    index
+                        .entry((property.clone(), owner.clone()))
+                        .or_default()
+                        .push(name.clone());
+                }
+            }
+            self.property_sharers_index = Some((class_count, index));
+        }
+        self.property_sharers_index
+            .as_ref()
+            .and_then(|(_, index)| index.get(&(prop_name.to_string(), declaring_class.to_string())))
+            .cloned()
+            .unwrap_or_default()
+    }
+
     /// Propagates a resolved constructor argument type into the corresponding constructor
     /// parameter and property slot for all classes that share an inherited property from
     /// `declaring_class`. Used to sharpen types across an inheritance hierarchy after
@@ -396,25 +487,26 @@ impl Checker {
             return;
         };
 
-        for class_info in self.classes.values_mut() {
-            let shares_inherited_property = class_info
-                .property_declaring_classes
-                .get(&prop_name)
-                .is_some_and(|owner| owner == &declaring_class);
-
-            if !shares_inherited_property {
+        // The promoted property has no default expression, so this write types its slot, and
+        // the backend builds the slot's reads and writes from it: an `array<int|null>` argument
+        // (`new Holder($a)` after `$a[] = $n ?? null`) is stored with boxed elements, as every
+        // other untyped slot update does (#1944). The parameter takes the same type so the
+        // constructor body's `$this->items = $items` sees no change.
+        let stored_ty = if param_is_ref {
+            PhpType::Mixed
+        } else {
+            crate::types::box_tagged_scalar_array_elements(arg_ty.clone())
+        };
+        for sharer in self.property_sharers(&prop_name, &declaring_class) {
+            let Some(class_info) = self.classes.get_mut(&sharer) else {
                 continue;
-            }
+            };
 
             let property_has_declared_type = class_info.visible_property_is_declared(&prop_name);
             if !property_has_declared_type {
                 if let Some(slot) = class_info.visible_property_index(&prop_name) {
                     if let Some(prop) = class_info.properties.get_mut(slot) {
-                        prop.1 = if param_is_ref {
-                            PhpType::Mixed
-                        } else {
-                            arg_ty.clone()
-                        };
+                        prop.1 = stored_ty.clone();
                     }
                 }
             }
@@ -427,11 +519,7 @@ impl Checker {
                 if let Some(sig) = class_info.methods.get_mut("__construct") {
                     if !sig.declared_params.get(param_index).copied().unwrap_or(false) {
                         if let Some((_, param_ty)) = sig.params.get_mut(param_index) {
-                            *param_ty = if param_is_ref {
-                                PhpType::Mixed
-                            } else {
-                                arg_ty.clone()
-                            };
+                            *param_ty = stored_ty.clone();
                         }
                     }
                 }

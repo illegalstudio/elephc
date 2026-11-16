@@ -15,6 +15,7 @@ const FRAME: usize = 48;
 const SOURCE: usize = 8;
 const OUTPUT: usize = 16;
 const PENDING: usize = 24;
+const CAUGHT: usize = 32;
 const BODY_FRAME: usize = 96;
 const CONTEXT: usize = 8;
 const CURSOR: usize = 16;
@@ -48,11 +49,16 @@ pub fn emit_array_flip_boxed(emitter: &mut Emitter) {
     abi::emit_call_label(emitter, "__rt_incref");
     abi::emit_store_zero_to_local_slot(emitter, OUTPUT);
     abi::emit_store_zero_to_local_slot(emitter, PENDING);
+    abi::emit_store_zero_to_local_slot(emitter, CAUGHT);
     abi::emit_frame_slot_address(emitter, result, OUTPUT);
     exceptions::emit_guarded_cleanup_call(emitter, "__rt_array_flip_boxed_body", result, PENDING);
+    record_caught(emitter, "__rt_array_flip_boxed_body_returned");
     abi::load_at_offset(emitter, result, SOURCE);
     exceptions::emit_guarded_cleanup_call(emitter, "__rt_decref_any", result, PENDING);
+    record_caught(emitter, "__rt_array_flip_boxed_source_released");
     abi::load_at_offset(emitter, result, PENDING);
+    abi::emit_branch_if_int_result_nonzero(emitter, "__rt_array_flip_boxed_throw");
+    abi::load_at_offset(emitter, result, CAUGHT);
     abi::emit_branch_if_int_result_nonzero(emitter, "__rt_array_flip_boxed_throw");
     abi::load_at_offset(emitter, result, OUTPUT);
     abi::emit_frame_restore(emitter, FRAME);
@@ -75,6 +81,15 @@ pub fn emit_array_flip_boxed(emitter: &mut Emitter) {
     abi::emit_frame_restore(emitter, FRAME);
     abi::emit_return(emitter);
     emit_body(emitter);
+}
+
+/// Remembers a null-object escape even when the guarded helper has no Throwable owner to store.
+fn record_caught(emitter: &mut Emitter, done: &str) {
+    let result = abi::int_result_reg(emitter);
+    abi::emit_branch_if_int_result_zero(emitter, done);
+    abi::emit_load_int_immediate(emitter, result, 1);
+    abi::store_at_offset(emitter, result, CAUGHT);
+    emitter.label(done);
 }
 
 /// Populates the boundary's output slot while borrowing its retained source snapshot.
@@ -191,6 +206,8 @@ mod tests {
             assert_eq!(boundary.matches("__rt_cleanup_invoke").count(), 3, "{name}");
             assert!(boundary.find("__rt_incref").unwrap() < boundary.find("__rt_cleanup_invoke").unwrap(), "{name}");
             assert!(boundary.contains("__rt_throw_current"), "{name}");
+            assert!(boundary.contains("__rt_array_flip_boxed_body_returned"), "{name}");
+            assert!(boundary.contains("__rt_array_flip_boxed_source_released"), "{name}");
             for helper in ["__rt_array_iter_next", "__rt_mixed_unbox", "__rt_hash_normalize_key", "__rt_diag_warning"] {
                 assert!(body.contains(helper), "{name}: {helper}");
             }

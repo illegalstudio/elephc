@@ -1,8 +1,6 @@
 ---
 title: "imagecropauto() - internals"
 description: "Compiler internals for imagecropauto(): lowering path, type checks, and runtime helpers."
-sidebar:
-  order: 496
 ---
 
 ## `imagecropauto()` - internals
@@ -10,7 +8,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`crates/elephc-builtin-contract/src/catalog_data.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-builtin-contract/src/catalog_data.rs)
-- **Lowering**: [`src/image_prelude.rs`:3149](https://github.com/illegalstudio/elephc/blob/main/src/image_prelude.rs#L3149) (`imagecropauto`)
+- **Lowering**: [`src/image_prelude.rs`](https://github.com/illegalstudio/elephc/blob/main/src/image_prelude.rs) (`imagecropauto`)
 - **Function symbol**: `imagecropauto()`
 
 

@@ -60,7 +60,7 @@ pub fn emit_fiber_entry(emitter: &mut Emitter) {
     emitter.instruction("mov x10, sp");                                         // x10 = address of the handler base
     abi::emit_store_reg_to_symbol(emitter, "x10", "_exc_handler_top", 0); // push the boundary handler onto the global handler chain
     emitter.instruction(&format!("add x0, sp, #{}", TRY_HANDLER_JMP_BUF_OFFSET)); // x0 = jmp_buf address inside the handler (offset 24)
-    emitter.bl_c("setjmp"); // setjmp returns 0 the first time; non-zero on a longjmp from __rt_throw_current
+    emitter.save_exception_handler();                                           // setjmp returns 0 the first time; non-zero on a longjmp from __rt_throw_current
     emitter.instruction("cbnz x0, __rt_fiber_entry_escape");                    // a non-zero return means an exception unwound past every user handler
 
     // -- mark the fiber Running and load its captured callable --
@@ -106,7 +106,10 @@ pub fn emit_fiber_entry(emitter: &mut Emitter) {
 
     // -- escape path: longjmp landed here because no user handler matched --
     emitter.label("__rt_fiber_entry_escape");
-    abi::emit_load_symbol_to_reg(emitter, "x10", "_exc_value", 0); // x10 = the Throwable that was unwound past every user catch
+    abi::emit_load_symbol_to_reg(emitter, "x0", "_exc_value", 0);
+    abi::emit_store_zero_to_symbol(emitter, "_exc_value", 0);
+    abi::emit_call_label(emitter, "__rt_coroutine_unwind_result");
+    abi::emit_reg_move(emitter, "x10", "x0"); // x10 = the Throwable that was unwound past every user catch
     abi::emit_load_symbol_to_reg(emitter, "x19", "_fiber_current", 0); // x19 = current fiber* (preserved through longjmp via the global)
     emitter.instruction(&format!("str x10, [x19, #{}]", FIBER_PENDING_THROW_OFFSET)); // park the escaped Throwable so the caller's helper can re-raise it
     emitter.instruction(&format!("str xzr, [x19, #{}]", FIBER_TRANSFER_VALUE_OFFSET)); // wipe transfer_value.lo so callers do not see stale data
@@ -156,7 +159,7 @@ fn emit_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov r10, rsp");                                        // r10 = address of the handler base
     abi::emit_store_reg_to_symbol(emitter, "r10", "_exc_handler_top", 0); // push the boundary handler onto the global handler chain
     emitter.instruction(&format!("lea rdi, [rsp + {}]", TRY_HANDLER_JMP_BUF_OFFSET)); // rdi = jmp_buf address inside the handler
-    emitter.bl_c("setjmp"); // setjmp returns 0 first, non-zero after longjmp
+    emitter.save_exception_handler();                                           // setjmp returns 0 first, non-zero after longjmp
     emitter.instruction("test eax, eax");                                       // did control arrive through longjmp?
     emitter.instruction("jne __rt_fiber_entry_escape");                         // non-zero setjmp result means an exception escaped
 
@@ -208,7 +211,10 @@ fn emit_x86_64(emitter: &mut Emitter) {
 
     // -- escape path: longjmp landed here because no user handler matched --
     emitter.label("__rt_fiber_entry_escape");
-    abi::emit_load_symbol_to_reg(emitter, "r10", "_exc_value", 0); // r10 = Throwable unwound past every user catch
+    abi::emit_load_symbol_to_reg(emitter, "rdi", "_exc_value", 0);
+    abi::emit_store_zero_to_symbol(emitter, "_exc_value", 0);
+    abi::emit_call_label(emitter, "__rt_coroutine_unwind_result");
+    abi::emit_reg_move(emitter, "r10", "rax"); // r10 = Throwable unwound past every user catch
     abi::emit_load_symbol_to_reg(emitter, "r12", "_fiber_current", 0); // r12 = current fiber* preserved through the global
     emitter.instruction(&format!(
         "mov QWORD PTR [r12 + {}], r10",

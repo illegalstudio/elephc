@@ -93,18 +93,57 @@ fn skip_serialized_value(data: &[u8], pos: usize) -> usize {
             }
         }
         b'd' => {
-            // d:<float>;
+            // d:<float>; — validate the numeric grammar instead of scanning to
+            // the first ';'. A `php` session key may itself start with `d:`
+            // (e.g. `d:cart|i:1;`), and a permissive float scan would mistake
+            // the whole entry for one serialized value.
             let mut p = pos + 1;
             if p < data.len() && data[p] == b':' {
                 p += 1;
             } else {
                 return pos;
             }
-            // Skip the float body until ';'.
-            while p < data.len() && data[p] != b';' {
+            if p < data.len() && (data[p] == b'+' || data[p] == b'-') {
                 p += 1;
             }
-            if p < data.len() && data[p] == b';' {
+            let inf_or_nan = data
+                .get(p..)
+                .is_some_and(|rest| rest.starts_with(b"INF") || rest.starts_with(b"NAN"));
+            if inf_or_nan {
+                p += 3;
+            } else {
+                let digits_start = p;
+                while p < data.len() && data[p].is_ascii_digit() {
+                    p += 1;
+                }
+                if p == digits_start {
+                    return pos;
+                }
+                if p < data.len() && data[p] == b'.' {
+                    p += 1;
+                    let fraction_start = p;
+                    while p < data.len() && data[p].is_ascii_digit() {
+                        p += 1;
+                    }
+                    if p == fraction_start {
+                        return pos;
+                    }
+                }
+                if p < data.len() && (data[p] == b'e' || data[p] == b'E') {
+                    p += 1;
+                    if p < data.len() && (data[p] == b'+' || data[p] == b'-') {
+                        p += 1;
+                    }
+                    let exponent_start = p;
+                    while p < data.len() && data[p].is_ascii_digit() {
+                        p += 1;
+                    }
+                    if p == exponent_start {
+                        return pos;
+                    }
+                }
+            }
+            if data.get(p) == Some(&b';') {
                 p + 1
             } else {
                 pos
@@ -345,10 +384,29 @@ fn skip_serialized_value(data: &[u8], pos: usize) -> usize {
     }
 }
 
+/// Returns true when `data` is exactly one complete serialized value.
+///
+/// A `php_serialize` session file is a single serialized array, while a `php`
+/// file is a sequence of `key|value` pairs. Refusing a whole-buffer serialized
+/// value stops a file written with one serializer from being reinterpreted as
+/// entries by a reader configured for another (the php2shell handler-mismatch
+/// chain), even when an application stored serialized-looking data.
+fn whole_buffer_is_serialized_value(data: &[u8]) -> bool {
+    !data.is_empty()
+        && matches!(
+            data[0],
+            b'N' | b'b' | b'i' | b'd' | b's' | b'a' | b'O' | b'C'
+        )
+        && skip_serialized_value(data, 0) == data.len()
+}
+
 /// Parses the session data format (`key|serialized_value` pairs) and returns a
 /// list of `(key_bytes, value_bytes)` slices. The key is everything before the
 /// first `|`; the value is one complete serialized value after the `|`.
 fn parse_session_entries(data: &[u8]) -> Vec<(&[u8], &[u8])> {
+    if whole_buffer_is_serialized_value(data) {
+        return Vec::new();
+    }
     let mut entries = Vec::new();
     let mut pos = 0;
     while pos < data.len() {
@@ -383,6 +441,9 @@ fn parse_session_entries(data: &[u8]) -> Vec<(&[u8], &[u8])> {
 /// `skip_serialized_value` for the value grammar (identical to the `php`
 /// handler).
 fn parse_session_entries_binary(data: &[u8]) -> Vec<(&[u8], &[u8])> {
+    if whole_buffer_is_serialized_value(data) {
+        return Vec::new();
+    }
     let mut entries = Vec::new();
     let mut pos = 0;
     while pos < data.len() {
@@ -608,6 +669,71 @@ mod tests {
         // a:1:{i:0;a:1:{i:0;i:1;}}
         let nested = b"a:1:{i:0;a:1:{i:0;i:1;}}";
         assert_eq!(skip_serialized_value(nested, 0), nested.len());
+    }
+
+    /// Float bodies are validated as floats. Scanning to the first `;` used to
+    /// accept a `php` session key such as `d:cart` as a whole serialized value,
+    /// which made the cross-format guard drop the saved session.
+    #[test]
+    fn float_grammar_does_not_swallow_a_php_session_key() {
+        for float in [
+            &b"d:3.14;"[..],
+            b"d:-1.5;",
+            b"d:1;",
+            b"d:1.0E+25;",
+            b"d:-1.0e-5;",
+            b"d:INF;",
+            b"d:-INF;",
+            b"d:NAN;",
+        ] {
+            assert_eq!(
+                skip_serialized_value(float, 0),
+                float.len(),
+                "valid float must be skipped completely: {:?}",
+                String::from_utf8_lossy(float)
+            );
+        }
+        assert_eq!(
+            skip_serialized_value(b"d:cart;", 0),
+            0,
+            "non-numeric float body must not advance"
+        );
+        assert_eq!(
+            parse_session_entries(b"d:cart|i:1;").len(),
+            1,
+            "a php key starting with d: must still parse as an entry"
+        );
+        assert_eq!(
+            parse_session_entries(b"d:1.5|i:1;").len(),
+            1,
+            "a php key that looks like a float must still parse as an entry"
+        );
+    }
+
+    /// A `php_serialize` file is one serialized array, not `key|value` pairs.
+    /// Reinterpreting it with the `php` (or `php_binary`) handler is the
+    /// handler-mismatch half of php2shell, so the whole-buffer shape is refused.
+    #[test]
+    fn a_php_serialize_file_is_not_reinterpreted_as_entries() {
+        let value = b"x|O:4:\"Evil\":1:{s:3:\"cmd\";s:1:\"x\";}";
+        let mut data = format!("a:1:{{s:17:\"upload_progress_k\";s:{}:\"", value.len()).into_bytes();
+        data.extend_from_slice(value);
+        data.extend_from_slice(b"\";}");
+        assert!(
+            whole_buffer_is_serialized_value(&data),
+            "fixture must be one complete serialized array"
+        );
+        assert!(
+            parse_session_entries(&data).is_empty(),
+            "the php handler must not turn a php_serialize file into entries"
+        );
+        assert!(
+            parse_session_entries_binary(&data).is_empty(),
+            "the php_binary handler must not turn a php_serialize file into entries"
+        );
+
+        // A real php-format file still parses normally.
+        assert_eq!(parse_session_entries(b"a|i:1;b|s:3:\"xyz\";").len(), 2);
     }
 
     /// Regression: a truncated collection with an attacker-controlled element

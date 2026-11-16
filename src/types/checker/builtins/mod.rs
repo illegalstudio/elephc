@@ -11,6 +11,8 @@
 pub(crate) mod arrays;
 mod callables;
 pub(crate) use callables::callback_dummy_arg_for_type;
+pub(super) use callables::is_callback_argument_placeholder;
+pub(super) use callables::callback_args_have_opaque_placeholder;
 pub(crate) mod catalog;
 pub(crate) mod io;
 mod language_constructs;
@@ -106,9 +108,11 @@ impl Checker {
         // eagerly inferred by argument normalization. Their handlers inspect the
         // raw operands directly.
         let builtin_key = crate::names::php_symbol_key(name.trim_start_matches('\\'));
-        if self.has_function_decl_folded(name)
-            && crate::builtins::registry::lookup(name).is_some()
+        // The declaration lookup scans every declared function, so it runs last: almost every
+        // builtin is available on the target, which settles the condition without it.
+        if crate::builtins::registry::lookup(name).is_some()
             && !catalog::builtin_is_available_for_target(name, self.target)
+            && self.has_function_decl_folded(name)
         {
             return Ok(None);
         }
@@ -233,17 +237,42 @@ impl Checker {
                     continue;
                 }
                 // `sort($a)`, `preg_match(..., $m)` and friends reach this local through its
-                // storage, so the local is never kill/retype eligible in this body.
+                // storage, so the local is never kill/retype eligible in this body. Registry
+                // builtins do not retain the cell, so this deliberately leaves the narrower
+                // non-builtin alias set unchanged.
                 //
                 // Recorded BEFORE the spread bail-out below, not after it. `sort(...$args)` hands
                 // the callee the very same by-reference parameter, so `$args` is aliased just as
                 // surely; only the LVALUE-SHAPE diagnostic underneath has nothing to say about a
                 // spread, which is what that bail-out is for.
-                self.record_reference_alias_root(arg);
+                let can_widen_local = self.by_ref_argument_can_widen_local_to_mixed(arg)
+                    || self.boxed_reference_promotion_pending(arg, span);
+                self.record_builtin_reference_alias_root(arg);
                 if matches!(arg.kind, ExprKind::Spread(_)) {
                     continue;
                 }
                 if self.is_builtin_by_ref_argument_lvalue(arg) {
+                    // A mixed reference can replace a guarded value and require a wider cell.
+                    // Publish the same storage transition as an ordinary mixed-reference call.
+                    if def.params.get(index).is_some_and(|(_, ty)| *ty == PhpType::Mixed)
+                        && self.guarded_local_storage_type(arg, env)
+                            .is_some_and(|storage| !Self::is_raw_non_null_contract(storage))
+                    {
+                        let actual = self.infer_type(arg, env)?;
+                        let output = if def.spec.semantics.preserves_array_reference(index)
+                            && (actual.is_php_array()
+                                || matches!(actual, PhpType::Array(_) | PhpType::AssocArray { .. }))
+                        {
+                            PhpType::php_array()
+                        } else {
+                            PhpType::Mixed
+                        };
+                        self.require_boxed_by_ref_storage(
+                            &output, &actual, arg, env, can_widen_local, false,
+                            &format!("Builtin '{}'", name),
+                        )?;
+                        self.record_boxed_reference_output(arg, &output, &actual, span, env, false)?;
+                    }
                     continue;
                 }
                 let param_name = def

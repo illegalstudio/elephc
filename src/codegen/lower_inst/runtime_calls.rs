@@ -25,6 +25,27 @@ pub(super) fn lower(
     target: RuntimeCallTarget,
 ) -> Result<()> {
     match target {
+        RuntimeCallTarget::ReferenceCellMutationLayout =>
+            super::reference_payloads::lower_mutation_layout(ctx, inst),
+        RuntimeCallTarget::ReferencePropertyCoerce { class_id, slot, is_static } => {
+            super::objects::lower_reference_property_coercion(ctx, inst, class_id, slot, is_static)
+        }
+        RuntimeCallTarget::CallableParameterIsByRef =>
+            super::builtins::eval::lower_callable_parameter_is_by_ref(ctx, inst),
+        RuntimeCallTarget::SplStorageHasAttachedWriteFetch => super::spl_storage_write_fetch::lower(ctx, inst),
+        RuntimeCallTarget::PhpextObjectRelease => {
+            ctx.load_value_to_result(expect_operand(inst, 0)?)?;
+            abi::emit_call_label(ctx.emitter, "__rt_decref_object");
+            Ok(())
+        }
+        RuntimeCallTarget::PhpextPublishObjectRoots => {
+            abi::emit_call_label(ctx.emitter, "__rt_gc_phpext_roots");
+            Ok(())
+        }
+        RuntimeCallTarget::PhpextCollectObjectCycles => {
+            abi::emit_call_label(ctx.emitter, "__rt_gc_collect_cycles_explicit");
+            Ok(())
+        }
         RuntimeCallTarget::WeakObjectId => {
             let receiver = expect_operand(inst, 0)?;
             ctx.load_value_to_result(receiver)?;
@@ -49,6 +70,20 @@ pub(super) fn lower(
         }
         RuntimeCallTarget::ThrowableInitialize => lower_throwable_initialize(ctx, inst),
         RuntimeCallTarget::ExceptionChain => lower_exception_chain(ctx, inst),
+        RuntimeCallTarget::ExceptionFinallyChain => lower_exception_finally_chain(ctx, inst),
+        RuntimeCallTarget::ExceptionDiscard => lower_exception_discard(ctx, inst),
+        RuntimeCallTarget::ExceptionCatchHostReplacement => {
+            lower_exception_catch_host_replacement(ctx, inst)
+        }
+        RuntimeCallTarget::PropertyHashRead => {
+            super::objects::lower_property_hash_read(ctx, inst)
+        }
+        RuntimeCallTarget::PropertyHashContains => {
+            super::objects::lower_property_hash_contains(ctx, inst)
+        }
+        RuntimeCallTarget::PropertyHashFetchForWrite => {
+            super::objects::lower_property_hash_fetch_for_write(ctx, inst)
+        }
         RuntimeCallTarget::ArrayFetchForWrite
         | RuntimeCallTarget::ArrayFetchForWriteAlreadyDiagnosed => {
             super::lower_array_fetch_for_write_runtime_call(ctx, inst, false)
@@ -60,7 +95,8 @@ pub(super) fn lower(
         RuntimeCallTarget::StringWriteOffset => super::string_write_offsets::lower_offset(ctx, inst),
         RuntimeCallTarget::WriteDiagnostic => super::string_write_offsets::lower_diagnostic(ctx, inst),
         RuntimeCallTarget::MixedArrayCellHasLiveOwner => super::runtime_array_liveness::lower(ctx, inst),
-        RuntimeCallTarget::MixedCellHasOtherOwner => lower_mixed_cell_has_other_owner(ctx, inst),
+        RuntimeCallTarget::MixedCellHasOtherOwner
+        | RuntimeCallTarget::ObjectCellHasOtherOwner => lower_heap_cell_has_other_owner(ctx, inst),
         RuntimeCallTarget::MixedCellPromoteToHash(sort) => {
             lower_mixed_cell_promote_to_hash(ctx, inst, sort, false)
         }
@@ -68,7 +104,14 @@ pub(super) fn lower(
             lower_mixed_cell_promote_to_hash(ctx, inst, sort, true)
         }
         RuntimeCallTarget::MixedCellClone => lower_mixed_cell_clone(ctx, inst),
+        RuntimeCallTarget::MixedBitNot => {
+            let value = expect_operand(inst, 0)?;
+            ctx.load_value_to_result(value)?;
+            abi::emit_call_label(ctx.emitter, "__rt_mixed_bit_not");
+            store_if_result(ctx, inst)
+        }
         RuntimeCallTarget::MixedCellResolveForWrite => lower_mixed_cell_resolve_for_write(ctx, inst),
+        RuntimeCallTarget::MixedCellCopyForWrite => lower_mixed_cell_copy_for_write(ctx, inst),
         RuntimeCallTarget::ArrayUnpackToHash => lower_array_unpack_to_hash(ctx, inst),
         RuntimeCallTarget::ExceptionGuardOwned => super::exception_instructions::lower_guard_owned(ctx, inst),
         RuntimeCallTarget::ExceptionUnguardOwned => super::exception_instructions::lower_unguard_owned(ctx, inst),
@@ -78,8 +121,12 @@ pub(super) fn lower(
         | RuntimeCallTarget::CallArgumentCollectPositionals
         | RuntimeCallTarget::CallArgumentCollectNamed => super::call_argument_unpack::lower(ctx, inst, target),
         RuntimeCallTarget::UnaryString(runtime) => lower_unary_string(ctx, inst, runtime),
+        RuntimeCallTarget::StringOffsetSet => lower_string_offset_set(ctx, inst),
         RuntimeCallTarget::Pcntl(target) => {
             crate::codegen::lower_inst::builtins::pcntl::lower(ctx, inst, target)
+        }
+        RuntimeCallTarget::PositionalImplode => {
+            super::builtins::strings::lower_implode(ctx, inst, "implode")
         }
         RuntimeCallTarget::Function(target) => super::runtime_functions::lower(ctx, inst, target),
         RuntimeCallTarget::ProfiledFunction { target, .. } => {
@@ -88,8 +135,133 @@ pub(super) fn lower(
     }
 }
 
-/// Checks the uniform cell header without adding an owner that would change the answer.
-fn lower_mixed_cell_has_other_owner(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+/// Notifies the PHP adapter before performing ordinary native exception chaining.
+fn lower_exception_finally_chain(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+) -> Result<()> {
+    if inst.operands.len() != 2 {
+        return Err(CodegenIrError::invalid_module(
+            "finally exception chaining requires two operands",
+        ));
+    }
+    if ctx.emitter.phpext_output {
+        let replacement = expect_operand(inst, 0)?;
+        let pending = expect_operand(inst, 1)?;
+        let result = abi::int_result_reg(ctx.emitter);
+        ctx.load_value_to_result(pending)?;
+        abi::emit_push_reg(ctx.emitter, result);
+        ctx.load_value_to_result(replacement)?;
+        abi::emit_push_reg(ctx.emitter, result);
+        let replacement_arg = abi::int_arg_reg_name(ctx.emitter.target, 0);
+        let pending_arg = abi::int_arg_reg_name(ctx.emitter.target, 1);
+        abi::emit_load_temporary_stack_slot(ctx.emitter, replacement_arg, 0);
+        abi::emit_load_temporary_stack_slot(ctx.emitter, pending_arg, 16);
+        ctx.emitter.bl_c("elephc_php_finally_chain");
+        abi::emit_load_temporary_stack_slot(ctx.emitter, result, 16);
+        abi::emit_call_label(ctx.emitter, "__rt_throwable_previous");
+        let pending_visit = ctx.next_label("finally_chain_pending_visit");
+        let pending_done = ctx.next_label("finally_chain_pending_done");
+        abi::emit_branch_if_int_result_zero(ctx.emitter, &pending_done);
+        ctx.emitter.label(&pending_visit);
+        abi::emit_push_reg(ctx.emitter, result);
+        abi::emit_reg_move(
+            ctx.emitter,
+            abi::int_arg_reg_name(ctx.emitter.target, 0),
+            result,
+        );
+        ctx.emitter.bl_c("elephc_php_finally_chain_pending");
+        abi::emit_pop_reg(ctx.emitter, result);
+        abi::emit_call_label(ctx.emitter, "__rt_throwable_previous");
+        abi::emit_branch_if_int_result_nonzero(ctx.emitter, &pending_visit);
+        ctx.emitter.label(&pending_done);
+        let replacement_visit = ctx.next_label("finally_chain_replacement_visit");
+        let replacement_done = ctx.next_label("finally_chain_replacement_done");
+        abi::emit_load_temporary_stack_slot(ctx.emitter, result, 16);
+        abi::emit_branch_if_int_result_nonzero(ctx.emitter, &replacement_done);
+        abi::emit_load_temporary_stack_slot(ctx.emitter, result, 0);
+        abi::emit_call_label(ctx.emitter, "__rt_throwable_previous");
+        abi::emit_branch_if_int_result_zero(ctx.emitter, &replacement_done);
+        ctx.emitter.label(&replacement_visit);
+        abi::emit_push_reg(ctx.emitter, result);
+        abi::emit_reg_move(
+            ctx.emitter,
+            abi::int_arg_reg_name(ctx.emitter.target, 0),
+            result,
+        );
+        ctx.emitter
+            .bl_c("elephc_php_finally_chain_replacement");
+        abi::emit_pop_reg(ctx.emitter, result);
+        abi::emit_call_label(ctx.emitter, "__rt_throwable_previous");
+        abi::emit_branch_if_int_result_nonzero(ctx.emitter, &replacement_visit);
+        ctx.emitter.label(&replacement_done);
+        abi::emit_release_temporary_stack(ctx.emitter, 32);
+    }
+    lower_exception_chain(ctx, inst)
+}
+
+/// Tells the PHP adapter when a native `finally` jump discarded a host escape or replacement.
+fn lower_exception_discard(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+    if inst.operands.len() != 1 {
+        return Err(CodegenIrError::invalid_module(
+            "exception discard notification requires one operand",
+        ));
+    }
+    if ctx.emitter.phpext_output {
+        let discarded = expect_operand(inst, 0)?;
+        let result = abi::int_result_reg(ctx.emitter);
+        ctx.load_value_to_result(discarded)?;
+        abi::emit_push_reg(ctx.emitter, result);
+        ctx.emitter.bl_c("elephc_php_discard_exception_begin");
+        abi::emit_pop_reg(ctx.emitter, result);
+        let visit = ctx.next_label("discard_host_replacement_visit");
+        ctx.emitter.label(&visit);
+        abi::emit_push_reg(ctx.emitter, result);
+        abi::emit_reg_move(
+            ctx.emitter,
+            abi::int_arg_reg_name(ctx.emitter.target, 0),
+            result,
+        );
+        ctx.emitter.bl_c("elephc_php_discard_exception");
+        abi::emit_pop_reg(ctx.emitter, result);
+        abi::emit_call_label(ctx.emitter, "__rt_throwable_previous");
+        abi::emit_branch_if_int_result_nonzero(ctx.emitter, &visit);
+    }
+    Ok(())
+}
+
+/// Tells the PHP adapter when a caught native chain contains a replacement exception.
+fn lower_exception_catch_host_replacement(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+) -> Result<()> {
+    if inst.operands.len() != 1 {
+        return Err(CodegenIrError::invalid_module(
+            "caught host replacement notification requires one operand",
+        ));
+    }
+    if ctx.emitter.phpext_output {
+        let caught = expect_operand(inst, 0)?;
+        let result = abi::int_result_reg(ctx.emitter);
+        ctx.load_value_to_result(caught)?;
+        let visit = ctx.next_label("catch_host_replacement_visit");
+        ctx.emitter.label(&visit);
+        abi::emit_push_reg(ctx.emitter, result);
+        abi::emit_reg_move(
+            ctx.emitter,
+            abi::int_arg_reg_name(ctx.emitter.target, 0),
+            result,
+        );
+        ctx.emitter.bl_c("elephc_php_catch_host_replacement");
+        abi::emit_pop_reg(ctx.emitter, result);
+        abi::emit_call_label(ctx.emitter, "__rt_throwable_previous");
+        abi::emit_branch_if_int_result_nonzero(ctx.emitter, &visit);
+    }
+    Ok(())
+}
+
+/// Checks a uniform heap-cell header without adding an owner that would change the answer.
+fn lower_heap_cell_has_other_owner(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     ctx.load_value_to_result(expect_operand(inst, 0)?)?;
     let done = ctx.next_label("mixed_cell_other_owner_done");
     // -- distinguish attached cell ownership from the sole pending write pin --
@@ -192,6 +364,54 @@ fn lower_mixed_cell_resolve_for_write(ctx: &mut FunctionContext<'_>, inst: &Inst
     ctx.emitter.label(&retain);
     abi::emit_call_label(ctx.emitter, "__rt_mixed_deref");
     abi::emit_call_label(ctx.emitter, "__rt_incref");
+    store_if_result(ctx, inst)
+}
+
+/// Detaches an ordinary public getter value while keeping explicit references writable.
+fn lower_mixed_cell_copy_for_write(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+) -> Result<()> {
+    let cell = expect_operand(inst, 0)?;
+    let actual = ctx.load_value_to_result(cell)?.codegen_repr();
+    if actual != PhpType::Mixed {
+        return Err(CodegenIrError::invalid_module(format!(
+            "typed runtime array.mixed_cell_copy_for_write expected Mixed, got {:?}",
+            actual,
+        )));
+    }
+    let retain = ctx.next_label("public_write_reference_retain");
+    let clone = ctx.next_label("public_write_value_clone");
+    let done = ctx.next_label("public_write_copy_done");
+    match ctx.emitter.target.arch {
+        crate::codegen::platform::Arch::AArch64 => {
+            ctx.emitter.instruction(&format!("cbz x0, {done}"));                // preserve an absent public getter result
+            ctx.emitter.instruction("ldr x9, [x0]");                            // inspect direct and persistent reference markers
+            ctx.emitter.instruction("cmp x9, #11");                             // direct caller-reference markers stay attached
+            ctx.emitter.instruction(&format!("b.eq {retain}"));                 // retain the marker instead of detaching its value
+            ctx.emitter.instruction("cmp x9, #7");                              // nested Mixed may be an explicit PHP reference
+            ctx.emitter.instruction(&format!("b.ne {clone}"));                  // ordinary values receive independent Mixed storage
+            ctx.emitter.instruction("ldr x9, [x0, #16]");                       // inspect the persistent-reference flag
+            ctx.emitter.instruction("cmp x9, #1");                              // flag one denotes shared writable reference identity
+            ctx.emitter.instruction(&format!("b.eq {retain}"));                 // preserve that identity through the later write resolver
+        }
+        crate::codegen::platform::Arch::X86_64 => {
+            ctx.emitter.instruction("test rax, rax");                           // preserve an absent public getter result
+            ctx.emitter.instruction(&format!("jz {done}"));                     // avoid reading a missing cell
+            ctx.emitter.instruction("cmp QWORD PTR [rax], 11");                 // direct caller-reference markers stay attached
+            ctx.emitter.instruction(&format!("je {retain}"));                   // retain the marker instead of detaching its value
+            ctx.emitter.instruction("cmp QWORD PTR [rax], 7");                  // nested Mixed may be an explicit PHP reference
+            ctx.emitter.instruction(&format!("jne {clone}"));                   // ordinary values receive independent Mixed storage
+            ctx.emitter.instruction("cmp QWORD PTR [rax + 16], 1");             // flag one denotes shared writable reference identity
+            ctx.emitter.instruction(&format!("je {retain}"));                   // preserve that identity through the later write resolver
+        }
+    }
+    ctx.emitter.label(&clone);
+    abi::emit_call_label(ctx.emitter, "__rt_mixed_clone");
+    ctx.emit_branch(&done);
+    ctx.emitter.label(&retain);
+    abi::emit_incref_if_refcounted(ctx.emitter, &PhpType::Mixed);
+    ctx.emitter.label(&done);
     store_if_result(ctx, inst)
 }
 
@@ -402,6 +622,40 @@ fn lower_unary_string(
         abi::emit_pop_reg_pair(ctx.emitter, pointer, length);
         ctx.emitter.label(&ready);
     }
+    store_if_result(ctx, inst)
+}
+
+/// Lowers PHP's string offset write through `__rt_str_offset_set`.
+///
+/// Operands are the subject string, the already-resolved integer offset, and the string value.
+/// ARM64 passes the subject in `x1`/`x2`, the offset in `x0`, and the value in `x3`/`x4`;
+/// x86_64 passes the subject in `rax`/`rdx`, the offset in `rcx`, and the value in `rdi`/`rsi`.
+/// The result is the updated string in the target's string result pair.
+fn lower_string_offset_set(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+    if inst.operands.len() != 3 {
+        return Err(CodegenIrError::invalid_module(format!(
+            "typed runtime string.offset_set expected 3 operands, got {}",
+            inst.operands.len(),
+        )));
+    }
+    let subject = expect_operand(inst, 0)?;
+    let offset = expect_operand(inst, 1)?;
+    let value = expect_operand(inst, 2)?;
+    let (subject_ptr, subject_len, offset_reg, value_ptr, value_len) = match ctx.emitter.target.arch {
+        crate::codegen::platform::Arch::AArch64 => ("x1", "x2", "x0", "x3", "x4"),
+        crate::codegen::platform::Arch::X86_64 => ("rax", "rdx", "rcx", "rdi", "rsi"),
+    };
+    // Plain frame-slot or register-home loads: none of them clobbers another argument register.
+    ctx.load_string_value_to_regs(value, value_ptr, value_len)?;
+    let offset_ty = ctx.load_value_to_reg(offset, offset_reg)?.codegen_repr();
+    if !matches!(offset_ty, PhpType::Int | PhpType::Bool) {
+        return Err(CodegenIrError::invalid_module(format!(
+            "typed runtime string.offset_set expected an integer offset, got {:?}",
+            offset_ty,
+        )));
+    }
+    ctx.load_string_value_to_regs(subject, subject_ptr, subject_len)?;
+    abi::emit_call_label(ctx.emitter, "__rt_str_offset_set");
     store_if_result(ctx, inst)
 }
 

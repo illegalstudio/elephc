@@ -29,6 +29,10 @@ pub(crate) fn emit_callable_descriptor_release(emitter: &mut Emitter) {
 
     emitter.blank();
     emitter.comment("--- runtime: callable descriptor release ---");
+    emitter.label_global("__rt_callable_descriptor_free_deep");
+    emitter.instruction("mov w9, #1");                                          // collapse doomed graph owners for exactly one descriptor teardown
+    emitter.instruction("str w9, [x0, #-12]");                                  // preserve the ordinary final-owner release path
+    crate::codegen_support::abi::emit_jump(emitter, "__rt_callable_descriptor_release_owned");
     emitter.label_global("__rt_callable_descriptor_release");
 
     // -- null and heap-range checks --
@@ -42,12 +46,20 @@ pub(crate) fn emit_callable_descriptor_release(emitter: &mut Emitter) {
     emitter.instruction("cmp x0, x10");                                         // is the descriptor outside the live heap window?
     emitter.instruction("b.hs __rt_callable_descriptor_release_done");          // yes, do not touch it
 
+    // -- sweep owns reclamation of unreachable descriptor snapshot members --
+    crate::codegen_support::abi::emit_load_symbol_to_reg(emitter, "x9", "_gc_freeing_unreachable", 0);
+    emitter.instruction("cbz x9, __rt_callable_descriptor_release_decrement");  // ordinary release and destructor callbacks still balance real owners
+    emitter.instruction("ldr x9, [x0, #-8]");                                   // inspect the current descriptor snapshot and reachability flags
+    emitter.instruction("tbz x9, #17, __rt_callable_descriptor_release_decrement"); // excluded children remain ordinary owned values
+    emitter.instruction("tbz x9, #16, __rt_callable_descriptor_release_done");  // direct sweep will reclaim this doomed child independently
+    emitter.label_shared("__rt_callable_descriptor_release_owned");
+    emitter.label("__rt_callable_descriptor_release_decrement");
     // -- decrement descriptor refcount --
     emitter.instruction("ldr w9, [x0, #-12]");                                  // load descriptor refcount from the uniform heap header
     emitter.instruction("cbz w9, __rt_callable_descriptor_release_done");       // already-freed raw blocks are ignored defensively
     emitter.instruction("subs w9, w9, #1");                                     // drop one descriptor owner
     emitter.instruction("str w9, [x0, #-12]");                                  // store the decremented descriptor refcount
-    emitter.instruction("b.ne __rt_callable_descriptor_release_done");          // other owners still keep the descriptor alive
+    emitter.instruction("b.ne __rt_callable_descriptor_release_candidate");     // other owners still keep the descriptor alive
 
     // -- set up cleanup frame --
     crate::codegen_support::abi::emit_frame_prologue(emitter, 64);
@@ -103,7 +115,7 @@ pub(crate) fn emit_callable_descriptor_release(emitter: &mut Emitter) {
 
     emitter.label("__rt_callable_descriptor_release_reference");
     crate::codegen_support::abi::emit_call_label(emitter, "__rt_reference_cell_owner");
-    super::super::arrays::deep_cleanup::invoke(emitter, "__rt_reference_cell_release", "x0");
+    super::super::arrays::deep_cleanup::invoke(emitter, "__rt_decref_any", "x0");
     emitter.instruction("b __rt_callable_descriptor_release_next");             // continue after releasing only an independently owned reference cell
 
     emitter.label("__rt_callable_descriptor_release_string");
@@ -132,12 +144,17 @@ pub(crate) fn emit_callable_descriptor_release(emitter: &mut Emitter) {
     crate::codegen_support::abi::emit_branch_if_int_result_nonzero(emitter, "__rt_throw_current");
     emitter.label("__rt_callable_descriptor_release_done");
     emitter.instruction("ret");                                                 // return after releasing or ignoring the descriptor
+    emitter.label("__rt_callable_descriptor_release_candidate");
+    crate::codegen_support::abi::emit_jump(emitter, "__rt_gc_note_candidate");
 }
 
 /// Emits the x86_64 Linux variant of `__rt_callable_descriptor_release`.
 fn emit_callable_descriptor_release_linux_x86_64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: callable descriptor release ---");
+    emitter.label_global("__rt_callable_descriptor_free_deep");
+    emitter.instruction("mov DWORD PTR [rax - 12], 1");                         // collapse doomed graph owners for exactly one descriptor teardown
+    crate::codegen_support::abi::emit_jump(emitter, "__rt_callable_descriptor_release_owned");
     emitter.label_global("__rt_callable_descriptor_release");
 
     emitter.instruction("test rax, rax");                                       // static null descriptors have nothing to release
@@ -154,12 +171,23 @@ fn emit_callable_descriptor_release_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("shr r10, 32");                                         // isolate the high-word ownership marker
     emitter.instruction(&format!("cmp r10d, 0x{:x}", crate::codegen_support::sentinels::X86_64_HEAP_MAGIC_HI32)); // verify that this block belongs to the x86_64 heap wrapper
     emitter.instruction("jne __rt_callable_descriptor_release_done");           // foreign/static pointers are ignored
+    // -- sweep owns reclamation of unreachable descriptor snapshot members --
+    crate::codegen_support::abi::emit_load_symbol_to_reg(emitter, "r10", "_gc_freeing_unreachable", 0);
+    emitter.instruction("test r10, r10");                                       // ordinary release and destructor callbacks still balance real owners
+    emitter.instruction("jz __rt_callable_descriptor_release_decrement");       // skip suppression outside final reclamation
+    emitter.instruction("mov r10, QWORD PTR [rax - 8]");                        // inspect current snapshot and reachability flags
+    emitter.instruction("test r10, 0x20000");                                   // only selected snapshot children have independent sweep ownership
+    emitter.instruction("jz __rt_callable_descriptor_release_decrement");       // excluded children retain ordinary cleanup
+    emitter.instruction("test r10, 0x10000");                                   // externally reachable captures retain their real owners
+    emitter.instruction("jz __rt_callable_descriptor_release_done");            // direct sweep reclaims this doomed child exactly once
+    emitter.label_shared("__rt_callable_descriptor_release_owned");
+    emitter.label("__rt_callable_descriptor_release_decrement");
     emitter.instruction("mov r10d, DWORD PTR [rax - 12]");                      // load descriptor refcount from the uniform heap header
     emitter.instruction("test r10d, r10d");                                     // has this raw heap block already been released?
     emitter.instruction("jz __rt_callable_descriptor_release_done");            // yes, ignore the defensive duplicate release
     emitter.instruction("sub r10d, 1");                                         // drop one descriptor owner
     emitter.instruction("mov DWORD PTR [rax - 12], r10d");                      // store the decremented descriptor refcount
-    emitter.instruction("jnz __rt_callable_descriptor_release_done");           // other owners still keep the descriptor alive
+    emitter.instruction("jnz __rt_callable_descriptor_release_candidate");      // other owners still keep the descriptor alive
 
     crate::codegen_support::abi::emit_frame_prologue(emitter, 64);
     emitter.instruction("mov QWORD PTR [rbp - 8], rax");                        // save descriptor pointer for capture release and final free
@@ -215,7 +243,7 @@ fn emit_callable_descriptor_release_linux_x86_64(emitter: &mut Emitter) {
 
     emitter.label("__rt_callable_descriptor_release_reference");
     crate::codegen_support::abi::emit_call_label(emitter, "__rt_reference_cell_owner");
-    super::super::arrays::deep_cleanup::invoke(emitter, "__rt_reference_cell_release", "rax");
+    super::super::arrays::deep_cleanup::invoke(emitter, "__rt_decref_any", "rax");
     emitter.instruction("jmp __rt_callable_descriptor_release_next");           // continue after releasing only an independently owned reference cell
 
     emitter.label("__rt_callable_descriptor_release_string");
@@ -241,6 +269,8 @@ fn emit_callable_descriptor_release_linux_x86_64(emitter: &mut Emitter) {
     crate::codegen_support::abi::emit_branch_if_int_result_nonzero(emitter, "__rt_throw_current");
     emitter.label("__rt_callable_descriptor_release_done");
     emitter.instruction("ret");                                                 // return after releasing or ignoring the descriptor
+    emitter.label("__rt_callable_descriptor_release_candidate");
+    crate::codegen_support::abi::emit_jump(emitter, "__rt_gc_note_candidate");
 }
 
 #[cfg(test)]
@@ -258,7 +288,7 @@ mod tests {
             let branch = asm.split_once("__rt_callable_descriptor_release_reference:\n").unwrap().1;
             let branch = branch.split("__rt_callable_descriptor_release_next").next().unwrap();
             let lookup = branch.find("__rt_reference_cell_owner").unwrap();
-            let release = branch.find("__rt_reference_cell_release").unwrap();
+            let release = branch.find("__rt_decref_any").unwrap();
             let guard = branch.find("__rt_cleanup_invoke").unwrap();
             assert!(lookup < release && release < guard, "{target}: {branch}");
         }

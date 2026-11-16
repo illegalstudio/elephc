@@ -26,7 +26,7 @@
 //!   `opcache_restrict_api_tests` / `opcache_preload_tests` and is deliberately not re-pinned here.
 //! - Tests invoke the elephc CLI (CARGO_BIN_EXE_elephc) as a subprocess in an isolated temp dir,
 //!   the same harness style as `opcache_preload_tests` / `opcache_ini_tests`. Host-target only
-//!   (macOS aarch64 local).
+//!   on macOS and Linux.
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -328,6 +328,39 @@ if (is_array($s)) {
     assert!(out60.contains("used_now=1\n"), "{out60}");
 }
 
+/// Formats the observed timestamp with the host date utility, independently of elephc.
+/// Child-local timezone and locale settings avoid shared environment mutations and DST races.
+fn system_asctime(timestamp: i64, timezone: Option<&str>) -> String {
+    let mut command = Command::new("date");
+    command.env("LC_ALL", "C");
+    match timezone {
+        Some(zone) => {
+            command.env("TZ", zone);
+        }
+        None => {
+            command.env_remove("TZ");
+        }
+    }
+    if cfg!(target_os = "macos") {
+        command.arg("-r").arg(timestamp.to_string());
+    } else {
+        command.arg(format!("--date=@{timestamp}"));
+    }
+    let output = command
+        .arg("+%a %b %e %H:%M:%S %Y")
+        .output()
+        .expect("failed to run system date oracle");
+    assert!(
+        output.status.success(),
+        "system date failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    String::from_utf8(output.stdout)
+        .expect("system date output is UTF-8")
+        .trim_end_matches('\n')
+        .to_string()
+}
+
 /// `last_used` is formatted in the SYSTEM timezone, because php-src builds it with libc
 /// `asctime(localtime(…))` rather than through PHP's date functions.
 ///
@@ -343,6 +376,8 @@ if (is_array($s)) {
 /// field tracks TZ while `date()` does not, which is why elephc resolves the zone itself and
 /// applies it only around this one formatting — restoring the previous default afterwards, which
 /// the `after_tz` assertion pins.
+/// Each comparison uses the timestamp from that same status snapshot, so it remains exact
+/// across seasons, daylight-saving transitions and clock boundaries between child processes.
 #[test]
 fn last_used_is_formatted_in_the_system_timezone() {
     let dir = make_test_dir("opcache_tz");
@@ -362,8 +397,9 @@ echo 'after_tz=', date_default_timezone_get(), "\n";
     .unwrap();
     let bin = compile(&dir, "tz", &["opcache.enable_cli=1"]);
 
-    let hour = |tz: Option<&str>| -> String {
+    let snapshot = |tz: Option<&str>| -> (String, i64) {
         let mut cmd = Command::new(&bin);
+        cmd.env("LC_ALL", "C");
         match tz {
             Some(zone) => {
                 cmd.env("TZ", zone);
@@ -381,21 +417,28 @@ echo 'after_tz=', date_default_timezone_get(), "\n";
             out.contains("after_tz=UTC\n"),
             "the default timezone must be restored:\n{out}"
         );
-        out.lines()
+        let formatted = out
+            .lines()
             .find_map(|line| line.strip_prefix("last_used="))
             .expect("last_used must be reported")
-            // `Www Mmm dd HH:MM:SS yyyy` — the hour field.
-            .get(11..13)
-            .expect("asctime must carry an hour field")
-            .to_string()
+            .to_string();
+        let timestamp = out
+            .lines()
+            .find_map(|line| line.strip_prefix("ts="))
+            .expect("last_used_timestamp must be reported")
+            .parse::<i64>()
+            .expect("last_used_timestamp is Unix seconds");
+        (formatted, timestamp)
     };
 
-    let utc: i32 = hour(Some("UTC")).parse().unwrap();
-    let new_york: i32 = hour(Some("America/New_York")).parse().unwrap();
-    let paris: i32 = hour(Some("Europe/Paris")).parse().unwrap();
-    // New York is UTC-4 in July, Paris UTC+2 (modulo the day wrap).
-    assert_eq!((new_york - utc).rem_euclid(24), 20, "America/New_York is UTC-4 in July");
-    assert_eq!((paris - utc).rem_euclid(24), 2, "Europe/Paris is UTC+2 in July");
+    for timezone in [Some("UTC"), Some("America/New_York"), Some("Europe/Paris")] {
+        let (formatted, timestamp) = snapshot(timezone);
+        assert_eq!(
+            formatted,
+            system_asctime(timestamp, timezone),
+            "last_used must use the system timezone {timezone:?} at timestamp {timestamp}"
+        );
+    }
 }
 
 /// EVERY `scripts` entry formats `last_used` in the same zone — not just the first.

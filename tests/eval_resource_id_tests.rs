@@ -58,6 +58,9 @@
 #[path = "support/managed_pcre2.rs"]
 mod managed_pcre2_support;
 
+#[path = "support/bounded_output.rs"]
+mod bounded_output;
+
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -141,10 +144,7 @@ fn compile(dir: &Path, source: &str, stem: &str) -> PathBuf {
 /// inherit the harness's cwd (the repository root), so a program opening `"first.txt"`
 /// would read a file next to `Cargo.toml`.
 fn run_binary_in(dir: &Path, bin: &Path) -> String {
-    let output = Command::new(bin)
-        .current_dir(dir)
-        .output()
-        .expect("failed to run compiled binary");
+    let output = bounded_output::output(Command::new(bin).current_dir(dir));
     assert!(
         output.status.success(),
         "compiled binary exited non-zero ({:?}):\n{}",
@@ -168,8 +168,11 @@ fn write_fixture_files(dir: &Path) {
 fn assert_program_output(prefix: &str, source: &str, expected: &str) {
     let dir = make_test_dir(prefix);
     write_fixture_files(&dir);
+    eprintln!("fixture {prefix}: compiling");
     let bin = compile(&dir, source, prefix);
+    eprintln!("fixture {prefix}: executing");
     assert_eq!(run_binary_in(&dir, &bin), expected);
+    eprintln!("fixture {prefix}: completed");
     let _ = fs::remove_dir_all(&dir);
 }
 

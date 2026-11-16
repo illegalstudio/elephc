@@ -464,7 +464,7 @@ return clone $box;"#,
     );
 }
 
-/// Verifies native clone dispatch materializes a physical hidden collector before bridging.
+/// Verifies an explicit shape materializes a physical hidden collector without name metadata.
 #[test]
 fn execute_program_materializes_aot_clone_hidden_collector() {
     let program = parse_fragment(
@@ -474,7 +474,6 @@ return clone $box;"#,
     .expect("parse eval fragment");
     let mut context = ElephcEvalContext::new();
     let mut signature = NativeCallableSignature::new(1);
-    assert!(signature.set_param_name(0, ""));
     assert!(signature.set_variadic_index(0));
     signature.set_shape(NativeCallableShape::new(0, 0, false, false));
     assert!(context.define_native_method_signature(

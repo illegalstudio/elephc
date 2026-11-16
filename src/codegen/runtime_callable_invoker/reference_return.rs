@@ -2,7 +2,7 @@
 //! Converts a native reference-returning callable's transferred cell into the invoker's owned value.
 //!
 //! Called from:
-//! - The native descriptor invoker after restoring the caller's concat storage.
+//! - The native descriptor invoker and eval instance/static method bridges.
 //!
 //! Key details:
 //! - The raw return always uses the integer result register, including string and float references.
@@ -11,7 +11,7 @@
 use super::{abi, Emitter, PhpType};
 
 /// Copies the referenced value into an owned Mixed return and consumes the callee's cell lease.
-pub(super) fn emit_boxed_reference_return(emitter: &mut Emitter, php_type: &PhpType) {
+pub(crate) fn emit_boxed_reference_return(emitter: &mut Emitter, php_type: &PhpType) {
     let result = abi::int_result_reg(emitter);
     let cell = abi::secondary_scratch_reg(emitter);
     let repr = php_type.codegen_repr();
@@ -21,7 +21,8 @@ pub(super) fn emit_boxed_reference_return(emitter: &mut Emitter, php_type: &PhpT
     if matches!(repr, PhpType::Mixed | PhpType::Union(_)) {
         abi::emit_call_label(emitter, "__rt_mixed_clone");
     } else {
-        super::emit_box_current_value_as_mixed(emitter, &repr);
+        // The declared type, so a `?ptr<T>` result boxes address 0 as PHP null.
+        super::emit_box_current_value_as_mixed(emitter, php_type);
     }
     abi::emit_push_reg(emitter, result);
     abi::emit_load_temporary_stack_slot(emitter, result, 16);

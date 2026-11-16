@@ -172,71 +172,9 @@ fn descriptor_invoker_placeholder_sig() -> FunctionSig {
 
 /// Reconstructs caller-visible signature metadata from a lowered EIR closure function.
 fn signature_from_closure(closure: &Function, visible_abi_param_count: usize) -> FunctionSig {
-    if let Some(signature) = &closure.signature {
-        let mut signature = signature.clone();
-        let original_param_count = signature.params.len();
-        ensure_variadic_param_slot(&mut signature);
-        if original_param_count == visible_abi_param_count {
-            return signature;
-        }
-    }
-
-    FunctionSig {
-        params: closure
-            .params
-            .iter()
-            .take(visible_abi_param_count)
-            .map(|param| (param.name.clone(), param.php_type.clone()))
-            .collect(),
-        param_type_exprs: vec![None; visible_abi_param_count],
-        param_attributes: Vec::new(),
-        defaults: closure
-            .params
-            .iter()
-            .take(visible_abi_param_count)
-            .map(|_| None)
-            .collect(),
-        return_type: closure.return_php_type.clone(),
-        declared_return: !matches!(closure.return_php_type, PhpType::Mixed),
-        by_ref_return: false,
-        ref_params: closure
-            .params
-            .iter()
-            .take(visible_abi_param_count)
-            .map(|param| param.by_ref)
-            .collect(),
-        declared_params: closure
-            .params
-            .iter()
-            .take(visible_abi_param_count)
-            .map(|param| !matches!(param.php_type, PhpType::Mixed))
-            .collect(),
-        variadic: closure
-            .params
-            .iter()
-            .take(visible_abi_param_count)
-            .find(|param| param.variadic)
-            .map(|param| param.name.clone()),
-        deprecation: None,
-        is_generator: false,
-    }
-}
-
-/// Adds the virtual variadic array slot when the EIR ABI stores it outside `params`.
-fn ensure_variadic_param_slot(signature: &mut FunctionSig) {
-    let Some(variadic) = signature.variadic.clone() else {
-        return;
-    };
-    if signature.params.iter().any(|(name, _)| name == &variadic) {
-        return;
-    }
-    signature
-        .params
-        .push((variadic, PhpType::Array(Box::new(PhpType::Mixed))));
-    signature.defaults.push(None);
-    signature.ref_params.push(false);
-    signature.declared_params.push(false);
-    signature.param_type_exprs.push(None);
+    super::callable_signatures::function_signature_from_eir_with_param_count(
+        closure, visible_abi_param_count,
+    )
 }
 
 /// Returns hidden argument types for closure captures stored in descriptor capture slots.
@@ -262,5 +200,29 @@ fn hidden_capture_arg_type(param: &FunctionParam) -> PhpType {
         PhpType::Int
     } else {
         param.php_type.clone()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Both fallback routes preserve reference returns, with by-value controls.
+    #[test]
+    fn fiber_signature_rebuild_preserves_reference_returns() {
+        for by_ref in [false, true] {
+            let mut closure = Function::new("callback".into(), crate::ir::IrType::I64, PhpType::Int);
+            closure.flags.by_ref_return = by_ref;
+            assert_eq!(signature_from_closure(&closure, 0).by_ref_return, by_ref);
+            let mut signature = signature_from_closure(&closure, 0);
+            signature.by_ref_return = by_ref;
+            closure.signature = Some(signature);
+            closure.flags.by_ref_return = !by_ref;
+            closure.params.push(FunctionParam {
+                name: "value".into(), ir_type: crate::ir::IrType::I64,
+                php_type: PhpType::Int, by_ref: false, variadic: false,
+            });
+            assert_eq!(signature_from_closure(&closure, 1).by_ref_return, by_ref);
+        }
     }
 }

@@ -165,6 +165,32 @@ pub(super) fn lower_array_map_descriptor_callback(
     result_elem_ty: &PhpType,
     target: ArrayMapTarget,
 ) -> Result<()> {
+    if let Some(symbol) =
+        try_direct_plain_closure(ctx, callback, elem_ty, callback_elem_ty, result_elem_ty, target)?
+    {
+        let callback_arg_reg = abi::int_arg_reg_name(ctx.emitter.target, 0);
+        let array_arg_reg = abi::int_arg_reg_name(ctx.emitter.target, 1);
+        let env_arg_reg = abi::int_arg_reg_name(ctx.emitter.target, 2);
+        abi::emit_symbol_address(ctx.emitter, callback_arg_reg, &symbol);
+        ctx.load_value_to_reg(array, array_arg_reg)?;
+        abi::emit_load_int_immediate(ctx.emitter, env_arg_reg, 0);
+        emit_array_map_runtime_call(ctx, callback_elem_ty, 0, target)?;
+        finish_array_map_result(ctx, inst, target, callback_elem_ty, result_elem_ty)?;
+        return store_if_result(ctx, inst);
+    }
+    if let Some(wrapper_label) =
+        try_emit_direct_closure_wrapper(ctx, callback, elem_ty, callback_elem_ty)?
+    {
+        let callback_arg_reg = abi::int_arg_reg_name(ctx.emitter.target, 0);
+        let array_arg_reg = abi::int_arg_reg_name(ctx.emitter.target, 1);
+        let env_arg_reg = abi::int_arg_reg_name(ctx.emitter.target, 2);
+        abi::emit_symbol_address(ctx.emitter, callback_arg_reg, &wrapper_label);
+        ctx.load_value_to_reg(array, array_arg_reg)?;
+        abi::emit_load_int_immediate(ctx.emitter, env_arg_reg, 0);
+        emit_array_map_runtime_call(ctx, callback_elem_ty, 0, target)?;
+        finish_array_map_result(ctx, inst, target, callback_elem_ty, result_elem_ty)?;
+        return store_if_result(ctx, inst);
+    }
     let wrapper_label =
         emit_descriptor_callback_wrapper(ctx, vec![elem_ty.clone()], callback_elem_ty.clone());
     let env_bytes = reserve_descriptor_callback_env(ctx, callback)?;
@@ -220,6 +246,206 @@ pub(super) fn release_descriptor_callback_env_preserving_result(ctx: &mut Functi
     abi::emit_load_temporary_stack_slot(ctx.emitter, result_reg, 16);
     callable_descriptor::emit_release_current_descriptor(ctx.emitter);
     abi::emit_pop_reg(ctx.emitter, result_reg);
+}
+
+/// Resolves a capture-free closure literal behind transparent ownership wrappers.
+fn resolve_capture_free_closure_name(
+    ctx: &FunctionContext<'_>,
+    callback: ValueId,
+) -> Result<Option<String>> {
+    let mut current = callback;
+    for _ in 0..8 {
+        let Some(value) = ctx.function.value(current) else {
+            return Ok(None);
+        };
+        let ValueDef::Instruction { inst, .. } = value.def else {
+            return Ok(None);
+        };
+        let Some(inst) = ctx.function.instruction(inst) else {
+            return Ok(None);
+        };
+        match inst.op {
+            Op::Acquire | Op::Move | Op::Borrow | Op::EnsureOwned | Op::MixedClone
+                if inst.operands.len() == 1 =>
+            {
+                current = inst.operands[0];
+            }
+            Op::ClosureNew if inst.operands.is_empty() => {
+                let name =
+                    crate::codegen::lower_inst::descriptor_metadata::callable_target_data(
+                        ctx, inst,
+                    )?;
+                return Ok(Some(name.to_string()));
+            }
+            _ => return Ok(None),
+        }
+    }
+    Ok(None)
+}
+
+/// Finds the EIR closure body for a capture-free literal.
+pub(super) fn capture_free_closure<'a>(
+    ctx: &'a FunctionContext<'_>,
+    callback: ValueId,
+) -> Result<Option<&'a crate::ir::Function>> {
+    let Some(name) = resolve_capture_free_closure_name(ctx, callback)? else {
+        return Ok(None);
+    };
+    Ok(ctx.module.closures.iter().find(|function| function.name == name))
+}
+
+/// Uses the closure entry point directly when its whole ABI matches the indexed map helper.
+///
+/// The plain `__rt_array_map` callback ABI is one raw element in the first integer register and
+/// one raw scalar result out. A capture-free closure whose single parameter and declared return
+/// are the same 8-byte scalar type needs no adapter at all: the helper can call its entry point
+/// for every element.
+fn try_direct_plain_closure(
+    ctx: &FunctionContext<'_>,
+    callback: ValueId,
+    elem_ty: &PhpType,
+    callback_elem_ty: &PhpType,
+    result_elem_ty: &PhpType,
+    target: ArrayMapTarget,
+) -> Result<Option<String>> {
+    if target != ArrayMapTarget::Indexed {
+        return Ok(None);
+    }
+    let element = elem_ty.codegen_repr();
+    if !matches!(element, PhpType::Int | PhpType::Bool)
+        || callback_elem_ty.codegen_repr() != element
+        || result_elem_ty.codegen_repr() != element
+    {
+        return Ok(None);
+    }
+    let Some(closure) = capture_free_closure(ctx, callback)? else {
+        return Ok(None);
+    };
+    if closure.params.len() > 1
+        || closure.flags.is_generator
+        || closure.flags.is_fiber_wrapper
+        || closure.return_php_type.codegen_repr() != element
+    {
+        return Ok(None);
+    }
+    if let Some(param) = closure.params.first() {
+        if param.by_ref || param.variadic || param.php_type.codegen_repr() != element {
+            return Ok(None);
+        }
+    }
+    Ok(Some(crate::names::function_symbol(&closure.name)))
+}
+
+/// Emits a direct capture-free closure callback wrapper when its ABI matches the map helper.
+///
+/// The generic descriptor path packs each element into a one-slot argument array and routes it
+/// through `__rt_callable_invoke_owned_args`. For a literal capture-free closure whose single
+/// parameter is boxed `Mixed`, the same call can be made directly. A scalar source element is
+/// boxed once; a parameter already typed like its source element is passed raw. The wrapper
+/// ignores the callback environment because the closure captures nothing.
+fn try_emit_direct_closure_wrapper(
+    ctx: &mut FunctionContext<'_>,
+    callback: ValueId,
+    elem_ty: &PhpType,
+    callback_elem_ty: &PhpType,
+) -> Result<Option<String>> {
+    if callback_elem_ty.codegen_repr() != PhpType::Mixed {
+        return Ok(None);
+    }
+    let Some(closure) = capture_free_closure(ctx, callback)? else {
+        return Ok(None);
+    };
+    if closure.params.len() != 1
+        || closure.params[0].by_ref
+        || closure.params[0].variadic
+        || closure.flags.is_generator
+        || closure.flags.is_fiber_wrapper
+    {
+        return Ok(None);
+    }
+    let element = elem_ty.codegen_repr();
+    if !matches!(element, PhpType::Int | PhpType::Bool | PhpType::Mixed) {
+        return Ok(None);
+    }
+    let param = closure.params[0].php_type.codegen_repr();
+    if param != PhpType::Mixed && param != element {
+        return Ok(None);
+    }
+    let symbol = crate::names::function_symbol(&closure.name);
+    Ok(Some(emit_direct_closure_wrapper(
+        ctx, &symbol, &element, &param,
+    )))
+}
+
+/// Emits one out-of-line wrapper that calls a closure entry point with the map element.
+fn emit_direct_closure_wrapper(
+    ctx: &mut FunctionContext<'_>,
+    closure_symbol: &str,
+    element: &PhpType,
+    param: &PhpType,
+) -> String {
+    let label = ctx.next_global_label("array_map_direct_closure");
+    let scope = ctx.emitter.begin_out_of_line();
+    ctx.emitter.blank();
+    ctx.emitter.comment(&format!("direct closure callback wrapper: {label}"));
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => ctx.emitter.raw(".align 2"),
+        Arch::X86_64 => ctx.emitter.raw(".align 16"),
+    }
+    ctx.emitter.label_global(&label);
+    if param == element {
+        match ctx.emitter.target.arch {
+            Arch::AArch64 => {
+                ctx.emitter.instruction(&format!("b {closure_symbol}"));        // tail-call a closure whose ABI already matches
+            }
+            Arch::X86_64 => {
+                ctx.emitter.instruction(&format!("jmp {closure_symbol}"));      // tail-call a closure whose ABI already matches
+            }
+        }
+        ctx.emitter.end_out_of_line(scope);
+        return label;
+    }
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction("sub sp, sp, #32");                         // reserve the boxed input and result slots
+            ctx.emitter.instruction("stp x29, x30, [sp, #16]");                 // preserve the caller frame across the closure call
+            ctx.emitter.instruction("add x29, sp, #16");                        // establish a stable frame base
+            crate::codegen_support::emit_box_current_value_as_mixed(
+                ctx.emitter,
+                element,
+            );
+            ctx.emitter.instruction("str x0, [sp, #0]");                        // keep the owned input box across the closure call
+            ctx.emitter.instruction(&format!("bl {closure_symbol}"));           // invoke the closure body directly
+            ctx.emitter.instruction("str x0, [sp, #8]");                        // keep the owned Mixed result
+            ctx.emitter.instruction("ldr x0, [sp, #0]");                        // reload the owned input box
+            ctx.emitter.instruction("bl __rt_decref_mixed");                    // retire the temporary argument box
+            ctx.emitter.instruction("ldr x0, [sp, #8]");                        // return the owned Mixed result
+            ctx.emitter.instruction("ldp x29, x30, [sp, #16]");                 // restore the caller frame
+            ctx.emitter.instruction("add sp, sp, #32");                         // release the wrapper frame
+            ctx.emitter.instruction("ret");                                     // return the closure result to the map helper
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("push rbp");                                // preserve the caller frame across the closure call
+            ctx.emitter.instruction("mov rbp, rsp");                            // establish a stable frame base
+            ctx.emitter.instruction("sub rsp, 32");                             // reserve the boxed input and result slots
+            ctx.emitter.instruction("mov rax, rdi");                            // move the raw element into the boxing result register
+            crate::codegen_support::emit_box_current_value_as_mixed(
+                ctx.emitter,
+                element,
+            );
+            ctx.emitter.instruction("mov QWORD PTR [rbp - 8], rax");            // keep the owned input box across the closure call
+            ctx.emitter.instruction("mov rdi, rax");                            // pass the boxed cell as the closure parameter
+            ctx.emitter.instruction(&format!("call {closure_symbol}"));         // invoke the closure body directly
+            ctx.emitter.instruction("mov QWORD PTR [rbp - 16], rax");           // keep the owned Mixed result
+            ctx.emitter.instruction("mov rax, QWORD PTR [rbp - 8]");            // reload the owned input box
+            ctx.emitter.instruction("call __rt_decref_mixed");                  // retire the temporary argument box
+            ctx.emitter.instruction("mov rax, QWORD PTR [rbp - 16]");           // return the owned Mixed result
+            ctx.emitter.instruction("leave");                                   // restore the caller frame
+            ctx.emitter.instruction("ret");                                     // return the closure result to the map helper
+        }
+    }
+    ctx.emitter.end_out_of_line(scope);
+    label
 }
 
 /// Emits a descriptor callback wrapper for the current EIR function body.

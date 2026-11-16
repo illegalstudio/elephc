@@ -37,26 +37,28 @@ macro_rules! impl_construction_raw_ops {
     ) -> Result<(), EvalStatus> {
         let (scope_ptr, scope_len) = self.current_class_scope_abi();
         let arg_array = self.arg_array(args)?;
-        let ok = unsafe {
-            __elephc_eval_value_construct_object(
-                object.as_ptr(),
-                arg_array.as_ptr(),
-                scope_ptr,
-                scope_len,
-                self.context.cast(),
-            )
-        };
-        let outcome = if ok == 0 {
-            self.take_pending_native_throwable()
-                .map_or(Err(EvalStatus::RuntimeFatal), |thrown| {
-                    self.schedule_pending_throw(thrown)?;
-                    Err(EvalStatus::UncaughtThrowable)
-                })
-        } else {
-            Ok(())
-        };
-        self.release_cells([arg_array])?;
-        outcome
+        crate::runtime_hooks::owner_frames::with_owned_runtime_cell(arg_array, |owner| {
+            let ok = unsafe {
+                __elephc_eval_value_construct_object(
+                    object.as_ptr(),
+                    owner.borrowed().as_ptr(),
+                    scope_ptr,
+                    scope_len,
+                    self.context.cast(),
+                )
+            };
+            let outcome = if ok == 0 {
+                self.take_pending_native_throwable()
+                    .map_or(Err(EvalStatus::RuntimeFatal), |thrown| {
+                        self.schedule_pending_throw(thrown)?;
+                        Err(EvalStatus::UncaughtThrowable)
+                    })
+            } else {
+                Ok(())
+            };
+            self.release_cells([owner.take()])?;
+            outcome
+        })
     }
 
     /// Returns whether the generated AOT class-name table contains the requested class.
@@ -165,6 +167,37 @@ macro_rules! impl_construction_raw_ops {
         slot: *mut *mut crate::value::RuntimeCell,
     ) -> Result<RuntimeCellHandle, EvalStatus> {
         Self::handle(unsafe { __elephc_eval_value_invoker_ref_cell(slot) })
+    }
+
+    /// Gives native reference consumers a managed slot retaining the caller's PHP reference.
+    fn native_mixed_reference_cell(
+        &mut self,
+        reference: RuntimeCellHandle,
+        pin: *mut std::ffi::c_void,
+    ) -> Result<Option<u64>, EvalStatus> {
+        let cell = unsafe { __elephc_eval_value_native_mixed_reference_cell(reference.as_ptr(), pin) };
+        if cell == 0 { Err(EvalStatus::RuntimeFatal) } else { Ok(Some(cell)) }
+    }
+
+    /// Pins a source reference while preserving its pending alias until native parameter entry.
+    fn pin_native_reference_argument_owner(
+        &mut self, reference: RuntimeCellHandle, pin: *mut std::ffi::c_void, cell: u64, staging: *mut std::ffi::c_void,
+    ) -> Result<bool, EvalStatus> {
+        let record = unsafe { __elephc_eval_value_native_reference_owner_pin_v1(reference.as_ptr(), pin, cell, staging) };
+        if record == 0 { Err(EvalStatus::RuntimeFatal) } else { Ok(true) }
+    }
+
+    /// Transfers a pending owner, or observes consumption by the native formal parameter.
+    fn take_native_reference_argument_owner(&mut self, pin: *mut std::ffi::c_void) -> Result<Option<RuntimeCellHandle>, EvalStatus> {
+        let value = unsafe { __elephc_eval_value_native_reference_owner_take_v1(pin) };
+        if value.is_null() { Ok(None) } else { Self::handle(value).map(Some) }
+    }
+
+    /// Uses the protected generic release ABI so a final cell cannot throw across Rust frames.
+    fn release_native_mixed_reference_cell(
+        &mut self, _cell: u64, pin: *mut std::ffi::c_void,
+    ) -> Result<(), EvalStatus> {
+        self.release_reference_pin(pin)
     }
 
     /// Creates an invoker-only by-reference marker for a staged raw one-word slot.

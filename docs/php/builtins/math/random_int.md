@@ -1,8 +1,6 @@
 ---
 title: "random_int()"
 description: "Get a cryptographically secure, uniformly selected integer."
-sidebar:
-  order: 596
 ---
 
 ## random_int()
@@ -21,8 +19,9 @@ Get a cryptographically secure, uniformly selected integer.
 
 ## Availability
 
-- **Compiled (AOT)**: supported by the Elephc code generator.
-- **`eval()` (magician interpreter)**: supported through a declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/math/random_int.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/math/random_int.rs)).
+| Compiled (AOT) | Magician (eval) |
+|---|---|
+| Available | Available |
 
 _No examples yet. Check `examples/` and `showcases/` for usage patterns._
 

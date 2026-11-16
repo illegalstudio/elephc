@@ -97,3 +97,98 @@ pub(crate) fn elephc_cli_command_with_mbstring_native(dir: &Path) -> Command {
     command.env("ELEPHC_NATIVE_CACHE", &fixture.cache);
     command
 }
+
+/// Builds a native project for eval-catalog fixtures that also declares the managed GMP package.
+///
+/// The eval builtin-catalog probe covers every registry builtin, including `ext/gmp`, so the
+/// compiler requires the project to declare the pinned native package even though the probe
+/// only asks `function_exists()`. Reuse the mbstring/regex fixture project, append the GMP
+/// dependency and lock stanza, and copy the globally materialized artifact into the fixture
+/// cache so the compiler can resolve it without a network or install step.
+pub(crate) fn elephc_cli_command_with_eval_catalog_native(dir: &Path) -> Command {
+    let command = elephc_cli_command_with_mbstring_native(dir);
+    let manifest = dir.join("elephc.toml");
+    let mut manifest_text = std::fs::read_to_string(&manifest).expect("read eval catalog manifest");
+    manifest_text.push_str("gmp = \"6.3.0\"\n");
+    std::fs::write(&manifest, manifest_text).expect("write eval catalog manifest with gmp");
+
+    let lock = dir.join("elephc.lock");
+    let lock_text = std::fs::read_to_string(&lock).expect("read eval catalog lock");
+    let gmp_lock = include_str!("../../../examples/gmp/elephc.lock");
+    let merged_lock = merge_lock_stanzas(&lock_text, gmp_lock);
+    std::fs::write(&lock, merged_lock).expect("write eval catalog lock with gmp");
+
+    let fixture_cache = command
+        .get_envs()
+        .find_map(|(name, value)| {
+            (name == "ELEPHC_NATIVE_CACHE").then(|| value.map(PathBuf::from))?
+        })
+        .expect("mbstring fixture must set ELEPHC_NATIVE_CACHE");
+    let global_root = std::env::var_os("ELEPHC_NATIVE_CACHE")
+        .filter(|value| !value.is_empty())
+        .map(PathBuf::from)
+        .or_else(|| {
+            std::env::var_os("HOME")
+                .filter(|value| !value.is_empty())
+                .map(|home| PathBuf::from(home).join(".cache/elephc/native"))
+        });
+    if let Some(global_root) = global_root {
+        let source = global_root.join("artifacts/gmp");
+        if source.is_dir() {
+            let destination = fixture_cache.join("artifacts/gmp");
+            if source != destination {
+                copy_tree(&source, &destination)
+                    .expect("copy managed gmp artifact into fixture cache");
+            }
+        }
+    }
+    command
+}
+
+/// Merges two generated native locks and restores the resolver's package-name order.
+///
+/// Appending a package stanza is not enough: the lock validation compares the package graph
+/// in canonical order, so the combined lock has to list `gmp` before `oniguruma` and `pcre2`.
+fn merge_lock_stanzas(base: &str, extra: &str) -> String {
+    let header_end = base.find("[[package]]").expect("base lock package stanza");
+    let header = &base[..header_end];
+    let mut stanzas: Vec<String> = base[header_end..]
+        .split("[[package]]")
+        .filter(|stanza| !stanza.trim().is_empty())
+        .map(|stanza| format!("[[package]]{}", stanza.trim_end()))
+        .collect();
+    let extra_start = extra.find("[[package]]").expect("extra lock package stanza");
+    stanzas.extend(
+        extra[extra_start..]
+            .split("[[package]]")
+            .filter(|stanza| !stanza.trim().is_empty())
+            .map(|stanza| format!("[[package]]{}", stanza.trim_end())),
+    );
+    stanzas.sort_by_key(|stanza| {
+        stanza
+            .lines()
+            .find_map(|line| line.strip_prefix("name = ").map(str::to_string))
+            .unwrap_or_default()
+    });
+    let mut merged = header.to_string();
+    for stanza in stanzas {
+        merged.push_str(&stanza);
+        merged.push_str("\n\n");
+    }
+    merged
+}
+
+/// Copies a directory tree recursively for the test-only managed-native cache handoff.
+fn copy_tree(source: &Path, destination: &Path) -> std::io::Result<()> {
+    std::fs::create_dir_all(destination)?;
+    for entry in std::fs::read_dir(source)? {
+        let entry = entry?;
+        let target = destination.join(entry.file_name());
+        if entry.file_type()?.is_dir() {
+            copy_tree(&entry.path(), &target)?;
+        } else if entry.path() != target {
+            std::fs::copy(entry.path(), target)?;
+        }
+    }
+    Ok(())
+}

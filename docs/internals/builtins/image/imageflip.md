@@ -1,8 +1,6 @@
 ---
 title: "imageflip() - internals"
 description: "Compiler internals for imageflip(): lowering path, type checks, and runtime helpers."
-sidebar:
-  order: 507
 ---
 
 ## `imageflip()` - internals
@@ -10,7 +8,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`crates/elephc-builtin-contract/src/catalog_data.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-builtin-contract/src/catalog_data.rs)
-- **Lowering**: [`src/image_prelude.rs`:3173](https://github.com/illegalstudio/elephc/blob/main/src/image_prelude.rs#L3173) (`imageflip`)
+- **Lowering**: [`src/image_prelude.rs`](https://github.com/illegalstudio/elephc/blob/main/src/image_prelude.rs) (`imageflip`)
 - **Function symbol**: `imageflip()`
 
 

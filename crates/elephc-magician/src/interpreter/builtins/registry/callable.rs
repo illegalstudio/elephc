@@ -14,6 +14,7 @@
 mod array_dispatch;
 mod call_user_func;
 mod execution;
+mod native_descriptor;
 mod object_dispatch;
 mod ownership;
 pub(in crate::interpreter) use ownership::*;
@@ -25,6 +26,7 @@ pub(in crate::interpreter) use array_dispatch::*;
 pub(in crate::interpreter) use call_user_func::*;
 pub(in crate::interpreter) use execution::*;
 use object_dispatch::*;
+use native_descriptor::*;
 use static_dispatch::*;
 
 /// Distinguishes PHP's invokable-object callback form from an explicit method callback.
@@ -254,6 +256,15 @@ fn eval_callable_with_optional_scope_and_array_receiver(
     if values.type_tag(callback)? == EVAL_TAG_OBJECT {
         return eval_object_callable(callback, context, values).map(|callback| (callback, None));
     }
+    if values.type_tag(callback)? == EVAL_TAG_CALLABLE {
+        let signature = values
+            .native_callable_signature(callback)?
+            .ok_or(EvalStatus::UnsupportedConstruct)?;
+        return Ok((EvaluatedCallable::NativeDescriptor {
+            callback,
+            display_name: signature.display_name,
+        }, None));
+    }
     if values.is_array_like(callback)? {
         return eval_array_callable_with_receiver_owner(callback, context, lexical_scope, values);
     }
@@ -270,6 +281,21 @@ pub(in crate::interpreter) fn eval_object_callable(
     let identity = values.object_identity(callback)?;
     if let Some(target) = context.closure_object_target(identity) {
         return Ok(eval_closure_object_target_callable(target));
+    }
+    #[cfg(not(test))]
+    if let Some(owner_pointer) = crate::ffi::dynamic_destructors::dynamic_object_owner_context(identity) {
+        if !std::ptr::eq(owner_pointer, context as *const ElephcEvalContext) {
+            if let Some(owner_context) = unsafe { owner_pointer.as_ref() }
+                .filter(|owner| owner.abi_version() == crate::abi::ABI_VERSION)
+            {
+                if let Some(target) = owner_context.closure_object_target(identity) {
+                    return Ok(EvaluatedCallable::ForeignContext {
+                        callback: Box::new(eval_closure_object_target_callable(target)),
+                        owner: crate::context::pcntl_runtime::EvalPcntlContextLease::for_live_dynamic_object(owner_pointer),
+                    });
+                }
+            }
+        }
     }
     let Some(class) = context.dynamic_object_class(identity) else {
         let class_name = runtime_object_class_name(callback, values)?;
@@ -309,6 +335,12 @@ fn eval_closure_object_target_callable(target: &EvalClosureObjectTarget) -> Eval
             EvaluatedCallable::ForeignContext {
                 callback: Box::new(eval_closure_object_target_callable(target)),
                 owner: owner.clone(),
+            }
+        }
+        EvalClosureObjectTarget::NativeDescriptor { callback, display_name } => {
+            EvaluatedCallable::NativeDescriptor {
+                callback: *callback,
+                display_name: display_name.clone(),
             }
         }
         EvalClosureObjectTarget::Named(name) => EvaluatedCallable::Named {

@@ -52,10 +52,13 @@ const BUILTIN_REFLECTION_CLASS_NAMES: &[&str] = &[
 /// `ReflectionEnum::getBackingType()` has no such path; its row lowers the type classes, but the
 /// object that getter returns is unusable for a separate reason — it crashes even when nothing
 /// stringifies it — so no test can exercise that row until that is fixed.
+///
+/// A class builder answers with a `ReflectionEnum` when the class is an enum (php's class
+/// factory does the same), so the class getters list it too.
 const MATERIALIZED_REFLECTION_SLOTS: &[(&str, &str, &[&str])] = &[
     ("getdeclaringfunction", "__declaring_function", &["ReflectionFunction", "ReflectionMethod"]),
-    ("getdeclaringclass", "__declaring_class", &["ReflectionClass"]),
-    ("getclass", "__class", &["ReflectionClass"]),
+    ("getdeclaringclass", "__declaring_class", &["ReflectionClass", "ReflectionEnum"]),
+    ("getclass", "__class", &["ReflectionClass", "ReflectionEnum"]),
     ("getparentclass", "__parent_class", &["ReflectionClass"]),
     ("getinterfaces", "__interfaces", &["ReflectionClass"]),
     ("gettraits", "__traits", &["ReflectionClass"]),
@@ -273,6 +276,7 @@ fn collect_builtin_reflection_class_from_type(
         | PhpType::Packed(_)
         | PhpType::Pointer(None)
         | PhpType::Resource(_)
+        | PhpType::Narrow(_)
         | PhpType::TaggedScalar => {}
     }
 }
@@ -283,7 +287,7 @@ fn insert_builtin_reflection_class(
     class_name: &str,
     classes: &mut BTreeSet<String>,
 ) {
-    let Some(canonical) = canonical_builtin_reflection_class_name(class_name) else {
+    let Some(canonical) = builtin_reflection_ancestor(module, class_name) else {
         return;
     };
     if !module.class_infos.contains_key(canonical) || !classes.insert(canonical.to_string()) {
@@ -302,6 +306,18 @@ fn insert_builtin_reflection_class(
     for dependency in dependencies {
         insert_builtin_reflection_class(module, &dependency, classes);
     }
+}
+
+/// Resolves a builtin Reflection class directly or through a user subclass's parent chain.
+fn builtin_reflection_ancestor(module: &Module, class_name: &str) -> Option<&'static str> {
+    let mut current = class_name.trim_start_matches('\\');
+    for _ in 0..=module.class_infos.len() {
+        if let Some(canonical) = canonical_builtin_reflection_class_name(current) {
+            return Some(canonical);
+        }
+        current = module.class_infos.get(current)?.parent.as_deref()?;
+    }
+    None
 }
 
 /// Adds the Reflection classes codegen can hand back through a getter the program names.

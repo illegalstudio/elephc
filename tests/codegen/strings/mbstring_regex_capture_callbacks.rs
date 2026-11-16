@@ -43,8 +43,7 @@ var_dump($matches);
         "bool(true)\nint(7)\nint(7)\nbool(true)\nA\nbool(true)\n",
         "mb_ereg(): Argument #1 ($pattern) must not be empty\n",
         "mb_ereg(): Argument #1 ($pattern) must not be empty\nint(9)\n"));
-    assert_eq!(output.stderr,
-        "Warning: mb_ereg(): Argument #3 ($matches) must be passed by reference, value given\n".repeat(3));
+    assert_eq!(normalize_diagnostic_text(&output.stderr), "Warning: mb_ereg(): Argument #3 ($matches) must be passed by reference, value given\n".repeat(3));
 }
 
 /// Matches PHP's different temporary-array lifetimes for direct syntax, dynamic wrappers, and retained arrays.
@@ -77,8 +76,7 @@ echo "done\n";
     assert_eq!(output.stdout, concat!(
         "direct\nold\nbool(true)\ndynamic\nold\nbool(false)\n",
         "retained\nbool(false)\nold\ndynamic-value\nold\nbool(false)\ndone\n"));
-    assert_eq!(output.stderr,
-        "Warning: mb_ereg(): Argument #3 ($matches) must be passed by reference, value given\n".repeat(4));
+    assert_eq!(normalize_diagnostic_text(&output.stderr), "Warning: mb_ereg(): Argument #3 ($matches) must be passed by reference, value given\n".repeat(4));
 }
 
 /// Adapts evaluated callback values from reflection, array_map, and nested callback wrappers.
@@ -107,8 +105,7 @@ echo $matches[0], "\n";
     let output = compile_and_run_capture(&program(body));
     assert!(output.success, "{}", output.stderr);
     assert_eq!(output.stdout, "bool(true)\nint(7)\nbool(true)\na\nbool(true)\nint(9)\nbool(true)\nbool(true)\nbool(true)\nA\nbool(true)\nb\n");
-    assert_eq!(output.stderr,
-        "Warning: mb_ereg(): Argument #3 ($matches) must be passed by reference, value given\n".repeat(4));
+    assert_eq!(normalize_diagnostic_text(&output.stderr), "Warning: mb_ereg(): Argument #3 ($matches) must be passed by reference, value given\n".repeat(4));
 }
 
 /// Preserves operand evaluation, Stringable conversion, destructor order, and scalar scratch lifetimes.
@@ -139,7 +136,7 @@ var_dump(call_user_func_array(new CallbackCondition() ? selected_callback_name()
         "new:left\nnew:right\nstring:left\nstring:right\ndrop:left\ndrop:right\narguments\nbool(true)\n",
         "new:left\nnew:right\nstring:left\nstring:right\ndrop:left\ndrop:right\nname conversion\n1234:156\n",
         "condition\nselected\nbool(true)\n"));
-    assert_eq!(output.stderr, "Warning: mb_ereg(): Argument #3 ($matches) must be passed by reference, value given\n");
+    assert_eq!(normalize_diagnostic_text(&output.stderr), "Warning: mb_ereg(): Argument #3 ($matches) must be passed by reference, value given\n");
 }
 
 /// Compares residual native allocation counts after one and twenty-four invocations of a callback surface.

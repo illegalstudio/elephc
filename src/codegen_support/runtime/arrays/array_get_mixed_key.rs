@@ -126,6 +126,10 @@ pub fn emit_array_get_mixed_key(emitter: &mut Emitter) {
     emitter.instruction("ldr x9, [x0, #16]");                                   // load the runtime tag of the referenced value
     emitter.instruction("ldr x1, [x10]");                                       // load the referenced low payload word
     emitter.instruction("mov x2, #0");                                          // scalar ref-cells have no high payload word
+    crate::codegen_support::callable_invoker_args::emit_tagged_scalar_ref_source(
+        emitter, "x9", "x10", "__rt_array_get_mixed_key_clone_ref_box",
+        "__rt_array_get_mixed_key_clone_ref_not_tagged_scalar",
+    );
     emitter.instruction("cmp x9, #7");                                          // does the caller storage contain another boxed Mixed cell?
     emitter.instruction("b.eq __rt_array_get_mixed_key_clone_ref_mixed");       // unbox nested Mixed storage before cloning it
     emitter.instruction("cmp x9, #1");                                          // does the caller storage contain a string pair?
@@ -343,6 +347,10 @@ fn emit_array_get_mixed_key_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov r11, QWORD PTR [rax + 16]");                       // load the runtime tag of the referenced value
     emitter.instruction("mov rdi, QWORD PTR [r10]");                            // load the referenced low payload word
     emitter.instruction("xor rsi, rsi");                                        // scalar ref-cells have no high payload word
+    crate::codegen_support::callable_invoker_args::emit_tagged_scalar_ref_source(
+        emitter, "r11", "r10", "__rt_array_get_mixed_key_clone_ref_box",
+        "__rt_array_get_mixed_key_clone_ref_not_tagged_scalar",
+    );
     emitter.instruction("cmp r11, 7");                                          // does the caller storage contain another boxed Mixed cell?
     emitter.instruction("je __rt_array_get_mixed_key_clone_ref_mixed");         // unbox nested Mixed storage before cloning it
     emitter.instruction("cmp r11, 1");                                          // does the caller storage contain a string pair?

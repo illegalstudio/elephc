@@ -73,8 +73,14 @@ pub(super) fn lower(
         RuntimeFnId::JsonDecode => Some({
             crate::codegen::lower_inst::builtins::json::lower_json_decode(ctx, inst)
         }),
+        RuntimeFnId::JsonDecodeCount => Some({
+            crate::codegen::lower_inst::builtins::json::lower_json_decode_count(ctx, inst)
+        }),
         RuntimeFnId::JsonEncode => Some({
             crate::codegen::lower_inst::builtins::json::lower_json_encode(ctx, inst)
+        }),
+        RuntimeFnId::JsonEncodeStr => Some({
+            crate::codegen::lower_inst::builtins::json::lower_json_encode_str(ctx, inst)
         }),
         RuntimeFnId::JsonLastError => Some({
             crate::codegen::lower_inst::builtins::json::lower_json_last_error(ctx, inst)
@@ -88,6 +94,12 @@ pub(super) fn lower(
         RuntimeFnId::Localtime => Some({
             crate::codegen::lower_inst::builtins::system::lower_localtime(ctx, inst)
         }),
+        RuntimeFnId::MemoryGetAllocations
+        | RuntimeFnId::MemoryGetFrees
+        | RuntimeFnId::MemoryGetPeakUsage
+        | RuntimeFnId::MemoryGetUsage
+        | RuntimeFnId::MemoryResetPeakUsage
+        => Some(crate::codegen::lower_inst::builtins::memory::lower(ctx, inst, target)),
         RuntimeFnId::Microtime => Some({
             crate::codegen::lower_inst::builtins::system::lower_microtime(ctx, inst)
         }),

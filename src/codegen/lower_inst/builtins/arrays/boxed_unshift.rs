@@ -16,7 +16,11 @@ pub(super) fn lower_boxed_array_unshift(
     inst: &Instruction,
     array: ValueId,
 ) -> Result<()> {
-    ReceiverPlace::resolve(ctx, array)?.require_writable("array_unshift")?;
+    let receiver = ReceiverPlace::resolve(ctx, array)?;
+    receiver.require_writable("array_unshift")?;
+    // Argument evaluation can replace the source after its EIR load. Validate the current place
+    // before prefix allocation or any ownership transfer, including a newly valid array.
+    receiver.reload_local_value(ctx, array)?;
     validate_receiver(ctx, array)?;
     emit_prefix(ctx, &inst.operands[1..])?;
     let result = abi::int_result_reg(ctx.emitter);
@@ -51,6 +55,92 @@ pub(super) fn lower_boxed_array_unshift(
         Arch::X86_64 => ctx.emitter.instruction("mov rax, QWORD PTR [rax]"),    // return the new logical entry count
     }
     abi::emit_release_temporary_stack(ctx.emitter, 32);
+    store_if_result(ctx, inst)
+}
+
+/// Prepends values to a concrete associative array, renumbering integer keys from zero.
+///
+/// The boxed path mutates a Mixed cell in place; a concrete hash has no cell, so the merged table
+/// is published as the receiver and the replaced table and the prefix are released, mirroring the
+/// hash-reindexing sorts. The prefix is built by the shared [`emit_prefix`].
+pub(super) fn lower_assoc_array_unshift(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+    array: ValueId,
+) -> Result<()> {
+    let receiver = ReceiverPlace::resolve(ctx, array)?;
+    receiver.require_writable("array_unshift")?;
+    receiver.reload_local_value(ctx, array)?;
+    super::boxed_mutation::require_non_null_hash_receiver(ctx, array, "array_unshift")?;
+    emit_prefix(ctx, &inst.operands[1..])?;
+    let result = abi::int_result_reg(ctx.emitter);
+    let arg0 = abi::int_arg_reg_name(ctx.emitter.target, 0);
+    let arg1 = abi::int_arg_reg_name(ctx.emitter.target, 1);
+    abi::emit_push_reg(ctx.emitter, result);                                    // park the owned prefix at stack offset 0
+    receiver.prepare_consuming_storeback(ctx, array)?;
+    super::sort_dispatch::ensure_unique_hash_sort_source(ctx, array)?;
+    ctx.load_value_to_reg(array, result)?;                                      // borrow the concrete hash being replaced
+    abi::emit_push_reg(ctx.emitter, result);                                    // park the old table: old at 0, prefix at 16
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            abi::emit_load_temporary_stack_slot(ctx.emitter, "x2", 0);          // pass the old table as the merge source payload
+            abi::emit_load_int_immediate(ctx.emitter, "x3", 5);                 // its layout tag is associative hash
+        }
+        Arch::X86_64 => {
+            abi::emit_load_temporary_stack_slot(ctx.emitter, "rdx", 0);         // pass the old table as the merge source payload
+            abi::emit_load_int_immediate(ctx.emitter, "rcx", 5);                // its layout tag is associative hash
+        }
+    }
+    abi::emit_load_temporary_stack_slot(ctx.emitter, arg0, 16);                 // the packed prefix is the merge destination
+    abi::emit_load_int_immediate(ctx.emitter, arg1, 4);                         // the prefix's own layout tag is packed array
+    abi::emit_call_label(ctx.emitter, "__rt_array_merge_boxed");
+    finish_assoc_unshift(ctx, inst, array, &receiver, true)
+}
+
+/// Renumbers a hash's integer keys even when no values are supplied, preserving its value storage.
+pub(super) fn lower_assoc_array_unshift_without_values(
+    ctx: &mut FunctionContext<'_>, inst: &Instruction, array: ValueId,
+) -> Result<()> {
+    let receiver = ReceiverPlace::resolve(ctx, array)?;
+    receiver.require_writable("array_unshift")?;
+    receiver.reload_local_value(ctx, array)?;
+    super::boxed_mutation::require_non_null_hash_receiver(ctx, array, "array_unshift")?;
+    receiver.prepare_consuming_storeback(ctx, array)?;
+    super::sort_dispatch::ensure_unique_hash_sort_source(ctx, array)?;
+    let result = abi::int_result_reg(ctx.emitter);
+    ctx.load_value_to_result(array)?;
+    abi::emit_push_reg(ctx.emitter, result);                                    // preserve the old table owner until its replacement is published
+    ctx.load_value_to_reg(array, abi::int_arg_reg_name(ctx.emitter.target, 0))?;
+    for index in 1..=4 {
+        abi::emit_load_int_immediate(ctx.emitter, abi::int_arg_reg_name(ctx.emitter.target, index), 0);
+    }
+    // A full non-preserving slice retains typed values and string keys, renumbers integer keys,
+    // and resets append history. Unlike boxed merging, it preserves non-Mixed hash value storage.
+    abi::emit_call_label(ctx.emitter, "__rt_hash_slice");
+    finish_assoc_unshift(ctx, inst, array, &receiver, false)
+}
+
+/// Publishes the fresh hash before retiring its old table and optional prefix owner.
+fn finish_assoc_unshift(
+    ctx: &mut FunctionContext<'_>, inst: &Instruction, array: ValueId,
+    receiver: &ReceiverPlace, has_prefix: bool,
+) -> Result<()> {
+    let result = abi::int_result_reg(ctx.emitter);
+    abi::emit_push_reg(ctx.emitter, result);                                    // preserve the fresh table above the old table and optional prefix
+    ctx.store_result_value(array)?;
+    receiver.store_back_after_consuming_split(ctx, array)?;
+    abi::emit_load_temporary_stack_slot(ctx.emitter, result, 16);               // release the replaced table
+    abi::emit_call_label(ctx.emitter, "__rt_decref_hash");
+    if has_prefix {
+        abi::emit_load_temporary_stack_slot(ctx.emitter, result, 32);           // release the optional prefix after the new table retains its values
+        abi::emit_call_label(ctx.emitter, "__rt_decref_array");
+    }
+    abi::emit_load_temporary_stack_slot(ctx.emitter, result, 0);                // return the merged table's logical entry count
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => ctx.emitter.instruction("ldr x0, [x0]"),               // read the new count from the published table
+        Arch::X86_64 => ctx.emitter.instruction("mov rax, QWORD PTR [rax]"),    // read the new count from the published table
+    }
+    abi::emit_release_temporary_stack(ctx.emitter, if has_prefix { 48 } else { 32 });
     store_if_result(ctx, inst)
 }
 

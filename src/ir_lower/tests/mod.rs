@@ -14,48 +14,138 @@ use std::path::{Path, PathBuf};
 use crate::codegen::platform::Target;
 use crate::ir::{print_module, Terminator};
 
+/// Schedules expensive target fixtures independently while keeping all five ABIs covered.
+macro_rules! supported_target_cases {
+    ($name:ident, $verify:ident) => {
+        mod $name {
+            /// Verifies the fixture on macOS ARM64.
+            #[test]
+            fn macos_aarch64() { super::$verify("macos-aarch64"); }
+            /// Verifies the fixture on iOS devices.
+            #[test]
+            fn ios_arm64() { super::$verify("ios-arm64"); }
+            /// Verifies the fixture on the iOS ARM64 simulator.
+            #[test]
+            fn ios_sim_arm64() { super::$verify("ios-sim-arm64"); }
+            /// Verifies the fixture on Linux ARM64.
+            #[test]
+            fn linux_aarch64() { super::$verify("linux-aarch64"); }
+            /// Verifies the fixture on Linux x86_64.
+            #[test]
+            fn linux_x86_64() { super::$verify("linux-x86_64"); }
+        }
+    };
+}
+
 mod aggregate_operand_owners;
+mod boxed_operators;
+mod loose_comparison_batch;
 mod argument_evaluation_owners;
+mod computed_property_update_owners;
+mod property_dimension_fetch_modes;
+mod alias_call_string_owners;
+mod method_receiver_owners;
+mod property_foreach_owners;
+mod property_unset_owners;
+mod native_property_read_leases;
+mod runtime_property_setters;
+mod indexed_property_protocols;
+mod callable_argument_labels;
+mod object_property_indices;
+mod promoted_constructor_references;
+mod native_reference_validators;
+mod native_reference_store_modes;
+mod native_reference_parameter_leases;
+mod source_variadic_calls;
+mod method_call_review;
+mod erased_xml_presence;
+mod ordinary_prefix_storage;
+mod scalar_parameter_owners;
+mod global_return_owners;
+mod conditional_assignment_owners;
+mod borrowed_string_reads;
+mod mbstring_fast_semantics;
+mod buffer_element_updates;
+mod ref_local_append;
+mod foreach_hash_scalars;
+mod settype_foreach;
+mod string_offset_lifetime;
+mod string_offset_writes;
 mod arrays;
+mod unset_collection;
+mod typed_element_refs;
+mod list_hash_param_binding;
+mod array_edge_guards;
+mod sparse_key_writes;
+mod assoc_push;
 mod append_writes;
+mod nullable_array_merges;
 mod array_reference_outputs;
 mod array_implode;
 mod array_membership;
 mod call_coercion_owners;
+mod integer_destinations;
 mod callable_flow_safety;
 mod loop_closures;
+mod method_loop_counters;
+mod nullable_fallback_flow;
+mod reused_loop_counters;
+mod counter_fast_paths;
 mod callable_property_owners;
 mod class_introspection_owners;
 mod closure_bind_owners;
+mod closure_scope_variants;
 mod corpus;
 mod debug_info;
 mod descriptor_ownership;
+mod descriptor_reference_layouts;
 mod descriptor_unpack_keys;
 mod destructor_catch_preservation;
 mod dom_html_review;
 mod dynamic_spreads;
 mod effects;
+mod container_store_effects;
+mod call_effect_followups;
+mod generator_identity;
+mod method_receiver_roots;
 mod enum_argument_boundaries;
 mod enum_review;
 mod enum_result_owners;
 mod string_append;
 mod eval_ownership;
+mod eval_native_reference_layout;
+mod native_reference_outputs;
+mod native_reference_mutations;
+mod eval_typed_array_boundaries;
 mod eval_default_helpers;
 mod default_review_boundaries;
 mod exhaustive;
 mod ownership;
+mod property_element_unset;
+mod transient_string_claims;
 mod strip_tags_review;
 mod weak_map_places;
 mod backtrace_labels;
 mod preg_match_all_review;
 mod object_mixed_return_owners;
+mod numeric_string_comparisons;
+mod packed_record_addresses;
+mod fixed_layout_field_narrowing;
+mod scalar_load_owners;
+mod buffer_lengths;
+mod branch_conditions;
 mod boxed_array_write_owners;
 mod boxed_array_reduce;
 mod boxed_array_aggregates;
+mod keyed_array_kernels;
 mod boxed_array_multisort;
 mod builtin_datetime_methods;
 mod eval_demand;
 mod instanceof_operand_owners;
+mod guarded_interface_receivers;
+mod guarded_interface_mutations;
+mod if_join_divergent_locals;
+mod switch_initialization;
 mod iter_start_origin;
 mod iterator_cleanup;
 mod iterator_aggregate_owners;
@@ -67,8 +157,16 @@ mod static_nested_updates;
 mod reference_cells;
 mod reference_detach;
 mod reference_property_payload;
+mod reflection_mirror_ownership;
+mod reflection_static_lifetimes;
+mod reflection_branch_targets;
 mod reference_return_boundaries;
+mod reference_return_siblings;
+mod reference_override_results;
 mod callable_operand_owners;
+mod late_string_argument_owners;
+mod native_isset_key_owners;
+mod converted_merge_owners;
 mod capture_view_owners;
 mod static_properties;
 mod nested_append_review;
@@ -78,7 +176,14 @@ mod static_receiver_writes;
 mod synthetic_arrays;
 mod throwable_constructors;
 mod mixed_throw_errors;
+mod hosted_exception_discard;
 mod xml_parser_arguments;
+mod simplexml_targets;
+mod simplexml_reference_arguments;
+mod simplexml_target_corpora;
+mod instance_dimension_incdec;
+mod native_property_child_probes;
+mod shared_property_reads;
 
 /// Runs frontend, type checking, optimization, and EIR lowering for a source string.
 fn lower_source(source: &str) -> crate::ir::Module {
@@ -120,6 +225,21 @@ fn try_lower_source_at_for_target(
     parent: &Path,
     target: Target,
 ) -> Result<crate::ir::Module, crate::ir_lower::LoweringError> {
+    try_lower_source_at_for_target_with_reachability(source, main_file_path, parent, target, false)
+}
+
+/// Emits executable corpora after the same declaration reachability pass used in production.
+fn lower_reachable_source_at_for_target(
+    source: &str, main_file_path: &Path, parent: &Path, target: Target,
+) -> crate::ir::Module {
+    try_lower_source_at_for_target_with_reachability(source, main_file_path, parent, target, true)
+        .unwrap_or_else(|error| panic!("EIR corpus lowering failed for {}: {error:?}", main_file_path.display()))
+}
+
+/// Shares frontend setup while declaration-inspection tests retain their unpruned functions.
+fn try_lower_source_at_for_target_with_reachability(
+    source: &str, main_file_path: &Path, parent: &Path, target: Target, prune: bool,
+) -> Result<crate::ir::Module, crate::ir_lower::LoweringError> {
     let source_mode = crate::source::SourceMode::from_path(main_file_path);
     let tokens =
         crate::lexer::tokenize_with_mode(source, source_mode).expect("tokenize failed");
@@ -151,7 +271,7 @@ fn try_lower_source_at_for_target(
         &mut prelude_inventory,
     );
     let ast = crate::tz_prelude::inject_if_used(ast, false, &mut prelude_inventory);
-    let ast = crate::list_id_prelude::inject_if_used(ast, &mut prelude_inventory);
+    let ast = crate::list_id_prelude::inject_if_used(ast, false, &mut prelude_inventory);
     let ast = crate::var_export_prelude::inject_if_used(ast, &mut prelude_inventory);
     let (ast, _) = crate::opcache_prelude::inject_if_used(
         ast,
@@ -168,9 +288,20 @@ fn try_lower_source_at_for_target(
     let ast = crate::hash_prelude::inject_if_used(ast, false, &mut prelude_inventory);
     let ast = crate::core_prelude::inject_if_used(ast, &mut prelude_inventory);
     let ast = crate::bcmath_prelude::inject_if_used(ast, false, &mut prelude_inventory);
+    let ast = crate::random_prelude::inject_if_used(ast, false, &mut prelude_inventory);
     let ast = crate::testing_prelude::inject_if_used(ast, false, &mut prelude_inventory);
     let ast = crate::curl_prelude::inject_if_used(ast, false, &mut prelude_inventory);
     let ast = crate::xml_prelude::inject_if_used(ast, false, &mut prelude_inventory);
+    let ast = crate::tidy_prelude::inject_if_used(
+        ast,
+        false,
+        "",
+        "",
+        false,
+        &mut prelude_inventory,
+    );
+    let ast = crate::fileinfo_prelude::inject_if_used(ast, false, &mut prelude_inventory);
+    let ast = crate::tokenizer_prelude::inject_if_used(ast, false, &mut prelude_inventory);
     let ast = crate::dom_html_prelude::inject_if_used(ast, false, &mut prelude_inventory);
     let ast = crate::version_prelude::inject_if_used(
         ast,
@@ -187,6 +318,8 @@ fn try_lower_source_at_for_target(
     .expect("autoload failed");
     let ast = crate::dom_html_prelude::inject_after_autoload(ast, &mut prelude_inventory)
         .expect("autoload DOM prelude injection failed");
+    let ast = crate::object_cast_prelude::inject_if_used(ast, &mut prelude_inventory)
+        .expect("object-cast prelude injection failed");
     // Mirrors `pipeline::compile`, which desugars the `func_get_args()` family between
     // `autoload::run` and constant folding. Without it an example using those functions
     // reaches the checker as an undefined call, so the corpus would fail on valid PHP.
@@ -196,7 +329,7 @@ fn try_lower_source_at_for_target(
     // CLASS is instantiated by that driver rather than by the checker, so a plain
     // `check_with_target` here hands the checker a template and reports `Unknown type: T` on an
     // example that compiles perfectly well through the CLI.
-    let (ast, check_result) = crate::generics::monomorphize(ast, |program, bounds| {
+    let (ast, mut check_result) = crate::generics::monomorphize(ast, |program, bounds| {
         crate::types::check_with_target_and_bounds(program, target, bounds)
     })
     .expect("type check failed");
@@ -211,6 +344,15 @@ fn try_lower_source_at_for_target(
     );
     let ast =
         crate::optimize::eliminate_dead_code(ast, check_result.local_binding_decision_spans());
+    let ast = if prune {
+        let roots = crate::generics::instantiation_roots(&check_result.requested_instantiations)
+            .into_iter().collect();
+        crate::optimize::prune_unreachable_declarations(ast, &mut check_result,
+            crate::optimize::reachability::PruneOptions {
+                inventory: &prelude_inventory, forced_groups: &HashSet::new(),
+                exported_functions: &roots, eval_forced: false,
+            })
+    } else { ast };
     crate::ir_lower::lower_program(&ast, &check_result, target, false)
 }
 
@@ -331,6 +473,28 @@ fn native_reflection_program_lowers_reachable_builtin_methods() {
         r#"<?php
 class Plain {}
 $reflection = new ReflectionClass('Plain');
+echo $reflection->getName();
+"#,
+    );
+    let method_names = module
+        .class_methods
+        .iter()
+        .map(|function| function.name.as_str())
+        .collect::<HashSet<_>>();
+    assert!(method_names.contains("ReflectionClass::__construct"));
+    assert!(method_names.contains("ReflectionClass::getName"));
+}
+
+/// Verifies a user Reflection subclass retains the builtin constructor and inherited methods.
+#[test]
+fn native_reflection_subclass_lowers_reachable_builtin_methods() {
+    let module = lower_source(
+        r#"<?php
+class ReflectedTarget {}
+class UserReflection extends ReflectionClass {
+    public function __construct(string $name) { parent::__construct($name); }
+}
+$reflection = new UserReflection(ReflectedTarget::class);
 echo $reflection->getName();
 "#,
     );

@@ -45,15 +45,19 @@ fn allocations(stderr: &str) -> usize {
         .split_whitespace().next().unwrap().parse().expect("numeric allocation counter")
 }
 
-/// A checked accumulator needs one numeric box per update, without a second copy.
+/// A checked accumulator allocates nothing per update once the optimizer runs.
+///
+/// Without the optimizer each update still boxes its sum on the heap: the assignment copy
+/// takes the variable's frame cell (the final `echo` is a numeric observation), not the
+/// producer. The transfer stores the producer itself, which lets it take that cell.
 #[test]
 fn test_fresh_mixed_transfer_removes_per_update_copy() {
     let (plain, plain_heap) = run_fixture(SUM, false);
     let (optimized, optimized_heap) = run_fixture(SUM, true);
     assert_eq!(plain, "500500");
     assert_eq!(optimized, plain);
-    assert!(allocations(&optimized_heap) <= 1020, "{optimized_heap}");
-    assert!(allocations(&plain_heap) >= 2000, "{plain_heap}");
+    assert!(allocations(&optimized_heap) <= 20, "{optimized_heap}");
+    assert!(allocations(&plain_heap) >= 1000, "{plain_heap}");
     assert!(optimized_heap.contains("HEAP DEBUG: leak summary: clean"), "{optimized_heap}");
     assert!(plain_heap.contains("HEAP DEBUG: leak summary: clean"), "{plain_heap}");
 }
@@ -99,8 +103,12 @@ fn test_fresh_mixed_transfer_all_target_eir() {
             .arg(&php_path).output().expect("emit target EIR");
         assert!(result.status.success(), "{target}: {}", String::from_utf8_lossy(&result.stderr));
         let ir = String::from_utf8(result.stdout).expect("UTF-8 EIR");
-        let main = ir.split("function main(").nth(1).expect("main EIR");
-        assert!(main.contains(" = ichecked_add "), "{target}: {main}");
+        let main = ir.split("function main(").nth(1).expect("main EIR")
+            .split("\n  function ").next().unwrap();
+        let numeric_add = main.contains(" = ichecked_add ") || main.lines().any(|line| {
+            line.contains(" = mixed_numeric_binop ") && line.contains(" add ")
+        });
+        assert!(numeric_add, "{target}: promotion-aware numeric addition must remain: {main}");
         assert!(!main.contains(" = mixed_clone "), "{target}: {main}");
     }
     fs::remove_dir_all(dir).expect("remove target fixture");

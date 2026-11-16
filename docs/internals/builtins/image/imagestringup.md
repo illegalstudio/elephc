@@ -1,8 +1,6 @@
 ---
 title: "imagestringup() - internals"
 description: "Compiler internals for imagestringup(): lowering path, type checks, and runtime helpers."
-sidebar:
-  order: 532
 ---
 
 ## `imagestringup()` - internals
@@ -10,7 +8,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`crates/elephc-builtin-contract/src/catalog_data.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-builtin-contract/src/catalog_data.rs)
-- **Lowering**: [`src/image_prelude.rs`:2913](https://github.com/illegalstudio/elephc/blob/main/src/image_prelude.rs#L2913) (`imagestringup`)
+- **Lowering**: [`src/image_prelude.rs`](https://github.com/illegalstudio/elephc/blob/main/src/image_prelude.rs) (`imagestringup`)
 - **Function symbol**: `imagestringup()`
 
 

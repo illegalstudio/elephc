@@ -1,5 +1,5 @@
 //! Purpose:
-//! Chooses the machine emission order of one function's EIR blocks and finds integer
+//! Chooses the machine emission order of one function's EIR blocks and finds scalar
 //! compares that can be fused into their block's conditional branch.
 //!
 //! Called from:
@@ -12,10 +12,15 @@
 //!   loop body's hot path is laid out contiguously and branches over no cold code.
 //! - Every terminator lowers to explicit jumps except a jump to the block laid out next,
 //!   which is what makes any order semantically safe.
+//! - A signed overflow test fused into `cond_br` must sit immediately after its wrapping
+//!   arithmetic, with the flag boolean used only by that branch. The result may live in a
+//!   register or a stack slot; the slot store preserves the overflow flags.
 
 use std::collections::HashMap;
 
-use crate::ir::{BasicBlock, Function, InstId, Op, Terminator, ValueId};
+use crate::ir::{
+    BasicBlock, CmpPredicate, Function, Immediate, InstId, MixedNumericOp, Op, Terminator, ValueId,
+};
 use crate::ir_passes::{successors, terminator_uses};
 
 /// Returns block-table indices in emission order: hot blocks first, cold blocks last.
@@ -70,12 +75,13 @@ pub(super) fn value_use_counts(function: &Function) -> HashMap<ValueId, usize> {
     counts
 }
 
-/// Returns the integer compare that `block`'s `cond_br` can consume as flags, if any.
+/// Returns the scalar compare that `block`'s `cond_br` can consume as flags, if any.
 ///
 /// The compare must be the block's last emitting instruction (only `nop`s may follow), and its
 /// boolean must have no use besides the branch condition (`use_counts` from
 /// [`value_use_counts`]), so skipping its materialization is unobservable and no instruction
-/// runs between the flag-setting compare and the branch.
+/// runs between the flag-setting compare and the branch. Float equality stays materialized
+/// because x86_64 needs both ZF and PF to distinguish equality from unordered NaN operands.
 pub(super) fn fusible_compare(
     function: &Function,
     block: &BasicBlock,
@@ -91,10 +97,68 @@ pub(super) fn fusible_compare(
         .copied()
         .find(|id| function.instruction(*id).is_some_and(|inst| inst.op != Op::Nop))?;
     let inst = function.instruction(compare)?;
-    if inst.op != Op::ICmp || inst.result != Some(*cond) {
+    let supported = match inst.op {
+        Op::ICmp => true,
+        Op::FCmp => matches!(
+            inst.immediate,
+            Some(Immediate::CmpPredicate(
+                CmpPredicate::Slt
+                    | CmpPredicate::Sle
+                    | CmpPredicate::Sgt
+                    | CmpPredicate::Sge
+                    | CmpPredicate::Olt
+                    | CmpPredicate::Ole
+                    | CmpPredicate::Ogt
+                    | CmpPredicate::Oge
+            ))
+        ),
+        _ => false,
+    };
+    if !supported || inst.result != Some(*cond) {
         return None;
     }
     (use_counts.get(cond) == Some(&1)).then_some(compare)
+}
+
+/// Returns the wrapping arithmetic and `IOverflows` flag a `cond_br` can consume as flags.
+///
+/// The flag instruction must be the block's last emitting instruction and its boolean must
+/// have no other use. The arithmetic instruction must be the immediately preceding emitting
+/// instruction, with the same operands and the operation selected by the flag immediate.
+/// The caller also requires the arithmetic result to already own a register, so the branch
+/// can write that register and test the flags with nothing flag-clobbering in between.
+pub(super) fn fusible_overflow(
+    function: &Function,
+    block: &BasicBlock,
+    use_counts: &HashMap<ValueId, usize>,
+) -> Option<(InstId, InstId)> {
+    let Some(Terminator::CondBr { cond, .. }) = &block.terminator else {
+        return None;
+    };
+    let mut emitting = block
+        .instructions
+        .iter()
+        .rev()
+        .copied()
+        .filter(|id| function.instruction(*id).is_some_and(|inst| inst.op != Op::Nop));
+    let flag = emitting.next()?;
+    let arith = emitting.next()?;
+    let flag_inst = function.instruction(flag)?;
+    let arith_inst = function.instruction(arith)?;
+    if flag_inst.op != Op::IOverflows || flag_inst.result != Some(*cond) {
+        return None;
+    }
+    if use_counts.get(cond) != Some(&1) || flag_inst.operands.len() != 2 {
+        return None;
+    }
+    let expected = match flag_inst.immediate {
+        Some(Immediate::MixedNumericOp(MixedNumericOp::Add)) => Op::IAdd,
+        Some(Immediate::MixedNumericOp(MixedNumericOp::Sub)) => Op::ISub,
+        Some(Immediate::MixedNumericOp(MixedNumericOp::Mul)) => Op::IMul,
+        _ => return None,
+    };
+    (arith_inst.op == expected && arith_inst.operands == flag_inst.operands && arith_inst.result.is_some())
+        .then_some((arith, flag))
 }
 
 #[cfg(test)]
@@ -150,6 +214,41 @@ mod tests {
         function
     }
 
+    /// Builds a float comparison diamond for one predicate.
+    fn float_diamond(predicate: CmpPredicate) -> Function {
+        let mut function = Function::new("float_f".to_string(), IrType::F64, PhpType::Float);
+        let mut builder = Builder::new(&mut function);
+        let entry = builder.create_named_block("entry", Vec::new());
+        let then_block = builder.create_named_block("then", Vec::new());
+        let else_block = builder.create_named_block("else", Vec::new());
+        builder.set_entry(entry);
+        builder.position_at_end(entry);
+        let lhs = builder.emit_const_f64(1.0);
+        let rhs = builder.emit_const_f64(2.0);
+        let cond = builder
+            .emit(
+                Op::FCmp,
+                vec![lhs, rhs],
+                Some(Immediate::CmpPredicate(predicate)),
+                IrType::I64,
+                PhpType::Bool,
+                Ownership::NonHeap,
+            )
+            .expect("fcmp result");
+        builder.terminate(Terminator::CondBr {
+            cond,
+            then_target: then_block,
+            then_args: Vec::new(),
+            else_target: else_block,
+            else_args: Vec::new(),
+        });
+        builder.position_at_end(then_block);
+        builder.terminate(Terminator::Return { value: Some(lhs) });
+        builder.position_at_end(else_block);
+        builder.terminate(Terminator::Return { value: Some(rhs) });
+        function
+    }
+
     /// Verifies a loop-free diamond has no retreating edge.
     #[test]
     fn diamond_has_no_retreating_edge() {
@@ -184,5 +283,29 @@ mod tests {
         let function = diamond(true);
         let counts = value_use_counts(&function);
         assert!(fusible_compare(&function, &function.blocks[0], &counts).is_none());
+    }
+
+    /// Ordered relational float compares fuse, while equality keeps its NaN-aware materializer.
+    #[test]
+    fn only_relational_float_branch_compares_fuse() {
+        for predicate in [
+            CmpPredicate::Slt,
+            CmpPredicate::Sle,
+            CmpPredicate::Sgt,
+            CmpPredicate::Sge,
+            CmpPredicate::Olt,
+            CmpPredicate::Ole,
+            CmpPredicate::Ogt,
+            CmpPredicate::Oge,
+        ] {
+            let function = float_diamond(predicate);
+            let counts = value_use_counts(&function);
+            assert!(fusible_compare(&function, &function.blocks[0], &counts).is_some());
+        }
+        for predicate in [CmpPredicate::Eq, CmpPredicate::Ne] {
+            let function = float_diamond(predicate);
+            let counts = value_use_counts(&function);
+            assert!(fusible_compare(&function, &function.blocks[0], &counts).is_none());
+        }
     }
 }

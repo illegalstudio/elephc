@@ -1,7 +1,8 @@
 //! Purpose:
 //! Local peephole rewrites over EIR: box/unbox cancellation, redundant
 //! `Move`/`Borrow` cleanup, scalar load/store forwarding, paired
-//! acquire/release cancellation, and string-literal concat folding.
+//! acquire/release cancellation, string-literal concat folding, and scalar
+//! box elision.
 //!
 //! Called from:
 //! - The fixed-point pass driver in `crate::ir_passes::driver`.
@@ -25,6 +26,7 @@ mod box_unbox;
 mod forward_ops;
 mod load_store;
 mod str_concat;
+mod tagged_box;
 
 /// Local peephole rewrite pass. See the module docs for the pattern set.
 pub struct Peephole;
@@ -45,6 +47,7 @@ impl IrPass for Peephole {
         acquire_release::collect(function, &mut rewrites);
         load_store::collect(function, &mut rewrites);
         str_concat::collect(function, data, &mut rewrites);
+        tagged_box::collect(function, &mut rewrites);
         if rewrites.is_empty() {
             return false;
         }

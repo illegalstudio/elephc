@@ -14,10 +14,10 @@ pub(super) fn lower_first_class_callable_new(ctx: &mut FunctionContext<'_>, inst
     let target = callable_target_data(ctx, inst)?.to_string();
     let strict_php = instruction_strict_php_profile(inst);
     if emit_static_late_bound_first_class_callable(ctx, &target)? {
-        return store_if_result(ctx, inst);
+        return store_callable_descriptor(ctx, inst);
     }
     if emit_instance_method_first_class_callable(ctx, inst, &target)? {
-        return store_if_result(ctx, inst);
+        return store_callable_descriptor(ctx, inst);
     }
     if let Some(descriptor) = first_class_callable_descriptor(ctx, &target, strict_php)? {
         let owns_string_return = descriptor.owns_string_return;
@@ -65,6 +65,16 @@ pub(super) fn lower_first_class_callable_new(ctx: &mut FunctionContext<'_>, inst
         emit_runtime_closure_descriptor_with_captures(ctx, &descriptor_label, &[], &[])?;
     } else {
         abi::emit_load_int_immediate(ctx.emitter, abi::int_result_reg(ctx.emitter), 0);
+    }
+    store_callable_descriptor(ctx, inst)
+}
+
+/// Keeps descriptor storage and captures while removing object identity for implicit callables.
+fn store_callable_descriptor(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+    if inst.op == Op::CallableValueNew {
+        // The shared constructor leaves its descriptor in the result register. Releasing only
+        // its handle preserves the descriptor's owner, captures, and fresh physical identity.
+        abi::emit_call_label(ctx.emitter, "__rt_object_handle_release");
     }
     store_if_result(ctx, inst)
 }
@@ -200,7 +210,11 @@ pub(super) fn emit_instance_method_first_class_callable(
         .get(&method_key)
         .cloned()
         .unwrap_or_else(|| normalized_class.clone());
-    if !class_method_body_exists(ctx, &impl_class, &method_key) {
+    // Only resume has the ordinary descriptor ABI among the bodyless Fiber instance methods.
+    // Start needs its dedicated argument array; state predicates need a hidden state operand.
+    let has_descriptor_wrapper = IntrinsicCall::instance_method(&impl_class, &method_key)
+        .is_some_and(|intrinsic| intrinsic.kind() == IntrinsicCallKind::FiberResume);
+    if !class_method_body_exists(ctx, &impl_class, &method_key) && !has_descriptor_wrapper {
         return Err(CodegenIrError::unsupported(format!(
             "instance first-class callable '{}' without emitted method body",
             target

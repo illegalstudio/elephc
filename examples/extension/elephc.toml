@@ -1,0 +1,5 @@
+[extension]
+schema = 1
+
+[extension.dependencies]
+wordstat = { path = "ext/wordstat" }

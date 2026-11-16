@@ -68,7 +68,10 @@ def render_svg(history: dict, dark: bool = False, days: int = 90) -> str:
     text(28, 40, f"ELEPHC / {TITLES[suite]}", 22, True)
     latest = records[-1] if records else None
     date = latest["date"] if latest else "no CI samples yet"
-    text(28, 67, f"Latest: {date} | {len(records)} saved samples | recent {days} days", 13, muted=True)
+    # Name the PHP configuration behind the latest numbers, since it changes their meaning.
+    php_mode = latest["environment"].get("php_mode") if latest and suite != "hot-path" else None
+    text(28, 67, f"Latest: {date} | {len(records)} saved samples | recent {days} days"
+         + (f" | PHP: {php_mode}" if php_mode else ""), 13, muted=True)
     if not records:
         text(28, 128, "The next successful main-branch benchmark run will populate this suite.", 14)
     else:

@@ -590,7 +590,7 @@ impl Rewriter {
         let ExprKind::FunctionCall { name, args } = &expr.kind else {
             return;
         };
-        if name_is_backtrace(name) || name_is_eval(name) {
+        if (name_is_backtrace(name) && !backtrace_ignores_arguments(args)) || name_is_eval(name) {
             self.saw_backtrace = true;
         }
         if !self.rewrite_introspection {
@@ -691,6 +691,14 @@ fn literal_call_user_func_introspection(
         }
         _ => None,
     }
+}
+
+/// A direct metadata-only backtrace never needs argument snapshots in caller frames.
+fn backtrace_ignores_arguments(args: &[Expr]) -> bool {
+    matches!(args.first().map(|arg| &arg.kind),
+        Some(ExprKind::IntLiteral(options)) if options & 2 != 0)
+        || matches!(args.first().map(|arg| &arg.kind),
+            Some(ExprKind::ConstRef(name)) if name.as_str() == "DEBUG_BACKTRACE_IGNORE_ARGS")
 }
 
 /// Returns whether an unqualified name segment spells one of PHP's Core backtrace builtins.

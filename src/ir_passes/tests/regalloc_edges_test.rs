@@ -100,3 +100,70 @@ fn exception_handler_functions_keep_scalar_values_on_stack() {
         assert!(allocation.used_callee_saved().is_empty(), "{target:?}: stack allocation needs no saved registers");
     }
 }
+
+/// A loop parameter used after its backedge value is defined must not share that
+/// value's register: the later use still observes the old iteration.
+#[test]
+fn loop_parameter_used_after_backedge_value_is_not_coalesced() {
+    for target in targets() {
+        let mut function = Function::new("loop_use_after_def".into(), IrType::I64, PhpType::Int);
+        let (param, updated);
+        {
+            let mut builder = Builder::new(&mut function);
+            let entry = builder.create_named_block("entry", vec![]);
+            let header = builder.create_named_block("header", vec![(IrType::I64, PhpType::Int)]);
+            let body = builder.create_named_block("body", vec![]);
+            let latch = builder.create_named_block("latch", vec![]);
+            let exit = builder.create_named_block("exit", vec![]);
+            builder.set_entry(entry);
+            builder.position_at_end(entry);
+            let one = builder.emit_const_i64(1);
+            builder.terminate(Terminator::Br { target: header, args: vec![one] });
+            builder.position_at_end(header);
+            param = builder.block_param(header, 0);
+            let condition = builder.emit_const_i64(1);
+            builder.terminate(Terminator::CondBr {
+                cond: condition,
+                then_target: body,
+                then_args: vec![],
+                else_target: exit,
+                else_args: vec![],
+            });
+            builder.position_at_end(body);
+            let one = builder.emit_const_i64(1);
+            updated = builder
+                .emit(
+                    Op::IAdd,
+                    vec![param, one],
+                    None,
+                    IrType::I64,
+                    PhpType::Int,
+                    Ownership::NonHeap,
+                )
+                .expect("backedge value");
+            let _later = builder
+                .emit(
+                    Op::IAdd,
+                    vec![param, updated],
+                    None,
+                    IrType::I64,
+                    PhpType::Int,
+                    Ownership::NonHeap,
+                )
+                .expect("later use of the old parameter");
+            builder.terminate(Terminator::Br { target: latch, args: vec![] });
+            builder.position_at_end(latch);
+            builder.terminate(Terminator::Br { target: header, args: vec![updated] });
+            builder.position_at_end(exit);
+            builder.terminate(Terminator::Return { value: Some(param) });
+        }
+        crate::ir::validate_function(&function).expect("valid overlapping loop fixture");
+        let allocation = allocate_registers(&function, target);
+        let param_home = allocation.register_of(param).expect("loop parameter stays register-resident");
+        let updated_home = allocation.register_of(updated).expect("backedge value stays register-resident");
+        assert_ne!(
+            param_home, updated_home,
+            "{target:?}: the old parameter is still live after the backedge value is defined"
+        );
+    }
+}

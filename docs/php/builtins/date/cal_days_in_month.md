@@ -1,8 +1,6 @@
 ---
 title: "cal_days_in_month()"
 description: "Returns the number of days in a month of the given calendar and year."
-sidebar:
-  order: 184
 ---
 
 ## cal_days_in_month()
@@ -22,8 +20,9 @@ Returns the number of days in a month of the given calendar and year.
 
 ## Availability
 
-- **Compiled (AOT)**: supported through the Elephc compiler.
-- **`eval()` (magician interpreter)**: supported through the procedural date/time alias dispatcher.
+| Compiled (AOT) | Magician (eval) |
+|---|---|
+| Available | Available |
 
 _No examples yet. Check `examples/` and `showcases/` for usage patterns._
 

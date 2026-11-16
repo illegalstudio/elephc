@@ -10,6 +10,42 @@
 
 use super::*;
 
+/// Rebinding an unset native name preserves its detachment until the next native snapshot.
+#[test]
+fn native_name_detachment_survives_rebinding() {
+    let mut scope = ElephcEvalScope::new();
+    let original = RuntimeCellHandle::from_raw(1usize as *mut crate::value::RuntimeCell);
+    let replacement = RuntimeCellHandle::from_raw(2usize as *mut crate::value::RuntimeCell);
+    scope.set_from_aot("node", original, ScopeCellOwnership::Borrowed);
+    scope.unset_respecting_references("node");
+    scope.set("node", replacement, ScopeCellOwnership::Borrowed);
+    assert_eq!(scope.visible_cell("node"), Some(replacement));
+    assert!(scope.native_name_detached("node"));
+    scope.clear_native_name_detachment("node");
+    assert!(!scope.native_name_detached("node"));
+}
+
+/// Snapshot import keeps other pending writes, while mutation, replacement and unset become dirty.
+#[test]
+fn clean_native_snapshots_preserve_other_writes_and_observe_all_binding_changes() {
+    let mut scope = ElephcEvalScope::new();
+    let first = RuntimeCellHandle::from_raw(1usize as *mut crate::value::RuntimeCell);
+    let second = RuntimeCellHandle::from_raw(2usize as *mut crate::value::RuntimeCell);
+    scope.set("pending", first, ScopeCellOwnership::Borrowed);
+    scope.set_from_aot("native", first, ScopeCellOwnership::Borrowed);
+    scope.mark_name_clean("native");
+    assert_eq!(scope.dirty_names(), vec!["pending"]);
+    scope.mark_reference_changed("native");
+    assert!(scope.entry("native").unwrap().flags().dirty);
+    scope.mark_name_clean("native");
+    scope.set("native", second, ScopeCellOwnership::Borrowed);
+    assert!(scope.entry("native").unwrap().flags().dirty);
+    scope.mark_name_clean("native");
+    scope.unset("native");
+    assert!(scope.entry("native").unwrap().flags().dirty);
+    assert!(!scope.entry("native").unwrap().flags().is_visible());
+}
+
 /// Verifies setting a variable records a visible dirty runtime-cell handle.
 #[test]
 fn set_records_visible_dirty_cell() {

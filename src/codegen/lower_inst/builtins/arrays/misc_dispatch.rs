@@ -31,6 +31,7 @@ pub(crate) fn lower_array_rand(ctx: &mut FunctionContext<'_>, inst: &Instruction
     if ctx.emitter.target.arch == Arch::X86_64 {
         ctx.emitter.instruction("mov rdi, rax");                                // pass the indexed-array pointer as the random-key helper argument
     }
+    crate::codegen::random::publish_elephc_random_function_pointers(ctx.emitter);
     abi::emit_call_label(ctx.emitter, "__rt_array_rand");
     store_if_result(ctx, inst)
 }
@@ -301,16 +302,59 @@ pub(super) fn lower_array_edge_key(
 ) -> Result<()> {
     super::super::ensure_arg_count(inst, name, 1)?;
     let array = expect_operand(inst, 0)?;
-    require_array_like_operand(ctx.value_php_type(array)?, name)?;
+    let array_ty = ctx.value_php_type(array)?;
+    require_array_like_operand(array_ty.clone(), name)?;
     let arg0 = abi::int_arg_reg_name(ctx.emitter.target, 0);
     let arg1 = abi::int_arg_reg_name(ctx.emitter.target, 1);
     ctx.load_value_to_reg(array, arg0)?;
+    if array_ty.codegen_repr() == PhpType::Mixed {
+        // PHP checks the `array` parameter at run time: a `mixed` holding no array is a TypeError.
+        super::mixed_array_argument_guard::emit_mixed_array_argument_guard(ctx, name, arg0)?;
+    }
     abi::emit_load_int_immediate(ctx.emitter, arg1, which);
     abi::emit_call_label(ctx.emitter, "__rt_array_edge_key");
     store_if_result(ctx, inst)
 }
 
-/// Verifies an operand is array-like: `array_is_list` / `array_key_first` / `array_key_last` accept
+/// Lowers PHP 8.5 `array_first()` through the shared edge-value helper with selector `0`.
+pub(crate) fn lower_array_first(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+    lower_array_edge_value(ctx, inst, "array_first", 0)
+}
+
+/// Lowers PHP 8.5 `array_last()` through the shared edge-value helper with selector `1`.
+pub(crate) fn lower_array_last(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+    lower_array_edge_value(ctx, inst, "array_last", 1)
+}
+
+/// Loads the array operand plus a first/last selector, then calls `__rt_array_edge_value`.
+///
+/// `which` is `0` for the first value and `1` for the last. The runtime helper boxes the selected
+/// element into a fresh mixed cell (or a boxed null for empty/non-array inputs) through a tail
+/// call, leaving the boxed pointer in the integer result register. The operand is only borrowed.
+fn lower_array_edge_value(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+    name: &str,
+    which: i64,
+) -> Result<()> {
+    super::super::ensure_arg_count(inst, name, 1)?;
+    let array = expect_operand(inst, 0)?;
+    let array_ty = ctx.value_php_type(array)?;
+    require_array_like_operand(array_ty.clone(), name)?;
+    let arg0 = abi::int_arg_reg_name(ctx.emitter.target, 0);
+    let arg1 = abi::int_arg_reg_name(ctx.emitter.target, 1);
+    ctx.load_value_to_reg(array, arg0)?;
+    if array_ty.codegen_repr() == PhpType::Mixed {
+        // PHP checks the `array` parameter at run time: a `mixed` holding no array is a TypeError.
+        super::mixed_array_argument_guard::emit_mixed_array_argument_guard(ctx, name, arg0)?;
+    }
+    abi::emit_load_int_immediate(ctx.emitter, arg1, which);
+    abi::emit_call_label(ctx.emitter, "__rt_array_edge_value");
+    store_if_result(ctx, inst)
+}
+
+/// Verifies an operand is array-like: `array_is_list` / `array_key_first` / `array_key_last` /
+/// `array_first` / `array_last` accept
 /// any indexed array, associative hash, or boxed mixed value, matching their uniform runtime helpers.
 pub(super) fn require_array_like_operand(ty: PhpType, name: &str) -> Result<()> {
     match ty.codegen_repr() {
@@ -436,12 +480,14 @@ pub(super) fn lower_two_hash_arg_builtin(
             abi::emit_call_label(ctx.emitter, runtime_label);
             ctx.emitter.instruction("sub rsp, 16");                             // reserve a slot for the result
             ctx.emitter.instruction("mov QWORD PTR [rsp], rax");                // spill the result; stack holds [result, h2, h1]
+            // `__rt_decref_hash` takes its hash in `rax`, which still holds the result here: loading
+            // the temporary into `rdi` released the result instead, and the temporary leaked.
             if conv1 {
-                ctx.emitter.instruction("mov rdi, QWORD PTR [rsp + 16]");       // reload the converted second hash temporary
+                ctx.emitter.instruction("mov rax, QWORD PTR [rsp + 16]");       // reload the converted second hash temporary
                 abi::emit_call_label(ctx.emitter, "__rt_decref_hash");
             }
             if conv0 {
-                ctx.emitter.instruction("mov rdi, QWORD PTR [rsp + 32]");       // reload the converted first hash temporary
+                ctx.emitter.instruction("mov rax, QWORD PTR [rsp + 32]");       // reload the converted first hash temporary
                 abi::emit_call_label(ctx.emitter, "__rt_decref_hash");
             }
             ctx.emitter.instruction("mov rax, QWORD PTR [rsp]");                // restore the result hash pointer

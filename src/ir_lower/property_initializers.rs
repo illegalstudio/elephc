@@ -20,7 +20,7 @@ pub(super) fn needs_initializer(class: &ClassInfo) -> bool {
         || class.properties.iter().enumerate().any(|(index, (name, _))| {
             class.property_slot_is_declared(index, name)
                 || (class.property_slot_is_reference(index, name)
-                    && class.owned_reference_properties.contains(name))
+                    && class.property_slot_owns_reference(index))
         })
 }
 
@@ -39,7 +39,7 @@ pub(super) fn lower(ctx: &mut LoweringContext<'_, '_>, class: &ClassInfo) {
         let Some(default) = class.defaults.get(index).and_then(Option::as_ref) else {
             if class.property_slot_is_declared(index, name)
                 || (class.property_slot_is_reference(index, name)
-                    && class.owned_reference_properties.contains(name))
+                    && class.property_slot_owns_reference(index))
             {
                 ctx.emit_void(
                     Op::PropUnset, vec![object.value], Some(slot),
@@ -76,6 +76,6 @@ fn lower_default_value(
             Op::HashNew.default_effects(), Some(default.span),
         );
     }
-    let value = super::expr::lower_expr(ctx, default);
+    let value = super::expr::lower_expr_for_destination(ctx, default, ty);
     super::stmt::contextualize_property_array_value(ctx, value, default, ty, default.span)
 }

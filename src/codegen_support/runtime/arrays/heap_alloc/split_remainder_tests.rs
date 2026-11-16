@@ -38,6 +38,8 @@ fn small_split_remainder_assembles_on_all_supported_targets() {
         let target = Target::parse(name).unwrap();
         let mut emitter = Emitter::new(target);
         emit_heap_alloc(&mut emitter);
+        crate::codegen_support::runtime::arrays::emit_heap_free(&mut emitter, false, false);
+        crate::codegen_support::runtime::strings::emit_str_persist(&mut emitter, false);
         let syntax = if target.arch == Arch::X86_64 { ".intel_syntax noprefix\n" } else { "" };
         let source = dir.0.join(format!("{name}.s"));
         fs::write(&source, format!("{syntax}.text\n{}", emitter.output())).unwrap();

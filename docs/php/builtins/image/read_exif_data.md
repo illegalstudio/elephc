@@ -1,8 +1,6 @@
 ---
 title: "read_exif_data()"
 description: "Alias of exif_read_data()."
-sidebar:
-  order: 540
 ---
 
 ## read_exif_data()
@@ -23,9 +21,11 @@ Alias of exif_read_data().
 
 ## Availability
 
-- **Compiled (AOT)**: supported through the compiler-injected image prelude.
-- **`eval()` (magician interpreter)**: not available inside eval'd code.
-- **Strict PHP mode**: hidden - this builtin is an elephc extension with no PHP equivalent, so programs compiled with [`--strict-php`](../../../compiling/cli-reference.md#strict-php-mode) treat the name as nonexistent, in compiled code and inside eval'd code.
+| Compiled (AOT) | Magician (eval) |
+|---|---|
+| Available | Not available yet |
+
+- Hidden in strict PHP mode: this builtin is an elephc extension with no PHP equivalent, so programs compiled with [`--strict-php`](../../../compiling/cli-reference.md#strict-php-mode) treat the name as nonexistent, in compiled code and inside eval'd code.
 
 _No examples yet. Check `examples/` and `showcases/` for usage patterns._
 

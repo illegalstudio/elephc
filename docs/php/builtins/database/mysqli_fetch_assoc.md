@@ -1,8 +1,6 @@
 ---
 title: "mysqli_fetch_assoc()"
 description: "Returns the next row as an associative array."
-sidebar:
-  order: 117
 ---
 
 ## mysqli_fetch_assoc()
@@ -20,8 +18,9 @@ Returns the next row as an associative array.
 
 ## Availability
 
-- **Compiled (AOT)**: supported through an injected elephc-PHP prelude.
-- **`eval()` (magician interpreter)**: not available inside eval'd code.
+| Compiled (AOT) | Magician (eval) |
+|---|---|
+| Available | Not available yet |
 
 _No examples yet. Check `examples/` and `showcases/` for usage patterns._
 

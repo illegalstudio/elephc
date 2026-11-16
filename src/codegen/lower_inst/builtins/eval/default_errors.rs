@@ -12,7 +12,7 @@ use super::*;
 
 /// Registers an Error-valued default, returning false for ordinary default trees.
 pub(super) fn register_eval_native_param_default_error(
-    ctx: &mut FunctionContext<'_>, context_offset: usize, key: (&str, usize),
+    ctx: &mut FunctionContext<'_>, context_source: EvalContextSource, key: (&str, usize),
     index: usize, default: Option<&Expr>, default_context: &EvalNativeDefaultContext<'_>, symbol: &str,
 ) -> bool {
     let Some(default) = default else { return false };
@@ -26,7 +26,7 @@ pub(super) fn register_eval_native_param_default_error(
         (source, format!("{}_expression", symbol.strip_suffix("_error").unwrap_or(symbol)))
     } else { return false; };
     let (message_label, message_len) = ctx.data.add_string(payload.as_bytes());
-    load_eval_context_local_to_arg(ctx, context_offset, 0);
+    load_eval_context_source_to_arg(ctx, context_source, 0);
     for (index, label) in [(1, key.0), (4, message_label.as_str())] {
         abi::emit_symbol_address(ctx.emitter, abi::int_arg_reg_name(ctx.emitter.target, index), label);
     }
@@ -40,7 +40,7 @@ pub(super) fn register_eval_native_param_default_error(
     super::status::emit_eval_fatal_message(ctx, "Fatal error: eval() native default registration failed\n");
     ctx.emitter.label(&registered);
     if !matches!(default.kind, ExprKind::Throw(_)) {
-        register_native_reflection_factory(ctx, context_offset, key, index, default,
+        register_native_reflection_factory(ctx, context_source, key, index, default,
             default_context, if symbol.contains("_constructor_") { 2 }
                 else if symbol.contains("_static_method_") { 1 }
                 else if symbol.contains("_function_") { 3 } else { 0 });
@@ -51,7 +51,7 @@ pub(super) fn register_eval_native_param_default_error(
 /// Registers a capture-free native factory only for protected Reflection getter invocation.
 /// Default argument binding still interprets the owned expression data and never calls it.
 fn register_native_reflection_factory(
-    ctx: &mut FunctionContext<'_>, context_offset: usize, key: (&str, usize), index: usize,
+    ctx: &mut FunctionContext<'_>, context_source: EvalContextSource, key: (&str, usize), index: usize,
     default: &Expr, context: &EvalNativeDefaultContext<'_>, kind: i64,
 ) {
     let Some(helper) = ctx.module.functions.iter().find(|function|
@@ -71,7 +71,7 @@ fn register_native_reflection_factory(
             crate::codegen_support::callable_descriptor::CallableDescriptorShape::Function,
         ), Some(&invoker),
     );
-    load_eval_context_local_to_arg(ctx, context_offset, 0);
+    load_eval_context_source_to_arg(ctx, context_source, 0);
     for (argument, label) in [(1, key.0), (5, descriptor.as_str())] {
         abi::emit_symbol_address(ctx.emitter, abi::int_arg_reg_name(ctx.emitter.target, argument), label);
     }

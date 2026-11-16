@@ -129,6 +129,7 @@ pub fn emit_buffer_new(emitter: &mut Emitter) {
 
     // -- fatal error: requested buffer length cannot be represented --
     emitter.label("__rt_buffer_new_size_fail");
+    if emitter.phpext_output { abi::emit_cdylib_exit_escape(emitter); }
     emitter.instruction("mov x0, #2");                                          // fd = stderr
     abi::emit_symbol_address(emitter, "x1", "_buffer_alloc_size_msg");
     emitter.instruction(&format!("mov x2, #{}", BUFFER_ALLOC_SIZE_MSG.len()));  // pass the exact buffer-length diagnostic byte count
@@ -245,6 +246,7 @@ fn emit_buffer_new_linux_x86_64(emitter: &mut Emitter) {
 
     // -- fatal error: requested buffer length cannot be represented --
     emitter.label("__rt_buffer_new_size_fail");
+    if emitter.phpext_output { abi::emit_cdylib_exit_escape(emitter); }
     emitter.instruction("mov edi, 2");                                          // fd = stderr for the buffer-length fatal error message
     abi::emit_symbol_address(emitter, "rsi", "_buffer_alloc_size_msg");
     emitter.instruction(&format!("mov edx, {}", BUFFER_ALLOC_SIZE_MSG.len()));  // pass the exact buffer-length diagnostic byte count

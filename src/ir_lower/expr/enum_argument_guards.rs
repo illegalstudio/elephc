@@ -3,6 +3,8 @@
 //!
 //! Called from:
 //! - Enum interface call rejection and runtime unpack materialization.
+//! - Function, method and closure entry, for by-reference parameters of a union of `null`,
+//!   arrays and objects ([`guard_reference_parameter_entry`]).
 //!
 //! Key details:
 //! - Callers stage every source expression before checking parameter-order constraints.
@@ -93,7 +95,7 @@ fn bind_implicit_integer(
 }
 
 /// Builds the runtime predicate for PHP weak scalar and class parameter acceptance.
-fn accepts_type(ty: &PhpType, value: &Expr, span: Span) -> Option<Expr> {
+pub(super) fn accepts_type(ty: &PhpType, value: &Expr, span: Span) -> Option<Expr> {
     let predicate = |name| predicate(name, value, span);
     let either = |a, b| Expr::new(ExprKind::BinaryOp {
         left: Box::new(a), op: BinOp::Or, right: Box::new(b),
@@ -140,11 +142,21 @@ fn predicate(name: &str, value: &Expr, span: Span) -> Expr {
 
 /// Produces PHP's diagnostic type names instead of gettype's historical aliases.
 fn runtime_type(value: &Expr, expected: &PhpType, span: Span) -> Expr {
+    runtime_type_with_bool_literals(value, contains_false(expected), span)
+}
+
+/// Produces PHP's `get_debug_type()` spelling for a runtime diagnostic.
+pub(crate) fn runtime_debug_type(value: &Expr, span: Span) -> Expr {
+    runtime_type_with_bool_literals(value, true, span)
+}
+
+/// Builds a normalized runtime type expression with optional bool-value spelling.
+fn runtime_type_with_bool_literals(value: &Expr, bool_literals: bool, span: Span) -> Expr {
     let mut result = predicate("gettype", value, span);
     for (test, text) in [
         ("is_null", "null"), ("is_bool", "bool"), ("is_float", "float"), ("is_int", "int"),
     ] {
-        let text = if test == "is_bool" && contains_false(expected) {
+        let text = if test == "is_bool" && bool_literals {
             Expr::new(ExprKind::Ternary {
                 condition: Box::new(value.clone()),
                 then_expr: Box::new(Expr::new(ExprKind::StringLiteral("true".into()), span)),
@@ -157,10 +169,17 @@ fn runtime_type(value: &Expr, expected: &PhpType, span: Span) -> Expr {
             else_expr: Box::new(result),
         }, span);
     }
-    Expr::new(ExprKind::Ternary {
+    let object_type = Expr::new(ExprKind::Ternary {
         condition: Box::new(predicate("is_object", value, span)),
         then_expr: Box::new(predicate("get_class", value, span)),
         else_expr: Box::new(result),
+    }, span);
+    // A native object hint can still carry a missing-selection null word.
+    // Test that representation before static object predicates select get_class.
+    Expr::new(ExprKind::Ternary {
+        condition: Box::new(predicate("is_null", value, span)),
+        then_expr: Box::new(Expr::string_lit("null")),
+        else_expr: Box::new(object_type),
     }, span)
 }
 
@@ -193,4 +212,49 @@ pub(super) fn throw_message(
         class_name: Name::unqualified(class), args: vec![message],
     }, span));
     ctx.builder.terminate(Terminator::Throw { value: exception.value });
+}
+
+/// Whether a by-reference parameter of type `ty` is checked at callee entry: a union whose
+/// members are all `null`, arrays or objects (`?array`, `?A`, `array|A`, `A|B|null`). Such a
+/// parameter is a boxed cell in the callee, which a caller's `mixed` local may fill with any
+/// value; these members never coerce, so the check is exact.
+pub(crate) fn reference_parameter_needs_entry_guard(ty: &PhpType) -> bool {
+    matches!(ty, PhpType::Union(members) if members.iter().all(|member| {
+        member.is_php_array()
+            || matches!(
+                member,
+                PhpType::Void | PhpType::Object(_) | PhpType::Array(_) | PhpType::AssocArray { .. }
+            )
+    }))
+}
+
+/// Checks a by-reference parameter's value against its declared union on entry to the callee,
+/// after every argument was evaluated (php's `RECV` order), raising php's
+/// `f(): Argument #N ($name) must be of type T, U given` `TypeError` for anything else.
+pub(crate) fn guard_reference_parameter_entry(
+    ctx: &mut LoweringContext<'_, '_>,
+    function: &str,
+    position: usize,
+    name: &str,
+    ty: &PhpType,
+) {
+    let span = Span::synthetic();
+    let variable = Expr::new(ExprKind::Variable(name.to_string()), span);
+    let Some(accepted) = accepts_type(ty, &variable, span) else { return; };
+    let accepted = lower_expr(ctx, &accepted);
+    let ok = ctx.builder.create_named_block("ref.param.type.ok", Vec::new());
+    let bad = ctx.builder.create_named_block("ref.param.type.bad", Vec::new());
+    ctx.builder.terminate(Terminator::CondBr {
+        cond: accepted.value, then_target: ok, then_args: Vec::new(),
+        else_target: bad, else_args: Vec::new(),
+    });
+    ctx.builder.position_at_end(bad);
+    let literal = |text| Expr::new(ExprKind::StringLiteral(text), span);
+    let prefix = literal(format!(
+        "{function}(): Argument #{position} (${name}) must be of type {}, ",
+        diagnostic_type(ty)
+    ));
+    let message = concat(prefix, concat(runtime_debug_type(&variable, span), literal(" given".to_string()), span), span);
+    throw_message(ctx, "TypeError", message, span);
+    ctx.builder.position_at_end(ok);
 }

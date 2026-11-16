@@ -59,6 +59,7 @@ mod wrapper_dispatch;
 mod path_call_helpers;
 mod stream_dispatch_helpers;
 mod filter_helpers;
+mod filter_dispatch;
 mod stream_bucket_arch;
 mod close_crypto_arch;
 mod stream_read_helpers;
@@ -124,6 +125,7 @@ pub(crate) use stream_sockets::{
     lower_stream_socket_sendto,
 };
 pub(crate) use stream_file_ops::{
+    emit_application_stream_closer,
     lower_fclose, lower_fread, lower_fwrite, lower_fprintf,
     lower_vfprintf, lower_fscanf, lower_fgets, lower_fgetc,
     lower_fgetcsv, lower_fputcsv, lower_fpassthru,

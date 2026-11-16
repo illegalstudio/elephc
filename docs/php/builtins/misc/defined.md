@@ -1,8 +1,6 @@
 ---
 title: "defined()"
 description: "Checks whether a given named constant exists."
-sidebar:
-  order: 608
 ---
 
 ## defined()
@@ -20,8 +18,9 @@ Checks whether a given named constant exists.
 
 ## Availability
 
-- **Compiled (AOT)**: supported by the Elephc code generator.
-- **`eval()` (magician interpreter)**: supported through a declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/core/defined.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/core/defined.rs)).
+| Compiled (AOT) | Magician (eval) |
+|---|---|
+| Available | Available |
 
 _No examples yet. Check `examples/` and `showcases/` for usage patterns._
 

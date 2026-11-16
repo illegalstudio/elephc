@@ -557,7 +557,11 @@ composite arrays, matching PHP.
 objects through `hasChildren()`. `RecursiveIteratorIterator` supports
 `LEAVES_ONLY`, `SELF_FIRST`, and `CHILD_FIRST`; it keeps a live stack of source
 sub-iterators so `getDepth()`, `getInnerIterator()`, and `getSubIterator()`
-track the active cursors. `RecursiveCallbackFilterIterator` preserves closure
+track the active cursors. The traversal follows php-src's
+`RS_START`/`RS_TEST`/`RS_SELF`/`RS_CHILD`/`RS_NEXT` state machine: `valid()`
+re-queries the active sub-iterator each time, `hasChildren()` runs once per
+element before any descent, and `getChildren()` is called only when entering
+`RS_CHILD`. `RecursiveCallbackFilterIterator` preserves closure
 and first-class-callable capture environments, including branch-selected
 descriptor environments and runtime-selected callable-array variables or
 literals, when it wraps child iterators. `RecursiveRegexIterator` wraps child

@@ -29,6 +29,8 @@ pub struct ResolvedNativePackage {
     pub artifact_root: PathBuf,
     pub archives: Vec<PathBuf>,
     pub system_libraries: Vec<String>,
+    /// Directories searched for `system_libraries`, beyond the toolchain defaults.
+    pub library_paths: Vec<PathBuf>,
     pub frameworks: Vec<String>,
 }
 
@@ -46,6 +48,7 @@ pub fn resolve_for_compilation(
     let cache = CacheLayout::from_environment(&cwd).map_err(|error| {
         let search_root = source
             .parent()
+            .filter(|parent| !parent.as_os_str().is_empty())
             .and_then(|parent| std::fs::canonicalize(parent).ok())
             .unwrap_or_else(|| cwd.clone());
         match discover_for_source(source).ok().flatten() {
@@ -85,6 +88,7 @@ fn feature_label(package: &str) -> &str {
     match package {
         "pcre2" => "regex",
         "libxml2" => "xml",
+        "libtidy" => "tidy",
         _ => package,
     }
 }
@@ -221,7 +225,7 @@ pub(crate) fn resolve_for_compilation_with(
         }
         resolved.push(ResolvedNativePackage {
             package: name.clone(), artifact_root: root, archives,
-            system_libraries: target_plan.system_libraries.clone(), frameworks: target_plan.frameworks.clone(),
+            system_libraries: target_plan.system_libraries.clone(), library_paths: Vec::new(), frameworks: target_plan.frameworks.clone(),
         });
         for (offset, dependency) in locked.dependencies.iter().enumerate() {
             queue.insert(cursor + offset, dependency.clone());
@@ -356,6 +360,7 @@ mod tests {
     #[test]
     fn feature_label_names_the_php_surface_or_the_package() {
         assert_eq!(feature_label("libxml2"), "xml");
+        assert_eq!(feature_label("libtidy"), "tidy");
         assert_eq!(feature_label("pcre2"), "regex");
         for package in ["curl", "libssh2", "nghttp2", "openssl", "zlib", "unknown"] {
             assert_eq!(feature_label(package), package, "{package} has no surface of its own");

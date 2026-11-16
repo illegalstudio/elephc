@@ -10,7 +10,9 @@
 //! - User functions, builtins, externs, and callable aliases must share the same argument semantics.
 
 mod call_validation;
+pub(crate) use call_validation::validate_unresolved_call_argument_order;
 mod param_binding;
 mod reference_outputs;
+mod array_push_values;
 mod resolution;
 mod returns;

@@ -1,8 +1,6 @@
 ---
 title: "zval_pack() - internals"
 description: "Compiler internals for zval_pack(): lowering path, type checks, and runtime helpers."
-sidebar:
-  order: 750
 ---
 
 ## `zval_pack()` - internals
@@ -10,7 +8,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/pointers/zval_pack.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/pointers/zval_pack.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:704](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L704) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 

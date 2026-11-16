@@ -219,6 +219,7 @@ pub(super) fn emit(emitter: &mut Emitter) {
     emitter.instruction("ldr x12, [sp]");                                       // base
     emitter.instruction("ldrb w13, [x12, x9]");                                 // bounded opening-quote byte
     emitter.instruction("cmp w13, #34");                                        // opening quote
+    emitter.instruction("mov x1, x9");                                          // report the opening-quote cursor on failure
     emitter.instruction("b.ne __rt_unser_validate_at_fail");                    // payload must open with '"'
     emitter.instruction("add x9, x9, #1");                                      // raw payload position
     emitter.instruction("sub x13, x10, x9");                                    // bytes remaining after opening quote
@@ -226,14 +227,17 @@ pub(super) fn emit(emitter: &mut Emitter) {
     emitter.instruction("b.lo __rt_unser_validate_at_fail");                    // no room for closing quote and ';'
     emitter.instruction("sub x13, x13, #2");                                    // maximum safe payload length
     emitter.instruction("cmp x11, x13");                                        // declared bytes fit before delimiters?
+    emitter.instruction("mov x1, x10");                                         // report the source end on truncation
     emitter.instruction("b.hi __rt_unser_validate_at_fail");                    // declared length overruns the source
     emitter.instruction("add x9, x9, x11");                                     // closing quote position
     emitter.instruction("ldrb w13, [x12, x9]");                                 // bounded closing-quote byte
     emitter.instruction("cmp w13, #34");                                        // closing quote
+    emitter.instruction("mov x1, x9");                                          // report the closing-quote cursor on failure
     emitter.instruction("b.ne __rt_unser_validate_at_fail");                    // payload must close with '"'
     emitter.instruction("add x9, x9, #1");                                      // terminator position
     emitter.instruction("ldrb w13, [x12, x9]");                                 // bounded terminator byte
     emitter.instruction("cmp w13, #59");                                        // string terminator
+    emitter.instruction("mov x1, x9");                                          // report the missing-semicolon cursor
     emitter.instruction("b.ne __rt_unser_validate_at_fail");                    // string must end with ';'
     emitter.instruction("add x1, x9, #1");                                      // position after string
     emitter.instruction("b __rt_unser_validate_at_ok");                         // string is fully bounded
@@ -357,6 +361,7 @@ pub(super) fn emit(emitter: &mut Emitter) {
     emitter.instruction("b.hs __rt_unser_validate_at_fail");                    // reject truncated and overflowing opaque payloads
     emitter.instruction("add x9, x9, x12");                                     // skip exactly the declared opaque byte count
     emitter.instruction("str x9, [sp, #40]");                                   // publish the closing delimiter position
+    emitter.instruction("str x9, [sp, #8]");                                    // report the closing-brace offset if it is missing
     emitter.instruction("b __rt_unser_validate_container_close");               // reuse the exact closing-brace check
     emitter.label("__rt_unser_validate_object_properties");
     emitter.instruction("str x9, [sp, #40]");                                   // first property key
@@ -419,7 +424,6 @@ pub(super) fn emit(emitter: &mut Emitter) {
     emitter.instruction("ret");                                                 // return ok=1 to the recursive caller or entry wrapper
     emitter.label("__rt_unser_validate_at_fail");
     emitter.instruction("mov x0, #0");                                          // report malformed/truncated wire data
-    emitter.instruction("ldr x1, [sp, #8]");                                    // preserve the original position on failure
     emitter.instruction("ldp x29, x30, [sp, #64]");                             // restore recursive validator frame
     emitter.instruction("add sp, sp, #80");                                     // release local validation state
     emitter.instruction("ret");                                                 // return ok=0 to the recursive caller or entry wrapper

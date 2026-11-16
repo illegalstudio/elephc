@@ -176,6 +176,14 @@ pub(crate) fn hash_declarations() -> Program {
     })
 }
 
+/// Whether `program` uses this prelude's surface: the same test `inject_if_used` applies.
+///
+/// Also run by `crate::autoload::prelude_probe` over the autoload closure, whose files are only
+/// loaded after this prelude has been decided.
+pub(crate) fn program_uses_surface(program: &[crate::parser::ast::Stmt]) -> bool {
+    detect::program_uses_hash_context(program)
+}
+
 /// Injects the hash prelude when the program references the incremental-hashing
 /// surface, leaving every other program untouched.
 ///

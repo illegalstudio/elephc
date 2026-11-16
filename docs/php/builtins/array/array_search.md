@@ -1,8 +1,6 @@
 ---
 title: "array_search()"
 description: "Searches the array for a given value and returns the first corresponding key if successful."
-sidebar:
-  order: 36
 ---
 
 ## array_search()
@@ -22,8 +20,9 @@ Searches the array for a given value and returns the first corresponding key if 
 
 ## Availability
 
-- **Compiled (AOT)**: supported by the Elephc code generator.
-- **`eval()` (magician interpreter)**: supported through a declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/array/array_search.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/array/array_search.rs)).
+| Compiled (AOT) | Magician (eval) |
+|---|---|
+| Available | Available |
 
 _No examples yet. Check `examples/` and `showcases/` for usage patterns._
 

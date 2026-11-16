@@ -1,8 +1,6 @@
 ---
 title: "call_user_func()"
 description: "Calls a callback with the given arguments."
-sidebar:
-  order: 50
 ---
 
 ## call_user_func()
@@ -21,8 +19,9 @@ Calls a callback with the given arguments.
 
 ## Availability
 
-- **Compiled (AOT)**: supported by the Elephc code generator.
-- **`eval()` (magician interpreter)**: supported through a declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/core/call_user_func.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/core/call_user_func.rs)).
+| Compiled (AOT) | Magician (eval) |
+|---|---|
+| Available | Available |
 
 _No examples yet. Check `examples/` and `showcases/` for usage patterns._
 

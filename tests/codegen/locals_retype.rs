@@ -417,8 +417,19 @@ fn test_constant_retype() {
 /// null-tolerant — the unset path may have nulled the old slot already).
 #[test]
 fn test_retype_after_conditional_unset_of_heap_local() {
-    let out = compile_and_run(fixtures::RETYPE_AFTER_CONDITIONAL_UNSET);
-    assert_eq!(out, "7");
+    let argvs: &[&[&str]] = &[&[], &["unset"]];
+    let outputs = compile_and_run_with_heap_debug_per_argv(
+        fixtures::RETYPE_AFTER_CONDITIONAL_UNSET,
+        argvs,
+    );
+    for (out, args) in outputs.into_iter().zip(argvs) {
+        assert!(out.success, "program failed for {args:?}: {}", out.stderr);
+        assert_eq!(out.stdout, "7", "arguments: {args:?}");
+        assert!(
+            out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+            "expected a clean heap for {args:?}, got: {}", out.stderr,
+        );
+    }
 }
 
 /// The compound-assignment shape (`$x .= "a"`), which the parser lowers into
@@ -1015,27 +1026,29 @@ fn test_reference_detach_in_included_function_keeps_its_source_identity() {
 /// Same-name mixed-storage decisions at equal coordinates in different files remain independent.
 #[test]
 fn test_mixed_storage_decisions_in_different_files_are_not_stripped() {
-    let out = compile_and_run_files(
+    let outputs = compile_and_run_files_per_argv(
         &[
             ("main.php", "<?php\nrequire 'lib.php';\n\n$a = 42;\necho \"|\";\n$a = 99;\necho $a;\n"),
             ("lib.php", "<?php\nfunction f($n) {\n    if ($n > 1) {\n$a = 42;\n    } else {\n$a = \"hello\";\n    }\n    echo strlen($a), \"|\";\n}\nf($argc);\n"),
         ],
         "main.php",
+        &[&[], &["int"]],
     );
-    assert_eq!(out, "5||99");
+    assert_eq!(outputs, ["5||99", "2||99"]);
 }
 
 /// A partial same-coordinate match across files cannot retire another source's mixed-storage key.
 #[test]
 fn test_partial_mixed_storage_decisions_in_different_files_stay_independent() {
-    let error = compile_files_error_message(
+    let outputs = compile_and_run_files_per_argv(
         &[
             ("main.php", "<?php\nrequire 'lib.php';\n\n$a = 5;\necho $a, \"|\";\n"),
             ("lib.php", "<?php\nfunction f($n) {\n    $q = 2;\n$a = 123456789;\n    for ($i = 1; $i < $n; $i++) {\n$a = \"s\";\n    }\n    var_dump($a);\n    return $q;\n}\nf($argc);\n"),
         ],
         "main.php",
+        &[&[], &["loop"]],
     );
-    assert!(error.is_none(), "included mixed-storage decisions must stay source-local: {error:?}");
+    assert_eq!(outputs, ["int(123456789)\n5|", "string(1) \"s\"\n5|"]);
 }
 
 /// Compatible rebinds in two source files keep their own binding decisions and still compile.
@@ -1950,13 +1963,14 @@ fn eval_aot_fragment_body(module_text: &str) -> String {
     body
 }
 
-/// The same program still prints PHP's answer.
+/// Both outer storage types survive a colliding eval fragment's local decision.
 #[test]
 fn test_eval_aot_fragment_with_a_colliding_outer_decision_runs() {
-    let out = compile_and_run(
+    let outputs = compile_and_run_per_argv(
         "<?php\n$b = \"s\";\nif ($argc > 1) { $b = 1; }\necho $b;\necho eval(\"\\n\\$b = 9;\\nreturn \\$b;\");\n",
+        &[&[], &["int"]],
     );
-    assert_eq!(out, "s9");
+    assert_eq!(outputs, ["s9", "19"]);
 }
 
 /// Two DIFFERENT locals killed at one (line, column) both keep their decision.
@@ -2224,21 +2238,20 @@ fn test_marked_local_assigned_across_switch_arms() {
 /// The mixed-storage WARNING the `switch` shape produces, and its `--strict-locals` rejection.
 #[test]
 fn test_marked_local_across_switch_arms_warns_and_is_strict_rejected() {
-    let source = "<?php switch ($argc) { case 1: $a = 0; break; default: $a = \"ciao\"; } echo $a;";
-    let warnings = check_files_diagnostics(&[("main.php", source)], "main.php", false)
-        .expect("the switch fixture must type-check");
-    assert_eq!(
-        warnings,
-        vec![
+    for initial in ["", "$a = null;"] {
+        let source = format!("<?php {initial} switch ($argc) {{ case 1: $a = 0; break; default: $a = \"ciao\"; }} echo $a;");
+        let warnings = check_files_diagnostics(&[("main.php", &source)], "main.php", false)
+            .expect("the switch fixture must type-check");
+        assert_eq!(warnings, vec![
             "$a is assigned incompatible types (int and string); it is compiled as boxed mixed storage (compile with --strict-locals to make this an error)".to_string(),
-        ],
-    );
-    let error = check_files_diagnostics(&[("main.php", source)], "main.php", true)
-        .expect_err("--strict-locals must reject the marked switch local");
-    assert!(
-        error.contains("cannot reassign $a"),
-        "expected the strict rejection, got: {error}"
-    );
+        ]);
+        let error = check_files_diagnostics(&[("main.php", &source)], "main.php", true)
+            .expect_err("--strict-locals must reject the marked switch local");
+        assert!(error.contains("cannot reassign $a"), "expected the strict rejection, got: {error}");
+    }
+    let guarded = "<?php function guarded(mixed $value, int $key): void { switch ($key) { case 1: if (!is_int($value)) { return; } break; default: if (!is_string($value)) { return; } } } guarded($argc, $argc);";
+    assert!(check_files_diagnostics(&[("main.php", guarded)], "main.php", true)
+        .expect("guard-only views must not become strict assignment conflicts").is_empty());
 }
 
 /// A marked store inside the `default` arm of a single-case `switch` on a runtime subject, which

@@ -11,3 +11,4 @@ sidebar:
 |---|---|---|:-:|:-:|
 | [`buffer_free()`](./buffer/buffer_free.md) | `(buffer $buffer): void` | `void` | ✓ | ✓ |
 | [`buffer_len()`](./buffer/buffer_len.md) | `(buffer $buffer): int` | `int` | ✓ | ✓ |
+| [`buffer_ptr()`](./buffer/buffer_ptr.md) | `(buffer $buffer): pointer` | `pointer` | ✓ | ✓ |

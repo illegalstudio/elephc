@@ -1,0 +1,348 @@
+//! Purpose:
+//! Pins how EIR lowering removes an element of an array held in an object or static property
+//! (`unset($this->data[$k])`, `unset(self::$cache[$k])`, issue #750), and which property shapes
+//! it refuses with a source diagnostic.
+//!
+//! Called from:
+//! - The AST-to-EIR unit suite.
+//!
+//! Key details:
+//! - Both instance shapes fetch the property with `PropGetForWrite` and remove in place, with no
+//!   acquired copy in flight and no `PropSet` after the removal: the removed value's destructor
+//!   may throw or write the property again.
+//! - A packed-list property and an untyped static array are refused, naming the declared `array`
+//!   type as the fix.
+
+use crate::codegen::platform::Target;
+use crate::ir::{Function, Immediate, LocalKind, Op, RuntimeCallTarget, RuntimeFnId};
+use crate::ir_lower::LoweringError;
+use std::path::Path;
+
+/// The five first-class targets every property-element removal must agree on.
+const TARGETS: [&str; 5] = [
+    "macos-aarch64",
+    "ios-arm64",
+    "ios-sim-arm64",
+    "linux-aarch64",
+    "linux-x86_64",
+];
+
+/// Runtime object dispatch, readonly guards, and invalid array keys emit for every supported ABI.
+#[test]
+fn property_element_unset_runtime_payloads_compile_on_every_target() {
+    let source = r#"<?php
+class RuntimeOffsetBag implements ArrayAccess {
+    public function offsetExists(mixed $key): bool { return false; }
+    public function offsetGet(mixed $key): mixed { return null; }
+    public function offsetSet(mixed $key, mixed $value): void {}
+    public function offsetUnset(mixed $key): void {}
+}
+class RuntimeOffsetHolder {
+    public mixed $value;
+    public readonly mixed $fixed;
+    public function __construct() { $this->fixed = new RuntimeOffsetBag(); }
+}
+class RuntimeStaticOffsetHolder { public static array $pending; }
+function runtime_offset_key(int $n): mixed { return $n > 0 ? new stdClass() : [1]; }
+unset(RuntimeStaticOffsetHolder::$pending["key"]);
+$holder = new RuntimeOffsetHolder();
+$holder->value = new RuntimeOffsetBag();
+unset($holder->value[[1]], $holder->value[new stdClass()], $holder->fixed["key"]);
+$holder->value = ["keep" => 1];
+unset($holder->value[1.5]);
+try { unset($holder->value[runtime_offset_key($argc)]); } catch (TypeError $error) {}
+"#;
+    for name in TARGETS {
+        let module = super::lower_source_at_for_target(
+            source, Path::new("main.php"), Path::new("."), Target::parse(name).unwrap(),
+        );
+        crate::codegen::generate_user_asm_from_ir(&module, false, false)
+            .unwrap_or_else(|error| panic!("{name}: {error:?}"));
+    }
+}
+
+/// Erased-property object errors keep the runtime class-name owner live while composing the message.
+fn verify_erased_property_unset_error_borrows_published_class_name(name: &str) {
+    let source = r#"<?php
+$activation = new SimpleXMLElement('<r/>');
+$erased = json_decode('{}');
+$plain = new stdClass();
+$erased->p = $plain;
+try { unset($erased->p[1]); } catch (Error $error) {}
+"#;
+    let module = super::lower_source_at_for_target(
+        source, Path::new("main.php"), Path::new("."), Target::parse(name).unwrap(),
+    );
+    let function = module.functions.iter().find(|function| function.name == "main").unwrap();
+    let (lookup, class_name) = function.instructions.iter().enumerate().find_map(|(index, inst)| {
+        matches!(inst.immediate, Some(Immediate::RuntimeCall(
+            RuntimeCallTarget::Function(RuntimeFnId::GetClass)
+        ))).then(|| (index, inst.result.unwrap()))
+    }).unwrap_or_else(|| panic!("{name}: missing erased-object class-name lookup"));
+    let acquired = function.instructions[lookup + 1..].iter().find(|inst| {
+        inst.op == Op::Acquire && inst.operands == [class_name]
+    }).and_then(|inst| inst.result).unwrap_or_else(|| panic!("{name}: missing class-name lease"));
+    let store = function.instructions[lookup + 1..].iter().find(|inst| {
+        inst.op == Op::StoreLocal && inst.operands == [acquired]
+    }).unwrap_or_else(|| panic!("{name}: missing class-name owner store"));
+    let Some(Immediate::LocalSlot(slot)) = store.immediate else {
+        panic!("{name}: class-name owner store has no slot");
+    };
+    assert_eq!(function.locals[slot.as_raw() as usize].kind, LocalKind::HiddenTemp,
+        "{name}: published class names need stable owner slots");
+    let loads = function.instructions.iter().filter(|inst| {
+        inst.op == Op::LoadLocal && inst.immediate == Some(Immediate::LocalSlot(slot))
+    }).filter_map(|inst| inst.result).collect::<Vec<_>>();
+    assert!(!loads.is_empty(), "{name}: class-name message must read the published slot");
+    assert!(!function.instructions.iter().any(|inst| {
+        inst.op == Op::Release && inst.operands.first().is_some_and(|value| loads.contains(value))
+    }), "{name}: message concatenation must not consume the published class name");
+    crate::codegen::generate_user_asm_from_ir(&module, false, false)
+        .unwrap_or_else(|error| panic!("{name}: {error:?}"));
+}
+
+supported_target_cases!(erased_property_unset_error_borrows_published_class_name,
+    verify_erased_property_unset_error_borrows_published_class_name);
+
+/// Lowers `source` for the host target and returns the refusal message it must produce.
+fn refusal(source: &str) -> crate::errors::CompileError {
+    match super::try_lower_source_at_for_target(
+        source,
+        Path::new("main.php"),
+        Path::new("."),
+        Target::detect_host(),
+    ) {
+        Ok(_) => panic!("expected EIR lowering to refuse this program, but it lowered"),
+        Err(LoweringError::Unsupported(error)) => error,
+        Err(other) => panic!("expected an unsupported-shape refusal, got {other:?}"),
+    }
+}
+
+/// Returns the opcodes of `function` in emission order.
+fn ops(function: &Function) -> Vec<Op> {
+    function.instructions.iter().map(|inst| inst.op).collect()
+}
+
+/// An associative property and a declared-`array` property both fetch the container for write
+/// and remove in place; neither acquires a copy nor stores one back.
+#[test]
+fn property_element_unset_removes_in_place_on_every_target() {
+    let source = r#"<?php
+class Store {
+    public $items = ["x" => 1, "y" => 2];
+    public array $typed = ["p" => 1, "q" => 2];
+    public function dropItem(string $k): void { unset($this->items[$k]); }
+    public function dropTyped(string $k): void { unset($this->typed[$k]); }
+    public function dropFloat(): void { unset($this->items[1.5]); }
+}
+$s = new Store();
+$s->dropItem("x");
+$s->dropTyped("p");
+$s->dropFloat();
+echo count($s->items), count($s->typed);
+"#;
+    for name in TARGETS {
+        let module = super::lower_source_at_for_target(
+            source,
+            Path::new("main.php"),
+            Path::new("."),
+            Target::parse(name).unwrap(),
+        );
+        for (method, remove) in [("Store::dropItem", Op::HashUnset), ("Store::dropTyped", Op::OffsetUnset)] {
+            let function = module
+                .class_methods
+                .iter()
+                .find(|function| function.name == method)
+                .unwrap_or_else(|| panic!("{name}: {method} was not lowered"));
+            let ops = ops(function);
+            let fetch = ops
+                .iter()
+                .position(|op| *op == Op::PropGetForWrite)
+                .unwrap_or_else(|| panic!("{name}: {method} must fetch the property for write"));
+            let removal = ops
+                .iter()
+                .position(|op| *op == remove)
+                .unwrap_or_else(|| panic!("{name}: {method} must remove through {remove:?}"));
+            assert_eq!(
+                fetch + 1,
+                removal,
+                "{name}: {method} removes straight from the fetched container: {ops:?}"
+            );
+            assert!(
+                !ops.iter().any(|op| matches!(op, Op::PropSet | Op::PropGet)),
+                "{name}: {method} must not hold or store back a copy of the property: {ops:?}"
+            );
+        }
+        crate::codegen::generate_user_asm_from_ir(&module, false, false)
+            .unwrap_or_else(|error| panic!("{name}: {error:?}"));
+    }
+}
+
+/// A declared-`array` static property is separated and removed through `OffsetUnset`.
+#[test]
+fn static_property_element_unset_separates_then_removes_on_every_target() {
+    let source = r#"<?php
+class Cache {
+    public static array $cache = ["a" => 1, "b" => 2];
+    public static function forget(string $k): void { unset(self::$cache[$k]); }
+}
+Cache::forget("a");
+echo count(Cache::$cache);
+"#;
+    for name in TARGETS {
+        let module = super::lower_source_at_for_target(
+            source,
+            Path::new("main.php"),
+            Path::new("."),
+            Target::parse(name).unwrap(),
+        );
+        let function = module
+            .class_methods
+            .iter()
+            .find(|function| function.name == "Cache::forget")
+            .unwrap_or_else(|| panic!("{name}: Cache::forget was not lowered"));
+        let ops = ops(function);
+        let clone = ops.iter().position(|op| *op == Op::MixedClone);
+        let removal = ops.iter().position(|op| *op == Op::OffsetUnset);
+        assert!(
+            matches!((clone, removal), (Some(clone), Some(removal)) if clone < removal),
+            "{name}: the static cell is separated before the removal: {ops:?}"
+        );
+        crate::codegen::generate_user_asm_from_ir(&module, false, false)
+            .unwrap_or_else(|error| panic!("{name}: {error:?}"));
+    }
+}
+
+/// An untyped property whose default is a list keeps packed storage every method reads, so an
+/// element removal is refused at its line with the declared-`array` fix.
+#[test]
+fn packed_list_property_element_unset_is_refused() {
+    let error = refusal(
+        r#"<?php
+class L {
+    public $list = [10, 20, 30];
+    public function drop(int $i): void { unset($this->list[$i]); }
+}
+$l = new L();
+$l->drop(1);
+"#,
+    );
+    assert!(
+        error.message.contains("removing an element of `$list` needs hash storage")
+            && error.message.contains("Declare the property `array`"),
+        "{}",
+        error.message
+    );
+    assert_eq!(error.span.line, 4, "the refusal names the unset line");
+}
+
+/// An untyped static array property has no separated-cell path, so its element removal is
+/// refused with the declared-`array` fix.
+#[test]
+fn untyped_static_array_element_unset_is_refused() {
+    let error = refusal(
+        r#"<?php
+class Cache {
+    public static $untyped = ["a" => "x", "b" => "y"];
+    public static function forget(string $k): void { unset(self::$untyped[$k]); }
+}
+Cache::forget("a");
+"#,
+    );
+    assert!(
+        error.message.contains("an element of static property `$untyped`")
+            && error.message.contains("declared `array`"),
+        "{}",
+        error.message
+    );
+    assert_eq!(error.span.line, 4, "the refusal names the unset line");
+}
+
+/// XML adapters coexist with upstream property storage removal on all five target ABIs.
+fn verify_property_element_unset_native_xml_protocol(name: &str) {
+    let source = r#"<?php
+class NativeXmlUnsetHolder {
+    public mixed $boxed;
+    public SimpleXMLElement $typed;
+    public readonly mixed $fixed;
+    public function __construct(SimpleXMLElement $xml) {
+        $this->boxed = $xml; $this->typed = $xml; $this->fixed = $xml;
+    }
+}
+class NativeXmlUnsetRefGetter {
+    public mixed $payload;
+    public function &__get(string $name): mixed { return $this->payload; }
+}
+$xml = new SimpleXMLElement('<r a="1" b="2" c="3"/>');
+$holder = new NativeXmlUnsetHolder($xml);
+unset($holder->boxed['a'], $holder->typed['b'], $holder->fixed['c']);
+$factory = simplexml_load_string('<r><a>1</a><a>2</a></r>'); unset($factory->a[0]);
+function removeOpaqueXmlField(object $holder): void { unset($holder->typed['id']); }
+function removeNullableXmlField(?NativeXmlUnsetHolder $holder): void { unset($holder->typed['id']); }
+removeOpaqueXmlField($holder); removeNullableXmlField($holder);
+$getter = new NativeXmlUnsetRefGetter(); $getter->payload = $xml; removeOpaqueXmlField($getter);
+$name = 'a'; unset($xml->{$name}[0], $xml->missing->{$name}[0]);
+function typedNativeXmlUnsetLocal(): void {
+    $value = new SimpleXMLElement('<r><a/></r>');
+    unset($value->a->b[0], $value->absent[1], $value->a[2]->b[0]);
+    $items = [new SimpleXMLElement('<list><b/></list>')];
+    unset($items[3]->a->b[0], $items[3][0]->b[0], $items[0]->b[0]);
+    $bag = new ArrayObject([new SimpleXMLElement('<bag><b/></bag>')]); unset($bag[0]->b[0]);
+}
+typedNativeXmlUnsetLocal();
+$callback = function (): mixed { return []; };
+try { unset($callback()['id']); } catch (Error $error) {}
+"#;
+    let module = super::lower_source_at_for_target(
+        source, Path::new("main.php"), Path::new("."), Target::parse(name).unwrap(),
+    );
+    let quiet_reads = module.functions.iter().flat_map(|function| &function.instructions)
+        .filter(|inst| inst.immediate == Some(crate::ir::Immediate::PropertyFetchMode(crate::ir::PropertyFetchMode::QuietRead)))
+        .collect::<Vec<_>>();
+    assert!(!quiet_reads.is_empty(), "{name}: opaque holder must fetch quietly");
+    for inst in quiet_reads {
+        assert!(inst.effects.contains(crate::ir::Effects::WRITES_HEAP), "{name}: quiet fetch may create a null field");
+    }
+    let assembly = crate::codegen::generate_user_asm_from_ir(&module, false, false)
+        .unwrap_or_else(|error| panic!("{name}: {error:?}"));
+    let table = assembly.split_once("_class_offsetunset_ptrs:\n").expect("offset unset table").1;
+    let table = table.split(".globl").next().unwrap();
+    let class_id = module.class_infos["SimpleXMLElement"].class_id as usize;
+    let entry = table.lines().filter(|line| line.trim_start().starts_with(".quad "))
+        .nth(class_id).expect("native class row");
+    let expected = crate::names::method_symbol("SimpleXMLElement", "__elephc_dimension_unset");
+    assert!(entry.contains(&expected), "{name}: native unset table entry missing: {entry}");
+}
+
+supported_target_cases!(property_element_unset_native_xml_protocol,
+    verify_property_element_unset_native_xml_protocol);
+
+/// A known quiet-read name emits only matching slots while runtime names keep every candidate.
+fn verify_property_element_unset_known_name_bounds_slot_dispatch(target: &str) {
+    for (name, known) in [("'items'", true), ("$name", false)] {
+        let source = format!(r#"<?php
+class QuietCandidateOwner {{
+    public array $items = [];
+    public array $other = [];
+    public array $third = [];
+}}
+function quietCandidateRead(object $owner, string $name): void {{ unset($owner->{{{name}}}['key']); }}
+$xmlCapability = new SimpleXMLElement('<r/>'); unset($xmlCapability);
+quietCandidateRead(new QuietCandidateOwner(), 'items');
+"#);
+        let module = super::lower_source_at_for_target(&source, Path::new("main.php"),
+            Path::new("."), Target::parse(target).unwrap());
+        let assembly = crate::codegen::generate_user_asm_from_ir(&module, false, false).unwrap();
+        let body = assembly.split_once("@fn name=quietCandidateRead symbol=").unwrap().1
+            .split_once("@endfn name=quietCandidateRead").unwrap().0;
+        let labels = body.lines().filter(|line| line.ends_with(':') && line.contains("unset_prop_slot")).count();
+        if known {
+            assert_eq!(labels, 1, "{target}: literal reads must skip unrelated slots");
+        } else {
+            assert!(labels >= 3, "{target}: runtime names must retain every declared slot");
+        }
+    }
+}
+
+supported_target_cases!(property_element_unset_known_name_bounds_slot_dispatch,
+    verify_property_element_unset_known_name_bounds_slot_dispatch);

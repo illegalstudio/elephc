@@ -411,7 +411,11 @@ fn collect_type_expr(ty: &TypeExpr, out: &mut HashSet<String>) {
             }
         }
         TypeExpr::Buffer(inner) => collect_type_expr(inner, out),
-        TypeExpr::Ptr(Some(name)) => push_name(name, out),
+        TypeExpr::Ptr(Some(name)) => {
+            let canonical = name.as_canonical();
+            let leaf = crate::names::pointer_target_leaf(&canonical).trim_start_matches('\\');
+            if !leaf.is_empty() { out.insert(leaf.to_string()); }
+        }
         // The TEMPLATE is the file to load: `Box<User>` is declared in whatever file declares
         // `class Box`, and the instantiated class does not exist until after autoloading. Its
         // arguments name classes with files of their own, so both halves are collected — the

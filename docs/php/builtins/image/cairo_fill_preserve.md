@@ -1,8 +1,6 @@
 ---
 title: "cairo_fill_preserve()"
 description: "Fills the current path with the current source and keeps the path."
-sidebar:
-  order: 405
 ---
 
 ## cairo_fill_preserve()
@@ -20,8 +18,9 @@ Fills the current path with the current source and keeps the path.
 
 ## Availability
 
-- **Compiled (AOT)**: supported through the compiler-injected image prelude.
-- **`eval()` (magician interpreter)**: not available inside eval'd code.
+| Compiled (AOT) | Magician (eval) |
+|---|---|
+| Available | Not available yet |
 
 _No examples yet. Check `examples/` and `showcases/` for usage patterns._
 

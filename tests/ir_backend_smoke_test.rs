@@ -2301,9 +2301,9 @@ try {
     );
 }
 
-/// Verifies invalid dynamic `instanceof` targets use the runtime fatal path.
+/// Verifies invalid dynamic `instanceof` targets raise an uncaught runtime `Error`.
 #[test]
-fn ir_backend_fatals_on_invalid_dynamic_instanceof_target() {
+fn ir_backend_raises_error_on_invalid_dynamic_instanceof_target() {
     let run = compile_ir_backend_and_run_with_managed_pcre2(
         "invalid_dynamic_instanceof_target",
         r#"<?php
@@ -2318,14 +2318,14 @@ echo ($user instanceof $target) ? "T" : "F";
         !run.status.success(),
         "IR backend invalid dynamic instanceof fixture unexpectedly succeeded"
     );
-    assert_eq!(
-        String::from_utf8(run.stdout).expect("fatal stdout should be utf8"),
-        ""
-    );
-    let stderr = String::from_utf8(run.stderr).expect("fatal stderr should be utf8");
+    let reported = String::from_utf8(run.stdout).expect("Error stdout should be utf8");
     assert!(
-        stderr.contains("Fatal error: Class name must be a valid object or a string"),
-        "unexpected fatal stderr: {stderr}"
+        reported.contains("Class name must be a valid object or a string"),
+        "unexpected uncaught Error output: {reported}"
+    );
+    assert_eq!(
+        String::from_utf8(run.stderr).expect("Error stderr should be utf8"),
+        ""
     );
 }
 
@@ -4282,8 +4282,8 @@ fn ir_backend_handles_basic_indexed_arrays() {
         ("array_set_int", "<?php $a = [10, 20]; $a[1] = 99; echo $a[1];", "99"),
         ("array_set_float", "<?php $a = [1.5, 2.5]; $a[0] = 3.5; echo $a[0];", "3.5"),
         ("array_set_string", "<?php $a = [\"a\", \"b\"]; $a[1] = \"z\"; echo $a[1];", "z"),
-        ("array_set_extends_int", "<?php $a = [1]; $a[3] = 9; echo count($a); echo \":\"; echo $a[0];", "4:1"),
-        ("array_set_extends_string", "<?php $a = [\"a\"]; $a[2] = \"z\"; echo count($a); echo \":\"; echo $a[2];", "3:z"),
+        ("array_set_extends_int", "<?php $a = [1]; $a[3] = 9; echo count($a); echo \":\"; echo $a[0];", "2:1"),
+        ("array_set_extends_string", "<?php $a = [\"a\"]; $a[2] = \"z\"; echo count($a); echo \":\"; echo $a[2];", "2:z"),
         ("array_set_empty_sparse_count", "<?php $a = []; $a[2] = 7; echo count($a);", "1"),
         (
             "array_literal_pushes_nullable_int_reads",

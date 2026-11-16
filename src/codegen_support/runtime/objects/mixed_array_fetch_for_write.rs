@@ -225,7 +225,7 @@ fn emit_mixed_array_get_for_write_aarch64(emitter: &mut Emitter) {
     emitter.instruction("ldr x0, [sp, #0]");                                    // reload the receiver cell for the plain reader
     emitter.instruction("ldr x1, [sp, #8]");                                    // reload key_lo for the plain reader
     emitter.instruction("ldr x2, [sp, #16]");                                   // reload key_hi for the plain reader
-    emitter.instruction("mov x3, xzr");                                         // write-context fallback reads suppress missing/null warnings
+    emitter.instruction("mov x3, #2");                                          // request attached SPL storage while suppressing ordinary read warnings
     emitter.instruction("ldp x29, x30, [sp, #64]");                             // restore frame pointer and return address before the tail call
     emitter.instruction("add sp, sp, #80");                                     // release the helper frame before the tail call
     emitter.instruction("b __rt_mixed_array_get");                              // delegate non-container receivers to the plain reader
@@ -590,7 +590,7 @@ fn emit_mixed_array_get_for_write_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // reload the receiver cell for the plain reader
     emitter.instruction("mov rsi, QWORD PTR [rbp - 16]");                       // reload key_lo for the plain reader
     emitter.instruction("mov rdx, QWORD PTR [rbp - 24]");                       // reload key_hi for the plain reader
-    emitter.instruction("xor ecx, ecx");                                        // write-context fallback reads suppress missing/null warnings
+    emitter.instruction("mov ecx, 2");                                          // request attached SPL storage while suppressing ordinary read warnings
     emitter.instruction("mov rsp, rbp");                                        // release the helper frame before the tail call
     emitter.instruction("pop rbp");                                             // restore caller frame pointer before the tail call
     emitter.instruction("jmp __rt_mixed_array_get");                            // delegate non-container receivers to the plain reader

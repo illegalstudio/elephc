@@ -11,7 +11,6 @@
 
 use crate::codegen_support::emit::Emitter;
 use crate::codegen_support::platform::Arch;
-use crate::codegen_support::abi;
 
 /// Emits the grapheme-aware string reversal runtime helper for the active target.
 ///
@@ -31,15 +30,25 @@ pub fn emit_grapheme_strrev(emitter: &mut Emitter) {
     emitter.label_global("__rt_grapheme_strrev");
 
     // -- preserve caller return address for local decoder calls --
-    emitter.instruction("sub sp, sp, #16");                                     // reserve a small aligned frame for the saved return address
-    emitter.instruction("str x30, [sp, #8]");                                   // preserve the external caller return address across local decoder calls
-
-    // -- get concat_buf write position --
-    crate::codegen_support::abi::emit_symbol_address(emitter, "x6", "_concat_off");
-    emitter.instruction("ldr x8, [x6]");                                        // load current concat-buffer write offset
-    crate::codegen_support::abi::emit_symbol_address(emitter, "x7", "_concat_buf");
-    emitter.instruction("add x9, x7, x8");                                      // compute destination pointer for the reversed string
+    // -- reserve the reversed result before the cluster scan writes anything --
+    emitter.instruction("sub sp, sp, #48");                                     // reserve spill space for the source pair and result start
+    emitter.instruction("stp x29, x30, [sp, #32]");                             // preserve the frame pointer and return address across decoder calls
+    emitter.instruction("add x29, sp, #32");                                    // establish the grapheme_strrev frame pointer
+    emitter.instruction("stp x1, x2, [sp]");                                    // save the source pointer and length
+    emitter.instruction("mov x0, x2");                                          // the reversed result has exactly the source length
+    emitter.instruction("bl __rt_concat_reserve");                              // reserve concat scratch or owned heap storage
+    crate::codegen_support::abi::emit_symbol_address(emitter, "x9", "_concat_buf"); // classify the reservation by its arena offset
+    emitter.instruction("sub x10, x0, x9");                                     // compute the candidate scratch offset
+    crate::codegen_support::abi::emit_load_int_immediate(emitter, "x11", emitter.concat_capacity as i64); // load the arena capacity
+    emitter.instruction("cmp x10, x11");                                        // is the reservation outside the scratch window?
+    emitter.instruction("b.lo __rt_grapheme_strrev_mark_done");                 // scratch reservations need no transient header
+    emitter.instruction(&format!("mov x9, #{}", crate::codegen_support::sentinels::CONCAT_TEMP_HEAP_KIND)); // mark the heap block as transferable
+    emitter.instruction("str x9, [x0, #-8]");                                   // let persistence adopt the reservation
+    emitter.label("__rt_grapheme_strrev_mark_done");
+    emitter.instruction("str x0, [sp, #16]");                                   // save the result start for the published pointer
+    emitter.instruction("mov x9, x0");                                          // destination cursor
     emitter.instruction("mov x10, x9");                                         // preserve destination start for the returned string pointer
+    emitter.instruction("ldp x1, x2, [sp]");                                    // reload the source pointer and length
     emitter.instruction("mov x0, x1");                                          // keep the source string pointer in a decoder-friendly scratch register
     emitter.instruction("mov x11, x2");                                         // scan_end = source length in bytes
 
@@ -93,21 +102,21 @@ pub fn emit_grapheme_strrev(emitter: &mut Emitter) {
 
     // -- publish success --
     emitter.label("__rt_grapheme_strrev_done");
-    crate::codegen_support::abi::emit_symbol_address(emitter, "x6", "_concat_off");
-    emitter.instruction("ldr x8, [x6]");                                        // reload concat-buffer write offset for the final update
-    emitter.instruction("add x8, x8, x2");                                      // advance offset by the unchanged source byte length
-    emitter.instruction("str x8, [x6]");                                        // publish the updated concat-buffer write offset
-    emitter.instruction("mov x1, x10");                                         // return pointer to the reversed string
-    emitter.instruction("ldr x30, [sp, #8]");                                   // restore the external caller return address
-    emitter.instruction("add sp, sp, #16");                                     // release the local decoder-call frame
+    emitter.instruction("ldr x1, [sp, #16]");                                   // return pointer to the reversed string
+    emitter.instruction("ldr x2, [sp, #8]");                                    // return the unchanged source byte length
+    emitter.instruction("bl __rt_concat_publish");                              // advance the scratch offset only for scratch-backed results
+    emitter.instruction("ldp x29, x30, [sp, #32]");                             // restore the frame pointer and return address
+    emitter.instruction("add sp, sp, #48");                                     // release the local decoder-call frame
     emitter.instruction("ret");                                                 // return the reversed string in x1/x2
 
     // -- publish failure as null pointer sentinel --
     emitter.label("__rt_grapheme_strrev_fail");
+    emitter.instruction("ldr x0, [sp, #16]");                                   // release the reservation that will not be returned
+    emitter.instruction("bl __rt_heap_free_safe");                              // no-op for scratch-backed reservations
     emitter.instruction("mov x1, #0");                                          // null pointer sentinel means false for grapheme_strrev()
     emitter.instruction("mov x2, #0");                                          // failure length is zero
-    emitter.instruction("ldr x30, [sp, #8]");                                   // restore the external caller return address
-    emitter.instruction("add sp, sp, #16");                                     // release the local decoder-call frame on failure
+    emitter.instruction("ldp x29, x30, [sp, #32]");                             // restore the frame pointer and return address
+    emitter.instruction("add sp, sp, #48");                                     // release the local decoder-call frame on failure
     emitter.instruction("ret");                                                 // return the false sentinel to the codegen wrapper
 
     emit_prev_utf8_aarch64(emitter);
@@ -236,11 +245,19 @@ fn emit_grapheme_strrev_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("push r15");                                            // preserve callee-saved cluster-end storage
     emitter.instruction("mov rbx, rax");                                        // keep the source string pointer stable across decoder calls
     emitter.instruction("mov r12, rdx");                                        // keep the source string length stable across decoder calls
-    crate::codegen_support::abi::emit_symbol_address(emitter, "r8", "_concat_off");
-    emitter.instruction("mov r9, QWORD PTR [r8]");                              // load current concat-buffer write offset
-    crate::codegen_support::abi::emit_symbol_address(emitter, "r10", "_concat_buf");
-    emitter.instruction("lea r13, [r10 + r9]");                                 // compute destination pointer for the reversed string
-    emitter.instruction("mov r14, r13");                                        // preserve destination start for the returned string pointer
+    emitter.instruction("mov rax, r12");                                        // the reversed result has exactly the source length
+    emitter.instruction("call __rt_concat_reserve");                            // reserve concat scratch or owned heap storage
+    crate::codegen_support::abi::emit_symbol_address(emitter, "r8", "_concat_buf"); // classify the reservation by its arena offset
+    emitter.instruction("mov r9, rax");                                         // copy the reservation before deriving its offset
+    emitter.instruction("sub r9, r8");                                          // compute the candidate scratch offset
+    crate::codegen_support::abi::emit_load_int_immediate(emitter, "r10", emitter.concat_capacity as i64); // load the arena capacity
+    emitter.instruction("cmp r9, r10");                                         // is the reservation outside the scratch window?
+    emitter.instruction("jb __rt_grapheme_strrev_mark_done_x");                 // scratch reservations need no transient header
+    crate::codegen_support::abi::emit_load_int_immediate(emitter, "r8", crate::codegen_support::sentinels::x86_64_heap_kind_word(crate::codegen_support::sentinels::CONCAT_TEMP_HEAP_KIND) as i64); // materialize the transferable heap kind
+    emitter.instruction("mov QWORD PTR [rax - 8], r8");                         // let persistence adopt the reservation
+    emitter.label("__rt_grapheme_strrev_mark_done_x");
+    emitter.instruction("mov r13, rax");                                        // destination cursor
+    emitter.instruction("mov r14, rax");                                        // preserve destination start for the returned string pointer
     emitter.instruction("mov rcx, r12");                                        // scan_end = source length in bytes
 
     emitter.label("__rt_grapheme_strrev_loop_x");
@@ -293,9 +310,9 @@ fn emit_grapheme_strrev_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("jmp __rt_grapheme_strrev_loop_x");                     // continue with the previous source grapheme cluster
 
     emitter.label("__rt_grapheme_strrev_done_x");
-    abi::emit_load_symbol_to_reg(emitter, "r8", "_concat_off", 0);              // reload concat-buffer write offset for the final update
-    emitter.instruction("add r8, r12");                                         // advance offset by the unchanged source byte length
-    abi::emit_store_reg_to_symbol(emitter, "r8", "_concat_off", 0);             // publish the updated concat-buffer write offset
+    emitter.instruction("mov rax, r14");                                        // return pointer to the reversed string
+    emitter.instruction("mov rdx, r12");                                        // return the unchanged source byte length
+    emitter.instruction("call __rt_concat_publish");                            // advance the scratch offset only for scratch-backed results
     emitter.instruction("mov rax, r14");                                        // return pointer to the reversed string
     emitter.instruction("mov rdx, r12");                                        // return the unchanged source byte length
     emitter.instruction("pop r15");                                             // restore callee-saved cluster-end storage
@@ -306,6 +323,8 @@ fn emit_grapheme_strrev_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("ret");                                                 // return the reversed string in rax/rdx
 
     emitter.label("__rt_grapheme_strrev_fail_x");
+    emitter.instruction("mov rax, r14");                                        // release the reservation that will not be returned
+    emitter.instruction("call __rt_heap_free_safe");                            // no-op for scratch-backed reservations
     emitter.instruction("xor eax, eax");                                        // null pointer sentinel means false for grapheme_strrev()
     emitter.instruction("xor edx, edx");                                        // failure length is zero
     emitter.instruction("pop r15");                                             // restore callee-saved cluster-end storage on failure

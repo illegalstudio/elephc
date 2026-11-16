@@ -65,6 +65,9 @@ pub(in crate::interpreter) fn eval_array_aggregate_result(
     for position in 0..len {
         let key = values.array_iter_key(array, position)?;
         let value = values.array_get(array, key)?;
+        // php-src's numeric aggregate uses `_IS_NUMBER` on internal value objects: GMP
+        // contributes `int` when it fits and `float` otherwise, not a GMP arithmetic result.
+        let value = values.number_value(value)?;
         result = match name {
             "array_sum" => values.add(result, value)?,
             "array_product" => values.mul(result, value)?,

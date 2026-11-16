@@ -15,6 +15,12 @@ mod x86_64;
 use crate::codegen_support::emit::Emitter;
 use crate::codegen_support::platform::Arch;
 
+/// Restores monitored activations when force-close rejects a suspension before switching.
+pub(super) fn emit_force_close_unpark(emitter: &mut Emitter) {
+    let coroutine = if emitter.target.arch == Arch::AArch64 { "x19" } else { "r12" };
+    common::emit_instr_unpark_hook(emitter, "__rt_fiber_suspend_close_no_instr", coroutine);
+}
+
 /// Allocates a FiberError object with the given message and raises it via
 /// `__rt_throw_current`. Never returns to its caller.
 ///

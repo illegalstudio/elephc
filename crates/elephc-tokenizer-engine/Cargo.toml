@@ -1,0 +1,26 @@
+[package]
+name = "elephc-tokenizer-engine"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+description = "Shared byte-preserving PHP tokenizer engine for elephc"
+publish = false
+
+[lib]
+crate-type = ["rlib"]
+
+[dependencies]
+elephc-builtin-contract = { path = "../elephc-builtin-contract" }
+# 1.51 is the last Mago line compatible with the workspace's Rust 1.98 pin.
+# Keep these exact: newer releases require Rust 1.99.
+mago-syntax = "=1.51.0"
+mago-syntax-core = "=1.51.0"
+mago-database = "=1.51.0"
+mago-allocator = "=1.51.0"
+mago-span = "=1.51.0"
+mago-reporting = "=1.51.0"
+mago-php-version = "=1.51.0"
+mago-text-edit = "=1.51.0"
+
+[dev-dependencies]
+serde_json = "1"

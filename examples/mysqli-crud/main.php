@@ -64,15 +64,19 @@ $db->query("CREATE TABLE mysqli_crud_demo (
     score DOUBLE NOT NULL
 )");
 
-// Insert through a prepared statement, re-binding per row.
+// Insert through a prepared statement. bind_param() binds BY REFERENCE, so
+// each execute() sends whatever $name / $score hold at that moment.
 $ins = $db->prepare("INSERT INTO mysqli_crud_demo (name, score) VALUES (?, ?)");
 $ins->execute(["Ada", "92.5"]);
-$ins->execute(["Grace", "88.0"]);
-$name = "Edsger";
-$score = 95.25;
+$name = "";
+$score = 0.0;
 $ins->bind_param("sd", $name, $score);
-$ins->execute();
-echo "Inserted 3 rows, last id ", $ins->insert_id > 0 ? "assigned" : "missing", "\n";
+foreach ([["Grace", 88.0], ["Edsger", 95.25]] as $person) {
+    $name = $person[0];
+    $score = $person[1];
+    $ins->execute();
+}
+echo "Inserted 3 rows, last id ", $db->insert_id > 0 ? "assigned" : "missing", "\n";
 $ins->close();
 
 // Update with an escaped ad-hoc statement.
@@ -90,6 +94,22 @@ if ($rows instanceof mysqli_result && $count instanceof mysqli_result) {
         echo "  #", $row["id"], " ", $row["name"], " -> ", $row["score"], "\n";
     }
 }
+
+// Read back through result binding: fetch() writes each row into $id / $who.
+$top = $db->prepare("SELECT id, name FROM mysqli_crud_demo WHERE score > ? ORDER BY id");
+$threshold = 90.0;
+$top->bind_param("d", $threshold);
+$id = 0;
+$who = "";
+$top->bind_result($id, $who);
+$top->execute();
+$top->store_result();
+echo $top->num_rows, " above ", $threshold, ":";
+while ($top->fetch()) {
+    echo " ", $who, "(#", $id, ")";
+}
+echo "\n";
+$top->close();
 
 // Delete inside a transaction.
 $db->begin_transaction();

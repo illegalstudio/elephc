@@ -1,8 +1,6 @@
 ---
 title: "mysqli_stmt_execute()"
 description: "Executes a prepared statement."
-sidebar:
-  order: 166
 ---
 
 ## mysqli_stmt_execute()
@@ -21,8 +19,9 @@ Executes a prepared statement.
 
 ## Availability
 
-- **Compiled (AOT)**: supported through an injected elephc-PHP prelude.
-- **`eval()` (magician interpreter)**: not available inside eval'd code.
+| Compiled (AOT) | Magician (eval) |
+|---|---|
+| Available | Not available yet |
 
 _No examples yet. Check `examples/` and `showcases/` for usage patterns._
 

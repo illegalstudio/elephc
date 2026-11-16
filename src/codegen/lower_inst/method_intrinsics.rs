@@ -6,6 +6,7 @@
 //!
 //! Key details:
 //! - Preserves EIR ownership, ABI ordering, runtime symbols, and target-aware lowering.
+//! - Eval-owned interface receivers dispatch dynamically before consulting native interface tables.
 
 use super::*;
 
@@ -23,6 +24,23 @@ pub(super) fn lower_interface_method_call(
         let object = expect_operand(inst, 0)?;
         return lower_throwable_standard_method(ctx, inst, object, method_name);
     }
+    let eval_done_label = if ctx.module.required_runtime_features.eval_bridge {
+        let native_fallback_label = ctx.next_label("interface_dispatch_native");
+        let done_label = ctx.next_label("interface_dispatch_eval_done");
+        let object = expect_operand(inst, 0)?;
+        builtins::lower_eval_context_free_method_call(
+            ctx,
+            inst,
+            object,
+            method_name,
+            &native_fallback_label,
+            &done_label,
+        )?;
+        ctx.emitter.label(&native_fallback_label);
+        Some(done_label)
+    } else {
+        None
+    };
     let (normalized, method_key, callee_sig) =
         resolve_interface_call_signature(ctx, interface_name, method_name, inst.operands.len())?;
     let mut param_types = Vec::with_capacity(callee_sig.params.len() + 1);
@@ -49,9 +67,13 @@ pub(super) fn lower_interface_method_call(
     let return_ty = iterators::emit_interface_dispatch_call(ctx, &normalized, &method_key, None)?;
     abi::emit_release_temporary_stack(ctx.emitter, caller_stack_pad_bytes);
     abi::emit_release_temporary_stack(ctx.emitter, call_args.overflow_bytes);
-    store_call_result(ctx, inst, &return_ty)?;
+    store_compiled_call_result(ctx, inst, &return_ty, callee_sig.by_ref_return)?;
     emit_call_arg_temp_cleanups(ctx, &call_args, inst.result)?;
-    emit_ref_arg_writebacks(ctx, &call_args)
+    emit_ref_arg_writebacks_guarding_result(ctx, &call_args, inst.result, false)?;
+    if let Some(done_label) = eval_done_label {
+        ctx.emitter.label(&done_label);
+    }
+    Ok(())
 }
 
 /// Resolves interface method metadata and validates the EIR ABI operand count.
@@ -121,7 +143,7 @@ pub(super) fn lower_nullable_receiver_method_call(
     let done_label = ctx.next_label("method_receiver_done");
     let receiver_reg = abi::nested_call_reg(ctx.emitter);
     objects::emit_nullable_receiver_object_payload(ctx, object, &null_label, receiver_reg)?;
-    if target.dynamic_slot.is_some() {
+    if super::method_resolution::method_requires_runtime_literal_guards(ctx, class_name, &target) {
         emit_hierarchy_literal_parameter_guards(
             ctx, inst, class_name, method_name, receiver_reg,
         )?;
@@ -148,7 +170,7 @@ pub(super) fn lower_nullable_receiver_method_call(
     abi::emit_release_temporary_stack(ctx.emitter, call_args.overflow_bytes);
     store_method_call_result(ctx, inst, &target)?;
     emit_call_arg_temp_cleanups(ctx, &call_args, None)?;
-    emit_ref_arg_writebacks(ctx, &call_args)?;
+    emit_ref_arg_writebacks_guarding_result(ctx, &call_args, inst.result, target.by_ref_return)?;
     abi::emit_jump(ctx.emitter, &done_label);
 
     ctx.emitter.label(&null_label);
@@ -234,9 +256,9 @@ pub(super) fn lower_nullable_receiver_interface_method_call(
     let return_ty = iterators::emit_interface_dispatch_call(ctx, normalized, &method_key, None)?;
     abi::emit_release_temporary_stack(ctx.emitter, caller_stack_pad_bytes);
     abi::emit_release_temporary_stack(ctx.emitter, call_args.overflow_bytes);
-    store_call_result(ctx, inst, &return_ty)?;
+    store_compiled_call_result(ctx, inst, &return_ty, callee_sig.by_ref_return)?;
     emit_call_arg_temp_cleanups(ctx, &call_args, None)?;
-    emit_ref_arg_writebacks(ctx, &call_args)?;
+    emit_ref_arg_writebacks_guarding_result(ctx, &call_args, inst.result, false)?;
     abi::emit_jump(ctx.emitter, &done_label);
 
     ctx.emitter.label(&null_label);
@@ -336,7 +358,7 @@ pub(super) fn lower_instance_runtime_intrinsic(
     abi::emit_release_temporary_stack(ctx.emitter, caller_stack_pad_bytes);
     abi::emit_release_temporary_stack(ctx.emitter, call_args.overflow_bytes);
     store_call_result(ctx, inst, &return_ty)?;
-    emit_ref_arg_writebacks(ctx, &call_args)
+    emit_ref_arg_writebacks_guarding_result(ctx, &call_args, inst.result, false)
 }
 
 /// Lowers a runtime-backed intrinsic static method using the hidden called-class id ABI.
@@ -410,7 +432,7 @@ pub(super) fn lower_static_runtime_intrinsic(
         ctx.store_result_value(result)?;
     }
     emit_call_arg_temp_cleanups(ctx, &call_args, inst.result)?;
-    emit_ref_arg_writebacks(ctx, &call_args)
+    emit_ref_arg_writebacks_guarding_result(ctx, &call_args, inst.result, false)
 }
 
 /// Lowers `CallbackFilterIterator::__elephcAcceptCallback()` through its stored descriptor.
@@ -468,8 +490,9 @@ fn emit_interface_literal_parameter_guards(
 /// Checks literal parameters on the runtime class when a base method can be overridden.
 ///
 /// `false` and `null` on the static signature are not the implementation's contract:
-/// a subclass may widen them. Only classes in `ancestor`'s tree are considered, and a
-/// class whose implementation no longer declares the literal is not rejected.
+/// a subclass may widen them. Normally only classes in `ancestor`'s tree are considered.
+/// Final generic declarations also consider variance siblings without inheritance edges,
+/// selecting the actual declaring instantiation's diagnostic name by runtime class id.
 pub(super) fn emit_hierarchy_literal_parameter_guards(
     ctx: &mut FunctionContext<'_>,
     inst: &Instruction,
@@ -478,14 +501,19 @@ pub(super) fn emit_hierarchy_literal_parameter_guards(
     receiver_reg: &str,
 ) -> Result<()> {
     let key = php_symbol_key(method_name);
-    if !ctx.module.class_infos.get(ancestor.trim_start_matches('\\'))
+    let normalized = ancestor.trim_start_matches('\\');
+    if !ctx.module.class_infos.get(normalized)
         .and_then(|class| class.methods.get(&key))
         .is_some_and(|signature| super::super::literal_method_index::has_literal_parameters(&signature.params))
     {
         return Ok(());
     }
+    let fixed_generic_signature = normalized.contains('<')
+        && ctx.module.class_infos.get(normalized).is_some_and(|class| {
+            class.is_final || class.final_methods.contains(&key)
+        });
     emit_dispatched_literal_parameter_guards(
-        ctx, inst, method_name, receiver_reg, Some(ancestor),
+        ctx, inst, method_name, receiver_reg, if fixed_generic_signature { None } else { Some(ancestor) },
     )
 }
 

@@ -1,8 +1,6 @@
 ---
 title: "uasort()"
 description: "Sorts an array with a user-defined comparison function and maintains index association."
-sidebar:
-  order: 69
 ---
 
 ## uasort()
@@ -21,8 +19,9 @@ Sorts an array with a user-defined comparison function and maintains index assoc
 
 ## Availability
 
-- **Compiled (AOT)**: supported by the Elephc code generator.
-- **`eval()` (magician interpreter)**: supported through a declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/array/uasort.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/array/uasort.rs)).
+| Compiled (AOT) | Magician (eval) |
+|---|---|
+| Available | Available |
 
 _No examples yet. Check `examples/` and `showcases/` for usage patterns._
 

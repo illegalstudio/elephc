@@ -1,8 +1,6 @@
 ---
 title: "getenv()"
 description: "Gets the value of an environment variable, or the whole environment."
-sidebar:
-  order: 276
 ---
 
 ## getenv()
@@ -21,8 +19,9 @@ Gets the value of an environment variable, or the whole environment.
 
 ## Availability
 
-- **Compiled (AOT)**: supported by the Elephc code generator.
-- **`eval()` (magician interpreter)**: supported through a declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/network_env/getenv.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/network_env/getenv.rs)).
+| Compiled (AOT) | Magician (eval) |
+|---|---|
+| Available | Available |
 
 _No examples yet. Check `examples/` and `showcases/` for usage patterns._
 

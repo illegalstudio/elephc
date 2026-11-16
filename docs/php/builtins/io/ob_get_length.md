@@ -1,8 +1,6 @@
 ---
 title: "ob_get_length()"
 description: "Returns the length of the output buffer."
-sidebar:
-  order: 348
 ---
 
 ## ob_get_length()
@@ -19,8 +17,9 @@ Returns the length of the output buffer.
 
 ## Availability
 
-- **Compiled (AOT)**: supported by the Elephc code generator.
-- **`eval()` (magician interpreter)**: supported through a declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/core/ob_get_length.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/core/ob_get_length.rs)).
+| Compiled (AOT) | Magician (eval) |
+|---|---|
+| Available | Available |
 
 _No examples yet. Check `examples/` and `showcases/` for usage patterns._
 

@@ -455,6 +455,79 @@ fn test_error_boxed_direct_callable_spread_after_named_argument() {
     }
 }
 
+/// Suppression produces a value expression and cannot turn an XML selection into an lvalue.
+#[test]
+fn test_error_suppressed_xml_selection_is_not_a_reference_argument() {
+    for call in ["acceptSuppressedXml(@$xml->missing);",
+        "$callback = acceptSuppressedXml(...); $callback(@$xml->missing);"]
+    {
+        expect_error(&format!("<?php function acceptSuppressedXml(&$value): void {{}} \
+            $xml = new SimpleXMLElement('<r/>'); {call}"), "must be passed a variable");
+    }
+}
+
+/// Unresolved callees obey PHP's positional ordering before runtime signature lookup.
+#[test]
+fn test_error_unresolved_call_positional_argument_order() {
+    for call in ["$callback(...[], 1);", "$callback(value: 1, 2);"] {
+        let detail = if call.contains("...") { "spread" } else { "named" };
+        for parameter_type in ["mixed", "string", "callable"] {
+            expect_error(&format!("<?php function invoke({parameter_type} $callback): void {{ {call} }}"),
+                &format!("cannot use positional arguments after {detail} arguments"));
+        }
+    }
+    expect_error("<?php function invoke(array $callbacks): void { ($callbacks[0])(...[], 1); }",
+        "cannot use positional arguments after spread arguments");
+    expect_error("<?php function construct(string $class): void { new $class(...[], 1); }",
+        "cannot use positional arguments after spread arguments");
+}
+
+/// Runtime callable arrays, method receivers and eval declarations share ordering errors.
+#[test]
+fn test_error_unresolved_member_and_expression_call_argument_order() {
+    let calls = [
+        "function invoke(array $callbacks): void { ($callbacks[0])(ARGS); }",
+        "function invoke(array $callback): void { $callback(ARGS); }",
+        "function invoke(mixed $receiver): void { $receiver->run(ARGS); }",
+        "function invoke(callable $callback): void { $callback->call(ARGS); }",
+        "function invoke(?stdClass $receiver): void { $receiver?->run(ARGS); }",
+        "function invoke(?stdClass $receiver, string $method): void { $receiver?->$method(ARGS); }",
+        "eval('return null;'); UnresolvedAfterEval::run(ARGS);",
+        "eval('return null;'); unresolvedAfterEval(ARGS);",
+        "eval('return null;'); declaredAfterEval(ARGS); function declaredAfterEval(int $value): void {}",
+        "class OrderedMagicBox { public function __call(string $name, array $args): void {} } function invoke(OrderedMagicBox $box): void { ([$box, 'missing'])(ARGS); }",
+        "class OrderedPrivateBox { private function hidden(int $value): void {} } function invoke(OrderedPrivateBox $box): void { ([$box, 'hidden'])(ARGS); }",
+        "class OrderedPrivateInvoker { private function __invoke(int $value): void {} } function invoke(OrderedPrivateInvoker $box): void { $box(ARGS); }",
+    ];
+    for call in calls {
+        for (args, detail) in [
+            ("...[], 1", "positional arguments after spread arguments"),
+            ("value: 1, 2", "positional arguments after named arguments"),
+            ("...[\"value\" => 1, 0 => 2]", "positional argument after named argument during unpacking"),
+        ] {
+            expect_error(&format!("<?php {}", call.replace("ARGS", args)),
+                &format!("cannot use {detail}"));
+        }
+    }
+}
+
+/// Named arguments after unpacking remain legal when the selected signature is unknown.
+#[test]
+fn test_unresolved_call_named_argument_after_spread_is_allowed() {
+    for parameter_type in ["mixed", "string", "callable"] {
+        expect_no_error(&format!("<?php function invoke({parameter_type} $callback): void {{ $callback(...[], value: 1); }}"));
+    }
+    for call in [
+        "function invoke(array $callback): void { $callback(...[], value: 1); }",
+        "function invoke(mixed $receiver): void { $receiver->run(...[], value: 1); }",
+        "function invoke(callable $callback): void { $callback->call(new stdClass(), ...[], value: 1); }",
+        "eval('return null;'); UnresolvedAfterEval::run(...[], value: 1);",
+        "eval('return null;'); unresolvedAfterEval(...[], value: 1);",
+    ] {
+        expect_no_error(&format!("<?php {call}"));
+    }
+}
+
 /// Verifies that error call user func ref param requires variable.
 #[test]
 fn test_error_call_user_func_ref_param_requires_variable() {

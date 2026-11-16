@@ -15,14 +15,14 @@ use super::*;
 use crate::codegen_support::emit::Emitter;
 use crate::codegen_support::try_handlers::EXCEPTION_GUARD_SLOT_SIZE;
 
+/// Protects a temporary boxed value saved in the stack until its operation returns.
+pub(super) fn guard_saved_owner(emitter: &mut Emitter, record: usize, owner: usize) {
+    register(emitter, record, owner, "__rt_exception_release_owned");
+}
+
 /// Removes a saved-owner record while leaving its owner for normal cleanup.
 pub(super) fn unguard_saved_owner(emitter: &mut Emitter, guard_offset: usize) {
-    abi::emit_temporary_stack_address(
-        emitter,
-        abi::int_arg_reg_name(emitter.target, 0),
-        guard_offset,
-    );
-    abi::emit_call_label(emitter, "__rt_exception_unguard_owned");
+    abi::emit_unguard_owned_at_stack(emitter, guard_offset);
 }
 
 /// Guards a raw object until its dynamic constructor completes successfully.
@@ -52,12 +52,27 @@ pub(super) fn end_unconstructed_object(emitter: &mut Emitter, bytes: usize) {
 /// Publishes one cleanup record for an owner already preserved in the temporary stack.
 fn register(emitter: &mut Emitter, record: usize, owner: usize, cleanup: &str) {
     let scratch = abi::temp_int_reg(emitter.target);
-    let base = match emitter.target.arch { Arch::AArch64 => "sp", Arch::X86_64 => "rsp" };
     abi::emit_load_temporary_stack_slot(emitter, scratch, owner);
-    abi::emit_store_to_address(emitter, scratch, base, record + 24);
-    abi::emit_symbol_address(emitter, scratch, cleanup);
-    abi::emit_store_to_address(emitter, scratch, base, record + 8);
-    abi::emit_temporary_stack_address(emitter, abi::int_arg_reg_name(emitter.target, 0), record);
-    abi::emit_load_int_immediate(emitter, abi::int_arg_reg_name(emitter.target, 1), 0);
-    abi::emit_call_label(emitter, "__rt_exception_guard_owned");
+    abi::emit_guard_owned_at_stack(emitter, scratch, cleanup, record);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::codegen_support::platform::Target;
+
+    /// Saved guards keep record and owner offsets distinct on every supported ABI.
+    #[test]
+    fn saved_owner_guard_uses_record_then_owner_offsets_on_all_targets() {
+        for target in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+            let mut emitter = Emitter::new(Target::parse(target).unwrap());
+            guard_saved_owner(&mut emitter, 96, 16);
+            let asm = emitter.output();
+            let offsets = if target == "linux-x86_64" {
+                ["[rsp + 16]", "[rsp + 120]"]
+            } else { ["[sp, #16]", "[sp, #120]"] };
+            for offset in offsets { assert!(asm.contains(offset), "{target}: {asm}"); }
+            assert!(asm.contains("__rt_exception_guard_owned"), "{target}: {asm}");
+        }
+    }
 }

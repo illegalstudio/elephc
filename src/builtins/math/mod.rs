@@ -20,6 +20,8 @@ use crate::builtins::spec::BuiltinCheckCtx;
 use crate::errors::CompileError;
 use crate::types::PhpType;
 
+mod min_max_gmp;
+
 pub mod __elephc_bcnumber_add;
 pub mod __elephc_bcnumber_ceil;
 pub mod __elephc_bcnumber_comp;

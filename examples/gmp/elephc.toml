@@ -1,0 +1,5 @@
+[native]
+schema = 1
+
+[native.dependencies]
+gmp = "6.3.0"

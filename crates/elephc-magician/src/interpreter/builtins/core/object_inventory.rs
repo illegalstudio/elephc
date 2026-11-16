@@ -82,8 +82,8 @@ pub(super) fn eval_get_mangled_object_vars(
         } else { None };
         let access_scope = shared_native_owner.as_deref().unwrap_or(&entry.owner);
         let initialized = if entry.native || shared_native_owner.is_some() {
-            eval_with_native_bridge_scope(access_scope, context, || {
-                result.values().property_is_initialized(*object, &entry.storage)
+            eval_with_native_bridge_scope(access_scope, context, result.values(), |values| {
+                values.property_is_initialized(*object, &entry.storage)
             })?
         } else {
             context.dynamic_property_is_initialized(identity, &entry.storage)
@@ -99,7 +99,7 @@ pub(super) fn eval_get_mangled_object_vars(
             }
             // Independent child slots must not select a private native ancestor slot
             // just because the inventory's caller happens to be inside that ancestor.
-            eval_with_native_bridge_scope(access_scope, context, || {
+            eval_with_native_bridge_scope(access_scope, context, values, |values| {
                 values.property_get(*object, &entry.storage)
             })
         })?;

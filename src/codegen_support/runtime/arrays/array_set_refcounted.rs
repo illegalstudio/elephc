@@ -8,6 +8,8 @@
 //! Key details:
 //! - The helper preserves array COW, retains the incoming payload for the array owner,
 //!   releases overwritten heap-backed slots, and keeps indexed-array metadata stamped.
+//! - An overwrite stores the replacement BEFORE releasing the old payload: the release can run
+//!   a destructor that reads or replaces the array, which must already hold the new element.
 
 use crate::codegen_support::emit::Emitter;
 use crate::codegen_support::platform::Arch;
@@ -93,11 +95,16 @@ pub fn emit_array_set_refcounted(emitter: &mut Emitter) {
     emitter.instruction("ldr x9, [x0]");                                        // reload logical length before deciding whether an old slot must be released
     emitter.instruction("cmp x1, x9");                                          // does the target index overwrite an existing heap-backed slot?
     emitter.instruction("b.hs __rt_array_set_refcounted_skip_release");         // writes beyond current length do not own an old slot
+    // The release can run a destructor that reads or replaces this array, so the slot takes
+    // the replacement first and the array is not touched again afterwards.
     emitter.instruction("add x10, x0, #24");                                    // compute the base address of the pointer payload region
-    emitter.instruction("ldr x0, [x10, x1, lsl #3]");                           // load the previous heap-backed payload before overwriting the slot
+    emitter.instruction("ldr x11, [x10, x1, lsl #3]");                          // keep the previous heap-backed payload for the release below
+    emitter.instruction("ldr x2, [sp, #16]");                                   // reload the retained payload that should be stored
+    emitter.instruction("str x2, [x10, x1, lsl #3]");                           // publish the replacement before the old payload is released
+    emitter.instruction("mov x0, x11");                                         // pass the overwritten payload to the uniform release dispatcher
     emitter.instruction("bl __rt_decref_any");                                  // release the overwritten payload through the uniform dispatcher
-    emitter.instruction("ldr x0, [sp, #0]");                                    // restore the indexed-array pointer after old-slot release
-    emitter.instruction("ldr x1, [sp, #8]");                                    // restore the target index after old-slot release
+    emitter.instruction("ldr x0, [sp, #0]");                                    // return the indexed-array pointer the write was made through
+    emitter.instruction("b __rt_array_set_refcounted_done");                    // an in-bounds overwrite keeps the logical length
     emitter.label("__rt_array_set_refcounted_skip_release");
     emitter.instruction("ldr x2, [sp, #16]");                                   // reload the retained payload that should be stored
     emitter.instruction("add x10, x0, #24");                                    // compute the base address of the pointer payload region
@@ -201,10 +208,15 @@ fn emit_array_set_refcounted_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov r9, QWORD PTR [rax]");                             // reload logical length before deciding whether an old slot must be released
     emitter.instruction("cmp rsi, r9");                                         // does the target index overwrite an existing heap-backed slot?
     emitter.instruction("jae __rt_array_set_refcounted_skip_release");          // writes beyond current length do not own an old slot
-    emitter.instruction("mov rax, QWORD PTR [rax + 24 + rsi * 8]");             // load the previous heap-backed payload before overwriting the slot
+    // The release can run a destructor that reads or replaces this array, so the slot takes
+    // the replacement first and the array is not touched again afterwards.
+    emitter.instruction("mov rdx, QWORD PTR [rbp - 16]");                       // reload the retained payload that should be stored
+    emitter.instruction("mov r9, QWORD PTR [rax + 24 + rsi * 8]");              // keep the previous heap-backed payload for the release below
+    emitter.instruction("mov QWORD PTR [rax + 24 + rsi * 8], rdx");             // publish the replacement before the old payload is released
+    emitter.instruction("mov rax, r9");                                         // pass the overwritten payload to the uniform release dispatcher
     emitter.instruction("call __rt_decref_any");                                // release the overwritten payload through the uniform dispatcher
-    emitter.instruction("mov rax, QWORD PTR [rbp - 24]");                       // restore the indexed-array pointer after old-slot release
-    emitter.instruction("mov rsi, QWORD PTR [rbp - 8]");                        // restore the target index after old-slot release
+    emitter.instruction("mov rax, QWORD PTR [rbp - 24]");                       // return the indexed-array pointer the write was made through
+    emitter.instruction("jmp __rt_array_set_refcounted_done");                  // an in-bounds overwrite keeps the logical length
     emitter.label("__rt_array_set_refcounted_skip_release");
     emitter.instruction("mov rdx, QWORD PTR [rbp - 16]");                       // reload the retained payload that should be stored
     emitter.instruction("mov QWORD PTR [rax + 24 + rsi * 8], rdx");             // store the retained heap payload into the addressed indexed-array slot

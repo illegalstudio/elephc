@@ -22,7 +22,7 @@ pub(super) fn initialize_owned_property_reference(
     starts_uninitialized: bool,
 ) -> bool {
     let owns_cell = slot.is_reference && ctx.module.class_infos.get(&slot.class_name)
-        .is_some_and(|class| class.owned_reference_properties.contains(&slot.property));
+        .is_some_and(|class| class.property_slot_owns_reference((slot.offset - 8) / 16));
     if owns_cell {
         // Fixed and known dynamic allocations already own this cell. Replacing it would
         // leak that owner and discard its typed-uninitialized marker. Runtime by-name
@@ -101,8 +101,10 @@ pub(super) fn resolve_physical_property_slot(
         offset: 8 + index * 16,
         is_declared: info.property_slot_is_declared(index, property),
         is_packed: false,
+        width: None,
         is_reference: info.property_slot_is_reference(index, property),
         abstract_setter_type_error_prefix: None,
+        reference_declaration: None,
     })
 }
 
@@ -115,7 +117,7 @@ pub(super) fn resolve_property_slot(
 ) -> Result<PropertySlot> {
     let object_ty = ctx.value_php_type(object)?;
     let PhpType::Object(class_name) = object_ty else {
-        if let PhpType::Packed(class_name) = object_ty {
+        if let Some(class_name) = packed_receiver_class(ctx, &object_ty) {
             return resolve_packed_field_slot(ctx, &class_name, property, inst);
         }
         return Err(CodegenIrError::unsupported(format!(
@@ -240,7 +242,7 @@ impl PropertyAccessKind {
     fn magic_method(self) -> Option<&'static str> {
         match self {
             Self::DirectRead(mode) | Self::RuntimeRead(mode) => {
-                Some(if mode.is_read() { "__get" } else { "__isset" })
+                Some(if mode.uses_magic_get() { "__get" } else { "__isset" })
             }
             Self::DirectWrite | Self::RuntimeWrite => Some("__set"),
             Self::DirectUnset | Self::RuntimeUnset => Some("__unset"),
@@ -358,7 +360,7 @@ pub(super) fn resolve_property_runtime_action(
         if let Some(magic) = kind.magic_method() {
             if class_declares_method(ctx, class_name, magic) {
                 return Ok(
-                    if matches!(kind, PropertyAccessKind::DirectRead(mode) if mode.is_read()) {
+                    if matches!(kind, PropertyAccessKind::DirectRead(mode) if mode.uses_magic_get()) {
                         PropertyRuntimeAction::MagicGet
                     } else {
                         PropertyRuntimeAction::MagicDeferred
@@ -369,6 +371,15 @@ pub(super) fn resolve_property_runtime_action(
     }
     match resolution {
         PropertyNameResolution::Visible => {
+            if matches!(kind, PropertyAccessKind::DirectUnset | PropertyAccessKind::RuntimeUnset)
+                && ctx.module.class_infos.get(class_name.trim_start_matches('\\'))
+                    .and_then(|info| info.property_hooks.get(property)).is_some_and(|hooks| hooks.any())
+            {
+                return Ok(PropertyRuntimeAction::Refuse {
+                    message: format!("Cannot unset hooked property {}::${}",
+                        class_name.trim_start_matches('\\'), property),
+                });
+            }
             resolve_property_slot_for_class(ctx, class_name, property, inst)
                 .map(PropertyRuntimeAction::Slot)
         }
@@ -416,7 +427,7 @@ pub(super) fn resolve_property_runtime_action(
             if matches!(
                 kind,
                 PropertyAccessKind::DirectRead(mode) | PropertyAccessKind::RuntimeRead(mode)
-                    if !mode.is_read()
+                    if !mode.uses_magic_get()
             ) {
                 return Ok(PropertyRuntimeAction::DynamicMissing {
                     warns_on_miss: false,
@@ -816,7 +827,7 @@ pub(super) fn resolve_property_name_in_current_scope(
         &ctx.module.class_infos,
         class_name,
         property,
-        ctx.function.lexical_class.as_deref(),
+        ctx.lexical_class(),
     )
 }
 
@@ -902,7 +913,7 @@ pub(super) fn resolve_property_read_arm(
                 .map(|slot| Some(PropertyNameArm::Slot(slot)))
         }
         PropertyNameResolution::Dynamic => Ok(Some(PropertyNameArm::ScopeDynamic)),
-        PropertyNameResolution::Inaccessible(visibility) => Ok(mode.is_read().then(|| {
+        PropertyNameResolution::Inaccessible(visibility) => Ok(mode.uses_magic_get().then(|| {
             PropertyNameArm::Refuse {
                 message: property_access_error_message(&visibility, normalized, property),
             }
@@ -919,7 +930,7 @@ fn class_declares_property_magic(
     class_name: &str,
     mode: PropertyFetchMode,
 ) -> bool {
-    let magic = if mode.is_read() { "__get" } else { "__isset" };
+    let magic = if mode.uses_magic_get() { "__get" } else { "__isset" };
     ctx.module
         .class_infos
         .get(class_name)
@@ -1035,8 +1046,10 @@ fn resolve_scope_private_property_slot(
         offset: 8 + index * 16,
         is_declared: class_info.property_slot_is_declared(index, slot_property),
         is_packed: false,
+        width: None,
         is_reference: class_info.property_slot_is_reference(index, slot_property),
         abstract_setter_type_error_prefix: None,
+        reference_declaration: None,
     })
 }
 
@@ -1056,7 +1069,7 @@ pub(super) fn property_name_is_scope_dynamic(
         &ctx.module.class_infos,
         class_name,
         property,
-        ctx.function.lexical_class.as_deref(),
+        ctx.lexical_class(),
     )
 }
 
@@ -1153,8 +1166,10 @@ pub(super) fn resolve_property_slot_for_class(
         offset,
         is_declared: class_info.property_slot_is_declared(index, property),
         is_packed: false,
+        width: None,
         is_reference,
         abstract_setter_type_error_prefix: None,
+        reference_declaration: None,
     })
 }
 
@@ -1304,6 +1319,63 @@ pub(in crate::codegen::lower_inst) fn emit_boxed_null(ctx: &mut FunctionContext<
     emit_box_current_value_as_mixed(ctx.emitter, &PhpType::Void);
 }
 
+/// Returns the packed class a property receiver addresses, or `None` for any other receiver.
+///
+/// A packed record arrives either as a `packed` value (a buffer element or a nested record
+/// field, both holding the record's address) or as a `ptr<T>` typed pointer whose target is a
+/// packed class. Both are the same raw address, so both use the packed field layout.
+pub(super) fn packed_receiver_class(ctx: &FunctionContext<'_>, object_ty: &PhpType) -> Option<String> {
+    match object_ty.codegen_repr() {
+        PhpType::Packed(class_name) => Some(class_name),
+        PhpType::Pointer(Some(class_name))
+            if ctx
+                .module
+                .packed_class_infos
+                .contains_key(class_name.trim_start_matches('\\')) =>
+        {
+            Some(class_name)
+        }
+        _ => None,
+    }
+}
+
+/// Returns the extern class a `ptr<T>` receiver addresses, or `None` for any other receiver.
+///
+/// The sibling of `packed_receiver_class` for C structs declared with `extern class`. Their
+/// fields have natural C widths rather than packed 8-byte words, so they are lowered by
+/// `extern_fields` instead of through a `PropertySlot`, with the same null-receiver fatal.
+pub(super) fn extern_receiver_class(ctx: &FunctionContext<'_>, object_ty: &PhpType) -> Option<String> {
+    let PhpType::Pointer(Some(class_name)) = object_ty.codegen_repr() else {
+        return None;
+    };
+    let normalized = class_name.trim_start_matches('\\');
+    ctx.module
+        .extern_class_infos
+        .contains_key(normalized)
+        .then(|| normalized.to_string())
+}
+
+/// Aborts with the pointer extension's null-dereference fatal when a `ptr<T>` receiver is null.
+///
+/// Buffer elements and nested records are never null, but a typed pointer can be (`ptr_null()`,
+/// a failed allocation), and dereferencing it would fault. The base address is already in
+/// `base_reg`; the runtime check reads it from the integer result register and leaves both
+/// registers unchanged when the pointer is valid. Other receivers emit nothing.
+pub(super) fn emit_typed_pointer_receiver_null_check(
+    ctx: &mut FunctionContext<'_>,
+    object: ValueId,
+    base_reg: &str,
+) -> Result<()> {
+    if !matches!(ctx.value_php_type(object)?.codegen_repr(), PhpType::Pointer(_)) {
+        return Ok(());
+    }
+    // -- null-check the typed pointer receiver --
+    let int_reg = abi::int_result_reg(ctx.emitter);
+    ctx.emitter.instruction(&format!("mov {}, {}", int_reg, base_reg));         // hand the typed pointer receiver to the null-dereference guard
+    abi::emit_call_label(ctx.emitter, "__rt_ptr_check_nonnull");
+    Ok(())
+}
+
 /// Resolves a field slot on an embedded packed-class receiver.
 pub(super) fn resolve_packed_field_slot(
     ctx: &FunctionContext<'_>,
@@ -1339,7 +1411,9 @@ pub(super) fn resolve_packed_field_slot(
         offset: field.offset,
         is_declared: false,
         is_packed: true,
+        width: field.width,
         is_reference: false,
         abstract_setter_type_error_prefix: None,
+        reference_declaration: None,
     })
 }

@@ -26,6 +26,8 @@ pub enum NativeCallableDefault {
     Int(i64),
     Float(f64),
     String(String),
+    /// PHP string bytes whose contents are not valid UTF-8.
+    Bytes(Vec<u8>),
     ExecutablePath,
     EmptyArray,
     Array(Vec<NativeCallableArrayDefaultElement>),
@@ -33,6 +35,16 @@ pub enum NativeCallableDefault {
         class_name: String,
         args: Vec<NativeCallableObjectDefaultArg>,
     },
+}
+
+impl NativeCallableDefault {
+    /// Retains UTF-8 strings or binary bytes without changing either PHP payload.
+    pub(crate) fn from_php_bytes(value: Vec<u8>) -> Self {
+        match String::from_utf8(value) {
+            Ok(value) => Self::String(value),
+            Err(error) => Self::Bytes(error.into_bytes()),
+        }
+    }
 }
 
 /// One element in an array-valued native AOT callable default.
@@ -62,6 +74,8 @@ impl NativeCallableArrayDefaultElement {
 pub enum NativeCallableArrayDefaultKey {
     Int(i64),
     String(String),
+    /// Binary PHP string key retained without UTF-8 replacement or source markers.
+    Bytes(Vec<u8>),
 }
 
 /// Constructor argument for an object-valued native AOT callable default.
@@ -457,6 +471,11 @@ impl NativeCallableSignature {
     /// Returns the resolved PHP-visible / compiler-internal partition of the physical slots.
     pub fn frame_shape(&self) -> NativeCallableFrameShape {
         NativeCallableFrameShape::new(self.param_count, self.variadic_index, self.shape)
+    }
+
+    /// Returns whether generated code registered an explicit source/physical signature shape.
+    pub fn has_explicit_shape(&self) -> bool {
+        self.shape.is_some()
     }
 
     /// Returns the minimum number of arguments this callable requires.

@@ -117,7 +117,7 @@ pub(super) fn uninitialized_property_marker_offsets(class_info: &ClassInfo) -> V
         .filter_map(|(index, (property, _))| {
             let starts_uninitialized = class_info.property_slot_is_declared(index, property)
                 && class_info.defaults.get(index).is_some_and(|default| default.is_none())
-                && !(class_info.owned_reference_properties.contains(property)
+                && !(class_info.property_slot_owns_reference(index)
                     && class_info.property_slot_is_reference(index, property));
             if starts_uninitialized {
                 Some(8 + index * 16 + 8)
@@ -138,7 +138,7 @@ pub(super) fn owned_reference_property_offsets(
         .iter()
         .enumerate()
         .filter_map(|(index, (property, php_type))| {
-            if class_info.owned_reference_properties.contains(property)
+            if class_info.property_slot_owns_reference(index)
                 && class_info.property_slot_is_reference(index, property)
             {
                 let starts_uninitialized = class_info.property_slot_is_declared(index, property)

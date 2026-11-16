@@ -1,7 +1,7 @@
 <?php
-// Sieve-style prime checker using all language features
+// Trial division compares the square of each possible divisor with the candidate.
 
-function is_prime($n) {
+function is_prime(int $n): bool {
     if ($n <= 1) {
         return false;
     }

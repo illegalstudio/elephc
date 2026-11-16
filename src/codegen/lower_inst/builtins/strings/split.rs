@@ -266,6 +266,21 @@ pub(crate) fn lower_sscanf(ctx: &mut FunctionContext<'_>, inst: &Instruction) ->
 
 /// Lowers `str_split(string, length?)` into the fixed-width string-array splitter.
 pub(crate) fn lower_str_split(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+    lower_str_split_impl(ctx, inst, "__rt_str_split")
+}
+
+/// Lowers the allocation-free `count(str_split(...))` helper with the same argument
+/// materialization and `$length >= 1` guard as the allocating split.
+pub(crate) fn lower_str_split_count(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+    lower_str_split_impl(ctx, inst, "__rt_str_split_count")
+}
+
+/// Shared `str_split` argument materialization, validation, and runtime call.
+fn lower_str_split_impl(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+    runtime_label: &str,
+) -> Result<()> {
     if inst.operands.is_empty() || inst.operands.len() > 2 {
         return Err(CodegenIrError::invalid_module(format!(
             "str_split expected 1 or 2 args, got {}",
@@ -288,7 +303,7 @@ pub(crate) fn lower_str_split(ctx: &mut FunctionContext<'_>, inst: &Instruction)
         super::super::exceptions::ValueGuard::SignedAtLeast(length_reg, 1),
         STR_SPLIT_NON_POSITIVE_LENGTH_MESSAGE,
     );
-    abi::emit_call_label(ctx.emitter, "__rt_str_split");
+    abi::emit_call_label(ctx.emitter, runtime_label);
     store_if_result(ctx, inst)
 }
 
@@ -298,7 +313,7 @@ pub(crate) fn lower_str_split(ctx: &mut FunctionContext<'_>, inst: &Instruction)
 /// argument count rather than the source spelling: a single operand is the ARRAY and the glue
 /// is the empty string (`join(["a","b"]) === "ab"`), while two operands keep the ordinary
 /// `(glue, array)` order. The reversed PHP 7 order was removed in PHP 8.0 and is not accepted.
-pub(crate) fn lower_implode(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+pub(crate) fn lower_implode(ctx: &mut FunctionContext<'_>, inst: &Instruction, name: &str) -> Result<()> {
     if inst.operands.is_empty() || inst.operands.len() > 2 {
         return Err(CodegenIrError::invalid_module(format!(
             "implode expected 1 or 2 args, got {}",
@@ -311,13 +326,13 @@ pub(crate) fn lower_implode(ctx: &mut FunctionContext<'_>, inst: &Instruction) -
         ctx.value_php_type(array)?.codegen_repr(),
         PhpType::Mixed | PhpType::Union(_)
     ) {
-        emit_boxed_implode_array_type_guard(ctx, array)?;
+        emit_boxed_implode_array_type_guard(ctx, inst, array, name)?;
     }
     let runtime_label = implode_runtime_label(ctx, inst, array_index)?;
     let normalized_copy = implode_normalized_value_type(ctx, inst, array_index)?;
     match ctx.emitter.target.arch {
-        Arch::AArch64 => lower_implode_aarch64(ctx, inst, array_index)?,
-        Arch::X86_64 => lower_implode_x86_64(ctx, inst, array_index)?,
+        Arch::AArch64 => lower_implode_aarch64(ctx, inst, array_index, name)?,
+        Arch::X86_64 => lower_implode_x86_64(ctx, inst, array_index, name)?,
     }
     super::implode_owners::emit_owned_implode(ctx, runtime_label, normalized_copy);
     store_if_result(ctx, inst)
@@ -623,6 +638,7 @@ pub(super) fn lower_implode_aarch64(
     ctx: &mut FunctionContext<'_>,
     inst: &Instruction,
     array_index: usize,
+    name: &str,
 ) -> Result<()> {
     let array = expect_operand(inst, array_index)?;
     if array_index == 0 {
@@ -631,10 +647,10 @@ pub(super) fn lower_implode_aarch64(
         abi::emit_load_int_immediate(ctx.emitter, "x2", 0);
     } else {
         let glue = expect_operand(inst, 0)?;
-        load_value_as_string_to_regs(ctx, glue, "implode", "x1", "x2")?;
+        load_value_as_string_to_regs(ctx, glue, name, "x1", "x2")?;
     }
     ctx.emitter.instruction("stp x1, x2, [sp, #-16]!");                         // preserve the glue string while materializing the array argument
-    load_implode_array(ctx, array)?;
+    load_implode_array(ctx, array, name)?;
     ctx.emitter.instruction("mov x3, x0");                                      // pass the indexed array pointer as the third implode argument
     ctx.emitter.instruction("ldp x1, x2, [sp], #16");                           // restore the glue string into primary implode argument registers
     Ok(())
@@ -648,6 +664,7 @@ pub(super) fn lower_implode_x86_64(
     ctx: &mut FunctionContext<'_>,
     inst: &Instruction,
     array_index: usize,
+    name: &str,
 ) -> Result<()> {
     let array = expect_operand(inst, array_index)?;
     if array_index == 0 {
@@ -656,20 +673,22 @@ pub(super) fn lower_implode_x86_64(
         abi::emit_load_int_immediate(ctx.emitter, "rdx", 0);
     } else {
         let glue = expect_operand(inst, 0)?;
-        load_value_as_string_to_regs(ctx, glue, "implode", "rax", "rdx")?;
+        load_value_as_string_to_regs(ctx, glue, name, "rax", "rdx")?;
     }
     abi::emit_push_reg_pair(ctx.emitter, "rax", "rdx");
-    load_implode_array(ctx, array)?;
+    load_implode_array(ctx, array, name)?;
     ctx.emitter.instruction("mov rdx, rax");                                    // pass the indexed array pointer as the third implode argument
     abi::emit_pop_reg_pair(ctx.emitter, "rdi", "rsi");
     Ok(())
 }
 
 /// Loads or normalizes an array into the dense payload required by the join renderers.
-pub(super) fn load_implode_array(ctx: &mut FunctionContext<'_>, array: ValueId) -> Result<()> {
+///
+/// `name` is the PHP-visible function the boxed fallback diagnostic reports (`implode` or `join`).
+pub(super) fn load_implode_array(ctx: &mut FunctionContext<'_>, array: ValueId, name: &str) -> Result<()> {
     ctx.load_value_to_result(array)?;
     match ctx.value_php_type(array)?.codegen_repr() {
-        PhpType::Mixed | PhpType::Union(_) => emit_boxed_implode_array_source(ctx),
+        PhpType::Mixed | PhpType::Union(_) => emit_boxed_implode_array_source(ctx, name),
         PhpType::Array(elem) if elem.codegen_repr() == PhpType::Mixed => {
             emit_loaded_dynamic_mixed_array_values(ctx)
         }

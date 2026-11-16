@@ -14,6 +14,26 @@ use std::collections::HashSet;
 use super::lower_source;
 use crate::ir_lower::program::{eval_demand, EvalDemand};
 
+/// An eval-only method is dispatched from a native Mixed frame with no native candidate.
+#[test]
+fn eval_only_method_from_context_free_mixed_frame_on_all_targets() {
+    let source = r#"<?php
+function callEvalOnlyMixed(mixed $object): mixed { return $object->evalOnlyRoundtrip(); }
+eval('class EvalOnlyMixedReceiver { public function evalOnlyRoundtrip(): string { return "ok"; } }
+echo callEvalOnlyMixed(new EvalOnlyMixedReceiver());');
+"#;
+    for target in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+        let module = super::lower_source_at_for_target(source, std::path::Path::new("main.php"),
+            std::path::Path::new("."), crate::codegen::platform::Target::parse(target).unwrap());
+        let assembly = crate::codegen::generate_user_asm_from_ir(&module, false, false).unwrap();
+        let body = assembly.split_once("@fn name=callEvalOnlyMixed symbol=").unwrap().1
+            .split_once("@endfn name=callEvalOnlyMixed").unwrap().0;
+        let owner = body.find("__elephc_eval_object_context").expect("borrow the eval object's owner");
+        let call = body.find("__elephc_eval_method_call").expect("dispatch the eval-only method");
+        assert!(owner < call, "{target}: resolve object identity before entering its method");
+    }
+}
+
 /// Collects the lowered class method names of a module.
 fn lowered_methods(module: &crate::ir::Module) -> HashSet<String> {
     module
@@ -37,6 +57,7 @@ fn literal_eval_without_date_or_reflection_names_lowers_neither_surface() {
     let lowered = lowered_methods(&module);
     assert!(!lowered.contains("DateTime::createFromFormat"), "{lowered:?}");
     assert!(!lowered.contains("ReflectionClass::getName"), "{lowered:?}");
+    assert!(!lowered.contains("ArrayObject::getArrayCopy"), "{lowered:?}");
 }
 
 /// Naming a date alias function inside the fragment lowers the DateTime alias surface.
@@ -75,10 +96,41 @@ fn opaque_evals_demand_everything() {
     ] {
         let module = lower_source(source);
         assert_eq!(eval_demand(&module), EvalDemand::Everything, "{source}");
+        assert!(!module.required_runtime_features.regex,
+            "{source}: opaque eval must not activate PCRE2 through unused SPL bodies");
         let lowered = lowered_methods(&module);
         assert!(lowered.contains("DateTime::createFromFormat"), "{source}");
         assert!(lowered.contains("ReflectionClass::getName"), "{source}");
+        assert!(lowered.contains("ArrayObject::getArrayCopy"), "{source}");
+        assert!(lowered.contains("ArrayIterator::getArrayCopy"), "{source}");
+        let serializer = module.class_methods.iter().find(|method|
+            method.name == "SplObjectStorage::__serialize").expect("opaque eval needs the serializer");
+        assert!(matches!(serializer.return_php_type,
+            crate::types::PhpType::AssocArray { .. }), "{source}: serializer must retain named entries");
     }
+}
+
+/// An explicit regex capability still provides regex iterator methods to opaque eval.
+#[test]
+fn opaque_eval_with_static_regex_use_lowers_regex_iterator_methods() {
+    let module = lower_source("<?php preg_match('/x/', 'x'); eval($argv[1]);");
+    assert!(module.required_runtime_features.regex);
+    assert!(lowered_methods(&module).contains("RegexIterator::accept"));
+}
+
+/// Methods invoked only by a bridge fragment still need their native SPL implementation.
+#[test]
+fn literal_eval_calling_spl_method_on_outer_object_lowers_native_body() {
+    let module = lower_source(
+        "<?php $bag = new ArrayObject([1]); eval('class EvalDemandSpl {} echo json_encode($bag->getArrayCopy());');",
+    );
+    let EvalDemand::Names(names) = eval_demand(&module) else {
+        panic!("a literal fragment must produce a named demand");
+    };
+    assert!(names.wildcard_methods.contains("getarraycopy"));
+    let lowered = lowered_methods(&module);
+    assert!(lowered.contains("ArrayObject::getArrayCopy"), "{lowered:?}");
+    assert!(lowered.contains("ArrayIterator::getArrayCopy"), "{lowered:?}");
 }
 
 /// A fragment calling a date method on an object the outer program built lowers that method
@@ -107,4 +159,37 @@ fn programs_without_eval_have_no_demand() {
     let module = lower_source("<?php echo strlen(\"abc\");");
     assert_eq!(eval_demand(&module), EvalDemand::None);
     assert!(!module.required_runtime_features.eval_bridge);
+}
+
+/// A resolved eval callable keeps literal source and named demand on every supported target.
+#[test]
+fn known_callable_literal_eval_keeps_named_demand_on_all_targets() {
+    let source = r#"<?php
+$prefix = 'ev'; $invoke = $prefix . 'al';
+$invoke('class KnownEvalDemand { public int $n = 3; } echo (new KnownEvalDemand())->n;');
+"#;
+    for target in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+        let module = super::lower_source_at_for_target(
+            source, std::path::Path::new("main.php"), std::path::Path::new("."),
+            crate::codegen::platform::Target::parse(target).unwrap(),
+        );
+        let EvalDemand::Names(names) = eval_demand(&module) else {
+            panic!("{target}: a known callable with literal source must retain named demand");
+        };
+        assert!(names.classes.contains("knownevaldemand"), "{target}");
+        assert!(module.functions.iter().flat_map(|function| &function.instructions)
+            .any(|inst| inst.op == crate::ir::Op::EvalLiteralCall), "{target}");
+        let lowered = lowered_methods(&module);
+        assert!(!lowered.contains("DateTime::createFromFormat"), "{target}");
+        assert!(!lowered.contains("ReflectionClass::getName"), "{target}");
+    }
+}
+
+/// A known eval target still demands the full catalog when its source is runtime-sourced.
+#[test]
+fn known_callable_runtime_eval_keeps_opaque_demand() {
+    let module = lower_source("<?php $prefix = 'ev'; $invoke = $prefix . 'al'; $invoke($argv[1]);");
+    assert_eq!(eval_demand(&module), EvalDemand::Everything);
+    assert!(module.functions.iter().flat_map(|function| &function.instructions)
+        .any(|inst| inst.op == crate::ir::Op::LanguageConstructCall));
 }

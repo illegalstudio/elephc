@@ -15,7 +15,7 @@
 use super::*;
 
 /// Emits the x86_64 native wrapper for cloning boxed object cells.
-pub(super) fn emit_x86_64_object_clone_shallow_wrapper(emitter: &mut Emitter) {
+pub(super) fn emit_x86_64_object_clone_shallow_wrapper(emitter: &mut Emitter, native_validation: bool) {
     emitter.label_global("__rt_object_clone_shallow_boxed");
     emitter.instruction("push rbp");                                            // preserve the Rust caller frame pointer across clone calls
     emitter.instruction("mov rbp, rsp");                                        // establish a stable clone wrapper frame pointer
@@ -157,6 +157,10 @@ pub(super) fn emit_x86_64_object_clone_shallow_wrapper(emitter: &mut Emitter) {
     emitter.instruction("mov QWORD PTR [r11 + r10], 0");                        // clear the clone's dynamic-property hash slot
 
     emitter.label("__rt_object_clone_shallow_boxed_box_x86");
+    if native_validation {
+        emitter.instruction("mov rdi, QWORD PTR [rbp - 16]");                   // register the completed clone before exposing its owning box
+        abi::emit_call_label(emitter, "__rt_reference_sources_bind_object");
+    }
     emitter.instruction("mov rax, 24");                                         // a Mixed cell stores a runtime tag and two payload words
     emitter.instruction("call __rt_heap_alloc");                                // allocate the Mixed cell that will own the fresh clone
     emitter.instruction(&x86_64_mixed_heap_kind_instruction());                 // materialize the Mixed-cell heap kind marker

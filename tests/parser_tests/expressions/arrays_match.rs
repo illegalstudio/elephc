@@ -170,4 +170,51 @@ fn test_parse_standalone_match_expression_statement() {
     }
 }
 
+/// A trailing comma after the last condition of a multi-condition arm is valid PHP
+/// (`'a', 'b', => …`), and so is one after `default` (`default, => …`): every condition
+/// stays on the arm and the next arm still parses.
+#[test]
+fn test_parse_match_arm_condition_list_trailing_comma() {
+    let stmts = parse_source(
+        "<?php $x = match ($s) {\n    'a',\n    'b',\n        => 1,\n    'c', => 2,\n    default, => 3,\n};",
+    );
+    assert_eq!(stmts.len(), 1);
+    let StmtKind::Assign { value, .. } = &stmts[0].kind else {
+        panic!("expected Assign containing Match");
+    };
+    let ExprKind::Match { arms, default, .. } = &value.kind else {
+        panic!("expected Match, got {:?}", value.kind);
+    };
+    assert_eq!(arms.len(), 2);
+    assert_eq!(arms[0].0.len(), 2);
+    assert_eq!(arms[1].0.len(), 1);
+    assert!(default.is_some());
+}
+
 // --- Foreach with key => value ---
+
+/// Automatic keys at the integer limit retain real appends without overflowing the parser.
+#[test]
+fn test_parse_array_implicit_after_max_key() {
+    let statements = parse_source("<?php echo [9223372036854775807 => 'a', 'b', 'c'];");
+    let StmtKind::Echo(expr) = &statements[0].kind else { panic!("expected echo"); };
+    let ExprKind::ArrayLiteralMixed(entries) = &expr.kind else { panic!("expected ordered entries"); };
+    assert_eq!(entries.len(), 3);
+    assert!(matches!(&entries[0], ArrayEntry::Keyed(key, _) if matches!(key.kind, ExprKind::IntLiteral(i64::MAX))));
+    assert!(entries[1..].iter().all(|entry| matches!(entry, ArrayEntry::Value(_))));
+}
+
+/// Negative-key appends retain their source position until the PHP profile is known.
+#[test]
+fn test_parse_array_implicit_after_negative_key() {
+    let statements = parse_source("<?php echo [-5 => 'a', 'b', 'c'];");
+    let StmtKind::Echo(expr) = &statements[0].kind else { panic!("expected echo"); };
+    let ExprKind::ArrayLiteralMixed(entries) = &expr.kind else { panic!("expected ordered entries"); };
+    assert_eq!(entries.len(), 3);
+    assert!(matches!(&entries[0], ArrayEntry::Keyed(_, value)
+        if value.kind == ExprKind::StringLiteral("a".to_string())));
+    assert!(matches!(&entries[1], ArrayEntry::Value(value)
+        if value.kind == ExprKind::StringLiteral("b".to_string())));
+    assert!(matches!(&entries[2], ArrayEntry::Value(value)
+        if value.kind == ExprKind::StringLiteral("c".to_string())));
+}

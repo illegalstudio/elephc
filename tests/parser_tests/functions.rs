@@ -233,6 +233,27 @@ fn test_parse_closure_return_type_after_use() {
     }
 }
 
+/// A trailing comma after the last capture is valid PHP 8.0+, on one line or spread over
+/// several: `use ($a, &$b,)` keeps both captures and the by-reference flag.
+#[test]
+fn test_parse_closure_use_list_trailing_comma() {
+    for source in [
+        "<?php $f = function () use ($a, &$b,): int { return $a + $b; };",
+        "<?php $f = function () use (\n    $a,\n    &$b,\n): int { return $a + $b; };",
+    ] {
+        let stmts = parse_source(source);
+        assert_eq!(stmts.len(), 1, "source: {source}");
+        let StmtKind::Assign { value, .. } = &stmts[0].kind else {
+            panic!("expected Assign, source: {source}");
+        };
+        let ExprKind::Closure { captures, capture_refs, .. } = &value.kind else {
+            panic!("expected Closure, source: {source}");
+        };
+        assert_eq!(captures, &["a".to_string(), "b".to_string()], "source: {source}");
+        assert_eq!(capture_refs, &["b".to_string()], "source: {source}");
+    }
+}
+
 #[test]
 // Verifies that `<?php $g = function(int $n) use (&$g): int { return $g($n - 1); };`
 // parses a closure with by-reference capture `&$g`: name "g", `capture_refs` includes "g".
@@ -703,13 +724,12 @@ fn test_parse_multi_member_null_union_keeps_sentinel() {
 }
 
 #[test]
-/// Verifies that a standalone `null` return type parses as the null sentinel
-/// (`TypeExpr::Void`), which the checker treats as null-accepting.
+/// Keeps a standalone null return declaration distinct from source void.
 fn test_parse_standalone_null_type() {
     let stmts = parse_source("<?php function f(): null { return null; }");
     match &stmts[0].kind {
         StmtKind::FunctionDecl { return_type, .. } => {
-            assert_eq!(return_type.as_ref(), Some(&TypeExpr::Void));
+            assert_eq!(return_type.as_ref(), Some(&TypeExpr::Named(Name::unqualified("null"))));
         }
         other => panic!("Expected FunctionDecl, got {:?}", other),
     }

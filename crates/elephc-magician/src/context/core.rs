@@ -34,6 +34,7 @@ pub enum EvalPcntlSignalHandler {
 pub struct ElephcEvalContext {
     pub(super) abi_version: u32,
     pub(super) abi_owner_count: usize,
+    pub(super) teardown_active: bool,
     pub(super) native_catalog_generation: u64,
     pub(super) native_catalog_ready: bool,
     pub(super) native_catalog_registration_failed: bool,
@@ -142,6 +143,7 @@ impl ElephcEvalContext {
         Self {
             abi_version: ABI_VERSION,
             abi_owner_count: 1,
+            teardown_active: false,
             native_catalog_generation: 0,
             native_catalog_ready: false,
             native_catalog_registration_failed: false,
@@ -245,6 +247,7 @@ impl ElephcEvalContext {
         Self {
             abi_version,
             abi_owner_count: 1,
+            teardown_active: false,
             native_catalog_generation: 0,
             native_catalog_ready: false,
             native_catalog_registration_failed: false,

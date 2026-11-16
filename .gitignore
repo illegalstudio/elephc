@@ -21,3 +21,6 @@ docs/superpowers/
 
 # graft's local graph cache — regenerable, not committed (run `graft build`).
 /graft/
+
+# Local benchmark harnesses and measurement output — never committed.
+/.bench-scratch/

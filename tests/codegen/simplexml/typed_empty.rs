@@ -1,0 +1,517 @@
+//! Purpose:
+//! Covers typed scalar, object, and interface continuations in native empty lowering.
+//!
+//! Called from:
+//! - Codegen CI with managed libxml2.
+//!
+//! Key details:
+//! - Ordinary scalar receivers must never produce a native XML method call.
+
+use crate::support::*;
+
+/// Erased XML dimensions avoid wrapper destruction while ordinary mixed values stay silent.
+#[test]
+fn test_simplexml_erased_dimension_isset_retains_non_xml_behavior() {
+    if skip_without_xml_native("test_simplexml_erased_dimension_isset_retains_non_xml_behavior") { return; }
+    let out = compile_and_run_with_heap_debug(r#"<?php
+class ErasedPresenceXml extends SimpleXMLElement { public function __destruct() { echo 'D|'; } }
+function erasedPresenceProbe(mixed $node): void {
+    var_dump(isset($node['id']), isset($node[0]), isset($node['missing']), isset($node[1]));
+}
+$xml = new ErasedPresenceXml('<r id="1"><a/></r>');
+erasedPresenceProbe($xml);
+erasedPresenceProbe(['id' => 1, 0 => null]);
+erasedPresenceProbe('ab');
+erasedPresenceProbe(null);
+unset($xml);
+"#);
+    assert!(out.success, "stdout={} stderr={}", out.stdout, out.stderr);
+    assert_eq!(out.stdout, concat!(
+        "bool(true)\nbool(true)\nbool(false)\nbool(false)\n",
+        "bool(true)\nbool(false)\nbool(false)\nbool(false)\n",
+        "bool(false)\nbool(true)\nbool(false)\nbool(true)\n",
+        "bool(false)\nbool(false)\nbool(false)\nbool(false)\nD|",
+    ));
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+    assert!(!out.stderr.contains("Warning:"), "{}", out.stderr);
+}
+
+/// Silent string probes preserve ordinary invalid-offset errors once XML dispatch is available.
+#[test]
+fn test_simplexml_erased_string_probes_preserve_read_errors() {
+    if skip_without_xml_native("test_simplexml_erased_string_probes_preserve_read_errors") { return; }
+    let out = compile_and_run_with_heap_debug(r#"<?php
+$xml = new SimpleXMLElement('<r/>');
+function erasedStringProbe(mixed $text): void {
+    var_dump(isset($text['missing']), empty($text['missing']), $text['missing'] ?? 'fallback');
+    var_dump(isset($text['-1']), isset($text['1.0']), isset($text['1x']));
+    try { echo $text['missing']; } catch (TypeError $error) { echo $error->getMessage(), '|'; }
+    try { $text['missing'] = 'x'; } catch (TypeError $error) { echo $error->getMessage(), '|'; }
+}
+erasedStringProbe('ab');
+unset($xml);
+"#);
+    assert!(out.success, "stdout={} stderr={}", out.stdout, out.stderr);
+    assert_eq!(out.stdout, concat!("bool(false)\nbool(true)\nstring(8) \"fallback\"\n",
+        "bool(true)\nbool(false)\nbool(false)\n",
+        "Cannot access offset of type string on string|Cannot access offset of type string on string|"));
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+    assert!(!out.stderr.contains("Warning:"), "{}", out.stderr);
+}
+
+/// Nullable native probes skip method dispatch and keep both direct and eval fallback values.
+#[test]
+fn test_simplexml_nullable_native_property_coalesce_bundle() {
+    if skip_without_xml_native("test_simplexml_nullable_native_property_coalesce_bundle") { return; }
+    let source = r#"<?php
+class NullableNativeProbeXml extends SimpleXMLElement {
+    public function __isset(string $name): bool { echo 'unexpected-isset|'; return true; }
+    public function __get(string $name): mixed { echo 'unexpected-get|'; return 'bad'; }
+}
+function nullableNativeProbe(?NullableNativeProbeXml $node): mixed {
+    return $node->missing ?? 'fallback';
+}
+function nullableNativeName(): string { echo 'n|'; return 'a'; }
+echo nullableNativeProbe(new NullableNativeProbeXml('<r/>')), '|', nullableNativeProbe(null), '|';
+$rows = [new NullableNativeProbeXml('<r><a>ok</a></r>')];
+echo $rows[$argc + 20]->a ?? 'fb', '|';
+echo $rows[$argc - 1]->a ?? 'fb', '|';
+$named = ['known' => new NullableNativeProbeXml('<r/>')];
+echo $named[$argc > 0 ? 'absent' : 'known']->a ?? 'fb', '|';
+$name = 'a';
+echo $rows[$argc + 20]->{$name} ?? 'fb', '|';
+echo $rows[$argc - 1]->{$name} ?? 'fb', '|';
+echo $named[$argc > 0 ? 'absent' : 'known']->{$name} ?? 'fb', '|';
+echo $rows[$argc + 20]->{nullableNativeName()} ?? 'fb', '|';
+var_dump(isset($rows[$argc + 20]->{$name}));
+unset($rows, $named, $name);
+"#;
+    let renamed = source.replace("NullableNative", "EvalNullableNative")
+        .replace("nullableNative", "evalNullableNative");
+    let body = renamed.strip_prefix("<?php").unwrap().replace('\\', "\\\\").replace('\'', "\\'");
+    let eval = format!("<?php $source = $argc > 0 ? '{body}' : ''; eval($source);");
+    assert_bundle_with(&[
+        BundleCase { name: "nullable_native_probe_aot", source, expected: "fallback|fallback|fb|ok|fb|fb|ok|fb|n|fb|bool(false)\n" },
+        BundleCase { name: "nullable_native_probe_eval", source: &eval, expected: "fallback|fallback|fb|ok|fb|fb|ok|fb|n|fb|bool(false)\n" },
+    ], |source| {
+        let out = compile_and_run_with_heap_debug(source);
+        assert!(out.success, "stdout={} stderr={}", out.stdout, out.stderr);
+        assert!(!out.stderr.contains("Warning:"), "{}", out.stderr);
+        assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+        out.stdout
+    });
+}
+
+/// An unreachable ordinary-write arm must not treat an XML subclass's declared field as storage.
+#[test]
+fn test_simplexml_erased_array_write_ignores_shadowing_declared_storage() {
+    if skip_without_xml_native("test_simplexml_erased_array_write_ignores_shadowing_declared_storage") { return; }
+    let out = compile_and_run_with_heap_debug(r#"<?php
+class ErasedArrayStorageXml extends SimpleXMLElement { public array $items = []; }
+class ErasedMixedStorageXml extends SimpleXMLElement { public mixed $items = []; }
+class ErasedUntypedStorageXml extends SimpleXMLElement { public $items = []; }
+class ErasedOrdinaryStorageXmlControl { public array $items = []; }
+function writeErasedStorageXml(mixed $box): void { $box->items[0] = 'x'; }
+foreach ([new ErasedArrayStorageXml('<r/>'), new ErasedMixedStorageXml('<r/>'), new ErasedUntypedStorageXml('<r/>')] as $xml) {
+    writeErasedStorageXml($xml);
+    echo $xml->asXML(), '|';
+}
+$ordinary = new ErasedOrdinaryStorageXmlControl(); writeErasedStorageXml($ordinary);
+echo json_encode($ordinary->items);
+unset($xml, $ordinary);
+"#);
+    assert!(out.success, "stdout={} stderr={}", out.stdout, out.stderr);
+    assert_eq!(out.stdout, concat!(
+        "<?xml version=\"1.0\"?>\n<r><items>x</items></r>\n|",
+        "<?xml version=\"1.0\"?>\n<r><items>x</items></r>\n|",
+        "<?xml version=\"1.0\"?>\n<r><items>x</items></r>\n|[\"x\"]",
+    ));
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
+/// Linking SimpleXML preserves the ordinary magic presence protocol for opaque receivers.
+#[test]
+fn test_simplexml_named_isset_preserves_ordinary_magic_hooks() {
+    if skip_without_xml_native("test_simplexml_named_isset_preserves_ordinary_magic_hooks") { return; }
+    let out = compile_and_run_with_heap_debug(r#"<?php
+interface XmlPresencePeer {}
+class XmlPresenceGetOnly implements XmlPresencePeer {
+    public function __get(string $name): mixed { echo 'get|'; return 'present'; }
+}
+class XmlPresenceBoth implements XmlPresencePeer {
+    public function __isset(string $name): bool { echo 'isset|'; return true; }
+    public function __get(string $name): mixed { echo 'get|'; return null; }
+}
+class XmlPresenceElement extends SimpleXMLElement implements XmlPresencePeer {}
+function xmlPresenceMixed(mixed $node): void {
+    $name = 'a';
+    echo (int)isset($node->a), ':', (int)isset($node->{$name}), ':';
+    echo $node->a ?? 'fallback', ':', (int)empty($node->a), '|';
+}
+function xmlPresenceUnion(XmlPresenceGetOnly|XmlPresenceBoth|SimpleXMLElement $node): void {
+    $name = 'a';
+    echo (int)isset($node->a), ':', (int)isset($node->{$name}), ':';
+    echo $node->a ?? 'fallback', ':', (int)empty($node->a), '|';
+}
+function xmlPresenceObject(object $node): void {
+    $name = 'a';
+    echo (int)isset($node->a), ':', (int)isset($node->{$name}), ':';
+    echo $node->a ?? 'fallback', ':', (int)empty($node->a), '|';
+}
+function xmlPresenceInterface(XmlPresencePeer $node): void {
+    $name = 'a';
+    echo (int)isset($node->a), ':', (int)isset($node->{$name}), ':';
+    echo $node->a ?? 'fallback', ':', (int)empty($node->a), '|';
+}
+$nodes = [new XmlPresenceGetOnly(), new XmlPresenceBoth(), new XmlPresenceElement('<r><a>1</a></r>')];
+foreach ($nodes as $node) { xmlPresenceMixed($node); }
+foreach ($nodes as $node) {
+    if ($node instanceof XmlPresenceGetOnly) { xmlPresenceUnion($node); }
+    elseif ($node instanceof XmlPresenceBoth) { xmlPresenceUnion($node); }
+    elseif ($node instanceof XmlPresenceElement) { xmlPresenceUnion($node); }
+    else { throw new Error('unexpected presence receiver'); }
+}
+foreach ($nodes as $node) {
+    if ($node instanceof XmlPresenceGetOnly) { xmlPresenceObject($node); }
+    elseif ($node instanceof XmlPresenceBoth) { xmlPresenceObject($node); }
+    elseif ($node instanceof XmlPresenceElement) { xmlPresenceObject($node); }
+    else { throw new Error('expected object receiver'); }
+}
+foreach ($nodes as $node) {
+    if ($node instanceof XmlPresencePeer) { xmlPresenceInterface($node); }
+    else { throw new Error('expected presence peer'); }
+}
+"#);
+    assert!(out.success, "stdout={} stderr={}", out.stdout, out.stderr);
+    let expected = "0:0:get|present:1|isset|1:isset|1:isset|get|fallback:isset|get|1|1:1:1:0|";
+    assert_eq!(out.stdout, expected.repeat(4));
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
+/// Scalar continuations preserve ordinary empty semantics and evaluate the final key.
+#[test]
+fn test_simplexml_empty_typed_scalar_continuations() {
+    if skip_without_xml_native("test_simplexml_empty_typed_scalar_continuations") { return; }
+    let source = r###"<?php
+class EmptyScalarPeer { public int $child = 0; public string $text = '0'; }
+function emptyScalarName(): string { echo 'name|'; return 'x'; }
+$xml = new SimpleXMLElement('<r/>');
+$peer = new EmptyScalarPeer();
+echo (int)empty($peer?->child->{emptyScalarName()}), '|';
+echo (int)empty($peer?->child[0]), '|', (int)empty($peer?->text[0]);
+"###;
+    assert_eq!(compile_and_run(source), "name|1|1|1");
+    assert_eq!(without_ir_opt(|| compile_and_run(source)), "name|1|1|1");
+}
+
+/// XML content checks survive bare-object and interface hints, including borrowed boxed receivers.
+#[test]
+fn test_simplexml_empty_object_and_interface_parameters() {
+    if skip_without_xml_native("test_simplexml_empty_object_and_interface_parameters") { return; }
+    let out = compile_and_run_with_heap_debug(r###"<?php
+function emptyXmlObject(object $node): bool { return empty($node->zero); }
+function emptyXmlCountable(Countable $node): bool { return empty($node->zero); }
+function emptyXmlRecursive(RecursiveIterator $node): bool { return empty($node->zero); }
+function emptyXmlIterator(Iterator $node): bool { return empty($node->zero); }
+function emptyXmlTraversable(Traversable $node): bool { return empty($node->zero); }
+function emptyXmlStringable(Stringable $node): bool { return empty($node->zero); }
+$xml = new SimpleXMLElement('<r><zero>0</zero></r>');
+echo (int)emptyXmlObject($xml), (int)emptyXmlCountable($xml), (int)emptyXmlRecursive($xml), (int)emptyXmlIterator($xml), (int)emptyXmlTraversable($xml), (int)emptyXmlStringable($xml), '|';
+$ordinary = new stdClass(); $ordinary->zero = 'kept';
+echo (int)emptyXmlObject($ordinary);
+"###);
+    assert!(out.success, "stdout={} stderr={}", out.stdout, out.stderr);
+    assert_eq!(out.stdout, "111111|0");
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
+/// Native unions use internal adapters for isset, empty and unset, including real null receivers.
+#[test]
+fn test_simplexml_native_union_dimension_probes() {
+    if skip_without_xml_native("test_simplexml_native_union_dimension_probes") { return; }
+    let out = compile_and_run_with_heap_debug(r#"<?php
+function nativeUnionProbe(SimpleXMLElement|SimpleXMLIterator|null $node): void {
+    echo (int)isset($node['id']), ':', (int)empty($node['id']), '|';
+    unset($node['id']);
+    echo (int)isset($node['id']), '|';
+}
+nativeUnionProbe(null);
+nativeUnionProbe(new SimpleXMLElement('<r id="x"/>'));
+nativeUnionProbe(new SimpleXMLIterator('<r id="0"/>'));
+"#);
+    assert!(out.success, "stdout={} stderr={}", out.stdout, out.stderr);
+    assert_eq!(out.stdout, "0:1|0|1:0|0|1:1|0|");
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
+/// Native XML and public ArrayAccess arms preserve their distinct isset and unset protocols.
+#[test]
+fn test_simplexml_arrayaccess_union_dimension_probes() {
+    if skip_without_xml_native("test_simplexml_arrayaccess_union_dimension_probes") { return; }
+    let out = compile_and_run_with_heap_debug(r#"<?php
+class XmlDimensionProbePeer implements ArrayAccess {
+    private bool $present = true;
+    public function offsetExists(mixed $offset): bool { echo 'exists|'; return $this->present; }
+    public function offsetGet(mixed $offset): mixed { echo 'get|'; return '1'; }
+    public function offsetSet(mixed $offset, mixed $value): void {}
+    public function offsetUnset(mixed $offset): void { echo 'unset|'; $this->present = false; }
+}
+function xmlDimensionProbeKey(): string { echo 'key|'; return 'id'; }
+function probeXmlOrArrayAccess(SimpleXMLElement|XmlDimensionProbePeer|null $node): void {
+    echo (int)isset($node[xmlDimensionProbeKey()]), ':', (int)empty($node['id']), '|';
+    unset($node[xmlDimensionProbeKey()]);
+    echo (int)isset($node['id']), '|';
+}
+probeXmlOrArrayAccess(null);
+probeXmlOrArrayAccess(new SimpleXMLElement('<r id="1"/>'));
+probeXmlOrArrayAccess(new XmlDimensionProbePeer());
+"#);
+    assert!(out.success, "stdout={} stderr={}", out.stdout, out.stderr);
+    assert_eq!(out.stdout, concat!(
+        "key|0:1|key|0|key|1:0|key|0|",
+        "key|exists|1:exists|get|0|key|unset|exists|0|",
+    ));
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
+/// A known XML source keeps its native probe protocol when a main local uses boxed global storage.
+#[test]
+fn test_simplexml_main_global_dimension_probe_protocol() {
+    if skip_without_xml_native("test_simplexml_main_global_dimension_probe_protocol") { return; }
+    let out = compile_and_run_with_heap_debug(r#"<?php
+function exposeXmlProbeGlobal(): void { global $probeGlobalXml; echo $probeGlobalXml->getName(), '|'; }
+$probeGlobalXml = new SimpleXMLElement('<r id="global"/>');
+exposeXmlProbeGlobal();
+echo (int)isset($probeGlobalXml['id']), ':', (int)empty($probeGlobalXml['id']), '|';
+unset($probeGlobalXml['id']);
+echo (int)isset($probeGlobalXml['id']);
+"#);
+    assert!(out.success, "stdout={} stderr={}", out.stdout, out.stderr);
+    assert_eq!(out.stdout, "r|1:0|0");
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+/// Erased variables dispatch unset to XML, public ArrayAccess, arrays, or PHP scalar diagnostics.
+#[test]
+fn test_simplexml_mixed_unset_selects_current_receiver() {
+    if skip_without_xml_native("test_simplexml_mixed_unset_selects_current_receiver") { return; }
+    let out = compile_and_run_with_heap_debug(r#"<?php
+function removeMixedXmlOffset(mixed &$value): void { unset($value['a']); }
+$xml = new SimpleXMLElement('<r a="old"/>');
+removeMixedXmlOffset($xml); echo (int)isset($xml['a']), '|';
+$ordinary = new ArrayObject(['a' => 'old']);
+removeMixedXmlOffset($ordinary); echo count($ordinary), '|';
+$array = ['a' => 'old']; $alias = $array;
+removeMixedXmlOffset($array); echo count($array), ':', count($alias), '|';
+set_error_handler(function(int $level, string $message): bool { echo $level, '|'; return true; });
+$scalar = false; removeMixedXmlOffset($scalar); var_dump($scalar);
+restore_error_handler();
+$scalar = null; removeMixedXmlOffset($scalar); var_dump($scalar);
+foreach ([true, 1, 1.0, 'abc'] as $scalar) {
+    try { removeMixedXmlOffset($scalar); }
+    catch (Error $error) { echo $error->getMessage(), '|'; }
+}
+function replaceUnsetXml(mixed &$value): string { $value = new SimpleXMLElement('<new a="value"/>'); return 'a'; }
+$current = new SimpleXMLElement('<old a="value"/>');
+$old = $current;
+unset($current[replaceUnsetXml($current)]);
+echo $current->getName(), ':', (int)isset($current['a']), ':', (int)isset($old['a']);
+function erasedUnsetXml(SimpleXMLElement $value): mixed { echo '|receiver'; return $value; }
+function computedUnsetKey(): string { echo '|key'; return 'a'; }
+unset(erasedUnsetXml($old)[computedUnsetKey()]);
+echo ':', (int)isset($old['a']);
+unset(simplexml_load_string('<r a="temporary"/>')['a']);
+function replaceProbeXml(mixed &$value): string { $value = new SimpleXMLElement('<probe/>'); return 'a'; }
+$probe = new SimpleXMLElement('<r a="value"/>');
+echo '|', (int)isset($probe[replaceProbeXml($probe)]), ':', $probe->getName();
+$probe = new SimpleXMLElement('<r a="value"/>');
+echo '|', (int)empty($probe[replaceProbeXml($probe)]), ':', $probe->getName();
+"#);
+    assert!(out.success, "stdout={} stderr={}", out.stdout, out.stderr);
+    assert_eq!(out.stdout, concat!("0|0|0:1|8192|bool(false)\nNULL\n",
+        "Cannot unset offset in a non-array variable|Cannot unset offset in a non-array variable|",
+        "Cannot unset offset in a non-array variable|Cannot unset string offsets|new:0:1|receiver|key:0|0:probe|1:probe"));
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+/// Opaque object receiver boxes stay rooted when a native empty key conversion throws.
+#[test]
+fn test_simplexml_object_empty_box_owners_survive_key_throws() {
+    if skip_without_xml_native("test_simplexml_object_empty_box_owners_survive_key_throws") { return; }
+    let out = compile_and_run_with_heap_debug(r#"<?php
+class ThrowingNativeEmptyKey {
+    public function __toString(): string { throw new RuntimeException('caught'); }
+}
+function emptyObjectXmlDimension(object $value, mixed $key): bool { return empty($value[$key]); }
+$xml = new SimpleXMLElement('<r/>');
+for ($i = 0; $i < 4; $i++) {
+    echo (int)emptyObjectXmlDimension($xml, 'missing'), '|';
+    try { emptyObjectXmlDimension($xml, new ThrowingNativeEmptyKey()); }
+    catch (RuntimeException $error) { echo $error->getMessage(), '|'; }
+}
+"#);
+    assert!(out.success, "stdout={} stderr={}", out.stdout, out.stderr);
+    assert_eq!(out.stdout, "1|caught|".repeat(4));
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
+/// XML capability must not turn unsupported erased storage unsets into discarded-copy mutations.
+#[test]
+fn test_simplexml_erased_unset_storage_is_rejected() {
+    assert_erased_unset_storage_is_rejected("test_simplexml_erased_unset_storage_is_rejected",
+        "class ErasedStaticUnset { public static mixed $data = ['a' => 1]; } unset(ErasedStaticUnset::$data['a']);");
+}
+
+/// Runtime-named erased properties keep the explicit unsupported-storage diagnostic.
+#[test]
+fn test_simplexml_erased_dynamic_unset_storage_is_rejected() {
+    assert_erased_unset_storage_is_rejected("test_simplexml_erased_dynamic_unset_storage_is_rejected",
+        "class ErasedDynamicUnset { public mixed $data = ['a' => 1]; } $h = new ErasedDynamicUnset(); $name = $argc > 0 ? 'data' : 'other'; unset($h->{$name}['a']);");
+}
+
+/// Erased function reference returns cannot silently mutate detached unset storage.
+#[test]
+fn test_simplexml_erased_function_ref_unset_storage_is_rejected() {
+    assert_erased_unset_storage_is_rejected("test_simplexml_erased_function_ref_unset_storage_is_rejected",
+        "function erasedRefSeed(): mixed { return ['a' => 1, 'b' => 2]; } function &erasedRefUnset(mixed &$data): mixed { return $data; } $data = erasedRefSeed(); unset(erasedRefUnset($data)['a']);");
+}
+
+/// Erased instance reference returns preserve their unsupported-storage diagnostic.
+#[test]
+fn test_simplexml_erased_method_ref_unset_storage_is_rejected() {
+    assert_erased_unset_storage_is_rejected("test_simplexml_erased_method_ref_unset_storage_is_rejected",
+        "class ErasedMethodRefUnset { public mixed $data = ['a' => 1, 'b' => 2]; public function &bag(): mixed { return $this->data; } } $h = new ErasedMethodRefUnset(); unset($h->bag()['a']);");
+}
+
+/// Erased static reference returns preserve their unsupported-storage diagnostic.
+#[test]
+fn test_simplexml_erased_static_ref_unset_storage_is_rejected() {
+    assert_erased_unset_storage_is_rejected("test_simplexml_erased_static_ref_unset_storage_is_rejected",
+        "class ErasedStaticRefUnset { public static mixed $data = ['a' => 1, 'b' => 2]; public static function &bag(): mixed { $value = self::$data; return $value; } } unset(ErasedStaticRefUnset::bag()['a']);");
+}
+
+/// Schedules one rejected source per test while retaining all original backend assertions.
+fn assert_erased_unset_storage_is_rejected(test: &str, body: &str) {
+    if skip_without_xml_native(test) { return; }
+    let source = format!("<?php $xml = simplexml_load_string('<r/>'); echo $xml->getName(); {body}");
+    let error = compile_source_expect_backend_error(&source);
+    assert!(error.contains("unset target shape"), "{error}");
+}
+
+/// An erased array element is refused at runtime while the original parent remains unchanged.
+#[test]
+fn test_simplexml_erased_nested_array_unset_preserves_unsupported_storage() {
+    if skip_without_xml_native("test_simplexml_erased_nested_array_unset_preserves_unsupported_storage") { return; }
+    let out = compile_and_run_with_heap_debug(r#"<?php
+$xml = new SimpleXMLElement('<r/>');
+$data = json_decode('{"a":{"b":1,"c":2}}', true);
+try { unset($data['a']['b']); }
+catch (Error $error) { echo $error->getMessage(), '|'; }
+echo json_encode($data);
+unset($xml, $data, $error);
+"#);
+    assert!(out.success, "stdout={} stderr={}", out.stdout, out.stderr);
+    assert_eq!(out.stdout, "Unsupported unset(): erased array storage has no attached removal path|{\"a\":{\"b\":1,\"c\":2}}");
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
+/// New property removal retains native XML protocols and mutates ordinary property storage in place.
+#[test]
+fn test_simplexml_property_unset_main_integration_bundle() {
+    if skip_without_xml_native("test_simplexml_property_unset_main_integration_bundle") { return; }
+    let source = r###"<?php
+class XmlUnsetIntegrationHolder {
+    public array $items = [];
+    public mixed $bag;
+    public SimpleXMLElement $xml;
+    public readonly mixed $locked;
+    public static array $shared = [];
+    public function __construct(mixed $value) { $this->locked = $value; }
+}
+function XmlUnsetIntegrationKey(XmlUnsetIntegrationHolder $holder): int {
+    echo 'key|'; $holder->bag = [8, 9]; return 0;
+}
+$doc = new SimpleXMLElement('<r><a>x</a><a>y</a><b id="keep"/></r>');
+$holder = new XmlUnsetIntegrationHolder($doc->b);
+$holder->xml = $doc->a; $holder->bag = $doc->a;
+unset($holder->xml[0]); echo $doc->asXML();
+unset($holder->bag[0]); echo $doc->asXML();
+$holder->bag = $doc->b;
+unset($holder->bag[XmlUnsetIntegrationKey($holder)]);
+echo json_encode($holder->bag), '|', $doc->asXML();
+$nested = ['xml' => $doc->b]; unset($nested['xml']['id']); echo $doc->asXML();
+unset($holder->locked[0]); echo $doc->asXML();
+$empty = new XmlUnsetIntegrationHolder(null); unset($empty->xml[0]); echo 'quiet|';
+$holder->items = [4, 5, 6]; $copy = $holder->items;
+unset($holder->items[1]); echo json_encode($holder->items), ':', json_encode($copy), '|';
+$holder->bag = ['k' => 1, 'j' => 2]; $mixedCopy = $holder->bag;
+unset($holder->bag['k']); echo json_encode($holder->bag), ':', json_encode($mixedCopy), '|';
+XmlUnsetIntegrationHolder::$shared = [4, 5]; $staticCopy = XmlUnsetIntegrationHolder::$shared;
+unset(XmlUnsetIntegrationHolder::$shared[0]); echo json_encode(XmlUnsetIntegrationHolder::$shared), ':', json_encode($staticCopy), '|';
+XmlUnsetIntegrationHolder::$shared = [];
+unset($holder, $empty, $nested, $doc, $copy, $mixedCopy, $staticCopy);
+"###;
+    let renamed = source.replace("XmlUnsetIntegration", "EvalXmlUnsetIntegration");
+    let body = renamed.strip_prefix("<?php").unwrap().replace('\\', "\\\\").replace('\'', "\\'");
+    let eval = format!("<?php $source = $argc > 0 ? '{body}' : ''; eval($source);");
+    let expected = "<?xml version=\"1.0\"?>\n<r><a>y</a><b id=\"keep\"/></r>\n<?xml version=\"1.0\"?>\n<r><b id=\"keep\"/></r>\nkey|{\"1\":9}|<?xml version=\"1.0\"?>\n<r><b id=\"keep\"/></r>\n<?xml version=\"1.0\"?>\n<r><b/></r>\n<?xml version=\"1.0\"?>\n<r/>\nquiet|{\"0\":4,\"2\":6}:[4,5,6]|{\"j\":2}:{\"k\":1,\"j\":2}|{\"1\":5}:[4,5]|";
+    // AOT class and function declarations must be visible before the argv branch.
+    let (declarations, native_body) = source.split_once("$doc =").unwrap();
+    let source = format!("{declarations} if ($argc === 1) {{ $doc = {native_body} }} else {{ {} }}",
+        eval.strip_prefix("<?php").unwrap());
+    let (runs, _) = compile_and_run_with_heap_debug_and_asm_per_argv(&source, &[&[], &["eval"]]);
+    let mut failures = Vec::new();
+    for (mode, out) in runs.iter().enumerate() {
+        if !out.success || out.stdout != expected || !out.stderr.contains("HEAP DEBUG: leak summary: clean")
+            || out.stderr.contains("Warning:") || out.stderr.contains("Notice:")
+        {
+            failures.push(format!("mode={mode} success={} stdout={:?} stderr={}", out.success, out.stdout, out.stderr));
+        }
+    }
+    assert_eq!(runs.len(), 2);
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
+}
+
+/// Erased ordinary scalar properties return their coerced prefix value without replaying hooks.
+#[test]
+fn test_simplexml_ordinary_prefix_results_follow_typed_storage_bundle() {
+    if skip_without_xml_native("test_simplexml_ordinary_prefix_results_follow_typed_storage_bundle") { return; }
+    let source = r#"<?php
+class PrefixStorageXmlCapability extends SimpleXMLElement {}
+class PrefixStorageString { public string $value = '5'; }
+class PrefixStorageInt { public int $value = 5; }
+class PrefixStorageFloat { public float $value = 5.0; }
+class PrefixStorageMixed { public mixed $value = '5'; }
+class PrefixStorageDeclaredMagic {
+    public string $value = '5';
+    public function __get(string $name): mixed { echo 'unexpected-get|'; return '5'; }
+    public function __set(string $name, mixed $value): void { echo 'unexpected-set|'; }
+}
+class PrefixStorageMagic {
+    public function __get(string $name): mixed { echo 'get|'; return '5'; }
+    public function __set(string $name, mixed $value): void { echo 'set|'; }
+}
+class PrefixStorageHook {
+    public string $value = '5' {
+        get { echo 'hook-get|'; return $this->value; }
+        set { echo 'hook-set|'; $this->value = $value; }
+    }
+}
+function prefixStorageNamed(mixed $object): mixed { return ++$object->value; }
+function prefixStorageDynamic(mixed $object, string $name): mixed { return --$object->{$name}; }
+$capability = new PrefixStorageXmlCapability('<r/>');
+foreach ([new PrefixStorageString(), new PrefixStorageInt(), new PrefixStorageFloat(),
+    new PrefixStorageMixed(), new PrefixStorageDeclaredMagic(), new PrefixStorageMagic(), new PrefixStorageHook()] as $object) {
+    var_dump(prefixStorageNamed($object), prefixStorageDynamic($object, 'value'));
+}
+unset($object, $capability);
+"#;
+    let (out, assembly) = compile_and_run_with_heap_debug_and_asm(source);
+    assert!(out.success, "stdout={} stderr={}", out.stdout, out.stderr);
+    let expected = concat!(
+        "string(1) \"6\"\nstring(1) \"5\"\nint(6)\nint(5)\nfloat(6)\nfloat(5)\n",
+        "int(6)\nint(5)\nstring(1) \"6\"\nstring(1) \"5\"\nget|set|get|set|int(6)\nint(4)\n",
+        "hook-get|hook-set|hook-get|hook-set|int(6)\nint(5)\n",
+    );
+    preserve_stdout_mismatches(source, &assembly, std::slice::from_ref(&out), &[expected]);
+    assert_eq!(out.stdout, expected);
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}

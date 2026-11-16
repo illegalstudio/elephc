@@ -17,7 +17,8 @@ use super::super::{
     FIBER_CALLABLE_OFFSET, FIBER_CALLABLE_WRAPPER_OFFSET, FIBER_CALLER_OFFSET,
     FIBER_DEFAULT_STACK_SIZE, FIBER_FLOAT_ARGS_MAX, FIBER_FLOAT_ARGS_OFFSET,
     FIBER_OBJECT_SIZE, FIBER_OWN_CALL_FRAME_OFFSET, FIBER_OWN_EXC_HEAD_OFFSET,
-    FIBER_OWN_MAGIC_SET_GUARD_OFFSET, FIBER_PENDING_THROW_OFFSET, FIBER_SAVED_SP_OFFSET,
+    FIBER_OWN_MAGIC_SET_GUARD_OFFSET, FIBER_OWN_GC_RELEASE_SUPPRESSED_OFFSET,
+    FIBER_PENDING_THROW_OFFSET, FIBER_SAVED_SP_OFFSET,
     FIBER_STACK_BASE_OFFSET, FIBER_STACK_SIZE_OFFSET, FIBER_STACK_TOP_OFFSET,
     FIBER_START_ARGS_MAX, FIBER_START_ARGS_OFFSET, FIBER_START_ARG_COUNT_OFFSET,
     FIBER_STATE_NOT_STARTED, FIBER_STATE_OFFSET, FIBER_STATE_RUNNING,
@@ -105,6 +106,7 @@ pub(super) fn emit_construct(emitter: &mut Emitter) {
     emitter.instruction(&format!("str xzr, [x21, #{}]", FIBER_OWN_EXC_HEAD_OFFSET)); // own_exc_head cleared (no installed handlers yet)
     emitter.instruction(&format!("str xzr, [x21, #{}]", FIBER_OWN_CALL_FRAME_OFFSET)); // own_call_frame cleared (no activation records on the fresh fiber stack yet)
     emitter.instruction(&format!("str xzr, [x21, #{}]", FIBER_OWN_MAGIC_SET_GUARD_OFFSET)); // no active magic-set recursion guard on a fresh fiber
+    emitter.instruction(&format!("str xzr, [x21, #{}]", FIBER_OWN_GC_RELEASE_SUPPRESSED_OFFSET)); // a fresh coroutine has no suspended deep release
     for i in 0..FIBER_START_ARGS_MAX {
         emitter.instruction(&format!("str xzr, [x21, #{}]", FIBER_START_ARGS_OFFSET + i * 8)); // start_args[i] cleared
     }
@@ -249,6 +251,8 @@ pub(super) fn emit_resume(emitter: &mut Emitter) {
     emitter.instruction(&format!("ldr x9, [x19, #{}]", FIBER_STATE_OFFSET));    // x9 = receiver fiber state
     emitter.instruction(&format!("cmp x9, #{}", FIBER_STATE_SUSPENDED));        // is the fiber currently paused at a Fiber::suspend() call?
     emitter.instruction("b.eq __rt_fiber_resume_state_ok");                     // proceed only when the fiber is suspended
+    emitter.instruction("mov x0, x20");                                         // retire the transferred input when state validation rejects the resume
+    abi::emit_call_label(emitter, "__rt_decref_mixed");
     abi::emit_symbol_address(emitter, "x0", "_fiber_msg_not_suspended");        // x0 = pointer to the static error message
     emitter.instruction("mov x1, #43");                                         // x1 = error message length in bytes
     emitter.instruction("bl __rt_fiber_throw_state_error");                     // raise FiberError; this call does not return
@@ -318,14 +322,19 @@ pub(super) fn emit_suspend(emitter: &mut Emitter) {
     // Raises without returning, so the suspension site's second hook never runs.
     // x19 is NULL on this path, which is exactly what the park recorded.
     super::common::emit_instr_unpark_hook(emitter, "__rt_fiber_suspend_outside_no_instr", "x19");
+    emitter.instruction("mov x0, x20");                                         // an invalid suspension still consumes its independent input owner
+    abi::emit_call_label(emitter, "__rt_decref_mixed");
     abi::emit_symbol_address(emitter, "x0", "_fiber_msg_suspend_outside");      // x0 = pointer to the static error message
     emitter.instruction("mov x1, #33");                                         // x1 = error message length in bytes
     emitter.instruction("bl __rt_fiber_throw_state_error");                     // raise FiberError; this call does not return
     emitter.label("__rt_fiber_suspend_state_ok");
+    super::super::force_close::suspend_guard(emitter);
     abi::emit_load_symbol_to_reg(emitter, "x9", "_unser_active", 0);          // x9 = active unserialize nesting count
     emitter.instruction("cbz x9, __rt_fiber_suspend_unserialize_ok");           // switching is safe only when no parser context is live
     // Also raises without returning, and also before the switch.
     super::common::emit_instr_unpark_hook(emitter, "__rt_fiber_suspend_unser_no_instr", "x19");
+    emitter.instruction("mov x0, x20");                                         // release the rejected transfer before raising the parser-state error
+    abi::emit_call_label(emitter, "__rt_decref_mixed");
     abi::emit_symbol_address(emitter, "x0", "_fiber_msg_suspend_unserialize"); // x0 = stable FiberError message for the forbidden switch
     emitter.instruction("mov x1, #52");                                         // x1 = error message length in bytes
     emitter.instruction("bl __rt_fiber_throw_state_error");                     // raise before publishing a yielded value or Suspended state

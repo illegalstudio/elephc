@@ -8,7 +8,7 @@
 //! - Profile metadata must not hide owned eval results from expression cleanup.
 //! - The source buffer has a frame root while native or eval code can throw.
 
-use crate::ir::{Immediate, Op, Ownership};
+use crate::ir::{Immediate, LocalKind, Op, Ownership};
 
 /// Verifies catch adapter cleanup for one independently scheduled target compilation.
 fn assert_eval_catch_predicates_retire_raw_throwable_adapter_boxes(name: &str) {
@@ -25,9 +25,12 @@ inspectCatchPredicateOwners('throw new RuntimeException("right"); // ' . $argc);
         source, std::path::Path::new("main.php"), std::path::Path::new("."), target,
     );
     let asm = crate::codegen::generate_user_asm_from_ir(&module, false, false).unwrap();
+    let function_symbol = crate::names::function_symbol("inspectCatchPredicateOwners");
+    let function = asm.split_once(&format!("{function_symbol}:\n")).unwrap().1;
+    let function = function.split("\n.globl ").next().unwrap();
     let symbol = target.extern_symbol("__elephc_eval_object_is_a");
     let mut probes = 0;
-    for path in asm.split(&format!("{symbol}\n")).skip(1) {
+    for path in function.split(&format!("{symbol}\n")).skip(1) {
         let restore = if name == "linux-x86_64" { "add rsp, 96" } else { "add sp, sp, #96" };
         let cleanup = path.split_once(restore).expect("predicate scratch restoration").0;
         assert!(cleanup.contains("retire temporary eval metadata operand box"), "{name}: {cleanup}");
@@ -66,6 +69,106 @@ fn eval_catch_predicates_retire_raw_throwable_adapter_boxes_linux_aarch64() {
 fn eval_catch_predicates_retire_raw_throwable_adapter_boxes_linux_x86_64() {
     assert_eval_catch_predicates_retire_raw_throwable_adapter_boxes("linux-x86_64");
 }
+
+/// Verifies AOT interface methods and relations recover escaped-object ownership without an eval local.
+fn assert_context_free_object_relations_use_eval_owner(name: &str) {
+    let source = r#"<?php
+interface EscapedEvalReferenceContract { public function label(): string; }
+class EscapedNativeReferenceImplementation implements EscapedEvalReferenceContract {
+    public function label(): string { return "native"; }
+}
+function acceptEscapedEvalReference(EscapedEvalReferenceContract &$value): string {
+    return $value->label();
+}
+function callEscapedEvalMixed(mixed $value): string { return $value->label(); }
+function inspectEscapedEvalRelations(mixed $value, string $target): string {
+    return ($value instanceof EscapedEvalReferenceContract ? 'i' : 'n')
+        . (is_a($value, EscapedEvalReferenceContract::class) ? 'a' : 'n')
+        . (is_subclass_of($value, EscapedEvalReferenceContract::class) ? 's' : 'n')
+        . ($value instanceof $target ? 'd' : 'n')
+        . (is_a($value, 'stdClass') ? 'w' : 'n');
+}
+$source = $argc > 0
+    ? 'class EscapedEvalReferenceImplementation implements EscapedEvalReferenceContract {
+           public function label(): string { return "eval"; }
+       }
+       $value = new EscapedEvalReferenceImplementation();
+       acceptEscapedEvalReference($value);
+       inspectEscapedEvalRelations($value, "EscapedEvalReferenceContract");
+       class EscapedEvalNativeChild extends EscapedNativeReferenceImplementation {
+           public function label(): string { return "eval-child"; }
+       }
+       callEscapedEvalMixed(new EscapedEvalNativeChild());'
+    : '';
+eval($source);
+"#;
+    let target = crate::codegen::platform::Target::parse(name).unwrap();
+    let module = super::lower_source_at_for_target(
+        source, std::path::Path::new("main.php"), std::path::Path::new("."), target,
+    );
+    let function = module.functions.iter()
+        .find(|function| function.name == "inspectEscapedEvalRelations").unwrap();
+    assert!(!function.locals.iter().any(|local| local.kind == LocalKind::EvalContext), "{name}");
+    assert!(function.instructions.iter().any(|instruction| instruction.op == Op::InstanceOf), "{name}");
+    assert!(function.instructions.iter().any(|instruction| instruction.op == Op::InstanceOfDynamic), "{name}");
+    let guard = module.functions.iter()
+        .find(|function| function.name == "acceptEscapedEvalReference").unwrap();
+    assert!(!guard.locals.iter().any(|local| local.kind == LocalKind::EvalContext), "{name}");
+    assert!(guard.instructions.iter().any(|instruction| instruction.op == Op::InstanceOf), "{name}");
+    let assembly = crate::codegen::generate_user_asm_from_ir(&module, false, false).unwrap();
+    let symbol = crate::names::function_symbol("inspectEscapedEvalRelations");
+    let body = assembly.split_once(&format!("{symbol}:\n")).unwrap().1;
+    let body = body.split("\n.globl ").next().unwrap();
+    let mixed = module.functions.iter().find(|function| function.name == "callEscapedEvalMixed").unwrap();
+    assert!(!mixed.locals.iter().any(|local| local.kind == LocalKind::EvalContext), "{name}");
+    let mixed_symbol = crate::names::function_symbol("callEscapedEvalMixed");
+    let mixed_body = assembly.split_once(&format!("{mixed_symbol}:\n")).unwrap().1;
+    let mixed_body = mixed_body.split("\n.globl ").next().unwrap();
+    let owner_probe = mixed_body.find(&target.extern_symbol("__elephc_eval_object_context"))
+        .expect("Mixed calls must recover eval ownership before checking the backing class id");
+    let eval_call = mixed_body.find(&target.extern_symbol("__elephc_eval_method_call")).unwrap();
+    let native_dispatch = mixed_body.find("mixed_method_EscapedNativeReferenceImplementation_").unwrap();
+    assert!(owner_probe < eval_call && eval_call < native_dispatch,
+        "{name}: an eval override must precede its native backing method");
+    let named_call = format!("{}\n", target.extern_symbol("__elephc_eval_object_is_a"));
+    let dynamic_call = format!("{}\n", target.extern_symbol("__elephc_eval_object_is_a_dynamic"));
+    assert!(body.matches(&named_call).count() >= 4, "{name}");
+    assert_eq!(body.matches(&dynamic_call).count(), 1, "{name}");
+    let guard_symbol = crate::names::function_symbol("acceptEscapedEvalReference");
+    let guard_body = assembly.split_once(&format!("{guard_symbol}:\n")).unwrap().1;
+    let guard_body = guard_body.split("\n.globl ").next().unwrap();
+    assert!(guard_body.contains(&named_call), "{name}");
+    let context_probe = target.extern_symbol("__elephc_eval_object_context");
+    let method_call = target.extern_symbol("__elephc_eval_method_call");
+    let context_probe = guard_body
+        .find(&context_probe)
+        .unwrap_or_else(|| panic!("{name}: interface dispatch must probe eval object ownership"));
+    let method_call = guard_body
+        .find(&method_call)
+        .unwrap_or_else(|| panic!("{name}: eval-owned interfaces must use dynamic method dispatch"));
+    let native_table = guard_body
+        .find("_class_interface_ptrs")
+        .unwrap_or_else(|| panic!("{name}: native interface fallback must remain available"));
+    assert!(context_probe < method_call, "{name}: resolve ownership before dynamic dispatch");
+    assert!(method_call < native_table, "{name}: dynamic dispatch must precede the native fallback");
+    let conversion = guard_body[method_call..].find("__rt_mixed_cast_string").unwrap() + method_call;
+    let result_release = guard_body[conversion..].find("__rt_decref_mixed").unwrap() + conversion;
+    assert!(result_release < native_table, "{name}: retire the owned eval string box after conversion");
+}
+
+macro_rules! context_free_eval_object_relations_target_test {
+    ($test:ident, $target:literal) => {
+        /// Context-free AOT object relations recover eval ownership on this target.
+        #[test]
+        fn $test() { assert_context_free_object_relations_use_eval_owner($target); }
+    };
+}
+
+context_free_eval_object_relations_target_test!(context_free_eval_object_relations_macos, "macos-aarch64");
+context_free_eval_object_relations_target_test!(context_free_eval_object_relations_ios, "ios-arm64");
+context_free_eval_object_relations_target_test!(context_free_eval_object_relations_ios_sim, "ios-sim-arm64");
+context_free_eval_object_relations_target_test!(context_free_eval_object_relations_linux_arm64, "linux-aarch64");
+context_free_eval_object_relations_target_test!(context_free_eval_object_relations_linux_x86_64, "linux-x86_64");
 
 /// Checks bounded eval scope writeback before unwinding for one independently scheduled target.
 fn check_eval_throw_writeback_is_bounded_before_unwinding(target: &str) {
@@ -370,6 +473,20 @@ fn check_profiled_eval_owns_its_result_and_roots_its_source(target: &str) {
     let root = function.instructions[..index].iter().find(|inst| {
         inst.op == Op::StoreLocal && inst.operands == [call.operands[0]]
     }).expect("the source must be visible to exceptional frame cleanup");
+    let guard = function.instructions[..index].iter().find(|inst| {
+        inst.immediate == Some(Immediate::RuntimeCall(crate::ir::RuntimeCallTarget::ExceptionGuardOwned))
+            && inst.operands.first() == call.operands.first()
+    }).expect("the eval argument must have an exceptional ownership guard");
+    let token = guard.result.expect("argument guard token");
+    let cleanup = &function.instructions[index + 1..];
+    let unguard = cleanup.iter().position(|inst| {
+        inst.immediate == Some(Immediate::RuntimeCall(crate::ir::RuntimeCallTarget::ExceptionUnguardOwned))
+            && inst.operands == [token]
+    }).expect("normal eval completion must remove its argument guard");
+    let detach = cleanup.iter().position(|inst| {
+        inst.op == Op::PopCallOperandOwner && inst.immediate == root.immediate
+    }).expect("normal eval completion must detach its source root");
+    assert!(unguard < detach, "{target}: remove the newer guard before detaching the source root");
     assert!(function.instructions[index + 1..].iter().any(|inst| {
         inst.op == Op::ReleaseLocalSlot && inst.immediate == root.immediate
     }), "{target}: normal return must clear and retire the source root");

@@ -1,8 +1,6 @@
 ---
 title: "current()"
 description: "Returns the element under the array's internal pointer."
-sidebar:
-  order: 53
 ---
 
 ## current()
@@ -20,8 +18,9 @@ Returns the element under the array's internal pointer.
 
 ## Availability
 
-- **Compiled (AOT)**: supported by the Elephc code generator.
-- **`eval()` (magician interpreter)**: supported through a declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/array/current.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/array/current.rs)).
+| Compiled (AOT) | Magician (eval) |
+|---|---|
+| Available | Available |
 
 _No examples yet. Check `examples/` and `showcases/` for usage patterns._
 

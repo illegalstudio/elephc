@@ -1,8 +1,6 @@
 ---
 title: "mysqli_next_result()"
 description: "Advances a multi-query to its next result set."
-sidebar:
-  order: 141
 ---
 
 ## mysqli_next_result()
@@ -20,8 +18,9 @@ Advances a multi-query to its next result set.
 
 ## Availability
 
-- **Compiled (AOT)**: supported through an injected elephc-PHP prelude.
-- **`eval()` (magician interpreter)**: not available inside eval'd code.
+| Compiled (AOT) | Magician (eval) |
+|---|---|
+| Available | Not available yet |
 
 _No examples yet. Check `examples/` and `showcases/` for usage patterns._
 

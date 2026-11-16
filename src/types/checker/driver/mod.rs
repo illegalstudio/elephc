@@ -48,6 +48,7 @@ use super::schema::{
 use super::yield_validation::validate_yield_contexts;
 use super::{CheckOptions, Checker};
 
+mod constants;
 mod declaration_metadata;
 mod externs;
 mod functions;
@@ -76,6 +77,7 @@ use declaration_metadata::{
 /// 8. Top-level program checking (twice: initial pass for errors that stabilize, then final)
 /// 9. Method body type-checking to stability
 /// 10. Implicit Stringable interface application
+/// 11. Re-walk of function bodies whose initial errors the final pass would drop as stale
 ///
 /// Returns `Ok((Checker, TypeEnv))` on success or `Err(CompileError)` if any phase reports errors.
 /// The `Checker` carries resolved class/interface/enum/function metadata; `TypeEnv` holds the global type environment.
@@ -104,12 +106,15 @@ pub(super) fn check_types_impl(
     errors.extend(validate_yield_contexts(program));
     errors.extend(validate_trait_property_defaults(program));
 
+    constants::prescan(&mut checker, program);
     checker.collect_function_decls(program, &mut errors);
 
     let (mut flattened_classes, mut flattened_enums, flatten_errors) = flatten_classes(program);
     errors.extend(flatten_errors);
     (checker.trait_imported_properties, checker.trait_imported_constructors) =
         super::schema::collect_trait_default_origins(program, &flattened_classes);
+    checker.trait_method_requirements =
+        super::schema::collect_trait_method_requirements(program, &flattened_classes);
     // A prelude parsed from PHP text gives its classes real spans, so the statement's source
     // mode is what tells them apart from the program's own classes (`ClassInfo::is_internal`).
     checker.internal_class_decls = program
@@ -135,7 +140,7 @@ pub(super) fn check_types_impl(
         let key = php_symbol_key(&class.name);
         if !seen_classes.insert(key) {
             errors.push(CompileError::new(
-                crate::span::Span::dummy(),
+                class.span,
                 &format!("Duplicate class declaration: {}", class.name),
             ));
             continue;
@@ -299,6 +304,12 @@ pub(super) fn check_types_impl(
             checker.declared_classes.insert(name.clone());
         }
     }
+    // Packed and extern classes are types that class members name too: `public buffer<Vec2> $data`,
+    // `public ptr<Point> $p`, a method parameter, or a generic argument (`Store<Vec2>` substitutes
+    // `buffer<T>` into a member). Their layouts must therefore exist before the interface and
+    // class schema passes below resolve member signatures. Duplicate detection against ordinary
+    // classes reads `declared_classes`, which is already complete here.
+    checker.prescan_extern_decls(program, &mut errors);
 
     let mut next_interface_id = 0u64;
     let mut building_interfaces = HashSet::new();
@@ -331,6 +342,24 @@ pub(super) fn check_types_impl(
     // `_class_*` metadata tables and the object header each `new` stamps.
     let mut class_names: Vec<String> = class_map.keys().cloned().collect();
     class_names.sort();
+    checker.declared_class_ancestry = class_map
+        .iter()
+        .map(|(name, class)| (name.clone(), (class.extends.clone(), class.implements.clone())))
+        .collect();
+    // Enums are built after every class, so a class method may return an enum that only its
+    // declaration can relate to the interface the parent method returns. Every enum also
+    // implements `UnitEnum`, and a backed one `BackedEnum`, as `build_enum_info` publishes.
+    for stmt in program {
+        if let StmtKind::EnumDecl { name, implements, backing_type, .. } = &stmt.kind {
+            let implements = implements
+                .iter()
+                .map(|name| name.as_str().to_string())
+                .chain(std::iter::once("UnitEnum".to_string()))
+                .chain(backing_type.as_ref().map(|_| "BackedEnum".to_string()))
+                .collect();
+            checker.declared_class_ancestry.entry(name.clone()).or_insert((None, implements));
+        }
+    }
     for class_name in class_names {
         if let Err(error) = build_class_info_recursive(
             &class_name,
@@ -342,6 +371,7 @@ pub(super) fn check_types_impl(
             errors.extend(error.flatten());
         }
     }
+    checker.declared_class_ancestry.clear();
     if let Err(error) = inject_builtin_enums(program, &mut checker, &mut next_class_id) {
         errors.extend(error.flatten());
     }
@@ -442,8 +472,6 @@ pub(super) fn check_types_impl(
     patch_builtin_spl_storage_signatures(&mut checker);
     patch_magic_method_signatures(&mut checker);
 
-    checker.prescan_extern_decls(program, &mut errors);
-
     // Every class, interface and enum is registered, and no body has been checked: a violated
     // bound is reported now, alone, instead of as whatever the instantiated body trips over.
     if let Err(error) =
@@ -453,6 +481,13 @@ pub(super) fn check_types_impl(
         return Err(CompileError::from_many(errors));
     }
 
+    // Exception summaries need valid inheritance, and still precede all callable bodies.
+    // Schema errors retain conservative exception flow rather than analyzing invalid cycles.
+    if errors.is_empty() {
+        let registered_parents: Vec<_> = class_map.iter().filter_map(|(name, class)|
+            class.extends.as_ref().map(|parent| (name.clone(), parent.clone()))).collect();
+        checker.exception_analysis = Some(crate::optimize::CheckerExceptionAnalysis::new(program, &registered_parents));
+    }
     let (_, initial_top_level_errors) = checker.check_top_level_program(program);
 
     checker.resolve_unchecked_functions(&mut errors);
@@ -473,6 +508,7 @@ pub(super) fn check_types_impl(
     checker.type_check_methods_until_stable(&methods_to_check, &mut errors)?;
     patch_builtin_spl_storage_signatures(&mut checker);
     apply_implicit_stringable_interfaces(&mut checker.classes);
+    let failed_body_errors = checker.recheck_failed_function_bodies(&initial_top_level_errors);
 
     let (final_global_env, final_top_level_errors) = checker.check_top_level_program(program);
     for (initial_errors, final_errors) in initial_top_level_errors
@@ -485,6 +521,14 @@ pub(super) fn check_types_impl(
         }
         if !Checker::can_suppress_initial_top_level_errors(&initial_errors) {
             errors.extend(initial_errors);
+        }
+    }
+    // A body error an unsuppressed initial statement already reported is not repeated.
+    for error in checker.unresolved_rechecked_body_errors(failed_body_errors) {
+        if !errors.iter().any(|seen| {
+            seen.span == error.span && seen.file == error.file && seen.message == error.message
+        }) {
+            errors.push(error);
         }
     }
 
@@ -520,6 +564,45 @@ fn report_class_id_inventory(checker: &Checker) {
 
 #[cfg(test)]
 mod tests {
+    /// Every enum `inject_builtin_enums` registers for a target is a builtin pointer target for
+    /// that target and no other name is, so the list the packed and extern prescan consults
+    /// (`is_builtin_enum_name`) cannot drift from the injection, including the macOS-only
+    /// `Pcntl\QosClass`.
+    #[test]
+    fn builtin_enum_pointer_targets_match_the_injected_enums() {
+        use std::collections::HashSet;
+
+        use crate::codegen_support::platform::{AppleVariant, Arch, Platform, Target};
+        use crate::types::checker::builtin_enums::{inject_builtin_enums, is_builtin_enum_name};
+
+        let targets = [
+            Target::new(Platform::MacOS, Arch::AArch64),
+            Target::new_apple(Arch::AArch64, AppleVariant::IOS),
+            Target::new(Platform::Linux, Arch::X86_64),
+            Target::new(Platform::Linux, Arch::AArch64),
+        ];
+        for target in targets {
+            let mut checker = super::Checker::new(target);
+            let before: HashSet<String> = checker.enums.keys().cloned().collect();
+            let mut next_class_id = 1;
+            inject_builtin_enums(&Vec::new(), &mut checker, &mut next_class_id)
+                .expect("builtin enums inject into an empty program");
+            let injected: HashSet<String> = checker
+                .enums
+                .keys()
+                .filter(|name| !before.contains(*name))
+                .cloned()
+                .collect();
+            for name in ["SortDirection", "PropertyHookType", "Pcntl\\QosClass", "Unrelated"] {
+                assert_eq!(
+                    is_builtin_enum_name(&checker, name),
+                    injected.contains(name),
+                    "{name} on {target:?}",
+                );
+            }
+        }
+    }
+
     /// Imported abstract factory requirements never replace synthesized concrete metadata.
     #[test]
     fn enum_metadata_keeps_synthesized_factories_concrete() {
@@ -572,6 +655,57 @@ mod tests {
             assert_eq!(class.static_methods[name].params[0].1, crate::types::PhpType::Int);
             assert!(!class.method_decls.iter().any(|decl| decl.name.eq_ignore_ascii_case(name)));
         }
+    }
+
+    /// The outer method/function/top-level fixpoint must converge when a method's untyped
+    /// variadic is both promoted to the descriptor container (a first-class callable inside a
+    /// method body) and called with a string from the top level.
+    ///
+    /// The method pass promoted `is`'s collector to `array<mixed>`, the top-level re-check joined
+    /// the `'api/*'` call site back into `array<string>` (`Str` absorbs `Mixed` in the coercion
+    /// join), and the two alternated until the round budget ran out; on Laravel that budget is
+    /// thousands of rounds. The collector must end as the wider `array<mixed>`, the only type the
+    /// descriptor invoker and both call sites agree on.
+    #[test]
+    fn promoted_method_variadic_is_not_narrowed_back_by_a_top_level_call() {
+        let source = r#"<?php
+class Req {
+    public function is(...$patterns) {
+        foreach ($patterns as $p) { if ($p === "api/x") return true; }
+        return false;
+    }
+}
+class Mw {
+    public function check(Req $r) {
+        $f = $r->is(...);
+        return $f("api/x");
+    }
+}
+$g = fn (Req $r) => $r->is('api/*');
+var_dump($g(new Req()));
+var_dump((new Mw())->check(new Req()));
+"#;
+        let tokens = crate::lexer::tokenize(source).expect("tokenize");
+        let program = crate::parser::parse(&tokens).expect("parse");
+        let program = crate::name_resolver::resolve(program).expect("name resolve");
+        let checked = crate::types::checker::check_types(
+            &program,
+            crate::codegen_support::platform::Target::new(
+                crate::codegen_support::platform::Platform::MacOS,
+                crate::codegen_support::platform::Arch::AArch64,
+            ),
+        )
+        .expect("check");
+        let is_sig = checked
+            .classes
+            .get("Req")
+            .and_then(|class| class.methods.get("is"))
+            .expect("Req::is signature");
+        assert_eq!(
+            is_sig.params.last().map(|(_, ty)| ty.clone()),
+            Some(crate::types::PhpType::Array(Box::new(crate::types::PhpType::Mixed))),
+            "the promoted collector must stay array<mixed>"
+        );
     }
 
     /// Class ids must not depend on HashMap iteration order.

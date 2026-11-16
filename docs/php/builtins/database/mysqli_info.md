@@ -1,8 +1,6 @@
 ---
 title: "mysqli_info()"
 description: "Returns information about the last query, when the server supplies it."
-sidebar:
-  order: 136
 ---
 
 ## mysqli_info()
@@ -20,8 +18,9 @@ Returns information about the last query, when the server supplies it.
 
 ## Availability
 
-- **Compiled (AOT)**: supported through an injected elephc-PHP prelude.
-- **`eval()` (magician interpreter)**: not available inside eval'd code.
+| Compiled (AOT) | Magician (eval) |
+|---|---|
+| Available | Not available yet |
 
 _No examples yet. Check `examples/` and `showcases/` for usage patterns._
 

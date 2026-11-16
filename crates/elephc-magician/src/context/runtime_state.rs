@@ -105,6 +105,27 @@ impl ElephcEvalContext {
         self.closures.contains_key(name)
     }
 
+    /// Detaches persistent value owners before native releases can reenter the context.
+    pub(crate) fn take_persistent_cell_owners(&mut self) -> Vec<RuntimeCellHandle> {
+        self.static_locals.drain().map(|(_, cell)| cell)
+            .chain(self.static_properties.drain().map(|(_, cell)| cell))
+            .chain(self.class_constants.drain().map(|(_, cell)| cell))
+            .collect()
+    }
+
+    /// Prevents nested ABI owner releases from freeing a context during destructor callbacks.
+    pub(crate) fn begin_teardown(&mut self) -> bool {
+        if self.teardown_active || self.has_abi_owners() { return false; }
+        self.teardown_active = true;
+        true
+    }
+
+    /// Ends the callback-sensitive release pass before final context reclamation.
+    pub(crate) fn end_teardown(&mut self) { self.teardown_active = false; }
+
+    /// Reports whether a native release callback is still using this context.
+    pub(crate) fn teardown_active(&self) -> bool { self.teardown_active }
+
     /// Returns a stored static local cell for an eval-declared function.
     pub fn static_local(&self, function_name: &str, name: &str) -> Option<RuntimeCellHandle> {
         self.static_locals
@@ -779,5 +800,45 @@ impl ElephcEvalContext {
             return String::new();
         }
         format!("{}({}) : eval()'d code", self.call_file, self.call_line)
+    }
+}
+
+#[cfg(test)]
+mod persistent_owner_tests {
+    use super::*;
+
+    /// Every map entry owns a lease, including equal handles stored in different maps.
+    #[test]
+    fn persistent_cell_drain_preserves_each_map_lease() {
+        let mut context = ElephcEvalContext::new();
+        let first = RuntimeCellHandle::from_raw(1usize as *mut crate::value::RuntimeCell);
+        let second = RuntimeCellHandle::from_raw(2usize as *mut crate::value::RuntimeCell);
+        context.set_static_local("function", "local", first);
+        context.set_static_property("Owner", "value", first);
+        context.set_class_constant_cell("Owner", "TOKEN", second);
+        let cells = context.take_persistent_cell_owners();
+        assert_eq!(cells.iter().filter(|cell| **cell == first).count(), 2);
+        assert_eq!(cells.iter().filter(|cell| **cell == second).count(), 1);
+        assert!(context.static_local("function", "local").is_none());
+        assert!(context.static_property("Owner", "value").is_none());
+        assert!(context.class_constant_cell("Owner", "TOKEN").is_none());
+        assert!(context.take_persistent_cell_owners().is_empty());
+        context.set_static_property("Owner", "replacement", second);
+        assert_eq!(context.take_persistent_cell_owners(), vec![second]);
+    }
+
+    /// Destructor callbacks cannot recursively claim a context already undergoing teardown.
+    #[test]
+    fn persistent_context_teardown_survives_nested_abi_owners() {
+        let mut context = ElephcEvalContext::new();
+        assert!(!context.begin_teardown());
+        assert!(context.release_abi_owner());
+        assert!(context.begin_teardown());
+        assert!(!context.begin_teardown());
+        context.retain_abi_owner().unwrap();
+        assert!(context.release_abi_owner());
+        assert!(context.teardown_active());
+        context.end_teardown();
+        assert!(context.begin_teardown());
     }
 }

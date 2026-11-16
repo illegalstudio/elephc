@@ -69,6 +69,27 @@ pub(super) fn lower_trim_mask_arg(
     Ok(())
 }
 
+/// Loads the PHP-visible trim function name and warning-enable flag for the mask helper.
+pub(super) fn load_trim_warning_args(
+    ctx: &mut FunctionContext<'_>,
+    name: &str,
+) -> Result<()> {
+    let (label, len) = ctx.data.add_string(name.as_bytes());
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            abi::emit_symbol_address(ctx.emitter, "x5", &label);
+            abi::emit_load_int_immediate(ctx.emitter, "x6", len as i64);
+            ctx.emitter.instruction("mov x7, #1");                              // enable invalid-range warnings on the mask scan
+        }
+        Arch::X86_64 => {
+            abi::emit_symbol_address(ctx.emitter, "r8", &label);
+            abi::emit_load_int_immediate(ctx.emitter, "r9", len as i64);
+            ctx.emitter.instruction("mov r10, 1");                              // enable invalid-range warnings on the mask scan
+        }
+    }
+    Ok(())
+}
+
 /// Materializes two string operands into the runtime helper's target ABI registers.
 pub(super) fn load_binary_string_args(
     ctx: &mut FunctionContext<'_>,
@@ -171,8 +192,22 @@ pub(in crate::codegen::lower_inst::builtins) fn load_value_as_string_to_regs(
             move_string_result_to_regs(ctx, ptr_reg, len_reg);
             Ok(())
         }
+        // A packed record address is the same pointer word a `ptr<T>` holds.
+        PhpType::Pointer(_) | PhpType::Packed(_) => {
+            // Same "0x..." text `echo $ptr` prints, so `sprintf("%s", $p)` agrees with it; a
+            // null `?ptr<T>` converts to "" the way `echo` prints nothing for it.
+            ctx.load_value_to_result(value)?;
+            if crate::types::is_nullable_pointer_type(&ctx.raw_value_php_type(value)?) {
+                crate::codegen::lower_inst::strings::emit_loaded_nullable_pointer_to_string(ctx);
+            } else {
+                abi::emit_call_label(ctx.emitter, "__rt_ptoa");
+            }
+            move_string_result_to_regs(ctx, ptr_reg, len_reg);
+            Ok(())
+        }
         PhpType::Float => {
             ctx.load_value_to_result(value)?;
+            crate::codegen::lower_inst::predicates::emit_nan_string_coercion_probe(ctx);
             abi::emit_call_label(ctx.emitter, "__rt_ftoa");
             move_string_result_to_regs(ctx, ptr_reg, len_reg);
             Ok(())
@@ -250,6 +285,7 @@ pub(super) fn emit_mixed_borrowed_string_aarch64(ctx: &mut FunctionContext<'_>, 
 
     ctx.emitter.label(&from_float);
     ctx.emitter.instruction("fmov d0, x1");                                     // move unboxed float bits into the FP argument register
+    crate::codegen::lower_inst::predicates::emit_nan_string_coercion_probe(ctx);
     abi::emit_call_label(ctx.emitter, "__rt_ftoa");
     ctx.emitter.instruction(&format!("b {}", done));                            // finish with the concat-backed float string
 
@@ -300,6 +336,7 @@ pub(super) fn emit_mixed_borrowed_string_x86_64(ctx: &mut FunctionContext<'_>, v
 
     ctx.emitter.label(&from_float);
     ctx.emitter.instruction("movq xmm0, rdi");                                  // move unboxed float bits into the FP argument register
+    crate::codegen::lower_inst::predicates::emit_nan_string_coercion_probe(ctx);
     abi::emit_call_label(ctx.emitter, "__rt_ftoa");
     ctx.emitter.instruction(&format!("jmp {}", done));                          // finish with the concat-backed float string
 

@@ -11,6 +11,31 @@ use super::*;
 
 /// Lowers a direct function, builtin, or extern call.
 pub(super) fn lower_function_call(ctx: &mut LoweringContext<'_, '_>, name: &Name, args: &[Expr], expr: &Expr) -> LoweredValue {
+    let value = lower_function_call_unviewed(ctx, name, args, expr);
+    // A call returning a promotable `array<int>` may hand back hash storage; where the checker
+    // typed the result as a whole value, it takes the kind-aware `array<mixed>` view. The result
+    // is a fresh owner, so the conversion consumes it directly.
+    let key = (ctx.loop_storage_scope.clone(), expr.span);
+    let viewed = ctx.promotable_arrays.call_views.contains(&key)
+        && !ctx.promotable_arrays.raw_sites.contains(&key);
+    if viewed
+        && matches!(ctx.builder.value_php_type(value.value).codegen_repr(),
+            PhpType::Array(element) if element.codegen_repr() == PhpType::Int)
+    {
+        return ctx.emit_value(
+            Op::ArrayToMixed,
+            vec![value.value],
+            None,
+            PhpType::Array(Box::new(PhpType::Mixed)),
+            Op::ArrayToMixed.default_effects(),
+            Some(expr.span),
+        );
+    }
+    value
+}
+
+/// Lowers a function call without the promotable-result view `lower_function_call` applies.
+fn lower_function_call_unviewed(ctx: &mut LoweringContext<'_, '_>, name: &Name, args: &[Expr], expr: &Expr) -> LoweredValue {
     constants::register_static_define_call(ctx, name, args);
     if let Some(value) = constants::lower_static_defined_call(ctx, name, args, expr) {
         return value;
@@ -80,12 +105,33 @@ pub(super) fn lower_function_call(ctx: &mut LoweringContext<'_, '_>, name: &Name
     if let Some(value) = lower_static_array_walk(ctx, canonical, args, expr) {
         return value;
     }
+    if let Some(value) = lower_reduce_sum(ctx, canonical, args, expr) {
+        return value;
+    }
+    if let Some(value) = lower_count_explode(ctx, canonical, args, expr) {
+        return value;
+    }
+    if let Some(value) = lower_map_sum_add_declared_int(ctx, canonical, args, expr) {
+        return value;
+    }
+    if let Some(value) = lower_map_sum_add(ctx, canonical, args, expr) {
+        return value;
+    }
+    if let Some(value) = lower_filter_count_mod(ctx, canonical, args, expr) {
+        return value;
+    }
+    if let Some(value) = lower_array_element_type_check(ctx, canonical, args, expr) {
+        return value;
+    }
     if php_symbol_key(canonical.trim_start_matches('\\')) == "unset" {
         if let Some(value) = lower_unset_locals(ctx, args, expr) {
             return value;
         }
     }
     if let Some(value) = lower_static_settype(ctx, canonical, args, expr) {
+        return value;
+    }
+    if let Some(value) = array_push_spread::lower_array_push_spread(ctx, name, args, expr) {
         return value;
     }
     if let Some(value) = lower_static_array_push(ctx, canonical, args, expr) {
@@ -107,6 +153,19 @@ pub(super) fn lower_function_call(ctx: &mut LoweringContext<'_, '_>, name: &Name
     let sig = call_signature(ctx, canonical, extension_builtin);
     let is_extern = ctx.extern_functions.contains_key(canonical);
     let is_user_function = ctx.functions.contains_key(canonical) && !extension_builtin;
+    if is_user_function {
+        if let Some(signature) = sig.as_ref() {
+            if let Some(rewrite) =
+                ref_place_args::rewrite_direct_function_property_ref_args(ctx, signature, args)
+            {
+                let previous = ctx.call_description.replace(canonical.to_string());
+                let result = lower_function_call(ctx, name, &rewrite.args, expr);
+                ctx.call_description = previous;
+                ref_place_args::finish_ref_place_rewrite(ctx, rewrite, expr.span);
+                return result;
+            }
+        }
+    }
     if !is_extern && !is_user_function {
         if let Some(call) = lower_packed_builtin_call(ctx, canonical, sig.as_ref(), args, expr) {
             return call;
@@ -141,7 +200,16 @@ pub(super) fn lower_function_call(ctx: &mut LoweringContext<'_, '_>, name: &Name
         ),
         _ => None,
     };
+    // A by-value object parameter can reject a `Class|false`/`Class|null` argument at
+    // binding time. Name the callee here so that guard's TypeError uses PHP's
+    // `take(): Argument #1 ...` spelling instead of the generic `call()` fallback.
+    let previous_description = is_user_function
+        .then(|| ctx.call_description.replace(canonical.to_string()));
     begin_call_argument_evaluation(ctx);
+    if is_user_function {
+        ctx.call_argument_evaluation_scopes.last_mut().expect("call argument scope")
+            .live_property_reference_arguments = !args.iter().any(is_spread_arg);
+    }
     let mut operands = if is_user_function {
         // A source-declared `array` has packed-or-hash Mixed storage. Its unpack must walk
         // runtime keys and bind each boxed cell before entering the direct function ABI, just
@@ -156,6 +224,30 @@ pub(super) fn lower_function_call(ctx: &mut LoweringContext<'_, '_>, name: &Name
     } else {
         lower_builtin_call_args(ctx, canonical, sig.as_ref(), args)
     };
+    if !is_extern && !is_user_function {
+        box_nullable_pointer_builtin_operands(ctx, sig.as_ref(), &mut operands, expr.span);
+        retype_array_push_values_for_pointer_storage(ctx, canonical, &mut operands, expr.span);
+    }
+    // A packed record address or a `null` passed where the signature (extern, builtin or user)
+    // declares a pointer parameter becomes that pointer word; for `?ptr<T>` a null is the word
+    // 0. The declared parameter type decides, never the name. By-reference parameters receive
+    // the caller's storage instead.
+    if let Some(signature) = sig.as_ref() {
+        for (index, (operand, (_, expected))) in
+            operands.iter_mut().zip(&signature.params).enumerate()
+        {
+            if signature.ref_params.get(index).copied().unwrap_or(false) {
+                continue;
+            }
+            let value = lowered_value_from_id(ctx, *operand);
+            *operand = ctx
+                .retype_packed_address_for_pointer_sink(value, expected, Some(expr.span))
+                .value;
+        }
+    }
+    if let Some(previous) = previous_description {
+        ctx.call_description = previous;
+    }
     let php_type = if is_extern || is_user_function {
         call_return_type(ctx, canonical, &operands)
     } else if let Some(php_type) =
@@ -176,14 +268,13 @@ pub(super) fn lower_function_call(ctx: &mut LoweringContext<'_, '_>, name: &Name
             Op::ExternCall.default_effects(),
             Some(expr.span),
         );
-        // Plain extern calls release owned argument temporaries the same way method
-        // and builtin calls do, so a fresh owned temporary passed as an argument is
-        // not leaked once per call. The alias guard keeps a pass-through result alive.
+        // Extern string results are copied into independent PHP storage by the C ABI
+        // adapter. Scalar and pointer results own no PHP argument storage either.
         release_owned_call_arg_temporaries(
             ctx,
             &operands,
             Some(call.value),
-            &ReturnArgAlias::Unknown,
+            &ReturnArgAlias::None,
             expr.span,
         );
         retire_call_argument_intermediates(ctx, &evaluation_intermediates);
@@ -192,7 +283,7 @@ pub(super) fn lower_function_call(ctx: &mut LoweringContext<'_, '_>, name: &Name
     if is_user_function {
         let return_alias = user_return_alias
             .expect("a user function call resolved its return-alias summary before its arguments");
-        let evaluation_intermediates = finish_call_argument_evaluation(ctx, &mut operands);
+        let evaluation_intermediates = finish_user_call_argument_evaluation(ctx, &mut operands, &php_type);
         let roots = root_user_call_operands(
             ctx, &mut operands, sig.as_ref(), &return_alias, &php_type, expr.span,
         );
@@ -240,11 +331,118 @@ pub(super) fn lower_function_call(ctx: &mut LoweringContext<'_, '_>, name: &Name
     }
     let eval_literal = eval_literal_fragment(canonical, args);
     let evaluation_intermediates = finish_call_argument_evaluation(ctx, &mut operands);
-    let call = emit_builtin_call_value(ctx, canonical, operands, php_type, expr.span, eval_literal);
+    // Zend's direct positional implode fast path treats the operand as the array;
+    // named, unpacked and callable invocations use the ordinary separator overload.
+    let positional_implode = canonical_builtin_function_name(canonical).as_deref() == Some("implode")
+        && args.len() == 1 && plain_positional_call_args(args);
+    let call = emit_builtin_call_value_with_target(
+        ctx, canonical, operands, php_type, expr.span, eval_literal,
+        positional_implode.then_some(crate::ir::RuntimeCallTarget::PositionalImplode),
+    );
     retire_call_argument_intermediates(ctx, &evaluation_intermediates);
-    call
+    unbox_raw_word_builtin_result(ctx, call, expr.span)
 }
 
+/// Returns a boxed builtin result as the `?ptr<T>` or `buffer<T>` word the checker typed the
+/// call as.
+///
+/// `array_pop()` and `array_shift()` hand every element out boxed, a pointer or buffer element
+/// as an integer-like cell and the null word (or an empty array) as PHP null, while the checker
+/// types a pointer element as `?ptr<T>` and a buffer element as `buffer<T>`. The box is cast
+/// back to the word (null casts to 0: the null pointer, or the invalid buffer handle) so field
+/// access, comparisons, `?ptr<T>` parameters and buffer element reads see the word.
+fn unbox_raw_word_builtin_result(
+    ctx: &mut LoweringContext<'_, '_>,
+    call: LoweredValue,
+    span: Span,
+) -> LoweredValue {
+    if span.line == 0 {
+        return call;
+    }
+    let Some(checked) = ctx.builtin_call_types.get(&span).cloned() else {
+        return call;
+    };
+    let raw_word = crate::types::is_nullable_pointer_type(&checked)
+        || matches!(checked, PhpType::Buffer(_));
+    if !raw_word || ctx.builder.value_php_type(call.value).codegen_repr() != PhpType::Mixed {
+        return call;
+    }
+    let word = coerce_to_int_at_span(ctx, call, Some(span));
+    ctx.emit_value(Op::Move, vec![word.value], None, checked, Op::Move.default_effects(), Some(span))
+}
+
+
+/// Retypes the values of an `array_push()` call into pointer storage, as `$a[] = ...` does.
+///
+/// The builtin is recognized by its runtime target, never its name. A packed record address
+/// becomes the `ptr<T>` word, and `null` the word 0 when the receiver already stores pointers;
+/// the receiver's own type decides, so a record address pushed into an `int` array is not
+/// turned into a pointer slot.
+fn retype_array_push_values_for_pointer_storage(
+    ctx: &mut LoweringContext<'_, '_>,
+    canonical: &str,
+    operands: &mut [crate::ir::ValueId],
+    span: Span,
+) {
+    let is_array_push = crate::builtins::registry::lookup(canonical.trim_start_matches('\\'))
+        .is_some_and(|def| {
+            matches!(
+                def.spec.semantics.lowering,
+                crate::builtins::semantics::BuiltinLowering::Runtime(
+                    crate::ir::RuntimeCallTarget::Function(crate::ir::RuntimeFnId::ArrayPush)
+                )
+            )
+        });
+    let Some((receiver, values)) = operands.split_first_mut().filter(|_| is_array_push) else {
+        return;
+    };
+    let container_ty = ctx.builder.value_php_type(*receiver);
+    for value in values {
+        let lowered = lowered_value_from_id(ctx, *value);
+        *value = ctx
+            .retype_value_for_container_element(&container_ty, lowered, Some(span))
+            .value;
+    }
+}
+
+/// Boxes each `?ptr<T>` operand a builtin binds to a by-value `mixed` parameter.
+///
+/// The boxer stores address 0 as PHP null and a live address as an integer, the Mixed shape
+/// `json_encode`, `var_dump`, `serialize`, `is_numeric` and `intval` read a nullable value in.
+/// Every route to a builtin (a direct call, a static callable such as `call_user_func`, a
+/// variable function or a pipe) runs this, so they agree; the declared parameter type decides,
+/// never the builtin's name. Operands past the declared parameters take a variadic last
+/// parameter's type.
+pub(super) fn box_nullable_pointer_builtin_operands(
+    ctx: &mut LoweringContext<'_, '_>,
+    sig: Option<&FunctionSig>,
+    operands: &mut [crate::ir::ValueId],
+    span: Span,
+) {
+    let Some(signature) = sig else {
+        return;
+    };
+    for (index, operand) in operands.iter_mut().enumerate() {
+        if signature.ref_params.get(index).copied().unwrap_or(false) {
+            continue;
+        }
+        let expected = match signature.params.get(index) {
+            Some((_, expected)) => expected,
+            None if signature.variadic.is_some() => match signature.params.last() {
+                Some((_, expected)) => expected,
+                None => continue,
+            },
+            None => continue,
+        };
+        if expected.codegen_repr() != PhpType::Mixed {
+            continue;
+        }
+        let value = lowered_value_from_id(ctx, *operand);
+        if crate::types::is_nullable_pointer_type(&ctx.builder.value_php_type(value.value)) {
+            *operand = ctx.box_value_as_mixed(value, PhpType::Mixed, Some(span)).value;
+        }
+    }
+}
 
 /// Emits a builtin call and releases owned temporary arguments after the call consumes them.
 pub(super) fn emit_builtin_call_value(
@@ -255,36 +453,58 @@ pub(super) fn emit_builtin_call_value(
     span: Span,
     eval_literal: Option<&str>,
 ) -> LoweredValue {
+    emit_builtin_call_value_with_target(ctx, name, operands, php_type, span, eval_literal, None)
+}
+
+/// Retains source-form overload selection while sharing builtin argument ownership handling.
+fn emit_builtin_call_value_with_target(
+    ctx: &mut LoweringContext<'_, '_>,
+    name: &str,
+    operands: Vec<crate::ir::ValueId>,
+    php_type: PhpType,
+    span: Span,
+    eval_literal: Option<&str>,
+    target: Option<crate::ir::RuntimeCallTarget>,
+) -> LoweredValue {
     if eval_literal.is_none() {
         if let Some(def) = crate::builtins::registry::lookup(name) {
             let mut operands = operands;
+            super::array_builtin_args::validate_typed_array_push_operands(ctx, def, &operands, span);
             let roots = root_non_aliasing_callback_operands(ctx, def, &mut operands, &php_type, span);
             // A builtin whose effects carry MAY_THROW can reach a codegen guard that jumps
             // straight to __rt_throw_current while these operands are still pure SSA. Pin them
             // in the unwind chain for the duration of the call so a caught guard releases them
             // exactly once instead of stranding them.
             let pins = pin_throwing_builtin_operands(ctx, def, &operands, &roots, &php_type, span);
-            let lowered = crate::builtins::semantics::lower_registry_call(
-                ctx,
-                def,
-                &operands,
-                &php_type,
-                span,
-            )
-            .unwrap_or_else(|error| {
-                panic!(
-                    "checked builtin {} failed backend-neutral EIR lowering at {}:{}: {}",
-                    def.name,
-                    span.line,
-                    span.col,
-                    error,
+            let lowered = if let Some(target) = target {
+                let value = ctx.emit_value(
+                    Op::RuntimeCall, operands.clone(), Some(Immediate::RuntimeCall(target)),
+                    php_type.clone(), crate::ir::RuntimeFnId::Implode.effects(), Some(span),
+                );
+                crate::builtins::semantics::LoweredBuiltinValue { value: value.value }
+            } else {
+                crate::builtins::semantics::lower_registry_call(
+                    ctx,
+                    def,
+                    &operands,
+                    &php_type,
+                    span,
                 )
-            });
+                .unwrap_or_else(|error| {
+                    panic!(
+                        "checked builtin {} failed backend-neutral EIR lowering at {}:{}: {}",
+                        def.name,
+                        span.line,
+                        span.col,
+                        error,
+                    )
+                })
+            };
             let raw_call = LoweredValue {
                 value: lowered.value,
                 ir_type: ctx.builder.value_type(lowered.value),
             };
-            // `substr()` can return an interior view into its source string. When source-order
+            // Substring and trim calls can return interior views into their source string. When source-order
             // evaluation transferred a pinned temporary into the final call operand, letting
             // that pin flow through the result would either leak its base allocation forever
             // or free an interior pointer. Persist the view before retiring the base owner so
@@ -292,9 +512,13 @@ pub(super) fn emit_builtin_call_value(
             let stabilizes_evaluation_pin = matches!(
                 def.spec.semantics.lowering,
                 crate::builtins::semantics::BuiltinLowering::Runtime(
-                    crate::ir::RuntimeCallTarget::Function(crate::ir::RuntimeFnId::Substr)
+                    crate::ir::RuntimeCallTarget::Function(crate::ir::RuntimeFnId::Substr
+                        | crate::ir::RuntimeFnId::Trim | crate::ir::RuntimeFnId::Ltrim
+                        | crate::ir::RuntimeFnId::Rtrim | crate::ir::RuntimeFnId::Chop)
                         | crate::ir::RuntimeCallTarget::ProfiledFunction {
-                            target: crate::ir::RuntimeFnId::Substr,
+                            target: crate::ir::RuntimeFnId::Substr | crate::ir::RuntimeFnId::Trim
+                                | crate::ir::RuntimeFnId::Ltrim | crate::ir::RuntimeFnId::Rtrim
+                                | crate::ir::RuntimeFnId::Chop,
                             ..
                         },
                 ),
@@ -304,6 +528,8 @@ pub(super) fn emit_builtin_call_value(
             ) && ctx.builder.value_php_type(raw_call.value).codegen_repr() == PhpType::Str
                 && operands.first().is_some_and(|operand| {
                     value_is_call_argument_evaluation_pin(ctx, *operand)
+                        || ctx.borrowed_string_call_operands.contains(operand)
+                        || ctx.value_is_owning_mixed_string_cast(*operand)
                 });
             let call = if stabilizes_evaluation_pin {
                 ctx.emit_owned_value(
@@ -317,18 +543,21 @@ pub(super) fn emit_builtin_call_value(
             } else {
                 raw_call
             };
+            // A lowering hook that ends in a min/max selection returns a detached copy of the
+            // winner, whatever the builtin's static contract says about its other forms.
+            let detached_copy = ctx.builder.value_defining_op(call.value) == Some(Op::MixedMinMax);
             // Consumers make lifetime decisions during lowering, before final
             // ownership refinement. In particular, Fresh strings already own
             // heap storage and must not be persisted again as concat scratch.
-            if matches!(
+            if (detached_copy || matches!(
                 def.spec.semantics.result_ownership,
                 crate::builtins::semantics::BuiltinResultOwnership::Fresh,
-            ) && Ownership::php_type_needs_lifetime_tracking(
+            )) && Ownership::php_type_needs_lifetime_tracking(
                 &ctx.builder.value_php_type(call.value),
             ) {
                 ctx.builder.set_value_ownership(call.value, Ownership::Owned);
             }
-            let return_alias = if stabilizes_evaluation_pin {
+            let return_alias = if stabilizes_evaluation_pin || detached_copy {
                 ReturnArgAlias::None
             } else {
                 match def.spec.semantics.result_ownership {
@@ -431,6 +660,8 @@ pub(super) fn emit_builtin_call_value(
     // Scope widening can make the already-lowered source load an owned string cast.
     // Eval guards that owner through exceptional exits, then releases it normally here.
     if let Some(slot) = eval_source_owner {
+        // The argument guard sits above the root and must not survive this call.
+        ctx.unguard_call_argument(operands[0], span);
         retire_owned_call_operand(ctx, slot, span);
     } else {
         release_owned_call_arg_temporaries(
@@ -444,10 +675,12 @@ pub(super) fn emit_builtin_call_value(
     if is_eval {
         ctx.mark_eval_executed();
         if eval_needs_barrier {
+            crate::ir_lower::eval_reference_layouts::refuse_unboxed_array_aliases(ctx, span, None);
             ctx.apply_eval_barrier();
         } else if let Some(write_names) = eval_literal
             .and_then(|fragment| eval_literal_scope_barrier_writes(ctx, fragment))
         {
+            crate::ir_lower::eval_reference_layouts::refuse_unboxed_array_aliases(ctx, span, Some(&write_names));
             ctx.apply_eval_scope_barrier(&write_names);
         }
     }
@@ -530,6 +763,30 @@ fn declared_type_is_a_safe_fallback(declared: &PhpType, checked: Option<&PhpType
     is_a_php_value(checked) == is_a_php_value(declared)
 }
 
+/// Is a boxed builtin result cast back to the raw word the checker typed the call as?
+///
+/// `array_pop()` and `array_shift()` declare `mixed` (an empty array yields null) and check as
+/// their element type, which for an array of pointers is `?ptr<T>` and for an array of buffers
+/// `buffer<T>`: raw words, not boxed cells. The declared `mixed` is the representation the call
+/// really produces, and `unbox_raw_word_builtin_result` casts that box back to the word after
+/// every call the checker filed, so this pair is a conversion the lowering owns rather than a
+/// fallback that changes representation.
+fn raw_word_result_is_unboxed(
+    def: &crate::builtins::registry::BuiltinDef,
+    checked: Option<&PhpType>,
+) -> bool {
+    let Some(checked) = checked else {
+        return false;
+    };
+    matches!(
+        def.spec.semantics.lowering,
+        crate::builtins::semantics::BuiltinLowering::Runtime(crate::ir::RuntimeCallTarget::Function(
+            crate::ir::RuntimeFnId::ArrayPop | crate::ir::RuntimeFnId::ArrayShift
+        ))
+    ) && matches!(def.return_type, PhpType::Mixed)
+        && (crate::types::is_nullable_pointer_type(checked) || matches!(checked, PhpType::Buffer(_)))
+}
+
 /// Resolves a registry builtin's result type from its descriptor, its lowered operands, and the
 /// checker's result type for this very call when one is available.
 ///
@@ -546,7 +803,8 @@ pub(super) fn resolve_registry_builtin_result_type(
 ) -> Option<PhpType> {
     let def = crate::builtins::registry::lookup(name)?;
     debug_assert!(
-        declared_type_is_a_safe_fallback(&def.return_type, checked.as_ref()),
+        declared_type_is_a_safe_fallback(&def.return_type, checked.as_ref())
+            || raw_word_result_is_unboxed(def, checked.as_ref()),
         "builtin `{name}` checks as {:?} but declares {:?}. Every path that cannot name this \
          call — a callable dispatched at runtime, a span the checker never filed — falls back to \
          the DECLARED type, so a declaration of a different representation is a miscompile \

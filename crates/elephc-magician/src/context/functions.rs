@@ -17,6 +17,8 @@ pub enum EvalNativeGlobalConstant {
     Int(i64),
     Float(f64),
     String(String),
+    /// Binary PHP string constant with a payload that is not valid UTF-8.
+    Bytes(Vec<u8>),
     Resource(i64),
 }
 
@@ -228,6 +230,9 @@ impl ElephcEvalContext {
             .and_then(|target| match target {
                 EvalClosureObjectTarget::Named(name)
                 | EvalClosureObjectTarget::BoundNamed { name, .. } => Some(name.as_str()),
+                EvalClosureObjectTarget::NativeDescriptor { display_name, .. } => {
+                    Some(display_name.as_str())
+                }
                 _ => None,
             })
     }
@@ -333,6 +338,22 @@ impl ElephcEvalContext {
             .is_some_and(|function| function.set_param_by_ref(index, by_ref))
     }
 
+    /// Records a native reference parameter's compiled nullable-integer storage shape.
+    pub fn define_native_function_param_tagged_scalar_ref(
+        &mut self, function_name: &str, index: usize, tagged: bool,
+    ) -> bool {
+        self.native_functions.get_mut(function_name)
+            .is_some_and(|function| function.set_param_tagged_scalar_ref(index, tagged))
+    }
+
+    /// Records a native reference parameter's physical boxed pointer-slot ABI.
+    pub fn define_native_function_param_boxed_ref(
+        &mut self, function_name: &str, index: usize, boxed: bool,
+    ) -> bool {
+        self.native_functions.get_mut(function_name)
+            .is_some_and(|function| function.set_param_boxed_ref(index, boxed))
+    }
+
     /// Records which native AOT callback parameter is variadic.
     pub fn define_native_function_variadic_param(
         &mut self,
@@ -342,6 +363,15 @@ impl ElephcEvalContext {
         self.native_functions
             .get_mut(function_name)
             .is_some_and(|function| function.set_variadic_index(index))
+    }
+
+    /// Retains one attribute on an already registered native AOT function.
+    pub fn define_native_function_attribute(&mut self, function_name: &str, attribute: EvalAttribute) -> bool {
+        let key = function_name.trim_start_matches('\\').to_ascii_lowercase();
+        self.native_functions.get_mut(&key).is_some_and(|function| {
+            function.add_attribute(attribute);
+            true
+        })
     }
 
     /// Records that one native AOT callback is declared `function &name()`.

@@ -1,8 +1,6 @@
 ---
 title: "imagecreatefromstring() - internals"
 description: "Compiler internals for imagecreatefromstring(): lowering path, type checks, and runtime helpers."
-sidebar:
-  order: 491
 ---
 
 ## `imagecreatefromstring()` - internals
@@ -10,7 +8,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`crates/elephc-builtin-contract/src/catalog_data.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-builtin-contract/src/catalog_data.rs)
-- **Lowering**: [`src/image_prelude.rs`:3505](https://github.com/illegalstudio/elephc/blob/main/src/image_prelude.rs#L3505) (`imagecreatefromstring`)
+- **Lowering**: [`src/image_prelude.rs`](https://github.com/illegalstudio/elephc/blob/main/src/image_prelude.rs) (`imagecreatefromstring`)
 - **Function symbol**: `imagecreatefromstring()`
 
 

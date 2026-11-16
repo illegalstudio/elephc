@@ -17,10 +17,18 @@ macro_rules! class {
     (
         $name:literal, $canonical:literal, $kind:ident, $module:ident, $route:ident
         $(, since: $since:ident)? $(, extension: $extension:literal)? $(, internal: $internal:literal)?
-        $(, targets: $targets:expr)? $(, operators: $operators:expr)? $(,)?
+        $(, targets: $targets:expr)? $(, operators: $operators:expr)?
+        $(, cloneable: $cloneable:literal)?
+        $(, dynamic_deprecated: $dynamic_deprecated:literal)?
+        $(, dynamic_first: $dynamic_first:literal)?
+        $(, hidden_properties: $hidden_properties:expr)?
+        $(, visible_methods: $visible_methods:expr)? $(,)?
     ) => {
         ClassContract {
+            cloneable: class!(@cloneable $($cloneable)?),
             operators: class!(@operators $($operators)?),
+            dynamic_properties_deprecated: class!(@flag $($dynamic_deprecated)?),
+            dump_dynamic_properties_first: class!(@flag $($dynamic_first)?),
             id: BuiltinId::from_canonical_name($canonical),
             name: $name,
             kind: ClassKind::$kind,
@@ -30,6 +38,8 @@ macro_rules! class {
             target_support: class!(@targets $($targets)?),
             extension: class!(@flag $($extension)?),
             internal: class!(@flag $($internal)?),
+            hidden_properties: class!(@hidden_properties $($hidden_properties)?),
+            php_visible_methods: class!(@visible_methods $($visible_methods)?),
             php_manual: None,
         }
     };
@@ -39,11 +49,21 @@ macro_rules! class {
     (@flag) => { false };
     (@targets $targets:expr) => { Some($targets) };
     (@targets) => { None };
+    (@cloneable $cloneable:literal) => { $cloneable };
+    (@cloneable) => { true };
     (@operators $operators:expr) => { Some($operators) };
     (@operators) => { None };
+    (@hidden_properties $hidden_properties:expr) => { $hidden_properties };
+    (@hidden_properties) => { &[] };
+    (@visible_methods $visible_methods:expr) => { Some($visible_methods) };
+    (@visible_methods) => { None };
 }
 
 pub(crate) static CLASSES: &[ClassContract] = &[
+    class!("Elephc\\Web\\Request", "elephc\\web\\request", Class, Elephc, Prelude),
+    class!("Elephc\\Web\\WorkerApplication", "elephc\\web\\workerapplication", Interface, Elephc, Prelude),
+    class!("Elephc\\Web\\Worker", "elephc\\web\\worker", Class, Elephc, Prelude),
+    class!("__ElephcFinfoHandle", "__elephcfinfohandle", Class, Elephc, Prelude, internal: true),
     class!("__ElephcCallableSessionHandler", "__elephccallablesessionhandler", Class, Elephc, Prelude, internal: true),
     class!("__ElephcDOMNodeListIterator", "__elephcdomnodelistiterator", Class, Elephc, Prelude, internal: true),
     class!("__ElephcMysqliResultIterator", "__elephcmysqliresultiterator", Class, Elephc, Prelude, internal: true),
@@ -51,6 +71,7 @@ pub(crate) static CLASSES: &[ClassContract] = &[
     class!("__ElephcPDOSqliteBlobStream", "__elephcpdosqliteblobstream", Class, Elephc, Prelude, internal: true),
     class!("__ElephcPDOStatementIterator", "__elephcpdostatementiterator", Class, Elephc, Prelude, internal: true),
     class!("__ElephcSessionState", "__elephcsessionstate", Class, Elephc, Prelude, internal: true),
+    class!("__ElephcSimpleXMLLease", "__elephcsimplexmllease", Class, Elephc, Prelude, internal: true),
     class!("__ElephcWeakMapIterator", "__elephcweakmapiterator", Class, Elephc, Prelude, internal: true),
     class!("AllowDynamicProperties", "allowdynamicproperties", Class, Core, Prelude, since: Php82),
     class!("AppendIterator", "appenditerator", Class, Spl, CheckerInjected),
@@ -128,10 +149,12 @@ pub(crate) static CLASSES: &[ClassContract] = &[
     class!("DOMComment", "domcomment", Class, Dom, Prelude),
     class!("DOMDocument", "domdocument", Class, Dom, Prelude),
     class!("DOMElement", "domelement", Class, Dom, Prelude),
+    class!("DOMException", "domexception", Class, Dom, Prelude),
     class!("DOMNode", "domnode", Class, Dom, Prelude),
     class!("DOMNodeList", "domnodelist", Class, Dom, Prelude),
     class!("DOMProcessingInstruction", "domprocessinginstruction", Class, Dom, Prelude),
     class!("DOMText", "domtext", Class, Dom, Prelude),
+    class!("Dom\\XMLDocument", "dom\\xmldocument", Class, Dom, Prelude, since: Php84),
     class!("Elephc\\Testing\\AssertionFailedError", "elephc\\testing\\assertionfailederror", Class, Elephc, Prelude, extension: true),
     class!("Elephc\\Testing\\IncompleteTestError", "elephc\\testing\\incompletetesterror", Class, Elephc, Prelude, extension: true),
     class!("Elephc\\Testing\\Runner", "elephc\\testing\\runner", Class, Elephc, Prelude, extension: true),
@@ -154,6 +177,7 @@ pub(crate) static CLASSES: &[ClassContract] = &[
     class!("GmagickException", "gmagickexception", Class, Gmagick, Prelude),
     class!("GmagickPixel", "gmagickpixel", Class, Gmagick, Prelude),
     class!("GmagickPixelException", "gmagickpixelexception", Class, Gmagick, Prelude),
+    class!("GMP", "gmp", Class, Gmp, Prelude, since: Php82, operators: &crate::GMP_OPERATORS, dynamic_deprecated: true, dynamic_first: true, hidden_properties: &["__elephc_num"], visible_methods: &["__construct", "__serialize", "__unserialize"]),
     class!("HashContext", "hashcontext", Class, Hash, Prelude),
     class!("ImageException", "imageexception", Class, Gd, Prelude, extension: true),
     class!("Imagick", "imagick", Class, Imagick, Prelude),
@@ -178,10 +202,12 @@ pub(crate) static CLASSES: &[ClassContract] = &[
     class!("LimitIterator", "limititerator", Class, Spl, CheckerInjected),
     class!("LogicException", "logicexception", Class, Spl, CheckerInjected),
     class!("MultipleIterator", "multipleiterator", Class, Spl, CheckerInjected),
-    class!("mysqli", "mysqli", Class, Mysqli, Prelude),
-    class!("mysqli_result", "mysqli_result", Class, Mysqli, Prelude),
+    class!("mysqli", "mysqli", Class, Mysqli, Prelude, visible_methods: &["__construct", "autocommit", "begin_transaction", "change_user", "character_set_name", "close", "commit", "connect", "dump_debug_info", "debug", "get_charset", "execute_query", "get_client_info", "get_connection_stats", "get_server_info", "get_warnings", "init", "kill", "multi_query", "more_results", "next_result", "ping", "poll", "prepare", "query", "real_connect", "real_escape_string", "reap_async_query", "escape_string", "real_query", "release_savepoint", "rollback", "savepoint", "select_db", "set_charset", "options", "set_opt", "ssl_set", "stat", "stmt_init", "store_result", "thread_safe", "use_result", "refresh"]),
+    class!("mysqli_driver", "mysqli_driver", Class, Mysqli, Prelude),
+    class!("mysqli_result", "mysqli_result", Class, Mysqli, Prelude, visible_methods: &["__construct", "close", "free", "data_seek", "fetch_field", "fetch_fields", "fetch_field_direct", "fetch_all", "fetch_array", "fetch_assoc", "fetch_object", "fetch_row", "fetch_column", "field_seek", "free_result", "getIterator"]),
     class!("mysqli_sql_exception", "mysqli_sql_exception", Class, Mysqli, Prelude),
-    class!("mysqli_stmt", "mysqli_stmt", Class, Mysqli, Prelude),
+    class!("mysqli_stmt", "mysqli_stmt", Class, Mysqli, Prelude, visible_methods: &["__construct", "attr_get", "attr_set", "bind_param", "bind_result", "close", "data_seek", "execute", "fetch", "get_warnings", "result_metadata", "more_results", "next_result", "num_rows", "send_long_data", "free_result", "reset", "prepare", "store_result", "get_result"]),
+    class!("mysqli_warning", "mysqli_warning", Class, Mysqli, Prelude),
     class!("NoDiscard", "nodiscard", Class, Core, Prelude, since: Php85),
     class!("NoRewindIterator", "norewinditerator", Class, Spl, CheckerInjected),
     class!("OuterIterator", "outeriterator", Interface, Spl, CheckerInjected),
@@ -205,10 +231,23 @@ pub(crate) static CLASSES: &[ClassContract] = &[
     class!("PDOStatement", "pdostatement", Class, Pdo, Prelude),
     class!("Phar", "phar", Class, Phar, CheckerInjected),
     class!("PharData", "phardata", Class, Phar, CheckerInjected),
+    class!("finfo", "finfo", Class, Fileinfo, Prelude, cloneable: false),
     class!("PharFileInfo", "pharfileinfo", Class, Phar, CheckerInjected),
     class!("php_user_filter", "php_user_filter", Class, Standard, CheckerInjected),
+    class!("PhpToken", "phptoken", Class, Tokenizer, Prelude),
     class!("PHPUnit\\Framework\\TestCase", "phpunit\\framework\\testcase", Class, Elephc, Prelude),
     class!("PropertyHookType", "propertyhooktype", Enum, Reflection, CheckerInjected, since: Php84),
+    class!("Random\\BrokenRandomEngineError", "random\\brokenrandomengineerror", Class, Random, Prelude, since: Php82),
+    class!("Random\\CryptoSafeEngine", "random\\cryptosafeengine", Interface, Random, Prelude, since: Php82),
+    class!("Random\\Engine", "random\\engine", Interface, Random, Prelude, since: Php82),
+    class!("Random\\Engine\\Mt19937", "random\\engine\\mt19937", Class, Random, Prelude, since: Php82),
+    class!("Random\\Engine\\PcgOneseq128XslRr64", "random\\engine\\pcgoneseq128xslrr64", Class, Random, Prelude, since: Php82),
+    class!("Random\\Engine\\Secure", "random\\engine\\secure", Class, Random, Prelude, since: Php82),
+    class!("Random\\Engine\\Xoshiro256StarStar", "random\\engine\\xoshiro256starstar", Class, Random, Prelude, since: Php82),
+    class!("Random\\IntervalBoundary", "random\\intervalboundary", Enum, Random, Prelude, since: Php83),
+    class!("Random\\RandomError", "random\\randomerror", Class, Random, Prelude, since: Php82),
+    class!("Random\\RandomException", "random\\randomexception", Class, Random, Prelude, since: Php82),
+    class!("Random\\Randomizer", "random\\randomizer", Class, Random, Prelude, since: Php82),
     class!("RangeException", "rangeexception", Class, Spl, CheckerInjected),
     class!("RecursiveArrayIterator", "recursivearrayiterator", Class, Spl, CheckerInjected),
     class!("RecursiveCachingIterator", "recursivecachingiterator", Class, Spl, CheckerInjected),
@@ -246,6 +285,8 @@ pub(crate) static CLASSES: &[ClassContract] = &[
     class!("SessionHandlerInterface", "sessionhandlerinterface", Interface, Session, Prelude),
     class!("SessionIdInterface", "sessionidinterface", Interface, Session, Prelude),
     class!("SessionUpdateTimestampHandlerInterface", "sessionupdatetimestamphandlerinterface", Interface, Session, Prelude),
+    class!("SimpleXMLElement", "simplexmlelement", Class, Simplexml, Prelude, operators: &crate::object_operators::SIMPLEXML_OPERATORS),
+    class!("SimpleXMLIterator", "simplexmliterator", Class, Simplexml, Prelude, operators: &crate::object_operators::SIMPLEXML_OPERATORS),
     class!("SortDirection", "sortdirection", Enum, Core, CheckerInjected, since: Php86),
     class!("SplDoublyLinkedList", "spldoublylinkedlist", Class, Spl, CheckerInjected),
     class!("SplFileInfo", "splfileinfo", Class, Spl, CheckerInjected),
@@ -264,6 +305,8 @@ pub(crate) static CLASSES: &[ClassContract] = &[
     class!("stdClass", "stdclass", Class, Core, LanguageIntrinsic),
     class!("Stringable", "stringable", Interface, Core, CheckerInjected),
     class!("Throwable", "throwable", Interface, Core, CheckerInjected),
+    class!("tidy", "tidy", Class, Tidy, Prelude, operators: &crate::TIDY_OPERATORS, cloneable: false, hidden_properties: &["__elephc_document", "__elephc_minting", "__elephc_minted_handle"], visible_methods: &["__construct", "__destruct", "__debugInfo", "__clone", "__toString", "getOpt", "cleanRepair", "parseFile", "parseString", "repairString", "repairFile", "diagnose", "getRelease", "getConfig", "getStatus", "getHtmlVer", "getOptDoc", "isXhtml", "isXml", "root", "head", "html", "body"]),
+    class!("tidyNode", "tidynode", Class, Tidy, Prelude, operators: &crate::TIDY_OPERATORS, cloneable: false, hidden_properties: &["__elephc_handle", "__elephc_minting"], visible_methods: &["__construct", "__destruct", "__debugInfo", "__clone", "__toString", "hasChildren", "hasSiblings", "isComment", "isHtml", "isText", "isJste", "isAsp", "isPhp", "getParent", "getPreviousSibling", "getNextSibling"]),
     class!("Traversable", "traversable", Interface, Core, CheckerInjected),
     class!("TypeError", "typeerror", Class, Core, CheckerInjected),
     class!("UnderflowException", "underflowexception", Class, Spl, CheckerInjected),

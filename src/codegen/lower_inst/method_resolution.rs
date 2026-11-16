@@ -8,6 +8,7 @@
 //! - Preserves EIR ownership, ABI ordering, runtime symbols, and target-aware lowering.
 
 use super::*;
+use crate::codegen::emit::Emitter;
 
 /// Resolves method implementation class, canonical key, return type, and ABI arity.
 pub(super) fn resolve_method_call_target(
@@ -76,7 +77,15 @@ pub(super) fn resolve_method_call_target(
             impl_class, method_name
         )));
     }
-    let dynamic_slot = if class_info.final_methods.contains(&method_key) {
+    // Object-argument variance can change the instantiation without an inheritance edge.
+    // Scalar arguments cannot widen in place and retain the ordinary final-class proof.
+    let fixed_instantiation = crate::generics::dispatch::has_fixed_instantiation(normalized);
+    // A final receiver with a fixed instantiation cannot select an override.
+    // Keep the vtable fallback when this module has no directly callable EIR body.
+    let dynamic_slot = if has_direct_body
+        && fixed_instantiation
+        && (class_info.is_final || class_info.final_methods.contains(&method_key))
+    {
         None
     } else {
         dynamic_slot
@@ -97,12 +106,32 @@ pub(super) fn resolve_method_call_target(
     })
 }
 
+/// Reports whether literal guards need a runtime signature or declaring-class diagnostic.
+///
+/// Object-only variance preserves final literal parameters, but the actual generic
+/// instantiation still supplies the class name in an argument TypeError.
+pub(super) fn method_requires_runtime_literal_guards(
+    ctx: &FunctionContext<'_>,
+    class_name: &str,
+    target: &MethodCallTarget,
+) -> bool {
+    let normalized = class_name.trim_start_matches('\\');
+    target.dynamic_slot.is_some()
+        && (normalized.contains('<') || ctx.module.class_infos.get(normalized).is_none_or(|class| {
+            !class.is_final && !class.final_methods.contains(&target.method_key)
+        }))
+}
+
 /// Emits an indirect instance call through either the physical or source-ABI vtable.
 pub(super) fn emit_dynamic_instance_method_call_with_abi(
     ctx: &mut FunctionContext<'_>,
     slot: usize,
-    source_abi: bool,
-) {
+    target: &MethodCallTarget,
+) -> Result<()> {
+    let reference_entries = super::reference_return_dispatch::entries(
+        ctx, &target.impl_class, &target.method_key, target.by_ref_return,
+        crate::codegen_support::source_method_adapters::MethodKind::Instance, target.source_abi,
+    )?;
     let class_id_reg = abi::temp_int_reg(ctx.emitter.target);
     let dispatch_reg = abi::symbol_scratch_reg(ctx.emitter);
     abi::emit_load_from_address(
@@ -111,7 +140,7 @@ pub(super) fn emit_dynamic_instance_method_call_with_abi(
         abi::int_arg_reg_name(ctx.emitter.target, 0),
         0,
     );
-    let table = if source_abi {
+    let table = if target.source_abi {
         "_class_source_vtable_ptrs"
     } else {
         "_class_vtable_ptrs"
@@ -132,7 +161,7 @@ pub(super) fn emit_dynamic_instance_method_call_with_abi(
         }
     }
     abi::emit_load_from_address(ctx.emitter, dispatch_reg, dispatch_reg, slot * 8);
-    abi::emit_call_reg(ctx.emitter, dispatch_reg);
+    super::reference_return_dispatch::emit_call(ctx, dispatch_reg, &reference_entries, &target.return_ty)
 }
 
 /// Calls a resolved target through the ABI selected from its caller-visible signature.
@@ -141,8 +170,7 @@ pub(super) fn emit_resolved_method_call(
     target: &MethodCallTarget,
 ) -> Result<()> {
     if let Some(slot) = target.dynamic_slot {
-        emit_dynamic_instance_method_call_with_abi(ctx, slot, target.source_abi);
-        return Ok(());
+        return emit_dynamic_instance_method_call_with_abi(ctx, slot, target);
     }
     emit_direct_resolved_method_call(ctx, target)
 }
@@ -233,6 +261,8 @@ pub(super) fn store_call_result(
 ) -> Result<()> {
     if let Some(result) = inst.result {
         let result_ty = ctx.value_php_type(result)?;
+        // A `?ptr<T>` result boxes by its declared type, so address 0 is PHP null.
+        let box_ty = crate::types::mixed_box_php_type(return_ty);
         let return_ty = return_ty.codegen_repr();
         if return_ty == PhpType::Void || result_ty == PhpType::Void {
             abi::emit_load_int_immediate(
@@ -247,11 +277,95 @@ pub(super) fn store_call_result(
             return Ok(());
         }
         if matches!(result_ty, PhpType::Mixed | PhpType::Union(_)) && return_ty != PhpType::Mixed {
-            emit_box_current_value_as_mixed(ctx.emitter, &return_ty);
+            emit_box_call_result_as_mixed(ctx.emitter, &box_ty);
         }
         ctx.store_result_value(result)?;
     }
     Ok(())
+}
+
+/// Boxes a compiled PHP return while retiring only the owner its callee transfers.
+///
+/// Runtime intrinsics do not publish the private PHP marker and keep using
+/// `store_call_result`. Consume the marker before boxing calls can clobber it.
+pub(super) fn store_compiled_call_result(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+    return_ty: &PhpType,
+    by_ref_return: bool,
+) -> Result<()> {
+    if by_ref_return {
+        if let Some(result) = inst.result {
+            if ctx.call_result_transfers_reference(result) {
+                // EIR retains the PHP payload type here, then AdoptRefCellPtr consumes this word.
+                ctx.store_int_result_value(result)?;
+            } else {
+                // Erased dispatch can discover a reference-returning implementation only now.
+                // Its caller requested a value, so retire the cell after acquiring a snapshot.
+                let result_ty = ctx.value_php_type(result)?;
+                super::reference_return_dispatch::emit_value_snapshot(ctx, return_ty, &result_ty)?;
+                ctx.store_result_value(result)?;
+            }
+        } else {
+            crate::codegen::runtime_callable_invoker::reference_return::emit_boxed_reference_return(
+                ctx.emitter, return_ty,
+            );
+            abi::emit_call_label(ctx.emitter, "__rt_decref_mixed");
+        }
+        return Ok(());
+    }
+    let Some(result) = inst.result else { return Ok(()); };
+    let result_ty = ctx.value_php_type(result)?;
+    let representation = return_ty.codegen_repr();
+    if (representation == PhpType::Mixed
+        || !matches!(result_ty, PhpType::Mixed | PhpType::Union(_)))
+        && result_ty.codegen_repr() == representation
+        && (representation.is_refcounted() || matches!(representation, PhpType::Str | PhpType::Callable))
+    {
+        // Method-call temporaries own their result even when no ABI boxing is
+        // needed. A borrowed static-property return must survive later writes.
+        let owned = ctx.next_label("compiled_return_already_owned");
+        crate::codegen_support::abi::emit_branch_if_php_return_owned(ctx.emitter, &owned);
+        if representation == PhpType::Str {
+            abi::emit_call_label(ctx.emitter, "__rt_str_persist");
+        } else {
+            abi::emit_incref_if_refcounted(ctx.emitter, &representation);
+        }
+        ctx.emitter.label(&owned);
+        return ctx.store_result_value(result);
+    }
+    if !matches!(result_ty, PhpType::Mixed | PhpType::Union(_))
+        || representation == PhpType::Mixed
+        || !(representation.is_refcounted() || matches!(representation, PhpType::Str | PhpType::Callable))
+    {
+        return store_call_result(ctx, inst, return_ty);
+    }
+    let owned = ctx.next_label("compiled_return_box_owned");
+    let done = ctx.next_label("compiled_return_box_done");
+    let box_ty = crate::types::mixed_box_php_type(return_ty);
+    crate::codegen_support::emit_box_current_php_return_as_mixed(
+        ctx.emitter, &box_ty, &owned, &done,
+    );
+    ctx.store_result_value(result)
+}
+
+/// Boxes a call's concrete result for a generic EIR slot.
+///
+/// The callee hands its caller an owned reference to a heap result, so the box takes that
+/// reference over rather than retaining a second one: a method a narrowed receiver's
+/// static type does not declare (`if ($shape instanceof Square) { $shape->grow() }`)
+/// dispatches through a `Mixed` slot, and the retained copy kept the returned object
+/// alive after the box was released, so it was never destructed. Strings keep the
+/// copying box, since a returned string may be persistent data the box must not own.
+fn emit_box_call_result_as_mixed(emitter: &mut Emitter, return_ty: &PhpType) {
+    if matches!(
+        return_ty,
+        PhpType::Object(_) | PhpType::Array(_) | PhpType::AssocArray { .. } | PhpType::Callable
+    ) {
+        emit_box_current_owned_value_as_mixed(emitter, return_ty);
+    } else {
+        emit_box_current_value_as_mixed(emitter, return_ty);
+    }
 }
 
 /// Stores a resolved method call's result, honoring by-reference returns.
@@ -264,13 +378,7 @@ pub(super) fn store_method_call_result(
     inst: &Instruction,
     target: &MethodCallTarget,
 ) -> Result<()> {
-    if target.by_ref_return {
-        if let Some(result) = inst.result {
-            ctx.store_int_result_value(result)?;
-        }
-        return Ok(());
-    }
-    store_call_result(ctx, inst, &target.return_ty)
+    store_compiled_call_result(ctx, inst, &target.return_ty, target.by_ref_return)
 }
 
 /// Resolves an instruction data immediate as a method name.

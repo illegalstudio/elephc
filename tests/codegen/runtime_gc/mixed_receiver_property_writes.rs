@@ -12,7 +12,79 @@
 //! - Before the fix these programs were trivially clean because the store never happened; the
 //!   point of the tests is that they stay clean now that it does.
 
-use crate::support::compile_and_run_with_heap_debug;
+use crate::support::*;
+
+/// Erased writes reject null typed slots while preserving allowed arrays and object contents.
+#[test]
+fn test_erased_nullable_property_dimension_guards_bundle() {
+    let source = r#"<?php
+class ErasedNullableObject { public ?ArrayObject $items = null; }
+class ErasedNullableText { public ?string $items = null; }
+class ErasedNullableFloat { public ?float $items = null; }
+class ErasedNullableInt { public ?int $items = null; }
+class ErasedNullableOther {}
+class ErasedNullablePlain { public ?ErasedNullableOther $items = null; }
+class ErasedNullableArray { public ?array $items = null; }
+class ErasedNullableUnion { public ArrayObject|array|null $items = null; }
+class ErasedNullableReadonly {
+    public readonly ?ArrayObject $items;
+    public function __construct(?ArrayObject $items) { $this->items = $items; }
+}
+class ErasedNullablePrivate {
+    public private(set) ?ArrayObject $items;
+    public function __construct(?ArrayObject $items) { $this->items = $items; }
+}
+function ErasedNullableWrite(mixed $box): void { $box->items[0] = 'x'; }
+function ErasedNullableReject(mixed $box): void {
+    try { ErasedNullableWrite($box); }
+    catch (Throwable $error) { echo get_class($error), ':', $error->getMessage(), ':', $box->items === null ? 'null' : 'changed', '|'; }
+}
+ErasedNullableReject(new ErasedNullableObject());
+ErasedNullableReject(new ErasedNullableText());
+ErasedNullableReject(new ErasedNullableFloat());
+ErasedNullableReject(new ErasedNullableInt());
+ErasedNullableReject(new ErasedNullablePlain());
+ErasedNullableReject(new ErasedNullableReadonly(null));
+ErasedNullableReject(new ErasedNullablePrivate(null));
+$object = new ErasedNullableObject(); $object->items = new ArrayObject([1]);
+ErasedNullableWrite($object); echo $object->items[0], '|';
+$text = new ErasedNullableText(); $text->items = 'abc';
+ErasedNullableWrite($text); echo $text->items, '|';
+$readonly = new ErasedNullableReadonly(new ArrayObject([1]));
+$private = new ErasedNullablePrivate(new ArrayObject([1]));
+ErasedNullableWrite($readonly); ErasedNullableWrite($private);
+echo $readonly->items[0], ':', $private->items[0], '|';
+$array = new ErasedNullableArray(); $union = new ErasedNullableUnion();
+ErasedNullableWrite($array); ErasedNullableWrite($union);
+echo json_encode($array->items), ':', json_encode($union->items);
+unset($object, $text, $readonly, $private, $array, $union);
+"#;
+    let renamed = source.replace("ErasedNullable", "EvalErasedNullable")
+        + "\n$native = new ErasedNullableObject(); EvalErasedNullableReject($native); unset($native);";
+    let body = renamed.strip_prefix("<?php").unwrap().replace('\\', "\\\\").replace('\'', "\\'");
+    let eval = format!("<?php $source = $argc > 0 ? '{body}' : ''; eval($source);");
+    let expected = concat!(
+        "TypeError:Cannot auto-initialize an array inside property ErasedNullableObject::$items of type ?ArrayObject:null|",
+        "TypeError:Cannot auto-initialize an array inside property ErasedNullableText::$items of type ?string:null|",
+        "TypeError:Cannot auto-initialize an array inside property ErasedNullableFloat::$items of type ?float:null|",
+        "TypeError:Cannot auto-initialize an array inside property ErasedNullableInt::$items of type ?int:null|",
+        "TypeError:Cannot auto-initialize an array inside property ErasedNullablePlain::$items of type ?ErasedNullableOther:null|",
+        "Error:Cannot indirectly modify readonly property ErasedNullableReadonly::$items:null|",
+        "Error:Cannot indirectly modify private(set) property ErasedNullablePrivate::$items from global scope:null|",
+        "x|xbc|x:x|[\"x\"]:[\"x\"]",
+    );
+    let eval_expected = expected.replace("ErasedNullable", "EvalErasedNullable")
+        + "TypeError:Cannot auto-initialize an array inside property ErasedNullableObject::$items of type ?ArrayObject:null|";
+    assert_bundle_with(&[
+        BundleCase { name: "nullable_property_aot", source, expected },
+        BundleCase { name: "nullable_property_eval", source: &eval, expected: &eval_expected },
+    ], |source| {
+        let out = compile_and_run_with_heap_debug(source);
+        assert!(out.success, "stdout={} stderr={}", out.stdout, out.stderr);
+        assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+        out.stdout
+    });
+}
 
 /// A throwing RHS retires the acquired nullable receiver through the same-frame unwind chain.
 #[test]

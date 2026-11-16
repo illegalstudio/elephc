@@ -6,6 +6,7 @@
 //!
 //! Key details:
 //! - Symbol spellings are a private assembly ABI shared with the PCNTL runtime emitters.
+//! - An active dispatch records its enclosing exception handler to distinguish inner catches from escapes.
 
 /// Returns assembly data for PCNTL array keys and process-wide signal-dispatch state.
 pub(crate) fn emit_pcntl_data() -> String {
@@ -54,6 +55,7 @@ pub(crate) fn emit_pcntl_data() -> String {
     out.push_str(".globl __rt_pcntl_handler_value\n__rt_pcntl_handler_value:\n    .zero 1024\n");
     out.push_str(".globl __rt_pcntl_async_enabled\n__rt_pcntl_async_enabled:\n    .quad 0\n");
     out.push_str(".globl __rt_pcntl_dispatching\n__rt_pcntl_dispatching:\n    .quad 0\n");
+    out.push_str(".globl __rt_pcntl_dispatch_handler\n__rt_pcntl_dispatch_handler:\n    .quad 0\n");
     out.push_str(".globl __rt_pcntl_dispatch_mask\n__rt_pcntl_dispatch_mask:\n    .zero 128\n");
     out.push_str(".globl __rt_pcntl_signal_fn\n__rt_pcntl_signal_fn:\n    .quad 0\n");
     out.push_str(".globl __rt_pcntl_signal_next_fn\n__rt_pcntl_signal_next_fn:\n    .quad 0\n");

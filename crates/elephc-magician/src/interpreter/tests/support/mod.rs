@@ -21,6 +21,7 @@ mod array_ops;
 mod cell_ops;
 mod conversions;
 mod lifecycle_ops;
+mod reference_owners;
 mod numeric_ops;
 mod object_ops;
 mod runtime_ops;
@@ -66,10 +67,15 @@ pub(super) const FAKE_STD_STREAM_MAX_PAYLOAD: i64 = 2;
 #[derive(Default)]
 pub(super) struct FakeOps {
     pub(super) next_id: usize,
+    pub(super) native_class_scope: Option<String>,
     pub(super) values: HashMap<usize, FakeValue>,
+    /// Boxed native callable descriptors use tag 10 instead of ordinary Closure object storage.
+    pub(super) native_callable_cells: std::collections::HashSet<usize>,
     /// Independent fake storage history for automatic associative-array indices.
     pub(super) array_next_indices: HashMap<usize, i64>,
     pub(super) references: HashMap<usize, RuntimeCellHandle>,
+    /// Physical source tags of native reference markers, separate from their slot addresses.
+    pub(super) invoker_marker_source_tags: HashMap<usize, u64>,
     /// Fake mirror of the runtime resource-id registry: native payload to PHP id.
     ///
     /// WHY THIS EXISTS. The fake used to answer `payload + 1` for every resource
@@ -95,6 +101,10 @@ pub(super) struct FakeOps {
     /// counter would keep advancing exactly as the buggy runtime's did.
     pub(super) inert_resources: std::collections::HashSet<i64>,
     pub(super) object_classes: HashMap<usize, String>,
+    /// Counts positional key lookups, which scan native associative arrays from their head.
+    pub(super) array_iter_key_calls: usize,
+    /// Counts provider copies that give PHP array values independent boxed storage.
+    pub(super) array_value_copy_calls: usize,
     /// Native clone calls recorded as `(declaring frame class, called class override)`.
     pub(super) native_clone_calls: Vec<(String, Option<String>)>,
     /// Physical clone argument shapes recorded as `(slot count, hidden collector length)`.
@@ -103,11 +113,15 @@ pub(super) struct FakeOps {
     pub(super) releases: Vec<RuntimeCellHandle>,
     /// Zero-based release call that consumes its owner but reports an injected cleanup exception.
     pub(super) fail_release_call: Option<usize>,
+    /// Enables stable native argument roots for exact lease-transfer and cleanup tests.
+    pub(super) native_argument_pins: bool,
+    /// Records pin entry and unlink before the corresponding foreign owner is released.
+    pub(super) native_argument_pin_events: Vec<(bool, RuntimeCellHandle)>,
     /// Zero-based native reference-marker allocation that fails before acquiring its cell.
     pub(super) fail_invoker_marker_call: Option<usize>,
     pub(super) invoker_marker_calls: usize,
     pub(super) retains: Vec<RuntimeCellHandle>,
-    /// Explicit cell owners only; fake containers do not model native heap payload refcounts.
+    /// Explicit owners; reference-sharing queries also count edges from live fake containers.
     pub(super) cell_owners: HashMap<usize, usize>,
     pub(super) warnings: Vec<String>,
     pub(super) pending_runtime_throwable: Option<RuntimeCellHandle>,

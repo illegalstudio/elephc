@@ -52,6 +52,11 @@ fn clone_body(host: &mut Function, source: &Function) -> BodyMap {
         host.add_local(Some(format!("__tail_{}_{}", source.name, local.id.as_raw())),
             local.ir_type, local.php_type.clone(), local.kind);
     }
+    for local in &source.locals {
+        host.locals[map.locals[&local.id].as_raw() as usize].is_reference_argument_owner = local.is_reference_argument_owner;
+        host.locals[map.locals[&local.id].as_raw() as usize].ref_cell_owner =
+            local.ref_cell_owner.map(|owner| map.locals[&owner]);
+    }
     for old in &source.values {
         let mut value = old.clone();
         value.def = match old.def {
@@ -68,6 +73,10 @@ fn clone_body(host: &mut Function, source: &Function) -> BodyMap {
         inst.result = old.result.map(|value| values[&value]);
         if let Some(immediate) = &mut inst.immediate { remap_immediate_local(immediate, &map.locals); }
         host.instructions.push(inst);
+    }
+    // A method body the inliner spliced into `source` keeps its class scope in the clone.
+    for (old, scope) in &source.inlined_scopes {
+        host.inlined_scopes.insert(map.instructions[old], scope.clone());
     }
     for old in &source.blocks {
         let mut block = old.clone();

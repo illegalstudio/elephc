@@ -1,8 +1,6 @@
 ---
 title: "getimagesizefromstring() - internals"
 description: "Compiler internals for getimagesizefromstring(): lowering path, type checks, and runtime helpers."
-sidebar:
-  order: 453
 ---
 
 ## `getimagesizefromstring()` - internals
@@ -10,7 +8,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`crates/elephc-builtin-contract/src/catalog_data.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-builtin-contract/src/catalog_data.rs)
-- **Lowering**: [`src/image_prelude.rs`:3856](https://github.com/illegalstudio/elephc/blob/main/src/image_prelude.rs#L3856) (`getimagesizefromstring`)
+- **Lowering**: [`src/image_prelude.rs`](https://github.com/illegalstudio/elephc/blob/main/src/image_prelude.rs) (`getimagesizefromstring`)
 - **Function symbol**: `getimagesizefromstring()`
 
 

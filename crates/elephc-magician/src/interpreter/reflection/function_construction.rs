@@ -95,7 +95,7 @@ pub(super) fn eval_reflection_function_new(
         let parameters = eval_reflection_native_function_parameters(reflected_name, &function);
         return eval_reflection_function_object_result(
             reflected_name,
-            &[],
+            function.attributes(),
             &parameters,
             required_parameter_count,
             context,
@@ -169,6 +169,7 @@ pub(super) fn eval_reflection_function_closure_target_name(target: &EvalClosureO
         EvalClosureObjectTarget::ForeignContext { target, .. } => {
             eval_reflection_function_closure_target_name(target)
         }
+        EvalClosureObjectTarget::NativeDescriptor { display_name, .. } => display_name.clone(),
         EvalClosureObjectTarget::Named(name)
         | EvalClosureObjectTarget::BoundNamed { name, .. } => name.clone(),
         EvalClosureObjectTarget::InvokableObject { .. } => String::from("__invoke"),
@@ -225,7 +226,7 @@ pub(super) fn eval_reflection_native_function_parameters(
     let mut parameters = eval_reflection_function_parameters(
         function_name,
         &parameter_names,
-        Vec::new(),
+        function.attributes().to_vec(),
         &parameter_attributes,
         &parameter_types,
         &parameter_defaults,

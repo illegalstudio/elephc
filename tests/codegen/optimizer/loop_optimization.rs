@@ -211,23 +211,27 @@ fn test_loop_optimization_coalesced_cast_overflow_both_modes() {
     }
 }
 
-/// Coalescing raw counters preserves the first overflow fatal before intervening output.
+/// Uncast counters promote to float and preserve the order of intervening output.
 #[test]
-fn test_loop_optimization_coalesced_raw_overflow_preserves_first_fatal() {
+fn test_loop_optimization_raw_overflow_continues_as_php_float() {
     let fixture = coalesced_overflow_fixture(false);
-    assert_coalesced_overflow_ir(&fixture, false);
-    // Raw-slot overflow already has different on/off behavior in CheckedIntSink.
-    // Pin the existing optimized fatal, including its order relative to print().
-    fixture.compile(true, &[]);
-    for (args, expected) in [
-        (vec![], format!("before:{0}:{0};between;before:{1}:{1};", i64::MAX - 1, i64::MAX)),
-        (vec!["extra"], format!("before:{0}:{0};", i64::MAX)),
-    ] {
-        let output = run_binary_with_args(&fixture.0.join("main"), &fixture.0, &args);
-        assert_eq!(output.status.code(), Some(1), "{output:?}");
-        assert_eq!(String::from_utf8(output.stdout).unwrap(), expected);
-        let error = String::from_utf8(output.stderr).unwrap();
-        assert!(error.contains("integer overflow in arithmetic whose result is used as an int"), "{error}");
+    let cases = [
+        (vec![], "before:9223372036854775806:9223372036854775806;between;before:9223372036854775807:9223372036854775807;between;before:9.2233720368548E+18:9.2233720368548E+18;between;"),
+        (vec!["extra"], "before:9223372036854775807:9223372036854775807;between;before:9.2233720368548E+18:9.2233720368548E+18;between;before:9.2233720368548E+18:9.2233720368548E+18;between;"),
+    ];
+    for mode in [false, true] {
+        fixture.compile(mode, &["--heap-debug"]);
+        for (args, expected) in &cases {
+            let output = run_binary_with_args(&fixture.0.join("main"), &fixture.0, args);
+            assert!(output.status.success(), "optimized={mode}: {output:?}");
+            assert_eq!(String::from_utf8_lossy(&output.stdout), *expected);
+            assert!(String::from_utf8_lossy(&output.stderr).contains("HEAP DEBUG: leak summary: clean"));
+            if std::env::var_os("ELEPHC_PHP_CHECK").is_some() {
+                let php = Command::new("php").arg("-n").arg(fixture.0.join("main.php")).args(args).output().unwrap();
+                assert!(php.status.success(), "{}", String::from_utf8_lossy(&php.stderr));
+                assert_eq!(output.stdout, php.stdout, "actual PHP, optimized={mode}");
+            }
+        }
     }
 }
 

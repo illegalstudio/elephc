@@ -60,7 +60,7 @@ Some tests are marked `#[ignore]` because they require external libraries (e.g.,
 
 ### Test strategy during development
 
-The full test suite is slow because each codegen test spawns `as` + `ld` + runs the binary. CI runs sharded executable codegen tests on `macos-aarch64`, `linux-x86_64`, and `linux-aarch64`, and covers `ios-arm64` and `ios-sim-arm64` through target-specific compile and emitter tests. Local implementation work should optimize for fast, relevant signal:
+The full test suite is slow because each codegen test spawns `as` + `ld` + runs the binary. CI runs sharded executable codegen tests on `macos-aarch64`, `linux-x86_64`, and `linux-aarch64`, and covers `ios-arm64` and `ios-sim-arm64` through target-specific compile and emitter tests. Pull Requests run the Linux matrix, the core live database suites and the macOS build; the macOS test matrix, the iOS links and the optional-driver live database suites run in the merge queue, or on the PR with the `ci:macos` / `ci:pdo-live` labels (CONTRIBUTING.md § "CI tiers and the merge queue"). Local implementation work should optimize for fast, relevant signal:
 
 1. **While developing a feature**: run only the tests for that feature or regression (`cargo test test_my_feature`).
 2. **Scope to a single test binary**: prefer `cargo test --test codegen_tests <filter>` over a bare `cargo test <filter>`. A bare filter rebuilds and links all six test binaries every cycle (~2.5s of wasted link time); `--test <binary>` links only the one you need. Most codegen work lives in `codegen_tests`.
@@ -70,7 +70,7 @@ The full test suite is slow because each codegen test spawns `as` + `ld` + runs 
 
 ### Pre-commit verification
 
-Before committing code changes, run the smallest useful focused tests and hygiene checks that cover the implementation. Do not run full local suites by default; CI is responsible for the complete sharded matrix after push/PR.
+Before committing code changes, run the smallest useful focused tests and hygiene checks that cover the implementation. Do not run full local suites by default; CI is responsible for the complete sharded matrix: the PR tier on every push, every target in the merge queue.
 
 ```bash
 cargo build                                    # for code changes that should compile warning-free
@@ -78,7 +78,7 @@ cargo test <feature_or_regression_filter>      # or the narrower --test <binary>
 git diff --check
 ```
 
-For docs-only, workflow-only, or configuration-only changes, replace Rust test runs with the relevant syntax/metadata checks. For codegen changes, also verify assembly-comment coverage/alignment for any files you touched. If the change can affect generated assembly, runtime helpers, ABI behavior, linking, ownership/GC, or target-specific libraries, run focused tests for affected supported targets when local evidence is needed; otherwise rely on CI for sharded Linux x86_64/Linux ARM64/macOS ARM64 executable coverage and the target-specific iOS device/Simulator compile and emitter checks.
+For docs-only, workflow-only, or configuration-only changes, replace Rust test runs with the relevant syntax/metadata checks. For codegen changes, also verify assembly-comment coverage/alignment for any files you touched. If the change can affect generated assembly, runtime helpers, ABI behavior, linking, ownership/GC, or target-specific libraries, run focused tests for affected supported targets when local evidence is needed; otherwise rely on CI for sharded Linux x86_64/Linux ARM64/macOS ARM64 executable coverage and the target-specific iOS device/Simulator compile and emitter checks. For target-sensitive Darwin work, add the `ci:macos` label so the macOS tier runs on the PR before it reaches the merge queue.
 
 ### Test structure
 
@@ -187,11 +187,11 @@ bridge.
 
 `--with-<crate>` force-enables a bridge regardless of detection. It force-links
 the staticlib (whole-archived so it is not dead-stripped) and, for crates whose
-PHP surface comes from a prelude (`pdo`, `tz`, `image`, `xml`), force-injects that
-prelude so the API is declared even when usage was not detected. The flag name is
+PHP surface comes from a prelude (`pdo`, `tz`, `image`, `xml`, `tidy`), force-injects
+that prelude so the API is declared even when usage was not detected. The flag name is
 the bridge's `flag_name` (`crate_name` minus the `elephc-` prefix): `--with-pdo`,
 `--with-tls`, `--with-crypto`, `--with-iconv`, `--with-phar`, `--with-tz`,
-`--with-image`, `--with-curl`, `--with-xml`.
+`--with-image`, `--with-curl`, `--with-xml`, `--with-tidy`.
 `--with-web` is an alias for `--web` (the full server mode, which owns the program
 entry point). An unknown `--with-<name>` is a hard CLI error listing the valid
 crates. The end-to-end wiring is CLI (`src/cli.rs`, `with_crates`) → pipeline
@@ -208,7 +208,8 @@ at runtime.
 `curl` is the first ordinary bridge crate that ALSO needs a managed native
 package: `--with-curl` (or ordinary detection
 of a `curl_*` call, via `src/curl_prelude/detect.rs`) force-links `elephc_curl`, and `src/pipeline/backend.rs`
-mirrors that into `NativeRequirement::package("curl")` so the final link also
+mirrors that into `NativeRequirement::package("curl")` (from the
+`BRIDGE_NATIVE_PACKAGES` table in `src/linker/native_packages.rs`) so the final link also
 resolves the managed `curl` package's `libcurl.a`, plus the `openssl`/`zlib`
 archives it declares as dependencies, in the fixed order
 `libcurl.a -> libssl.a -> libcrypto.a -> libz.a`. There is no system fallback:
@@ -229,6 +230,12 @@ for libxml2's encoding handlers through the entry's
 `BridgeStaticlib.apple_libraries`; glibc provides iconv from libc. `libxml2`
 has no catalog dependencies, and a missing package fails closed with the
 `elephc native add libxml2` recovery, never a `-lxml2`.
+
+`gmp`, `fileinfo` (`libmagic`), `openssl` (`openssl-crypto`) and `tidy`
+(`libtidy`) follow the same shape. Every bridge-to-package pairing lives only in
+`BRIDGE_NATIVE_PACKAGES`, whose order is the final link order; `--print-capabilities`
+reports each pairing as a `native:<package>` field, and the release probe adds exactly
+those packages, so a new pairing needs no edit in `scripts/verify-release-artifact.sh`.
 
 ### Codegen layout
 
@@ -325,7 +332,7 @@ Key invariants:
   callable, reflection, resource, eval-declaration, or strict signature-subset behavior.
 - Before opening a PR that adds, removes, or changes PHP-visible builtins, run the
   `update-builtin-docs` skill or the equivalent CI sequence:
-  `cargo build --example gen_builtins`,
+  `cargo build --example gen_builtins --features curl`,
   `python3 scripts/docs/extract_builtins.py --render --force`,
   `python3 scripts/docs/audit_builtins.py`, and
   `python3 scripts/docs/elephc_builtins/validate_site_compat.py`, plus
@@ -560,7 +567,7 @@ docs/
 
 ### Astro compatibility
 
-All docs files are Markdown with YAML frontmatter compatible with Astro content collections. Every `.md` file **must** have this frontmatter format:
+All docs files are Markdown with YAML frontmatter compatible with Astro content collections. Every `.md` file **must** have `title` and `description`. Handwritten pages and generated area indexes also require `sidebar.order`, following this format:
 
 ```yaml
 ---
@@ -572,7 +579,7 @@ sidebar:
 ```
 
 - `title` replaces the `# Heading` — do **not** add a top-level `# Title` in the body (Astro renders it from frontmatter)
-- `sidebar.order` controls page ordering within its section
+- `sidebar.order` controls page ordering within its section. Generated per-builtin pages omit it and use the site's alphabetical ordering, so adding a builtin does not renumber unrelated pages.
 - No navigation links (`[← Back]`, `Next:`, etc.) — Astro handles navigation
 - Use standard Markdown (CommonMark). No custom shortcodes or Astro components inside docs
 

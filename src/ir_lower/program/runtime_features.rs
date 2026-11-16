@@ -114,6 +114,10 @@ fn lowered_runtime_features_with(module: &Module, count_opcache_links: bool) -> 
         for (inst_index, inst) in function.instructions.iter().enumerate() {
             match inst.op {
                 Op::RuntimeCall => {
+                    if matches!(inst.immediate, Some(Immediate::RuntimeCall(
+                        crate::ir::RuntimeCallTarget::CallableParameterIsByRef))) {
+                        features.eval_bridge = true;
+                    }
                     // `opcache_compile_file()` is the ONE runtime-tier operation whose job is
                     // to CREATE a cache entry, so it is the one whose pay-for-use fold is a
                     // lie rather than a truth. `is_cached` and `discard` fold to `false` in a
@@ -525,7 +529,7 @@ pub(super) fn eval_literal_static_method_supported_by_module(
 fn function_references_callable_runtime(module: &Module, function: &Function, accepts: fn(&str) -> bool) -> bool {
     let names = std::cell::OnceCell::new();
     function.instructions.iter().any(|inst| {
-        if inst.op == Op::FirstClassCallableNew {
+        if matches!(inst.op, Op::FirstClassCallableNew | Op::CallableValueNew) {
             let data = match inst.immediate {
                 Some(Immediate::Data(data) | Immediate::ProfiledData { data, .. }) => data,
                 _ => return false,

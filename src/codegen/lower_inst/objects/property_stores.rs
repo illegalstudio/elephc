@@ -156,9 +156,9 @@ pub(super) fn emit_reference_property_bind(
     slot: &PropertySlot,
     base_reg: &str,
 ) -> Result<()> {
+    abi::emit_push_reg(ctx.emitter, base_reg);
     super::super::materialize_local_ref_arg_address(ctx, value)?;
     let pointer_reg = abi::int_result_reg(ctx.emitter);
-    abi::emit_push_reg(ctx.emitter, base_reg);
     abi::emit_push_reg(ctx.emitter, pointer_reg);
     abi::emit_call_label(ctx.emitter, "__rt_reference_cell_is_unmanaged_borrow");
     let safe = ctx.next_label("reference_property_bind_safe");
@@ -169,6 +169,20 @@ pub(super) fn emit_reference_property_bind(
     ctx.emitter.label(&safe);
     abi::emit_pop_reg(ctx.emitter, pointer_reg);
     abi::emit_pop_reg(ctx.emitter, base_reg);
+    let owns_cell = ctx.module.class_infos.get(&slot.class_name)
+        .is_some_and(|class| class.property_slot_owns_reference((slot.offset - 8) / 16));
+    if owns_cell {
+        abi::emit_push_reg(ctx.emitter, base_reg);
+        abi::emit_call_label(ctx.emitter, "__rt_reference_cell_retain_mixed");
+        abi::emit_pop_reg(ctx.emitter, base_reg);
+        let previous = reference_pointer_reg(ctx, base_reg);
+        abi::emit_load_from_address(ctx.emitter, previous, base_reg, slot.offset);
+        abi::emit_store_to_address(ctx.emitter, pointer_reg, base_reg, slot.offset);
+        abi::emit_store_zero_to_address(ctx.emitter, base_reg, slot.offset + 8);
+        abi::emit_reg_move(ctx.emitter, pointer_reg, previous);
+        abi::emit_call_label(ctx.emitter, "__rt_reference_cell_release");
+        return Ok(());
+    }
     abi::emit_store_to_address(
         ctx.emitter,
         pointer_reg,
@@ -186,7 +200,12 @@ pub(super) fn is_promoted_reference_property_bind(
     value: ValueId,
     slot: &PropertySlot,
 ) -> Result<bool> {
-    if !slot.is_reference {
+    if !slot.is_reference
+        || !ctx.function.name.rsplit_once("::")
+            .is_some_and(|(_, method)| method.eq_ignore_ascii_case("__construct"))
+        || !ctx.module.class_infos.get(&slot.class_name)
+            .is_some_and(|class| class.promoted_properties.contains(&slot.property))
+    {
         return Ok(false);
     }
     let Some(object_source) = loaded_local_source(ctx, object)? else {
@@ -202,6 +221,44 @@ pub(super) fn is_promoted_reference_property_bind(
         return Ok(false);
     }
     Ok(value_source.is_ref_cell && local_slot_is_by_ref_param(ctx, value_source.slot))
+}
+
+/// Returns whether `object` is a load of the method receiver `$this`, which is never null.
+pub(super) fn object_is_this_receiver(ctx: &FunctionContext<'_>, object: ValueId) -> Result<bool> {
+    Ok(loaded_local_source(ctx, object)?
+        .is_some_and(|source| !source.is_ref_cell && local_slot_name_is(ctx, source.slot, "this")))
+}
+
+/// Raises PHP's catchable `Error` when the object receiver of a property write is null.
+///
+/// A receiver can be null at run time even where its static type is a class: an element read
+/// that misses its container answers the null sentinel with the element's declared type, so
+/// `$objects[5]->count = 2` reaches the store with that sentinel in `base_reg`. Writing through
+/// it dereferenced the sentinel and crashed; PHP throws `Error` with `message` instead.
+/// `$this` is never null and is not checked.
+pub(super) fn emit_null_write_receiver_error(
+    ctx: &mut FunctionContext<'_>,
+    object: ValueId,
+    base_reg: &str,
+    message: &str,
+) -> Result<()> {
+    if object_is_this_receiver(ctx, object)? {
+        return Ok(());
+    }
+    let null_label = ctx.next_label("prop_write_null_receiver");
+    let ok_label = ctx.next_label("prop_write_receiver_ok");
+    let scratch_reg = abi::secondary_scratch_reg(ctx.emitter);
+    crate::codegen::sentinels::emit_branch_if_null_container(
+        ctx.emitter,
+        base_reg,
+        scratch_reg,
+        &null_label,
+    );
+    abi::emit_jump(ctx.emitter, &ok_label);
+    ctx.emitter.label(&null_label);
+    super::super::exceptions::emit_error(ctx, message);
+    ctx.emitter.label(&ok_label);
+    Ok(())
 }
 
 /// Describes an SSA value that was produced by loading an addressable local slot.
@@ -227,7 +284,7 @@ fn loaded_local_source(
         .ok_or_else(|| CodegenIrError::missing_entry("instruction", inst.as_raw()))?;
     let is_ref_cell = match inst_ref.op {
         Op::LoadLocal => false,
-        Op::LoadRefCell => true,
+        Op::LoadRefCell | Op::LoadRefCellValue => true,
         _ => return Ok(None),
     };
     let Some(Immediate::LocalSlot(slot)) = inst_ref.immediate else {
@@ -294,6 +351,14 @@ pub(super) fn publish_reference_cell_result_then_release_previous(
     incoming_result_ty: &PhpType,
 ) -> Result<()> {
     let prop_ty = prop_ty.codegen_repr();
+    if prop_ty == PhpType::Mixed {
+        let done = ctx.next_label("mixed_property_reference_store_slot");
+        let scratch = if ctx.emitter.target.arch == Arch::AArch64 { "x12" } else { "r8" };
+        let marker = if ctx.emitter.target.arch == Arch::AArch64 { "x13" } else { "rcx" };
+        crate::codegen_support::runtime::reference_cells::follow_mixed_reference_slot(
+            ctx.emitter, pointer_reg, scratch, marker, &done,
+        );
+    }
     let releases_value =
         matches!(prop_ty, PhpType::Str | PhpType::Callable) || prop_ty.is_refcounted();
     if !releases_value {

@@ -12,6 +12,10 @@ use crate::codegen_support::abi;
 use crate::codegen_support::emit::Emitter;
 use crate::codegen_support::platform::Arch;
 
+#[cfg(test)]
+#[path = "pcntl_ownership_tests.rs"]
+mod ownership_tests;
+
 /// PHP resource-usage key plus its byte offset in the stable bridge record.
 const RUSAGE_FIELDS: &[(&str, usize, usize)] = &[
     ("_pcntl_rusage_oublock", 10, 0),
@@ -273,15 +277,18 @@ fn emit_pcntl_invoke_descriptor_aarch64(emitter: &mut Emitter) {
     emitter.instruction("str x0, [sp, #48]");                                   // preserve the boxed argument owner
     emitter.instruction("ldr x0, [sp, #32]");                                   // reload the raw argument array owner
     emitter.instruction("bl __rt_decref_any");                                  // transfer ownership to its Mixed box
-    emitter.instruction("ldr x9, [sp, #0]");                                    // reload the callable descriptor
+    emitter.instruction("add x11, sp, #48");                                    // address the boxed arguments before reserving their unwind record
+    abi::emit_push_call_operand_owner(emitter, "x11", false);
+    emitter.instruction("ldr x9, [sp, #48]");                                   // reload the descriptor above the 48-byte unwind record
     emitter.instruction("ldr x10, [x9, #56]");                                  // load its uniform invocation entry point
     emitter.instruction("cbz x10, __rt_pcntl_invoke_cleanup");                  // tolerate descriptors without an invoker
     emitter.instruction("mov x0, x9");                                          // invocation arg0 = callable descriptor
-    emitter.instruction("ldr x1, [sp, #48]");                                   // invocation arg1 = boxed arguments
+    emitter.instruction("ldr x1, [sp, #96]");                                   // invocation arg1 = boxed arguments above the unwind record
     emitter.instruction("blr x10");                                             // invoke the PHP signal handler
     emitter.instruction("cbz x0, __rt_pcntl_invoke_cleanup");                   // a void/null result needs no release
     emitter.instruction("bl __rt_decref_any");                                  // release the ignored callback result
     emitter.label("__rt_pcntl_invoke_cleanup");
+    abi::emit_pop_call_operand_owner(emitter);
     emitter.instruction("ldr x0, [sp, #48]");                                   // reload the boxed argument owner
     emitter.instruction("bl __rt_decref_any");                                  // release both callback arguments deeply
     emitter.instruction("ldp x29, x30, [sp, #64]");                             // restore frame pointer and return address
@@ -338,6 +345,8 @@ fn emit_pcntl_invoke_descriptor_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov QWORD PTR [rbp - 56], rax");                       // preserve the boxed argument owner
     emitter.instruction("mov rax, QWORD PTR [rbp - 40]");                       // reload the raw argument array owner
     emitter.instruction("call __rt_decref_any");                                // transfer ownership to its Mixed box
+    emitter.instruction("lea r11, [rbp - 56]");                                 // address the boxed callback argument owner
+    abi::emit_push_call_operand_owner(emitter, "r11", false);
     emitter.instruction("mov r10, QWORD PTR [rbp - 8]");                        // reload the callable descriptor
     emitter.instruction("mov r11, QWORD PTR [r10 + 56]");                       // load its uniform invocation entry point
     emitter.instruction("test r11, r11");                                       // does the descriptor provide an invoker?
@@ -349,6 +358,7 @@ fn emit_pcntl_invoke_descriptor_x86_64(emitter: &mut Emitter) {
     emitter.instruction("jz __rt_pcntl_invoke_cleanup_x86");                    // a void/null result needs no release
     emitter.instruction("call __rt_decref_any");                                // release the ignored callback result
     emitter.label("__rt_pcntl_invoke_cleanup_x86");
+    abi::emit_pop_call_operand_owner(emitter);
     emitter.instruction("mov rax, QWORD PTR [rbp - 56]");                       // reload the boxed argument owner
     emitter.instruction("call __rt_decref_any");                                // release both callback arguments deeply
     emitter.instruction("leave");                                               // release adapter storage and restore rbp
@@ -370,6 +380,8 @@ fn emit_pcntl_dispatch_pending_aarch64(emitter: &mut Emitter) {
     emitter.instruction("mov x10, #1");                                         // mark callback dispatch active
     emitter.instruction("str x10, [x9]");                                       // publish the guard before masking signals
     emitter.instruction("str x10, [sp, #96]");                                  // default the returned success value to true
+    abi::emit_load_symbol_to_reg(emitter, "x10", "_exc_handler_top", 0);
+    abi::emit_store_reg_to_symbol(emitter, "x10", "__rt_pcntl_dispatch_handler", 0);
     abi::emit_symbol_address(emitter, "x0", "__rt_pcntl_dispatch_mask");
     abi::emit_symbol_address(emitter, "x9", "__rt_pcntl_dispatch_begin_fn");
     emitter.instruction("ldr x9, [x9]");                                        // load the bridge mask-begin callback
@@ -411,6 +423,7 @@ fn emit_pcntl_dispatch_pending_aarch64(emitter: &mut Emitter) {
     emitter.label("__rt_pcntl_dispatch_failed");
     emitter.instruction("str xzr, [sp, #96]");                                  // record failure before clearing the guard
     emitter.label("__rt_pcntl_dispatch_clear");
+    abi::emit_store_zero_to_symbol(emitter, "__rt_pcntl_dispatch_handler", 0);
     abi::emit_symbol_address(emitter, "x9", "__rt_pcntl_dispatching");
     emitter.instruction("str xzr, [x9]");                                       // leave the non-reentrant dispatch region
     emitter.instruction("ldr x0, [sp, #96]");                                   // return the accumulated boolean result
@@ -437,6 +450,8 @@ fn emit_pcntl_dispatch_pending_x86_64(emitter: &mut Emitter) {
     emitter.instruction("jne __rt_pcntl_dispatch_reentrant_x86");               // nested dispatch is a successful no-op
     emitter.instruction("mov QWORD PTR [r9], 1");                               // publish active dispatch state
     emitter.instruction("mov QWORD PTR [rsp + 96], 1");                         // default the returned success value to true
+    abi::emit_load_symbol_to_reg(emitter, "r10", "_exc_handler_top", 0);
+    abi::emit_store_reg_to_symbol(emitter, "r10", "__rt_pcntl_dispatch_handler", 0);
     abi::emit_symbol_address(emitter, "rdi", "__rt_pcntl_dispatch_mask");
     abi::emit_symbol_address(emitter, "r9", "__rt_pcntl_dispatch_begin_fn");
     emitter.instruction("mov r9, QWORD PTR [r9]");                              // load the bridge mask-begin callback
@@ -483,6 +498,7 @@ fn emit_pcntl_dispatch_pending_x86_64(emitter: &mut Emitter) {
     emitter.label("__rt_pcntl_dispatch_failed_x86");
     emitter.instruction("mov QWORD PTR [rsp + 96], 0");                         // record failure before clearing the guard
     emitter.label("__rt_pcntl_dispatch_clear_x86");
+    abi::emit_store_zero_to_symbol(emitter, "__rt_pcntl_dispatch_handler", 0);
     abi::emit_symbol_address(emitter, "r9", "__rt_pcntl_dispatching");
     emitter.instruction("mov QWORD PTR [r9], 0");                               // leave the non-reentrant dispatch region
     emitter.instruction("mov rax, QWORD PTR [rsp + 96]");                       // return the accumulated boolean result
@@ -503,9 +519,11 @@ fn emit_pcntl_abort_dispatch_aarch64(emitter: &mut Emitter) {
     emitter.instruction("sub sp, sp, #112");                                    // reserve one siginfo record and saved frame state
     emitter.instruction("stp x29, x30, [sp, #96]");                             // preserve frame pointer and return address
     emitter.instruction("add x29, sp, #96");                                    // establish the cleanup frame
-    abi::emit_symbol_address(emitter, "x9", "__rt_pcntl_dispatching");
-    emitter.instruction("ldr x10, [x9]");                                       // test whether an exception escaped a signal handler
-    emitter.instruction("cbz x10, __rt_pcntl_abort_dispatch_done");             // ordinary throws require no PCNTL cleanup
+    // -- only the AOT marker can identify an unwind outside this dispatch --
+    abi::emit_load_symbol_to_reg(emitter, "x10", "_exc_handler_top", 0);
+    abi::emit_load_symbol_to_reg(emitter, "x11", "__rt_pcntl_dispatch_handler", 0);
+    emitter.instruction("cmp x10, x11");                                        // distinguish an escaping throw from a handler's inner catch
+    emitter.instruction("b.ne __rt_pcntl_abort_dispatch_done");                 // inner boundaries keep the masked dispatch snapshot active
     emitter.label("__rt_pcntl_abort_dispatch_drain");
     emitter.instruction("mov x0, sp");                                          // C arg0 = discard record storage
     emitter.instruction("mov x1, #1");                                          // C arg1 = generated AOT queue owner
@@ -522,6 +540,7 @@ fn emit_pcntl_abort_dispatch_aarch64(emitter: &mut Emitter) {
     emitter.instruction("cbz x9, __rt_pcntl_abort_dispatch_clear");             // clear state if no restore callback is available
     emitter.instruction("blr x9");                                              // restore delivery before propagating the Throwable
     emitter.label("__rt_pcntl_abort_dispatch_clear");
+    abi::emit_store_zero_to_symbol(emitter, "__rt_pcntl_dispatch_handler", 0);
     abi::emit_symbol_address(emitter, "x9", "__rt_pcntl_dispatching");
     emitter.instruction("str xzr, [x9]");                                       // guarantee future dispatch calls can run
     emitter.label("__rt_pcntl_abort_dispatch_done");
@@ -539,9 +558,11 @@ fn emit_pcntl_abort_dispatch_x86_64(emitter: &mut Emitter) {
     emitter.instruction("push rbp");                                            // preserve the caller frame pointer
     emitter.instruction("mov rbp, rsp");                                        // establish stable cleanup offsets
     emitter.instruction("sub rsp, 96");                                         // reserve one stable siginfo discard record
-    abi::emit_symbol_address(emitter, "r9", "__rt_pcntl_dispatching");
-    emitter.instruction("cmp QWORD PTR [r9], 0");                               // test whether an exception escaped a signal handler
-    emitter.instruction("je __rt_pcntl_abort_dispatch_done_x86");               // ordinary throws require no PCNTL cleanup
+    // -- eval can change the shared guard, so the saved AOT handler owns restoration --
+    abi::emit_load_symbol_to_reg(emitter, "r10", "_exc_handler_top", 0);
+    abi::emit_load_symbol_to_reg(emitter, "r11", "__rt_pcntl_dispatch_handler", 0);
+    emitter.instruction("cmp r10, r11");                                        // distinguish an escaping throw from a handler's inner catch
+    emitter.instruction("jne __rt_pcntl_abort_dispatch_done_x86");              // inner boundaries keep the masked dispatch snapshot active
     emitter.label("__rt_pcntl_abort_dispatch_drain_x86");
     emitter.instruction("mov rdi, rsp");                                        // C arg0 = discard record storage
     emitter.instruction("mov esi, 1");                                          // C arg1 = generated AOT queue owner
@@ -560,6 +581,7 @@ fn emit_pcntl_abort_dispatch_x86_64(emitter: &mut Emitter) {
     emitter.instruction("jz __rt_pcntl_abort_dispatch_clear_x86");              // clear state if no restore callback is available
     emitter.instruction("call r9");                                             // restore delivery before propagating the Throwable
     emitter.label("__rt_pcntl_abort_dispatch_clear_x86");
+    abi::emit_store_zero_to_symbol(emitter, "__rt_pcntl_dispatch_handler", 0);
     abi::emit_symbol_address(emitter, "r9", "__rt_pcntl_dispatching");
     emitter.instruction("mov QWORD PTR [r9], 0");                               // guarantee future dispatch calls can run
     emitter.label("__rt_pcntl_abort_dispatch_done_x86");

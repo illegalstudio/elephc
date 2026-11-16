@@ -45,7 +45,7 @@ fn aarch64(emitter: &mut Emitter, name: &str, body: fn(&mut Emitter), body_statu
     emitter.instruction("mov x10, sp");                                         // publish this stack record as the PHP exception boundary
     abi::emit_store_reg_to_symbol(emitter, "x10", "_exc_handler_top", 0);
     emitter.instruction(&format!("add x0, sp, #{TRY_HANDLER_JMP_BUF_OFFSET}")); // address the platform jump buffer inside the handler record
-    emitter.bl_c("setjmp");
+    emitter.save_exception_handler();
     emitter.instruction(&format!("cbnz x0, {name}_throw"));                     // convert PHP longjmp into a returned callback status
     body(emitter);
     if !body_status {
@@ -81,7 +81,7 @@ fn x86_64(emitter: &mut Emitter, name: &str, body: fn(&mut Emitter), body_status
     emitter.instruction("mov r10, rsp");                                        // publish this stack record as the protected PHP handler
     abi::emit_store_reg_to_symbol(emitter, "r10", "_exc_handler_top", 0);
     emitter.instruction(&format!("lea rdi, [rsp + {TRY_HANDLER_JMP_BUF_OFFSET}]")); // address the platform jump buffer through the first C argument
-    emitter.bl_c("setjmp");
+    emitter.save_exception_handler();
     emitter.instruction("test eax, eax");                                       // distinguish initial callback execution from an escaping PHP throw
     emitter.instruction(&format!("jnz {name}_throw"));                          // return a pending status after restoring the caller's runtime state
     body(emitter);

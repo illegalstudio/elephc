@@ -185,14 +185,14 @@ pub(super) fn builtin_reflection_property_is_initialized_method() -> ClassMethod
     }
 }
 
-/// Returns a static-property `getValue()` branch backed by the declaring ReflectionClass snapshot.
+/// Returns a static-property `getValue()` branch backed by a fresh declaring ReflectionClass.
 pub(super) fn reflection_property_static_get_value_return(span: crate::span::Span) -> Stmt {
     Stmt::new(
         StmtKind::If {
             condition: reflection_this_property("__is_static", span),
             then_body: vec![Stmt::new(
                 StmtKind::Return(Some(method_call_expr(
-                    reflection_this_property("__declaring_class", span),
+                    method_call_expr(Expr::new(ExprKind::This, span), "getDeclaringClass", Vec::new(), span),
                     "getStaticPropertyValue",
                     vec![reflection_this_property("__name", span)],
                     span,
@@ -217,7 +217,7 @@ pub(super) fn reflection_property_static_is_initialized_return(span: crate::span
                     vec![
                         reflection_this_property("__name", span),
                         method_call_expr(
-                            reflection_this_property("__declaring_class", span),
+                            method_call_expr(Expr::new(ExprKind::This, span), "getDeclaringClass", Vec::new(), span),
                             "getStaticProperties",
                             Vec::new(),
                             span,

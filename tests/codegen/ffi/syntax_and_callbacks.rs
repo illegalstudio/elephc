@@ -282,3 +282,35 @@ echo my_abs(-10);
     );
     assert_eq!(out, "10");
 }
+
+/// Verifies program exit releases the descriptor each extern callback slot retains, so a
+/// captured object is destroyed and the heap report is clean.
+#[test]
+fn test_ffi_callback_slot_descriptors_released_at_exit() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+extern function signal(int $sig, callable $handler): ptr;
+extern function raise(int $sig): int;
+
+class Probe {
+    public function __construct(public int $delta) {}
+    public function __destruct() { echo "[gone {$this->delta}]"; }
+}
+
+function plain(int $sig): void { echo $sig, ";"; }
+
+for ($i = 0; $i < 3; $i++) {
+    $probe = new Probe($i);
+    signal(15, function(int $sig) use ($probe): void { echo $sig + $probe->delta, ";"; });
+    raise(15);
+}
+unset($probe);
+signal(10, "plain");
+raise(10);
+echo "end";
+"#,
+    );
+    assert!(out.success, "{}", out.stderr);
+    assert_eq!(out.stdout, "15;[gone 0]16;[gone 1]17;10;end[gone 2]");
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}

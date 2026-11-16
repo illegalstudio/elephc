@@ -17,8 +17,9 @@ use crate::types::PhpType;
 builtin! {
     contract: "json_validate",
     check: check,
-    semantics: crate::builtins::semantics::runtime_fn_semantics(
-        crate::ir::RuntimeFnId::JsonValidate,
+    semantics: crate::builtins::semantics::with_argument_lowering(
+        crate::builtins::semantics::runtime_fn_semantics(crate::ir::RuntimeFnId::JsonValidate),
+        crate::builtins::semantics::BuiltinArgumentLowering::JsonSource,
     ),
 }
 

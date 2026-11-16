@@ -1,8 +1,6 @@
 ---
 title: "mysqli_fetch_field()"
 description: "Returns metadata for the next column of a result."
-sidebar:
-  order: 119
 ---
 
 ## mysqli_fetch_field()
@@ -20,8 +18,9 @@ Returns metadata for the next column of a result.
 
 ## Availability
 
-- **Compiled (AOT)**: supported through an injected elephc-PHP prelude.
-- **`eval()` (magician interpreter)**: not available inside eval'd code.
+| Compiled (AOT) | Magician (eval) |
+|---|---|
+| Available | Not available yet |
 
 _No examples yet. Check `examples/` and `showcases/` for usage patterns._
 

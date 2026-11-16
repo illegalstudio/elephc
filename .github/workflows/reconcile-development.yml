@@ -1,0 +1,29 @@
+name: Reconcile development artifacts
+
+on:
+  schedule:
+    - cron: '23 * * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  actions: write
+
+concurrency:
+  group: development-artifact-ledger
+  cancel-in-progress: false
+
+jobs:
+  reconcile:
+    if: github.repository == 'illegalstudio/elephc'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: main
+          fetch-depth: 0
+      - name: Record gaps before requesting bounded backfills
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 -B scripts/ci/reconcile_development.py reconcile

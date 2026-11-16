@@ -18,6 +18,8 @@ pub(in crate::codegen::lower_inst) fn lower_object_new(ctx: &mut FunctionContext
     if reflection::is_reflection_owner_class(&class_name) {
         return reflection::lower_reflection_owner_new(ctx, inst, &class_name);
     }
+    let reflection_owner_class = reflection::reflection_owner_base_class(ctx, &class_name);
+    let is_reflection_subclass = reflection_owner_class.is_some();
     if class_name == "CallbackFilterIterator" || class_name == "RecursiveCallbackFilterIterator" {
         return lower_callback_filter_iterator_new(ctx, inst, &class_name);
     }
@@ -57,7 +59,7 @@ pub(in crate::codegen::lower_inst) fn lower_object_new(ctx: &mut FunctionContext
                 class_name
             )));
         }
-        let property_initialization = collect_property_initialization(class_info, inst);
+        let property_initialization = collect_property_initialization(ctx.module, class_info, inst);
         // A private constructor is not inherited, so a descendant of a class that declares one
         // carries no `__construct` entry of its own. PHP still instantiates it through that
         // ancestor, so resolve the owner; it is the class itself for every other constructor.
@@ -111,8 +113,7 @@ pub(in crate::codegen::lower_inst) fn lower_object_new(ctx: &mut FunctionContext
             .enumerate()
             .filter_map(|(index, property)| {
                 let property = property.as_ref()?;
-                (class_info.reference_properties.contains(property)
-                    && !class_info.owned_reference_properties.contains(property))
+                class_info.reference_properties.contains(property)
                     .then_some(index)
             })
             .collect::<Vec<_>>();
@@ -136,6 +137,14 @@ pub(in crate::codegen::lower_inst) fn lower_object_new(ctx: &mut FunctionContext
             &format!("{}::__construct", constructor.impl_class),
         )?;
     }
+    if let Some(owner_class) = reflection_owner_class.as_deref() {
+        reflection_constructor::validate_reflection_subclass_constructor_forwarding(
+            ctx,
+            &class_name,
+            owner_class,
+            constructor_impl.as_ref(),
+        )?;
+    }
     emit_object_allocation(
         ctx,
         class_id,
@@ -148,7 +157,9 @@ pub(in crate::codegen::lower_inst) fn lower_object_new(ctx: &mut FunctionContext
         .result
         .ok_or_else(|| CodegenIrError::invalid_module("object_new missing result value"))?;
     ctx.store_result_value(result)?;
-    let needs_construction_guard = constructor_impl.is_some() || property_initialization.uses_thunk();
+    let needs_construction_guard = constructor_impl.is_some()
+        || property_initialization.uses_thunk()
+        || is_reflection_subclass;
     let construction_guard_bytes = if needs_construction_guard {
         ctx.load_value_to_result(result)?;
         abi::emit_push_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
@@ -157,6 +168,9 @@ pub(in crate::codegen::lower_inst) fn lower_object_new(ctx: &mut FunctionContext
         0
     };
     emit_property_initialization(ctx, result, &property_initialization)?;
+    if is_reflection_subclass {
+        reflection::populate_reflection_owner_new(ctx, inst, &class_name, result)?;
+    }
     if super::super::is_throwable_like_class(ctx, &class_name) {
         ctx.load_value_to_result(result)?;
         emit_regular_throwable_creation_line(ctx, result, abi::int_result_reg(ctx.emitter), class_id);
@@ -223,7 +237,7 @@ fn materialize_existing_promoted_reference_address(
         .instruction(inst)
         .ok_or_else(|| CodegenIrError::missing_entry("instruction", inst.as_raw()))?;
     match instruction.op {
-        Op::LoadLocal | Op::LoadRefCell => {
+        Op::LoadLocal | Op::LoadRefCell | Op::LoadRefCellValue => {
             super::super::materialize_local_ref_arg_address(ctx, value)?;
             Ok(true)
         }

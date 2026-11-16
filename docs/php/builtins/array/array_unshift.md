@@ -1,8 +1,6 @@
 ---
 title: "array_unshift()"
 description: "Prepends one or more elements to the beginning of an array."
-sidebar:
-  order: 44
 ---
 
 ## array_unshift()
@@ -21,8 +19,9 @@ Prepends one or more elements to the beginning of an array.
 
 ## Availability
 
-- **Compiled (AOT)**: supported by the Elephc code generator.
-- **`eval()` (magician interpreter)**: supported through a declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/array/array_unshift.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/array/array_unshift.rs)).
+| Compiled (AOT) | Magician (eval) |
+|---|---|
+| Available | Available |
 
 _No examples yet. Check `examples/` and `showcases/` for usage patterns._
 

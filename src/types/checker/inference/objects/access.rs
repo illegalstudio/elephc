@@ -15,6 +15,27 @@ use crate::types::{PhpType, TypeEnv};
 use super::super::super::Checker;
 
 impl Checker {
+    /// Accepts scalar names and objects with PHP's public string conversion contract.
+    pub(crate) fn valid_dynamic_property_name_type(&self, ty: &PhpType) -> bool {
+        match ty {
+            // PHP coerces every scalar, null, and array to a property-name string at run
+            // time (an array emits its "Array to string conversion" warning); only an
+            // object without __toString is rejected.
+            PhpType::Str | PhpType::Int | PhpType::Float | PhpType::Bool | PhpType::False
+            | PhpType::Void | PhpType::Array(_) | PhpType::AssocArray { .. }
+            | PhpType::Mixed => true,
+            PhpType::Object(class) => self.object_type_implements_interface(class, "Stringable")
+                || self.classes.get(class).is_some_and(|info| {
+                    let key = crate::names::php_symbol_key("__toString");
+                    info.methods.get(&key).is_some_and(|sig| sig.return_type == PhpType::Str)
+                        && info.method_visibilities.get(&key)
+                            == Some(&crate::parser::ast::Visibility::Public)
+                }),
+            PhpType::Union(members) => members.iter().all(|member| self.valid_dynamic_property_name_type(member)),
+            _ => false,
+        }
+    }
+
     /// Infers the type of a property access expression (`$obj->prop`).
     ///
     /// Returns the declared property type on class/object, handles `Mixed`
@@ -32,10 +53,21 @@ impl Checker {
         // `branch_guard_narrowing`). Consult it first so a guarded branch sees the narrowed type.
         if let Some(key) = Self::narrowed_property_env_key(object, property) {
             if let Some(narrowed) = env.get(&key) {
+                if let Ok(obj_ty) = self.infer_type(object, env) {
+                    self.record_member_receiver_type(expr.span, &obj_ty);
+                }
                 return Ok(narrowed.clone());
             }
         }
         let obj_ty = self.infer_type(object, env)?;
+        self.record_member_receiver_type(expr.span, &obj_ty);
+        // A `?ptr<T>` reaches its fields like `ptr<T>`: the value is the bare address, and a
+        // null one faults with the null-pointer dereference fatal a null `ptr<T>` raises.
+        let nullable_pointer = match &obj_ty {
+            PhpType::Union(members) => crate::types::nullable_pointer_union_member(members),
+            _ => None,
+        };
+        let obj_ty = nullable_pointer.unwrap_or(obj_ty);
         if let PhpType::Object(class_name) = &obj_ty {
             let inferred = self.infer_property_on_class_type(class_name, property, expr);
             if inferred.is_err()
@@ -85,12 +117,22 @@ impl Checker {
             // No object class at all: surface the strict diagnostic.
             self.nullsafe_object_receiver(&obj_ty, expr, "property access")?;
         }
+        // A nested packed field is an embedded record: reading it yields the record's ADDRESS,
+        // typed exactly like a packed buffer element, so `$b[0]->pos->x` resolves the inner
+        // field from the outer one's compile-time offset.
+        let obj_ty = match obj_ty {
+            PhpType::Packed(class_name) => PhpType::Pointer(Some(class_name)),
+            other => other,
+        };
         if let PhpType::Pointer(Some(class_name)) = &obj_ty {
             if let Some(field_ty) = self.extern_field_type(class_name, property) {
                 return Ok(field_ty);
             }
             if let Some(field_ty) = self.packed_field_type(class_name, property) {
-                return Ok(field_ty);
+                return Ok(match field_ty {
+                    PhpType::Packed(inner) => PhpType::Pointer(Some(inner)),
+                    other => other,
+                });
             }
             if self.extern_classes.contains_key(class_name) {
                 return Err(CompileError::new(
@@ -119,7 +161,8 @@ impl Checker {
         }
         // `isset($n->p)` / `$n->p ?? $d` reach through a null receiver in PHP and answer
         // `false` / the default; only a probe context may do so.
-        if matches!(obj_ty, PhpType::Void) && self.null_probe_depth > 0 {
+        if self.null_probe_depth > 0 && matches!(obj_ty,
+            PhpType::Void | PhpType::Int | PhpType::Float | PhpType::Bool | PhpType::False | PhpType::Str | PhpType::Resource(_)) {
             return Ok(PhpType::Void);
         }
         Err(CompileError::new(
@@ -141,6 +184,7 @@ impl Checker {
         env: &TypeEnv,
     ) -> Result<PhpType, CompileError> {
         let obj_ty = self.infer_type(object, env)?;
+        self.record_member_receiver_type(expr.span, &obj_ty);
         if matches!(obj_ty, PhpType::Mixed) {
             return Ok(PhpType::Mixed);
         }
@@ -172,20 +216,16 @@ impl Checker {
         nullsafe: bool,
     ) -> Result<PhpType, CompileError> {
         let obj_ty = self.infer_type(object, env)?;
+        self.record_member_receiver_type(expr.span, &obj_ty);
         if nullsafe && matches!(obj_ty, PhpType::Void) {
             return Ok(PhpType::Void);
         }
 
         let property_ty = self.infer_type(property, env)?;
-        // NOT relaxed for `int|float`, deliberately. Accepting it here only moves the refusal:
-        // the lowering has no arm for a boxed runtime property name and answers
-        // `dynamic_prop_set with runtime property name PHP type Mixed`, which is the same gap a
-        // genuinely `mixed` name hits. The checker's message is the better one until the backend
-        // grows that arm.
-        if !matches!(property_ty, PhpType::Str | PhpType::Int | PhpType::Mixed) {
+        if !self.valid_dynamic_property_name_type(&property_ty) {
             return Err(CompileError::new(
                 property.span,
-                "Dynamic property name must be string or integer",
+                "Dynamic property name must be string or integer, or a Stringable object",
             ));
         }
 
@@ -199,6 +239,7 @@ impl Checker {
 
         match obj_ty {
             PhpType::Object(_) | PhpType::Union(_) | PhpType::Mixed => Ok(PhpType::Mixed),
+            _ if self.null_probe_depth > 0 && !nullsafe => Ok(PhpType::Void),
             _ if nullsafe => {
                 self.nullsafe_object_receiver(&obj_ty, expr, "property access")?;
                 Ok(PhpType::Mixed)
@@ -226,6 +267,11 @@ impl Checker {
             return Ok(PhpType::Mixed);
         }
         if let Some(class_info) = self.classes.get(class_name) {
+            if !property.starts_with("__elephc_")
+                && crate::types::builtin_classes::has_native_dimensions(class_name, &self.classes)
+            {
+                return Ok(PhpType::Object(class_name.to_string()));
+            }
             if let Some(visibility) = class_info.property_visibilities.get(property) {
                 // `property_visibilities` answers for the PHYSICAL slot table, which still carries
                 // a strict ancestor's private slot under its plain name. php 7.4 removed shadow
@@ -248,6 +294,10 @@ impl Checker {
                     .map(String::as_str)
                     .unwrap_or(class_name);
                 if !self.can_access_member(declaring_class, visibility) {
+                    if let Some(getter) = class_info.methods.get("__get") {
+                        // Inaccessible declared properties use the same magic read as missing ones.
+                        return Ok(getter.return_type.clone());
+                    }
                     return Err(CompileError::new(
                         expr.span,
                         &format!(
@@ -273,6 +323,9 @@ impl Checker {
                 return Ok(PhpType::Mixed);
             }
             if let Some(sig) = class_info.methods.get("__get") {
+                if crate::types::builtin_classes::has_native_dimensions(class_name, &self.classes) {
+                    return Ok(PhpType::Object(class_name.to_string()));
+                }
                 return Ok(sig.return_type.clone());
             }
             if class_info.allow_dynamic_properties {
@@ -285,6 +338,9 @@ impl Checker {
                 expr.span,
                 &format!("Undefined property: {}::{}", class_name, property),
             ));
+        }
+        if class_name.is_empty() || self.interfaces.contains_key(class_name) {
+            return Ok(PhpType::Mixed);
         }
         if self.awaits_generic_instantiation(class_name) {
             // Resolved by this round, spliced by the next one. `Mixed` keeps the rest of this

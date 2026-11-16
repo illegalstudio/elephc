@@ -429,7 +429,7 @@ struct Instantiate<'a> {
     /// The body the walk is lexically inside, spelled as the checker spells its site scope.
     ///
     /// Half the key for the construction rewrite. It has to be built exactly as the checker
-    /// builds `current_loop_storage_scope` (`main`, a function's declared name, `Class::method`,
+    /// builds `current_loop_storage_scope` (`#main`, a function's declared name, `Class::method`,
     /// or a closure's nested scope), or the lookup misses and a `new Box(5)` keeps naming the
     /// stripped template.
     site_scope: super::site_scope::SiteScope,
@@ -689,7 +689,7 @@ impl Instantiate<'_> {
                         _ => "class",
                     },
                     parameter: super::parameter_name(&param.name).to_string(),
-                    bound: bound.substitute_type_params(&bindings),
+                    bound: super::substitute_value_type(bound, &bindings),
                     argument: argument.clone(),
                     span,
                 });
@@ -1029,7 +1029,7 @@ pub fn template_key(name: &str) -> String {
     name.trim_start_matches('\\').to_ascii_lowercase()
 }
 
-/// Appends one ordinary declaration per requested instantiation the program does not carry.
+/// Prepends one ordinary declaration per requested instantiation the program does not carry.
 ///
 /// Returns the program and how many were added; a zero is the fixpoint signal.
 fn splice(
@@ -1043,8 +1043,7 @@ fn splice(
     let mut declared: Vec<String> = Vec::new();
     collect_declared_names(&program, &mut declared);
 
-    let mut program = program;
-    let mut added = 0usize;
+    let mut instances = Vec::new();
     for (base, bindings) in requests {
         let Some(template) = templates.get(base) else {
             continue;
@@ -1054,14 +1053,18 @@ fn splice(
             continue;
         }
         declared.push(target.clone());
-        program.push(instantiate_declaration(
+        instances.push(instantiate_declaration(
             &template.declaration,
             &target,
             bindings,
         ));
-        added += 1;
     }
-    (program, added)
+    let added = instances.len();
+    // These declarations are compile-time specializations, not executable trailing code.
+    // Appending them after a terminal statement (including the test driver's exit) makes
+    // control-flow pruning discard their bodies before EIR lowering can emit them.
+    instances.extend(program);
+    (instances, added)
 }
 
 /// Collects every class, interface, trait and enum name the program declares, namespace blocks
@@ -1194,11 +1197,11 @@ fn strip_in_namespace(stmt: Stmt) -> Stmt {
 /// Returns a span from the deepest instantiation the runaway produced, for the round-cap error.
 ///
 /// `Span::dummy()` would lose the file, and a program that never settles is exactly the one a
-/// programmer needs pointed at: the last declaration appended is the deepest instantiation, and
-/// its span is the mention that asked for it.
+/// programmer needs pointed at: the first declaration was prepended by the latest round, so
+/// its span identifies a template whose instantiation did not settle.
 fn runaway_span(program: &Program) -> Span {
     program
-        .last()
+        .first()
         .map(|stmt| stmt.span)
         .unwrap_or_else(Span::dummy)
 }

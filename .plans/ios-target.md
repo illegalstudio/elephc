@@ -1,12 +1,18 @@
 # iOS target implementation specification
 
-This document describes the implementation on `feat/ios-target` after the
-owned-string library ABI from #734 was merged. It is a description of the
-current tree, not the original implementation plan.
+This working specification describes the shipped iOS implementation and the
+owned-string library ABI introduced by #734. Reviewed against release candidate
+`df57a9800f` on 2026-10-19, it is retained here because the SwiftUI examples
+reference it. The permanent references are [targets](../docs/compiling/targets.md)
+and [C libraries](../docs/beyond-php/cdylib.md).
+
+The target support is shipped; host/device qualification and the explicitly
+listed library-boundary follow-ups remain separate work. No tests, simulator
+runs or physical-device checks were performed during this planning cleanup.
 
 ## Scope
 
-The change adds two native compilation targets:
+The compiler supports two iOS compilation targets:
 
 - `ios-arm64` / `aarch64-apple-ios`
 - `ios-sim-arm64` / `aarch64-apple-ios-simulator`
@@ -151,7 +157,9 @@ The managed native catalog has five target names:
 - `linux-aarch64`
 - `linux-x86_64`
 
-PCRE2 and zlib are catalogued for both iOS targets. Cross compilation requires
+All eight current packages (PCRE2, zlib, OpenSSL, nghttp2, libssh2, curl,
+Oniguruma and libxml2) are catalogued for both iOS targets. The authoritative
+package/target matrix is `src/native_deps/catalog.rs`. Cross compilation requires
 explicit `ELEPHC_NATIVE_CC`, `ELEPHC_NATIVE_AR`, and
 `ELEPHC_NATIVE_RANLIB` tools appropriate for the selected SDK. Device and
 Simulator compiler tuples are validated separately.
@@ -211,13 +219,14 @@ x86_64 matrix. iOS SDK assembly/linking and SwiftUI execution require Xcode.
 
 ## Deliberate non-goals
 
-This PR does not add another `Platform`, redesign staticlib versus cdylib, or
-change PHP header newline behavior.
+The iOS implementation does not add another `Platform`, redesign staticlib
+versus cdylib, or change PHP header newline behavior.
 
-#804 (implicit-magic traversal for `__set`, `__isset`, `__unset`, and
-`__clone`) and #805 (remaining raw `_exit` helpers) apply unchanged to code
-inside the generated archive. They are independent follow-ups and are not
-fixed here.
+[#804](https://github.com/illegalstudio/elephc/issues/804) (implicit-magic
+traversal for `__set`, `__isset`, `__unset`, and `__clone`) and
+[#805](https://github.com/illegalstudio/elephc/issues/805) (remaining raw `_exit`
+helpers) were still open at the 2026-10-19 review. They also apply to code inside
+the generated archive and remain independent library-boundary follow-ups.
 
 Physical-device execution still requires application packaging, provisioning,
 entitlements, and signing. The compiler can build device-target objects and

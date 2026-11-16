@@ -1,27 +1,27 @@
 ---
 title: "array_rand()"
 description: "Pick one or more random keys out of an array."
-sidebar:
-  order: 31
 ---
 
 ## array_rand()
 
 ```php
-function array_rand(array $array): int
+function array_rand(array $array, int $num = 1): int|string|array
 ```
 
 Pick one or more random keys out of an array.
 
 **Parameters**:
 - `$array` (`array`)
+- `$num` (`int`), default `1`, optional
 
-**Returns**: `int`
+**Returns**: `int|string|array`
 
 ## Availability
 
-- **Compiled (AOT)**: supported by the Elephc code generator.
-- **`eval()` (magician interpreter)**: supported through a declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/array/array_rand.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/array/array_rand.rs)).
+| Compiled (AOT) | Magician (eval) |
+|---|---|
+| Available | Available |
 
 _No examples yet. Check `examples/` and `showcases/` for usage patterns._
 

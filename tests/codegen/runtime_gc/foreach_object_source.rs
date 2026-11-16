@@ -19,6 +19,32 @@
 
 use crate::support::compile_and_run_with_heap_debug;
 
+/// Native SPL iterator results own their cells with heap debugging both enabled and disabled.
+#[test]
+fn test_spl_foreach_intrinsic_result_owners_with_and_without_heap_debug() {
+    let source = r#"<?php
+class SplForeachOwnedValue {
+    public string $name;
+    public function __construct(string $name) { $this->name = $name; }
+    public function __destruct() { echo 'drop-', $this->name, '|'; }
+}
+$list = new SplDoublyLinkedList(); $list->push(new SplForeachOwnedValue('list'));
+foreach ($list as $key => $value) { echo $key, ':', $value->name, '|'; }
+unset($value, $list); echo 'after-list|';
+$stack = new SplStack(); $stack->push(new SplForeachOwnedValue('stack'));
+foreach ($stack as $key => $value) { echo $key, ':', $value->name, '|'; }
+unset($value, $stack); echo 'after-stack|';
+$queue = new SplQueue(); $queue->enqueue(new SplForeachOwnedValue('queue'));
+foreach ($queue as $key => $value) { echo $key, ':', $value->name, '|'; }
+unset($value, $queue); echo 'after-queue';
+"#;
+    let expected = "0:list|drop-list|after-list|0:stack|drop-stack|after-stack|0:queue|drop-queue|after-queue";
+    assert_eq!(crate::support::compile_and_run(source), expected);
+    let out = compile_and_run_with_heap_debug(source);
+    assert!(out.success, "stdout={:?}\nstderr={}", out.stdout, out.stderr);
+    assert_clean(out, expected);
+}
+
 /// Asserts the program printed `expected` and left a clean heap under heap debug.
 fn assert_clean(out: crate::support::ProgramOutput, expected: &str) {
     assert_eq!(out.stdout, expected, "stderr: {}", out.stderr);

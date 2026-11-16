@@ -69,6 +69,18 @@ pub struct Target {
 }
 
 impl Platform {
+    /// Returns whether this platform follows the System V x86_64 calling convention.
+    ///
+    /// Darwin and Linux do; Win64 does not — it passes the first four integer
+    /// arguments in rcx/rdx/r8/r9, reserves 32 bytes of shadow space, and makes
+    /// rdi/rsi caller-saved, which no shim built for SysV may assume.
+    pub fn uses_sysv_abi(self) -> bool {
+        match self {
+            Platform::MacOS | Platform::Linux => true,
+            Platform::Windows => false,
+        }
+    }
+
     /// Detects the host operating system from the Rust compile-time target OS.
     ///
     /// Returns `Platform::MacOS` when compiling on macOS, otherwise `Platform::Linux`.

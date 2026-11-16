@@ -26,6 +26,18 @@ macro_rules! impl_fake_collection_call_ops {
     ) -> Result<RuntimeCellHandle, EvalStatus> {
         self.runtime_string_array_push(array, value)
     }
+    /// Creates a fake direct-object indexed array cell.
+    fn object_array_new(&mut self, capacity: usize) -> Result<RuntimeCellHandle, EvalStatus> {
+        self.runtime_array_new(capacity)
+    }
+    /// Appends one retained object to a fake direct-object indexed array cell.
+    fn object_array_push(
+        &mut self,
+        array: RuntimeCellHandle,
+        object: RuntimeCellHandle,
+    ) -> Result<RuntimeCellHandle, EvalStatus> {
+        self.runtime_object_array_push(array, object)
+    }
     /// Creates a fake associative array cell.
     fn assoc_new(&mut self, _capacity: usize) -> Result<RuntimeCellHandle, EvalStatus> {
         self.runtime_assoc_new(_capacity)
@@ -60,6 +72,7 @@ macro_rules! impl_fake_collection_call_ops {
         array: RuntimeCellHandle,
         position: usize,
     ) -> Result<RuntimeCellHandle, EvalStatus> {
+        self.array_iter_key_calls += 1;
         self.runtime_array_iter_key(array, position)
     }
     /// Writes one fake indexed or associative array element.
@@ -70,6 +83,12 @@ macro_rules! impl_fake_collection_call_ops {
         value: RuntimeCellHandle,
     ) -> Result<RuntimeCellHandle, EvalStatus> {
         self.runtime_array_set(array, index, value)
+    }
+    /// Copies fake entries and index history without calling runtime element traversal hooks.
+    fn copy_array_value(&mut self, array: RuntimeCellHandle) -> Result<RuntimeCellHandle, EvalStatus> {
+        if !self.is_array_like(array)? { return Err(EvalStatus::RuntimeFatal); }
+        self.array_value_copy_calls += 1;
+        self.copy_value(array)
     }
     /// Reads one fake object property by name.
     fn property_get(

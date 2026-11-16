@@ -39,7 +39,6 @@ use super::sprintf_x86_64::emit_sprintf_linux_x86_64;
 /// Byte capacity of the shared `_concat_buf` result arena declared in
 /// `crate::codegen_support::runtime::data::emit_runtime_data_fixed`. Both `__rt_sprintf`
 /// lowerings derive their write limit from this constant, so the two stay in step.
-pub(super) const CONCAT_BUF_CAP: u32 = 65536;
 
 /// Byte capacity of the per-conversion `snprintf` scratch buffer. PHP clamps float
 /// precision to 53 digits, so the widest libc body is `%.53f` of `DBL_MAX`
@@ -72,6 +71,7 @@ pub(super) const CONV_SCRATCH_CAP: u32 = 512;
 /// cursor in `_concat_buf`, `x24` = result start, `x25` = `_concat_off` address,
 /// `x26` = argument count, `x27` = optional eval context.
 pub fn emit_sprintf(emitter: &mut Emitter) {
+    let cap = emitter.concat_capacity;
     if emitter.target.arch == Arch::X86_64 {
         emit_sprintf_linux_x86_64(emitter);
         return;
@@ -123,7 +123,7 @@ pub fn emit_sprintf(emitter: &mut Emitter) {
     abi::emit_symbol_address(emitter, "x7", "_concat_buf");
     emitter.instruction("add x23, x7, x8");                                     // write cursor = buffer base + offset
     emitter.instruction("mov x24, x23");                                        // remember where this result starts
-    emitter.instruction(&format!("mov x9, #{}", CONCAT_BUF_CAP));               // total concat-buffer capacity in bytes
+    crate::codegen_support::abi::emit_load_int_immediate(emitter, "x9", cap as i64); // total concat-buffer capacity in bytes
     emitter.instruction("add x9, x7, x9");                                      // one-past-the-end address of the concat buffer
     emitter.instruction("str x9, [sp, #144]");                                  // publish the hard write limit for every copy below
     emitter.instruction("str xzr, [sp, #152]");                                 // no formatter-owned temporary string is live
@@ -564,6 +564,14 @@ fn emit_integer_conversion(emitter: &mut Emitter) {
     emitter.instruction("b.eq __rt_sprintf_bin_go");                            // yes → generate binary digits by hand
     emitter.instruction("cmp w12, #99");                                        // is this the single-character conversion?
     emitter.instruction("b.eq __rt_sprintf_chr_go");                            // yes → emit the low byte directly
+    emitter.instruction("cmp w12, #100");                                       // is this plain signed decimal?
+    emitter.instruction("b.ne __rt_sprintf_int_go");                            // other conversions keep the libc path
+    emitter.instruction("ldr x9, [sp, #112]");                                  // parsed flags
+    emitter.instruction("cbnz x9, __rt_sprintf_int_go");                        // flags require libc field rules
+    emitter.instruction("ldr x9, [sp, #96]");                                   // parsed field width
+    emitter.instruction("cbnz x9, __rt_sprintf_int_go");                        // width requires libc padding rules
+    emitter.instruction("ldr x9, [sp, #104]");                                  // parsed precision
+    emitter.instruction("tbnz x9, #63, __rt_sprintf_int_itoa");                 // absent precision → direct decimal digits
     emitter.label("__rt_sprintf_int_go");
     emitter.instruction("add x14, sp, #160");                                   // mini C format cursor
     emitter.instruction("mov w9, #37");                                         // '%' introducer
@@ -596,6 +604,14 @@ fn emit_integer_conversion(emitter: &mut Emitter) {
     emitter.bl_c("snprintf");                                                   // render the integer body through libc
     emitter.instruction("b __rt_sprintf_snret");                                // clamp and take the result
 
+    // -- unadorned `%d`: format the decimal digits without libc --
+    emitter.label("__rt_sprintf_int_itoa");
+    emitter.instruction("mov x0, x3");                                          // integer operand
+    emitter.instruction("add x1, sp, #192");                                    // private decimal scratch
+    emitter.instruction("bl __rt_itoa_into");                                   // write the digits without a libc format parse
+    emitter.instruction("mov x3, x0");                                          // body pointer = first decimal digit
+    emitter.instruction("mov x4, x1");                                          // body length = formatted byte count
+    emitter.instruction("b __rt_sprintf_emit");                                 // pad and copy the decimal body
 }
 
 /// Emits the AArch64 float conversions (`%f`, `%F`, `%e`, `%E`, `%g`, `%G`).
@@ -929,6 +945,22 @@ mod tests {
         assert!(x64.contains("movsxd r11, eax"), "{x64}");
         assert!(x64.contains(&format!("cmp r11, {}", CONV_SCRATCH_CAP - 1)), "{x64}");
         assert!(x64.contains(&format!("mov r11d, {}", CONV_SCRATCH_CAP - 1)), "{x64}");
+    }
+
+    /// Unadorned `%d` formats decimal digits directly after proving that no flag, width,
+    /// or precision needs libc's field rules. Both targets keep `snprintf` for every other
+    /// integer shape.
+    #[test]
+    fn plain_decimal_conversions_skip_libc_formatting() {
+        let arm = sprintf_asm(Target::new(Platform::MacOS, Arch::AArch64));
+        assert!(arm.contains("tbnz x9, #63, __rt_sprintf_int_itoa"), "{arm}");
+        assert!(arm.contains("__rt_sprintf_int_itoa:"), "{arm}");
+        assert!(arm.contains("bl __rt_itoa_into"), "{arm}");
+
+        let x64 = sprintf_asm(Target::new(Platform::Linux, Arch::X86_64));
+        assert!(x64.contains("js __rt_sprintf_int_itoa_x64"), "{x64}");
+        assert!(x64.contains("__rt_sprintf_int_itoa_x64:"), "{x64}");
+        assert!(x64.contains("call __rt_itoa_into"), "{x64}");
     }
 
     /// Both lowerings must bound every conversion against the end of `_concat_buf` and

@@ -200,6 +200,7 @@ fn detach_reference_return_payload(
     span: Span,
 ) -> LoweredValue {
     let php_type = ctx.builder.value_php_type(value.value);
+    if ctx.value_is_owning_temporary(value) { return value; }
     if ctx.builder.value_defining_op(value.value) == Some(Op::LoadRefCell)
         && php_type.codegen_repr() == PhpType::Mixed
     {

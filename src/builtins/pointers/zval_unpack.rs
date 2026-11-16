@@ -20,7 +20,7 @@ builtin! {
 }
 
 /// Validates the zval pointer argument and returns `PhpType::Mixed`.
-fn check(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
+pub(crate) fn check(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
     let ptr_ty = cx.checker.infer_type(&cx.args[0], cx.env)?;
     cx.checker.ensure_pointer_type(&ptr_ty, cx.span, "zval_unpack()")?;
     Ok(PhpType::Mixed)

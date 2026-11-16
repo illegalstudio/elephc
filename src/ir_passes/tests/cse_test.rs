@@ -182,3 +182,24 @@ fn function_with_exception_handler_is_skipped() {
     let adds = function.instructions.iter().filter(|i| i.op == Op::IAdd).count();
     assert_eq!(adds, 2, "both adds survive untouched");
 }
+
+/// Width and class pointers with the same visible spelling have different CSE identities.
+#[test]
+fn distinct_pointer_width_and_class_types_are_not_merged() {
+    let class_pointer = PhpType::Pointer(Some("u8".to_string()));
+    let width_pointer = PhpType::Pointer(Some(crate::names::pointer_width_tag("u8")));
+    let mut function = Function::new("pointer_types".to_string(), IrType::I64, class_pointer.clone());
+    {
+        let mut builder = Builder::new(&mut function);
+        let entry = builder.create_named_block("entry", vec![]);
+        builder.set_entry(entry);
+        builder.position_at_end(entry);
+        let source = builder.emit_const_i64(1);
+        let _width = builder.emit(Op::Move, vec![source], None, IrType::I64, width_pointer, Ownership::NonHeap).unwrap();
+        let class = builder.emit(Op::Move, vec![source], None, IrType::I64, class_pointer, Ownership::NonHeap).unwrap();
+        builder.terminate(Terminator::Return { value: Some(class) });
+    }
+    assert!(!run_cse(&mut function), "different pointer target types must not merge");
+    assert_eq!(function.instructions[2].op, Op::Move);
+    assert!(validate_function(&function).is_ok());
+}

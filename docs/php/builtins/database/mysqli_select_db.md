@@ -1,8 +1,6 @@
 ---
 title: "mysqli_select_db()"
 description: "Selects the default database for the connection."
-sidebar:
-  order: 155
 ---
 
 ## mysqli_select_db()
@@ -21,8 +19,9 @@ Selects the default database for the connection.
 
 ## Availability
 
-- **Compiled (AOT)**: supported through an injected elephc-PHP prelude.
-- **`eval()` (magician interpreter)**: not available inside eval'd code.
+| Compiled (AOT) | Magician (eval) |
+|---|---|
+| Available | Not available yet |
 
 _No examples yet. Check `examples/` and `showcases/` for usage patterns._
 

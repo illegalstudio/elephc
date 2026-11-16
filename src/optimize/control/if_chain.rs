@@ -44,7 +44,7 @@ pub(crate) fn prune_if_chain(
             let kept_else = normalize_optional_block(kept_else);
 
             if then_body.is_empty() && kept_elseifs.is_empty() && kept_else.is_none() {
-                return expr_to_effect_stmt(condition);
+                return condition_to_effect_stmt(condition);
             }
 
             if then_body.is_empty() {
@@ -65,7 +65,7 @@ pub(crate) fn prune_if_chain(
                 normalize_optional_block(Some(build_if_chain_body(kept_elseifs, kept_else)));
 
             if canonical_else_body.as_ref() == Some(&then_body) {
-                let mut stmts = expr_to_effect_stmt(condition);
+                let mut stmts = condition_to_effect_stmt(condition);
                 stmts.extend(then_body);
                 return stmts;
             }

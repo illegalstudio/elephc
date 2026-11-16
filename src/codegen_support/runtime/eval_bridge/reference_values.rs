@@ -38,6 +38,9 @@ pub(super) fn emit(emitter: &mut Emitter) {
         emitter.instruction("ldr x10, [x0, #-8]");                              // inspect an artificial collector pin
         emitter.instruction("ubfx x10, x10, #18, #1");                          // isolate the collector-only owner bit
         emitter.instruction("sub w9, w9, w10");                                 // PHP sharing excludes collector pins
+        super::super::reference_cells::subtract_validation_pins(
+            emitter, "x0", "x9", "x10", "x11", "__elephc_eval_reference_shared",
+        );
         emitter.instruction("cmp w9, #1");                                      // one owner separates during array COW
         emitter.instruction("cset x0, hi");                                     // another owner keeps the reference shared
         emitter.instruction("ret");                                             // return the sharing predicate
@@ -56,6 +59,9 @@ pub(super) fn emit(emitter: &mut Emitter) {
         emitter.instruction("shr r10, 18");                                     // position the collector-only owner bit
         emitter.instruction("and r10d, 1");                                     // isolate the collector pin
         emitter.instruction("sub eax, r10d");                                   // PHP sharing excludes collector pins
+        super::super::reference_cells::subtract_validation_pins(
+            emitter, "rdi", "rax", "r10", "r11", "__elephc_eval_reference_shared",
+        );
         emitter.instruction("cmp eax, 1");                                      // one owner separates during array COW
         emitter.instruction("seta al");                                         // another owner keeps the reference shared
         emitter.instruction("movzx eax, al");                                   // normalize the sharing predicate

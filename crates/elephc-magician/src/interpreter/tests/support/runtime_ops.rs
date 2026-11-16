@@ -26,6 +26,11 @@ use numeric_string::impl_fake_numeric_string_ops;
 use reflection::impl_fake_reflection_ops;
 
 impl RuntimeValueOps for FakeOps {
+    /// Models nested native bridge authorization independently of interpreter context identity.
+    fn replace_native_class_scope(&mut self, scope: Option<String>) -> Option<String> {
+        std::mem::replace(&mut self.native_class_scope, scope)
+    }
+
     /// Uses the real mbstring bridge for encoded strings and primitive adapters for other IDs.
     fn runtime_builtin_call(&mut self, id: elephc_builtin_contract::RuntimeBuiltinId, args: &[RuntimeCellHandle]) -> Result<Option<RuntimeCellHandle>, EvalStatus> {
         if id.is_mbstring() {

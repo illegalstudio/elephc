@@ -1,8 +1,6 @@
 ---
 title: "asort()"
 description: "Sorts an array and maintains index association."
-sidebar:
-  order: 49
 ---
 
 ## asort()
@@ -20,8 +18,9 @@ Sorts an array and maintains index association.
 
 ## Availability
 
-- **Compiled (AOT)**: supported by the Elephc code generator.
-- **`eval()` (magician interpreter)**: supported through a declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/array/asort.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/array/asort.rs)).
+| Compiled (AOT) | Magician (eval) |
+|---|---|
+| Available | Available |
 
 _No examples yet. Check `examples/` and `showcases/` for usage patterns._
 

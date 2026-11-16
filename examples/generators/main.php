@@ -50,6 +50,20 @@ $r->next();
 echo $r->getReturn();
 echo "\n";
 
+// The syntactic yield makes this a generator even when no values are produced.
+function optionalRows() {
+    $result = match (1) { 0 => yield "unused", default => 12 };
+    return $result;
+}
+
+$empty = optionalRows();
+foreach ($empty as $row) {
+    echo $row;
+}
+echo "empty ret=";
+echo $empty->getReturn();
+echo "\n";
+
 // Generator::throw() raises the exception at the suspended `yield`, so a
 // try/catch *inside* the generator body handles it and execution resumes.
 function worker() {

@@ -10,6 +10,7 @@
 //! - Keep this surface small: runtime codegen imports these re-exports instead of reaching into leaf emitters directly.
 
 mod arrays;
+pub(crate) use arrays::emit_native_frame_owners;
 mod buffers;
 mod callables;
 /// PHP loose-equality (`==`) walkers for boxed Mixed values, arrays, and objects.
@@ -26,6 +27,7 @@ mod bcmath;
 mod eval_bridge;
 mod eval_scope;
 mod exceptions;
+pub(crate) use exceptions::deep_cleanup::Scope as CleanupScope;
 mod fibers;
 /// Runtime helpers for generator state management (yield, resume, stack frames).
 pub(crate) mod generators;
@@ -38,6 +40,7 @@ mod pdo;
 mod pointers;
 mod resource_ids;
 mod resource_inventory;
+pub(crate) use resource_inventory::DEFAULT_CONTEXT_PAYLOAD;
 pub(crate) mod reference_cells;
 /// PHP's `round($num, $precision, $mode)` runtime implementation (`__rt_round_mode`).
 mod round_mode;
@@ -48,7 +51,10 @@ pub(crate) mod spl;
 #[cfg(test)]
 mod sysv_call_alignment;
 mod strings;
+pub(crate) use strings::concat_scratch::scratch_capacity as concat_scratch_capacity;
 mod system;
+#[cfg(test)]
+mod hosted_fatals;
 /// zval pack/unpack bridge helpers (elephc values ↔ PHP zval structs).
 mod zval;
 
@@ -87,9 +93,13 @@ pub(crate) use data::{is_user_filter_contract_method, is_user_wrapper_contract_m
 pub(crate) use emitters::emit_runtime;
 /// The PHP 8.5 NAN-to-bool coercion probe, reached from `src/codegen/lower_inst` float
 /// truthiness lowering as well as from the boxed-Mixed runtime helpers.
-pub(crate) use arrays::{emit_nan_bool_coercion_probe, nan_bool_coercion_warning_enabled};
+pub(crate) use arrays::{
+    emit_nan_bool_coercion_probe, emit_nan_string_coercion_probe, nan_bool_coercion_warning_enabled,
+};
 /// The `__rt_hash_map` callback result-kind selector, chosen by the `array_map()` lowering.
 pub(crate) use arrays::HashMapResultKind;
+/// Retire allocator payload-base metadata before bulk web arena reclamation.
+pub(crate) use arrays::heap_live_bases::emit_reset as emit_heap_live_bases_reset;
 /// The call-stack overflow guard's shared symbol name. Codegen's prologue check and the
 /// runtime emitter must name the same `.comm` word or the guard silently never fires.
 pub(crate) use system::STACK_LIMIT_SYMBOL;
@@ -101,3 +111,5 @@ pub(crate) use fibers::{
     FIBER_STATE_SUSPENDED, FIBER_STATE_TERMINATED, FIBER_TRANSFER_VALUE_OFFSET,
     FIBER_USER_ARG_MAX_OFFSET,
 };
+
+pub(crate) use exceptions::guards as exception_guards;

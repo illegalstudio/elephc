@@ -115,7 +115,12 @@ impl Parser {
 
     /// Parses postfix array reads, property reads, method calls, and dynamic calls.
     pub(in crate::parser) fn parse_postfix(&mut self) -> Result<EvalExpr, EvalParseError> {
-        let mut expr = self.parse_primary()?;
+        let mut expr = if matches!(self.current(), TokenKind::PlusPlus | TokenKind::MinusMinus) {
+            let increment = matches!(self.current(), TokenKind::PlusPlus);
+            self.advance();
+            let target = self.parse_postfix()?;
+            Self::property_inc_dec_expression(target, increment, true)?
+        } else { self.parse_primary()? };
         loop {
             if matches!(self.current(), TokenKind::LParen) {
                 if self.consume_first_class_callable_marker() {
@@ -156,6 +161,13 @@ impl Parser {
             };
             expr = self.parse_object_member_postfix(expr, nullsafe)?;
             continue;
+        }
+        if matches!(self.current(), TokenKind::PlusPlus | TokenKind::MinusMinus)
+            && matches!(expr, EvalExpr::PropertyGet { .. } | EvalExpr::DynamicPropertyGet { .. })
+        {
+            let increment = matches!(self.current(), TokenKind::PlusPlus);
+            self.advance();
+            expr = Self::property_inc_dec_expression(expr, increment, false)?;
         }
         Ok(expr)
     }

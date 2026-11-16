@@ -1,0 +1,11 @@
+A:B|{"a":"urn:a","b":"urn:b","":""}|{"a":"urn:a"}|{"a":"urn:a"}|{"a":"urn:a"}|{"b":"urn:b"}|[]|simplexml_load_string(): Argument #2 ($class_name) must be a class name derived from SimpleXMLElement or null, MissingXmlReviewClass given|simplexml_load_file(): Argument #2 ($class_name) must be a class name derived from SimpleXMLElement or null, MissingXmlReviewClass given|simplexml_import_dom(): Argument #2 ($class_name) must be a class name derived from SimpleXMLElement or null, MissingXmlReviewClass given|simplexml_load_string(): Argument #2 ($class_name) must be a class name derived from SimpleXMLElement or null, stdClass given|simplexml_load_file(): Argument #2 ($class_name) must be a class name derived from SimpleXMLElement or null, stdClass given|simplexml_import_dom(): Argument #2 ($class_name) must be a class name derived from SimpleXMLElement or null, stdClass given|float(-0)
+float(-0)
+float(0)
+float(0)
+float(-0)
+0|original:copy|1|<a><b>copy</b></a>|NULL
+NULL
+NULL
+NULL
+1:1|written|deep|four|attribute|tail|dynamic|boxed|<sum><deep><leaf/></deep></sum>|1|1|write-name:0|NULL
+NULL

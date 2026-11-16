@@ -26,7 +26,8 @@ use crate::numeric_string::{scan_numeric_prefix, NumericScan};
 /// PHP's `is_numeric_string()` classification of a numeric string.
 ///
 /// `Int` mirrors `IS_LONG`; `Float` mirrors `IS_DOUBLE`, carrying the `oflow` flag PHP
-/// sets when the text was a plain integer too large (`1`) or too small (`-1`) for `i64`.
+/// sets when the integer part was too large (`1`) or too small (`-1`) for `i64`, including
+/// a 20-digit integer part followed by a `.` or an exponent.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub(in crate::optimize) enum PhpNumeric {
     Int(i64),
@@ -53,26 +54,52 @@ impl PhpNumeric {
     }
 }
 
+/// PHP's `MAX_LENGTH_OF_LONG` on 64-bit targets: `_is_numeric_string_ex` stops its integer
+/// scan after this many significant digits and records `oflow` whatever follows them.
+const MAX_LENGTH_OF_LONG: usize = 20;
+
 /// Classifies a scanned numeric run into PHP's `IS_LONG` / `IS_DOUBLE` result.
 ///
 /// Integer text that does not fit `i64` becomes `Float` with the `oflow` sign PHP records,
-/// which `zendi_smart_strcmp` needs to fall back to a byte comparison.
+/// which `zendi_smart_strcmp` needs to fall back to a byte comparison. A float spelling
+/// records the same `oflow` when its integer part already reaches `MAX_LENGTH_OF_LONG`
+/// significant digits, because PHP sets it before it reaches the `.` or the exponent:
+/// `"99999999999999999999.0"` and `"100000000000000000000.0"` both overflow, round to the
+/// same double, and therefore compare by bytes. This is the twin of the runtime's
+/// `__rt_num_run_class`.
 fn classify_numeric_scan(scan: &NumericScan<'_>) -> Option<PhpNumeric> {
+    let overflow_sign = if scan.text.starts_with('-') { -1 } else { 1 };
     if scan.is_float {
+        let integer_overflow = if significant_integer_digits(scan.text) >= MAX_LENGTH_OF_LONG {
+            overflow_sign
+        } else {
+            0
+        };
         // Rust's `f64` parser accepts the exact grammar scanned above and, like
         // `zend_strtod`, saturates to infinity on exponent overflow.
         return scan.text.parse::<f64>().ok().map(|value| PhpNumeric::Float {
             value,
-            integer_overflow: 0,
+            integer_overflow,
         });
     }
     match scan.text.parse::<i64>() {
         Ok(value) => Some(PhpNumeric::Int(value)),
         Err(_) => scan.text.parse::<f64>().ok().map(|value| PhpNumeric::Float {
             value,
-            integer_overflow: if scan.text.starts_with('-') { -1 } else { 1 },
+            integer_overflow: overflow_sign,
         }),
     }
+}
+
+/// Counts the significant digits of a numeric run's integer part: the digits after the
+/// optional sign and any leading zeros, up to the first `.` or exponent.
+fn significant_integer_digits(text: &str) -> usize {
+    let unsigned = text.strip_prefix(['+', '-']).unwrap_or(text);
+    unsigned
+        .trim_start_matches('0')
+        .bytes()
+        .take_while(u8::is_ascii_digit)
+        .count()
 }
 
 /// Recognizes a *fully* numeric string, PHP's `is_numeric_string(..., allow_errors = 0)`.

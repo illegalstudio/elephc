@@ -9,15 +9,45 @@
 
 use super::*;
 
+/// Reports whether the receiver's static class or interface declares the method, or a class
+/// handles undeclared calls through `__call`.
+///
+/// A narrowed receiver keeps its declared type in EIR, so a method only its narrowed class has
+/// is absent here and must dispatch on the runtime class instead.
+fn static_receiver_declares_method(
+    ctx: &FunctionContext<'_>,
+    class_name: &str,
+    method_name: &str,
+) -> bool {
+    let normalized = class_name.trim_start_matches('\\');
+    let method_key = php_symbol_key(method_name);
+    if let Some(interface_info) = ctx.module.interface_infos.get(normalized) {
+        return interface_info.methods.contains_key(&method_key);
+    }
+    match ctx.module.class_infos.get(normalized) {
+        Some(class_info) => {
+            class_info.methods.contains_key(&method_key)
+                || class_info.methods.contains_key(&php_symbol_key("__call"))
+        }
+        None => true,
+    }
+}
+
 /// Lowers a direct instance-method call on a statically known object receiver.
 ///
 /// Overridable methods check literal `false` and `null` parameters on the runtime
-/// implementation. A final or otherwise non-virtual method keeps the resolved signature.
+/// implementation. Generic final declarations also select the runtime instantiation's
+/// diagnostic name, even though object-only variance preserves literal parameter types.
 pub(super) fn lower_method_call(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     let object = expect_operand(inst, 0)?;
     let method_name = method_name_data(ctx, inst)?.to_string();
     if let Some((class_name, true)) = objects::nullable_object_receiver_class(ctx, object)? {
         if !class_name.is_empty() {
+            if !static_receiver_declares_method(ctx, &class_name, &method_name) {
+                // A narrowed nullable receiver (`if ($this->shape instanceof Square)`): dispatch
+                // on the runtime class, which still reports a call on null.
+                return lower_mixed_method_call(ctx, inst, object, &method_name);
+            }
             return lower_nullable_receiver_method_call(ctx, inst, object, &class_name, &method_name);
         }
     }
@@ -26,16 +56,15 @@ pub(super) fn lower_method_call(ctx: &mut FunctionContext<'_>, inst: &Instructio
         return lower_mixed_method_call(ctx, inst, object, &method_name);
     }
     if matches!(object_ty, PhpType::Mixed | PhpType::Union(_)) {
-        if let Some(state) = fiber_state_predicate_method(&method_name) {
-            return lower_mixed_fiber_state_predicate(ctx, inst, object, &method_name, state);
-        }
         return lower_mixed_method_call(ctx, inst, object, &method_name);
     }
     let PhpType::Object(class_name) = object_ty else {
-        return Err(CodegenIrError::unsupported(format!(
-            "method call receiver for PHP type {:?}",
-            object_ty
-        )));
+        // PHP raises a catchable Error naming the runtime type. A static int, string,
+        // array, bool, or null used to stop compilation instead.
+        super::method_dispatch_errors::emit_static_non_object_method_error(
+            ctx, object, &method_name, &object_ty,
+        )?;
+        return Ok(());
     };
     guard_static_method_receiver(ctx, object, &method_name)?;
     if let Some(state) = fiber_state_predicate(&class_name, &method_name) {
@@ -65,6 +94,12 @@ pub(super) fn lower_method_call(ctx: &mut FunctionContext<'_>, inst: &Instructio
     if is_throwable_standard_method_call(ctx, &class_name, &method_name) {
         return lower_throwable_standard_method(ctx, inst, object, &method_name);
     }
+    if !static_receiver_declares_method(ctx, &class_name, &method_name) {
+        // The checker accepted a method the receiver's static type does not declare, so the
+        // receiver was narrowed (`if ($shape instanceof Square)`). Lowering keeps the slot's
+        // declared type, so dispatch on the runtime class, as for an untyped receiver.
+        return lower_mixed_method_call(ctx, inst, object, &method_name);
+    }
     if ctx
         .module
         .interface_infos
@@ -73,7 +108,7 @@ pub(super) fn lower_method_call(ctx: &mut FunctionContext<'_>, inst: &Instructio
         return lower_interface_method_call(ctx, inst, &class_name, &method_name);
     }
     let target = resolve_method_call_target(ctx, &class_name, &method_name, inst.operands.len())?;
-    if target.dynamic_slot.is_some() {
+    if super::method_resolution::method_requires_runtime_literal_guards(ctx, &class_name, &target) {
         // An override may widen `false` or `null`. The vtable selects that body, so the
         // guard has to read the runtime class rather than the static base signature.
         let receiver_reg = abi::nested_call_reg(ctx.emitter);
@@ -112,7 +147,7 @@ pub(super) fn lower_method_call(ctx: &mut FunctionContext<'_>, inst: &Instructio
     store_method_call_result(ctx, inst, &target)?;
     // User callees return an owner independent of the caller's materialized Mixed arguments.
     emit_call_arg_temp_cleanups(ctx, &call_args, None)?;
-    emit_ref_arg_writebacks(ctx, &call_args)
+    emit_ref_arg_writebacks_guarding_result(ctx, &call_args, inst.result, target.by_ref_return)
 }
 
 /// Rejects the raw null-container representation before a static object method dispatch.
@@ -147,14 +182,25 @@ pub(super) fn lower_mixed_method_call(
     method_name: &str,
 ) -> Result<()> {
     let candidates = mixed_method_candidates(ctx, method_name, inst.operands.len())?;
-    if candidates.is_empty() {
-        if builtins::has_eval_context(ctx) {
-            return builtins::lower_eval_method_call(ctx, inst, object, method_name);
-        }
-        emit_method_call_on_null_fatal(ctx, method_name);
+    // Eval subclasses keep their native backing class id, so identity must precede that ladder.
+    let eval_done_label = if ctx.module.required_runtime_features.eval_bridge {
+        let native_label = ctx.next_label("mixed_method_native");
+        let eval_done = ctx.next_label("mixed_method_eval_done");
+        builtins::lower_eval_context_free_method_call(
+            ctx, inst, object, method_name, &native_label, &eval_done,
+        )?;
+        ctx.emitter.label(&native_label);
+        Some(eval_done)
+    } else { None };
+    // A method declared only by eval has no native candidate. Its owning context
+    // must still get the first chance to resolve the call from a context-free frame.
+    // Without eval, an empty native ladder is not "on null": the receiver may be a
+    // real object (`__call`, or an undefined method) or a non-object mixed value.
+    if candidates.is_empty() && builtins::has_eval_context(ctx) {
+        builtins::lower_eval_method_call(ctx, inst, object, method_name)?;
+        if let Some(label) = eval_done_label { ctx.emitter.label(&label); }
         return Ok(());
     }
-
     let receiver_reg = abi::nested_call_reg(ctx.emitter);
     let non_object_label = ctx.next_label("mixed_method_non_object");
     let no_match_label = ctx.next_label("mixed_method_no_match");
@@ -195,13 +241,16 @@ pub(super) fn lower_mixed_method_call(
         builtins::lower_eval_method_call(ctx, inst, object, method_name)?;
         abi::emit_jump(ctx.emitter, &done_label);
     } else {
-        emit_method_call_on_null_fatal(ctx, method_name);
+        super::method_dispatch_errors::emit_undefined_or_arity_error(
+            ctx, inst, receiver_reg, method_name,
+        )?;
     }
 
     ctx.emitter.label(&non_object_label);
-    emit_method_call_on_null_fatal(ctx, method_name);
+    super::method_dispatch_errors::emit_mixed_non_object_method_fatal(ctx, method_name);
 
     ctx.emitter.label(&done_label);
+    if let Some(label) = eval_done_label { ctx.emitter.label(&label); }
     Ok(())
 }
 
@@ -220,6 +269,13 @@ pub(super) fn lower_mixed_method_candidate_call(
     // `receiver_reg`, which is exactly what `_from_reg` expects.
     if is_throwable_standard_method_call(ctx, &candidate.class_name, method_name) {
         return lower_throwable_standard_method_from_reg(ctx, inst, receiver_reg, method_name);
+    }
+    // Fiber's state predicates are runtime intrinsics with placeholder bodies. Only the
+    // matched Fiber branch calls the runtime predicate: other classes declaring a method of
+    // the same name (`isRunning()` on a user interface) keep their own branch.
+    if let Some(state) = fiber_state_predicate(&candidate.class_name, method_name) {
+        emit_fiber_state_predicate_from_reg(ctx, receiver_reg, state);
+        return store_method_call_result(ctx, inst, &candidate.target);
     }
     abi::emit_push_reg(ctx.emitter, receiver_reg);
     super::method_resolution::emit_method_literal_parameter_guards(
@@ -256,7 +312,7 @@ pub(super) fn lower_mixed_method_candidate_call(
     store_method_call_result(ctx, inst, &candidate.target)?;
     // Candidate dispatch creates the same caller-owned coercion cells as concrete dispatch.
     emit_call_arg_temp_cleanups(ctx, &call_args, None)?;
-    emit_ref_arg_writebacks(ctx, &call_args)
+    emit_ref_arg_writebacks_guarding_result(ctx, &call_args, inst.result, candidate.target.by_ref_return)
 }
 
 /// Returns true when `class_name` is `ancestor` or reaches it through `parent`.

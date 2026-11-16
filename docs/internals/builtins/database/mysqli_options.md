@@ -1,8 +1,6 @@
 ---
 title: "mysqli_options() - internals"
 description: "Compiler internals for mysqli_options(): lowering path, type checks, and runtime helpers."
-sidebar:
-  order: 144
 ---
 
 ## `mysqli_options()` - internals
@@ -10,7 +8,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`crates/elephc-builtin-contract/src/catalog_data.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-builtin-contract/src/catalog_data.rs)
-- **Lowering**: [`src/mysqli_prelude/build/procedural.rs`:393](https://github.com/illegalstudio/elephc/blob/main/src/mysqli_prelude/build/procedural.rs#L393) (`mysqli_options`)
+- **Lowering**: [`src/mysqli_prelude/build/procedural.rs`](https://github.com/illegalstudio/elephc/blob/main/src/mysqli_prelude/build/procedural.rs) (`mysqli_options`)
 - **Function symbol**: `mysqli_options()`
 
 

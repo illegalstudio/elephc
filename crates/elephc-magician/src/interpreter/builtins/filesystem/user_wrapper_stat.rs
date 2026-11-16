@@ -33,7 +33,7 @@ pub(in crate::interpreter) fn eval_user_wrapper_fstat_result(
     else {
         return values.bool_value(false).map(Some);
     };
-    let result = eval_dynamic_method_with_values(
+    let result = eval_dynamic_method_with_owned_values(
         &declaring_class,
         &info.class_name,
         &stream_stat,

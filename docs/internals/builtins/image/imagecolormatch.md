@@ -1,8 +1,6 @@
 ---
 title: "imagecolormatch() - internals"
 description: "Compiler internals for imagecolormatch(): lowering path, type checks, and runtime helpers."
-sidebar:
-  order: 473
 ---
 
 ## `imagecolormatch()` - internals
@@ -10,7 +8,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`crates/elephc-builtin-contract/src/catalog_data.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-builtin-contract/src/catalog_data.rs)
-- **Lowering**: [`src/image_prelude.rs`:2563](https://github.com/illegalstudio/elephc/blob/main/src/image_prelude.rs#L2563) (`imagecolormatch`)
+- **Lowering**: [`src/image_prelude.rs`](https://github.com/illegalstudio/elephc/blob/main/src/image_prelude.rs) (`imagecolormatch`)
 - **Function symbol**: `imagecolormatch()`
 
 

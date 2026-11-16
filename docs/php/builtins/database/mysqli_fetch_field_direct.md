@@ -1,8 +1,6 @@
 ---
 title: "mysqli_fetch_field_direct()"
 description: "Returns metadata for one column of a result by index."
-sidebar:
-  order: 120
 ---
 
 ## mysqli_fetch_field_direct()
@@ -21,8 +19,9 @@ Returns metadata for one column of a result by index.
 
 ## Availability
 
-- **Compiled (AOT)**: supported through an injected elephc-PHP prelude.
-- **`eval()` (magician interpreter)**: not available inside eval'd code.
+| Compiled (AOT) | Magician (eval) |
+|---|---|
+| Available | Not available yet |
 
 _No examples yet. Check `examples/` and `showcases/` for usage patterns._
 

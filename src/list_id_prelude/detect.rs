@@ -5,6 +5,8 @@
 //!
 //! Called from:
 //! - `crate::list_id_prelude::inject_if_used`.
+//! - `crate::list_id_prelude::program_uses_list_identifiers`, which the autoload
+//!   prelude probe calls after name resolution.
 //!
 //! Key details:
 //! - Runs before name resolution, so function `Name`s are raw source text; matched
@@ -29,11 +31,17 @@ pub(super) fn program_uses_list_identifiers(program: &[Stmt]) -> bool {
     program.iter().any(stmt_refs_listid)
 }
 
-/// Returns whether a function name is the `timezone_identifiers_list` procedural
-/// alias, compared case-insensitively on its unqualified last segment.
+/// Returns whether a function name is the identifier-listing surface, compared
+/// case-insensitively on its unqualified last segment.
+///
+/// `timezone_identifiers_list` is the procedural alias. Name resolution rewrites
+/// that alias and `DateTimeZone::listIdentifiers` to `__elephc_list_identifiers`
+/// before the autoload probe scans a loaded file, so the desugared name counts too.
 fn name_is_listid_fn(name: &Name) -> bool {
-    name.last_segment()
-        .is_some_and(|segment| segment.eq_ignore_ascii_case("timezone_identifiers_list"))
+    name.last_segment().is_some_and(|segment| {
+        segment.eq_ignore_ascii_case("timezone_identifiers_list")
+            || segment.eq_ignore_ascii_case("__elephc_list_identifiers")
+    })
 }
 
 /// Returns whether a function name is PHP's `eval` construct.
@@ -445,8 +453,9 @@ mod tests {
     //! - `cargo test` through Rust's test harness.
     //!
     //! Key details:
-    //! - Tests parse raw source (pre name-resolution), matching the stage at which
-    //!   `program_uses_list_identifiers` runs inside `inject_if_used`.
+    //! - Source-form tests match `inject_if_used` before name resolution. The
+    //!   desugared `__elephc_list_identifiers` test matches the autoload probe,
+    //!   which scans files after name resolution rewrites both call forms.
 
     use super::*;
 
@@ -461,6 +470,14 @@ mod tests {
     fn detects_procedural_call() {
         assert!(program_uses_list_identifiers(&parse(
             r#"<?php $z = timezone_identifiers_list(DateTimeZone::EUROPE);"#
+        )));
+    }
+
+    /// The function name left by name resolution is detected.
+    #[test]
+    fn detects_desugared_function() {
+        assert!(program_uses_list_identifiers(&parse(
+            r#"<?php $z = __elephc_list_identifiers(128, "");"#
         )));
     }
 

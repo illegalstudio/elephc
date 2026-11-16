@@ -15,7 +15,7 @@
 use super::*;
 
 /// Emits the ARM64 native wrapper for cloning boxed object cells.
-pub(super) fn emit_aarch64_object_clone_shallow_wrapper(emitter: &mut Emitter) {
+pub(super) fn emit_aarch64_object_clone_shallow_wrapper(emitter: &mut Emitter, native_validation: bool) {
     emitter.label_global("__rt_object_clone_shallow_boxed");
     emitter.instruction("sub sp, sp, #80");                                     // reserve source, clone, descriptor, counters, and wrapper frame slots
     emitter.instruction("stp x29, x30, [sp, #64]");                             // save frame pointer and return address across clone helper calls
@@ -168,6 +168,10 @@ pub(super) fn emit_aarch64_object_clone_shallow_wrapper(emitter: &mut Emitter) {
     emitter.instruction("str xzr, [x11, x13]");                                 // clear the clone's dynamic-property hash slot
 
     emitter.label("__rt_object_clone_shallow_boxed_box");
+    if native_validation {
+        emitter.instruction("ldr x0, [sp, #8]");                                // register the completed clone before a PHP-visible box owns it
+        abi::emit_call_label(emitter, "__rt_reference_sources_bind_object");
+    }
     emitter.instruction("mov x0, #24");                                         // a Mixed cell stores a runtime tag and two payload words
     emitter.instruction("bl __rt_heap_alloc");                                  // allocate the Mixed cell that will own the fresh clone
     emitter.instruction("mov x9, #5");                                          // heap kind 5 marks Mixed cells for the ownership helpers

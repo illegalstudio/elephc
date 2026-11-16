@@ -211,8 +211,10 @@ impl Checker {
                 })
                 .collect(),
         };
-        let substituted =
-            replace_relative_class_types(&declared, &written_self).substitute_type_params(&bindings);
+        let substituted = generics::substitute_value_type(
+            &replace_relative_class_types(&declared, &written_self),
+            &bindings,
+        );
         Ok(Some(self.resolve_type_expr(&substituted, expr.span)?))
     }
 
@@ -348,8 +350,8 @@ impl Checker {
             };
             // Substituted first, as every bound check does: `<T : Cmp<T>>` names `T` itself.
             let bound_ty =
-                self.resolve_type_expr(&bound.substitute_type_params(bindings), expr.span)?;
-            let argument_ty = self.resolve_type_expr(argument, expr.span)?;
+                self.resolve_type_expr(&generics::substitute_value_type(bound, bindings), expr.span)?;
+            let argument_ty = self.resolve_generic_bound_argument(argument, expr.span)?;
             if !self.type_accepts(&bound_ty, &argument_ty) {
                 return Err(CompileError::new(
                     expr.span,

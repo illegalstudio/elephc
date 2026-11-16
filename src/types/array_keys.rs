@@ -73,6 +73,19 @@ pub(crate) fn static_array_key_forces_hash_storage(expr: &Expr) -> bool {
     }
 }
 
+/// A static key that can leave a gap in an already non-empty packed array.
+///
+/// A packed array of length `n` already holds keys `0..n-1`. Key `0` or `1` is an
+/// overwrite or the next contiguous slot; any higher key (or a negative key) may
+/// skip, so PHP must switch to hash storage before the write.
+pub(crate) fn nonempty_array_key_forces_hash_storage(expr: &Expr) -> bool {
+    match &expr.kind {
+        ExprKind::IntLiteral(value) => *value < 0 || *value >= 2,
+        ExprKind::FloatLiteral(value) => *value < 0.0 || *value >= 2.0,
+        _ => false,
+    }
+}
+
 /// Keeps an empty array packed only when its first explicit key is provably zero.
 /// Unknown keys can be sparse or negative, so hash storage must not create typed holes.
 pub(crate) fn empty_array_key_requires_hash_storage(expr: &Expr) -> bool {
@@ -83,6 +96,17 @@ pub(crate) fn empty_array_key_requires_hash_storage(expr: &Expr) -> bool {
         ExprKind::StringLiteral(value) => value != "0",
         _ => true,
     }
+}
+
+/// Returns whether an integer key written into the non-empty packed local `array` provably lands
+/// inside `[0, count($array)]`, so the write can neither leave a gap nor need a negative key.
+///
+/// Packed storage has no keys: slot `n` is key `n`, and a write past the logical end zero-fills
+/// the gap where PHP promotes the array to a hash (`$a = [1, 2]; $a[5] = 3;` is
+/// `{"0":1,"1":2,"5":3}`). Without a length fact the only key bounded syntactically is one that
+/// is provably `0`; the checker adds the loop-counter proofs it owns.
+pub(crate) fn nonempty_array_key_stays_in_range(index: &Expr) -> bool {
+    !empty_array_key_requires_hash_storage(index)
 }
 
 /// Merges two array key types from adjacent elements into a unified key type.

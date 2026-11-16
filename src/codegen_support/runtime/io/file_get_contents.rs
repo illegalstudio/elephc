@@ -11,7 +11,7 @@
 use crate::codegen_support::{emit::Emitter, platform::Arch};
 use crate::codegen_support::abi;
 
-const FILE_GET_CONTENTS_FAILED_WARNING: &str =
+pub(super) const FILE_GET_CONTENTS_FAILED_WARNING: &str =
     "Warning: file_get_contents(): Failed to open stream\n";
 
 /// Emits `__rt_file_get_contents`, the runtime helper that reads an entire file into an owned heap buffer.

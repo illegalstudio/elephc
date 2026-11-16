@@ -136,7 +136,8 @@ pub fn emit_push_result_value(emitter: &mut Emitter, ty: &PhpType) {
         | PhpType::Callable
         | PhpType::Object(_)
         | PhpType::Packed(_)
-        | PhpType::Pointer(_) => {
+        | PhpType::Pointer(_)
+        | PhpType::Narrow(_) => {
             emit_push_reg(emitter, int_result_reg(emitter));                            // push the current scalar or pointer result register onto the temporary arg stack
         }
         PhpType::Float => {

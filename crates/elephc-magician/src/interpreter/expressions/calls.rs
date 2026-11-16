@@ -106,8 +106,14 @@ fn eval_call_with_error_name(
     }
     // The xml surface forwards to the host's compiled prelude; the source-level path keeps
     // `xml_parse_into_struct()`'s by-reference outputs and named arguments intact.
+    if eval_fileinfo_builtin_name(name) {
+        return eval_builtin_fileinfo_call(name, args, context, scope, values);
+    }
     if eval_xml_builtin_name(name) {
         return eval_builtin_xml_call(name, args, context, scope, values);
+    }
+    if eval_tidy_builtin_name(name) {
+        return eval_builtin_tidy_call(name, args, context, scope, values);
     }
     // ALL EIGHT OPcache functions are prelude-provided on the native side (they are not
     // catalog builtins), so eval carries a fallback handler for each. Every one of those
@@ -243,7 +249,7 @@ pub(in crate::interpreter) fn eval_dynamic_call(
 }
 
 /// Invokes a rooted callback while source-order argument leases protect all consumed values.
-fn eval_dynamic_call_with_callback(
+pub(in crate::interpreter) fn eval_dynamic_call_with_callback(
     callback: RuntimeCellHandle,
     args: &[EvalCallArg],
     context: &mut ElephcEvalContext,
@@ -262,14 +268,16 @@ fn eval_dynamic_call_with_callback(
             || crate::context::pcntl_runtime::is_handler_callable(callback);
         if !is_closure_object && !is_detached_pcntl_handler {
             eval_invokable_object_precheck(callback, context, values)?;
-            return with_eval_call_arguments(args, context, scope, values, |arguments, context, _, values| {
+            let modes = CallArgumentModes::for_method(callback, "__invoke", context, values).unwrap_or_default();
+            return with_eval_call_arguments_with_modes(args, &modes, context, scope, values, |arguments, context, _, values| {
                 eval_invokable_object_call_result(callback, arguments, context, values)
             });
         }
     }
     let callback = eval_callable(callback, context, values)?;
     callback.with_values(context, values, |callback, context, values| {
-        with_eval_call_arguments(args, context, scope, values, |arguments, context, _, values| {
+        let modes = CallArgumentModes::for_callable(&callback, context, values)?;
+        with_eval_call_arguments_with_modes(args, &modes, context, scope, values, |arguments, context, _, values| {
             eval_evaluated_callable_with_call_array_args(&callback, arguments, context, values)
         })
     })

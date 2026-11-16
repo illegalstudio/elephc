@@ -66,18 +66,54 @@ pub(in crate::parser::stmt) fn try_parse_postfix_assignment(
     if lhs_pos != lhs_expr_tokens.len() {
         return Err(CompileError::new(span, "Invalid assignment target"));
     }
+    let lhs_expr = if is_append {
+        match lhs_expr.kind {
+            ExprKind::DynamicPropertyAccess { object, property } => match property.kind {
+                ExprKind::StringLiteral(property) => Expr::new(ExprKind::PropertyAccess { object, property }, lhs_expr.span),
+                _ => Expr::new(ExprKind::DynamicPropertyAccess { object, property }, lhs_expr.span),
+            },
+            _ => lhs_expr,
+        }
+    } else { lhs_expr };
+
+    let computed_indexed_update = !is_append && matches!(lhs_expr.kind, ExprKind::ArrayAccess { .. })
+        && matches!(op, AssignmentOperator::Compound(_))
+        && computed_receiver_property_target(&lhs_expr);
 
     // Runtime-name writes need the expression lowerer's captured RHS and lazy ??= plan.
     // A handcrafted assignment without its result target evaluated the value twice.
-    if !is_append && matches!(lhs_expr.kind, ExprKind::DynamicPropertyAccess { .. }) {
-        let value = parse_expr(tokens, pos)?;
+    if !is_append && (matches!(lhs_expr.kind, ExprKind::DynamicPropertyAccess { .. })
+        || (op != AssignmentOperator::Assign && (computed_storage_property_target(&lhs_expr)
+            || (computed_receiver_property_target(&lhs_expr) && !computed_indexed_update)))) {
+        let value = if matches!(lhs_expr.kind, ExprKind::DynamicPropertyAccess { .. }) {
+            parse_expr(tokens, pos)?
+        } else {
+            let start = *pos;
+            let expression = crate::parser::expr::parse_scoped_write_expr(tokens, pos)?;
+            if matches!(expression.kind, ExprKind::Assignment { .. }) { expression } else {
+                // Low-precedence logic can wrap the assignment; retain its ordinary expression scope.
+                *pos = start;
+                parse_expr(tokens, pos)?
+            }
+        };
         expect_semicolon(tokens, pos)?;
         return Ok(Some(Stmt::new(StmtKind::ExprStmt(value), span)));
     }
 
     *pos = assign_pos + 1;
     let rhs = parse_assignment_value_expr(tokens, pos)?;
+    if computed_indexed_update && matches!(tokens.get(*pos).map(|(token, _)| token),
+        Some(Token::And | Token::Or | Token::Xor))
+    {
+        *pos = start;
+        let expression = parse_expr(tokens, pos)?;
+        expect_semicolon(tokens, pos)?;
+        return Ok(Some(Stmt::new(StmtKind::ExprStmt(expression), span)));
+    }
     expect_semicolon(tokens, pos)?;
+    if computed_indexed_update {
+        return lower_computed_property_element_update(lhs_expr, op, rhs, span).map(Some);
+    }
     if op != AssignmentOperator::Assign && !can_replay_assignment_target(&lhs_expr) {
         return lower_effectful_postfix_assignment(lhs_expr, op, rhs, span).map(Some);
     }
@@ -100,6 +136,13 @@ pub(in crate::parser::stmt) fn try_parse_postfix_assignment(
         // afterwards. A child-property append must not retain the old static object chain.
         let target = hoisted.stabilize_array_base(lhs_expr);
         (target, hoisted.stabilize_unconditionally(rhs))
+    } else if op == AssignmentOperator::Assign
+        && !(is_append && matches!(lhs_expr.kind, ExprKind::ArrayAccess { .. }))
+        && (computed_storage_property_target(&lhs_expr)
+        || computed_receiver_property_target(&lhs_expr)) {
+        // Settle computed roots, names and keys before the RHS, retaining writable traversal.
+        hoisted.scoped = true;
+        (hoisted.stabilize_array_base(lhs_expr), rhs)
     } else {
         let rhs = if matches!(op, AssignmentOperator::Compound(_))
             && compound_rhs_can_disturb_index(&lhs_expr, &rhs)
@@ -216,6 +259,9 @@ pub(crate) fn lower_nested_append_assignment(
     span: Span,
 ) -> Result<Stmt, CompileError> {
     let mut lowerer = EffectfulTargetLowerer::new(span);
+    // The bucket is read and written back through the same target, so a key that reads an
+    // element would warn twice for a missing key where PHP warns once.
+    lowerer.hoist_element_read_keys = true;
     let delayed_receiver = has_delayed_static_receiver(&target);
     let target = lowerer.stabilize_array_target(target);
     let value = if delayed_receiver {
@@ -331,6 +377,25 @@ pub(in crate::parser::stmt) fn try_parse_scoped_postfix_incdec(
     expect_semicolon(tokens, pos)?;
 
     lower_postfix_incdec_assignment(lhs_expr, is_increment, span).map(Some)
+}
+
+/// Claims a discarded computed property-element postfix without consuming surrounding expressions.
+pub(in crate::parser::stmt) fn try_parse_computed_property_element_postfix_incdec(
+    tokens: &[SpannedToken], pos: &mut usize, span: Span,
+) -> Result<Option<Stmt>, CompileError> {
+    let start = *pos;
+    let Some((position, increment)) = find_top_level_postfix_incdec(tokens, start) else { return Ok(None); };
+    if !matches!(tokens.get(position + 1), Some((Token::Semicolon, _)))
+        || assignment_precedes(tokens, start, position) { return Ok(None); }
+    let lhs = &tokens[start..position];
+    if contains_empty_dimension(lhs) { return Ok(None); }
+    let mut consumed = 0;
+    let Ok(target) = parse_expr(lhs, &mut consumed) else { return Ok(None); };
+    if consumed != lhs.len() || !matches!(target.kind, ExprKind::ArrayAccess { .. })
+        || !computed_receiver_property_target(&target) { return Ok(None); }
+    *pos = position + 1;
+    expect_semicolon(tokens, pos)?;
+    lower_postfix_incdec_assignment(target, increment, span).map(Some)
 }
 
 /// Parses discarded post-increment/decrement on a complex l-value target.
@@ -534,6 +599,59 @@ fn is_instance_property_assignment_target(target: &Expr) -> bool {
     }
 }
 
+/// Recognizes computed hops in a property-ending chain with a live storage root.
+fn computed_storage_property_target(target: &Expr) -> bool {
+    matches!(target.kind, ExprKind::PropertyAccess { .. } | ExprKind::DynamicPropertyAccess { .. })
+        && storage_receiver_root(target) && !can_replay_assignment_target(target)
+}
+
+/// Recognizes computed receiver values that must be captured separately from writable hops.
+fn computed_receiver_property_target(target: &Expr) -> bool {
+    if !is_instance_property_assignment_target(target) { return false; }
+    let mut root = target;
+    loop {
+        root = match &root.kind {
+            ExprKind::PropertyAccess { object, .. } | ExprKind::DynamicPropertyAccess { object, .. } => object,
+            ExprKind::ArrayAccess { array, .. } => array,
+            _ => return !can_replay_assignment_target(root),
+        };
+    }
+}
+
+/// Shares scoped receiver and name capture planning with indexed incdec expressions.
+pub(crate) fn lower_scoped_instance_dimension_incdec(
+    target: &Expr, increment: bool, span: Span,
+) -> Option<Stmt> {
+    if !matches!(target.kind, ExprKind::ArrayAccess { .. })
+        || !is_instance_property_assignment_target(target) { return None; }
+    let mut hop = target;
+    let mut computed_name = false;
+    loop {
+        hop = match &hop.kind {
+            ExprKind::DynamicPropertyAccess { object, property } => {
+                computed_name |= !matches!(property.kind, ExprKind::StringLiteral(_));
+                object
+            }
+            ExprKind::PropertyAccess { object, .. } => object,
+            ExprKind::ArrayAccess { array, .. } => array,
+            _ => break,
+        };
+    }
+    if !computed_name && !computed_receiver_property_target(target) { return None; }
+    lower_computed_property_element_update(target.clone(), AssignmentOperator::IncDec(increment),
+        Expr::new(ExprKind::IntLiteral(1), span), span).ok()
+}
+
+/// Distinguishes live storage roots from computed values captured once before assignment operands.
+fn storage_receiver_root(target: &Expr) -> bool {
+    match &target.kind {
+        ExprKind::PropertyAccess { object, .. } | ExprKind::DynamicPropertyAccess { object, .. } => storage_receiver_root(object),
+        ExprKind::ArrayAccess { array, .. } => storage_receiver_root(array),
+        ExprKind::Variable(_) | ExprKind::This | ExprKind::StaticPropertyAccess { .. } => true,
+        _ => false,
+    }
+}
+
 /// Finds a delayed static receiver through literal, runtime-name, and array traversal.
 fn has_delayed_static_receiver(target: &Expr) -> bool {
     match &target.kind {
@@ -686,6 +804,42 @@ pub(crate) fn can_replay_assignment_target(expr: &Expr) -> bool {
     }
 }
 
+/// Returns whether a replay-safe expression reads an array element anywhere, a read that warns
+/// on a missing key each time it is evaluated.
+fn reads_array_element(expr: &Expr) -> bool {
+    match &expr.kind {
+        ExprKind::ArrayAccess { .. } => true,
+        ExprKind::PropertyAccess { object, .. } => reads_array_element(object),
+        ExprKind::DynamicPropertyAccess { object, property } => {
+            reads_array_element(object) || reads_array_element(property)
+        }
+        ExprKind::BinaryOp { left, right, .. } => {
+            reads_array_element(left) || reads_array_element(right)
+        }
+        ExprKind::InstanceOf { value, .. }
+        | ExprKind::Negate(value)
+        | ExprKind::Not(value)
+        | ExprKind::BitNot(value)
+        | ExprKind::Cast { expr: value, .. }
+        | ExprKind::PtrCast { expr: value, .. }
+        | ExprKind::NamedArg { value, .. }
+        | ExprKind::Spread(value) => reads_array_element(value),
+        ExprKind::NullCoalesce { value, default } | ExprKind::ShortTernary { value, default } => {
+            reads_array_element(value) || reads_array_element(default)
+        }
+        ExprKind::Ternary {
+            condition,
+            then_expr,
+            else_expr,
+        } => {
+            reads_array_element(condition)
+                || reads_array_element(then_expr)
+                || reads_array_element(else_expr)
+        }
+        _ => false,
+    }
+}
+
 /// Returns whether an update's array base is one whose single dimension gets an index snapshot.
 ///
 /// A local, a property, or a static property is written by the statement itself, so its key
@@ -804,6 +958,27 @@ fn lower_effectful_postfix_assignment(
     Ok(lowerer.finish(lowered))
 }
 
+/// Captures computed roots and keys without reading an indexed property's writable receiver.
+fn lower_computed_property_element_update(
+    target: Expr, op: AssignmentOperator, rhs: Expr, span: Span,
+) -> Result<Stmt, CompileError> {
+    let mut lowerer = EffectfulTargetLowerer::new(span);
+    lowerer.scoped = true;
+    let target = lowerer.stabilize_array_base(target);
+    let rhs = if matches!(op, AssignmentOperator::Compound(_))
+        && compound_rhs_can_disturb_index(&target, &rhs)
+    { lowerer.stabilize_unconditionally(rhs) } else { rhs };
+    // This writer lowers one shared key after receiver handoff. A user variable must
+    // remain live until then, since a temporary parent's destructor can change it.
+    let target = if matches!(&target.kind, ExprKind::ArrayAccess { index, .. }
+        if matches!(&index.kind, ExprKind::Variable(name) if !crate::names::is_generated_local_name(name))) {
+        target
+    } else { lowerer.snapshot_update_dimension(target) };
+    let value = assignment_value(target.clone(), op, rhs, span);
+    let statement = assignment_target_store_stmt(target, value, span)?;
+    Ok(lowerer.finish(statement))
+}
+
 /// Lowers discarded post-increment/decrement to the existing assignment statement forms.
 ///
 /// Statement position discards the operator's value, so prefix `++$obj->n;` lowers through
@@ -821,6 +996,22 @@ pub(crate) fn lower_postfix_incdec_assignment(
         AssignmentOperator::Compound(BinOp::Sub)
     };
     let one = Expr::new(ExprKind::IntLiteral(1), span);
+
+    if matches!(lhs_expr.kind, ExprKind::ArrayAccess { .. })
+        && computed_receiver_property_target(&lhs_expr)
+    {
+        return lower_computed_property_element_update(lhs_expr, op, one, span);
+    }
+
+    if computed_storage_property_target(&lhs_expr)
+        || (matches!(lhs_expr.kind, ExprKind::PropertyAccess { .. } | ExprKind::DynamicPropertyAccess { .. })
+            && computed_receiver_property_target(&lhs_expr)) {
+        if let Some(expression) = crate::parser::expr::desugar_scoped_lvalue_incdec(
+            lhs_expr.clone(), is_increment, false, span,
+        ) {
+            return Ok(Stmt::new(StmtKind::ExprStmt(expression), span));
+        }
+    }
 
     if matches!(&lhs_expr.kind,
         ExprKind::PropertyAccess { object, .. } | ExprKind::DynamicPropertyAccess { object, .. }
@@ -957,8 +1148,12 @@ fn lower_effectful_static_assignment(
 /// assignments so that source evaluation order is preserved and side effects are not duplicated.
 struct EffectfulTargetLowerer {
     span: Span,
+    scoped: bool,
     next_temp: usize,
     stmts: Vec<Stmt>,
+    /// Whether a subscript key that reads an array element is moved into a temporary although
+    /// it is replay-safe as a value: its missing-key warning is not.
+    hoist_element_read_keys: bool,
 }
 
 impl EffectfulTargetLowerer {
@@ -967,8 +1162,10 @@ impl EffectfulTargetLowerer {
     fn new(span: Span) -> Self {
         Self {
             span,
+            scoped: false,
             next_temp: 0,
             stmts: Vec::new(),
+            hoist_element_read_keys: false,
         }
     }
 
@@ -1018,7 +1215,8 @@ impl EffectfulTargetLowerer {
     /// Returns a unique synthetic temporary name for this lowered statement.
     fn next_temp_name(&mut self) -> String {
         let name = crate::names::generated_local_name(&format!(
-            "__elephc_compound_{}_{}_{}",
+            "{}{}_{}_{}",
+            if self.scoped { crate::parser::ast::SCOPED_WRITE_TEMP_PREFIX } else { "__elephc_compound_" },
             self.span.line, self.span.col, self.next_temp
         ));
         self.next_temp += 1;
@@ -1043,6 +1241,15 @@ impl EffectfulTargetLowerer {
         name
     }
 
+    /// Stabilizes a subscript key: as `stabilize` does, and also unconditionally when the lowerer
+    /// hoists element-read keys and this key reads an array element.
+    fn stabilize_key(&mut self, index: Expr) -> Expr {
+        if self.hoist_element_read_keys && reads_array_element(&index) {
+            return self.stabilize_unconditionally(index);
+        }
+        self.stabilize(index)
+    }
+
     /// Stabilizes an array-access target, recursively stabilizing both the array base
     /// and the index. For simple array bases (Variable, This, StaticPropertyAccess),
     /// the array base is kept as-is; deeper bases are stabilized via `stabilize_array_base`.
@@ -1052,7 +1259,7 @@ impl EffectfulTargetLowerer {
             ExprKind::ArrayAccess { array, index } => Expr::new(
                 ExprKind::ArrayAccess {
                     array: Box::new(self.stabilize_array_base(*array)),
-                    index: Box::new(self.stabilize(*index)),
+                    index: Box::new(self.stabilize_key(*index)),
                 },
                 span,
             ),
@@ -1074,7 +1281,7 @@ impl EffectfulTargetLowerer {
                 {
                     self.stabilize_unconditionally(*index)
                 } else {
-                    self.stabilize(*index)
+                    self.stabilize_key(*index)
                 };
                 Expr::new(ExprKind::ArrayAccess { array, index: Box::new(index) }, span)
             }

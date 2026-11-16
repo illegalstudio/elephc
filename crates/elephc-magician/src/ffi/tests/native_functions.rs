@@ -10,6 +10,57 @@
 
 use super::*;
 
+/// Reference layout flags retain old boolean registrations and reject incomplete shape flags.
+#[test]
+fn native_function_reference_flags_preserve_compiled_tagged_scalar_layout() {
+    let mut ctx = ElephcEvalContext::new();
+    let name = b"native_nullable_ref";
+    assert_eq!(unsafe { __elephc_eval_register_native_function(
+        &mut ctx, name.as_ptr(), name.len() as u64, 1usize as *mut c_void, Some(fake_native_invoker), 1,
+    ) }, 1);
+    for (flags, accepted, tagged, boxed) in [
+        (3, 1, true, false), (2, 0, true, false), (4, 0, true, false),
+        (1, 1, false, false), (5, 1, false, true), (7, 0, false, true),
+        (8, 0, false, true), (0, 1, false, false),
+    ] {
+        assert_eq!(unsafe { __elephc_eval_register_native_function_param_flags(
+            &mut ctx, name.as_ptr(), name.len() as u64, 0, flags, 0,
+        ) }, accepted);
+        let function = ctx.native_function("native_nullable_ref").unwrap();
+        assert_eq!(function.param_tagged_scalar_ref(0), tagged);
+        assert_eq!(function.param_boxed_ref(0), boxed);
+        if accepted == 1 { assert_eq!(function.param_by_ref(0), flags & 1 != 0); }
+    }
+}
+
+/// Function attribute records retain named arguments, source order and repeated entries.
+#[test]
+fn register_native_function_attributes_preserves_metadata() {
+    let mut ctx = ElephcEvalContext::new();
+    let name = b"Native\\DeprecatedFn";
+    assert_eq!(unsafe { __elephc_eval_register_native_function(
+        &mut ctx, name.as_ptr(), name.len() as u64,
+        1usize as *mut c_void, Some(fake_native_invoker), 0,
+    ) }, 1);
+    let args = vec![EvalAttributeArg::Named {
+        name: "since".into(), value: Box::new(EvalAttributeArg::String("8.5".into())),
+    }];
+    let record = native_member_attribute_record(4, "\\NATIVE\\DeprecatedFn", "Deprecated", Some(&args));
+    for _ in 0..2 {
+        assert_eq!(unsafe { __elephc_eval_register_native_member_attribute(
+            &mut ctx, record.as_ptr(), record.len() as u64,
+        ) }, 1);
+    }
+    let function = ctx.native_function("native\\deprecatedfn").unwrap();
+    assert_eq!(function.attributes().len(), 2);
+    assert_eq!(function.attributes()[0].name(), "Deprecated");
+    assert_eq!(function.attributes()[0].args(), Some(args.as_slice()));
+    let missing = native_member_attribute_record(4, "missing", "Deprecated", Some(&[]));
+    assert_eq!(unsafe { __elephc_eval_register_native_member_attribute(
+        &mut ctx, missing.as_ptr(), missing.len() as u64,
+    ) }, 0);
+}
+
 /// The shape ABI distinguishes compiler-internal declarations from user and legacy callbacks.
 #[test]
 fn register_native_function_shape_preserves_declaration_origin() {

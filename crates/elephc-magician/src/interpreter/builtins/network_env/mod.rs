@@ -230,7 +230,7 @@ pub(in crate::interpreter) fn eval_network_env_values_result(
         }
         "phpversion" => match evaluated_args {
             [] => eval_phpversion_result(values),
-            [extension] => eval_phpversion_extension_result(*extension, values),
+            [extension] => eval_phpversion_extension_result(*extension, context, values),
             _ => Err(EvalStatus::RuntimeFatal),
         },
         "putenv" => {

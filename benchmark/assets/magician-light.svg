@@ -3,1073 +3,1133 @@
 <desc id="desc">CI process execution medians in milliseconds. Lower is better. Lines break when environment or fixture changes.</desc>
 <rect width="1000" height="1950" rx="16" fill="#ffffff"/>
 <text x="28.0" y="40.0" fill="#172033" font-family="ui-monospace,monospace" font-size="22" font-weight="700">ELEPHC / Magician eval</text>
-<text x="28.0" y="67.0" fill="#53647a" font-family="ui-monospace,monospace" font-size="13" font-weight="400">Latest: 2026-10-20 | 86 saved samples | recent 90 days</text>
+<text x="28.0" y="67.0" fill="#53647a" font-family="ui-monospace,monospace" font-size="13" font-weight="400">Latest: 2026-11-15 | 112 saved samples | recent 90 days | PHP: CLI; OPcache and tracing JIT enabled</text>
 <rect x="20" y="85" width="960" height="140" rx="10" fill="#f6f8fa" stroke="#d0d7de"/>
 <text x="36.0" y="110.0" fill="#172033" font-family="ui-monospace,monospace" font-size="16" font-weight="700">algebra_heavy</text>
-<text x="36.0" y="134.0" fill="#172033" font-family="ui-monospace,monospace" font-size="12" font-weight="400">eval 7.61 ms | native 11.27 ms | eval/native: 0.67x</text>
-<text x="36.0" y="155.0" fill="#53647a" font-family="ui-monospace,monospace" font-size="11" font-weight="400">2026-10-20 | 3c39673c | trend: elephc-eval ms</text>
+<text x="36.0" y="134.0" fill="#172033" font-family="ui-monospace,monospace" font-size="12" font-weight="400">eval 6.25 ms | native 1.95 ms | eval/native: 3.21x</text>
+<text x="36.0" y="155.0" fill="#53647a" font-family="ui-monospace,monospace" font-size="11" font-weight="400">2026-11-15 | 2857abcb | trend: elephc-eval ms</text>
 <path d="M565 193 H955" stroke="#d0d7de" fill="none"/>
-<polyline points="565.00,173.92 566.80,175.07 571.61,168.03 577.21,175.43 581.70,171.07 584.86,172.36 590.61,155.14 594.97,164.79 599.11,155.04 602.27,166.95 616.62,173.68 620.81,165.21 623.35,169.56 627.45,157.24 633.29,174.29 638.08,171.19 642.42,172.80 647.11,152.94 649.57,168.39 654.62,159.27 659.06,163.60 662.89,153.86 667.37,172.24 676.63,170.09 681.32,168.66 684.11,167.54 689.68,170.41 693.96,166.47 710.58,169.74 716.39,160.58 719.26,160.88 725.40,141.24 728.74,165.33 737.64,160.92 741.72,166.98 745.07,159.69 750.51,170.21 754.94,141.28 759.35,155.89 767.86,171.48 772.53,160.50 777.20,158.15 780.47,159.03 785.72,166.12 793.22,165.45 798.41,157.08 801.53,157.49 806.13,167.47 816.04,154.20 829.08,169.34 832.65,166.00 836.47,160.71 842.26,161.33 846.61,150.21 849.82,157.70 855.22,146.10 859.12,150.74 863.37,167.69 867.45,168.26 872.57,162.62 875.54,155.07 878.85,158.85 889.11,129.94 894.21,170.65 898.65,128.00 902.05,153.35 906.89,153.79 909.85,164.20 915.90,145.73 919.17,128.51" stroke="#d85a26" stroke-width="2" fill="none"/>
-<circle cx="565.00" cy="173.92" r="1.5" fill="#d85a26"/>
-<circle cx="566.80" cy="175.07" r="1.5" fill="#d85a26"/>
-<circle cx="571.61" cy="168.03" r="1.5" fill="#d85a26"/>
-<circle cx="577.21" cy="175.43" r="1.5" fill="#d85a26"/>
-<circle cx="581.70" cy="171.07" r="1.5" fill="#d85a26"/>
-<circle cx="584.86" cy="172.36" r="1.5" fill="#d85a26"/>
-<circle cx="590.61" cy="155.14" r="1.5" fill="#d85a26"/>
-<circle cx="594.97" cy="164.79" r="1.5" fill="#d85a26"/>
-<circle cx="599.11" cy="155.04" r="1.5" fill="#d85a26"/>
-<circle cx="602.27" cy="166.95" r="1.5" fill="#d85a26"/>
-<circle cx="616.62" cy="173.68" r="1.5" fill="#d85a26"/>
-<circle cx="620.81" cy="165.21" r="1.5" fill="#d85a26"/>
-<circle cx="623.35" cy="169.56" r="1.5" fill="#d85a26"/>
-<circle cx="627.45" cy="157.24" r="1.5" fill="#d85a26"/>
-<circle cx="633.29" cy="174.29" r="1.5" fill="#d85a26"/>
-<circle cx="638.08" cy="171.19" r="1.5" fill="#d85a26"/>
-<circle cx="642.42" cy="172.80" r="1.5" fill="#d85a26"/>
-<circle cx="647.11" cy="152.94" r="1.5" fill="#d85a26"/>
-<circle cx="649.57" cy="168.39" r="1.5" fill="#d85a26"/>
-<circle cx="654.62" cy="159.27" r="1.5" fill="#d85a26"/>
-<circle cx="659.06" cy="163.60" r="1.5" fill="#d85a26"/>
-<circle cx="662.89" cy="153.86" r="1.5" fill="#d85a26"/>
-<circle cx="667.37" cy="172.24" r="1.5" fill="#d85a26"/>
-<circle cx="676.63" cy="170.09" r="1.5" fill="#d85a26"/>
-<circle cx="681.32" cy="168.66" r="1.5" fill="#d85a26"/>
-<circle cx="684.11" cy="167.54" r="1.5" fill="#d85a26"/>
-<circle cx="689.68" cy="170.41" r="1.5" fill="#d85a26"/>
-<circle cx="693.96" cy="166.47" r="1.5" fill="#d85a26"/>
-<circle cx="710.58" cy="169.74" r="1.5" fill="#d85a26"/>
-<circle cx="716.39" cy="160.58" r="1.5" fill="#d85a26"/>
-<circle cx="719.26" cy="160.88" r="1.5" fill="#d85a26"/>
-<circle cx="725.40" cy="141.24" r="1.5" fill="#d85a26"/>
-<circle cx="728.74" cy="165.33" r="1.5" fill="#d85a26"/>
-<circle cx="737.64" cy="160.92" r="1.5" fill="#d85a26"/>
-<circle cx="741.72" cy="166.98" r="1.5" fill="#d85a26"/>
-<circle cx="745.07" cy="159.69" r="1.5" fill="#d85a26"/>
-<circle cx="750.51" cy="170.21" r="1.5" fill="#d85a26"/>
-<circle cx="754.94" cy="141.28" r="1.5" fill="#d85a26"/>
-<circle cx="759.35" cy="155.89" r="1.5" fill="#d85a26"/>
-<circle cx="767.86" cy="171.48" r="1.5" fill="#d85a26"/>
-<circle cx="772.53" cy="160.50" r="1.5" fill="#d85a26"/>
-<circle cx="777.20" cy="158.15" r="1.5" fill="#d85a26"/>
-<circle cx="780.47" cy="159.03" r="1.5" fill="#d85a26"/>
-<circle cx="785.72" cy="166.12" r="1.5" fill="#d85a26"/>
-<circle cx="793.22" cy="165.45" r="1.5" fill="#d85a26"/>
-<circle cx="798.41" cy="157.08" r="1.5" fill="#d85a26"/>
-<circle cx="801.53" cy="157.49" r="1.5" fill="#d85a26"/>
-<circle cx="806.13" cy="167.47" r="1.5" fill="#d85a26"/>
-<circle cx="816.04" cy="154.20" r="1.5" fill="#d85a26"/>
-<circle cx="829.08" cy="169.34" r="1.5" fill="#d85a26"/>
-<circle cx="832.65" cy="166.00" r="1.5" fill="#d85a26"/>
-<circle cx="836.47" cy="160.71" r="1.5" fill="#d85a26"/>
-<circle cx="842.26" cy="161.33" r="1.5" fill="#d85a26"/>
-<circle cx="846.61" cy="150.21" r="1.5" fill="#d85a26"/>
-<circle cx="849.82" cy="157.70" r="1.5" fill="#d85a26"/>
-<circle cx="855.22" cy="146.10" r="1.5" fill="#d85a26"/>
-<circle cx="859.12" cy="150.74" r="1.5" fill="#d85a26"/>
-<circle cx="863.37" cy="167.69" r="1.5" fill="#d85a26"/>
-<circle cx="867.45" cy="168.26" r="1.5" fill="#d85a26"/>
-<circle cx="872.57" cy="162.62" r="1.5" fill="#d85a26"/>
-<circle cx="875.54" cy="155.07" r="1.5" fill="#d85a26"/>
-<circle cx="878.85" cy="158.85" r="1.5" fill="#d85a26"/>
-<circle cx="889.11" cy="129.94" r="1.5" fill="#d85a26"/>
-<circle cx="894.21" cy="170.65" r="1.5" fill="#d85a26"/>
-<circle cx="898.65" cy="128.00" r="1.5" fill="#d85a26"/>
-<circle cx="902.05" cy="153.35" r="1.5" fill="#d85a26"/>
-<circle cx="906.89" cy="153.79" r="1.5" fill="#d85a26"/>
-<circle cx="909.85" cy="164.20" r="1.5" fill="#d85a26"/>
-<circle cx="915.90" cy="145.73" r="1.5" fill="#d85a26"/>
-<circle cx="919.17" cy="128.51" r="1.5" fill="#d85a26"/>
-<polyline points="923.05,142.58 929.08,142.31 932.64,152.70 937.87,157.60 942.15,155.85 945.91,152.58 950.19,146.30 955.00,156.81" stroke="#d85a26" stroke-width="2" fill="none"/>
-<circle cx="923.05" cy="142.58" r="1.5" fill="#d85a26"/>
-<circle cx="929.08" cy="142.31" r="1.5" fill="#d85a26"/>
-<circle cx="932.64" cy="152.70" r="1.5" fill="#d85a26"/>
-<circle cx="937.87" cy="157.60" r="1.5" fill="#d85a26"/>
-<circle cx="942.15" cy="155.85" r="1.5" fill="#d85a26"/>
-<circle cx="945.91" cy="152.58" r="1.5" fill="#d85a26"/>
-<circle cx="950.19" cy="146.30" r="1.5" fill="#d85a26"/>
-<circle cx="955.00" cy="156.81" r="1.5" fill="#d85a26"/>
-<text x="565.0" y="212.0" fill="#53647a" font-family="ui-monospace,monospace" font-size="10" font-weight="400">2026-07-22</text>
-<text x="875.0" y="212.0" fill="#53647a" font-family="ui-monospace,monospace" font-size="10" font-weight="400">2026-10-20</text>
-<text x="490.0" y="133.0" fill="#53647a" font-family="ui-monospace,monospace" font-size="10" font-weight="400">13.7</text>
+<polyline points="565.00,178.28 569.70,177.35 572.49,176.63 578.06,178.48 582.34,175.95 598.97,178.05 604.78,172.16 607.65,172.35 613.80,159.73 617.13,175.21 626.05,172.38 630.13,176.28 633.48,171.59 638.92,178.35 643.34,159.76 647.76,169.15 656.28,179.17 660.95,172.11 665.61,170.60 668.89,171.17 674.14,175.72 681.65,175.29 686.84,169.91 689.96,170.17 694.56,176.59 704.47,168.06 717.52,177.79 721.09,175.65 724.92,172.25 730.71,172.64 735.06,165.49 738.27,170.31 743.67,162.85 747.57,165.83 751.82,176.73 755.91,177.10 761.03,173.47 764.00,168.62 767.31,171.05 777.58,152.47 782.68,178.63 787.12,151.22 790.53,167.51 795.36,167.79 798.32,174.49 804.38,162.61 807.64,151.55" stroke="#d85a26" stroke-width="2" fill="none"/>
+<circle cx="565.00" cy="178.28" r="1.5" fill="#d85a26"/>
+<circle cx="569.70" cy="177.35" r="1.5" fill="#d85a26"/>
+<circle cx="572.49" cy="176.63" r="1.5" fill="#d85a26"/>
+<circle cx="578.06" cy="178.48" r="1.5" fill="#d85a26"/>
+<circle cx="582.34" cy="175.95" r="1.5" fill="#d85a26"/>
+<circle cx="598.97" cy="178.05" r="1.5" fill="#d85a26"/>
+<circle cx="604.78" cy="172.16" r="1.5" fill="#d85a26"/>
+<circle cx="607.65" cy="172.35" r="1.5" fill="#d85a26"/>
+<circle cx="613.80" cy="159.73" r="1.5" fill="#d85a26"/>
+<circle cx="617.13" cy="175.21" r="1.5" fill="#d85a26"/>
+<circle cx="626.05" cy="172.38" r="1.5" fill="#d85a26"/>
+<circle cx="630.13" cy="176.28" r="1.5" fill="#d85a26"/>
+<circle cx="633.48" cy="171.59" r="1.5" fill="#d85a26"/>
+<circle cx="638.92" cy="178.35" r="1.5" fill="#d85a26"/>
+<circle cx="643.34" cy="159.76" r="1.5" fill="#d85a26"/>
+<circle cx="647.76" cy="169.15" r="1.5" fill="#d85a26"/>
+<circle cx="656.28" cy="179.17" r="1.5" fill="#d85a26"/>
+<circle cx="660.95" cy="172.11" r="1.5" fill="#d85a26"/>
+<circle cx="665.61" cy="170.60" r="1.5" fill="#d85a26"/>
+<circle cx="668.89" cy="171.17" r="1.5" fill="#d85a26"/>
+<circle cx="674.14" cy="175.72" r="1.5" fill="#d85a26"/>
+<circle cx="681.65" cy="175.29" r="1.5" fill="#d85a26"/>
+<circle cx="686.84" cy="169.91" r="1.5" fill="#d85a26"/>
+<circle cx="689.96" cy="170.17" r="1.5" fill="#d85a26"/>
+<circle cx="694.56" cy="176.59" r="1.5" fill="#d85a26"/>
+<circle cx="704.47" cy="168.06" r="1.5" fill="#d85a26"/>
+<circle cx="717.52" cy="177.79" r="1.5" fill="#d85a26"/>
+<circle cx="721.09" cy="175.65" r="1.5" fill="#d85a26"/>
+<circle cx="724.92" cy="172.25" r="1.5" fill="#d85a26"/>
+<circle cx="730.71" cy="172.64" r="1.5" fill="#d85a26"/>
+<circle cx="735.06" cy="165.49" r="1.5" fill="#d85a26"/>
+<circle cx="738.27" cy="170.31" r="1.5" fill="#d85a26"/>
+<circle cx="743.67" cy="162.85" r="1.5" fill="#d85a26"/>
+<circle cx="747.57" cy="165.83" r="1.5" fill="#d85a26"/>
+<circle cx="751.82" cy="176.73" r="1.5" fill="#d85a26"/>
+<circle cx="755.91" cy="177.10" r="1.5" fill="#d85a26"/>
+<circle cx="761.03" cy="173.47" r="1.5" fill="#d85a26"/>
+<circle cx="764.00" cy="168.62" r="1.5" fill="#d85a26"/>
+<circle cx="767.31" cy="171.05" r="1.5" fill="#d85a26"/>
+<circle cx="777.58" cy="152.47" r="1.5" fill="#d85a26"/>
+<circle cx="782.68" cy="178.63" r="1.5" fill="#d85a26"/>
+<circle cx="787.12" cy="151.22" r="1.5" fill="#d85a26"/>
+<circle cx="790.53" cy="167.51" r="1.5" fill="#d85a26"/>
+<circle cx="795.36" cy="167.79" r="1.5" fill="#d85a26"/>
+<circle cx="798.32" cy="174.49" r="1.5" fill="#d85a26"/>
+<circle cx="804.38" cy="162.61" r="1.5" fill="#d85a26"/>
+<circle cx="807.64" cy="151.55" r="1.5" fill="#d85a26"/>
+<polyline points="811.53,160.59 817.56,160.42 821.12,167.10 826.36,170.25 830.64,169.12 834.40,167.02 838.68,162.98 843.49,169.74" stroke="#d85a26" stroke-width="2" fill="none"/>
+<circle cx="811.53" cy="160.59" r="1.5" fill="#d85a26"/>
+<circle cx="817.56" cy="160.42" r="1.5" fill="#d85a26"/>
+<circle cx="821.12" cy="167.10" r="1.5" fill="#d85a26"/>
+<circle cx="826.36" cy="170.25" r="1.5" fill="#d85a26"/>
+<circle cx="830.64" cy="169.12" r="1.5" fill="#d85a26"/>
+<circle cx="834.40" cy="167.02" r="1.5" fill="#d85a26"/>
+<circle cx="838.68" cy="162.98" r="1.5" fill="#d85a26"/>
+<circle cx="843.49" cy="169.74" r="1.5" fill="#d85a26"/>
+<polyline points="847.20,171.79 852.29,158.01 856.73,175.31 861.15,171.55 864.31,171.40 869.56,178.91 874.20,171.20 878.50,170.37 882.33,173.12 886.71,175.16 890.18,180.47 895.86,176.69 899.85,174.33 903.74,173.08 908.70,177.62 912.62,161.55 917.34,128.00 921.80,168.03 926.29,184.28 930.18,169.68" stroke="#d85a26" stroke-width="2" fill="none"/>
+<circle cx="847.20" cy="171.79" r="1.5" fill="#d85a26"/>
+<circle cx="852.29" cy="158.01" r="1.5" fill="#d85a26"/>
+<circle cx="856.73" cy="175.31" r="1.5" fill="#d85a26"/>
+<circle cx="861.15" cy="171.55" r="1.5" fill="#d85a26"/>
+<circle cx="864.31" cy="171.40" r="1.5" fill="#d85a26"/>
+<circle cx="869.56" cy="178.91" r="1.5" fill="#d85a26"/>
+<circle cx="874.20" cy="171.20" r="1.5" fill="#d85a26"/>
+<circle cx="878.50" cy="170.37" r="1.5" fill="#d85a26"/>
+<circle cx="882.33" cy="173.12" r="1.5" fill="#d85a26"/>
+<circle cx="886.71" cy="175.16" r="1.5" fill="#d85a26"/>
+<circle cx="890.18" cy="180.47" r="1.5" fill="#d85a26"/>
+<circle cx="895.86" cy="176.69" r="1.5" fill="#d85a26"/>
+<circle cx="899.85" cy="174.33" r="1.5" fill="#d85a26"/>
+<circle cx="903.74" cy="173.08" r="1.5" fill="#d85a26"/>
+<circle cx="908.70" cy="177.62" r="1.5" fill="#d85a26"/>
+<circle cx="912.62" cy="161.55" r="1.5" fill="#d85a26"/>
+<circle cx="917.34" cy="128.00" r="1.5" fill="#d85a26"/>
+<circle cx="921.80" cy="168.03" r="1.5" fill="#d85a26"/>
+<circle cx="926.29" cy="184.28" r="1.5" fill="#d85a26"/>
+<circle cx="930.18" cy="169.68" r="1.5" fill="#d85a26"/>
+<polyline points="933.93,184.33 938.23,183.70 942.61,182.29 947.54,177.24 951.86,183.64 955.00,173.90" stroke="#d85a26" stroke-width="2" fill="none"/>
+<circle cx="933.93" cy="184.33" r="1.5" fill="#d85a26"/>
+<circle cx="938.23" cy="183.70" r="1.5" fill="#d85a26"/>
+<circle cx="942.61" cy="182.29" r="1.5" fill="#d85a26"/>
+<circle cx="947.54" cy="177.24" r="1.5" fill="#d85a26"/>
+<circle cx="951.86" cy="183.64" r="1.5" fill="#d85a26"/>
+<circle cx="955.00" cy="173.90" r="1.5" fill="#d85a26"/>
+<text x="565.0" y="212.0" fill="#53647a" font-family="ui-monospace,monospace" font-size="10" font-weight="400">2026-08-17</text>
+<text x="875.0" y="212.0" fill="#53647a" font-family="ui-monospace,monospace" font-size="10" font-weight="400">2026-11-15</text>
+<text x="490.0" y="133.0" fill="#53647a" font-family="ui-monospace,monospace" font-size="10" font-weight="400">21.3</text>
 <text x="530.0" y="194.0" fill="#53647a" font-family="ui-monospace,monospace" font-size="10" font-weight="400">0</text>
 <rect x="20" y="235" width="960" height="140" rx="10" fill="#f6f8fa" stroke="#d0d7de"/>
 <text x="36.0" y="260.0" fill="#172033" font-family="ui-monospace,monospace" font-size="16" font-weight="700">arithmetic_loop</text>
-<text x="36.0" y="284.0" fill="#172033" font-family="ui-monospace,monospace" font-size="12" font-weight="400">eval 23.92 ms | native 7.73 ms | eval/native: 3.09x</text>
-<text x="36.0" y="305.0" fill="#53647a" font-family="ui-monospace,monospace" font-size="11" font-weight="400">2026-10-20 | 3c39673c | trend: elephc-eval ms</text>
+<text x="36.0" y="284.0" fill="#172033" font-family="ui-monospace,monospace" font-size="12" font-weight="400">eval 16.35 ms | native 2.77 ms | eval/native: 5.89x</text>
+<text x="36.0" y="305.0" fill="#53647a" font-family="ui-monospace,monospace" font-size="11" font-weight="400">2026-11-15 | 2857abcb | trend: elephc-eval ms</text>
 <path d="M565 343 H955" stroke="#d0d7de" fill="none"/>
-<polyline points="565.00,334.91 566.80,333.68 571.61,330.79 577.21,335.01 581.70,333.25 584.86,332.83 590.61,329.48 594.97,326.73 599.11,329.84 602.27,328.69 616.62,334.67 620.81,330.27 623.35,334.52 627.45,331.11 633.29,334.95 638.08,334.60 642.42,331.58 647.11,329.93 649.57,333.22 654.62,323.45 659.06,330.85 662.89,331.25 667.37,331.62 676.63,334.21 681.32,334.76 684.11,329.38 689.68,334.82 693.96,333.35 710.58,333.21 716.39,329.08 719.26,326.52 725.40,331.43 728.74,333.95 737.64,331.89 741.72,333.04 745.07,323.67 750.51,334.34 754.94,325.20 759.35,325.85 767.86,329.86 772.53,325.99 777.20,309.94 780.47,320.06 785.72,324.93 793.22,326.87 798.41,329.12 801.53,319.40 806.13,326.68 816.04,316.53 829.08,329.45 832.65,295.05 836.47,307.40 842.26,307.37 846.61,310.37 849.82,307.95 855.22,286.29 859.12,291.10 863.37,310.94 867.45,311.18 872.57,304.34 875.54,298.34 878.85,299.40 889.11,296.48 894.21,312.86 898.65,301.53 902.05,304.00 906.89,304.11 909.85,310.26 915.90,297.85 919.17,301.49" stroke="#168a81" stroke-width="2" fill="none"/>
-<circle cx="565.00" cy="334.91" r="1.5" fill="#168a81"/>
-<circle cx="566.80" cy="333.68" r="1.5" fill="#168a81"/>
-<circle cx="571.61" cy="330.79" r="1.5" fill="#168a81"/>
-<circle cx="577.21" cy="335.01" r="1.5" fill="#168a81"/>
-<circle cx="581.70" cy="333.25" r="1.5" fill="#168a81"/>
-<circle cx="584.86" cy="332.83" r="1.5" fill="#168a81"/>
-<circle cx="590.61" cy="329.48" r="1.5" fill="#168a81"/>
-<circle cx="594.97" cy="326.73" r="1.5" fill="#168a81"/>
-<circle cx="599.11" cy="329.84" r="1.5" fill="#168a81"/>
-<circle cx="602.27" cy="328.69" r="1.5" fill="#168a81"/>
-<circle cx="616.62" cy="334.67" r="1.5" fill="#168a81"/>
-<circle cx="620.81" cy="330.27" r="1.5" fill="#168a81"/>
-<circle cx="623.35" cy="334.52" r="1.5" fill="#168a81"/>
-<circle cx="627.45" cy="331.11" r="1.5" fill="#168a81"/>
-<circle cx="633.29" cy="334.95" r="1.5" fill="#168a81"/>
-<circle cx="638.08" cy="334.60" r="1.5" fill="#168a81"/>
-<circle cx="642.42" cy="331.58" r="1.5" fill="#168a81"/>
-<circle cx="647.11" cy="329.93" r="1.5" fill="#168a81"/>
-<circle cx="649.57" cy="333.22" r="1.5" fill="#168a81"/>
-<circle cx="654.62" cy="323.45" r="1.5" fill="#168a81"/>
-<circle cx="659.06" cy="330.85" r="1.5" fill="#168a81"/>
-<circle cx="662.89" cy="331.25" r="1.5" fill="#168a81"/>
-<circle cx="667.37" cy="331.62" r="1.5" fill="#168a81"/>
-<circle cx="676.63" cy="334.21" r="1.5" fill="#168a81"/>
-<circle cx="681.32" cy="334.76" r="1.5" fill="#168a81"/>
-<circle cx="684.11" cy="329.38" r="1.5" fill="#168a81"/>
-<circle cx="689.68" cy="334.82" r="1.5" fill="#168a81"/>
-<circle cx="693.96" cy="333.35" r="1.5" fill="#168a81"/>
-<circle cx="710.58" cy="333.21" r="1.5" fill="#168a81"/>
-<circle cx="716.39" cy="329.08" r="1.5" fill="#168a81"/>
-<circle cx="719.26" cy="326.52" r="1.5" fill="#168a81"/>
-<circle cx="725.40" cy="331.43" r="1.5" fill="#168a81"/>
-<circle cx="728.74" cy="333.95" r="1.5" fill="#168a81"/>
-<circle cx="737.64" cy="331.89" r="1.5" fill="#168a81"/>
-<circle cx="741.72" cy="333.04" r="1.5" fill="#168a81"/>
-<circle cx="745.07" cy="323.67" r="1.5" fill="#168a81"/>
-<circle cx="750.51" cy="334.34" r="1.5" fill="#168a81"/>
-<circle cx="754.94" cy="325.20" r="1.5" fill="#168a81"/>
-<circle cx="759.35" cy="325.85" r="1.5" fill="#168a81"/>
-<circle cx="767.86" cy="329.86" r="1.5" fill="#168a81"/>
-<circle cx="772.53" cy="325.99" r="1.5" fill="#168a81"/>
-<circle cx="777.20" cy="309.94" r="1.5" fill="#168a81"/>
-<circle cx="780.47" cy="320.06" r="1.5" fill="#168a81"/>
-<circle cx="785.72" cy="324.93" r="1.5" fill="#168a81"/>
-<circle cx="793.22" cy="326.87" r="1.5" fill="#168a81"/>
-<circle cx="798.41" cy="329.12" r="1.5" fill="#168a81"/>
-<circle cx="801.53" cy="319.40" r="1.5" fill="#168a81"/>
-<circle cx="806.13" cy="326.68" r="1.5" fill="#168a81"/>
-<circle cx="816.04" cy="316.53" r="1.5" fill="#168a81"/>
-<circle cx="829.08" cy="329.45" r="1.5" fill="#168a81"/>
-<circle cx="832.65" cy="295.05" r="1.5" fill="#168a81"/>
-<circle cx="836.47" cy="307.40" r="1.5" fill="#168a81"/>
-<circle cx="842.26" cy="307.37" r="1.5" fill="#168a81"/>
-<circle cx="846.61" cy="310.37" r="1.5" fill="#168a81"/>
-<circle cx="849.82" cy="307.95" r="1.5" fill="#168a81"/>
-<circle cx="855.22" cy="286.29" r="1.5" fill="#168a81"/>
-<circle cx="859.12" cy="291.10" r="1.5" fill="#168a81"/>
-<circle cx="863.37" cy="310.94" r="1.5" fill="#168a81"/>
-<circle cx="867.45" cy="311.18" r="1.5" fill="#168a81"/>
-<circle cx="872.57" cy="304.34" r="1.5" fill="#168a81"/>
-<circle cx="875.54" cy="298.34" r="1.5" fill="#168a81"/>
-<circle cx="878.85" cy="299.40" r="1.5" fill="#168a81"/>
-<circle cx="889.11" cy="296.48" r="1.5" fill="#168a81"/>
-<circle cx="894.21" cy="312.86" r="1.5" fill="#168a81"/>
-<circle cx="898.65" cy="301.53" r="1.5" fill="#168a81"/>
-<circle cx="902.05" cy="304.00" r="1.5" fill="#168a81"/>
-<circle cx="906.89" cy="304.11" r="1.5" fill="#168a81"/>
-<circle cx="909.85" cy="310.26" r="1.5" fill="#168a81"/>
-<circle cx="915.90" cy="297.85" r="1.5" fill="#168a81"/>
-<circle cx="919.17" cy="301.49" r="1.5" fill="#168a81"/>
-<polyline points="923.05,298.83 929.08,278.00 932.64,308.65 937.87,314.07 942.15,313.13 945.91,312.86 950.19,315.22 955.00,319.64" stroke="#168a81" stroke-width="2" fill="none"/>
-<circle cx="923.05" cy="298.83" r="1.5" fill="#168a81"/>
-<circle cx="929.08" cy="278.00" r="1.5" fill="#168a81"/>
-<circle cx="932.64" cy="308.65" r="1.5" fill="#168a81"/>
-<circle cx="937.87" cy="314.07" r="1.5" fill="#168a81"/>
-<circle cx="942.15" cy="313.13" r="1.5" fill="#168a81"/>
-<circle cx="945.91" cy="312.86" r="1.5" fill="#168a81"/>
-<circle cx="950.19" cy="315.22" r="1.5" fill="#168a81"/>
-<circle cx="955.00" cy="319.64" r="1.5" fill="#168a81"/>
-<text x="565.0" y="362.0" fill="#53647a" font-family="ui-monospace,monospace" font-size="10" font-weight="400">2026-07-22</text>
-<text x="875.0" y="362.0" fill="#53647a" font-family="ui-monospace,monospace" font-size="10" font-weight="400">2026-10-20</text>
+<polyline points="565.00,334.21 569.70,334.76 572.49,329.38 578.06,334.82 582.34,333.35 598.97,333.21 604.78,329.08 607.65,326.52 613.80,331.43 617.13,333.95 626.05,331.89 630.13,333.04 633.48,323.67 638.92,334.34 643.34,325.20 647.76,325.85 656.28,329.86 660.95,325.99 665.61,309.94 668.89,320.06 674.14,324.93 681.65,326.87 686.84,329.12 689.96,319.40 694.56,326.68 704.47,316.53 717.52,329.45 721.09,295.05 724.92,307.40 730.71,307.37 735.06,310.37 738.27,307.95 743.67,286.29 747.57,291.10 751.82,310.94 755.91,311.18 761.03,304.34 764.00,298.34 767.31,299.40 777.58,296.48 782.68,312.86 787.12,301.53 790.53,304.00 795.36,304.11 798.32,310.26 804.38,297.85 807.64,301.49" stroke="#168a81" stroke-width="2" fill="none"/>
+<circle cx="565.00" cy="334.21" r="1.5" fill="#168a81"/>
+<circle cx="569.70" cy="334.76" r="1.5" fill="#168a81"/>
+<circle cx="572.49" cy="329.38" r="1.5" fill="#168a81"/>
+<circle cx="578.06" cy="334.82" r="1.5" fill="#168a81"/>
+<circle cx="582.34" cy="333.35" r="1.5" fill="#168a81"/>
+<circle cx="598.97" cy="333.21" r="1.5" fill="#168a81"/>
+<circle cx="604.78" cy="329.08" r="1.5" fill="#168a81"/>
+<circle cx="607.65" cy="326.52" r="1.5" fill="#168a81"/>
+<circle cx="613.80" cy="331.43" r="1.5" fill="#168a81"/>
+<circle cx="617.13" cy="333.95" r="1.5" fill="#168a81"/>
+<circle cx="626.05" cy="331.89" r="1.5" fill="#168a81"/>
+<circle cx="630.13" cy="333.04" r="1.5" fill="#168a81"/>
+<circle cx="633.48" cy="323.67" r="1.5" fill="#168a81"/>
+<circle cx="638.92" cy="334.34" r="1.5" fill="#168a81"/>
+<circle cx="643.34" cy="325.20" r="1.5" fill="#168a81"/>
+<circle cx="647.76" cy="325.85" r="1.5" fill="#168a81"/>
+<circle cx="656.28" cy="329.86" r="1.5" fill="#168a81"/>
+<circle cx="660.95" cy="325.99" r="1.5" fill="#168a81"/>
+<circle cx="665.61" cy="309.94" r="1.5" fill="#168a81"/>
+<circle cx="668.89" cy="320.06" r="1.5" fill="#168a81"/>
+<circle cx="674.14" cy="324.93" r="1.5" fill="#168a81"/>
+<circle cx="681.65" cy="326.87" r="1.5" fill="#168a81"/>
+<circle cx="686.84" cy="329.12" r="1.5" fill="#168a81"/>
+<circle cx="689.96" cy="319.40" r="1.5" fill="#168a81"/>
+<circle cx="694.56" cy="326.68" r="1.5" fill="#168a81"/>
+<circle cx="704.47" cy="316.53" r="1.5" fill="#168a81"/>
+<circle cx="717.52" cy="329.45" r="1.5" fill="#168a81"/>
+<circle cx="721.09" cy="295.05" r="1.5" fill="#168a81"/>
+<circle cx="724.92" cy="307.40" r="1.5" fill="#168a81"/>
+<circle cx="730.71" cy="307.37" r="1.5" fill="#168a81"/>
+<circle cx="735.06" cy="310.37" r="1.5" fill="#168a81"/>
+<circle cx="738.27" cy="307.95" r="1.5" fill="#168a81"/>
+<circle cx="743.67" cy="286.29" r="1.5" fill="#168a81"/>
+<circle cx="747.57" cy="291.10" r="1.5" fill="#168a81"/>
+<circle cx="751.82" cy="310.94" r="1.5" fill="#168a81"/>
+<circle cx="755.91" cy="311.18" r="1.5" fill="#168a81"/>
+<circle cx="761.03" cy="304.34" r="1.5" fill="#168a81"/>
+<circle cx="764.00" cy="298.34" r="1.5" fill="#168a81"/>
+<circle cx="767.31" cy="299.40" r="1.5" fill="#168a81"/>
+<circle cx="777.58" cy="296.48" r="1.5" fill="#168a81"/>
+<circle cx="782.68" cy="312.86" r="1.5" fill="#168a81"/>
+<circle cx="787.12" cy="301.53" r="1.5" fill="#168a81"/>
+<circle cx="790.53" cy="304.00" r="1.5" fill="#168a81"/>
+<circle cx="795.36" cy="304.11" r="1.5" fill="#168a81"/>
+<circle cx="798.32" cy="310.26" r="1.5" fill="#168a81"/>
+<circle cx="804.38" cy="297.85" r="1.5" fill="#168a81"/>
+<circle cx="807.64" cy="301.49" r="1.5" fill="#168a81"/>
+<polyline points="811.53,298.83 817.56,278.00 821.12,308.65 826.36,314.07 830.64,313.13 834.40,312.86 838.68,315.22 843.49,319.64" stroke="#168a81" stroke-width="2" fill="none"/>
+<circle cx="811.53" cy="298.83" r="1.5" fill="#168a81"/>
+<circle cx="817.56" cy="278.00" r="1.5" fill="#168a81"/>
+<circle cx="821.12" cy="308.65" r="1.5" fill="#168a81"/>
+<circle cx="826.36" cy="314.07" r="1.5" fill="#168a81"/>
+<circle cx="830.64" cy="313.13" r="1.5" fill="#168a81"/>
+<circle cx="834.40" cy="312.86" r="1.5" fill="#168a81"/>
+<circle cx="838.68" cy="315.22" r="1.5" fill="#168a81"/>
+<circle cx="843.49" cy="319.64" r="1.5" fill="#168a81"/>
+<polyline points="847.20,322.40 852.29,308.54 856.73,316.41 861.15,305.25 864.31,320.06 869.56,322.66 874.20,328.92 878.50,323.23 882.33,323.65 886.71,327.04 890.18,329.51 895.86,323.20 899.85,323.02 903.74,324.92 908.70,323.93 912.62,319.91 917.34,325.03 921.80,321.98 926.29,327.62 930.18,328.60" stroke="#168a81" stroke-width="2" fill="none"/>
+<circle cx="847.20" cy="322.40" r="1.5" fill="#168a81"/>
+<circle cx="852.29" cy="308.54" r="1.5" fill="#168a81"/>
+<circle cx="856.73" cy="316.41" r="1.5" fill="#168a81"/>
+<circle cx="861.15" cy="305.25" r="1.5" fill="#168a81"/>
+<circle cx="864.31" cy="320.06" r="1.5" fill="#168a81"/>
+<circle cx="869.56" cy="322.66" r="1.5" fill="#168a81"/>
+<circle cx="874.20" cy="328.92" r="1.5" fill="#168a81"/>
+<circle cx="878.50" cy="323.23" r="1.5" fill="#168a81"/>
+<circle cx="882.33" cy="323.65" r="1.5" fill="#168a81"/>
+<circle cx="886.71" cy="327.04" r="1.5" fill="#168a81"/>
+<circle cx="890.18" cy="329.51" r="1.5" fill="#168a81"/>
+<circle cx="895.86" cy="323.20" r="1.5" fill="#168a81"/>
+<circle cx="899.85" cy="323.02" r="1.5" fill="#168a81"/>
+<circle cx="903.74" cy="324.92" r="1.5" fill="#168a81"/>
+<circle cx="908.70" cy="323.93" r="1.5" fill="#168a81"/>
+<circle cx="912.62" cy="319.91" r="1.5" fill="#168a81"/>
+<circle cx="917.34" cy="325.03" r="1.5" fill="#168a81"/>
+<circle cx="921.80" cy="321.98" r="1.5" fill="#168a81"/>
+<circle cx="926.29" cy="327.62" r="1.5" fill="#168a81"/>
+<circle cx="930.18" cy="328.60" r="1.5" fill="#168a81"/>
+<polyline points="933.93,325.56 938.23,326.60 942.61,328.98 947.54,327.39 951.86,325.43 955.00,327.04" stroke="#168a81" stroke-width="2" fill="none"/>
+<circle cx="933.93" cy="325.56" r="1.5" fill="#168a81"/>
+<circle cx="938.23" cy="326.60" r="1.5" fill="#168a81"/>
+<circle cx="942.61" cy="328.98" r="1.5" fill="#168a81"/>
+<circle cx="947.54" cy="327.39" r="1.5" fill="#168a81"/>
+<circle cx="951.86" cy="325.43" r="1.5" fill="#168a81"/>
+<circle cx="955.00" cy="327.04" r="1.5" fill="#168a81"/>
+<text x="565.0" y="362.0" fill="#53647a" font-family="ui-monospace,monospace" font-size="10" font-weight="400">2026-08-17</text>
+<text x="875.0" y="362.0" fill="#53647a" font-family="ui-monospace,monospace" font-size="10" font-weight="400">2026-11-15</text>
 <text x="490.0" y="283.0" fill="#53647a" font-family="ui-monospace,monospace" font-size="10" font-weight="400">66.6</text>
 <text x="530.0" y="344.0" fill="#53647a" font-family="ui-monospace,monospace" font-size="10" font-weight="400">0</text>
 <rect x="20" y="385" width="960" height="140" rx="10" fill="#f6f8fa" stroke="#d0d7de"/>
 <text x="36.0" y="410.0" fill="#172033" font-family="ui-monospace,monospace" font-size="16" font-weight="700">array_reads_writes</text>
-<text x="36.0" y="434.0" fill="#172033" font-family="ui-monospace,monospace" font-size="12" font-weight="400">eval 11.57 ms | native 3.33 ms | eval/native: 3.47x</text>
-<text x="36.0" y="455.0" fill="#53647a" font-family="ui-monospace,monospace" font-size="11" font-weight="400">2026-10-20 | 3c39673c | trend: elephc-eval ms</text>
+<text x="36.0" y="434.0" fill="#172033" font-family="ui-monospace,monospace" font-size="12" font-weight="400">eval 11.41 ms | native 2.42 ms | eval/native: 4.72x</text>
+<text x="36.0" y="455.0" fill="#53647a" font-family="ui-monospace,monospace" font-size="11" font-weight="400">2026-11-15 | 2857abcb | trend: elephc-eval ms</text>
 <path d="M565 493 H955" stroke="#d0d7de" fill="none"/>
-<polyline points="565.00,473.64 566.80,471.98 571.61,462.32 577.21,481.01 581.70,479.75 584.86,475.26 590.61,468.50 594.97,474.78 599.11,473.23 602.27,473.28 616.62,480.74 620.81,471.78 623.35,477.44 627.45,455.18 633.29,480.77 638.08,476.74 642.42,475.76 647.11,467.37 649.57,466.73 654.62,471.75 659.06,471.44 662.89,474.16 667.37,478.86 676.63,479.87 681.32,476.78 684.11,476.34 689.68,478.05 693.96,473.14 710.58,478.05 716.39,473.34 719.26,471.83 725.40,466.30 728.74,479.81 737.64,471.29 741.72,468.38 745.07,472.24 750.51,479.78 754.94,459.20 759.35,461.61 767.86,477.62 772.53,471.80 777.20,460.94 780.47,457.66 785.72,467.84 793.22,468.69 798.41,458.90 801.53,458.65 806.13,464.22 816.04,452.16 829.08,474.73 832.65,456.84 836.47,451.34 842.26,435.68 846.61,441.02 849.82,453.94 855.22,452.79 859.12,453.61 863.37,465.17 867.45,469.29 872.57,460.78 875.54,463.29 878.85,455.35 889.11,428.46 894.21,461.97 898.65,452.87 902.05,458.09 906.89,456.83 909.85,460.00 915.90,451.02 919.17,432.60" stroke="#8161c7" stroke-width="2" fill="none"/>
-<circle cx="565.00" cy="473.64" r="1.5" fill="#8161c7"/>
-<circle cx="566.80" cy="471.98" r="1.5" fill="#8161c7"/>
-<circle cx="571.61" cy="462.32" r="1.5" fill="#8161c7"/>
-<circle cx="577.21" cy="481.01" r="1.5" fill="#8161c7"/>
-<circle cx="581.70" cy="479.75" r="1.5" fill="#8161c7"/>
-<circle cx="584.86" cy="475.26" r="1.5" fill="#8161c7"/>
-<circle cx="590.61" cy="468.50" r="1.5" fill="#8161c7"/>
-<circle cx="594.97" cy="474.78" r="1.5" fill="#8161c7"/>
-<circle cx="599.11" cy="473.23" r="1.5" fill="#8161c7"/>
-<circle cx="602.27" cy="473.28" r="1.5" fill="#8161c7"/>
-<circle cx="616.62" cy="480.74" r="1.5" fill="#8161c7"/>
-<circle cx="620.81" cy="471.78" r="1.5" fill="#8161c7"/>
-<circle cx="623.35" cy="477.44" r="1.5" fill="#8161c7"/>
-<circle cx="627.45" cy="455.18" r="1.5" fill="#8161c7"/>
-<circle cx="633.29" cy="480.77" r="1.5" fill="#8161c7"/>
-<circle cx="638.08" cy="476.74" r="1.5" fill="#8161c7"/>
-<circle cx="642.42" cy="475.76" r="1.5" fill="#8161c7"/>
-<circle cx="647.11" cy="467.37" r="1.5" fill="#8161c7"/>
-<circle cx="649.57" cy="466.73" r="1.5" fill="#8161c7"/>
-<circle cx="654.62" cy="471.75" r="1.5" fill="#8161c7"/>
-<circle cx="659.06" cy="471.44" r="1.5" fill="#8161c7"/>
-<circle cx="662.89" cy="474.16" r="1.5" fill="#8161c7"/>
-<circle cx="667.37" cy="478.86" r="1.5" fill="#8161c7"/>
-<circle cx="676.63" cy="479.87" r="1.5" fill="#8161c7"/>
-<circle cx="681.32" cy="476.78" r="1.5" fill="#8161c7"/>
-<circle cx="684.11" cy="476.34" r="1.5" fill="#8161c7"/>
-<circle cx="689.68" cy="478.05" r="1.5" fill="#8161c7"/>
-<circle cx="693.96" cy="473.14" r="1.5" fill="#8161c7"/>
-<circle cx="710.58" cy="478.05" r="1.5" fill="#8161c7"/>
-<circle cx="716.39" cy="473.34" r="1.5" fill="#8161c7"/>
-<circle cx="719.26" cy="471.83" r="1.5" fill="#8161c7"/>
-<circle cx="725.40" cy="466.30" r="1.5" fill="#8161c7"/>
-<circle cx="728.74" cy="479.81" r="1.5" fill="#8161c7"/>
-<circle cx="737.64" cy="471.29" r="1.5" fill="#8161c7"/>
-<circle cx="741.72" cy="468.38" r="1.5" fill="#8161c7"/>
-<circle cx="745.07" cy="472.24" r="1.5" fill="#8161c7"/>
-<circle cx="750.51" cy="479.78" r="1.5" fill="#8161c7"/>
-<circle cx="754.94" cy="459.20" r="1.5" fill="#8161c7"/>
-<circle cx="759.35" cy="461.61" r="1.5" fill="#8161c7"/>
-<circle cx="767.86" cy="477.62" r="1.5" fill="#8161c7"/>
-<circle cx="772.53" cy="471.80" r="1.5" fill="#8161c7"/>
-<circle cx="777.20" cy="460.94" r="1.5" fill="#8161c7"/>
-<circle cx="780.47" cy="457.66" r="1.5" fill="#8161c7"/>
-<circle cx="785.72" cy="467.84" r="1.5" fill="#8161c7"/>
-<circle cx="793.22" cy="468.69" r="1.5" fill="#8161c7"/>
-<circle cx="798.41" cy="458.90" r="1.5" fill="#8161c7"/>
-<circle cx="801.53" cy="458.65" r="1.5" fill="#8161c7"/>
-<circle cx="806.13" cy="464.22" r="1.5" fill="#8161c7"/>
-<circle cx="816.04" cy="452.16" r="1.5" fill="#8161c7"/>
-<circle cx="829.08" cy="474.73" r="1.5" fill="#8161c7"/>
-<circle cx="832.65" cy="456.84" r="1.5" fill="#8161c7"/>
-<circle cx="836.47" cy="451.34" r="1.5" fill="#8161c7"/>
-<circle cx="842.26" cy="435.68" r="1.5" fill="#8161c7"/>
-<circle cx="846.61" cy="441.02" r="1.5" fill="#8161c7"/>
-<circle cx="849.82" cy="453.94" r="1.5" fill="#8161c7"/>
-<circle cx="855.22" cy="452.79" r="1.5" fill="#8161c7"/>
-<circle cx="859.12" cy="453.61" r="1.5" fill="#8161c7"/>
-<circle cx="863.37" cy="465.17" r="1.5" fill="#8161c7"/>
-<circle cx="867.45" cy="469.29" r="1.5" fill="#8161c7"/>
-<circle cx="872.57" cy="460.78" r="1.5" fill="#8161c7"/>
-<circle cx="875.54" cy="463.29" r="1.5" fill="#8161c7"/>
-<circle cx="878.85" cy="455.35" r="1.5" fill="#8161c7"/>
-<circle cx="889.11" cy="428.46" r="1.5" fill="#8161c7"/>
-<circle cx="894.21" cy="461.97" r="1.5" fill="#8161c7"/>
-<circle cx="898.65" cy="452.87" r="1.5" fill="#8161c7"/>
-<circle cx="902.05" cy="458.09" r="1.5" fill="#8161c7"/>
-<circle cx="906.89" cy="456.83" r="1.5" fill="#8161c7"/>
-<circle cx="909.85" cy="460.00" r="1.5" fill="#8161c7"/>
-<circle cx="915.90" cy="451.02" r="1.5" fill="#8161c7"/>
-<circle cx="919.17" cy="432.60" r="1.5" fill="#8161c7"/>
-<polyline points="923.05,456.57 929.08,453.01 932.64,428.00 937.87,451.91 942.15,459.21 945.91,449.16 950.19,448.21 955.00,465.76" stroke="#8161c7" stroke-width="2" fill="none"/>
-<circle cx="923.05" cy="456.57" r="1.5" fill="#8161c7"/>
-<circle cx="929.08" cy="453.01" r="1.5" fill="#8161c7"/>
-<circle cx="932.64" cy="428.00" r="1.5" fill="#8161c7"/>
-<circle cx="937.87" cy="451.91" r="1.5" fill="#8161c7"/>
-<circle cx="942.15" cy="459.21" r="1.5" fill="#8161c7"/>
-<circle cx="945.91" cy="449.16" r="1.5" fill="#8161c7"/>
-<circle cx="950.19" cy="448.21" r="1.5" fill="#8161c7"/>
-<circle cx="955.00" cy="465.76" r="1.5" fill="#8161c7"/>
-<text x="565.0" y="512.0" fill="#53647a" font-family="ui-monospace,monospace" font-size="10" font-weight="400">2026-07-22</text>
-<text x="875.0" y="512.0" fill="#53647a" font-family="ui-monospace,monospace" font-size="10" font-weight="400">2026-10-20</text>
-<text x="490.0" y="433.0" fill="#53647a" font-family="ui-monospace,monospace" font-size="10" font-weight="400">27.6</text>
+<polyline points="565.00,482.48 569.70,480.00 572.49,479.65 578.06,481.02 582.34,477.09 598.97,481.02 604.78,477.25 607.65,476.04 613.80,471.61 617.13,482.43 626.05,475.60 630.13,473.28 633.48,476.37 638.92,482.41 643.34,465.92 647.76,467.85 656.28,480.68 660.95,476.01 665.61,467.31 668.89,464.69 674.14,472.84 681.65,473.52 686.84,465.68 689.96,465.48 694.56,469.94 704.47,460.28 717.52,478.36 721.09,464.03 724.92,459.62 730.71,447.07 735.06,451.35 738.27,461.71 743.67,460.79 747.57,461.44 751.82,470.70 755.91,474.00 761.03,467.18 764.00,469.19 767.31,462.83 777.58,441.29 782.68,468.14 787.12,460.85 790.53,465.03 795.36,464.02 798.32,466.56 804.38,459.36 807.64,444.60" stroke="#8161c7" stroke-width="2" fill="none"/>
+<circle cx="565.00" cy="482.48" r="1.5" fill="#8161c7"/>
+<circle cx="569.70" cy="480.00" r="1.5" fill="#8161c7"/>
+<circle cx="572.49" cy="479.65" r="1.5" fill="#8161c7"/>
+<circle cx="578.06" cy="481.02" r="1.5" fill="#8161c7"/>
+<circle cx="582.34" cy="477.09" r="1.5" fill="#8161c7"/>
+<circle cx="598.97" cy="481.02" r="1.5" fill="#8161c7"/>
+<circle cx="604.78" cy="477.25" r="1.5" fill="#8161c7"/>
+<circle cx="607.65" cy="476.04" r="1.5" fill="#8161c7"/>
+<circle cx="613.80" cy="471.61" r="1.5" fill="#8161c7"/>
+<circle cx="617.13" cy="482.43" r="1.5" fill="#8161c7"/>
+<circle cx="626.05" cy="475.60" r="1.5" fill="#8161c7"/>
+<circle cx="630.13" cy="473.28" r="1.5" fill="#8161c7"/>
+<circle cx="633.48" cy="476.37" r="1.5" fill="#8161c7"/>
+<circle cx="638.92" cy="482.41" r="1.5" fill="#8161c7"/>
+<circle cx="643.34" cy="465.92" r="1.5" fill="#8161c7"/>
+<circle cx="647.76" cy="467.85" r="1.5" fill="#8161c7"/>
+<circle cx="656.28" cy="480.68" r="1.5" fill="#8161c7"/>
+<circle cx="660.95" cy="476.01" r="1.5" fill="#8161c7"/>
+<circle cx="665.61" cy="467.31" r="1.5" fill="#8161c7"/>
+<circle cx="668.89" cy="464.69" r="1.5" fill="#8161c7"/>
+<circle cx="674.14" cy="472.84" r="1.5" fill="#8161c7"/>
+<circle cx="681.65" cy="473.52" r="1.5" fill="#8161c7"/>
+<circle cx="686.84" cy="465.68" r="1.5" fill="#8161c7"/>
+<circle cx="689.96" cy="465.48" r="1.5" fill="#8161c7"/>
+<circle cx="694.56" cy="469.94" r="1.5" fill="#8161c7"/>
+<circle cx="704.47" cy="460.28" r="1.5" fill="#8161c7"/>
+<circle cx="717.52" cy="478.36" r="1.5" fill="#8161c7"/>
+<circle cx="721.09" cy="464.03" r="1.5" fill="#8161c7"/>
+<circle cx="724.92" cy="459.62" r="1.5" fill="#8161c7"/>
+<circle cx="730.71" cy="447.07" r="1.5" fill="#8161c7"/>
+<circle cx="735.06" cy="451.35" r="1.5" fill="#8161c7"/>
+<circle cx="738.27" cy="461.71" r="1.5" fill="#8161c7"/>
+<circle cx="743.67" cy="460.79" r="1.5" fill="#8161c7"/>
+<circle cx="747.57" cy="461.44" r="1.5" fill="#8161c7"/>
+<circle cx="751.82" cy="470.70" r="1.5" fill="#8161c7"/>
+<circle cx="755.91" cy="474.00" r="1.5" fill="#8161c7"/>
+<circle cx="761.03" cy="467.18" r="1.5" fill="#8161c7"/>
+<circle cx="764.00" cy="469.19" r="1.5" fill="#8161c7"/>
+<circle cx="767.31" cy="462.83" r="1.5" fill="#8161c7"/>
+<circle cx="777.58" cy="441.29" r="1.5" fill="#8161c7"/>
+<circle cx="782.68" cy="468.14" r="1.5" fill="#8161c7"/>
+<circle cx="787.12" cy="460.85" r="1.5" fill="#8161c7"/>
+<circle cx="790.53" cy="465.03" r="1.5" fill="#8161c7"/>
+<circle cx="795.36" cy="464.02" r="1.5" fill="#8161c7"/>
+<circle cx="798.32" cy="466.56" r="1.5" fill="#8161c7"/>
+<circle cx="804.38" cy="459.36" r="1.5" fill="#8161c7"/>
+<circle cx="807.64" cy="444.60" r="1.5" fill="#8161c7"/>
+<polyline points="811.53,463.81 817.56,460.96 821.12,440.92 826.36,460.08 830.64,465.92 834.40,457.87 838.68,457.11 843.49,471.17" stroke="#8161c7" stroke-width="2" fill="none"/>
+<circle cx="811.53" cy="463.81" r="1.5" fill="#8161c7"/>
+<circle cx="817.56" cy="460.96" r="1.5" fill="#8161c7"/>
+<circle cx="821.12" cy="440.92" r="1.5" fill="#8161c7"/>
+<circle cx="826.36" cy="460.08" r="1.5" fill="#8161c7"/>
+<circle cx="830.64" cy="465.92" r="1.5" fill="#8161c7"/>
+<circle cx="834.40" cy="457.87" r="1.5" fill="#8161c7"/>
+<circle cx="838.68" cy="457.11" r="1.5" fill="#8161c7"/>
+<circle cx="843.49" cy="471.17" r="1.5" fill="#8161c7"/>
+<polyline points="847.20,476.27 852.29,465.55 856.73,466.57 861.15,453.75 864.31,454.19 869.56,474.48 874.20,465.62 878.50,468.70 882.33,462.03 886.71,467.69 890.18,469.02 895.86,467.16 899.85,461.26 903.74,469.36 908.70,428.00 912.62,435.43 917.34,468.30 921.80,467.86 926.29,470.44 930.18,468.37" stroke="#8161c7" stroke-width="2" fill="none"/>
+<circle cx="847.20" cy="476.27" r="1.5" fill="#8161c7"/>
+<circle cx="852.29" cy="465.55" r="1.5" fill="#8161c7"/>
+<circle cx="856.73" cy="466.57" r="1.5" fill="#8161c7"/>
+<circle cx="861.15" cy="453.75" r="1.5" fill="#8161c7"/>
+<circle cx="864.31" cy="454.19" r="1.5" fill="#8161c7"/>
+<circle cx="869.56" cy="474.48" r="1.5" fill="#8161c7"/>
+<circle cx="874.20" cy="465.62" r="1.5" fill="#8161c7"/>
+<circle cx="878.50" cy="468.70" r="1.5" fill="#8161c7"/>
+<circle cx="882.33" cy="462.03" r="1.5" fill="#8161c7"/>
+<circle cx="886.71" cy="467.69" r="1.5" fill="#8161c7"/>
+<circle cx="890.18" cy="469.02" r="1.5" fill="#8161c7"/>
+<circle cx="895.86" cy="467.16" r="1.5" fill="#8161c7"/>
+<circle cx="899.85" cy="461.26" r="1.5" fill="#8161c7"/>
+<circle cx="903.74" cy="469.36" r="1.5" fill="#8161c7"/>
+<circle cx="908.70" cy="428.00" r="1.5" fill="#8161c7"/>
+<circle cx="912.62" cy="435.43" r="1.5" fill="#8161c7"/>
+<circle cx="917.34" cy="468.30" r="1.5" fill="#8161c7"/>
+<circle cx="921.80" cy="467.86" r="1.5" fill="#8161c7"/>
+<circle cx="926.29" cy="470.44" r="1.5" fill="#8161c7"/>
+<circle cx="930.18" cy="468.37" r="1.5" fill="#8161c7"/>
+<polyline points="933.93,469.49 938.23,471.30 942.61,468.04 947.54,451.20 951.86,470.21 955.00,471.46" stroke="#8161c7" stroke-width="2" fill="none"/>
+<circle cx="933.93" cy="469.49" r="1.5" fill="#8161c7"/>
+<circle cx="938.23" cy="471.30" r="1.5" fill="#8161c7"/>
+<circle cx="942.61" cy="468.04" r="1.5" fill="#8161c7"/>
+<circle cx="947.54" cy="451.20" r="1.5" fill="#8161c7"/>
+<circle cx="951.86" cy="470.21" r="1.5" fill="#8161c7"/>
+<circle cx="955.00" cy="471.46" r="1.5" fill="#8161c7"/>
+<text x="565.0" y="512.0" fill="#53647a" font-family="ui-monospace,monospace" font-size="10" font-weight="400">2026-08-17</text>
+<text x="875.0" y="512.0" fill="#53647a" font-family="ui-monospace,monospace" font-size="10" font-weight="400">2026-11-15</text>
+<text x="490.0" y="433.0" fill="#53647a" font-family="ui-monospace,monospace" font-size="10" font-weight="400">34.4</text>
 <text x="530.0" y="494.0" fill="#53647a" font-family="ui-monospace,monospace" font-size="10" font-weight="400">0</text>
 <rect x="20" y="535" width="960" height="140" rx="10" fill="#f6f8fa" stroke="#d0d7de"/>
 <text x="36.0" y="560.0" fill="#172033" font-family="ui-monospace,monospace" font-size="16" font-weight="700">builtin_calls</text>
-<text x="36.0" y="584.0" fill="#172033" font-family="ui-monospace,monospace" font-size="12" font-weight="400">eval 41.06 ms | native 2.82 ms | eval/native: 14.55x</text>
-<text x="36.0" y="605.0" fill="#53647a" font-family="ui-monospace,monospace" font-size="11" font-weight="400">2026-10-20 | 3c39673c | trend: elephc-eval ms</text>
+<text x="36.0" y="584.0" fill="#172033" font-family="ui-monospace,monospace" font-size="12" font-weight="400">eval 32.72 ms | native 2.87 ms | eval/native: 11.40x</text>
+<text x="36.0" y="605.0" fill="#53647a" font-family="ui-monospace,monospace" font-size="11" font-weight="400">2026-11-15 | 2857abcb | trend: elephc-eval ms</text>
 <path d="M565 643 H955" stroke="#d0d7de" fill="none"/>
-<polyline points="565.00,634.54 566.80,633.96 571.61,623.84 577.21,634.49 581.70,633.86 584.86,633.10 590.61,625.85 594.97,626.71 599.11,627.71 602.27,630.05 616.62,634.43 620.81,627.29 623.35,633.03 627.45,619.39 633.29,634.47 638.08,633.43 642.42,633.78 647.11,629.21 649.57,627.83 654.62,630.28 659.06,627.65 662.89,631.35 667.37,632.36 676.63,633.64 681.32,631.66 684.11,631.02 689.68,632.47 693.96,629.95 710.58,630.81 716.39,626.53 719.26,630.63 725.40,628.57 728.74,630.84 737.64,626.13 741.72,631.32 745.07,630.54 750.51,630.30 754.94,628.89 759.35,623.35 767.86,629.58 772.53,623.85 777.20,620.15 780.47,621.45 785.72,624.32 793.22,619.79 798.41,626.80 801.53,623.23 806.13,620.26 816.04,620.54 829.08,628.64 832.65,609.62 836.47,605.55 842.26,612.19 846.61,609.63 849.82,601.85 855.22,593.61 859.12,605.27 863.37,611.70 867.45,610.06 872.57,598.25 875.54,601.47 878.85,598.67 889.11,585.77 894.21,608.04 898.65,602.10 902.05,590.35 906.89,603.08 909.85,609.96 915.90,606.06 919.17,607.76" stroke="#3677bc" stroke-width="2" fill="none"/>
-<circle cx="565.00" cy="634.54" r="1.5" fill="#3677bc"/>
-<circle cx="566.80" cy="633.96" r="1.5" fill="#3677bc"/>
-<circle cx="571.61" cy="623.84" r="1.5" fill="#3677bc"/>
-<circle cx="577.21" cy="634.49" r="1.5" fill="#3677bc"/>
-<circle cx="581.70" cy="633.86" r="1.5" fill="#3677bc"/>
-<circle cx="584.86" cy="633.10" r="1.5" fill="#3677bc"/>
-<circle cx="590.61" cy="625.85" r="1.5" fill="#3677bc"/>
-<circle cx="594.97" cy="626.71" r="1.5" fill="#3677bc"/>
-<circle cx="599.11" cy="627.71" r="1.5" fill="#3677bc"/>
-<circle cx="602.27" cy="630.05" r="1.5" fill="#3677bc"/>
-<circle cx="616.62" cy="634.43" r="1.5" fill="#3677bc"/>
-<circle cx="620.81" cy="627.29" r="1.5" fill="#3677bc"/>
-<circle cx="623.35" cy="633.03" r="1.5" fill="#3677bc"/>
-<circle cx="627.45" cy="619.39" r="1.5" fill="#3677bc"/>
-<circle cx="633.29" cy="634.47" r="1.5" fill="#3677bc"/>
-<circle cx="638.08" cy="633.43" r="1.5" fill="#3677bc"/>
-<circle cx="642.42" cy="633.78" r="1.5" fill="#3677bc"/>
-<circle cx="647.11" cy="629.21" r="1.5" fill="#3677bc"/>
-<circle cx="649.57" cy="627.83" r="1.5" fill="#3677bc"/>
-<circle cx="654.62" cy="630.28" r="1.5" fill="#3677bc"/>
-<circle cx="659.06" cy="627.65" r="1.5" fill="#3677bc"/>
-<circle cx="662.89" cy="631.35" r="1.5" fill="#3677bc"/>
-<circle cx="667.37" cy="632.36" r="1.5" fill="#3677bc"/>
-<circle cx="676.63" cy="633.64" r="1.5" fill="#3677bc"/>
-<circle cx="681.32" cy="631.66" r="1.5" fill="#3677bc"/>
-<circle cx="684.11" cy="631.02" r="1.5" fill="#3677bc"/>
-<circle cx="689.68" cy="632.47" r="1.5" fill="#3677bc"/>
-<circle cx="693.96" cy="629.95" r="1.5" fill="#3677bc"/>
-<circle cx="710.58" cy="630.81" r="1.5" fill="#3677bc"/>
-<circle cx="716.39" cy="626.53" r="1.5" fill="#3677bc"/>
-<circle cx="719.26" cy="630.63" r="1.5" fill="#3677bc"/>
-<circle cx="725.40" cy="628.57" r="1.5" fill="#3677bc"/>
-<circle cx="728.74" cy="630.84" r="1.5" fill="#3677bc"/>
-<circle cx="737.64" cy="626.13" r="1.5" fill="#3677bc"/>
-<circle cx="741.72" cy="631.32" r="1.5" fill="#3677bc"/>
-<circle cx="745.07" cy="630.54" r="1.5" fill="#3677bc"/>
-<circle cx="750.51" cy="630.30" r="1.5" fill="#3677bc"/>
-<circle cx="754.94" cy="628.89" r="1.5" fill="#3677bc"/>
-<circle cx="759.35" cy="623.35" r="1.5" fill="#3677bc"/>
-<circle cx="767.86" cy="629.58" r="1.5" fill="#3677bc"/>
-<circle cx="772.53" cy="623.85" r="1.5" fill="#3677bc"/>
-<circle cx="777.20" cy="620.15" r="1.5" fill="#3677bc"/>
-<circle cx="780.47" cy="621.45" r="1.5" fill="#3677bc"/>
-<circle cx="785.72" cy="624.32" r="1.5" fill="#3677bc"/>
-<circle cx="793.22" cy="619.79" r="1.5" fill="#3677bc"/>
-<circle cx="798.41" cy="626.80" r="1.5" fill="#3677bc"/>
-<circle cx="801.53" cy="623.23" r="1.5" fill="#3677bc"/>
-<circle cx="806.13" cy="620.26" r="1.5" fill="#3677bc"/>
-<circle cx="816.04" cy="620.54" r="1.5" fill="#3677bc"/>
-<circle cx="829.08" cy="628.64" r="1.5" fill="#3677bc"/>
-<circle cx="832.65" cy="609.62" r="1.5" fill="#3677bc"/>
-<circle cx="836.47" cy="605.55" r="1.5" fill="#3677bc"/>
-<circle cx="842.26" cy="612.19" r="1.5" fill="#3677bc"/>
-<circle cx="846.61" cy="609.63" r="1.5" fill="#3677bc"/>
-<circle cx="849.82" cy="601.85" r="1.5" fill="#3677bc"/>
-<circle cx="855.22" cy="593.61" r="1.5" fill="#3677bc"/>
-<circle cx="859.12" cy="605.27" r="1.5" fill="#3677bc"/>
-<circle cx="863.37" cy="611.70" r="1.5" fill="#3677bc"/>
-<circle cx="867.45" cy="610.06" r="1.5" fill="#3677bc"/>
-<circle cx="872.57" cy="598.25" r="1.5" fill="#3677bc"/>
-<circle cx="875.54" cy="601.47" r="1.5" fill="#3677bc"/>
-<circle cx="878.85" cy="598.67" r="1.5" fill="#3677bc"/>
-<circle cx="889.11" cy="585.77" r="1.5" fill="#3677bc"/>
-<circle cx="894.21" cy="608.04" r="1.5" fill="#3677bc"/>
-<circle cx="898.65" cy="602.10" r="1.5" fill="#3677bc"/>
-<circle cx="902.05" cy="590.35" r="1.5" fill="#3677bc"/>
-<circle cx="906.89" cy="603.08" r="1.5" fill="#3677bc"/>
-<circle cx="909.85" cy="609.96" r="1.5" fill="#3677bc"/>
-<circle cx="915.90" cy="606.06" r="1.5" fill="#3677bc"/>
-<circle cx="919.17" cy="607.76" r="1.5" fill="#3677bc"/>
-<polyline points="923.05,592.71 929.08,590.47 932.64,578.00 937.87,610.67 942.15,601.59 945.91,607.19 950.19,588.88 955.00,603.86" stroke="#3677bc" stroke-width="2" fill="none"/>
-<circle cx="923.05" cy="592.71" r="1.5" fill="#3677bc"/>
-<circle cx="929.08" cy="590.47" r="1.5" fill="#3677bc"/>
-<circle cx="932.64" cy="578.00" r="1.5" fill="#3677bc"/>
-<circle cx="937.87" cy="610.67" r="1.5" fill="#3677bc"/>
-<circle cx="942.15" cy="601.59" r="1.5" fill="#3677bc"/>
-<circle cx="945.91" cy="607.19" r="1.5" fill="#3677bc"/>
-<circle cx="950.19" cy="588.88" r="1.5" fill="#3677bc"/>
-<circle cx="955.00" cy="603.86" r="1.5" fill="#3677bc"/>
-<text x="565.0" y="662.0" fill="#53647a" font-family="ui-monospace,monospace" font-size="10" font-weight="400">2026-07-22</text>
-<text x="875.0" y="662.0" fill="#53647a" font-family="ui-monospace,monospace" font-size="10" font-weight="400">2026-10-20</text>
+<polyline points="565.00,633.64 569.70,631.66 572.49,631.02 578.06,632.47 582.34,629.95 598.97,630.81 604.78,626.53 607.65,630.63 613.80,628.57 617.13,630.84 626.05,626.13 630.13,631.32 633.48,630.54 638.92,630.30 643.34,628.89 647.76,623.35 656.28,629.58 660.95,623.85 665.61,620.15 668.89,621.45 674.14,624.32 681.65,619.79 686.84,626.80 689.96,623.23 694.56,620.26 704.47,620.54 717.52,628.64 721.09,609.62 724.92,605.55 730.71,612.19 735.06,609.63 738.27,601.85 743.67,593.61 747.57,605.27 751.82,611.70 755.91,610.06 761.03,598.25 764.00,601.47 767.31,598.67 777.58,585.77 782.68,608.04 787.12,602.10 790.53,590.35 795.36,603.08 798.32,609.96 804.38,606.06 807.64,607.76" stroke="#3677bc" stroke-width="2" fill="none"/>
+<circle cx="565.00" cy="633.64" r="1.5" fill="#3677bc"/>
+<circle cx="569.70" cy="631.66" r="1.5" fill="#3677bc"/>
+<circle cx="572.49" cy="631.02" r="1.5" fill="#3677bc"/>
+<circle cx="578.06" cy="632.47" r="1.5" fill="#3677bc"/>
+<circle cx="582.34" cy="629.95" r="1.5" fill="#3677bc"/>
+<circle cx="598.97" cy="630.81" r="1.5" fill="#3677bc"/>
+<circle cx="604.78" cy="626.53" r="1.5" fill="#3677bc"/>
+<circle cx="607.65" cy="630.63" r="1.5" fill="#3677bc"/>
+<circle cx="613.80" cy="628.57" r="1.5" fill="#3677bc"/>
+<circle cx="617.13" cy="630.84" r="1.5" fill="#3677bc"/>
+<circle cx="626.05" cy="626.13" r="1.5" fill="#3677bc"/>
+<circle cx="630.13" cy="631.32" r="1.5" fill="#3677bc"/>
+<circle cx="633.48" cy="630.54" r="1.5" fill="#3677bc"/>
+<circle cx="638.92" cy="630.30" r="1.5" fill="#3677bc"/>
+<circle cx="643.34" cy="628.89" r="1.5" fill="#3677bc"/>
+<circle cx="647.76" cy="623.35" r="1.5" fill="#3677bc"/>
+<circle cx="656.28" cy="629.58" r="1.5" fill="#3677bc"/>
+<circle cx="660.95" cy="623.85" r="1.5" fill="#3677bc"/>
+<circle cx="665.61" cy="620.15" r="1.5" fill="#3677bc"/>
+<circle cx="668.89" cy="621.45" r="1.5" fill="#3677bc"/>
+<circle cx="674.14" cy="624.32" r="1.5" fill="#3677bc"/>
+<circle cx="681.65" cy="619.79" r="1.5" fill="#3677bc"/>
+<circle cx="686.84" cy="626.80" r="1.5" fill="#3677bc"/>
+<circle cx="689.96" cy="623.23" r="1.5" fill="#3677bc"/>
+<circle cx="694.56" cy="620.26" r="1.5" fill="#3677bc"/>
+<circle cx="704.47" cy="620.54" r="1.5" fill="#3677bc"/>
+<circle cx="717.52" cy="628.64" r="1.5" fill="#3677bc"/>
+<circle cx="721.09" cy="609.62" r="1.5" fill="#3677bc"/>
+<circle cx="724.92" cy="605.55" r="1.5" fill="#3677bc"/>
+<circle cx="730.71" cy="612.19" r="1.5" fill="#3677bc"/>
+<circle cx="735.06" cy="609.63" r="1.5" fill="#3677bc"/>
+<circle cx="738.27" cy="601.85" r="1.5" fill="#3677bc"/>
+<circle cx="743.67" cy="593.61" r="1.5" fill="#3677bc"/>
+<circle cx="747.57" cy="605.27" r="1.5" fill="#3677bc"/>
+<circle cx="751.82" cy="611.70" r="1.5" fill="#3677bc"/>
+<circle cx="755.91" cy="610.06" r="1.5" fill="#3677bc"/>
+<circle cx="761.03" cy="598.25" r="1.5" fill="#3677bc"/>
+<circle cx="764.00" cy="601.47" r="1.5" fill="#3677bc"/>
+<circle cx="767.31" cy="598.67" r="1.5" fill="#3677bc"/>
+<circle cx="777.58" cy="585.77" r="1.5" fill="#3677bc"/>
+<circle cx="782.68" cy="608.04" r="1.5" fill="#3677bc"/>
+<circle cx="787.12" cy="602.10" r="1.5" fill="#3677bc"/>
+<circle cx="790.53" cy="590.35" r="1.5" fill="#3677bc"/>
+<circle cx="795.36" cy="603.08" r="1.5" fill="#3677bc"/>
+<circle cx="798.32" cy="609.96" r="1.5" fill="#3677bc"/>
+<circle cx="804.38" cy="606.06" r="1.5" fill="#3677bc"/>
+<circle cx="807.64" cy="607.76" r="1.5" fill="#3677bc"/>
+<polyline points="811.53,592.71 817.56,590.47 821.12,578.00 826.36,610.67 830.64,601.59 834.40,607.19 838.68,588.88 843.49,603.86" stroke="#3677bc" stroke-width="2" fill="none"/>
+<circle cx="811.53" cy="592.71" r="1.5" fill="#3677bc"/>
+<circle cx="817.56" cy="590.47" r="1.5" fill="#3677bc"/>
+<circle cx="821.12" cy="578.00" r="1.5" fill="#3677bc"/>
+<circle cx="826.36" cy="610.67" r="1.5" fill="#3677bc"/>
+<circle cx="830.64" cy="601.59" r="1.5" fill="#3677bc"/>
+<circle cx="834.40" cy="607.19" r="1.5" fill="#3677bc"/>
+<circle cx="838.68" cy="588.88" r="1.5" fill="#3677bc"/>
+<circle cx="843.49" cy="603.86" r="1.5" fill="#3677bc"/>
+<polyline points="847.20,611.55 852.29,596.52 856.73,602.25 861.15,600.75 864.31,612.40 869.56,620.95 874.20,594.55 878.50,615.95 882.33,609.52 886.71,600.72 890.18,621.00 895.86,616.19 899.85,611.24 903.74,609.13 908.70,617.89 912.62,601.12 917.34,614.98 921.80,600.70 926.29,620.06 930.18,616.10" stroke="#3677bc" stroke-width="2" fill="none"/>
+<circle cx="847.20" cy="611.55" r="1.5" fill="#3677bc"/>
+<circle cx="852.29" cy="596.52" r="1.5" fill="#3677bc"/>
+<circle cx="856.73" cy="602.25" r="1.5" fill="#3677bc"/>
+<circle cx="861.15" cy="600.75" r="1.5" fill="#3677bc"/>
+<circle cx="864.31" cy="612.40" r="1.5" fill="#3677bc"/>
+<circle cx="869.56" cy="620.95" r="1.5" fill="#3677bc"/>
+<circle cx="874.20" cy="594.55" r="1.5" fill="#3677bc"/>
+<circle cx="878.50" cy="615.95" r="1.5" fill="#3677bc"/>
+<circle cx="882.33" cy="609.52" r="1.5" fill="#3677bc"/>
+<circle cx="886.71" cy="600.72" r="1.5" fill="#3677bc"/>
+<circle cx="890.18" cy="621.00" r="1.5" fill="#3677bc"/>
+<circle cx="895.86" cy="616.19" r="1.5" fill="#3677bc"/>
+<circle cx="899.85" cy="611.24" r="1.5" fill="#3677bc"/>
+<circle cx="903.74" cy="609.13" r="1.5" fill="#3677bc"/>
+<circle cx="908.70" cy="617.89" r="1.5" fill="#3677bc"/>
+<circle cx="912.62" cy="601.12" r="1.5" fill="#3677bc"/>
+<circle cx="917.34" cy="614.98" r="1.5" fill="#3677bc"/>
+<circle cx="921.80" cy="600.70" r="1.5" fill="#3677bc"/>
+<circle cx="926.29" cy="620.06" r="1.5" fill="#3677bc"/>
+<circle cx="930.18" cy="616.10" r="1.5" fill="#3677bc"/>
+<polyline points="933.93,619.85 938.23,611.47 942.61,619.42 947.54,616.68 951.86,614.53 955.00,611.81" stroke="#3677bc" stroke-width="2" fill="none"/>
+<circle cx="933.93" cy="619.85" r="1.5" fill="#3677bc"/>
+<circle cx="938.23" cy="611.47" r="1.5" fill="#3677bc"/>
+<circle cx="942.61" cy="619.42" r="1.5" fill="#3677bc"/>
+<circle cx="947.54" cy="616.68" r="1.5" fill="#3677bc"/>
+<circle cx="951.86" cy="614.53" r="1.5" fill="#3677bc"/>
+<circle cx="955.00" cy="611.81" r="1.5" fill="#3677bc"/>
+<text x="565.0" y="662.0" fill="#53647a" font-family="ui-monospace,monospace" font-size="10" font-weight="400">2026-08-17</text>
+<text x="875.0" y="662.0" fill="#53647a" font-family="ui-monospace,monospace" font-size="10" font-weight="400">2026-11-15</text>
 <text x="490.0" y="583.0" fill="#53647a" font-family="ui-monospace,monospace" font-size="10" font-weight="400">68.2</text>
 <text x="530.0" y="644.0" fill="#53647a" font-family="ui-monospace,monospace" font-size="10" font-weight="400">0</text>
 <rect x="20" y="685" width="960" height="140" rx="10" fill="#f6f8fa" stroke="#d0d7de"/>
 <text x="36.0" y="710.0" fill="#172033" font-family="ui-monospace,monospace" font-size="16" font-weight="700">callable_dispatch</text>
-<text x="36.0" y="734.0" fill="#172033" font-family="ui-monospace,monospace" font-size="12" font-weight="400">eval 47.95 ms | native 3.34 ms | eval/native: 14.34x</text>
-<text x="36.0" y="755.0" fill="#53647a" font-family="ui-monospace,monospace" font-size="11" font-weight="400">2026-10-20 | 3c39673c | trend: elephc-eval ms</text>
+<text x="36.0" y="734.0" fill="#172033" font-family="ui-monospace,monospace" font-size="12" font-weight="400">eval 29.02 ms | native 4.30 ms | eval/native: 6.75x</text>
+<text x="36.0" y="755.0" fill="#53647a" font-family="ui-monospace,monospace" font-size="11" font-weight="400">2026-11-15 | 2857abcb | trend: elephc-eval ms</text>
 <path d="M565 793 H955" stroke="#d0d7de" fill="none"/>
-<polyline points="565.00,782.37 566.80,784.42 571.61,783.03 577.21,784.97 581.70,784.52 584.86,781.74 590.61,776.92 594.97,782.48 599.11,780.14 602.27,784.66 616.62,784.59 620.81,780.86 623.35,784.00 627.45,778.26 633.29,785.04 638.08,781.24 642.42,784.57 647.11,782.19 649.57,782.40 654.62,782.12 659.06,776.90 662.89,782.55 667.37,784.24 676.63,784.58 681.32,782.67 684.11,781.24 689.68,784.40 693.96,782.27 710.58,784.26 716.39,780.82 719.26,781.44 725.40,781.06 728.74,782.81 737.64,779.59 741.72,781.60 745.07,780.87 750.51,782.53 754.94,773.55 759.35,779.30 767.86,781.25 772.53,777.42 777.20,775.82 780.47,765.11 785.72,771.81 793.22,772.20 798.41,776.68 801.53,776.69 806.13,752.58 816.04,770.91 829.08,780.03 832.65,762.78 836.47,766.71 842.26,766.56 846.61,764.38 849.82,765.93 855.22,759.29 859.12,760.31 863.37,761.47 867.45,767.05 872.57,757.36 875.54,755.65 878.85,764.38 889.11,747.75 894.21,767.92 898.65,748.24 902.05,760.65 906.89,759.03 909.85,767.07 915.90,761.86 919.17,764.03" stroke="#d85a26" stroke-width="2" fill="none"/>
-<circle cx="565.00" cy="782.37" r="1.5" fill="#d85a26"/>
-<circle cx="566.80" cy="784.42" r="1.5" fill="#d85a26"/>
-<circle cx="571.61" cy="783.03" r="1.5" fill="#d85a26"/>
-<circle cx="577.21" cy="784.97" r="1.5" fill="#d85a26"/>
-<circle cx="581.70" cy="784.52" r="1.5" fill="#d85a26"/>
-<circle cx="584.86" cy="781.74" r="1.5" fill="#d85a26"/>
-<circle cx="590.61" cy="776.92" r="1.5" fill="#d85a26"/>
-<circle cx="594.97" cy="782.48" r="1.5" fill="#d85a26"/>
-<circle cx="599.11" cy="780.14" r="1.5" fill="#d85a26"/>
-<circle cx="602.27" cy="784.66" r="1.5" fill="#d85a26"/>
-<circle cx="616.62" cy="784.59" r="1.5" fill="#d85a26"/>
-<circle cx="620.81" cy="780.86" r="1.5" fill="#d85a26"/>
-<circle cx="623.35" cy="784.00" r="1.5" fill="#d85a26"/>
-<circle cx="627.45" cy="778.26" r="1.5" fill="#d85a26"/>
-<circle cx="633.29" cy="785.04" r="1.5" fill="#d85a26"/>
-<circle cx="638.08" cy="781.24" r="1.5" fill="#d85a26"/>
-<circle cx="642.42" cy="784.57" r="1.5" fill="#d85a26"/>
-<circle cx="647.11" cy="782.19" r="1.5" fill="#d85a26"/>
-<circle cx="649.57" cy="782.40" r="1.5" fill="#d85a26"/>
-<circle cx="654.62" cy="782.12" r="1.5" fill="#d85a26"/>
-<circle cx="659.06" cy="776.90" r="1.5" fill="#d85a26"/>
-<circle cx="662.89" cy="782.55" r="1.5" fill="#d85a26"/>
-<circle cx="667.37" cy="784.24" r="1.5" fill="#d85a26"/>
-<circle cx="676.63" cy="784.58" r="1.5" fill="#d85a26"/>
-<circle cx="681.32" cy="782.67" r="1.5" fill="#d85a26"/>
-<circle cx="684.11" cy="781.24" r="1.5" fill="#d85a26"/>
-<circle cx="689.68" cy="784.40" r="1.5" fill="#d85a26"/>
-<circle cx="693.96" cy="782.27" r="1.5" fill="#d85a26"/>
-<circle cx="710.58" cy="784.26" r="1.5" fill="#d85a26"/>
-<circle cx="716.39" cy="780.82" r="1.5" fill="#d85a26"/>
-<circle cx="719.26" cy="781.44" r="1.5" fill="#d85a26"/>
-<circle cx="725.40" cy="781.06" r="1.5" fill="#d85a26"/>
-<circle cx="728.74" cy="782.81" r="1.5" fill="#d85a26"/>
-<circle cx="737.64" cy="779.59" r="1.5" fill="#d85a26"/>
-<circle cx="741.72" cy="781.60" r="1.5" fill="#d85a26"/>
-<circle cx="745.07" cy="780.87" r="1.5" fill="#d85a26"/>
-<circle cx="750.51" cy="782.53" r="1.5" fill="#d85a26"/>
-<circle cx="754.94" cy="773.55" r="1.5" fill="#d85a26"/>
-<circle cx="759.35" cy="779.30" r="1.5" fill="#d85a26"/>
-<circle cx="767.86" cy="781.25" r="1.5" fill="#d85a26"/>
-<circle cx="772.53" cy="777.42" r="1.5" fill="#d85a26"/>
-<circle cx="777.20" cy="775.82" r="1.5" fill="#d85a26"/>
-<circle cx="780.47" cy="765.11" r="1.5" fill="#d85a26"/>
-<circle cx="785.72" cy="771.81" r="1.5" fill="#d85a26"/>
-<circle cx="793.22" cy="772.20" r="1.5" fill="#d85a26"/>
-<circle cx="798.41" cy="776.68" r="1.5" fill="#d85a26"/>
-<circle cx="801.53" cy="776.69" r="1.5" fill="#d85a26"/>
-<circle cx="806.13" cy="752.58" r="1.5" fill="#d85a26"/>
-<circle cx="816.04" cy="770.91" r="1.5" fill="#d85a26"/>
-<circle cx="829.08" cy="780.03" r="1.5" fill="#d85a26"/>
-<circle cx="832.65" cy="762.78" r="1.5" fill="#d85a26"/>
-<circle cx="836.47" cy="766.71" r="1.5" fill="#d85a26"/>
-<circle cx="842.26" cy="766.56" r="1.5" fill="#d85a26"/>
-<circle cx="846.61" cy="764.38" r="1.5" fill="#d85a26"/>
-<circle cx="849.82" cy="765.93" r="1.5" fill="#d85a26"/>
-<circle cx="855.22" cy="759.29" r="1.5" fill="#d85a26"/>
-<circle cx="859.12" cy="760.31" r="1.5" fill="#d85a26"/>
-<circle cx="863.37" cy="761.47" r="1.5" fill="#d85a26"/>
-<circle cx="867.45" cy="767.05" r="1.5" fill="#d85a26"/>
-<circle cx="872.57" cy="757.36" r="1.5" fill="#d85a26"/>
-<circle cx="875.54" cy="755.65" r="1.5" fill="#d85a26"/>
-<circle cx="878.85" cy="764.38" r="1.5" fill="#d85a26"/>
-<circle cx="889.11" cy="747.75" r="1.5" fill="#d85a26"/>
-<circle cx="894.21" cy="767.92" r="1.5" fill="#d85a26"/>
-<circle cx="898.65" cy="748.24" r="1.5" fill="#d85a26"/>
-<circle cx="902.05" cy="760.65" r="1.5" fill="#d85a26"/>
-<circle cx="906.89" cy="759.03" r="1.5" fill="#d85a26"/>
-<circle cx="909.85" cy="767.07" r="1.5" fill="#d85a26"/>
-<circle cx="915.90" cy="761.86" r="1.5" fill="#d85a26"/>
-<circle cx="919.17" cy="764.03" r="1.5" fill="#d85a26"/>
-<polyline points="923.05,758.84 929.08,728.00 932.64,743.34 937.87,762.82 942.15,758.11 945.91,762.21 950.19,747.71 955.00,754.85" stroke="#d85a26" stroke-width="2" fill="none"/>
-<circle cx="923.05" cy="758.84" r="1.5" fill="#d85a26"/>
-<circle cx="929.08" cy="728.00" r="1.5" fill="#d85a26"/>
-<circle cx="932.64" cy="743.34" r="1.5" fill="#d85a26"/>
-<circle cx="937.87" cy="762.82" r="1.5" fill="#d85a26"/>
-<circle cx="942.15" cy="758.11" r="1.5" fill="#d85a26"/>
-<circle cx="945.91" cy="762.21" r="1.5" fill="#d85a26"/>
-<circle cx="950.19" cy="747.71" r="1.5" fill="#d85a26"/>
-<circle cx="955.00" cy="754.85" r="1.5" fill="#d85a26"/>
-<text x="565.0" y="812.0" fill="#53647a" font-family="ui-monospace,monospace" font-size="10" font-weight="400">2026-07-22</text>
-<text x="875.0" y="812.0" fill="#53647a" font-family="ui-monospace,monospace" font-size="10" font-weight="400">2026-10-20</text>
+<polyline points="565.00,784.58 569.70,782.67 572.49,781.24 578.06,784.40 582.34,782.27 598.97,784.26 604.78,780.82 607.65,781.44 613.80,781.06 617.13,782.81 626.05,779.59 630.13,781.60 633.48,780.87 638.92,782.53 643.34,773.55 647.76,779.30 656.28,781.25 660.95,777.42 665.61,775.82 668.89,765.11 674.14,771.81 681.65,772.20 686.84,776.68 689.96,776.69 694.56,752.58 704.47,770.91 717.52,780.03 721.09,762.78 724.92,766.71 730.71,766.56 735.06,764.38 738.27,765.93 743.67,759.29 747.57,760.31 751.82,761.47 755.91,767.05 761.03,757.36 764.00,755.65 767.31,764.38 777.58,747.75 782.68,767.92 787.12,748.24 790.53,760.65 795.36,759.03 798.32,767.07 804.38,761.86 807.64,764.03" stroke="#d85a26" stroke-width="2" fill="none"/>
+<circle cx="565.00" cy="784.58" r="1.5" fill="#d85a26"/>
+<circle cx="569.70" cy="782.67" r="1.5" fill="#d85a26"/>
+<circle cx="572.49" cy="781.24" r="1.5" fill="#d85a26"/>
+<circle cx="578.06" cy="784.40" r="1.5" fill="#d85a26"/>
+<circle cx="582.34" cy="782.27" r="1.5" fill="#d85a26"/>
+<circle cx="598.97" cy="784.26" r="1.5" fill="#d85a26"/>
+<circle cx="604.78" cy="780.82" r="1.5" fill="#d85a26"/>
+<circle cx="607.65" cy="781.44" r="1.5" fill="#d85a26"/>
+<circle cx="613.80" cy="781.06" r="1.5" fill="#d85a26"/>
+<circle cx="617.13" cy="782.81" r="1.5" fill="#d85a26"/>
+<circle cx="626.05" cy="779.59" r="1.5" fill="#d85a26"/>
+<circle cx="630.13" cy="781.60" r="1.5" fill="#d85a26"/>
+<circle cx="633.48" cy="780.87" r="1.5" fill="#d85a26"/>
+<circle cx="638.92" cy="782.53" r="1.5" fill="#d85a26"/>
+<circle cx="643.34" cy="773.55" r="1.5" fill="#d85a26"/>
+<circle cx="647.76" cy="779.30" r="1.5" fill="#d85a26"/>
+<circle cx="656.28" cy="781.25" r="1.5" fill="#d85a26"/>
+<circle cx="660.95" cy="777.42" r="1.5" fill="#d85a26"/>
+<circle cx="665.61" cy="775.82" r="1.5" fill="#d85a26"/>
+<circle cx="668.89" cy="765.11" r="1.5" fill="#d85a26"/>
+<circle cx="674.14" cy="771.81" r="1.5" fill="#d85a26"/>
+<circle cx="681.65" cy="772.20" r="1.5" fill="#d85a26"/>
+<circle cx="686.84" cy="776.68" r="1.5" fill="#d85a26"/>
+<circle cx="689.96" cy="776.69" r="1.5" fill="#d85a26"/>
+<circle cx="694.56" cy="752.58" r="1.5" fill="#d85a26"/>
+<circle cx="704.47" cy="770.91" r="1.5" fill="#d85a26"/>
+<circle cx="717.52" cy="780.03" r="1.5" fill="#d85a26"/>
+<circle cx="721.09" cy="762.78" r="1.5" fill="#d85a26"/>
+<circle cx="724.92" cy="766.71" r="1.5" fill="#d85a26"/>
+<circle cx="730.71" cy="766.56" r="1.5" fill="#d85a26"/>
+<circle cx="735.06" cy="764.38" r="1.5" fill="#d85a26"/>
+<circle cx="738.27" cy="765.93" r="1.5" fill="#d85a26"/>
+<circle cx="743.67" cy="759.29" r="1.5" fill="#d85a26"/>
+<circle cx="747.57" cy="760.31" r="1.5" fill="#d85a26"/>
+<circle cx="751.82" cy="761.47" r="1.5" fill="#d85a26"/>
+<circle cx="755.91" cy="767.05" r="1.5" fill="#d85a26"/>
+<circle cx="761.03" cy="757.36" r="1.5" fill="#d85a26"/>
+<circle cx="764.00" cy="755.65" r="1.5" fill="#d85a26"/>
+<circle cx="767.31" cy="764.38" r="1.5" fill="#d85a26"/>
+<circle cx="777.58" cy="747.75" r="1.5" fill="#d85a26"/>
+<circle cx="782.68" cy="767.92" r="1.5" fill="#d85a26"/>
+<circle cx="787.12" cy="748.24" r="1.5" fill="#d85a26"/>
+<circle cx="790.53" cy="760.65" r="1.5" fill="#d85a26"/>
+<circle cx="795.36" cy="759.03" r="1.5" fill="#d85a26"/>
+<circle cx="798.32" cy="767.07" r="1.5" fill="#d85a26"/>
+<circle cx="804.38" cy="761.86" r="1.5" fill="#d85a26"/>
+<circle cx="807.64" cy="764.03" r="1.5" fill="#d85a26"/>
+<polyline points="811.53,758.84 817.56,728.00 821.12,743.34 826.36,762.82 830.64,758.11 834.40,762.21 838.68,747.71 843.49,754.85" stroke="#d85a26" stroke-width="2" fill="none"/>
+<circle cx="811.53" cy="758.84" r="1.5" fill="#d85a26"/>
+<circle cx="817.56" cy="728.00" r="1.5" fill="#d85a26"/>
+<circle cx="821.12" cy="743.34" r="1.5" fill="#d85a26"/>
+<circle cx="826.36" cy="762.82" r="1.5" fill="#d85a26"/>
+<circle cx="830.64" cy="758.11" r="1.5" fill="#d85a26"/>
+<circle cx="834.40" cy="762.21" r="1.5" fill="#d85a26"/>
+<circle cx="838.68" cy="747.71" r="1.5" fill="#d85a26"/>
+<circle cx="843.49" cy="754.85" r="1.5" fill="#d85a26"/>
+<polyline points="847.20,767.12 852.29,750.33 856.73,763.81 861.15,756.21 864.31,769.24 869.56,773.18 874.20,767.54 878.50,767.72 882.33,763.47 886.71,755.51 890.18,774.45 895.86,762.99 899.85,763.11 903.74,767.01 908.70,759.30 912.62,757.42 917.34,769.14 921.80,768.75 926.29,774.86 930.18,772.65" stroke="#d85a26" stroke-width="2" fill="none"/>
+<circle cx="847.20" cy="767.12" r="1.5" fill="#d85a26"/>
+<circle cx="852.29" cy="750.33" r="1.5" fill="#d85a26"/>
+<circle cx="856.73" cy="763.81" r="1.5" fill="#d85a26"/>
+<circle cx="861.15" cy="756.21" r="1.5" fill="#d85a26"/>
+<circle cx="864.31" cy="769.24" r="1.5" fill="#d85a26"/>
+<circle cx="869.56" cy="773.18" r="1.5" fill="#d85a26"/>
+<circle cx="874.20" cy="767.54" r="1.5" fill="#d85a26"/>
+<circle cx="878.50" cy="767.72" r="1.5" fill="#d85a26"/>
+<circle cx="882.33" cy="763.47" r="1.5" fill="#d85a26"/>
+<circle cx="886.71" cy="755.51" r="1.5" fill="#d85a26"/>
+<circle cx="890.18" cy="774.45" r="1.5" fill="#d85a26"/>
+<circle cx="895.86" cy="762.99" r="1.5" fill="#d85a26"/>
+<circle cx="899.85" cy="763.11" r="1.5" fill="#d85a26"/>
+<circle cx="903.74" cy="767.01" r="1.5" fill="#d85a26"/>
+<circle cx="908.70" cy="759.30" r="1.5" fill="#d85a26"/>
+<circle cx="912.62" cy="757.42" r="1.5" fill="#d85a26"/>
+<circle cx="917.34" cy="769.14" r="1.5" fill="#d85a26"/>
+<circle cx="921.80" cy="768.75" r="1.5" fill="#d85a26"/>
+<circle cx="926.29" cy="774.86" r="1.5" fill="#d85a26"/>
+<circle cx="930.18" cy="772.65" r="1.5" fill="#d85a26"/>
+<polyline points="933.93,772.32 938.23,772.49 942.61,771.38 947.54,763.69 951.86,761.16 955.00,769.91" stroke="#d85a26" stroke-width="2" fill="none"/>
+<circle cx="933.93" cy="772.32" r="1.5" fill="#d85a26"/>
+<circle cx="938.23" cy="772.49" r="1.5" fill="#d85a26"/>
+<circle cx="942.61" cy="771.38" r="1.5" fill="#d85a26"/>
+<circle cx="947.54" cy="763.69" r="1.5" fill="#d85a26"/>
+<circle cx="951.86" cy="761.16" r="1.5" fill="#d85a26"/>
+<circle cx="955.00" cy="769.91" r="1.5" fill="#d85a26"/>
+<text x="565.0" y="812.0" fill="#53647a" font-family="ui-monospace,monospace" font-size="10" font-weight="400">2026-08-17</text>
+<text x="875.0" y="812.0" fill="#53647a" font-family="ui-monospace,monospace" font-size="10" font-weight="400">2026-11-15</text>
 <text x="490.0" y="733.0" fill="#53647a" font-family="ui-monospace,monospace" font-size="10" font-weight="400">81.7</text>
 <text x="530.0" y="794.0" fill="#53647a" font-family="ui-monospace,monospace" font-size="10" font-weight="400">0</text>
 <rect x="20" y="835" width="960" height="140" rx="10" fill="#f6f8fa" stroke="#d0d7de"/>
 <text x="36.0" y="860.0" fill="#172033" font-family="ui-monospace,monospace" font-size="16" font-weight="700">eval_declared_function</text>
-<text x="36.0" y="884.0" fill="#172033" font-family="ui-monospace,monospace" font-size="12" font-weight="400">eval 44.87 ms | native 4.17 ms | eval/native: 10.76x</text>
-<text x="36.0" y="905.0" fill="#53647a" font-family="ui-monospace,monospace" font-size="11" font-weight="400">2026-10-20 | 3c39673c | trend: elephc-eval ms</text>
+<text x="36.0" y="884.0" fill="#172033" font-family="ui-monospace,monospace" font-size="12" font-weight="400">eval 39.29 ms | native 10.46 ms | eval/native: 3.76x</text>
+<text x="36.0" y="905.0" fill="#53647a" font-family="ui-monospace,monospace" font-size="11" font-weight="400">2026-11-15 | 2857abcb | trend: elephc-eval ms</text>
 <path d="M565 943 H955" stroke="#d0d7de" fill="none"/>
-<polyline points="565.00,932.95 566.80,933.45 571.61,930.62 577.21,933.65 581.70,933.48 584.86,930.47 590.61,924.56 594.97,929.53 599.11,928.19 602.27,932.87 616.62,932.83 620.81,928.78 623.35,932.24 627.45,926.81 633.29,933.70 638.08,931.80 642.42,932.23 647.11,928.33 649.57,926.11 654.62,927.24 659.06,929.50 662.89,931.19 667.37,933.00 676.63,929.27 681.32,928.33 684.11,927.54 689.68,931.65 693.96,931.74 710.58,932.22 716.39,929.67 719.26,929.52 725.40,929.30 728.74,930.81 737.64,925.71 741.72,928.26 745.07,927.43 750.51,931.84 754.94,921.52 759.35,922.27 767.86,928.28 772.53,926.28 777.20,924.23 780.47,911.04 785.72,916.24 793.22,920.20 798.41,924.62 801.53,924.95 806.13,921.23 816.04,918.75 829.08,927.25 832.65,911.48 836.47,897.13 842.26,908.14 846.61,906.54 849.82,907.80 855.22,885.49 859.12,896.33 863.37,912.57 867.45,910.71 872.57,896.13 875.54,888.19 878.85,906.50 889.11,879.88 894.21,912.68 898.65,904.96 902.05,901.04 906.89,894.64 909.85,912.05 915.90,878.00 919.17,908.73" stroke="#168a81" stroke-width="2" fill="none"/>
-<circle cx="565.00" cy="932.95" r="1.5" fill="#168a81"/>
-<circle cx="566.80" cy="933.45" r="1.5" fill="#168a81"/>
-<circle cx="571.61" cy="930.62" r="1.5" fill="#168a81"/>
-<circle cx="577.21" cy="933.65" r="1.5" fill="#168a81"/>
-<circle cx="581.70" cy="933.48" r="1.5" fill="#168a81"/>
-<circle cx="584.86" cy="930.47" r="1.5" fill="#168a81"/>
-<circle cx="590.61" cy="924.56" r="1.5" fill="#168a81"/>
-<circle cx="594.97" cy="929.53" r="1.5" fill="#168a81"/>
-<circle cx="599.11" cy="928.19" r="1.5" fill="#168a81"/>
-<circle cx="602.27" cy="932.87" r="1.5" fill="#168a81"/>
-<circle cx="616.62" cy="932.83" r="1.5" fill="#168a81"/>
-<circle cx="620.81" cy="928.78" r="1.5" fill="#168a81"/>
-<circle cx="623.35" cy="932.24" r="1.5" fill="#168a81"/>
-<circle cx="627.45" cy="926.81" r="1.5" fill="#168a81"/>
-<circle cx="633.29" cy="933.70" r="1.5" fill="#168a81"/>
-<circle cx="638.08" cy="931.80" r="1.5" fill="#168a81"/>
-<circle cx="642.42" cy="932.23" r="1.5" fill="#168a81"/>
-<circle cx="647.11" cy="928.33" r="1.5" fill="#168a81"/>
-<circle cx="649.57" cy="926.11" r="1.5" fill="#168a81"/>
-<circle cx="654.62" cy="927.24" r="1.5" fill="#168a81"/>
-<circle cx="659.06" cy="929.50" r="1.5" fill="#168a81"/>
-<circle cx="662.89" cy="931.19" r="1.5" fill="#168a81"/>
-<circle cx="667.37" cy="933.00" r="1.5" fill="#168a81"/>
-<circle cx="676.63" cy="929.27" r="1.5" fill="#168a81"/>
-<circle cx="681.32" cy="928.33" r="1.5" fill="#168a81"/>
-<circle cx="684.11" cy="927.54" r="1.5" fill="#168a81"/>
-<circle cx="689.68" cy="931.65" r="1.5" fill="#168a81"/>
-<circle cx="693.96" cy="931.74" r="1.5" fill="#168a81"/>
-<circle cx="710.58" cy="932.22" r="1.5" fill="#168a81"/>
-<circle cx="716.39" cy="929.67" r="1.5" fill="#168a81"/>
-<circle cx="719.26" cy="929.52" r="1.5" fill="#168a81"/>
-<circle cx="725.40" cy="929.30" r="1.5" fill="#168a81"/>
-<circle cx="728.74" cy="930.81" r="1.5" fill="#168a81"/>
-<circle cx="737.64" cy="925.71" r="1.5" fill="#168a81"/>
-<circle cx="741.72" cy="928.26" r="1.5" fill="#168a81"/>
-<circle cx="745.07" cy="927.43" r="1.5" fill="#168a81"/>
-<circle cx="750.51" cy="931.84" r="1.5" fill="#168a81"/>
-<circle cx="754.94" cy="921.52" r="1.5" fill="#168a81"/>
-<circle cx="759.35" cy="922.27" r="1.5" fill="#168a81"/>
-<circle cx="767.86" cy="928.28" r="1.5" fill="#168a81"/>
-<circle cx="772.53" cy="926.28" r="1.5" fill="#168a81"/>
-<circle cx="777.20" cy="924.23" r="1.5" fill="#168a81"/>
-<circle cx="780.47" cy="911.04" r="1.5" fill="#168a81"/>
-<circle cx="785.72" cy="916.24" r="1.5" fill="#168a81"/>
-<circle cx="793.22" cy="920.20" r="1.5" fill="#168a81"/>
-<circle cx="798.41" cy="924.62" r="1.5" fill="#168a81"/>
-<circle cx="801.53" cy="924.95" r="1.5" fill="#168a81"/>
-<circle cx="806.13" cy="921.23" r="1.5" fill="#168a81"/>
-<circle cx="816.04" cy="918.75" r="1.5" fill="#168a81"/>
-<circle cx="829.08" cy="927.25" r="1.5" fill="#168a81"/>
-<circle cx="832.65" cy="911.48" r="1.5" fill="#168a81"/>
-<circle cx="836.47" cy="897.13" r="1.5" fill="#168a81"/>
-<circle cx="842.26" cy="908.14" r="1.5" fill="#168a81"/>
-<circle cx="846.61" cy="906.54" r="1.5" fill="#168a81"/>
-<circle cx="849.82" cy="907.80" r="1.5" fill="#168a81"/>
-<circle cx="855.22" cy="885.49" r="1.5" fill="#168a81"/>
-<circle cx="859.12" cy="896.33" r="1.5" fill="#168a81"/>
-<circle cx="863.37" cy="912.57" r="1.5" fill="#168a81"/>
-<circle cx="867.45" cy="910.71" r="1.5" fill="#168a81"/>
-<circle cx="872.57" cy="896.13" r="1.5" fill="#168a81"/>
-<circle cx="875.54" cy="888.19" r="1.5" fill="#168a81"/>
-<circle cx="878.85" cy="906.50" r="1.5" fill="#168a81"/>
-<circle cx="889.11" cy="879.88" r="1.5" fill="#168a81"/>
-<circle cx="894.21" cy="912.68" r="1.5" fill="#168a81"/>
-<circle cx="898.65" cy="904.96" r="1.5" fill="#168a81"/>
-<circle cx="902.05" cy="901.04" r="1.5" fill="#168a81"/>
-<circle cx="906.89" cy="894.64" r="1.5" fill="#168a81"/>
-<circle cx="909.85" cy="912.05" r="1.5" fill="#168a81"/>
-<circle cx="915.90" cy="878.00" r="1.5" fill="#168a81"/>
-<circle cx="919.17" cy="908.73" r="1.5" fill="#168a81"/>
-<polyline points="923.05,902.54 929.08,891.76 932.64,895.91 937.87,896.43 942.15,908.56 945.91,903.94 950.19,894.00 955.00,898.86" stroke="#168a81" stroke-width="2" fill="none"/>
-<circle cx="923.05" cy="902.54" r="1.5" fill="#168a81"/>
-<circle cx="929.08" cy="891.76" r="1.5" fill="#168a81"/>
-<circle cx="932.64" cy="895.91" r="1.5" fill="#168a81"/>
-<circle cx="937.87" cy="896.43" r="1.5" fill="#168a81"/>
-<circle cx="942.15" cy="908.56" r="1.5" fill="#168a81"/>
-<circle cx="945.91" cy="903.94" r="1.5" fill="#168a81"/>
-<circle cx="950.19" cy="894.00" r="1.5" fill="#168a81"/>
-<circle cx="955.00" cy="898.86" r="1.5" fill="#168a81"/>
-<text x="565.0" y="962.0" fill="#53647a" font-family="ui-monospace,monospace" font-size="10" font-weight="400">2026-07-22</text>
-<text x="875.0" y="962.0" fill="#53647a" font-family="ui-monospace,monospace" font-size="10" font-weight="400">2026-10-20</text>
+<polyline points="565.00,929.27 569.70,928.33 572.49,927.54 578.06,931.65 582.34,931.74 598.97,932.22 604.78,929.67 607.65,929.52 613.80,929.30 617.13,930.81 626.05,925.71 630.13,928.26 633.48,927.43 638.92,931.84 643.34,921.52 647.76,922.27 656.28,928.28 660.95,926.28 665.61,924.23 668.89,911.04 674.14,916.24 681.65,920.20 686.84,924.62 689.96,924.95 694.56,921.23 704.47,918.75 717.52,927.25 721.09,911.48 724.92,897.13 730.71,908.14 735.06,906.54 738.27,907.80 743.67,885.49 747.57,896.33 751.82,912.57 755.91,910.71 761.03,896.13 764.00,888.19 767.31,906.50 777.58,879.88 782.68,912.68 787.12,904.96 790.53,901.04 795.36,894.64 798.32,912.05 804.38,878.00 807.64,908.73" stroke="#168a81" stroke-width="2" fill="none"/>
+<circle cx="565.00" cy="929.27" r="1.5" fill="#168a81"/>
+<circle cx="569.70" cy="928.33" r="1.5" fill="#168a81"/>
+<circle cx="572.49" cy="927.54" r="1.5" fill="#168a81"/>
+<circle cx="578.06" cy="931.65" r="1.5" fill="#168a81"/>
+<circle cx="582.34" cy="931.74" r="1.5" fill="#168a81"/>
+<circle cx="598.97" cy="932.22" r="1.5" fill="#168a81"/>
+<circle cx="604.78" cy="929.67" r="1.5" fill="#168a81"/>
+<circle cx="607.65" cy="929.52" r="1.5" fill="#168a81"/>
+<circle cx="613.80" cy="929.30" r="1.5" fill="#168a81"/>
+<circle cx="617.13" cy="930.81" r="1.5" fill="#168a81"/>
+<circle cx="626.05" cy="925.71" r="1.5" fill="#168a81"/>
+<circle cx="630.13" cy="928.26" r="1.5" fill="#168a81"/>
+<circle cx="633.48" cy="927.43" r="1.5" fill="#168a81"/>
+<circle cx="638.92" cy="931.84" r="1.5" fill="#168a81"/>
+<circle cx="643.34" cy="921.52" r="1.5" fill="#168a81"/>
+<circle cx="647.76" cy="922.27" r="1.5" fill="#168a81"/>
+<circle cx="656.28" cy="928.28" r="1.5" fill="#168a81"/>
+<circle cx="660.95" cy="926.28" r="1.5" fill="#168a81"/>
+<circle cx="665.61" cy="924.23" r="1.5" fill="#168a81"/>
+<circle cx="668.89" cy="911.04" r="1.5" fill="#168a81"/>
+<circle cx="674.14" cy="916.24" r="1.5" fill="#168a81"/>
+<circle cx="681.65" cy="920.20" r="1.5" fill="#168a81"/>
+<circle cx="686.84" cy="924.62" r="1.5" fill="#168a81"/>
+<circle cx="689.96" cy="924.95" r="1.5" fill="#168a81"/>
+<circle cx="694.56" cy="921.23" r="1.5" fill="#168a81"/>
+<circle cx="704.47" cy="918.75" r="1.5" fill="#168a81"/>
+<circle cx="717.52" cy="927.25" r="1.5" fill="#168a81"/>
+<circle cx="721.09" cy="911.48" r="1.5" fill="#168a81"/>
+<circle cx="724.92" cy="897.13" r="1.5" fill="#168a81"/>
+<circle cx="730.71" cy="908.14" r="1.5" fill="#168a81"/>
+<circle cx="735.06" cy="906.54" r="1.5" fill="#168a81"/>
+<circle cx="738.27" cy="907.80" r="1.5" fill="#168a81"/>
+<circle cx="743.67" cy="885.49" r="1.5" fill="#168a81"/>
+<circle cx="747.57" cy="896.33" r="1.5" fill="#168a81"/>
+<circle cx="751.82" cy="912.57" r="1.5" fill="#168a81"/>
+<circle cx="755.91" cy="910.71" r="1.5" fill="#168a81"/>
+<circle cx="761.03" cy="896.13" r="1.5" fill="#168a81"/>
+<circle cx="764.00" cy="888.19" r="1.5" fill="#168a81"/>
+<circle cx="767.31" cy="906.50" r="1.5" fill="#168a81"/>
+<circle cx="777.58" cy="879.88" r="1.5" fill="#168a81"/>
+<circle cx="782.68" cy="912.68" r="1.5" fill="#168a81"/>
+<circle cx="787.12" cy="904.96" r="1.5" fill="#168a81"/>
+<circle cx="790.53" cy="901.04" r="1.5" fill="#168a81"/>
+<circle cx="795.36" cy="894.64" r="1.5" fill="#168a81"/>
+<circle cx="798.32" cy="912.05" r="1.5" fill="#168a81"/>
+<circle cx="804.38" cy="878.00" r="1.5" fill="#168a81"/>
+<circle cx="807.64" cy="908.73" r="1.5" fill="#168a81"/>
+<polyline points="811.53,902.54 817.56,891.76 821.12,895.91 826.36,896.43 830.64,908.56 834.40,903.94 838.68,894.00 843.49,898.86" stroke="#168a81" stroke-width="2" fill="none"/>
+<circle cx="811.53" cy="902.54" r="1.5" fill="#168a81"/>
+<circle cx="817.56" cy="891.76" r="1.5" fill="#168a81"/>
+<circle cx="821.12" cy="895.91" r="1.5" fill="#168a81"/>
+<circle cx="826.36" cy="896.43" r="1.5" fill="#168a81"/>
+<circle cx="830.64" cy="908.56" r="1.5" fill="#168a81"/>
+<circle cx="834.40" cy="903.94" r="1.5" fill="#168a81"/>
+<circle cx="838.68" cy="894.00" r="1.5" fill="#168a81"/>
+<circle cx="843.49" cy="898.86" r="1.5" fill="#168a81"/>
+<polyline points="847.20,910.44 852.29,901.29 856.73,907.71 861.15,906.91 864.31,919.82 869.56,920.96 874.20,915.33 878.50,910.71 882.33,898.57 886.71,913.49 890.18,921.20 895.86,919.63 899.85,915.27 903.74,910.13 908.70,912.33 912.62,897.27 917.34,913.93 921.80,908.62 926.29,910.11 930.18,901.57" stroke="#168a81" stroke-width="2" fill="none"/>
+<circle cx="847.20" cy="910.44" r="1.5" fill="#168a81"/>
+<circle cx="852.29" cy="901.29" r="1.5" fill="#168a81"/>
+<circle cx="856.73" cy="907.71" r="1.5" fill="#168a81"/>
+<circle cx="861.15" cy="906.91" r="1.5" fill="#168a81"/>
+<circle cx="864.31" cy="919.82" r="1.5" fill="#168a81"/>
+<circle cx="869.56" cy="920.96" r="1.5" fill="#168a81"/>
+<circle cx="874.20" cy="915.33" r="1.5" fill="#168a81"/>
+<circle cx="878.50" cy="910.71" r="1.5" fill="#168a81"/>
+<circle cx="882.33" cy="898.57" r="1.5" fill="#168a81"/>
+<circle cx="886.71" cy="913.49" r="1.5" fill="#168a81"/>
+<circle cx="890.18" cy="921.20" r="1.5" fill="#168a81"/>
+<circle cx="895.86" cy="919.63" r="1.5" fill="#168a81"/>
+<circle cx="899.85" cy="915.27" r="1.5" fill="#168a81"/>
+<circle cx="903.74" cy="910.13" r="1.5" fill="#168a81"/>
+<circle cx="908.70" cy="912.33" r="1.5" fill="#168a81"/>
+<circle cx="912.62" cy="897.27" r="1.5" fill="#168a81"/>
+<circle cx="917.34" cy="913.93" r="1.5" fill="#168a81"/>
+<circle cx="921.80" cy="908.62" r="1.5" fill="#168a81"/>
+<circle cx="926.29" cy="910.11" r="1.5" fill="#168a81"/>
+<circle cx="930.18" cy="901.57" r="1.5" fill="#168a81"/>
+<polyline points="933.93,917.22 938.23,906.63 942.61,915.01 947.54,917.01 951.86,908.69 955.00,904.35" stroke="#168a81" stroke-width="2" fill="none"/>
+<circle cx="933.93" cy="917.22" r="1.5" fill="#168a81"/>
+<circle cx="938.23" cy="906.63" r="1.5" fill="#168a81"/>
+<circle cx="942.61" cy="915.01" r="1.5" fill="#168a81"/>
+<circle cx="947.54" cy="917.01" r="1.5" fill="#168a81"/>
+<circle cx="951.86" cy="908.69" r="1.5" fill="#168a81"/>
+<circle cx="955.00" cy="904.35" r="1.5" fill="#168a81"/>
+<text x="565.0" y="962.0" fill="#53647a" font-family="ui-monospace,monospace" font-size="10" font-weight="400">2026-08-17</text>
+<text x="875.0" y="962.0" fill="#53647a" font-family="ui-monospace,monospace" font-size="10" font-weight="400">2026-11-15</text>
 <text x="490.0" y="883.0" fill="#53647a" font-family="ui-monospace,monospace" font-size="10" font-weight="400">66.1</text>
 <text x="530.0" y="944.0" fill="#53647a" font-family="ui-monospace,monospace" font-size="10" font-weight="400">0</text>
 <rect x="20" y="985" width="960" height="140" rx="10" fill="#f6f8fa" stroke="#d0d7de"/>
 <text x="36.0" y="1010.0" fill="#172033" font-family="ui-monospace,monospace" font-size="16" font-weight="700">include_repeated</text>
-<text x="36.0" y="1034.0" fill="#172033" font-family="ui-monospace,monospace" font-size="12" font-weight="400">eval 57.37 ms | native 4.23 ms | eval/native: 13.56x</text>
-<text x="36.0" y="1055.0" fill="#53647a" font-family="ui-monospace,monospace" font-size="11" font-weight="400">2026-10-20 | 3c39673c | trend: elephc-eval ms</text>
+<text x="36.0" y="1034.0" fill="#172033" font-family="ui-monospace,monospace" font-size="12" font-weight="400">eval 31.32 ms | native 3.73 ms | eval/native: 8.41x</text>
+<text x="36.0" y="1055.0" fill="#53647a" font-family="ui-monospace,monospace" font-size="11" font-weight="400">2026-11-15 | 2857abcb | trend: elephc-eval ms</text>
 <path d="M565 1093 H955" stroke="#d0d7de" fill="none"/>
-<polyline points="565.00,1077.22 566.80,1074.28 571.61,1071.74 577.21,1077.03 581.70,1076.97 584.86,1074.22 590.61,1068.38 594.97,1074.07 599.11,1075.44 602.27,1077.19 616.62,1077.21 620.81,1067.78 623.35,1072.73 627.45,1072.44 633.29,1077.38 638.08,1077.08 642.42,1076.71 647.11,1072.91 649.57,1073.47 654.62,1066.48 659.06,1071.69 662.89,1074.89 667.37,1075.68 676.63,1077.27 681.32,1074.13 684.11,1075.97 689.68,1076.08 693.96,1076.30 710.58,1072.10 716.39,1074.81 719.26,1072.46 725.40,1070.29 728.74,1076.28 737.64,1068.20 741.72,1074.32 745.07,1069.25 750.51,1076.41 754.94,1072.84 759.35,1068.64 767.86,1075.02 772.53,1058.52 777.20,1064.28 780.47,1064.04 785.72,1063.61 793.22,1071.17 798.41,1073.22 801.53,1072.94 806.13,1064.78 816.04,1069.41 829.08,1074.78 832.65,1062.53 836.47,1053.06 842.26,1069.16 846.61,1065.66 849.82,1068.93 855.22,1062.60 859.12,1058.69 863.37,1072.60 867.45,1071.28 872.57,1055.79 875.54,1067.23 878.85,1072.38 889.11,1059.29 894.21,1071.71 898.65,1067.44 902.05,1053.80 906.89,1054.62 909.85,1070.47 915.90,1053.88 919.17,1059.99" stroke="#8161c7" stroke-width="2" fill="none"/>
-<circle cx="565.00" cy="1077.22" r="1.5" fill="#8161c7"/>
-<circle cx="566.80" cy="1074.28" r="1.5" fill="#8161c7"/>
-<circle cx="571.61" cy="1071.74" r="1.5" fill="#8161c7"/>
-<circle cx="577.21" cy="1077.03" r="1.5" fill="#8161c7"/>
-<circle cx="581.70" cy="1076.97" r="1.5" fill="#8161c7"/>
-<circle cx="584.86" cy="1074.22" r="1.5" fill="#8161c7"/>
-<circle cx="590.61" cy="1068.38" r="1.5" fill="#8161c7"/>
-<circle cx="594.97" cy="1074.07" r="1.5" fill="#8161c7"/>
-<circle cx="599.11" cy="1075.44" r="1.5" fill="#8161c7"/>
-<circle cx="602.27" cy="1077.19" r="1.5" fill="#8161c7"/>
-<circle cx="616.62" cy="1077.21" r="1.5" fill="#8161c7"/>
-<circle cx="620.81" cy="1067.78" r="1.5" fill="#8161c7"/>
-<circle cx="623.35" cy="1072.73" r="1.5" fill="#8161c7"/>
-<circle cx="627.45" cy="1072.44" r="1.5" fill="#8161c7"/>
-<circle cx="633.29" cy="1077.38" r="1.5" fill="#8161c7"/>
-<circle cx="638.08" cy="1077.08" r="1.5" fill="#8161c7"/>
-<circle cx="642.42" cy="1076.71" r="1.5" fill="#8161c7"/>
-<circle cx="647.11" cy="1072.91" r="1.5" fill="#8161c7"/>
-<circle cx="649.57" cy="1073.47" r="1.5" fill="#8161c7"/>
-<circle cx="654.62" cy="1066.48" r="1.5" fill="#8161c7"/>
-<circle cx="659.06" cy="1071.69" r="1.5" fill="#8161c7"/>
-<circle cx="662.89" cy="1074.89" r="1.5" fill="#8161c7"/>
-<circle cx="667.37" cy="1075.68" r="1.5" fill="#8161c7"/>
-<circle cx="676.63" cy="1077.27" r="1.5" fill="#8161c7"/>
-<circle cx="681.32" cy="1074.13" r="1.5" fill="#8161c7"/>
-<circle cx="684.11" cy="1075.97" r="1.5" fill="#8161c7"/>
-<circle cx="689.68" cy="1076.08" r="1.5" fill="#8161c7"/>
-<circle cx="693.96" cy="1076.30" r="1.5" fill="#8161c7"/>
-<circle cx="710.58" cy="1072.10" r="1.5" fill="#8161c7"/>
-<circle cx="716.39" cy="1074.81" r="1.5" fill="#8161c7"/>
-<circle cx="719.26" cy="1072.46" r="1.5" fill="#8161c7"/>
-<circle cx="725.40" cy="1070.29" r="1.5" fill="#8161c7"/>
-<circle cx="728.74" cy="1076.28" r="1.5" fill="#8161c7"/>
-<circle cx="737.64" cy="1068.20" r="1.5" fill="#8161c7"/>
-<circle cx="741.72" cy="1074.32" r="1.5" fill="#8161c7"/>
-<circle cx="745.07" cy="1069.25" r="1.5" fill="#8161c7"/>
-<circle cx="750.51" cy="1076.41" r="1.5" fill="#8161c7"/>
-<circle cx="754.94" cy="1072.84" r="1.5" fill="#8161c7"/>
-<circle cx="759.35" cy="1068.64" r="1.5" fill="#8161c7"/>
-<circle cx="767.86" cy="1075.02" r="1.5" fill="#8161c7"/>
-<circle cx="772.53" cy="1058.52" r="1.5" fill="#8161c7"/>
-<circle cx="777.20" cy="1064.28" r="1.5" fill="#8161c7"/>
-<circle cx="780.47" cy="1064.04" r="1.5" fill="#8161c7"/>
-<circle cx="785.72" cy="1063.61" r="1.5" fill="#8161c7"/>
-<circle cx="793.22" cy="1071.17" r="1.5" fill="#8161c7"/>
-<circle cx="798.41" cy="1073.22" r="1.5" fill="#8161c7"/>
-<circle cx="801.53" cy="1072.94" r="1.5" fill="#8161c7"/>
-<circle cx="806.13" cy="1064.78" r="1.5" fill="#8161c7"/>
-<circle cx="816.04" cy="1069.41" r="1.5" fill="#8161c7"/>
-<circle cx="829.08" cy="1074.78" r="1.5" fill="#8161c7"/>
-<circle cx="832.65" cy="1062.53" r="1.5" fill="#8161c7"/>
-<circle cx="836.47" cy="1053.06" r="1.5" fill="#8161c7"/>
-<circle cx="842.26" cy="1069.16" r="1.5" fill="#8161c7"/>
-<circle cx="846.61" cy="1065.66" r="1.5" fill="#8161c7"/>
-<circle cx="849.82" cy="1068.93" r="1.5" fill="#8161c7"/>
-<circle cx="855.22" cy="1062.60" r="1.5" fill="#8161c7"/>
-<circle cx="859.12" cy="1058.69" r="1.5" fill="#8161c7"/>
-<circle cx="863.37" cy="1072.60" r="1.5" fill="#8161c7"/>
-<circle cx="867.45" cy="1071.28" r="1.5" fill="#8161c7"/>
-<circle cx="872.57" cy="1055.79" r="1.5" fill="#8161c7"/>
-<circle cx="875.54" cy="1067.23" r="1.5" fill="#8161c7"/>
-<circle cx="878.85" cy="1072.38" r="1.5" fill="#8161c7"/>
-<circle cx="889.11" cy="1059.29" r="1.5" fill="#8161c7"/>
-<circle cx="894.21" cy="1071.71" r="1.5" fill="#8161c7"/>
-<circle cx="898.65" cy="1067.44" r="1.5" fill="#8161c7"/>
-<circle cx="902.05" cy="1053.80" r="1.5" fill="#8161c7"/>
-<circle cx="906.89" cy="1054.62" r="1.5" fill="#8161c7"/>
-<circle cx="909.85" cy="1070.47" r="1.5" fill="#8161c7"/>
-<circle cx="915.90" cy="1053.88" r="1.5" fill="#8161c7"/>
-<circle cx="919.17" cy="1059.99" r="1.5" fill="#8161c7"/>
-<polyline points="923.05,1069.40 929.08,1028.00 932.64,1066.83 937.87,1065.11 942.15,1067.18 945.91,1066.69 950.19,1056.27 955.00,1053.01" stroke="#8161c7" stroke-width="2" fill="none"/>
-<circle cx="923.05" cy="1069.40" r="1.5" fill="#8161c7"/>
-<circle cx="929.08" cy="1028.00" r="1.5" fill="#8161c7"/>
-<circle cx="932.64" cy="1066.83" r="1.5" fill="#8161c7"/>
-<circle cx="937.87" cy="1065.11" r="1.5" fill="#8161c7"/>
-<circle cx="942.15" cy="1067.18" r="1.5" fill="#8161c7"/>
-<circle cx="945.91" cy="1066.69" r="1.5" fill="#8161c7"/>
-<circle cx="950.19" cy="1056.27" r="1.5" fill="#8161c7"/>
-<circle cx="955.00" cy="1053.01" r="1.5" fill="#8161c7"/>
-<text x="565.0" y="1112.0" fill="#53647a" font-family="ui-monospace,monospace" font-size="10" font-weight="400">2026-07-22</text>
-<text x="875.0" y="1112.0" fill="#53647a" font-family="ui-monospace,monospace" font-size="10" font-weight="400">2026-10-20</text>
+<polyline points="565.00,1077.27 569.70,1074.13 572.49,1075.97 578.06,1076.08 582.34,1076.30 598.97,1072.10 604.78,1074.81 607.65,1072.46 613.80,1070.29 617.13,1076.28 626.05,1068.20 630.13,1074.32 633.48,1069.25 638.92,1076.41 643.34,1072.84 647.76,1068.64 656.28,1075.02 660.95,1058.52 665.61,1064.28 668.89,1064.04 674.14,1063.61 681.65,1071.17 686.84,1073.22 689.96,1072.94 694.56,1064.78 704.47,1069.41 717.52,1074.78 721.09,1062.53 724.92,1053.06 730.71,1069.16 735.06,1065.66 738.27,1068.93 743.67,1062.60 747.57,1058.69 751.82,1072.60 755.91,1071.28 761.03,1055.79 764.00,1067.23 767.31,1072.38 777.58,1059.29 782.68,1071.71 787.12,1067.44 790.53,1053.80 795.36,1054.62 798.32,1070.47 804.38,1053.88 807.64,1059.99" stroke="#8161c7" stroke-width="2" fill="none"/>
+<circle cx="565.00" cy="1077.27" r="1.5" fill="#8161c7"/>
+<circle cx="569.70" cy="1074.13" r="1.5" fill="#8161c7"/>
+<circle cx="572.49" cy="1075.97" r="1.5" fill="#8161c7"/>
+<circle cx="578.06" cy="1076.08" r="1.5" fill="#8161c7"/>
+<circle cx="582.34" cy="1076.30" r="1.5" fill="#8161c7"/>
+<circle cx="598.97" cy="1072.10" r="1.5" fill="#8161c7"/>
+<circle cx="604.78" cy="1074.81" r="1.5" fill="#8161c7"/>
+<circle cx="607.65" cy="1072.46" r="1.5" fill="#8161c7"/>
+<circle cx="613.80" cy="1070.29" r="1.5" fill="#8161c7"/>
+<circle cx="617.13" cy="1076.28" r="1.5" fill="#8161c7"/>
+<circle cx="626.05" cy="1068.20" r="1.5" fill="#8161c7"/>
+<circle cx="630.13" cy="1074.32" r="1.5" fill="#8161c7"/>
+<circle cx="633.48" cy="1069.25" r="1.5" fill="#8161c7"/>
+<circle cx="638.92" cy="1076.41" r="1.5" fill="#8161c7"/>
+<circle cx="643.34" cy="1072.84" r="1.5" fill="#8161c7"/>
+<circle cx="647.76" cy="1068.64" r="1.5" fill="#8161c7"/>
+<circle cx="656.28" cy="1075.02" r="1.5" fill="#8161c7"/>
+<circle cx="660.95" cy="1058.52" r="1.5" fill="#8161c7"/>
+<circle cx="665.61" cy="1064.28" r="1.5" fill="#8161c7"/>
+<circle cx="668.89" cy="1064.04" r="1.5" fill="#8161c7"/>
+<circle cx="674.14" cy="1063.61" r="1.5" fill="#8161c7"/>
+<circle cx="681.65" cy="1071.17" r="1.5" fill="#8161c7"/>
+<circle cx="686.84" cy="1073.22" r="1.5" fill="#8161c7"/>
+<circle cx="689.96" cy="1072.94" r="1.5" fill="#8161c7"/>
+<circle cx="694.56" cy="1064.78" r="1.5" fill="#8161c7"/>
+<circle cx="704.47" cy="1069.41" r="1.5" fill="#8161c7"/>
+<circle cx="717.52" cy="1074.78" r="1.5" fill="#8161c7"/>
+<circle cx="721.09" cy="1062.53" r="1.5" fill="#8161c7"/>
+<circle cx="724.92" cy="1053.06" r="1.5" fill="#8161c7"/>
+<circle cx="730.71" cy="1069.16" r="1.5" fill="#8161c7"/>
+<circle cx="735.06" cy="1065.66" r="1.5" fill="#8161c7"/>
+<circle cx="738.27" cy="1068.93" r="1.5" fill="#8161c7"/>
+<circle cx="743.67" cy="1062.60" r="1.5" fill="#8161c7"/>
+<circle cx="747.57" cy="1058.69" r="1.5" fill="#8161c7"/>
+<circle cx="751.82" cy="1072.60" r="1.5" fill="#8161c7"/>
+<circle cx="755.91" cy="1071.28" r="1.5" fill="#8161c7"/>
+<circle cx="761.03" cy="1055.79" r="1.5" fill="#8161c7"/>
+<circle cx="764.00" cy="1067.23" r="1.5" fill="#8161c7"/>
+<circle cx="767.31" cy="1072.38" r="1.5" fill="#8161c7"/>
+<circle cx="777.58" cy="1059.29" r="1.5" fill="#8161c7"/>
+<circle cx="782.68" cy="1071.71" r="1.5" fill="#8161c7"/>
+<circle cx="787.12" cy="1067.44" r="1.5" fill="#8161c7"/>
+<circle cx="790.53" cy="1053.80" r="1.5" fill="#8161c7"/>
+<circle cx="795.36" cy="1054.62" r="1.5" fill="#8161c7"/>
+<circle cx="798.32" cy="1070.47" r="1.5" fill="#8161c7"/>
+<circle cx="804.38" cy="1053.88" r="1.5" fill="#8161c7"/>
+<circle cx="807.64" cy="1059.99" r="1.5" fill="#8161c7"/>
+<polyline points="811.53,1069.40 817.56,1028.00 821.12,1066.83 826.36,1065.11 830.64,1067.18 834.40,1066.69 838.68,1056.27 843.49,1053.01" stroke="#8161c7" stroke-width="2" fill="none"/>
+<circle cx="811.53" cy="1069.40" r="1.5" fill="#8161c7"/>
+<circle cx="817.56" cy="1028.00" r="1.5" fill="#8161c7"/>
+<circle cx="821.12" cy="1066.83" r="1.5" fill="#8161c7"/>
+<circle cx="826.36" cy="1065.11" r="1.5" fill="#8161c7"/>
+<circle cx="830.64" cy="1067.18" r="1.5" fill="#8161c7"/>
+<circle cx="834.40" cy="1066.69" r="1.5" fill="#8161c7"/>
+<circle cx="838.68" cy="1056.27" r="1.5" fill="#8161c7"/>
+<circle cx="843.49" cy="1053.01" r="1.5" fill="#8161c7"/>
+<polyline points="847.20,1062.93 852.29,1060.44 856.73,1059.21 861.15,1064.25 864.31,1070.03 869.56,1073.03 874.20,1068.70 878.50,1064.05 882.33,1058.56 886.71,1066.20 890.18,1073.57 895.86,1064.23 899.85,1071.41 903.74,1071.84 908.70,1061.22 912.62,1033.85 917.34,1044.49 921.80,1068.58 926.29,1073.89 930.18,1068.22" stroke="#8161c7" stroke-width="2" fill="none"/>
+<circle cx="847.20" cy="1062.93" r="1.5" fill="#8161c7"/>
+<circle cx="852.29" cy="1060.44" r="1.5" fill="#8161c7"/>
+<circle cx="856.73" cy="1059.21" r="1.5" fill="#8161c7"/>
+<circle cx="861.15" cy="1064.25" r="1.5" fill="#8161c7"/>
+<circle cx="864.31" cy="1070.03" r="1.5" fill="#8161c7"/>
+<circle cx="869.56" cy="1073.03" r="1.5" fill="#8161c7"/>
+<circle cx="874.20" cy="1068.70" r="1.5" fill="#8161c7"/>
+<circle cx="878.50" cy="1064.05" r="1.5" fill="#8161c7"/>
+<circle cx="882.33" cy="1058.56" r="1.5" fill="#8161c7"/>
+<circle cx="886.71" cy="1066.20" r="1.5" fill="#8161c7"/>
+<circle cx="890.18" cy="1073.57" r="1.5" fill="#8161c7"/>
+<circle cx="895.86" cy="1064.23" r="1.5" fill="#8161c7"/>
+<circle cx="899.85" cy="1071.41" r="1.5" fill="#8161c7"/>
+<circle cx="903.74" cy="1071.84" r="1.5" fill="#8161c7"/>
+<circle cx="908.70" cy="1061.22" r="1.5" fill="#8161c7"/>
+<circle cx="912.62" cy="1033.85" r="1.5" fill="#8161c7"/>
+<circle cx="917.34" cy="1044.49" r="1.5" fill="#8161c7"/>
+<circle cx="921.80" cy="1068.58" r="1.5" fill="#8161c7"/>
+<circle cx="926.29" cy="1073.89" r="1.5" fill="#8161c7"/>
+<circle cx="930.18" cy="1068.22" r="1.5" fill="#8161c7"/>
+<polyline points="933.93,1071.58 938.23,1067.61 942.61,1072.30 947.54,1062.54 951.86,1061.34 955.00,1071.17" stroke="#8161c7" stroke-width="2" fill="none"/>
+<circle cx="933.93" cy="1071.58" r="1.5" fill="#8161c7"/>
+<circle cx="938.23" cy="1067.61" r="1.5" fill="#8161c7"/>
+<circle cx="942.61" cy="1072.30" r="1.5" fill="#8161c7"/>
+<circle cx="947.54" cy="1062.54" r="1.5" fill="#8161c7"/>
+<circle cx="951.86" cy="1061.34" r="1.5" fill="#8161c7"/>
+<circle cx="955.00" cy="1071.17" r="1.5" fill="#8161c7"/>
+<text x="565.0" y="1112.0" fill="#53647a" font-family="ui-monospace,monospace" font-size="10" font-weight="400">2026-08-17</text>
+<text x="875.0" y="1112.0" fill="#53647a" font-family="ui-monospace,monospace" font-size="10" font-weight="400">2026-11-15</text>
 <text x="490.0" y="1033.0" fill="#53647a" font-family="ui-monospace,monospace" font-size="10" font-weight="400">93.3</text>
 <text x="530.0" y="1094.0" fill="#53647a" font-family="ui-monospace,monospace" font-size="10" font-weight="400">0</text>
 <rect x="20" y="1135" width="960" height="140" rx="10" fill="#f6f8fa" stroke="#d0d7de"/>
 <text x="36.0" y="1160.0" fill="#172033" font-family="ui-monospace,monospace" font-size="16" font-weight="700">large_eval_loop</text>
-<text x="36.0" y="1184.0" fill="#172033" font-family="ui-monospace,monospace" font-size="12" font-weight="400">eval 6.95 ms | native 5.41 ms | eval/native: 1.28x</text>
-<text x="36.0" y="1205.0" fill="#53647a" font-family="ui-monospace,monospace" font-size="11" font-weight="400">2026-10-20 | 3c39673c | trend: elephc-eval ms</text>
+<text x="36.0" y="1184.0" fill="#172033" font-family="ui-monospace,monospace" font-size="12" font-weight="400">eval 3.97 ms | native 3.20 ms | eval/native: 1.24x</text>
+<text x="36.0" y="1205.0" fill="#53647a" font-family="ui-monospace,monospace" font-size="11" font-weight="400">2026-11-15 | 2857abcb | trend: elephc-eval ms</text>
 <path d="M565 1243 H955" stroke="#d0d7de" fill="none"/>
-<polyline points="565.00,1232.42 566.80,1232.28 571.61,1219.29 577.21,1232.78 581.70,1232.45 584.86,1228.11 590.61,1216.93 594.97,1223.00 599.11,1226.93 602.27,1232.07 616.62,1231.90 620.81,1216.67 623.35,1225.50 627.45,1223.00 633.29,1230.83 638.08,1230.96 642.42,1231.85 647.11,1216.22 649.57,1226.31 654.62,1221.25 659.06,1224.94 662.89,1225.70 667.37,1229.86 676.63,1231.43 681.32,1229.28 684.11,1223.35 689.68,1224.64 693.96,1231.26 710.58,1226.05 716.39,1222.19 719.26,1223.71 725.40,1220.01 728.74,1224.03 737.64,1216.38 741.72,1222.08 745.07,1225.10 750.51,1223.42 754.94,1221.53 759.35,1212.91 767.86,1230.90 772.53,1219.44 777.20,1214.38 780.47,1210.32 785.72,1229.12 793.22,1225.06 798.41,1227.72 801.53,1223.34 806.13,1214.57 816.04,1202.71 829.08,1229.39 832.65,1215.12 836.47,1212.81 842.26,1212.86 846.61,1219.90 849.82,1221.73 855.22,1200.16 859.12,1219.43 863.37,1230.15 867.45,1229.09 872.57,1206.41 875.54,1214.41 878.85,1231.07 889.11,1212.62 894.21,1228.07 898.65,1215.74 902.05,1200.59 906.89,1186.84 909.85,1223.14 915.90,1178.00 919.17,1219.39" stroke="#3677bc" stroke-width="2" fill="none"/>
-<circle cx="565.00" cy="1232.42" r="1.5" fill="#3677bc"/>
-<circle cx="566.80" cy="1232.28" r="1.5" fill="#3677bc"/>
-<circle cx="571.61" cy="1219.29" r="1.5" fill="#3677bc"/>
-<circle cx="577.21" cy="1232.78" r="1.5" fill="#3677bc"/>
-<circle cx="581.70" cy="1232.45" r="1.5" fill="#3677bc"/>
-<circle cx="584.86" cy="1228.11" r="1.5" fill="#3677bc"/>
-<circle cx="590.61" cy="1216.93" r="1.5" fill="#3677bc"/>
-<circle cx="594.97" cy="1223.00" r="1.5" fill="#3677bc"/>
-<circle cx="599.11" cy="1226.93" r="1.5" fill="#3677bc"/>
-<circle cx="602.27" cy="1232.07" r="1.5" fill="#3677bc"/>
-<circle cx="616.62" cy="1231.90" r="1.5" fill="#3677bc"/>
-<circle cx="620.81" cy="1216.67" r="1.5" fill="#3677bc"/>
-<circle cx="623.35" cy="1225.50" r="1.5" fill="#3677bc"/>
-<circle cx="627.45" cy="1223.00" r="1.5" fill="#3677bc"/>
-<circle cx="633.29" cy="1230.83" r="1.5" fill="#3677bc"/>
-<circle cx="638.08" cy="1230.96" r="1.5" fill="#3677bc"/>
-<circle cx="642.42" cy="1231.85" r="1.5" fill="#3677bc"/>
-<circle cx="647.11" cy="1216.22" r="1.5" fill="#3677bc"/>
-<circle cx="649.57" cy="1226.31" r="1.5" fill="#3677bc"/>
-<circle cx="654.62" cy="1221.25" r="1.5" fill="#3677bc"/>
-<circle cx="659.06" cy="1224.94" r="1.5" fill="#3677bc"/>
-<circle cx="662.89" cy="1225.70" r="1.5" fill="#3677bc"/>
-<circle cx="667.37" cy="1229.86" r="1.5" fill="#3677bc"/>
-<circle cx="676.63" cy="1231.43" r="1.5" fill="#3677bc"/>
-<circle cx="681.32" cy="1229.28" r="1.5" fill="#3677bc"/>
-<circle cx="684.11" cy="1223.35" r="1.5" fill="#3677bc"/>
-<circle cx="689.68" cy="1224.64" r="1.5" fill="#3677bc"/>
-<circle cx="693.96" cy="1231.26" r="1.5" fill="#3677bc"/>
-<circle cx="710.58" cy="1226.05" r="1.5" fill="#3677bc"/>
-<circle cx="716.39" cy="1222.19" r="1.5" fill="#3677bc"/>
-<circle cx="719.26" cy="1223.71" r="1.5" fill="#3677bc"/>
-<circle cx="725.40" cy="1220.01" r="1.5" fill="#3677bc"/>
-<circle cx="728.74" cy="1224.03" r="1.5" fill="#3677bc"/>
-<circle cx="737.64" cy="1216.38" r="1.5" fill="#3677bc"/>
-<circle cx="741.72" cy="1222.08" r="1.5" fill="#3677bc"/>
-<circle cx="745.07" cy="1225.10" r="1.5" fill="#3677bc"/>
-<circle cx="750.51" cy="1223.42" r="1.5" fill="#3677bc"/>
-<circle cx="754.94" cy="1221.53" r="1.5" fill="#3677bc"/>
-<circle cx="759.35" cy="1212.91" r="1.5" fill="#3677bc"/>
-<circle cx="767.86" cy="1230.90" r="1.5" fill="#3677bc"/>
-<circle cx="772.53" cy="1219.44" r="1.5" fill="#3677bc"/>
-<circle cx="777.20" cy="1214.38" r="1.5" fill="#3677bc"/>
-<circle cx="780.47" cy="1210.32" r="1.5" fill="#3677bc"/>
-<circle cx="785.72" cy="1229.12" r="1.5" fill="#3677bc"/>
-<circle cx="793.22" cy="1225.06" r="1.5" fill="#3677bc"/>
-<circle cx="798.41" cy="1227.72" r="1.5" fill="#3677bc"/>
-<circle cx="801.53" cy="1223.34" r="1.5" fill="#3677bc"/>
-<circle cx="806.13" cy="1214.57" r="1.5" fill="#3677bc"/>
-<circle cx="816.04" cy="1202.71" r="1.5" fill="#3677bc"/>
-<circle cx="829.08" cy="1229.39" r="1.5" fill="#3677bc"/>
-<circle cx="832.65" cy="1215.12" r="1.5" fill="#3677bc"/>
-<circle cx="836.47" cy="1212.81" r="1.5" fill="#3677bc"/>
-<circle cx="842.26" cy="1212.86" r="1.5" fill="#3677bc"/>
-<circle cx="846.61" cy="1219.90" r="1.5" fill="#3677bc"/>
-<circle cx="849.82" cy="1221.73" r="1.5" fill="#3677bc"/>
-<circle cx="855.22" cy="1200.16" r="1.5" fill="#3677bc"/>
-<circle cx="859.12" cy="1219.43" r="1.5" fill="#3677bc"/>
-<circle cx="863.37" cy="1230.15" r="1.5" fill="#3677bc"/>
-<circle cx="867.45" cy="1229.09" r="1.5" fill="#3677bc"/>
-<circle cx="872.57" cy="1206.41" r="1.5" fill="#3677bc"/>
-<circle cx="875.54" cy="1214.41" r="1.5" fill="#3677bc"/>
-<circle cx="878.85" cy="1231.07" r="1.5" fill="#3677bc"/>
-<circle cx="889.11" cy="1212.62" r="1.5" fill="#3677bc"/>
-<circle cx="894.21" cy="1228.07" r="1.5" fill="#3677bc"/>
-<circle cx="898.65" cy="1215.74" r="1.5" fill="#3677bc"/>
-<circle cx="902.05" cy="1200.59" r="1.5" fill="#3677bc"/>
-<circle cx="906.89" cy="1186.84" r="1.5" fill="#3677bc"/>
-<circle cx="909.85" cy="1223.14" r="1.5" fill="#3677bc"/>
-<circle cx="915.90" cy="1178.00" r="1.5" fill="#3677bc"/>
-<circle cx="919.17" cy="1219.39" r="1.5" fill="#3677bc"/>
-<polyline points="923.05,1221.15 929.08,1212.08 932.64,1216.94 937.87,1213.16 942.15,1221.52 945.91,1221.26 950.19,1214.06 955.00,1206.04" stroke="#3677bc" stroke-width="2" fill="none"/>
-<circle cx="923.05" cy="1221.15" r="1.5" fill="#3677bc"/>
-<circle cx="929.08" cy="1212.08" r="1.5" fill="#3677bc"/>
-<circle cx="932.64" cy="1216.94" r="1.5" fill="#3677bc"/>
-<circle cx="937.87" cy="1213.16" r="1.5" fill="#3677bc"/>
-<circle cx="942.15" cy="1221.52" r="1.5" fill="#3677bc"/>
-<circle cx="945.91" cy="1221.26" r="1.5" fill="#3677bc"/>
-<circle cx="950.19" cy="1214.06" r="1.5" fill="#3677bc"/>
-<circle cx="955.00" cy="1206.04" r="1.5" fill="#3677bc"/>
-<text x="565.0" y="1262.0" fill="#53647a" font-family="ui-monospace,monospace" font-size="10" font-weight="400">2026-07-22</text>
-<text x="875.0" y="1262.0" fill="#53647a" font-family="ui-monospace,monospace" font-size="10" font-weight="400">2026-10-20</text>
+<polyline points="565.00,1231.43 569.70,1229.28 572.49,1223.35 578.06,1224.64 582.34,1231.26 598.97,1226.05 604.78,1222.19 607.65,1223.71 613.80,1220.01 617.13,1224.03 626.05,1216.38 630.13,1222.08 633.48,1225.10 638.92,1223.42 643.34,1221.53 647.76,1212.91 656.28,1230.90 660.95,1219.44 665.61,1214.38 668.89,1210.32 674.14,1229.12 681.65,1225.06 686.84,1227.72 689.96,1223.34 694.56,1214.57 704.47,1202.71 717.52,1229.39 721.09,1215.12 724.92,1212.81 730.71,1212.86 735.06,1219.90 738.27,1221.73 743.67,1200.16 747.57,1219.43 751.82,1230.15 755.91,1229.09 761.03,1206.41 764.00,1214.41 767.31,1231.07 777.58,1212.62 782.68,1228.07 787.12,1215.74 790.53,1200.59 795.36,1186.84 798.32,1223.14 804.38,1178.00 807.64,1219.39" stroke="#3677bc" stroke-width="2" fill="none"/>
+<circle cx="565.00" cy="1231.43" r="1.5" fill="#3677bc"/>
+<circle cx="569.70" cy="1229.28" r="1.5" fill="#3677bc"/>
+<circle cx="572.49" cy="1223.35" r="1.5" fill="#3677bc"/>
+<circle cx="578.06" cy="1224.64" r="1.5" fill="#3677bc"/>
+<circle cx="582.34" cy="1231.26" r="1.5" fill="#3677bc"/>
+<circle cx="598.97" cy="1226.05" r="1.5" fill="#3677bc"/>
+<circle cx="604.78" cy="1222.19" r="1.5" fill="#3677bc"/>
+<circle cx="607.65" cy="1223.71" r="1.5" fill="#3677bc"/>
+<circle cx="613.80" cy="1220.01" r="1.5" fill="#3677bc"/>
+<circle cx="617.13" cy="1224.03" r="1.5" fill="#3677bc"/>
+<circle cx="626.05" cy="1216.38" r="1.5" fill="#3677bc"/>
+<circle cx="630.13" cy="1222.08" r="1.5" fill="#3677bc"/>
+<circle cx="633.48" cy="1225.10" r="1.5" fill="#3677bc"/>
+<circle cx="638.92" cy="1223.42" r="1.5" fill="#3677bc"/>
+<circle cx="643.34" cy="1221.53" r="1.5" fill="#3677bc"/>
+<circle cx="647.76" cy="1212.91" r="1.5" fill="#3677bc"/>
+<circle cx="656.28" cy="1230.90" r="1.5" fill="#3677bc"/>
+<circle cx="660.95" cy="1219.44" r="1.5" fill="#3677bc"/>
+<circle cx="665.61" cy="1214.38" r="1.5" fill="#3677bc"/>
+<circle cx="668.89" cy="1210.32" r="1.5" fill="#3677bc"/>
+<circle cx="674.14" cy="1229.12" r="1.5" fill="#3677bc"/>
+<circle cx="681.65" cy="1225.06" r="1.5" fill="#3677bc"/>
+<circle cx="686.84" cy="1227.72" r="1.5" fill="#3677bc"/>
+<circle cx="689.96" cy="1223.34" r="1.5" fill="#3677bc"/>
+<circle cx="694.56" cy="1214.57" r="1.5" fill="#3677bc"/>
+<circle cx="704.47" cy="1202.71" r="1.5" fill="#3677bc"/>
+<circle cx="717.52" cy="1229.39" r="1.5" fill="#3677bc"/>
+<circle cx="721.09" cy="1215.12" r="1.5" fill="#3677bc"/>
+<circle cx="724.92" cy="1212.81" r="1.5" fill="#3677bc"/>
+<circle cx="730.71" cy="1212.86" r="1.5" fill="#3677bc"/>
+<circle cx="735.06" cy="1219.90" r="1.5" fill="#3677bc"/>
+<circle cx="738.27" cy="1221.73" r="1.5" fill="#3677bc"/>
+<circle cx="743.67" cy="1200.16" r="1.5" fill="#3677bc"/>
+<circle cx="747.57" cy="1219.43" r="1.5" fill="#3677bc"/>
+<circle cx="751.82" cy="1230.15" r="1.5" fill="#3677bc"/>
+<circle cx="755.91" cy="1229.09" r="1.5" fill="#3677bc"/>
+<circle cx="761.03" cy="1206.41" r="1.5" fill="#3677bc"/>
+<circle cx="764.00" cy="1214.41" r="1.5" fill="#3677bc"/>
+<circle cx="767.31" cy="1231.07" r="1.5" fill="#3677bc"/>
+<circle cx="777.58" cy="1212.62" r="1.5" fill="#3677bc"/>
+<circle cx="782.68" cy="1228.07" r="1.5" fill="#3677bc"/>
+<circle cx="787.12" cy="1215.74" r="1.5" fill="#3677bc"/>
+<circle cx="790.53" cy="1200.59" r="1.5" fill="#3677bc"/>
+<circle cx="795.36" cy="1186.84" r="1.5" fill="#3677bc"/>
+<circle cx="798.32" cy="1223.14" r="1.5" fill="#3677bc"/>
+<circle cx="804.38" cy="1178.00" r="1.5" fill="#3677bc"/>
+<circle cx="807.64" cy="1219.39" r="1.5" fill="#3677bc"/>
+<polyline points="811.53,1221.15 817.56,1212.08 821.12,1216.94 826.36,1213.16 830.64,1221.52 834.40,1221.26 838.68,1214.06 843.49,1206.04" stroke="#3677bc" stroke-width="2" fill="none"/>
+<circle cx="811.53" cy="1221.15" r="1.5" fill="#3677bc"/>
+<circle cx="817.56" cy="1212.08" r="1.5" fill="#3677bc"/>
+<circle cx="821.12" cy="1216.94" r="1.5" fill="#3677bc"/>
+<circle cx="826.36" cy="1213.16" r="1.5" fill="#3677bc"/>
+<circle cx="830.64" cy="1221.52" r="1.5" fill="#3677bc"/>
+<circle cx="834.40" cy="1221.26" r="1.5" fill="#3677bc"/>
+<circle cx="838.68" cy="1214.06" r="1.5" fill="#3677bc"/>
+<circle cx="843.49" cy="1206.04" r="1.5" fill="#3677bc"/>
+<polyline points="847.20,1198.33 852.29,1216.90 856.73,1217.57 861.15,1198.36 864.31,1212.48 869.56,1220.17 874.20,1212.05 878.50,1216.44 882.33,1180.66 886.71,1214.75 890.18,1225.79 895.86,1210.98 899.85,1226.97 903.74,1226.72 908.70,1214.47 912.62,1195.43 917.34,1185.85 921.80,1219.46 926.29,1221.15 930.18,1220.78" stroke="#3677bc" stroke-width="2" fill="none"/>
+<circle cx="847.20" cy="1198.33" r="1.5" fill="#3677bc"/>
+<circle cx="852.29" cy="1216.90" r="1.5" fill="#3677bc"/>
+<circle cx="856.73" cy="1217.57" r="1.5" fill="#3677bc"/>
+<circle cx="861.15" cy="1198.36" r="1.5" fill="#3677bc"/>
+<circle cx="864.31" cy="1212.48" r="1.5" fill="#3677bc"/>
+<circle cx="869.56" cy="1220.17" r="1.5" fill="#3677bc"/>
+<circle cx="874.20" cy="1212.05" r="1.5" fill="#3677bc"/>
+<circle cx="878.50" cy="1216.44" r="1.5" fill="#3677bc"/>
+<circle cx="882.33" cy="1180.66" r="1.5" fill="#3677bc"/>
+<circle cx="886.71" cy="1214.75" r="1.5" fill="#3677bc"/>
+<circle cx="890.18" cy="1225.79" r="1.5" fill="#3677bc"/>
+<circle cx="895.86" cy="1210.98" r="1.5" fill="#3677bc"/>
+<circle cx="899.85" cy="1226.97" r="1.5" fill="#3677bc"/>
+<circle cx="903.74" cy="1226.72" r="1.5" fill="#3677bc"/>
+<circle cx="908.70" cy="1214.47" r="1.5" fill="#3677bc"/>
+<circle cx="912.62" cy="1195.43" r="1.5" fill="#3677bc"/>
+<circle cx="917.34" cy="1185.85" r="1.5" fill="#3677bc"/>
+<circle cx="921.80" cy="1219.46" r="1.5" fill="#3677bc"/>
+<circle cx="926.29" cy="1221.15" r="1.5" fill="#3677bc"/>
+<circle cx="930.18" cy="1220.78" r="1.5" fill="#3677bc"/>
+<polyline points="933.93,1217.59 938.23,1208.74 942.61,1222.77 947.54,1209.03 951.86,1222.23 955.00,1221.87" stroke="#3677bc" stroke-width="2" fill="none"/>
+<circle cx="933.93" cy="1217.59" r="1.5" fill="#3677bc"/>
+<circle cx="938.23" cy="1208.74" r="1.5" fill="#3677bc"/>
+<circle cx="942.61" cy="1222.77" r="1.5" fill="#3677bc"/>
+<circle cx="947.54" cy="1209.03" r="1.5" fill="#3677bc"/>
+<circle cx="951.86" cy="1222.23" r="1.5" fill="#3677bc"/>
+<circle cx="955.00" cy="1221.87" r="1.5" fill="#3677bc"/>
+<text x="565.0" y="1262.0" fill="#53647a" font-family="ui-monospace,monospace" font-size="10" font-weight="400">2026-08-17</text>
+<text x="875.0" y="1262.0" fill="#53647a" font-family="ui-monospace,monospace" font-size="10" font-weight="400">2026-11-15</text>
 <text x="490.0" y="1183.0" fill="#53647a" font-family="ui-monospace,monospace" font-size="10" font-weight="400">12.2</text>
 <text x="530.0" y="1244.0" fill="#53647a" font-family="ui-monospace,monospace" font-size="10" font-weight="400">0</text>
 <rect x="20" y="1285" width="960" height="140" rx="10" fill="#f6f8fa" stroke="#d0d7de"/>
 <text x="36.0" y="1310.0" fill="#172033" font-family="ui-monospace,monospace" font-size="16" font-weight="700">literal_scalar_aot</text>
-<text x="36.0" y="1334.0" fill="#172033" font-family="ui-monospace,monospace" font-size="12" font-weight="400">eval 8.40 ms | native 7.33 ms | eval/native: 1.15x</text>
-<text x="36.0" y="1355.0" fill="#53647a" font-family="ui-monospace,monospace" font-size="11" font-weight="400">2026-10-20 | 3c39673c | trend: elephc-eval ms</text>
+<text x="36.0" y="1334.0" fill="#172033" font-family="ui-monospace,monospace" font-size="12" font-weight="400">eval 4.39 ms | native 2.47 ms | eval/native: 1.78x</text>
+<text x="36.0" y="1355.0" fill="#53647a" font-family="ui-monospace,monospace" font-size="11" font-weight="400">2026-11-15 | 2857abcb | trend: elephc-eval ms</text>
 <path d="M565 1393 H955" stroke="#d0d7de" fill="none"/>
-<polyline points="565.00,1381.46 566.80,1381.09 571.61,1373.77 577.21,1381.49 581.70,1380.90 584.86,1378.23 590.61,1353.37 594.97,1370.37 599.11,1354.99 602.27,1380.17 616.62,1380.29 620.81,1349.23 623.35,1368.29 627.45,1374.45 633.29,1380.85 638.08,1380.66 642.42,1378.32 647.11,1369.80 649.57,1371.52 654.62,1368.89 659.06,1369.50 662.89,1374.17 667.37,1372.87 676.63,1379.05 681.32,1378.11 684.11,1377.07 689.68,1380.25 693.96,1379.30 710.58,1365.12 716.39,1374.15 719.26,1366.92 725.40,1367.69 728.74,1376.87 737.64,1361.44 741.72,1373.62 745.07,1366.47 750.51,1375.99 754.94,1364.93 759.35,1358.71 767.86,1380.23 772.53,1354.93 777.20,1359.79 780.47,1371.82 785.72,1348.86 793.22,1374.48 798.41,1375.26 801.53,1372.11 806.13,1360.25 816.04,1361.84 829.08,1378.52 832.65,1355.50 836.47,1362.43 842.26,1364.82 846.61,1367.71 849.82,1364.16 855.22,1349.39 859.12,1362.36 863.37,1372.06 867.45,1377.29 872.57,1341.07 875.54,1371.94 878.85,1379.77 889.11,1365.19 894.21,1376.06 898.65,1363.17 902.05,1359.68 906.89,1328.33 909.85,1368.75 915.90,1343.10 919.17,1365.42" stroke="#d85a26" stroke-width="2" fill="none"/>
-<circle cx="565.00" cy="1381.46" r="1.5" fill="#d85a26"/>
-<circle cx="566.80" cy="1381.09" r="1.5" fill="#d85a26"/>
-<circle cx="571.61" cy="1373.77" r="1.5" fill="#d85a26"/>
-<circle cx="577.21" cy="1381.49" r="1.5" fill="#d85a26"/>
-<circle cx="581.70" cy="1380.90" r="1.5" fill="#d85a26"/>
-<circle cx="584.86" cy="1378.23" r="1.5" fill="#d85a26"/>
-<circle cx="590.61" cy="1353.37" r="1.5" fill="#d85a26"/>
-<circle cx="594.97" cy="1370.37" r="1.5" fill="#d85a26"/>
-<circle cx="599.11" cy="1354.99" r="1.5" fill="#d85a26"/>
-<circle cx="602.27" cy="1380.17" r="1.5" fill="#d85a26"/>
-<circle cx="616.62" cy="1380.29" r="1.5" fill="#d85a26"/>
-<circle cx="620.81" cy="1349.23" r="1.5" fill="#d85a26"/>
-<circle cx="623.35" cy="1368.29" r="1.5" fill="#d85a26"/>
-<circle cx="627.45" cy="1374.45" r="1.5" fill="#d85a26"/>
-<circle cx="633.29" cy="1380.85" r="1.5" fill="#d85a26"/>
-<circle cx="638.08" cy="1380.66" r="1.5" fill="#d85a26"/>
-<circle cx="642.42" cy="1378.32" r="1.5" fill="#d85a26"/>
-<circle cx="647.11" cy="1369.80" r="1.5" fill="#d85a26"/>
-<circle cx="649.57" cy="1371.52" r="1.5" fill="#d85a26"/>
-<circle cx="654.62" cy="1368.89" r="1.5" fill="#d85a26"/>
-<circle cx="659.06" cy="1369.50" r="1.5" fill="#d85a26"/>
-<circle cx="662.89" cy="1374.17" r="1.5" fill="#d85a26"/>
-<circle cx="667.37" cy="1372.87" r="1.5" fill="#d85a26"/>
-<circle cx="676.63" cy="1379.05" r="1.5" fill="#d85a26"/>
-<circle cx="681.32" cy="1378.11" r="1.5" fill="#d85a26"/>
-<circle cx="684.11" cy="1377.07" r="1.5" fill="#d85a26"/>
-<circle cx="689.68" cy="1380.25" r="1.5" fill="#d85a26"/>
-<circle cx="693.96" cy="1379.30" r="1.5" fill="#d85a26"/>
-<circle cx="710.58" cy="1365.12" r="1.5" fill="#d85a26"/>
-<circle cx="716.39" cy="1374.15" r="1.5" fill="#d85a26"/>
-<circle cx="719.26" cy="1366.92" r="1.5" fill="#d85a26"/>
-<circle cx="725.40" cy="1367.69" r="1.5" fill="#d85a26"/>
-<circle cx="728.74" cy="1376.87" r="1.5" fill="#d85a26"/>
-<circle cx="737.64" cy="1361.44" r="1.5" fill="#d85a26"/>
-<circle cx="741.72" cy="1373.62" r="1.5" fill="#d85a26"/>
-<circle cx="745.07" cy="1366.47" r="1.5" fill="#d85a26"/>
-<circle cx="750.51" cy="1375.99" r="1.5" fill="#d85a26"/>
-<circle cx="754.94" cy="1364.93" r="1.5" fill="#d85a26"/>
-<circle cx="759.35" cy="1358.71" r="1.5" fill="#d85a26"/>
-<circle cx="767.86" cy="1380.23" r="1.5" fill="#d85a26"/>
-<circle cx="772.53" cy="1354.93" r="1.5" fill="#d85a26"/>
-<circle cx="777.20" cy="1359.79" r="1.5" fill="#d85a26"/>
-<circle cx="780.47" cy="1371.82" r="1.5" fill="#d85a26"/>
-<circle cx="785.72" cy="1348.86" r="1.5" fill="#d85a26"/>
-<circle cx="793.22" cy="1374.48" r="1.5" fill="#d85a26"/>
-<circle cx="798.41" cy="1375.26" r="1.5" fill="#d85a26"/>
-<circle cx="801.53" cy="1372.11" r="1.5" fill="#d85a26"/>
-<circle cx="806.13" cy="1360.25" r="1.5" fill="#d85a26"/>
-<circle cx="816.04" cy="1361.84" r="1.5" fill="#d85a26"/>
-<circle cx="829.08" cy="1378.52" r="1.5" fill="#d85a26"/>
-<circle cx="832.65" cy="1355.50" r="1.5" fill="#d85a26"/>
-<circle cx="836.47" cy="1362.43" r="1.5" fill="#d85a26"/>
-<circle cx="842.26" cy="1364.82" r="1.5" fill="#d85a26"/>
-<circle cx="846.61" cy="1367.71" r="1.5" fill="#d85a26"/>
-<circle cx="849.82" cy="1364.16" r="1.5" fill="#d85a26"/>
-<circle cx="855.22" cy="1349.39" r="1.5" fill="#d85a26"/>
-<circle cx="859.12" cy="1362.36" r="1.5" fill="#d85a26"/>
-<circle cx="863.37" cy="1372.06" r="1.5" fill="#d85a26"/>
-<circle cx="867.45" cy="1377.29" r="1.5" fill="#d85a26"/>
-<circle cx="872.57" cy="1341.07" r="1.5" fill="#d85a26"/>
-<circle cx="875.54" cy="1371.94" r="1.5" fill="#d85a26"/>
-<circle cx="878.85" cy="1379.77" r="1.5" fill="#d85a26"/>
-<circle cx="889.11" cy="1365.19" r="1.5" fill="#d85a26"/>
-<circle cx="894.21" cy="1376.06" r="1.5" fill="#d85a26"/>
-<circle cx="898.65" cy="1363.17" r="1.5" fill="#d85a26"/>
-<circle cx="902.05" cy="1359.68" r="1.5" fill="#d85a26"/>
-<circle cx="906.89" cy="1328.33" r="1.5" fill="#d85a26"/>
-<circle cx="909.85" cy="1368.75" r="1.5" fill="#d85a26"/>
-<circle cx="915.90" cy="1343.10" r="1.5" fill="#d85a26"/>
-<circle cx="919.17" cy="1365.42" r="1.5" fill="#d85a26"/>
-<polyline points="923.05,1369.38 929.08,1343.06 932.64,1348.15 937.87,1328.00 942.15,1371.76 945.91,1365.62 950.19,1360.38 955.00,1340.35" stroke="#d85a26" stroke-width="2" fill="none"/>
-<circle cx="923.05" cy="1369.38" r="1.5" fill="#d85a26"/>
-<circle cx="929.08" cy="1343.06" r="1.5" fill="#d85a26"/>
-<circle cx="932.64" cy="1348.15" r="1.5" fill="#d85a26"/>
-<circle cx="937.87" cy="1328.00" r="1.5" fill="#d85a26"/>
-<circle cx="942.15" cy="1371.76" r="1.5" fill="#d85a26"/>
-<circle cx="945.91" cy="1365.62" r="1.5" fill="#d85a26"/>
-<circle cx="950.19" cy="1360.38" r="1.5" fill="#d85a26"/>
-<circle cx="955.00" cy="1340.35" r="1.5" fill="#d85a26"/>
-<text x="565.0" y="1412.0" fill="#53647a" font-family="ui-monospace,monospace" font-size="10" font-weight="400">2026-07-22</text>
-<text x="875.0" y="1412.0" fill="#53647a" font-family="ui-monospace,monospace" font-size="10" font-weight="400">2026-10-20</text>
+<polyline points="565.00,1379.05 569.70,1378.11 572.49,1377.07 578.06,1380.25 582.34,1379.30 598.97,1365.12 604.78,1374.15 607.65,1366.92 613.80,1367.69 617.13,1376.87 626.05,1361.44 630.13,1373.62 633.48,1366.47 638.92,1375.99 643.34,1364.93 647.76,1358.71 656.28,1380.23 660.95,1354.93 665.61,1359.79 668.89,1371.82 674.14,1348.86 681.65,1374.48 686.84,1375.26 689.96,1372.11 694.56,1360.25 704.47,1361.84 717.52,1378.52 721.09,1355.50 724.92,1362.43 730.71,1364.82 735.06,1367.71 738.27,1364.16 743.67,1349.39 747.57,1362.36 751.82,1372.06 755.91,1377.29 761.03,1341.07 764.00,1371.94 767.31,1379.77 777.58,1365.19 782.68,1376.06 787.12,1363.17 790.53,1359.68 795.36,1328.33 798.32,1368.75 804.38,1343.10 807.64,1365.42" stroke="#d85a26" stroke-width="2" fill="none"/>
+<circle cx="565.00" cy="1379.05" r="1.5" fill="#d85a26"/>
+<circle cx="569.70" cy="1378.11" r="1.5" fill="#d85a26"/>
+<circle cx="572.49" cy="1377.07" r="1.5" fill="#d85a26"/>
+<circle cx="578.06" cy="1380.25" r="1.5" fill="#d85a26"/>
+<circle cx="582.34" cy="1379.30" r="1.5" fill="#d85a26"/>
+<circle cx="598.97" cy="1365.12" r="1.5" fill="#d85a26"/>
+<circle cx="604.78" cy="1374.15" r="1.5" fill="#d85a26"/>
+<circle cx="607.65" cy="1366.92" r="1.5" fill="#d85a26"/>
+<circle cx="613.80" cy="1367.69" r="1.5" fill="#d85a26"/>
+<circle cx="617.13" cy="1376.87" r="1.5" fill="#d85a26"/>
+<circle cx="626.05" cy="1361.44" r="1.5" fill="#d85a26"/>
+<circle cx="630.13" cy="1373.62" r="1.5" fill="#d85a26"/>
+<circle cx="633.48" cy="1366.47" r="1.5" fill="#d85a26"/>
+<circle cx="638.92" cy="1375.99" r="1.5" fill="#d85a26"/>
+<circle cx="643.34" cy="1364.93" r="1.5" fill="#d85a26"/>
+<circle cx="647.76" cy="1358.71" r="1.5" fill="#d85a26"/>
+<circle cx="656.28" cy="1380.23" r="1.5" fill="#d85a26"/>
+<circle cx="660.95" cy="1354.93" r="1.5" fill="#d85a26"/>
+<circle cx="665.61" cy="1359.79" r="1.5" fill="#d85a26"/>
+<circle cx="668.89" cy="1371.82" r="1.5" fill="#d85a26"/>
+<circle cx="674.14" cy="1348.86" r="1.5" fill="#d85a26"/>
+<circle cx="681.65" cy="1374.48" r="1.5" fill="#d85a26"/>
+<circle cx="686.84" cy="1375.26" r="1.5" fill="#d85a26"/>
+<circle cx="689.96" cy="1372.11" r="1.5" fill="#d85a26"/>
+<circle cx="694.56" cy="1360.25" r="1.5" fill="#d85a26"/>
+<circle cx="704.47" cy="1361.84" r="1.5" fill="#d85a26"/>
+<circle cx="717.52" cy="1378.52" r="1.5" fill="#d85a26"/>
+<circle cx="721.09" cy="1355.50" r="1.5" fill="#d85a26"/>
+<circle cx="724.92" cy="1362.43" r="1.5" fill="#d85a26"/>
+<circle cx="730.71" cy="1364.82" r="1.5" fill="#d85a26"/>
+<circle cx="735.06" cy="1367.71" r="1.5" fill="#d85a26"/>
+<circle cx="738.27" cy="1364.16" r="1.5" fill="#d85a26"/>
+<circle cx="743.67" cy="1349.39" r="1.5" fill="#d85a26"/>
+<circle cx="747.57" cy="1362.36" r="1.5" fill="#d85a26"/>
+<circle cx="751.82" cy="1372.06" r="1.5" fill="#d85a26"/>
+<circle cx="755.91" cy="1377.29" r="1.5" fill="#d85a26"/>
+<circle cx="761.03" cy="1341.07" r="1.5" fill="#d85a26"/>
+<circle cx="764.00" cy="1371.94" r="1.5" fill="#d85a26"/>
+<circle cx="767.31" cy="1379.77" r="1.5" fill="#d85a26"/>
+<circle cx="777.58" cy="1365.19" r="1.5" fill="#d85a26"/>
+<circle cx="782.68" cy="1376.06" r="1.5" fill="#d85a26"/>
+<circle cx="787.12" cy="1363.17" r="1.5" fill="#d85a26"/>
+<circle cx="790.53" cy="1359.68" r="1.5" fill="#d85a26"/>
+<circle cx="795.36" cy="1328.33" r="1.5" fill="#d85a26"/>
+<circle cx="798.32" cy="1368.75" r="1.5" fill="#d85a26"/>
+<circle cx="804.38" cy="1343.10" r="1.5" fill="#d85a26"/>
+<circle cx="807.64" cy="1365.42" r="1.5" fill="#d85a26"/>
+<polyline points="811.53,1369.38 817.56,1343.06 821.12,1348.15 826.36,1328.00 830.64,1371.76 834.40,1365.62 838.68,1360.38 843.49,1340.35" stroke="#d85a26" stroke-width="2" fill="none"/>
+<circle cx="811.53" cy="1369.38" r="1.5" fill="#d85a26"/>
+<circle cx="817.56" cy="1343.06" r="1.5" fill="#d85a26"/>
+<circle cx="821.12" cy="1348.15" r="1.5" fill="#d85a26"/>
+<circle cx="826.36" cy="1328.00" r="1.5" fill="#d85a26"/>
+<circle cx="830.64" cy="1371.76" r="1.5" fill="#d85a26"/>
+<circle cx="834.40" cy="1365.62" r="1.5" fill="#d85a26"/>
+<circle cx="838.68" cy="1360.38" r="1.5" fill="#d85a26"/>
+<circle cx="843.49" cy="1340.35" r="1.5" fill="#d85a26"/>
+<polyline points="847.20,1354.81 852.29,1352.34 856.73,1359.46 861.15,1339.22 864.31,1357.19 869.56,1373.42 874.20,1362.10 878.50,1352.56 882.33,1356.36 886.71,1362.14 890.18,1374.49 895.86,1357.49 899.85,1371.77 903.74,1365.29 908.70,1358.67 912.62,1330.65 917.34,1365.88 921.80,1353.34 926.29,1376.17 930.18,1369.97" stroke="#d85a26" stroke-width="2" fill="none"/>
+<circle cx="847.20" cy="1354.81" r="1.5" fill="#d85a26"/>
+<circle cx="852.29" cy="1352.34" r="1.5" fill="#d85a26"/>
+<circle cx="856.73" cy="1359.46" r="1.5" fill="#d85a26"/>
+<circle cx="861.15" cy="1339.22" r="1.5" fill="#d85a26"/>
+<circle cx="864.31" cy="1357.19" r="1.5" fill="#d85a26"/>
+<circle cx="869.56" cy="1373.42" r="1.5" fill="#d85a26"/>
+<circle cx="874.20" cy="1362.10" r="1.5" fill="#d85a26"/>
+<circle cx="878.50" cy="1352.56" r="1.5" fill="#d85a26"/>
+<circle cx="882.33" cy="1356.36" r="1.5" fill="#d85a26"/>
+<circle cx="886.71" cy="1362.14" r="1.5" fill="#d85a26"/>
+<circle cx="890.18" cy="1374.49" r="1.5" fill="#d85a26"/>
+<circle cx="895.86" cy="1357.49" r="1.5" fill="#d85a26"/>
+<circle cx="899.85" cy="1371.77" r="1.5" fill="#d85a26"/>
+<circle cx="903.74" cy="1365.29" r="1.5" fill="#d85a26"/>
+<circle cx="908.70" cy="1358.67" r="1.5" fill="#d85a26"/>
+<circle cx="912.62" cy="1330.65" r="1.5" fill="#d85a26"/>
+<circle cx="917.34" cy="1365.88" r="1.5" fill="#d85a26"/>
+<circle cx="921.80" cy="1353.34" r="1.5" fill="#d85a26"/>
+<circle cx="926.29" cy="1376.17" r="1.5" fill="#d85a26"/>
+<circle cx="930.18" cy="1369.97" r="1.5" fill="#d85a26"/>
+<polyline points="933.93,1374.62 938.23,1371.58 942.61,1376.47 947.54,1368.86 951.86,1367.64 955.00,1365.47" stroke="#d85a26" stroke-width="2" fill="none"/>
+<circle cx="933.93" cy="1374.62" r="1.5" fill="#d85a26"/>
+<circle cx="938.23" cy="1371.58" r="1.5" fill="#d85a26"/>
+<circle cx="942.61" cy="1376.47" r="1.5" fill="#d85a26"/>
+<circle cx="947.54" cy="1368.86" r="1.5" fill="#d85a26"/>
+<circle cx="951.86" cy="1367.64" r="1.5" fill="#d85a26"/>
+<circle cx="955.00" cy="1365.47" r="1.5" fill="#d85a26"/>
+<text x="565.0" y="1412.0" fill="#53647a" font-family="ui-monospace,monospace" font-size="10" font-weight="400">2026-08-17</text>
+<text x="875.0" y="1412.0" fill="#53647a" font-family="ui-monospace,monospace" font-size="10" font-weight="400">2026-11-15</text>
 <text x="490.0" y="1333.0" fill="#53647a" font-family="ui-monospace,monospace" font-size="10" font-weight="400">10.4</text>
 <text x="530.0" y="1394.0" fill="#53647a" font-family="ui-monospace,monospace" font-size="10" font-weight="400">0</text>
 <rect x="20" y="1435" width="960" height="140" rx="10" fill="#f6f8fa" stroke="#d0d7de"/>
 <text x="36.0" y="1460.0" fill="#172033" font-family="ui-monospace,monospace" font-size="16" font-weight="700">literal_scope_read_write_aot</text>
-<text x="36.0" y="1484.0" fill="#172033" font-family="ui-monospace,monospace" font-size="12" font-weight="400">eval 6.69 ms | native 4.57 ms | eval/native: 1.46x</text>
-<text x="36.0" y="1505.0" fill="#53647a" font-family="ui-monospace,monospace" font-size="11" font-weight="400">2026-10-20 | 3c39673c | trend: elephc-eval ms</text>
+<text x="36.0" y="1484.0" fill="#172033" font-family="ui-monospace,monospace" font-size="12" font-weight="400">eval 4.98 ms | native 3.00 ms | eval/native: 1.66x</text>
+<text x="36.0" y="1505.0" fill="#53647a" font-family="ui-monospace,monospace" font-size="11" font-weight="400">2026-11-15 | 2857abcb | trend: elephc-eval ms</text>
 <path d="M565 1543 H955" stroke="#d0d7de" fill="none"/>
-<polyline points="565.00,1531.54 566.80,1530.54 571.61,1521.43 577.21,1531.68 581.70,1531.18 584.86,1528.19 590.61,1520.02 594.97,1516.39 599.11,1525.19 602.27,1529.92 616.62,1531.12 620.81,1508.53 623.35,1526.39 627.45,1521.81 633.29,1530.45 638.08,1530.73 642.42,1525.68 647.11,1523.78 649.57,1510.93 654.62,1510.19 659.06,1525.55 662.89,1527.00 667.37,1530.03 676.63,1527.72 681.32,1526.86 684.11,1520.04 689.68,1530.20 693.96,1530.91 710.58,1530.02 716.39,1525.34 719.26,1518.10 725.40,1527.86 728.74,1531.16 737.64,1526.33 741.72,1525.22 745.07,1520.22 750.51,1526.37 754.94,1519.35 759.35,1500.65 767.86,1530.35 772.53,1519.60 777.20,1520.77 780.47,1525.11 785.72,1523.69 793.22,1520.51 798.41,1513.51 801.53,1520.72 806.13,1503.25 816.04,1512.12 829.08,1529.60 832.65,1480.76 836.47,1508.91 842.26,1516.45 846.61,1515.64 849.82,1526.48 855.22,1512.19 859.12,1504.68 863.37,1525.20 867.45,1525.59 872.57,1493.18 875.54,1510.47 878.85,1526.67 889.11,1510.00 894.21,1527.50 898.65,1506.94 902.05,1506.00 906.89,1502.97 909.85,1526.02 915.90,1489.70 919.17,1508.35" stroke="#168a81" stroke-width="2" fill="none"/>
-<circle cx="565.00" cy="1531.54" r="1.5" fill="#168a81"/>
-<circle cx="566.80" cy="1530.54" r="1.5" fill="#168a81"/>
-<circle cx="571.61" cy="1521.43" r="1.5" fill="#168a81"/>
-<circle cx="577.21" cy="1531.68" r="1.5" fill="#168a81"/>
-<circle cx="581.70" cy="1531.18" r="1.5" fill="#168a81"/>
-<circle cx="584.86" cy="1528.19" r="1.5" fill="#168a81"/>
-<circle cx="590.61" cy="1520.02" r="1.5" fill="#168a81"/>
-<circle cx="594.97" cy="1516.39" r="1.5" fill="#168a81"/>
-<circle cx="599.11" cy="1525.19" r="1.5" fill="#168a81"/>
-<circle cx="602.27" cy="1529.92" r="1.5" fill="#168a81"/>
-<circle cx="616.62" cy="1531.12" r="1.5" fill="#168a81"/>
-<circle cx="620.81" cy="1508.53" r="1.5" fill="#168a81"/>
-<circle cx="623.35" cy="1526.39" r="1.5" fill="#168a81"/>
-<circle cx="627.45" cy="1521.81" r="1.5" fill="#168a81"/>
-<circle cx="633.29" cy="1530.45" r="1.5" fill="#168a81"/>
-<circle cx="638.08" cy="1530.73" r="1.5" fill="#168a81"/>
-<circle cx="642.42" cy="1525.68" r="1.5" fill="#168a81"/>
-<circle cx="647.11" cy="1523.78" r="1.5" fill="#168a81"/>
-<circle cx="649.57" cy="1510.93" r="1.5" fill="#168a81"/>
-<circle cx="654.62" cy="1510.19" r="1.5" fill="#168a81"/>
-<circle cx="659.06" cy="1525.55" r="1.5" fill="#168a81"/>
-<circle cx="662.89" cy="1527.00" r="1.5" fill="#168a81"/>
-<circle cx="667.37" cy="1530.03" r="1.5" fill="#168a81"/>
-<circle cx="676.63" cy="1527.72" r="1.5" fill="#168a81"/>
-<circle cx="681.32" cy="1526.86" r="1.5" fill="#168a81"/>
-<circle cx="684.11" cy="1520.04" r="1.5" fill="#168a81"/>
-<circle cx="689.68" cy="1530.20" r="1.5" fill="#168a81"/>
-<circle cx="693.96" cy="1530.91" r="1.5" fill="#168a81"/>
-<circle cx="710.58" cy="1530.02" r="1.5" fill="#168a81"/>
-<circle cx="716.39" cy="1525.34" r="1.5" fill="#168a81"/>
-<circle cx="719.26" cy="1518.10" r="1.5" fill="#168a81"/>
-<circle cx="725.40" cy="1527.86" r="1.5" fill="#168a81"/>
-<circle cx="728.74" cy="1531.16" r="1.5" fill="#168a81"/>
-<circle cx="737.64" cy="1526.33" r="1.5" fill="#168a81"/>
-<circle cx="741.72" cy="1525.22" r="1.5" fill="#168a81"/>
-<circle cx="745.07" cy="1520.22" r="1.5" fill="#168a81"/>
-<circle cx="750.51" cy="1526.37" r="1.5" fill="#168a81"/>
-<circle cx="754.94" cy="1519.35" r="1.5" fill="#168a81"/>
-<circle cx="759.35" cy="1500.65" r="1.5" fill="#168a81"/>
-<circle cx="767.86" cy="1530.35" r="1.5" fill="#168a81"/>
-<circle cx="772.53" cy="1519.60" r="1.5" fill="#168a81"/>
-<circle cx="777.20" cy="1520.77" r="1.5" fill="#168a81"/>
-<circle cx="780.47" cy="1525.11" r="1.5" fill="#168a81"/>
-<circle cx="785.72" cy="1523.69" r="1.5" fill="#168a81"/>
-<circle cx="793.22" cy="1520.51" r="1.5" fill="#168a81"/>
-<circle cx="798.41" cy="1513.51" r="1.5" fill="#168a81"/>
-<circle cx="801.53" cy="1520.72" r="1.5" fill="#168a81"/>
-<circle cx="806.13" cy="1503.25" r="1.5" fill="#168a81"/>
-<circle cx="816.04" cy="1512.12" r="1.5" fill="#168a81"/>
-<circle cx="829.08" cy="1529.60" r="1.5" fill="#168a81"/>
-<circle cx="832.65" cy="1480.76" r="1.5" fill="#168a81"/>
-<circle cx="836.47" cy="1508.91" r="1.5" fill="#168a81"/>
-<circle cx="842.26" cy="1516.45" r="1.5" fill="#168a81"/>
-<circle cx="846.61" cy="1515.64" r="1.5" fill="#168a81"/>
-<circle cx="849.82" cy="1526.48" r="1.5" fill="#168a81"/>
-<circle cx="855.22" cy="1512.19" r="1.5" fill="#168a81"/>
-<circle cx="859.12" cy="1504.68" r="1.5" fill="#168a81"/>
-<circle cx="863.37" cy="1525.20" r="1.5" fill="#168a81"/>
-<circle cx="867.45" cy="1525.59" r="1.5" fill="#168a81"/>
-<circle cx="872.57" cy="1493.18" r="1.5" fill="#168a81"/>
-<circle cx="875.54" cy="1510.47" r="1.5" fill="#168a81"/>
-<circle cx="878.85" cy="1526.67" r="1.5" fill="#168a81"/>
-<circle cx="889.11" cy="1510.00" r="1.5" fill="#168a81"/>
-<circle cx="894.21" cy="1527.50" r="1.5" fill="#168a81"/>
-<circle cx="898.65" cy="1506.94" r="1.5" fill="#168a81"/>
-<circle cx="902.05" cy="1506.00" r="1.5" fill="#168a81"/>
-<circle cx="906.89" cy="1502.97" r="1.5" fill="#168a81"/>
-<circle cx="909.85" cy="1526.02" r="1.5" fill="#168a81"/>
-<circle cx="915.90" cy="1489.70" r="1.5" fill="#168a81"/>
-<circle cx="919.17" cy="1508.35" r="1.5" fill="#168a81"/>
-<polyline points="923.05,1515.08 929.08,1478.00 932.64,1517.70 937.87,1512.88 942.15,1498.26 945.91,1512.00 950.19,1505.61 955.00,1503.36" stroke="#168a81" stroke-width="2" fill="none"/>
-<circle cx="923.05" cy="1515.08" r="1.5" fill="#168a81"/>
-<circle cx="929.08" cy="1478.00" r="1.5" fill="#168a81"/>
-<circle cx="932.64" cy="1517.70" r="1.5" fill="#168a81"/>
-<circle cx="937.87" cy="1512.88" r="1.5" fill="#168a81"/>
-<circle cx="942.15" cy="1498.26" r="1.5" fill="#168a81"/>
-<circle cx="945.91" cy="1512.00" r="1.5" fill="#168a81"/>
-<circle cx="950.19" cy="1505.61" r="1.5" fill="#168a81"/>
-<circle cx="955.00" cy="1503.36" r="1.5" fill="#168a81"/>
-<text x="565.0" y="1562.0" fill="#53647a" font-family="ui-monospace,monospace" font-size="10" font-weight="400">2026-07-22</text>
-<text x="875.0" y="1562.0" fill="#53647a" font-family="ui-monospace,monospace" font-size="10" font-weight="400">2026-10-20</text>
+<polyline points="565.00,1527.72 569.70,1526.86 572.49,1520.04 578.06,1530.20 582.34,1530.91 598.97,1530.02 604.78,1525.34 607.65,1518.10 613.80,1527.86 617.13,1531.16 626.05,1526.33 630.13,1525.22 633.48,1520.22 638.92,1526.37 643.34,1519.35 647.76,1500.65 656.28,1530.35 660.95,1519.60 665.61,1520.77 668.89,1525.11 674.14,1523.69 681.65,1520.51 686.84,1513.51 689.96,1520.72 694.56,1503.25 704.47,1512.12 717.52,1529.60 721.09,1480.76 724.92,1508.91 730.71,1516.45 735.06,1515.64 738.27,1526.48 743.67,1512.19 747.57,1504.68 751.82,1525.20 755.91,1525.59 761.03,1493.18 764.00,1510.47 767.31,1526.67 777.58,1510.00 782.68,1527.50 787.12,1506.94 790.53,1506.00 795.36,1502.97 798.32,1526.02 804.38,1489.70 807.64,1508.35" stroke="#168a81" stroke-width="2" fill="none"/>
+<circle cx="565.00" cy="1527.72" r="1.5" fill="#168a81"/>
+<circle cx="569.70" cy="1526.86" r="1.5" fill="#168a81"/>
+<circle cx="572.49" cy="1520.04" r="1.5" fill="#168a81"/>
+<circle cx="578.06" cy="1530.20" r="1.5" fill="#168a81"/>
+<circle cx="582.34" cy="1530.91" r="1.5" fill="#168a81"/>
+<circle cx="598.97" cy="1530.02" r="1.5" fill="#168a81"/>
+<circle cx="604.78" cy="1525.34" r="1.5" fill="#168a81"/>
+<circle cx="607.65" cy="1518.10" r="1.5" fill="#168a81"/>
+<circle cx="613.80" cy="1527.86" r="1.5" fill="#168a81"/>
+<circle cx="617.13" cy="1531.16" r="1.5" fill="#168a81"/>
+<circle cx="626.05" cy="1526.33" r="1.5" fill="#168a81"/>
+<circle cx="630.13" cy="1525.22" r="1.5" fill="#168a81"/>
+<circle cx="633.48" cy="1520.22" r="1.5" fill="#168a81"/>
+<circle cx="638.92" cy="1526.37" r="1.5" fill="#168a81"/>
+<circle cx="643.34" cy="1519.35" r="1.5" fill="#168a81"/>
+<circle cx="647.76" cy="1500.65" r="1.5" fill="#168a81"/>
+<circle cx="656.28" cy="1530.35" r="1.5" fill="#168a81"/>
+<circle cx="660.95" cy="1519.60" r="1.5" fill="#168a81"/>
+<circle cx="665.61" cy="1520.77" r="1.5" fill="#168a81"/>
+<circle cx="668.89" cy="1525.11" r="1.5" fill="#168a81"/>
+<circle cx="674.14" cy="1523.69" r="1.5" fill="#168a81"/>
+<circle cx="681.65" cy="1520.51" r="1.5" fill="#168a81"/>
+<circle cx="686.84" cy="1513.51" r="1.5" fill="#168a81"/>
+<circle cx="689.96" cy="1520.72" r="1.5" fill="#168a81"/>
+<circle cx="694.56" cy="1503.25" r="1.5" fill="#168a81"/>
+<circle cx="704.47" cy="1512.12" r="1.5" fill="#168a81"/>
+<circle cx="717.52" cy="1529.60" r="1.5" fill="#168a81"/>
+<circle cx="721.09" cy="1480.76" r="1.5" fill="#168a81"/>
+<circle cx="724.92" cy="1508.91" r="1.5" fill="#168a81"/>
+<circle cx="730.71" cy="1516.45" r="1.5" fill="#168a81"/>
+<circle cx="735.06" cy="1515.64" r="1.5" fill="#168a81"/>
+<circle cx="738.27" cy="1526.48" r="1.5" fill="#168a81"/>
+<circle cx="743.67" cy="1512.19" r="1.5" fill="#168a81"/>
+<circle cx="747.57" cy="1504.68" r="1.5" fill="#168a81"/>
+<circle cx="751.82" cy="1525.20" r="1.5" fill="#168a81"/>
+<circle cx="755.91" cy="1525.59" r="1.5" fill="#168a81"/>
+<circle cx="761.03" cy="1493.18" r="1.5" fill="#168a81"/>
+<circle cx="764.00" cy="1510.47" r="1.5" fill="#168a81"/>
+<circle cx="767.31" cy="1526.67" r="1.5" fill="#168a81"/>
+<circle cx="777.58" cy="1510.00" r="1.5" fill="#168a81"/>
+<circle cx="782.68" cy="1527.50" r="1.5" fill="#168a81"/>
+<circle cx="787.12" cy="1506.94" r="1.5" fill="#168a81"/>
+<circle cx="790.53" cy="1506.00" r="1.5" fill="#168a81"/>
+<circle cx="795.36" cy="1502.97" r="1.5" fill="#168a81"/>
+<circle cx="798.32" cy="1526.02" r="1.5" fill="#168a81"/>
+<circle cx="804.38" cy="1489.70" r="1.5" fill="#168a81"/>
+<circle cx="807.64" cy="1508.35" r="1.5" fill="#168a81"/>
+<polyline points="811.53,1515.08 817.56,1478.00 821.12,1517.70 826.36,1512.88 830.64,1498.26 834.40,1512.00 838.68,1505.61 843.49,1503.36" stroke="#168a81" stroke-width="2" fill="none"/>
+<circle cx="811.53" cy="1515.08" r="1.5" fill="#168a81"/>
+<circle cx="817.56" cy="1478.00" r="1.5" fill="#168a81"/>
+<circle cx="821.12" cy="1517.70" r="1.5" fill="#168a81"/>
+<circle cx="826.36" cy="1512.88" r="1.5" fill="#168a81"/>
+<circle cx="830.64" cy="1498.26" r="1.5" fill="#168a81"/>
+<circle cx="834.40" cy="1512.00" r="1.5" fill="#168a81"/>
+<circle cx="838.68" cy="1505.61" r="1.5" fill="#168a81"/>
+<circle cx="843.49" cy="1503.36" r="1.5" fill="#168a81"/>
+<polyline points="847.20,1510.74 852.29,1510.71 856.73,1518.97 861.15,1498.06 864.31,1512.97 869.56,1514.96 874.20,1493.10 878.50,1513.80 882.33,1507.39 886.71,1509.23 890.18,1522.11 895.86,1514.34 899.85,1504.96 903.74,1513.15 908.70,1511.19 912.62,1481.71 917.34,1512.22 921.80,1522.85 926.29,1527.06 930.18,1517.08" stroke="#168a81" stroke-width="2" fill="none"/>
+<circle cx="847.20" cy="1510.74" r="1.5" fill="#168a81"/>
+<circle cx="852.29" cy="1510.71" r="1.5" fill="#168a81"/>
+<circle cx="856.73" cy="1518.97" r="1.5" fill="#168a81"/>
+<circle cx="861.15" cy="1498.06" r="1.5" fill="#168a81"/>
+<circle cx="864.31" cy="1512.97" r="1.5" fill="#168a81"/>
+<circle cx="869.56" cy="1514.96" r="1.5" fill="#168a81"/>
+<circle cx="874.20" cy="1493.10" r="1.5" fill="#168a81"/>
+<circle cx="878.50" cy="1513.80" r="1.5" fill="#168a81"/>
+<circle cx="882.33" cy="1507.39" r="1.5" fill="#168a81"/>
+<circle cx="886.71" cy="1509.23" r="1.5" fill="#168a81"/>
+<circle cx="890.18" cy="1522.11" r="1.5" fill="#168a81"/>
+<circle cx="895.86" cy="1514.34" r="1.5" fill="#168a81"/>
+<circle cx="899.85" cy="1504.96" r="1.5" fill="#168a81"/>
+<circle cx="903.74" cy="1513.15" r="1.5" fill="#168a81"/>
+<circle cx="908.70" cy="1511.19" r="1.5" fill="#168a81"/>
+<circle cx="912.62" cy="1481.71" r="1.5" fill="#168a81"/>
+<circle cx="917.34" cy="1512.22" r="1.5" fill="#168a81"/>
+<circle cx="921.80" cy="1522.85" r="1.5" fill="#168a81"/>
+<circle cx="926.29" cy="1527.06" r="1.5" fill="#168a81"/>
+<circle cx="930.18" cy="1517.08" r="1.5" fill="#168a81"/>
+<polyline points="933.93,1518.42 938.23,1517.20 942.61,1526.86 947.54,1518.53 951.86,1524.36 955.00,1513.52" stroke="#168a81" stroke-width="2" fill="none"/>
+<circle cx="933.93" cy="1518.42" r="1.5" fill="#168a81"/>
+<circle cx="938.23" cy="1517.20" r="1.5" fill="#168a81"/>
+<circle cx="942.61" cy="1526.86" r="1.5" fill="#168a81"/>
+<circle cx="947.54" cy="1518.53" r="1.5" fill="#168a81"/>
+<circle cx="951.86" cy="1524.36" r="1.5" fill="#168a81"/>
+<circle cx="955.00" cy="1513.52" r="1.5" fill="#168a81"/>
+<text x="565.0" y="1562.0" fill="#53647a" font-family="ui-monospace,monospace" font-size="10" font-weight="400">2026-08-17</text>
+<text x="875.0" y="1562.0" fill="#53647a" font-family="ui-monospace,monospace" font-size="10" font-weight="400">2026-11-15</text>
 <text x="490.0" y="1483.0" fill="#53647a" font-family="ui-monospace,monospace" font-size="10" font-weight="400">11.0</text>
 <text x="530.0" y="1544.0" fill="#53647a" font-family="ui-monospace,monospace" font-size="10" font-weight="400">0</text>
 <rect x="20" y="1585" width="960" height="140" rx="10" fill="#f6f8fa" stroke="#d0d7de"/>
 <text x="36.0" y="1610.0" fill="#172033" font-family="ui-monospace,monospace" font-size="16" font-weight="700">repeated_small_eval</text>
-<text x="36.0" y="1634.0" fill="#172033" font-family="ui-monospace,monospace" font-size="12" font-weight="400">eval 24.93 ms | native 6.46 ms | eval/native: 3.86x</text>
-<text x="36.0" y="1655.0" fill="#53647a" font-family="ui-monospace,monospace" font-size="11" font-weight="400">2026-10-20 | 3c39673c | trend: elephc-eval ms</text>
+<text x="36.0" y="1634.0" fill="#172033" font-family="ui-monospace,monospace" font-size="12" font-weight="400">eval 16.74 ms | native 2.51 ms | eval/native: 6.68x</text>
+<text x="36.0" y="1655.0" fill="#53647a" font-family="ui-monospace,monospace" font-size="11" font-weight="400">2026-11-15 | 2857abcb | trend: elephc-eval ms</text>
 <path d="M565 1693 H955" stroke="#d0d7de" fill="none"/>
-<polyline points="565.00,1683.65 566.80,1682.51 571.61,1680.00 577.21,1683.48 581.70,1683.20 584.86,1681.48 590.61,1675.04 594.97,1679.28 599.11,1678.53 602.27,1683.75 616.62,1682.86 620.81,1668.87 623.35,1681.92 627.45,1680.58 633.29,1683.25 638.08,1681.64 642.42,1682.89 647.11,1679.77 649.57,1675.94 654.62,1670.53 659.06,1674.46 662.89,1681.71 667.37,1681.27 676.63,1683.01 681.32,1680.63 684.11,1680.78 689.68,1680.02 693.96,1683.39 710.58,1679.78 716.39,1680.65 719.26,1677.96 725.40,1681.92 728.74,1682.56 737.64,1681.17 741.72,1676.54 745.07,1677.76 750.51,1682.06 754.94,1679.71 759.35,1661.18 767.86,1676.23 772.53,1671.42 777.20,1665.01 780.47,1661.25 785.72,1671.79 793.22,1674.58 798.41,1656.88 801.53,1673.43 806.13,1674.42 816.04,1669.00 829.08,1676.37 832.65,1648.11 836.47,1653.64 842.26,1646.97 846.61,1641.13 849.82,1645.61 855.22,1650.12 859.12,1646.44 863.37,1657.41 867.45,1656.14 872.57,1628.00 875.54,1653.57 878.85,1656.64 889.11,1645.05 894.21,1658.87 898.65,1648.11 902.05,1645.19 906.89,1648.37 909.85,1656.79 915.90,1644.39 919.17,1650.27" stroke="#8161c7" stroke-width="2" fill="none"/>
-<circle cx="565.00" cy="1683.65" r="1.5" fill="#8161c7"/>
-<circle cx="566.80" cy="1682.51" r="1.5" fill="#8161c7"/>
-<circle cx="571.61" cy="1680.00" r="1.5" fill="#8161c7"/>
-<circle cx="577.21" cy="1683.48" r="1.5" fill="#8161c7"/>
-<circle cx="581.70" cy="1683.20" r="1.5" fill="#8161c7"/>
-<circle cx="584.86" cy="1681.48" r="1.5" fill="#8161c7"/>
-<circle cx="590.61" cy="1675.04" r="1.5" fill="#8161c7"/>
-<circle cx="594.97" cy="1679.28" r="1.5" fill="#8161c7"/>
-<circle cx="599.11" cy="1678.53" r="1.5" fill="#8161c7"/>
-<circle cx="602.27" cy="1683.75" r="1.5" fill="#8161c7"/>
-<circle cx="616.62" cy="1682.86" r="1.5" fill="#8161c7"/>
-<circle cx="620.81" cy="1668.87" r="1.5" fill="#8161c7"/>
-<circle cx="623.35" cy="1681.92" r="1.5" fill="#8161c7"/>
-<circle cx="627.45" cy="1680.58" r="1.5" fill="#8161c7"/>
-<circle cx="633.29" cy="1683.25" r="1.5" fill="#8161c7"/>
-<circle cx="638.08" cy="1681.64" r="1.5" fill="#8161c7"/>
-<circle cx="642.42" cy="1682.89" r="1.5" fill="#8161c7"/>
-<circle cx="647.11" cy="1679.77" r="1.5" fill="#8161c7"/>
-<circle cx="649.57" cy="1675.94" r="1.5" fill="#8161c7"/>
-<circle cx="654.62" cy="1670.53" r="1.5" fill="#8161c7"/>
-<circle cx="659.06" cy="1674.46" r="1.5" fill="#8161c7"/>
-<circle cx="662.89" cy="1681.71" r="1.5" fill="#8161c7"/>
-<circle cx="667.37" cy="1681.27" r="1.5" fill="#8161c7"/>
-<circle cx="676.63" cy="1683.01" r="1.5" fill="#8161c7"/>
-<circle cx="681.32" cy="1680.63" r="1.5" fill="#8161c7"/>
-<circle cx="684.11" cy="1680.78" r="1.5" fill="#8161c7"/>
-<circle cx="689.68" cy="1680.02" r="1.5" fill="#8161c7"/>
-<circle cx="693.96" cy="1683.39" r="1.5" fill="#8161c7"/>
-<circle cx="710.58" cy="1679.78" r="1.5" fill="#8161c7"/>
-<circle cx="716.39" cy="1680.65" r="1.5" fill="#8161c7"/>
-<circle cx="719.26" cy="1677.96" r="1.5" fill="#8161c7"/>
-<circle cx="725.40" cy="1681.92" r="1.5" fill="#8161c7"/>
-<circle cx="728.74" cy="1682.56" r="1.5" fill="#8161c7"/>
-<circle cx="737.64" cy="1681.17" r="1.5" fill="#8161c7"/>
-<circle cx="741.72" cy="1676.54" r="1.5" fill="#8161c7"/>
-<circle cx="745.07" cy="1677.76" r="1.5" fill="#8161c7"/>
-<circle cx="750.51" cy="1682.06" r="1.5" fill="#8161c7"/>
-<circle cx="754.94" cy="1679.71" r="1.5" fill="#8161c7"/>
-<circle cx="759.35" cy="1661.18" r="1.5" fill="#8161c7"/>
-<circle cx="767.86" cy="1676.23" r="1.5" fill="#8161c7"/>
-<circle cx="772.53" cy="1671.42" r="1.5" fill="#8161c7"/>
-<circle cx="777.20" cy="1665.01" r="1.5" fill="#8161c7"/>
-<circle cx="780.47" cy="1661.25" r="1.5" fill="#8161c7"/>
-<circle cx="785.72" cy="1671.79" r="1.5" fill="#8161c7"/>
-<circle cx="793.22" cy="1674.58" r="1.5" fill="#8161c7"/>
-<circle cx="798.41" cy="1656.88" r="1.5" fill="#8161c7"/>
-<circle cx="801.53" cy="1673.43" r="1.5" fill="#8161c7"/>
-<circle cx="806.13" cy="1674.42" r="1.5" fill="#8161c7"/>
-<circle cx="816.04" cy="1669.00" r="1.5" fill="#8161c7"/>
-<circle cx="829.08" cy="1676.37" r="1.5" fill="#8161c7"/>
-<circle cx="832.65" cy="1648.11" r="1.5" fill="#8161c7"/>
-<circle cx="836.47" cy="1653.64" r="1.5" fill="#8161c7"/>
-<circle cx="842.26" cy="1646.97" r="1.5" fill="#8161c7"/>
-<circle cx="846.61" cy="1641.13" r="1.5" fill="#8161c7"/>
-<circle cx="849.82" cy="1645.61" r="1.5" fill="#8161c7"/>
-<circle cx="855.22" cy="1650.12" r="1.5" fill="#8161c7"/>
-<circle cx="859.12" cy="1646.44" r="1.5" fill="#8161c7"/>
-<circle cx="863.37" cy="1657.41" r="1.5" fill="#8161c7"/>
-<circle cx="867.45" cy="1656.14" r="1.5" fill="#8161c7"/>
-<circle cx="872.57" cy="1628.00" r="1.5" fill="#8161c7"/>
-<circle cx="875.54" cy="1653.57" r="1.5" fill="#8161c7"/>
-<circle cx="878.85" cy="1656.64" r="1.5" fill="#8161c7"/>
-<circle cx="889.11" cy="1645.05" r="1.5" fill="#8161c7"/>
-<circle cx="894.21" cy="1658.87" r="1.5" fill="#8161c7"/>
-<circle cx="898.65" cy="1648.11" r="1.5" fill="#8161c7"/>
-<circle cx="902.05" cy="1645.19" r="1.5" fill="#8161c7"/>
-<circle cx="906.89" cy="1648.37" r="1.5" fill="#8161c7"/>
-<circle cx="909.85" cy="1656.79" r="1.5" fill="#8161c7"/>
-<circle cx="915.90" cy="1644.39" r="1.5" fill="#8161c7"/>
-<circle cx="919.17" cy="1650.27" r="1.5" fill="#8161c7"/>
-<polyline points="923.05,1652.48 929.08,1646.16 932.64,1650.31 937.87,1654.95 942.15,1657.49 945.91,1670.38 950.19,1667.45 955.00,1665.75" stroke="#8161c7" stroke-width="2" fill="none"/>
-<circle cx="923.05" cy="1652.48" r="1.5" fill="#8161c7"/>
-<circle cx="929.08" cy="1646.16" r="1.5" fill="#8161c7"/>
-<circle cx="932.64" cy="1650.31" r="1.5" fill="#8161c7"/>
-<circle cx="937.87" cy="1654.95" r="1.5" fill="#8161c7"/>
-<circle cx="942.15" cy="1657.49" r="1.5" fill="#8161c7"/>
-<circle cx="945.91" cy="1670.38" r="1.5" fill="#8161c7"/>
-<circle cx="950.19" cy="1667.45" r="1.5" fill="#8161c7"/>
-<circle cx="955.00" cy="1665.75" r="1.5" fill="#8161c7"/>
-<text x="565.0" y="1712.0" fill="#53647a" font-family="ui-monospace,monospace" font-size="10" font-weight="400">2026-07-22</text>
-<text x="875.0" y="1712.0" fill="#53647a" font-family="ui-monospace,monospace" font-size="10" font-weight="400">2026-10-20</text>
+<polyline points="565.00,1683.01 569.70,1680.63 572.49,1680.78 578.06,1680.02 582.34,1683.39 598.97,1679.78 604.78,1680.65 607.65,1677.96 613.80,1681.92 617.13,1682.56 626.05,1681.17 630.13,1676.54 633.48,1677.76 638.92,1682.06 643.34,1679.71 647.76,1661.18 656.28,1676.23 660.95,1671.42 665.61,1665.01 668.89,1661.25 674.14,1671.79 681.65,1674.58 686.84,1656.88 689.96,1673.43 694.56,1674.42 704.47,1669.00 717.52,1676.37 721.09,1648.11 724.92,1653.64 730.71,1646.97 735.06,1641.13 738.27,1645.61 743.67,1650.12 747.57,1646.44 751.82,1657.41 755.91,1656.14 761.03,1628.00 764.00,1653.57 767.31,1656.64 777.58,1645.05 782.68,1658.87 787.12,1648.11 790.53,1645.19 795.36,1648.37 798.32,1656.79 804.38,1644.39 807.64,1650.27" stroke="#8161c7" stroke-width="2" fill="none"/>
+<circle cx="565.00" cy="1683.01" r="1.5" fill="#8161c7"/>
+<circle cx="569.70" cy="1680.63" r="1.5" fill="#8161c7"/>
+<circle cx="572.49" cy="1680.78" r="1.5" fill="#8161c7"/>
+<circle cx="578.06" cy="1680.02" r="1.5" fill="#8161c7"/>
+<circle cx="582.34" cy="1683.39" r="1.5" fill="#8161c7"/>
+<circle cx="598.97" cy="1679.78" r="1.5" fill="#8161c7"/>
+<circle cx="604.78" cy="1680.65" r="1.5" fill="#8161c7"/>
+<circle cx="607.65" cy="1677.96" r="1.5" fill="#8161c7"/>
+<circle cx="613.80" cy="1681.92" r="1.5" fill="#8161c7"/>
+<circle cx="617.13" cy="1682.56" r="1.5" fill="#8161c7"/>
+<circle cx="626.05" cy="1681.17" r="1.5" fill="#8161c7"/>
+<circle cx="630.13" cy="1676.54" r="1.5" fill="#8161c7"/>
+<circle cx="633.48" cy="1677.76" r="1.5" fill="#8161c7"/>
+<circle cx="638.92" cy="1682.06" r="1.5" fill="#8161c7"/>
+<circle cx="643.34" cy="1679.71" r="1.5" fill="#8161c7"/>
+<circle cx="647.76" cy="1661.18" r="1.5" fill="#8161c7"/>
+<circle cx="656.28" cy="1676.23" r="1.5" fill="#8161c7"/>
+<circle cx="660.95" cy="1671.42" r="1.5" fill="#8161c7"/>
+<circle cx="665.61" cy="1665.01" r="1.5" fill="#8161c7"/>
+<circle cx="668.89" cy="1661.25" r="1.5" fill="#8161c7"/>
+<circle cx="674.14" cy="1671.79" r="1.5" fill="#8161c7"/>
+<circle cx="681.65" cy="1674.58" r="1.5" fill="#8161c7"/>
+<circle cx="686.84" cy="1656.88" r="1.5" fill="#8161c7"/>
+<circle cx="689.96" cy="1673.43" r="1.5" fill="#8161c7"/>
+<circle cx="694.56" cy="1674.42" r="1.5" fill="#8161c7"/>
+<circle cx="704.47" cy="1669.00" r="1.5" fill="#8161c7"/>
+<circle cx="717.52" cy="1676.37" r="1.5" fill="#8161c7"/>
+<circle cx="721.09" cy="1648.11" r="1.5" fill="#8161c7"/>
+<circle cx="724.92" cy="1653.64" r="1.5" fill="#8161c7"/>
+<circle cx="730.71" cy="1646.97" r="1.5" fill="#8161c7"/>
+<circle cx="735.06" cy="1641.13" r="1.5" fill="#8161c7"/>
+<circle cx="738.27" cy="1645.61" r="1.5" fill="#8161c7"/>
+<circle cx="743.67" cy="1650.12" r="1.5" fill="#8161c7"/>
+<circle cx="747.57" cy="1646.44" r="1.5" fill="#8161c7"/>
+<circle cx="751.82" cy="1657.41" r="1.5" fill="#8161c7"/>
+<circle cx="755.91" cy="1656.14" r="1.5" fill="#8161c7"/>
+<circle cx="761.03" cy="1628.00" r="1.5" fill="#8161c7"/>
+<circle cx="764.00" cy="1653.57" r="1.5" fill="#8161c7"/>
+<circle cx="767.31" cy="1656.64" r="1.5" fill="#8161c7"/>
+<circle cx="777.58" cy="1645.05" r="1.5" fill="#8161c7"/>
+<circle cx="782.68" cy="1658.87" r="1.5" fill="#8161c7"/>
+<circle cx="787.12" cy="1648.11" r="1.5" fill="#8161c7"/>
+<circle cx="790.53" cy="1645.19" r="1.5" fill="#8161c7"/>
+<circle cx="795.36" cy="1648.37" r="1.5" fill="#8161c7"/>
+<circle cx="798.32" cy="1656.79" r="1.5" fill="#8161c7"/>
+<circle cx="804.38" cy="1644.39" r="1.5" fill="#8161c7"/>
+<circle cx="807.64" cy="1650.27" r="1.5" fill="#8161c7"/>
+<polyline points="811.53,1652.48 817.56,1646.16 821.12,1650.31 826.36,1654.95 830.64,1657.49 834.40,1670.38 838.68,1667.45 843.49,1665.75" stroke="#8161c7" stroke-width="2" fill="none"/>
+<circle cx="811.53" cy="1652.48" r="1.5" fill="#8161c7"/>
+<circle cx="817.56" cy="1646.16" r="1.5" fill="#8161c7"/>
+<circle cx="821.12" cy="1650.31" r="1.5" fill="#8161c7"/>
+<circle cx="826.36" cy="1654.95" r="1.5" fill="#8161c7"/>
+<circle cx="830.64" cy="1657.49" r="1.5" fill="#8161c7"/>
+<circle cx="834.40" cy="1670.38" r="1.5" fill="#8161c7"/>
+<circle cx="838.68" cy="1667.45" r="1.5" fill="#8161c7"/>
+<circle cx="843.49" cy="1665.75" r="1.5" fill="#8161c7"/>
+<polyline points="847.20,1671.64 852.29,1662.21 856.73,1672.34 861.15,1660.95 864.31,1676.60 869.56,1679.01 874.20,1665.78 878.50,1673.42 882.33,1669.11 886.71,1668.28 890.18,1678.49 895.86,1666.63 899.85,1675.09 903.74,1673.93 908.70,1676.06 912.62,1661.54 917.34,1667.81 921.80,1673.45 926.29,1679.91 930.18,1673.99" stroke="#8161c7" stroke-width="2" fill="none"/>
+<circle cx="847.20" cy="1671.64" r="1.5" fill="#8161c7"/>
+<circle cx="852.29" cy="1662.21" r="1.5" fill="#8161c7"/>
+<circle cx="856.73" cy="1672.34" r="1.5" fill="#8161c7"/>
+<circle cx="861.15" cy="1660.95" r="1.5" fill="#8161c7"/>
+<circle cx="864.31" cy="1676.60" r="1.5" fill="#8161c7"/>
+<circle cx="869.56" cy="1679.01" r="1.5" fill="#8161c7"/>
+<circle cx="874.20" cy="1665.78" r="1.5" fill="#8161c7"/>
+<circle cx="878.50" cy="1673.42" r="1.5" fill="#8161c7"/>
+<circle cx="882.33" cy="1669.11" r="1.5" fill="#8161c7"/>
+<circle cx="886.71" cy="1668.28" r="1.5" fill="#8161c7"/>
+<circle cx="890.18" cy="1678.49" r="1.5" fill="#8161c7"/>
+<circle cx="895.86" cy="1666.63" r="1.5" fill="#8161c7"/>
+<circle cx="899.85" cy="1675.09" r="1.5" fill="#8161c7"/>
+<circle cx="903.74" cy="1673.93" r="1.5" fill="#8161c7"/>
+<circle cx="908.70" cy="1676.06" r="1.5" fill="#8161c7"/>
+<circle cx="912.62" cy="1661.54" r="1.5" fill="#8161c7"/>
+<circle cx="917.34" cy="1667.81" r="1.5" fill="#8161c7"/>
+<circle cx="921.80" cy="1673.45" r="1.5" fill="#8161c7"/>
+<circle cx="926.29" cy="1679.91" r="1.5" fill="#8161c7"/>
+<circle cx="930.18" cy="1673.99" r="1.5" fill="#8161c7"/>
+<polyline points="933.93,1677.59 938.23,1676.88 942.61,1676.50 947.54,1674.23 951.86,1673.95 955.00,1674.70" stroke="#8161c7" stroke-width="2" fill="none"/>
+<circle cx="933.93" cy="1677.59" r="1.5" fill="#8161c7"/>
+<circle cx="938.23" cy="1676.88" r="1.5" fill="#8161c7"/>
+<circle cx="942.61" cy="1676.50" r="1.5" fill="#8161c7"/>
+<circle cx="947.54" cy="1674.23" r="1.5" fill="#8161c7"/>
+<circle cx="951.86" cy="1673.95" r="1.5" fill="#8161c7"/>
+<circle cx="955.00" cy="1674.70" r="1.5" fill="#8161c7"/>
+<text x="565.0" y="1712.0" fill="#53647a" font-family="ui-monospace,monospace" font-size="10" font-weight="400">2026-08-17</text>
+<text x="875.0" y="1712.0" fill="#53647a" font-family="ui-monospace,monospace" font-size="10" font-weight="400">2026-11-15</text>
 <text x="490.0" y="1633.0" fill="#53647a" font-family="ui-monospace,monospace" font-size="10" font-weight="400">59.5</text>
 <text x="530.0" y="1694.0" fill="#53647a" font-family="ui-monospace,monospace" font-size="10" font-weight="400">0</text>
 <rect x="20" y="1735" width="960" height="140" rx="10" fill="#f6f8fa" stroke="#d0d7de"/>
 <text x="36.0" y="1760.0" fill="#172033" font-family="ui-monospace,monospace" font-size="16" font-weight="700">string_output</text>
-<text x="36.0" y="1784.0" fill="#172033" font-family="ui-monospace,monospace" font-size="12" font-weight="400">eval 21.10 ms | native 7.62 ms | eval/native: 2.77x</text>
-<text x="36.0" y="1805.0" fill="#53647a" font-family="ui-monospace,monospace" font-size="11" font-weight="400">2026-10-20 | 3c39673c | trend: elephc-eval ms</text>
+<text x="36.0" y="1784.0" fill="#172033" font-family="ui-monospace,monospace" font-size="12" font-weight="400">eval 22.27 ms | native 7.96 ms | eval/native: 2.80x</text>
+<text x="36.0" y="1805.0" fill="#53647a" font-family="ui-monospace,monospace" font-size="11" font-weight="400">2026-11-15 | 2857abcb | trend: elephc-eval ms</text>
 <path d="M565 1843 H955" stroke="#d0d7de" fill="none"/>
-<polyline points="565.00,1826.58 566.80,1827.56 571.61,1823.25 577.21,1829.35 581.70,1829.36 584.86,1826.71 590.61,1815.74 594.97,1819.99 599.11,1820.99 602.27,1828.94 616.62,1827.29 620.81,1812.18 623.35,1825.80 627.45,1826.09 633.29,1829.42 638.08,1826.66 642.42,1827.12 647.11,1820.20 649.57,1811.20 654.62,1809.92 659.06,1811.78 662.89,1826.46 667.37,1826.53 676.63,1826.13 681.32,1827.90 684.11,1820.42 689.68,1824.60 693.96,1821.47 710.58,1823.63 716.39,1820.40 719.26,1812.79 725.40,1825.13 728.74,1826.16 737.64,1812.06 741.72,1820.83 745.07,1818.53 750.51,1821.40 754.94,1804.09 759.35,1805.62 767.86,1825.34 772.53,1808.94 777.20,1802.21 780.47,1797.59 785.72,1810.40 793.22,1814.88 798.41,1818.96 801.53,1815.69 806.13,1814.26 816.04,1812.78 829.08,1826.00 832.65,1778.00 836.47,1804.46 842.26,1810.61 846.61,1810.64 849.82,1807.25 855.22,1796.01 859.12,1809.33 863.37,1817.20 867.45,1815.80 872.57,1811.03 875.54,1812.78 878.85,1814.83 889.11,1803.33 894.21,1817.25 898.65,1799.94 902.05,1805.26 906.89,1796.76 909.85,1816.55 915.90,1810.03 919.17,1810.93" stroke="#3677bc" stroke-width="2" fill="none"/>
-<circle cx="565.00" cy="1826.58" r="1.5" fill="#3677bc"/>
-<circle cx="566.80" cy="1827.56" r="1.5" fill="#3677bc"/>
-<circle cx="571.61" cy="1823.25" r="1.5" fill="#3677bc"/>
-<circle cx="577.21" cy="1829.35" r="1.5" fill="#3677bc"/>
-<circle cx="581.70" cy="1829.36" r="1.5" fill="#3677bc"/>
-<circle cx="584.86" cy="1826.71" r="1.5" fill="#3677bc"/>
-<circle cx="590.61" cy="1815.74" r="1.5" fill="#3677bc"/>
-<circle cx="594.97" cy="1819.99" r="1.5" fill="#3677bc"/>
-<circle cx="599.11" cy="1820.99" r="1.5" fill="#3677bc"/>
-<circle cx="602.27" cy="1828.94" r="1.5" fill="#3677bc"/>
-<circle cx="616.62" cy="1827.29" r="1.5" fill="#3677bc"/>
-<circle cx="620.81" cy="1812.18" r="1.5" fill="#3677bc"/>
-<circle cx="623.35" cy="1825.80" r="1.5" fill="#3677bc"/>
-<circle cx="627.45" cy="1826.09" r="1.5" fill="#3677bc"/>
-<circle cx="633.29" cy="1829.42" r="1.5" fill="#3677bc"/>
-<circle cx="638.08" cy="1826.66" r="1.5" fill="#3677bc"/>
-<circle cx="642.42" cy="1827.12" r="1.5" fill="#3677bc"/>
-<circle cx="647.11" cy="1820.20" r="1.5" fill="#3677bc"/>
-<circle cx="649.57" cy="1811.20" r="1.5" fill="#3677bc"/>
-<circle cx="654.62" cy="1809.92" r="1.5" fill="#3677bc"/>
-<circle cx="659.06" cy="1811.78" r="1.5" fill="#3677bc"/>
-<circle cx="662.89" cy="1826.46" r="1.5" fill="#3677bc"/>
-<circle cx="667.37" cy="1826.53" r="1.5" fill="#3677bc"/>
-<circle cx="676.63" cy="1826.13" r="1.5" fill="#3677bc"/>
-<circle cx="681.32" cy="1827.90" r="1.5" fill="#3677bc"/>
-<circle cx="684.11" cy="1820.42" r="1.5" fill="#3677bc"/>
-<circle cx="689.68" cy="1824.60" r="1.5" fill="#3677bc"/>
-<circle cx="693.96" cy="1821.47" r="1.5" fill="#3677bc"/>
-<circle cx="710.58" cy="1823.63" r="1.5" fill="#3677bc"/>
-<circle cx="716.39" cy="1820.40" r="1.5" fill="#3677bc"/>
-<circle cx="719.26" cy="1812.79" r="1.5" fill="#3677bc"/>
-<circle cx="725.40" cy="1825.13" r="1.5" fill="#3677bc"/>
-<circle cx="728.74" cy="1826.16" r="1.5" fill="#3677bc"/>
-<circle cx="737.64" cy="1812.06" r="1.5" fill="#3677bc"/>
-<circle cx="741.72" cy="1820.83" r="1.5" fill="#3677bc"/>
-<circle cx="745.07" cy="1818.53" r="1.5" fill="#3677bc"/>
-<circle cx="750.51" cy="1821.40" r="1.5" fill="#3677bc"/>
-<circle cx="754.94" cy="1804.09" r="1.5" fill="#3677bc"/>
-<circle cx="759.35" cy="1805.62" r="1.5" fill="#3677bc"/>
-<circle cx="767.86" cy="1825.34" r="1.5" fill="#3677bc"/>
-<circle cx="772.53" cy="1808.94" r="1.5" fill="#3677bc"/>
-<circle cx="777.20" cy="1802.21" r="1.5" fill="#3677bc"/>
-<circle cx="780.47" cy="1797.59" r="1.5" fill="#3677bc"/>
-<circle cx="785.72" cy="1810.40" r="1.5" fill="#3677bc"/>
-<circle cx="793.22" cy="1814.88" r="1.5" fill="#3677bc"/>
-<circle cx="798.41" cy="1818.96" r="1.5" fill="#3677bc"/>
-<circle cx="801.53" cy="1815.69" r="1.5" fill="#3677bc"/>
-<circle cx="806.13" cy="1814.26" r="1.5" fill="#3677bc"/>
-<circle cx="816.04" cy="1812.78" r="1.5" fill="#3677bc"/>
-<circle cx="829.08" cy="1826.00" r="1.5" fill="#3677bc"/>
-<circle cx="832.65" cy="1778.00" r="1.5" fill="#3677bc"/>
-<circle cx="836.47" cy="1804.46" r="1.5" fill="#3677bc"/>
-<circle cx="842.26" cy="1810.61" r="1.5" fill="#3677bc"/>
-<circle cx="846.61" cy="1810.64" r="1.5" fill="#3677bc"/>
-<circle cx="849.82" cy="1807.25" r="1.5" fill="#3677bc"/>
-<circle cx="855.22" cy="1796.01" r="1.5" fill="#3677bc"/>
-<circle cx="859.12" cy="1809.33" r="1.5" fill="#3677bc"/>
-<circle cx="863.37" cy="1817.20" r="1.5" fill="#3677bc"/>
-<circle cx="867.45" cy="1815.80" r="1.5" fill="#3677bc"/>
-<circle cx="872.57" cy="1811.03" r="1.5" fill="#3677bc"/>
-<circle cx="875.54" cy="1812.78" r="1.5" fill="#3677bc"/>
-<circle cx="878.85" cy="1814.83" r="1.5" fill="#3677bc"/>
-<circle cx="889.11" cy="1803.33" r="1.5" fill="#3677bc"/>
-<circle cx="894.21" cy="1817.25" r="1.5" fill="#3677bc"/>
-<circle cx="898.65" cy="1799.94" r="1.5" fill="#3677bc"/>
-<circle cx="902.05" cy="1805.26" r="1.5" fill="#3677bc"/>
-<circle cx="906.89" cy="1796.76" r="1.5" fill="#3677bc"/>
-<circle cx="909.85" cy="1816.55" r="1.5" fill="#3677bc"/>
-<circle cx="915.90" cy="1810.03" r="1.5" fill="#3677bc"/>
-<circle cx="919.17" cy="1810.93" r="1.5" fill="#3677bc"/>
-<polyline points="923.05,1811.87 929.08,1798.80 932.64,1810.31 937.87,1816.14 942.15,1802.69 945.91,1808.80 950.19,1805.93 955.00,1804.15" stroke="#3677bc" stroke-width="2" fill="none"/>
-<circle cx="923.05" cy="1811.87" r="1.5" fill="#3677bc"/>
-<circle cx="929.08" cy="1798.80" r="1.5" fill="#3677bc"/>
-<circle cx="932.64" cy="1810.31" r="1.5" fill="#3677bc"/>
-<circle cx="937.87" cy="1816.14" r="1.5" fill="#3677bc"/>
-<circle cx="942.15" cy="1802.69" r="1.5" fill="#3677bc"/>
-<circle cx="945.91" cy="1808.80" r="1.5" fill="#3677bc"/>
-<circle cx="950.19" cy="1805.93" r="1.5" fill="#3677bc"/>
-<circle cx="955.00" cy="1804.15" r="1.5" fill="#3677bc"/>
-<text x="565.0" y="1862.0" fill="#53647a" font-family="ui-monospace,monospace" font-size="10" font-weight="400">2026-07-22</text>
-<text x="875.0" y="1862.0" fill="#53647a" font-family="ui-monospace,monospace" font-size="10" font-weight="400">2026-10-20</text>
+<polyline points="565.00,1826.13 569.70,1827.90 572.49,1820.42 578.06,1824.60 582.34,1821.47 598.97,1823.63 604.78,1820.40 607.65,1812.79 613.80,1825.13 617.13,1826.16 626.05,1812.06 630.13,1820.83 633.48,1818.53 638.92,1821.40 643.34,1804.09 647.76,1805.62 656.28,1825.34 660.95,1808.94 665.61,1802.21 668.89,1797.59 674.14,1810.40 681.65,1814.88 686.84,1818.96 689.96,1815.69 694.56,1814.26 704.47,1812.78 717.52,1826.00 721.09,1778.00 724.92,1804.46 730.71,1810.61 735.06,1810.64 738.27,1807.25 743.67,1796.01 747.57,1809.33 751.82,1817.20 755.91,1815.80 761.03,1811.03 764.00,1812.78 767.31,1814.83 777.58,1803.33 782.68,1817.25 787.12,1799.94 790.53,1805.26 795.36,1796.76 798.32,1816.55 804.38,1810.03 807.64,1810.93" stroke="#3677bc" stroke-width="2" fill="none"/>
+<circle cx="565.00" cy="1826.13" r="1.5" fill="#3677bc"/>
+<circle cx="569.70" cy="1827.90" r="1.5" fill="#3677bc"/>
+<circle cx="572.49" cy="1820.42" r="1.5" fill="#3677bc"/>
+<circle cx="578.06" cy="1824.60" r="1.5" fill="#3677bc"/>
+<circle cx="582.34" cy="1821.47" r="1.5" fill="#3677bc"/>
+<circle cx="598.97" cy="1823.63" r="1.5" fill="#3677bc"/>
+<circle cx="604.78" cy="1820.40" r="1.5" fill="#3677bc"/>
+<circle cx="607.65" cy="1812.79" r="1.5" fill="#3677bc"/>
+<circle cx="613.80" cy="1825.13" r="1.5" fill="#3677bc"/>
+<circle cx="617.13" cy="1826.16" r="1.5" fill="#3677bc"/>
+<circle cx="626.05" cy="1812.06" r="1.5" fill="#3677bc"/>
+<circle cx="630.13" cy="1820.83" r="1.5" fill="#3677bc"/>
+<circle cx="633.48" cy="1818.53" r="1.5" fill="#3677bc"/>
+<circle cx="638.92" cy="1821.40" r="1.5" fill="#3677bc"/>
+<circle cx="643.34" cy="1804.09" r="1.5" fill="#3677bc"/>
+<circle cx="647.76" cy="1805.62" r="1.5" fill="#3677bc"/>
+<circle cx="656.28" cy="1825.34" r="1.5" fill="#3677bc"/>
+<circle cx="660.95" cy="1808.94" r="1.5" fill="#3677bc"/>
+<circle cx="665.61" cy="1802.21" r="1.5" fill="#3677bc"/>
+<circle cx="668.89" cy="1797.59" r="1.5" fill="#3677bc"/>
+<circle cx="674.14" cy="1810.40" r="1.5" fill="#3677bc"/>
+<circle cx="681.65" cy="1814.88" r="1.5" fill="#3677bc"/>
+<circle cx="686.84" cy="1818.96" r="1.5" fill="#3677bc"/>
+<circle cx="689.96" cy="1815.69" r="1.5" fill="#3677bc"/>
+<circle cx="694.56" cy="1814.26" r="1.5" fill="#3677bc"/>
+<circle cx="704.47" cy="1812.78" r="1.5" fill="#3677bc"/>
+<circle cx="717.52" cy="1826.00" r="1.5" fill="#3677bc"/>
+<circle cx="721.09" cy="1778.00" r="1.5" fill="#3677bc"/>
+<circle cx="724.92" cy="1804.46" r="1.5" fill="#3677bc"/>
+<circle cx="730.71" cy="1810.61" r="1.5" fill="#3677bc"/>
+<circle cx="735.06" cy="1810.64" r="1.5" fill="#3677bc"/>
+<circle cx="738.27" cy="1807.25" r="1.5" fill="#3677bc"/>
+<circle cx="743.67" cy="1796.01" r="1.5" fill="#3677bc"/>
+<circle cx="747.57" cy="1809.33" r="1.5" fill="#3677bc"/>
+<circle cx="751.82" cy="1817.20" r="1.5" fill="#3677bc"/>
+<circle cx="755.91" cy="1815.80" r="1.5" fill="#3677bc"/>
+<circle cx="761.03" cy="1811.03" r="1.5" fill="#3677bc"/>
+<circle cx="764.00" cy="1812.78" r="1.5" fill="#3677bc"/>
+<circle cx="767.31" cy="1814.83" r="1.5" fill="#3677bc"/>
+<circle cx="777.58" cy="1803.33" r="1.5" fill="#3677bc"/>
+<circle cx="782.68" cy="1817.25" r="1.5" fill="#3677bc"/>
+<circle cx="787.12" cy="1799.94" r="1.5" fill="#3677bc"/>
+<circle cx="790.53" cy="1805.26" r="1.5" fill="#3677bc"/>
+<circle cx="795.36" cy="1796.76" r="1.5" fill="#3677bc"/>
+<circle cx="798.32" cy="1816.55" r="1.5" fill="#3677bc"/>
+<circle cx="804.38" cy="1810.03" r="1.5" fill="#3677bc"/>
+<circle cx="807.64" cy="1810.93" r="1.5" fill="#3677bc"/>
+<polyline points="811.53,1811.87 817.56,1798.80 821.12,1810.31 826.36,1816.14 830.64,1802.69 834.40,1808.80 838.68,1805.93 843.49,1804.15" stroke="#3677bc" stroke-width="2" fill="none"/>
+<circle cx="811.53" cy="1811.87" r="1.5" fill="#3677bc"/>
+<circle cx="817.56" cy="1798.80" r="1.5" fill="#3677bc"/>
+<circle cx="821.12" cy="1810.31" r="1.5" fill="#3677bc"/>
+<circle cx="826.36" cy="1816.14" r="1.5" fill="#3677bc"/>
+<circle cx="830.64" cy="1802.69" r="1.5" fill="#3677bc"/>
+<circle cx="834.40" cy="1808.80" r="1.5" fill="#3677bc"/>
+<circle cx="838.68" cy="1805.93" r="1.5" fill="#3677bc"/>
+<circle cx="843.49" cy="1804.15" r="1.5" fill="#3677bc"/>
+<polyline points="847.20,1809.29 852.29,1814.84 856.73,1785.59 861.15,1803.69 864.31,1815.57 869.56,1815.56 874.20,1806.33 878.50,1819.24 882.33,1793.98 886.71,1794.07 890.18,1820.34 895.86,1819.77 899.85,1821.62 903.74,1806.89 908.70,1808.84 912.62,1812.28 917.34,1819.58 921.80,1820.72 926.29,1818.95 930.18,1818.13" stroke="#3677bc" stroke-width="2" fill="none"/>
+<circle cx="847.20" cy="1809.29" r="1.5" fill="#3677bc"/>
+<circle cx="852.29" cy="1814.84" r="1.5" fill="#3677bc"/>
+<circle cx="856.73" cy="1785.59" r="1.5" fill="#3677bc"/>
+<circle cx="861.15" cy="1803.69" r="1.5" fill="#3677bc"/>
+<circle cx="864.31" cy="1815.57" r="1.5" fill="#3677bc"/>
+<circle cx="869.56" cy="1815.56" r="1.5" fill="#3677bc"/>
+<circle cx="874.20" cy="1806.33" r="1.5" fill="#3677bc"/>
+<circle cx="878.50" cy="1819.24" r="1.5" fill="#3677bc"/>
+<circle cx="882.33" cy="1793.98" r="1.5" fill="#3677bc"/>
+<circle cx="886.71" cy="1794.07" r="1.5" fill="#3677bc"/>
+<circle cx="890.18" cy="1820.34" r="1.5" fill="#3677bc"/>
+<circle cx="895.86" cy="1819.77" r="1.5" fill="#3677bc"/>
+<circle cx="899.85" cy="1821.62" r="1.5" fill="#3677bc"/>
+<circle cx="903.74" cy="1806.89" r="1.5" fill="#3677bc"/>
+<circle cx="908.70" cy="1808.84" r="1.5" fill="#3677bc"/>
+<circle cx="912.62" cy="1812.28" r="1.5" fill="#3677bc"/>
+<circle cx="917.34" cy="1819.58" r="1.5" fill="#3677bc"/>
+<circle cx="921.80" cy="1820.72" r="1.5" fill="#3677bc"/>
+<circle cx="926.29" cy="1818.95" r="1.5" fill="#3677bc"/>
+<circle cx="930.18" cy="1818.13" r="1.5" fill="#3677bc"/>
+<polyline points="933.93,1821.40 938.23,1817.06 942.61,1822.00 947.54,1816.93 951.86,1815.40 955.00,1802.00" stroke="#3677bc" stroke-width="2" fill="none"/>
+<circle cx="933.93" cy="1821.40" r="1.5" fill="#3677bc"/>
+<circle cx="938.23" cy="1817.06" r="1.5" fill="#3677bc"/>
+<circle cx="942.61" cy="1822.00" r="1.5" fill="#3677bc"/>
+<circle cx="947.54" cy="1816.93" r="1.5" fill="#3677bc"/>
+<circle cx="951.86" cy="1815.40" r="1.5" fill="#3677bc"/>
+<circle cx="955.00" cy="1802.00" r="1.5" fill="#3677bc"/>
+<text x="565.0" y="1862.0" fill="#53647a" font-family="ui-monospace,monospace" font-size="10" font-weight="400">2026-08-17</text>
+<text x="875.0" y="1862.0" fill="#53647a" font-family="ui-monospace,monospace" font-size="10" font-weight="400">2026-11-15</text>
 <text x="490.0" y="1783.0" fill="#53647a" font-family="ui-monospace,monospace" font-size="10" font-weight="400">35.3</text>
 <text x="530.0" y="1844.0" fill="#53647a" font-family="ui-monospace,monospace" font-size="10" font-weight="400">0</text>
 <text x="28.0" y="1915.0" fill="#53647a" font-family="ui-monospace,monospace" font-size="11" font-weight="400">Process execution only; compile/link excluded. Shared CI runners have timing noise.</text>

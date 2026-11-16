@@ -102,6 +102,33 @@ fn test_mem2reg_promotes_branch_join() {
     }
 }
 
+/// Flags initialized to false retain boolean SSA parameters through conditional loop updates.
+#[test]
+fn test_mem2reg_promotes_false_initialized_boolean_flag() {
+    let source = r#"<?php
+function findFlag(int $n, int $key): bool {
+    $found = false;
+    for ($i = 0; $i < $n; $i++) {
+        if ($i === $key) { $found = true; }
+    }
+    return $found;
+}
+echo findFlag($argc + 3, $argc) ? "found" : "missing";
+echo "|", findFlag($argc + 3, $argc + 4) ? "found" : "missing";
+"#;
+    let plain = function_ir(source, false, "findFlag");
+    let optimized = function_ir(source, true, "findFlag");
+    let boolean_load = |line: &str| line.contains("load_local")
+        && (line.contains("php=bool") || line.contains("php=false"));
+    assert!(plain.lines().any(boolean_load), "{plain}");
+    assert!(!optimized.lines().any(boolean_load), "{optimized}");
+    assert!(optimized.lines().any(|line| line.contains("for.cond(") && line.contains("php=bool")),
+        "the loop carries a boolean SSA parameter: {optimized}");
+    for optimized in [false, true] {
+        assert_eq!(run_variant(source, optimized), "found|missing");
+    }
+}
+
 /// Floating-point loop state is promoted without changing PHP's printed result.
 #[test]
 fn test_mem2reg_promotes_float_loop() {
@@ -165,8 +192,7 @@ fn test_mem2reg_keeps_dynamic_eval_slot_traffic() {
 }
 
 /// Dead-store and immutable-load passes also retain a single later eval-visible store.
-#[test]
-fn test_mem2reg_keeps_single_store_visible_to_dynamic_eval() {
+fn assert_single_store_visible_to_dynamic_eval(optimized: bool) {
     let source = r#"<?php
 function repeat_eval(string $code): void {
     for ($i = 0; $i < 3; $i++) {
@@ -178,8 +204,19 @@ function repeat_eval(string $code): void {
 repeat_eval('echo "n=$n\\n";');
 "#;
     let expected = "step\nn=7\nstep\nn=7\nstep\n";
-    assert_eq!(run_variant(source, false), expected);
-    assert_eq!(run_variant(source, true), expected);
+    assert_eq!(run_variant(source, optimized), expected);
+}
+
+/// The unoptimized build keeps the single later eval-visible store.
+#[test]
+fn test_mem2reg_keeps_single_store_visible_to_dynamic_eval() {
+    assert_single_store_visible_to_dynamic_eval(false);
+}
+
+/// The optimized build keeps the single later eval-visible store.
+#[test]
+fn test_mem2reg_keeps_single_store_visible_to_dynamic_eval_optimized() {
+    assert_single_store_visible_to_dynamic_eval(true);
 }
 
 /// A scalar defined before a loop remains promotable when its back edge has no store.

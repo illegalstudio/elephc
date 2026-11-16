@@ -1,8 +1,6 @@
 ---
 title: "array_fill_keys()"
 description: "Fill an array with values, specifying keys."
-sidebar:
-  order: 11
 ---
 
 ## array_fill_keys()
@@ -21,8 +19,9 @@ Fill an array with values, specifying keys.
 
 ## Availability
 
-- **Compiled (AOT)**: supported by the Elephc code generator.
-- **`eval()` (magician interpreter)**: supported through a declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/array/array_fill_keys.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/array/array_fill_keys.rs)).
+| Compiled (AOT) | Magician (eval) |
+|---|---|
+| Available | Available |
 
 _No examples yet. Check `examples/` and `showcases/` for usage patterns._
 

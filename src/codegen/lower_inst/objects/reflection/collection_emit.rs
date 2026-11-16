@@ -1,5 +1,5 @@
 //! Purpose:
-//! Reflection arrays, hashes, constants, and static-property collections.
+//! Reflection arrays, hashes, constants, and declaration collections.
 //!
 //! Called from:
 //! - `crate::codegen::lower_inst::objects::reflection`.
@@ -8,6 +8,30 @@
 //! - Preserves compile-time metadata, target-aware object layout, and ownership.
 
 use super::*;
+
+/// Allocates a metadata hash without reserving buckets for absent entries.
+///
+/// Reflectors eagerly build nested metadata trees, most of whose maps are empty.
+/// A zero-capacity hash keeps its normal owned header and grows on first insertion.
+pub(super) fn emit_reflection_assoc_array_to_result(
+    ctx: &mut FunctionContext<'_>,
+    value_type: &PhpType,
+    entry_count: usize,
+) {
+    let capacity = if entry_count == 0 {
+        0
+    } else {
+        (entry_count * 4).div_ceil(3).next_power_of_two()
+    };
+    abi::emit_load_int_immediate(
+        ctx.emitter, abi::int_arg_reg_name(ctx.emitter.target, 0), capacity as i64,
+    );
+    abi::emit_load_int_immediate(
+        ctx.emitter, abi::int_arg_reg_name(ctx.emitter.target, 1),
+        runtime_value_tag(&value_type.codegen_repr()) as i64,
+    );
+    abi::emit_call_label(ctx.emitter, "__rt_hash_new");
+}
 
 /// Allocates an indexed array of populated ReflectionMethod/ReflectionProperty objects.
 pub(super) fn emit_reflection_member_array(
@@ -37,9 +61,10 @@ pub(super) fn emit_reflection_property_hook_array(
     ctx: &mut FunctionContext<'_>,
     members: &[(String, ReflectionListedMember)],
 ) -> Result<()> {
-    emit_empty_assoc_array_literal_to_result(
+    emit_reflection_assoc_array_to_result(
         ctx,
         &PhpType::Object("ReflectionMethod".to_string()),
+        members.len(),
     );
     for (key, member) in members {
         abi::emit_push_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
@@ -76,7 +101,7 @@ pub(super) fn emit_reflection_constant_array(
     ctx: &mut FunctionContext<'_>,
     members: &[ReflectionConstantMember],
 ) -> Result<()> {
-    emit_empty_assoc_array_literal_to_result(ctx, &PhpType::Mixed);
+    emit_reflection_assoc_array_to_result(ctx, &PhpType::Mixed, members.len());
     for member in members {
         abi::emit_push_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
         emit_reflection_constant_value_as_mixed(ctx, &member.value);
@@ -87,7 +112,9 @@ pub(super) fn emit_reflection_constant_array(
 
 /// Allocates and populates a name-keyed map of full ReflectionClass objects.
 pub(super) fn emit_reflection_class_array(ctx: &mut FunctionContext<'_>, names: &[String]) -> Result<()> {
-    emit_empty_assoc_array_literal_to_result(ctx, &PhpType::Object("ReflectionClass".to_string()));
+    emit_reflection_assoc_array_to_result(
+        ctx, &PhpType::Object("ReflectionClass".to_string()), names.len(),
+    );
     for name in names {
         abi::emit_push_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
         let metadata = reflection_class_metadata_for_name(ctx, name)?;
@@ -219,10 +246,10 @@ pub(super) fn emit_reflection_string_assoc_array(
     ctx: &mut FunctionContext<'_>,
     entries: &[(String, String)],
 ) {
-    emit_empty_assoc_array_literal_to_result(ctx, &PhpType::Str);
+    emit_reflection_assoc_array_to_result(ctx, &PhpType::Str, entries.len());
     for (key, value) in entries {
         abi::emit_push_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
-        emit_string_literal_default_to_result(ctx, value);
+        emit_string_bytes_default_to_result(ctx, value.as_bytes());
         emit_reflection_string_hash_insert(ctx, key);
     }
 }
@@ -260,66 +287,10 @@ pub(super) fn emit_reflection_default_property_array(
     ctx: &mut FunctionContext<'_>,
     members: &[ReflectionDefaultPropertyMember],
 ) {
-    emit_empty_assoc_array_literal_to_result(ctx, &PhpType::Mixed);
+    emit_reflection_assoc_array_to_result(ctx, &PhpType::Mixed, members.len());
     for member in members {
         abi::emit_push_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
         emit_reflection_default_value_as_mixed(ctx, &member.value);
         emit_reflection_constant_hash_insert(ctx, &member.name);
     }
 }
-
-/// Allocates and populates current static-property values for ReflectionClass.
-pub(super) fn emit_reflection_static_property_array(
-    ctx: &mut FunctionContext<'_>,
-    members: &[ReflectionStaticPropertyMember],
-) {
-    emit_empty_assoc_array_literal_to_result(ctx, &PhpType::Mixed);
-    for member in members {
-        let skip_label = emit_skip_if_static_property_uninitialized(ctx, member);
-        abi::emit_push_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
-        let symbol = static_property_symbol(&member.declaring_class_name, &member.name);
-        abi::emit_load_symbol_to_result(ctx.emitter, &symbol, &member.php_type);
-        emit_box_current_value_as_mixed(ctx.emitter, &member.php_type.codegen_repr());
-        emit_reflection_static_property_hash_insert(ctx, &member.name);
-        if let Some(skip_label) = skip_label {
-            ctx.emitter.label(&skip_label);
-        }
-    }
-}
-
-/// Emits a branch over uninitialized typed static properties, matching PHP reflection.
-#[rustfmt::skip]
-pub(super) fn emit_skip_if_static_property_uninitialized(
-    ctx: &mut FunctionContext<'_>,
-    member: &ReflectionStaticPropertyMember,
-) -> Option<String> {
-    if !member.is_declared {
-        return None;
-    }
-    let skip_label = ctx.next_label("reflection_static_uninitialized");
-    let symbol = static_property_symbol(&member.declaring_class_name, &member.name);
-    let marker_reg = abi::secondary_scratch_reg(ctx.emitter);
-    let sentinel_reg = abi::tertiary_scratch_reg(ctx.emitter);
-    abi::emit_load_symbol_to_reg(ctx.emitter, marker_reg, &symbol, 8);
-    abi::emit_load_int_immediate(
-        ctx.emitter,
-        sentinel_reg,
-        UNINITIALIZED_TYPED_PROPERTY_SENTINEL,
-    );
-    match ctx.emitter.target.arch {
-        Arch::AArch64 => {
-            ctx.emitter.instruction(
-                &format!("cmp {}, {}", marker_reg, sentinel_reg)
-            );                                                                  // compare the static property marker against the uninitialized sentinel
-            ctx.emitter.instruction(&format!("b.eq {}", skip_label));           // omit uninitialized typed static properties from the reflection map
-        }
-        Arch::X86_64 => {
-            ctx.emitter.instruction(
-                &format!("cmp {}, {}", marker_reg, sentinel_reg)
-            );                                                                  // compare the static property marker against the uninitialized sentinel
-            ctx.emitter.instruction(&format!("je {}", skip_label));             // omit uninitialized typed static properties from the reflection map
-        }
-    }
-    Some(skip_label)
-}
-

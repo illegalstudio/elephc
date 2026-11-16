@@ -108,7 +108,8 @@ pub fn emit_array_walk_recursive(emitter: &mut Emitter) {
     emitter.instruction("ldp x19, x20, [sp, #32]");                             // restore callee-saved callback address and environment
     emitter.instruction("ldp x29, x30, [sp, #48]");                             // restore frame pointer and return address
     emitter.instruction("add sp, sp, #64");                                     // deallocate the stack frame
-    emitter.instruction("ret");                                                 // return (void)
+    emitter.instruction("mov x0, #1");                                          // PHP array_walk_recursive returns bool(true)
+    emitter.instruction("ret");                                                 // return the boolean result
 }
 
 /// x86_64 Linux implementation of `__rt_array_walk_recursive`.
@@ -202,6 +203,7 @@ fn emit_array_walk_recursive_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("pop r13");                                             // restore the caller scratch register
     emitter.instruction("pop r12");                                             // restore the caller callback register
     emitter.instruction("pop rbp");                                             // restore the caller frame pointer
-    emitter.instruction("ret");                                                 // return (void)
+    emitter.instruction("mov rax, 1");                                          // PHP array_walk_recursive returns bool(true)
+    emitter.instruction("ret");                                                 // return the boolean result
 }
 

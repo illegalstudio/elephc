@@ -15,18 +15,17 @@ use crate::codegen::platform::Arch;
 use crate::codegen::literal_defaults::{
     emit_boxed_bool_literal_to_result, emit_boxed_float_literal_to_result,
     emit_boxed_int_literal_to_result, emit_boxed_null_literal_to_result,
-    emit_boxed_string_literal_default_to_result, emit_empty_assoc_array_literal_to_result,
-    emit_string_literal_default_to_result,
+    emit_boxed_string_literal_default_to_result,
+    emit_string_bytes_default_to_result,
 };
 use crate::codegen::{
     abi, emit_array_value_type_stamp, emit_box_current_owned_value_as_mixed,
     emit_box_current_value_as_mixed, emit_release_pushed_refcounted_temp_after_array_push,
-    runtime_value_tag, CodegenIrError, Result, UNINITIALIZED_TYPED_PROPERTY_SENTINEL,
+    runtime_value_tag, CodegenIrError, Result,
 };
 use crate::ir::{Immediate, Instruction, Op, TraitMethodInfo, ValueDef, ValueId};
 use crate::names::{
     php_symbol_key, property_hook_get_method, property_hook_set_method,
-    static_property_symbol,
 };
 use crate::parser::ast::{BinOp, Expr, ExprKind, StaticReceiver, TypeExpr, Visibility};
 use crate::types::{
@@ -37,6 +36,7 @@ use crate::types::{
 use super::super::super::context::FunctionContext;
 
 mod owner_dispatch;
+mod class_builders;
 mod owner_emission;
 mod class_metadata;
 mod callable_metadata;
@@ -50,7 +50,12 @@ mod property_members;
 mod property_defaults_fold;
 mod default_members;
 mod parameter_defaults;
+mod object_defaults;
+mod default_export;
 mod names_constants;
+mod constant_resolved;
+mod constant_arithmetic;
+mod constant_arrays;
 mod operand_extract;
 mod string_attrs_emit;
 mod member_properties_emit;
@@ -58,10 +63,12 @@ mod collection_emit;
 mod default_emit;
 mod member_object_emit;
 mod parameter_property_emit;
+mod callable_to_string;
 mod type_object_emit;
 mod flags_offsets;
 
 use owner_emission::*;
+pub(in crate::codegen) use class_builders::emit_pending_reflection_class_builders;
 use class_metadata::*;
 use callable_metadata::*;
 use property_metadata::*;
@@ -74,7 +81,10 @@ use property_members::*;
 use property_defaults_fold::*;
 use default_members::*;
 use parameter_defaults::*;
+use object_defaults::*;
+use default_export::*;
 use names_constants::*;
+use constant_arrays::*;
 use operand_extract::*;
 use string_attrs_emit::*;
 use member_properties_emit::*;
@@ -82,10 +92,14 @@ use collection_emit::*;
 use default_emit::*;
 use member_object_emit::*;
 use parameter_property_emit::*;
+use callable_to_string::*;
 use type_object_emit::*;
 use flags_offsets::*;
 
-pub(super) use owner_dispatch::{is_reflection_owner_class, lower_reflection_owner_new};
+pub(super) use owner_dispatch::{
+    is_reflection_owner_class, lower_reflection_owner_new, populate_reflection_owner_new,
+    reflection_owner_base_class,
+};
 
 /// Compile-time metadata used to populate one Reflection owner object.
 struct ReflectionOwnerMetadata {
@@ -101,7 +115,6 @@ struct ReflectionOwnerMetadata {
     constant_names: Vec<String>,
     constant_members: Vec<ReflectionConstantMember>,
     default_property_members: Vec<ReflectionDefaultPropertyMember>,
-    static_property_members: Vec<ReflectionStaticPropertyMember>,
     constant_reflection_members: Vec<ReflectionListedMember>,
     enum_case_members: Vec<ReflectionListedMember>,
     method_members: Vec<ReflectionListedMember>,
@@ -135,6 +148,13 @@ struct ReflectionOwnerMetadata {
     is_iterable: bool,
     modifiers: i64,
     member_flags: ReflectionMemberFlags,
+    /// A literal-byte-encoded `__toString()` dump instead of rendering from the fields above.
+    ///
+    /// `getDeclaringFunction()` builds its reflector from metadata that deliberately carries NO
+    /// parameters: emitting them would emit a `ReflectionParameter` for each, and each of those
+    /// emits its own declaring function, which does not terminate. The dump is a string, so it
+    /// does not recurse: it is rendered from the real member and carried across (#1080).
+    rendered_to_string: Option<String>,
 }
 
 /// Compile-time metadata for one class/interface/trait/enum constant reflector.
@@ -192,6 +212,8 @@ struct ReflectionParameterMember {
     type_metadata: Option<ReflectionParameterTypeMetadata>,
     default_value: Option<ReflectionParameterDefaultValue>,
     default_value_constant_name: Option<String>,
+    /// The written AST dump, using literal-byte encoding for shapes the value cannot rebuild.
+    default_value_export: Option<String>,
 }
 
 /// Metadata needed for `ReflectionParameter::getDeclaringFunction()`.
@@ -258,14 +280,27 @@ enum ReflectionParameterDefaultValue {
     Float(f64),
     Str(String),
     Null,
+    EnumCase(crate::codegen::const_default_values::EnumCaseDefault),
+    /// A scalar whose constant expression first reads these enum singletons, in PHP order.
+    Evaluated { value: Box<ReflectionParameterDefaultValue>, enum_cases: Vec<(String, String)> },
     DeferredError(String),
     EirHelper(String),
     Object {
         class_name: String,
+        /// Every constructor argument in parameter order, including omitted defaults.
         args: Vec<ReflectionParameterDefaultValue>,
+        /// Arguments in written order, preserving names and excluding omitted defaults.
+        written_args: Vec<ReflectionDefaultObjectArg>,
     },
     Array(Vec<ReflectionParameterDefaultValue>),
     AssocArray(Vec<ReflectionDefaultAssocEntry>),
+}
+
+/// One written constructor argument kept separately from normalized value-materialization slots.
+#[derive(Clone)]
+struct ReflectionDefaultObjectArg {
+    name: Option<String>,
+    value: ReflectionParameterDefaultValue,
 }
 
 /// Metadata for one key/value pair in an associative Reflection default array.
@@ -296,14 +331,6 @@ struct ReflectionDefaultPropertyMember {
     value: ReflectionParameterDefaultValue,
 }
 
-/// Metadata for one live static-property value exposed by ReflectionClass.
-struct ReflectionStaticPropertyMember {
-    name: String,
-    declaring_class_name: String,
-    php_type: PhpType,
-    is_declared: bool,
-}
-
 /// Compile-time value forms supported by Reflection constant metadata emission.
 #[derive(Clone)]
 enum ReflectionConstantValue {
@@ -316,6 +343,17 @@ enum ReflectionConstantValue {
         enum_name: String,
         case_name: String,
     },
+    /// A value whose constant expression first reads these enum singletons, in PHP order.
+    Evaluated { value: Box<ReflectionConstantValue>, enum_cases: Vec<(String, String)> },
+    Array(Vec<ReflectionConstantValue>),
+    AssocArray(Vec<ReflectionConstantAssocEntry>),
+}
+
+/// Metadata for one key/value pair in a Reflection constant associative array value.
+#[derive(Clone)]
+struct ReflectionConstantAssocEntry {
+    key: ReflectionDefaultArrayKey,
+    value: ReflectionConstantValue,
 }
 
 /// Compile-time parameter selector from `ReflectionParameter::__construct()`.
@@ -324,7 +362,7 @@ enum ReflectionParameterSelector {
     Position(i64),
 }
 
-/// Boolean metadata exposed by ReflectionMethod and ReflectionProperty predicates.
+/// Method and property flags plus inherited-origin metadata used by Reflection dumps.
 #[derive(Clone, Copy, Default)]
 struct ReflectionMemberFlags {
     is_static: bool,
@@ -336,6 +374,8 @@ struct ReflectionMemberFlags {
     is_readonly: bool,
     is_promoted: bool,
     is_virtual: bool,
+    /// The reflected class inherits this method from another class-like.
+    is_inherited: bool,
 }
 
 /// Runtime class candidate used when object reflection must dispatch by object class id.

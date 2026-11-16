@@ -48,6 +48,7 @@ $p = xml_parser_create();
 var_dump(get_class($p), $p instanceof XMLParser);
 var_dump(xml_parser_get_option($p, XML_OPTION_CASE_FOLDING), xml_parser_get_option($p, XML_OPTION_TARGET_ENCODING), xml_parser_get_option($p, XML_OPTION_SKIP_TAGSTART), xml_parser_get_option($p, XML_OPTION_SKIP_WHITE), xml_parser_get_option($p, XML_OPTION_PARSE_HUGE));
 var_dump(xml_parser_set_option($p, XML_OPTION_SKIP_TAGSTART, 3), xml_parser_get_option($p, XML_OPTION_SKIP_TAGSTART));
+var_dump(xml_parser_set_option($p, XML_OPTION_SKIP_WHITE, true), xml_parser_get_option($p, XML_OPTION_SKIP_WHITE));
 try { xml_parser_set_option($p, 99, 1); } catch (ValueError $e) { echo get_class($e), ": ", $e->getMessage(), "\n"; }
 try { xml_parser_get_option($p, 99); } catch (ValueError $e) { echo get_class($e), ": ", $e->getMessage(), "\n"; }
 try { xml_parser_set_option($p, XML_OPTION_TARGET_ENCODING, "bogus"); } catch (ValueError $e) { echo get_class($e), ": ", $e->getMessage(), "\n"; }
@@ -61,7 +62,7 @@ var_dump(extension_loaded('xml'), extension_loaded('xmlwriter'));
     );
     assert_eq!(
         out,
-        "string(9) \"XMLParser\"\nbool(true)\nbool(true)\nstring(5) \"UTF-8\"\nint(0)\nbool(false)\nbool(false)\nbool(true)\nint(3)\nValueError: xml_parser_set_option(): Argument #2 ($option) must be a XML_OPTION_* constant\nValueError: xml_parser_get_option(): Argument #2 ($option) must be a XML_OPTION_* constant\nValueError: xml_parser_set_option(): Argument #3 ($value) is not a supported target encoding\nstring(10) \"ISO-8859-1\"\nValueError: xml_parser_create(): Argument #1 ($encoding) is not a supported source encoding\nError: Cannot directly construct XMLParser, use xml_parser_create() or xml_parser_create_ns() instead\nbool(true)\nstring(6) \"libxml\"\nint(7)\nint(5)\nbool(true)\nbool(true)\n"
+        "string(9) \"XMLParser\"\nbool(true)\nbool(true)\nstring(5) \"UTF-8\"\nint(0)\nbool(false)\nbool(false)\nbool(true)\nint(3)\nbool(true)\nbool(true)\nValueError: xml_parser_set_option(): Argument #2 ($option) must be a XML_OPTION_* constant\nValueError: xml_parser_get_option(): Argument #2 ($option) must be a XML_OPTION_* constant\nValueError: xml_parser_set_option(): Argument #3 ($value) is not a supported target encoding\nstring(10) \"ISO-8859-1\"\nValueError: xml_parser_create(): Argument #1 ($encoding) is not a supported source encoding\nError: Cannot directly construct XMLParser, use xml_parser_create() or xml_parser_create_ns() instead\nbool(true)\nstring(6) \"libxml\"\nint(7)\nint(5)\nbool(true)\nbool(true)\n"
     );
 }
 

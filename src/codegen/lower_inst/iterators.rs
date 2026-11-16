@@ -25,8 +25,9 @@
 //!   `IteratorIterator` sites, where the shape really is unsupported.
 
 use crate::codegen::platform::Arch;
+use crate::codegen::callable_invoker_args::INVOKER_ARG_REF_CELL_TAG;
 use crate::codegen::{
-    abi, emit_box_current_owned_value_as_mixed, emit_box_current_value_as_mixed,
+    abi, emit_box_current_value_as_mixed,
     emit_box_runtime_payload_as_mixed,
 };
 use crate::intrinsics::IntrinsicCall;
@@ -40,6 +41,10 @@ use super::{
     expect_operand, resolve_method_call_target, store_if_result,
 };
 use crate::codegen::{CodegenIrError, Result};
+
+mod hash_objects;
+mod key_reuse;
+mod native_origins;
 
 const ITER_SOURCE_OFFSET_DELTA: usize = 0;
 const ITER_CURSOR_OFFSET_DELTA: usize = 8;
@@ -279,18 +284,29 @@ pub(super) fn lower_iter_next(ctx: &mut FunctionContext<'_>, inst: &Instruction)
 }
 
 /// Lowers the current iterator key by boxing it as a `Mixed` value.
+///
+/// An instruction that names the key variable's slot lets an integer key of an indexed array
+/// or hash rewrite the cell that slot already owns (`key_reuse`) instead of allocating. An
+/// object iterator's `key()` result never takes that path.
 pub(super) fn lower_iter_current_key(
     ctx: &mut FunctionContext<'_>,
     inst: &Instruction,
 ) -> Result<()> {
     let iterator = expect_operand(inst, 0)?;
     let offset = iterator_state_offset(ctx, iterator, inst)?;
+    let reusable_slot = key_reuse::reusable_slot(ctx, inst);
     match iterator_source_kind(ctx, iterator, inst)? {
         IteratorSourceKind::Indexed { .. } if iterator_is_by_ref(ctx, iterator, inst)? => {
             match ctx.emitter.target.arch {
                 Arch::AArch64 => load_current_hash_key_as_mixed_aarch64(ctx, offset),
                 Arch::X86_64 => load_current_hash_key_as_mixed_x86_64(ctx, offset),
             }
+        }
+        IteratorSourceKind::Indexed { .. } if reusable_slot.is_some() => {
+            key_reuse::lower_indexed(ctx, reusable_slot.expect("guarded above"), offset)?;
+        }
+        IteratorSourceKind::Hash if reusable_slot.is_some() => {
+            key_reuse::lower_hash(ctx, reusable_slot.expect("guarded above"), offset)?;
         }
         IteratorSourceKind::Indexed { .. } => {
             let result_reg = abi::int_result_reg(ctx.emitter);
@@ -302,7 +318,7 @@ pub(super) fn lower_iter_current_key(
             Arch::X86_64 => load_current_hash_key_as_mixed_x86_64(ctx, offset),
         },
         IteratorSourceKind::DynamicIterable | IteratorSourceKind::DynamicMixed => {
-            lower_dynamic_iter_current_key(ctx, inst, offset)?;
+            lower_dynamic_iter_current_key(ctx, inst, offset, reusable_slot)?;
         }
         // Dead code in practice — `IterNext` already reported "no more elements" — but the
         // block is still emitted, so materialize a null Mixed rather than reading the
@@ -340,6 +356,9 @@ pub(super) fn lower_iter_current_value(
             }
             retain_current_indexed_value_if_unboxed(&mut ctx.emitter, &elem, &result_ty);
             box_current_indexed_value_if_needed(ctx, &elem, &result_ty)?;
+        }
+        IteratorSourceKind::Hash if matches!(result_ty, PhpType::Object(_)) => {
+            hash_objects::load_current_hash_object_value(ctx, offset, preserve_reference, promote_reference);
         }
         IteratorSourceKind::Hash => load_current_hash_call_value_as_mixed(ctx, offset, preserve_reference, promote_reference),
         IteratorSourceKind::DynamicIterable | IteratorSourceKind::DynamicMixed => {
@@ -460,6 +479,9 @@ fn initialize_dynamic_iterable_iterator(
 
     ctx.emitter.label(&indexed_case);
     if by_ref {
+        if let Some(slot) = source_load_local_slot(ctx, source)? {
+            ctx.prepare_mutated_source_local_owner(slot, source)?;
+        }
         convert_dynamic_indexed_source_for_ref(ctx, offset)?;
         store_iter_source_to_origin_if_local(ctx, offset, source)?;
     }
@@ -471,6 +493,9 @@ fn initialize_dynamic_iterable_iterator(
 
     ctx.emitter.label(&hash_case);
     if by_ref {
+        if let Some(slot) = source_load_local_slot(ctx, source)? {
+            ctx.prepare_mutated_source_local_owner(slot, source)?;
+        }
         convert_dynamic_hash_source_for_ref(ctx, offset)?;
         store_iter_source_to_origin_if_local(ctx, offset, source)?;
     }
@@ -747,16 +772,8 @@ fn emit_load_origin_container(
     let state_offset = match origin.storage {
         IterOriginStorage::Raw => return,
         IterOriginStorage::RefCell => {
-            match ctx.emitter.target.arch {
-                Arch::AArch64 => {
-                    ctx.emitter.instruction(&format!("ldr {dest}, [{dest}]"));  // a definite reference origin stores its value behind the incoming cell pointer
-                }
-                Arch::X86_64 => {
-                    ctx.emitter.instruction(                                    // a definite reference origin stores its value behind the incoming cell pointer
-                        &format!("mov {dest}, QWORD PTR [{dest}]")
-                    );
-                }
-            }
+            let label = ctx.next_label("iter_reference_origin");
+            native_origins::load(ctx.emitter, dest, &label);
             return;
         }
         IterOriginStorage::Dynamic { state_offset } => state_offset,
@@ -771,15 +788,14 @@ fn emit_load_origin_container(
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
             ctx.emitter.instruction(&format!("cbz {scratch}, {direct}"));       // a raw slot already holds the container itself
-            ctx.emitter.instruction(&format!("ldr {dest}, [{dest}]"));          // a promoted slot holds it behind the alias address
         }
         Arch::X86_64 => {
             ctx.emitter.instruction(&format!("test {scratch}, {scratch}"));     // is this slot still in its raw representation?
             ctx.emitter.instruction(&format!("jz {direct}"));                   // a raw slot already holds the container itself
-            ctx.emitter
-                .instruction(&format!("mov {dest}, QWORD PTR [{dest}]"));        // a promoted slot holds it behind the alias address
         }
     }
+    let label = ctx.next_label("iter_reference_origin");
+    native_origins::load(ctx.emitter, dest, &label);
     ctx.emitter.label(&direct);
 }
 
@@ -1019,12 +1035,13 @@ fn ensure_unique_static_iter_source(
             // Retire and clear the old box before the consuming conversion, then publish the
             // converted owner below. Raw concrete slots need no release here.
             if let Some(slot) = source_local {
-                ctx.release_mutated_source_local_owner(slot, source)?;
+                ctx.prepare_mutated_source_local_owner(slot, source)?;
             }
+            ctx.load_value_to_result(source)?;
             convert_loaded_indexed_source_to_hash(ctx);
             ctx.store_result_value(source)?;
             if let Some(slot) = source_local {
-                ctx.store_container_writeback_to_local(slot, source)?;
+                ctx.store_mutated_container_writeback_to_local(slot, source)?;
             }
             return Ok(());
         }
@@ -1037,15 +1054,13 @@ fn ensure_unique_static_iter_source(
     // local's payload owner into that operation so storeback neither leaks the previous box nor
     // leaves the iterator's origin pointing at a retired generation.
     if let Some(slot) = source_local {
-        ctx.release_mutated_source_local_owner(slot, source)?;
+        ctx.prepare_mutated_source_local_owner(slot, source)?;
     }
-    if ctx.emitter.target.arch == Arch::X86_64 {
-        ctx.emitter.instruction("mov rdi, rax");                                // pass the foreach source pointer to the COW helper
-    }
+    ctx.load_value_to_reg(source, abi::int_arg_reg_name(ctx.emitter.target, 0))?;
     abi::emit_call_label(ctx.emitter, helper);
     ctx.store_result_value(source)?;
     if let Some(slot) = source_local {
-        ctx.store_container_writeback_to_local(slot, source)?;
+        ctx.store_mutated_container_writeback_to_local(slot, source)?;
     }
     Ok(())
 }
@@ -1124,7 +1139,7 @@ fn store_iter_source_to_origin_if_local(
         }
     }
     ctx.store_result_value(source)?;
-    ctx.store_container_writeback_to_local(slot, source)
+    ctx.store_mutated_container_writeback_to_local(slot, source)
 }
 
 /// Resolves a source SSA value back to its direct or reference-bound local origin.
@@ -1307,7 +1322,9 @@ fn bind_dynamic_current_value_ref(
     abi::emit_jump(ctx.emitter, &done);
 
     ctx.emitter.label(&object_case);
-    abi::emit_call_label(ctx.emitter, "__rt_iterable_unsupported_kind");
+    // PHP refuses by-reference traversal of any Iterator/IteratorAggregate; SimpleXML is
+    // the common case in practice. Raise the catchable Error instead of a compiler fatal.
+    super::exceptions::emit_error(ctx, "An iterator cannot be used with foreach by reference");
     ctx.emitter.label(&done);
     Ok(())
 }
@@ -1355,6 +1372,7 @@ fn lower_dynamic_iter_current_key(
     ctx: &mut FunctionContext<'_>,
     inst: &Instruction,
     offset: usize,
+    reusable_slot: Option<LocalSlotId>,
 ) -> Result<()> {
     let indexed_case = ctx.next_label("iter_key_dyn_indexed");
     let hash_case = ctx.next_label("iter_key_dyn_hash");
@@ -1365,16 +1383,26 @@ fn lower_dynamic_iter_current_key(
     abi::emit_load_int_immediate(ctx.emitter, abi::int_result_reg(ctx.emitter), 0);
     abi::emit_jump(ctx.emitter, &done);
 
+    // The array and hash arms read stored keys without running user code, so they may rewrite
+    // the key variable's own cell. The object arm calls `key()` and leaves that cell alone.
     ctx.emitter.label(&indexed_case);
-    let result_reg = abi::int_result_reg(ctx.emitter);
-    abi::load_at_offset(ctx.emitter, result_reg, offset - ITER_CURSOR_OFFSET_DELTA);
-    emit_box_current_value_as_mixed(ctx.emitter, &PhpType::Int);
+    if let Some(slot) = reusable_slot {
+        key_reuse::lower_indexed(ctx, slot, offset)?;
+    } else {
+        let result_reg = abi::int_result_reg(ctx.emitter);
+        abi::load_at_offset(ctx.emitter, result_reg, offset - ITER_CURSOR_OFFSET_DELTA);
+        emit_box_current_value_as_mixed(ctx.emitter, &PhpType::Int);
+    }
     abi::emit_jump(ctx.emitter, &done);
 
     ctx.emitter.label(&hash_case);
-    match ctx.emitter.target.arch {
-        Arch::AArch64 => load_current_hash_key_as_mixed_aarch64(ctx, offset),
-        Arch::X86_64 => load_current_hash_key_as_mixed_x86_64(ctx, offset),
+    if let Some(slot) = reusable_slot {
+        key_reuse::lower_hash(ctx, slot, offset)?;
+    } else {
+        match ctx.emitter.target.arch {
+            Arch::AArch64 => load_current_hash_key_as_mixed_aarch64(ctx, offset),
+            Arch::X86_64 => load_current_hash_key_as_mixed_x86_64(ctx, offset),
+        }
     }
     abi::emit_jump(ctx.emitter, &done);
 
@@ -1440,10 +1468,8 @@ fn resolve_dynamic_object_iterator_source(
 
 /// Owns a nonzero `getIterator()` result in the Mixed owner slot, then publishes a borrow.
 ///
-/// `emit_box_current_owned_value_as_mixed` is the transfer: `__rt_mixed_from_value`
-/// retains the payload into a fresh Mixed cell, then the helper releases the
-/// original method-return owner. There is no user callback between those two
-/// steps, so the Mixed cell is the sole owner afterward. The iterator source
+/// The compiled return marker decides whether boxing transfers a return owner or
+/// retains a borrowed payload. The iterator source
 /// word is then loaded from that cell's payload. The previous aggregate pointer
 /// is overwritten without a matching release; the loop's source retain still
 /// owns the aggregate.
@@ -1469,7 +1495,7 @@ fn adopt_get_iterator_result(
             ctx.emitter.instruction(&format!("je {}", keep_original));          // skip replacement when getIterator() was not resolved
         }
     }
-    emit_box_current_owned_value_as_mixed(ctx.emitter, &return_ty.codegen_repr());
+    box_compiled_iterator_result(ctx, return_ty);
     let local_offset = ctx.local_offset(slot)?;
     abi::store_at_offset(ctx.emitter, result_reg, local_offset);
     abi::emit_load_from_address(
@@ -1796,10 +1822,31 @@ fn box_iterator_method_result_if_needed(
         return Ok(());
     };
     let result_ty = ctx.value_php_type(result)?;
-    if result_ty == PhpType::Mixed && return_ty.codegen_repr() != PhpType::Mixed {
-        emit_box_current_value_as_mixed(ctx.emitter, &return_ty.codegen_repr());
+    if result_ty == PhpType::Mixed {
+        // A `?ptr<T>` result keeps its union, so address 0 is PHP null.
+        // Source-declared arrays already use Mixed storage. Their borrowed return
+        // still needs a foreach owner before a later key() callback can throw.
+        let box_ty = crate::types::mixed_box_php_type(return_ty);
+        box_compiled_iterator_result(ctx, &box_ty);
     }
     Ok(())
+}
+
+/// Boxes a compiled iterator return without consuming an owner on borrowed return paths.
+fn box_compiled_iterator_result(ctx: &mut FunctionContext<'_>, return_ty: &PhpType) {
+    if return_ty.codegen_repr() != PhpType::Mixed {
+        let owned = ctx.next_label("iterator_value_owned");
+        let done = ctx.next_label("iterator_value_boxed");
+        crate::codegen_support::emit_box_current_php_return_as_mixed(
+            ctx.emitter, return_ty, &owned, &done,
+        );
+        return;
+    }
+    let done = ctx.next_label("iterator_value_boxed");
+    crate::codegen::return_ownership::emit_branch_if_owned(ctx.emitter, &done);
+    abi::emit_incref_if_refcounted(ctx.emitter, &PhpType::Mixed);
+    ctx.emitter.label(&done);
+    crate::codegen_support::abi::emit_php_return_status(ctx.emitter, true);
 }
 
 /// Lowers object iterator advancement using PHP's Iterator method protocol.
@@ -1890,10 +1937,14 @@ fn emit_object_iterator_method_call(
     let overflow_bytes = abi::materialize_outgoing_args(ctx.emitter, &assignments);
     let caller_stack_pad_bytes = direct_call_stack_pad_bytes(ctx, overflow_bytes);
     abi::emit_reserve_temporary_stack(ctx.emitter, caller_stack_pad_bytes);
-    if let Some(helper) = IntrinsicCall::instance_method(&target.impl_class, &method_key)
-        .and_then(|intrinsic| intrinsic.runtime_helper())
+    if let Some((intrinsic, helper)) = IntrinsicCall::instance_method(&target.impl_class, &method_key)
+        .and_then(|intrinsic| intrinsic.runtime_helper().map(|helper| (intrinsic, helper)))
     {
         abi::emit_call_label(ctx.emitter, helper);
+        // Native SPL current/key helpers transfer a retained or fresh Mixed cell.
+        // They do not publish the private compiled-PHP marker themselves.
+        crate::codegen_support::abi::emit_php_return_status(ctx.emitter, matches!(intrinsic.kind(),
+            crate::intrinsics::IntrinsicCallKind::SplDllCurrent | crate::intrinsics::IntrinsicCallKind::SplDllKey));
     } else {
         emit_direct_resolved_method_call(ctx, &target)?;
     }
@@ -1940,6 +1991,7 @@ fn emit_generator_interface_fast_path(
             ctx.emitter.instruction("cmp x10, x11");                            // compare receiver class id with Generator
             ctx.emitter.instruction(&format!("b.ne {}", not_generator));        // fall back to interface dispatch for non-Generator iterators
             abi::emit_call_label(ctx.emitter, helper);
+            crate::codegen::return_ownership::emit_status(ctx.emitter, true);
             ctx.emitter.instruction(&format!("b {}", done));                    // skip generic interface dispatch after the fast path
             ctx.emitter.label(&not_generator);
         }
@@ -1949,6 +2001,7 @@ fn emit_generator_interface_fast_path(
             ctx.emitter.instruction("cmp r10, r11");                            // compare receiver class id with Generator
             ctx.emitter.instruction(&format!("jne {}", not_generator));         // fall back to interface dispatch for non-Generator iterators
             abi::emit_call_label(ctx.emitter, helper);
+            crate::codegen::return_ownership::emit_status(ctx.emitter, true);
             ctx.emitter.instruction(&format!("jmp {}", done));                  // skip generic interface dispatch after the fast path
             ctx.emitter.label(&not_generator);
         }
@@ -2020,12 +2073,11 @@ pub(super) fn emit_interface_dispatch_call(
             ctx.emitter.instruction("mov r11, QWORD PTR [r11 + r10 * 8]");      // select this class's interface metadata block
             ctx.emitter.instruction("mov r10, QWORD PTR [r11]");                // load implemented interface count
             ctx.emitter.instruction("add r11, 8");                              // move to first [interface id, table] pair
-            abi::emit_load_int_immediate(ctx.emitter, "r9", interface_id);
+            abi::emit_load_int_immediate(ctx.emitter, "rax", interface_id);
             ctx.emitter.label(&scan_loop);
             ctx.emitter.instruction("test r10, r10");                           // check whether implemented interfaces remain
             ctx.emitter.instruction(&format!("je {}", missing));                // stop when no implemented interface matched
-            ctx.emitter.instruction("mov r8, QWORD PTR [r11]");                 // load current implemented interface id
-            ctx.emitter.instruction("cmp r8, r9");                              // compare with target interface id
+            ctx.emitter.instruction("cmp QWORD PTR [r11], rax");                // compare the current implemented interface id with the target
             ctx.emitter.instruction(&format!("je {}", found));                  // dispatch through this table when matched
             ctx.emitter.instruction("add r11, 16");                             // advance to next interface metadata entry
             ctx.emitter.instruction("sub r10, 1");                              // consume one interface entry
@@ -2084,6 +2136,8 @@ fn emit_generator_iterator_runtime_call(
     let receiver_arg = abi::int_arg_reg_name(ctx.emitter.target, 0);
     abi::load_at_offset(ctx.emitter, receiver_arg, offset - ITER_SOURCE_OFFSET_DELTA);
     abi::emit_call_label(ctx.emitter, helper);
+    // Runtime generator keys and values already transfer an owned Mixed cell.
+    crate::codegen::return_ownership::emit_status(ctx.emitter, true);
 }
 
 /// Lowers iterator cleanup for owned relocation anchors in the stack-resident state.
@@ -2444,6 +2498,8 @@ fn box_hash_payload_as_mixed_aarch64(ctx: &mut FunctionContext<'_>) {
 /// Boxes or retains an AArch64 tag-7 hash payload as Mixed after checking its heap kind.
 fn box_tagged_hash_payload_as_mixed_aarch64(ctx: &mut FunctionContext<'_>) {
     let reuse_box = ctx.next_label("iter_hash_value_reuse_box");
+    let ref_cell = ctx.next_label("iter_hash_value_ref_cell");
+    let ordinary_box = ctx.next_label("iter_hash_value_ordinary_box");
     let done = ctx.next_label("iter_hash_value_tagged_done");
     ctx.emitter.instruction("str x3, [sp, #-16]!");                             // preserve the tag-7 payload while probing its heap kind
     ctx.emitter.instruction("mov x0, x3");                                      // pass the tag-7 payload to the heap-kind probe
@@ -2455,7 +2511,15 @@ fn box_tagged_hash_payload_as_mixed_aarch64(ctx: &mut FunctionContext<'_>) {
     ctx.emitter.instruction(&format!("b {}", done));                            // skip the existing Mixed retention path
     ctx.emitter.label(&reuse_box);
     ctx.emitter.instruction("ldr x0, [sp], #16");                               // restore the existing Mixed box before retaining it
+    ctx.emitter.instruction(&format!("cbz x0, {ordinary_box}"));                // null Mixed slots have no marker tag to inspect
+    ctx.emitter.instruction("ldr x9, [x0]");                                    // inspect whether the Mixed box aliases caller reference storage
+    ctx.emitter.instruction(&format!("cmp x9, #{INVOKER_ARG_REF_CELL_TAG}"));   // descriptor markers must yield their referenced value
+    ctx.emitter.instruction(&format!("b.eq {ref_cell}"));                       // box the current caller value instead of returning the marker
+    ctx.emitter.label(&ordinary_box);
     abi::emit_call_label(ctx.emitter, "__rt_incref");
+    ctx.emitter.instruction(&format!("b {done}"));                              // skip marker dereferencing for ordinary Mixed boxes
+    ctx.emitter.label(&ref_cell);
+    super::arrays::emit_box_loaded_invoker_ref_cell_value_as_mixed(ctx, "x0");
     ctx.emitter.label(&done);
 }
 
@@ -2475,6 +2539,8 @@ fn box_hash_payload_as_mixed_x86_64(ctx: &mut FunctionContext<'_>) {
 /// Boxes or retains an x86_64 tag-7 hash payload as Mixed after checking its heap kind.
 fn box_tagged_hash_payload_as_mixed_x86_64(ctx: &mut FunctionContext<'_>) {
     let reuse_box = ctx.next_label("iter_hash_value_reuse_box");
+    let ref_cell = ctx.next_label("iter_hash_value_ref_cell");
+    let ordinary_box = ctx.next_label("iter_hash_value_ordinary_box");
     let done = ctx.next_label("iter_hash_value_tagged_done");
     abi::emit_push_reg(ctx.emitter, "rcx");
     ctx.emitter.instruction("mov rax, rcx");                                    // pass the tag-7 payload to the heap-kind probe
@@ -2486,7 +2552,15 @@ fn box_tagged_hash_payload_as_mixed_x86_64(ctx: &mut FunctionContext<'_>) {
     ctx.emitter.instruction(&format!("jmp {}", done));                          // skip the existing Mixed retention path
     ctx.emitter.label(&reuse_box);
     abi::emit_pop_reg(ctx.emitter, "rax");
+    ctx.emitter.instruction("test rax, rax");                                   // null Mixed slots have no marker tag to inspect
+    ctx.emitter.instruction(&format!("jz {ordinary_box}"));                     // retain the null handle through the common helper path
+    ctx.emitter.instruction(&format!("cmp QWORD PTR [rax], {INVOKER_ARG_REF_CELL_TAG}")); // descriptor marker tag aliases caller reference storage
+    ctx.emitter.instruction(&format!("je {ref_cell}"));                         // box the current caller value instead of returning the marker
+    ctx.emitter.label(&ordinary_box);
     abi::emit_call_label(ctx.emitter, "__rt_incref");
+    ctx.emitter.instruction(&format!("jmp {done}"));                            // skip marker dereferencing for ordinary Mixed boxes
+    ctx.emitter.label(&ref_cell);
+    super::arrays::emit_box_loaded_invoker_ref_cell_value_as_mixed(ctx, "rax");
     ctx.emitter.label(&done);
 }
 
@@ -2498,6 +2572,7 @@ fn load_current_dynamic_indexed_value_as_mixed_aarch64(
     let string_case = ctx.next_label("iter_dynamic_indexed_string");
     let loaded = ctx.next_label("iter_dynamic_indexed_loaded");
     let reuse_box = ctx.next_label("iter_dynamic_indexed_reuse_box");
+    let ref_cell = ctx.next_label("iter_dynamic_indexed_ref_cell");
     let done = ctx.next_label("iter_dynamic_indexed_done");
     abi::load_at_offset_scratch(ctx.emitter, "x11", offset - ITER_SOURCE_OFFSET_DELTA, "x9");
     abi::load_at_offset(ctx.emitter, "x0", offset - ITER_CURSOR_OFFSET_DELTA);
@@ -2525,7 +2600,14 @@ fn load_current_dynamic_indexed_value_as_mixed_aarch64(
     ctx.emitter.instruction(&format!("b {}", done));                            // skip the existing-box retention path
     ctx.emitter.label(&reuse_box);
     ctx.emitter.instruction("mov x0, x3");                                      // pass the existing Mixed box to the retain helper
+    ctx.emitter.instruction(&format!("cbz x0, {done}"));                        // null Mixed slots have no marker tag to inspect or retain
+    ctx.emitter.instruction("ldr x9, [x0]");                                    // inspect whether the Mixed box aliases caller reference storage
+    ctx.emitter.instruction(&format!("cmp x9, #{INVOKER_ARG_REF_CELL_TAG}"));   // descriptor markers must yield their referenced value
+    ctx.emitter.instruction(&format!("b.eq {ref_cell}"));                       // box the current caller value instead of returning the marker
     abi::emit_call_label(ctx.emitter, "__rt_incref");
+    ctx.emitter.instruction(&format!("b {done}"));                              // skip marker dereferencing for ordinary Mixed boxes
+    ctx.emitter.label(&ref_cell);
+    super::arrays::emit_box_loaded_invoker_ref_cell_value_as_mixed(ctx, "x0");
     ctx.emitter.label(&done);
 }
 
@@ -2537,6 +2619,7 @@ fn load_current_dynamic_indexed_value_as_mixed_x86_64(
     let string_case = ctx.next_label("iter_dynamic_indexed_string");
     let loaded = ctx.next_label("iter_dynamic_indexed_loaded");
     let reuse_box = ctx.next_label("iter_dynamic_indexed_reuse_box");
+    let ref_cell = ctx.next_label("iter_dynamic_indexed_ref_cell");
     let done = ctx.next_label("iter_dynamic_indexed_done");
     abi::load_at_offset(ctx.emitter, "r11", offset - ITER_SOURCE_OFFSET_DELTA);
     abi::load_at_offset(ctx.emitter, "r10", offset - ITER_CURSOR_OFFSET_DELTA);
@@ -2564,7 +2647,14 @@ fn load_current_dynamic_indexed_value_as_mixed_x86_64(
     ctx.emitter.instruction(&format!("jmp {}", done));                          // skip the existing-box retention path
     ctx.emitter.label(&reuse_box);
     ctx.emitter.instruction("mov rax, rcx");                                    // pass the existing Mixed box to the retain helper
+    ctx.emitter.instruction("test rax, rax");                                   // null Mixed slots have no marker tag to inspect or retain
+    ctx.emitter.instruction(&format!("jz {done}"));                             // preserve the null handle without touching missing metadata
+    ctx.emitter.instruction(&format!("cmp QWORD PTR [rax], {INVOKER_ARG_REF_CELL_TAG}")); // descriptor marker tag aliases caller reference storage
+    ctx.emitter.instruction(&format!("je {ref_cell}"));                         // box the current caller value instead of returning the marker
     abi::emit_call_label(ctx.emitter, "__rt_incref");
+    ctx.emitter.instruction(&format!("jmp {done}"));                            // skip marker dereferencing for ordinary Mixed boxes
+    ctx.emitter.label(&ref_cell);
+    super::arrays::emit_box_loaded_invoker_ref_cell_value_as_mixed(ctx, "rax");
     ctx.emitter.label(&done);
 }
 
@@ -2583,7 +2673,12 @@ fn load_current_array_value_aarch64(
         PhpType::Void | PhpType::Never => {
             abi::emit_load_int_immediate(ctx.emitter, result_reg, 0);
         }
-        PhpType::Int | PhpType::Bool | PhpType::Callable | PhpType::Mixed => {
+        PhpType::Int
+        | PhpType::Bool
+        | PhpType::Callable
+        | PhpType::Mixed
+        | PhpType::Pointer(_)
+        | PhpType::Buffer(_) => {
             ctx.emitter.instruction(                                            // skip the indexed-array header to reach element payloads
                 &format!("add {}, {}, #24", array_reg, array_reg)
             );
@@ -2646,7 +2741,12 @@ fn load_current_array_value_x86_64(
         PhpType::Void | PhpType::Never => {
             abi::emit_load_int_immediate(ctx.emitter, result_reg, 0);
         }
-        PhpType::Int | PhpType::Bool | PhpType::Callable | PhpType::Mixed => {
+        PhpType::Int
+        | PhpType::Bool
+        | PhpType::Callable
+        | PhpType::Mixed
+        | PhpType::Pointer(_)
+        | PhpType::Buffer(_) => {
             ctx.emitter.instruction(                                            // skip the indexed-array header to reach element payloads
                 &format!("lea {}, [{} + 24]", array_reg, array_reg)
             );

@@ -11,19 +11,39 @@
 //!   its checker type: a fresh value (literal, `new`, `clone`, closure, `$this`) or a call whose
 //!   target DECLARES a return type that excludes null. Storage reads keep the default whatever
 //!   their type says: an unassigned or `unset()` variable, an absent array key and an
-//!   uninitialized property all read as null inside `??`, and the checker has no
-//!   definite-assignment analysis to rule that out. Inferred returns are not trusted either,
+//!   uninitialized property all read as null inside `??`. This operand predicate stays
+//!   separate from completed-store guarantees that use binding presence and value facts.
+//!   Inferred returns are not trusted either,
 //!   because they omit the implicit `null` of a body that can fall off its end, and builtin and
 //!   extern results are left out because their checker types can omit a null they return.
 //! - A join where one arm is already an object/scalar union keeps a union instead of `mixed`,
 //!   with the object members meeting the way two object arms do.
+//! - A join that involves a `buffer<T>` arm keeps that buffer type, and a buffer beside an arm of
+//!   another type is rejected, through the shared buffer merge rule in `buffer_merges`.
 
+use crate::errors::CompileError;
 use crate::names::php_symbol_key;
 use crate::parser::ast::{Expr, ExprKind, StaticReceiver};
+use crate::span::Span;
 use crate::types::{FunctionSig, PhpType, TypeEnv};
 
 use super::super::super::Checker;
+use super::buffer_merges::buffer_merge_result_type;
 use super::merge_null_coalesce_result_type;
+
+/// Returns the type the `??` merge sees for its default: `inferred`, or `Never` when the default
+/// never yields a value (`throw`, `exit`, `die`), which the checker otherwise types as `Void`.
+///
+/// `$n ?? throw new E()` keeps the value's own type, as a `?:` throw arm does: only a default
+/// that can complete is a null arm, and a scalar beside a null arm keeps the null member
+/// (`null_coalesce_merge_type`), which would turn `$argv[1] ?? exit(1)` into `string|null`.
+pub(super) fn coalesce_default_type(default: &Expr, inferred: PhpType) -> PhpType {
+    if crate::termination::expr_guarantees_function_exit(default) {
+        PhpType::Never
+    } else {
+        inferred
+    }
+}
 
 /// Types `value ?? default` from the left operand's type, the default's type and whether the
 /// left operand can ever be null (see [`operand_is_never_null`]).
@@ -50,6 +70,37 @@ pub(super) fn null_coalesce_result_type(
     merge_null_coalesce_result_type(checker, non_null_value, default_ty)
 }
 
+/// Types `value ?? default` when one of its reachable arms holds a buffer (see
+/// [`buffer_merge_result_type`]), or rejects it when the other arm has another type.
+///
+/// The value arm is the left type without its null member, and drops out when nothing else is
+/// left: a null value always takes the default. The default drops out when it is dead (the left
+/// operand is never null) or is itself null: `$b ?? null` keeps the buffer type, the way
+/// [`null_coalesce_result_type`] absorbs a null default. `Ok(None)` keeps the ordinary join.
+pub(super) fn null_coalesce_buffer_merge_type(
+    checker: &Checker,
+    value: &Expr,
+    value_ty: &PhpType,
+    value_is_never_null: bool,
+    default: &Expr,
+    default_ty: &PhpType,
+    span: Span,
+) -> Result<Option<PhpType>, CompileError> {
+    let non_null_value = if Checker::union_contains_void(value_ty) {
+        checker.strip_void_from_union(value_ty)
+    } else {
+        value_ty.clone()
+    };
+    let mut arms = Vec::with_capacity(2);
+    if !matches!(non_null_value, PhpType::Void | PhpType::Never) {
+        arms.push((value, non_null_value));
+    }
+    if !value_is_never_null && !matches!(default_ty, PhpType::Void | PhpType::Never) {
+        arms.push((default, default_ty.clone()));
+    }
+    buffer_merge_result_type("a `??`", &arms, span)
+}
+
 /// Returns whether the `??` left operand `value`, inferred as `value_ty` in `env`, always
 /// evaluates to a non-null value.
 ///
@@ -66,6 +117,11 @@ pub(super) fn operand_is_never_null(
     if type_admits_null(value_ty) {
         return false;
     }
+    intrinsic_non_null_value(checker, value, env)
+}
+
+/// Recognizes fresh values and declared returns independently of a surrounding result type.
+pub(super) fn intrinsic_non_null_value(checker: &Checker, value: &Expr, env: &TypeEnv) -> bool {
     match &value.kind {
         ExprKind::IntLiteral(_)
         | ExprKind::FloatLiteral(_)
@@ -94,7 +150,7 @@ pub(super) fn operand_is_never_null(
 }
 
 /// Returns whether a checker type admits PHP null (`void` is the checker's null type).
-fn type_admits_null(ty: &PhpType) -> bool {
+pub(super) fn type_admits_null(ty: &PhpType) -> bool {
     match ty {
         PhpType::Void | PhpType::Mixed | PhpType::Never | PhpType::TaggedScalar => true,
         PhpType::Union(members) => members.iter().any(type_admits_null),
@@ -173,18 +229,7 @@ fn static_call_declares_non_null_return(
     receiver: &StaticReceiver,
     method: &str,
 ) -> bool {
-    let class_name = match receiver {
-        StaticReceiver::Named(name) => Some(name.as_str().to_string()),
-        StaticReceiver::Self_ | StaticReceiver::Static => checker.current_class.clone(),
-        StaticReceiver::Parent => checker
-            .current_class
-            .as_ref()
-            .and_then(|current| checker.classes.get(current))
-            .and_then(|class_info| class_info.parent.clone()),
-        // `generics::classes` rewrites every generic receiver before the checker runs; should one
-        // survive, "may return null" is the answer that cannot fold anything away wrongly.
-        StaticReceiver::Generic(_) => None,
-    };
+    let class_name = static_receiver_class_name(checker, receiver);
     let Some(class_name) = class_name else {
         return false;
     };
@@ -202,6 +247,22 @@ fn static_call_declares_non_null_return(
                 .or_else(|| class_info.methods.get(&method_key))
         })
         .is_some_and(declares_non_null_return)
+}
+
+/// Resolves a static receiver without inferring expressions or publishing flow effects.
+pub(super) fn static_receiver_class_name(checker: &Checker, receiver: &StaticReceiver) -> Option<String> {
+    match receiver {
+        StaticReceiver::Named(name) => Some(name.as_str().to_string()),
+        StaticReceiver::Self_ | StaticReceiver::Static => checker.current_class.clone(),
+        StaticReceiver::Parent => checker
+            .current_class
+            .as_ref()
+            .and_then(|current| checker.classes.get(current))
+            .and_then(|class_info| class_info.parent.clone()),
+        // `generics::classes` rewrites every generic receiver before the checker runs; should one
+        // survive, "may return null" is the answer that cannot fold anything away wrongly.
+        StaticReceiver::Generic(_) => None,
+    }
 }
 
 /// Joins `??` arms when one of them already mixes an object with a non-false scalar.
@@ -284,7 +345,7 @@ fn split_object_members(checker: &Checker, ty: &PhpType) -> (Option<PhpType>, Ve
 }
 
 /// Yields a type's union members, or the type itself when it is not a union.
-fn union_members(ty: &PhpType) -> std::slice::Iter<'_, PhpType> {
+pub(super) fn union_members(ty: &PhpType) -> std::slice::Iter<'_, PhpType> {
     match ty {
         PhpType::Union(members) => members.iter(),
         other => std::slice::from_ref(other).iter(),

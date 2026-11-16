@@ -17,7 +17,7 @@ use crate::parser::ast::{
     CallableTarget, Expr, ExprKind, StaticReceiver, Stmt, StmtKind, TypeExpr,
 };
 use crate::parser::stmt::{
-    looks_like_typed_param, parse_anonymous_class, parse_block, parse_name, parse_type_expr,
+    looks_like_typed_param, parse_anonymous_class, parse_block, parse_name, parse_type_arguments_only, parse_type_expr,
 };
 use crate::span::Span;
 
@@ -63,6 +63,10 @@ pub(super) fn parse_match_expr(
     while *pos < tokens.len() && tokens[*pos].0 != Token::RBrace {
         if tokens[*pos].0 == Token::Default {
             *pos += 1;
+            // PHP allows the same trailing comma after `default` as after a condition list.
+            if tokens.get(*pos).map(|(token, _)| token) == Some(&Token::Comma) {
+                *pos += 1;
+            }
             if *pos >= tokens.len() || tokens[*pos].0 != Token::DoubleArrow {
                 return Err(CompileError::new(span, "Expected '=>' after 'default'"));
             }
@@ -77,10 +81,9 @@ pub(super) fn parse_match_expr(
             loop {
                 patterns.push(parse_expr(tokens, pos)?);
                 if *pos < tokens.len() && tokens[*pos].0 == Token::Comma {
-                    let saved = *pos;
                     *pos += 1;
+                    // A trailing comma closes the condition list: `'a', 'b', => …`.
                     if *pos < tokens.len() && tokens[*pos].0 == Token::DoubleArrow {
-                        *pos = saved;
                         break;
                     }
                 } else {
@@ -186,6 +189,10 @@ pub(super) fn parse_closure(
                     ));
                 }
                 *pos += 1;
+                // A trailing comma closes the list: `use ($a, $b,)` (PHP 8.0+).
+                if tokens.get(*pos).map(|(token, _)| token) == Some(&Token::RParen) {
+                    break;
+                }
             }
             let is_ref = if tokens.get(*pos).map(|(token, _)| token) == Some(&Token::Ampersand) {
                 *pos += 1;
@@ -208,6 +215,13 @@ pub(super) fn parse_closure(
                     ))
                 }
             }
+        }
+        // PHP's grammar requires at least one capture: `use ()` is a syntax error.
+        if captures.is_empty() {
+            return Err(CompileError::new(
+                span,
+                "Expected variable in use() capture list",
+            ));
         }
         if *pos >= tokens.len() || tokens[*pos].0 != Token::RParen {
             return Err(CompileError::new(
@@ -706,7 +720,7 @@ pub(super) fn parse_named_expr(
                 let (_, args) =
                     crate::parser::stmt::parse_inherited_name_at(tokens, pos, span, &name)?;
                 if !args.is_empty() {
-                    name = name.with_type_arguments(&args);
+                    name = name.with_written_type_arguments(&args);
                 }
             }
             _ => {}
@@ -738,12 +752,11 @@ pub(super) fn parse_named_expr(
         && *pos < tokens.len()
         && tokens[*pos].0 == Token::Less
     {
-        *pos += 1;
-        let element_type = parse_type_expr(tokens, pos, span)?;
-        if *pos >= tokens.len() || tokens[*pos].0 != Token::Greater {
-            return Err(CompileError::new(span, "Expected '>' after buffer_new<T"));
+        let mut args = parse_type_arguments_only(tokens, pos, span)?;
+        if args.len() != 1 {
+            return Err(CompileError::new(span, "Expected one buffer element type"));
         }
-        *pos += 1;
+        let element_type = args.remove(0);
         if *pos >= tokens.len() || tokens[*pos].0 != Token::LParen {
             return Err(CompileError::new(span, "Expected '(' after buffer_new<T>"));
         }
@@ -782,8 +795,14 @@ pub(super) fn parse_named_expr(
         && tokens[*pos].0 == Token::Less
     {
         *pos += 1;
-        let target_type = parse_name(tokens, pos, span, "Expected type name after 'ptr_cast<'")?
-            .as_canonical();
+        let target_name = parse_name(tokens, pos, span, "Expected type name after 'ptr_cast<'")?;
+        // Keep the leading `\` of a fully qualified target: the name resolver applies the current
+        // namespace to every other spelling, so `ptr_cast<\Pair>` must stay distinguishable.
+        let target_type = if target_name.is_fully_qualified() {
+            format!("\\{}", target_name.as_canonical())
+        } else {
+            target_name.as_canonical()
+        };
         if *pos >= tokens.len() || tokens[*pos].0 != Token::Greater {
             return Err(CompileError::new(span, "Expected '>' after ptr_cast<T"));
         }

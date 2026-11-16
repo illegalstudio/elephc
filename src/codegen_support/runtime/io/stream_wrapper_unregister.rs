@@ -8,7 +8,7 @@
 //! Key details:
 //! - Scans `_user_wrappers` for a slot whose stored `(protocol_ptr,
 //!   protocol_len)` matches the call argument byte-for-byte. The first match
-//!   wins; the slot is cleared by setting `protocol_ptr` to `0`. Returns 1 on
+//!   wins; the complete slot is cleared and both persisted strings are released. Returns 1 on
 //!   a successful unregistration, 0 when no registered protocol matches.
 
 use crate::codegen_support::{abi, emit::Emitter, platform::Arch};
@@ -52,9 +52,9 @@ pub fn emit_stream_wrapper_unregister(emitter: &mut Emitter) {
     emitter.instruction("b __rt_swu_cmp");                                      // continue comparing bytes
 
     emitter.label("__rt_swu_match");
-    emitter.instruction("str xzr, [x6]");                                       // clear the protocol pointer to free the slot
-    emitter.instruction("mov x0, #1");                                          // return true for a successful unregistration
-    emitter.instruction("ret");                                                 // return to the caller
+    // -- retire both persisted strings after the matching row becomes unreachable --
+    emitter.instruction("mov x0, x6");                                          // pass the matched row through the native integer ABI
+    emitter.instruction("b __rt_stream_registry_retire");                       // clear the slot and return true after releasing its owners
 
     emitter.label("__rt_swu_next");
     emitter.instruction("add x5, x5, #1");                                      // advance the slot index
@@ -99,9 +99,9 @@ fn emit_stream_wrapper_unregister_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("jmp __rt_swu_cmp_x86");                                // continue comparing bytes
 
     emitter.label("__rt_swu_match_x86");
-    emitter.instruction("mov QWORD PTR [r10], 0");                              // clear the protocol pointer to free the slot
-    emitter.instruction("mov eax, 1");                                          // return true for a successful unregistration
-    emitter.instruction("ret");                                                 // return to the caller
+    // -- retire both persisted strings after the matching row becomes unreachable --
+    emitter.instruction("mov rax, r10");                                        // pass the matched row through the native integer ABI
+    emitter.instruction("jmp __rt_stream_registry_retire");                     // clear the slot and return true after releasing its owners
 
     emitter.label("__rt_swu_next_x86");
     emitter.instruction("inc r9");                                              // advance the slot index

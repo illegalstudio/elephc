@@ -30,6 +30,7 @@ pub(super) fn lower_lazy_isset(
     let false_block = ctx.builder.create_named_block("isset.lazy_false", Vec::new());
     let merge = ctx.builder.create_named_block("isset.lazy_merge", Vec::new());
     for (idx, arg) in args.iter().enumerate() {
+        ctx.begin_quiet_undefined_reads(arg);
         let checked = lower_lazy_isset_operand(ctx, arg).unwrap_or_else(|| {
             // `isset()` never emits undefined-offset warnings, so eager array
             // operands must be lowered with the silent read variants.
@@ -40,6 +41,7 @@ pub(super) fn lower_lazy_isset(
             };
             emit_builtin_call_value(ctx, name, vec![value.value], PhpType::Int, arg.span, None)
         });
+        ctx.end_quiet_undefined_reads();
         let then_target = if idx + 1 == args.len() {
             ctx.builder.create_named_block("isset.lazy_true", Vec::new())
         } else {
@@ -76,18 +78,29 @@ pub(super) fn lower_lazy_isset_operand(
     match &arg.kind {
         ExprKind::ArrayAccess { array, index } => {
             if array_access_expr_satisfies_array_access(ctx, array) {
-                let synthetic = Expr::new(
-                    ExprKind::MethodCall {
-                        object: array.clone(),
-                        method: "offsetExists".to_string(),
-                        args: vec![(**index).clone()],
-                    },
-                    arg.span,
-                );
-                return Some(lower_expr(ctx, &synthetic));
+                if matches!(array.kind, ExprKind::Variable(_)) {
+                    let (key, key_temp) = evaluate_once(ctx, index, arg);
+                    let owner = key_temp.as_ref().filter(|name|
+                        Ownership::php_type_needs_lifetime_tracking(&ctx.local_type(name)))
+                        .map(|name| ctx.local_slots[name]);
+                    if let Some(slot) = owner { register_owned_call_operand(ctx, slot, arg.span); }
+                    let value = if array_access_expr_satisfies_array_access(ctx, array) {
+                        let ty = array_cast_source::array_cast_source_type_for_ir(ctx, array);
+                        let object = lower_expr(ctx, array);
+                        native_dimension_probes::lower(ctx, object, &ty, &key,
+                            elephc_builtin_contract::ObjectDimension::Isset, arg)
+                    } else { lower_native_isset_offset_probe(ctx, array, &key, arg) };
+                    if let Some(slot) = owner { unregister_owned_call_operand(ctx, slot, arg.span); }
+                    release_evaluated_once(ctx, key_temp, arg.span);
+                    return Some(value);
+                }
+                let ty = array_cast_source::array_cast_source_type_for_ir(ctx, array);
+                let object = lower_expr(ctx, array);
+                return Some(native_dimension_probes::lower(ctx, object, &ty, index,
+                    elephc_builtin_contract::ObjectDimension::Isset, arg));
             }
             if !array_access_expr_supports_native_isset_probe(ctx, array) {
-                return None;
+                return native_xml_empty::lower(ctx, "isset", arg, arg);
             }
             Some(lower_native_isset_offset_probe(ctx, array, index, arg))
         }
@@ -103,14 +116,14 @@ pub(super) fn lower_lazy_isset_operand(
                 return None;
             }
             let object = lower_expr(ctx, object);
-            let probed = lower_property_probe_from_value(ctx, object, property, arg);
+            let probed = lower_property_isset_probe_from_value(ctx, object, property, arg);
             Some(probe_value_is_set(ctx, probed, arg))
         }
         ExprKind::DynamicPropertyAccess { object, property } => {
             // `isset($o->{$k})` must not raise for a name php refuses, and must not warn for one
             // it has never created, so the read carries php's probe fetch mode.
             let probed =
-                lower_dynamic_property_fetch(ctx, object, property, PropertyFetchMode::Probe, arg);
+                lower_dynamic_property_fetch(ctx, object, property, PropertyFetchMode::Isset, arg);
             Some(probe_value_is_set(ctx, probed, arg))
         }
         // `$o?->{$k}` is a nullsafe CHAIN, so its short-circuit belongs to the chain lowering.
@@ -139,7 +152,7 @@ pub(super) fn lower_lazy_isset_operand(
 }
 
 /// Reduces a probed property value to php's `isset()` answer: set means "not null".
-fn probe_value_is_set(
+pub(super) fn probe_value_is_set(
     ctx: &mut LoweringContext<'_, '_>,
     probed: LoweredValue,
     arg: &Expr,
@@ -167,6 +180,21 @@ pub(super) fn lower_lazy_empty(
     {
         return None;
     }
+    if ctx.classes.contains_key("SimpleXMLElement") {
+        if let Some(value) = nullsafe_chain::lower_empty(ctx, &args[0]) {
+            return Some(value);
+        }
+    }
+    if let Some(value) = native_xml_empty::lower(ctx, name, &args[0], expr) {
+        return Some(value);
+    }
+    lower_lazy_empty_without_native(ctx, name, args, expr)
+}
+
+/// Keeps ordinary empty semantics after an enclosing native receiver guard has selected fallback.
+pub(super) fn lower_lazy_empty_without_native(
+    ctx: &mut LoweringContext<'_, '_>, name: &str, args: &[Expr], expr: &Expr,
+) -> Option<LoweredValue> {
     if let ExprKind::ArrayAccess { array, index } = &args[0].kind {
         // The receiver is read ONCE and judged by the type it lowers to. `$this`, a property
         // and a call or `new` result only get that type by being lowered (#1448), and even a
@@ -224,10 +252,10 @@ pub(super) fn lower_lazy_empty(
     // re-derived so the two constructs cannot drift on which properties they consider declared.
     if let ExprKind::PropertyAccess { object, property } = &args[0].kind {
         if matches!(
-            property_isset_action(ctx, object, property),
+            property_isset_action(ctx, object, property, &args[0]),
             Some(IssetPropertyAction::Initialized)
         ) {
-            let object = lower_expr(ctx, object);
+            let object = lower_member_receiver(ctx, object, &args[0]);
             return Some(lower_initialized_property_empty(
                 ctx, object, property, name, &args[0],
             ));
@@ -236,13 +264,22 @@ pub(super) fn lower_lazy_empty(
         // never-created name answers `true` instead of raising.
         if property_probe_needs_runtime_name_form(ctx, object) {
             let object = lower_expr(ctx, object);
-            let probed = lower_property_probe_from_value(ctx, object, property, &args[0]);
+            let probed = lower_property_empty_probe_from_value(ctx, object, property, &args[0]);
+            return Some(lower_empty_of_probed_value(ctx, probed, name, expr));
+        }
+        // A class with `__get` but no `__isset`: php finds no property and never calls
+        // `__get`, so the probe below answers from the dynamic hash or null.
+        if property_existence_magic_class(ctx, object, property, "__get").is_some()
+            && property_existence_magic_class(ctx, object, property, "__isset").is_none()
+        {
+            let object = lower_expr(ctx, object);
+            let probed = lower_property_empty_probe_from_value(ctx, object, property, &args[0]);
             return Some(lower_empty_of_probed_value(ctx, probed, name, expr));
         }
     }
     if let ExprKind::DynamicPropertyAccess { object, property } = &args[0].kind {
         let probed =
-            lower_dynamic_property_fetch(ctx, object, property, PropertyFetchMode::Probe, &args[0]);
+            lower_dynamic_property_fetch(ctx, object, property, PropertyFetchMode::Empty, &args[0]);
         return Some(lower_empty_of_probed_value(ctx, probed, name, expr));
     }
     // A `?->` operand is a nullsafe CHAIN. Its segments only learn they are in a silent probe
@@ -360,7 +397,7 @@ fn lower_nullable_receiver_empty(
 /// which the caller hands to `release_evaluated_once` as soon as both reads are done. A hidden
 /// temp, not a one-shot owned temp: its loads borrow from the slot, so the `offsetExists` and
 /// `offsetGet` calls can both name it without consuming its reference.
-fn evaluate_once(
+pub(super) fn evaluate_once(
     ctx: &mut LoweringContext<'_, '_>,
     expr: &Expr,
     arg: &Expr,
@@ -391,7 +428,7 @@ fn evaluate_once(
 /// extra reference kept an object alive past its last `unset()` and delayed `__destruct()`.
 /// `ReleaseLocalSlot` clears the slot before releasing its occupant, so the epilogue finds it
 /// empty and a throwing destructor cannot revisit it.
-fn release_evaluated_once(ctx: &mut LoweringContext<'_, '_>, temp: Option<String>, span: Span) {
+pub(super) fn release_evaluated_once(ctx: &mut LoweringContext<'_, '_>, temp: Option<String>, span: Span) {
     let Some(temp_name) = temp else {
         return;
     };
@@ -460,6 +497,7 @@ fn lower_empty_through_exists_then_get(
 
     // `__isset(prop)` decides whether the property is considered set at all.
     let exists = lower_expr(ctx, exists_call);
+    let exists = ctx.truthy_consuming(exists, Some(expr.span));
     ctx.builder.terminate(Terminator::CondBr {
         cond: exists.value,
         then_target: present_block,
@@ -494,6 +532,14 @@ pub(super) fn lower_empty_of_probed_value(
     name: &str,
     expr: &Expr,
 ) -> LoweredValue {
+    if ctx.builder.value_php_type(probed.value).codegen_repr() == PhpType::Str {
+        // A string offset can be the byte "0", which PHP considers empty despite its length.
+        let truthy = ctx.truthy_consuming(probed, Some(expr.span));
+        let zero = lower_int_literal(ctx, 0, expr);
+        return ctx.emit_value(Op::ICmp, vec![truthy.value, zero.value],
+            Some(Immediate::CmpPredicate(CmpPredicate::Eq)), PhpType::Bool,
+            Op::ICmp.default_effects(), Some(expr.span));
+    }
     if let Some(truthy) = object_operators::lower_object_truthy(ctx, probed, Some(expr.span)) {
         let zero = lower_int_literal(ctx, 0, expr);
         let result = ctx.emit_value(Op::ICmp, vec![truthy.value, zero.value],
@@ -570,6 +616,9 @@ pub(super) fn property_existence_magic_class(
     magic: &str,
 ) -> Option<String> {
     let class_name = instance_callable_object_class(ctx, object)?;
+    if crate::types::builtin_classes::native_property_method(
+        &class_name, property, elephc_builtin_contract::ObjectProperty::Probe, ctx.classes,
+    ).is_some() { return None; }
     let class_info = ctx.classes.get(&class_name)?;
     if property_is_accessible_for_ir(ctx, &class_name, class_info, property) {
         return None;

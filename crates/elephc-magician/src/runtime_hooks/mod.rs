@@ -19,6 +19,7 @@ mod ops;
 mod object_owners;
 #[cfg(not(test))]
 mod tags;
+pub(crate) mod owner_frames;
 #[cfg(not(test))]
 pub(crate) mod release;
 
@@ -39,6 +40,7 @@ use externs::{
 #[cfg(not(test))]
 pub struct ElephcRuntimeOps {
     context: *const ElephcEvalContext,
+    native_class_scope: Option<String>,
 }
 
 #[cfg(not(test))]
@@ -47,12 +49,13 @@ impl ElephcRuntimeOps {
     pub const fn new() -> Self {
         Self {
             context: std::ptr::null(),
+            native_class_scope: None,
         }
     }
 
     /// Creates a runtime hook adapter that can expose the active class scope to generated helpers.
     pub const fn with_context(context: *const ElephcEvalContext) -> Self {
-        Self { context }
+        Self { context, native_class_scope: None }
     }
 
     /// Converts a runtime wrapper result into an interpreter handle.
@@ -96,6 +99,9 @@ impl ElephcRuntimeOps {
 
     /// Returns the active eval class-scope bytes in the generated helper ABI shape.
     fn current_class_scope_abi(&self) -> (*const u8, u64) {
+        if let Some(scope) = &self.native_class_scope {
+            return (scope.as_ptr(), scope.len() as u64);
+        }
         let Some(context) = (unsafe { self.context.as_ref() }) else {
             return (std::ptr::null(), 0);
         };

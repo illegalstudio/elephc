@@ -109,6 +109,9 @@ pub(super) fn lower_dynamic_prop_get_nonnull(
     object: ValueId,
     property_value: ValueId,
 ) -> Result<()> {
+    if property_fetch_mode(inst) == PropertyFetchMode::QuietRead {
+        return super::unset_property_reads::lower(ctx, inst, object, property_value);
+    }
     if let Some(property) = const_string_operand(ctx, property_value)? {
         return lower_const_dynamic_prop_get(ctx, object, property, inst);
     }
@@ -155,6 +158,71 @@ pub(super) fn emit_property_warning_fragment(ctx: &mut FunctionContext<'_>, byte
     abi::emit_call_label(ctx.emitter, if complete { "__rt_diag_warning" } else { "__rt_diag_warning_fragment" });
 }
 
+/// Appends PHP's ` in FILE on line N` suffix to the pending diagnostic.
+///
+/// The static message fragment already sits in the warning buffer; these raw writes add the
+/// location PHP's CLI formatter reports for a statement in the main script. The caller finishes
+/// the diagnostic with its newline fragment so one warning is dispatched exactly once.
+pub(super) fn emit_property_warning_location(ctx: &mut FunctionContext<'_>, line: u32) {
+    // Record where the message ends before the location suffix is appended. Warning
+    // dispatch hands PHP error handlers only that prefix, while the default output keeps
+    // the complete buffered line including ` in <file> on line <n>`.
+    let scratch = abi::symbol_scratch_reg(ctx.emitter);
+    abi::emit_load_symbol_to_reg(ctx.emitter, scratch, "_rt_diag_pending_len", 0);
+    abi::emit_store_reg_to_symbol(ctx.emitter, scratch, "_rt_diag_warning_message_len", 0);
+    emit_property_warning_fragment(ctx, b" in ", false);
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            abi::emit_symbol_address(ctx.emitter, "x1", "_script_source_file");
+            abi::emit_load_symbol_to_reg(ctx.emitter, "x2", "_script_source_file_len", 0);
+        }
+        Arch::X86_64 => {
+            abi::emit_symbol_address(ctx.emitter, "rdi", "_script_source_file");
+            abi::emit_load_symbol_to_reg(ctx.emitter, "rsi", "_script_source_file_len", 0);
+        }
+    }
+    abi::emit_call_label(ctx.emitter, "__rt_diag_warning_fragment");
+    emit_property_warning_fragment(ctx, b" on line ", false);
+    abi::emit_load_int_immediate(ctx.emitter, abi::int_result_reg(ctx.emitter), i64::from(line));
+    abi::emit_call_label(ctx.emitter, "__rt_itoa");
+    if ctx.emitter.target.arch == Arch::X86_64 {
+        ctx.emitter.instruction("mov rdi, rax");                                // pass the formatted line-number pointer to the warning fragment buffer
+        ctx.emitter.instruction("mov rsi, rdx");                                // pass the formatted line-number length to the warning fragment buffer
+    }
+    abi::emit_call_label(ctx.emitter, "__rt_diag_warning_fragment");
+    // Publish the real caller location for a user error handler.
+    let scratch = abi::symbol_scratch_reg(ctx.emitter);
+    abi::emit_symbol_address(ctx.emitter, scratch, "_script_source_file");
+    abi::emit_store_reg_to_symbol(ctx.emitter, scratch, "_php_diagnostic_file", 0);
+    abi::emit_load_symbol_to_reg(ctx.emitter, scratch, "_script_source_file_len", 0);
+    abi::emit_store_reg_to_symbol(ctx.emitter, scratch, "_php_diagnostic_file_len", 0);
+    abi::emit_load_int_immediate(ctx.emitter, scratch, i64::from(line));
+    abi::emit_store_reg_to_symbol(ctx.emitter, scratch, "_php_diagnostic_line", 0);
+}
+
+/// Answers an `isset()`/`empty()` probe that found no property.
+///
+/// The checker types the probe with `__get`'s return type, which may be a scalar with no null
+/// spelling; there the only consumer is the emptiness test, so the type's empty value stands in
+/// for null (`0`, `false`, `0.0`, `""`).
+fn emit_absent_probe_result(ctx: &mut FunctionContext<'_>, inst: &Instruction) {
+    match inst.result_php_type.codegen_repr() {
+        PhpType::Int | PhpType::Bool => {
+            abi::emit_load_int_immediate(ctx.emitter, abi::int_result_reg(ctx.emitter), 0);
+        }
+        PhpType::Float => match ctx.emitter.target.arch {
+            Arch::AArch64 => ctx.emitter.instruction("fmov d0, xzr"),           // an absent property probes as 0.0
+            Arch::X86_64 => ctx.emitter.instruction("xorpd xmm0, xmm0"),        // an absent property probes as 0.0
+        },
+        PhpType::Str => {
+            let (pointer, length) = abi::string_result_regs(ctx.emitter);
+            abi::emit_load_int_immediate(ctx.emitter, pointer, 0);
+            abi::emit_load_int_immediate(ctx.emitter, length, 0);
+        }
+        _ => emit_dynamic_property_miss_result(ctx, inst),
+    }
+}
+
 /// Lowers a dynamic property read when the property expression is a literal string.
 pub(super) fn lower_const_dynamic_prop_get(
     ctx: &mut FunctionContext<'_>,
@@ -171,10 +239,20 @@ pub(super) fn lower_const_dynamic_prop_get(
     if object_is_builtin_stdclass(ctx, object)? {
         return lower_stdclass_prop_get(ctx, inst, object, property);
     }
+    let mode = property_fetch_mode(inst);
     if let Some(class_name) = magic_get_receiver_class(ctx, object, property)? {
+        // `isset()`/`empty()` on a class with `__get` but no `__isset` find nothing and never
+        // call `__get`: the probe answers null.
+        let skips_get = mode.skips_get_without_isset()
+            && !ctx.module.class_infos.get(class_name.trim_start_matches('\\')).is_some_and(
+                |info| info.methods.contains_key(&php_symbol_key("__isset")),
+            );
+        if skips_get {
+            emit_absent_probe_result(ctx, inst);
+            return store_if_result(ctx, inst);
+        }
         return lower_magic_get_prop(ctx, inst, object, &class_name, property);
     }
-    let mode = property_fetch_mode(inst);
     // Same runtime-class rule as the `PropGet` sibling: a name php does not answer from a declared
     // slot on the STATIC class is decided per runtime class, kind and all.
     if let Some(plan) = dynamic_property_runtime_plan_for_object(
@@ -216,6 +294,7 @@ pub(super) fn lower_const_dynamic_prop_get(
     let slot = resolve_property_slot(ctx, object, property, inst)?;
     let base_reg = abi::symbol_scratch_reg(ctx.emitter);
     ctx.load_value_to_reg(object, base_reg)?;
+    emit_typed_pointer_receiver_null_check(ctx, object, base_reg)?;
     let read_done = emit_property_read_state_guard(
         ctx,
         &slot,
@@ -238,10 +317,26 @@ pub(super) fn lower_runtime_dynamic_mixed_prop_get(
     object: ValueId,
     property_value: ValueId,
 ) -> Result<()> {
+    if let Some(label) = crate::codegen::shared_property_read::helper_label(ctx, inst) {
+        crate::codegen::shared_property_read::emit_call(ctx, object, property_value, &label)?;
+        return store_if_result(ctx, inst);
+    }
     ensure_runtime_dynamic_property_name(ctx, property_value, inst)?;
     ensure_dynamic_property_miss_supported(inst)?;
     let mode = property_fetch_mode(inst);
-    let candidates = declared_mixed_property_get_candidates(ctx, mode, inst)?;
+    let candidates = declared_mixed_property_get_candidates(ctx, mode, None, inst)?;
+    // Magic accessors return an owned Mixed snapshot. Keep narrower result ABIs on their existing
+    // miss path until they can consume that snapshot without changing their physical contract.
+    let magic_supported = inst.result_php_type.codegen_repr() == PhpType::Mixed;
+    let magic_arms = if magic_supported {
+        runtime_magic_read_arms(ctx, mode)?
+    } else {
+        Vec::new()
+    };
+    let magic_class_ids = magic_arms
+        .iter()
+        .map(|arm| arm.magic.class_id)
+        .collect::<Vec<_>>();
     let done_label = ctx.next_label("mixed_dyn_prop_get_done");
     let miss_label = ctx.next_label("mixed_dyn_prop_get_miss");
     let miss_no_stack_label = ctx.next_label("mixed_dyn_prop_get_miss_no_stack");
@@ -260,7 +355,16 @@ pub(super) fn lower_runtime_dynamic_mixed_prop_get(
     // so an `#[\AllowDynamicProperties]` user class answered `null` for a key it really held.
     // The arms are per CLASS, because the name is only known at run time; the declared (class,
     // name) probes above run first, so a name the class declares keeps its declared answer.
-    let hash_arms = mixed_class_hash_arms(ctx, "", &[])?;
+    let hash_arms = runtime_class_hash_arms(ctx, &magic_class_ids);
+    let magic_labels = magic_arms
+        .iter()
+        .map(|arm| {
+            ctx.next_label(&format!(
+                "mixed_dyn_prop_get_magic_{}",
+                label_fragment(&arm.magic.class_name)
+            ))
+        })
+        .collect::<Vec<_>>();
     let hash_labels = hash_arms
         .iter()
         .map(|arm| {
@@ -287,11 +391,20 @@ pub(super) fn lower_runtime_dynamic_mixed_prop_get(
             label,
         );
     }
+    for (arm, label) in magic_arms.iter().zip(magic_labels.iter()) {
+        emit_branch_if_stacked_object_class_matches(ctx, arm.magic.class_id, 16, label);
+    }
     for (arm, label) in hash_arms.iter().zip(hash_labels.iter()) {
         emit_branch_if_stacked_object_class_matches(ctx, arm.class_id, 16, label);
     }
     emit_branch_if_stacked_object_is_stdclass(ctx, 16, &stdclass_label);
     abi::emit_jump(ctx.emitter, &miss_label);
+
+    for (arm, label) in magic_arms.iter().zip(magic_labels.iter()) {
+        ctx.emitter.label(label);
+        emit_runtime_magic_property_arm(ctx, &arm.magic, arm.hash_offset, 16, 0, 32)?;
+        abi::emit_jump(ctx.emitter, &done_label);
+    }
 
     for (arm, label) in hash_arms.iter().zip(hash_labels.iter()) {
         ctx.emitter.label(label);
@@ -331,8 +444,15 @@ pub(super) fn lower_runtime_dynamic_mixed_prop_get(
                 abi::emit_jump(ctx.emitter, &done_label);
                 continue;
             }
-            // php answers `__get` or `__isset`, which a runtime name cannot reach yet.
+            // php answers `__get` or `__isset` for this declared name without reading its slot.
             MixedPropertyReadKind::MagicDeferred => {
+                if magic_supported {
+                    if let Some(arm) = magic_property_arm(ctx, &slot.class_name, mode)? {
+                        emit_runtime_magic_property_arm(ctx, &arm, None, 16, 0, 32)?;
+                        abi::emit_jump(ctx.emitter, &done_label);
+                        continue;
+                    }
+                }
                 abi::emit_release_temporary_stack(ctx.emitter, 32);
                 emit_dynamic_property_miss_result(ctx, inst);
                 abi::emit_jump(ctx.emitter, &done_label);

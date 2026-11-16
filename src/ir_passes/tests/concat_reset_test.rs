@@ -15,7 +15,7 @@ use crate::ir::{
     validate_function, Builder, CmpPredicate, DataId, DataPool, Effects, Function, Immediate,
     InstId, IrHeapKind, IrType, IterStartMetadata, LocalKind, Op, Ownership, Terminator, ValueId,
 };
-use crate::ir_passes::concat_reset::ConcatResetElim;
+use crate::ir_passes::concat_reset::{ConcatResetElim, ConcatResetHoist};
 use crate::ir_passes::driver::{run_function_passes, IrPass};
 use crate::types::PhpType;
 
@@ -26,7 +26,8 @@ fn run_once(function: &mut Function) -> bool {
 
 /// Runs the fixed-point driver with only `ConcatResetElim` registered.
 fn run_to_fixed_point(function: &mut Function) {
-    let passes: Vec<Box<dyn IrPass>> = vec![Box::new(ConcatResetElim)];
+    let passes: Vec<Box<dyn IrPass>> =
+        vec![Box::new(ConcatResetElim), Box::new(ConcatResetHoist)];
     run_function_passes(function, &passes, &mut DataPool::default());
 }
 
@@ -275,6 +276,96 @@ fn arithmetic_loop_after_concat_eliminates_in_loop_resets() {
     assert!(validate_function(&function).is_ok());
 }
 
+/// A dirty preheader gains one reset so an otherwise inert loop body can drop its
+/// per-iteration reset on every iteration, including the first.
+#[test]
+fn dirty_preheader_reset_eliminates_an_inert_loop_body_reset() {
+    let mut function = Function::new("dirty_preheader".to_string(), IrType::I64, PhpType::Int);
+    let (entry, body_reset, update_reset);
+    {
+        let mut builder = Builder::new(&mut function);
+        let i_slot = builder.add_local(
+            Some("i".to_string()),
+            IrType::I64,
+            PhpType::Int,
+            LocalKind::PhpLocal,
+        );
+        entry = builder.create_named_block("entry", vec![]);
+        let header = builder.create_named_block("for.cond", vec![]);
+        let body = builder.create_named_block("for.body", vec![]);
+        let update = builder.create_named_block("for.update", vec![]);
+        let exit = builder.create_named_block("for.exit", vec![]);
+        builder.set_entry(entry);
+
+        builder.position_at_end(entry);
+        let num = builder.emit_const_i64(42);
+        let _scratch = builder
+            .emit(
+                Op::IToStr,
+                vec![num],
+                None,
+                IrType::Str,
+                PhpType::Str,
+                Ownership::Borrowed,
+            )
+            .expect("itostr dirties the concat cursor");
+        let zero = builder.emit_const_i64(0);
+        builder.emit_store_local(i_slot, zero);
+        builder.terminate(Terminator::Br {
+            target: header,
+            args: vec![],
+        });
+
+        builder.position_at_end(header);
+        let i_val = builder.emit_load_local(i_slot, IrType::I64, PhpType::Int);
+        let bound = builder.emit_const_i64(100);
+        let cmp = emit_icmp(&mut builder, CmpPredicate::Slt, i_val, bound);
+        builder.terminate(Terminator::CondBr {
+            cond: cmp,
+            then_target: body,
+            then_args: vec![],
+            else_target: exit,
+            else_args: vec![],
+        });
+
+        builder.position_at_end(body);
+        body_reset = emit_concat_reset(&mut builder);
+        let one = builder.emit_const_i64(1);
+        let _sum = builder.emit_iadd(i_val, one);
+        builder.terminate(Terminator::Br {
+            target: update,
+            args: vec![],
+        });
+
+        builder.position_at_end(update);
+        update_reset = emit_concat_reset(&mut builder);
+        let cur = builder.emit_load_local(i_slot, IrType::I64, PhpType::Int);
+        let one = builder.emit_const_i64(1);
+        let next = builder.emit_iadd(cur, one);
+        builder.emit_store_local(i_slot, next);
+        builder.terminate(Terminator::Br {
+            target: header,
+            args: vec![],
+        });
+
+        builder.position_at_end(exit);
+        let res = builder.emit_load_local(i_slot, IrType::I64, PhpType::Int);
+        builder.terminate(Terminator::Return { value: Some(res) });
+    }
+
+    run_to_fixed_point(&mut function);
+    assert_eq!(function.instruction(body_reset).unwrap().op, Op::Nop);
+    assert_eq!(function.instruction(update_reset).unwrap().op, Op::Nop);
+    let entry_has_reset = function
+        .block(entry)
+        .unwrap()
+        .instructions
+        .iter()
+        .any(|inst_id| function.instruction(*inst_id).unwrap().op == Op::ConcatReset);
+    assert!(entry_has_reset, "the dirty preheader must gain a one-time reset");
+    assert!(validate_function(&function).is_ok());
+}
+
 /// A loop whose body allocates concat scratch (`StrConcat`) keeps its in-loop
 /// `ConcatReset` because the back-edge reaches the loop header with a dirty state.
 #[test]
@@ -342,10 +433,24 @@ fn loop_with_concat_in_body_preserves_loop_reset() {
         builder.terminate(Terminator::Return { value: Some(res) });
     }
 
+    let entry_len_before = function.blocks.first().unwrap().instructions.len();
     run_to_fixed_point(&mut function);
     assert_eq!(
         function.instruction(body_reset).unwrap().op,
         Op::ConcatReset
+    );
+    let entry = function.blocks.first().unwrap();
+    assert_eq!(
+        entry.instructions.len(),
+        entry_len_before,
+        "a failed preheader probe must be removed, not left as a nop"
+    );
+    assert!(
+        entry
+            .instructions
+            .iter()
+            .all(|inst_id| function.instruction(*inst_id).unwrap().op != Op::ConcatReset),
+        "a body concat keeps the reset in the loop and leaves no preheader reset"
     );
     assert!(validate_function(&function).is_ok());
 }
@@ -1554,4 +1659,60 @@ fn opaque_call_use_of_empty_array_local_disqualifies_slot_release() {
         "releasing an array slot that escaped to a call must preserve the following ConcatReset"
     );
     assert!(validate_function(&function).is_ok());
+}
+
+/// The hoist finalizer opts out of generated bodies and functions without a loop.
+#[test]
+fn hoist_finalizer_skips_generated_and_loop_free_bodies() {
+    let mut looped = Function::new("gated".to_string(), IrType::I64, PhpType::Int);
+    {
+        let mut builder = Builder::new(&mut looped);
+        let entry = builder.create_named_block("entry", vec![]);
+        let header = builder.create_named_block("header", vec![]);
+        let body = builder.create_named_block("body", vec![]);
+        let exit = builder.create_named_block("exit", vec![]);
+        builder.set_entry(entry);
+        builder.position_at_end(entry);
+        builder.terminate(Terminator::Br {
+            target: header,
+            args: vec![],
+        });
+        builder.position_at_end(header);
+        let condition = builder.emit_const_bool(true);
+        builder.terminate(Terminator::CondBr {
+            cond: condition,
+            then_target: body,
+            then_args: vec![],
+            else_target: exit,
+            else_args: vec![],
+        });
+        builder.position_at_end(body);
+        emit_concat_reset(&mut builder);
+        builder.terminate(Terminator::Br {
+            target: header,
+            args: vec![],
+        });
+        builder.position_at_end(exit);
+        let result = builder.emit_const_i64(0);
+        builder.terminate(Terminator::Return { value: Some(result) });
+    }
+    assert!(ConcatResetHoist.is_applicable(&looped));
+    looped.flags.is_synthetic = true;
+    assert!(!ConcatResetHoist.is_applicable(&looped));
+    looped.flags.is_synthetic = false;
+    looped.flags.is_internal = true;
+    assert!(!ConcatResetHoist.is_applicable(&looped));
+    looped.flags.is_internal = false;
+
+    let mut straight = Function::new("straight".to_string(), IrType::I64, PhpType::Int);
+    {
+        let mut builder = Builder::new(&mut straight);
+        let entry = builder.create_named_block("entry", vec![]);
+        builder.set_entry(entry);
+        builder.position_at_end(entry);
+        emit_concat_reset(&mut builder);
+        let result = builder.emit_const_i64(0);
+        builder.terminate(Terminator::Return { value: Some(result) });
+    }
+    assert!(!ConcatResetHoist.is_applicable(&straight));
 }

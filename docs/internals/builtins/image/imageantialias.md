@@ -1,8 +1,6 @@
 ---
 title: "imageantialias() - internals"
 description: "Compiler internals for imageantialias(): lowering path, type checks, and runtime helpers."
-sidebar:
-  order: 459
 ---
 
 ## `imageantialias()` - internals
@@ -10,7 +8,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`crates/elephc-builtin-contract/src/catalog_data.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-builtin-contract/src/catalog_data.rs)
-- **Lowering**: [`src/image_prelude.rs`:3364](https://github.com/illegalstudio/elephc/blob/main/src/image_prelude.rs#L3364) (`imageantialias`)
+- **Lowering**: [`src/image_prelude.rs`](https://github.com/illegalstudio/elephc/blob/main/src/image_prelude.rs) (`imageantialias`)
 - **Function symbol**: `imageantialias()`
 
 

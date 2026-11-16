@@ -48,11 +48,10 @@ pub(super) fn execute_property_stmt(
             property,
             value,
         } => {
-            with_eval_void_operands(&[object], context, scope, values, |receiver, context, scope, values| {
-                let property = eval_dynamic_member_name(property, context, scope, values)?;
-                with_eval_void_operands(&[value], context, scope, values, |args, context, _, values| {
-                    eval_property_set_result(receiver[0], &property, args[0], context, values)
-                })
+            with_eval_named_property_write_operands(object, DimensionProperty::Dynamic(property), &[value],
+                context, scope, values, |args, property, context, _, values| {
+                validate_reflection_public_mirror_direct_write(args[0], property, context, values)?;
+                eval_property_set_result(args[0], property, args[1], context, values)
             })?;
             Ok(EvalControl::None)
         }
@@ -61,10 +60,7 @@ pub(super) fn execute_property_stmt(
             property,
             value,
         } => {
-            with_eval_void_operands(&[object], context, scope, values, |args, context, scope, values| {
-                let property = eval_dynamic_member_name(property, context, scope, values)?;
-                eval_property_array_write_result(args[0], &property, None, None, value, context, scope, values)
-            })?;
+            eval_property_dimension_write(object, DimensionProperty::Dynamic(property), None, None, value, context, scope, values)?;
             Ok(EvalControl::None)
         }
         EvalStmt::DynamicPropertyArraySet {
@@ -74,10 +70,7 @@ pub(super) fn execute_property_stmt(
             op,
             value,
         } => {
-            with_eval_void_operands(&[object], context, scope, values, |args, context, scope, values| {
-                let property = eval_dynamic_member_name(property, context, scope, values)?;
-                eval_property_array_write_result(args[0], &property, Some(index), *op, value, context, scope, values)
-            })?;
+            eval_property_dimension_write(object, DimensionProperty::Dynamic(property), Some(index), *op, value, context, scope, values)?;
             Ok(EvalControl::None)
         }
         EvalStmt::DynamicPropertyCompoundAssign {
@@ -86,9 +79,9 @@ pub(super) fn execute_property_stmt(
             op,
             value,
         } => {
-            with_eval_void_operands(&[object], context, scope, values, |args, context, scope, values| {
-                let property = eval_dynamic_member_name(property, context, scope, values)?;
-                eval_property_compound_assign_result(args[0], &property, *op, value, context, scope, values)
+            with_eval_named_property_write_operands(object, DimensionProperty::Dynamic(property), &[value],
+                context, scope, values, |args, property, context, _, values| {
+                eval_property_compound_assign_result(args[0], property, *op, args[1], context, values)
             })?;
             Ok(EvalControl::None)
         }
@@ -97,9 +90,9 @@ pub(super) fn execute_property_stmt(
             property,
             increment,
         } => {
-            with_eval_void_operands(&[object], context, scope, values, |args, context, scope, values| {
-                let property = eval_dynamic_member_name(property, context, scope, values)?;
-                eval_property_inc_dec_result(args[0], &property, *increment, context, values)
+            with_eval_named_property_write_operands(object, DimensionProperty::Dynamic(property), &[],
+                context, scope, values, |args, property, context, _, values| {
+                eval_property_inc_dec_result(args[0], property, *increment, context, values)
             })?;
             Ok(EvalControl::None)
         }
@@ -108,7 +101,8 @@ pub(super) fn execute_property_stmt(
             property,
             value,
         } => {
-            with_eval_void_operands(&[object, value], context, scope, values, |args, context, _, values| {
+            with_eval_property_write_operands(&[object, value], context, scope, values, |args, context, _, values| {
+                validate_reflection_public_mirror_direct_write(args[0], property, context, values)?;
                 eval_property_set_result(args[0], property, args[1], context, values)
             })?;
             Ok(EvalControl::None)
@@ -118,9 +112,7 @@ pub(super) fn execute_property_stmt(
             property,
             value,
         } => {
-            with_eval_void_operands(&[object], context, scope, values, |args, context, scope, values| {
-                eval_property_array_write_result(args[0], property, None, None, value, context, scope, values)
-            })?;
+            eval_property_dimension_write(object, DimensionProperty::Literal(property), None, None, value, context, scope, values)?;
             Ok(EvalControl::None)
         }
         EvalStmt::PropertyArraySet {
@@ -130,9 +122,7 @@ pub(super) fn execute_property_stmt(
             op,
             value,
         } => {
-            with_eval_void_operands(&[object], context, scope, values, |args, context, scope, values| {
-                eval_property_array_write_result(args[0], property, Some(index), *op, value, context, scope, values)
-            })?;
+            eval_property_dimension_write(object, DimensionProperty::Literal(property), Some(index), *op, value, context, scope, values)?;
             Ok(EvalControl::None)
         }
         EvalStmt::PropertyCompoundAssign {
@@ -141,8 +131,8 @@ pub(super) fn execute_property_stmt(
             op,
             value,
         } => {
-            with_eval_void_operands(&[object], context, scope, values, |args, context, scope, values| {
-                eval_property_compound_assign_result(args[0], property, *op, value, context, scope, values)
+            with_eval_property_write_operands(&[object, value], context, scope, values, |args, context, _, values| {
+                eval_property_compound_assign_result(args[0], property, *op, args[1], context, values)
             })?;
             Ok(EvalControl::None)
         }
@@ -151,7 +141,7 @@ pub(super) fn execute_property_stmt(
             property,
             increment,
         } => {
-            with_eval_void_operands(&[object], context, scope, values, |args, context, _, values| {
+            with_eval_property_write_operands(&[object], context, scope, values, |args, context, _, values| {
                 eval_property_inc_dec_result(args[0], property, *increment, context, values)
             })?;
             Ok(EvalControl::None)

@@ -1,8 +1,6 @@
 ---
 title: "array_intersect()"
 description: "Computes the intersection of arrays."
-sidebar:
-  order: 15
 ---
 
 ## array_intersect()
@@ -21,8 +19,9 @@ Computes the intersection of arrays.
 
 ## Availability
 
-- **Compiled (AOT)**: supported by the Elephc code generator.
-- **`eval()` (magician interpreter)**: supported through a declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/array/array_intersect.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/array/array_intersect.rs)).
+| Compiled (AOT) | Magician (eval) |
+|---|---|
+| Available | Available |
 
 _No examples yet. Check `examples/` and `showcases/` for usage patterns._
 

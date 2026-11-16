@@ -38,6 +38,8 @@ pub(in crate::interpreter) enum EvalArea {
     Filesystem,
     /// Formatting and display-oriented numeric builtins.
     Formatting,
+    /// `ext/gmp` procedural builtins, forwarded to the compiled GMP prelude helpers.
+    Gmp,
     /// JSON encoding, decoding, validation, and error-state builtins.
     Json,
     /// Numeric and mathematical builtins.
@@ -56,6 +58,8 @@ pub(in crate::interpreter) enum EvalArea {
     Symbols,
     /// Date, time, and sleep builtins.
     Time,
+    /// `ext/tidy` builtins, forwarded to the compiled tidy prelude.
+    Tidy,
     /// Scalar conversion and type-related builtins.
     Types,
     /// `ext/xml` and `ext/xmlwriter` builtins, forwarded to the compiled xml prelude.
@@ -72,6 +76,7 @@ impl EvalArea {
             EvalArea::Curl => "curl",
             EvalArea::Filesystem => "filesystem",
             EvalArea::Formatting => "formatting",
+            EvalArea::Gmp => "gmp",
             EvalArea::Json => "json",
             EvalArea::Math => "math",
             EvalArea::NetworkEnv => "network_env",
@@ -83,6 +88,7 @@ impl EvalArea {
             EvalArea::Time => "time",
             EvalArea::Types => "types",
             EvalArea::Xml => "xml",
+            EvalArea::Tidy => "tidy",
         }
     }
 }

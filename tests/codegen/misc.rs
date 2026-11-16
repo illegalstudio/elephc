@@ -160,6 +160,128 @@ echo describe(200);
     assert_eq!(out, "big");
 }
 
+/// Regression for task b4024b9a: an int and a bool merged by `??`, `?:` or a ternary keep their
+/// own PHP types, so an int `0` still echoes `0` and `false` echoes nothing, also when the merge
+/// is the source of an `(array)` cast inside an array literal.
+#[test]
+fn test_merges_keep_int_and_bool_apart() {
+    let out = compile_and_run(
+        r#"<?php
+function coalesce(?int $n, bool $flag): void { echo $n ?? $flag, "|"; }
+function choose(bool $first, int $n, bool $flag): void { echo $first ? $n : $flag, "|"; }
+coalesce(0, false);
+coalesce(2, false);
+coalesce(null, true);
+coalesce(null, false);
+choose(true, 0, true);
+choose(false, 0, true);
+echo "\n";
+function cast_rows(?int $n, bool $flag): void {
+    $rows = [(array)($n ?? $flag)];
+    echo $rows[0][0], ":", gettype($rows[0][0]), "|";
+}
+cast_rows(0, false);
+cast_rows(null, false);
+echo "\n";
+"#,
+    );
+    assert_eq!(out, "0|2|1||0|1|\n0:integer|:boolean|\n");
+}
+
+/// Regression for task b4024b9a: an int/bool `??`, `?:` or `match` nested in an outer ternary,
+/// match or array literal keeps its boxed result, so `false` is not cast to integer 0 by an
+/// enclosing temp or element stamp predicted from the syntactic `int`.
+#[test]
+fn test_nested_and_literal_merges_keep_int_and_bool_apart() {
+    let out = compile_and_run(
+        r#"<?php
+function pick(bool $take, ?int $n, bool $flag): void {
+    $v = $take ? ($n ?? $flag) : 0;
+    echo $v, ":", gettype($v), "|";
+    $m = match ($take) { true => ($n ?? $flag), default => 0 };
+    echo $m, ":", gettype($m), "|";
+}
+pick(true, null, false);
+pick(true, 5, false);
+echo "\n";
+function rows(?int $n, bool $flag): void {
+    $list = [$n ?? $flag];
+    echo $list[0], ":", gettype($list[0]), "|";
+    $map = ["k" => $n ?? $flag];
+    echo $map["k"], ":", gettype($map["k"]), "|";
+}
+rows(null, false);
+rows(4, false);
+echo "\n";
+function short(int $n, bool $flag): void {
+    $list = [$n ?: $flag];
+    echo $list[0], ":", gettype($list[0]), "|";
+    $map = ["k" => $n ?: $flag];
+    echo $map["k"], ":", gettype($map["k"]), "|";
+}
+short(0, false);
+short(7, false);
+echo "\n";
+$v = [match ($argc) { 1 => 42, default => true }];
+echo $v[0], ":", gettype($v[0]);
+$w = ["k" => match ($argc) { 1 => 42, default => true }];
+echo "|", $w["k"], ":", gettype($w["k"]), "\n";
+"#,
+    );
+    assert_eq!(
+        out,
+        ":boolean|:boolean|5:integer|5:integer|\n\
+         :boolean|:boolean|4:integer|4:integer|\n\
+         :boolean|:boolean|7:integer|7:integer|\n\
+         42:integer|42:integer\n"
+    );
+}
+
+/// Regression for task b4024b9a: a `!` arm merged with an int (ternary, match, `?:`) and a bare
+/// `!` literal element keep the boolean.
+#[test]
+fn test_negation_keeps_bool_in_merges_and_literals() {
+    let out = compile_and_run(
+        r#"<?php
+function show(bool $flag): void {
+    $v = $flag ? !$flag : 0;
+    echo $v, ":", gettype($v), "|";
+    $m = match (true) { true => !$flag, default => 0 };
+    echo $m, ":", gettype($m), "|";
+    $list = [!$flag];
+    echo gettype($list[0]), "|";
+    $s = !$flag ?: 0;
+    echo $s, ":", gettype($s), "\n";
+}
+show(true);
+show(false);
+"#,
+    );
+    assert_eq!(out, ":boolean|:boolean|boolean|0:integer\n0:integer|1:boolean|boolean|1:boolean\n");
+}
+
+/// Regression for task b4024b9a: an assignment expression used as a ternary arm or an array
+/// literal element is typed from the value it evaluates to, so `($tmp = false)` merged with an
+/// int stays `false`, and `[$x = "a", "k" => $y = 2.5]` stores the string and the float instead
+/// of their raw words stamped as integers.
+#[test]
+fn test_assignment_expressions_keep_their_type_in_merges_and_literals() {
+    let out = compile_and_run(
+        r#"<?php
+function show(bool $flag, int $argc): void {
+    echo ($argc > 0) ? ($tmp = $flag) : 0, ":";
+    echo gettype(($argc > 0) ? ($tmp = $flag) : 0), "|";
+    $list = [$tmp = $flag];
+    echo $list[0], ":", gettype($list[0]), "|";
+    $mixed = [$x = "a", "k" => $y = 2.5];
+    echo $mixed[0], ":", $mixed["k"], "\n";
+}
+show(false, $argc);
+"#,
+    );
+    assert_eq!(out, ":boolean|:boolean|a:2.5\n");
+}
+
 /// Verifies null-coalescing a null variable with a string literal default allocates the string
 /// and does not evaluate the default eagerly.
 #[test]
@@ -674,4 +796,94 @@ echo constant("APP_X"), "|", \constant("APP_X");
 "#,
     );
     assert_eq!(out, "11|11");
+}
+
+/// A top-level `$GLOBALS` read projects every initialized global, and recursive merges of
+/// colliding object or scalar entries follow PHP's convert-to-array rule.
+#[test]
+fn globals_array_projects_top_level_values_and_merges_objects() {
+    let out = compile_and_run(
+        r#"<?php
+class GlobalsObject { public int $x = 1; }
+$root = new GlobalsObject();
+$n = 7;
+$merged = array_merge_recursive($GLOBALS, $GLOBALS);
+var_dump($merged["root"]);
+var_dump($merged["n"]);
+var_dump(is_array($GLOBALS), $GLOBALS["n"]);
+"#,
+    );
+    assert_eq!(
+        out,
+        "array(1) {\n  [\"x\"]=>\n  array(2) {\n    [0]=>\n    int(1)\n    [1]=>\n    int(1)\n  }\n}\narray(2) {\n  [0]=>\n  int(7)\n  [1]=>\n  int(7)\n}\nbool(true)\nint(7)\n"
+    );
+}
+
+/// A read before the variable's first store warns and yields null, even though the checker
+/// learned the name from a later assignment in the same scope.
+#[test]
+fn undefined_read_before_first_store_warns_and_reads_null() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+echo '[', $value, ']';
+$value = 1;
+echo '[', $value, ']';
+"#);
+    assert!(out.success, "stderr={}", out.stderr);
+    assert_eq!(out.stdout, "[][1]");
+    assert_eq!(out.stderr.matches("Warning: Undefined variable $value").count(), 1, "{}", out.stderr);
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
+/// A displayed warning keeps PHP's leading newline and `in FILE on line N` suffix.
+#[test]
+fn warning_display_includes_leading_newline_and_location() {
+    let out = compile_and_run_with_heap_debug("<?php\n\necho $missing;\n");
+    assert!(out.success, "stderr={}", out.stderr);
+    let expected = "\nWarning: Undefined variable $missing in ";
+    assert!(out.stderr.starts_with(expected), "{}", out.stderr);
+    let line = out
+        .stderr
+        .lines()
+        .find(|line| line.contains("Undefined variable $missing"))
+        .expect("warning line");
+    assert!(line.ends_with("test.php on line 3"), "{}", line);
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
+/// Null probes silence their root, while offsets, property names and call arguments still warn.
+#[test]
+fn test_simplexml_followup_null_probe_diagnostics_bundle() {
+    let source = r#"<?php
+set_error_handler(function(int $level, string $message): bool { echo $message, '|'; return true; });
+function followup_key(mixed $value): string { return 'present'; }
+function followup_probes(array $values): void {
+    var_dump(isset($values[(string)$missingIndex]));
+    echo ($values[(string)$missingCoalesce] ?? 7), '|';
+    var_dump(isset($values[(string)$missingNested][0]));
+    var_dump(isset($values[followup_key($missingArgument)]));
+    var_dump(isset($silentRoot));
+    echo ($silentRoot ?? 'fallback'), '|';
+}
+class FollowupProbeObject { public int $present = 1; }
+$object = new FollowupProbeObject();
+var_dump(isset($object->{(string)$missingProperty}));
+followup_probes(['present' => 1]);
+restore_error_handler();
+"#;
+    let expected = concat!(
+        "Undefined variable $missingProperty|bool(false)\n",
+        "Undefined variable $missingIndex|bool(false)\n",
+        "Undefined variable $missingCoalesce|7|",
+        "Undefined variable $missingNested|bool(false)\n",
+        "Undefined variable $missingArgument|bool(true)\n",
+        "bool(false)\nfallback|",
+    );
+    for optimized in [true, false] {
+        let run = || compile_and_run_with_heap_debug(source);
+        let out = if optimized { run() } else { without_ir_opt(run) };
+        assert!(out.success, "{}", out.stderr);
+        assert_eq!(out.stdout, expected, "optimized={optimized}");
+        assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+        assert!(!out.stderr.contains("Warning:"), "{}", out.stderr);
+    }
 }

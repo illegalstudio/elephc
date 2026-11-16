@@ -21,6 +21,13 @@ use crate::generics::classes::BoundObligation;
 use super::Checker;
 
 impl Checker {
+    /// Resolves a generic argument's PHP carrier when checking a value-type bound.
+    pub(crate) fn resolve_generic_bound_argument(
+        &self, argument: &crate::parser::ast::TypeExpr, span: crate::span::Span,
+    ) -> Result<crate::types::PhpType, CompileError> {
+        self.resolve_type_expr(&crate::generics::value_carrier_type(argument), span)
+    }
+
     /// Rejects any type argument that does not satisfy its parameter's declared bound.
     ///
     /// Reports the FIRST violation rather than collecting them: an instantiation that violates
@@ -56,7 +63,7 @@ impl Checker {
     ) -> Result<(), CompileError> {
         for obligation in obligations {
             let bound = self.resolve_type_expr(&obligation.bound, obligation.span)?;
-            let argument = self.resolve_type_expr(&obligation.argument, obligation.span)?;
+            let argument = self.resolve_generic_bound_argument(&obligation.argument, obligation.span)?;
             // `type_accepts` is the assignability predicate the rest of the checker uses, so a
             // bound admits exactly what a parameter of that type would: subclasses, implemented
             // interfaces, and interface inheritance. Comparing spellings instead would let an

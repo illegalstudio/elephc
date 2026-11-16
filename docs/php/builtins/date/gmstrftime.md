@@ -1,8 +1,6 @@
 ---
 title: "gmstrftime()"
 description: "Formats a UTC timestamp with locale-aware strftime specifiers. Deprecated since PHP 8.1."
-sidebar:
-  order: 224
 ---
 
 ## gmstrftime()
@@ -21,8 +19,9 @@ Formats a UTC timestamp with locale-aware strftime specifiers. Deprecated since 
 
 ## Availability
 
-- **Compiled (AOT)**: supported through the Elephc compiler.
-- **`eval()` (magician interpreter)**: supported through the procedural date/time alias dispatcher.
+| Compiled (AOT) | Magician (eval) |
+|---|---|
+| Available | Available |
 
 _No examples yet. Check `examples/` and `showcases/` for usage patterns._
 
