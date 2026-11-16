@@ -27,13 +27,14 @@ pub(super) fn emit(emitter: &mut Emitter) {
     emitter.instruction("mov QWORD PTR [rbp - 24], rdx");                      // save optional callback environment
     emitter.instruction("mov QWORD PTR [rbp - 32], rcx");                      // save callback mode
 
-    emitter.instruction("cmp rcx, 0");                                         // accept value-only mode
-    emitter.instruction("je __rt_array_filter_mixed_mode_valid_x86");
-    emitter.instruction("cmp rcx, 1");                                         // accept value-and-key mode
-    emitter.instruction("je __rt_array_filter_mixed_mode_valid_x86");
-    emitter.instruction("cmp rcx, 2");                                         // accept key-only mode
-    emitter.instruction("je __rt_array_filter_mixed_mode_valid_x86");
-    emitter.instruction("jmp __rt_array_filter_mixed_invalid_mode_x86");       // reject every other mode with ValueError
+    emitter.instruction("cmp rcx, 2");                                         // an unsigned range check accepts value, both and key modes
+    emitter.instruction("jbe __rt_array_filter_mixed_mode_valid_x86");
+    if super::rejects_invalid_mode() {
+        emitter.instruction("jmp __rt_array_filter_mixed_invalid_mode_x86");   // PHP 8.6 rejects every other mode with ValueError
+    } else {
+        emitter.instruction("xor ecx, ecx");                                   // before PHP 8.6 an unknown mode filters by value only
+        emitter.instruction("mov QWORD PTR [rbp - 32], rcx");                  // publish the normalized mode
+    }
     emitter.label("__rt_array_filter_mixed_mode_valid_x86");
 
     emitter.instruction("mov rax, QWORD PTR [rbp - 16]");                      // reload boxed source for runtime dispatch
@@ -227,19 +228,21 @@ pub(super) fn emit(emitter: &mut Emitter) {
     emitter.instruction("pop rbp");                                            // restore caller frame pointer
     emitter.instruction("ret");                                                // return boxed filtered array
 
-    emitter.label("__rt_array_filter_mixed_invalid_mode_x86");
-    // The shared ValueError thrower opens its own frame assuming it was spliced at a function
-    // ENTRY, where System V leaves rsp 8 bytes past a 16-byte boundary. This helper is 168
-    // bytes into its frame here, so the throw path first returns the stack to the entry state
-    // — it never comes back, and an unaligned `__rt_heap_alloc` below faults once the
-    // allocator reaches real C.
-    emitter.instruction("mov rsp, rbp");                                       // drop this helper's spill slots before the shared throw sequence
-    emitter.instruction("pop rbp");                                            // restore the caller frame pointer, leaving rsp as it was at entry
-    value_error::emit_throw_value_error_x86_64(
-        emitter,
-        "_array_filter_mode_msg",
-        ARRAY_FILTER_MODE_MSG_LEN,
-    );
+    if super::rejects_invalid_mode() {
+        emitter.label("__rt_array_filter_mixed_invalid_mode_x86");
+        // The shared ValueError thrower opens its own frame assuming it was spliced at a function
+        // ENTRY, where System V leaves rsp 8 bytes past a 16-byte boundary. This helper is 168
+        // bytes into its frame here, so the throw path first returns the stack to the entry state
+        // — it never comes back, and an unaligned `__rt_heap_alloc` below faults once the
+        // allocator reaches real C.
+        emitter.instruction("mov rsp, rbp");                                   // drop this helper's spill slots before the shared throw sequence
+        emitter.instruction("pop rbp");                                        // restore the caller frame pointer, leaving rsp as it was at entry
+        value_error::emit_throw_value_error_x86_64(
+            emitter,
+            "_array_filter_mode_msg",
+            ARRAY_FILTER_MODE_MSG_LEN,
+        );
+    }
 
     emitter.blank();
     emitter.comment("--- runtime: array_filter_mixed_raw ---");

@@ -32,13 +32,14 @@ pub(super) fn emit(emitter: &mut Emitter) {
     emitter.instruction("str x2, [sp, #16]");                                 // save optional callback environment
     emitter.instruction("str x3, [sp, #24]");                                 // save callback mode
 
-    emitter.instruction("cmp x3, #0");                                        // accept value-only mode
-    emitter.instruction("b.eq __rt_array_filter_mixed_mode_valid");
-    emitter.instruction("cmp x3, #1");                                        // accept value-and-key mode
-    emitter.instruction("b.eq __rt_array_filter_mixed_mode_valid");
-    emitter.instruction("cmp x3, #2");                                        // accept key-only mode
-    emitter.instruction("b.eq __rt_array_filter_mixed_mode_valid");
-    emitter.instruction("b __rt_array_filter_mixed_invalid_mode");            // reject every other mode with ValueError
+    emitter.instruction("cmp x3, #2");                                        // an unsigned range check accepts value, both and key modes
+    emitter.instruction("b.ls __rt_array_filter_mixed_mode_valid");
+    if super::rejects_invalid_mode() {
+        emitter.instruction("b __rt_array_filter_mixed_invalid_mode");        // PHP 8.6 rejects every other mode with ValueError
+    } else {
+        emitter.instruction("mov x3, #0");                                    // before PHP 8.6 an unknown mode filters by value only
+        emitter.instruction("str x3, [sp, #24]");                             // publish the normalized mode
+    }
     emitter.label("__rt_array_filter_mixed_mode_valid");
 
     emitter.instruction("ldr x0, [sp, #8]");                                  // reload boxed source for runtime shape dispatch
@@ -237,12 +238,14 @@ pub(super) fn emit(emitter: &mut Emitter) {
     emitter.instruction("add sp, sp, #192");                                  // release filter frame
     emitter.instruction("ret");                                               // return boxed filtered array
 
-    emitter.label("__rt_array_filter_mixed_invalid_mode");
-    value_error::emit_throw_value_error_aarch64(
-        emitter,
-        "_array_filter_mode_msg",
-        ARRAY_FILTER_MODE_MSG_LEN,
-    );
+    if super::rejects_invalid_mode() {
+        emitter.label("__rt_array_filter_mixed_invalid_mode");
+        value_error::emit_throw_value_error_aarch64(
+            emitter,
+            "_array_filter_mode_msg",
+            ARRAY_FILTER_MODE_MSG_LEN,
+        );
+    }
 
     emitter.blank();
     emitter.comment("--- runtime: array_filter_mixed_raw ---");

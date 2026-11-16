@@ -147,6 +147,21 @@ for ($i = 0; $i < 3; $i++) {
 "#, &"filter failure|callback|1|".repeat(3));
 }
 
+/// The runtime-dispatched (gradual `mixed` array) filter follows the same legacy rule: an
+/// unknown mode filters by value instead of raising a ValueError.
+#[test]
+fn test_array_filter_php85_unknown_mode_on_mixed_array_uses_values() {
+    let source = r#"<?php
+function filterMixed(mixed $values, int $mode): int {
+    return count(array_filter($values, fn($value) => true, $mode));
+}
+foreach ([-1, 3, 99] as $mode) {
+    echo filterMixed([1, 2], $mode), filterMixed(["a" => 1, "b" => 2, "c" => 3], $mode), "|";
+}
+"#;
+    assert_eq!(compile_and_run_with_php_version(source, PhpVersion::Php85), "23|".repeat(3));
+}
+
 /// Legacy profiles use value-only dispatch for other integers, including negative modes.
 #[test]
 fn test_array_filter_php85_unknown_modes_use_values_aot_and_eval() {

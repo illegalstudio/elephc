@@ -18,6 +18,12 @@ mod x86_64;
 
 pub(super) const ARRAY_FILTER_MODE_MSG_LEN: usize = "array_filter(): Argument #3 ($mode) must be one of ARRAY_FILTER_USE_VALUE, ARRAY_FILTER_USE_KEY, or ARRAY_FILTER_USE_BOTH.".len();
 
+/// Whether an `array_filter()` mode other than 0, 1 and 2 raises a ValueError: PHP 8.6 does, and
+/// earlier versions fall back to value-only filtering (the typed lowering makes the same split).
+pub(super) fn rejects_invalid_mode() -> bool {
+    crate::codegen_support::compile_php_version().version_id() >= 80600
+}
+
 /// Emits `__rt_array_filter_mixed` for the selected target.
 pub fn emit_array_filter_mixed(emitter: &mut Emitter) {
     match emitter.target.arch {
