@@ -425,12 +425,10 @@ pub fn e_assign(target: Expr, value: Expr) -> Expr {
     crate::parser::expr::plain_assignment_expression(target, value, Span::synthetic())
 }
 
-/// A reference to a global constant (`PHP_INT_MIN`, `STDERR`, …).
+/// A reference to a global constant (`PHP_INT_MIN`, `STDERR`, …); a leading `\` makes it
+/// fully qualified, the name the parser gives `\PHP_SESSION_ACTIVE`.
 pub fn e_const(name: &str) -> Expr {
-    Expr::new(
-        ExprKind::ConstRef(Name::unqualified(name)),
-        Span::dummy(),
-    )
+    Expr::new(ExprKind::ConstRef(class_name(name)), Span::dummy())
 }
 
 /// A float literal.
