@@ -787,6 +787,10 @@ pub(super) fn lower_static_property_element_ref_assign(
 }
 
 /// Lowers a direct, indexed, or append write through a runtime static-property name.
+///
+/// The index and value are lowered BEFORE the container is loaded, like the named writes: a
+/// value expression that grows the same property would otherwise leave the loaded pointer
+/// stale, and the store-back would publish it over the grown array.
 pub(super) fn lower_dynamic_static_property_write(
     ctx: &mut LoweringContext<'_, '_>,
     receiver: &StaticReceiver,
@@ -801,9 +805,9 @@ pub(super) fn lower_dynamic_static_property_write(
     let common_ty = dynamic_static_property_common_type(ctx, receiver);
 
     if append {
+        let value = lower_expr(ctx, value);
         if let Some(array_ty) = common_ty.clone().filter(is_indexed_array_type) {
             let array = load_dynamic_static_property_as(ctx, receiver, name, array_ty, span);
-            let value = lower_expr(ctx, value);
             ctx.emit_void(
                 Op::ArrayPush,
                 vec![array.value, value.value],
@@ -818,7 +822,6 @@ pub(super) fn lower_dynamic_static_property_write(
             .filter(|ty| type_satisfies_array_access_for_ir(ctx, ty))
             .unwrap_or(PhpType::Mixed);
         let array = load_dynamic_static_property_as(ctx, receiver, name, array_ty, span);
-        let value = lower_expr(ctx, value);
         ctx.emit_void(
             Op::RuntimeCall,
             vec![array.value, value.value],
@@ -865,11 +868,11 @@ fn lower_dynamic_static_array_element_set(
     value: &Expr,
     span: Span,
 ) {
+    let index = lower_expr(ctx, index);
+    let value = lower_expr(ctx, value);
     if let Some(array_ty) = common_ty.clone().filter(is_indexed_array_type) {
         let element_array_ty = array_ty.clone();
         let array = load_dynamic_static_property_as(ctx, receiver, name, array_ty, span);
-        let index = lower_expr(ctx, index);
-        let value = lower_expr(ctx, value);
         let value = coerce_indexed_array_set_value(ctx, &element_array_ty, value, Some(span));
         ctx.emit_void(
             Op::ArraySet,
@@ -886,8 +889,6 @@ fn lower_dynamic_static_array_element_set(
         .filter(|ty| type_satisfies_array_access_for_ir(ctx, ty))
         .unwrap_or(PhpType::Mixed);
     let array = load_dynamic_static_property_as(ctx, receiver, name, array_ty, span);
-    let index = lower_expr(ctx, index);
-    let value = lower_expr(ctx, value);
     ctx.emit_void(
         Op::RuntimeCall,
         vec![array.value, index.value, value.value],

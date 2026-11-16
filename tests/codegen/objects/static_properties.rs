@@ -2441,3 +2441,34 @@ unset($h, $l);
         out.stderr
     );
 }
+
+/// Verifies a runtime-named static write of a borrowed parameter keeps its own reference.
+#[test]
+fn test_dynamic_static_property_write_acquires_borrowed_value() {
+    let out = compile_and_run(
+        r#"<?php
+class DynStaticOwn { public static $a; public static $b; }
+function put(string $n, $v) { DynStaticOwn::${$n} = $v; }
+function mk() { return [1, 2, 3]; }
+put('a', mk());
+$junk = [str_repeat('x', 40), str_repeat('y', 40)];
+echo count(DynStaticOwn::$a), "|", DynStaticOwn::$a[2];
+"#,
+    );
+    assert_eq!(out, "3|3");
+}
+
+/// Verifies the value of a runtime-named element write settles before the container loads.
+#[test]
+fn test_dynamic_static_property_element_write_value_first() {
+    let out = compile_and_run(
+        r#"<?php
+class DynStaticOrder { public static array $a = []; }
+function grow() { for ($i = 0; $i < 50; $i++) { DynStaticOrder::$a[] = $i; } return 'v'; }
+$n = 'a';
+DynStaticOrder::${$n}[0] = grow();
+echo count(DynStaticOrder::$a), "|", DynStaticOrder::$a[0];
+"#,
+    );
+    assert_eq!(out, "50|v");
+}
