@@ -335,6 +335,17 @@ pub(crate) fn emit_copy_descriptor_header_to_runtime(
     emit_initialize_runtime_descriptor(emitter, dest_reg);
 }
 
+/// Branches to `label` when `descriptor_reg` holds no descriptor: a zero pointer or the in-band
+/// null sentinel a missed read (`$callbacks[$missing]`) leaves in a `callable` slot. Checks that
+/// read the descriptor's words must take this branch first. Clobbers one scratch register.
+pub(crate) fn emit_branch_if_missing_descriptor(emitter: &mut Emitter, descriptor_reg: &str, label: &str) {
+    let scratch = match emitter.target.arch {
+        crate::codegen_support::platform::Arch::AArch64 => "x9",
+        crate::codegen_support::platform::Arch::X86_64 => "r10",
+    };
+    crate::codegen_support::sentinels::emit_branch_if_null_container(emitter, descriptor_reg, scratch, label);
+}
+
 /// Records the PHP value an implicit callable stands for (`CALLABLE_DESC_ORIGIN_*`) in the
 /// kind word of the runtime descriptor held in `descriptor_reg`.
 ///

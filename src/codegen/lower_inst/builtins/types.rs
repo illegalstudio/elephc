@@ -1173,12 +1173,17 @@ fn emit_implicit_callable_class_lookup_errors(
     }
     let string_error = ctx.next_label("get_class_callable_string");
     let array_error = ctx.next_label("get_class_callable_array");
+    let null_error = ctx.next_label("get_class_callable_null");
     let object = ctx.next_label("get_class_callable_object");
+    // A missed read leaves null in the slot, not a descriptor whose words could be read.
+    crate::codegen_support::callable_descriptor::emit_branch_if_missing_descriptor(
+        ctx.emitter, descriptor_reg, &null_error,
+    );
     crate::codegen_support::callable_descriptor::emit_branch_on_descriptor_origin(
         ctx.emitter, descriptor_reg, &string_error, &array_error,
     );
     abi::emit_jump(ctx.emitter, &object);
-    for (label, type_name) in [(&string_error, "string"), (&array_error, "array")] {
+    for (label, type_name) in [(&string_error, "string"), (&array_error, "array"), (&null_error, "null")] {
         ctx.emitter.label(label);
         if class_constant {
             super::super::exceptions::emit_type_error(
@@ -1199,11 +1204,13 @@ fn emit_branch_to_invokable_receiver(ctx: &mut FunctionContext<'_>, descriptor_r
     use crate::codegen_support::callable_descriptor as desc;
     let invoke = desc::CALLABLE_DESC_KIND_OBJECT_INVOKE;
     let receiver = desc::CALLABLE_DESC_RUNTIME_CAPTURE_OFFSET;
+    let skip = ctx.next_label("get_class_not_invokable");
+    // A missed read leaves no descriptor whose kind could be read.
+    desc::emit_branch_if_missing_descriptor(ctx.emitter, descriptor_reg, &skip);
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
             ctx.emitter.instruction(&format!("ldr x9, [{descriptor_reg}]"));    // load the callable descriptor kind
             ctx.emitter.instruction(&format!("cmp x9, #{invoke}"));             // is this an invokable object's descriptor?
-            let skip = ctx.next_label("get_class_not_invokable");
             ctx.emitter.instruction(&format!("b.ne {skip}"));                   // any other callable reports Closure
             ctx.emitter.instruction(&format!("ldr x1, [{descriptor_reg}, #{receiver}]")); // load the captured receiver object
             ctx.emitter.instruction(&format!("b {receiver_label}"));            // report the receiver object's class
@@ -1211,7 +1218,6 @@ fn emit_branch_to_invokable_receiver(ctx: &mut FunctionContext<'_>, descriptor_r
         }
         Arch::X86_64 => {
             ctx.emitter.instruction(&format!("cmp QWORD PTR [{descriptor_reg}], {invoke}")); // is this an invokable object's descriptor?
-            let skip = ctx.next_label("get_class_not_invokable");
             ctx.emitter.instruction(&format!("jne {skip}"));                    // any other callable reports Closure
             ctx.emitter.instruction(&format!("mov rdi, QWORD PTR [{descriptor_reg} + {receiver}]")); // load the captured receiver object
             ctx.emitter.instruction(&format!("jmp {receiver_label}"));          // report the receiver object's class

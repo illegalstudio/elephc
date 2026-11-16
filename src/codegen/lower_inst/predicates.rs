@@ -496,6 +496,8 @@ fn emit_descriptor_identity(
     false_label: &str,
 ) {
     use crate::codegen_support::callable_descriptor as desc;
+    // A missed read leaves no descriptor to inspect: it is null, neither an object nor a Closure.
+    desc::emit_branch_if_missing_descriptor(ctx.emitter, payload, false_label);
     let eval = ctx.module.required_runtime_features.eval_bridge;
     if !accept_objects && !eval {
         desc::emit_require_object_handle(ctx.emitter, payload, false_label);

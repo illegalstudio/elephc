@@ -161,6 +161,31 @@ echo $kb(new Inv()), "|", $kb('Cls::sm'), "|", $kb([$o, 'm']), "|", $kb(function
     )]);
 }
 
+/// A missed read from an array of closures leaves null in a `callable` slot, not a descriptor:
+/// `is_object()`, `instanceof Closure`, `is_a()` (literal and runtime target) and gettype() answer
+/// for null instead of reading through the sentinel, held as a callable or passed into a
+/// `mixed`, and get_class() throws PHP's TypeError for null. Expected output measured with
+/// php 8.5.12.
+#[test]
+fn test_missing_callable_array_element_is_null_for_object_checks() {
+    let out = compile_and_run_per_argv(
+        r#"<?php
+function yn(bool $b): string { return $b ? "y" : "n"; }
+function m(mixed $f): string { return yn(is_object($f)) . yn($f instanceof Closure) . yn(is_a($f, 'Closure')) . gettype($f); }
+$cbs = ['a' => fn() => 1, 'b' => function () { return 2; }];
+$k = $argv[1] ?? 'zz';
+$t = $argv[2] ?? 'Closure';
+echo yn(is_object(@$cbs[$k])), yn(@$cbs[$k] instanceof Closure), yn(is_a(@$cbs[$k], 'Closure')), yn(is_a(@$cbs[$k], $t)), gettype(@$cbs[$k]), " ", m(@$cbs[$k]), "\n";
+try { echo get_class(@$cbs[$k]), "\n"; } catch (TypeError $e) { echo $e->getMessage(), "\n"; }
+"#,
+        &[&[], &["a"]],
+    );
+    assert_eq!(out, [
+        "nnnnNULL nnnNULL\nget_class(): Argument #1 ($object) must be of type object, null given\n",
+        "yyyyobject yyyobject\nClosure\n",
+    ]);
+}
+
 /// Verifies anonymous function with multiple parameters and a simple arithmetic body.
 #[test]
 fn test_closure_multiple_params() {
