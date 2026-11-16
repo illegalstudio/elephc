@@ -469,7 +469,7 @@ fn eval_expr_with_result_ownership(
                 // `@` already suppresses through `errors_suppressed()`. `??` and `isset()` are
                 // the other two readers php keeps quiet, and they suppress around their own
                 // operand rather than being special-cased here, because the rule is theirs.
-                if !context.errors_suppressed() {
+                if !context.errors_suppressed() && !context.quiet_property_fetch() {
                     values.warning(&format!("Undefined variable ${name}"))?;
                 }
                 values.null()
@@ -595,14 +595,10 @@ fn eval_expr_with_result_ownership(
         }),
         EvalExpr::NullCoalesce { value, default } => {
             // `$x ?? $default` asks whether `$x` is there and must not complain that it is not:
-            // php raises no `Undefined variable` for the left operand of `??`. Suppressing around
-            // it is exactly that rule, and reuses the depth counter `@` already maintains.
-            //
-            // Suppression alone is not enough, because an uninitialized typed property THROWS
-            // rather than warning, and `@` does not stop a throw: `$o->t ?? 'D'` died with
-            // `Typed property C::$t must not be accessed before initialization` where php
-            // answers `'D'`. The quiet-fetch mode is the second half of the same rule.
-            context.push_error_suppression();
+            // php raises no `Undefined variable` for the left operand of `??`, and an
+            // uninitialized typed property ANSWERS instead of throwing. Both are the quiet-fetch
+            // mode, which a call boundary cuts: a callee body, unlike the `@` depth counter that
+            // propagates into calls, still warns about its own undefined variables.
             context.push_quiet_property_fetch();
             let value = if let EvalExpr::LoadVar(name) = value.as_ref() {
                 match visible_scope_cell(context, scope, name) {
@@ -614,7 +610,6 @@ fn eval_expr_with_result_ownership(
                 eval_expr_with_result_ownership(value, context, scope, values, own_result)
             };
             context.pop_quiet_property_fetch();
-            context.pop_error_suppression();
             let value = value?;
             if values.is_null(value)? {
                 release_expr_result(value, context, values)?;
