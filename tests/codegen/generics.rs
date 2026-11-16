@@ -3888,7 +3888,9 @@ interface Pile { public function push(int $at, object ...$items): int; }
 /** @template T */
 class Stack implements Pile {
     /** @param T ...$items */
-    public function push(int $at, object ...$items): int { return count($items); }
+    public function push(int $at, object ...$items): int {
+        return count($items) + count(get_defined_vars()) - 2;
+    }
 }
 $bin = new Bin(new User());
 echo $bin->put(new User()), get_class($bin->value);

@@ -404,8 +404,12 @@ fn native_param_guard(
     match fixed {
         Some(index) => vec![check(param, e_str(&(index + 1).to_string()))],
         None => {
-            let position = format!("_elephc_guard_{param}_position");
-            let element = format!("_elephc_guard_{param}_element");
+            // Generated names carry a `#`, which no PHP source can spell, so they cannot take
+            // over a parameter or a local of the method, and stay out of `get_defined_vars()`.
+            let position =
+                crate::names::generated_local_name(&format!("__elephc_guard_{param}_position"));
+            let element =
+                crate::names::generated_local_name(&format!("__elephc_guard_{param}_element"));
             vec![
                 s_assign(&position, e_int(method.params.len() as i64)),
                 s_foreach(
