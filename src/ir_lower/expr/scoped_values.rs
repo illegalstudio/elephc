@@ -588,7 +588,23 @@ fn late_static_defined_candidates(
 ) -> Vec<(String, u64, bool)> {
     let mut candidates = Vec::new();
     let family = ctx.return_alias_summaries.class_family(ctx.classes, base_class);
-    for (class_name, class_info) in family.iter().filter_map(|name| ctx.classes.get_key_value(name)) {
+    // An interface has no `parent` links to descend: its family is the classes implementing it,
+    // so `$x::FOO` through an interface-typed receiver reaches an implementer's own value.
+    let implementers: Vec<&String> = if ctx.interfaces.contains_key(base_class.trim_start_matches('\\')) {
+        ctx.classes
+            .keys()
+            .filter(|name| {
+                crate::ir_lower::expr::array_access_types::class_implements_interface_for_ir(ctx, name, base_class)
+            })
+            .collect()
+    } else {
+        Vec::new()
+    };
+    for (class_name, class_info) in family
+        .iter()
+        .chain(implementers)
+        .filter_map(|name| ctx.classes.get_key_value(name))
+    {
         if class_name == base_class {
             continue;
         }
@@ -628,7 +644,23 @@ pub(super) fn late_static_constant_candidates(
     let base_value = ctx.scoped_constant_value(base_class, const_name);
     let mut candidates = Vec::new();
     let family = ctx.return_alias_summaries.class_family(ctx.classes, base_class);
-    for (class_name, class_info) in family.iter().filter_map(|name| ctx.classes.get_key_value(name)) {
+    // An interface has no `parent` links to descend: its family is the classes implementing it,
+    // so `$x::FOO` through an interface-typed receiver reaches an implementer's own value.
+    let implementers: Vec<&String> = if ctx.interfaces.contains_key(base_class.trim_start_matches('\\')) {
+        ctx.classes
+            .keys()
+            .filter(|name| {
+                crate::ir_lower::expr::array_access_types::class_implements_interface_for_ir(ctx, name, base_class)
+            })
+            .collect()
+    } else {
+        Vec::new()
+    };
+    for (class_name, class_info) in family
+        .iter()
+        .chain(implementers)
+        .filter_map(|name| ctx.classes.get_key_value(name))
+    {
         if class_name == base_class {
             continue;
         }
