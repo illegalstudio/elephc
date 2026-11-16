@@ -975,9 +975,29 @@ foreach (['routes', 'dbal'] as $name) {
 
 /// Every refused condition of a `match` is compiled to php's fault in one round: each round is a
 /// full check of the program, and `SymfonyCaster` spent four of them on four arms of one `match`.
+///
+/// The default build types each demotable fault in the round that meets it
+/// (`CheckOptions::tolerate_runtime_faults`), so the whole program is checked once.
 #[test]
 fn closed_world_demotes_every_match_condition_in_one_round() {
-    let dir = make_test_dir("cw_match_rounds");
+    let log = compile_match_rounds_fixture("cw_match_rounds", None);
+    let checks = log.matches("[elephc-typecheck] top_level_final").count();
+    assert_eq!(checks, 1, "the round that meets the faults also types their demotion");
+}
+
+/// The same `match` with fault tolerance off (`ELEPHC_TOLERATE_RUNTIME_FAULTS=0`): the first check
+/// refuses, and it must refuse every arm at once, so a single re-check passes.
+#[test]
+fn closed_world_demotes_every_match_condition_in_one_refusing_round() {
+    let log = compile_match_rounds_fixture("cw_match_rounds_untolerated", Some("0"));
+    let checks = log.matches("[elephc-typecheck] top_level_final").count();
+    assert_eq!(checks, 2, "one check that refuses, one that passes");
+}
+
+/// Compiles the three-undefined-constant `match` project, asserts each arm is compiled to php's
+/// `Error` and the binary prints what php prints, and returns the compiler's log.
+fn compile_match_rounds_fixture(prefix: &str, tolerate_runtime_faults: Option<&str>) -> String {
+    let dir = make_test_dir(prefix);
     fs::create_dir_all(dir.join("src")).unwrap();
     fs::write(dir.join("composer.json"), r#"{"autoload":{"psr-4":{"App\\\\":"src/"}}}"#).unwrap();
     fs::write(
@@ -993,23 +1013,33 @@ spl_autoload_register(function (string $c): void {
     if (str_starts_with($c, 'App\\') && is_file($f)) { require $f; }
 });
 echo App\Caster::name(0), "\n";
+try { echo App\Caster::name(5), "\n"; } catch (Error $e) { echo get_class($e), ': ', $e->getMessage(), "\n"; }
 "#,
     )
     .unwrap();
-    let output = Command::new(elephc_bin())
+    let mut command = Command::new(elephc_bin());
+    command
         .env("XDG_CACHE_HOME", dir.join("cache-root"))
         .env("ELEPHC_TYPECHECK_TIMES", "1")
         .env("ELEPHC_CLOSED_WORLD", "1")
         .current_dir(&dir)
         .args(["--php-version", "8.5"])
-        .arg(dir.join("main.php"))
-        .output()
-        .expect("failed to spawn elephc");
+        .arg(dir.join("main.php"));
+    if let Some(value) = tolerate_runtime_faults {
+        command.env("ELEPHC_TOLERATE_RUNTIME_FAULTS", value);
+    }
+    let output = command.output().expect("failed to spawn elephc");
     assert!(output.status.success(), "{}{}", text(&output.stdout), text(&output.stderr));
     let log = format!("{}{}", text(&output.stdout), text(&output.stderr));
-    let checks = log.matches("[elephc-typecheck] top_level_final").count();
-    assert_eq!(checks, 2, "one check that refuses, one that passes");
-    assert_eq!(text(&run(&dir).stdout), "known\n");
+    for name in ["ONE", "TWO", "THREE"] {
+        assert!(
+            log.contains(&format!("php's Error `Undefined constant App\\State::{name}` is thrown when it runs")),
+            "State::{name} must be compiled to php's Error:\n{log}"
+        );
+    }
+    // php -n 8.5.10 on the same files prints exactly this.
+    assert_eq!(text(&run(&dir).stdout), "known\nError: Undefined constant App\\State::ONE\n");
+    log
 }
 
 /// A rebuild starts from the refusals the first build remembered. A class php cannot load, and
