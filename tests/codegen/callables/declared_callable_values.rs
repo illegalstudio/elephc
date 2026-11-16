@@ -143,8 +143,9 @@ echo $b(), "\n";
     );
 }
 
-/// Verifies by-reference and variadic `callable` parameters check their values on entry, and
-/// that a union with a coercible scalar (`int|callable`) still takes its members.
+/// Verifies by-reference and variadic `callable` parameters (including a by-reference variadic
+/// `callable &...$xs`) check their values on entry, and that a union with a coercible scalar
+/// (`int|callable`) still takes its members.
 #[test]
 fn test_declared_callable_reference_and_variadic_parameters_check_values() {
     let out = compile_and_run(
@@ -162,13 +163,18 @@ try { v($pair); } catch (TypeError $e) { echo $e->getMessage(), "\n"; }
 echo v("strlen", fn() => 1), "\n";
 function u(int|callable $v): string { return is_int($v) ? "int" : gettype($v); }
 echo u(5), " ", u(fn() => 1), "\n";
+function rv(callable &...$xs): void { echo "ran ", count($xs), "\n"; }
+$a = $argc > 0 ? "nope" : "strlen";
+try { rv($a); echo "after\n"; } catch (TypeError $e) { echo $e->getMessage(), "\n"; }
+$b = "strlen"; $c = "strtoupper"; rv($b, $c);
 "#,
     );
     assert_eq!(
         out,
         "r(): Argument #1 ($c) must be of type callable, string given\nok\n\
          v(): Argument #2 must be of type callable, string given\n\
-         v(): Argument #1 must be of type callable, array given\n2\nint object\n"
+         v(): Argument #1 must be of type callable, array given\n2\nint object\n\
+         rv(): Argument #1 must be of type callable, string given\nran 2\n"
     );
 }
 

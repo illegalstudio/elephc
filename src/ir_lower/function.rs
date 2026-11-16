@@ -1983,6 +1983,21 @@ fn lower_body_into_function(
                 .signature
                 .as_ref()
                 .is_some_and(|signature| signature.variadic.as_deref() == Some(name.as_str()));
+            if variadic && by_ref {
+                // A by-reference variadic is stored as `array<mixed>`, so the declared element
+                // type survives only as the source hint; `callable &...$xs` checks each
+                // referenced value on entry like its by-value form.
+                let callable_element = function
+                    .signature
+                    .as_ref()
+                    .and_then(crate::types::signatures::variadic_source_element_type_expr)
+                    .filter(|hint| crate::types::checker::type_expr_declares_callable(hint))
+                    .map(crate::ir_lower::context::type_expr_to_php_type);
+                if let Some(element) = callable_element {
+                    callable_variadic_guard = Some((display.clone(), position, name.clone(), element));
+                    continue;
+                }
+            }
             if by_ref && crate::ir_lower::expr::reference_parameter_needs_entry_guard(php_type) {
                 guards.push((display.clone(), position, name.clone(), php_type.clone()));
             } else if !variadic && php_type.declares_callable() {
