@@ -169,3 +169,25 @@ echo "end\n";
     );
     assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
 }
+
+/// Interpreted code storing a closure into a compiled `\Closure` property releases the
+/// descriptor the slot held before. The callable arm of the eval property setter published the
+/// converted descriptor with a bare store, so every reassignment leaked the previous one.
+#[test]
+fn test_eval_closure_property_reassignment_releases_the_previous_descriptor() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+class ClosureHolder { public \Closure $h; }
+function setHolderThroughEval(ClosureHolder $o, string $code) { eval($code); }
+$code = $argc > 0 ? '$o->h = function () { return 1; };' : '';
+for ($i = 0; $i < 3; $i++) {
+    $o = new ClosureHolder();
+    setHolderThroughEval($o, $code);
+    setHolderThroughEval($o, $code);
+    echo ($o->h)(), "\n";
+}
+unset($o);
+echo "end\n";
+"#);
+    assert_eq!(out.stdout, "1\n1\n1\nend\n", "stderr: {}", out.stderr);
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}

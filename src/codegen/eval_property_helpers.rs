@@ -1569,9 +1569,8 @@ fn emit_aarch64_store_property_slot(
                 AARCH64_SET_CONTEXT_FROM_FP_OFFSET,
                 AARCH64_SET_VALUE_FROM_FP_OFFSET,
             );
-            emitter.instruction("ldr x9, [sp, #16]");                           // reload the unboxed object pointer for the store
-            emitter.instruction(&format!("str x0, [x9, #{}]", slot.offset));    // publish the converted descriptor
-            emitter.instruction(&format!("str xzr, [x9, #{}]", slot.offset + 8)); // clear the typed-property initialization marker
+            // The converted descriptor is owned; publishing it displaces the previous owner.
+            emit_owned_slot_replacement(emitter, slot);
         }
         PhpType::Object(class_name) => {
             emit_aarch64_store_object_property_slot(
@@ -1646,13 +1645,8 @@ fn emit_x86_64_store_property_slot(
                 X86_64_SET_CONTEXT_FRAME_OFFSET,
                 X86_64_SET_VALUE_FRAME_OFFSET,
             );
-            emitter.instruction("mov r11, QWORD PTR [rbp - 24]");               // reload the unboxed object pointer for the store
-            emitter.instruction(
-                &format!("mov QWORD PTR [r11 + {}], rax", slot.offset)
-            );                                                                  // publish the converted descriptor
-            emitter.instruction(
-                &format!("mov QWORD PTR [r11 + {}], 0", slot.offset + 8)
-            );                                                                  // clear the typed-property initialization marker
+            // See the ARM64 twin: the owned descriptor displaces the previous owner.
+            emit_owned_slot_replacement(emitter, slot);
         }
         PhpType::Object(class_name) => {
             emit_x86_64_store_object_property_slot(
