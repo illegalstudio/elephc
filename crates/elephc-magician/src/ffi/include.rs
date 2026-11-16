@@ -113,6 +113,9 @@ pub extern "C" fn __elephc_eval_include_request_reset() {
         crate::context::reset_global_eval_classes();
         // Statics are request state shared by every context; they go with the arena too.
         crate::context::reset_request_statics();
+        // So is compiled class-like ACTIVATION, which the cached existence answers mirror.
+        #[cfg(not(test))]
+        crate::runtime_hooks::reset_existence_memo();
         // The null-handle context lives for the PROCESS, not the request, so its declarations
         // survive a boundary that just emptied the global registry. Clearing them is what lets
         // the next request re-declare and re-publish; see `forget_declared_class_likes`.

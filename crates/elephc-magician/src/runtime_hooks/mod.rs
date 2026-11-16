@@ -20,6 +20,8 @@ mod object_owners;
 #[cfg(not(test))]
 pub(crate) use object_owners::reset_object_owners;
 #[cfg(not(test))]
+pub(crate) use ops::reset_existence_memo;
+#[cfg(not(test))]
 mod tags;
 #[cfg(not(test))]
 pub(crate) mod release;

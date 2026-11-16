@@ -20,6 +20,7 @@ use crate::interpreter::RuntimeValueOps;
 use crate::value::{RuntimeCell, RuntimeCellHandle};
 
 mod aot_memo;
+pub(crate) use aot_memo::reset_existence_memo;
 mod collection_calls;
 mod construction_raw;
 mod lifecycle_scalars;

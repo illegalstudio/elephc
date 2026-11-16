@@ -191,6 +191,17 @@ pub(super) fn memoized_existence<E>(
     Ok(value)
 }
 
+/// Forgets every cached positive EXISTENCE answer at a `--web` request boundary.
+///
+/// "A type never stops existing" holds within one request only: a compiled interface (or
+/// probe-only class) exists once its source ACTIVATES, and the activation cells are request
+/// state the boundary zeroes (`emit_web_reset`). A `true` kept across it told the next request's
+/// interpreter that `I` existed while the compiled side saw it undeclared, so an eval autoloader
+/// skipped the include that would have activated it.
+pub(crate) fn reset_existence_memo() {
+    KIND_EXISTS.with(|table| table.borrow_mut().clear());
+}
+
 /// [`memoized`] for a PROPERTY query: the member half of the key keeps its case.
 pub(super) fn memoized_property<V, E>(
     cache: &'static LocalKey<MemoTable<V>>,
