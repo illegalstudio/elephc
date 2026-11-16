@@ -84,6 +84,9 @@ pub struct ElephcEvalContext {
     pub(super) static_properties: HashMap<(String, String), RuntimeCellHandle>,
     pub(super) static_property_aliases: HashMap<(String, String), EvalReferenceTarget>,
     pub(super) class_constants: HashMap<(String, String), RuntimeCellHandle>,
+    /// Instance property defaults each eval class evaluated when it was initialized, by
+    /// (class, property storage name); a new object copies them.
+    pub(super) instance_defaults: HashMap<(String, String), RuntimeCellHandle>,
     pub(super) included_files: HashSet<String>,
     pub(super) included_file_order: Vec<String>,
     pub(super) included_main_file: Option<String>,
@@ -135,6 +138,8 @@ pub struct ElephcEvalContext {
     pub(super) call_dir: String,
     pub(super) call_line: i64,
     pub(super) file_magic_override: Option<String>,
+    /// Deprecation notices captured during eager constant-expression evaluation.
+    pub(super) deprecation_notices: super::deprecation_notices::EvalDeprecationNotices,
 }
 
 impl ElephcEvalContext {
@@ -191,6 +196,7 @@ impl ElephcEvalContext {
             static_properties: HashMap::new(),
             static_property_aliases: HashMap::new(),
             class_constants: HashMap::new(),
+            instance_defaults: HashMap::new(),
             included_files: HashSet::new(),
             included_file_order: Vec::new(),
             included_main_file: None,
@@ -238,6 +244,7 @@ impl ElephcEvalContext {
             call_dir: String::new(),
             call_line: 0,
             file_magic_override: None,
+            deprecation_notices: Default::default(),
         }
     }
 
@@ -295,6 +302,7 @@ impl ElephcEvalContext {
             static_properties: HashMap::new(),
             static_property_aliases: HashMap::new(),
             class_constants: HashMap::new(),
+            instance_defaults: HashMap::new(),
             included_files: HashSet::new(),
             included_file_order: Vec::new(),
             included_main_file: None,
@@ -342,6 +350,7 @@ impl ElephcEvalContext {
             call_dir: String::new(),
             call_line: 0,
             file_magic_override: None,
+            deprecation_notices: Default::default(),
         }
     }
 

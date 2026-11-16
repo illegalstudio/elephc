@@ -299,6 +299,8 @@ pub(crate) struct Checker {
     /// Abstract methods each trait-using class owes to its traits, by class name
     /// ([`schema::collect_trait_method_requirements`]).
     pub trait_method_requirements: HashMap<String, schema::TraitMethodRequirements>,
+    /// Own property order and trait-collision defaults of classes that use traits.
+    pub trait_property_origins: schema::TraitPropertyOrigins,
     /// Name of the class currently being type-checked (used for `$this` resolution).
     pub current_class: Option<String>,
     /// Name of the current method being type-checked, when inside a class body.
@@ -1634,6 +1636,8 @@ fn check_types_on_compiler_stack(
     )?;
 
     Ok(CheckResult {
+        trait_collision_defaults: std::mem::take(&mut checker.trait_property_origins.collision_defaults),
+        class_binding: std::mem::take(&mut checker.trait_property_origins.binding),
         requested_instantiations: checker.requested_instantiations,
         requested_promotable_clones: checker.requested_promotable_clones,
         generic_call_sites: checker.generic_call_sites,

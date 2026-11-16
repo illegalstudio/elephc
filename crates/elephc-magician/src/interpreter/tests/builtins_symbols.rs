@@ -360,7 +360,7 @@ return PCNTL_EAGAIN;"#,
     #[cfg(target_os = "linux")]
     assert_eq!(values.get(result), FakeValue::Int(11));
 }
-/// Verifies missing eval dynamic constants fail through runtime status.
+/// Verifies a missing eval dynamic constant throws PHP's undefined-constant `Error`.
 #[test]
 fn execute_program_missing_constant_fetch_fails() {
     let program = parse_fragment(br#"return MissingEvalConst;"#).expect("parse eval fragment");
@@ -370,7 +370,7 @@ fn execute_program_missing_constant_fetch_fails() {
     let err = execute_program(&program, &mut scope, &mut values)
         .expect_err("missing constant should fail");
 
-    assert_eq!(err, EvalStatus::RuntimeFatal);
+    assert_eq!(err, EvalStatus::UncaughtThrowable);
 }
 /// Verifies eval class probes use the runtime class-name table.
 #[test]

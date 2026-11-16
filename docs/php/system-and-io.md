@@ -292,6 +292,8 @@ Procedural date/time aliases (`date_create`, `date_create_immutable`, `date_crea
 | `u` / `v` | microseconds / milliseconds; always `000000` / `000` (whole-second timestamps) |
 | `X` / `x` | expanded ISO-8601 year — `X` is always signed (`+2024`); `x` is signed only outside `[0, 9999]` (`1970`, `+10000`, `-0005`) |
 
+The predefined `DATE_*` constants (`DATE_ATOM`, `DATE_RFC2822`, `DATE_RFC3339_EXTENDED`, and the rest of PHP's set) hold these format strings. Each value matches the `DateTimeInterface` constant of the same suffix. See [Format constants](datetime.md#format-constants).
+
 A backslash escapes the next character so it is emitted literally instead of being treated as a specifier (e.g. `date('Y-m-d\TH:i:s')` → `2023-11-14T22:13:20`). Use single-quoted format strings so PHP's double-quoted escapes (`\t`, `\n`, …) don't interfere. (A lone trailing backslash emits nothing, rather than PHP's NUL byte.)
 
 `strtotime()` accepts the following shapes (input is case-insensitive for keywords/unit names/weekday names, and leading/trailing ASCII whitespace is trimmed):

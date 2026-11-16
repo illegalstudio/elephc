@@ -201,6 +201,7 @@ pub(super) fn builtin_reflection_class() -> FlattenedClass {
                 Some(mixed_type()),
                 empty_array(),
             ),
+            builtin_reflection_lazy_property(),
             builtin_property(
                 "__default_error",
                 Visibility::Private,
@@ -302,7 +303,7 @@ pub(super) fn builtin_reflection_class() -> FlattenedClass {
             builtin_reflection_class_has_name_method("hasProperty", "__property_names", false),
             builtin_reflection_class_has_name_method("hasConstant", "__constant_names", false),
             builtin_reflection_class_get_constant_method(),
-            builtin_reflection_class_mixed_method("getConstants", "__constants"),
+            builtin_reflection_lazy_mixed_method("getConstants", "__constants"),
             builtin_reflection_class_get_default_properties_method(),
             builtin_reflection_class_mixed_method("getStaticProperties", "__static_properties"),
             builtin_reflection_class_get_static_property_value_method(),

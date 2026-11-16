@@ -43,6 +43,194 @@ pub(super) fn eval_reflection_owner_object(
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
+    // Constructing a reflector initializes nothing in php-src; the defaults and member values
+    // materialized here for the compiled getters are evaluated silently.
+    context.begin_deprecation_silence();
+    let object = eval_reflection_owner_object_silently(
+        owner_kind, reflected_name, attributes, interface_names, trait_names, method_names,
+        property_names, parent_class_name, parameter_metadata, type_metadata,
+        settable_type_metadata, default_value, default_value_trait_origin, flags, modifiers,
+        method_modifiers, constant_value, backing_value, context, values,
+    );
+    context.end_deprecation_silence();
+    let object = object?;
+    let lazy = eval_reflection_lazy_source(owner_kind, reflected_name, parent_class_name, default_value.is_some(), object, context, values)
+        .and_then(|lazy| match lazy {
+            Some((scope, source)) => eval_reflection_attach_lazy(object, &scope, "__lazy", &source, None, context, values),
+            None => Ok(()),
+        });
+    if let Err(status) = lazy {
+        let _ = eval_release_value(context, values, object);
+        return Err(status);
+    }
+    Ok(object)
+}
+
+/// Stores, on a `ReflectionParameter` eval builds, the `__default_factory` closure the compiled
+/// `getDefaultValue()` calls: php-src evaluates the default on every call, so compiled code gets
+/// a fresh evaluation through eval, with its notices and errors, rather than the value
+/// previewed at construction. A closure's parameter, which cannot be named again, is reached
+/// through the closure object being reflected. A default eval leaves to a native factory keeps
+/// that factory.
+fn eval_reflection_attach_parameter_lazy_default(
+    object: RuntimeCellHandle,
+    parameter: &EvalReflectionParameterMetadata,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<(), EvalStatus> {
+    let Some(default) = parameter.default_value.as_ref() else { return Ok(()) };
+    if parameter_default_is_deferred(default) {
+        return Ok(());
+    }
+    let Some(function) = parameter.declaring_function.as_ref() else { return Ok(()) };
+    if function.name.contains('{') {
+        let Some(closure) = context.reflected_closure() else { return Ok(()) };
+        let source = format!(
+            "return static function () use ($__target) {{ return (new \\ReflectionFunction($__target))->getParameters()[{}]->getDefaultValue(); }};",
+            parameter.position
+        );
+        return eval_reflection_attach_lazy(object, "ReflectionParameter", "__default_factory", &source, Some(closure), context, values);
+    }
+    let target = match function.declaring_class_name.as_deref() {
+        Some(class) => format!(
+            "[{}, {}]",
+            eval_php_single_quoted(class.trim_start_matches('\\')),
+            eval_php_single_quoted(&function.name)
+        ),
+        None => eval_php_single_quoted(function.name.trim_start_matches('\\')),
+    };
+    let source = format!(
+        "return static function () {{ return (new \\ReflectionParameter({target}, {}))->getDefaultValue(); }};",
+        parameter.position
+    );
+    eval_reflection_attach_lazy(object, "ReflectionParameter", "__default_factory", &source, None, context, values)
+}
+
+/// Quotes `text` as a PHP single-quoted string literal.
+fn eval_php_single_quoted(text: &str) -> String {
+    format!("'{}'", text.replace('\\', "\\\\").replace('\'', "\\'"))
+}
+
+/// Returns the class scope and the PHP source of the closure a reflector `eval()` builds stores
+/// in `__lazy`, or `None` when its compiled getters can answer from the slots filled at
+/// construction. php-src computes a reflected class constant, enum case, property default,
+/// constant table, or default-property map on the getter call, so a value not final when the
+/// reflector is built is left to the closure, which makes that evaluation through eval (raising
+/// its notices and errors) when compiled code calls the getter. An eval call never reaches the
+/// compiled getter (`eval_reflection_evaluating_getter_result`).
+fn eval_reflection_lazy_source(
+    owner_kind: u64,
+    reflected_name: &str,
+    parent_class_name: Option<&str>,
+    has_default: bool,
+    object: RuntimeCellHandle,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<Option<(String, String)>, EvalStatus> {
+    if eval_reflection_owner_uses_class_metadata(owner_kind) {
+        if !eval_reflection_class_like_exists(reflected_name, context) {
+            return Ok(None);
+        }
+        let class = eval_php_single_quoted(reflected_name.trim_start_matches('\\'));
+        let source = format!(
+            "return static function (string $m, ...$a) {{ $r = new \\ReflectionClass({class}); \
+             if ($m === 'getConstant') {{ return $r->getConstant($a[0]); }} \
+             if ($m === 'getConstants') {{ return $r->getConstants(); }} \
+             return $r->getDefaultProperties(); }};"
+        );
+        return Ok(Some((eval_reflection_class_owner_scope(owner_kind).to_string(), source)));
+    }
+    let Some(holder) = parent_class_name else { return Ok(None) };
+    if !eval_reflection_class_like_exists(holder, context) {
+        return Ok(None);
+    }
+    let quoted_holder = eval_php_single_quoted(holder.trim_start_matches('\\'));
+    let quoted_name = eval_php_single_quoted(reflected_name);
+    if owner_kind == EVAL_REFLECTION_OWNER_PROPERTY {
+        if !has_default {
+            return Ok(None);
+        }
+        let source = format!(
+            "return static function (string $m) {{ return (new \\ReflectionProperty({quoted_holder}, {quoted_name}))->getDefaultValue(); }};"
+        );
+        return Ok(Some((String::from("ReflectionProperty"), source)));
+    }
+    if !matches!(
+        owner_kind,
+        EVAL_REFLECTION_OWNER_CLASS_CONSTANT | EVAL_REFLECTION_OWNER_ENUM_UNIT_CASE | EVAL_REFLECTION_OWNER_ENUM_BACKED_CASE
+    ) {
+        return Ok(None);
+    }
+    let evaluated = if crate::interpreter::statements::eval_is_enum_case(holder, reflected_name, context) {
+        context.enum_case(holder, reflected_name).is_some()
+    } else {
+        context
+            .class_constant(holder, reflected_name)
+            .is_none_or(|(owner, constant)| context.class_constant_cell(&owner, constant.name()).is_some())
+    };
+    if evaluated {
+        return Ok(None);
+    }
+    let class_name = values.object_class_name(object)?;
+    let bytes = values.string_bytes(class_name);
+    values.release(class_name)?;
+    let reflector_class = String::from_utf8_lossy(&bytes?).into_owned();
+    let source = format!(
+        "return static function (string $m) {{ $r = new \\{reflector_class}({quoted_holder}, {quoted_name}); \
+         return $m === 'getBackingValue' ? $r->getBackingValue() : $r->getValue(); }};"
+    );
+    Ok(Some((reflector_class, source)))
+}
+
+/// Builds the closure `source` (a `return` of a closure expression, which may capture
+/// `$__target`, bound to `target`) and stores it in reflector slot `slot`, from inside class
+/// scope `scope`.
+fn eval_reflection_attach_lazy(
+    object: RuntimeCellHandle,
+    scope: &str,
+    slot: &str,
+    source: &str,
+    target: Option<RuntimeCellHandle>,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<(), EvalStatus> {
+    let program = crate::parser::parse_fragment(source.as_bytes()).map_err(|_| EvalStatus::RuntimeFatal)?;
+    let Some(EvalStmt::Return(Some(expr))) = program.statements().first() else {
+        return Err(EvalStatus::RuntimeFatal);
+    };
+    let mut closure_scope = ElephcEvalScope::new();
+    if let Some(target) = target {
+        closure_scope.set("__target", target, crate::scope::ScopeCellOwnership::Borrowed);
+    }
+    let closure = eval_expr(expr, context, &mut closure_scope, values)?;
+    let stored = crate::interpreter::statements::eval_set_reflector_slots(object, scope, &[(slot, closure)], context, values);
+    let released = if closure.is_borrowed() { Ok(()) } else { values.release(closure) };
+    stored.and(released)
+}
+
+/// Builds the owner object for [`eval_reflection_owner_object`] inside its silent evaluation.
+fn eval_reflection_owner_object_silently(
+    owner_kind: u64,
+    reflected_name: &str,
+    attributes: &[EvalAttribute],
+    interface_names: &[String],
+    trait_names: &[String],
+    method_names: &[String],
+    property_names: &[String],
+    parent_class_name: Option<&str>,
+    parameter_metadata: &[EvalReflectionParameterMetadata],
+    type_metadata: Option<&EvalReflectionParameterTypeMetadata>,
+    settable_type_metadata: Option<&EvalReflectionParameterTypeMetadata>,
+    default_value: Option<&EvalExpr>,
+    default_value_trait_origin: Option<&str>,
+    flags: u64,
+    modifiers: u64,
+    method_modifiers: u64,
+    constant_value: Option<RuntimeCellHandle>,
+    backing_value: Option<RuntimeCellHandle>,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
     let attrs = eval_reflection_attribute_array_result(
         attributes,
         eval_reflection_attribute_target(owner_kind),
@@ -110,14 +298,25 @@ pub(super) fn eval_reflection_owner_object(
             )?
         }
     } else if owner_kind == EVAL_REFLECTION_OWNER_PROPERTY {
-        match default_value {
-            Some(default) => eval_reflection_class_like_default_value(
-                parent_class_name,
-                default_value_trait_origin,
-                default,
+        // A default that needs a value php-src has not evaluated yet (or throws) is stored as
+        // null; `getDefaultValue()` evaluates it (`eval_reflection_evaluating_getter_result`, or the
+        // `__lazy` closure from compiled code).
+        let preview = match default_value {
+            Some(default) => crate::interpreter::statements::eval_preview_outcome(
+                eval_reflection_class_like_default_value(
+                    parent_class_name,
+                    default_value_trait_origin,
+                    default,
+                    context,
+                    values,
+                ),
                 context,
                 values,
             )?,
+            None => None,
+        };
+        match preview {
+            Some(value) => value,
             None => values.null()?,
         }
     } else {
@@ -703,7 +902,17 @@ pub(super) fn eval_reflection_parameter_object_result(
         None => values.null()?,
     };
     let class_value = eval_reflection_parameter_class_value(parameter, context, values)?;
-    let default_value = eval_reflection_parameter_default_value(parameter, context, values)?;
+    // Materializing the reflector is not a PHP evaluation; `getDefaultValue()` raises the
+    // default's notices on each call (`eval_reflection_evaluating_getter_result`).
+    context.begin_deprecation_silence();
+    let default_value = eval_reflection_parameter_default_value(parameter, context, values);
+    context.end_deprecation_silence();
+    // A default that needs a value php-src has not evaluated yet (or throws) is stored as null;
+    // eval's `getDefaultValue()` evaluates it on the call.
+    let default_value = match crate::interpreter::statements::eval_preview_outcome(default_value, context, values)? {
+        Some(value) => value,
+        None => values.null()?,
+    };
     let default_value_constant_name = match parameter.default_value_constant_name.as_deref() {
         Some(name) => values.string(name)?,
         None => values.null()?,
@@ -740,9 +949,30 @@ pub(super) fn eval_reflection_parameter_object_result(
     values.release(default_value_constant_name)?;
     values.release(class_value)?;
     values.release(constructor)?;
-    if let Err(status) = attach_parameter_default_factory(object, parameter, context, values) {
+    if let Err(status) = attach_parameter_default_factory(object, parameter, context, values)
+        .and_then(|()| eval_reflection_attach_parameter_lazy_default(object, parameter, context, values))
+    {
         let _ = eval_release_value(context, values, object);
         return Err(status);
+    }
+    if let Some(default) = parameter.default_value.as_ref() {
+        if let Ok(identity) = values.object_identity(object) {
+            let magic_scope = parameter
+                .declaring_function
+                .as_ref()
+                .and_then(|function| function.magic_scope.as_ref())
+                .map(|scope| {
+                    (scope.function_name.clone(), scope.method_name.clone(), scope.class_name.clone(), scope.trait_name.clone())
+                });
+            context.register_reflected_parameter_default(
+                identity,
+                crate::context::EvalReflectedParameterDefault {
+                    default: default.clone(),
+                    declaring_class: parameter.declaring_class_name.clone(),
+                    magic_scope,
+                },
+            );
+        }
     }
     let rendered = eval_reflection_function_method_parameter_to_string(parameter);
     if let Err(status) = eval_reflection_store_dump(

@@ -667,7 +667,7 @@ fn empty_activation_has_no_synthetic_argument_cells() {
     let mut values = FakeOps::default();
     let mut context = ElephcEvalContext::new();
     let binding = bind_evaluated_function_args_with_ref_mode(
-        "f", &[], &[], &[], &[], &[], Vec::new(), EvalByRefBindingMode::RequireTarget,
+        "f", "f", &[], &[], &[], &[], &[], Vec::new(), EvalByRefBindingMode::RequireTarget,
         &mut context, &mut values,
     ).unwrap();
     assert!(binding.params.is_empty());
@@ -685,7 +685,7 @@ fn activation_surplus_snapshot_releases_its_own_lease() {
     let value = values.string("extra").unwrap();
     let result = values.int(42).unwrap();
     let binding = bind_evaluated_function_args_with_ref_mode(
-        "f", &[], &[], &[], &[], &[], positional_args(vec![value.borrowed()]),
+        "f", "f", &[], &[], &[], &[], &[], positional_args(vec![value.borrowed()]),
         EvalByRefBindingMode::RequireTarget, &mut context, &mut values,
     ).unwrap();
     assert!(binding.params.is_empty());
@@ -1014,7 +1014,7 @@ fn dynamic_callable_binding_failure_releases_prepared_defaults() {
     let mut values = FakeOps::default();
     let caller = values.int(7).unwrap();
     let result = bind_evaluated_function_args_with_ref_mode(
-        "ownedDefaultFailure", &["flag".into(), "target".into()],
+        "ownedDefaultFailure", "ownedDefaultFailure", &["flag".into(), "target".into()],
         &[Some(EvalParameterType::new(vec![EvalParameterTypeVariant::Bool], false)),
           Some(EvalParameterType::new(vec![EvalParameterTypeVariant::Class("MissingTarget".into())], true))],
         &[Some(EvalExpr::Const(EvalConst::Bool(false))), Some(EvalExpr::Const(EvalConst::Null))], &[false, false], &[false, false],

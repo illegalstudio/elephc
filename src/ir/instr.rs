@@ -1429,6 +1429,9 @@ pub enum Op {
     GeneratorReturn,
     IncludeOnceMark,
     IncludeOnceGuard,
+    /// Reads a program-wide once flag (the `.comm` symbol named by its data immediate) without
+    /// setting it: `true` once an `IncludeOnceGuard` or `IncludeOnceMark` on it has run.
+    IncludeOnceTest,
     FunctionVariantMark,
     FunctionVariantDispatch,
     Acquire,
@@ -1553,6 +1556,7 @@ impl Op {
             | TryPushHandler
             | TryPopHandler => E::WRITES_GLOBAL,
             IncludeOnceGuard => E::READS_GLOBAL | E::WRITES_GLOBAL,
+            IncludeOnceTest => E::READS_GLOBAL,
             IToStr | ResourceToStr | StrConcat | StrInterpolate
             | VarDump | PrintR => E::ALLOC_CONCAT,
             // NaN diagnostics and Mixed conversion callbacks may enter PHP handlers.
@@ -2161,6 +2165,7 @@ impl Op {
             GeneratorReturn => "generator_return",
             IncludeOnceMark => "include_once_mark",
             IncludeOnceGuard => "include_once_guard",
+            IncludeOnceTest => "include_once_test",
             FunctionVariantMark => "function_variant_mark",
             FunctionVariantDispatch => "function_variant_dispatch",
             Acquire => "acquire",

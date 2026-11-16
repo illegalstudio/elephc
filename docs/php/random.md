@@ -110,12 +110,16 @@ and `unserialize()` of malformed or all-zero Xoshiro state raises the same
 
 ## Known differences
 
-- The `MT_RAND_PHP` and `lcg_value()` deprecations go through `trigger_error()`, so a
-  custom error handler sees `E_USER_DEPRECATED` where php-src raises `E_DEPRECATED`. The
-  message text, file, and line match php-src, including for the variant notices raised
-  inside `mt_srand()` and `Mt19937::__construct()`, which report the user's call site.
-- A `MT_RAND_PHP` read inside a constant expression (a `const`, a class constant, an enum
-  case value, an attribute argument, or a default parameter) is reported as elephc's
-  compile-time deprecation diagnostic, because those sites cannot contain a function call.
-  Ordinary reads, including `switch` cases and `match` arms, emit the deprecation at run
-  time, on stderr, exactly where the constant is fetched.
+- The `lcg_value()` deprecation and the `MT_RAND_PHP` variant notices raised inside
+  `mt_srand()` and `Mt19937::__construct()` go through `trigger_error()`, so a custom error
+  handler sees `E_USER_DEPRECATED` where php-src raises `E_DEPRECATED`. The message text,
+  file, and line match php-src, and each reports the user's call site. A read of the
+  `MT_RAND_PHP` constant itself raises `E_DEPRECATED`, as in php-src, and only under the
+  PHP 8.3 and later profiles.
+- A `MT_RAND_PHP` read inside a constant expression deprecates when PHP evaluates it, once:
+  a global `const` or `define()` when its statement runs, a class constant on its first
+  read, property defaults when their class initializes, and a parameter default on the first
+  call that omits the argument (see [Format constants](datetime.md#format-constants) for the
+  full rules, which `DATE_RFC7231` shares). Ordinary reads, including `switch` cases and
+  `match` arms, emit the deprecation every time they run, on stderr, exactly where the
+  constant is fetched.

@@ -136,6 +136,12 @@ The portable groups include error levels, `DEBUG_BACKTRACE_*`, integer and
 floating-point limits, `PHP_FLOAT_DIG`, `PHP_OUTPUT_HANDLER_*`, `UPLOAD_ERR_*`,
 and the debug/thread build flags.
 
+Reading a constant PHP deprecates raises `E_DEPRECATED` with php-src's message, in
+compiled code and in `eval()`, under the profiles that deprecate it. In Core that is
+`E_STRICT` (PHP 8.4 and later); the other modules' deprecated constants are listed on
+their pages. A constant expression reports when PHP evaluates it, as described under
+[Format constants](datetime.md#format-constants).
+
 Environment constants describe the compiled Elephc program:
 
 | Constants | Value |

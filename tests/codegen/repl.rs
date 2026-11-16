@@ -210,7 +210,7 @@ fn test_repl_recovers_nested_failures() {
     ), &["--heap-debug"]);
     assert_eq!(output.status.code(), Some(1));
     assert_eq!(String::from_utf8_lossy(&output.stdout), "int(0)\nint(1)\nint(42)\nint(2)\ncaughtalive");
-    assert_eq!(String::from_utf8_lossy(&output.stderr), "Error: eval() runtime failed\n");
+    assert_eq!(String::from_utf8_lossy(&output.stderr), "Error: Undefined constant \"das\"\n");
 }
 
 /// Includes, magic directory constants, and project configuration use the launch directory.

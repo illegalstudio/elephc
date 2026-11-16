@@ -244,11 +244,11 @@ pub(crate) fn build_attribute_new_instance_body_with_extra(
                             Some(crate::types::AttrKey::Str(name)) => Expr::new(
                                 ExprKind::NamedArg {
                                     name: name.clone(),
-                                    value: Box::new(attr_arg_expr(&entry.value)),
+                                    value: Box::new(attr_arg_expr(&entry.value, false)),
                                 },
                                 span,
                             ),
-                            _ => attr_arg_expr(&entry.value),
+                            _ => attr_arg_expr(&entry.value, false),
                         })
                         .collect(),
                 },
@@ -301,24 +301,28 @@ fn factory_condition(factory_id: i64) -> Expr {
 /// re-emitted nodes resolve directly during lowering (the global/class constant
 /// folds to its value; an enum case materializes the case object, matching
 /// PHP's `ReflectionAttribute::getArguments()`).
-fn attr_arg_expr(arg: &AttrArgValue) -> Expr {
+fn attr_arg_expr(arg: &AttrArgValue, caller_line: bool) -> Expr {
     let span = crate::span::Span::dummy();
+    // A constant read keeps its source line, which a deprecated constant reports at. A bare
+    // top-level `getArguments()` argument takes php-src's fast path and reports at the
+    // caller's line instead; its dummy span asks for that.
+    let read_span = |line: u32| if caller_line || line == 0 { span } else { crate::span::Span::new(line, 1) };
     match arg {
         AttrArgValue::Null => Expr::new(ExprKind::Null, span),
         AttrArgValue::Int(value) => Expr::new(ExprKind::IntLiteral(*value), span),
         AttrArgValue::Float(bits) => Expr::new(ExprKind::FloatLiteral(f64::from_bits(*bits)), span),
         AttrArgValue::Bool(value) => Expr::new(ExprKind::BoolLiteral(*value), span),
         AttrArgValue::Str(value) => Expr::new(ExprKind::StringLiteral(value.clone()), span),
-        AttrArgValue::Array(entries) => entries_to_array_expr(entries, false),
-        AttrArgValue::ConstRef(name) => {
-            Expr::new(ExprKind::ConstRef(name_from_canonical(name)), span)
+        AttrArgValue::Array(entries) => entries_to_array_expr(entries, false, false),
+        AttrArgValue::ConstRef(name, line) => {
+            Expr::new(ExprKind::ConstRef(name_from_canonical(name)), read_span(*line))
         }
-        AttrArgValue::ScopedConst(type_name, member) => Expr::new(
+        AttrArgValue::ScopedConst(type_name, member, line) => Expr::new(
             ExprKind::ScopedConstantAccess {
                 receiver: StaticReceiver::Named(name_from_canonical(type_name)),
                 name: member.clone(),
             },
-            span,
+            if *line == 0 { span } else { crate::span::Span::new(*line, 1) },
         ),
     }
 }
@@ -330,7 +334,7 @@ fn attr_arg_expr(arg: &AttrArgValue) -> Expr {
 /// `getArguments()` ordering; otherwise it produces a positional `ArrayLiteral`.
 /// `force_assoc` keeps the top-level `getArguments()` result a single array kind
 /// (a hash) so its declared associative type matches the runtime value.
-fn entries_to_array_expr(entries: &[AttrArgEntry], force_assoc: bool) -> Expr {
+fn entries_to_array_expr(entries: &[AttrArgEntry], force_assoc: bool, caller_line: bool) -> Expr {
     let span = crate::span::Span::dummy();
     if force_assoc || entries.iter().any(|entry| entry.key.is_some()) {
         let mut next_index = 0i64;
@@ -345,7 +349,7 @@ fn entries_to_array_expr(entries: &[AttrArgEntry], force_assoc: bool) -> Expr {
                         Expr::new(ExprKind::IntLiteral(index), span)
                     }
                 };
-                (key, attr_arg_expr(&entry.value))
+                (key, attr_arg_expr(&entry.value, caller_line))
             })
             .collect();
         Expr::new(ExprKind::ArrayLiteralAssoc(pairs), span)
@@ -354,7 +358,7 @@ fn entries_to_array_expr(entries: &[AttrArgEntry], force_assoc: bool) -> Expr {
             ExprKind::ArrayLiteral(
                 entries
                     .iter()
-                    .map(|entry| attr_arg_expr(&entry.value))
+                    .map(|entry| attr_arg_expr(&entry.value, caller_line))
                     .collect(),
             ),
             span,
@@ -385,7 +389,7 @@ pub(crate) fn build_attribute_get_arguments_body_with_extra(
     for factory in factories {
         let condition = factory_condition(factory.id);
         let then_body = vec![Stmt::new(
-            StmtKind::Return(Some(entries_to_array_expr(&factory.args, true))),
+            StmtKind::Return(Some(entries_to_array_expr(&factory.args, true, true))),
             span,
         )];
         body.push(Stmt::new(

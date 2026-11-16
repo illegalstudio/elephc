@@ -17531,6 +17531,258 @@
       },
       "extension": false,
       "internal": false,
+      "module": "date",
+      "name": "DATE_ATOM",
+      "route": "predefined",
+      "since": null,
+      "value": "Y-m-d\\TH:i:sP"
+    },
+    {
+      "aot": {
+        "kind": "language-intrinsic",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "interpreter",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
+      "module": "date",
+      "name": "DATE_COOKIE",
+      "route": "predefined",
+      "since": null,
+      "value": "l, d-M-Y H:i:s T"
+    },
+    {
+      "aot": {
+        "kind": "language-intrinsic",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "interpreter",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
+      "module": "date",
+      "name": "DATE_ISO8601",
+      "route": "predefined",
+      "since": null,
+      "value": "Y-m-d\\TH:i:sO"
+    },
+    {
+      "aot": {
+        "kind": "language-intrinsic",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "interpreter",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
+      "module": "date",
+      "name": "DATE_ISO8601_EXPANDED",
+      "route": "predefined",
+      "since": "8.2",
+      "value": "X-m-d\\TH:i:sP"
+    },
+    {
+      "aot": {
+        "kind": "language-intrinsic",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "interpreter",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
+      "module": "date",
+      "name": "DATE_RFC1036",
+      "route": "predefined",
+      "since": null,
+      "value": "D, d M y H:i:s O"
+    },
+    {
+      "aot": {
+        "kind": "language-intrinsic",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "interpreter",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
+      "module": "date",
+      "name": "DATE_RFC1123",
+      "route": "predefined",
+      "since": null,
+      "value": "D, d M Y H:i:s O"
+    },
+    {
+      "aot": {
+        "kind": "language-intrinsic",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "interpreter",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
+      "module": "date",
+      "name": "DATE_RFC2822",
+      "route": "predefined",
+      "since": null,
+      "value": "D, d M Y H:i:s O"
+    },
+    {
+      "aot": {
+        "kind": "language-intrinsic",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "interpreter",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
+      "module": "date",
+      "name": "DATE_RFC3339",
+      "route": "predefined",
+      "since": null,
+      "value": "Y-m-d\\TH:i:sP"
+    },
+    {
+      "aot": {
+        "kind": "language-intrinsic",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "interpreter",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
+      "module": "date",
+      "name": "DATE_RFC3339_EXTENDED",
+      "route": "predefined",
+      "since": null,
+      "value": "Y-m-d\\TH:i:s.vP"
+    },
+    {
+      "aot": {
+        "kind": "language-intrinsic",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "interpreter",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
+      "module": "date",
+      "name": "DATE_RFC7231",
+      "route": "predefined",
+      "since": null,
+      "value": "D, d M Y H:i:s \\G\\M\\T"
+    },
+    {
+      "aot": {
+        "kind": "language-intrinsic",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "interpreter",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
+      "module": "date",
+      "name": "DATE_RFC822",
+      "route": "predefined",
+      "since": null,
+      "value": "D, d M y H:i:s O"
+    },
+    {
+      "aot": {
+        "kind": "language-intrinsic",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "interpreter",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
+      "module": "date",
+      "name": "DATE_RFC850",
+      "route": "predefined",
+      "since": null,
+      "value": "l, d-M-y H:i:s T"
+    },
+    {
+      "aot": {
+        "kind": "language-intrinsic",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "interpreter",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
+      "module": "date",
+      "name": "DATE_RSS",
+      "route": "predefined",
+      "since": null,
+      "value": "D, d M Y H:i:s O"
+    },
+    {
+      "aot": {
+        "kind": "language-intrinsic",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "interpreter",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
+      "module": "date",
+      "name": "DATE_W3C",
+      "route": "predefined",
+      "since": null,
+      "value": "Y-m-d\\TH:i:sP"
+    },
+    {
+      "aot": {
+        "kind": "language-intrinsic",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "interpreter",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
       "module": "core",
       "name": "DEBUG_BACKTRACE_IGNORE_ARGS",
       "route": "predefined",

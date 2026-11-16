@@ -188,6 +188,11 @@ pub(super) fn builtin_reflection_class_get_constant_method() -> ClassMethod {
         return_type: Some(mixed_type()),
         by_ref_return: false,
         body: vec![
+            reflection_lazy_return(
+                "getConstant",
+                vec![Expr::new(ExprKind::Variable("name".to_string()), dummy_span)],
+                dummy_span,
+            ),
             Stmt::new(
                 StmtKind::Assign {
                     name: "value".to_string(),

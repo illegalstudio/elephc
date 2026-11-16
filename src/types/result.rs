@@ -111,6 +111,13 @@ pub struct ArrayPushPropertyPlan {
 /// class metadata, warnings, FFI data, and required libraries forward to optimizer,
 /// codegen, and linker setup.
 pub struct CheckResult {
+    /// Default expressions php-src evaluates when execution reaches a class or trait statement
+    /// whose properties compatibly redeclare a used trait's, keyed by class or trait name. A
+    /// trait has no `ClassInfo`, so lowering reads its entry here.
+    pub trait_collision_defaults: HashMap<String, Vec<crate::types::TraitCollisionDefault>>,
+    /// How each user class-like is bound (compile time or at its statement) and where its
+    /// trait-imported properties come from.
+    pub class_binding: crate::types::ClassBindingFacts,
     /// Every instantiation a call site asked for, as (template name, type arguments).
     ///
     /// The pipeline splices one declaration per entry into the program and re-checks, because

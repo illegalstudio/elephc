@@ -310,8 +310,17 @@ pub(super) fn expr_effect(expr: &Expr) -> Effect {
         | ExprKind::Variable(_)
         | ExprKind::BoolLiteral(_)
         | ExprKind::Null
-        | ExprKind::ConstRef(_)
         | ExprKind::This => Effect::PURE,
+        // A deprecated constant read raises E_DEPRECATED, which reaches the user error handler
+        // (output, globals, a throw), so it must survive like a call. Profiles that do not
+        // deprecate it only lose a dead-read elimination.
+        ExprKind::ConstRef(name) => {
+            if elephc_builtin_contract::global_constant_deprecation(name.as_str()).is_some() {
+                Effect::PURE.with_side_effects().with_may_throw().with_writes_globals()
+            } else {
+                Effect::PURE
+            }
+        }
         ExprKind::Negate(inner) | ExprKind::BitNot(inner) => {
             let effect = expr_effect(inner);
             if internal_object_operators_available() && !literal_scalar_operand(inner) {
@@ -511,6 +520,12 @@ pub(super) fn expr_effect(expr: &Expr) -> Effect {
         ExprKind::StaticPropertyAccess { .. } => Effect::PURE.with_may_throw(),
         ExprKind::FirstClassCallable(target) => callable_target_effect(target),
         ExprKind::BufferNew { len, .. } => expr_effect(len).with_side_effects(),
+        ExprKind::ScopedConstantAccess { name, .. }
+            if elephc_builtin_contract::is_deprecated_class_constant_name(name)
+                || super::class_constant_may_deprecate(name) =>
+        {
+            Effect::PURE.with_side_effects().with_may_throw().with_writes_globals()
+        }
         ExprKind::ClassConstant { .. } | ExprKind::ScopedConstantAccess { .. } => Effect::PURE,
         ExprKind::ObjectClassName { object } => expr_effect(object),
         ExprKind::NewScopedObject { args, .. } => combine_effects(args.iter().map(expr_effect))
@@ -610,4 +625,57 @@ pub(super) fn combine_effects(effects: impl IntoIterator<Item = Effect>) -> Effe
 fn output_effect(effect: Effect) -> Effect {
     let effect = effect.with_side_effects();
     if output::output_may_throw() { effect.with_may_throw() } else { effect }
+}
+
+/// Returns the user class-constant names whose initializer may read a deprecated constant when
+/// php-src first evaluates it: directly, or through another such constant. Names are compared
+/// without their class, which only costs dead-read eliminations of unrelated same-named
+/// constants.
+pub(super) fn deprecation_reading_class_constants(program: &[Stmt]) -> HashSet<String> {
+    let mut constants: Vec<(String, Expr)> = Vec::new();
+    collect_class_constants(program, &mut constants);
+    let mut reading: HashSet<String> = HashSet::new();
+    loop {
+        let before = reading.len();
+        for (name, value) in &constants {
+            if !reading.contains(name) && initializer_may_deprecate(value, &reading) {
+                reading.insert(name.clone());
+            }
+        }
+        if reading.len() == before {
+            return reading;
+        }
+    }
+}
+
+/// Collects every class, interface, trait, and enum constant declared in `program`.
+fn collect_class_constants(program: &[Stmt], out: &mut Vec<(String, Expr)>) {
+    for statement in program {
+        match &statement.kind {
+            StmtKind::ClassDecl { constants, .. }
+            | StmtKind::InterfaceDecl { constants, .. }
+            | StmtKind::TraitDecl { constants, .. }
+            | StmtKind::EnumDecl { constants, .. } => {
+                out.extend(constants.iter().map(|constant| (constant.name.clone(), constant.value.clone())));
+            }
+            StmtKind::NamespaceBlock { body, .. } => collect_class_constants(body, out),
+            _ => {}
+        }
+    }
+}
+
+/// Reports whether a constant initializer reads a deprecated global or builtin class constant,
+/// or a user class constant already known to.
+fn initializer_may_deprecate(expr: &Expr, reading: &HashSet<String>) -> bool {
+    let mut found = false;
+    crate::ir_lower::visit_constant_reads(expr, &mut |read| match &read.kind {
+        ExprKind::ConstRef(name) => {
+            found |= elephc_builtin_contract::global_constant_deprecation(name.as_str()).is_some();
+        }
+        ExprKind::ScopedConstantAccess { name, .. } => {
+            found |= elephc_builtin_contract::is_deprecated_class_constant_name(name) || reading.contains(name);
+        }
+        _ => {}
+    });
+    found
 }

@@ -67,10 +67,12 @@ pub(super) fn lower_method_call(
             return result;
         }
     }
+    // These reflection methods initialize the reflected class (deferred default errors and
+    // property-default deprecations), like php-src does.
     if op == Op::MethodCall && args.is_empty()
-        && ctx.classes.values().any(|class| class.deferred_property_default_error.is_some())
         && matches!(php_symbol_key(method).as_str(),
             "getdefaultproperties" | "getstaticproperties" | "newinstancewithoutconstructor")
+        && ctx.classes.keys().any(|class| crate::ir_lower::property_default_errors::has_initialization_effect(ctx, class))
     {
         if is_reflection_class_construction_receiver(ctx, object.value) {
             let owns_receiver = ctx.value_is_owning_temporary(object)
@@ -86,6 +88,11 @@ pub(super) fn lower_method_call(
                 Some(expr.span));
             let name = lower_property_get_from_value(ctx, borrowed, "__name", Op::PropGet, expr);
             crate::ir_lower::property_default_errors::for_dynamic_class(ctx, name, expr.span);
+            if php_symbol_key(method) == "getdefaultproperties" {
+                crate::ir_lower::property_default_errors::for_reflection_default_properties(
+                    ctx, name, expr.span,
+                );
+            }
             if owns_receiver { ctx.unguard_call_argument(object.value, expr.span); }
         }
     }
@@ -224,6 +231,13 @@ pub(super) fn lower_method_call(
         .map_or(args, |rewrite| rewrite.args.as_slice());
     let arg_values = lower_args_with_signature(ctx, sig.as_ref(), call_args);
     ctx.call_description = previous_description;
+    // php-src initializes the reflected class once the arguments are evaluated, whether the
+    // static property exists or not.
+    if op == Op::MethodCall
+        && matches!(php_symbol_key(dispatch_method).as_str(), "getstaticpropertyvalue" | "setstaticpropertyvalue")
+    {
+        initialize_reflected_class_from_receiver(ctx, object, expr);
+    }
     let mut arg_values = arg_values;
     if method_is_fiber_start(ctx, object.value, dispatch_method) {
         for argument in &mut arg_values {
@@ -527,4 +541,23 @@ pub(super) fn lower_nullable_regular_method_call(
 
     ctx.builder.position_at_end(merge);
     take_owned_temp(ctx, &temp_name, expr.span)
+}
+
+/// Initializes the class a `ReflectionClass` receiver reflects (deferred default errors and
+/// property-default deprecations), reading its runtime name without consuming the receiver.
+fn initialize_reflected_class_from_receiver(
+    ctx: &mut LoweringContext<'_, '_>,
+    object: LoweredValue,
+    expr: &Expr,
+) {
+    if !is_reflection_class_construction_receiver(ctx, object.value)
+        || !ctx.classes.keys().any(|class| crate::ir_lower::property_default_errors::has_initialization_effect(ctx, class))
+    {
+        return;
+    }
+    let borrowed = ctx.emit_value(Op::Borrow, vec![object.value], None,
+        ctx.builder.value_php_type(object.value).clone(), Op::Borrow.default_effects(),
+        Some(expr.span));
+    let name = lower_property_get_from_value(ctx, borrowed, "__name", Op::PropGet, expr);
+    crate::ir_lower::property_default_errors::for_dynamic_class(ctx, name, expr.span);
 }

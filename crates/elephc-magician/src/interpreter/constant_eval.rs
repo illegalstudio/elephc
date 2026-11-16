@@ -8,6 +8,10 @@
 //! - Registered AOT constants override the standalone predefined fallback inventory.
 //! - AOT user constants live in their own registry and materialize a fresh value per read.
 //! - Magic file and directory values come from the current eval call-site context.
+//! - Reads of deprecated predefined constants (`DATE_RFC7231`, `MT_RAND_PHP`) raise
+//!   `E_DEPRECATED` from the fetch, including through `constant()`.
+//! - An undefined constant throws PHP's catchable `Error` (`Undefined constant "NAME"`, the
+//!   namespaced name when a namespaced read falls back to a missing global one).
 
 use super::*;
 use elephc_builtin_contract::ConstValue;
@@ -28,47 +32,103 @@ pub(super) fn eval_const(
     }
 }
 
-/// Borrows one eval-defined dynamic constant until its expression consumer takes a copy.
-pub(super) fn eval_const_fetch(
+/// Raises PHP's `E_DEPRECATED` for a read of a deprecated predefined global constant
+/// (`DATE_RFC7231`, `MT_RAND_PHP`) under the active eval profile.
+///
+/// php-src reports it from the fetch itself, so `constant()` reports it too.
+fn eval_report_constant_deprecation(
     name: &str,
-    context: &ElephcEvalContext,
+    context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
-) -> Result<RuntimeCellHandle, EvalStatus> {
-    if let Some(value) = context.native_global_constant(name) {
-        return eval_native_global_constant(value, values);
-    }
-    if let Some(value) = context.native_user_constant(name) {
-        return eval_native_user_constant(value, values);
-    }
-    if let Some(value) = eval_predefined_constant(name, values)? {
-        return Ok(value);
-    }
-    let Some(value) = context.constant(name) else {
-        return Err(EvalStatus::RuntimeFatal);
+) -> Result<(), EvalStatus> {
+    let Some(deprecation) = elephc_builtin_contract::global_constant_deprecation(name) else {
+        return Ok(());
     };
-    Ok(value)
+    if deprecation.applies_to_version_id(crate::eval_php_profile::eval_php_version_id())
+        && !context.capture_deprecation(deprecation.message)
+    {
+        eval_dispatch_php_error(deprecation.message, E_DEPRECATED, context, values)?;
+    }
+    Ok(())
 }
 
-/// Fetches a namespaced constant and falls back to the global constant namespace.
+/// Borrows one eval-defined dynamic constant until its expression consumer takes a copy, or
+/// throws PHP's `Error` for an undefined constant.
+pub(super) fn eval_const_fetch(
+    name: &str,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    match eval_const_lookup(name, context, values)? {
+        Some(value) => Ok(value),
+        None => eval_throw_undefined_constant(name, context, values),
+    }
+}
+
+/// Fetches a namespaced constant and falls back to the global constant namespace. php-src
+/// names the namespaced constant when neither exists.
 pub(super) fn eval_namespaced_const_fetch(
     name: &str,
     fallback_name: &str,
-    context: &ElephcEvalContext,
+    context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
+    // A user constant in the namespace shadows the global one; the global fallback reports
+    // its own deprecation.
+    if let Some(value) = eval_const_lookup(name, context, values)? {
+        return Ok(value);
+    }
+    match eval_const_lookup(fallback_name, context, values)? {
+        Some(value) => Ok(value),
+        None => eval_throw_undefined_constant(name, context, values),
+    }
+}
+
+/// Returns global constant `name`, raising its deprecation, or `None` when it is undefined.
+fn eval_const_lookup(
+    name: &str,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<Option<RuntimeCellHandle>, EvalStatus> {
+    // php-src raises a predefined constant's deprecation from the fetch that finds it, so a
+    // name that is not defined here (an extension the program does not load) only throws.
     if let Some(value) = context.native_global_constant(name) {
-        return eval_native_global_constant(value, values);
+        let value = eval_native_global_constant(value, values)?;
+        return eval_report_found_constant_deprecation(name, value, context, values);
     }
     if let Some(value) = context.native_user_constant(name) {
-        return eval_native_user_constant(value, values);
+        return eval_native_user_constant(value, values).map(Some);
     }
     if let Some(value) = eval_predefined_constant(name, values)? {
-        return Ok(value);
+        return eval_report_found_constant_deprecation(name, value, context, values);
     }
-    if let Some(value) = context.constant(name) {
-        return Ok(value);
+    Ok(context.constant(name))
+}
+
+/// Raises the deprecation of predefined constant `name`, which the fetch found as `value`, and
+/// returns the value (released if the handler throws).
+fn eval_report_found_constant_deprecation(
+    name: &str,
+    value: RuntimeCellHandle,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<Option<RuntimeCellHandle>, EvalStatus> {
+    if let Err(status) = eval_report_constant_deprecation(name, context, values) {
+        if !value.is_borrowed() {
+            let _ = values.release(value);
+        }
+        return Err(status);
     }
-    eval_const_fetch(fallback_name, context, values)
+    Ok(Some(value))
+}
+
+/// Throws PHP's `Error: Undefined constant "NAME"`.
+fn eval_throw_undefined_constant<T>(
+    name: &str,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<T, EvalStatus> {
+    eval_throw_error(&format!("Undefined constant \"{}\"", name.trim_start_matches('\\')), context, values)
 }
 
 /// Materializes one registered AOT global constant into a fresh runtime cell.
@@ -331,6 +391,26 @@ mod curl_constant_fallback_tests {
                 ),
             }
         }
+    }
+
+    /// The global `DATE_*` masks resolve to the same strings as `DateTimeInterface`, including
+    /// the escaped `T` in `DATE_ATOM` and the literal `GMT` in `DATE_RFC7231`. Lookup stays
+    /// case-sensitive.
+    #[test]
+    fn date_format_constants_resolve_to_php_format_strings() {
+        assert!(matches!(
+            eval_predefined_constant_value("DATE_ATOM"),
+            Some(EvalPredefinedConstant::String("Y-m-d\\TH:i:sP"))
+        ));
+        assert!(matches!(
+            eval_predefined_constant_value("DATE_RFC7231"),
+            Some(EvalPredefinedConstant::String("D, d M Y H:i:s \\G\\M\\T"))
+        ));
+        assert!(matches!(
+            eval_predefined_constant_value("DATE_ISO8601_EXPANDED"),
+            Some(EvalPredefinedConstant::String("X-m-d\\TH:i:sP"))
+        ));
+        assert!(eval_predefined_constant_value("date_atom").is_none());
     }
 
     /// The existing (pre-curl) predefined constants must still resolve unchanged: the new

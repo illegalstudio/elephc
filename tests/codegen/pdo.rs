@@ -6485,3 +6485,23 @@ function viaQuoteWrap(PDO $pdo): string { return viaEarlyReturn($pdo); }
     );
     assert_eq!(out, "1|'X'|0\n");
 }
+
+/// The legacy `PDO::SQLITE_*` spellings are deprecated since PHP 8.5: a read through `PDO` or
+/// through the `Pdo\Sqlite` subclass that inherits it raises php-src's message, which names
+/// `PDO`, while the `Pdo\Sqlite::DETERMINISTIC` replacement stays silent.
+#[test]
+fn test_pdo_legacy_sqlite_constants_read_deprecations() {
+    let out = compile_and_run(
+        r#"<?php
+set_error_handler(function (int $level, string $message, string $file, int $line): bool {
+    echo "[", $level, "] ", $message, " @", $line, "\n";
+    return true;
+});
+echo PDO::SQLITE_DETERMINISTIC, ",", \Pdo\Sqlite::SQLITE_OPEN_CREATE, ",", \Pdo\Sqlite::DETERMINISTIC, "\n";
+"#,
+    );
+    assert_eq!(
+        out,
+        "[8192] Constant PDO::SQLITE_DETERMINISTIC is deprecated since 8.5, use Pdo\\Sqlite::DETERMINISTIC instead @6\n2048,[8192] Constant PDO::SQLITE_OPEN_CREATE is deprecated since 8.5, use Pdo\\Sqlite::OPEN_CREATE instead @6\n4,2048\n"
+    );
+}

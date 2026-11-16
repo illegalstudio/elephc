@@ -123,6 +123,8 @@ fn dummy_check_result() -> CheckResult {
     );
 
     CheckResult {
+        trait_collision_defaults: HashMap::new(),
+        class_binding: Default::default(),
         requested_instantiations: Vec::new(),
         requested_promotable_clones: Vec::new(),
         requested_class_instantiations: Vec::new(),
@@ -204,6 +206,8 @@ fn class_info(_class_name: &str) -> ClassInfo {
         constants: HashMap::new(),
         constant_order: Vec::new(),
         constant_deprecations: HashMap::new(),
+        property_initialization_order: Vec::new(),
+        trait_collision_defaults: Vec::new(),
         constant_types: HashMap::new(),
         constant_visibilities: Default::default(),
         final_constants: Default::default(),

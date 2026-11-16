@@ -583,7 +583,26 @@ pub fn infer_expr_type_syntactic(expr: &Expr) -> PhpType {
         // `!` always yields a bool, as the checker and `lower_not` type it; the `int` default
         // made a merge of `!$flag` with an int collapse into an int slot.
         ExprKind::Not(_) => PhpType::Bool,
+        // A catalogued predefined constant has a known scalar type. Without this arm a string
+        // constant such as `DATE_ATOM` in an untyped property default typed its slot `int`,
+        // and the property initializer could not store the string.
+        ExprKind::ConstRef(name) => predefined_scalar_constant_type(name.as_str()).unwrap_or(PhpType::Int),
         _ => PhpType::Int,
+    }
+}
+
+/// Returns the scalar type of a predefined constant from the shared catalog, if it has one.
+fn predefined_scalar_constant_type(name: &str) -> Option<PhpType> {
+    let constant = elephc_builtin_contract::lookup_constant(name)?;
+    if !crate::types::predefined_constants::is_registered_constant(name) {
+        return None;
+    }
+    match constant.value.php_type() {
+        elephc_builtin_contract::ConstType::Int => Some(PhpType::Int),
+        elephc_builtin_contract::ConstType::Float => Some(PhpType::Float),
+        elephc_builtin_contract::ConstType::Str => Some(PhpType::Str),
+        elephc_builtin_contract::ConstType::Bool => Some(PhpType::Bool),
+        elephc_builtin_contract::ConstType::Null => None,
     }
 }
 

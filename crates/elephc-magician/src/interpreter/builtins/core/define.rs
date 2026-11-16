@@ -27,9 +27,21 @@ pub(in crate::interpreter) fn eval_builtin_define(
     let [name, value] = args else {
         return Err(EvalStatus::RuntimeFatal);
     };
+    let value_expr = value;
     let name = eval_expr(name, context, scope, values)?;
     let value = eval_expr(value, context, scope, values)?;
+    let is_string = values.type_tag(value)? == EVAL_TAG_STRING;
+    let constant_name = eval_constant_name(name, values)?;
     let defined = eval_define_name(name, value, context, values)?;
+    // A string the argument built at run time (anything but a literal or a constant read) is
+    // refcounted in php-src, which decides whether a parameter default reading the constant
+    // is cached (`eval_parameter_default_is_refcounted`).
+    if defined
+        && is_string
+        && !matches!(value_expr, EvalExpr::Const(_) | EvalExpr::ConstFetch(_) | EvalExpr::NamespacedConstFetch { .. } | EvalExpr::ClassConstantFetch { .. })
+    {
+        context.record_built_constant(&constant_name);
+    }
     values.bool_value(defined)
 }
 
