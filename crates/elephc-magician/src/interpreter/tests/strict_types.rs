@@ -84,6 +84,24 @@ try { retInt("7"); } catch (\TypeError $e) { echo $e->getMessage(); }"#
     );
 }
 
+/// Verifies a single nullable type is spelled with php's `?` prefix, a real union with `|null`.
+///
+/// `php -n` 8.5.10: `retNullable(): Return value must be of type ?int, string returned` and
+/// `takesNullable(): Argument #1 ($x) must be of type ?ArrayObject, int given`.
+#[test]
+fn a_nullable_type_is_spelled_with_the_question_mark_prefix() {
+    assert_eq!(
+        out(
+            br#"declare(strict_types=1);
+function retNullable($v): ?int { return $v; }
+function takesNullable(?ArrayObject $x) {}
+try { retNullable("abc"); } catch (\TypeError $e) { echo $e->getMessage(), "|"; }
+try { takesNullable(5); } catch (\TypeError $e) { echo $e->getMessage(); }"#
+        ),
+        "retNullable(): Return value must be of type ?int, string returned|takesNullable(): Argument #1 ($x) must be of type ?ArrayObject, int given",
+    );
+}
+
 /// Verifies a METHOD argument is named `Class::method()` the way php names it.
 ///
 /// `php -n` 8.5.6 says `K::m(): Argument #1 ($n) must be of type int, string given, called in

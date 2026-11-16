@@ -476,6 +476,11 @@ pub(in crate::interpreter) fn eval_declared_type_spelling(
         .map(eval_declared_variant_spelling)
         .collect();
     if declared.allows_null() && !names.iter().any(|name| name == "null") {
+        // php's `zend_type_to_string` writes a single nullable type with the `?` prefix
+        // (`?int`, `?Foo`, `?static`) and only a real union as `A|B|null`.
+        if names.len() == 1 && names[0] != "mixed" && !declared.is_intersection() {
+            return format!("?{}", names[0]);
+        }
         names.push("null".to_string());
     }
     names.join(separator)
