@@ -288,7 +288,12 @@ impl Checker {
                     return;
                 }
                 for (position, arg) in call.args.iter().enumerate() {
-                    if !matches!(&arg.kind, ExprKind::Variable(name) if name == param) {
+                    // `f(inl: $inl)` names its callee parameter instead of positioning it.
+                    let (named, forwarded) = match &arg.kind {
+                        ExprKind::NamedArg { name, value } => (Some(name.as_str()), &**value),
+                        _ => (None, arg),
+                    };
+                    if !matches!(&forwarded.kind, ExprKind::Variable(name) if name == param) {
                         continue;
                     }
                     let candidates = match &call.target {
@@ -333,7 +338,14 @@ impl Checker {
                             CallTarget::RefCapture(_) => false,
                         };
                         target_matches
-                            && callee.params.get(position).is_some_and(
+                            && named
+                                .map_or_else(
+                                    || callee.params.get(position),
+                                    |wanted| {
+                                        callee.params.iter().find(|(callee_param, _)| callee_param == wanted)
+                                    },
+                                )
+                                .is_some_and(
                                 |(callee_param, callee_by_ref)| {
                                     *callee_by_ref
                                         && is_target(&(callee.scope.clone(), callee_param.clone()))
@@ -1153,130 +1165,59 @@ const POSITIONAL_ARRAY_BUILTINS: &[&str] = &[
 
 /// Visits every call in a body, including calls nested in expressions and in nested statements.
 ///
-/// Closure bodies are not entered, for the reason `collect_local_stores` gives.
+/// Every statement and expression form is reached (`ast::visit::walk_nodes`, the walk the sibling
+/// `binds_array_element_to_ref_param` uses): a hand-written subset missed a `use (&$param)` or a
+/// forward inside a `[$a, $b] = f($p)`, a `yield`, a `match` arm or a property array write, and a
+/// missed fact costs a wrong value. Closure bodies and nested declarations are not entered, for
+/// the reason `collect_local_stores` gives: their variables are their own.
 fn for_each_call<'a>(stmts: &'a [Stmt], visit: &mut dyn FnMut(CallSite<'a>)) {
-    for stmt in stmts {
-        for_each_call_in_stmt(stmt, visit);
-    }
-}
-
-fn for_each_call_in_stmt<'a>(stmt: &'a Stmt, visit: &mut dyn FnMut(CallSite<'a>)) {
-    match &stmt.kind {
-        StmtKind::Assign { value, .. }
-        | StmtKind::TypedAssign { value, .. }
-        | StmtKind::ExprStmt(value)
-        | StmtKind::Echo(value)
-        | StmtKind::Throw(value)
-        | StmtKind::Return(Some(value))
-        | StmtKind::StaticPropertyAssign { value, .. } => for_each_call_in_expr(value, visit),
-        StmtKind::ArrayAssign { index, value, .. } => {
-            for_each_call_in_expr(index, visit);
-            for_each_call_in_expr(value, visit);
+    use crate::parser::ast::visit::{walk_nodes, Node};
+    // Pre-order: the nodes of a skipped body follow its owner, so they are counted off.
+    let mut skip = 0usize;
+    walk_nodes(stmts, &mut |node| {
+        if skip > 0 {
+            skip -= 1;
+            return;
         }
-        StmtKind::ArrayPush { value, .. } => for_each_call_in_expr(value, visit),
-        StmtKind::PropertyAssign { object, value, .. }
-        | StmtKind::PropertyArrayPush { object, value, .. } => {
-            for_each_call_in_expr(object, visit);
-            for_each_call_in_expr(value, visit);
-        }
-        StmtKind::If {
-            condition,
-            then_body,
-            elseif_clauses,
-            else_body,
-        } => {
-            for_each_call_in_expr(condition, visit);
-            for_each_call(then_body, visit);
-            for (clause_condition, body) in elseif_clauses {
-                for_each_call_in_expr(clause_condition, visit);
-                for_each_call(body, visit);
-            }
-            if let Some(body) = else_body {
-                for_each_call(body, visit);
-            }
-        }
-        StmtKind::While { condition, body } | StmtKind::DoWhile { body, condition } => {
-            for_each_call_in_expr(condition, visit);
-            for_each_call(body, visit);
-        }
-        StmtKind::For {
-            init,
-            condition,
-            update,
-            body,
-        } => {
-            if let Some(init) = init {
-                for_each_call_in_stmt(init, visit);
-            }
-            if let Some(condition) = condition {
-                for_each_call_in_expr(condition, visit);
-            }
-            if let Some(update) = update {
-                for_each_call_in_stmt(update, visit);
-            }
-            for_each_call(body, visit);
-        }
-        StmtKind::Foreach { array, body, .. } => {
-            for_each_call_in_expr(array, visit);
-            for_each_call(body, visit);
-        }
-        StmtKind::Switch {
-            subject,
-            cases,
-            default,
-        } => {
-            for_each_call_in_expr(subject, visit);
-            for (values, body) in cases {
-                for value in values {
-                    for_each_call_in_expr(value, visit);
+        match node {
+            Node::Stmt(stmt) => match &stmt.kind {
+                StmtKind::FunctionDecl { body, .. } => skip = count_nodes(body),
+                StmtKind::ClassDecl { methods, .. }
+                | StmtKind::EnumDecl { methods, .. }
+                | StmtKind::InterfaceDecl { methods, .. }
+                | StmtKind::TraitDecl { methods, .. } => {
+                    skip = methods.iter().map(|method| count_nodes(&method.body)).sum();
                 }
-                for_each_call(body, visit);
-            }
-            if let Some(body) = default {
-                for_each_call(body, visit);
-            }
-        }
-        StmtKind::Try {
-            try_body,
-            catches,
-            finally_body,
-        } => {
-            for_each_call(try_body, visit);
-            for catch in catches {
-                for_each_call(&catch.body, visit);
-            }
-            if let Some(body) = finally_body {
-                for_each_call(body, visit);
+                _ => {}
+            },
+            Node::Expr(expr) => {
+                if let ExprKind::Closure { body, .. } = &expr.kind {
+                    skip = count_nodes(body);
+                }
+                if let Some(site) = call_site_of_expr(expr) {
+                    visit(site);
+                }
             }
         }
-        StmtKind::Synthetic(body)
-        | StmtKind::NamespaceBlock { body, .. }
-        | StmtKind::IncludeOnceGuard { body, .. } => for_each_call(body, visit),
-        StmtKind::IfDef {
-            then_body,
-            else_body,
-            ..
-        } => {
-            for_each_call(then_body, visit);
-            if let Some(body) = else_body {
-                for_each_call(body, visit);
-            }
-        }
-        _ => {}
-    }
+    });
 }
 
-fn for_each_call_in_expr<'a>(expr: &'a Expr, visit: &mut dyn FnMut(CallSite<'a>)) {
+/// Counts the nodes `walk_nodes` reaches in `stmts`.
+fn count_nodes(stmts: &[Stmt]) -> usize {
+    let mut count = 0usize;
+    crate::parser::ast::visit::walk_nodes(stmts, &mut |_| count += 1);
+    count
+}
+
+/// The call (or by-reference capture) one expression node is, when it is one.
+fn call_site_of_expr(expr: &Expr) -> Option<CallSite<'_>> {
     use crate::parser::ast::StaticReceiver;
     match &expr.kind {
         ExprKind::FunctionCall { name, args } => {
-            visit(CallSite {
+            Some(CallSite {
                 target: CallTarget::Function(name.as_str().to_string()),
                 args,
-            });
-            for arg in args {
-                for_each_call_in_expr(arg, visit);
-            }
+            })
         }
         ExprKind::MethodCall {
             object,
@@ -1290,17 +1231,13 @@ fn for_each_call_in_expr<'a>(expr: &'a Expr, visit: &mut dyn FnMut(CallSite<'a>)
         } => {
             let receiver_class =
                 matches!(object.kind, ExprKind::This).then_some(ReceiverClass::Own);
-            visit(CallSite {
+            Some(CallSite {
                 target: CallTarget::Method {
                     method: method.clone(),
                     receiver_class,
                 },
                 args,
-            });
-            for_each_call_in_expr(object, visit);
-            for arg in args {
-                for_each_call_in_expr(arg, visit);
-            }
+            })
         }
         ExprKind::StaticMethodCall {
             receiver,
@@ -1320,21 +1257,18 @@ fn for_each_call_in_expr<'a>(expr: &'a Expr, visit: &mut dyn FnMut(CallSite<'a>)
                     ReceiverClass::Own
                 }
             });
-            visit(CallSite {
+            Some(CallSite {
                 target: CallTarget::Method {
                     method: method.clone(),
                     receiver_class,
                 },
                 args,
-            });
-            for arg in args {
-                for_each_call_in_expr(arg, visit);
-            }
+            })
         }
         // `new Foo(...)` runs `Foo::__construct`, and a constructor is where a by-reference
         // parameter is most often kept (`$this->p = &$param`).
         ExprKind::NewObject { class_name, args } => {
-            visit(CallSite {
+            Some(CallSite {
                 target: CallTarget::Method {
                     method: "__construct".to_string(),
                     receiver_class: Some(ReceiverClass::Named(
@@ -1342,68 +1276,16 @@ fn for_each_call_in_expr<'a>(expr: &'a Expr, visit: &mut dyn FnMut(CallSite<'a>)
                     )),
                 },
                 args,
-            });
-            for arg in args {
-                for_each_call_in_expr(arg, visit);
-            }
-        }
-        ExprKind::Assignment {
-            target,
-            value,
-            prelude,
-            ..
-        } => {
-            for_each_call(prelude, visit);
-            for_each_call_in_expr(target, visit);
-            for_each_call_in_expr(value, visit);
-        }
-        ExprKind::BinaryOp { left, right, .. } => {
-            for_each_call_in_expr(left, visit);
-            for_each_call_in_expr(right, visit);
-        }
-        ExprKind::NullCoalesce { value, default } | ExprKind::ShortTernary { value, default } => {
-            for_each_call_in_expr(value, visit);
-            for_each_call_in_expr(default, visit);
-        }
-        ExprKind::Ternary {
-            condition,
-            then_expr,
-            else_expr,
-        } => {
-            for_each_call_in_expr(condition, visit);
-            for_each_call_in_expr(then_expr, visit);
-            for_each_call_in_expr(else_expr, visit);
-        }
-        ExprKind::Negate(inner)
-        | ExprKind::Not(inner)
-        | ExprKind::BitNot(inner)
-        | ExprKind::ErrorSuppress(inner)
-        | ExprKind::Print(inner)
-        | ExprKind::Cast { expr: inner, .. } => for_each_call_in_expr(inner, visit),
-        ExprKind::ArrayAccess { array, index } => {
-            for_each_call_in_expr(array, visit);
-            for_each_call_in_expr(index, visit);
-        }
-        ExprKind::PropertyAccess { object, .. } => for_each_call_in_expr(object, visit),
-        ExprKind::ArrayLiteral(items) => {
-            for item in items {
-                for_each_call_in_expr(item, visit);
-            }
-        }
-        ExprKind::ArrayLiteralAssoc(pairs) => {
-            for (key, value) in pairs {
-                for_each_call_in_expr(key, visit);
-                for_each_call_in_expr(value, visit);
-            }
+            })
         }
         // The body is not entered (see `for_each_call`), but the capture list belongs to the
         // enclosing body: `use (&$x)` binds the enclosing `$x`'s cell into the closure.
         ExprKind::Closure { capture_refs, .. } if !capture_refs.is_empty() => {
-            visit(CallSite {
+            Some(CallSite {
                 target: CallTarget::RefCapture(capture_refs),
                 args: &[],
-            });
+            })
         }
-        _ => {}
+        _ => None,
     }
 }
