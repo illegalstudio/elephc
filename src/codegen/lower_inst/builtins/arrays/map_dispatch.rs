@@ -82,7 +82,7 @@ pub(crate) fn lower_array_map(ctx: &mut FunctionContext<'_>, inst: &Instruction)
     match ctx.value_php_type(callback)?.codegen_repr() {
         PhpType::Mixed => {
             return boxed_map_callback::lower_array_map_mixed_callback(
-                ctx, inst, callback, array, &elem_ty, target,
+                ctx, inst, callback, array, source, &elem_ty, target,
             );
         }
         PhpType::Callable => {
@@ -216,7 +216,7 @@ fn prepare_array_map_source(
 }
 
 /// Loads the selected source container while accounting for callback temporaries above it.
-fn load_array_map_source(
+pub(super) fn load_array_map_source(
     ctx: &mut FunctionContext<'_>,
     source: ArrayMapSource,
     reg: &str,
@@ -235,7 +235,7 @@ fn load_array_map_source(
 }
 
 /// Releases an owned gradual source without clobbering the mapped result register.
-fn release_array_map_source_preserving_result(
+pub(super) fn release_array_map_source_preserving_result(
     ctx: &mut FunctionContext<'_>,
     source: ArrayMapSource,
 ) {

@@ -16,6 +16,7 @@ pub(super) fn lower_array_map_mixed_callback(
     inst: &Instruction,
     callback: ValueId,
     array: ValueId,
+    source: ArrayMapSource,
     elem_ty: &PhpType,
     target: ArrayMapTarget,
 ) -> Result<()> {
@@ -51,7 +52,8 @@ pub(super) fn lower_array_map_mixed_callback(
     let array_arg = abi::int_arg_reg_name(ctx.emitter.target, 1);
     let env_arg = abi::int_arg_reg_name(ctx.emitter.target, 2);
     abi::emit_symbol_address(ctx.emitter, callback_arg, &wrapper);
-    ctx.load_value_to_reg(array, array_arg)?;
+    // The normalized source sits below the 48-byte owner record and the 16-byte descriptor env.
+    load_array_map_source(ctx, source, array_arg, env_bytes + abi::CALL_OPERAND_OWNER_RECORD_BYTES)?;
     abi::emit_temporary_stack_address(ctx.emitter, env_arg, 48);
     emit_array_map_runtime_call(ctx, elem_ty, &callback_elem_ty, env_bytes, target)?;
     finish_array_map_result(ctx, inst, target, &callback_elem_ty, &result_elem_ty)?;
@@ -67,10 +69,12 @@ pub(super) fn lower_array_map_mixed_callback(
     abi::emit_pop_call_operand_owner(ctx.emitter);
     abi::emit_pop_reg(ctx.emitter, result);
     abi::emit_release_temporary_stack(ctx.emitter, env_bytes);
+    release_array_map_source_preserving_result(ctx, source);
     store_if_result(ctx, inst)?;
     abi::emit_jump(ctx.emitter, &done);
     ctx.emitter.label(&identity);
     lower_array_map_identity(ctx, inst, array)?;
+    release_array_map_source_preserving_result(ctx, source);
     ctx.emitter.label(&done);
     Ok(())
 }
