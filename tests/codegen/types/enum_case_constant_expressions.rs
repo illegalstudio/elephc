@@ -111,3 +111,24 @@ echo "\n";
     );
     assert_eq!(out, "A=n1;B=x1;C=y;\n");
 }
+
+/// PHP decides a branch at compile time when its operand folds from literals and predefined
+/// constants, and never checks the branch it skips, so a variable there is not an error.
+#[test]
+fn test_enum_case_values_skip_branches_decided_by_literals() {
+    let out = compile_and_run(
+        r#"<?php
+enum E: int
+{
+    case A = true ? 1 : $x;
+    case B = PHP_INT_SIZE ? 2 : strlen('b');
+    case C = false || 1 ? 3 : $y;
+    case D = null ?? 4 ?? $z;
+    case F = 5 ?: $w;
+}
+foreach (E::cases() as $c) { echo $c->name, '=', $c->value, ';'; }
+echo "\n";
+"#,
+    );
+    assert_eq!(out, "A=1;B=2;C=3;D=4;F=5;\n");
+}
