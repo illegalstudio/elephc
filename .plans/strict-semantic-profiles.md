@@ -371,7 +371,7 @@ evidence and outstanding guarantees are recorded below.
 
 ## Implementation progress
 
-Verified through step106 (this commit), with original-kind admission audits in progress. Issue:
+Verified through step107 (this commit), with original-kind admission audits in progress. Issue:
 https://github.com/illegalstudio/elephc/issues/2347.
 
 The full task remains active. The user requested complete implementation, with a
@@ -382,7 +382,7 @@ but its stronger numeric/reference/eval binding contract is outstanding. All
 other guarantees and the complete umbrella remain explicitly gated until their
 whole contract is enforced.
 
-This progress ledger condenses verified implementation through step106.
+This progress ledger condenses verified implementation through step107.
 Detailed evidence remains in Git history, historical Code Journal plan revisions,
 the linked work logs, and the current agent-facing architecture document
 3739892b. The approved behavior and delivery requirements above are unchanged.
@@ -985,7 +985,8 @@ paths. Keep this plan, agent documentation and the current journal log synchroni
 | 103 | `40185b8f12` | feat(strict): guard builtin comparison modes and callable boundaries |
 | 104 | `018184aad7` | feat(strict): enforce native string and formatting contracts |
 | 105 | `9da37f1595` | feat(strict): enforce eval string and formatting contracts |
-| 106 | this commit | fix(strict): validate native string updates before mutation |
+| 106 | `2d69515576` | fix(strict): validate native string updates before mutation |
+| 107 | this commit | fix(strict): reject logical null string operands |
 
 
 ### Builtin comparison policy integration
@@ -1155,3 +1156,34 @@ outside this commit. Strings remains staged because107 still needs its logical
 null check. Inspection confirms str_persist preserves the dedicated sentinel on
 both architectures; TypePredicate(String) alone accepts concrete Str storage,
 while IsNull already checks its logical missing value (facte2d23047).
+
+
+### Logical null behind typed string storage (107, verified)
+
+The concat contract now uses the existing target-aware IsNull operation for
+concrete Str storage before the ordinary kind predicate, with the same unwind
+owner pin discipline. Ownership/persistence and explicit formatting/casts retain
+their existing behavior. The small original five-target string fixture now also
+includes a typed string-array miss and asserts that the logical guard survives
+EIR optimization in public source and stays absent in trusted implementation
+source. Queued060fc446/session97410 selects that exact library test, the
+eight-program strict/permissive AST/EIR missing-read regression and compiler
+build. The native XML106 fix is already signed and complete; no feature is newly
+admitted while107 and later host/boundary audits remain pending.
+
+
+A separate, currently unregistered tests/codegen/strict_string_boxed_nulls.rs
+probe is prepared for the next audit. It distinguishes missing typed-string
+values passed through native mixed arguments/returns from genuine empty strings.
+PHP syntax validation passed; no execution result exists yet. Register and run
+it after107 before claiming Mixed/native boundary or Strings admission parity.
+
+
+Final107 job060fc446 exited0 after3m22s. The existing small string guard test
+passed all5 target/source-policy checks with both EIR optimization modes in0.98s.
+The native missing-read regression passed all8 strict/permissive AST/EIR mode
+combinations with clean heaps, correct TypeError behavior and unchanged explicit
+formatting/cast controls. Compiler build passed. This107 commit excludes the
+new boxed-null probe and its module registration. That probe is now registered
+and queued as2892c6b5/session8050 for the next boundary audit. No execution result
+exists for it yet, and Strings admission remains closed.

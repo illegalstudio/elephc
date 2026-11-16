@@ -178,5 +178,6 @@ mod strict_conversion_parameters;
 mod strict_comparisons;
 mod strict_strings;
 mod strict_string_native_views;
+mod strict_string_missing_reads;
 
 mod strict_conversion_returns;

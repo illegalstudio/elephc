@@ -15,6 +15,16 @@ pub(super) fn concatenation(
     ctx: &mut LoweringContext<'_, '_>, value: LoweredValue, span: Span,
 ) -> LoweredValue {
     if crate::semantics::strings::active(ctx.semantic_profile, ctx.source_mode) {
+        // Concrete string storage can still hold a typed-array miss. Ownership
+        // stabilization preserves that logical null, so inspect it before conversion.
+        if ctx.builder.value_php_type(value.value).codegen_repr() == PhpType::Str {
+            let pins = pin_in_flight_owners(ctx, &[value.value], span);
+            let missing = ctx.emit_value(Op::IsNull, vec![value.value], None, PhpType::Bool,
+                Op::IsNull.default_effects(), Some(span));
+            crate::ir_lower::semantic_guards::require_false(ctx, missing, Op::ThrowTypeError,
+                crate::semantics::strings::CONCAT_MESSAGE, Some(span));
+            unpin_in_flight_owners(ctx, pins, span);
+        }
         crate::ir_lower::semantic_guards::require_kind(ctx, value,
             crate::ir::PhpTypePredicate::String, "strict-strings", Some(span))
     } else { value }
