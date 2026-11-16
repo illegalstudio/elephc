@@ -111,3 +111,49 @@ fn parse_source_file_reports_the_file_line_of_a_refusal() {
     assert_eq!(diagnostic.line(), 7);
     assert_eq!(diagnostic.token(), "token \";\"");
 }
+
+/// Verifies the `;` a closing tag leaves in front of the first `case` is legal in both forms.
+#[test]
+fn parse_source_file_accepts_a_closing_tag_before_the_first_case() {
+    for source in [
+        &b"<?php switch ($k): ?>\n<?php case 1: ?>A<?php break; ?>\n<?php endswitch; ?>"[..],
+        &b"<?php switch ($k) { ?>\n<?php case 1: ?>A<?php break; ?>\n<?php } ?>"[..],
+    ] {
+        let program = parse_source_file(source).expect("a closing tag before a case should parse");
+        assert!(program.statements().iter().any(
+            |statement| matches!(statement, EvalStmt::Switch { cases, .. } if cases.len() == 1)
+        ));
+    }
+}
+
+/// Verifies `<?php` glued to another byte is inline HTML, not an open tag.
+#[test]
+fn parse_source_file_treats_a_glued_php_open_tag_as_text() {
+    let program =
+        parse_source_file(b"see <?phpunit bootstrap ?>\n").expect("inline text should parse");
+    assert_eq!(
+        program.statements(),
+        &[
+            EvalStmt::SourceLine(1),
+            EvalStmt::Echo(EvalExpr::Const(EvalConst::String(
+                "see <?phpunit bootstrap ?>\n".to_string()
+            )))
+        ]
+    );
+}
+
+/// Verifies a statement after an empty one on the same line still gets its line marker.
+#[test]
+fn parse_source_file_marks_the_line_after_an_empty_statement() {
+    let program = parse_source_file(b"<?php\nif (1) {\n$a = 1;\n} ?><p><?= $b ?>")
+        .expect("source file should parse");
+    let lines: Vec<i64> = program
+        .statements()
+        .iter()
+        .filter_map(|statement| match statement {
+            EvalStmt::SourceLine(line) => Some(*line),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(lines, vec![2, 4]);
+}

@@ -99,9 +99,13 @@ fn find_php_open_tag(code: &[u8], start: usize) -> Option<PhpOpenTag> {
     let mut index = start;
     while index + 1 < code.len() {
         if code[index] == b'<' && code[index + 1] == b'?' {
+            // php requires whitespace or the end of input after `<?php`; `<?phpunit` is text.
             if code
                 .get(index + 2..index + 5)
                 .is_some_and(|word| word.eq_ignore_ascii_case(b"php"))
+                && code
+                    .get(index + 5)
+                    .is_none_or(|byte| matches!(byte, b' ' | b'\t' | b'\n' | b'\r'))
             {
                 return Some(PhpOpenTag {
                     tag_start: index,

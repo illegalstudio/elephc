@@ -148,6 +148,11 @@ impl Parser {
         } else {
             self.expect(TokenKind::LBrace)?;
         }
+        // php's grammar allows one `;` before the first case (`'{' ';' case_list`): it is what a
+        // closing tag right after `switch (..) {` or `switch (..):` leaves behind.
+        if matches!(self.current(), TokenKind::Semicolon) {
+            self.advance();
+        }
         let mut cases = Vec::new();
         loop {
             if matches!(self.current(), TokenKind::Eof) {

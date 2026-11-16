@@ -98,7 +98,13 @@ impl Parser {
                 return Err(error);
             }
         };
-        if parsed.is_empty() || line == previous {
+        if parsed.is_empty() {
+            // An empty statement (a bare `;`, the `;` of a closing tag) emitted no marker, so the
+            // line it stood on must not suppress the next statement's marker.
+            self.last_source_line = previous;
+            return Ok(parsed);
+        }
+        if line == previous {
             return Ok(parsed);
         }
         let mut marked = Vec::with_capacity(parsed.len() + 1);
