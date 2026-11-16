@@ -28,6 +28,9 @@ pub const ORDERING_MESSAGE: &str = "--strict-comparisons requires operands of th
 /// Names the explicit equality syntax rather than silently changing loose operators.
 pub const EQUALITY_MESSAGE: &str = "--strict-comparisons requires === or !== instead of loose equality";
 
+/// Rejects implicit callback-result casts at source-selected comparison boundaries.
+pub const COMPARATOR_MESSAGE: &str = "--strict-comparisons requires an integer comparator result";
+
 #[cfg(test)]
 mod tests {
     use super::*;

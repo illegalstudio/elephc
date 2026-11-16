@@ -994,3 +994,104 @@ activation and ownership helpers close the reproduced admission regressions.
 The complete umbrella and remaining seven feature admissions are unfinished.
 Continue stronger Locals and the Comparisons audit before nullability, mixed,
 initialization, arrays, indexing and final cache/host/combination acceptance.
+
+
+### Comparator callback admission audit (112, in progress)
+
+Added two focused Magician probes before production changes: actual integer
+callback returns must retire all sort entry/result owners in permissive and
+checked modes, and strict comparator results must retain their original integer
+kind. The probes cover usort, uasort and uksort; the ownership control also
+reaches builtin fallback from a bytecode user caller. Baseline job ebb80c30 is
+queued behind the existing Elephc docblock and WordPress verification jobs.
+No runtime outcome is claimed yet. Reuse the existing sort entry/root/container
+helpers instead of adding a second ownership lifecycle. Keep original source
+policy authoritative for native adapters and maintain all five target paths.
+
+
+Step112 baseline probes reproduced an outstanding Int(0) owner after permissive
+usort and acceptance of a boolean comparator return under Comparisons. Existing
+compiled single-unit replays established both failures without compiling or
+running a heavy suite outside the queue. Generic sort entries now share the
+existing collector, root inventory and partial-result builder; callbacks retain
+an explicit result owner and checked consumers reject noninteger original kinds.
+Direct writeback uses the existing lvalue/replacement finishers.
+
+Job7907229b passed all seven exact unit gates and the default Magician build
+(exit0,23s). This includes both caller entry modes, all three user sorts, five
+rejected return kinds and failed insertion at each result position, plus ordinary
+sort/key-sort/shuffle regression controls. Two earlier fixture versions stopped
+at unsupported VM syntax; the corrected probe enters through VM and executes
+builtin fallback inside the walker callee. The uksort control uses strcmp rather
+than FakeOps permissive numeric-string ordering. Only inherited warnings remain.
+Current jobc6848415/session35840 runs exporter/docs audits, restores the default
+Magician archive, executes the opaque native-runtime retirement fixture in both
+optimizer modes and builds the compiler. No112 commit yet. Native source-policy
+metadata for subsequent step113 is being prepared separately and remains
+uncommitted, with no native comparator guard claim yet.
+
+
+The first opaque fixture attempt exited UnsupportedConstruct before any output.
+The production eval FFI explicitly rejects pending semantic profiles, including
+Comparisons; staged native lowering bypasses only frontend admission. This is
+an admission guard, not evidence of a parser defect. The echo expression-list
+syntax is supported by the parser. Added a fast parse assertion to distinguish
+these layers. Queued job7d812690/session56173 will check parsing and still meets
+the production admission guard until Comparisons is admitted. Do not claim a
+native heap result from that blocked probe. Move the opaque execution fixture
+into the later complete Comparisons admission verification.
+
+Next native integration keeps the invocation policy in ProfiledFunction EIR,
+so internal physical consumers cannot acquire user strictness from the emitter.
+Runtime adapters must inspect the original boxed comparator result before any
+integer cast, retain it through a catchable failure and support every target.
+Descriptor, runtime-string and static callbacks must share the checked result
+adapter. Comparator-based set operations need the same policy at their runtime
+boundary. Public admission remains gated until those native and host controls
+are verified. The other seven pending feature admissions and stronger Locals
+remain part of the current user request.
+
+
+Job7d812690 passed the exact parser/integer-kind unit, then stopped at the
+expected production pending-profile guard in the checked opaque test (exit1,
+2m22s). The shared-owner integration test now uses a separate permissive PHP
+fixture; the checked-result fixture remains parse-verified for later admission.
+PHP oracle for the permissive fixture:1,2;1,2;1,2;label-1,label-2.
+
+Prepared step113 native integration retains strict_comparisons on ProfiledFunction
+EIR, preserves it through optimizer rewrites, and shares one checked return
+adapter across static/descriptor/string sort callbacks. A borrowed/owned native
+guard checks the original unboxed integer tag before conversion. Comparator set
+operations carry an explicit sixth ABI policy argument and retain their ordinary
+cast path for internal/permissive invocations. New tests cover five-target EIR
+and runtime emission, real cross-assembly, callback result kinds, descriptors,
+string dispatch and heap retirement. These changes are not verified or committed.
+
+Queued job38a0a3a1 was terminated by signal15 while waiting, without running any
+tests; cause unknown. Replacement jobdf0ec42d has a persistent task-owned log in
+target/strict-comparator-checks-_r_y5j68, wrapperPID3698701. It queues three exact
+Magician regressions, the permissive opaque native heap control, all-target
+native guard/EIR/assembler tests, native callback/set-operation runtime control,
+and compiler build. Remove this exact task directory after collecting evidence.
+Registered compiler sources remain frozen during the job. build.rs recursively
+hashes every Rust file under src, including files not registered as Rust modules;
+new unregistered source files are therefore not outside compiler build inputs.
+No112 or113 commit yet; complete profile and stronger Locals work remain active.
+
+
+### Eval comparator return and owner foundation (112, verified)
+
+The shared eval sort collector/root/result builder now supports both precomputed
+sort keys and user comparators. Callback returns are retired independently and
+staged Comparisons consumers require an original integer result. Existing direct
+lvalue finishers balance callback/target/replacement ownership. Seven exact unit
+gates and the default Magician build passed in job7907229b. The three new unit
+gates passed again in current jobdf0ec42d, including the checked fixture parser
+assertion. Exporter generation and all builtin-docs audits passed in queued
+jobc6848415 without generated changes. Only inherited warnings remain.
+
+This is a component foundation commit, with Comparisons still publicly gated.
+The production checked opaque fixture meets that intentional admission guard;
+its runtime heap validation remains part of the subsequent complete admission.
+The permissive opaque control and native callbacks are still running under
+jobdf0ec42d. Step113 native policy/guard changes remain separate and uncommitted.

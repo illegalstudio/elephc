@@ -12,10 +12,10 @@ use super::*;
 use crate::runtime_hooks::owner_frames::{RuntimeOwnerSlot, with_runtime_owners};
 
 /// Captures entry leases in fixed root slots before fallible sort-key conversion runs.
-pub(super) fn collect<V: RuntimeValueOps>(
+pub(in crate::interpreter::builtins::array) fn collect<V: RuntimeValueOps, K>(
     array: RuntimeCellHandle, context: &mut ElephcEvalContext, values: &mut V,
-    mut key: impl FnMut(RuntimeCellHandle, RuntimeCellHandle, &mut V) -> Result<EvalArraySortKey, EvalStatus>,
-) -> Result<Vec<EvalArraySortEntry>, EvalStatus> {
+    mut key: impl FnMut(RuntimeCellHandle, RuntimeCellHandle, &mut V) -> Result<K, EvalStatus>,
+) -> Result<Vec<EvalArraySortEntry<K>>, EvalStatus> {
     let len = values.array_len(array)?;
     let empty = RuntimeCellHandle::from_raw(std::ptr::null_mut()).borrowed();
     let owners = (0..len).map(|_| (RuntimeOwnerSlot::new(empty), RuntimeOwnerSlot::new(empty))).collect::<Vec<_>>();
@@ -42,9 +42,9 @@ pub(super) fn collect<V: RuntimeValueOps>(
 }
 
 /// Keeps every captured entry rooted until ordering and result construction finish.
-pub(super) fn with_entries<V: RuntimeValueOps>(
-    mut entries: Vec<EvalArraySortEntry>, context: &mut ElephcEvalContext, values: &mut V,
-    consume: impl FnOnce(&mut [EvalArraySortEntry], &mut ElephcEvalContext, &mut V)
+pub(in crate::interpreter::builtins::array) fn with_entries<V: RuntimeValueOps, K>(
+    mut entries: Vec<EvalArraySortEntry<K>>, context: &mut ElephcEvalContext, values: &mut V,
+    consume: impl FnOnce(&mut [EvalArraySortEntry<K>], &mut ElephcEvalContext, &mut V)
         -> Result<RuntimeCellHandle, EvalStatus>,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     let owners = entries.iter().flat_map(|entry| [entry.source_key, entry.value])
@@ -54,8 +54,8 @@ pub(super) fn with_entries<V: RuntimeValueOps>(
 }
 
 /// Publishes borrowed entries into a fresh unique container and retires partial output on failure.
-pub(super) fn build_result(
-    entries: &[EvalArraySortEntry], preserve_keys: bool,
+pub(in crate::interpreter::builtins::array) fn build_result<K>(
+    entries: &[EvalArraySortEntry<K>], preserve_keys: bool,
     context: &mut ElephcEvalContext, values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     let result = if preserve_keys { values.assoc_new(entries.len())? } else { values.array_new(entries.len())? };

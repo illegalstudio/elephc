@@ -9,7 +9,7 @@
 
 use super::super::super::*;
 
-mod owners;
+pub(super) mod owners;
 
 eval_builtin! {
     contract: "sort",
@@ -49,10 +49,10 @@ pub(in crate::interpreter) enum EvalArraySortKey {
 }
 
 /// One source array entry plus its precomputed ordering key.
-pub(in crate::interpreter) struct EvalArraySortEntry {
-    sort_key: EvalArraySortKey,
-    source_key: RuntimeCellHandle,
-    value: RuntimeCellHandle,
+pub(in crate::interpreter) struct EvalArraySortEntry<K = EvalArraySortKey> {
+    sort_key: K,
+    pub(super) source_key: RuntimeCellHandle,
+    pub(super) value: RuntimeCellHandle,
 }
 
 /// Builds the sorted replacement array for eval array ordering builtins.

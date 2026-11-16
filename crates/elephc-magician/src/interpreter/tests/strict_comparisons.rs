@@ -11,6 +11,91 @@ use super::super::*;
 use super::{support::*, strict_semantics::staged_numeric_execution};
 use elephc_semantics::{SemanticProfile, StrictFeature};
 
+/// User-sort callbacks retire each owned integer result in both legacy and checked consumers.
+#[test]
+fn strict_comparison_eval_comparator_owned_returns_are_retired() {
+    for selected in [false, true] {
+        for name in ["usort", "uasort", "uksort"] {
+            for vm in [false, true] {
+                let mut context = ElephcEvalContext::new();
+                context.install_semantic_profile(SemanticProfile::PERMISSIVE
+                    .with(StrictFeature::Comparisons, selected)).unwrap();
+                let mut scope = ElephcEvalScope::new(); let mut values = FakeOps::default();
+                let comparison = if name == "uksort" { "strcmp($left, $right)" } else { "$left <=> $right" };
+                let setup = format!("$items = ['b' => 2, 'a' => 1]; \
+                    function ownedIntegerComparator($left, $right): mixed {{ return {comparison}; }} \
+                    function ownedIntegerSortProxy($items) {{ {name}($items, 'ownedIntegerComparator'); echo implode(',', $items); }}");
+                staged_numeric_execution(&setup, false, &mut context, &mut scope, &mut values).unwrap();
+                let source = if vm {
+                    "if (false) { function ownedIntegerSortProxy($items) {} } \
+                        ownedIntegerSortProxy($items);".to_string()
+                } else { format!("{name}($items, 'ownedIntegerComparator'); echo implode(',', $items);") };
+                staged_numeric_execution(&source, vm, &mut context, &mut scope, &mut values).unwrap();
+                assert_eq!(values.output, "1,2", "{name}: selected={selected} vm={vm}");
+                clean_sort_context(&mut context, &mut scope, &mut values, name);
+            }
+        }
+    }
+}
+
+/// Explicit source comparators must return actual integers without hidden result conversion.
+#[test]
+fn strict_comparison_eval_comparator_results_require_integer_kind() {
+    let fixture = include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/../../tests/fixtures/strict/comparator_checked_results.php"));
+    let fragment = fixture.split_once("$argc > 0 ? '").unwrap().1.split_once("' : '';").unwrap().0;
+    crate::parser::parse_fragment_with_semantics(fragment.as_bytes(),
+        SemanticProfile::PERMISSIVE.with(StrictFeature::Comparisons, true)).unwrap();
+    for name in ["usort", "uasort", "uksort"] {
+        for value in ["true", "1.5", "'1'", "[1]", "new stdClass()"] {
+            let mut context = ElephcEvalContext::new();
+            context.install_semantic_profile(SemanticProfile::PERMISSIVE
+                .with(StrictFeature::Comparisons, true)).unwrap();
+            let mut scope = ElephcEvalScope::new(); let mut values = FakeOps::default();
+            let source = format!("function invalidIntegerComparator($left, $right): mixed {{ return {value}; }} \
+                $items = ['b' => 2, 'a' => 1]; {name}($items, 'invalidIntegerComparator'); echo 'X';");
+            let result = staged_numeric_execution(&source, false, &mut context, &mut scope, &mut values);
+            assert!(matches!(result, Err(EvalStatus::UncaughtThrowable)),
+                "{name} returning {value}: {:?}", result.as_ref().err());
+            assert!(values.output.is_empty(), "{name} returning {value}: {}", values.output);
+            let error = context.take_pending_throw().expect("comparator result TypeError");
+            assert!(values.object_is_a(error, "TypeError", false).unwrap());
+            values.release(error).unwrap();
+            clean_sort_context(&mut context, &mut scope, &mut values, name);
+        }
+    }
+}
+
+/// A failed replacement insertion retires callback, entry and unfinished-container leases.
+#[test]
+fn strict_comparison_eval_comparator_partial_results_are_retired() {
+    for name in ["usort", "uasort", "uksort"] {
+        for failed_insert in [0, 1] {
+            let mut context = ElephcEvalContext::new();
+            let mut scope = ElephcEvalScope::new(); let mut values = FakeOps::default();
+            let setup = "function partialSortComparator($left, $right): mixed { return $left <=> $right; } \
+                return ['b' => 2, 'a' => 1];";
+            let EvalControl::Return(array) = staged_numeric_execution(setup, false,
+                &mut context, &mut scope, &mut values).unwrap() else { panic!("source array"); };
+            let callback = values.string("partialSortComparator").unwrap();
+            values.fail_array_set_call(failed_insert);
+            let result = eval_user_sort_replacement(name, array, callback, &mut context, &mut values);
+            assert_eq!(result, Err(EvalStatus::UnsupportedConstruct), "{name}: insertion {failed_insert}");
+            values.release(callback).unwrap(); values.release(array).unwrap();
+            clean_sort_context(&mut context, &mut scope, &mut values, name);
+        }
+    }
+}
+
+/// Retires the test activation and checks every independent callback/container lease.
+fn clean_sort_context(context: &mut ElephcEvalContext, scope: &mut ElephcEvalScope,
+    values: &mut FakeOps, name: &str) {
+    for value in scope.drain_owned_cells() { values.release(value).unwrap(); }
+    for value in context.take_persistent_cell_owners() { values.release(value).unwrap(); }
+    for (id, owners) in &values.cell_owners {
+        assert_eq!(*owners, 0, "{name}: {:?}", values.values[id]);
+    }
+}
+
 /// Search leases balance in permissive mode, including misses and an escaping owned string key.
 #[test]
 fn strict_comparison_eval_search_permissive_ownership_controls() {
