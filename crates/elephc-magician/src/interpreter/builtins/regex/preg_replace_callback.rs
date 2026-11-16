@@ -221,7 +221,10 @@ fn eval_preg_replace_callback_bytes(
     let mut result = Vec::with_capacity(subject.len());
     let mut cursor = 0;
     let mut replacement_count = 0i64;
-    for captures in regex.captures_iter(subject) {
+    let all_captures: Vec<_> = regex.captures_iter(subject).collect();
+    // Read before any callback runs: a callback may itself call a `preg_*` function.
+    let match_failed = crate::regex_provider::regex_last_error() != 0;
+    for captures in all_captures {
         if limit >= 0 && replacement_count >= limit {
             break;
         }
@@ -244,6 +247,10 @@ fn eval_preg_replace_callback_bytes(
         result.extend_from_slice(&callback_bytes);
         cursor = matched.end();
         replacement_count += 1;
+    }
+    if match_failed {
+        // A failed match (a subject that is not valid UTF-8 under `u`) makes the result null.
+        return Ok((None, replacement_count));
     }
     result.extend_from_slice(&subject[cursor..]);
     Ok((Some(result), replacement_count))

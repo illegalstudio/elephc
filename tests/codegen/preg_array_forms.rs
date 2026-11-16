@@ -460,6 +460,25 @@ array(1) {
     assert!(!out.stderr.contains("Warning:"), "stderr: {}", out.stderr);
 }
 
+/// Interpreted `preg_replace_callback()` hands each callback the mark of ITS match (the mark was
+/// read after the terminal failing search of the scan) and answers null, with
+/// `PREG_BAD_UTF8_ERROR`, when the match fails. Output is php 8.5's.
+#[test]
+fn test_eval_preg_replace_callback_marks_and_match_errors_match_php() {
+    let out = compile_and_run_capture_with_regex(
+        r#"<?php
+preg_match('/warm/', 'warm');
+$code = <<<'PHP'
+echo preg_replace_callback('/(?:a(*:1)|b(*:2))/', fn($m) => '['.($m['MARK'] ?? '?').']', 'ab'), "\n";
+var_dump(preg_replace_callback('/a/u', fn($m) => 'x', "a\xff"));
+var_dump(preg_last_error() === PREG_BAD_UTF8_ERROR);
+PHP;
+eval($code);
+"#,
+    );
+    assert_eq!(out.stdout, "[1][2]\nNULL\nbool(true)\n", "stderr: {}", out.stderr);
+}
+
 /// A NUL byte inside a pattern is an ordinary character to match, compiled and interpreted. The
 /// compiled helper that hands the pattern to PCRE2 as a C string truncated it at the NUL, so
 /// `"~[\s\0]+~"` (Laravel's `Str::trim()`) lost its closing bracket and failed to compile.

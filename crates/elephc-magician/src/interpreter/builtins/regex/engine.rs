@@ -292,7 +292,11 @@ impl Regex {
         if status == REG_NOMATCH || status != 0 {
             return None;
         }
+        // The mark belongs to THIS search: read it before another `exec` (the terminal failing
+        // search of a global scan, say) replaces it on the handle.
+        let mark = self.last_mark();
         Some(Captures {
+            mark,
             matches: offset_pairs
                 .chunks_exact(2)
                 .map(|pair| offsets(pair[0], pair[1]))
@@ -373,11 +377,18 @@ impl Match {
 
 /// Capture offsets for one regex match.
 pub(in crate::interpreter) struct Captures<'a> {
+    /// The `(*MARK:name)` the search that produced this set passed, if any.
+    mark: Option<Vec<u8>>,
     matches: Vec<Option<(usize, usize)>>,
     _subject: PhantomData<&'a [u8]>,
 }
 
 impl Captures<'_> {
+    /// Returns the `(*MARK:name)` verb the producing search passed, which php reports as `MARK`.
+    pub(in crate::interpreter) fn mark(&self) -> Option<&[u8]> {
+        self.mark.as_deref()
+    }
+
     /// Returns the number of capture slots including the full match.
     pub(in crate::interpreter) fn len(&self) -> usize {
         self.matches.len()
