@@ -1824,7 +1824,9 @@ $instance->label();
 ///
 /// The function itself contains no eval expression and therefore has no persistent eval local.
 /// Its dynamic class probe and construction must still use the callback-owning context registered
-/// by an earlier frame, as PHP's process-wide SPL table requires.
+/// by an earlier frame, as PHP's process-wide SPL table requires. The output comes from the
+/// autoloaded trait's `label()`, so it also proves the trait was loaded and its method dispatches
+/// on the runtime-constructed object.
 #[test]
 fn test_aot_dynamic_new_after_eval_uses_global_autoload_context() {
     let out = compile_and_run_files(
@@ -1849,7 +1851,7 @@ interface RuntimeConstructedContract {
 }
 
 function useLoadedClass(RuntimeConstructedContract $instance): void {
-    echo 'global-loaded';
+    $instance->label();
 }
 
 class RuntimeAutoloadLoader {
