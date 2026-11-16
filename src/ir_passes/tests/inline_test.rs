@@ -1482,3 +1482,46 @@ fn inliner_analyses_loops_only_where_a_site_needs_them() {
         .all(|f| f.instructions.iter().all(|i| !matches!(i.op, Op::Call | Op::FunctionVariantCall))));
     assert!(analyses <= 2, "{analyses} loop analyses for one candidate callee");
 }
+
+/// Only a function within the inlining budget is copied into the callee snapshot: 30 bodies of
+/// 40 instructions are never candidates, so one small callee is the only copy.
+#[test]
+fn inliner_snapshots_only_functions_within_the_budget() {
+    let mut module = Module::new(Target::new(Platform::MacOS, Arch::AArch64));
+    module.add_function(make_fortytwo_callee());
+    for index in 0..30 {
+        let mut f = Function::new(format!("large{index}"), IrType::I64, PhpType::Int);
+        {
+            let mut b = Builder::new(&mut f);
+            let entry = b.create_named_block("entry", vec![]);
+            b.set_entry(entry);
+            b.position_at_end(entry);
+            let mut last = b.emit_const_i64(0);
+            for value in 0..40 {
+                last = b.emit_const_i64(value);
+            }
+            b.terminate(Terminator::Return { value: Some(last) });
+        }
+        module.add_function(f);
+    }
+    let mut caller = Function::new("caller".to_string(), IrType::I64, PhpType::Int);
+    {
+        let mut b = Builder::new(&mut caller);
+        let entry = b.create_named_block("entry", vec![]);
+        b.set_entry(entry);
+        b.position_at_end(entry);
+        let data_id = module.data.intern_function_name("fortytwo");
+        let call_res = b
+            .emit(Op::Call, vec![], Some(Immediate::Data(data_id)), IrType::I64, PhpType::Int, Ownership::NonHeap)
+            .unwrap();
+        b.terminate(Terminator::Return { value: Some(call_res) });
+    }
+    module.add_function(caller);
+    let before = crate::ir_passes::inline::SNAPSHOT_CLONES.with(|count| count.get());
+
+    assert!(inline_small_functions(&mut module));
+
+    let clones = crate::ir_passes::inline::SNAPSHOT_CLONES.with(|count| count.get()) - before;
+    validate_module(&module).unwrap();
+    assert_eq!(clones, 2, "{clones} snapshot copies: fortytwo and the small caller only");
+}

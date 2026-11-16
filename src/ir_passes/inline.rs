@@ -91,6 +91,12 @@ const MAX_INLINE_INSTRUCTIONS: usize = 24;
 /// Keep their expansion bounded while admitting an eight-field vertex writer.
 const MAX_INLINE_METHOD_INSTRUCTIONS: usize = 96;
 
+#[cfg(test)]
+thread_local! {
+    /// Function bodies `inline_small_functions` copied into its callee snapshot.
+    pub(crate) static SNAPSHOT_CLONES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
 /// Applies the separate, bounded method budget without widening free-function inlining.
 fn callee_fits_budget(callee: &Function, receiver: bool) -> bool {
     count_non_nop_instructions(callee) <= if receiver {
@@ -108,10 +114,14 @@ fn callee_fits_budget(callee: &Function, receiver: bool) -> bool {
 /// lines). `ELEPHC_INLINE_BUDGET` exists to measure how much of that volume the inliner is
 /// responsible for before deciding whether the cap should move.
 fn inline_budget() -> usize {
-    std::env::var("ELEPHC_INLINE_BUDGET")
-        .ok()
-        .and_then(|value| value.trim().parse::<usize>().ok())
-        .unwrap_or(MAX_INLINES_PER_FUNCTION)
+    // Read once: every host of every round asks.
+    static BUDGET: std::sync::OnceLock<usize> = std::sync::OnceLock::new();
+    *BUDGET.get_or_init(|| {
+        std::env::var("ELEPHC_INLINE_BUDGET")
+            .ok()
+            .and_then(|value| value.trim().parse::<usize>().ok())
+            .unwrap_or(MAX_INLINES_PER_FUNCTION)
+    })
 }
 
 /// Returns true if `n` is a direct user-function call opcode we consider for inlining.
@@ -1359,8 +1369,9 @@ fn emit_receiver_null_guard(
 /// Everything here is an owned pre-mutation snapshot, so hosts can be borrowed mutably
 /// while it is read.
 struct Callees<'a> {
-    /// Snapshot of `module.functions`, indexed by `CalleeRef::Function`.
-    functions: &'a [Function],
+    /// Snapshot of `module.functions`, indexed by `CalleeRef::Function`: only the functions
+    /// within the inlining budget, the others (`None`) are never candidates.
+    functions: &'a [Option<Function>],
     /// Function name to its index in `functions`.
     name_to_idx: &'a HashMap<String, usize>,
     /// Function call-site name resolution.
@@ -1423,7 +1434,11 @@ impl Callees<'_> {
     fn resolve(&self, host: &Function, inst: &Instruction, strings: &[String]) -> Option<CalleeRef> {
         if is_user_call_op(inst.op) {
             let name = self.resolver.resolve(inst)?;
-            return self.name_to_idx.get(&name).map(|&index| CalleeRef::Function(index));
+            return self
+                .name_to_idx
+                .get(&name)
+                .filter(|&&index| self.functions[index].is_some())
+                .map(|&index| CalleeRef::Function(index));
         }
         self.methods
             .resolve(host, inst, strings)
@@ -1433,7 +1448,9 @@ impl Callees<'_> {
     /// Returns the snapshot body of a resolved candidate.
     fn body(&self, callee: CalleeRef) -> &Function {
         match callee {
-            CalleeRef::Function(index) => &self.functions[index],
+            CalleeRef::Function(index) => self.functions[index]
+                .as_ref()
+                .expect("`resolve` names only snapshotted functions"),
             CalleeRef::Method(index) => &self.methods.bodies()[index],
         }
     }
@@ -1523,9 +1540,21 @@ pub(crate) fn inline_small_functions(module: &mut Module) -> bool {
     let resolver = CallTargetResolver::new(module);
     let methods = methods::MethodTargets::new(module);
 
-    // Snapshot callee bodies once (small); we only inline from the pre-mutation bodies,
-    // and repeated inlining inside one host re-scans the updated host only.
-    let callee_snapshots: Vec<Function> = module.functions.clone();
+    // Snapshot callee bodies once; we only inline from the pre-mutation bodies, and repeated
+    // inlining inside one host re-scans the updated host only. Only a body within the budget
+    // can be inlined, so only those are copied: cloning every function was ~540 samples of a
+    // sampled one-core Symfony demo build.
+    let callee_snapshots: Vec<Option<Function>> = module
+        .functions
+        .iter()
+        .map(|function| {
+            callee_fits_budget(function, false).then(|| {
+                #[cfg(test)]
+                SNAPSHOT_CLONES.with(|count| count.set(count.get() + 1));
+                function.clone()
+            })
+        })
+        .collect();
     let recursive = recursion::compute_recursive_callees(module, &name_to_idx, &resolver, &methods);
     let callees = Callees {
         functions: &callee_snapshots,
