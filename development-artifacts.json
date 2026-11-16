@@ -1,7 +1,12 @@
 {
   "schema": 1,
-  "checkpoint": "cd514891e47e4a49e6c72a358aeef1f8c1a37d07",
-  "pending": {},
+  "checkpoint": "aa0a9d2d47b08f56941601bafcc6a5a97be1f82d",
+  "pending": {
+    "aa0a9d2d47b08f56941601bafcc6a5a97be1f82d": {
+      "first_seen": 1794864360,
+      "attempts": 0
+    }
+  },
   "completed": [
     {
       "sha": "b1fa9a77307cafc87b9e55541adb5f48efb90791",
