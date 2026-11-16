@@ -232,7 +232,12 @@ fn abandon_location(
             }
             abandon_container(*parent, context, values)
         }
-        EvaluatedLocation::ArrayAccessElement { index, .. } => {
+        EvaluatedLocation::ArrayAccessElement { object, index, .. } => {
+            // The container is the read of the parent location: an owned one goes back here,
+            // since no `offsetSet()` follows to settle it.
+            if !object.is_borrowed() {
+                eval_release_value(context, values, object)?;
+            }
             if index.is_borrowed() {
                 return Ok(());
             }
@@ -1226,6 +1231,11 @@ fn write_location(
         EvaluatedLocation::ArrayAccessElement { object, index, .. } => {
             let result =
                 eval_method_call_result(object, "offsetSet", vec![index, value], context, values)?;
+            // The container came from a read of its own (`$a->obj[$k] = $v` reads the property),
+            // and nothing past this write uses it: an owned read is given back here.
+            if !object.is_borrowed() {
+                eval_release_value(context, values, object)?;
+            }
             eval_release_value(context, values, result)
         }
     }

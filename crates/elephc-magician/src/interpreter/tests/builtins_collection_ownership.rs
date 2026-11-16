@@ -262,6 +262,41 @@ fn core_integer_arguments_release_conversion_cells() {
     }
 }
 
+/// An `offsetSet()` write through `$holder->bag[$k]` gives back the container its property read made.
+///
+/// Each write used to leave one reference on the `ArrayAccess` object behind, keeping it (and
+/// everything it reaches) alive for the life of a `--web` worker.
+#[test]
+fn array_access_property_writes_release_the_container_read() {
+    let mut values = FakeOps::default();
+    let mut context = ElephcEvalContext::new();
+    let mut scope = ElephcEvalScope::new();
+    let declare = parse_fragment(
+        br#"class OwnershipBag implements ArrayAccess {
+    function offsetExists($o): bool { return true; }
+    function offsetGet($o): mixed { return 1; }
+    function offsetSet($o, $v): void {}
+    function offsetUnset($o): void {}
+}
+class OwnershipHolder { public $bag; function __construct() { $this->bag = new OwnershipBag(); } }
+$holder = new OwnershipHolder();
+$alias = $holder->bag;"#,
+    )
+    .unwrap();
+    execute_program_with_context(&mut context, &declare, &mut scope, &mut values).unwrap();
+    let bag = scope.visible_cell("alias").unwrap();
+    let owners_before = values.cell_owners[&(bag.as_ptr() as usize)];
+    for write in [
+        "$holder->bag['k'] = 5;",
+        "$holder->bag['k'] = 6;",
+        "$holder->bag['j'] ??= 7;",
+    ] {
+        let writes = parse_fragment(write.as_bytes()).unwrap();
+        execute_program_with_context(&mut context, &writes, &mut scope, &mut values).unwrap();
+        assert_eq!(values.cell_owners[&(bag.as_ptr() as usize)], owners_before, "{write}");
+    }
+}
+
 /// `==` over two arrays and `+` over an array release every key and element read they make.
 ///
 /// Every `array_iter_key`/`array_get`/`array_key_exists`/`compare` result is an owned cell, so
