@@ -948,6 +948,77 @@ impl ClassInfo {
             && self.property_slot_is_reference(index, name)
     }
 
+    /// Collects the high-word offsets of property slots born with the typed-uninitialized marker.
+    ///
+    /// Every physical slot without a schema default is PHP-uninitialized, except an owned
+    /// REFERENCE slot (its marker lives in the cell, see [`Self::owned_reference_property_slots`])
+    /// and an UNTYPED promoted property, which PHP creates null like any untyped property (its
+    /// schema default stays absent only so reflection keeps reporting no default). Marking it made
+    /// an object built without its constructor (`newInstanceWithoutConstructor()`, which DeepClone
+    /// uses) dump `uninitialized(mixed)` and count no properties.
+    ///
+    /// KNOWN DIVERGENCE, deliberately left in place: excluding owned reference slots disagrees with
+    /// PHP, but dropping the exclusion made a caught uninitialized-property fatal on a reference
+    /// slot corrupt an unrelated live heap string, so the reference-slot release path must be
+    /// fixed first.
+    ///
+    /// The direct object allocator and `__rt_new_by_name` both read this, so a dynamically named
+    /// object starts in exactly the state a `new` site's object does.
+    pub fn uninitialized_property_marker_offsets(&self) -> Vec<usize> {
+        self.properties
+            .iter()
+            .enumerate()
+            .filter_map(|(index, (property, _))| {
+                // Do not key this on the name-level declared-property set: inherited private
+                // slots can be intentionally absent from that visible map while still needing
+                // their own marker.
+                let is_owned_reference = self.property_slot_is_owned_reference(index);
+                // An untyped HOOKED property is born null too: the checker withholds its
+                // synthetic `null` default (the hook owns initialization) but php still
+                // initializes a backed untyped property, so `var_dump(new A)` shows `NULL` for
+                // `public $x { set { ... } }`.
+                let untyped_promoted = (self.promoted_properties.contains(property)
+                    || self.property_hooks.contains_key(property))
+                    && !self
+                        .property_declared_slots
+                        .get(index)
+                        .copied()
+                        .unwrap_or(false);
+                let starts_uninitialized = self
+                    .defaults
+                    .get(index)
+                    .is_some_and(|default| default.is_none())
+                    && !is_owned_reference
+                    && !untyped_promoted;
+                starts_uninitialized.then_some(8 + index * 16 + 8)
+            })
+            .collect()
+    }
+
+    /// Collects `(slot offset, property type, starts uninitialized)` for the object-owned
+    /// reference properties, whose ref-cells the object allocates at construction and releases on
+    /// destruction. A declared, default-less slot carries the uninitialized sentinel in its cell.
+    pub fn owned_reference_property_slots(&self) -> Vec<(usize, PhpType, bool)> {
+        self.properties
+            .iter()
+            .enumerate()
+            .filter_map(|(index, (property, php_type))| {
+                // Per SLOT, not per name: a child redeclaring an ancestor's private `$p` has two
+                // `p` slots, and the name-keyed set describes only the child's.
+                if self.property_slot_is_owned_reference(index) {
+                    let starts_uninitialized = self.property_slot_is_declared(index, property)
+                        && self
+                            .defaults
+                            .get(index)
+                            .is_some_and(|default| default.is_none());
+                    Some((8 + index * 16, php_type.clone(), starts_uninitialized))
+                } else {
+                    None
+                }
+            })
+            .collect()
+    }
+
     /// Returns whether one physical property slot is a private ancestor slot that
     /// a same-named descendant declaration hides from name lookups.
     pub fn property_slot_is_hidden(&self, index: usize) -> bool {

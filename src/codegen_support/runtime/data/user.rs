@@ -3583,7 +3583,7 @@ fn emit_class_uninitialized_property_marker_tables(
 
 /// Emits dense per-class metadata for OBJECT-OWNED REFERENCE property slots.
 ///
-/// Such a slot does not hold a value: it holds a pointer to a 16-byte ref-cell the object owns,
+/// Such a slot does not hold a value: it holds a pointer to a managed reference cell the object owns,
 /// because somewhere in the program a reference was taken to the property (`$r = &$this->prop`,
 /// or a by-reference return). Every read and every write of that property therefore dereferences
 /// the slot — including the `$this->prop = <default>` statements in `_class_propinit_<id>`.
@@ -3596,10 +3596,10 @@ fn emit_class_uninitialized_property_marker_tables(
 /// allocator reproduce the direct allocator's observable state exactly, the same way
 /// `_class_uninit_prop_offsets_*` does for typed-uninitialized slots.
 ///
-/// The predicate MUST stay in step with
-/// `crate::codegen::lower_inst::objects::interface_layout::owned_reference_property_offsets`,
-/// which is what the direct allocator uses; the two are the same rule written twice because they
-/// read different halves of the compiler.
+/// Each row is three words: the slot offset, the payload descriptor tag and a flag for a declared,
+/// default-less slot whose cell starts with the uninitialized sentinel. The rows come from
+/// `ClassInfo::owned_reference_property_slots`, the same source the direct allocator uses, and the
+/// cell is built by `__rt_reference_cell_new` just as there.
 fn emit_class_owned_reference_property_tables(
     out: &mut String,
     max_class_id: Option<u64>,
@@ -3618,8 +3618,8 @@ fn emit_class_owned_reference_property_tables(
                 ".globl _class_ref_prop_offsets_{0}\n_class_ref_prop_offsets_{0}:\n",
                 class_id
             ));
-            for offset in offsets {
-                out.push_str(&format!("    .quad {}\n", offset));
+            for (offset, tag, starts_uninitialized) in offsets {
+                out.push_str(&format!("    .quad {}, {}, {}\n", offset, tag, starts_uninitialized as u8));
             }
         }
     }
@@ -3650,15 +3650,14 @@ fn emit_class_owned_reference_property_tables(
     }
 }
 
-/// Returns the slot offsets of object-owned reference properties for one class layout.
-fn class_owned_reference_property_offsets(class_info: &ClassInfo) -> Vec<usize> {
+/// Returns `(slot offset, descriptor tag, starts uninitialized)` for the object-owned reference
+/// properties of one class layout, exactly what the direct allocator hands `__rt_reference_cell_new`.
+fn class_owned_reference_property_offsets(class_info: &ClassInfo) -> Vec<(usize, i64, bool)> {
     class_info
-        .properties
-        .iter()
-        .enumerate()
-        .filter_map(|(index, _)| {
-            let is_owned_reference = class_info.property_slot_is_owned_reference(index);
-            is_owned_reference.then_some(8 + index * 16)
+        .owned_reference_property_slots()
+        .into_iter()
+        .map(|(offset, php_type, starts_uninitialized)| {
+            (offset, crate::codegen_support::runtime::reference_cells::payload_tag(&php_type), starts_uninitialized)
         })
         .collect()
 }
@@ -3667,20 +3666,7 @@ fn class_owned_reference_property_offsets(class_info: &ClassInfo) -> Vec<usize> 
 /// Dynamic construction begins from a zeroed object, so these offsets make its observable state
 /// identical to the direct object allocator before property-default initialization runs.
 fn class_uninitialized_property_marker_offsets(class_info: &ClassInfo) -> Vec<usize> {
-    class_info
-        .properties
-        .iter()
-        .enumerate()
-        .filter_map(|(index, _)| {
-            let is_owned_reference = class_info.property_slot_is_owned_reference(index);
-            let starts_uninitialized = class_info
-                .defaults
-                .get(index)
-                .is_some_and(|default| default.is_none())
-                && !is_owned_reference;
-            starts_uninitialized.then_some(8 + index * 16 + 8)
-        })
-        .collect()
+    class_info.uninitialized_property_marker_offsets()
 }
 
 /// Returns whether this class layout stores a dynamic-property hash tail.

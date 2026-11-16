@@ -96,64 +96,7 @@ pub(super) fn class_method_already_emitted(
 
 /// Collects property high-word offsets that should start with the typed-property sentinel.
 pub(super) fn uninitialized_property_marker_offsets(class_info: &ClassInfo) -> Vec<usize> {
-    class_info
-        .properties
-        .iter()
-        .enumerate()
-        .filter_map(|(index, (property, _))| {
-            // Every physical slot without a schema default is PHP-uninitialized. Do not key
-            // this on the name-level declared-property set: inherited private slots can be
-            // intentionally absent from that visible map while still needing their own marker.
-            //
-            // KNOWN DIVERGENCE, deliberately left in place. Excluding owned REFERENCE slots is
-            // wrong against PHP. Whether a slot is a reference is a WHOLE-PROGRAM property —
-            // one `&$obj->prop` anywhere promotes that property for every instance of the class
-            // — so a single reference somewhere unrelated makes the property born INITIALIZED:
-            // `isset()` answers true, `get_object_vars()` lists it, and a read PHP refuses
-            // returns the empty cell. Two classes identical apart from whether some later line
-            // took a reference disagree about all three, where `php -n` 8.5.6 answers
-            // `n | d | THROW` for both.
-            //
-            // Dropping the exclusion is NOT the fix, though it looks like a one-line one and
-            // the slot has room (the cell pointer takes the low word, the marker loop writes
-            // only the high word, and both reference write paths already zero it). Doing so
-            // makes the guard fire for reference slots, and a caught uninitialized-property
-            // fatal on a reference slot then corrupts an unrelated live heap string: a 9-byte
-            // result came back with its first 8 bytes replaced by a pointer, deterministic in
-            // shape and ASLR-varying in value, i.e. a freed block's free-list link. The same
-            // program with an ordinary `throw new Error` is clean, and so is the same probe on
-            // a NON-reference slot, so the fault is in what the reference-slot fatal frees on
-            // the way out, not in the marker. Fix that release path first; the marker is one
-            // line behind it.
-            let is_owned_reference = class_info.property_slot_is_owned_reference(index);
-            // An UNTYPED promoted property is born null in PHP, like any untyped property; its
-            // schema default stays absent only so reflection keeps reporting no default. Marking
-            // it made an object built without its constructor (`newInstanceWithoutConstructor()`,
-            // which DeepClone uses) dump `uninitialized(mixed)` and count no properties.
-            //
-            // An untyped HOOKED property is born null too: the checker withholds its synthetic
-            // `null` default (the hook owns initialization) but php still initializes a backed
-            // untyped property, so `var_dump(new A)` shows `NULL` for `public $x { set { ... } }`.
-            let untyped_promoted = (class_info.promoted_properties.contains(property)
-                || class_info.property_hooks.contains_key(property))
-                && !class_info
-                    .property_declared_slots
-                    .get(index)
-                    .copied()
-                    .unwrap_or(false);
-            let starts_uninitialized = class_info
-                .defaults
-                .get(index)
-                .is_some_and(|default| default.is_none())
-                && !is_owned_reference
-                && !untyped_promoted;
-            if starts_uninitialized {
-                Some(8 + index * 16 + 8)
-            } else {
-                None
-            }
-        })
-        .collect()
+    class_info.uninitialized_property_marker_offsets()
 }
 
 /// Collects the slot offsets of object-owned reference properties, whose ref-cells the
@@ -161,25 +104,5 @@ pub(super) fn uninitialized_property_marker_offsets(class_info: &ClassInfo) -> V
 pub(super) fn owned_reference_property_offsets(
     class_info: &ClassInfo,
 ) -> Vec<(usize, PhpType, bool)> {
-    class_info
-        .properties
-        .iter()
-        .enumerate()
-        .filter_map(|(index, (property, php_type))| {
-            // Per SLOT, not per name: a child redeclaring an ancestor's private `$p` has two `p`
-            // slots, and the name-keyed set describes only the child's. The ancestor's slot owns
-            // its cell when the ancestor's `$r = &$this->p` promoted it, and a constructor that
-            // skipped its allocation left a null cell for that method to write through.
-            if class_info.property_slot_is_owned_reference(index) {
-                let starts_uninitialized = class_info.property_slot_is_declared(index, property)
-                    && class_info
-                        .defaults
-                        .get(index)
-                        .is_some_and(|default| default.is_none());
-                Some((8 + index * 16, php_type.clone(), starts_uninitialized))
-            } else {
-                None
-            }
-        })
-        .collect()
+    class_info.owned_reference_property_slots()
 }

@@ -23,7 +23,7 @@
 //!   own zero-fill has to be reproduced here from a class id known only at run
 //!   time: the typed-uninitialized markers (`_class_uninit_prop_*`) and the
 //!   object-owned reference cells (`_class_ref_prop_*`). An owned reference
-//!   slot holds a POINTER to a 16-byte cell rather than a value, and the
+//!   slot holds a POINTER to a managed reference cell rather than a value, and the
 //!   property-default thunk called next stores THROUGH it — so a slot left at
 //!   zero is a null store inside compiled code, with no PHP-level diagnostic.
 //! - On miss: returns 0 (null), which EIR object lowering boxes as PHP
@@ -148,7 +148,7 @@ pub fn emit_new_by_name(emitter: &mut Emitter) {
     emitter.instruction("b __rt_nbn_uninit_marker_loop");                       // continue marking this object's typed slots
     emitter.label("__rt_nbn_no_uninit_markers");
     // -- allocate the ref-cells this layout's object-owned reference properties need --
-    // An owned reference slot holds a POINTER to a 16-byte cell, not a value: every read and
+    // An owned reference slot holds a POINTER to a managed reference cell, not a value: every read and
     // every write of the property dereferences it, including the property-default stores in
     // `_class_propinit_<id>` below. The direct EIR allocator allocates those cells right after
     // zeroing the layout; the by-name allocator must do the same or the very next instruction
@@ -168,13 +168,24 @@ pub fn emit_new_by_name(emitter: &mut Emitter) {
     emitter.instruction("ldr x10, [sp, #48]");                                  // reload the reference-slot count
     emitter.instruction("cmp x11, x10");                                        // has every reference slot been given a cell?
     emitter.instruction("b.ge __rt_nbn_ref_cells_done");                        // continue once every cell exists
-    emitter.instruction("mov x0, #16");                                         // 16-byte ref cell: value at +0, tag/length at +8
-    emitter.instruction("bl __rt_heap_alloc");                                  // x0 = cell pointer
-    emitter.instruction("str xzr, [x0]");                                       // zero the cell value word
-    emitter.instruction("str xzr, [x0, #8]");                                   // zero the cell tag/length word
-    emitter.instruction("ldr x9, [sp, #24]");                                   // reload the slot-offset table
+    emitter.instruction("ldr x9, [sp, #24]");                                   // reload the slot-row table (three words per row)
+    emitter.instruction("mov x12, #24");                                        // row stride in bytes
+    emitter.instruction("madd x9, x11, x12, x9");                               // x9 = this reference property's row
+    emitter.instruction("ldr x0, [x9, #8]");                                    // argument 1 = the payload descriptor tag of the slot's type
+    emitter.instruction("bl __rt_reference_cell_new");                          // x0 = managed reference cell, as the direct allocator builds it
+    emitter.instruction("ldr x9, [sp, #24]");                                   // reload the slot-row table
     emitter.instruction("ldr x11, [sp, #56]");                                  // reload the reference-slot index
-    emitter.instruction("ldr x14, [x9, x11, lsl #3]");                          // load this reference property's slot offset
+    emitter.instruction("mov x12, #24");                                        // row stride in bytes
+    emitter.instruction("madd x9, x11, x12, x9");                               // x9 = this reference property's row
+    emitter.instruction("ldr x14, [x9]");                                       // load this reference property's slot offset
+    emitter.instruction("ldr x15, [x9, #16]");                                  // does the slot start typed-uninitialized?
+    emitter.instruction("cbz x15, __rt_nbn_ref_cell_ready");                    // an initialized slot keeps the zeroed cell
+    emitter.instruction("movz x15, #0xfffd");                                   // materialize the typed-uninitialized sentinel low bits
+    emitter.instruction("movk x15, #0xffff, lsl #16");                          // materialize the typed-uninitialized sentinel bits 16..31
+    emitter.instruction("movk x15, #0xffff, lsl #32");                          // materialize the typed-uninitialized sentinel bits 32..47
+    emitter.instruction("movk x15, #0x7fff, lsl #48");                          // materialize the typed-uninitialized sentinel high bits
+    emitter.instruction("str x15, [x0]");                                       // mark the owned reference payload as typed-uninitialized
+    emitter.label("__rt_nbn_ref_cell_ready");
     emitter.instruction("ldr x13, [sp, #16]");                                  // reload the object pointer
     emitter.instruction("str x0, [x13, x14]");                                  // store the cell pointer in the reference-property slot
     emitter.instruction("add x11, x11, #1");                                    // advance to the next reference slot
@@ -342,7 +353,7 @@ fn emit_new_by_name_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("jmp __rt_nbn_uninit_marker_loop_x86");                 // continue marking this object's typed slots
     emitter.label("__rt_nbn_no_uninit_markers_x86");
     // -- allocate the ref-cells this layout's object-owned reference properties need --
-    // See the AArch64 path: an owned reference slot holds a POINTER to a 16-byte cell, and the
+    // See the AArch64 path: an owned reference slot holds a POINTER to a managed reference cell, and the
     // property-default thunk below stores THROUGH it.
     emitter.instruction("mov rcx, QWORD PTR [rbp - 32]");                       // reload the matched class id for the reference-cell table lookup
     abi::emit_symbol_address(emitter, "r8", "_class_ref_prop_counts"); // reference-slot count table base
@@ -359,13 +370,20 @@ fn emit_new_by_name_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov r10, QWORD PTR [rbp - 48]");                       // reload the reference-slot index
     emitter.instruction("cmp r10, QWORD PTR [rbp - 24]");                       // has every reference slot been given a cell?
     emitter.instruction("jge __rt_nbn_ref_cells_done_x86");                     // continue once every cell exists
-    emitter.instruction("mov rax, 16");                                         // 16-byte ref cell: value at +0, tag/length at +8
-    emitter.instruction("call __rt_heap_alloc");                                // rax = cell pointer
-    emitter.instruction("mov QWORD PTR [rax], 0");                              // zero the cell value word
-    emitter.instruction("mov QWORD PTR [rax + 8], 0");                          // zero the cell tag/length word
-    emitter.instruction("mov r8, QWORD PTR [rbp - 16]");                        // reload the slot-offset table
+    emitter.instruction("mov r8, QWORD PTR [rbp - 16]");                        // reload the slot-row table (three words per row)
+    emitter.instruction("lea r11, [r10 + r10*2]");                              // word index of this reference property's row
+    emitter.instruction("mov rdi, QWORD PTR [r8 + r11*8 + 8]");                 // argument 1 = the payload descriptor tag of the slot's type
+    emitter.instruction("call __rt_reference_cell_new");                        // rax = managed reference cell, as the direct allocator builds it
+    emitter.instruction("mov r8, QWORD PTR [rbp - 16]");                        // reload the slot-row table
     emitter.instruction("mov r10, QWORD PTR [rbp - 48]");                       // reload the reference-slot index
-    emitter.instruction("mov rdx, QWORD PTR [r8 + r10*8]");                     // load this reference property's slot offset
+    emitter.instruction("lea r11, [r10 + r10*2]");                              // word index of this reference property's row
+    emitter.instruction("mov rdx, QWORD PTR [r8 + r11*8]");                     // load this reference property's slot offset
+    emitter.instruction("mov rsi, QWORD PTR [r8 + r11*8 + 16]");                // does the slot start typed-uninitialized?
+    emitter.instruction("test rsi, rsi");                                       // initialized slots keep the zeroed cell
+    emitter.instruction("jz __rt_nbn_ref_cell_ready_x86");                      // nothing to mark
+    emitter.instruction("movabs r9, 0x7ffffffffffffffd");                       // the typed-uninitialized sentinel
+    emitter.instruction("mov QWORD PTR [rax], r9");                             // mark the owned reference payload as typed-uninitialized
+    emitter.label("__rt_nbn_ref_cell_ready_x86");
     emitter.instruction("mov rcx, QWORD PTR [rbp - 8]");                        // reload the object pointer
     emitter.instruction("mov QWORD PTR [rcx + rdx], rax");                      // store the cell pointer in the reference-property slot
     emitter.instruction("add r10, 1");                                          // advance to the next reference slot
