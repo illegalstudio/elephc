@@ -579,3 +579,37 @@ return function_exists("get_resources");"#,
     );
     assert_eq!(values.get(result), FakeValue::Bool(true));
 }
+
+/// Verifies the parser's hidden foreach bindings never show up in `get_defined_vars()`.
+///
+/// `php -n` lists only `a`, `b` and `vars` here.
+#[test]
+fn execute_program_get_defined_vars_hides_foreach_pattern_bindings() {
+    let program = parse_fragment(
+        br#"foreach ([[1, 2]] as [$a, $b]) {}
+$vars = get_defined_vars();
+echo implode(",", array_keys($vars));"#,
+    )
+    .expect("parse foreach pattern fragment");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+    execute_program(&program, &mut scope, &mut values).expect("execute foreach pattern fragment");
+    assert_eq!(values.output, "a,b");
+}
+
+/// Verifies an arrow function leaves a variable the defining scope lacks undefined in its body.
+///
+/// `php -n` imports only variables that exist, so `get_defined_vars()` in the body is empty.
+#[test]
+fn execute_program_arrow_function_does_not_capture_a_missing_variable() {
+    let program = parse_fragment(
+        br#"$present = 1;
+$f = fn() => count(get_defined_vars()) . ($present ?? "") . (isset($missing) ? "set" : "unset");
+echo $f();"#,
+    )
+    .expect("parse arrow fragment");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+    execute_program(&program, &mut scope, &mut values).expect("execute arrow fragment");
+    assert_eq!(values.output, "11unset");
+}

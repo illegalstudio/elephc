@@ -401,7 +401,7 @@ fn infer_arrow_closure_captures(
                 && !is_arrow_superglobal(name)
                 && seen.insert(name.clone())
         })
-        .map(|name| EvalClosureCapture::new(name, false))
+        .map(|name| EvalClosureCapture::new(name, false).into_implicit())
         .collect()
 }
 

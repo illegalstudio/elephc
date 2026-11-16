@@ -27,7 +27,7 @@ fn parse_fragment_accepts_attributed_arrow_closure() {
     assert!(!is_static);
     assert_eq!(function.attributes().len(), 1);
     assert_eq!(function.attributes()[0].name(), "Closure");
-    assert_eq!(captures, &[EvalClosureCapture::new("container", false)]);
+    assert_eq!(captures, &[EvalClosureCapture::new("container", false).into_implicit()]);
 }
 
 /// Verifies the parser leaves a generator body alone instead of rewriting it.

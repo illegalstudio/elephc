@@ -14,6 +14,8 @@ use super::*;
 pub struct EvalClosureCapture {
     name: String,
     by_ref: bool,
+    /// Whether an arrow function inferred this capture from its body rather than a `use` list.
+    implicit: bool,
 }
 
 impl EvalClosureCapture {
@@ -22,7 +24,20 @@ impl EvalClosureCapture {
         Self {
             name: name.into(),
             by_ref,
+            implicit: false,
         }
+    }
+
+    /// Marks the capture as inferred from an arrow function body: php imports such a variable
+    /// only when the defining scope has it, so a missing one stays undefined in the body.
+    pub fn into_implicit(mut self) -> Self {
+        self.implicit = true;
+        self
+    }
+
+    /// Returns whether this capture was inferred from an arrow function body.
+    pub const fn implicit(&self) -> bool {
+        self.implicit
     }
 
     /// Returns the captured variable name without the leading `$`.

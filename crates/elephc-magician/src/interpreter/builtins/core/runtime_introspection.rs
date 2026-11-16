@@ -556,7 +556,9 @@ fn defined_variable_entries(scope: &ElephcEvalScope) -> Vec<(String, RuntimeCell
     scope
         .visible_entries()
         .into_iter()
-        .filter(|(name, _)| name != "this")
+        // The parser's hidden bindings (`\0elephc_foreach_binding:N`, `\0elephc_reference_source:N`)
+        // are scope variables only by implementation; php never lists them.
+        .filter(|(name, _)| name != "this" && !name.starts_with('\0'))
         .collect()
 }
 

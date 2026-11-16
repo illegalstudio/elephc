@@ -104,7 +104,8 @@ mod tests {
     /// `EvalAttributeArg::Expr` variant, `SourceLine` markers on included files) was merged
     /// in. The fingerprint below must be RE-RECORDED once the merged tree compiles: the guard
     /// test prints the new value.
-    const RECORDED_FINGERPRINT: u64 = 16184864277357032611;
+    /// RE-RECORDED AT 27: `EvalClosureCapture::implicit` (arrow-function captures).
+    const RECORDED_FINGERPRINT: u64 = 5686664831650677854;
 
     /// Returns a stable fingerprint of every source the stored format depends on.
     ///

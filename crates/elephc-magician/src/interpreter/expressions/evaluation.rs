@@ -977,6 +977,9 @@ pub(super) fn eval_closure_expr(
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     let mut bindings = Vec::with_capacity(captures.len());
     for capture in captures {
+        if capture.implicit() && visible_scope_cell(context, scope, capture.name()).is_none() {
+            continue;
+        }
         bindings.push(eval_closure_capture(capture, context, scope, values)?);
     }
     let mut closure = EvalClosure::new(function.clone(), bindings, is_static);

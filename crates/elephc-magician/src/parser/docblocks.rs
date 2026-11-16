@@ -177,7 +177,8 @@ pub(super) fn apply(tokens: Vec<Token>) -> Vec<Token> {
     }
     for (comment_index, token) in tokens.iter().enumerate() {
         let TokenKind::DocComment(comment) = token.kind() else { continue; };
-        edits.push((comment_index, comment_index + 1, Vec::new()));
+        // The comment token stays: `drop_unread_doc_comments` removes the ones no grammar rule
+        // reads, and the class/interface rules keep theirs for `getDocComment()`.
         let block = block(comment);
         let declaration = skip_prefix(&tokens, comment_index + 1, tokens.len());
         let Some(next) = tokens.get(declaration) else { continue; };

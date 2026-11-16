@@ -107,12 +107,13 @@ pub(super) enum UseImportKind {
 fn drop_unread_doc_comments(
     tokens: Vec<TokenKind>,
     lines: Vec<i64>,
-) -> (Vec<TokenKind>, Vec<i64>) {
+    phpdoc: Vec<bool>,
+) -> (Vec<TokenKind>, Vec<i64>, Vec<bool>) {
     if !tokens
         .iter()
         .any(|token| matches!(token, TokenKind::DocComment(_)))
     {
-        return (tokens, lines);
+        return (tokens, lines, phpdoc);
     }
     let read: Vec<bool> = tokens
         .iter()
@@ -135,7 +136,12 @@ fn drop_unread_doc_comments(
         .zip(read.iter().chain(std::iter::repeat(&true)))
         .filter_map(|(line, keep)| keep.then_some(line))
         .collect();
-    (kept_tokens, kept_lines)
+    let kept_phpdoc = phpdoc
+        .into_iter()
+        .zip(read.iter().chain(std::iter::repeat(&true)))
+        .filter_map(|(flag, keep)| keep.then_some(flag))
+        .collect();
+    (kept_tokens, kept_lines, kept_phpdoc)
 }
 
 /// Returns a parser-global synthetic class name for one eval anonymous class expression.
@@ -196,7 +202,8 @@ impl Parser {
         let token_phpdoc = tokens.iter().map(Token::phpdoc).collect();
         let token_lines = tokens.iter().map(Token::line).collect();
         let tokens = tokens.into_iter().map(Token::into_kind).collect();
-        let (tokens, token_lines) = drop_unread_doc_comments(tokens, token_lines);
+        let (tokens, token_lines, token_phpdoc) =
+            drop_unread_doc_comments(tokens, token_lines, token_phpdoc);
         Self {
             type_parameters: Vec::new(),
             type_parameter_origins: Vec::new(),
