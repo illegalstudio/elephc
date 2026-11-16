@@ -56,6 +56,27 @@ echo c(strlen(...)), " ", c($o->m(...)), " ", c(fn() => 1), " ", c(function () {
     assert_eq!(out, "nnnn nnnn nnnn nnnn yyyy yyyy yyyy yyyy\n");
 }
 
+/// An invokable object that a runtime call converts for a `callable` parameter is still an
+/// object, held as a callable or forwarded into a `mixed`, but no Closure. The same method as an
+/// array (`[$obj, '__invoke']`) stays an array. Expected output measured with php 8.5.12.
+#[test]
+fn test_invokable_object_converted_to_callable_is_an_object() {
+    let out = compile_and_run_per_argv(
+        r#"<?php
+class Inv { public function __invoke() { return 1; } }
+class Plain { public function m() { return 2; } }
+function yn(bool $b): string { return $b ? "y" : "n"; }
+function c(callable $f): string { return yn(is_object($f)) . yn($f instanceof Closure) . yn(is_a($f, 'Closure')) . m($f); }
+function m(mixed $f): string { return yn(is_object($f)) . yn($f instanceof Closure); }
+$o = new Inv();
+$cb = $argv[1] ?? 'c';
+echo $cb($o), " ", $cb(new Inv()), " ", $cb([new Plain(), 'm']), " ", $cb([$o, '__invoke']), " ", $cb('strlen'), " ", $cb(fn() => 1), "\n";
+"#,
+        &[&[]],
+    );
+    assert_eq!(out, ["ynnyn ynnyn nnnnn nnnnn nnnnn yyyyy\n"]);
+}
+
 /// Verifies anonymous function with multiple parameters and a simple arithmetic body.
 #[test]
 fn test_closure_multiple_params() {

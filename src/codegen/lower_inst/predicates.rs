@@ -420,7 +420,9 @@ pub(super) fn emit_mixed_tag_membership(
 /// carries an object handle. A function name or method array passed as a `callable` (`'strlen'`,
 /// `[$obj, 'm']`, `'Cls::m'`) becomes an implicit descriptor without one: PHP still sees a string
 /// or an array there, which is neither an object nor an instance of `Closure`. An eval callback
-/// adapter wraps the original boxed value, so an eval closure keeps its identity through it.
+/// adapter wraps the original boxed value, so an eval closure keeps its identity through it. An
+/// invokable object converted to a callable (descriptor kind `ObjectInvoke`) is an object, but
+/// no Closure.
 /// A boxed object (tag 6) is an object; whether it is a Closure is decided by the caller.
 pub(super) fn emit_closure_identity(
     ctx: &mut FunctionContext<'_>,
@@ -494,7 +496,8 @@ fn emit_descriptor_identity(
     false_label: &str,
 ) {
     use crate::codegen_support::callable_descriptor as desc;
-    if !ctx.module.required_runtime_features.eval_bridge {
+    let eval = ctx.module.required_runtime_features.eval_bridge;
+    if !accept_objects && !eval {
         desc::emit_require_object_handle(ctx.emitter, payload, false_label);
         abi::emit_jump(ctx.emitter, true_label);
         return;
@@ -503,14 +506,32 @@ fn emit_descriptor_identity(
     desc::emit_require_object_handle(ctx.emitter, payload, &no_handle);
     abi::emit_jump(ctx.emitter, true_label);
     ctx.emitter.label(&no_handle);
-    // -- an eval callback adapter: ask about the boxed value it wraps --
-    let (context_offset, value_offset) = crate::codegen::eval_callable_helpers::eval_callback_adapter_capture_offsets();
-    let adapter = desc::CALLABLE_DESC_KIND_CALLBACK_ADAPTER;
     let (kind, wrapped) = match ctx.emitter.target.arch {
         Arch::AArch64 => ("x9", "x10"),
         Arch::X86_64 => ("r10", "r11"),
     };
     abi::emit_load_from_address(ctx.emitter, kind, payload, 0);
+    if accept_objects {
+        // -- an invokable object converted to a callable keeps its receiver, which is an object --
+        let invoke = desc::CALLABLE_DESC_KIND_OBJECT_INVOKE;
+        match ctx.emitter.target.arch {
+            Arch::AArch64 => {
+                ctx.emitter.instruction(&format!("cmp {kind}, #{invoke}"));     // an invokable object's descriptor wraps that object
+                ctx.emitter.instruction(&format!("b.eq {true_label}"));         // the callable is the object itself
+            }
+            Arch::X86_64 => {
+                ctx.emitter.instruction(&format!("cmp {kind}, {invoke}"));      // an invokable object's descriptor wraps that object
+                ctx.emitter.instruction(&format!("je {true_label}"));           // the callable is the object itself
+            }
+        }
+    }
+    if !eval {
+        abi::emit_jump(ctx.emitter, false_label);
+        return;
+    }
+    // -- an eval callback adapter: ask about the boxed value it wraps --
+    let (context_offset, value_offset) = crate::codegen::eval_callable_helpers::eval_callback_adapter_capture_offsets();
+    let adapter = desc::CALLABLE_DESC_KIND_CALLBACK_ADAPTER;
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
             ctx.emitter.instruction(&format!("cmp {kind}, #{adapter}"));        // only an eval callback adapter wraps another value

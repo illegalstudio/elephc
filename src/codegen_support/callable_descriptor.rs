@@ -391,6 +391,19 @@ pub(crate) fn emit_store_current_result_to_runtime_capture(
     }
 }
 
+/// Overwrites the kind word of a runtime (heap) descriptor copy held in `descriptor_reg`.
+pub(crate) fn emit_store_kind_to_runtime_descriptor(emitter: &mut Emitter, descriptor_reg: &str, kind: u64) {
+    match emitter.target.arch {
+        crate::codegen_support::platform::Arch::AArch64 => {
+            emitter.instruction(&format!("mov x9, #{kind}"));                   // materialize the descriptor kind
+            emitter.instruction(&format!("str x9, [{descriptor_reg}]"));        // record the kind in the runtime descriptor header
+        }
+        crate::codegen_support::platform::Arch::X86_64 => {
+            emitter.instruction(&format!("mov QWORD PTR [{descriptor_reg}], {kind}")); // record the kind in the runtime descriptor header
+        }
+    }
+}
+
 /// Loads a runtime descriptor capture slot into the ABI result registers.
 pub(crate) fn emit_load_runtime_capture_to_result(
     emitter: &mut Emitter,
