@@ -340,7 +340,17 @@ impl<'a> Scanner<'a> {
                 break;
             }
             let word = &self.source[start..cursor];
-            let class = if !qualified && KEYWORDS.iter().any(|keyword| word.eq_ignore_ascii_case(keyword.as_bytes())) {
+            // `yield from` is one `T_YIELD_FROM` token spanning the gap between the two words.
+            if !qualified && word.eq_ignore_ascii_case(b"yield") {
+                if let Some(end) = self.scan_yield_from(cursor) {
+                    self.pos = end;
+                    self.push(Class::Green, start, end);
+                    return self.next_token();
+                }
+            }
+            let is_keyword = KEYWORDS.iter().any(|keyword| word.eq_ignore_ascii_case(keyword.as_bytes()))
+                || (word.eq_ignore_ascii_case(b"enum") && self.enum_keyword_follows(cursor));
+            let class = if !qualified && is_keyword {
                 Class::Green
             } else {
                 Class::Blue
@@ -728,6 +738,64 @@ impl<'a> Scanner<'a> {
         }
         (self.source.get(cursor) == Some(&b')')).then_some(cursor + 1)
     }
+
+    /// Skips the lexer's `{WHITESPACE_OR_COMMENTS}` run (whitespace, `/* */`, `//` and `#`
+    /// comments) from `cursor`; returns its end, or `None` when nothing was skipped.
+    fn skip_whitespace_or_comments(&self, mut cursor: usize) -> Option<usize> {
+        let start = cursor;
+        loop {
+            match self.source.get(cursor) {
+                Some(b' ' | b'\t' | b'\r' | b'\n') => cursor += 1,
+                Some(b'/') if self.source.get(cursor + 1) == Some(&b'*') => {
+                    let close = self.source[cursor + 2..].windows(2).position(|pair| pair == b"*/")?;
+                    cursor += 2 + close + 2;
+                }
+                Some(b'/') if self.source.get(cursor + 1) == Some(&b'/') => {
+                    while self.source.get(cursor).is_some_and(|byte| !matches!(byte, b'\n' | b'\r')) {
+                        cursor += 1;
+                    }
+                }
+                Some(b'#') if self.source.get(cursor + 1) != Some(&b'[') => {
+                    while self.source.get(cursor).is_some_and(|byte| !matches!(byte, b'\n' | b'\r')) {
+                        cursor += 1;
+                    }
+                }
+                _ => break,
+            }
+        }
+        (cursor > start).then_some(cursor)
+    }
+
+    /// Returns the end of a `yield from` token whose `yield` ends at `cursor`, or `None`.
+    ///
+    /// The Zend lexer's rule is `"yield"{WHITESPACE_OR_COMMENTS}"from"` followed by a byte that
+    /// cannot continue a name, so `yield fromx` stays `yield` plus the name `fromx`.
+    fn scan_yield_from(&self, cursor: usize) -> Option<usize> {
+        let from_start = self.skip_whitespace_or_comments(cursor)?;
+        let from_end = from_start + 4;
+        let from = self.source.get(from_start..from_end)?;
+        let terminated = self.source.get(from_end).is_some_and(|next| !is_name_continue(*next));
+        (from.eq_ignore_ascii_case(b"from") && terminated).then_some(from_end)
+    }
+
+    /// Returns whether an `enum` word ending at `cursor` is the `T_ENUM` keyword.
+    ///
+    /// The Zend lexer makes `enum` a keyword only when whitespace or comments and then a name
+    /// follow it, and that name is not `extends`/`implements`; `enum(...)` or `const enum` keep
+    /// it an ordinary name.
+    fn enum_keyword_follows(&self, cursor: usize) -> bool {
+        let Some(next) = self.skip_whitespace_or_comments(cursor) else {
+            return false;
+        };
+        if !self.source.get(next).is_some_and(|byte| is_name_start(*byte)) {
+            return false;
+        }
+        let rest = &self.source[next..];
+        let starts_with = |prefix: &[u8]| {
+            rest.len() >= prefix.len() && rest[..prefix.len()].eq_ignore_ascii_case(prefix)
+        };
+        !starts_with(b"extends") && !starts_with(b"implements")
+    }
 }
 
 /// Returns whether one byte can start a PHP name.
@@ -747,6 +815,23 @@ mod tests {
     /// Renders one source and returns it as UTF-8.
     fn rendered(source: &str) -> String {
         String::from_utf8(highlight_document(source.as_bytes())).expect("utf-8 highlight")
+    }
+
+    /// Oracle: `php -n` 8.5.10 `highlight_string(..., true)`. `enum` before a name is the
+    /// `T_ENUM` keyword (green); before `extends` or `(` it is an ordinary name (blue).
+    #[test]
+    fn matches_php_for_enum_keyword() {
+        assert_eq!(rendered(r"<?php enum Foo {}"), r#"<pre><code style="color: #000000"><span style="color: #0000BB">&lt;?php </span><span style="color: #007700">enum </span><span style="color: #0000BB">Foo </span><span style="color: #007700">{}</span></code></pre>"#);
+        assert_eq!(rendered(r"<?php enum extends;"), r#"<pre><code style="color: #000000"><span style="color: #0000BB">&lt;?php enum </span><span style="color: #007700">extends;</span></code></pre>"#);
+    }
+
+    /// Oracle: `php -n` 8.5.10 `highlight_string(..., true)`. `yield from` is one green
+    /// `T_YIELD_FROM` token, comments between the words included; `yield fromx` is not.
+    #[test]
+    fn matches_php_for_yield_from() {
+        assert_eq!(rendered(r"<?php yield from f();"), r#"<pre><code style="color: #000000"><span style="color: #0000BB">&lt;?php </span><span style="color: #007700">yield from </span><span style="color: #0000BB">f</span><span style="color: #007700">();</span></code></pre>"#);
+        assert_eq!(rendered(r"<?php yield /*c*/ from f();"), r#"<pre><code style="color: #000000"><span style="color: #0000BB">&lt;?php </span><span style="color: #007700">yield /*c*/ from </span><span style="color: #0000BB">f</span><span style="color: #007700">();</span></code></pre>"#);
+        assert_eq!(rendered(r"<?php enum(1); yield fromx;"), r#"<pre><code style="color: #000000"><span style="color: #0000BB">&lt;?php enum</span><span style="color: #007700">(</span><span style="color: #0000BB">1</span><span style="color: #007700">); yield </span><span style="color: #0000BB">fromx</span><span style="color: #007700">;</span></code></pre>"#);
     }
 
     /// Oracle: `php -r 'echo highlight_string(...);'`.
