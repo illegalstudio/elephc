@@ -165,7 +165,7 @@ pub(super) fn lower_boxed_spread_args(
                 guarded[index] = true;
                 let guard_span = ctx.call_site_span.unwrap_or(span);
                 converted[index] = super::scalar_param_guards::guard_scalar_param(
-                    ctx, sig, index, value, source, guard_span, false,
+                    ctx, sig, index, value, source, guard_span, false, &[],
                 ).map(|value| value.value);
                 if converted[index].is_none() && sig.params[index].1.codegen_repr() == PhpType::Str {
                     // PHP converts an accepted argument while binding it, before the next

@@ -930,6 +930,7 @@ pub(crate) fn coerce_scalar_arg_to_param_storage(
             super::scalar_param_guards::GuardSource::Recorded(arg.span),
             arg.span,
             false,
+            &[],
         ) {
             return converted;
         }
@@ -1639,8 +1640,9 @@ pub(super) fn coerce_operands_to_params_guarded(
             && (needs_guard[index].is_some() || operand_needs_param_coercion(ctx, sig, &operands, index)))
         .collect::<Vec<_>>();
     // A deferred guard can throw too: every other owned operand (a freshly built array, a call
-    // result) must be published first, or the throw leaks it. The guarded operand itself stays
-    // unpublished, so an accepted check costs no extra root; its refusal releases it instead.
+    // result) must be published first, or the throw leaks it. Guarded operands themselves stay
+    // unpublished, so an accepted check costs no extra root; a refusal releases them instead,
+    // its own operand and every other guarded operand (or its converted string) still owned.
     let publish_all = needs_coercion.iter().any(|needs| *needs);
     let publish_others = !publish_all && deferred_positional.iter().any(|deferred| *deferred);
     if publish_all || publish_others {
@@ -1667,6 +1669,20 @@ pub(super) fn coerce_operands_to_params_guarded(
             }
         }
     }
+    // What each deferred guard's refusal must release besides its own operand: the other
+    // guarded operands that are owned temporaries, plus, for an earlier string guard, the box it
+    // kept and the string it converted (an earlier int/float guard already released its box).
+    let deferred_sources = operands.clone();
+    let mut still_owned: Vec<Vec<crate::ir::ValueId>> = (0..limit)
+        .map(|index| {
+            let value = lowered_value_from_id(ctx, deferred_sources[index]);
+            if publish_others && deferred_positional[index] && ctx.value_is_owning_temporary(value) {
+                vec![value.value]
+            } else {
+                Vec::new()
+            }
+        })
+        .collect();
     for index in 0..limit {
         if sig.ref_params.get(index).copied().unwrap_or(false) {
             if let Some((local, span)) = reference_check(index) {
@@ -1680,10 +1696,18 @@ pub(super) fn coerce_operands_to_params_guarded(
         let value = operands[index];
         if let Some(source) = needs_guard[index] {
             let lowered = lowered_value_from_id(ctx, value);
+            let also_release = still_owned
+                .iter()
+                .enumerate()
+                .filter(|(other, _)| *other != index)
+                .flat_map(|(_, values)| values.iter().copied())
+                .collect::<Vec<_>>();
             if let Some(converted) = super::scalar_param_guards::guard_scalar_param(
                 ctx, sig, index, lowered, source, guard_span,
-                publish_others && deferred_positional[index],
+                publish_others && deferred_positional[index], &also_release,
             ) {
+                // The guard released an owned box it converted: nothing is left to release.
+                still_owned[index].clear();
                 // The guard already produced the `int`/`float` PHP binds; the boxed source
                 // stays owned by its published root and retires with the call's operands.
                 operands[index] = converted.value;
@@ -1694,7 +1718,11 @@ pub(super) fn coerce_operands_to_params_guarded(
                 // call's span: a conversion that can warn publishes its span as the current
                 // line, and a span-less one would publish line 0 over the caller's site (a
                 // compiler-generated span is not published at all).
-                operands[index] = coerce_to_string_at_span(ctx, lowered, Some(guard_span)).value;
+                let string = coerce_to_string_at_span(ctx, lowered, Some(guard_span));
+                if publish_others && ctx.value_is_owning_temporary(string) {
+                    still_owned[index].push(string.value);
+                }
+                operands[index] = string.value;
                 continue;
             }
         }

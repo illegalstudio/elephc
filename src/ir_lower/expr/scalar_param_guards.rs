@@ -172,7 +172,8 @@ pub(super) fn deferred_guard_source(ctx: &LoweringContext<'_, '_>, arg: &Expr) -
 /// caller passes it instead of the box. For `string` and `bool` it yields nothing and the
 /// existing conversion runs afterwards. Earlier arguments stay published when it throws; with
 /// `release_on_refusal`, an owned operand that is not itself published is released before the
-/// throw.
+/// throw, together with `also_release`: the call's other unpublished owned operands, which no
+/// cleanup root covers either (they become extra operands the refusal path releases).
 pub(super) fn guard_scalar_param(
     ctx: &mut LoweringContext<'_, '_>,
     sig: &FunctionSig,
@@ -181,6 +182,7 @@ pub(super) fn guard_scalar_param(
     source: GuardSource,
     span: Span,
     release_on_refusal: bool,
+    also_release: &[crate::ir::ValueId],
 ) -> Option<LoweredValue> {
     let declared = guarded_scalar_param(ctx, sig, index, value.value, source)?;
     let mode = match declared {
@@ -192,7 +194,17 @@ pub(super) fn guard_scalar_param(
     let mode = if crate::source::current_strict_types() { mode.to_ascii_uppercase() } else { mode };
     // An owned operand no cleanup root covers is released by the refusal itself, so a
     // `TypeError` does not leak it (the accepting path keeps the ordinary ownership flow).
-    let release = if release_on_refusal && ctx.value_is_owning_temporary(value) { "r" } else { "" };
+    let mut releases = Vec::new();
+    if release_on_refusal && ctx.value_is_owning_temporary(value) {
+        releases.push(value.value);
+    }
+    releases.extend(also_release.iter().copied());
+    let release = if releases.is_empty() { "" } else { "r" };
+    // Operand 0 is the checked value; with the `r` flag the rest are released on refusal.
+    let mut guard_operands = vec![value.value];
+    if !releases.is_empty() {
+        guard_operands.extend(releases);
+    }
     let argument = sig.params.iter().take(index).filter(|(name, _)| {
         name != crate::func_args::HIDDEN_ARGC_PARAM && name != crate::func_args::HIDDEN_ARGS_PARAM
     }).count() + 1;
@@ -216,7 +228,7 @@ pub(super) fn guard_scalar_param(
         };
         let converted = ctx.emit_value(
             Op::ScalarParamGuard,
-            vec![value.value],
+            guard_operands.clone(),
             Some(Immediate::Data(data)),
             declared,
             Op::ScalarParamGuard.default_effects(),
@@ -231,7 +243,7 @@ pub(super) fn guard_scalar_param(
     }
     ctx.emit_void(
         Op::ScalarParamGuard,
-        vec![value.value],
+        guard_operands,
         Some(Immediate::Data(data)),
         Op::ScalarParamGuard.default_effects(),
         Some(span),
