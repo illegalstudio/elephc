@@ -518,12 +518,26 @@ pub(crate) fn lower_class_name_lookup(
             emit_dynamic_object_class_name(ctx, name);
         }
         PhpType::Callable => {
+            // An invokable object converted to a callable is that object, not a Closure.
+            let invokable = ctx.next_label("get_class_callable_invokable");
+            let done = ctx.next_label("get_class_callable_done");
+            let result_reg = abi::int_result_reg(ctx.emitter);
+            ctx.load_value_to_reg(value, result_reg)?;
+            emit_branch_to_invokable_receiver(ctx, result_reg, &invokable);
             let result = if name == "get_class" {
                 b"Closure".as_slice()
             } else {
                 b"".as_slice()
             };
             emit_string_result(ctx, result);
+            abi::emit_jump(ctx.emitter, &done);
+            ctx.emitter.label(&invokable);
+            abi::emit_reg_move(ctx.emitter, result_reg, match ctx.emitter.target.arch {
+                Arch::AArch64 => "x1",
+                Arch::X86_64 => "rdi",
+            });
+            emit_dynamic_object_class_name(ctx, name);
+            ctx.emitter.label(&done);
         }
         PhpType::Mixed | PhpType::Union(_) if super::has_eval_context(ctx) => {
             return super::lower_eval_object_class_name(ctx, inst, value, name);
@@ -1122,6 +1136,34 @@ pub(in crate::codegen::lower_inst::builtins) fn emit_dynamic_object_class_name(c
     }
 }
 
+/// Branches to `receiver_label` with the receiver object in the second payload register (`x1` /
+/// `rdi`) when the callable descriptor in `descriptor_reg` is an invokable object converted to a
+/// callable (kind `ObjectInvoke`); falls through otherwise.
+fn emit_branch_to_invokable_receiver(ctx: &mut FunctionContext<'_>, descriptor_reg: &str, receiver_label: &str) {
+    use crate::codegen_support::callable_descriptor as desc;
+    let invoke = desc::CALLABLE_DESC_KIND_OBJECT_INVOKE;
+    let receiver = desc::CALLABLE_DESC_RUNTIME_CAPTURE_OFFSET;
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction(&format!("ldr x9, [{descriptor_reg}]"));    // load the callable descriptor kind
+            ctx.emitter.instruction(&format!("cmp x9, #{invoke}"));             // is this an invokable object's descriptor?
+            let skip = ctx.next_label("get_class_not_invokable");
+            ctx.emitter.instruction(&format!("b.ne {skip}"));                   // any other callable reports Closure
+            ctx.emitter.instruction(&format!("ldr x1, [{descriptor_reg}, #{receiver}]")); // load the captured receiver object
+            ctx.emitter.instruction(&format!("b {receiver_label}"));            // report the receiver object's class
+            ctx.emitter.label(&skip);
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction(&format!("cmp QWORD PTR [{descriptor_reg}], {invoke}")); // is this an invokable object's descriptor?
+            let skip = ctx.next_label("get_class_not_invokable");
+            ctx.emitter.instruction(&format!("jne {skip}"));                    // any other callable reports Closure
+            ctx.emitter.instruction(&format!("mov rdi, QWORD PTR [{descriptor_reg} + {receiver}]")); // load the captured receiver object
+            ctx.emitter.instruction(&format!("jmp {receiver_label}"));          // report the receiver object's class
+            ctx.emitter.label(&skip);
+        }
+    }
+}
+
 /// Emits class-name lookup for a boxed Mixed value that may contain an object.
 fn emit_mixed_object_class_name(ctx: &mut FunctionContext<'_>, name: &str) {
     let object_label = ctx.next_label("get_class_mixed_object");
@@ -1194,6 +1236,12 @@ fn emit_mixed_object_class_name(ctx: &mut FunctionContext<'_>, name: &str) {
     abi::emit_jump(ctx.emitter, &done_label);
 
     ctx.emitter.label(&closure_label);
+    // An invokable object converted to a callable is that object: report its receiver's class.
+    let payload = match ctx.emitter.target.arch {
+        Arch::AArch64 => "x1",
+        Arch::X86_64 => "rdi",
+    };
+    emit_branch_to_invokable_receiver(ctx, payload, &object_label);
     if name == "get_class" {
         emit_string_result(ctx, b"Closure");
     } else {

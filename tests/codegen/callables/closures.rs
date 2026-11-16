@@ -77,6 +77,28 @@ echo $cb($o), " ", $cb(new Inv()), " ", $cb([new Plain(), 'm']), " ", $cb([$o, '
     assert_eq!(out, ["ynnyn ynnyn nnnnn nnnnn nnnnn yyyyy\n"]);
 }
 
+/// `get_class()` of an invokable object converted for a `callable` parameter names the object's
+/// class, held as a callable or forwarded into a `mixed`, and `get_parent_class()` its parent.
+/// A closure stays `Closure`. Expected output measured with php 8.5.12.
+#[test]
+fn test_get_class_of_invokable_object_converted_to_callable() {
+    let out = compile_and_run_per_argv(
+        r#"<?php
+class Base {}
+class Inv extends Base { public function __invoke() { return 1; } }
+function c(callable $f): string { return get_class($f) . "/" . get_parent_class($f) . "/" . m($f); }
+function m(mixed $f): string { return get_class($f) . "/" . get_parent_class($f); }
+function k(callable $f): string { return get_class($f) . "/" . get_class(n($f)); }
+function n(mixed $f): mixed { return $f; }
+$cb = $argv[1] ?? 'c';
+$kb = $argv[2] ?? 'k';
+echo $cb(new Inv()), " ", m(new Inv()), " ", $kb(fn() => 1), "\n";
+"#,
+        &[&[]],
+    );
+    assert_eq!(out, ["Inv/Base/Inv/Base Inv/Base Closure/Closure\n"]);
+}
+
 /// Verifies anonymous function with multiple parameters and a simple arithmetic body.
 #[test]
 fn test_closure_multiple_params() {
