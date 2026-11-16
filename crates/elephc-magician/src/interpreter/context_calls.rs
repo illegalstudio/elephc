@@ -528,26 +528,32 @@ pub fn execute_context_unwrap_aggregate(
 ) -> Result<Option<RuntimeCellHandle>, EvalStatus> {
     let mut current = object;
     let mut owned = false;
-    for _ in 0..10 {
-        let identity = values.object_identity(current)?;
-        if context.has_eval_generator(identity)
-            || !eval_foreach_object_is_a(current, "IteratorAggregate", context, values)?
-        {
-            return Ok(owned.then_some(current));
+    let outcome = (|| {
+        for _ in 0..10 {
+            let identity = values.object_identity(current)?;
+            if context.has_eval_generator(identity)
+                || !eval_foreach_object_is_a(current, "IteratorAggregate", context, values)?
+            {
+                return Ok(owned.then_some(current));
+            }
+            let inner =
+                eval_method_call_result(current, "getIterator", Vec::new(), context, values)?;
+            if owned {
+                values.release(current)?;
+            }
+            current = inner;
+            owned = true;
+            if values.type_tag(current)? != EVAL_TAG_OBJECT {
+                return Err(EvalStatus::RuntimeFatal);
+            }
         }
-        let inner = eval_method_call_result(current, "getIterator", Vec::new(), context, values)?;
-        if owned {
-            values.release(current)?;
-        }
-        current = inner;
-        owned = true;
-        if values.type_tag(current)? != EVAL_TAG_OBJECT {
-            values.release(current)?;
-            return Err(EvalStatus::RuntimeFatal);
-        }
+        Err(EvalStatus::RuntimeFatal)
+    })();
+    // Any failure past the first hop still holds the owned intermediate traversable.
+    if outcome.is_err() && owned {
+        values.release(current)?;
     }
-    values.release(current)?;
-    Err(EvalStatus::RuntimeFatal)
+    outcome
 }
 
 /// Reads an instance property through the active eval context.

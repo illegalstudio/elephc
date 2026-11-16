@@ -297,6 +297,40 @@ $alias = $holder->bag;"#,
     }
 }
 
+/// Unwrapping nested aggregates gives back the intermediate traversable when a hop fails.
+///
+/// The first `getIterator()` hands over an owned aggregate; when the second one throws, that
+/// owned cell used to be dropped on the error path without a release.
+#[test]
+fn nested_aggregate_unwrap_releases_the_intermediate_on_failure() {
+    let mut values = FakeOps::default();
+    let mut context = ElephcEvalContext::new();
+    let mut scope = ElephcEvalScope::new();
+    let program = parse_fragment(
+        br#"class OuterAgg implements IteratorAggregate {
+    function getIterator(): Traversable { return new InnerAgg(); }
+}
+class InnerAgg implements IteratorAggregate {
+    function getIterator(): Traversable { throw new Exception("inner"); }
+}
+$outer = new OuterAgg();"#,
+    )
+    .unwrap();
+    execute_program_with_context(&mut context, &program, &mut scope, &mut values).unwrap();
+    let outer = scope.visible_cell("outer").unwrap();
+    let result =
+        crate::interpreter::execute_context_unwrap_aggregate(&mut context, outer, &mut values);
+    assert!(result.is_err());
+    if let Some(thrown) = context.take_pending_throw() {
+        values.release(thrown).unwrap();
+    }
+    for (id, value) in &values.values {
+        if matches!(value, FakeValue::Object(_)) && *id != outer.as_ptr() as usize {
+            assert_eq!(values.cell_owners[id], 0, "leaked object cell {id}");
+        }
+    }
+}
+
 /// Initializing a lazy ghost gives back the reference it took to hand the ghost to its initializer.
 ///
 /// `call_user_func` borrows its argument cells, so the retained ghost reference was never given
