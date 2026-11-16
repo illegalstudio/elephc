@@ -102,12 +102,16 @@ fn materialize_mixed_target_class_name(
             ctx.emitter.instruction(&format!("je {}", closure_label));
         }
     }
-    super::super::exceptions::emit_type_error(
+    let wrong_label = ctx.next_label("member_exists_dynamic_wrong_tag");
+    super::arrays::union_type_guard::emit_mixed_wrong_tag_type_error_dispatch(
         ctx,
-        &format!(
-            "{}(): Argument #1 ($object_or_class) must be of type object|string, mixed given",
-            name
-        ),
+        &wrong_label,
+        &|given| {
+            format!(
+                "{}(): Argument #1 ($object_or_class) must be of type object|string, {} given",
+                name, given
+            )
+        },
     );
 
     ctx.emitter.label(&object_label);
