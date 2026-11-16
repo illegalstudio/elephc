@@ -104,6 +104,31 @@ fn foreach_destructuring_value_local_is_marked() {
     );
 }
 
+/// A `foreach` over a property, element or append target binds the key and the value through
+/// marked locals, and a by-reference `foreach` that names its own source aliases it likewise.
+#[test]
+fn foreach_target_and_source_alias_locals_are_marked() {
+    assert_marked_local_with_stem(
+        "<?php foreach ($m as $k => $this->p) { echo $k; }",
+        "__elephc_foreach_value_",
+    );
+    assert_marked_local_with_stem(
+        "<?php foreach ($m as $o->k => $list[]) { echo 1; }",
+        "__elephc_foreach_key_",
+    );
+    assert_marked_local_with_stem(
+        "<?php foreach ($v as $k => &$v) { echo $k; }",
+        "__elephc_foreach_src_",
+    );
+}
+
+/// A destructuring assignment used as an EXPRESSION binds its right-hand side through a marked
+/// local.
+#[test]
+fn list_destructuring_expression_temp_is_marked() {
+    assert_marked_local_with_stem("<?php if ([$a, $b] = $o) { echo 1; }", "__elephc_list_expr_");
+}
+
 /// A postfix increment on an array element in expression position captures the old value in
 /// one marked local and stores the new value in another.
 ///

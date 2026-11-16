@@ -341,7 +341,10 @@ pub fn parse_foreach(
     if value_by_ref {
         if let ExprKind::Variable(source) = &array.kind {
             if source == &value_var || key_var.as_deref() == Some(source.as_str()) {
-                let alias = format!("__elephc_foreach_src_{}_{}", span.line, span.col);
+                let alias = crate::names::generated_local_name(&format!(
+                    "__elephc_foreach_src_{}_{}",
+                    span.line, span.col
+                ));
                 let bind = Stmt::new(
                     StmtKind::Assign {
                         name: alias.clone(),
@@ -409,10 +412,10 @@ fn parse_foreach_assignment_target(
         }
     }
 
-    let value_var = format!(
+    let value_var = crate::names::generated_local_name(&format!(
         "__elephc_foreach_{}_{}_{}",
         role, target_span.line, target_span.col
-    );
+    ));
     let value = Expr::new(ExprKind::Variable(value_var.clone()), target_span);
     let bind = match append_end {
         Some(_) => assignment_target_append_stmt(target, value, target_span)?,

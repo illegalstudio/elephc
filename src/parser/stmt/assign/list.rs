@@ -70,7 +70,10 @@ pub(crate) fn lower_destructuring_assignment_expression(
     value: Expr,
     span: Span,
 ) -> Expr {
-    let result_name = format!("__elephc_list_expr_{}_{}", span.line, span.col);
+    let result_name = crate::names::generated_local_name(&format!(
+        "__elephc_list_expr_{}_{}",
+        span.line, span.col
+    ));
     let result = Expr::new(ExprKind::Variable(result_name.clone()), span);
     let prelude = vec![
         Stmt::new(
