@@ -465,7 +465,14 @@ impl<'a> Scanner<'a> {
                 self.push(Class::Green, cursor, cursor + 1);
                 cursor += 1;
                 while cursor < limit && self.source[cursor] != b']' {
-                    if self.source[cursor] == b'-' || self.source[cursor].is_ascii_digit() {
+                    // `"$a[-1]"`: php's tokenizer gives the `-` as an operator before the number,
+                    // and `scan_number` never consumes a sign, so it must be stepped over here.
+                    if self.source[cursor] == b'-' {
+                        self.push(Class::Green, cursor, cursor + 1);
+                        cursor += 1;
+                        continue;
+                    }
+                    if self.source[cursor].is_ascii_digit() {
                         let number_end = self.scan_number(cursor);
                         self.push(Class::Blue, cursor, number_end);
                         cursor = number_end;
@@ -963,6 +970,13 @@ $r </span><span style="color: #007700">= match(</span><span style="color: #0000B
     #[test]
     fn matches_php_for_interp_dollar() {
         assert_eq!(rendered(r#"<?php $s = "$a[0] and $b->c";"#), r#"<pre><code style="color: #000000"><span style="color: #0000BB">&lt;?php $s </span><span style="color: #007700">= </span><span style="color: #DD0000">"</span><span style="color: #0000BB">$a</span><span style="color: #007700">[</span><span style="color: #0000BB">0</span><span style="color: #007700">]</span><span style="color: #DD0000"> and </span><span style="color: #0000BB">$b</span><span style="color: #007700">-&gt;</span><span style="color: #0000BB">c</span><span style="color: #DD0000">"</span><span style="color: #007700">;</span></code></pre>"#);
+    }
+
+    /// A negative offset in an interpolated string terminates (it looped forever on the `-`).
+    /// Oracle: `php -n -r 'echo highlight_string("<?php echo \"\$a[-1] x\";", true);'`.
+    #[test]
+    fn matches_php_for_negative_interpolated_offset() {
+        assert_eq!(rendered(r#"<?php echo "$a[-1] x";"#), r#"<pre><code style="color: #000000"><span style="color: #0000BB">&lt;?php </span><span style="color: #007700">echo </span><span style="color: #DD0000">"</span><span style="color: #0000BB">$a</span><span style="color: #007700">[-</span><span style="color: #0000BB">1</span><span style="color: #007700">]</span><span style="color: #DD0000"> x"</span><span style="color: #007700">;</span></code></pre>"#);
     }
 
     /// Oracle: `php -r 'echo highlight_string(...);'`.
