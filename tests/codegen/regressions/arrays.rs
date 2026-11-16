@@ -5414,6 +5414,113 @@ echo show(reverseHash([3 => 'c', 7 => 'g']));
     );
 }
 
+/// Verifies `array_reverse($hash, false)` releases its intermediate reversed hash.
+///
+/// The `false` arm reverses into an owned hash and renumbers it into a second one;
+/// `__rt_hash_reindex` never releases its input, so each call used to orphan the first hash, its
+/// persisted string copies and a reference on every nested value. The heap-checked run must end
+/// with a clean leak summary for both the typed and the gradual (boxed) operand.
+#[test]
+fn test_array_reverse_over_a_hash_without_preserve_keys_does_not_leak() {
+    let source = r#"<?php
+function typed(array $h) { return array_reverse($h, false); }
+function gradual($h, $flag) { return array_reverse($h, $flag); }
+$h = ['a' => 'x' . $argc, 5 => [1, 2], 7 => 'y' . $argc];
+for ($i = 0; $i < 20; $i++) {
+    $r = typed($h);
+    $g = gradual($h, false);
+}
+echo count($r), ':', count($g), ':', $r[0], ':', $g[0];
+unset($r, $g);
+"#;
+    let out = compile_and_run_with_heap_debug(source);
+    assert!(out.success, "{}", out.stderr);
+    assert_eq!(out.stdout, "3:3:y1:y1");
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
+/// Verifies `array_map()` with an untyped (boxed) callback over a source that needs normalizing.
+///
+/// An `array<mixed>` source is normalized to an owned Mixed-valued hash before the callback
+/// dispatch; the boxed-callback arm used to hand the helper the original indexed array (read as a
+/// hash header) and never released or popped the normalized copy. Both the mapping form and the
+/// null-callback identity form must give php's result with a clean heap.
+#[test]
+fn test_array_map_boxed_callback_over_a_normalized_source() {
+    let source = r#"<?php
+function apply($f) { $xs = [1, 'a', null]; return array_map($f, $xs); }
+$out = [];
+for ($i = 0; $i < 5; $i++) {
+    $out = apply(fn ($v) => $v);
+}
+echo json_encode($out), json_encode(apply(null)), json_encode(apply(fn ($v) => is_int($v) ? $v + 1 : $v));
+unset($out);
+"#;
+    let out = compile_and_run_with_heap_debug(source);
+    assert!(out.success, "{}", out.stderr);
+    assert_eq!(out.stdout, "[1,\"a\",null][1,\"a\",null][2,\"a\",null]");
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
+/// Verifies an array warning raised inside a METHOD of an included file hands the error handler
+/// that file, not the entry script (the line was already the included file's).
+#[test]
+fn test_array_warning_in_included_method_reports_the_included_file() {
+    let out = compile_and_run_files(
+        &[
+            (
+                "main.php",
+                "<?php\nset_error_handler(function ($no, $str, $file, $line) { echo basename($file), ':', $line, ' ', $str, \"\\n\"; return true; });\nrequire __DIR__ . '/Repo.php';\n$r = new Repo();\n$r->read([1, 2, 3]);\n",
+            ),
+            (
+                "Repo.php",
+                "<?php\nclass Repo {\n    public function read(array $rows) {\n        return $rows[7];\n    }\n}\n",
+            ),
+        ],
+        "main.php",
+    );
+    assert_eq!(out, "Repo.php:4 Undefined array key 7\n");
+}
+
+/// Verifies a typed `array_push()` on the array of a `mixed` static neither leaks the old array
+/// nor leaves the static's cell pointing at a freed block across calls.
+#[test]
+fn test_typed_array_push_on_a_mixed_static_keeps_the_cell_valid() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+function f() { static $t = null; $t = []; array_push($t, 1); array_push($t, 2); return count($t); }
+function g() { static $u = null; if ($u === null) { $u = []; } array_push($u, 7); array_push($u, 8); return implode(',', $u); }
+echo f(), f(), '|', g(), '|', g();
+"#,
+    );
+    assert!(out.success, "{}", out.stderr);
+    assert_eq!(out.stdout, "22|7,8|7,8,7,8");
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
+/// Verifies `array_count_values()` over a boxed non-array names the given type in its TypeError.
+///
+/// php always spells `..., <type> given`; the gradual arm used to stop at `must be of type array`.
+#[test]
+fn test_array_count_values_on_a_boxed_non_array_names_the_given_type() {
+    let out = compile_and_run(
+        r#"<?php
+function f(mixed $v) { return array_count_values($v); }
+foreach (["x", 5, null, 1.5, true] as $bad) {
+    try { f($bad); } catch (TypeError $e) { echo $e->getMessage(), "\n"; }
+}
+"#,
+    );
+    assert_eq!(
+        out,
+        "array_count_values(): Argument #1 ($array) must be of type array, string given\n\
+         array_count_values(): Argument #1 ($array) must be of type array, int given\n\
+         array_count_values(): Argument #1 ($array) must be of type array, null given\n\
+         array_count_values(): Argument #1 ($array) must be of type array, float given\n\
+         array_count_values(): Argument #1 ($array) must be of type array, true given\n"
+    );
+}
+
 /// Verifies a string builtin still works as a callback when the array's element type is only known
 /// at run time.
 ///
