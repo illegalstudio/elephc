@@ -275,9 +275,9 @@ echo "|" . gettype($column) . ":" . $column;
     assert_eq!(out, "2|integer:12|integer:34");
 }
 
-/// Verifies missing conversions overwrite the corresponding output with PHP null.
+/// Verifies missing conversions leave the corresponding output untouched, as php does.
 #[test]
-fn test_sscanf_missing_output_becomes_null() {
+fn test_sscanf_missing_output_stays_untouched() {
     let out = compile_and_run(
         r#"<?php
 $first = 99;
@@ -286,7 +286,7 @@ $count = sscanf("12", "%d %d", $first, $second);
 echo $count . "|" . $first . "|" . gettype($second);
 "#,
     );
-    assert_eq!(out, "1|12|NULL");
+    assert_eq!(out, "1|12|string");
 }
 
 /// The string-search builtins must coerce a Mixed/Union haystack (e.g. a
