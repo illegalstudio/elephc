@@ -3856,7 +3856,8 @@ class Child extends Box {
 
 /// A dispatched method erased for a PHPDoc class template still makes the check php-src makes
 /// on entry: an argument the native hint rejects throws a `TypeError`, `null` passes a nullable
-/// hint, and the body still stores the parameter in a property of the template.
+/// hint, a variadic is checked element by element, and the body still stores the parameter in
+/// a property of the template.
 #[test]
 fn test_docblock_class_template_erased_method_checks_its_native_parameter_hints() {
     let out = compile_and_run(
@@ -3883,6 +3884,12 @@ class Table implements Rows {
         return $row === null ? 0 : count($row);
     }
 }
+interface Pile { public function push(int $at, object ...$items): int; }
+/** @template T */
+class Stack implements Pile {
+    /** @param T ...$items */
+    public function push(int $at, object ...$items): int { return count($items); }
+}
 $bin = new Bin(new User());
 echo $bin->put(new User()), get_class($bin->value);
 try {
@@ -3897,12 +3904,20 @@ try {
 } catch (TypeError $e) {
     echo "|", $e->getMessage();
 }
+$stack = new Stack();
+echo "|", $stack->push(0), $stack->push(0, new User(), new User());
+try {
+    $stack->push(0, new User(), 5);
+} catch (TypeError $e) {
+    echo "|", $e->getMessage();
+}
 "#,
     );
     assert_eq!(
         out,
         "1User|Bin::put(): Argument #1 ($v) must be of type object, integer given\
-         |02|Table::add(): Argument #1 ($row) must be of type ?array, string given"
+         |02|Table::add(): Argument #1 ($row) must be of type ?array, string given\
+         |02|Stack::push(): Argument #3 ($items) must be of type object, integer given"
     );
 }
 

@@ -307,7 +307,7 @@ fn erase_in(stmts: &mut [Stmt], dispatched: &BTreeSet<(String, String)>) {
                             .filter_map(|param| param.native_hint.as_ref())
                             .flat_map(|hint| hint.member_params.iter())
                             .filter(|(member, _, _)| member.eq_ignore_ascii_case(&method.name))
-                            .filter_map(|(_, param, native)| {
+                            .flat_map(|(_, param, native)| {
                                 native_param_guard(name, method, param, native)
                             })
                             .collect();
@@ -333,67 +333,90 @@ fn erase_in(stmts: &mut [Stmt], dispatched: &BTreeSet<(String, String)>) {
 /// `put(object $v)`) would run. A `TypeError` thrown on entry is exactly what php-src does, and
 /// unlike a restored hint it leaves the parameter's static type to the call, so the body still
 /// stores it in a property of the template. `null` passes when the hint is nullable or the
-/// parameter defaults to `null`. The variadic is not guarded.
+/// parameter defaults to `null`. A variadic is checked element by element, counting argument
+/// positions as php-src numbers them.
 fn native_param_guard(
     class: &str,
     method: &ClassMethod,
     param: &str,
     native: &TypeExpr,
-) -> Option<Stmt> {
+) -> Vec<Stmt> {
     use crate::synthetic_class::{
-        e_binop, e_call, e_concat_all, e_instance_of, e_new_fq, e_not, e_null, e_str, e_var, s_if,
+        e_binop, e_call, e_concat_all, e_instance_of, e_int, e_new_fq, e_not, e_null, e_post_inc,
+        e_str, e_var, s_assign, s_expr, s_foreach, s_if,
     };
-    let index = method.params.iter().position(|(name, _, _, _)| name == param)?;
+    let fixed = method.params.iter().position(|(name, _, _, _)| name == param);
+    let is_variadic = method.variadic.as_deref() == Some(param);
+    if fixed.is_none() && !is_variadic {
+        return Vec::new();
+    }
     let (hint, mut nullable) = match native {
         TypeExpr::Nullable(inner) => (inner.as_ref(), true),
         other => (other, false),
     };
-    nullable |= method.params[index]
-        .2
-        .as_ref()
+    nullable |= fixed
+        .and_then(|index| method.params[index].2.as_ref())
         .is_some_and(|default| matches!(default.kind, crate::parser::ast::ExprKind::Null));
-    let is = |function: &str| e_call(function, vec![e_var(param)]);
-    let accepted = match hint {
-        TypeExpr::Array(_) | TypeExpr::AssocArray { .. } => is("\\is_array"),
-        TypeExpr::Iterable => is("\\is_iterable"),
+    let predicate = match hint {
+        TypeExpr::Array(_) | TypeExpr::AssocArray { .. } => "\\is_array",
+        TypeExpr::Iterable => "\\is_iterable",
         TypeExpr::Named(name) => {
             match name.as_str().trim_start_matches('\\').to_ascii_lowercase().as_str() {
-                "object" => is("\\is_object"),
-                "array" => is("\\is_array"),
-                "iterable" => is("\\is_iterable"),
-                "callable" => is("\\is_callable"),
-                "closure" => e_instance_of(e_var(param), "\\Closure"),
-                _ => return None,
+                "object" => "\\is_object",
+                "array" => "\\is_array",
+                "iterable" => "\\is_iterable",
+                "callable" => "\\is_callable",
+                "closure" => "",
+                _ => return Vec::new(),
             }
         }
-        _ => return None,
+        _ => return Vec::new(),
     };
-    let mut rejected = e_not(accepted);
-    if nullable {
-        rejected = e_binop(
-            e_binop(e_var(param), crate::parser::ast::BinOp::StrictNotEq, e_null()),
-            crate::parser::ast::BinOp::And,
-            rejected,
+    // `if (<value> is rejected) { throw new \TypeError("...Argument #<position> ..."); }`
+    let check = |value: &str, position: crate::parser::ast::Expr| {
+        let accepted = if predicate.is_empty() {
+            e_instance_of(e_var(value), "\\Closure")
+        } else {
+            e_call(predicate, vec![e_var(value)])
+        };
+        let mut rejected = e_not(accepted);
+        if nullable {
+            rejected = e_binop(
+                e_binop(e_var(value), crate::parser::ast::BinOp::StrictNotEq, e_null()),
+                crate::parser::ast::BinOp::And,
+                rejected,
+            );
+        }
+        let message = e_concat_all(vec![
+            e_str(&format!("{}::{}(): Argument #", class, method.name)),
+            position,
+            e_str(&format!(" (${}) must be of type {}, ", param, super::describe_type(native))),
+            e_call("\\gettype", vec![e_var(value)]),
+            e_str(" given"),
+        ]);
+        // A distinct span: the throw's span is what the compiler keys the exception class by.
+        let throw = Stmt::new(
+            StmtKind::Throw(e_new_fq("TypeError", vec![message])),
+            crate::span::Span::synthetic(),
         );
+        s_if(rejected, vec![throw], Vec::new(), None)
+    };
+    match fixed {
+        Some(index) => vec![check(param, e_str(&(index + 1).to_string()))],
+        None => {
+            let position = format!("_elephc_guard_{param}_position");
+            let element = format!("_elephc_guard_{param}_element");
+            vec![
+                s_assign(&position, e_int(method.params.len() as i64)),
+                s_foreach(
+                    e_var(param),
+                    None,
+                    &element,
+                    vec![s_expr(e_post_inc(&position)), check(&element, e_var(&position))],
+                ),
+            ]
+        }
     }
-    let message = e_concat_all(vec![
-        e_str(&format!(
-            "{}::{}(): Argument #{} (${}) must be of type {}, ",
-            class,
-            method.name,
-            index + 1,
-            param,
-            super::describe_type(native)
-        )),
-        is("\\gettype"),
-        e_str(" given"),
-    ]);
-    // A distinct span: the throw's span is what the compiler keys the exception class by.
-    let throw = Stmt::new(
-        StmtKind::Throw(e_new_fq("TypeError", vec![message])),
-        crate::span::Span::synthetic(),
-    );
-    Some(s_if(rejected, vec![throw], Vec::new(), None))
 }
 
 /// Drops a method's own type parameters, and reads every one of them, and every name in
