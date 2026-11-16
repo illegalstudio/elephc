@@ -28,6 +28,21 @@ fn out(fragment: &[u8]) -> String {
     values.output.clone()
 }
 
+/// An aggregate whose `getIterator()` returns itself is php's catchable `Exception`, not an
+/// endless re-ask: `php -n` 8.5.10 prints `Exception` (message `Objects returned by
+/// SelfAgg::getIterator() must be traversable or implement interface Iterator`).
+#[test]
+fn an_aggregate_returning_itself_throws_instead_of_recursing() {
+    assert_eq!(
+        out(br#"class SelfAgg implements IteratorAggregate {
+    function getIterator(): Traversable { return $this; }
+}
+try { foreach (new SelfAgg() as $x) { echo "body"; } echo "missed"; }
+catch (\Exception $e) { echo get_class($e); }"#),
+        "Exception",
+    );
+}
+
 /// The fixture class: three declared visibilities, three dynamics out of alphabetical order.
 const VISIBILITY_FIXTURE: &[u8] = br#"class F1 {
     private $secret = "s";

@@ -327,6 +327,15 @@ pub(super) fn execute_foreach_array_stmt(
         let replaced = if value_by_ref {
             let reference_key =
                 eval_array_reference_key(key, values)?.ok_or(EvalStatus::RuntimeFatal)?;
+            // With an array target the element cell is only this round's owned read (writes go
+            // through the target), so the scope owns it and releases it on the next rebind or at
+            // exit; bound borrowed it leaked one reference per element. Without one the cell IS
+            // the reference target and stays borrowed.
+            let ownership = if array_target.is_some() {
+                ScopeCellOwnership::Owned
+            } else {
+                ScopeCellOwnership::Borrowed
+            };
             let target = array_target.cloned().map_or_else(
                 || EvalReferenceTarget::Cell { cell: value },
                 |array_target| EvalReferenceTarget::NestedArrayElement {
@@ -335,7 +344,7 @@ pub(super) fn execute_foreach_array_stmt(
                 },
             );
             let replaced = scope
-                .rebind_reference(value_name.to_string(), value, ScopeCellOwnership::Borrowed)
+                .rebind_reference(value_name.to_string(), value, ownership)
                 .into_iter()
                 .collect();
             scope.set_reference_target(value_name.to_string(), target);
@@ -353,7 +362,9 @@ pub(super) fn execute_foreach_array_stmt(
         for replaced in replaced {
             values.release(replaced)?;
         }
-        if key_name.is_none() && !value_by_ref {
+        // A key nothing binds is released, by-reference loops included (the reference key above
+        // is a plain copy of it).
+        if key_name.is_none() {
             values.release(key)?;
         }
         let control = execute_statements(body, context, scope, values).map_err(|status| {
@@ -490,6 +501,20 @@ fn execute_foreach_object_body(
             // again until it reaches something it can walk: measured with `php -n` 8.5.6, a
             // two-level chain yields `k0=v0,k1=v1,` rather than raising. The subject of the inner
             // round is this iterator, which the caller already owns, so it is not owned again.
+            // An aggregate answering ITSELF is php's catchable `Exception` ("Objects returned by
+            // A::getIterator() must be traversable or implement interface Iterator"); asking it
+            // again recursed until the native stack overflowed.
+            EVAL_TAG_OBJECT if iterator_identity == Some(identity) => {
+                let class_name = runtime_object_class_name(iterator, values)?;
+                eval_throw_builtin_exception(
+                    "Exception",
+                    &format!(
+                        "Objects returned by {class_name}::getIterator() must be traversable or implement interface Iterator"
+                    ),
+                    context,
+                    values,
+                )
+            }
             EVAL_TAG_OBJECT
                 if eval_foreach_object_is_a(iterator, "IteratorAggregate", context, values)? =>
             {
@@ -583,9 +608,20 @@ fn execute_foreach_object_by_ref_stmt(
     let len = values.array_len(properties)?;
     for index in 0..len {
         let key = values.array_iter_key(properties, index)?;
-        let property = String::from_utf8(values.string_bytes(key)?)
-            .map_err(|_| EvalStatus::RuntimeFatal)?;
-        let value = values.array_get(properties, key)?;
+        // The key read is owned: an early exit below gives it back instead of leaking it.
+        let read = (|| {
+            let property = String::from_utf8(values.string_bytes(key)?)
+                .map_err(|_| EvalStatus::RuntimeFatal)?;
+            let value = values.array_get(properties, key)?;
+            Ok((property, value))
+        })();
+        let (property, value) = match read {
+            Ok(read) => read,
+            Err(status) => {
+                let _ = values.release(key);
+                return Err(status);
+            }
+        };
         if let Some(key_name) = key_name {
             for replaced in set_scope_cell(
                 context,
@@ -605,8 +641,10 @@ fn execute_foreach_object_by_ref_stmt(
             property,
             access_scope: access_scope.clone(),
         };
+        // The property value is an owned read and writes go through the target, so the scope
+        // owns that cell (released on the next rebind or at exit) instead of borrowing it.
         let replaced: Vec<RuntimeCellHandle> = scope
-            .rebind_reference(value_name.to_string(), value, ScopeCellOwnership::Borrowed)
+            .rebind_reference(value_name.to_string(), value, ScopeCellOwnership::Owned)
             .into_iter()
             .collect();
         scope.set_reference_target(value_name.to_string(), target);
