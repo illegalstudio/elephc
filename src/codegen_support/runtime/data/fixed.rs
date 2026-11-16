@@ -1231,6 +1231,10 @@ pub(crate) fn emit_runtime_data_fixed(
     out.push_str(".p2align 3\n.globl _cstr2_cap\n_cstr2_cap:\n    .quad 4096\n");
     out.push_str(&comm_directive("_cstr_buf2_dynamic", 8, target));
     out.push_str(&comm_directive("_eof_flags", 256, target));
+    // `__rt_tmpfile` resolves TMPDIR once per process, as php does: its length + 1 (0 while
+    // unresolved) and a copy of the first 240 bytes that later `putenv()` calls cannot move.
+    out.push_str(&comm_directive("_tmpfile_tmpdir_state", 8, target));
+    out.push_str(&comm_directive("_tmpfile_tmpdir_cache", 256, target));
     out.push_str(&comm_directive("_popen_files", 2048, target));
     out.push_str(&comm_directive("_dir_handles", 2048, target));
     // Per-fd glob:// state pointers (256 fds × 8B). Each slot is a pointer to

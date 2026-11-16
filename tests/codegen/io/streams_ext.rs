@@ -328,21 +328,42 @@ echo $wrote . "|" . $content;
 /// points somewhere unusable (it does not fall back to `/tmp`). elephc emulates `php://memory`
 /// with the same helper, so honoring `TMPDIR` is also what keeps that emulation inside a
 /// writable sandbox root.
+///
+/// php resolves the directory ONCE per process, so the `putenv()` between the two calls does not
+/// move it: both calls fail (php 8.5.10 prints `boolean|boolean`).
 #[test]
 fn test_tmpfile_honors_tmpdir_like_php() {
     let out = compile_and_run(
         r#"<?php
 putenv("TMPDIR=/nonexistent");
-$missing = tmpfile();
+$missing = @tmpfile();
 putenv("TMPDIR=" . __DIR__);
-$present = tmpfile();
-fwrite($present, "ok");
-rewind($present);
-echo gettype($missing), "|", fread($present, 2), "\n";
-fclose($present);
+$still_missing = @tmpfile();
+echo gettype($missing), "|", gettype($still_missing), "\n";
 "#,
     );
-    assert_eq!(out, "boolean|ok\n");
+    assert_eq!(out, "boolean|boolean\n");
+}
+
+/// Verifies the reverse order: a usable `TMPDIR` resolved by the first `tmpfile()` keeps serving
+/// later calls after `putenv()` points it somewhere unusable, as php's once-per-process
+/// resolution does (php 8.5.10 prints `ok|ok`).
+#[test]
+fn test_tmpfile_keeps_the_first_resolved_tmpdir() {
+    let out = compile_and_run(
+        r#"<?php
+putenv("TMPDIR=" . __DIR__);
+$first = tmpfile();
+putenv("TMPDIR=/nonexistent");
+$second = tmpfile();
+fwrite($first, "ok");
+fwrite($second, "ok");
+rewind($first);
+rewind($second);
+echo fread($first, 2), "|", fread($second, 2), "\n";
+"#,
+    );
+    assert_eq!(out, "ok|ok\n");
 }
 
 /// Verifies `tmpfile` returns a resource type (not `false`) and `gettype` reports "resource".

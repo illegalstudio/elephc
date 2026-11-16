@@ -266,20 +266,42 @@ pub fn emit_streams_ext(emitter: &mut Emitter) {
     emitter.instruction(&format!("sub sp, sp, #{}", tmpl_frame));               // allocate frame + path buffer + fd slot
     emitter.instruction(&format!("stp x29, x30, [sp, #{}]", tmpl_save));        // save frame pointer and return address
     emitter.instruction(&format!("add x29, sp, #{}", tmpl_save));               // establish new frame pointer
+    // php resolves the temporary directory ONCE per process (`php_get_temporary_directory()`
+    // caches it), so a later `putenv("TMPDIR=...")` does not move it: the first call copies
+    // TMPDIR into `_tmpfile_tmpdir_cache` and records its length + 1 in `_tmpfile_tmpdir_state`.
+    abi::emit_symbol_address(emitter, "x9", "_tmpfile_tmpdir_state");           // resolved-once TMPDIR length + 1 (0 = not yet resolved)
+    emitter.instruction("ldr x10, [x9]");                                       // load the cached state
+    emitter.instruction("cbnz x10, __rt_tmpfile_tmpdir_cached");                // already resolved: reuse the first answer
     abi::emit_symbol_address(emitter, "x0", "_tmpfile_tmpdir_name");            // "TMPDIR" for getenv
     emitter.bl_c("getenv");                                                     // libc getenv("TMPDIR")
-    emitter.instruction("cbz x0, __rt_tmpfile_use_default");                    // unset TMPDIR → the static /tmp template
+    emitter.instruction("mov x10, #0");                                         // TMPDIR length cursor (0 when unset)
+    emitter.instruction("cbz x0, __rt_tmpfile_tmpdir_resolved");                // unset TMPDIR → cache the default
     emitter.instruction("mov x9, x0");                                          // TMPDIR string pointer
-    emitter.instruction("mov x10, #0");                                         // TMPDIR length cursor
     emitter.label("__rt_tmpfile_tmpdir_len");
     emitter.instruction(&format!("cmp x10, #{}", tmpl_buf - 16));               // cap the prefix so the suffix still fits
-    emitter.instruction("b.hs __rt_tmpfile_tmpdir_len_done");                   // capped: use what fits
+    emitter.instruction("b.hs __rt_tmpfile_tmpdir_resolve_copy");               // capped: use what fits
     emitter.instruction("ldrb w11, [x9, x10]");                                 // next TMPDIR byte
-    emitter.instruction("cbz w11, __rt_tmpfile_tmpdir_len_done");               // end of TMPDIR
+    emitter.instruction("cbz w11, __rt_tmpfile_tmpdir_resolve_copy");           // end of TMPDIR
     emitter.instruction("add x10, x10, #1");                                    // advance the cursor
     emitter.instruction("b __rt_tmpfile_tmpdir_len");                           // keep scanning
-    emitter.label("__rt_tmpfile_tmpdir_len_done");
-    emitter.instruction("cbz x10, __rt_tmpfile_use_default");                   // empty TMPDIR → default template
+    emitter.label("__rt_tmpfile_tmpdir_resolve_copy");
+    abi::emit_symbol_address(emitter, "x13", "_tmpfile_tmpdir_cache");          // process-lifetime copy of the resolved TMPDIR
+    emitter.instruction("mov x11, #0");                                         // cache copy cursor
+    emitter.label("__rt_tmpfile_tmpdir_cache_copy");
+    emitter.instruction("cmp x11, x10");                                        // copied the whole prefix into the cache?
+    emitter.instruction("b.hs __rt_tmpfile_tmpdir_resolved");                   // cache filled
+    emitter.instruction("ldrb w12, [x9, x11]");                                 // TMPDIR byte
+    emitter.instruction("strb w12, [x13, x11]");                                // store it in the cache
+    emitter.instruction("add x11, x11, #1");                                    // advance the cache cursor
+    emitter.instruction("b __rt_tmpfile_tmpdir_cache_copy");                    // keep copying
+    emitter.label("__rt_tmpfile_tmpdir_resolved");
+    emitter.instruction("add x10, x10, #1");                                    // state = length + 1, never 0 once resolved
+    abi::emit_symbol_address(emitter, "x9", "_tmpfile_tmpdir_state");           // reload the state slot (getenv clobbered x9)
+    emitter.instruction("str x10, [x9]");                                       // publish the resolved length
+    emitter.label("__rt_tmpfile_tmpdir_cached");
+    emitter.instruction("sub x10, x10, #1");                                    // cached TMPDIR length
+    emitter.instruction("cbz x10, __rt_tmpfile_use_default");                   // unset or empty TMPDIR → default template
+    abi::emit_symbol_address(emitter, "x9", "_tmpfile_tmpdir_cache");           // copy the prefix from the cache
     emitter.instruction("mov x11, #0");                                         // copy cursor
     emitter.label("__rt_tmpfile_tmpdir_copy");
     emitter.instruction("cmp x11, x10");                                        // copied the whole prefix?
@@ -478,23 +500,35 @@ fn emit_streams_ext_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("push rbp");                                            // preserve caller frame pointer
     emitter.instruction("mov rbp, rsp");                                        // establish frame
     emitter.instruction("sub rsp, 288");                                        // reserve path buffer plus fd spill slot
+    // TMPDIR is resolved once per process, as php does; see the AArch64 sibling.
+    abi::emit_symbol_address(emitter, "r10", "_tmpfile_tmpdir_state");          // resolved-once TMPDIR length + 1 (0 = not yet resolved)
+    emitter.instruction("mov rcx, QWORD PTR [r10]");                            // load the cached state
+    emitter.instruction("test rcx, rcx");                                       // resolved already?
+    emitter.instruction("jne __rt_tmpfile_tmpdir_cached_x86");                  // reuse the first answer
     abi::emit_symbol_address(emitter, "rdi", "_tmpfile_tmpdir_name");           // "TMPDIR" for getenv
     emitter.instruction("call getenv");                                         // libc getenv("TMPDIR")
+    emitter.instruction("xor ecx, ecx");                                        // TMPDIR length cursor (0 when unset)
     emitter.instruction("test rax, rax");                                       // unset?
-    emitter.instruction("je __rt_tmpfile_use_default_x86");                     // unset TMPDIR → the static /tmp template
+    emitter.instruction("je __rt_tmpfile_tmpdir_resolved_x86");                 // unset TMPDIR → cache the default
     emitter.instruction("mov r8, rax");                                         // TMPDIR string pointer
-    emitter.instruction("xor ecx, ecx");                                        // TMPDIR length cursor
+    abi::emit_symbol_address(emitter, "r11", "_tmpfile_tmpdir_cache");          // process-lifetime copy of the resolved TMPDIR
     emitter.label("__rt_tmpfile_tmpdir_len_x86");
     emitter.instruction("cmp rcx, 240");                                        // cap the prefix so the suffix still fits
-    emitter.instruction("jae __rt_tmpfile_tmpdir_len_done_x86");                // capped: use what fits
+    emitter.instruction("jae __rt_tmpfile_tmpdir_resolved_x86");                // capped: use what fits
     emitter.instruction("movzx edx, BYTE PTR [r8 + rcx]");                      // next TMPDIR byte
     emitter.instruction("test dl, dl");                                         // end of TMPDIR?
-    emitter.instruction("je __rt_tmpfile_tmpdir_len_done_x86");                 // stop at the terminator
+    emitter.instruction("je __rt_tmpfile_tmpdir_resolved_x86");                 // stop at the terminator
+    emitter.instruction("mov BYTE PTR [r11 + rcx], dl");                        // store the byte in the cache
     emitter.instruction("inc rcx");                                             // advance the cursor
     emitter.instruction("jmp __rt_tmpfile_tmpdir_len_x86");                     // keep scanning
-    emitter.label("__rt_tmpfile_tmpdir_len_done_x86");
-    emitter.instruction("test rcx, rcx");                                       // empty TMPDIR?
-    emitter.instruction("je __rt_tmpfile_use_default_x86");                     // empty → default template
+    emitter.label("__rt_tmpfile_tmpdir_resolved_x86");
+    emitter.instruction("inc rcx");                                             // state = length + 1, never 0 once resolved
+    abi::emit_symbol_address(emitter, "r10", "_tmpfile_tmpdir_state");          // reload the state slot (getenv clobbered r10)
+    emitter.instruction("mov QWORD PTR [r10], rcx");                            // publish the resolved length
+    emitter.label("__rt_tmpfile_tmpdir_cached_x86");
+    emitter.instruction("dec rcx");                                             // cached TMPDIR length
+    emitter.instruction("je __rt_tmpfile_use_default_x86");                     // unset or empty TMPDIR → default template
+    abi::emit_symbol_address(emitter, "r8", "_tmpfile_tmpdir_cache");           // copy the prefix from the cache
     emitter.instruction("xor r9d, r9d");                                        // copy cursor
     emitter.label("__rt_tmpfile_tmpdir_copy_x86");
     emitter.instruction("cmp r9, rcx");                                         // copied the whole prefix?
