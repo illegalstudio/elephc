@@ -360,6 +360,11 @@ fn compile_config(config: CliConfig, entry: EntryKind<'_>) {
         .filter(|(key, _)| key.eq_ignore_ascii_case("opcache.preload"))
         .filter_map(|(_, directive)| crate::opcache_preload_sources::resolve_preload_path(directive, parent))
         .filter_map(|path| crate::source::canonical(&path).ok()?.parent().map(Path::to_path_buf))
+        // The entry script is the project's own code wherever it sits: a preload directory that
+        // holds the entry itself (a flat project) says nothing about what is generated there.
+        .filter(|dir| {
+            crate::source::canonical(Path::new(filename)).map_or(true, |entry| !entry.starts_with(dir))
+        })
         .collect();
     if closed_world_mode == crate::closed_world::Mode::Auto {
         let early = crate::closed_world::project_computed_eval(&ast, &preload_dirs)
