@@ -46,9 +46,11 @@ pub(super) fn check(
             }
             if let Some(arg) = args.first() {
                 let ty = checker.infer_type(arg, env)?;
-                // A boxed (`mixed`) status is accepted and coerced at run time; `int|float` and
-                // every other static type stay refused with the clearer word.
-                if !matches!(ty, PhpType::Int | PhpType::Mixed) {
+                // php's `exit(string|int $status)`: a string is printed and the process ends
+                // with status 0, an int is the status. A boxed (`mixed`) status is dispatched on
+                // its run-time tag; `int|float` and every other static type stay refused with the
+                // clearer word.
+                if !matches!(ty, PhpType::Int | PhpType::Str | PhpType::Mixed) {
                     return Err(CompileError::new(span, "exit() argument must be integer"));
                 }
             }

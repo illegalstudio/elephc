@@ -1594,6 +1594,34 @@ echo "after";
     assert_eq!(out, "a|x|");
 }
 
+/// php's `exit(string|int $status)` PRINTS a string status and ends with status 0. A `mixed`
+/// status used to be cast to an int unconditionally (nothing printed, status `(int) $msg`), and a
+/// statically typed string was a compile error.
+#[test]
+fn test_exit_with_a_string_status_prints_it_and_exits_zero() {
+    let boxed = compile_and_run_capture(
+        r#"<?php
+function fail($msg) { exit($msg); }
+echo "start\n";
+fail($argc > 5 ? 3 : "12 errors\n");
+echo "unreachable\n";
+"#,
+    );
+    assert_eq!(boxed.stdout, "start\n12 errors\n");
+    assert_eq!(boxed.status.code(), Some(0));
+    let boxed_int = compile_and_run_capture(
+        r#"<?php
+function fail($code) { exit($code); }
+fail($argc > 5 ? "x" : 7);
+"#,
+    );
+    assert_eq!(boxed_int.stdout, "");
+    assert_eq!(boxed_int.status.code(), Some(7));
+    let typed = compile_and_run_capture("<?php echo \"a\"; die(\"static message\\n\"); echo \"b\";");
+    assert_eq!(typed.stdout, "astatic message\n");
+    assert_eq!(typed.status.code(), Some(0));
+}
+
 // --- Nested control flow ---
 
 /// Verifies nested if.

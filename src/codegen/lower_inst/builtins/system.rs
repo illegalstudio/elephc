@@ -817,12 +817,7 @@ pub(super) fn lower_exit(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> R
         // that request, not the prefork worker: flush captured output and return to
         // `elephc_web_run` so it can construct the response and serve the next request.
         if let Some(status) = inst.operands.first().copied() {
-            let status_ty = ctx.load_value_to_result(status)?;
-            if matches!(status_ty.codegen_repr(), PhpType::Mixed | PhpType::Union(_)) {
-                abi::emit_call_label(ctx.emitter, "__rt_mixed_cast_int");
-            } else {
-                require_integer_like(status_ty, "exit status")?;
-            }
+            emit_exit_status(ctx, status)?;
         }
         abi::emit_call_label(ctx.emitter, "__rt_ob_flush_all");
         crate::codegen::frame::emit_web_handler_epilogue(ctx);
@@ -838,13 +833,43 @@ pub(super) fn lower_exit(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> R
         abi::emit_exit(ctx.emitter, 0);
         return Ok(());
     };
-    let status_ty = ctx.load_value_to_result(status)?;
-    if matches!(status_ty.codegen_repr(), PhpType::Mixed | PhpType::Union(_)) {
-        abi::emit_call_label(ctx.emitter, "__rt_mixed_cast_int");
-    } else {
-        require_integer_like(status_ty, "exit status")?;
-    }
+    emit_exit_status(ctx, status)?;
     emit_dynamic_exit(ctx);
+    Ok(())
+}
+
+/// Leaves the integer process status of `exit(status)` in the integer result register.
+///
+/// php's `exit(string|int $status)` PRINTS a string status and ends with status 0; only an int
+/// is a status. A boxed (`mixed`/union) status is therefore dispatched on its run-time tag: a
+/// string payload is written to the output and yields 0, every other payload goes through
+/// `__rt_mixed_cast_int`. A statically typed string is printed the same way.
+fn emit_exit_status(ctx: &mut FunctionContext<'_>, status: ValueId) -> Result<()> {
+    let status_ty = ctx.value_php_type(status)?.codegen_repr();
+    match status_ty {
+        PhpType::Mixed | PhpType::Union(_) => {
+            let not_string = ctx.next_label("exit_status_not_string");
+            let done = ctx.next_label("exit_status_done");
+            super::super::predicates::emit_mixed_tag_eq(ctx, status, 1)?;
+            abi::emit_branch_if_int_result_zero(ctx.emitter, &not_string);
+            super::super::conversions::emit_mixed_string_context_stdout(ctx, status)?;
+            abi::emit_load_int_immediate(ctx.emitter, abi::int_result_reg(ctx.emitter), 0);
+            abi::emit_jump(ctx.emitter, &done);
+            ctx.emitter.label(&not_string);
+            ctx.load_value_to_result(status)?;
+            abi::emit_call_label(ctx.emitter, "__rt_mixed_cast_int");
+            ctx.emitter.label(&done);
+        }
+        PhpType::Str => {
+            let loaded = ctx.load_value_to_result(status)?;
+            super::super::output_values::emit_loaded_value_to_stdout(ctx, &loaded)?;
+            abi::emit_load_int_immediate(ctx.emitter, abi::int_result_reg(ctx.emitter), 0);
+        }
+        _ => {
+            let loaded = ctx.load_value_to_result(status)?;
+            require_integer_like(loaded, "exit status")?;
+        }
+    }
     Ok(())
 }
 
