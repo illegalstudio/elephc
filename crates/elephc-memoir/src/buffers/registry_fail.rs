@@ -3,18 +3,18 @@
 //! is already live or permanently retired.
 //!
 //! Called from:
-//! - `crate::codegen_support::runtime::buffers::buffer_new` on registry exhaustion.
+//! - `elephc::codegen_support::runtime::buffers::buffer_new` on registry exhaustion.
 //!
 //! Key details:
 //! - Registry exhaustion is distinct from allocation-size overflow on both targets.
 
-use crate::codegen_support::abi;
-use crate::codegen_support::emit::Emitter;
-use crate::codegen_support::platform::Arch;
+use crate::abi;
+use crate::Emitter;
+use crate::Arch;
 
 /// Emits the target-specific Buffer registry-exhaustion fatal helper.
-pub fn emit_buffer_registry_fail(emitter: &mut Emitter) {
-    if emitter.target.arch == Arch::X86_64 {
+pub fn emit_buffer_registry_fail(emitter: &mut impl Emitter) {
+    if emitter.arch() == Arch::X86_64 {
         emit_buffer_registry_fail_linux_x86_64(emitter);
         return;
     }
@@ -22,7 +22,7 @@ pub fn emit_buffer_registry_fail(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: buffer_registry_fail ---");
     emitter.label_global("__rt_buffer_registry_exhausted");
-    if emitter.phpext_output { abi::emit_cdylib_exit_escape(emitter); }
+    if emitter.phpext_output() { abi::emit_cdylib_exit_escape(emitter); }
     abi::emit_symbol_address(emitter, "x1", "_buffer_registry_exhausted_msg");
     emitter.instruction("mov x2, #39");                                         // pass the exact diagnostic byte length
     emitter.instruction("mov x0, #2");                                          // write the diagnostic to standard error
@@ -33,11 +33,11 @@ pub fn emit_buffer_registry_fail(emitter: &mut Emitter) {
 }
 
 /// Emits the Linux x86_64 Buffer registry-exhaustion fatal helper.
-fn emit_buffer_registry_fail_linux_x86_64(emitter: &mut Emitter) {
+fn emit_buffer_registry_fail_linux_x86_64(emitter: &mut impl Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: buffer_registry_fail ---");
     emitter.label_global("__rt_buffer_registry_exhausted");
-    if emitter.phpext_output { abi::emit_cdylib_exit_escape(emitter); }
+    if emitter.phpext_output() { abi::emit_cdylib_exit_escape(emitter); }
     abi::emit_symbol_address(emitter, "rsi", "_buffer_registry_exhausted_msg");
     emitter.instruction("mov rdx, 39");                                         // pass the exact diagnostic byte length
     emitter.instruction("mov rdi, 2");                                          // write the diagnostic to standard error

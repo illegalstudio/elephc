@@ -3,16 +3,16 @@
 //! The static descriptor registry is the sole owner of buffer metadata.
 //!
 //! Called from:
-//! - `crate::codegen_support::runtime::emitters::emit_runtime()` via `buffers`.
+//! - `elephc::codegen_support::runtime::emitters::emit_runtime()` via `buffers`.
 //!
 //! Key details:
 //! - Descriptor index zero and generation zero are invalid public-handle components.
 //! - Only the exact requested payload bytes are cleared; allocator rounding is never exposed.
 
-use crate::codegen_support::abi;
-use crate::codegen_support::emit::Emitter;
-use crate::codegen_support::platform::Arch;
-use crate::codegen_support::runtime::data::BUFFER_ALLOC_SIZE_MSG;
+use crate::abi;
+use crate::Emitter;
+use crate::Arch;
+use crate::diagnostics::BUFFER_ALLOC_SIZE_MSG;
 
 use super::{BUFFER_DESCRIPTOR_SIZE, BUFFER_REGISTRY_CAPACITY};
 
@@ -21,8 +21,8 @@ use super::{BUFFER_DESCRIPTOR_SIZE, BUFFER_REGISTRY_CAPACITY};
 /// Inputs are `x0`/`x1` on ARM64 and `rax`/`rdi` on x86_64 for length/stride.
 /// Returns `(generation << 32) | index`; allocation exhaustion and size overflow
 /// transfer to the non-returning buffer allocation diagnostic.
-pub fn emit_buffer_new(emitter: &mut Emitter) {
-    if emitter.target.arch == Arch::X86_64 {
+pub fn emit_buffer_new(emitter: &mut impl Emitter) {
+    if emitter.arch() == Arch::X86_64 {
         emit_buffer_new_linux_x86_64(emitter);
         return;
     }
@@ -129,7 +129,7 @@ pub fn emit_buffer_new(emitter: &mut Emitter) {
 
     // -- fatal error: requested buffer length cannot be represented --
     emitter.label("__rt_buffer_new_size_fail");
-    if emitter.phpext_output { abi::emit_cdylib_exit_escape(emitter); }
+    if emitter.phpext_output() { abi::emit_cdylib_exit_escape(emitter); }
     emitter.instruction("mov x0, #2");                                          // fd = stderr
     abi::emit_symbol_address(emitter, "x1", "_buffer_alloc_size_msg");
     emitter.instruction(&format!("mov x2, #{}", BUFFER_ALLOC_SIZE_MSG.len()));  // pass the exact buffer-length diagnostic byte count
@@ -141,7 +141,7 @@ pub fn emit_buffer_new(emitter: &mut Emitter) {
 
 /// Emits the Linux x86_64 variant of `__rt_buffer_new`.
 /// Uses `rax` for length/result and `rdi` for stride as required by buffer lowering.
-fn emit_buffer_new_linux_x86_64(emitter: &mut Emitter) {
+fn emit_buffer_new_linux_x86_64(emitter: &mut impl Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: buffer_new ---");
     emitter.label_global("__rt_buffer_new");
@@ -246,7 +246,7 @@ fn emit_buffer_new_linux_x86_64(emitter: &mut Emitter) {
 
     // -- fatal error: requested buffer length cannot be represented --
     emitter.label("__rt_buffer_new_size_fail");
-    if emitter.phpext_output { abi::emit_cdylib_exit_escape(emitter); }
+    if emitter.phpext_output() { abi::emit_cdylib_exit_escape(emitter); }
     emitter.instruction("mov edi, 2");                                          // fd = stderr for the buffer-length fatal error message
     abi::emit_symbol_address(emitter, "rsi", "_buffer_alloc_size_msg");
     emitter.instruction(&format!("mov edx, {}", BUFFER_ALLOC_SIZE_MSG.len()));  // pass the exact buffer-length diagnostic byte count

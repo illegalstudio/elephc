@@ -89,3 +89,21 @@ pub(crate) fn store_at_offset(emitter: &mut impl Emitter, reg: &str, offset: usi
 
 /// Delegates string result regs without duplicating target logic.
 pub(crate) fn string_result_regs(emitter: &impl Emitter) -> (&'static str, &'static str) { emitter.string_result_regs() }
+
+/// Uses the authoritative host emit cdylib exit escape operation.
+pub(crate) fn emit_cdylib_exit_escape(emitter: &mut impl Emitter) { emitter.emit_cdylib_exit_escape() }
+
+/// Uses the authoritative host emit store to address operation.
+pub(crate) fn emit_store_to_address(emitter: &mut impl Emitter, reg: &str, addr_reg: &str, byte_offset: usize) { emitter.emit_store_to_address(reg, addr_reg, byte_offset) }
+
+/// Uses the authoritative host emit store zero to address operation.
+pub(crate) fn emit_store_zero_to_address(emitter: &mut impl Emitter, addr_reg: &str, byte_offset: usize) { emitter.emit_store_zero_to_address(addr_reg, byte_offset) }
+
+/// Uses the authoritative host tertiary scratch reg operation.
+pub(crate) fn tertiary_scratch_reg(emitter: &impl Emitter) -> &'static str { emitter.tertiary_scratch_reg() }
+
+/// Uses the authoritative host emit cmp reg to symbol operation.
+pub(crate) fn emit_cmp_reg_to_symbol(emitter: &mut impl Emitter, reg: &str, symbol: &str) { emitter.emit_cmp_reg_to_symbol(reg, symbol) }
+
+/// Uses the authoritative host emit unary cleanup preserving exception operation.
+pub(crate) fn emit_unary_cleanup_preserving_exception(emitter: &mut impl Emitter, entry: &str, payload: &str) { emitter.emit_unary_cleanup_preserving_exception(entry, payload) }

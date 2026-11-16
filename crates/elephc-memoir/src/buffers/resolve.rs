@@ -12,9 +12,9 @@
 //! - `__rt_buffer_try_resolve` applies the same checks but answers 0 instead of failing, so a
 //!   loop preheader can resolve a handle ahead of the access that reports the use-after-free.
 
-use crate::codegen_support::abi;
-use crate::codegen_support::emit::Emitter;
-use crate::codegen_support::platform::Arch;
+use crate::abi;
+use crate::Emitter;
+use crate::Arch;
 
 use super::{BUFFER_DESCRIPTOR_SIZE, BUFFER_REGISTRY_CAPACITY};
 
@@ -24,8 +24,8 @@ use super::{BUFFER_DESCRIPTOR_SIZE, BUFFER_REGISTRY_CAPACITY};
 /// generation/index handle; the output is the validated static descriptor address.
 /// Invalid, inactive, stale, or null handles never return and use the common
 /// use-after-free diagnostic.
-pub fn emit_buffer_resolve(emitter: &mut Emitter) {
-    if emitter.target.arch == Arch::X86_64 {
+pub fn emit_buffer_resolve(emitter: &mut impl Emitter) {
+    if emitter.arch() == Arch::X86_64 {
         emit_buffer_resolve_linux_x86_64(emitter);
         return;
     }
@@ -57,7 +57,7 @@ pub fn emit_buffer_resolve(emitter: &mut Emitter) {
 }
 
 /// Emits the Linux x86_64 generation-safe Buffer handle resolver.
-fn emit_buffer_resolve_linux_x86_64(emitter: &mut Emitter) {
+fn emit_buffer_resolve_linux_x86_64(emitter: &mut impl Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: buffer_resolve ---");
     emitter.label_global("__rt_buffer_resolve");
@@ -91,8 +91,8 @@ fn emit_buffer_resolve_linux_x86_64(emitter: &mut Emitter) {
 /// caller owns the fault: `buffer_get_resolved` and `buffer_set_resolved` test the descriptor
 /// at the access site, so the diagnostic still fires exactly where the unresolved access would
 /// have raised it.
-pub fn emit_buffer_try_resolve(emitter: &mut Emitter) {
-    if emitter.target.arch == Arch::X86_64 {
+pub fn emit_buffer_try_resolve(emitter: &mut impl Emitter) {
+    if emitter.arch() == Arch::X86_64 {
         emit_buffer_try_resolve_linux_x86_64(emitter);
         return;
     }
@@ -125,7 +125,7 @@ pub fn emit_buffer_try_resolve(emitter: &mut Emitter) {
 }
 
 /// Emits the Linux x86_64 non-faulting Buffer handle resolver.
-fn emit_buffer_try_resolve_linux_x86_64(emitter: &mut Emitter) {
+fn emit_buffer_try_resolve_linux_x86_64(emitter: &mut impl Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: buffer_try_resolve ---");
     emitter.label_global("__rt_buffer_try_resolve");

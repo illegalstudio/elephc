@@ -11,6 +11,10 @@ use crate::codegen_support::{abi, emit::Emitter};
 use elephc_memoir::{Arch, GraphLayout, GcStatusSelectors};
 
 impl elephc_memoir::Emitter for Emitter {
+    /// Keeps the PHP uninitialized-property marker authoritative in the compiler.
+    fn uninitialized_property_sentinel(&self) -> i64 {
+        crate::codegen_support::sentinels::UNINITIALIZED_TYPED_PROPERTY_SENTINEL
+    }
     /// Supplies the compiler arch contract.
     fn arch(&self) -> Arch { self.target.arch }
     /// Supplies the compiler extern symbol contract.
@@ -23,6 +27,8 @@ impl elephc_memoir::Emitter for Emitter {
     fn phpext_output(&self) -> bool { self.phpext_output }
     /// Supplies the compiler graph layout contract.
     fn graph_layout(&self) -> GraphLayout { GraphLayout {
+            fiber_stack_size_offset: super::fibers::FIBER_STACK_SIZE_OFFSET,
+            spl_fixed_storage_offset: super::spl::SPL_FIXED_STORAGE_OFFSET as i32,
             fiber_callable_offset: super::fibers::FIBER_CALLABLE_OFFSET,
             fiber_object_size: super::fibers::FIBER_OBJECT_SIZE,
             fiber_own_call_frame_offset: super::fibers::FIBER_OWN_CALL_FRAME_OFFSET,
@@ -125,5 +131,50 @@ impl elephc_memoir::Emitter for Emitter {
     /// Retains the existing protected weak-observer cleanup ABI.
     fn emit_guarded_cleanup_call(&mut self, entry: &str, payload: &str, pending_offset: usize) {
         super::exceptions::emit_guarded_cleanup_call(self, entry, payload, pending_offset);
+    }
+    /// Supplies the existing scratch capacity selected for this compilation.
+    fn concat_capacity(&self) -> usize { self.concat_capacity }
+    /// Preserves raw assembly directives.
+    fn raw(&mut self, text: &str) { Emitter::raw(self, text); }
+    /// Preserves compiler translation of native reference-source failures.
+    fn emit_reference_source_success(&mut self) { super::reference_cells::require_source_success(self); }
+
+    /// Delegates emit cdylib exit escape to the established compiler ABI.
+    fn emit_cdylib_exit_escape(&mut self) { abi::emit_cdylib_exit_escape(self) }
+    /// Delegates emit store to address to the established compiler ABI.
+    fn emit_store_to_address(&mut self, reg: &str, addr_reg: &str, byte_offset: usize) { abi::emit_store_to_address(self, reg, addr_reg, byte_offset) }
+    /// Delegates emit store zero to address to the established compiler ABI.
+    fn emit_store_zero_to_address(&mut self, addr_reg: &str, byte_offset: usize) { abi::emit_store_zero_to_address(self, addr_reg, byte_offset) }
+    /// Delegates tertiary scratch reg to the established compiler ABI.
+    fn tertiary_scratch_reg(&self) -> &'static str { abi::tertiary_scratch_reg(self) }
+    /// Delegates emit cmp reg to symbol to the established compiler ABI.
+    fn emit_cmp_reg_to_symbol(&mut self, reg: &str, symbol: &str) { abi::emit_cmp_reg_to_symbol(self, reg, symbol) }
+    /// Delegates emit unary cleanup preserving exception to the established compiler ABI.
+    fn emit_unary_cleanup_preserving_exception(&mut self, entry: &str, payload: &str) { abi::emit_unary_cleanup_preserving_exception(self, entry, payload) }
+
+}
+
+impl From<crate::codegen_support::RuntimeFeatures> for elephc_memoir::ValueFeatures {
+    /// Copies the exact feature gates used by value-retirement emitters.
+    fn from(value: crate::codegen_support::RuntimeFeatures) -> Self {
+        Self {
+            eval_bridge: value.eval_bridge,
+            fiber: value.fiber,
+            generator: value.generator,
+            native_reference_validation: value.native_reference_validation,
+            directory_resource: value.directory_resource,
+            popen_resource: value.popen_resource,
+        }
+    }
+}
+
+impl elephc_memoir::data::DataTarget for crate::codegen_support::platform::Target {
+    /// Uses the compiler's established common-symbol spelling.
+    fn common(&self, name: &str, bytes: usize) -> String {
+        crate::codegen_support::data_section::comm_directive(name, bytes, *self)
+    }
+    /// Uses the compiler's established explicit-alignment spelling.
+    fn aligned_common(&self, name: &str, bytes: usize, alignment: usize) -> String {
+        crate::codegen_support::data_section::comm_directive_aligned(name, bytes, alignment, *self)
     }
 }

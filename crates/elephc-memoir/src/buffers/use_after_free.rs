@@ -3,20 +3,20 @@
 //! Keeps compiler buffer extension checks and fatal paths aligned with generated pointer operations.
 //!
 //! Called from:
-//! - `crate::codegen_support::runtime::emitters::emit_runtime()` via `crate::codegen_support::runtime::buffers`.
+//! - `elephc::codegen_support::runtime::emitters::emit_runtime()` via `elephc::codegen_support::runtime::buffers`.
 //!
 //! Key details:
 //! - Buffer helpers enforce extension ownership rules, including live headers, bounds checks, and fatal paths before unsafe access.
 
-use crate::codegen_support::abi;
-use crate::codegen_support::emit::Emitter;
-use crate::codegen_support::platform::Arch;
+use crate::abi;
+use crate::Emitter;
+use crate::Arch;
 
 /// Emits the `__rt_buffer_use_after_free` runtime helper for buffer use-after-free diagnostics.
-/// Dispatches to the platform-specific variant based on `emitter.target.arch`.
+/// Dispatches to the platform-specific variant based on `emitter.arch()`.
 /// Escapes an active cdylib boundary, otherwise terminates with exit code 70.
-pub fn emit_buffer_use_after_free(emitter: &mut Emitter) {
-    if emitter.target.arch == Arch::X86_64 {
+pub fn emit_buffer_use_after_free(emitter: &mut impl Emitter) {
+    if emitter.arch() == Arch::X86_64 {
         emit_buffer_use_after_free_linux_x86_64(emitter);
         return;
     }
@@ -24,7 +24,7 @@ pub fn emit_buffer_use_after_free(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: buffer_use_after_free ---");
     emitter.label_global("__rt_buffer_use_after_free");
-    if emitter.phpext_output { abi::emit_cdylib_exit_escape(emitter); }
+    if emitter.phpext_output() { abi::emit_cdylib_exit_escape(emitter); }
     abi::emit_symbol_address(emitter, "x1", "_buffer_uaf_msg");                 // load the error message page
     emitter.instruction("mov x2, #47");                                         // byte length of the use-after-free error message
     emitter.instruction("mov x0, #2");                                          // write diagnostics to stderr
@@ -37,11 +37,11 @@ pub fn emit_buffer_use_after_free(emitter: &mut Emitter) {
 /// Emits the Linux x86_64 variant of `__rt_buffer_use_after_free`.
 /// Uses Linux syscall 1 (`write`) to emit the error message to stderr (fd=2), then
 /// syscall 231 (`exit_group`) to terminate with exit code 70 (EX_SOFTWARE), matching ARM64.
-fn emit_buffer_use_after_free_linux_x86_64(emitter: &mut Emitter) {
+fn emit_buffer_use_after_free_linux_x86_64(emitter: &mut impl Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: buffer_use_after_free ---");
     emitter.label_global("__rt_buffer_use_after_free");
-    if emitter.phpext_output { abi::emit_cdylib_exit_escape(emitter); }
+    if emitter.phpext_output() { abi::emit_cdylib_exit_escape(emitter); }
     emitter.instruction("mov edi, 2");                                          // write diagnostics to the Linux stderr file descriptor
     abi::emit_symbol_address(emitter, "rsi", "_buffer_uaf_msg");
     emitter.instruction("mov edx, 47");                                         // byte length of the fixed buffer use-after-free error message
