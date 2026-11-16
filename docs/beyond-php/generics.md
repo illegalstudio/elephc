@@ -1191,8 +1191,11 @@ instead:
   these and asks for the type argument.
 - **A native hint wins over the annotation that documents it.** php-src enforces `int $m` and
   coerces to it, so `@param T $m` does not replace it. A hint php-src enforces loosely
-  (`array`, `iterable`, `callable`, `object`, or none) gives way to the annotation, as does a
-  class hint to its own generic form (`Box $b` documented `@param Box<T> $b`).
+  (`array`, `iterable`, `callable`, `object`, or none) gives way to an annotation of its own
+  shape (`array $a` to `array<T>`, `object $o` to `Collection<T>`, `callable $f` to
+  `callable(T): U`), as does a class hint to its own generic form (`Box $b` documented
+  `@param Box<T> $b`). A union does so only when every member has that shape:
+  `@return T|false` on `: object` keeps `object`.
 - **A hint a type parameter takes over stays binding.** `@param T $m` replaces a native
   `object $m`, or a native `Model $m` when the template is `T of Model`, and `@return T`
   replaces a native return type the same way. php-src still enforces those hints, so the type

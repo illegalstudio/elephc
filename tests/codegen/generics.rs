@@ -3687,23 +3687,15 @@ class Items {
     /** @param T $items */
     public function __construct(public array $items) {}
 }
-interface Sink { public function put(object $v): int; }
-/** @template T */
-class Bin implements Sink {
-    /** @param T $v */
-    public function put(object $v): int { return 1; }
-}
 "#;
     let valid = format!(
-        "{declarations}echo (new Box(new User()))->get()->hi(), \"|\", get_class((new Box(new Other()))->value), \"|\", count((new Items([1, 2]))->items), \"|\", (new Bin())->put(new User());\n"
+        "{declarations}echo (new Box(new User()))->get()->hi(), \"|\", get_class((new Box(new Other()))->value), \"|\", count((new Items([1, 2]))->items);\n"
     );
     let warnings = compile_cli_file_with_flags_capturing_stderr(&valid, &[]);
     assert!(warnings.contains("<T> to Other, which does not satisfy its bound Model"), "{warnings}");
-    assert_eq!(compile_cli_file_and_run_with_flags(&valid, &[]), "hi|Other|2|1");
+    assert_eq!(compile_cli_file_and_run_with_flags(&valid, &[]), "hi|Other|2");
     for (code, expected) in [
         ("new Box(\"x\");", "expects object, got string"),
-        // A dispatched method is erased back to its native `object $v`, not to an untyped one.
-        ("(new Bin())->put(5);", "expects object, got int"),
         ("new Items(\"x\");", "expects array, got string"),
         (
             "/** @extends Box<string> */\nclass Bad extends Box {}",
@@ -3721,5 +3713,88 @@ class Bin implements Sink {
         let error =
             compile_cli_file_with_flags_expect_failure(&format!("{declarations}{code}\n"), &[]);
         assert!(error.contains(expected), "{code}: {error}");
+    }
+}
+
+/// A bare mention of a PHPDoc class or trait template whose parameter took over a native hint
+/// (`extends Box`, a `Box` parameter, `use BinT`) reads the parameter as that hint, so the
+/// program php-src runs compiles and the hint is still enforced.
+#[test]
+fn test_docblock_class_template_bare_mention_reads_the_native_hint() {
+    let declarations = r#"<?php
+/** @template T */
+class Box {
+    /** @param T $v */
+    public function id(object $v): int { return 1; }
+}
+class Child extends Box {}
+function take(Box $b): int { return $b->id(new stdClass()); }
+interface Sink { public function put(object $v): int; }
+/** @template T */
+trait BinT {
+    /** @param T $v */
+    public function put(object $v): int { return 2; }
+}
+class Bin implements Sink { use BinT; }
+"#;
+    let valid = format!("{declarations}echo take(new Child()), (new Bin())->put(new stdClass());\n");
+    assert_eq!(compile_cli_file_and_run_with_flags(&valid, &[]), "12");
+    let error = compile_cli_file_with_flags_expect_failure(
+        &format!("{declarations}(new Child())->id(5);\n"),
+        &[],
+    );
+    assert!(error.contains("expects object, got int"), "{error}");
+}
+
+/// A dispatched method erased for a PHPDoc class template still type-checks a body that stores
+/// its parameter in a property of the template: the instantiation keeps the property at the
+/// type argument, so the erased parameter stays untyped rather than the native `object`.
+#[test]
+fn test_docblock_class_template_erased_method_stores_into_template_property() {
+    let out = compile_and_run(
+        r#"<?php
+class User {}
+interface Sink { public function put(object $v): int; }
+/** @template T */
+class Bin implements Sink {
+    /** @var T */
+    public object $value;
+    /** @param T $v */
+    public function __construct(object $v) { $this->value = $v; }
+    /** @param T $v */
+    public function put(object $v): int { $this->value = $v; return 1; }
+}
+echo get_class((new Bin(new User()))->value), "|", (new Bin(new User()))->put(new User());
+"#,
+    );
+    assert_eq!(out, "User|1");
+}
+
+/// A union annotation replaces a native hint only when every member refines it: `T|false` on
+/// `: object` and `T|string` on `object $v` would admit values php-src rejects, so the native
+/// hint stays, and so does a hint whose annotation has another shape (`array<T>` on `object`).
+#[test]
+fn test_docblock_union_annotation_does_not_replace_a_native_hint() {
+    for (declarations, expected) in [
+        (
+            "/** @template T */\nclass Box {\n    /** @return T|false */\n    public function get(): object { return false; }\n}\n(new Box())->get();",
+            "expects object",
+        ),
+        (
+            "/**\n * @template T\n * @param T|string $v\n */\nfunction take(object $v): int { return 1; }\ntake(\"x\");",
+            "expects object, got string",
+        ),
+        (
+            "/**\n * @template T\n * @param array<T> $v\n */\nfunction take(object $v): int { return 1; }\ntake([1]);",
+            "expects object",
+        ),
+        (
+            "/**\n * @template T\n * @return T|false\n */\nfunction make(): array { return false; }\nmake();",
+            "expects array",
+        ),
+    ] {
+        let error =
+            compile_cli_file_with_flags_expect_failure(&format!("<?php\n{declarations}\n"), &[]);
+        assert!(error.contains(expected), "{declarations}: {error}");
     }
 }

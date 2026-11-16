@@ -274,12 +274,6 @@ fn erase_in(stmts: &mut [Stmt], dispatched: &BTreeSet<(String, String)>) {
                     .filter(|param| param.from_docblock)
                     .map(|param| param.name.clone())
                     .collect();
-                let class_hints: Vec<&crate::parser::ast::NativeHint> = generics
-                    .iter()
-                    .flat_map(|g| g.type_params.iter())
-                    .filter(|param| param.from_docblock)
-                    .filter_map(|param| param.native_hint.as_ref())
-                    .collect();
                 for method in methods.iter_mut() {
                     let key = (owner.clone(), method.name.to_ascii_lowercase());
                     let is_dispatched = dispatched.contains(&key)
@@ -287,10 +281,10 @@ fn erase_in(stmts: &mut [Stmt], dispatched: &BTreeSet<(String, String)>) {
                     if !method.type_params.is_empty()
                         && (method.is_abstract || !method.has_body || is_dispatched)
                     {
-                        erase_method(method, &[], &[]);
+                        erase_method(method, &[]);
                     }
                     if is_dispatched && !doc_class_params.is_empty() {
-                        erase_method(method, &doc_class_params, &class_hints);
+                        erase_method(method, &doc_class_params);
                     }
                 }
             }
@@ -306,46 +300,28 @@ fn erase_in(stmts: &mut [Stmt], dispatched: &BTreeSet<(String, String)>) {
 /// `class_params`, as `mixed` in the declared types: `array<TKey, TValue>` keeps the `array` an
 /// override is checked against, and a bare `T` (or `?T`, `T|mixed`) becomes untyped.
 ///
-/// A position whose template took over a native hint (`TypeParam::native_hint`) gets that hint
-/// back first, so the erased method declares what php-src enforces: `@param T $m` on
+/// A position whose METHOD template took over a native hint (`TypeParam::native_hint`) gets
+/// that hint back first, so the erased method declares what php-src enforces: `@param T $m` on
 /// `Model $m` is `Model $m` again, and `@return T` on `: Model` is `: Model`. A parameter the
-/// same template annotates without a native hint stays untyped. `class_hints` are the hints the
-/// enclosing class's PHPDoc templates recorded for their members.
-fn erase_method(
-    method: &mut ClassMethod,
-    class_params: &[String],
-    class_hints: &[&crate::parser::ast::NativeHint],
-) {
-    let mut natives: Vec<(Option<String>, TypeExpr)> = Vec::new();
+/// same template annotates without a native hint stays untyped.
+///
+/// A CLASS template's positions are not restored. The instantiation keeps the template's
+/// properties at the type argument (`Bin<User>::$value` is a `User`), and a body that stores an
+/// erased parameter there (`$this->value = $v`) only checks while that parameter is untyped: a
+/// restored `object $v` is not a `User`, and php-src runs the method.
+fn erase_method(method: &mut ClassMethod, class_params: &[String]) {
     for hint in method.type_params.iter().filter_map(|param| param.native_hint.as_ref()) {
-        natives.extend(hint.params.iter().map(|(name, native)| (Some(name.clone()), native.clone())));
-        natives.extend(hint.return_type.iter().map(|native| (None, native.clone())));
-    }
-    for hint in class_hints {
-        let names = method.params.iter().map(|(name, _, _, _)| name).chain(method.variadic.iter());
-        for name in names {
-            let key = crate::parser::ast::NativeHint::member_key(&method.name, Some(name));
-            if let Some((_, native)) = hint.params.iter().find(|(member, _)| member == &key) {
-                natives.push((Some(name.clone()), native.clone()));
+        for (name, native) in &hint.params {
+            if let Some((_, declared, _, _)) =
+                method.params.iter_mut().find(|(param, _, _, _)| param == name)
+            {
+                *declared = Some(native.clone());
+            } else if method.variadic.as_ref() == Some(name) {
+                method.variadic_type = Some(native.clone());
             }
         }
-        let key = crate::parser::ast::NativeHint::member_key(&method.name, None);
-        if let Some((_, native)) = hint.params.iter().find(|(member, _)| member == &key) {
-            natives.push((None, native.clone()));
-        }
-    }
-    for (name, native) in natives {
-        match name {
-            None => method.return_type = Some(native),
-            Some(name) => {
-                if let Some((_, declared, _, _)) =
-                    method.params.iter_mut().find(|(param, _, _, _)| param == &name)
-                {
-                    *declared = Some(native);
-                } else if method.variadic.as_ref() == Some(&name) {
-                    method.variadic_type = Some(native);
-                }
-            }
+        if let Some(native) = &hint.return_type {
+            method.return_type = Some(native.clone());
         }
     }
     let mut names: Vec<String> = method.type_params.iter().map(|p| p.name.clone()).collect();

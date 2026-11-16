@@ -515,9 +515,14 @@ impl Instantiate<'_> {
                     .type_params
                     .iter()
                     .map(|param| {
+                        // A PHPDoc parameter that took over a native hint reads as that hint:
+                        // it is what php-src enforces at the members, and the only argument the
+                        // hint's own obligation is sure to accept (`mixed` is not an `object`).
                         param
-                            .bound
-                            .clone()
+                            .native_hint
+                            .as_ref()
+                            .map(|hint| hint.ty.clone())
+                            .or_else(|| param.bound.clone())
                             .or_else(|| param.default.clone())
                             .unwrap_or_else(|| TypeExpr::Named(Name::unqualified("mixed")))
                     })
