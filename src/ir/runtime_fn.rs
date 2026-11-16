@@ -3190,6 +3190,10 @@ impl RuntimeFnId {
                 // release of an owned `$replacement` argument, so `array_splice($a, 1, 2, [9])`
                 // leaked the literal replacement array on every call.
                 | RuntimeFnId::ArraySplice
+                // `__rt_mixed_spread_array` answers an OWNED cell on every path: the boxed
+                // two-slot array for a `[$object, 'method']` descriptor, or a retained
+                // reference to the input cell, so the lowering releases it like any fresh value.
+                | RuntimeFnId::MixedSpreadArray
                 // A `__rt_str_persist` copy of the record's message or file.
                 | RuntimeFnId::ElephcLastErrorStr
                 | RuntimeFnId::Unpack

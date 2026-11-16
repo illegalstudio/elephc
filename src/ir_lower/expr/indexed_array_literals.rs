@@ -962,6 +962,9 @@ pub(super) fn narrow_gradual_indexed_spread_source(
         Op::MixedUnbox.default_effects(),
         Some(span),
     );
+    // The helper answers an owned cell (a retained input, or the array it built for a callable
+    // descriptor); the unbox above took what it needs, so the lease ends here.
+    crate::ir_lower::ownership::release_if_owned(ctx, materialized, Some(span));
     if ctx.value_is_owning_temporary(source) {
         crate::ir_lower::ownership::release_if_owned(ctx, source, Some(span));
     }

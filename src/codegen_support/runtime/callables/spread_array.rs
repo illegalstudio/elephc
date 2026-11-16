@@ -27,11 +27,11 @@ use crate::codegen_support::platform::Arch;
 ///
 /// ## ARM64 ABI
 /// - **Input**: `x0` = boxed Mixed cell
-/// - **Output**: `x0` = a boxed Mixed cell: the input itself, or a fresh boxed array
+/// - **Output**: `x0` = an OWNED boxed Mixed cell: the input itself (retained), or a fresh boxed array
 ///
 /// ## x86_64 ABI
 /// - **Input**: `rax` = boxed Mixed cell
-/// - **Output**: `rax` = the same
+/// - **Output**: `rax` = the same, owned
 pub(crate) fn emit_mixed_spread_array(emitter: &mut Emitter) {
     if emitter.target.arch == Arch::X86_64 {
         emit_mixed_spread_array_x86_64(emitter);
@@ -47,7 +47,7 @@ pub(crate) fn emit_mixed_spread_array(emitter: &mut Emitter) {
     emitter.instruction("cmp x9, #10");                                         // tag 10 is a callable descriptor
     emitter.instruction("b.eq __rt_mixed_spread_array_callable");
     emitter.label("__rt_mixed_spread_array_passthrough");
-    emitter.instruction("ret");                                                 // every other cell is returned untouched
+    emitter.instruction("b __rt_incref");                                              // every other cell is returned untouched, retained so the result is always owned
 
     emitter.label("__rt_mixed_spread_array_callable");
     emitter.instruction("ldr x9, [x0, #8]");                                    // load the callable descriptor
@@ -90,7 +90,11 @@ pub(crate) fn emit_mixed_spread_array(emitter: &mut Emitter) {
     emitter.instruction("mov x1, x9");                                          // box the materialized array back up
     emitter.instruction("mov x0, #4");                                          // runtime tag 4 identifies an indexed array
     emitter.instruction("mov x2, #0");                                          // array payloads do not use a high word
-    emitter.instruction("bl __rt_mixed_from_value");
+    emitter.instruction("bl __rt_mixed_from_value");                            // the box retained the array: it now holds two references
+    emitter.instruction("str x0, [sp, #0]");                                    // keep the box (the descriptor slot is no longer needed)
+    emitter.instruction("ldr x0, [sp, #8]");                                    // the array's creation reference
+    emitter.instruction("bl __rt_decref_array");                                // the box is the array's only owner now, so releasing it frees everything
+    emitter.instruction("ldr x0, [sp, #0]");                                    // return the boxed array
     emitter.instruction("ldp x29, x30, [sp, #16]");
     emitter.instruction("add sp, sp, #32");
     emitter.instruction("ret");                                                 // a boxed cell, exactly like the input
@@ -108,7 +112,7 @@ fn emit_mixed_spread_array_x86_64(emitter: &mut Emitter) {
     emitter.instruction("cmp r10, 10");                                         // tag 10 is a callable descriptor
     emitter.instruction("je __rt_mixed_spread_array_callable");
     emitter.label("__rt_mixed_spread_array_passthrough");
-    emitter.instruction("ret");                                                 // every other cell is returned untouched
+    emitter.instruction("jmp __rt_incref");                                            // every other cell is returned untouched, retained so the result is always owned
 
     emitter.label("__rt_mixed_spread_array_callable");
     emitter.instruction("mov r10, QWORD PTR [rax + 8]");                        // load the callable descriptor
@@ -149,7 +153,11 @@ fn emit_mixed_spread_array_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rdi, r10");                                        // box the materialized array back up
     emitter.instruction("xor esi, esi");                                        // array payloads do not use a length word
     emitter.instruction("mov rax, 4");                                          // runtime tag 4 identifies an indexed array
-    emitter.instruction("call __rt_mixed_from_value");
+    emitter.instruction("call __rt_mixed_from_value");                          // the box retained the array: it now holds two references
+    emitter.instruction("mov QWORD PTR [rbp - 8], rax");                        // keep the box (the descriptor slot is no longer needed)
+    emitter.instruction("mov rax, QWORD PTR [rbp - 16]");                       // the array's creation reference
+    emitter.instruction("call __rt_decref_array");                              // the box is the array's only owner now, so releasing it frees everything
+    emitter.instruction("mov rax, QWORD PTR [rbp - 8]");                        // return the boxed array
     emitter.instruction("add rsp, 16");
     emitter.instruction("pop rbp");
     emitter.instruction("ret");                                                 // a boxed cell, exactly like the input

@@ -333,6 +333,9 @@ fn lower_source(ctx: &mut LoweringContext<'_, '_>, sig: &FunctionSig, state: &Sp
     if let Some(slot) = iterator_owner {
         ctx.retire_iter_start_owner(slot, state.span);
     }
+    // `__rt_mixed_spread_array` answers an owned cell (a retained input, or the array it built for
+    // a callable descriptor); the iterator walked it, so the lease ends with the loop.
+    crate::ir_lower::ownership::release_if_owned(ctx, source, Some(state.span));
 }
 
 /// Binds a string-keyed value after checking that the parameter has not already been populated.
