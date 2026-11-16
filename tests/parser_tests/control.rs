@@ -497,3 +497,32 @@ fn test_terminal_goto_is_desugared() {
     assert!(!parse_fails("<?php goto done; done: echo 1;"));
     assert!(parse_fails("<?php done: echo 1;"));
 }
+
+// --- docblocks between the parts of a statement ---
+
+/// Verifies a `/** ... */` docblock is whitespace before a `switch` arm, `else` / `elseif`,
+/// `catch` / `finally`, a do-while's `while`, a `for` header clause and an alternative-syntax
+/// `else` / `endif`, as php reads it, while an enum case keeps its docblock.
+#[test]
+fn test_docblocks_between_statement_parts_are_whitespace() {
+    let stmts = parse_source(
+        "<?php switch ($a) { /** a */ case 1: echo 1; break; /** b */ case 2: break; /** c */ default: break; }",
+    );
+    let StmtKind::Switch { cases, default, .. } = &stmts[0].kind else {
+        panic!("expected a switch, got {:?}", stmts[0].kind);
+    };
+    assert_eq!(cases.len(), 2);
+    assert!(default.is_some());
+    for source in [
+        "<?php if ($a) { echo 1; } /** x */ else { echo 2; }",
+        "<?php if ($a) { echo 1; } /** x */ elseif ($b) { echo 2; }",
+        "<?php try { f(); } /** c */ catch (Exception $e) { } /** f */ finally { }",
+        "<?php do { $i++; } /** w */ while ($i < 3);",
+        "<?php for ($j = 0; /** c */ $j < 2; /** u */ $j++) { }",
+        "<?php if ($a): echo 1; /** e */ else: echo 2; /** z */ endif;",
+    ] {
+        assert!(!parse_fails(source), "{source} must parse");
+    }
+    let stmts = parse_source("<?php enum E { /** first */ case A; }");
+    assert!(matches!(&stmts[0].kind, StmtKind::EnumDecl { .. }));
+}

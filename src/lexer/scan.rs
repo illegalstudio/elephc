@@ -144,11 +144,13 @@ pub(super) fn scan_tokens_in_source(
 
     // A docblock that closes a block (`return $x; /** @phpstan-ignore y */ }`) documents nothing:
     // `retain_declaration_doc_comment` keeps it because a `;` precedes it, but no declaration
-    // follows, and the statement loops would otherwise parse it as the start of one.
+    // follows, and the statement loops would otherwise parse it as the start of one. The same
+    // holds in front of a token that continues the construct before it rather than starting a
+    // statement (`} /** x */ else`, `} /** x */ catch`, `do {} /** x */ while`, `default:`).
     let mut index = 0;
     while index + 1 < tokens.len() {
         if matches!(tokens[index].0, Token::DocComment(_))
-            && matches!(tokens[index + 1].0, Token::RBrace | Token::Eof)
+            && doc_comment_documents_nothing_before(&tokens[index + 1].0)
         {
             tokens.remove(index);
         } else {
@@ -234,6 +236,35 @@ fn opens_doc_comment(rest: &str) -> bool {
     rest.strip_prefix("/**")
         .and_then(|after| after.chars().next())
         .is_some_and(|next| matches!(next, ' ' | '\t' | '\n' | '\r'))
+}
+
+/// Whether a retained docblock directly in front of `next` can be dropped: `next` closes a block
+/// or continues the statement before it, so no declaration the docblock could document follows.
+///
+/// `case` is not listed: in an enum body it starts a documented case declaration, so a docblock
+/// before a `switch` arm is skipped by the switch parser instead.
+fn doc_comment_documents_nothing_before(next: &Token) -> bool {
+    matches!(
+        next,
+        Token::RBrace
+            | Token::Eof
+            | Token::Else
+            | Token::ElseIf
+            | Token::Catch
+            | Token::Finally
+            | Token::While
+            | Token::Default
+            | Token::EndIf
+            | Token::EndWhile
+            | Token::EndFor
+            | Token::EndForeach
+            | Token::EndSwitch
+            | Token::EndDeclare
+            | Token::Semicolon
+            | Token::RParen
+            | Token::RBracket
+            | Token::Comma
+    )
 }
 
 /// Retains a doc comment only where PHP can begin a declaration statement.

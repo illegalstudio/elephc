@@ -601,6 +601,7 @@ pub fn parse_for(
     let init = parse_for_clause(tokens, pos, &Token::Semicolon, "Expected ';' after for clauses", span)?;
     expect_semicolon(tokens, pos)?;
 
+    skip_doc_comments(tokens, pos);
     let condition = if *pos < tokens.len() && tokens[*pos].0 != Token::Semicolon {
         Some(parse_expr(tokens, pos)?)
     } else {
@@ -622,6 +623,7 @@ pub fn parse_for(
     }
     expect_semicolon(tokens, pos)?;
 
+    skip_doc_comments(tokens, pos);
     let update = parse_for_clause(tokens, pos, &Token::RParen, "Expected ')' after for clauses", span)?;
     expect_token(tokens, pos, &Token::RParen, "Expected ')' after for clauses")?;
 
@@ -981,6 +983,9 @@ pub fn parse_switch(
     let mut default: Option<Vec<Stmt>> = None;
 
     while *pos < tokens.len() && tokens[*pos].0 != close && tokens[*pos].0 != Token::Eof {
+        if skip_doc_comment_before_case(tokens, pos) {
+            continue;
+        }
         if tokens[*pos].0 == Token::Case {
             // Parse one or more case values
             let mut values = Vec::new();
@@ -991,7 +996,8 @@ pub fn parse_switch(
             }
             // Parse case body (statements until the next case/default or the case-list end)
             let mut body = Vec::new();
-            while *pos < tokens.len()
+            while !skip_doc_comment_before_case(tokens, pos)
+                && *pos < tokens.len()
                 && tokens[*pos].0 != Token::Case
                 && tokens[*pos].0 != Token::Default
                 && tokens[*pos].0 != close
@@ -1005,7 +1011,8 @@ pub fn parse_switch(
             *pos += 1;
             expect_case_separator(tokens, pos, "Expected ':' after 'default'")?;
             let mut body = Vec::new();
-            while *pos < tokens.len()
+            while !skip_doc_comment_before_case(tokens, pos)
+                && *pos < tokens.len()
                 && tokens[*pos].0 != Token::Case
                 && tokens[*pos].0 != close
                 && tokens[*pos].0 != Token::Eof
@@ -1043,6 +1050,30 @@ pub fn parse_switch(
         },
         span,
     ))
+}
+
+/// Steps over a docblock written in front of a `switch` arm's `case`, answering whether it did.
+///
+/// php reads a docblock there as whitespace. The lexer keeps one that follows `;`, `{` or `}`
+/// because an enum's `case` declaration is documented the same way, so the switch drops it here.
+fn skip_doc_comment_before_case(tokens: &[SpannedToken], pos: &mut usize) -> bool {
+    if matches!(tokens.get(*pos), Some((Token::DocComment(_), _)))
+        && matches!(tokens.get(*pos + 1), Some((Token::Case, _)))
+    {
+        *pos += 1;
+        return true;
+    }
+    false
+}
+
+/// Steps over docblocks at the start of a `for` header clause, which php reads as whitespace.
+///
+/// The lexer keeps a docblock that follows `;` (a declaration could start there), so one written
+/// before the condition or the update clause (`for (;; /** x */ $i++)`) reaches the parser.
+fn skip_doc_comments(tokens: &[SpannedToken], pos: &mut usize) {
+    while matches!(tokens.get(*pos), Some((Token::DocComment(_), _))) {
+        *pos += 1;
+    }
 }
 
 /// Consumes the separator that terminates a `case`/`default` label.
