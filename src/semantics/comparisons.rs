@@ -48,3 +48,23 @@ pub(crate) fn validate(profile: SemanticProfile, source: SourceMode, operator: &
     }
     Ok(())
 }
+
+/// Reports whether strict identity can share a PHP kind without applying scalar conversion.
+pub(crate) fn identity_kinds_overlap(left: &PhpType, right: &PhpType) -> bool {
+    identity_kind_mask(left) & identity_kind_mask(right) != 0
+}
+
+/// Preserves array layout alternatives and iterable/object overlap without erasing scalar kinds.
+fn identity_kind_mask(ty: &PhpType) -> u16 {
+    match ty {
+        PhpType::Int => 1, PhpType::Float => 2, PhpType::Bool | PhpType::False => 4,
+        PhpType::Str => 8, PhpType::Void => 16,
+        PhpType::Array(_) | PhpType::AssocArray { .. } => 32,
+        PhpType::Object(_) | PhpType::Callable => 64, PhpType::Resource(_) => 128,
+        PhpType::Packed(_) | PhpType::Pointer(_) => 256, PhpType::Buffer(_) => 512,
+        PhpType::Iterable => 32 | 64, PhpType::Mixed | PhpType::Never => 1023,
+        PhpType::TaggedScalar => 1 | 16,
+        PhpType::Union(members) => members.iter().fold(0, |mask, member| mask | identity_kind_mask(member)),
+        PhpType::Narrow(_) => identity_kind_mask(&ty.storage_value_type()),
+    }
+}

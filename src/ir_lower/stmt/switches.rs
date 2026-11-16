@@ -34,9 +34,10 @@ pub(super) fn lower_switch(
     } else {
         let mut subject = lower_expr(ctx, subject_expr);
         let preserve_subject = live_subject.is_none()
-            && matches!(subject.ir_type, IrType::Heap(crate::ir::IrHeapKind::Object | crate::ir::IrHeapKind::Mixed))
-            && ctx.classes.keys().any(|name| elephc_builtin_contract::lookup_class(name)
-                .is_some_and(|class| class.operators.is_some()));
+            && (crate::semantics::comparisons::active(ctx.semantic_profile, ctx.source_mode)
+                || (matches!(subject.ir_type, IrType::Heap(crate::ir::IrHeapKind::Object | crate::ir::IrHeapKind::Mixed))
+                    && ctx.classes.keys().any(|name| elephc_builtin_contract::lookup_class(name)
+                        .is_some_and(|class| class.operators.is_some()))));
         if preserve_subject {
             if matches!(subject.ir_type, IrType::Heap(crate::ir::IrHeapKind::Mixed)) {
                 subject = crate::ir_lower::ownership::copy_assignment_value(ctx, subject, Some(span));

@@ -15,6 +15,37 @@ use crate::types::{PhpType, TypeEnv};
 use elephc_semantics::StrictFeature;
 
 impl Checker {
+    /// Rejects a statically impossible exact case while preserving runtime checks for open types.
+    pub(crate) fn require_exact_switch_case(&self, subject: &PhpType, label: &PhpType,
+        span: Span) -> Result<(), CompileError> {
+        if !crate::semantics::comparisons::active(self.semantic_profile, self.semantic_source_mode)
+            || self.exact_switch_types_overlap(subject, label) { return Ok(()); }
+        Err(CompileError::new(span, &format!(
+            "--strict-comparisons: switch label of type {label} cannot match subject of type {subject}")))
+    }
+
+    /// Refines PHP kind overlap with existing class inheritance and resource compatibility rules.
+    fn exact_switch_types_overlap(&self, subject: &PhpType, label: &PhpType) -> bool {
+        if let PhpType::Union(members) = subject {
+            return members.iter().any(|member| self.exact_switch_types_overlap(member, label));
+        }
+        if let PhpType::Union(members) = label {
+            return members.iter().any(|member| self.exact_switch_types_overlap(subject, member));
+        }
+        if !crate::semantics::comparisons::identity_kinds_overlap(subject, label) { return false; }
+        match (subject, label) {
+            (PhpType::Object(left), PhpType::Object(right)) => {
+                if self.interfaces.contains_key(left) || self.interfaces.contains_key(right) { return true; }
+                let (Some(left_class), Some(right_class)) = (self.classes.get(left), self.classes.get(right))
+                    else { return true; };
+                left_class.class_id == right_class.class_id || self.is_subclass_of(left, right)
+                    || self.is_subclass_of(right, left)
+            }
+            (PhpType::Resource(_), PhpType::Resource(_)) => PhpType::resource_types_compatible(subject, label),
+            _ => true,
+        }
+    }
+
     /// Checks an implicit scalar boundary using its source operation rather than physical storage.
     pub(crate) fn require_noncoercive_value_type(&self, expected: &PhpType, actual: &PhpType,
         source: crate::source::SourceMode, span: Span, context: &str) -> Result<(), CompileError> {

@@ -10,6 +10,33 @@
 use crate::support::*;
 use elephc_semantics::{SemanticProfile, StrictFeature};
 
+/// Temporary switch subjects and labels retire before case bodies without losing live-variable effects.
+#[test]
+fn test_strict_comparison_native_switch_temporary_subjects_and_labels() {
+    let source = r#"<?php
+class StrictSwitchTemp { public function __destruct() { echo 'D'; } }
+function strictSwitchOwnedSubject(): StrictSwitchTemp { return new StrictSwitchTemp(); }
+function strictSwitchOwnedText(string $suffix): string { return 'subject-' . $suffix; }
+function strictSwitchInitialValue(): mixed { return 1; }
+switch (strictSwitchOwnedSubject()) {
+    case new StrictSwitchTemp(): echo 'X'; break;
+    default: echo 'B';
+}
+echo '|';
+switch (strictSwitchOwnedText(strval($argc))) { case 'never': echo 'X'; break; default: echo 'S'; }
+$value = strictSwitchInitialValue();
+switch ($value) { case ($value = '2'): echo 'L'; break; default: echo 'X'; }
+gc_collect_cycles();
+"#;
+    for (ast, ir) in [(false, false), (true, false), (false, true), (true, true)] {
+        let output = StrictFixture::new(source).capture_staged_optimizers(
+            SemanticProfile::PERMISSIVE.with(StrictFeature::Comparisons, true), ast, ir);
+        assert!(output.success, "ast={ast} ir={ir}: {} {} {}", output.status, output.stdout, output.stderr);
+        assert_eq!(output.stdout, "DDB|SL", "ast={ast} ir={ir}: {}", output.stderr);
+        assert!(output.stderr.contains("HEAP DEBUG: leak summary: clean"), "ast={ast} ir={ir}: {}", output.stderr);
+    }
+}
+
 /// The runnable label example sorts numeric-looking text through an explicit user comparator.
 #[test]
 fn test_strict_comparison_native_label_example() {

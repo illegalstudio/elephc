@@ -978,6 +978,32 @@ Comparisons remains staged. Native value-class comparison domains, comparison
 builtin policies, typed switch-label evidence and the remaining literal-eval/host
 paths must be completed before admitting the feature.
 
+### Prepared source policies and exact switch boundaries
+
+Step 101 adds one reusable expression source-policy stack to the shared AST
+visitor. Prepared producers retain their original operation policy through a
+physical internal consumer. Nested statements establish their own lexical policy;
+expression exit restores the parent policy. Inverse, sibling and nested closure
+fixtures cover both accidental exemptions and accidental restrictions.
+
+Typed switch labels use exact PHP kind overlap, plus existing nominal inheritance
+and resource compatibility. Variable subjects are checked after label effects,
+matching their execution-time lookup. Open unions and interfaces retain valid
+possibilities. Nonvariable strict switch subjects use the existing call-owner
+rooting protocol and retire before the selected body, including object and string
+temporaries. The optimizer keeps the switch boundary instead of rewriting it to
+a loose binary comparison with different capture and retirement timing.
+
+Actual regression evidence: source copies incorrectly passed inside internal
+statements; known disjoint typed cases passed checking; the native temporary
+fixture printed `DB|SL` and leaked one object and one string. After owner repair,
+only AST optimization changed its result to `DDX|SX`, exposing the single-case
+rewrite. Verification covers independent AST/EIR optimization settings and heap
+balance. All eight focused compiler checks and three native fixtures pass;
+the temporary-switch fixture passes all four AST/EIR optimizer combinations with
+a clean heap. The compiler build, all-five-target EIR emission, architecture
+inventory and source hygiene pass. Public admission remains unchanged.
+
 ### Verification discipline
 
 Count exact test registrations, use narrow package/test-binary filters, and queue
@@ -1103,4 +1129,6 @@ paths. Keep this plan, agent documentation and the current journal log synchroni
 
 | 98 | `4d3192488e` | fix(strict): retire converted reflection class arguments |
 | 99 | `b8f700b046` | feat(strict): guard native builtin input contracts |
-| 100 | this commit | feat(strict): implement exact scalar comparison boundaries |
+| 100 | `87db018d1b` | feat(strict): implement exact scalar comparison boundaries |
+
+| 101 | this commit | fix(strict): preserve comparison sources and switch lifetimes |

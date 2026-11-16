@@ -18,7 +18,7 @@ pub fn validate_source(program: &Program, profile: SemanticProfile) -> Result<()
     if ![StrictFeature::DynamicCode, StrictFeature::Bools, StrictFeature::Overflow, StrictFeature::Arithmetic, StrictFeature::Coercions, StrictFeature::Casts, StrictFeature::Comparisons].into_iter().any(|feature| profile.contains(feature)) { return Ok(()); }
     crate::compiler_stack::with_compiler_stack(|| {
         super::numeric_constants::validate(program, profile)?;
-        let mut validator = SourceValidator { depth: 0, error: None, profile, source_modes: Vec::new() };
+        let mut validator = SourceValidator { depth: 0, error: None, profile, source_modes: Default::default() };
         walk_program(program, &mut validator);
         validator.error.map_or(Ok(()), Err)
     })
@@ -28,14 +28,14 @@ pub fn validate_source(program: &Program, profile: SemanticProfile) -> Result<()
 struct SourceValidator {
     depth: usize,
     profile: SemanticProfile,
-    source_modes: Vec<crate::source::SourceMode>,
+    source_modes: crate::ast_visit::SourcePolicy,
     error: Option<CompileError>,
 }
 
 impl AstVisitor for SourceValidator {
     /// Tracks physical source for trusted implementation statements and validates raw conditions.
     fn statement(&mut self, stmt: &Stmt) {
-        self.source_modes.push(stmt.source_mode);
+        self.source_modes.enter_statement(stmt);
         if super::comparisons::active(self.profile, stmt.source_mode) {
             if let StmtKind::Switch { subject, cases, .. } = &stmt.kind {
                 if let Some(subject) = literal_type(subject) {
@@ -66,14 +66,14 @@ impl AstVisitor for SourceValidator {
 
     /// Restores the enclosing statement's source after nested bodies and declarations.
     fn statement_end(&mut self, _stmt: &Stmt) {
-        self.source_modes.pop();
+        self.source_modes.leave_statement();
     }
 
     /// Requires eval source to be literal and recursively verifies its source restrictions.
     fn expression(&mut self, expr: &Expr) {
+        let source_mode = self.source_modes.enter_expression(expr).mode;
         if self.error.is_some() { return; }
-        if super::comparisons::active(self.profile,
-            self.source_modes.last().copied().unwrap_or(crate::source::SourceMode::Php))
+        if super::comparisons::active(self.profile, source_mode)
         {
             if let ExprKind::BinaryOp { left, op, right } = &expr.kind {
                 if matches!(op, BinOp::Eq | BinOp::NotEq) {
@@ -83,12 +83,12 @@ impl AstVisitor for SourceValidator {
                 }
                 if let (Some(left), Some(right)) = (literal_type(left), literal_type(right)) {
                     if let Err(error) = super::comparisons::validate(self.profile,
-                        crate::source::SourceMode::Php, op, &left, &right, expr.span)
+                        source_mode, op, &left, &right, expr.span)
                     { self.error = Some(error); return; }
                 }
             }
         }
-        if self.profile.contains(StrictFeature::Bools) && self.source_modes.last() != Some(&crate::source::SourceMode::Internal) {
+        if self.profile.contains(StrictFeature::Bools) && source_mode != crate::source::SourceMode::Internal {
             match &expr.kind {
                 ExprKind::Not(inner) => self.boolean_literal(inner),
                 ExprKind::BinaryOp { left, op: BinOp::And | BinOp::Or | BinOp::Xor, right } => {
@@ -99,21 +99,21 @@ impl AstVisitor for SourceValidator {
                 _ => {}
             }
         }
-        if self.source_modes.last() != Some(&crate::source::SourceMode::Internal) {
+        if source_mode != crate::source::SourceMode::Internal {
             let unary = match &expr.kind {
                 ExprKind::UnaryPlus(inner) | ExprKind::Negate(inner) => Some((inner, elephc_semantics::numeric_domains::NumericOperator::Unary)),
                 ExprKind::BitNot(inner) => Some((inner, elephc_semantics::numeric_domains::NumericOperator::BitNot)),
                 _ => None,
             };
             if let Some((inner, operator)) = unary {
-                if let (Some(rule), Some(ty)) = (super::numeric::operator_rule(self.profile, crate::source::SourceMode::Php, operator), literal_type(inner)) {
+                if let (Some(rule), Some(ty)) = (super::numeric::operator_rule(self.profile, source_mode, operator), literal_type(inner)) {
                     if let Err(error) = super::numeric::validate_unary_type(rule, &ty, expr.span) {
                         self.error = Some(error); return;
                     }
                 }
             }
             if let ExprKind::BinaryOp { left, op, right } = &expr.kind {
-                if let Some(rule) = super::numeric::operand_rule(self.profile, crate::source::SourceMode::Php, op) {
+                if let Some(rule) = super::numeric::operand_rule(self.profile, source_mode, op) {
                     if let (Some(left), Some(right)) = (literal_type(left), literal_type(right)) {
                         let array_union = *op == BinOp::Add && matches!(left, crate::types::PhpType::Array(_))
                             && matches!(right, crate::types::PhpType::Array(_));
@@ -161,6 +161,11 @@ impl AstVisitor for SourceValidator {
             Err(error) => self.error = Some(CompileError::new(expr.span,
                 &format!("--{verification_flag} cannot statically verify literal eval: {}", error.message))),
         }
+    }
+
+    /// Restores the enclosing producer after recursive operands and literal eval have been visited.
+    fn expression_end(&mut self, _expr: &Expr) {
+        self.source_modes.leave_expression();
     }
 }
 

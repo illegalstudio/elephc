@@ -19,6 +19,7 @@ struct StagedRuntimeOptions {
     gmp: bool,
     xml: bool,
     source_mode: Option<elephc::source::SourceMode>,
+    ir_optimize: Option<bool>,
 }
 
 /// A PHP entry with optional include or Composer/autoload companions.
@@ -77,6 +78,15 @@ impl StrictFixture {
         &self, profile: elephc_semantics::SemanticProfile, optimize: bool,
     ) -> ProgramOutput {
         self.capture_staged_runtime(profile, optimize, StagedRuntimeOptions::default())
+    }
+
+    /// Separates AST and EIR optimization when a regression can originate in either layer.
+    pub(crate) fn capture_staged_optimizers(
+        &self, profile: elephc_semantics::SemanticProfile, ast: bool, ir: bool,
+    ) -> ProgramOutput {
+        self.capture_staged_runtime(profile, ast, StagedRuntimeOptions {
+            ir_optimize: Some(ir), ..Default::default()
+        })
     }
 
     /// Links the native eval callback ABI while its public semantic profile remains staged.
@@ -153,7 +163,7 @@ impl StrictFixture {
         }
         let mut module = elephc::ir_lower::lower_program(&program, &checked, target(), false).unwrap();
         module.required_runtime_features.eval_bridge |= options.eval_bridge;
-        if optimize { elephc::ir_passes::optimize_module(&mut module); }
+        if options.ir_optimize.unwrap_or(optimize) { elephc::ir_passes::optimize_module(&mut module); }
         elephc::ir::validate_module(&module).unwrap();
         let generated = elephc::codegen::generate_user_asm_from_ir_with_options_and_features(
             &module, false, false, elephc::codegen::Instrumentation::Off, false, true, false,

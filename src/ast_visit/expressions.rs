@@ -280,5 +280,6 @@ pub(super) fn walk_expr(expr: &Expr, visitor: &mut impl AstVisitor) {
             }
         }
     }
+    visitor.expression_end(expr);
 }
 

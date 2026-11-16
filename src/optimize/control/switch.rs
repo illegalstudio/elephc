@@ -96,6 +96,9 @@ pub(crate) fn prune_switch_stmt(
 
     let Some(subject_value) = scalar_value(&subject) else {
         if cases.len() == 1
+            // Exact switches read variable subjects after each label and retire captured
+            // subjects before the body. A binary expression has different timing.
+            && !crate::optimize::semantic_context::enabled(elephc_semantics::StrictFeature::Comparisons)
             && !single_case_rewrite_would_clone_a_decision(&subject, &cases, &default)
         {
             let (patterns, _) = &cases[0];

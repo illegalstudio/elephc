@@ -513,14 +513,20 @@ impl Checker {
                 cases,
                 default,
             } => {
-                self.infer_type_with_assignment_effects(subject, env)?;
+                let subject_type = self.infer_type_with_assignment_effects(subject, env)?;
                 let mut errors = Vec::new();
                 let branch_entry_boxed_refs = self.boxed_ref_aliased_locals.clone();
                 let mut arm_entries = Vec::new();
                 for (values, _) in cases {
                     let mut entries = Vec::new();
                     for value in values {
-                        self.infer_type_with_assignment_effects(value, env)?;
+                        let label_type = self.infer_type_with_assignment_effects(value, env)?;
+                        if crate::semantics::comparisons::active(self.semantic_profile, self.semantic_source_mode) {
+                            let live_type = if matches!(subject.kind, ExprKind::Variable(_)) {
+                                self.infer_type(subject, env)?
+                            } else { subject_type.clone() };
+                            self.require_exact_switch_case(&live_type, &label_type, value.span)?;
+                        }
                         self.record_switch_comparison_exception_flow(subject, value, env);
                         entries.push(self.snapshot_flow_exit(env));
                     }

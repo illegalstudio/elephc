@@ -15,10 +15,12 @@ use crate::parser::ast::{
 };
 use crate::span::Span;
 
-/// Receives source observations before each node's children are visited.
+/// Receives source observations around recursive syntax traversal.
 pub trait AstVisitor {
     /// Observes one expression in source traversal order.
     fn expression(&mut self, _expr: &Expr) {}
+    /// Observes the end of an expression after its operands and nested statements.
+    fn expression_end(&mut self, _expr: &Expr) {}
     /// Observes one statement, including generated nested statement lists.
     fn statement(&mut self, _stmt: &Stmt) {}
     /// Observes the end of a statement after all nested syntax has been visited.
@@ -46,6 +48,8 @@ fn extension(visitor: &mut impl AstVisitor, span: Span, description: &str) {
 mod statements;
 mod expressions;
 mod members;
+mod source_policy;
+pub(crate) use source_policy::SourcePolicy;
 use statements::*;
 use expressions::*;
 use members::*;
