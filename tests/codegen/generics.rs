@@ -2384,6 +2384,39 @@ fn test_docblock_covariant_marker_broken_by_the_declaration_is_demoted() {
     assert_eq!(out, "a true");
 }
 
+/// A PHPDoc bound on a CLASS template is a warning when a construction breaks it, and a class
+/// template no constructor argument determines is read at `mixed`: php-src runs both programs
+/// (issue #1899).
+#[test]
+fn test_docblock_class_template_bound_violation_and_undetermined_parameter() {
+    let source = r#"<?php
+class Entity {}
+class Other { public string $n = "other"; }
+/** @template T of Entity */
+class Holder {
+    /** @var T */
+    public $item;
+    /** @param T $item */
+    public function __construct($item) { $this->item = $item; }
+}
+/** @template T */
+class Middleware {
+    public function name(): string { return "mw"; }
+}
+$h = new Holder(new Other());
+echo $h->item->n, "|", (new Middleware())->name();
+"#;
+    let warnings = compile_cli_file_with_flags_capturing_stderr(source, &[]);
+    assert!(
+        warnings.contains(
+            "Constructing 'Holder' binds type parameter <T> to Other, which does not satisfy \
+             its bound Entity; the bound is a PHPDoc annotation php-src does not enforce"
+        ),
+        "{warnings}"
+    );
+    assert_eq!(compile_cli_file_and_run_with_flags(source, &[]), "other|mw");
+}
+
 /// PHPStan-style type arguments on built-in interfaces (`IteratorAggregate<K, V>`,
 /// `ArrayAccess<K, V>`) describe nothing elephc stores and are erased.
 #[test]

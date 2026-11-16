@@ -146,14 +146,18 @@ impl Checker {
             let Some((_, argument)) = bindings.iter().find(|(name, _)| name == &param.name) else {
                 continue;
             };
+            if Self::skips_docblock_bound(param, argument) {
+                continue;
+            }
             // Substituted first, as for a generic function: `<U : Cmp<U>>` names `U` itself.
             let bound_ty =
                 self.resolve_type_expr(&generics::substitute_value_type(bound, &bindings), expr.span)?;
             let argument_ty = self.resolve_generic_bound_argument(argument, expr.span)?;
             if !self.type_accepts(&bound_ty, &argument_ty) {
-                return Err(CompileError::new(
+                self.report_bound_violation(
+                    param.from_docblock,
                     expr.span,
-                    &format!(
+                    format!(
                         "Call to generic method '{}::{}' binds type parameter <{}> to {}, which \
                          does not satisfy its bound {}",
                         template.declared_class,
@@ -162,7 +166,7 @@ impl Checker {
                         argument_ty,
                         bound_ty
                     ),
-                ));
+                )?;
             }
         }
         let instantiated =

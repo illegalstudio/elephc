@@ -79,48 +79,19 @@ pub(super) fn apply(
         {
             apply_type(&mut method.variadic_type, annotated, in_scope, own);
         }
-        let native_return = method.return_type.clone();
         if let Some(annotated) = &block.return_type {
             apply_type(&mut method.return_type, annotated, in_scope, own);
         }
-        // A template the PHPDoc binds through a parameter, whose annotation then lost to a native
-        // hint (`@param T $v` on `mixed $v`), is no longer bound by anything at a call: calls
-        // infer method templates from their arguments only. Keeping it, and the return type it
-        // was adopted into, would make every ordinary call unresolvable, so both go and the
-        // method keeps its native signature there, which is all php-src ever saw. A template no
-        // `@param` mentions at all is left alone: that is the author's own unbindable template,
-        // and the call reports it.
-        let lost: Vec<String> = own
-            .iter()
-            .filter(|param| param.default.is_none())
-            .map(|param| param.name.clone())
-            .filter(|name| {
-                let name = std::slice::from_ref(name);
-                block
-                    .params
-                    .values()
-                    .any(|annotated| annotated.mentions_type_param(name))
-                    && !method
-                        .params
-                        .iter()
-                        .map(|(_, declared, _, _)| declared)
-                        .chain([&method.variadic_type])
-                        .flatten()
-                        .any(|declared| declared.mentions_type_param(name))
-            })
-            .collect();
-        if !lost.is_empty() {
-            if method
-                .return_type
-                .as_ref()
-                .is_some_and(|declared| declared.mentions_type_param(&lost))
-            {
-                method.return_type = native_return;
-            }
-            method.type_params.retain(|param| !lost.contains(&param.name));
-        }
-        // A template no position adopted (every annotation lost to a native hint) binds nothing
-        // at a call and would only make the call unresolvable; php-src never saw it either.
+        // A template whose `@param` lost to a native hint (`@param T $v` on `mixed $v`) but
+        // whose `@return T` was adopted is kept: no argument binds it any more, and a call that
+        // leaves a PHPDoc parameter undetermined reads it as `mixed`
+        // (`crate::generics::infer_bindings_with_args`), which is the native signature php-src
+        // runs. Keeping it is what lets a written `$repo->id<int>(7)` still select an
+        // instantiation.
+        //
+        // A template no position adopted (every annotation lost to a native hint) changes no
+        // declared type, so the method is not a template at all: it keeps its name and its
+        // vtable slot, exactly as php-src declares it.
         if !own.is_empty() {
             let names: Vec<String> = own.iter().map(|param| param.name.clone()).collect();
             let adopted = method
@@ -172,7 +143,7 @@ fn apply_type(
 /// `method_params` are the method's own PHPDoc templates: `@param T $m` with
 /// `@template T of Model` refines a native `Model $m`, because every `T` the call can bind is a
 /// `Model` (the bound is checked at the call), so the contract php-src enforces still holds.
-fn refines_native(
+pub(super) fn refines_native(
     native: Option<&TypeExpr>,
     annotated: &TypeExpr,
     method_params: &[TypeParam],

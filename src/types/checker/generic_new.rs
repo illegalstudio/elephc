@@ -348,19 +348,23 @@ impl Checker {
             let Some((_, argument)) = bindings.iter().find(|(name, _)| name == &param.name) else {
                 continue;
             };
+            if Self::skips_docblock_bound(param, argument) {
+                continue;
+            }
             // Substituted first, as every bound check does: `<T : Cmp<T>>` names `T` itself.
             let bound_ty =
                 self.resolve_type_expr(&generics::substitute_value_type(bound, bindings), expr.span)?;
             let argument_ty = self.resolve_generic_bound_argument(argument, expr.span)?;
             if !self.type_accepts(&bound_ty, &argument_ty) {
-                return Err(CompileError::new(
+                self.report_bound_violation(
+                    param.from_docblock,
                     expr.span,
-                    &format!(
+                    format!(
                         "Constructing '{}' binds type parameter <{}> to {}, which does not \
                          satisfy its bound {}",
                         template.declared_name, generics::parameter_name(&param.name), argument_ty, bound_ty
                     ),
-                ));
+                )?;
             }
         }
         Ok(())

@@ -14,6 +14,9 @@
 //! - A class says the same four things: `@template` its parameters, `@var`/`@param`/`@return`
 //!   its members' types, and `@extends`/`@implements` the instantiation it inherits. Inside one,
 //!   an ordinary member annotation must mention a class type parameter to be honoured.
+//! - An annotation never replaces a native hint php-src enforces (`int $m`, a class name): only
+//!   a missing or loosely enforced hint gives way, and a template no position adopts is not
+//!   adopted at all. php-src ignores the comment, so the annotated file must keep compiling.
 //! - A method may declare its own `@template` parameters even in a non-generic class or trait.
 //!   Its annotations then form a generic declaration, just as on a free function. Method-local
 //!   type parameters do not enter the scope of other members, and native method syntax wins.
@@ -117,21 +120,44 @@ fn apply_to_stmt(mut stmt: Stmt, blocks: &HashMap<(u32, u32), DocBlock>) -> Stmt
             if !block.declares_generics() || !type_params.is_empty() {
                 return stmt;
             }
-            *type_params = block.type_params.clone();
-            for (name, declared, _, _) in params.iter_mut() {
+            // Built on copies and committed together: a template no position ends up naming is
+            // not adopted, and then none of its annotations may leak into the declaration.
+            let mut adopted_params = params.clone();
+            let mut adopted_variadic = variadic_type.clone();
+            let mut adopted_return = return_type.clone();
+            for (name, declared, _, _) in adopted_params.iter_mut() {
                 if let Some(annotated) = block.params.get(name) {
-                    // The annotation REPLACES the written hint, which is the point: `array $a` with
-                    // `@param array<T> $a` is precisely the shape PHPStan-annotated code has, and
-                    // the annotation is the more precise of the two.
-                    *declared = Some(annotated.clone());
+                    // The annotation REPLACES a hint php-src treats loosely, which is the point:
+                    // `array $a` with `@param array<T> $a` is precisely the shape
+                    // PHPStan-annotated code has, and the annotation is the more precise of the
+                    // two. A native scalar or class hint is a contract php-src enforces (and
+                    // coerces to), so it wins: `@param T $m` documenting `int $m` stays `int`.
+                    adopt_refinement(declared, annotated, &block.type_params);
                 }
             }
             if let Some(annotated) = variadic.as_ref().and_then(|name| block.params.get(name)) {
-                *variadic_type = Some(annotated.clone());
+                adopt_refinement(&mut adopted_variadic, annotated, &block.type_params);
             }
             if let Some(annotated) = &block.return_type {
-                *return_type = Some(annotated.clone());
+                adopt_refinement(&mut adopted_return, annotated, &block.type_params);
             }
+            // A template no position adopted changes no declared type: the function is not a
+            // template, keeps its own name, and compiles exactly as php-src declares it.
+            let names: Vec<String> =
+                block.type_params.iter().map(|param| param.name.clone()).collect();
+            let adopted = adopted_params
+                .iter()
+                .map(|(_, declared, _, _)| declared)
+                .chain([&adopted_variadic, &adopted_return])
+                .flatten()
+                .any(|declared| declared.mentions_type_param(&names));
+            if !adopted {
+                return stmt;
+            }
+            *type_params = block.type_params.clone();
+            *params = adopted_params;
+            *variadic_type = adopted_variadic;
+            *return_type = adopted_return;
         }
         StmtKind::ClassDecl {
             generics,
@@ -178,6 +204,17 @@ fn apply_to_stmt(mut stmt: Stmt, blocks: &HashMap<(u32, u32), DocBlock>) -> Stmt
         _ => {}
     }
     stmt
+}
+
+/// Replaces a function's declared type with its annotation when the annotation refines it.
+///
+/// The rule is the one a method template follows (`members::refines_native`): a missing or
+/// loosely enforced native hint gives way to the annotation, a native scalar or class hint does
+/// not.
+fn adopt_refinement(declared: &mut Option<TypeExpr>, annotated: &TypeExpr, own: &[TypeParam]) {
+    if members::refines_native(declared.as_ref(), annotated, own) {
+        *declared = Some(annotated.clone());
+    }
 }
 
 /// Gives a declaration its generic half from `block`, and returns the type parameters now in

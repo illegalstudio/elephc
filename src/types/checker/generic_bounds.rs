@@ -28,6 +28,44 @@ impl Checker {
         self.resolve_type_expr(&crate::generics::value_carrier_type(argument), span)
     }
 
+    /// Reports a violated type-parameter bound: an error for native syntax, a warning for PHPDoc.
+    ///
+    /// php-src never reads `@template T of Foo`, so a call that breaks the annotation still runs
+    /// there, and rejecting it would refuse a valid PHP program. The instantiation is compiled at
+    /// the type the code supplies, exactly as php-src executes it. A native bound (`<T : Foo>`)
+    /// is compiler syntax its author opted into, and stays an error.
+    pub(crate) fn report_bound_violation(
+        &mut self,
+        from_docblock: bool,
+        span: crate::span::Span,
+        message: String,
+    ) -> Result<(), CompileError> {
+        if !from_docblock {
+            return Err(CompileError::new(span, &message));
+        }
+        let message = format!(
+            "{}; the bound is a PHPDoc annotation php-src does not enforce, so the code is \
+             compiled as written",
+            message
+        );
+        // A body is re-checked once per call-site specialization, which reaches the same site again.
+        if !self.warnings.iter().any(|seen| seen.span == span && seen.message == message) {
+            self.warnings.push(crate::errors::CompileWarning::new(span, &message));
+        }
+        Ok(())
+    }
+
+    /// Returns whether a bound is left unchecked: a PHPDoc parameter bound to `mixed`.
+    ///
+    /// `mixed` is what an undetermined PHPDoc parameter is read as, and what an untyped argument
+    /// infers. Neither says the annotation was broken, so neither is worth a diagnostic.
+    pub(crate) fn skips_docblock_bound(
+        param: &crate::parser::ast::TypeParam,
+        argument: &crate::parser::ast::TypeExpr,
+    ) -> bool {
+        param.from_docblock && crate::generics::is_mixed_type(argument)
+    }
+
     /// Rejects any type argument that does not satisfy its parameter's declared bound.
     ///
     /// Reports the FIRST violation rather than collecting them: an instantiation that violates
@@ -68,18 +106,22 @@ impl Checker {
             // bound admits exactly what a parameter of that type would: subclasses, implemented
             // interfaces, and interface inheritance. Comparing spellings instead would let an
             // unrelated class with the same name through and reject a legitimate subclass.
+            if obligation.from_docblock && crate::generics::is_mixed_type(&obligation.argument) {
+                continue;
+            }
             if !self.type_accepts(&bound, &argument) {
                 if defer_implicit_stringable && self.declares_public_tostring(&argument) {
                     continue;
                 }
-                return Err(CompileError::new(
+                self.report_bound_violation(
+                    obligation.from_docblock,
                     obligation.span,
-                    &format!(
+                    format!(
                         "Generic {} '{}' binds type parameter <{}> to {}, which does not \
                          satisfy its bound {}",
                         obligation.kind, obligation.template, obligation.parameter, argument, bound
                     ),
-                ));
+                )?;
             }
         }
         Ok(())

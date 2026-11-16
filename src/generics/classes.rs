@@ -48,6 +48,9 @@ pub struct BoundObligation {
     pub argument: TypeExpr,
     /// Where the mention was written, so the error lands on it.
     pub span: Span,
+    /// Whether the bound was declared by a PHPDoc `@template T of Foo`. php-src does not enforce
+    /// one, so the checker reports its violation as a warning instead of an error.
+    pub from_docblock: bool,
 }
 
 /// A generic class, interface or trait declaration, indexed by the name it is declared under.
@@ -692,6 +695,7 @@ impl Instantiate<'_> {
                     bound: super::substitute_value_type(bound, &bindings),
                     argument: argument.clone(),
                     span,
+                    from_docblock: param.from_docblock,
                 });
             }
         }

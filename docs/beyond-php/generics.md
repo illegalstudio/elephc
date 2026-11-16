@@ -1027,7 +1027,8 @@ PHPStan reads that annotation and **checks** it. elephc reads the same annotatio
 **compiles** it.
 
 `@template T of Foo` is the bound (`T : Foo` in native syntax) and `@template T = string` the
-default; both reach the same declaration.
+default; both reach the same declaration. A PHPDoc bound is reported as a warning rather than an
+error, see [Annotations never reject valid PHP](#annotations-never-reject-valid-php).
 
 ### A class
 
@@ -1173,11 +1174,52 @@ has its own type parameters, they bind first, followed by the constructor's para
 For example, `new Pair<int>(7, 'seven')` with a constructor-local `U` creates
 `Pair<int><string>`. The constructor retains the name `__construct` in each concrete class.
 
+### Annotations never reject valid PHP
+
+php-src ignores a doc comment, so a file it runs must also compile, whatever its annotations
+claim. Native syntax keeps every check strict; a PHPDoc declaration gives way instead:
+
+- **A bound a call breaks is a warning.** `@template E of Entity` with `accept(new Other())`
+  compiles at `E = Other`, exactly as php-src executes the call, and reports the violation as a
+  warning. The same holds for a function, a method and a class template. The native
+  `<E : Entity>` stays an error.
+- **A parameter the call cannot determine is `mixed`.** That covers a template only the
+  `@return` mentions, an annotation elephc has no type for (`@param class-string<T> $class`),
+  two arguments that bind one parameter to two types, and a `null` argument. The native form
+  reports each of these and asks for the type argument.
+- **A native hint wins over the annotation that documents it.** php-src enforces `int $m` and
+  coerces to it, so `@param T $m` does not replace it. A hint php-src enforces loosely
+  (`array`, `iterable`, `callable`, `object`, or none) gives way to the annotation, as does a
+  class hint to its own generic form (`Box $b` documented `@param Box<T> $b`).
+- **A template no position adopts is not a template.** When every annotation naming `T` lost
+  to a native hint, the function or method keeps its own name and its native signature.
+
+```php
+<?php
+class Entity {}
+class Other {}
+
+class Repo
+{
+    /**
+     * @template E of Entity
+     * @param E $entity
+     */
+    public function accept($entity): int { return 1; }
+}
+
+echo (new Repo())->accept(new Other());   // 1, with a warning about the bound
+```
+
+One divergence remains: a class or constructor template still names its instantiations, so
+`get_class(new Value(7))` answers `Value<int>` (see [A class](#a-class)).
+
 ## Limitations
 
-- **A type parameter nothing mentions must be written.** Inference works from the argument
-  types, so a parameter no signature position names cannot be inferred —
-  [write it at the call](#writing-the-type-arguments-at-the-call). A bare `callable` names
+- **A native type parameter nothing mentions must be written.** Inference works from the
+  argument types, so a parameter no signature position names cannot be inferred —
+  [write it at the call](#writing-the-type-arguments-at-the-call). A PHPDoc parameter in the
+  same position is [read as `mixed`](#annotations-never-reject-valid-php). A bare `callable` names
   nothing either; [typed callables](#typed-callables) are the way to reach through a callback.
 - **Only a closure literal drives callback inference.** A callable held in a variable or named
   by a string carries no declared types at the call site.

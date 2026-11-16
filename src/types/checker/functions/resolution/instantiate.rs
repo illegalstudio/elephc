@@ -139,16 +139,20 @@ impl Checker {
             // its own included: `<T : Cmp<T>>` asks for `Cmp<Word>` once `T` is `Word`.
             // Resolving it unsubstituted asked whether `Word` implements `Cmp<T>`, a class that
             // does not exist, and rejected every F-bounded call.
+            if Self::skips_docblock_bound(param, argument) {
+                continue;
+            }
             let bound_ty = self.resolve_type_expr(&generics::substitute_value_type(bound, &bindings), span)?;
             let argument_ty = self.resolve_generic_bound_argument(argument, span)?;
             if !self.type_accepts(&bound_ty, &argument_ty) {
-                return Err(CompileError::new(
+                self.report_bound_violation(
+                    param.from_docblock,
                     span,
-                    &format!(
+                    format!(
                         "Call to generic function '{}' binds type parameter <{}> to {}, which does not satisfy its bound {}",
                         name, param.name, argument_ty, bound_ty
                     ),
-                ));
+                )?;
             }
         }
         let instantiated = generics::instantiated_name(name, &bindings);

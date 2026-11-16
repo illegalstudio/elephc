@@ -229,9 +229,10 @@ echo $holder->get(), "|", strtoupper($holder->id("seven"));
     assert_eq!(out, "7|SEVEN");
 }
 
-/// An unrelated object is rejected against a method-local PHPDoc bound in both strict modes.
+/// An unrelated object against a method-local PHPDoc bound is a warning in both strict modes:
+/// php-src never reads the bound, so the call compiles and runs as it does there (issue #1899).
 #[test]
-fn test_docblock_method_templates_enforce_bounds() {
+fn test_docblock_method_template_bound_violation_warns_and_runs() {
     let source = r#"<?php
 class Entity {}
 class Other {}
@@ -245,8 +246,15 @@ class Repo {
 echo (new Repo())->accept(new Other());
 "#;
     for flags in [&[][..], &["--strict-php"][..]] {
-        let error = compile_cli_file_with_flags_expect_failure(source, flags);
-        assert!(error.contains("does not satisfy its bound"), "{error}");
+        let warnings = compile_cli_file_with_flags_capturing_stderr(source, flags);
+        assert!(
+            warnings.contains(
+                "binds type parameter <E> to Other, which does not satisfy its bound Entity; \
+                 the bound is a PHPDoc annotation php-src does not enforce"
+            ),
+            "{warnings}"
+        );
+        assert_eq!(compile_cli_file_and_run_with_flags(source, flags), "1", "{flags:?}");
     }
 }
 
@@ -300,9 +308,10 @@ fn test_docblock_on_the_declaration_line_binds_to_it() {
     }
 }
 
-/// An enum method's PHPDoc template specializes per call and enforces its bound, like a class's.
+/// An enum method's PHPDoc template specializes per call and reads its bound, like a class's.
 ///
-/// Enum methods were skipped, so `@template T of int` was never checked on `Id::A->id("seven")`.
+/// Enum methods were skipped, so `@template T of int` was never read on `Id::A->id("seven")`.
+/// The violation is a warning, and the call runs as php-src runs it.
 #[test]
 fn test_docblock_method_templates_on_enum_methods() {
     let template = r#"<?php
@@ -323,9 +332,10 @@ echo Id::A->id(ARG);
             "7",
             "{flags:?}"
         );
-        let error =
-            compile_cli_file_with_flags_expect_failure(&template.replace("ARG", "\"seven\""), flags);
-        assert!(error.contains("does not satisfy its bound int"), "{error}");
+        let violating = template.replace("ARG", "\"seven\"");
+        let warnings = compile_cli_file_with_flags_capturing_stderr(&violating, flags);
+        assert!(warnings.contains("does not satisfy its bound int"), "{warnings}");
+        assert_eq!(compile_cli_file_and_run_with_flags(&violating, flags), "seven", "{flags:?}");
     }
 }
 
@@ -403,8 +413,8 @@ fn test_block_comment_between_docblock_and_declaration_keeps_the_template() {
 function id($v) { return $v; }
 echo id("seven");
 "#;
-    let error = compile_cli_file_with_flags_expect_failure(bounded, &[]);
-    assert!(error.contains("does not satisfy its bound int"), "{error}");
+    let warnings = compile_cli_file_with_flags_capturing_stderr(bounded, &[]);
+    assert!(warnings.contains("does not satisfy its bound int"), "{warnings}");
 }
 
 /// A `/***` banner is an ordinary comment, as php's lexer reads it, so it does not replace the
@@ -431,8 +441,8 @@ fn test_star_banner_comment_keeps_the_docblock_above_it() {
              echo Id::A->id(\"seven\");\n"
         ),
     ] {
-        let error = compile_cli_file_with_flags_expect_failure(&source, &[]);
-        assert!(error.contains("does not satisfy its bound int"), "{source}: {error}");
+        let warnings = compile_cli_file_with_flags_capturing_stderr(&source, &[]);
+        assert!(warnings.contains("does not satisfy its bound int"), "{source}: {warnings}");
     }
     let second = "<?php\n/** @template T */\n/** plain */\n\
                   class Box { public function __construct(public $v) {} }\n\
@@ -452,8 +462,8 @@ fn test_comment_scan_follows_the_php_lexer() {
     for comment in ["/*/ kept */", "/*/** kept */"] {
         let source =
             format!("<?php\n{bound}{comment}\nfunction id($v) {{ return $v; }}\necho id(\"seven\");\n");
-        let error = compile_cli_file_with_flags_expect_failure(&source, &[]);
-        assert!(error.contains("does not satisfy its bound int"), "{comment}: {error}");
+        let warnings = compile_cli_file_with_flags_capturing_stderr(&source, &[]);
+        assert!(warnings.contains("does not satisfy its bound int"), "{comment}: {warnings}");
     }
     for comment in ["/*/*/", "/**\u{0c}*/", "/**\u{0b}*/", "/**\u{a0}*/"] {
         let source = format!(
@@ -631,23 +641,17 @@ echo $b["x"], " ", rd($b), " ", $b->offsetGet("y"), " ", json_encode($b), " ", c
 
 /// A one-line block parses its OPENING tag only — the tags after it are that tag's description
 /// (phpDocumentor semantics, review finding: a tag MENTIONED in a description must not bind).
-/// The violating argument is still refused, by a different route: with `@param` unread, `T`
-/// stays undetermined and the call errors. The multi-line form binds every tag and reports the
-/// bound violation.
+/// With `@param` unread, no position adopts `T`, so the declaration is not a template at all:
+/// it compiles untyped and silently, as php-src runs it. The multi-line form binds every tag
+/// and reports the bound violation as a warning.
 #[test]
 fn test_one_line_block_reads_its_opening_tag() {
     let bound = "/** @template T of int @param T $v @return T */\n";
-    let function_case =
-        format!("<?php\n{bound}function id($v) {{ return $v; }}\necho id(\"seven\");\n");
-    let error = compile_cli_file_with_flags_expect_failure(&function_case, &[]);
-    assert!(
-        error.contains("does not determine type parameter <T>"),
-        "{function_case}: {error}"
-    );
-    // `docblock/members.rs`: a METHOD template that no parameter
-    // or return position adopts binds nothing at a call, so it is dropped and the method compiles
-    // untyped, as php-src runs it, instead of failing as an undetermined call.
-    let method_cases = [
+    // `docblock.rs` and `docblock/members.rs`: a template that no parameter or return position
+    // adopts binds nothing at a call, so it is dropped and the declaration compiles untyped, as
+    // php-src runs it, instead of failing as an undetermined call.
+    let unadopted_cases = [
+        format!("<?php\n{bound}function id($v) {{ return $v; }}\necho id(\"seven\");\n"),
         format!(
             "<?php\nclass R {{\n{bound}public static function id($v) {{ return $v; }}\n}}\n\
              echo R::id(\"seven\");\n"
@@ -661,28 +665,31 @@ fn test_one_line_block_reads_its_opening_tag() {
              echo Id::A->id(\"seven\");\n"
         ),
     ];
-    for source in &method_cases {
+    for source in &unadopted_cases {
+        let warnings = compile_cli_file_with_flags_capturing_stderr(source, &[]);
+        assert!(!warnings.contains("its bound"), "{source}: {warnings}");
         assert_eq!(compile_cli_file_and_run_with_flags(source, &[]), "seven", "{source}");
     }
     let multiline = "<?php\n/** @template T of int\n * @param T $v\n * @return T\n */\n\
                      function id($v) { return $v; }\necho id(\"seven\");\n";
-    let error = compile_cli_file_with_flags_expect_failure(multiline, &[]);
+    let warnings = compile_cli_file_with_flags_capturing_stderr(multiline, &[]);
     assert!(
-        error.contains("does not satisfy its bound int"),
-        "{multiline}: {error}"
+        warnings.contains("does not satisfy its bound int"),
+        "{multiline}: {warnings}"
     );
+    assert_eq!(compile_cli_file_and_run_with_flags(multiline, &[]), "seven");
     let ok = "<?php\n/** @template T of int\n * @param T $v\n * @return T\n */\n\
               function id($v) { return $v; }\necho id(7);\n";
     assert_eq!(compile_cli_file_and_run_with_flags(ok, &[]), "7");
 }
 
-/// A method template whose only `@param` loses to a native `mixed` binds nothing at a call, so
-/// it is dropped together with the `@return T` it was adopted into: ordinary calls keep
-/// compiling with the native signature, as php-src runs them. A sibling whose `@param` is adopted
-/// still specializes.
+/// A method template whose only `@param` loses to a native `mixed` is bound by no argument, so
+/// an ordinary call reads it as `mixed`: the native signature php-src runs. A sibling whose
+/// `@param` is adopted still specializes, and a written `id<int>(7)` still selects its own
+/// instantiation (native syntax, so outside `--strict-php`).
 #[test]
 fn test_docblock_method_template_lost_to_native_mixed_still_compiles() {
-    let source = r#"<?php
+    let declaration = r#"<?php
 class Repo {
     /**
      * @template T
@@ -698,9 +705,96 @@ class Repo {
     public function same($v) { return $v; }
 }
 $repo = new Repo();
-echo $repo->id(7), "|", $repo->id("x"), "|", $repo->same(8) + 1, "|", $repo->same("y");
+"#;
+    let source = format!(
+        "{declaration}echo $repo->id(7), \"|\", $repo->id(\"x\"), \"|\", $repo->same(8) + 1, \"|\", $repo->same(\"y\");\n"
+    );
+    for flags in [&[][..], &["--strict-php"][..]] {
+        assert_eq!(compile_cli_file_and_run_with_flags(&source, flags), "7|x|9|y");
+    }
+    let written = format!("{declaration}echo $repo->id<int>(7) + 1, \"|\", $repo->id(\"x\");\n");
+    assert_eq!(compile_cli_file_and_run_with_flags(&written, &[]), "8|x");
+}
+
+/// A PHPDoc type parameter the call cannot determine is read as `mixed` instead of failing a
+/// program php-src runs (issue #1899): `class-string<T>` has no elephc type, so nothing binds
+/// `T` on `make()`; two arguments bind `T` to two types on `pick()`; and `null` says nothing
+/// about `T` on `same()`. A bound on such a parameter is not reported either.
+#[test]
+fn test_docblock_undetermined_template_reads_as_mixed() {
+    let source = r#"<?php
+class Model { public function hi() { return "hi"; } }
+class Locator {
+    /**
+     * @template T of Model
+     * @param class-string<T> $class
+     * @return T
+     */
+    public function make(string $class) { return new $class(); }
+}
+/**
+ * @template T
+ * @param T $a
+ * @param T $b
+ * @return T
+ */
+function pick($a, $b) { return $b; }
+/**
+ * @template T
+ * @param T $v
+ * @return T
+ */
+function same($v) { return $v; }
+echo (new Locator())->make("Model")->hi(), "|", pick(1, "two"), "|", var_export(same(null), true);
 "#;
     for flags in [&[][..], &["--strict-php"][..]] {
-        assert_eq!(compile_cli_file_and_run_with_flags(source, flags), "7|x|9|y");
+        let warnings = compile_cli_file_with_flags_capturing_stderr(source, flags);
+        assert!(!warnings.contains("its bound"), "{warnings}");
+        assert_eq!(compile_cli_file_and_run_with_flags(source, flags), "hi|two|NULL", "{flags:?}");
     }
+}
+
+/// A PHPDoc bound on a FUNCTION template is a warning when a call breaks it, and a native hint
+/// wins over the `@param` that documents it, as php-src enforces the hint and not the comment
+/// (issue #1899, case 6).
+#[test]
+fn test_docblock_function_bound_violation_warns_and_native_hint_wins() {
+    let bounded = r#"<?php
+/**
+ * @template T of int
+ * @param T $v
+ * @return T
+ */
+function id($v) { return $v; }
+echo id("seven");
+"#;
+    let warnings = compile_cli_file_with_flags_capturing_stderr(bounded, &[]);
+    assert!(
+        warnings.contains(
+            "Call to generic function 'id' binds type parameter <T> to string, which does not \
+             satisfy its bound int; the bound is a PHPDoc annotation php-src does not enforce"
+        ),
+        "{warnings}"
+    );
+    assert_eq!(compile_cli_file_and_run_with_flags(bounded, &[]), "seven");
+
+    let native_hint = r#"<?php
+/**
+ * @template T of object
+ * @param T $m
+ * @return T
+ */
+function keep(int $m): int { return $m + 1; }
+/**
+ * @template T
+ * @param T $m
+ * @param array<T> $rest
+ * @return T
+ */
+function first(int $m, array $rest) { return $rest[0]; }
+echo keep(4), "|", keep("4"), "|", first(1, ["a", "b"]);
+"#;
+    let warnings = compile_cli_file_with_flags_capturing_stderr(native_hint, &[]);
+    assert!(!warnings.contains("its bound"), "{warnings}");
+    assert_eq!(compile_cli_file_and_run_with_flags(native_hint, &[]), "5|5|a");
 }
