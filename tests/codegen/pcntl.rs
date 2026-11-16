@@ -273,6 +273,23 @@ fn test_pcntl_alarm_returns_previous_remaining_seconds() {
     assert_eq!(out, "0|remaining");
 }
 
+/// A loop that closes only through a catch edge still reaches an async-signal safe point: the
+/// back edge of such a cycle is implicit, so only the catch handler's block start can poll.
+#[test]
+fn test_pcntl_async_signal_runs_in_a_loop_closed_by_a_catch() {
+    let out = compile_and_run(
+        "<?php
+        pcntl_async_signals(true);
+        pcntl_signal(SIGALRM, function () { echo 'handled'; exit(0); });
+        pcntl_alarm(1);
+        $e = new Exception;
+        $i = 0;
+        while ($i < 400000000) { $i++; try { throw $e; } catch (Exception $x) {} }
+        echo 'spun';",
+    );
+    assert_eq!(out, "handled");
+}
+
 /// Creates process groups and sessions through the shared POSIX bridge.
 #[test]
 fn test_pcntl_posix_process_group_and_session_helpers() {

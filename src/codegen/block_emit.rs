@@ -2292,7 +2292,7 @@ fn emit_blocks(ctx: &mut FunctionContext<'_>) -> Result<()> {
 /// call returns; the calls are covered by `signal_safe_point_after`, the entry by the first block.
 /// A block start that is neither (the join of an `if`, a `catch` body) is a bounded step between
 /// two of those points, and a safe point there only cost a call at about 300 000 sites of the
-/// Symfony console. Every cycle contains a back edge, so a tight loop still polls. Blocks the walk
+/// Symfony console. Every cycle contains a back edge or passes a catch handler (the handler blocks poll too), so a tight loop still polls. Blocks the walk
 /// cannot reach from the entry (landing pads, dead arms) are walked as roots of their own, so a loop in one still polls, but their first block does not.
 fn signal_loop_headers(ctx: &FunctionContext<'_>) -> crate::fast_hash::FastSet<crate::ir::BlockId> {
     use crate::ir::{BlockId, Terminator};
@@ -2354,6 +2354,12 @@ fn signal_loop_headers(ctx: &FunctionContext<'_>) -> crate::fast_hash::FastSet<c
             }
         }
     }
+    // A catch edge is implicit (a throwing instruction jumps to its handler through the pushed
+    // `TryPushHandler` record), so the walk above never sees a cycle `header -> try body ->
+    // (throw) -> catch -> header` close. Polling at every handler block start covers it.
+    for block in crate::codegen::callable_reachability::exception_handler_blocks(function) {
+        headers.insert(block);
+    }
     headers
 }
 
@@ -2380,11 +2386,13 @@ fn op_stats_key(inst: &crate::ir::Instruction) -> String {
     format!("{name}[{detail}{inner}]")
 }
 
+/// The process-wide per-op histogram that `ELEPHC_OP_STATS` fills.
 fn op_stats() -> &'static std::sync::Mutex<OpStats> {
     static STATS: std::sync::OnceLock<std::sync::Mutex<OpStats>> = std::sync::OnceLock::new();
     STATS.get_or_init(Default::default)
 }
 
+/// Adds one lowered instruction and the machine instructions it emitted to the histogram.
 fn record_op_stats(op: String, instructions: usize) {
     if let Ok(mut stats) = op_stats().lock() {
         let entry = stats.entry(op).or_default();

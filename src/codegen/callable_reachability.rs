@@ -300,7 +300,7 @@ fn apply_local_transfer(
 }
 
 /// Returns blocks entered through implicit exception-handler control-flow edges.
-fn exception_handler_blocks(function: &Function) -> BTreeSet<BlockId> {
+pub(crate) fn exception_handler_blocks(function: &Function) -> BTreeSet<BlockId> {
     function
         .instructions
         .iter()
