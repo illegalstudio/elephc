@@ -27,6 +27,10 @@ use crate::types::PhpType;
 use super::super::super::context::FunctionContext;
 use super::super::{expect_operand, store_if_result};
 
+/// The `ValueError` php raises for a negative `$offset` or one past the end of `$data`.
+const UNPACK_OFFSET_MESSAGE: &str =
+    "unpack(): Argument #3 ($offset) must be contained in argument #2 ($data)";
+
 /// Byte order used by one supported integer field.
 #[derive(Clone, Copy)]
 enum ByteOrder {
@@ -41,6 +45,7 @@ struct Field {
     order: ByteOrder,
     key: FieldKey,
     byte_offset: usize,
+    code: char,
 }
 
 /// Where one unpacked field is stored: under its format name, or under php's integer key `1`
@@ -142,6 +147,7 @@ fn parse_format(format: &str) -> Result<FormatPlan> {
                 order,
                 key,
                 byte_offset,
+                code: char::from(directive),
             });
             byte_offset += width;
         }
@@ -181,20 +187,36 @@ fn lower_sequence(
         ByteOrder::Big => 1,
         ByteOrder::Little | ByteOrder::Native => 0,
     };
+    let spilled = spill_mixed_offset(ctx, offset)?;
+    let (error, in_range) = (ctx.next_label("unpack_offset_error"), ctx.next_label("unpack_offset_ok"));
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
             super::strings::load_value_as_string_to_regs(ctx, input, "unpack", "x0", "x1")?;
-            abi::emit_push_reg_pair(ctx.emitter, "x0", "x1");
-            load_offset(ctx, offset, "x2")?;
-            abi::emit_pop_reg_pair(ctx.emitter, "x0", "x1");
+            if !spilled { abi::emit_push_reg_pair(ctx.emitter, "x0", "x1"); }
+            load_offset(ctx, offset, "x2", spilled)?;
+            if !spilled { abi::emit_pop_reg_pair(ctx.emitter, "x0", "x1"); }
+            ctx.emitter.instruction("cmp x2, #0");                             // reject negative input offsets
+            ctx.emitter.instruction(&format!("b.lt {error}"));                 // a negative offset raises php's ValueError
+            ctx.emitter.instruction("cmp x2, x1");                             // compare offset with input length
+            ctx.emitter.instruction(&format!("b.ls {in_range}"));              // an offset inside the string is usable
+            ctx.emitter.label(&error);
+            super::super::exceptions::emit_value_error(ctx, UNPACK_OFFSET_MESSAGE);
+            ctx.emitter.label(&in_range);
             abi::emit_load_int_immediate(ctx.emitter, "x3", width);
             abi::emit_load_int_immediate(ctx.emitter, "x4", order);
         }
         Arch::X86_64 => {
             super::strings::load_value_as_string_to_regs(ctx, input, "unpack", "rdi", "rsi")?;
-            abi::emit_push_reg_pair(ctx.emitter, "rdi", "rsi");
-            load_offset(ctx, offset, "rdx")?;
-            abi::emit_pop_reg_pair(ctx.emitter, "rdi", "rsi");
+            if !spilled { abi::emit_push_reg_pair(ctx.emitter, "rdi", "rsi"); }
+            load_offset(ctx, offset, "rdx", spilled)?;
+            if !spilled { abi::emit_pop_reg_pair(ctx.emitter, "rdi", "rsi"); }
+            ctx.emitter.instruction("cmp rdx, 0");                             // reject negative input offsets
+            ctx.emitter.instruction(&format!("jl {error}"));                   // a negative offset raises php's ValueError
+            ctx.emitter.instruction("cmp rdx, rsi");                           // compare offset with input length
+            ctx.emitter.instruction(&format!("jbe {in_range}"));               // an offset inside the string is usable
+            ctx.emitter.label(&error);
+            super::super::exceptions::emit_value_error(ctx, UNPACK_OFFSET_MESSAGE);
+            ctx.emitter.label(&in_range);
             abi::emit_load_int_immediate(ctx.emitter, "rcx", width);
             abi::emit_load_int_immediate(ctx.emitter, "r8", order);
         }
@@ -239,16 +261,24 @@ fn lower_named_aarch64(
     required: usize,
     fail: &str,
 ) -> Result<()> {
+    let spilled = spill_mixed_offset(ctx, offset)?;
     super::strings::load_value_as_string_to_regs(ctx, input, "unpack", "x9", "x10")?;
-    load_offset(ctx, offset, "x11")?;
+    load_offset(ctx, offset, "x11", spilled)?;
+    let (error, in_range) = (ctx.next_label("unpack_offset_error"), ctx.next_label("unpack_offset_ok"));
     ctx.emitter.instruction("cmp x11, #0");                                    // reject negative input offsets
-    ctx.emitter.instruction(&format!("b.lt {fail}"));                          // negative offsets raise/fail before reading data
+    ctx.emitter.instruction(&format!("b.lt {error}"));                         // a negative offset raises php's ValueError
     ctx.emitter.instruction("cmp x11, x10");                                  // compare offset with input length
-    ctx.emitter.instruction(&format!("b.hi {fail}"));                          // offsets beyond the string cannot be unpacked
+    ctx.emitter.instruction(&format!("b.ls {in_range}"));                      // an offset inside the string is usable
+    ctx.emitter.label(&error);
+    super::super::exceptions::emit_value_error(ctx, UNPACK_OFFSET_MESSAGE);
+    ctx.emitter.label(&in_range);
     ctx.emitter.instruction("sub x12, x10, x11");                             // remaining input bytes after the offset
     abi::emit_load_int_immediate(ctx.emitter, "x13", required as i64);
     ctx.emitter.instruction("cmp x12, x13");                                  // ensure all fixed fields fit
-    ctx.emitter.instruction(&format!("b.lo {fail}"));                          // PHP returns false when fixed fields are truncated
+    let fits = ctx.next_label("unpack_fields_fit");
+    ctx.emitter.instruction(&format!("b.hs {fits}"));                          // every fixed field fits the remaining input
+    emit_truncation_warning(ctx, fields, fail);
+    ctx.emitter.label(&fits);
     ctx.emitter.instruction("add x9, x9, x11");                              // cursor = input + offset
     ctx.emitter.instruction("sub sp, sp, #32");                               // reserve aligned cursor/hash spill slots
     ctx.emitter.instruction("str x9, [sp]");                                  // preserve the input cursor across runtime calls
@@ -339,16 +369,24 @@ fn lower_named_x86_64(
     required: usize,
     fail: &str,
 ) -> Result<()> {
+    let spilled = spill_mixed_offset(ctx, offset)?;
     super::strings::load_value_as_string_to_regs(ctx, input, "unpack", "r10", "r11")?;
-    load_offset(ctx, offset, "rax")?;
+    load_offset(ctx, offset, "rax", spilled)?;
+    let (error, in_range) = (ctx.next_label("unpack_offset_error"), ctx.next_label("unpack_offset_ok"));
     ctx.emitter.instruction("cmp rax, 0");                                     // reject negative input offsets
-    ctx.emitter.instruction(&format!("jl {fail}"));                            // negative offsets cannot be unpacked
+    ctx.emitter.instruction(&format!("jl {error}"));                           // a negative offset raises php's ValueError
     ctx.emitter.instruction("cmp rax, r11");                                  // compare offset with input length
-    ctx.emitter.instruction(&format!("ja {fail}"));                            // offsets beyond the string cannot be unpacked
+    ctx.emitter.instruction(&format!("jbe {in_range}"));                       // an offset inside the string is usable
+    ctx.emitter.label(&error);
+    super::super::exceptions::emit_value_error(ctx, UNPACK_OFFSET_MESSAGE);
+    ctx.emitter.label(&in_range);
     ctx.emitter.instruction("mov rdx, r11");                                  // compute remaining input byte count
     ctx.emitter.instruction("sub rdx, rax");                                  // remaining = input_len - offset
     ctx.emitter.instruction(&format!("cmp rdx, {required}"));                  // ensure every fixed field fits
-    ctx.emitter.instruction(&format!("jb {fail}"));                            // PHP returns false for truncated fixed fields
+    let fits = ctx.next_label("unpack_fields_fit");
+    ctx.emitter.instruction(&format!("jae {fits}"));                           // every fixed field fits the remaining input
+    emit_truncation_warning(ctx, fields, fail);
+    ctx.emitter.label(&fits);
     ctx.emitter.instruction("add r10, rax");                                  // cursor = input + offset
     ctx.emitter.instruction("sub rsp, 32");                                   // reserve aligned cursor/hash spill slots
     ctx.emitter.instruction("mov QWORD PTR [rsp], r10");                      // preserve the input cursor across runtime calls
@@ -430,12 +468,125 @@ fn unpack_hash_type() -> PhpType {
     }
 }
 
+/// Converts a boxed (`mixed`) `$offset` to an int and parks it on the temporary stack.
+///
+/// The raw operand of a boxed offset is the box pointer, which the bounds checks would read as
+/// a huge integer. The conversion calls the runtime, so it runs before the input string is
+/// loaded into registers; `load_offset` pops the parked value afterwards. Returns whether a
+/// value was parked.
+fn spill_mixed_offset(ctx: &mut FunctionContext<'_>, offset: Option<ValueId>) -> Result<bool> {
+    let Some(offset) = offset else {
+        return Ok(false);
+    };
+    if !matches!(ctx.value_php_type(offset)?.codegen_repr(), PhpType::Mixed | PhpType::Union(_)) {
+        return Ok(false);
+    }
+    ctx.load_value_to_result(offset)?;
+    abi::emit_call_label(ctx.emitter, "__rt_mixed_cast_int");
+    abi::emit_push_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
+    Ok(true)
+}
+
+/// Emits php's "not enough input values" warning for the first field the input cannot hold.
+///
+/// The remaining byte count is in `x12` (AArch64) or `rdx` (x86_64). Fields are grouped by
+/// directive; the failing group is the first whose end passes the remaining bytes, and the
+/// bytes php reports as provided are the remainder left after the whole fields before the
+/// failure. The warning is followed by a jump to `fail`, which answers `false`.
+fn emit_truncation_warning(ctx: &mut FunctionContext<'_>, fields: &[Field], fail: &str) {
+    let mut groups: Vec<(char, usize, usize, usize)> = Vec::new(); // (code, start, width, count)
+    for field in fields {
+        match groups.last_mut() {
+            Some((code, _, _, count)) if *code == field.code => *count += 1,
+            _ => groups.push((field.code, field.byte_offset, field.width, 1)),
+        }
+    }
+    let labels: Vec<String> = groups.iter().map(|_| ctx.next_label("unpack_truncated_group")).collect();
+    for ((_, start, width, count), label) in groups.iter().zip(&labels) {
+        let end = (start + width * count) as i64;
+        match ctx.emitter.target.arch {
+            Arch::AArch64 => {
+                abi::emit_load_int_immediate(ctx.emitter, "x13", end);
+                ctx.emitter.instruction("cmp x12, x13");                       // does this directive group run past the remaining input?
+                ctx.emitter.instruction(&format!("b.lo {label}"));             // the first such group holds the truncated field
+            }
+            Arch::X86_64 => {
+                ctx.emitter.instruction(&format!("cmp rdx, {end}"));           // does this directive group run past the remaining input?
+                ctx.emitter.instruction(&format!("jb {label}"));               // the first such group holds the truncated field
+            }
+        }
+    }
+    for ((code, start, width, _), label) in groups.iter().zip(&labels) {
+        ctx.emitter.label(label);
+        match ctx.emitter.target.arch {
+            Arch::AArch64 => {
+                abi::emit_load_int_immediate(ctx.emitter, "x14", *start as i64);
+                ctx.emitter.instruction("sub x14, x12, x14");                  // bytes left at the start of this group
+                abi::emit_load_int_immediate(ctx.emitter, "x15", *width as i64);
+                ctx.emitter.instruction("udiv x16, x14, x15");                 // whole fields that still fit
+                ctx.emitter.instruction("msub x14, x16, x15, x14");            // bytes left at the truncated field
+            }
+            Arch::X86_64 => {
+                ctx.emitter.instruction("mov rax, rdx");                       // copy the remaining byte count
+                ctx.emitter.instruction(&format!("sub rax, {start}"));         // bytes left at the start of this group
+                ctx.emitter.instruction("xor edx, edx");                       // clear the dividend high half
+                ctx.emitter.instruction(&format!("mov rcx, {width}"));         // field width as the divisor
+                ctx.emitter.instruction("div rcx");                            // rdx = bytes left at the truncated field
+                ctx.emitter.instruction("mov rax, rdx");                       // stage the provided byte count
+            }
+        }
+        let provided = if ctx.emitter.target.arch == Arch::AArch64 { "x14" } else { "rax" };
+        abi::emit_push_reg(ctx.emitter, provided);
+        emit_unpack_fragment(
+            ctx,
+            &format!("Warning: unpack(): Type {code}: not enough input values, need {width} values but only "),
+            false,
+        );
+        abi::emit_load_temporary_stack_slot(ctx.emitter, abi::int_result_reg(ctx.emitter), 0);
+        abi::emit_call_label(ctx.emitter, "__rt_itoa");
+        if ctx.emitter.target.arch == Arch::X86_64 {
+            ctx.emitter.instruction("mov rdi, rax");                           // pass the digits pointer as the fragment pointer
+            ctx.emitter.instruction("mov rsi, rdx");                           // pass the digits length as the fragment length
+        }
+        abi::emit_call_label(ctx.emitter, "__rt_diag_warning_fragment");
+        emit_unpack_fragment(ctx, " were provided\n", true);
+        abi::emit_release_temporary_stack(ctx.emitter, 16);
+        abi::emit_jump(ctx.emitter, fail);
+    }
+}
+
+/// Emits one static diagnostic fragment; `complete` ends the warning line.
+fn emit_unpack_fragment(ctx: &mut FunctionContext<'_>, text: &str, complete: bool) {
+    let (label, len) = ctx.data.add_string(text.as_bytes());
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            abi::emit_symbol_address(ctx.emitter, "x1", &label);
+            abi::emit_load_int_immediate(ctx.emitter, "x2", len as i64);
+        }
+        Arch::X86_64 => {
+            abi::emit_symbol_address(ctx.emitter, "rdi", &label);
+            abi::emit_load_int_immediate(ctx.emitter, "rsi", len as i64);
+        }
+    }
+    abi::emit_call_label(
+        ctx.emitter,
+        if complete { "__rt_diag_warning" } else { "__rt_diag_warning_fragment" },
+    );
+}
+
 /// Loads the optional third argument, whose PHP default is byte offset zero.
+///
+/// `spilled` means `spill_mixed_offset` already parked the converted value on the stack.
 fn load_offset(
     ctx: &mut FunctionContext<'_>,
     offset: Option<ValueId>,
     register: &str,
+    spilled: bool,
 ) -> Result<()> {
+    if spilled {
+        abi::emit_pop_reg(ctx.emitter, register);
+        return Ok(());
+    }
     if let Some(offset) = offset {
         ctx.load_value_to_reg(offset, register).map(|_| ())
     } else {
