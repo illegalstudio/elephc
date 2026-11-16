@@ -33,10 +33,7 @@ docs/superpowers/
 # graft's local graph cache — regenerable, not committed (run `graft build`).
 /graft/
 
-# Kage repository memory: the verified packets are committed and shared, every
-# other entry (indexes, code graph, structural/observation caches, daemon and
-# store state, reports) is local and regenerable (run `kage refresh`).
-.agent_memory/*
-!.agent_memory/packets/
-.agent_memory/packets/*
-!.agent_memory/packets/*.md
+# Local agent memories (Kage, kioku): kept on each machine, never committed. The shared
+# memory is trail's (`.trail/`) and the plans (`.plans/`).
+.agent_memory/
+.kioku/

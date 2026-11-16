@@ -121,7 +121,7 @@ Each test runs in an isolated temp directory. Tests run in parallel — the `com
 A fixture that contains an `eval()` whose source is known only at runtime (the `$argc > 0 ? '...' : ''` pattern, `eval($code)`) lowers the whole builtin catalog and costs tens of seconds per compile; a literal `eval('...')` costs about as much as the same code inline. When several such fixtures only compare stdout, bundle them with `assert_bundle` / `assert_bundle_with` (`tests/codegen/support/bundle.rs`): the cases compile and run as one program, stdout is split per case, and a failure names the case. Cases share one scope and declaration namespace (unique function/class names, no `declare(strict_types=1)`, no `exit`), so keep a fixture on its own when it needs per-program heap or GC statistics, a non-zero exit, or stderr assertions. Name a bundled test `test_<family>_bundle`: `.config/nextest.toml` gives that suffix a longer timeout budget, because one bundle runs every case it replaced.
 ## Repository memory (Kage)
 
-Kage is this repository's shared memory: verified, evidence-backed **memory packets** under `.agent_memory/packets/` (`bug_fix`, `decision`, `gotcha`, `convention`, `runbook`, `code_explanation`) plus a code graph over the source. The packets are committed and shared through git — they are part of a change, like a test. Everything else under `.agent_memory/` (indexes, code graph, structural and observation caches, daemon/store/report state) is regenerable local state and is git-ignored.
+Kage keeps verified, evidence-backed **memory packets** under `.agent_memory/packets/` (`bug_fix`, `decision`, `gotcha`, `convention`, `runbook`, `code_explanation`) plus a code graph over the source. `.agent_memory/` is local to each machine and git-ignored, like kioku's `.kioku/`: the memory committed and shared with a change is trail's learnings under `.trail/learnings/` (write one with `trail note`) and the plans under `.plans/`.
 
 ### Recall before working
 
@@ -156,7 +156,7 @@ Both tools are mandatory, on every task, and the cost of using them is accepted:
 2. `graft ask` to locate the mechanism the recall named.
 3. Measure against `php -n` before changing anything — a recalled packet states what was true when it was written, not what is true now.
 4. `kage_risk` before committing, and read its co-change partners as candidate twins of the change.
-5. `kage_learn` with the commit, `kage_supersede` when it replaces an older claim, `kage reverify` when only the code moved.
+5. A `trail note` learning with the commit when the task took real digging (it is what the team shares); `kage_learn` for the local memory, `kage_supersede` when it replaces an older claim, `kage reverify` when only the code moved.
 6. Never leave a measured divergence unrecorded because it was not the defect you were chasing. A finding filed as an open item and never scheduled costs exactly as much as a finding never made: on 2026-09-11 the Symfony `--web` request was blocked by an integer-key densification defect that had been measured, written up and filed as an open bug on 2026-08-23, and days were spent on stops downstream of it. Record it, and say plainly in the report that it is unfixed and why.
 
 ### Hygiene and known traps
