@@ -82,13 +82,13 @@ fn test_error_readline_wrong_args() {
 /// Verifies the error diagnostic for fgetcsv wrong args.
 #[test]
 fn test_error_fgetcsv_wrong_args() {
-    expect_error("<?php fgetcsv();", "fgetcsv() takes 1 to 3 arguments");
+    expect_error("<?php fgetcsv();", "fgetcsv() takes 1 to 5 arguments");
 }
 
 /// Verifies the error diagnostic for fputcsv wrong args.
 #[test]
 fn test_error_fputcsv_wrong_args() {
-    expect_error("<?php fputcsv(1);", "fputcsv() takes 2 to 4 arguments");
+    expect_error("<?php fputcsv(1);", "fputcsv() takes 2 to 6 arguments");
 }
 
 /// Verifies the error diagnostic for dirname wrong args.
