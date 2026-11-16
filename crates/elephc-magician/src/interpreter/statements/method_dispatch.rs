@@ -40,11 +40,19 @@ fn eval_native_closure_method(
     object: RuntimeCellHandle,
     method_name: &str,
     evaluated_args: &[EvaluatedCallArg],
-    _context: &mut ElephcEvalContext,
+    context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<Option<RuntimeCellHandle>, EvalStatus> {
     if !method_name.eq_ignore_ascii_case("bindTo") {
         return Ok(None);
+    }
+    // `$newThis` is required: php raises `ArgumentCountError` rather than unbinding.
+    if evaluated_args.is_empty() {
+        return eval_throw_argument_count_error(
+            "Closure::bindTo() expects at least 1 argument, 0 given",
+            context,
+            values,
+        );
     }
     let new_this = evaluated_args
         .first()
