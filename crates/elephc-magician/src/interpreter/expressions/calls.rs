@@ -296,7 +296,9 @@ fn eval_assert_call(
     }
     let message = match args.get(1) {
         Some(description) => {
-            let value = eval_expr(description, context, scope, values)?;
+            // OWNED, like `throw`'s operand: a variable operand would otherwise hand the scope's
+            // own cell to the pending throw, which the catch releases while `$e` still holds it.
+            let value = eval_owned_expr(description, context, scope, values)?;
             if values.type_tag(value)? == EVAL_TAG_OBJECT {
                 context.set_pending_throw(value);
                 return Err(EvalStatus::UncaughtThrowable);
