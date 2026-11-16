@@ -234,8 +234,6 @@ fn array_map_over_bool_returning_builtin_renders_php_style() {
 /// error left to read the element type out of. Strict mode is where PHP throws
 /// `TypeError: ... must be of type string, bool given` — verified against php 8.4 — and it is
 /// therefore the only probe that still observes the element type through a diagnostic.
-/// The sibling `..._follows_a_string_callback` test needs no such directive: its `"n1"` is a
-/// non-numeric string, which PHP rejects for an `int` parameter in both modes.
 #[test]
 fn array_map_result_element_type_is_the_callback_return_type() {
     let dir = make_test_dir("array_result_map_elemty");
@@ -253,7 +251,13 @@ fn array_map_result_element_type_is_the_callback_return_type() {
 
 /// Same probe for a `string`-returning callback over an `int[]`: the element type must follow the
 /// callback (`Str`), which the old "keep the input element type" rule got wrong in the other
-/// direction. Passing the mapped element into an `int` parameter must name `Str`.
+/// direction. Passing the mapped element into an `int` parameter must name `string`.
+///
+/// `"n1"` is a non-numeric string, which PHP rejects for an `int` parameter in both modes, but at
+/// RUN time: the binding is legal for a numeric string, so the program compiles and throws php's
+/// catchable `TypeError`. php -n 8.5.10 prints `Fatal error: Uncaught TypeError: want_int():
+/// Argument #1 ($n) must be of type int, string given, called in ...` and exits 255; the
+/// `string given` it names is the mapped element's type.
 #[test]
 fn array_map_result_element_type_follows_a_string_callback() {
     let dir = make_test_dir("array_result_map_elemty_str");
@@ -262,10 +266,13 @@ fn array_map_result_element_type_follows_a_string_callback() {
         function want_int(int $n): int { return $n; } \
         $mapped = array_map('label', [1, 0]); \
         echo want_int($mapped[0]);";
-    let diagnostics = compile_expecting_failure(&dir, src, "app");
+    let bin = compile(&dir, src, "app");
+    let output = run_binary_expecting_fatal(&bin);
     assert!(
-        diagnostics.contains("expects int, got string"),
-        "array_map() must report the callback's Str return as the element type, got:\n{diagnostics}"
+        output.contains(
+            "Fatal error: Uncaught TypeError: want_int(): Argument #1 ($n) must be of type int, string given"
+        ),
+        "array_map() must carry the callback's Str return as the element type, got:\n{output}"
     );
 }
 
