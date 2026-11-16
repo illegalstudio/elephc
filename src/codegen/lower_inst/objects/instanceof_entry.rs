@@ -77,34 +77,14 @@ pub(in crate::codegen::lower_inst) fn lower_instanceof(ctx: &mut FunctionContext
     store_if_result(ctx, inst)
 }
 
-/// Tests callable storage against PHP's built-in `Closure` class identity.
+/// Tests callable storage against PHP's built-in `Closure` class identity. Only a descriptor with
+/// an object handle is a Closure: an implicit string or array callable is not.
 fn emit_closure_instanceof(
     ctx: &mut FunctionContext<'_>,
     value: crate::ir::ValueId,
     value_ty: &PhpType,
 ) -> Result<()> {
-    match value_ty {
-        PhpType::Callable => {
-            abi::emit_load_int_immediate(ctx.emitter, abi::int_result_reg(ctx.emitter), 1);
-        }
-        PhpType::Mixed | PhpType::Union(_) => {
-            ctx.load_value_to_reg(value, abi::int_result_reg(ctx.emitter))?;
-            abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
-            match ctx.emitter.target.arch {
-                Arch::AArch64 => {
-                    ctx.emitter.instruction("cmp x0, #10");                     // runtime tag 10 is a Closure callable descriptor
-                    ctx.emitter.instruction("cset x0, eq");                     // return whether the boxed value carries that tag
-                }
-                Arch::X86_64 => {
-                    ctx.emitter.instruction("cmp rax, 10");                     // runtime tag 10 is a Closure callable descriptor
-                    ctx.emitter.instruction("sete al");                         // materialize the callable-tag comparison
-                    ctx.emitter.instruction("movzx rax, al");                   // widen the boolean result to the integer ABI
-                }
-            }
-        }
-        _ => emit_false(ctx),
-    }
-    Ok(())
+    super::super::predicates::emit_closure_identity(ctx, value, value_ty, false)
 }
 
 /// Tests the synthetic `__PHP_Incomplete_Class` identity carried by class id `-2`.

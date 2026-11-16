@@ -36,6 +36,26 @@ echo $closure instanceof Closure ? 'yes' : 'no';
     assert_eq!(out, "HELLO|Closure|yes");
 }
 
+/// Only a Closure is an object: a function name or a method array passed as a `callable` is an
+/// implicit callable without object identity, so `instanceof Closure` and `is_object()` answer
+/// `false` for it, held as a callable or forwarded into a `mixed`. First-class callables,
+/// closures and arrow functions stay Closures. Expected output measured with php 8.5.12.
+#[test]
+fn test_implicit_callable_is_not_a_closure_object() {
+    let out = compile_and_run(
+        r#"<?php
+class Cls { public function m() {} public static function sm() {} }
+function yn(bool $b): string { return $b ? "y" : "n"; }
+function m(mixed $f): string { return yn($f instanceof Closure) . yn(is_object($f)); }
+function c(callable $f): string { return yn($f instanceof Closure) . yn(is_object($f)) . m($f); }
+$o = new Cls();
+echo c('strlen'), " ", c([$o, 'm']), " ", c('Cls::sm'), " ", c(['Cls', 'sm']), " ";
+echo c(strlen(...)), " ", c($o->m(...)), " ", c(fn() => 1), " ", c(function () {}), "\n";
+"#,
+    );
+    assert_eq!(out, "nnnn nnnn nnnn nnnn yyyy yyyy yyyy yyyy\n");
+}
+
 /// Verifies anonymous function with multiple parameters and a simple arithmetic body.
 #[test]
 fn test_closure_multiple_params() {

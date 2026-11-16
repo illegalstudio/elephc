@@ -413,6 +413,64 @@ pub(super) fn emit_mixed_tag_membership(
     Ok(())
 }
 
+/// Emits a boolean result that is 1 when a callable or boxed Mixed value is a PHP `Closure`
+/// object, and, with `accept_objects`, when a boxed Mixed value holds any object (runtime tag 6).
+///
+/// A callable descriptor (a `callable` value, or Mixed runtime tag 10) is a Closure only when it
+/// carries an object handle. A function name or method array passed as a `callable` (`'strlen'`,
+/// `[$obj, 'm']`, `'Cls::m'`) becomes an implicit descriptor without one: PHP still sees a string
+/// or an array there, which is neither an object nor an instance of `Closure`.
+pub(super) fn emit_closure_identity(
+    ctx: &mut FunctionContext<'_>,
+    value: ValueId,
+    value_ty: &PhpType,
+    accept_objects: bool,
+) -> Result<()> {
+    let result = abi::int_result_reg(ctx.emitter);
+    let true_label = ctx.next_label("closure_identity_true");
+    let false_label = ctx.next_label("closure_identity_false");
+    let done_label = ctx.next_label("closure_identity_done");
+    match value_ty {
+        PhpType::Callable => {
+            ctx.load_value_to_reg(value, result)?;
+            crate::codegen_support::callable_descriptor::emit_require_object_handle(ctx.emitter, result, &false_label);
+        }
+        PhpType::Mixed | PhpType::Union(_) if matches!(value_ty.codegen_repr(), PhpType::Mixed | PhpType::Union(_)) => {
+            ctx.load_value_to_reg(value, result)?;
+            abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
+            let payload = match ctx.emitter.target.arch {
+                Arch::AArch64 => {
+                    if accept_objects {
+                        ctx.emitter.instruction("cmp x0, #6");                  // runtime tag 6 is an object payload
+                        ctx.emitter.instruction(&format!("b.eq {true_label}")); // accept any object
+                    }
+                    ctx.emitter.instruction("cmp x0, #10");                     // runtime tag 10 is a callable descriptor payload
+                    ctx.emitter.instruction(&format!("b.ne {false_label}"));    // any other value is no Closure
+                    "x1"
+                }
+                Arch::X86_64 => {
+                    if accept_objects {
+                        ctx.emitter.instruction("cmp rax, 6");                  // runtime tag 6 is an object payload
+                        ctx.emitter.instruction(&format!("je {true_label}"));   // accept any object
+                    }
+                    ctx.emitter.instruction("cmp rax, 10");                     // runtime tag 10 is a callable descriptor payload
+                    ctx.emitter.instruction(&format!("jne {false_label}"));     // any other value is no Closure
+                    "rdi"
+                }
+            };
+            crate::codegen_support::callable_descriptor::emit_require_object_handle(ctx.emitter, payload, &false_label);
+        }
+        _ => abi::emit_jump(ctx.emitter, &false_label),
+    }
+    ctx.emitter.label(&true_label);
+    abi::emit_load_int_immediate(ctx.emitter, result, 1);
+    abi::emit_jump(ctx.emitter, &done_label);
+    ctx.emitter.label(&false_label);
+    abi::emit_load_int_immediate(ctx.emitter, result, 0);
+    ctx.emitter.label(&done_label);
+    Ok(())
+}
+
 /// Emits an integer nonzero check into the canonical integer result register.
 pub(in crate::codegen::lower_inst) fn emit_int_result_nonzero_bool(ctx: &mut FunctionContext<'_>) {
     match ctx.emitter.target.arch {
