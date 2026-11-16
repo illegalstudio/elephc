@@ -422,3 +422,25 @@ echo " ", is_a($m, $argv[2] ?? "Closure") ? "y" : "n", "\n";
     );
     assert_eq!(out, ["ynnnn y\n", "ynnnn y\n", "ynnnn n\n"]);
 }
+
+/// Only a Closure is an instance of `Closure`: a function name or a method array passed as a
+/// `callable` is an implicit callable without object identity, so a runtime `Closure` target
+/// does not match it, held as a callable or forwarded into a Mixed. A first-class callable
+/// (`strlen(...)`, `$o->m(...)`) is a Closure and matches. Expected output measured with
+/// php 8.5.12.
+#[test]
+fn test_is_a_implicit_callable_is_not_a_closure() {
+    let out = compile_and_run_per_argv(
+        r#"<?php
+class Cls { public function m() {} public static function sm() {} }
+function m(mixed $f, string $t): string { return (is_a($f, $t) ? "y" : "n") . (is_a($f, $t, true) ? "y" : "n"); }
+function c(callable $f, string $t): string { return (is_a($f, $t) ? "y" : "n") . (is_a($f, $t, true) ? "y" : "n") . m($f, $t); }
+$t = $argv[1] ?? "Closure";
+$o = new Cls();
+echo c('strlen', $t), " ", c([$o, 'm'], $t), " ", c('Cls::sm', $t), " ", c(['Cls', 'sm'], $t), " ";
+echo c(strlen(...), $t), " ", c($o->m(...), $t), " ", c(fn() => 1, $t), "\n";
+"#,
+        &[&[], &["Cls"]],
+    );
+    assert_eq!(out, ["nnnn nnnn nnnn nnnn yyyy yyyy yyyy\n", "nnnn nnnn nnnn nnnn nnnn nnnn nnnn\n"]);
+}
