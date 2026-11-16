@@ -520,10 +520,16 @@ fn pack_native_object_variadic(
         return Ok(());
     }
     let len = values.array_len(bound_arg.value)?;
+    // Every key read is caller-owned: each is released once used, and on the early return for a
+    // string key the ones already collected are given back too.
     let mut keys = Vec::with_capacity(len);
     for position in 0..len {
         let key = values.array_iter_key(bound_arg.value, position)?;
         if values.type_tag(key)? != EVAL_TAG_INT {
+            values.release(key)?;
+            for key in keys {
+                values.release(key)?;
+            }
             return Ok(());
         }
         keys.push(key);
@@ -531,7 +537,9 @@ fn pack_native_object_variadic(
     let mut packed = values.object_array_new(len)?;
     for key in keys {
         // `array_get` hands back an owned cell; the packed array retains its own reference.
-        let value = values.array_get(bound_arg.value, key)?;
+        let value = values.array_get(bound_arg.value, key);
+        values.release(key)?;
+        let value = value?;
         let pushed = values.object_array_push(packed, value);
         values.release(value)?;
         packed = pushed?;
@@ -566,11 +574,15 @@ fn pack_native_string_variadic(
     let mut items = Vec::with_capacity(len);
     for position in 0..len {
         let key = values.array_iter_key(bound_arg.value, position)?;
+        // The key read is caller-owned and only locates the element.
         if values.type_tag(key)? != EVAL_TAG_INT {
+            values.release(key)?;
             return Ok(());
         }
         // `array_get` hands back an owned cell; only its bytes are kept.
-        let value = values.array_get(bound_arg.value, key)?;
+        let value = values.array_get(bound_arg.value, key);
+        values.release(key)?;
+        let value = value?;
         let bytes = values.string_bytes(value);
         values.release(value)?;
         items.push(bytes?);
