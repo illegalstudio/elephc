@@ -15,11 +15,12 @@
 //!   file's top level, whose return value is the include's value.
 //!
 //! A path the table does not know is php's failed-open: two warnings and `false`, or for `require`
-//! the fatal error php raises.
+//! the stream warning and a NULL result, for which the include site throws php's catchable `Error`.
 //!
 //! Register contracts (a leaf of the include sites, not a C ABI):
 //! - in: AArch64 `x1`/`x2` = path bytes/length, `x3` = flags; x86_64 `rax`/`rdx`/`rcx`;
-//! - out: the include's value as an owned boxed `mixed` in the integer result register;
+//! - out: the include's value as an owned boxed `mixed` in the integer result register (null only
+//!   for a failed `require`);
 //! - flags: bit 0 `_once`, bit 1 `require`, bit 2 the value is discarded (a statement include).
 
 use super::bridge::{emit_lookup, OnMatch};
@@ -177,14 +178,12 @@ pub(super) fn emit_closed_include(module: &Module, emitter: &mut Emitter, data: 
     );
     let middle = data.add_string(b"): Failed to open stream: No such file or directory\n");
     let tail = data.add_string(b"' for inclusion\n");
-    let fatal_head = data.add_string(b"Fatal error: Uncaught Error: Failed opening required '");
-    let fatal_tail = data.add_string(b"'\n");
     let not_compiled_head = data.add_string(b"Fatal error: Uncaught Error: Cannot include '");
     let not_compiled_tail = data.add_string(
         b"': it is part of this closed-world build but its top level cannot be run from an include\n",
     );
     emit_runtime_include(emitter, &not_compiled_head, &not_compiled_tail);
-    emit_include_failed(emitter, &first, &second, &middle, &tail, &fatal_head, &fatal_tail);
+    emit_include_failed(emitter, &first, &second, &middle, &tail);
 }
 
 /// The program's literal spellings of compiled files that are not their canonical path, each with
@@ -381,7 +380,7 @@ fn emit_runtime_include(emitter: &mut Emitter, not_compiled_head: &(String, usiz
             abi::load_at_offset(emitter, "x1", PATH);
             abi::load_at_offset(emitter, "x2", LEN);
             abi::load_at_offset(emitter, "x3", FLAGS);
-            abi::emit_call_label(emitter, FAILED);                              // warnings, then false (or the require fatal)
+            abi::emit_call_label(emitter, FAILED);                              // warnings, then false (null for a failed require)
             abi::emit_frame_restore(emitter, FRAME);
             abi::emit_return(emitter);
         }
@@ -459,7 +458,7 @@ fn emit_runtime_include(emitter: &mut Emitter, not_compiled_head: &(String, usiz
             abi::load_at_offset(emitter, "rax", PATH);
             abi::load_at_offset(emitter, "rdx", LEN);
             abi::load_at_offset(emitter, "rcx", FLAGS);
-            abi::emit_call_label(emitter, FAILED);                              // warnings, then false (or the require fatal)
+            abi::emit_call_label(emitter, FAILED);                              // warnings, then false (null for a failed require)
             abi::emit_frame_restore(emitter, FRAME);
             abi::emit_return(emitter);
         }
@@ -475,19 +474,18 @@ fn emit_runtime_include(emitter: &mut Emitter, not_compiled_head: &(String, usiz
 /// `__rt_include_failed`: php's failed-open for a path nothing compiled answers.
 ///
 /// Two warnings (`include(PATH): Failed to open stream: ...`, then `include(): Failed opening
-/// 'PATH' for inclusion`), then `false`; a `require` raises the fatal php reports instead.
+/// 'PATH' for inclusion`), then `false`; a `require` stops after the first warning and answers
+/// a null result, for which the include site throws php's `Error`.
 fn emit_include_failed(
     emitter: &mut Emitter,
     first: &str,
     second: &str,
     middle: &(String, usize),
     tail: &(String, usize),
-    fatal_head: &(String, usize),
-    fatal_tail: &(String, usize),
 ) {
     let prefix = emitter.target.platform.local_label_prefix();
     let returns_false = format!("{prefix}include_failed_false");
-    let fatal = format!("{prefix}include_failed_fatal");
+    let required = format!("{prefix}include_failed_required");
     emitter.blank();
     emitter.comment("--- runtime: include failed to open ---");
     if emitter.target.arch == Arch::AArch64 { emitter.raw(".align 2"); }
@@ -518,7 +516,7 @@ fn emit_include_failed(
                 if table == first {
                     // php reports a failed `require` as the Error alone after the stream warning.
                     abi::load_at_offset(emitter, "x3", FLAGS);
-                    emitter.instruction(&format!("tbnz x3, #1, {fatal}"));
+                    emitter.instruction(&format!("tbnz x3, #1, {required}"));
                 }
             }
             emitter.instruction(&format!("b {returns_false}"));                 // include: false
@@ -548,17 +546,18 @@ fn emit_include_failed(
                     // php reports a failed `require` as the Error alone after the stream warning.
                     abi::load_at_offset(emitter, "rcx", FLAGS);
                     emitter.instruction("test rcx, 2");                         // require?
-                    emitter.instruction(&format!("jnz {fatal}"));
+                    emitter.instruction(&format!("jnz {required}"));
                 }
             }
             emitter.instruction(&format!("jmp {returns_false}"));               // include: false
         }
     }
-    emitter.label(&fatal);
-    write_stderr(emitter, &fatal_head.0, fatal_head.1);
-    write_stderr_path(emitter);
-    write_stderr(emitter, &fatal_tail.0, fatal_tail.1);
-    abi::emit_exit(emitter, 255);
+    // A failed `require` answers no value (a null result): the include site throws php's
+    // catchable `Error` naming the path, so `catch`, `finally` and the uncaught report all apply.
+    emitter.label(&required);
+    abi::emit_load_int_immediate(emitter, abi::int_result_reg(emitter), 0);
+    abi::emit_frame_restore(emitter, FRAME);
+    abi::emit_return(emitter);
     emitter.label(&returns_false);
     match emitter.target.arch {
         Arch::AArch64 => emitter.instruction("mov x0, #0"),                     // the include evaluates to false

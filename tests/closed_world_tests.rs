@@ -418,9 +418,15 @@ fn closed_world_runtime_include_runs_units_answers_once_and_fails_like_php() {
         .expect("php must be installed to pin the reference behaviour");
 
     // The values: a compiled unit's return value, then `true` twice for `_once`, false for the
-    // failed includes (the first silenced).
-    assert_eq!(text(&ours.stdout), text(&php.stdout), "stdout differs from php");
-    assert!(text(&ours.stdout).starts_with("array(2) {"));
+    // failed includes (the first silenced). The failed `require` raises a real `Error`, which
+    // elephc reports uncaught where php's CLI does by default (stdout); this php run sends it to
+    // stderr, so it is split off before the values are compared.
+    let ours_stdout = text(&ours.stdout);
+    let (values, uncaught) = ours_stdout
+        .split_once("\nFatal error: ")
+        .unwrap_or((ours_stdout.as_str(), ""));
+    assert_eq!(values, text(&php.stdout), "stdout differs from php");
+    assert!(values.starts_with("array(2) {"));
 
     // The warnings: same text, php's include_path suffix aside, in the same order.
     let theirs = without_include_path(&text(&php.stderr));
@@ -436,7 +442,7 @@ fn closed_world_runtime_include_runs_units_answers_once_and_fails_like_php() {
 
     // `require` of a missing file is fatal in both, with php's message.
     let missing = format!("Failed opening required '{}/nope-1.php'", dir.display());
-    assert!(text(&ours.stderr).contains(&format!("Fatal error: Uncaught Error: {missing}")));
+    assert!(uncaught.starts_with(&format!("Uncaught Error: {missing}")), "{ours_stdout}");
     assert!(theirs.contains(&format!("Fatal error: Uncaught Error: {missing}")));
     assert_eq!(ours.status.code(), php.status.code());
     assert!(!text(&ours.stdout).contains("unreachable"));
@@ -2650,4 +2656,17 @@ fn closed_world_buffer_builtin_name_in_a_string_compiles() {
     let (stdout, _, dir) = closed_run("cw_buffer_name", source);
     assert_eq!(stdout, "buffer_free,buffer_len:3\n");
     assert_eq!(stdout, php_stdout(&dir));
+}
+
+/// A closed-world `require` of a path nothing compiled answers raises php's catchable `Error`
+/// after the stream warning: `catch` and `finally` run and the program goes on. The include
+/// routine used to write a fatal line and `exit(255)`, so no handler ever saw it. php's
+/// installation-dependent ` (include_path='…')` suffix is the one normalization.
+#[test]
+fn closed_world_failed_require_throws_a_catchable_error() {
+    let source = "<?php\n$p = __DIR__ . '/missing-' . $argc . '.php';\ntry { require $p; }\ncatch (\\Error $e) { echo 'fallback: ', get_class($e), ': ', str_replace(__DIR__, 'DIR', $e->getMessage()), \"\\n\"; }\nfinally { echo \"finally\\n\"; }\necho \"after\\n\";\n";
+    let (stdout, heap, dir) = closed_run("cw_require_catch", source);
+    assert_eq!(stdout, without_include_path(&php_stdout(&dir)));
+    assert_eq!(stdout, "fallback: Error: Failed opening required 'DIR/missing-1.php'\nfinally\nafter\n");
+    assert!(heap.contains("leak summary: clean"), "{heap}");
 }

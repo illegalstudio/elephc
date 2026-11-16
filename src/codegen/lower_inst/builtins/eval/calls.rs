@@ -209,8 +209,48 @@ fn lower_closed_world_include(
             ctx.emitter.instruction(&format!("mov ecx, {flags}"));              // once / require / discarded
         }
     }
+    let (path_ptr, path_len) = abi::string_result_regs(ctx.emitter);
+    if required {
+        // Keep the path bytes across the routine: a failed require names it in its `Error`.
+        abi::emit_push_reg_pair(ctx.emitter, path_ptr, path_len);
+    }
     abi::emit_call_label(ctx.emitter, CLOSED_INCLUDE);
+    if required {
+        emit_closed_world_require_failure(ctx);
+    }
     store_if_result(ctx, inst)
+}
+
+/// Throws php's catchable `Error` when `__rt_closed_include` answered a `require` with no value,
+/// then drops the path pair the include site parked on the temporary stack.
+///
+/// The routine already printed the stream warning; php then raises
+/// `Failed opening required '<path>' (include_path='...')` as an `Error`, so a `catch`, a
+/// `finally` and the uncaught report all see it. elephc has no `include_path` (relative paths
+/// resolve against the working directory), so the message stops after the path, as the
+/// closed-world tests' include_path normalization expects.
+fn emit_closed_world_require_failure(ctx: &mut FunctionContext<'_>) {
+    let opened = ctx.next_label("closed_include_opened");
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction(&format!("cbnz x0, {opened}"));             // a boxed value means the require succeeded
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("test rax, rax");                           // did the require answer a value?
+            ctx.emitter.instruction(&format!("jnz {opened}"));                  // a boxed value means the require succeeded
+        }
+    }
+    let (path_ptr, path_len) = abi::string_result_regs(ctx.emitter);
+    abi::emit_pop_reg_pair(ctx.emitter, path_ptr, path_len);
+    crate::codegen::lower_inst::runtime_class_messages::emit_concat_static_prefix(
+        ctx,
+        "Failed opening required '",
+    );
+    crate::codegen::lower_inst::runtime_class_messages::emit_concat_static_suffix(ctx, "'");
+    abi::emit_call_label(ctx.emitter, "__rt_str_persist");
+    crate::codegen::lower_inst::exceptions::emit_error_from_string_result(ctx);
+    ctx.emitter.label(&opened);
+    abi::emit_release_temporary_stack(ctx.emitter, 16);
 }
 
 /// Runs a compiled include unit when the path names one: absolute, canonicalized through the
