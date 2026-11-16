@@ -10,6 +10,81 @@
 use crate::{source::SourceMode, codegen_support::platform::Target};
 use elephc_semantics::{SemanticProfile, StrictFeature};
 
+/// Automatic builtin comparisons cannot disappear before checking, including named and spread modes.
+#[test]
+fn strict_comparison_builtin_source_modes_and_defaults() {
+    let profile = SemanticProfile::PERMISSIVE.with(StrictFeature::Comparisons, true);
+    for source in [
+        "<?php if (false) { in_array(1, [1]); }",
+        "<?php in_array(1, [1], false);", "<?php in_array(1, [1], 0);",
+        "<?php in_array(needle: 1, haystack: [1]);",
+        "<?php in_array(...['strict' => false, 'haystack' => [1], 'needle' => 1]);",
+        "<?php array_search(...[1, [1], false]);", "<?php array_search(1, [1]);",
+        "<?php $values = [1]; sort($values);", "<?php array_unique([1]);",
+        "<?php max(1, 2);", "<?php min(1, 2);", "<?php array_diff([1], ['1']);",
+    ] {
+        let program = crate::parser::parse(&crate::lexer::tokenize(source).unwrap()).unwrap();
+        let error = crate::semantics::validate_source(&program, profile).unwrap_err();
+        assert!(error.message.contains("strict-comparisons"), "{source}: {error:?}");
+        assert!(crate::semantics::validate_source(&program, SemanticProfile::PERMISSIVE).is_ok());
+    }
+    for source in [
+        "<?php in_array(1, [1], true);",
+        "<?php in_array(strict: true, needle: 1, haystack: [1]);",
+        "<?php array_search(...['strict' => true, 'haystack' => [1], 'needle' => 1]);",
+        "<?php function search(bool $mode) { return in_array(1, [1], $mode); }",
+        "<?php function search(array $args) { return in_array(...$args); }",
+        "<?php array_keys([1]);",
+    ] {
+        let program = crate::parser::parse(&crate::lexer::tokenize(source).unwrap()).unwrap();
+        crate::semantics::validate_source(&program, profile).unwrap_or_else(|error| panic!("{source}: {error:?}"));
+    }
+}
+
+/// A prepared builtin call keeps its operation policy even when its physical consumer is internal.
+#[test]
+fn strict_comparison_builtin_prepared_source_modes() {
+    let profile = SemanticProfile::PERMISSIVE.with(StrictFeature::Comparisons, true);
+    for (physical, producer, rejected) in [
+        (SourceMode::Internal, SourceMode::Php, true),
+        (SourceMode::Php, SourceMode::Internal, false),
+    ] {
+        let mut program = crate::parser::parse(&crate::lexer::tokenize("<?php echo in_array(1, [1]);").unwrap()).unwrap();
+        program[0].source_mode = physical;
+        let crate::parser::ast::StmtKind::Echo(value) = &mut program[0].kind else { panic!("builtin fixture"); };
+        value.producer_binding = Some(crate::parser::ast::ProducerBinding::Identity);
+        value.source_profile.mode = producer;
+        assert_eq!(crate::semantics::validate_source(&program, profile).is_err(), rejected,
+            "physical={physical:?} producer={producer:?}");
+    }
+}
+
+/// Evaluated builtin mode guards use ordinary EIR on all targets and retain trusted controls.
+#[test]
+fn strict_comparison_builtin_all_target_guards() {
+    let profile = SemanticProfile::PERMISSIVE.with(StrictFeature::Comparisons, true);
+    let source = "<?php function choose(mixed $needle, array $items, bool $mode): bool { return in_array($needle, $items, $mode); }";
+    for mode in [SourceMode::Php, SourceMode::Internal] {
+        let program = crate::parser::parse_with_mode(&crate::lexer::tokenize(source).unwrap(), mode).unwrap();
+        for name in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+            let target = Target::parse(name).unwrap();
+            let checked = crate::types::checker::check_staged_semantics(&program, target, profile).unwrap();
+            let module = crate::ir_lower::lower_program(&program, &checked, target, false).unwrap();
+            for optimize in [false, true] {
+                let mut module = module.clone();
+                if optimize { crate::ir_passes::optimize_module(&mut module); }
+                let function = module.functions.iter().find(|function| function.name == "choose").unwrap();
+                let mode_guard = module.data.strings.iter().any(|message| message.contains("--strict-comparisons: in_array()"))
+                    && function.instructions.iter().any(|instruction| instruction.op == crate::ir::Op::ThrowTypeError);
+                assert_eq!(mode_guard,
+                    mode != SourceMode::Internal, "{name} {mode:?} opt={optimize}");
+                crate::ir::validate_module(&module).unwrap();
+                crate::codegen::generate_user_asm_from_ir(&module, false, false).unwrap();
+            }
+        }
+    }
+}
+
 /// Prepared producer copies retain the operation policy of their source across physical scopes.
 #[test]
 fn strict_comparison_prepared_producer_source_policy() {

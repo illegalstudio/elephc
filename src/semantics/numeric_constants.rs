@@ -139,12 +139,12 @@ struct Evidence {
 
 /// Checks all syntactic branches without sharing address-based memo entries between source trees.
 pub(super) fn validate(program: &Program, profile: SemanticProfile) -> Result<(), CompileError> {
-    if ![StrictFeature::Overflow, StrictFeature::Arithmetic, StrictFeature::Coercions, StrictFeature::Casts].into_iter()
+    if ![StrictFeature::Overflow, StrictFeature::Arithmetic, StrictFeature::Coercions, StrictFeature::Casts, StrictFeature::Comparisons].into_iter()
         .any(|feature| profile.contains(feature)) { return Ok(()); }
     let mut definitions = Definitions::default();
     definitions.collect(program);
     walk_program(program, &mut FunctionDeclarations(&mut definitions.functions));
-    if profile.contains(StrictFeature::Coercions) && !definitions.unresolved_namespaces {
+    if (profile.contains(StrictFeature::Coercions) || profile.contains(StrictFeature::Comparisons)) && !definitions.unresolved_namespaces {
         definitions.calls = source_calls::Signatures::collect(program);
     }
     let mut visitor = NumericValidator { definitions, evidence: Evidence { profile, ..Default::default() }, scopes: Vec::new(), source_modes: Default::default(), error: None };

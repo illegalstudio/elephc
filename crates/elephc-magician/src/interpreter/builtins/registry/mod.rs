@@ -29,6 +29,7 @@ mod names;
 mod owned_arguments;
 mod signature;
 mod value_contracts;
+mod comparison_contracts;
 
 pub(in crate::interpreter) use arity::*;
 pub(in crate::interpreter) use binding::*;

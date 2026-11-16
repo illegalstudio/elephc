@@ -118,6 +118,25 @@ pub(crate) enum CallArgPlanError {
 }
 
 impl CallArgPlan {
+    /// Projects a fixed source/default expression only when no dynamic unpack can replace it.
+    pub(crate) fn known_regular_argument<'a>(&'a self, signature: &'a crate::types::FunctionSig,
+        parameter_index: usize) -> Option<&'a Expr> {
+        if parameter_index >= self.regular_param_count { return None; }
+        if let Some(arguments) = &self.passthrough_args {
+            if arguments.iter().take(parameter_index + 1).any(|arg| matches!(arg.kind, ExprKind::Spread(_))) {
+                return None;
+            }
+            return arguments.get(parameter_index)
+                .or_else(|| signature.defaults.get(parameter_index)?.as_ref());
+        }
+        match self.regular_args.get(parameter_index) {
+            Some(PlannedRegularArg::Source { expr, .. } | PlannedRegularArg::Default(expr)) => Some(expr),
+            Some(PlannedRegularArg::SpreadElement { .. }) => None,
+            None if self.prefix_has_dynamic_named_spread => None,
+            None => signature.defaults.get(parameter_index)?.as_ref(),
+        }
+    }
+
     /// Retains unpack provenance when literal expansion makes a value look like caller storage.
     pub(crate) fn regular_argument_is_unpacked(&self, parameter_index: usize) -> bool {
         let from_unpack = |source_index: usize| {

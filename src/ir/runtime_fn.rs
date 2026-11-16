@@ -2665,6 +2665,11 @@ impl RuntimeFnId {
         if matches!(self, RuntimeFnId::MbDetectOrderSingle) {
             return BuiltinResultOwnership::Fresh;
         }
+        // Search returns a fresh boxed key or false, never the haystack allocation.
+        // Treating that cell as a possible array alias strands temporary haystacks.
+        if matches!(self, RuntimeFnId::ArraySearch) {
+            return BuiltinResultOwnership::Fresh;
+        }
         // Decoding always constructs an independent Mixed graph. String payloads are
         // persisted from decoder scratch; no result borrows the source argument pin.
         if matches!(self, RuntimeFnId::JsonDecode | RuntimeFnId::JsonEncodeStr) {

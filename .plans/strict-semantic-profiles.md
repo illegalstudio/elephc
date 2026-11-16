@@ -1150,4 +1150,49 @@ paths. Keep this plan, agent documentation and the current journal log synchroni
 
 | 101 | `bed10dc9b4` | fix(strict): preserve comparison sources and switch lifetimes |
 
-| 102 | this commit | fix(strict): retain numeric producer policies and result bindings |
+| 102 | `c7b1e9b122` | fix(strict): retain numeric producer policies and result bindings |
+| 103 | this commit | feat(strict): guard builtin comparison modes and callable boundaries |
+
+
+### Builtin comparison policy integration
+
+The canonical builtin contract now carries comparison metadata, keyed by stable
+identity and parameter name. Searches
+require explicit identity mode. Automatic comparison APIs direct the caller to
+a source-selected comparator; enumeration-only `array_keys()` remains valid.
+Existing defaults stay unchanged. Compiler source proof consumes the common call
+planner; a shared projection handles fixed source/default operands without
+assuming values supplied by dynamic unpacking. Native mode checks run after all
+source arguments, retain operand owners and emit ordinary EIR. Eval's existing
+named/reference binder and positional value boundary share the same policy.
+Comparison-mode failures are observable to AST DCE and exceptional flow.
+
+Tests cover static omitted/false modes before folding, named/static spread
+arguments, prepared producer modes, all-five-target EIR, native callable/default
+mode failures, source effects, heap accounting and eval walker/VM consumers.
+The label example now demonstrates an explicit identity membership check.
+Focused source, prepared producer, neutral contract and all-target EIR checks
+passed. Native descriptor fallback now uses prepared EIR bodies, including a
+rejection-only body for automatic comparison APIs. Reused callables after a caught
+failure retain explicit/default mode guards and normal return/argument ownership.
+Direct eval sort calls also consume the shared evaluated comparison contract,
+independently of Coercions. VM tests use compiled callers with the supported
+interpreter fallback rather than claiming unsupported direct builtin bytecode.
+
+Actual owner regressions exposed and fixed two separate search issues. Eval now
+retires each key, fetched entry and comparison result through the existing owner
+finisher. Native array_search returns a fresh boxed key or false, never its
+haystack allocation; its previous alias metadata leaked a temporary string array
+and both entries (152 bytes), also in permissive mode. New native isolation
+controls and the complete builtin failure bundle pass with clean heaps; the
+bundle covers every AST/EIR optimizer combination. Four focused eval tests and
+all-five-target descriptor checks pass. Compiler build, curl exporter, complete
+generated builtin documentation workflow (828 AOT, 679 eval), assembly-comment
+alignment and diff hygiene pass. The local Rust1.99 toolchain reports only the
+previously documented inherited native_catalog deprecation and test import warnings.
+
+No policy has been newly admitted or claimed complete. Production implementation
+and verification use the original checkout and its own Cargo target directory.
+Strings source baselines have established 14 rejected cases are still accepted,
+with explicit formatting positive controls passing. New, unregistered Strings
+helpers and fixtures are prepared for the next step and excluded from step103.

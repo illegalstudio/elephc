@@ -10,6 +10,68 @@
 use crate::support::*;
 use elephc_semantics::{SemanticProfile, StrictFeature};
 
+/// Isolates accepted and rejected search argument owners, including a permissive baseline.
+#[test]
+fn test_strict_comparison_native_search_owner_paths() {
+    let mut failures = Vec::new();
+    for selected in [false, true] {
+        for (label, source) in [
+            ("search strings", "<?php echo array_search('1', ['0', '1'], true); gc_collect_cycles();"),
+            ("membership strings", "<?php echo in_array('1', ['0', '1'], true); gc_collect_cycles();"),
+            ("failed direct", "<?php function ownerMode(): bool { return false; } try { in_array(1, [1, '1'], ownerMode()); } catch (TypeError $error) { unset($error); } gc_collect_cycles();"),
+            ("failed descriptor", "<?php function ownerMode(): bool { return false; } $search = in_array(...); try { $search(1, [1, '1'], ownerMode()); } catch (TypeError $error) { unset($error); } try { $search(1, [1, '1']); } catch (TypeError $error) { unset($error); } gc_collect_cycles();"),
+        ] {
+            let output = StrictFixture::new(source).capture_staged_optimizers(
+                SemanticProfile::PERMISSIVE.with(StrictFeature::Comparisons, selected), false, false);
+            if !output.success || !output.stderr.contains("HEAP DEBUG: leak summary: clean") {
+                failures.push(format!("{label}, strict={selected}: {} {}", output.stdout, output.stderr));
+            }
+        }
+    }
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
+}
+
+/// Builtin mode failures retain argument effects, first-class calls and temporary ownership.
+#[test]
+fn test_strict_comparison_native_builtin_modes_and_effects_bundle() {
+    let source = r#"<?php
+function strictComparisonFalse(int $count): bool { return $count < 0; }
+function strictComparisonNeedle(): int { echo 'A'; return 1; }
+function strictComparisonHaystack(): array { echo 'B'; return [1, '1']; }
+function strictComparisonMode(): bool { echo 'C'; return false; }
+class StrictComparisonOwnedNeedle { public function __destruct() { echo 'D'; } }
+try { in_array(strictComparisonNeedle(), strictComparisonHaystack(), strictComparisonMode()); echo 'X'; }
+catch (TypeError $error) { echo 'T'; unset($error); }
+try { in_array(strict: strictComparisonMode(), needle: strictComparisonNeedle(), haystack: strictComparisonHaystack()); echo 'X'; }
+catch (TypeError $error) { echo 'T'; unset($error); }
+try { in_array(new StrictComparisonOwnedNeedle(), [1], strictComparisonFalse($argc)); echo 'X'; }
+catch (TypeError $error) { echo 'T'; unset($error); }
+$search = in_array(...);
+try { $search(1, [1], strictComparisonFalse($argc)); echo 'X'; }
+catch (TypeError $error) { echo 'T'; unset($error); }
+try { $search(1, [1]); echo 'X'; }
+catch (TypeError $error) { echo 'T'; unset($error); }
+try { $search(1, [1], strictComparisonFalse($argc)); echo 'X'; }
+catch (TypeError $error) { echo 'T'; unset($error); }
+$freshSearch = in_array(...);
+try { $freshSearch(1, [1]); echo 'X'; }
+catch (TypeError $error) { echo 'T'; unset($error); }
+$automatic = array_unique(...);
+try { $automatic([1, 1]); echo 'X'; }
+catch (TypeError $error) { echo 'U'; unset($error); }
+echo '|', in_array(1, ['1'], true) ? 'X' : 'N', $search(1, [1], true) ? 'Y' : 'X';
+echo array_search('1', ['0', '1'], true);
+gc_collect_cycles();
+"#;
+    for (ast, ir) in [(false, false), (true, false), (false, true), (true, true)] {
+        let output = StrictFixture::new(source).capture_staged_optimizers(
+            SemanticProfile::PERMISSIVE.with(StrictFeature::Comparisons, true), ast, ir);
+        assert!(output.success, "ast={ast} ir={ir}: {} {} {}", output.status, output.stdout, output.stderr);
+        assert_eq!(output.stdout, "ABCTCABTDTTTTTU|NY1", "ast={ast} ir={ir}: {}", output.stderr);
+        assert!(output.stderr.contains("HEAP DEBUG: leak summary: clean"), "ast={ast} ir={ir}: {}", output.stderr);
+    }
+}
+
 /// Temporary switch subjects and labels retire before case bodies without losing live-variable effects.
 #[test]
 fn test_strict_comparison_native_switch_temporary_subjects_and_labels() {
@@ -46,7 +108,7 @@ fn test_strict_comparison_native_label_example() {
         let output = StrictFixture::new(&source).capture_staged_lowering(
             SemanticProfile::PERMISSIVE.with(StrictFeature::Comparisons, true), optimize);
         assert!(output.success, "opt={optimize}: {} {} {}", output.status, output.stdout, output.stderr);
-        assert_eq!(output.stdout, "Label with a preserved leading zero: 02\nLabel: 10\nLabel: 9\n");
+        assert_eq!(output.stdout, "Label with a preserved leading zero: 02\nLabel: 10\nLabel: 9\nExact label found: 02\n");
         assert!(output.stderr.contains("HEAP DEBUG: leak summary: clean"), "opt={optimize}: {}", output.stderr);
     }
 }

@@ -29,6 +29,18 @@ pub(crate) fn lower_prepared_builtin_callable(
     internal_signature.declared_params.push(true);
     internal_signature.param_type_exprs.push(Some(TypeExpr::Int));
     internal_signature.param_attributes.push(Vec::new());
+    if module.semantic_profile.contains(elephc_semantics::StrictFeature::Comparisons) {
+        if let Some(policy @ elephc_builtin_contract::ComparisonPolicy::ComparatorRequired { .. }) =
+            crate::builtins::registry::lookup(name).and_then(|definition| definition.spec.comparison_policy())
+        {
+            // Rejection has no builtin call to lower, including unsupported variadic storage.
+            let failure = Stmt::new(StmtKind::Throw(Expr::new(ExprKind::NewObject {
+                class_name: Name::unqualified("TypeError"),
+                args: vec![Expr::new(ExprKind::StringLiteral(policy.message(name)), span)],
+            }, span)), span);
+            return lower_builtin_callable_body(module, label, &internal_signature, php_only, vec![failure]);
+        }
+    }
     let mut strict_return = Stmt::new(StmtKind::Return(Some(call.clone())), span);
     strict_return.strict_types = true;
     let mut weak_return = Stmt::new(StmtKind::Return(Some(call)), span);

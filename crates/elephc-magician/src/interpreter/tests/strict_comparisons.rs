@@ -11,6 +11,78 @@ use super::super::*;
 use super::{support::*, strict_semantics::staged_numeric_execution};
 use elephc_semantics::{SemanticProfile, StrictFeature};
 
+/// Search leases balance in permissive mode, including misses and an escaping owned string key.
+#[test]
+fn strict_comparison_eval_search_permissive_ownership_controls() {
+    for (source, expected) in [
+        ("return in_array('1', $haystack);", FakeValue::Bool(true)),
+        ("return array_search('1', $haystack, false);", FakeValue::Int(0)),
+        ("return array_search('1', $haystack, true);", FakeValue::Int(1)),
+        ("return array_search('absent', $haystack, true);", FakeValue::Bool(false)),
+        ("return array_search('1', $map, true);", FakeValue::String("name".into())),
+    ] {
+        let mut context = ElephcEvalContext::new();
+        let mut scope = ElephcEvalScope::new(); let mut values = FakeOps::default();
+        staged_numeric_execution("$haystack = [1, '1']; $map = ['name' => '1'];", false,
+            &mut context, &mut scope, &mut values).unwrap();
+        let EvalControl::Return(value) = staged_numeric_execution(source, false,
+            &mut context, &mut scope, &mut values).unwrap_or_else(|status| panic!("{source}: {status:?}"))
+            else { panic!("missing return: {source}"); };
+        assert_eq!(values.get(value), expected, "{source}"); values.release(value).unwrap();
+        for value in scope.drain_owned_cells() { values.release(value).unwrap(); }
+        for value in context.take_persistent_cell_owners() { values.release(value).unwrap(); }
+        for (id, owners) in &values.cell_owners { assert_eq!(*owners, 0, "{source}: {:?}", values.values[id]); }
+    }
+}
+
+/// Source/value builtin dispatch shares explicit modes without enabling unrelated coercion rules.
+#[test]
+fn strict_comparison_eval_builtin_modes_and_owner_contracts() {
+    for (source, expected, vm) in [
+        ("return in_array(1, $haystack, true);", Some(FakeValue::Bool(true)), false),
+        ("return in_array(1, $haystack, true);", Some(FakeValue::Bool(true)), true),
+        ("return array_search('1', $haystack, true);", Some(FakeValue::Int(1)), false),
+        ("return in_array(strict: true, needle: 1, haystack: $haystack);", Some(FakeValue::Bool(true)), false),
+        ("return in_array(...[1, $haystack, true]);", Some(FakeValue::Bool(true)), false),
+        ("return call_user_func('in_array', 1, $haystack, true);", Some(FakeValue::Bool(true)), false),
+        ("return in_array(1, $haystack, 1);", Some(FakeValue::Bool(true)), false),
+        ("return in_array(1, $haystack);", None, false),
+        ("return in_array(1, $haystack, false);", None, true),
+        ("return in_array(strict: false, needle: 1, haystack: $haystack);", None, false),
+        ("return array_search(...[1, $haystack, false]);", None, false),
+        ("return call_user_func('in_array', 1, $haystack);", None, false),
+        ("sort($haystack);", None, false),
+        ("return array_unique($haystack);", None, false),
+        ("return max(1, 2);", None, false),
+    ] {
+        let mut context = ElephcEvalContext::new();
+        context.install_semantic_profile(SemanticProfile::PERMISSIVE.with(StrictFeature::Comparisons, true)).unwrap();
+        let mut scope = ElephcEvalScope::new(); let mut values = FakeOps::default();
+        staged_numeric_execution("$haystack = [1, '1'];", false, &mut context, &mut scope, &mut values).unwrap();
+        // Builtins are interpreter fallback calls, reached from a compiled user-function caller.
+        let caller = if vm {
+            let declaration = format!("function strictComparisonVmCall($haystack) {{ {source} }}");
+            staged_numeric_execution(&declaration, false, &mut context, &mut scope, &mut values).unwrap();
+            "if (false) { function strictComparisonVmCall($haystack) {} } return strictComparisonVmCall($haystack);"
+        } else { source };
+        let result = staged_numeric_execution(caller, vm, &mut context, &mut scope, &mut values);
+        if let Some(expected) = expected {
+            let EvalControl::Return(value) = result.unwrap_or_else(|status| panic!("{source}, vm={vm}: {status:?}"))
+                else { panic!("missing return: {source}"); };
+            assert_eq!(values.get(value), expected, "{source}, vm={vm}");
+            values.release(value).unwrap();
+        } else {
+            assert!(matches!(result, Err(EvalStatus::UncaughtThrowable)), "{source}, vm={vm}: {:?}", result.as_ref().err());
+            let error = context.take_pending_throw().expect("comparison mode TypeError");
+            assert!(values.object_is_a(error, "TypeError", false).unwrap());
+            values.release(error).unwrap();
+        }
+        for value in scope.drain_owned_cells() { values.release(value).unwrap(); }
+        for value in context.take_persistent_cell_owners() { values.release(value).unwrap(); }
+        for (id, owners) in &values.cell_owners { assert_eq!(*owners, 0, "{source}, vm={vm}: {:?}", values.values[id]); }
+    }
+}
+
 /// Both consumers preserve bytewise strings, exact scalar kinds and TypeError ownership.
 #[test]
 fn strict_comparison_eval_scalar_values_failures_and_owners() {

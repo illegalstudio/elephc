@@ -314,6 +314,11 @@ impl BuiltinContract {
     pub fn callback_parameter_names(&self) -> &'static [&'static str] {
         crate::callback_parameters::names(self.id)
     }
+
+    /// Returns the shared policy for automatic comparison or an explicit identity mode.
+    pub fn comparison_policy(&self) -> Option<crate::ComparisonPolicy> {
+        crate::comparison_policy::policy(self.id)
+    }
 }
 
 #[cfg(test)]

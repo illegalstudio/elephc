@@ -18,8 +18,13 @@ pub(super) fn validate_builtin_value_contracts(
     name: &str, arguments: &[RuntimeCellHandle],
     context: &mut ElephcEvalContext, values: &mut impl RuntimeValueOps,
 ) -> Result<(), EvalStatus> {
-    if !context.semantic_profile().contains(elephc_semantics::StrictFeature::Coercions) { return Ok(()); }
+    let coercions = context.semantic_profile().contains(elephc_semantics::StrictFeature::Coercions);
+    if !coercions && !context.semantic_profile().contains(elephc_semantics::StrictFeature::Comparisons) { return Ok(()); }
     let Some(spec) = eval_declared_builtin_spec(name) else { return Ok(()); };
+    if arguments.len() >= spec.required_param_count() {
+        super::comparison_contracts::validate(spec, |index| arguments.get(index).copied(), context, values)?;
+    }
+    if !coercions { return Ok(()); }
     for (index, (parameter, value)) in spec.params.iter().zip(arguments).enumerate() {
         validate_parameter(name, index, parameter, *value, context, values)?;
     }
@@ -31,11 +36,16 @@ pub(in crate::interpreter) fn validate_builtin_call_arguments(
     name: &str, arguments: &[EvaluatedCallArg],
     context: &mut ElephcEvalContext, values: &mut impl RuntimeValueOps,
 ) -> Result<(), EvalStatus> {
-    if !context.semantic_profile().contains(elephc_semantics::StrictFeature::Coercions) { return Ok(()); }
+    let coercions = context.semantic_profile().contains(elephc_semantics::StrictFeature::Coercions);
+    if !coercions && !context.semantic_profile().contains(elephc_semantics::StrictFeature::Comparisons) { return Ok(()); }
     let Some(spec) = eval_declared_builtin_spec(name) else { return Ok(()); };
     let (bound, _) = bind_evaluated_ref_builtin_args(&spec.param_names, arguments, spec.variadic.is_some())?;
     // The existing callee retains its missing-required-argument diagnostic priority.
     if bound.iter().take(spec.required_param_count()).any(Option::is_none) { return Ok(()); }
+    super::comparison_contracts::validate(spec,
+        |index| bound.get(index).and_then(|argument| argument.as_ref().map(|argument| argument.value)),
+        context, values)?;
+    if !coercions { return Ok(()); }
     for (index, (parameter, argument)) in spec.params.iter().zip(&bound).enumerate() {
         if let Some(argument) = argument {
             validate_parameter(name, index, parameter, argument.value, context, values)?;

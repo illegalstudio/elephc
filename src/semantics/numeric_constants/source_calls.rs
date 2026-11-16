@@ -130,7 +130,8 @@ fn key(name: &str) -> String { crate::names::php_symbol_key(name.trim_start_matc
 /// Checks known scalar operands without executing defaults, dynamic dispatch or uncertain unpacking.
 pub(super) fn check(expr: &Expr, class: Option<&str>, definitions: &Definitions, evidence: &Evidence)
     -> Result<(), CompileError> {
-    if !evidence.profile.contains(StrictFeature::Coercions) || definitions.unresolved_namespaces { return Ok(()); }
+    if !(evidence.profile.contains(StrictFeature::Coercions) || evidence.profile.contains(StrictFeature::Comparisons))
+        || definitions.unresolved_namespaces { return Ok(()); }
     let signatures = &definitions.calls;
     let generated;
     let mut builtin = None;
@@ -171,6 +172,24 @@ pub(super) fn check(expr: &Expr, class: Option<&str>, definitions: &Definitions,
     // Planner expressions have their own lifetime, so never reuse address memo entries from source.
     let mut local = Evidence { profile: evidence.profile, active: evidence.active.clone(),
         strict_types: evidence.strict_types, ..Default::default() };
+    if evidence.profile.contains(StrictFeature::Comparisons) {
+        if let Some(builtin) = builtin {
+            if let Some(policy) = builtin.spec.comparison_policy() {
+                let rejected = match policy {
+                    elephc_builtin_contract::ComparisonPolicy::ComparatorRequired { .. } => true,
+                    elephc_builtin_contract::ComparisonPolicy::Identity { parameter } => {
+                        if let Some(argument) = sig.params.iter().position(|(name, _)| name == parameter)
+                            .and_then(|index| plan.known_regular_argument(sig, index)) {
+                            evaluate(argument, true, class, definitions, &mut local)?
+                                .and_then(selection::truthy) == Some(false)
+                        } else { false }
+                    }
+                };
+                if rejected { return Err(CompileError::new(expr.span, &policy.message(builtin.name))); }
+            }
+        }
+    }
+    if !evidence.profile.contains(StrictFeature::Coercions) { return Ok(()); }
     let regular = crate::types::call_args::regular_param_count(sig);
     if plan.first_named_pos.is_none() {
         for (index, value) in plan.source_args.iter().enumerate() {

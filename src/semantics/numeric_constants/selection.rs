@@ -11,7 +11,7 @@
 use super::*;
 
 /// Proves only truth values represented exactly by the original scalar evidence.
-fn truthy(value: Number) -> Option<bool> {
+pub(super) fn truthy(value: Number) -> Option<bool> {
     match value {
         Number::Int(value) => Some(value != 0), Number::Float(value) => Some(value != 0.0),
         Number::Bool(value) => Some(value), Number::Null => Some(false),

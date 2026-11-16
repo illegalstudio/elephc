@@ -171,6 +171,10 @@ pub(super) fn lower_builtin_call_args(
     let operands = if let Some(signature) = checked_signature.as_ref() {
         coerce_operands_to_params(ctx, signature, operands)
     } else { operands };
+    if let Some(definition) = def {
+        super::builtin_comparisons::validate(ctx, definition, sig, &operands,
+            args.first().map_or_else(Span::dummy, |arg| arg.span));
+    }
     let lowering = def.map(|def| def.spec.semantics.argument_lowering);
     let operands = match lowering {
         Some(crate::builtins::semantics::BuiltinArgumentLowering::BareArrayValues { arg, sole }) => {

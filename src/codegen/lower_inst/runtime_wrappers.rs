@@ -41,7 +41,7 @@ pub(super) fn emit_runtime_builtin_invoker_inline(
         let owns_string_return = sig.return_type.codegen_repr() == PhpType::Str
             && super::builtin_returns_owned_string(name);
         return emit_runtime_callable_invoker_with_string_owner(ctx, sig, &[], owns_string_return,
-            builtin_uses_prepared_callable_body(name));
+            builtin_uses_prepared_callable_body(name, ctx.module.semantic_profile));
     };
     if operation == elephc_builtin_contract::RuntimeBuiltinId::MbConvertVariables {
         let label = ctx.next_global_label("callable_invoker");
@@ -253,10 +253,12 @@ fn emit_runtime_call_wrapper_inline(
 }
 
 /// Keeps wrapper construction and descriptor return ownership on the same full PHP-body contract.
-fn builtin_uses_prepared_callable_body(name: &str) -> bool {
+fn builtin_uses_prepared_callable_body(name: &str, profile: elephc_semantics::SemanticProfile) -> bool {
     crate::builtins::registry::lookup(name).is_some_and(|def| {
         use crate::builtins::semantics::*;
         matches!(def.spec.semantics.callable, BuiltinCallablePolicy::Prepared(_))
+            || profile.contains(elephc_semantics::StrictFeature::Comparisons)
+                && def.spec.comparison_policy().is_some()
             || matches!(def.spec.semantics.argument_lowering, BuiltinArgumentLowering::WeakStringUnion { .. })
             || def.spec.semantics.runtime_functions == BuiltinRuntimeFunctions::None
                 && matches!(def.spec.semantics.lowering, BuiltinLowering::Eir(_))
@@ -274,7 +276,7 @@ fn build_runtime_call_wrapper_function(
     kind: RuntimeCallWrapperKind,
 ) -> Result<Function> {
     if let RuntimeCallWrapperKind::Builtin { php_only } = kind {
-        if builtin_uses_prepared_callable_body(name) {
+        if builtin_uses_prepared_callable_body(name, module.semantic_profile) {
             let function = crate::ir_lower::lower_prepared_builtin_callable(
                 module, label, name, sig, php_only,
             );
@@ -794,6 +796,29 @@ mod tests {
                 assert_eq!(wrapper.value(allocation.result.unwrap()).unwrap().ownership, Ownership::Owned);
             }
             assert!(wrapper.instructions.iter().any(|inst| inst.op == Op::Release), "{target}");
+        }
+    }
+    /// Strict comparison descriptors share the full body and hidden caller scope on every target.
+    #[test]
+    fn strict_comparison_callable_wrappers_keep_guards_on_all_targets() {
+        for target in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+            for selected in [false, true] {
+                for name in ["in_array", "sort"] {
+                    let mut module = Module::new(crate::codegen::platform::Target::parse(target).unwrap());
+                    module.semantic_profile = elephc_semantics::SemanticProfile::PERMISSIVE
+                        .with(elephc_semantics::StrictFeature::Comparisons, selected);
+                    let sig = crate::builtins::registry::first_class_callable_sig_with_semantics(name,
+                        module.semantic_profile).unwrap();
+                    let sig = runtime_builtin_wrapper_sig(name, &sig);
+                    let wrapper = build_runtime_call_wrapper_function(&mut module, "comparison_wrapper", name,
+                        &sig, RuntimeCallWrapperKind::Builtin { php_only: false }).unwrap();
+                    crate::ir::validate_function(&wrapper).unwrap();
+                    assert_eq!(wrapper.flags.is_builtin_contract_wrapper, selected, "{target} {name}");
+                    assert_eq!(wrapper.params.len(), sig.params.len() + usize::from(selected), "{target} {name}");
+                    assert_eq!(module.data.strings.iter().any(|message|
+                        message.contains("--strict-comparisons:")), selected, "{target} {name}");
+                }
+            }
         }
     }
 }

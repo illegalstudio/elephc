@@ -16,3 +16,7 @@ foreach ($labels as $label) {
             echo 'Label: ', $label, PHP_EOL;
     }
 }
+
+if (in_array('02', $labels, true)) {
+    echo 'Exact label found: 02', PHP_EOL;
+}
