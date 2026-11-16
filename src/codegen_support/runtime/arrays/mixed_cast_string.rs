@@ -195,6 +195,7 @@ fn emit_mixed_cast_string_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("jne __rt_value_cast_string_dispatch");                // dispatch after reaching a concrete payload tag
     emitter.instruction("test rdi, rdi");                                       // is the nested Mixed cell null?
     emitter.instruction("je __rt_mixed_cast_string_false");                    // a null nested cell casts to the empty string
+    emitter.instruction("mov rax, rdi");                                        // __rt_mixed_unbox takes the cell in rax, not the tag
     emitter.instruction("call __rt_mixed_unbox");                               // expose the nested tag and payload in the standard registers
     emitter.instruction("jmp __rt_value_cast_string_unwrap");                  // peel arbitrarily nested Mixed wrappers
     emitter.label("__rt_value_cast_string_dispatch");
