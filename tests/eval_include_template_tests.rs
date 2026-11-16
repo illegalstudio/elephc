@@ -139,6 +139,9 @@ END\n";
 /// A parse error anywhere in an included file stops it before ANY of it runs, as in PHP,
 /// which compiles a whole script first. MEASURED: reference prints only the parse error for
 /// this template; elephc used to print `before`, `ran` and `middle` first.
+///
+/// php -n 8.5.10 prints the error on STDOUT, as elephc's runtime diagnostics now do:
+/// `[late_parse_error:\nParse error: syntax error, unexpected token ";" in DIR/tpl/late_parse_error.php on line 4\n`.
 #[test]
 fn a_late_parse_error_runs_none_of_the_included_file() {
     let templates: &[(&str, &[u8])] = &[(
@@ -148,5 +151,9 @@ fn a_late_parse_error_runs_none_of_the_included_file() {
     let run = run_templates("eval_include_parse_error", templates);
     let stdout = String::from_utf8_lossy(&run.stdout);
     assert!(!run.status.success(), "the include must fail: {stdout}");
-    assert_eq!(stdout, "[late_parse_error:", "nothing of the file may run");
+    assert!(
+        stdout.starts_with("[late_parse_error:\nParse error: syntax error, unexpected token \";\" in /")
+            && stdout.ends_with("/tpl/late_parse_error.php on line 4\n"),
+        "nothing of the file may run, and the parse error reads as php's: {stdout:?}"
+    );
 }
