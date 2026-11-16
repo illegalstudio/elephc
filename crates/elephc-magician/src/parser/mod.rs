@@ -27,7 +27,8 @@ mod tests;
 use crate::errors::{EvalParseDiagnostic, EvalParseError};
 use crate::eval_ir::EvalProgram;
 use crate::lexer::{
-    contains_php_open_tag, find_php_close_tag, normalize_binary_source, tokenize, Token, TokenKind,
+    contains_php_open_tag, find_php_close_tag, normalize_binary_source, tokenize, tokenize_at_line,
+    Token, TokenKind,
 };
 pub(crate) use state::{EVAL_YIELD_FROM_INTRINSIC, EVAL_YIELD_INTRINSIC};
 use state::Parser;
@@ -148,20 +149,18 @@ fn push_php_block_tokens(
 ) -> Result<(), EvalParseDiagnostic> {
     let block = &code[start.min(code.len())..end.min(code.len())];
     let source = normalize_binary_source(block);
-    let block_tokens = tokenize(&source)
+    // Lexed AT the block's file line, not shifted afterwards: the lexer folds `__LINE__` into a
+    // literal while it scans, so a block lexed from line 1 printed its block-relative line
+    // (`tests/eval_include_template_tests.rs`, php 8.5.10 counts the whole file).
+    let block_tokens = tokenize_at_line(&source, source_line(code, start))
         .map_err(|error| EvalParseDiagnostic::at_source_end(error, code, "end of file"))?;
-    let offset = source_line(code, start) - 1;
     // Each block is tokenized on its own and therefore ends with the lexer's end-of-file token.
     // Concatenating those would put an end of file in the middle of the file, where every block
     // loop would stop; only the token stream as a whole has one end.
     tokens.extend(
         block_tokens
             .into_iter()
-            .filter(|token| *token.kind() != TokenKind::Eof)
-            .map(|token| {
-                let line = token.line() + offset;
-                Token::new(token.into_kind(), line)
-            }),
+            .filter(|token| *token.kind() != TokenKind::Eof),
     );
     Ok(())
 }
@@ -177,11 +176,13 @@ fn source_line(code: &[u8], offset: usize) -> i64 {
     .unwrap_or(0)
 }
 
-/// Skips the single newline PHP swallows right after a closing tag.
+/// Skips the single newline PHP swallows right after a closing tag: `\n`, `\r\n` or a lone `\r`,
+/// as the Zend scanner's `NEWLINE` and `script_cache::segments` do.
 fn skip_one_newline(code: &[u8], start: usize) -> usize {
     match code.get(start) {
         Some(b'\n') => start + 1,
         Some(b'\r') if code.get(start + 1) == Some(&b'\n') => start + 2,
+        Some(b'\r') => start + 1,
         _ => start,
     }
 }
