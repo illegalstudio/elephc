@@ -67,6 +67,16 @@ static CLASSLIKE_DOC_COMMENTS: std::sync::Mutex<
     Option<crate::fast_hash::FastMap<(crate::span::Span, String), String>>,
 > = std::sync::Mutex::new(None);
 
+/// Forgets every recorded doc comment; a compile calls it before its first file is parsed.
+///
+/// Source identities restart at every compile, so a span recorded by an earlier compile in the
+/// same process could otherwise be answered for an undocumented declaration at the same place.
+pub(crate) fn reset_classlike_doc_comments() {
+    if let Ok(mut table) = CLASSLIKE_DOC_COMMENTS.lock() {
+        *table = None;
+    }
+}
+
 /// Records the doc comment written before one interface, trait or enum declaration.
 fn record_classlike_doc_comment(span: crate::span::Span, name: &str, doc_comment: String) {
     let short = name.rsplit('\\').next().unwrap_or(name).to_ascii_lowercase();
@@ -514,4 +524,36 @@ fn statement_lhs_contains_double_colon(tokens: &[SpannedToken], start: usize) ->
         }
     }
     false
+}
+
+#[cfg(test)]
+mod classlike_doc_comment_tests {
+    //! Purpose:
+    //! Unit tests for the process-global interface/trait/enum doc comment table.
+
+    use super::*;
+
+    /// A compile starts from an empty table: a doc comment recorded by an earlier compile in the
+    /// same process is not answered for a declaration at the same span.
+    #[test]
+    fn reset_forgets_the_doc_comments_of_an_earlier_compile() {
+        let source = "<?php\n/** documented */\ninterface RecordedByTheResetTest {}\n";
+        let tokens = crate::lexer::tokenize(source).expect("source must lex");
+        let program = crate::parser::parse(&tokens).expect("source must parse");
+        let span = program
+            .iter()
+            .find_map(|stmt| match &stmt.kind {
+                StmtKind::InterfaceDecl { .. } => Some(stmt.span),
+                _ => None,
+            })
+            .expect("the interface must be parsed");
+        assert_eq!(
+            classlike_doc_comment(span, "RecordedByTheResetTest").as_deref(),
+            Some("/** documented */")
+        );
+
+        reset_classlike_doc_comments();
+
+        assert_eq!(classlike_doc_comment(span, "RecordedByTheResetTest"), None);
+    }
 }

@@ -133,6 +133,7 @@ fn compile_config(config: CliConfig, entry: EntryKind<'_>) {
     // One numbering of included/autoloaded files per compile; see `resolver::resolve_*`.
     crate::span::Span::reset_source_ids();
     crate::source::reset_source_memos();
+    crate::parser::reset_classlike_doc_comments();
     // Before any file is parsed: an earlier build's PHPDoc erasures apply from the first round.
     crate::docblock::erasure::set_entry(Path::new(&config.filename));
     let CliConfig {

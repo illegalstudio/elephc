@@ -23,7 +23,7 @@ pub(crate) mod declaration_groups;
 /// Resolves relative `namespace\name` references against the namespace being parsed.
 mod relative_names;
 pub(crate) mod stmt;
-pub(crate) use stmt::classlike_doc_comment;
+pub(crate) use stmt::{classlike_doc_comment, reset_classlike_doc_comments};
 mod terminal_goto;
 pub(crate) mod variable_variables;
 
