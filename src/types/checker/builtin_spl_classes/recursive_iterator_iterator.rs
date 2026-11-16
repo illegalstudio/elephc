@@ -80,12 +80,18 @@ fn spl_recursive_iterator_iterator_methods() -> Vec<ClassMethod> {
         method_with_body(
             "__construct",
             vec![
-                param("iterator", named_type("RecursiveIterator")),
+                param("iterator", named_type("Traversable")),
                 param_default("mode", TypeExpr::Int, int_expr(0)),
                 param_default("flags", TypeExpr::Int, int_expr(0)),
             ],
             Some(TypeExpr::Void),
             recursive_iterator_iterator_construct_body(),
+        ),
+        method_with_body(
+            "__elephcAssumeRecursiveIterator",
+            vec![param("iterator", mixed_type())],
+            Some(named_type("RecursiveIterator")),
+            return_body(var_expr("iterator")),
         ),
         method_with_body("rewind", Vec::new(), Some(TypeExpr::Void), recursive_iterator_iterator_rewind_body()),
         method_with_body("valid", Vec::new(), Some(TypeExpr::Bool), recursive_iterator_iterator_valid_body()),
