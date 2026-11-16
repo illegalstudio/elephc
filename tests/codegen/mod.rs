@@ -138,6 +138,7 @@ mod serialize;
 mod regressions;
 mod objects;
 mod outlined_dynamic_properties;
+mod object_property_review;
 mod outlined_method_calls;
 mod deepclone_shapes;
 mod destructors;
