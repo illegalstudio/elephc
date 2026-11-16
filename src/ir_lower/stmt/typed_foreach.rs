@@ -1224,8 +1224,8 @@ fn foreach_source_by_run_time_class(
 /// `Traversable` nor a `Closure`) becomes its scope-filtered property projection, as php walks
 /// its visible properties; arrays, iterators and every other value pass through unchanged.
 ///
-/// Returns the source and, when the value was an owning temporary, the value itself, which the
-/// caller pins for the loop as for a projected object.
+/// Returns the source; an owning temporary is released here (the walked value holds its own
+/// reference), so no pin outlives the loop through a throw.
 fn foreach_source_of_boxed_value(
     ctx: &mut LoweringContext<'_, '_>,
     source: LoweredValue,
@@ -1309,8 +1309,13 @@ fn foreach_source_of_boxed_value(
     ctx.builder.position_at_end(merge);
     ctx.restore_initialized_slots(merged);
     let walked = crate::ir_lower::expr::take_owned_temp(ctx, &temp, span);
-    let kept = ctx.value_is_owning_temporary(source).then_some(source);
-    (walked, kept)
+    // Both arms hold a reference of their own in the temp, so an owning source is let go of now:
+    // kept as an SSA pin until the loop exit it would leak when the body throws, since only the
+    // call-operand owner records are unwound.
+    if ctx.value_is_owning_temporary(source) {
+        crate::ir_lower::ownership::release_if_owned(ctx, source, Some(span));
+    }
+    (walked, None)
 }
 
 /// Whether a value declared as `declared` (a class or an interface that is not itself traversable)
