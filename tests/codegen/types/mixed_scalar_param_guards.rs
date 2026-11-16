@@ -390,3 +390,37 @@ echo $c, " ", strlen($c), "\n";
     );
     assert_eq!(out, "caught 6\ntop 3\nmethod 6\nclosure 7\n");
 }
+
+/// A runtime spread the callee binds itself left the positional arguments before it unchecked:
+/// `$o->m($null, ...side())` bound `null` as `""`. PHP evaluates the spread (its side effects
+/// first) and then throws the prefix's `TypeError`, for methods, static methods, functions,
+/// constructors and nullsafe calls alike, and a pure callee's call stays observable.
+#[test]
+fn test_runtime_spread_calls_check_the_positional_prefix() {
+    let out = compile_and_run(
+        r#"<?php
+function box(mixed $v): mixed { return $v; }
+function side(): array { echo "side\n"; return [2]; }
+function show(TypeError $e): void { echo str_replace(__FILE__, "F", $e->getMessage()), "\n"; }
+class O {
+    public function m(string $s, int ...$rest): string { return "m:" . $s; }
+    public static function s(string $s, int ...$rest): string { return "s:" . $s; }
+    public function p(string $s, int $n, int ...$r): string { return "p:" . $s; }
+    public function __construct(string $s = "x", int ...$rest) {}
+}
+function f(string $s, int ...$rest): string { return "f:" . $s; }
+function pure(string $s, int ...$r): int { return 1; }
+$o = new O();
+$v = box(null);
+try { echo $o->m($v, ...side()), "\n"; } catch (TypeError $e) { show($e); }
+try { echo O::s($v, ...side()), "\n"; } catch (TypeError $e) { show($e); }
+try { echo f($v, ...side()), "\n"; } catch (TypeError $e) { show($e); }
+try { new O($v, ...side()); echo "new ok\n"; } catch (TypeError $e) { show($e); }
+try { echo $o?->m($v, ...side()), "\n"; } catch (TypeError $e) { show($e); }
+try { echo $o->p($v, 1, ...side()), "\n"; } catch (TypeError $e) { show($e); }
+try { echo $o->m(box("ok"), ...side()), "\n"; } catch (TypeError $e) { show($e); }
+try { pure($v, ...[1, 2]); echo "kept?\n"; } catch (TypeError $e) { show($e); }
+"#,
+    );
+    assert_eq!(out, "side\nO::m(): Argument #1 ($s) must be of type string, null given, called in F on line 15\nside\nO::s(): Argument #1 ($s) must be of type string, null given, called in F on line 16\nside\nf(): Argument #1 ($s) must be of type string, null given, called in F on line 17\nside\nO::__construct(): Argument #1 ($s) must be of type string, null given, called in F on line 18\nside\nO::m(): Argument #1 ($s) must be of type string, null given, called in F on line 19\nside\nO::p(): Argument #1 ($s) must be of type string, null given, called in F on line 20\nside\nm:ok\npure(): Argument #1 ($s) must be of type string, null given, called in F on line 22\n");
+}
