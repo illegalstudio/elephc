@@ -2390,15 +2390,16 @@ fn closed_world_autoloaded_class_extending_php_token_is_compiled() {
 
 /// `extract($this->code['use'], EXTR_OVERWRITE | EXTR_REFS)` (laravel/serializable-closure's
 /// `Native::__unserialize()`) binds each local the function spells to the array's element, so a
-/// write through the local reaches the array: it needed the interpreter's scope. No leak
-/// assertion: two element references into one property array leak (bead elephc-872).
+/// write through the local reaches the array: it needed the interpreter's scope. The bindings are
+/// two element references into one property array, which leaked that array (bead elephc-872).
 #[test]
 fn closed_world_extract_by_reference_binds_the_elements() {
     let dir = make_test_dir("cw_extract_refs");
     fs::write(dir.join("main.php"), "<?php\nclass Native {\n    public $code = [];\n    public function unserialize(array $use): string {\n        $greeting = '';\n        $n = 0;\n        $this->code['use'] = $use;\n        extract($this->code['use'], EXTR_OVERWRITE | EXTR_REFS);\n        $before = $greeting . ' ' . $n;\n        $greeting .= '!';\n        $n = $n * 2;\n        return $before . ' ' . json_encode($this->code['use']);\n    }\n    public function plain(array $vars): string {\n        $x = null;\n        extract($vars, EXTR_SKIP);\n        return $x ?? 'none';\n    }\n}\n$o = new Native();\necho $o->unserialize(['greeting' => 'hi', 'n' => 21, 'other' => 1]), \"\\n\";\n\n").unwrap();
-    compile_ok(&dir, &["--closed-world"]);
+    compile_ok(&dir, &["--closed-world", "--heap-debug"]);
     let output = run(&dir);
     assert_eq!(text(&output.stdout), php_stdout(&dir));
+    assert!(text(&output.stderr).contains("HEAP DEBUG: leak summary: clean"), "{}", text(&output.stderr));
 }
 
 /// Under an 8.5 profile php 8.6's `SortDirection` is a free name, which symfony/polyfill-php86's

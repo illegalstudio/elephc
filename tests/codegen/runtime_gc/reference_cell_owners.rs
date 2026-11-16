@@ -797,3 +797,37 @@ echo $o->s, "|", $e->s, "|", $f->s;
     assert_eq!(out.stdout, "aaaaa|new|aaaaa!", "{}", out.stderr);
     assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
 }
+
+/// A second reference to an element of a property array that already is a reference (bead
+/// elephc-872, the shape closed-world `extract(..., EXTR_REFS)` rewrites into) handed the shared
+/// cell back without consuming the owner its ref-cell receiver gave the helper, so the property
+/// array leaked whole; the nested and the flat binding both have to come out clean.
+#[test]
+fn test_core_second_reference_to_a_property_array_element_releases_the_array() {
+    let source = r#"<?php
+class NestedReferences {
+    public $code = [];
+    public function nested(array $use): string {
+        $this->code['use'] = $use;
+        $a = &$this->code['use']['greeting'];
+        $n = &$this->code['use']['n'];
+        $a .= '!';
+        $n *= 2;
+        return json_encode($this->code['use']);
+    }
+    public function same(): string {
+        $this->code['k'] = 5;
+        $x = &$this->code['k'];
+        $y = &$this->code['k'];
+        $y++;
+        return $x . '|' . $this->code['k'];
+    }
+}
+$o = new NestedReferences();
+echo $o->nested(['greeting' => 'hi', 'n' => 21]), "\n";
+echo $o->same(), "\n";
+"#;
+    let out = compile_and_run_with_heap_debug(source);
+    assert_eq!(out.stdout, "{\"greeting\":\"hi!\",\"n\":42}\n6|6\n", "{}", out.stderr);
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}

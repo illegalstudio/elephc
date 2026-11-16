@@ -14,7 +14,10 @@
 //!   `$a[$k] = v` writes through the marker (`__rt_ref_marker_store`), a copy of the array shares
 //!   it, and destroying the array drops the marker's share.
 //! - An element that already is a reference hands back its existing cell, so every binder of the
-//!   same element shares one reference, as in PHP.
+//!   same element shares one reference, as in PHP. A shared hash is still split there, exactly as
+//!   the setter path splits it: callers hand the helper an owner it may consume, and a ref-cell
+//!   receiver's write-back retires the previous occupant. The element is then looked up again in
+//!   the private copy, where a reference nothing else holds was separated into a plain value.
 //! - The container is split before the slot changes (copy-on-write) and a missing key is created
 //!   as null first, both through the ordinary setters, so the returned container is the one the
 //!   caller must store back.
@@ -489,6 +492,14 @@ fn emit_elem_ref_cell_aarch64(emitter: &mut Emitter) {
     emitter.instruction("bl __rt_incref");                                      // the caller's share
     emitter.instruction("b __rt_elem_ref_cell_return");                         // done
     emitter.label("__rt_elem_ref_cell_hash_existing");
+    emitter.instruction("str x1, [sp, #24]");                                   // keep the marker box across the split
+    emitter.instruction("ldr x0, [sp, #0]");                                    // reload the hash
+    emitter.instruction("bl __rt_hash_ensure_unique");                          // split a shared hash as the setter path does, consuming one owner
+    emitter.instruction("ldr x9, [sp, #0]");                                    // the hash before the split
+    emitter.instruction("str x0, [sp, #0]");                                    // the container to store back
+    emitter.instruction("cmp x0, x9");                                          // did the split hand back a private copy?
+    emitter.instruction("b.ne __rt_elem_ref_cell_dispatch");                    // look the element up again there: an orphaned reference was separated
+    emitter.instruction("ldr x1, [sp, #24]");                                   // reload the marker box
     emitter.instruction("ldr x0, [x1, #8]");                                    // the existing marker's cell
     emitter.instruction("str x0, [sp, #32]");                                   // keep it
     emitter.instruction("bl __rt_incref");                                      // the caller's share
@@ -679,6 +690,14 @@ fn emit_elem_ref_cell_x86_64(emitter: &mut Emitter) {
     emitter.instruction("call __rt_incref");                                    // the caller's share
     emitter.instruction("jmp __rt_elem_ref_cell_return");                       // done
     emitter.label("__rt_elem_ref_cell_hash_existing");
+    emitter.instruction("mov QWORD PTR [rbp - 32], rdi");                       // keep the marker box across the split
+    emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // reload the hash
+    emitter.instruction("call __rt_hash_ensure_unique");                        // split a shared hash as the setter path does, consuming one owner
+    emitter.instruction("mov r10, QWORD PTR [rbp - 8]");                        // the hash before the split
+    emitter.instruction("mov QWORD PTR [rbp - 8], rax");                        // the container to store back
+    emitter.instruction("cmp rax, r10");                                        // did the split hand back a private copy?
+    emitter.instruction("jne __rt_elem_ref_cell_dispatch");                     // look the element up again there: an orphaned reference was separated
+    emitter.instruction("mov rdi, QWORD PTR [rbp - 32]");                       // reload the marker box
     emitter.instruction("mov rax, QWORD PTR [rdi + 8]");                        // the existing marker's cell
     emitter.instruction("mov QWORD PTR [rbp - 40], rax");                       // keep it
     emitter.instruction("call __rt_incref");                                    // the caller's share
