@@ -444,3 +444,22 @@ echo c(strlen(...), $t), " ", c($o->m(...), $t), " ", c(fn() => 1, $t), "\n";
     );
     assert_eq!(out, ["nnnn nnnn nnnn nnnn yyyy yyyy yyyy\n", "nnnn nnnn nnnn nnnn nnnn nnnn nnnn\n"]);
 }
+
+/// A LITERAL `Closure` target matches a Closure (any case, backslash-rooted or not), held as a
+/// callable, typed `Closure`, boxed in a Mixed or in a local. `Closure` has no class-info entry,
+/// so the static walk answered `false` for every closure. `is_subclass_of()` never matches, and a
+/// function name passed as a `callable` is no Closure. Expected output measured with php 8.5.12.
+#[test]
+fn test_is_a_closure_subject_literal_closure_target() {
+    let out = compile_and_run(r#"<?php
+function yn(bool $b): string { return $b ? "y" : "n"; }
+function m(mixed $v): string { return yn(is_a($v, 'Closure')) . yn(is_a($v, '\closure', true)) . yn(is_subclass_of($v, 'Closure')); }
+function c(callable $f): string { return yn(is_a($f, 'Closure')) . yn(is_a($f, 'CLOSURE')) . yn(is_subclass_of($f, 'Closure')) . m($f); }
+function k(Closure $f): string { return yn(is_a($f, 'Closure')) . yn(is_subclass_of($f, '\Closure')); }
+$a = fn() => 1;
+$m = $argc > 9 ? 1 : function () {};
+echo c($a), " ", c(strlen(...)), " ", c('strlen'), " ", k($a), " ", m($m), " ", m(new stdClass()), " ";
+echo yn(is_a($a, 'Closure')), yn(is_a($a, 'Closur')), yn(is_subclass_of($a, 'Closure')), "\n";
+"#);
+    assert_eq!(out, "yynyyn yynyyn nnnnnn yn yyn nnn ynn\n");
+}
