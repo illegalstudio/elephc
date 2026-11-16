@@ -1968,7 +1968,10 @@ fn lower_body_into_function(
         let mut position = 0;
         let mut guards = Vec::new();
         for (index, (name, php_type)) in params.iter().enumerate() {
+            // Hidden ABI parameters (the receiver, a static method's late-static-binding class
+            // id, func_get_args() state) are not PHP arguments and take no position.
             if name == "this"
+                || name == crate::names::CALLED_CLASS_ID_LOCAL
                 || name == crate::func_args::HIDDEN_ARGC_PARAM
                 || name == crate::func_args::HIDDEN_ARGS_PARAM
             {

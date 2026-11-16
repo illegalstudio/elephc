@@ -223,3 +223,66 @@ eval('function evalOnlyCallback(): string { return "E"; } echo invoke(Closure::f
     );
     assert_eq!(out, "E\n");
 }
+
+/// Verifies a call whose arguments are all fresh objects, and an immediately invoked closure,
+/// keep the `TypeError` handler of a declared `callable` check, whose catch used to be pruned.
+///
+/// Exception-flow DCE let a fresh `new` argument waive every entry check, though it proves
+/// nothing about `is_callable`, and modelled only `int` return checks, so a `callable` return
+/// of a function given `new Box()` or of an immediate closure escaped its `try`.
+#[test]
+fn test_declared_callable_type_errors_survive_fresh_objects_and_immediate_closures() {
+    let out = compile_and_run(
+        r#"<?php
+class Box {}
+function bad(Box $o): callable { $name = "missing_function"; return $name; }
+try { bad(new Box()); } catch (TypeError $e) { echo "A ", $e->getMessage(), "\n"; }
+try {
+    (function (): callable { $n = "missing_function"; return $n; })();
+} catch (TypeError $e) { echo "B caught\n"; }
+try { (fn(): callable => "missing_function")(); } catch (TypeError $e) { echo "B2 caught\n"; }
+function take(callable $c): void {}
+try { take(new Box()); } catch (TypeError $e) { echo "C ", $e->getMessage(), "\n"; }
+class Holder { public static function take(callable ...$cs): void {} }
+try { Holder::take(new Box()); } catch (TypeError $e) { echo "D ", $e->getMessage(), "\n"; }
+echo "done\n";
+"#,
+    );
+    assert_eq!(
+        out,
+        "A bad(): Return value must be of type callable, string returned\nB caught\nB2 caught\n\
+         C take(): Argument #1 ($c) must be of type callable, Box given\n\
+         D Holder::take(): Argument #1 must be of type callable, Box given\ndone\n"
+    );
+}
+
+/// Verifies a native method reached from eval through a Closure descriptor resolves an
+/// eval-only callback name bound to `int|callable`, `?callable` and `callable ...`, keeps an int
+/// for `int|callable`, and raises PHP's `TypeError` for a value no member accepts.
+///
+/// Only an exact `callable` parameter used to convert eval-only callbacks; the union, nullable
+/// and variadic forms rejected them because the native `is_callable` cannot see eval functions.
+#[test]
+fn test_declared_callable_unions_and_variadics_from_eval_see_eval_functions() {
+    let out = compile_and_run(
+        r#"<?php
+class Target {
+    public static function run(int|callable $f): string { return is_int($f) ? "int" : $f(); }
+    public static function maybe(?callable $f): string { return $f === null ? "null" : $f(); }
+    public static function many(callable ...$fs): string { $out = ""; foreach ($fs as $f) { $out .= $f(); } return $out; }
+}
+function invoke(Closure $c, mixed $arg): string { return $c($arg); }
+eval('function evalOnlyCallback(): string { return "E"; }
+echo invoke(Closure::fromCallable(["Target", "run"]), "evalOnlyCallback"), " ",
+    invoke(Closure::fromCallable(["Target", "run"]), 7), " ",
+    invoke(Closure::fromCallable(["Target", "maybe"]), "evalOnlyCallback"), " ",
+    invoke(Closure::fromCallable(["Target", "maybe"]), null), " ",
+    invoke(Closure::fromCallable(["Target", "many"]), "evalOnlyCallback"), "\n";
+try { invoke(Closure::fromCallable(["Target", "run"]), "nope"); } catch (TypeError $e) { echo $e->getMessage(), "\n"; }');
+"#,
+    );
+    assert_eq!(
+        out,
+        "E int E null E\nTarget::run(): Argument #1 ($f) must be of type callable|int, string given\n"
+    );
+}

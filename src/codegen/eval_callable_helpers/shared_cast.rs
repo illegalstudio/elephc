@@ -78,36 +78,69 @@ pub(in crate::codegen) fn emit_x86_64_cast_eval_callable_arg(
     super::argument_owners::keep(emitter, context_frame_offset);
 }
 
-/// Casts an eval callback for a native declared-`callable` parameter on ARM64.
+/// Casts an eval argument for a native parameter declaring `callable` on ARM64.
 ///
-/// The parameter stores a boxed value, so the descriptor the ordinary cast selected (and the
-/// bridge already owns) is boxed into a fresh `Mixed` cell that the bridge owns as well.
+/// The parameter stores the boxed PHP value. A natively callable value is passed as it is, so
+/// the callee keeps the string, array or object it was given. A value only eval can resolve
+/// (a function declared inside `eval()`) is converted by the shared resolver into a descriptor
+/// that is boxed into a fresh `Mixed` cell the bridge owns. Anything else is passed unchanged
+/// too: the callee's entry check accepts it for another union member (`int|callable`, `null`)
+/// or raises PHP's `must be of type callable, T given` `TypeError`.
 pub(in crate::codegen) fn emit_aarch64_cast_eval_declared_callable_arg(
-    module: &Module, emitter: &mut Emitter, data: &mut DataSection,
-    support: &EvalCallableDescriptorSupport, label_prefix: &str, fail_label: &str,
+    _module: &Module, emitter: &mut Emitter, _data: &mut DataSection,
+    support: &EvalCallableDescriptorSupport, label_prefix: &str, _fail_label: &str,
 ) {
-    emit_aarch64_cast_eval_callable_arg(module, emitter, data, support, label_prefix, fail_label);
-    crate::codegen::emit_box_current_value_as_mixed(
-        emitter,
-        &crate::types::PhpType::Callable,
-    );
-    super::argument_owners::keep_mixed(emitter, 64);
+    let keep = format!("{label_prefix}_declared_callable_keep");
+    let done = format!("{label_prefix}_declared_callable_ready");
+    // -- a natively callable value keeps its PHP value --
+    abi::load_at_offset(emitter, "x0", 16);
+    abi::emit_call_label(emitter, "__rt_is_callable_mixed");
+    abi::emit_branch_if_int_result_nonzero(emitter, &keep);
+    if !support.is_empty() || support.has_dynamic_descriptor() {
+        // -- an eval-only callback becomes a boxed descriptor; an unresolved value stays --
+        abi::emit_load_from_address(emitter, "x0", "x29", AARCH64_EVAL_CONTEXT_FROM_FP_OFFSET as usize);
+        abi::load_at_offset(emitter, "x1", 16);
+        abi::emit_call_label(emitter, ENTRY);
+        abi::emit_branch_if_int_result_zero(emitter, &keep);
+        super::argument_owners::keep(emitter, 64);
+        crate::codegen::emit_box_current_value_as_mixed(emitter, &crate::types::PhpType::Callable);
+        super::argument_owners::keep_mixed(emitter, 64);
+        abi::emit_jump(emitter, &done);
+    }
+    emitter.label(&keep);
+    abi::load_at_offset(emitter, "x0", 16);
+    emitter.label(&done);
 }
 
-/// Casts an eval callback for a native declared-`callable` parameter on x86_64.
+/// Casts an eval argument for a native parameter declaring `callable` on x86_64.
+///
+/// Mirrors the ARM64 caster: native callables and unresolved values pass unchanged, and only
+/// an eval-only callback is converted into a boxed descriptor the bridge owns.
 pub(in crate::codegen) fn emit_x86_64_cast_eval_declared_callable_arg(
-    module: &Module, emitter: &mut Emitter, data: &mut DataSection,
-    support: &EvalCallableDescriptorSupport, label_prefix: &str, fail_label: &str,
+    _module: &Module, emitter: &mut Emitter, _data: &mut DataSection,
+    support: &EvalCallableDescriptorSupport, label_prefix: &str, _fail_label: &str,
     context_frame_offset: usize,
 ) {
-    emit_x86_64_cast_eval_callable_arg(
-        module, emitter, data, support, label_prefix, fail_label, context_frame_offset,
-    );
-    crate::codegen::emit_box_current_value_as_mixed(
-        emitter,
-        &crate::types::PhpType::Callable,
-    );
-    super::argument_owners::keep_mixed(emitter, context_frame_offset);
+    let keep = format!("{label_prefix}_declared_callable_keep");
+    let done = format!("{label_prefix}_declared_callable_ready");
+    // -- a natively callable value keeps its PHP value --
+    abi::load_at_offset(emitter, "rdi", 40);
+    abi::emit_call_label(emitter, "__rt_is_callable_mixed");
+    abi::emit_branch_if_int_result_nonzero(emitter, &keep);
+    if !support.is_empty() || support.has_dynamic_descriptor() {
+        // -- an eval-only callback becomes a boxed descriptor; an unresolved value stays --
+        abi::load_at_offset(emitter, "rdi", context_frame_offset);
+        abi::load_at_offset(emitter, "rsi", 40);
+        abi::emit_call_label(emitter, ENTRY);
+        abi::emit_branch_if_int_result_zero(emitter, &keep);
+        super::argument_owners::keep(emitter, context_frame_offset);
+        crate::codegen::emit_box_current_value_as_mixed(emitter, &crate::types::PhpType::Callable);
+        super::argument_owners::keep_mixed(emitter, context_frame_offset);
+        abi::emit_jump(emitter, &done);
+    }
+    emitter.label(&keep);
+    abi::load_at_offset(emitter, "rax", 40);
+    emitter.label(&done);
 }
 
 #[cfg(test)]

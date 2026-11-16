@@ -103,29 +103,30 @@ pub(super) fn collect_reference_parameter_scopes(
 /// Collects declaration-level entry checks when checker metadata is unavailable to the pass.
 pub(super) fn collect_object_reference_entry_checks(
     stmts: &[Stmt],
-    functions: &mut HashSet<String>,
-    static_methods: &mut HashMap<String, bool>,
-    instance_methods: &mut HashMap<String, bool>,
+    functions: &mut HashMap<String, super::EntryCheck>,
+    static_methods: &mut HashMap<String, super::EntryCheck>,
+    instance_methods: &mut HashMap<String, super::EntryCheck>,
 ) {
     for stmt in stmts {
         match &stmt.kind {
-            StmtKind::FunctionDecl { name, params, return_type, .. } => {
-                if params_have_object_reference(params) || returns_declared_callable(return_type.as_ref()) {
-                    functions.insert(name.clone());
+            StmtKind::FunctionDecl { name, params, variadic_type, .. } => {
+                if let Some(check) = params_entry_check(params, variadic_type.as_ref()) {
+                    functions.insert(name.clone(), check);
                 }
             }
             StmtKind::ClassDecl { name, methods, .. }
             | StmtKind::InterfaceDecl { name, methods, .. }
             | StmtKind::TraitDecl { name, methods, .. } => {
-                for method in methods.iter().filter(|method| {
-                    params_have_object_reference(&method.params)
-                        || returns_declared_callable(method.return_type.as_ref())
-                }) {
+                for method in methods {
+                    let Some(check) = params_entry_check(&method.params, method.variadic_type.as_ref())
+                    else {
+                        continue;
+                    };
                     let key = method_effect_key(name, &method.name);
                     if method.is_static {
-                        static_methods.insert(key, true);
+                        static_methods.insert(key, check);
                     } else {
-                        instance_methods.insert(key, true);
+                        instance_methods.insert(key, check);
                     }
                 }
             }
@@ -137,29 +138,27 @@ pub(super) fn collect_object_reference_entry_checks(
     }
 }
 
-/// Returns whether a declared `callable` return type checks the returned value, which raises
-/// `TypeError` for a value that is not callable before it leaves the body.
-fn returns_declared_callable(return_type: Option<&TypeExpr>) -> bool {
-    return_type.is_some_and(type_hint_mentions_callable)
-}
-
-/// Finds parameter hints that can reject a `Class|false` / `Class|null` argument.
+/// Classifies the entry checks parameter hints run at the call boundary.
 ///
-/// A class-typed parameter runs the union guard at the call boundary whether it is by-value
-/// or by-reference, and a literal `false` parameter always checks its argument. A
-/// by-reference `array` / `?array` / `array|Class` parameter checks a boxed (`mixed`) argument
-/// at the boundary too, raising `TypeError` before the callee runs. Checker metadata narrows
-/// this down; without it the declaration is the conservative source.
-fn params_have_object_reference(
+/// A class-typed parameter runs the `Class|false` / `Class|null` union guard whether it is
+/// by-value or by-reference, and a by-reference `array` / `?array` / `array|Class` parameter
+/// checks a boxed (`mixed`) argument at the boundary too; a fresh `new` argument passes both.
+/// A `callable` parameter checks `is_callable`, which a fresh object can fail, so it throws
+/// for every call, as does each element of a `callable ...$xs` variadic. Checker metadata
+/// narrows this down; without it the declaration is the conservative source.
+fn params_entry_check(
     params: &[(String, Option<TypeExpr>, Option<crate::parser::ast::Expr>, bool)],
-) -> bool {
-    params.iter().any(|(_, hint, _, by_ref)| {
-        hint.as_ref().is_some_and(|hint| {
-            type_hint_is_class(hint)
-                || (*by_ref && type_hint_mentions_array(hint))
-                || type_hint_mentions_callable(hint)
-        })
-    })
+    variadic_type: Option<&TypeExpr>,
+) -> Option<super::EntryCheck> {
+    let hints = || params.iter().filter_map(|(_, hint, _, by_ref)| Some((hint.as_ref()?, *by_ref)));
+    if hints().any(|(hint, _)| type_hint_mentions_callable(hint))
+        || variadic_type.is_some_and(type_hint_mentions_callable)
+    {
+        return Some(super::EntryCheck::Always);
+    }
+    hints()
+        .any(|(hint, by_ref)| type_hint_is_class(hint) || (by_ref && type_hint_mentions_array(hint)))
+        .then_some(super::EntryCheck::NonFreshArguments)
 }
 
 /// Returns whether a declared parameter hint is, or contains, the `array` type.
