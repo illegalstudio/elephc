@@ -376,6 +376,28 @@ impl ElephcEvalContext {
             && !self.has_retained_request_lifetime()
     }
 
+    /// Records the native function a reflected compiled-closure descriptor decodes to, replacing
+    /// any earlier record under the same name; fails only when a user function owns the name.
+    ///
+    /// The name is derived from the descriptor's ADDRESS. A freed descriptor's block is reused by
+    /// the next closure of its size, so keeping the first record (as `define_native_function`
+    /// does) gave the new closure the old one's parameters, source and invoker. A record in use
+    /// cannot be replaced under a live reflector: the reflector keeps its descriptor alive, so the
+    /// address is not reused while it exists. The entry lives in the request-scoped overlay.
+    pub fn redefine_native_function(
+        &mut self,
+        name: impl Into<String>,
+        mut function: NativeFunction,
+    ) -> Result<(), NativeFunction> {
+        let name = name.into();
+        if self.functions.contains_key(&name) {
+            return Err(function);
+        }
+        function.name.clone_from(&name);
+        self.local_native_functions.insert(name, function);
+        Ok(())
+    }
+
     /// Defines a generated native function callback, failing if the name already exists.
     pub fn define_native_function(
         &mut self,
@@ -403,6 +425,17 @@ impl ElephcEvalContext {
             self.native_functions.insert(name, function);
         }
         Ok(())
+    }
+
+    /// The name to call a function by in this context when the global registry named it as the
+    /// owner: the full (namespaced) `name` when this context declared it, else its bare global
+    /// part (the registry's namespace-to-global fallback matched that one).
+    pub fn declared_function_call_name<'a>(&self, name: &'a str) -> &'a str {
+        let key = name.trim_start_matches('\\');
+        match key.rsplit_once('\\') {
+            Some((_, bare)) if self.function(&key.to_ascii_lowercase()).is_none() => bare,
+            _ => key,
+        }
     }
 
     /// Returns a dynamic user function by its lowercase PHP function name.

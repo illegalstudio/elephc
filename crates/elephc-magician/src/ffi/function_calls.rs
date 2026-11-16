@@ -253,7 +253,10 @@ fn execute_global_eval_function_owner(
 ) -> Option<Result<interpreter::EvalOutcome, EvalStatus>> {
     let owner = crate::context::global_eval_function_owner_context(name)?;
     let owner = unsafe { owner.as_mut() }?;
-    let call_name = name.rsplit_once('\\').map_or(name, |(_, bare)| bare);
+    // The registry matched either the exact (namespaced) key or, failing that, the bare global
+    // name; call the owner by the one it declared. Always calling the bare name made a namespaced
+    // `App\helper()` owned by another context unresolvable, or ran a global `helper` instead.
+    let call_name = owner.declared_function_call_name(name);
     let mut values = ElephcRuntimeOps::with_context(owner as *const ElephcEvalContext);
     Some(interpreter::execute_context_function_outcome(
         owner,

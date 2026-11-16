@@ -131,6 +131,49 @@ echo function_exists("missing_probe") . "x";"#,
     assert_eq!(values.output, "1x1x1x1xxx");
 }
 
+/// Verifies a function owned by another context is called by the name that context declared:
+/// the namespaced `app\helper` by its full name, a global `helper` (the registry's bare fallback)
+/// by the bare one. Always answering the bare name sent `App\helper()` to a missing function, or
+/// to an unrelated global `helper`.
+#[test]
+fn owner_context_is_called_by_the_name_it_declared() {
+    let mut namespaced = ElephcEvalContext::new();
+    namespaced
+        .define_function(
+            "app\\helper",
+            crate::eval_ir::EvalFunction::new("App\\helper", Vec::new(), Vec::new()),
+        )
+        .expect("declare the namespaced function");
+    assert_eq!(namespaced.declared_function_call_name("app\\helper"), "app\\helper");
+    assert_eq!(namespaced.declared_function_call_name("\\app\\helper"), "app\\helper");
+
+    let mut global = ElephcEvalContext::new();
+    global
+        .define_function(
+            "helper",
+            crate::eval_ir::EvalFunction::new("helper", Vec::new(), Vec::new()),
+        )
+        .expect("declare the global function");
+    assert_eq!(global.declared_function_call_name("app\\helper"), "helper");
+    assert_eq!(global.declared_function_call_name("helper"), "helper");
+}
+
+/// Verifies a reflected compiled closure's address-derived record is replaced, not kept: a freed
+/// descriptor's block is reused by the next closure, and the first record's arity (and invoker)
+/// used to answer for it (`getNumberOfParameters()` gave 1 for a two-parameter closure).
+#[test]
+fn redefined_native_function_replaces_the_previous_record() {
+    let mut context = ElephcEvalContext::new();
+    let first = NativeFunction::new(1usize as *mut c_void, fake_native_return_descriptor, 1);
+    let second = NativeFunction::new(2usize as *mut c_void, fake_native_return_descriptor, 2);
+    assert!(context.redefine_native_function("{closure:native:beef}", first).is_ok());
+    assert!(context.redefine_native_function("{closure:native:beef}", second).is_ok());
+    let current = context
+        .native_function("{closure:native:beef}")
+        .expect("the record is registered");
+    assert_eq!(current.param_count(), 2);
+}
+
 /// Verifies eval function probes recognize static DateTime/calendar procedural aliases.
 #[test]
 fn execute_program_function_probes_recognize_date_procedural_aliases() {

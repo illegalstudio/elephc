@@ -586,17 +586,21 @@ fn eval_reflection_function_callable_target_arg(
             }
             let bound_this = eval_reflection_descriptor_bound_this(decoded.bound_this, values)?;
             let lookup_name = format!("{{closure:native:{:x}}}", descriptor as usize);
-            if context.native_function(&lookup_name).is_none() {
-                if let Err(_existing) =
-                    context.define_native_function(lookup_name.clone(), decoded.function)
-                {
-                    if trace {
-                        eprintln!(
-                            "[elephc-eval-trace] phase=reflection-descriptor-register failed=true"
-                        );
-                    }
-                    return Err(EvalStatus::RuntimeFatal);
+            // Always the descriptor being reflected NOW: the address-derived name outlives a
+            // freed descriptor whose block the next closure reuses, and keeping the first record
+            // answered the old closure's parameters and invoker for the new one.
+            if let Err(_existing) =
+                context.redefine_native_function(lookup_name.clone(), decoded.function)
+            {
+                if trace {
+                    eprintln!(
+                        "[elephc-eval-trace] phase=reflection-descriptor-register failed=true"
+                    );
                 }
+                if let Some(bound_this) = bound_this {
+                    let _ = values.release(bound_this);
+                }
+                return Err(EvalStatus::RuntimeFatal);
             }
             let target = match bound_this {
                 Some(bound_this) => EvalClosureObjectTarget::BoundNamed {
