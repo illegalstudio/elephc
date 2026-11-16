@@ -51,6 +51,13 @@ fn emit_string_aarch64(emitter: &mut Emitter) {
     emitter.instruction("b.ne __rt_is_callable_string_unqualified");            // keep names without a leading separator unchanged
     emitter.instruction("add x0, x0, #1");                                      // skip the leading separator, as PHP resolves "\\name" like "name"
     emitter.instruction("sub x1, x1, #1");                                      // shorten the candidate name by the skipped separator
+    // -- only one separator is allowed: `\\name` and `\\Class::method` name nothing --
+    emitter.instruction("cbz x1, __rt_is_callable_string_unqualified");         // a lone separator falls through to the ordinary failed lookups
+    emitter.instruction("ldrb w9, [x0]");                                       // read the byte after the skipped separator
+    emitter.instruction("cmp w9, #92");                                         // is it a second namespace separator?
+    emitter.instruction("b.ne __rt_is_callable_string_unqualified");            // a single separator keeps the stripped name
+    emitter.instruction("mov x0, #0");                                          // a doubly qualified name is never callable
+    emitter.instruction("ret");                                                 // return false before reserving the lookup frame
     emitter.label("__rt_is_callable_string_unqualified");
     emitter.instruction("sub sp, sp, #80");                                     // reserve lookup frame for string inputs and table cursor state
     emitter.instruction("stp x29, x30, [sp, #64]");                             // save caller frame pointer and return address around string comparisons
@@ -680,6 +687,13 @@ fn emit_string_x86_64(emitter: &mut Emitter) {
     emitter.instruction("jne __rt_is_callable_string_unqualified_x86_64");      // keep names without a leading separator unchanged
     emitter.instruction("add rdi, 1");                                          // skip the leading separator, as PHP resolves "\\name" like "name"
     emitter.instruction("sub rsi, 1");                                          // shorten the candidate name by the skipped separator
+    // -- only one separator is allowed: `\\name` and `\\Class::method` name nothing --
+    emitter.instruction("test rsi, rsi");                                       // a lone separator falls through to the ordinary failed lookups
+    emitter.instruction("je __rt_is_callable_string_unqualified_x86_64");       // keep the now-empty name for the ordinary lookups
+    emitter.instruction("cmp BYTE PTR [rdi], 92");                              // is the next byte a second namespace separator?
+    emitter.instruction("jne __rt_is_callable_string_unqualified_x86_64");      // a single separator keeps the stripped name
+    emitter.instruction("xor eax, eax");                                        // a doubly qualified name is never callable
+    emitter.instruction("ret");                                                 // return false before reserving the lookup frame
     emitter.label("__rt_is_callable_string_unqualified_x86_64");
     emitter.instruction("push rbp");                                            // preserve caller frame pointer before table scans
     emitter.instruction("mov rbp, rsp");                                        // establish stable frame base for saved string and table cursor
