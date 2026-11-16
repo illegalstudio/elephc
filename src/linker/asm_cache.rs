@@ -198,7 +198,8 @@ fn is_intact(object: &Path, integrity: &Path) -> bool {
 /// A hardlink is preferred: it costs no bytes and survives the cache pruning the
 /// entry, because the inode outlives the canonical name. A copy is the fallback for
 /// a cache on another filesystem. The destination is removed first so a hardlink
-/// cannot fail merely because the previous build left a file there.
+/// cannot fail merely because the previous build left a file there, and so a miss never leaves a
+/// stale hard link behind for the assembler to write through.
 pub(super) fn reuse(key: u64, destination: &Path) -> bool {
     reuse_in(&asm_cache_dir(), key, destination)
 }
@@ -209,10 +210,12 @@ fn reuse_in(directory: &Path, key: u64, destination: &Path) -> bool {
     let name = cache_name(key);
     let object = directory.join(&name);
     let integrity = directory.join(format!("{name}.integrity"));
+    // Unlink first on a miss too: a previous build can have left the name as a HARD LINK to a
+    // cache entry, and the assembler would then write through it into that entry.
+    let _ = fs::remove_file(destination);
     if !is_intact(&object, &integrity) {
         return false;
     }
-    let _ = fs::remove_file(destination);
     if fs::hard_link(&object, destination).is_ok() {
         return true;
     }
@@ -237,7 +240,9 @@ fn publish_in(directory: &Path, key: u64, object: &Path) {
     }
     let name = cache_name(key);
     let canonical = directory.join(&name);
-    if canonical.exists() {
+    // An entry that no longer matches its sidecar is replaced, not kept: refusing it forever
+    // would make the slice reassemble on every build.
+    if canonical.exists() && is_intact(&canonical, &directory.join(format!("{name}.integrity"))) {
         return;
     }
     let Ok(bytes) = fs::read(object) else {
@@ -501,8 +506,49 @@ mod tests {
         fs::write(&destination, b"STALEOBJECT").expect("write stale");
         let key = slice_key("        nop\n", "v1:as:-arch:arm64");
         assert!(!reuse_in(&directory, key, &destination), "nothing was published");
-        // The stale file may remain -- what matters is the caller is told to
-        // assemble, which overwrites it. Assert the verdict, not the filesystem.
+        assert!(!destination.exists(), "a miss must unlink the stale destination");
+        let _ = fs::remove_dir_all(&directory);
+    }
+
+    /// A destination left as a hard link to an entry by an earlier build must not let the next
+    /// build's assembler write through it into that entry.
+    #[test]
+    fn a_miss_after_a_hit_does_not_write_through_the_cache_entry() {
+        let directory = scratch("hardlink");
+        let source = directory.join("slice0.o");
+        fs::write(&source, b"OBJECTBYTES").expect("write source object");
+        let hit = slice_key("        ret\n", "v1:as:-arch:arm64");
+        publish_in(&directory, hit, &source);
+        let destination = directory.join("restored.o");
+        assert!(reuse_in(&directory, hit, &destination));
+
+        let miss = slice_key("        nop\n", "v1:as:-arch:arm64");
+        assert!(!reuse_in(&directory, miss, &destination), "nothing was published");
+        fs::write(&destination, b"OTHERPROGRAM").expect("assemble the new slice");
+        assert_eq!(
+            fs::read(directory.join(cache_name(hit))).expect("read entry"),
+            b"OBJECTBYTES",
+            "the entry must keep its own bytes"
+        );
+        assert!(reuse_in(&directory, hit, &directory.join("again.o")));
+        let _ = fs::remove_dir_all(&directory);
+    }
+
+    /// Publishing replaces an entry that no longer matches its sidecar instead of keeping it.
+    #[test]
+    fn publishing_repairs_a_corrupted_entry() {
+        let directory = scratch("repair");
+        let source = directory.join("slice0.o");
+        fs::write(&source, b"OBJECTBYTES").expect("write source object");
+        let key = slice_key("        ret\n", "v1:as:-arch:arm64");
+        publish_in(&directory, key, &source);
+        fs::write(directory.join(cache_name(key)), b"CORRUPTED!!").expect("tamper");
+        assert!(!reuse_in(&directory, key, &directory.join("a.o")));
+
+        publish_in(&directory, key, &source);
+        let restored = directory.join("b.o");
+        assert!(reuse_in(&directory, key, &restored), "the repaired entry must be reused");
+        assert_eq!(fs::read(&restored).expect("read restored"), b"OBJECTBYTES");
         let _ = fs::remove_dir_all(&directory);
     }
 
