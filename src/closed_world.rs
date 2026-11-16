@@ -164,22 +164,13 @@ pub fn project_computed_include(
 /// Only an include among the branch's own statements counts, and only while no earlier statement
 /// of the branch assigns the variable again.
 fn condition_pinned_include_paths(program: &[crate::parser::ast::Stmt]) -> std::collections::HashSet<usize> {
-    use crate::parser::ast::visit::{walk_expr_nodes, walk_stmts, Node};
+    use crate::parser::ast::visit::walk_stmts;
     use crate::parser::ast::{Expr, ExprKind, StmtKind};
     let mut pinned = std::collections::HashSet::new();
     walk_stmts(program, &mut |stmt| {
         let StmtKind::If { condition, then_body, .. } = &stmt.kind else { return };
         let mut bound: Vec<&str> = Vec::new();
-        walk_expr_nodes(condition, &mut |node| {
-            let Node::Expr(Expr { kind: ExprKind::Assignment { target, value, .. }, .. }) = node else {
-                return;
-            };
-            if let ExprKind::Variable(name) = &target.kind {
-                if crate::resolver::include_path_is_static(value) {
-                    bound.push(name.as_str());
-                }
-            }
-        });
+        collect_unconditional_static_bindings(condition, &mut bound);
         if bound.is_empty() {
             return;
         }
@@ -199,31 +190,50 @@ fn condition_pinned_include_paths(program: &[crate::parser::ast::Stmt]) -> std::
                 }
                 continue;
             }
-            // Any other statement that may write the variable ends its pin.
-            let mut writes = Vec::new();
-            walk_stmts(std::slice::from_ref(branch_stmt), &mut |inner| {
-                if let StmtKind::Assign { name, .. } = &inner.kind {
-                    writes.push(name.clone());
-                }
-            });
-            walk_nodes_assignment_targets(branch_stmt, &mut writes);
-            bound.retain(|name| !writes.iter().any(|written| written == name));
+            // Any other statement that mentions the variable ends its pin: it may write it through
+            // a loop variable, a list unpack, a reference, `global`, `unset` or a by-reference
+            // call, none of which is worth modelling for a pin that only exists to keep the
+            // interpreter out of ordinary `file_exists($m = ...)` guards. The Debug text carries
+            // every spelling of the name, in any statement or expression kind.
+            let spelling = format!("{:?}", branch_stmt);
+            bound.retain(|name| !spelling.contains(&format!("{name:?}")));
         }
     });
     pinned
 }
 
-/// Pushes every variable an expression-position assignment inside `stmt` writes onto `writes`.
-fn walk_nodes_assignment_targets(stmt: &crate::parser::ast::Stmt, writes: &mut Vec<String>) {
-    use crate::parser::ast::visit::{walk_nodes, Node};
-    use crate::parser::ast::{Expr, ExprKind};
-    walk_nodes(std::slice::from_ref(stmt), &mut |node| {
-        if let Node::Expr(Expr { kind: ExprKind::Assignment { target, .. }, .. }) = node {
+/// Collects the variables `condition` binds to a static path on EVERY evaluation of it.
+///
+/// An assignment in a short-circuited operand (`$skip || file_exists($m = '/a.php')`) may not
+/// have run, so only the condition itself, the arguments of a call, a negation and the operands a
+/// non-short-circuit operator always evaluates (the left one of `&&`, `||`, `??`) are searched.
+fn collect_unconditional_static_bindings<'a>(
+    condition: &'a crate::parser::ast::Expr,
+    bound: &mut Vec<&'a str>,
+) {
+    use crate::parser::ast::{BinOp, ExprKind};
+    match &condition.kind {
+        ExprKind::Assignment { target, value, .. } => {
             if let ExprKind::Variable(name) = &target.kind {
-                writes.push(name.clone());
+                if crate::resolver::include_path_is_static(value) {
+                    bound.push(name.as_str());
+                }
             }
         }
-    });
+        ExprKind::Not(inner) => collect_unconditional_static_bindings(inner, bound),
+        ExprKind::FunctionCall { args, .. } => {
+            for arg in args {
+                collect_unconditional_static_bindings(arg, bound);
+            }
+        }
+        ExprKind::BinaryOp { left, op, right } => {
+            collect_unconditional_static_bindings(left, bound);
+            if !matches!(op, BinOp::And | BinOp::Or | BinOp::NullCoalesce) {
+                collect_unconditional_static_bindings(right, bound);
+            }
+        }
+        _ => {}
+    }
 }
 
 /// Whether a site's source file lies under the directory of an `opcache.preload` script, whose
@@ -355,6 +365,9 @@ mod tests {
             "<?php\nif (file_exists($m = '/a.php')) {\n    foo($m = $argv[1]);\n    require $m;\n}\n",
             "<?php\nif (file_exists($m = '/a.php')) {\n}\nrequire $m;\n",
             "<?php\nif (file_exists($m = $argv[1])) {\n    require $m;\n}\n",
+            "<?php\nif ($skip || file_exists($m = '/a.php')) {\n    require $m;\n}\n",
+            "<?php\nif (file_exists($m = '/a.php')) {\n    foreach ($argv as $m) {}\n    require $m;\n}\n",
+            "<?php\nif (file_exists($m = '/a.php')) {\n    [$m] = $argv;\n    require $m;\n}\n",
         ] {
             let program = parse_php(source);
             assert!(project_computed_include(&program, &[]).is_some(), "{source}");
