@@ -796,6 +796,23 @@ Error: Call to a member function foo() on null\n"
     );
 }
 
+/// The `__call()` fallback helper is declared when the only `__call()` lives in an enum or in a
+/// class declared inside a `try`; the declaration scan used to see top-level and
+/// namespace/`if` classes only, so the call on an unknown receiver died with "undefined method".
+/// Expected output is real php 8.5 output.
+#[test]
+fn test_magic_call_fallback_for_enum_and_try_declared_class() {
+    let out = compile_and_run(
+        r#"<?php
+enum Unit { case A; public function __call($n, $a) { return $n; } }
+function f($x) { return $x->label(); }
+try { class Loc { public function __call($n, $a) { return "loc:$n"; } } } finally { }
+echo f(Unit::A), "|", f(new Loc);
+"#,
+    );
+    assert_eq!(out, "label|loc:label");
+}
+
 /// Nested calls on an UNKNOWN receiver evaluate each argument once, in order, whichever of the
 /// plain method or `__call()` answers -- including a `void` call's null and a mixed argument list.
 ///

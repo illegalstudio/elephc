@@ -107,26 +107,18 @@ fn magic_callable_helper() -> Stmt {
 /// Returns whether any class-like declaration in `program` defines a `__call()` method.
 pub(crate) fn program_declares_magic_call(program: &Program) -> bool {
     use crate::parser::ast::StmtKind;
-    fn declares(stmts: &[crate::parser::ast::Stmt]) -> bool {
-        stmts.iter().any(|stmt| match &stmt.kind {
-            StmtKind::ClassDecl { methods, .. } | StmtKind::TraitDecl { methods, .. } => methods
+    let mut found = false;
+    // The walk reaches declarations at any depth: an enum (php allows `__call()` there), a class
+    // declared in a function body, a loop, a `try` or a `switch`.
+    crate::parser::ast::visit::walk_stmts(program, &mut |stmt| {
+        if let StmtKind::ClassDecl { methods, .. }
+        | StmtKind::TraitDecl { methods, .. }
+        | StmtKind::EnumDecl { methods, .. } = &stmt.kind
+        {
+            found |= methods
                 .iter()
-                .any(|method| method.name.eq_ignore_ascii_case("__call")),
-            StmtKind::NamespaceBlock { body, .. }
-            | StmtKind::Synthetic(body)
-            | StmtKind::IncludeOnceGuard { body, .. } => declares(body),
-            StmtKind::If {
-                then_body,
-                elseif_clauses,
-                else_body,
-                ..
-            } => {
-                declares(then_body)
-                    || elseif_clauses.iter().any(|(_, body)| declares(body))
-                    || else_body.as_deref().is_some_and(declares)
-            }
-            _ => false,
-        })
-    }
-    declares(program)
+                .any(|method| method.name.eq_ignore_ascii_case("__call"));
+        }
+    });
+    found
 }
