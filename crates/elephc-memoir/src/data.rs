@@ -175,3 +175,16 @@ pub fn append_array_allocation_message(out: &mut String) {
         crate::diagnostics::ARRAY_ALLOC_SIZE_MSG
     ));
 }
+
+/// Reserves non-owning handle identities, weak observer slots and the LIFO free stack.
+pub fn append_object_handle_storage(out: &mut String, heap_size: usize, target: &impl DataTarget) {
+    out.push_str(&target.common("_obj_handle_index", crate::object_handles::object_handle_index_slots(heap_size) * 4));
+    out.push_str(&target.common("_obj_weak_reference_index", crate::object_handles::object_handle_index_slots(heap_size) * 8));
+    out.push_str(&target.common("_obj_handle_free", crate::object_handles::object_handle_free_slots(heap_size) * 4));
+    out.push_str(&target.common("_obj_handle_free_top", 8));
+}
+
+/// Starts fresh handle identities at one, reserving zero for blocks without a handle.
+pub fn append_object_handle_cursor(out: &mut String) {
+    out.push_str(".globl _obj_handle_next\n_obj_handle_next:\n    .quad 1\n");
+}

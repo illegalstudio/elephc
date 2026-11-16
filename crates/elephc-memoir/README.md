@@ -12,9 +12,12 @@ reference counting, cycle collection and candidate proofs, graph traversal,
 container allocation and growth, copy-on-write and cloning, deep release, owned
 strings and scratch allocation, growable output buffers, consuming string append,
 callable-descriptor retirement, hash-entry ownership guards, generation-safe
-buffers, Mixed boxing and persistent references, reference-cell lifetime and pin
-primitives, and protected owner retirement. It also emits fixed heap, GC, buffer,
-reference-root and string-scratch declarations, keeping their existing order and byte layout.
+buffers, Mixed boxing and unboxing, persistent references, reference-cell lifetime,
+parameter-owner acquisition, original-identity pins, protected cleanup, temporary
+owner retirement,
+validated boxed object transfers, the object-handle pool and guarded stack mapping.
+It also emits fixed heap, GC, buffer, reference-root, handle-table and string-scratch
+declarations, keeping their existing order and byte layout.
 
 The `Emitter` trait delegates assembly output, symbol spelling, library-boundary
 modes, compiler-owned layout facts and target ABI operations to the compiler.
@@ -26,7 +29,8 @@ and pointer-container tags live in `layout`.
 
 The compiler retains EIR lifetime analysis, ownership optimization and placement,
 PHP reference/type validation, resource identity/inventory policy,
-class/coroutine/SPL layout definitions, semantic runtime data, helper ordering,
+class/coroutine/SPL layout definitions, PHP object hash formatting, platform mapping
+flags, semantic runtime data, helper ordering,
 runtime object caching, and final linking.
 Memory constants live in Memoir with compatibility re-exports where needed.
 The former compiler memory modules retain thin adapters and integration tests;
@@ -39,7 +43,10 @@ value-storage fingerprints also cover optional resource hooks and the complete
 fixed runtime-data block. Storage fingerprints additionally cover growable
 buffers, append metadata variants, callable capture release and hash guards.
 Boxed-value fingerprints cover construction, persistent-reference operations and
-protected reference retirement.
+protected reference retirement. Identity fingerprints cover unboxing, temporary
+owners, reference acquisition, borrowed identity pins, handle recycling and stack
+mapping, together with complete fixed data. The identity test also cross-assembles
+every target and emission mode.
 
 `build.rs` includes this crate's Rust sources in the runtime-cache identity.
 Changes to these emitters therefore invalidate cached runtime objects even when
