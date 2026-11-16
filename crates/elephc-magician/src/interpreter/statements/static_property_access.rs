@@ -315,10 +315,15 @@ fn eval_static_property_value_or_default(
         &mut scope,
         values,
     )?;
-    if let Some(replaced) = context.set_static_property(declaring_class, property.name(), value) {
+    // The static slot owns the cell and every read borrows it, the first one included, as
+    // `eval_class_like_constant_cell` does: handing the freshly evaluated cell out OWNED let the
+    // caller's release free the value the slot still held, and a borrowed default (`= self::C`)
+    // left the slot holding a reference it never took.
+    let owned = if value.is_borrowed() { values.retain(value)? } else { value };
+    if let Some(replaced) = context.set_static_property(declaring_class, property.name(), owned) {
         values.release(replaced)?;
     }
-    Ok(Some(value))
+    Ok(Some(RuntimeCellHandle::borrowed(owned)))
 }
 
 /// Returns whether a static property is PHP-`isset()` without throwing for missing properties.

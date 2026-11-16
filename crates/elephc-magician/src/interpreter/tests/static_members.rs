@@ -10,6 +10,30 @@
 use super::super::*;
 use super::support::*;
 
+/// A static default materialized on first access (the declaration ran in another context, or the
+/// request statics were reset) stays owned by its slot: the read hands it out BORROWED, so the
+/// reader's release leaves the slot's reference alone. It used to come back owned, and the first
+/// `count(self::$roots)` freed the value the slot still pointed at.
+#[test]
+fn lazily_materialized_static_default_stays_owned_by_its_slot() {
+    let program = parse_fragment(br#"class SpdHolder { public static $roots = [1, 2]; }"#)
+        .expect("parse static default fragment");
+    let mut context = ElephcEvalContext::new();
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+    execute_program_with_context(&mut context, &program, &mut scope, &mut values)
+        .expect("declare the class");
+    if let Some(seeded) = context.take_static_property("SpdHolder", "roots") {
+        values.release(seeded).unwrap();
+    }
+    let first = eval_static_property_get_result("SpdHolder", "roots", &mut context, &mut values)
+        .expect("materialize the default");
+    assert!(first.is_borrowed());
+    release_expr_result(first, &mut context, &mut values).unwrap();
+    let slot = context.static_property("SpdHolder", "roots").expect("the slot holds the default");
+    assert_eq!(values.refcount(slot), 1);
+}
+
 /// Class-level native failures preserve visibility precedence and retire every pending Error.
 #[test]
 fn native_class_default_error_static_access_preserves_owners_and_visibility() {
