@@ -116,6 +116,9 @@ pub(in crate::codegen::lower_inst) fn lower_scalar_param_guard(
         .ok_or_else(|| CodegenIrError::unsupported(format!("unknown scalar_param_guard mode {mode}")))?;
     let (prefix, suffix) = (prefix.to_string(), suffix.to_string());
     let numeric = mode.chars().next().and_then(numeric_mode);
+    // A trailing `r`: the operand is an owned temporary no cleanup root covers, so the
+    // refusal releases it before throwing.
+    let release = mode.chars().nth(1) == Some('r');
 
     // Constant folding can retype the operand under the guard; a raw value is decided now.
     let loaded = ctx.load_value_to_result(value)?.codegen_repr();
@@ -148,7 +151,7 @@ pub(in crate::codegen::lower_inst) fn lower_scalar_param_guard(
         ctx.emitter.label(&done);
         ctx.emit_cold_path(|ctx| {
             ctx.emitter.label(&cold);
-            emit_numeric_cold_check(ctx, value, target, strict, &done, &prefix, &suffix)
+            emit_numeric_cold_check(ctx, value, target, strict, &done, &prefix, &suffix, release)
         })?;
         return store_if_result(ctx, inst);
     }
@@ -156,7 +159,7 @@ pub(in crate::codegen::lower_inst) fn lower_scalar_param_guard(
     ctx.emitter.label(&done);
     ctx.emit_cold_path(|ctx| {
         ctx.emitter.label(&cold);
-        emit_cold_check(ctx, inst, value, rule, &done, &prefix, &suffix)
+        emit_cold_check(ctx, inst, value, rule, &done, &prefix, &suffix, release)
     })
 }
 
@@ -362,6 +365,7 @@ fn emit_numeric_cold_check(
     done: &str,
     prefix: &str,
     suffix: &str,
+    release: bool,
 ) -> Result<()> {
     let null_label = ctx.next_label("scalar_param_guard_null");
     let refuse = ctx.next_label("scalar_param_guard_refuse");
@@ -428,7 +432,7 @@ fn emit_numeric_cold_check(
     // -- message: name the refused value and throw --
     ctx.emitter.label(&refuse);
     emit_rejected_type_name(ctx, value, &null_label)?;
-    emit_throw_with_name(ctx, prefix, suffix);
+    emit_throw_with_name(ctx, prefix, suffix, release.then_some(value))?;
     Ok(())
 }
 
@@ -532,6 +536,7 @@ fn emit_cold_check(
     done: &str,
     prefix: &str,
     suffix: &str,
+    release: bool,
 ) -> Result<()> {
     let null_label = ctx.next_label("scalar_param_guard_null");
     let name_label = ctx.next_label("scalar_param_guard_name");
@@ -567,7 +572,7 @@ fn emit_cold_check(
     }
     ctx.emitter.label(&name_label);
     emit_rejected_type_name(ctx, value, &null_label)?;
-    emit_throw_with_name(ctx, prefix, suffix);
+    emit_throw_with_name(ctx, prefix, suffix, release.then_some(value))?;
     Ok(())
 }
 
@@ -688,8 +693,14 @@ fn emit_word(ctx: &mut FunctionContext<'_>, word: &[u8]) {
     abi::emit_load_int_immediate(ctx.emitter, len_reg, len as i64);
 }
 
-/// Throws `TypeError(prefix . <name in the string result registers> . suffix)`.
-fn emit_throw_with_name(ctx: &mut FunctionContext<'_>, prefix: &str, suffix: &str) {
+/// Throws `TypeError(prefix . <name in the string result registers> . suffix)`, first
+/// releasing `release`, a refused owned operand no cleanup root covers.
+fn emit_throw_with_name(
+    ctx: &mut FunctionContext<'_>,
+    prefix: &str,
+    suffix: &str,
+    release: Option<crate::ir::ValueId>,
+) -> Result<()> {
     let (ptr_reg, len_reg) = abi::string_result_regs(ctx.emitter);
     let (second_ptr, second_len) = match ctx.emitter.target.arch {
         Arch::AArch64 => ("x3", "x4"),
@@ -704,5 +715,14 @@ fn emit_throw_with_name(ctx: &mut FunctionContext<'_>, prefix: &str, suffix: &st
     abi::emit_call_label(ctx.emitter, "__rt_concat");
     super::enums::emit_concat_current_string_with_static_suffix(ctx, suffix);
     abi::emit_call_label(ctx.emitter, "__rt_str_persist");
+    if let Some(value) = release {
+        // -- release the refused owned operand; the persisted message survives the call --
+        let (ptr_reg, len_reg) = abi::string_result_regs(ctx.emitter);
+        abi::emit_push_reg_pair(ctx.emitter, ptr_reg, len_reg);
+        ctx.load_value_to_result(value)?;
+        abi::emit_decref_if_refcounted(ctx.emitter, &PhpType::Mixed);
+        abi::emit_pop_reg_pair(ctx.emitter, ptr_reg, len_reg);
+    }
     super::enums::emit_throw_type_error_from_string_result(ctx);
+    Ok(())
 }

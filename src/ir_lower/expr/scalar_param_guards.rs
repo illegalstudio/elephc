@@ -98,7 +98,9 @@ pub(super) fn deferred_guard_source(ctx: &LoweringContext<'_, '_>, arg: &Expr) -
 /// For an `int` or `float` parameter the instruction also yields the converted scalar, with
 /// PHP's numeric-string rules, the lossy-conversion deprecation and the range check, and the
 /// caller passes it instead of the box. For `string` and `bool` it yields nothing and the
-/// existing conversion runs afterwards. Earlier arguments stay published when it throws.
+/// existing conversion runs afterwards. Earlier arguments stay published when it throws; with
+/// `release_on_refusal`, an owned operand that is not itself published is released before the
+/// throw.
 pub(super) fn guard_scalar_param(
     ctx: &mut LoweringContext<'_, '_>,
     sig: &FunctionSig,
@@ -106,6 +108,7 @@ pub(super) fn guard_scalar_param(
     value: LoweredValue,
     source: GuardSource,
     span: Span,
+    release_on_refusal: bool,
 ) -> Option<LoweredValue> {
     let declared = guarded_scalar_param(ctx, sig, index, value.value, source)?;
     let mode = match declared {
@@ -115,6 +118,9 @@ pub(super) fn guard_scalar_param(
         _ => 'b',
     };
     let mode = if crate::source::current_strict_types() { mode.to_ascii_uppercase() } else { mode };
+    // An owned operand no cleanup root covers is released by the refusal itself, so a
+    // `TypeError` does not leak it (the accepting path keeps the ordinary ownership flow).
+    let release = if release_on_refusal && ctx.value_is_owning_temporary(value) { "r" } else { "" };
     let argument = sig.params.iter().take(index).filter(|(name, _)| {
         name != crate::func_args::HIDDEN_ARGC_PARAM && name != crate::func_args::HIDDEN_ARGS_PARAM
     }).count() + 1;
@@ -123,7 +129,7 @@ pub(super) fn guard_scalar_param(
     // PHP's "called in" names the line where the call starts, not the argument's line.
     let line = ctx.call_site_span.map_or(span.line, |call| call.line);
     let encoded = format!(
-        "{mode}\u{1f}{callable}(): Argument #{argument} (${}) must be of type {}, \u{1f} given, called in {source_path} on line {line}",
+        "{mode}{release}\u{1f}{callable}(): Argument #{argument} (${}) must be of type {}, \u{1f} given, called in {source_path} on line {line}",
         sig.params[index].0,
         crate::types::diagnostic_names::php_type_name(&declared),
     );
