@@ -60,6 +60,7 @@ pub fn inject_if_used(
     overrides: &[(String, String)],
     preload: Option<&PreloadStatistics>,
     strict: bool,
+    force_ini_get: bool,
     inventory: &mut crate::optimize::reachability::PreludeInventory,
 ) -> (Program, ManifestBakeSites) {
     crate::compiler_stack::with_compiler_stack(|| {
@@ -72,6 +73,7 @@ pub fn inject_if_used(
             overrides,
             preload,
             strict,
+            force_ini_get,
             inventory,
         )
     })
@@ -98,6 +100,7 @@ fn inject_if_used_on_compiler_stack(
     overrides: &[(String, String)],
     preload: Option<&PreloadStatistics>,
     strict: bool,
+    force_ini_get: bool,
     inventory: &mut crate::optimize::reachability::PreludeInventory,
 ) -> (Program, ManifestBakeSites) {
     let mut sites = ManifestBakeSites {
@@ -254,7 +257,10 @@ fn inject_if_used_on_compiler_stack(
         // is pay-for-use with its own redeclaration guard; the shared helpers are injected once
         // whenever any of the three is.
         if !web {
-            let ini_get_used = detect::program_references(&program, "ini_get")
+            // `force_ini_get` covers the tokenizer memory guard when `--ini memory_limit=...`
+            // configured a limit but the user program never mentions `ini_get`: the guard has to
+            // read the active Core INI value instead of falling back to the compiled heap size.
+            let ini_get_used = (force_ini_get || detect::program_references(&program, "ini_get"))
                 && !detect::program_declares(&program, "ini_get");
             // Inside `if !web`, so the flag reduces to the CLI reference check.
             let ini_set_used = ini_set_injected;

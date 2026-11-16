@@ -118,6 +118,24 @@ counter();
     assert_eq!(out, "123");
 }
 
+/// Multiple declarators in one `static` statement each keep their own storage.
+#[test]
+fn test_static_multiple_declarations() {
+    let out = compile_and_run(
+        r#"<?php
+function counter() {
+    static $a = 0, $b = 10;
+    $a++;
+    $b--;
+    echo $a, ':', $b, ' ';
+}
+counter();
+counter();
+"#,
+    );
+    assert_eq!(out, "1:9 2:8 ");
+}
+
 /// Verifies that a static variable declared without an initializer defaults to null.
 #[test]
 fn test_static_without_initializer_defaults_to_null() {

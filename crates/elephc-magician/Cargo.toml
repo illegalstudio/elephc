@@ -33,7 +33,7 @@ curl = ["elephc-builtin-contract/curl"]
 
 [dependencies]
 elephc-process-context = { path = "../elephc-process-context" }
-elephc-tokenizer-engine = { path = "../elephc-tokenizer-engine" }
+elephc-tokenizer-engine = { path = "../elephc-tokenizer-engine", features = ["parse"] }
 elephc-generics = { path = "../elephc-generics" }
 elephc-builtin-contract = { path = "../elephc-builtin-contract" }
 elephc-crypto = { path = "../elephc-crypto" }

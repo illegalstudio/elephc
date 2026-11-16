@@ -308,6 +308,14 @@ pub(in crate::codegen::lower_inst) fn lower_eval_constant_fetch(
     eval::lower_eval_constant_fetch(ctx, inst)
 }
 
+/// Lowers a constant read that chooses between native storage and the eval registry at run time.
+pub(in crate::codegen::lower_inst) fn lower_eval_constant_fetch_or_global(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+) -> Result<()> {
+    eval::lower_eval_constant_fetch_or_global(ctx, inst)
+}
+
 /// Lowers post-eval class-like constant fetches to the optional eval bridge.
 pub(in crate::codegen::lower_inst) fn lower_eval_class_constant_fetch(
     ctx: &mut FunctionContext<'_>,

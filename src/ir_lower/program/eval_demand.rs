@@ -245,7 +245,9 @@ fn named_dynamic_op_target(module: &Module, inst: &crate::ir::Instruction) -> Op
                 php_symbol_key(method),
             ))
         }
-        Op::EvalConstantExists | Op::EvalConstantFetch => Some(NamedTarget::Constant),
+        Op::EvalConstantExists | Op::EvalConstantFetch | Op::EvalConstantFetchOrGlobal => {
+            Some(NamedTarget::Constant)
+        }
         _ => None,
     }
 }
@@ -266,6 +268,7 @@ pub(in crate::ir_lower) fn instruction_uses_eval(
             | Op::EvalClassExists
             | Op::EvalConstantExists
             | Op::EvalConstantFetch
+            | Op::EvalConstantFetchOrGlobal
     ) || builtin_call_is_eval(module, inst)
 }
 

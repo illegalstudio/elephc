@@ -131,6 +131,8 @@ fn dummy_check_result() -> CheckResult {
         requested_method_instantiations: Vec::new(),
         generic_method_sites: std::collections::HashMap::new(),
         generic_new_sites: Default::default(),
+        program_contains_eval: false,
+        native_defined_constants: Default::default(),
         generic_call_sites: HashMap::new(),
         global_env: HashMap::new(),
         functions,

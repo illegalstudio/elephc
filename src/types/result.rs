@@ -143,6 +143,14 @@ pub struct CheckResult {
     /// (enclosing body scope, `new` site) -> the instantiated class it resolved to, consumed by
     /// `generics::classes` as an AST rewrite. See `Checker::generic_new_sites` for the key.
     pub generic_new_sites: HashMap<(String, Span), std::collections::BTreeSet<String>>,
+    /// Whether the checked source can call `eval()` anywhere, including code the optimizer may
+    /// later remove. EIR lowering keeps an unresolved declared-initializer constant on the
+    /// eval-aware runtime lookup instead of reading native global storage when this is set.
+    pub program_contains_eval: bool,
+    /// Literal names a compiled `define()` declares anywhere in the checked source, including
+    /// calls inside functions. These names keep the native global lookup even in an eval-aware
+    /// program, because the compiled call writes native storage rather than an eval context.
+    pub native_defined_constants: HashSet<String>,
     pub global_env: TypeEnv,
     pub functions: HashMap<String, FunctionSig>,
     pub function_attribute_names: HashMap<String, Vec<String>>,

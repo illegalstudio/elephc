@@ -23,6 +23,24 @@ fn tokenizer_function_arity_errors() {
     }
 }
 
+/// A statically sized spread cannot smuggle surplus positional arguments past arity.
+#[test]
+fn tokenizer_function_static_spread_arity_error() {
+    let error = check_source("<?php token_get_all('x', ...[0, 1]);")
+        .expect_err("surplus spread elements must fail");
+    assert!(
+        error.contains("Function 'token_get_all' expects 1 to 2 arguments, got 3"),
+        "{error}"
+    );
+}
+
+/// A nested unpack makes the spread length unknown, so arity is left to the runtime.
+#[test]
+fn tokenizer_function_nested_spread_skips_static_arity_error() {
+    check_source("<?php $empty = []; token_get_all('x', ...[0, ...$empty]);")
+        .expect("a nested unpack must not be counted as a positional argument");
+}
+
 /// Tokenizer string and integer parameters reject array input.
 #[test]
 fn tokenizer_function_argument_type_errors() {

@@ -4392,6 +4392,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
                     | Op::EvalFunctionCall
                     | Op::EvalFunctionCallArray
                     | Op::EvalConstantFetch
+                    | Op::EvalConstantFetchOrGlobal
                     | Op::EvalStaticMethodCall
                     | Op::RuntimeCall
                     | Op::ExternCall
@@ -6215,7 +6216,7 @@ pub(super) fn opcode_has_opaque_user_code_target(op: Op, immediate: Option<&Imme
         ) => true,
         (Op::CoreBuiltin, Some(Immediate::I64(selector))) => {
             matches!(crate::ir::CoreBuiltinOp::from_i64(*selector),
-                Some(crate::ir::CoreBuiltinOp::TriggerError | crate::ir::CoreBuiltinOp::BuiltinWarning | crate::ir::CoreBuiltinOp::BuiltinDeprecated))
+                Some(crate::ir::CoreBuiltinOp::TriggerError | crate::ir::CoreBuiltinOp::BuiltinWarning | crate::ir::CoreBuiltinOp::BuiltinWarningAt | crate::ir::CoreBuiltinOp::BuiltinDeprecatedAt | crate::ir::CoreBuiltinOp::BuiltinDeprecated))
         }
         _ => false,
     }

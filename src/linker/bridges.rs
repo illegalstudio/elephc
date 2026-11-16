@@ -799,6 +799,9 @@ fn path_dependency_dirs(crate_dir: &Path) -> Vec<PathBuf> {
             collect_path_dependencies(entry, crate_dir, &mut dirs);
         }
     }
+    // A wrapper crate can compile another crate's sources without a `path` dependency, as
+    // `elephc-syntax-validate` does for `../elephc-syntax/src/lib.rs`.
+    dirs.extend(elephc::bridge_sources::external_source_crates(&parsed, crate_dir));
     dirs
 }
 
@@ -1542,6 +1545,38 @@ mod tests {
         assert_eq!(found, vec!["a", "b", "c", "d"]);
 
         let _ = std::fs::remove_dir_all(&crate_dir);
+    }
+
+    /// A wrapper crate that compiles another crate's `[lib].path` source is watched too.
+    ///
+    /// `elephc-syntax-validate` builds `../elephc-syntax/src/lib.rs` through `[lib].path`
+    /// rather than a `path` dependency, so a parser edit used to leave its archive looking
+    /// fresh and an old validator linked into compiled programs.
+    #[test]
+    fn path_dependency_dirs_follows_an_external_lib_path() {
+        let root = scratch("external_lib_path");
+        std::fs::create_dir_all(root.join("shared/src")).expect("shared src dir");
+        std::fs::write(
+            root.join("shared/Cargo.toml"),
+            "[package]\nname = \"shared\"\nversion = \"0.1.0\"\n",
+        )
+        .expect("write shared manifest");
+        std::fs::write(root.join("shared/src/lib.rs"), "").expect("write shared lib");
+        std::fs::create_dir_all(root.join("wrapper")).expect("wrapper dir");
+        std::fs::write(
+            root.join("wrapper/Cargo.toml"),
+            "[package]\nname = \"wrapper\"\nversion = \"0.1.0\"\n\n\
+             [lib]\npath = \"../shared/src/lib.rs\"\n",
+        )
+        .expect("write wrapper manifest");
+
+        let found: Vec<String> = path_dependency_dirs(&root.join("wrapper"))
+            .iter()
+            .filter_map(|path| path.file_name().map(|name| name.to_string_lossy().into_owned()))
+            .collect();
+        assert_eq!(found, vec!["shared"]);
+
+        let _ = std::fs::remove_dir_all(&root);
     }
 
     /// Every bridge crate must appear in the lists CI, the Docker scripts and the

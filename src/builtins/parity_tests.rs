@@ -76,7 +76,7 @@ fn injected_prelude_programs() -> Vec<(&'static str, crate::parser::ast::Program
         ("simplexml_prelude", crate::simplexml_prelude::declarations()),
         ("tidy_prelude", crate::tidy_prelude::tidy_declarations()),
         ("fileinfo_prelude", crate::fileinfo_prelude::fileinfo_declarations()),
-        ("tokenizer_prelude", crate::tokenizer_prelude::tokenizer_declarations()),
+        ("tokenizer_prelude", crate::tokenizer_prelude::tokenizer_declarations(134_217_728, crate::tokenizer_prelude::IniMemorySource::None)),
         ("testing_prelude", crate::testing_prelude::testing_declarations()),
         (
             "version_prelude",
@@ -151,6 +151,7 @@ fn opcache_api_program() -> crate::parser::ast::Program {
         &[],
         &[],
         None,
+        false,
         false,
         &mut inventory,
     );
