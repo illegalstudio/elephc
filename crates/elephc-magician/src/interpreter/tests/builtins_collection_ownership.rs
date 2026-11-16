@@ -261,3 +261,27 @@ fn core_integer_arguments_release_conversion_cells() {
         }
     }
 }
+
+/// `==` over two arrays and `+` over an array release every key and element read they make.
+///
+/// Every `array_iter_key`/`array_get`/`array_key_exists`/`compare` result is an owned cell, so
+/// each one the comparison or the union allocates has to be given back.
+#[test]
+fn array_equality_and_union_release_the_cells_they_read() {
+    let mut values = FakeOps::default();
+    let one = values.int(1).unwrap();
+    let two = values.int(2).unwrap();
+    let left = values.alloc(FakeValue::Array(vec![one, two]));
+    let right = values.alloc(FakeValue::Array(vec![one, two, one]));
+    let same = values.alloc(FakeValue::Array(vec![one, two]));
+    let before = values.values.keys().copied().collect::<Vec<_>>();
+    assert!(eval_values_loosely_equal(left, same, &mut values).unwrap());
+    let union = eval_array_union_result(left, right, &mut values).unwrap();
+    for id in values.values.keys() {
+        let cell = RuntimeCellHandle::from_raw(*id as *mut crate::value::RuntimeCell);
+        if before.contains(id) || cell == union {
+            continue;
+        }
+        assert!(values.releases.contains(&cell), "leaked cell {id}: {:?}", values.get(cell));
+    }
+}

@@ -174,14 +174,41 @@ pub(in crate::interpreter) fn eval_values_loosely_equal(
             return Ok(false);
         }
         for position in 0..len {
+            // Every read below is an owned cell: they are all given back, on every exit.
             let key = values.array_iter_key(left, position)?;
-            let present = values.array_key_exists(key, right)?;
-            if !values.truthy(present)? {
-                return Ok(false);
+            let present = values.array_key_exists(key, right);
+            let found = match present {
+                Ok(present) => {
+                    let truthy = values.truthy(present);
+                    values.release(present)?;
+                    truthy
+                }
+                Err(status) => Err(status),
+            };
+            if !found.as_ref().is_ok_and(|found| *found) {
+                values.release(key)?;
+                return found;
             }
-            let left_item = values.array_get(left, key)?;
-            let right_item = values.array_get(right, key)?;
-            if !eval_values_loosely_equal(left_item, right_item, values)? {
+            let items = values
+                .array_get(left, key)
+                .and_then(|left_item| match values.array_get(right, key) {
+                    Ok(right_item) => Ok((left_item, right_item)),
+                    Err(status) => {
+                        let _ = values.release(left_item);
+                        Err(status)
+                    }
+                });
+            let equal = match items {
+                Ok((left_item, right_item)) => {
+                    let equal = eval_values_loosely_equal(left_item, right_item, values);
+                    values.release(left_item)?;
+                    values.release(right_item)?;
+                    equal
+                }
+                Err(status) => Err(status),
+            };
+            values.release(key)?;
+            if !equal? {
                 return Ok(false);
             }
         }
@@ -200,7 +227,9 @@ pub(in crate::interpreter) fn eval_values_loosely_equal(
         return Ok(false);
     }
     let equal = values.compare(EvalBinOp::LooseEq, left, right)?;
-    values.truthy(equal)
+    let truthy = values.truthy(equal);
+    values.release(equal)?;
+    truthy
 }
 
 /// PHP's `&`, `|` and `^` on two STRINGS: byte by byte, never through integers.
@@ -232,7 +261,7 @@ fn eval_string_bitwise_result(
 }
 
 /// Builds PHP's left-biased array union while preserving insertion order.
-fn eval_array_union_result(
+pub(in crate::interpreter) fn eval_array_union_result(
     left: RuntimeCellHandle,
     right: RuntimeCellHandle,
     values: &mut impl RuntimeValueOps,
@@ -240,13 +269,20 @@ fn eval_array_union_result(
     let mut result = values.array_clone_shallow(left)?;
     let right_len = values.array_len(right)?;
     for position in 0..right_len {
+        // The key, the existence answer and the element read are owned cells; storage retains
+        // the element on its own, so every temporary is given back here.
         let key = values.array_iter_key(right, position)?;
         let exists = values.array_key_exists(key, result)?;
-        if values.truthy(exists)? {
+        let present = values.truthy(exists);
+        values.release(exists)?;
+        if present? {
+            values.release(key)?;
             continue;
         }
         let value = values.array_get(right, key)?;
         result = values.array_set(result, key, value)?;
+        values.release(value)?;
+        values.release(key)?;
     }
     Ok(result)
 }
