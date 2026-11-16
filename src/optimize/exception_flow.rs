@@ -136,9 +136,13 @@ pub(super) struct ExceptionFlowAnalysis {
 fn declared_entry_check(signature: &FunctionSig) -> Option<EntryCheck> {
     // A by-value `callable` parameter keeps the PHP value it received and checks it on entry
     // (`must be of type callable, T given`); a fresh object can fail that check too.
+    // A by-reference `callable &...$xs` is stored as `array<mixed>` and keeps its element
+    // contract only in the source hint, which its entry check reads.
     if signature.params.iter().any(|(_, ty)| {
         ty.declares_callable() || matches!(ty, PhpType::Array(element) if element.declares_callable())
-    }) {
+    }) || crate::types::signatures::variadic_source_element_type_expr(signature)
+        .is_some_and(crate::types::checker::type_expr_declares_callable)
+    {
         return Some(EntryCheck::Always);
     }
     // Literal false arguments are checked before ABI truthiness coercion, even for pure bodies.
