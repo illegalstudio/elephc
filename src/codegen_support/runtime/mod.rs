@@ -126,3 +126,6 @@ mod memoir_boxed_tests;
 
 #[cfg(test)]
 mod memoir_identity_tests;
+
+#[cfg(test)]
+mod memoir_interop_tests;

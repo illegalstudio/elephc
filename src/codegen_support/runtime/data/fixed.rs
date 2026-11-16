@@ -286,9 +286,7 @@ pub(crate) fn emit_runtime_data_fixed(
     // __rt_pr_finish into an owned heap string. Only non-zero during an active
     // print_r rendering, so ordinary output is unaffected.
     out.push_str(&comm_directive("_print_r_mode", 8, target));
-    out.push_str(&comm_directive("_print_r_off", 8, target));
-    out.push_str(&comm_directive("_print_r_ptr", 8, target));
-    out.push_str(&comm_directive("_print_r_cap", 8, target));
+    elephc_memoir::data::append_capture_buffer_storage(&mut out, &target);
     // Output-buffering (ob_*) stack state. _ob_level is the active nesting depth
     // (0 = no buffering) consulted by __rt_stdout_write and __rt_pr_write before
     // the terminal write syscall; _ob_ptrs/_ob_lens/_ob_caps are 64-slot parallel

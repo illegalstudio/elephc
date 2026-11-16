@@ -188,3 +188,10 @@ pub fn append_object_handle_storage(out: &mut String, heap_size: usize, target: 
 pub fn append_object_handle_cursor(out: &mut String) {
     out.push_str(".globl _obj_handle_next\n_obj_handle_next:\n    .quad 1\n");
 }
+
+/// Reserves byte count, raw storage and capacity while the compiler owns capture routing.
+pub fn append_capture_buffer_storage(out: &mut String, target: &impl DataTarget) {
+    out.push_str(&target.common("_print_r_off", 8));
+    out.push_str(&target.common("_print_r_ptr", 8));
+    out.push_str(&target.common("_print_r_cap", 8));
+}

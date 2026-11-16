@@ -68,3 +68,5 @@ pub mod temporary_owners;
 pub mod identity_pin;
 pub mod object_handles;
 pub mod stacks;
+
+pub mod interop;

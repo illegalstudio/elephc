@@ -11,15 +11,21 @@ The compiler-side `elephc-memoir` crate centralizes the Rust code that emits
 heap allocation, reference counting, cycle collection, graph traversal, COW,
 cloning, deep release, owned strings, growable string buffers, consuming append,
 callable capture release, hash ownership guards, buffers, Mixed boxing, persistent
-references, unboxing, protected cleanup, temporary-owner transfers, reference acquisition,
-identity pinning, object-handle recycling and guarded stack allocation/free.
+references, unboxing, protected cleanup, temporary-owner transfers,
+reference acquisition,
+identity pinning, object-handle recycling, guarded stack allocation/free, byte-string
+concatenation, C-string copies, raw capture buffers and zval storage retirement.
 It also owns fixed heap/GC/buffer state, handle tables and string-scratch
-declarations. It is an ordinary compiler dependency and is never linked as a Rust library into compiled PHP programs. Those programs contain the same
+declarations. It is an ordinary compiler dependency and is never linked as a Rust
+library into compiled PHP programs. Those programs contain the same
 assembly `__rt_*` helpers. EIR ownership analysis and optimization remain in the
 compiler, together with PHP type/reference validation, resource identity policy,
-layout definitions, PHP object hash formatting, platform mapping flags,
-semantic runtime data, helper ordering and linking. The compiler emitter adapter supplies target ABI operations and layout facts to
-Memoir. Memoir source changes also participate in runtime-object cache identity.
+layout definitions, PHP formatting and output routing, zval pack/unpack,
+platform mapping flags, semantic runtime data, helper ordering and linking. The
+compiler emitter adapter supplies target ABI operations and layout facts to Memoir. Capture cleanup receives a compiler callback for its mode reset. Zval
+storage cleanup releases copied strings/arrays and leaves borrowed native
+object/resource payloads untouched. Memoir source changes also participate in
+runtime-object cache identity.
 
 This page explains where every value lives in memory at runtime.
 
