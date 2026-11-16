@@ -39,8 +39,12 @@ const SETTYPE_HELPER: &str = "__elephc_settype";
 pub fn split_ternary_literal_formats(mut program: Program) -> Program {
     let mut uses_settype = false;
     let mut uses_highlight = false;
+    let user_functions = user_function_names(&program);
     walk_nodes_mut(&mut program, &mut |node| {
         if let NodeMut::Expr(expr) = node {
+            if is_user_function_call(expr, &user_functions) {
+                return;
+            }
             if let Some(rewritten) = rewrite_highlight_call(expr, &mut uses_highlight)
                 .or_else(|| rewrite_call(expr, &mut uses_settype))
             {
@@ -61,6 +65,27 @@ pub fn split_ternary_literal_formats(mut program: Program) -> Program {
         return combined;
     }
     program
+}
+
+/// The lower-cased names of every function the program declares, at any depth.
+fn user_function_names(program: &Program) -> std::collections::HashSet<String> {
+    let mut names = std::collections::HashSet::new();
+    crate::parser::ast::visit::walk_stmts(program, &mut |stmt| {
+        if let StmtKind::FunctionDecl { name, .. } = &stmt.kind {
+            names.insert(name.trim_start_matches('\\').to_ascii_lowercase());
+        }
+    });
+    names
+}
+
+/// Whether `expr` calls a function the program itself declares (e.g. a namespaced
+/// `App\settype`): the rewrites below match the unqualified last segment, so such a call must be
+/// left alone or the user's function would be replaced by the builtin's helper.
+fn is_user_function_call(expr: &Expr, user_functions: &std::collections::HashSet<String>) -> bool {
+    let ExprKind::FunctionCall { name, .. } = &expr.kind else {
+        return false;
+    };
+    user_functions.contains(&name.as_str().trim_start_matches('\\').to_ascii_lowercase())
 }
 
 /// Routes a direct `highlight_string()`/`highlight_file()` call to its native-rendering helper.

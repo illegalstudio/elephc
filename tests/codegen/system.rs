@@ -4887,6 +4887,24 @@ foreach ([
     );
 }
 
+/// A user's namespaced `settype()` / `highlight_string()` keeps winning over the builtin helpers
+/// the literal-format pass routes the global functions to. Host PHP 8.5.
+#[test]
+fn test_namespaced_user_settype_and_highlight_string_are_not_hijacked() {
+    let out = compile_and_run(
+        r#"<?php
+namespace App;
+function settype($a, $b) { echo "mine-settype\n"; return true; }
+function highlight_string($code, $return = false) { return "mine-highlight"; }
+$v = "1";
+settype($v, "int");
+var_dump($v);
+echo highlight_string('<?php 1;', true), "\n";
+"#,
+    );
+    assert_eq!(out, "mine-settype\nstring(1) \"1\"\nmine-highlight\n");
+}
+
 /// intl's `Locale` default follows ICU's POSIX resolution, as php reads it with an empty
 /// `intl.default_locale`: `LC_ALL` first, codeset dropped, modifier appended upper-cased, `C` and
 /// `POSIX` meaning `en_US_POSIX`; `setDefault()` replaces it and `setDefault('')` restores it.
@@ -4910,4 +4928,6 @@ echo Locale::getDefault();
     assert_eq!(run("fr_FR.UTF-8"), "class|fr_FR|bool(true)\npt-BR|fr_FR");
     assert_eq!(run("C.UTF-8"), "class|en_US_POSIX|bool(true)\npt-BR|en_US_POSIX");
     assert_eq!(run("sr_RS.UTF-8@latin"), "class|sr_RS_LATIN|bool(true)\npt-BR|sr_RS_LATIN");
+    // ICU joins a modifier to a country-less id with two underscores (php 8.5.10 measured).
+    assert_eq!(run("sr@latin"), "class|sr__LATIN|bool(true)\npt-BR|sr__LATIN");
 }
