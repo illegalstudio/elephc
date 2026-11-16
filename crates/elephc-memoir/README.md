@@ -10,8 +10,9 @@ capability. Generated programs continue to use the same emitted `__rt_*` helpers
 Memoir owns heap allocation and consolidation, allocator diagnostics and metrics,
 reference counting, cycle collection and candidate proofs, graph traversal,
 container allocation and growth, copy-on-write and cloning, deep release, owned
-strings and scratch allocation, generation-safe buffers, and reference-cell
-lifetime and pin primitives. It also emits fixed heap, GC, buffer, reference-root
+strings and scratch allocation, growable output buffers, consuming string append,
+callable-descriptor retirement, hash-entry ownership guards, generation-safe
+buffers, and reference-cell lifetime and pin primitives. It also emits fixed heap, GC, buffer, reference-root
 and string-scratch declarations, keeping their existing order and byte layout.
 
 The `Emitter` trait delegates assembly output, symbol spelling, library-boundary
@@ -27,11 +28,12 @@ Memory constants live in Memoir with compatibility re-exports where needed.
 The former compiler memory modules retain thin adapters and integration tests;
 they contain no duplicate implementation.
 
-Both extractions preserve emitted instructions, labels and ownership behavior.
+The extractions preserve emitted instructions, labels and ownership behavior.
 Frozen assembly fingerprints cover all five supported targets and executable,
 PIC, recoverable-library, hosted-extension and dead-strip configurations. The
 value-storage fingerprints also cover optional resource hooks and the complete
-fixed runtime-data block.
+fixed runtime-data block. Storage fingerprints additionally cover growable
+buffers, append metadata variants, callable capture release and hash guards.
 
 `build.rs` includes this crate's Rust sources in the runtime-cache identity.
 Changes to these emitters therefore invalidate cached runtime objects even when

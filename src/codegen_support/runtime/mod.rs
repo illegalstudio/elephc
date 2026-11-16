@@ -118,3 +118,6 @@ mod memoir;
 
 #[cfg(test)]
 mod memoir_values_tests;
+
+#[cfg(test)]
+mod memoir_storage_tests;

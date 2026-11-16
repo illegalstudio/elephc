@@ -8,10 +8,10 @@
 //! - Header size is capacity, logical length stays in the returned string pair.
 //! - The old owner survives all allocation and copying until the replacement is ready.
 
-use crate::codegen_support::emit::Emitter;
+use crate::Emitter;
 
 /// Emits the target ABI helper while preserving frame alignment across nested calls.
-pub(super) fn emit(emitter: &mut Emitter, mbstring: bool) {
+pub(super) fn emit(emitter: &mut impl Emitter, mbstring: bool) {
     emitter.blank();
     emitter.comment("--- runtime: consuming string append ---");
     // -- set up the frame and preserve the input owner --
@@ -81,7 +81,7 @@ pub(super) fn emit(emitter: &mut Emitter, mbstring: bool) {
     emitter.instruction("mov rax, 16");                                         // start small strings with sixteen bytes of capacity
     emitter.label("__rt_str_append_reserve");
     emitter.instruction("call __rt_heap_alloc");                                // allocate before consuming any old ownership
-    emitter.instruction(&format!("mov r10, 0x{:x}", crate::codegen_support::sentinels::x86_64_heap_kind_word(1))); // stamp ordinary string ownership with the x86 heap marker
+    emitter.instruction(&format!("mov r10, 0x{:x}", crate::layout::x86_64_heap_kind_word(1))); // stamp ordinary string ownership with the x86 heap marker
     emitter.instruction("mov QWORD PTR [rax - 8], r10");                        // publish the new allocation's string kind
     emitter.instruction("mov QWORD PTR [rbp - 48], rax");                       // preserve the replacement payload across further calls
     // -- detach lazy metadata before mutating the result bytes --

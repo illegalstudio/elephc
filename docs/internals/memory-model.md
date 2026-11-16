@@ -9,7 +9,8 @@ elephc manages memory without calling `malloc`/`free` for PHP values directly. S
 
 The compiler-side `elephc-memoir` crate centralizes the Rust code that emits
 heap allocation, reference counting, cycle collection, graph traversal, COW,
-cloning, deep release, owned strings, buffers and reference-cell lifetime.
+cloning, deep release, owned strings, growable string buffers, consuming append,
+callable capture release, hash ownership guards, buffers and reference-cell lifetime.
 It also owns fixed heap/GC/buffer state and string-scratch declarations. It is an ordinary compiler dependency and is never linked
 as a Rust library into compiled PHP programs. Those programs contain the same
 assembly `__rt_*` helpers. EIR ownership analysis and optimization remain in the
