@@ -109,6 +109,14 @@ pub(super) fn prepare_call_site(
                 .map_or(0, |span| span.line),
         );
         let descriptor = match &span_file {
+            // A literal eval fragment compiled ahead of time is shared by every `eval()` site
+            // with its text; php names the site that ran it, `FILE(LINE) : eval()'d code`, which
+            // that site writes into this descriptor around the call.
+            None if crate::eval_aot::is_eir_fragment_function_name(&ctx.function.name) => {
+                crate::codegen_support::data_section::DataWord::Symbol(
+                    "_rt_eval_site_file".to_string(),
+                )
+            }
             Some(path) => {
                 let (label, len) = ctx.data.add_string(path.as_bytes());
                 let descriptor = ctx.data.add_words(vec![

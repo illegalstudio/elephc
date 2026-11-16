@@ -300,7 +300,7 @@ use public_utilities::*;
 
 #[allow(unused_imports)]
 pub(crate) use planning::{
-    eir_function_name, eir_scope_function_name, parse_literal_fragment,
+    eir_function_name, eir_scope_function_name, is_eir_fragment_function_name, parse_literal_fragment,
     parse_literal_fragment_with_source_path, plan_literal_fragment_with_source_path_and_static_and_method_calls,
     plan_literal_fragment_with_static_and_method_calls, plan_literal_fragment_with_static_calls,
 };

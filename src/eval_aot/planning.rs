@@ -58,6 +58,12 @@ pub(crate) fn eir_function_name(fragment: &str, strict_php: bool) -> String {
     )
 }
 
+/// Returns whether `name` is an internal function compiled from a literal eval fragment, either
+/// form above.
+pub(crate) fn is_eir_fragment_function_name(name: &str) -> bool {
+    name.starts_with(EIR_AOT_FUNCTION_PREFIX)
+}
+
 /// Returns a deterministic internal function name for a profiled scope-aware eval fragment.
 pub(crate) fn eir_scope_function_name(fragment: &str, strict_php: bool) -> String {
     format!(

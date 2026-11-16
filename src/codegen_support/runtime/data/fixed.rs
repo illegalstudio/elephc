@@ -677,6 +677,12 @@ pub(crate) fn emit_runtime_data_fixed(
     out.push_str(&comm_directive("_rt_diag_file_ptr", 8, target));
     out.push_str(&comm_directive("_rt_diag_file_len", 8, target));
     out.push_str(&comm_directive("_rt_diag_line", 8, target));
+    // The `{ptr, len}` file descriptor naming the literal eval fragment running now,
+    // `FILE(LINE) : eval()'d code`. A fragment compiled ahead of time is ONE function shared by
+    // every `eval()` site with the same text, so its sites cannot name their file statically:
+    // their `_php_site` records point at this descriptor, and the `eval()` site fills it around
+    // the call.
+    out.push_str(&comm_directive("_rt_eval_site_file", 16, target));
     // elephc_web_capture: per-request output-capture mode flag read by
     // __rt_stdout_write. Zero (the default) routes echo output to the plain
     // write(1, …) syscall; non-zero (set only by the --web bridge) routes it to

@@ -3075,10 +3075,35 @@ pub(super) fn emit_publish_diag_location(ctx: &mut FunctionContext<'_>) {
         Arch::AArch64 => "x10",
         Arch::X86_64 => "r10",
     };
+    let fragment_labels = crate::eval_aot::is_eir_fragment_function_name(&ctx.function.name)
+        .then(|| (ctx.next_label("diag_static_file"), ctx.next_label("diag_file_done")));
+    if let Some((static_file, file_done)) = &fragment_labels {
+        // A literal eval fragment compiled ahead of time is shared by every `eval()` site with
+        // the same text; php names the site that ran it, `FILE(LINE) : eval()'d code`, which
+        // that site stored before the call. Outside such a call the host file stands.
+        abi::emit_load_symbol_to_reg(ctx.emitter, value_reg, "_rt_eval_site_file", 0);
+        match ctx.emitter.target.arch {
+            Arch::AArch64 => {
+                ctx.emitter.instruction(&format!("cbz {value_reg}, {static_file}")); // no eval site published: name the host file
+            }
+            Arch::X86_64 => {
+                ctx.emitter.instruction(&format!("test {value_reg}, {value_reg}")); // was an eval site published by the caller?
+                ctx.emitter.instruction(&format!("je {static_file}"));          // no eval site published: name the host file
+            }
+        }
+        abi::emit_store_reg_to_symbol(ctx.emitter, value_reg, "_rt_diag_file_ptr", 0);
+        abi::emit_load_symbol_to_reg(ctx.emitter, value_reg, "_rt_eval_site_file", 8);
+        abi::emit_store_reg_to_symbol(ctx.emitter, value_reg, "_rt_diag_file_len", 0);
+        abi::emit_jump(ctx.emitter, file_done);
+        ctx.emitter.label(static_file);
+    }
     abi::emit_symbol_address(ctx.emitter, value_reg, &file_label);
     abi::emit_store_reg_to_symbol(ctx.emitter, value_reg, "_rt_diag_file_ptr", 0);
     abi::emit_load_int_immediate(ctx.emitter, value_reg, file_len as i64);
     abi::emit_store_reg_to_symbol(ctx.emitter, value_reg, "_rt_diag_file_len", 0);
+    if let Some((_, file_done)) = &fragment_labels {
+        ctx.emitter.label(file_done);
+    }
     abi::emit_load_int_immediate(ctx.emitter, value_reg, i64::from(span.source_line()));
     abi::emit_store_reg_to_symbol(ctx.emitter, value_reg, "_rt_diag_line", 0);
 }

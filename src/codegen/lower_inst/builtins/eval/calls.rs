@@ -18,7 +18,12 @@ const EVAL_GUARDED_STACK_BYTES: usize = EVAL_STACK_BYTES + EXCEPTION_GUARD_SLOT_
 pub(in crate::codegen::lower_inst::builtins) fn lower_eval(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     super::super::ensure_arg_count(inst, "eval", 1)?;
     if let Some(fragment) = eval_literal_fragment(ctx, inst)? {
-        if lower_eval_literal_eir_function(ctx, inst, &fragment)? {
+        let published = publish_eval_fragment_site(ctx, inst);
+        let lowered = lower_eval_literal_eir_function(ctx, inst, &fragment)?;
+        if published {
+            restore_eval_fragment_site(ctx);
+        }
+        if lowered {
             return Ok(());
         }
     }
@@ -450,6 +455,63 @@ fn emit_dynamic_include_fast_path(
     abi::emit_jump(ctx.emitter, &done);
     ctx.emitter.label(&slow);
     Ok(Some(done))
+}
+
+/// Publishes this `eval()` site as `FILE(LINE) : eval()'d code` for the diagnostics of the
+/// fragment it may call, saving the previous site on the temporary stack. Returns whether it did.
+///
+/// A literal fragment compiled ahead of time is ONE function shared by every site with the same
+/// text, so its `_php_site` records point at the `_rt_eval_site_file` descriptor rather than at
+/// a file of their own (see `prepare_call_site` and `emit_publish_diag_location`); without it a
+/// warning raised inside `eval()` named the host file, where php names the eval'd code. Only
+/// scratch registers are used, so nothing the fragment call loads afterwards is disturbed. A
+/// fragment calling `eval()` keeps its own site.
+fn publish_eval_fragment_site(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> bool {
+    if crate::eval_aot::is_eir_fragment_function_name(&ctx.function.name) {
+        return false;
+    }
+    // The file the `eval()` itself sits in: an included file's spans carry their own identity.
+    let Some(host) = ctx
+        .span_source_file(inst.span)
+        .or_else(|| super::eval_source_path_for_function(ctx.module, ctx.function))
+        .map(str::to_string)
+    else {
+        return false;
+    };
+    let line = inst.span.map(|span| span.source_line()).unwrap_or(0);
+    let site = format!("{host}({line}) : eval()'d code");
+    let (site_label, site_len) = ctx.data.add_string(site.as_bytes());
+    let (ptr_reg, len_reg) = eval_site_scratch_regs(ctx);
+    abi::emit_load_symbol_to_reg(ctx.emitter, ptr_reg, "_rt_eval_site_file", 0);
+    abi::emit_load_symbol_to_reg(ctx.emitter, len_reg, "_rt_eval_site_file", 8);
+    abi::emit_push_reg_pair(ctx.emitter, ptr_reg, len_reg);
+    abi::emit_symbol_address(ctx.emitter, ptr_reg, &site_label);
+    abi::emit_store_reg_to_symbol(ctx.emitter, ptr_reg, "_rt_eval_site_file", 0);
+    abi::emit_load_int_immediate(ctx.emitter, ptr_reg, site_len as i64);
+    abi::emit_store_reg_to_symbol(ctx.emitter, ptr_reg, "_rt_eval_site_file", 8);
+    true
+}
+
+/// Puts back the `eval()` site [`publish_eval_fragment_site`] saved, so a fragment that called a
+/// function running another `eval()` names its own site again.
+fn restore_eval_fragment_site(ctx: &mut FunctionContext<'_>) {
+    let (ptr_reg, len_reg) = eval_site_scratch_regs(ctx);
+    abi::emit_pop_reg_pair(ctx.emitter, ptr_reg, len_reg);
+    abi::emit_store_reg_to_symbol(ctx.emitter, ptr_reg, "_rt_eval_site_file", 0);
+    // A store at a non-zero offset materializes the address in x86_64's symbol scratch (r11),
+    // which is `len_reg` there, so the length goes through `ptr_reg`.
+    abi::emit_reg_move(ctx.emitter, ptr_reg, len_reg);
+    abi::emit_store_reg_to_symbol(ctx.emitter, ptr_reg, "_rt_eval_site_file", 8);
+}
+
+/// Scratch registers that hold the eval site words: never argument or result registers, and
+/// never the AArch64 symbol-address scratch (x9). Only `ptr_reg` may be stored at a non-zero
+/// symbol offset, x86_64's `len_reg` being its symbol scratch.
+fn eval_site_scratch_regs(ctx: &FunctionContext<'_>) -> (&'static str, &'static str) {
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => ("x10", "x11"),
+        Arch::X86_64 => ("r10", "r11"),
+    }
 }
 
 /// Calls a pre-lowered internal EIR function for no-scope literal eval fragments.
