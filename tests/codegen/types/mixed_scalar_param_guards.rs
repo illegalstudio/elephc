@@ -641,3 +641,32 @@ echo $f(box(4.5)), "\n";
     );
     assert_eq!(out, "[7] Implicit conversion from float-string \"1.5\" to int loses precision\n1\n[10] Implicit conversion from float 2.5 to int loses precision\n2\n[12] Implicit conversion from float-string \"3.5\" to int loses precision\n3\n[12] Implicit conversion from float 5.5 to int loses precision\n[13] Implicit conversion from float 6.5 to int loses precision\n6\n[23] Implicit conversion from float 4.5 to int loses precision\n4\n");
 }
+
+/// With several deferred guards in one call, a later guard's `TypeError` must release what the
+/// earlier ones left: the fresh array bound to a second `int` (the last argument is never rooted
+/// while arguments are evaluated), and the string an earlier `string` guard's conversion made
+/// (a `Stringable`'s `__toString()` result or a converted box). Each caught call leaked them
+/// (review on the return-guard follow-up).
+#[test]
+fn test_guard_throw_after_an_earlier_guard_releases_its_operands() {
+    let output = compile_and_run_with_heap_debug(
+        r#"<?php
+function box(mixed $v): mixed { return $v; }
+function make(): mixed { return [str_repeat("a", 40), 2]; }
+function t(int $a, int $b): int { return $a + $b; }
+function u(string $s, int $b): int { return strlen($s) + $b; }
+class Name { public function __toString(): string { return str_repeat("n", 30); } }
+$n = 0;
+for ($i = 0; $i < 3; $i++) {
+    try { t(box(null), make()); } catch (TypeError $e) { $n++; }
+    try { u(box(new Name()), make()); } catch (TypeError $e) { $n++; }
+    try { u(box(str_repeat("s", 20)), box(null)); } catch (TypeError $e) { $n++; }
+    $n += t(box(1), box(2)) + u(box(new Name()), box("4"));
+}
+echo $n, "\n";
+"#,
+    );
+    assert!(output.success, "{}", output.stderr);
+    assert_eq!(output.stdout, "120\n");
+    assert!(output.stderr.contains("leak summary: clean"), "{}", output.stderr);
+}

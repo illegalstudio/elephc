@@ -441,7 +441,7 @@ fn emit_numeric_cold_check(
     // -- message: name the refused value and throw --
     ctx.emitter.label(&refuse);
     emit_rejected_type_name(ctx, value, &null_label)?;
-    emit_throw_with_name(ctx, prefix, suffix, release.then_some(value))?;
+    emit_throw_with_name(ctx, prefix, suffix, if release { &inst.operands[1..] } else { &[] })?;
     Ok(())
 }
 
@@ -581,7 +581,7 @@ fn emit_cold_check(
     }
     ctx.emitter.label(&name_label);
     emit_rejected_type_name(ctx, value, &null_label)?;
-    emit_throw_with_name(ctx, prefix, suffix, release.then_some(value))?;
+    emit_throw_with_name(ctx, prefix, suffix, if release { &inst.operands[1..] } else { &[] })?;
     Ok(())
 }
 
@@ -703,12 +703,13 @@ fn emit_word(ctx: &mut FunctionContext<'_>, word: &[u8]) {
 }
 
 /// Throws `TypeError(prefix . <name in the string result registers> . suffix)`, first
-/// releasing `release`, a refused owned operand no cleanup root covers.
+/// releasing `releases`, the call's owned operands no cleanup root covers (the refused value
+/// among them when it is one).
 fn emit_throw_with_name(
     ctx: &mut FunctionContext<'_>,
     prefix: &str,
     suffix: &str,
-    release: Option<crate::ir::ValueId>,
+    releases: &[crate::ir::ValueId],
 ) -> Result<()> {
     let (ptr_reg, len_reg) = abi::string_result_regs(ctx.emitter);
     let (second_ptr, second_len) = match ctx.emitter.target.arch {
@@ -724,12 +725,20 @@ fn emit_throw_with_name(
     abi::emit_call_label(ctx.emitter, "__rt_concat");
     super::enums::emit_concat_current_string_with_static_suffix(ctx, suffix);
     abi::emit_call_label(ctx.emitter, "__rt_str_persist");
-    if let Some(value) = release {
-        // -- release the refused owned operand; the persisted message survives the call --
+    if !releases.is_empty() {
+        // -- release the call's unpublished owned operands; the persisted message survives --
         let (ptr_reg, len_reg) = abi::string_result_regs(ctx.emitter);
         abi::emit_push_reg_pair(ctx.emitter, ptr_reg, len_reg);
-        ctx.load_value_to_result(value)?;
-        abi::emit_decref_if_refcounted(ctx.emitter, &PhpType::Mixed);
+        for value in releases {
+            // Lowering lists only owned temporaries, so a box is released unconditionally;
+            // anything else (a converted string) takes the generic release.
+            if matches!(ctx.value_php_type(*value)?.codegen_repr(), PhpType::Mixed | PhpType::Union(_)) {
+                ctx.load_value_to_result(*value)?;
+                abi::emit_decref_if_refcounted(ctx.emitter, &PhpType::Mixed);
+            } else {
+                super::ownership::release_value_if_owned(ctx, *value)?;
+            }
+        }
         abi::emit_pop_reg_pair(ctx.emitter, ptr_reg, len_reg);
     }
     super::enums::emit_throw_type_error_from_string_result(ctx);

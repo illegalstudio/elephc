@@ -294,7 +294,7 @@ pub(super) fn lower_release(ctx: &mut FunctionContext<'_>, inst: &Instruction) -
 ///
 /// Shared by `release` and by instructions that consume their operand on one path only,
 /// such as a static-local initializer that is dropped once the slot is already initialized.
-pub(super) fn release_value_if_owned(ctx: &mut FunctionContext<'_>, value: ValueId) -> Result<()> {
+pub(in crate::codegen::lower_inst) fn release_value_if_owned(ctx: &mut FunctionContext<'_>, value: ValueId) -> Result<()> {
     let ownership = ctx.value_ownership(value)?;
     if !ownership.may_require_release() {
         return Ok(());
