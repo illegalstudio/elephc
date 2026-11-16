@@ -587,7 +587,9 @@ pub(crate) static CONSTANTS: &[ConstantContract] = &[
     // BUMPING PCRE2 MUST BUMP ALL THREE TOGETHER. `pcre_version_constants_match_each_other` in
     // this file's tests fails when the string and the two integers drift apart, and
     // `pcre_version_constant_matches_the_pinned_native_dependency` in `src/native_deps/catalog.rs`
-    // fails when they drift from the pinned tarball.
+    // fails when the version NUMBER drifts from the pinned tarball. The release DATE after the
+    // number is copied by hand from that release's own `pcre2_config(PCRE2_CONFIG_VERSION)`
+    // answer and no test can derive it, so check it when bumping.
     constant!("PATH_SEPARATOR", Standard, ConstValue::TargetDependent(ConstType::Str)),
     constant!("PCRE_VERSION", Pcre, ConstValue::Str("10.47 2025-10-21")),
     constant!("PCRE_VERSION_MAJOR", Pcre, ConstValue::Int(10)),

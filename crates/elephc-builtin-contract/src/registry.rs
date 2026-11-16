@@ -248,4 +248,15 @@ mod tests {
             .requirements
             .is_empty());
     }
+
+    /// The case-mapping pair is compiled through the iconv bridge, so its contract must say so
+    /// (an earlier `mb_*` list answered first and left the iconv entry unreachable).
+    #[test]
+    fn mb_case_mapping_names_the_iconv_bridge() {
+        for name in ["mb_strtoupper", "mb_strtolower"] {
+            let requirements = lookup(name).expect("mb case contract").requirements;
+            assert!(requirements.contains(&crate::BuiltinRequirement::Bridge("elephc_iconv")));
+            assert!(requirements.contains(&crate::BuiltinRequirement::Bridge("elephc_mbstring")));
+        }
+    }
 }

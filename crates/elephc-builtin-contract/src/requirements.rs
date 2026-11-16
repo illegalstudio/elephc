@@ -28,6 +28,13 @@ const ICONV_BRIDGE: &[BuiltinRequirement] = &[
     BuiltinRequirement::Bridge("elephc_iconv"),
     BuiltinRequirement::MacOsLibrary("iconv"),
 ];
+/// `mb_strtoupper()` / `mb_strtolower()`: the compiled call lowers through the iconv bridge's case
+/// engine, while eval answers them from the mbstring bridge, so a program needs both.
+const MB_CASE_MAPPING: &[BuiltinRequirement] = &[
+    BuiltinRequirement::Bridge("elephc_iconv"),
+    BuiltinRequirement::MacOsLibrary("iconv"),
+    BuiltinRequirement::Bridge("elephc_mbstring"),
+];
 const REGEX: &[BuiltinRequirement] = &[BuiltinRequirement::RuntimeCapability("pcre2")];
 
 /// Returns fixed neutral requirements for one canonical shared contract ID.
@@ -186,7 +193,10 @@ pub(crate) fn fixed_requirements(id: BuiltinId) -> &'static [BuiltinRequirement]
     ) {
         return ZLIB;
     }
-    if matches_name(id, &["mb_regex_encoding", "mb_regex_set_options", "mb_strlen", "mb_strwidth", "mb_strtoupper", "mb_strtolower", "mb_convert_case", "mb_ucfirst", "mb_lcfirst", "mb_strimwidth",
+    if matches_name(id, &["mb_strtoupper", "mb_strtolower"]) {
+        return MB_CASE_MAPPING;
+    }
+    if matches_name(id, &["mb_regex_encoding", "mb_regex_set_options", "mb_strlen", "mb_strwidth", "mb_convert_case", "mb_ucfirst", "mb_lcfirst", "mb_strimwidth",
         "mb_substr", "mb_strcut", "mb_scrub", "mb_decode_mimeheader", "mb_encode_mimeheader", "mb_get_info", "mb_http_input", "mb_trim", "mb_ltrim", "mb_rtrim", "mb_str_pad", "mb_convert_kana", "mb_substr_count", "mb_ord", "mb_chr", "mb_strpos", "mb_stripos", "mb_strrpos", "mb_strripos", "mb_strstr", "mb_stristr", "mb_strrchr", "mb_strrichr", "mb_language", "mb_internal_encoding", "mb_http_output", "mb_encoding_aliases", "mb_str_split", "mb_preferred_mime_name"]) {
         return MBSTRING;
     }
@@ -203,9 +213,6 @@ pub(crate) fn fixed_requirements(id: BuiltinId) -> &'static [BuiltinRequirement]
             "iconv_strpos",
             "iconv_strrpos",
             "iconv_substr",
-            // mbstring's case mapping lives in the same bridge crate.
-            "mb_strtolower",
-            "mb_strtoupper",
         ],
     ) {
         return ICONV_BRIDGE;

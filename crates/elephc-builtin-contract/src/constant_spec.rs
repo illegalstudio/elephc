@@ -101,14 +101,10 @@ pub struct ConstantContract {
     /// exists on Windows builds only). `None` means every target. A restricted name stays typed
     /// for the checker, so a branch guarded by a platform test still compiles, but it is not
     /// defined elsewhere: `defined()` answers false and a read throws php's `Undefined constant`.
+    ///
+    /// The answer is read by `crate::types::predefined_constants::constant_defined_on_target`
+    /// (compiled code, which parses the target through `Target::parse`) and by eval's
+    /// `eval_constant_defined_on_host` (the host operating system); there is deliberately no third
+    /// predicate here that could disagree with them.
     pub target_support: Option<&'static [&'static str]>,
-}
-
-impl ConstantContract {
-    /// Returns whether php defines this constant on the target spelled `target`
-    /// (`macos-aarch64`, `linux-x86_64`, ...).
-    pub fn is_defined_on(&self, target: &str) -> bool {
-        self.target_support
-            .is_none_or(|targets| targets.contains(&target))
-    }
 }

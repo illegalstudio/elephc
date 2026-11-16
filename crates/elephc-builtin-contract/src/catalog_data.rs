@@ -4137,7 +4137,7 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         arity_error: None,
         returns: TypeSpec::Int,
         by_ref_return: false,
-        summary: "Finds the reflection table row of a class-like by lowercase name, or -1.",
+        summary: "Finds the reflection table row of a class-like by lowercase name, or 0 (row 0 is a blank).",
         examples: &[
         ],
         php_manual: None,

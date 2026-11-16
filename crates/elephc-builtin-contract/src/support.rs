@@ -182,15 +182,14 @@ pub fn eval_support(contract: &BuiltinContract) -> BackendSupport {
 
 /// Prelude-provided surfaces outside `ext/curl` that Magician binds with its own eval homes.
 ///
-/// The three non-hash entries are prelude surfaces INTERPRETED CODE CANNOT REACH: a compiler
-/// prelude is injected into the compiled program, and an `eval()` fragment never runs through
-/// it. Each therefore has a real interpreter implementation rather than a forward:
-/// `interpreter::builtins::core::var_export` (Symfony's routing dumper is interpreted and calls
-/// it), `interpreter::builtins::string::levenshtein`, and
-/// `interpreter::builtins::filesystem::file`. The four
-/// `sodium_crypto_box_*` entries are the
-/// same case: Symfony's `SodiumVault` is interpreted in an eval-heavy build, so
-/// `interpreter::builtins::string::sodium_box` calls `elephc_crypto::sodium` directly.
+/// Every entry is a prelude surface INTERPRETED CODE CANNOT REACH: a compiler prelude is injected
+/// into the compiled program, and an `eval()` fragment never runs through it. Each therefore has
+/// a real interpreter implementation rather than a forward. The list grew from three surfaces
+/// (`var_export`, which Symfony's interpreted routing dumper calls, `levenshtein` and `file`)
+/// to the families below, each with its interpreter home under `interpreter::builtins`:
+/// `sodium_crypto_box_*` (Symfony's `SodiumVault` calls `elephc_crypto::sodium` directly),
+/// the `array_*` comparator and edge helpers, `password_*`, `proc_*`, `preg_filter`,
+/// `preg_replace_callback_array`, `strtok`, `parse_str`, `version_compare` and the rest.
 /// Leaving one out is not a quiet loss of coverage —
 /// `spec.rs` asserts every binding has an execution route, so the interpreter aborts at startup.
 const EVAL_IMPLEMENTED_PRELUDE_SURFACES: &[&str] = &[

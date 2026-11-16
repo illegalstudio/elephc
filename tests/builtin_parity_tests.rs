@@ -35,8 +35,10 @@ const CURL_SURFACE_LEN: usize = if cfg!(feature = "curl") { 34 } else { 0 };
 /// See the derivation note at its use site. 365 = 357 + `addcslashes` + the four
 /// `sodium_crypto_box_*` wrappers `sodium_prelude` declares + `preg_filter` and
 /// `preg_replace_callback_array` (`preg_array_prelude`) + `get_class_vars`
-/// (`class_vars_prelude`).
-const PRELUDE_PROVIDED_NON_CURL: usize = 365;
+/// (`class_vars_prelude`) + the 34 prelude surfaces the closed-world Symfony work added
+/// (`array_*` comparators, `password_*`, `proc_*`, `strtok`, `version_compare`, ...), measured
+/// as 399 when this was re-derived.
+const PRELUDE_PROVIDED_NON_CURL: usize = 399;
 
 /// The two curl contracts whose eval route needs caller-addressable storage.
 ///
@@ -117,8 +119,8 @@ fn non_registry_surfaces_have_complete_backend_contracts() {
     //
     // `exceptional` is every contract whose `aot_support()` is not
     // `Implemented(Registry)`, minus the `curl_*` surface partitioned off above. That is
-    // exhaustively the five buckets below — `aot_support` maps each `BuiltinKind` to one
-    // `BackendImplementation` and has no sixth answer — so the TOTAL is not an independent
+    // exhaustively the six buckets below (the compiler transforms are the sixth) — `aot_support` maps each `BuiltinKind` to one
+    // `BackendImplementation` and has no further answer — so the TOTAL is not an independent
     // fact and is asserted as the sum rather than as a second literal. A standalone
     // `assert_eq!(exceptional.len(), 410)` used to sit above the loop; it went stale the
     // moment a prelude family landed and failed every run while the per-bucket numbers
@@ -126,11 +128,11 @@ fn non_registry_surfaces_have_complete_backend_contracts() {
     //
     // - `language_constructs` — compiled as syntax, not calls (`isset` and friends).
     // - `dedicated_syntax` — the one surface with its own parser production.
-    // - `unsupported` — 3, and it is a SUM of two lists in `support.rs`:
-    //   `is_eval_only_reflection` (`get_called_class`) plus `AOT_IMPLEMENTATION_PENDING`
-    //   (`register_tick_function`, `unregister_tick_function`). `get_class_methods` left the
-    //   first list when it was compiled natively, and `get_class_vars` when
-    //   `crate::class_vars_prelude` began building it, which moved it to `preludes`.
+    // - `unsupported` — 2: `AOT_IMPLEMENTATION_PENDING` in `support.rs`
+    //   (`register_tick_function`, `unregister_tick_function`). The eval-only reflection list
+    //   it once shared the bucket with is gone: `get_called_class`, `get_class_methods` and
+    //   `get_class_vars` are all compiled now (the last through `crate::class_vars_prelude`,
+    //   which moved it to `preludes`).
     // - `rewrites` — the date/calendar names the name resolver rewrites.
     // - `preludes` — every PHP-declared prelude function outside `ext/curl`. To re-derive:
     //   count `BuiltinKind::PreludeProvided` contracts whose `area` is not `Area::Curl`
@@ -138,7 +140,7 @@ fn non_registry_surfaces_have_complete_backend_contracts() {
     //   whenever a prelude family lands, which is the ONLY number here that routinely does.
     assert_eq!(language_constructs, 5);
     assert_eq!(dedicated_syntax, 1);
-    assert_eq!(unsupported, 0);
+    assert_eq!(unsupported, 2);
     assert_eq!(
         compiler_transforms,
         BTreeSet::from(["func_get_arg", "func_get_args", "func_num_args"])
@@ -147,8 +149,13 @@ fn non_registry_surfaces_have_complete_backend_contracts() {
     assert_eq!(preludes.len(), PRELUDE_PROVIDED_NON_CURL);
     assert_eq!(
         exceptional_len,
-        language_constructs + dedicated_syntax + unsupported + rewrites + preludes.len(),
-        "every non-registry contract lands in exactly one of the five buckets"
+        language_constructs
+            + dedicated_syntax
+            + compiler_transforms.len()
+            + unsupported
+            + rewrites
+            + preludes.len(),
+        "every non-registry contract lands in exactly one of the six buckets"
     );
     for name in [
         "hash_copy",
