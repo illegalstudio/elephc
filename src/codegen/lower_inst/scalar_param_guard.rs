@@ -18,6 +18,9 @@
 //!   deprecation, a float outside the int range and every other string throw).
 //! - Registers are free to clobber: later instructions reload their operands, and the only
 //!   value the instruction leaves is its own result.
+//! - Descriptor invokers (calls through a callable value) have no `FunctionContext`; their
+//!   coercive `int`/`float` binding calls the module helpers `emit_invoker_numeric_param_helpers`
+//!   emits once from this same conversion code.
 
 use crate::codegen::abi;
 use crate::codegen::platform::Arch;
@@ -725,4 +728,109 @@ fn emit_throw_with_name(
     }
     super::enums::emit_throw_type_error_from_string_result(ctx);
     Ok(())
+}
+
+/// Label of the module helper that binds a boxed argument to a coercive `int` parameter for a
+/// descriptor invoker (see [`emit_invoker_numeric_param_helpers`]).
+pub(in crate::codegen) const INVOKER_INT_PARAM_HELPER: &str = "__elephc_invoker_int_param";
+/// Label of the module helper that binds a boxed argument to a coercive `float` parameter.
+pub(in crate::codegen) const INVOKER_FLOAT_PARAM_HELPER: &str = "__elephc_invoker_float_param";
+
+/// Emits, once per module, the coercive `int`/`float` conversions descriptor invokers call.
+///
+/// An invoker has no `FunctionContext`, so it cannot inline the numeric-string scan, the
+/// precision deprecations or the range refusal the direct-call guard uses. These helpers are
+/// that same code behind a plain call: the boxed argument pointer in the integer result
+/// register; on return the converted value is in the integer (or float) result register and the
+/// status register (`x1` / `rdx`) is 0, or 1 when PHP refuses the value (the caller builds the
+/// `TypeError`, which needs the callee name only the invoker's descriptor knows).
+pub(in crate::codegen) fn emit_invoker_numeric_param_helpers(ctx: &mut FunctionContext<'_>) {
+    if ctx.shared.invoker_numeric_param_helpers {
+        return;
+    }
+    ctx.shared.invoker_numeric_param_helpers = true;
+    let scope = ctx.emitter.begin_out_of_line();
+    emit_invoker_numeric_param_helper(ctx, Numeric::Int, INVOKER_INT_PARAM_HELPER);
+    emit_invoker_numeric_param_helper(ctx, Numeric::Float, INVOKER_FLOAT_PARAM_HELPER);
+    ctx.emitter.end_out_of_line(scope);
+}
+
+/// The register an invoker numeric helper reports its accept/refuse status in.
+pub(in crate::codegen) fn invoker_numeric_status_reg(arch: Arch) -> &'static str {
+    match arch {
+        Arch::AArch64 => "x1",
+        Arch::X86_64 => "rdx",
+    }
+}
+
+/// Emits one coercive numeric binding helper (see [`emit_invoker_numeric_param_helpers`]).
+fn emit_invoker_numeric_param_helper(ctx: &mut FunctionContext<'_>, target: Numeric, label: &str) {
+    let refuse = ctx.next_label("invoker_numeric_param_refuse");
+    let accept = ctx.next_label("invoker_numeric_param_accept");
+    let int_label = ctx.next_label("invoker_numeric_param_int");
+    let float_label = ctx.next_label("invoker_numeric_param_float");
+    let string_label = ctx.next_label("invoker_numeric_param_string");
+    let payload = crate::codegen_support::mixed_unbox_payload_reg(ctx.emitter.target);
+    let tag = abi::int_result_reg(ctx.emitter);
+    let status = invoker_numeric_status_reg(ctx.emitter.target.arch);
+    ctx.emitter.blank();
+    ctx.emitter.comment(&format!("invoker {} parameter binding", if target == Numeric::Int { "int" } else { "float" }));
+    ctx.emitter.raw(".align 2");
+    ctx.emitter.label_global(label);
+    abi::emit_frame_prologue(ctx.emitter, 16);
+    // -- peel the boxed argument and dispatch on its concrete tag --
+    abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
+    super::enums::emit_mixed_tag_branch(ctx, tag, 0, &int_label);
+    super::enums::emit_mixed_tag_branch(ctx, tag, 3, &int_label);
+    super::enums::emit_mixed_tag_branch(ctx, tag, 2, &float_label);
+    super::enums::emit_mixed_tag_branch(ctx, tag, 1, &string_label);
+    abi::emit_jump(ctx.emitter, &refuse);
+
+    // -- an int or bool payload binds directly (widened for float) --
+    ctx.emitter.label(&int_label);
+    super::enums::emit_move_reg(ctx, tag, payload);
+    if target == Numeric::Float {
+        emit_int_result_to_float(ctx);
+    }
+    abi::emit_jump(ctx.emitter, &accept);
+
+    // -- a float binds to float, or to int after PHP's precision and range rules --
+    ctx.emitter.label(&float_label);
+    super::mixed_narrowing::emit_float_bits_to_float_result(ctx, payload);
+    if target == Numeric::Int {
+        super::builtins::strings::emit_float_result_int_coercion_diagnostics(ctx, &refuse);
+    }
+    abi::emit_jump(ctx.emitter, &accept);
+
+    // -- only a fully numeric string binds --
+    ctx.emitter.label(&string_label);
+    match target {
+        Numeric::Int => emit_string_to_int_parameter(ctx, &refuse),
+        Numeric::Float => {
+            let (string_ptr, _) = abi::string_result_regs(ctx.emitter);
+            if string_ptr != payload {
+                ctx.emitter.instruction(&format!("mov {string_ptr}, {payload}")); // move the unboxed string pointer into the numeric-scan input
+            }
+            abi::emit_call_label(ctx.emitter, "__rt_str_to_number");
+            match ctx.emitter.target.arch {
+                Arch::AArch64 => {
+                    ctx.emitter.instruction(&format!("cbz x0, {refuse}"));      // a string that is not numeric as a whole is refused
+                }
+                Arch::X86_64 => {
+                    ctx.emitter.instruction("test rax, rax");                   // did the numeric scan accept the whole string?
+                    ctx.emitter.instruction(&format!("jz {refuse}"));           // a string that is not numeric as a whole is refused
+                }
+            }
+        }
+    }
+
+    // -- report the verdict in the status register and return --
+    ctx.emitter.label(&accept);
+    abi::emit_load_int_immediate(ctx.emitter, status, 0);
+    abi::emit_frame_restore(ctx.emitter, 16);
+    abi::emit_return(ctx.emitter);
+    ctx.emitter.label(&refuse);
+    abi::emit_load_int_immediate(ctx.emitter, status, 1);
+    abi::emit_frame_restore(ctx.emitter, 16);
+    abi::emit_return(ctx.emitter);
 }

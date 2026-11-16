@@ -285,7 +285,8 @@ pub(super) use known_property_reads::{
 pub(super) use property_fetch_for_write::lower_prop_get_for_write;
 pub(super) use property_element_writes::{in_place_property_container, InPlacePropertyContainer};
 pub(super) use property_hash_fetch_for_write::{lower_property_hash_contains, lower_property_hash_fetch_for_write, lower_property_hash_read};
-pub(super) use mixed_property_type_guard::{BOOL_TAG, OBJECT_TAG, RUNTIME_TAGS};
+pub(super) use mixed_property_type_guard::{BOOL_TAG, OBJECT_TAG};
+pub(in crate::codegen) use mixed_property_type_guard::RUNTIME_TAGS;
 pub(super) use property_store_values::{
     emit_mixed_iterable_for_property_store, lower_packed_field_mixed_to_int,
     release_adopted_mixed_source,

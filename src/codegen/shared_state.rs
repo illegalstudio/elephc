@@ -34,6 +34,8 @@ pub(crate) struct GeneratedRuntimeFeatures {
 pub(crate) struct SharedCodegenState {
     /// Descriptor argument adapters need the shared boxed-callable normalizer.
     pub(super) callable_argument_normalizer: bool,
+    /// Descriptor invokers' coercive `int`/`float` parameter helpers have been emitted.
+    pub(super) invoker_numeric_param_helpers: bool,
     generated_runtime_features: GeneratedRuntimeFeatures,
     /// Declared parameter contracts cached independently of emitted method bodies.
     pub(super) literal_methods: super::literal_method_index::LiteralMethodIndex,
@@ -128,6 +130,8 @@ struct RuntimeCallableInvokerCacheEntry {
     captures: Vec<(String, PhpType, bool)>,
     owns_string_return: bool,
     php_return_status: bool,
+    /// The static callee name a closure invoker's scalar-parameter `TypeError` uses, if any.
+    guard_callee: Option<String>,
     /// The RESOLVED defaults the body materializes. Two signatures can be identical as ABI and
     /// still fold `self::`/`parent::` defaults differently in different class scopes, so the
     /// resolved values are part of the key rather than the declaring class name.
@@ -448,6 +452,7 @@ impl SharedCodegenState {
         owns_string_return: bool,
         php_return_status: bool,
         defaults: &[Option<crate::codegen::runtime_callable_invoker::InvokerDefaultValue>],
+        guard_callee: Option<&str>,
     ) -> Option<String> {
         self.runtime_callable_invokers
             .iter()
@@ -457,6 +462,7 @@ impl SharedCodegenState {
                     && entry.owns_string_return == owns_string_return
                     && entry.php_return_status == php_return_status
                     && entry.defaults == defaults
+                    && entry.guard_callee.as_deref() == guard_callee
             })
             .map(|entry| entry.label.clone())
     }
@@ -469,6 +475,7 @@ impl SharedCodegenState {
         owns_string_return: bool,
         php_return_status: bool,
         defaults: &[Option<crate::codegen::runtime_callable_invoker::InvokerDefaultValue>],
+        guard_callee: Option<&str>,
         label: &str,
     ) {
         self.runtime_callable_invokers
@@ -477,6 +484,7 @@ impl SharedCodegenState {
                 captures: captures.to_vec(),
                 owns_string_return,
                 php_return_status,
+                guard_callee: guard_callee.map(str::to_string),
                 defaults: defaults.to_vec(),
                 label: label.to_string(),
             });
