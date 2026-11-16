@@ -32,17 +32,23 @@ echo "Q";
 }
 
 /// A float array out-of-bounds read (inside a function so the element type is a
-/// concrete Float local) returns a deterministic 0.0, not a stale prior float.
+/// concrete Float local) yields null, not a stale prior float, so returning it
+/// from a `float` function throws PHP's return TypeError.
 #[test]
-fn test_indexed_oob_float_read_is_zero_not_stale() {
+fn test_indexed_oob_float_read_is_null_not_stale() {
     let out = compile_and_run(
         r#"<?php
 function pick(array $a, int $i): float { return $a[$i]; }
 $b = [1.5, 2.5];
-echo "X" . pick($b, 9) . "Y";
+try {
+    echo "X" . pick($b, 9) . "Y";
+} catch (TypeError $e) {
+    echo $e->getMessage();
+}
+echo "|", pick($b, 1);
 "#,
     );
-    assert_eq!(out, "X0Y");
+    assert_eq!(out, "pick(): Return value must be of type float, null returned|2.5");
 }
 
 /// Iterating a string array and THEN reading out of bounds must not crash and
