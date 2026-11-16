@@ -36,10 +36,17 @@ fn emit_aarch64(emitter: &mut Emitter) {
     emitter.comment("--- runtime: class_relation_lookup ---");
     emitter.label_global("__rt_class_relation_lookup");
 
-    emitter.instruction("stp x29, x30, [sp, #-48]!");                           // save frame pointer/return address, reserve 3 spill slots
+    emitter.instruction("stp x29, x30, [sp, #-80]!");                           // save frame pointer/return address, reserve the spill slots
     emitter.instruction("mov x29, sp");                                         // establish the new frame pointer
     emitter.instruction("stp x0, x1, [sp, #16]");                               // stash name_ptr/name_len across every probe call
     emitter.instruction("str x2, [sp, #32]");                                   // stash the caller's requested payload byte offset
+
+    // -- lowercase ONCE: every probe re-reads the name, and a probe's own lowercase may adopt and free a transient caller block --
+    emitter.instruction("mov x2, x1");                                          // the length rides in strtolower's length register
+    emitter.instruction("mov x1, x0");                                          // the pointer rides in strtolower's pointer register
+    emitter.instruction("bl __rt_strtolower");                                  // x1=owned lowered copy, x2=length
+    emitter.instruction("stp x1, x2, [sp, #16]");                               // every probe now reads the owned lowered copy
+    emitter.instruction("str x1, [sp, #40]");                                   // keep it for release after the last probe
 
     // -- try the class relation table first (matches the literal path's class/interface/trait order) --
     emitter.instruction("ldp x0, x1, [sp, #16]");                               // reload name_ptr/name_len
@@ -76,7 +83,13 @@ fn emit_aarch64(emitter: &mut Emitter) {
     emitter.instruction("mov x2, #0");                                          // no list count when the target is unknown
 
     emitter.label("__rt_class_relation_lookup_done");
-    emitter.instruction("ldp x29, x30, [sp], #48");                             // restore frame pointer and return address
+    emitter.instruction("stp x0, x1, [sp, #48]");                               // keep found and list_ptr across the release
+    emitter.instruction("str x2, [sp, #64]");                                   // keep list_count across the release
+    emitter.instruction("ldr x0, [sp, #40]");                                   // the owned lowered name
+    emitter.instruction("bl __rt_decref_any");                                  // release it
+    emitter.instruction("ldp x0, x1, [sp, #48]");                               // restore found and list_ptr
+    emitter.instruction("ldr x2, [sp, #64]");                                   // restore list_count
+    emitter.instruction("ldp x29, x30, [sp], #80");                             // restore frame pointer and return address
     emitter.instruction("ret");                                                 // return found/list_ptr/list_count in x0/x1/x2
 }
 
@@ -88,10 +101,18 @@ fn emit_x86_64(emitter: &mut Emitter) {
 
     emitter.instruction("push rbp");                                            // preserve the caller frame pointer
     emitter.instruction("mov rbp, rsp");                                        // keep the nested call 16-byte aligned
-    emitter.instruction("sub rsp, 32");                                         // reserve 3 spill slots (16-byte aligned), rsp stays fixed for every call below
+    emitter.instruction("sub rsp, 64");                                         // reserve the spill slots (16-byte aligned), rsp stays fixed for every call below
     emitter.instruction("mov QWORD PTR [rbp - 8], rdi");                        // stash name_ptr across every probe call
     emitter.instruction("mov QWORD PTR [rbp - 16], rsi");                       // stash name_len across every probe call
     emitter.instruction("mov QWORD PTR [rbp - 24], rdx");                       // stash the caller's requested payload byte offset
+
+    // -- lowercase ONCE: every probe re-reads the name, and a probe's own lowercase may adopt and free a transient caller block --
+    emitter.instruction("mov rax, rdi");                                        // the pointer rides in strtolower's pointer register
+    emitter.instruction("mov rdx, rsi");                                        // the length rides in strtolower's length register
+    emitter.instruction("call __rt_strtolower");                                // rax=owned lowered copy, rdx=length
+    emitter.instruction("mov QWORD PTR [rbp - 8], rax");                        // every probe now reads the owned lowered copy
+    emitter.instruction("mov QWORD PTR [rbp - 16], rdx");                       // and its length
+    emitter.instruction("mov QWORD PTR [rbp - 32], rax");                       // keep it for release after the last probe
 
     // -- try the class relation table first (matches the literal path's class/interface/trait order) --
     emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // reload name_ptr
@@ -134,7 +155,15 @@ fn emit_x86_64(emitter: &mut Emitter) {
     emitter.instruction("xor esi, esi");                                        // no list count when the target is unknown
 
     emitter.label("__rt_class_relation_lookup_done");
-    emitter.instruction("add rsp, 32");                                         // drop the spill slots
+    emitter.instruction("mov QWORD PTR [rbp - 40], rax");                       // keep found across the release
+    emitter.instruction("mov QWORD PTR [rbp - 48], rdi");                       // keep list_ptr across the release
+    emitter.instruction("mov QWORD PTR [rbp - 56], rsi");                       // keep list_count across the release
+    emitter.instruction("mov rax, QWORD PTR [rbp - 32]");                       // the owned lowered name
+    emitter.instruction("call __rt_decref_any");                                // release it
+    emitter.instruction("mov rax, QWORD PTR [rbp - 40]");                       // restore found
+    emitter.instruction("mov rdi, QWORD PTR [rbp - 48]");                       // restore list_ptr
+    emitter.instruction("mov rsi, QWORD PTR [rbp - 56]");                       // restore list_count
+    emitter.instruction("add rsp, 64");                                         // drop the spill slots
     emitter.instruction("pop rbp");                                             // restore the caller frame pointer
     emitter.instruction("ret");                                                 // return found/list_ptr/list_count in rax/rdi/rsi
 }
