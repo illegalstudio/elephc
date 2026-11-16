@@ -22,18 +22,20 @@
 //!   php numbers them: every value except an `R:` takes the next 1-based index, an `r:` takes one
 //!   too (it aliases its target), and array/object KEYS take none. `r:` needs an object target and
 //!   shares its identity; `R:` copies the target (an object keeps its identity), because the
-//!   interpreter cannot bind two slots to one PHP reference here. A target still being built (an
-//!   object naming itself from inside its own properties, an enclosing array) is not yet
-//!   resolvable and fails the parse like an out-of-range index. The registry is only kept when
-//!   the payload contains an `r:`/`R:` marker at all.
+//!   interpreter cannot bind two slots to one PHP reference here. An object is allocated and
+//!   published before its properties parse, so a property naming an enclosing object (a cycle)
+//!   resolves to it; an enclosing ARRAY is still being built and is not yet resolvable, which
+//!   fails the parse like an out-of-range index. The registry is only kept when the payload
+//!   contains an `r:`/`R:` marker at all.
+//! - `E:<len>:"<Enum>:<Case>";` resolves to the enum case singleton (`serialize()` writes it).
 //! - Nesting is bounded like php's: arrays and objects deeper than `max_depth` (the option, else
 //!   `unserialize_max_depth`'s 4096; 0 = unbounded) warn `Maximum depth of N exceeded...` and fail
 //!   with the generic `Error at offset` wrapper right after the offending container's `{`. Without
 //!   it a deeply nested payload overflowed the Rust stack (SIGSEGV) where php returns false.
 //! - Legacy `C:` payloads go to the class's unserializer: an internal class's hidden
 //!   `__elephc_legacy_unserialize` hook (GMP), else `Serializable::unserialize()`.
-//! - NOT implemented (measured absent from the real 404 payloads; each is a separate, larger
-//!   ticket): `E:` enum payloads and `unserialize_callback_func` (the ini key still round-trips through `ini_get`/`ini_set`
+//! - NOT implemented (measured absent from the real 404 payloads; a separate, larger ticket):
+//!   `unserialize_callback_func` (the ini key still round-trips through `ini_get`/`ini_set`
 //!   independently of this file). Byte-exact warning OFFSETS are
 //!   best-effort (the offset is wherever this scanner's cursor sat when it gave up), not a
 //!   guaranteed match to php's own scanner position for every malformed shape.
@@ -451,6 +453,11 @@ fn eval_unserialize_parse_value(
         return eval_unserialize_parse_back_reference(cursor, refs, values);
     }
     let slot = refs.reserve();
+    // An object publishes itself under its index as soon as it is allocated, before its
+    // properties are parsed, so a back-reference from inside them (`r:1;`) can name it.
+    if cursor.peek() == Some(b'O') {
+        return eval_unserialize_parse_object(cursor, slot, allowed_classes, refs, context, values);
+    }
     let value = eval_unserialize_parse_plain_value(cursor, allowed_classes, refs, context, values)?;
     refs.publish(slot, value, values).map_err(|_| EvalUnserializeFailure::Generic)?;
     Ok(value)
@@ -558,9 +565,71 @@ fn eval_unserialize_parse_plain_value(
                 .map_err(|_| EvalUnserializeFailure::Generic)
         }
         Some(b'a') => eval_unserialize_parse_array(cursor, allowed_classes, refs, context, values),
-        Some(b'O') => eval_unserialize_parse_object(cursor, allowed_classes, refs, context, values),
+        Some(b'O') => {
+            eval_unserialize_parse_object(cursor, None, allowed_classes, refs, context, values)
+        }
         Some(b'C') => eval_unserialize_parse_custom_object(cursor, allowed_classes, context, values),
+        Some(b'E') => eval_unserialize_parse_enum_case(cursor, allowed_classes, context, values),
         _ => Err(EvalUnserializeFailure::Generic),
+    }
+}
+
+/// Parses `E:<len>:"<Enum>:<Case>";` into that enum case's singleton, as php-src's
+/// `object_enum`: an unknown class warns `Class 'X' not found`, and a missing case, a class that
+/// is not an enum or a disallowed class fails the parse.
+fn eval_unserialize_parse_enum_case(
+    cursor: &mut EvalUnserializeCursor<'_>,
+    allowed_classes: &EvalUnserializeAllowedClasses,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalUnserializeFailure> {
+    /// Maps any lower-level failure to the generic `Error at offset` parse failure.
+    fn failed<E>(_: E) -> EvalUnserializeFailure {
+        EvalUnserializeFailure::Generic
+    }
+    cursor.take_byte(b'E')?;
+    cursor.take_byte(b':')?;
+    let len: usize = std::str::from_utf8(cursor.take_until(b':')?)
+        .ok()
+        .and_then(|text| text.parse().ok())
+        .ok_or(EvalUnserializeFailure::Generic)?;
+    cursor.take_byte(b'"')?;
+    let text = String::from_utf8(cursor.take_exact(len)?.to_vec()).map_err(failed)?;
+    cursor.take_byte(b'"')?;
+    cursor.take_byte(b';')?;
+    let (class_name, case) = text.split_once(':').ok_or(EvalUnserializeFailure::Generic)?;
+    let is_enum = context.has_enum(class_name) || values.enum_exists(class_name).map_err(failed)?;
+    if !is_enum {
+        if !context.has_class(class_name) && !values.class_exists(class_name).map_err(failed)? {
+            values.warning(&format!("unserialize(): Class '{class_name}' not found")).map_err(failed)?;
+        }
+        return Err(EvalUnserializeFailure::Generic);
+    }
+    if !allowed_classes.allows(class_name) {
+        return Err(EvalUnserializeFailure::Generic);
+    }
+    // The case is the enum's class constant; the fetch hands back the cached singleton borrowed,
+    // and the parser's caller owns what it gets, so a borrowed answer is retained.
+    match eval_class_constant_fetch_result(class_name, case, context, values) {
+        Ok(value) => {
+            let value = if value.is_borrowed() { values.retain(value).map_err(failed)? } else { value };
+            let is_case = values.type_tag(value).map_err(failed)? == EVAL_TAG_OBJECT;
+            if !is_case {
+                let _ = values.release(value);
+                return Err(EvalUnserializeFailure::Generic);
+            }
+            Ok(value)
+        }
+        Err(_) => {
+            // An undefined case raised php's `Error` for the fetch; unserialize() fails quietly
+            // with its own warning instead.
+            if let Some(thrown) = context.take_pending_throw() {
+                if !thrown.is_borrowed() {
+                    let _ = values.release(thrown);
+                }
+            }
+            Err(EvalUnserializeFailure::Generic)
+        }
     }
 }
 
@@ -748,6 +817,7 @@ fn eval_unserialize_retag_as_list_if_packed(
 /// Parses `O:<name-len>:"<name>":<count>:{<key><value>...}` and hydrates an object.
 fn eval_unserialize_parse_object(
     cursor: &mut EvalUnserializeCursor<'_>,
+    slot: Option<usize>,
     allowed_classes: &EvalUnserializeAllowedClasses,
     refs: &mut EvalUnserializeRefs,
     context: &mut ElephcEvalContext,
@@ -774,36 +844,66 @@ fn eval_unserialize_parse_object(
     cursor.take_byte(b'{')?;
     cursor.enter_container(values)?;
 
-    let mut payload: Vec<(String, RuntimeCellHandle)> = Vec::with_capacity(count);
-    for _ in 0..count {
-        if cursor.peek().is_none() {
-            values
-                .warning("unserialize(): Unexpected end of serialized data")
-                .map_err(|_| EvalUnserializeFailure::Generic)?;
-            return Err(EvalUnserializeFailure::AlreadyWarned);
-        }
-        // A `__serialize()` payload keeps its array's own keys, so an integer key (`i:0;`) is as
-        // valid here as a property name; it travels as its decimal spelling.
-        let key = if cursor.peek() == Some(b'i') {
-            eval_unserialize_parse_int_key(cursor)?.to_string()
-        } else {
-            let key_bytes = eval_unserialize_parse_raw_string(cursor)?;
-            String::from_utf8_lossy(&key_bytes).into_owned()
-        };
-        if cursor.peek().is_none() {
-            values
-                .warning("unserialize(): Unexpected end of serialized data")
-                .map_err(|_| EvalUnserializeFailure::Generic)?;
-            return Err(EvalUnserializeFailure::AlreadyWarned);
-        }
-        let value = eval_unserialize_parse_value(cursor, allowed_classes, refs, context, values)?;
-        payload.push((key, value));
+    // The object exists before its properties are parsed, as in php, and is published under its
+    // index at once: a property naming it back (`$node->self = $node`, a child's parent pointer)
+    // resolves to it instead of failing the whole parse.
+    let (object, target) =
+        eval_unserialize_allocate_object(&class_name, allowed_classes, context, values)
+            .map_err(eval_unserialize_hook_failure)?;
+    if refs.publish(slot, object, values).is_err() {
+        let _ = values.release(object);
+        return Err(EvalUnserializeFailure::Generic);
     }
-    cursor.take_byte(b'}')?;
-    cursor.leave_container();
+    let parsed = (|| {
+        let mut payload: Vec<(String, RuntimeCellHandle)> = Vec::with_capacity(count);
+        for _ in 0..count {
+            if cursor.peek().is_none() {
+                values
+                    .warning("unserialize(): Unexpected end of serialized data")
+                    .map_err(|_| EvalUnserializeFailure::Generic)?;
+                return Err(EvalUnserializeFailure::AlreadyWarned);
+            }
+            // A `__serialize()` payload keeps its array's own keys, so an integer key (`i:0;`) is
+            // as valid here as a property name; it travels as its decimal spelling.
+            let key = if cursor.peek() == Some(b'i') {
+                eval_unserialize_parse_int_key(cursor)?.to_string()
+            } else {
+                let key_bytes = eval_unserialize_parse_raw_string(cursor)?;
+                String::from_utf8_lossy(&key_bytes).into_owned()
+            };
+            if cursor.peek().is_none() {
+                values
+                    .warning("unserialize(): Unexpected end of serialized data")
+                    .map_err(|_| EvalUnserializeFailure::Generic)?;
+                return Err(EvalUnserializeFailure::AlreadyWarned);
+            }
+            let value =
+                eval_unserialize_parse_value(cursor, allowed_classes, refs, context, values)?;
+            payload.push((key, value));
+        }
+        cursor.take_byte(b'}')?;
+        cursor.leave_container();
+        Ok(payload)
+    })();
+    let payload = match parsed {
+        Ok(payload) => payload,
+        Err(failure) => {
+            let _ = values.release(object);
+            return Err(failure);
+        }
+    };
+    eval_unserialize_fill_object(object, target, &class_name, payload, context, values)
+        .map_err(eval_unserialize_hook_failure)
+}
 
-    eval_unserialize_hydrate_object(&class_name, payload, allowed_classes, context, values)
-        .map_err(|_| EvalUnserializeFailure::Generic)
+/// Maps an object-restoring failure to the parser's: a Throwable a hook raised (`__wakeup()`,
+/// `__unserialize()`, an autoloader) propagates out of `unserialize()` as in php; anything else
+/// is the generic `Error at offset` failure.
+fn eval_unserialize_hook_failure(status: EvalStatus) -> EvalUnserializeFailure {
+    match status {
+        EvalStatus::UncaughtThrowable => EvalUnserializeFailure::Raised(status),
+        _ => EvalUnserializeFailure::Generic,
+    }
 }
 
 /// Parses one legacy `C:<len>:"Class":<n>:{<n bytes>}` payload, as php-src's `object_custom`.
@@ -961,6 +1061,7 @@ pub(crate) fn eval_unserialize_declared_object_from_hash(
 /// Builds the actual object once a class name and its property payload have been parsed --
 /// separated from the byte-cursor parser above so its error type is the ordinary `EvalStatus`
 /// every other object-construction helper in this crate already uses.
+#[cfg(not(test))]
 fn eval_unserialize_hydrate_object(
     class_name: &str,
     payload: Vec<(String, RuntimeCellHandle)>,
@@ -968,6 +1069,31 @@ fn eval_unserialize_hydrate_object(
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
+    let (object, target) =
+        eval_unserialize_allocate_object(class_name, allowed_classes, context, values)?;
+    eval_unserialize_fill_object(object, target, class_name, payload, context, values)
+}
+
+/// What an `O:` payload is restored into, decided before its properties are parsed.
+enum EvalUnserializeTarget {
+    /// An unknown or disallowed class: the `__PHP_Incomplete_Class` stand-in.
+    Incomplete,
+    /// A class the interpreter declared.
+    Declared(EvalClass),
+    /// A compiled class with no eval-declared metadata.
+    Native,
+}
+
+/// Resolves the class of an `O:` payload and allocates its object, constructor not run.
+///
+/// The object exists BEFORE its properties are parsed, as in php: a property that refers back
+/// to it (`r:1;`, a child's back-pointer to its parent) resolves to this very object.
+fn eval_unserialize_allocate_object(
+    class_name: &str,
+    allowed_classes: &EvalUnserializeAllowedClasses,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<(RuntimeCellHandle, EvalUnserializeTarget), EvalStatus> {
     // PHP resolves an unknown class here through `unserialize_callback_func`, whose whole point
     // is to give the autoloader a chance before the value degrades to
     // `__PHP_Incomplete_Class` — Symfony points it at its own autoloader, so its `.meta` files
@@ -985,11 +1111,34 @@ fn eval_unserialize_hydrate_object(
         .unwrap_or(false);
     }
     if !class_is_known || !allowed_classes.allows(class_name) {
-        return eval_unserialize_incomplete_class(class_name, payload, values);
+        let object = eval_unserialize_incomplete_object(class_name, values)?;
+        return Ok((object, EvalUnserializeTarget::Incomplete));
     }
     if let Some(class) = context.class(class_name).cloned() {
         let mut scope = ElephcEvalScope::new();
         let object = eval_dynamic_class_allocate_object(&class, context, &mut scope, values)?;
+        return Ok((object, EvalUnserializeTarget::Declared(class)));
+    }
+    Ok((values.new_object(class_name)?, EvalUnserializeTarget::Native))
+}
+
+/// Writes a parsed payload into an object [`eval_unserialize_allocate_object`] made, then runs
+/// its `__unserialize()` or `__wakeup()` hook as php does.
+fn eval_unserialize_fill_object(
+    object: RuntimeCellHandle,
+    target: EvalUnserializeTarget,
+    class_name: &str,
+    payload: Vec<(String, RuntimeCellHandle)>,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    if let EvalUnserializeTarget::Incomplete = target {
+        for (name, value) in payload {
+            values.property_set(object, &name, value)?;
+        }
+        return Ok(object);
+    }
+    if let EvalUnserializeTarget::Declared(class) = target {
         let identity = values.object_identity(object)?;
         if let Some((declaring_class, method)) = context.class_method(class.name(), "__unserialize") {
             // php hands a `__unserialize()` class the payload and writes no property itself:
@@ -1029,6 +1178,21 @@ fn eval_unserialize_hydrate_object(
                 context.mark_dynamic_property_initialized(identity, name);
             }
         }
+        // php runs `__wakeup()` once the properties are restored (a class with
+        // `__unserialize()` returned above and never gets it); a nested object is hydrated, and
+        // woken, before the object holding it, which is php's innermost-first order.
+        if let Some((declaring_class, method)) = context.class_method(class.name(), "__wakeup") {
+            let woken = eval_dynamic_method_with_values(
+                &declaring_class,
+                class.name(),
+                &method,
+                object,
+                Vec::new(),
+                context,
+                values,
+            );
+            return eval_unserialize_finish_wakeup(object, woken, values);
+        }
         return Ok(object);
     }
     // A native/AOT class with no eval-declared metadata (e.g. a genuine built-in): there is no
@@ -1038,7 +1202,6 @@ fn eval_unserialize_hydrate_object(
     // A compiled class with `__unserialize()` does not need that table at all: php hands the
     // hook the payload, which is how Symfony's session reads back the compiled `App\Entity\User`
     // inside a security token.
-    let object = values.new_object(class_name)?;
     // A compiled class that restores itself through `__unserialize()` gets the payload handed to
     // that hook, as php does, instead of having its keys written as properties from outside its
     // scope: those writes land nowhere for a protected property, and Laravel's
@@ -1070,7 +1233,32 @@ fn eval_unserialize_hydrate_object(
         // path instead, the same matcher the compiled decoder uses.
         values.hydrate_declared_property(object, &name, value)?;
     }
+    if eval_unserialize_class_has_method(class_name, "__wakeup", context, values)? {
+        let woken =
+            crate::interpreter::eval_method_call_result(object, "__wakeup", Vec::new(), context, values);
+        return eval_unserialize_finish_wakeup(object, woken, values);
+    }
     Ok(object)
+}
+
+/// Ends a `__wakeup()` call made by hydration: its result is discarded and the object answered,
+/// or, when it threw, the half-restored object is released and the Throwable propagates out of
+/// `unserialize()` as php's does (Symfony's `__wakeup()` guards throw `BadMethodCallException`).
+fn eval_unserialize_finish_wakeup(
+    object: RuntimeCellHandle,
+    woken: Result<RuntimeCellHandle, EvalStatus>,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    match woken {
+        Ok(result) => {
+            values.release(result)?;
+            Ok(object)
+        }
+        Err(status) => {
+            let _ = values.release(object);
+            Err(status)
+        }
+    }
 }
 
 /// Whether a class the interpreter did not declare has an `__unserialize()` hook.
@@ -1136,11 +1324,21 @@ fn eval_unserialize_incomplete_class(
     // `__PHP_Incomplete_Class_Name` marker and every payload property instead. Known divergence:
     // `get_class()` answers `stdClass` and re-serializing does not restore the original class
     // name; giving eval php's real stand-in object is a separate ticket.
-    let object = values.new_object("stdClass")?;
-    let marker_name = values.string(class_name)?;
-    values.property_set(object, "__PHP_Incomplete_Class_Name", marker_name)?;
+    let object = eval_unserialize_incomplete_object(class_name, values)?;
     for (name, value) in payload {
         values.property_set(object, &name, value)?;
     }
+    Ok(object)
+}
+
+/// Allocates the `__PHP_Incomplete_Class` stand-in (see [`eval_unserialize_incomplete_class`])
+/// with its class-name marker and no payload yet.
+fn eval_unserialize_incomplete_object(
+    class_name: &str,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let object = values.new_object("stdClass")?;
+    let marker_name = values.string(class_name)?;
+    values.property_set(object, "__PHP_Incomplete_Class_Name", marker_name)?;
     Ok(object)
 }

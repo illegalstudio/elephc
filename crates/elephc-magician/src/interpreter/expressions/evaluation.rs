@@ -479,7 +479,8 @@ fn eval_object_array_cast_with_mangled_keys(
         return eval_object_array_cast_value(object, context, values);
     }
     let class_name = eval_debug_object_class_name(object, Some(identity), context, values)?;
-    let properties = eval_debug_object_properties(object, Some(identity), &class_name, context, values)?;
+    let properties =
+        eval_object_properties_ignoring_debug_info(object, Some(identity), &class_name, context, values)?;
     let mut result = values.assoc_new(properties.len())?;
     for property in properties {
         let key = values.string(&eval_serialize_mangled_property_key(&property))?;

@@ -310,6 +310,20 @@ pub(in crate::interpreter) fn eval_debug_object_properties(
     if let Some(properties) = eval_debug_info_properties(object, class_name, context, values)? {
         return Ok(properties);
     }
+    eval_object_properties_ignoring_debug_info(object, identity, class_name, context, values)
+}
+
+/// Collects an object's real properties, never `__debugInfo()`'s replacement list.
+///
+/// `__debugInfo()` speaks for `var_dump()`/`print_r()` only: php's `serialize()`, `var_export()`
+/// and `(array)` read the object's own property table and never call it.
+pub(in crate::interpreter) fn eval_object_properties_ignoring_debug_info(
+    object: RuntimeCellHandle,
+    identity: Option<u64>,
+    class_name: &str,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<Vec<EvalDebugObjectProperty>, EvalStatus> {
     if let Some(identity) = identity {
         if context.dynamic_object_declaring_class(identity).is_some() {
             return eval_debug_dynamic_object_properties(object, identity, class_name, context, values);

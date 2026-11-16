@@ -67,6 +67,36 @@ serialize(true), serialize(false), serialize(null);"#),
     );
 }
 
+/// Verifies `serialize()`, `var_export()` and `(array)` read the real properties and never call
+/// `__debugInfo()`, which speaks for `var_dump()`/`print_r()` only.
+///
+/// `php -n` 8.5.10 (NUL shown as `~`): `O:4:"Conn":2:{s:9:"~Conn~dsn";s:1:"x";
+/// s:12:"~Conn~secret";s:1:"y";}`, `'secret' => 'y'` in the export, and a 2-entry cast.
+#[test]
+fn serialize_and_var_export_ignore_debug_info() {
+    assert_eq!(
+        out(br#"class Conn { private $dsn = 'x'; private $secret = 'y';
+    function __debugInfo() { echo "DBG"; return ['dsn' => $this->dsn]; } }
+echo str_replace("\0", "~", serialize(new Conn())), "|";
+echo strpos(var_export(new Conn(), true), "'secret' => 'y'") !== false ? "export" : "bad", "|";
+echo count((array) new Conn());"#),
+        "O:4:\"Conn\":2:{s:9:\"~Conn~dsn\";s:1:\"x\";s:12:\"~Conn~secret\";s:1:\"y\";}|export|2",
+    );
+}
+
+/// Verifies floats outside the decimal-point range take php's exponent form, and a negative zero
+/// and a large integral float keep php's spelling.
+///
+/// `php -n` 8.5.10: `d:1.0E+25;d:1.0E-5;d:1.5E-7;d:1.0E+17;d:1000000000000000;d:-0;d:100;`.
+#[test]
+fn serialize_floats_use_php_exponent_form() {
+    assert_eq!(
+        out(br#"echo serialize(1e25), serialize(0.00001), serialize(1.5e-7), serialize(1e17),
+serialize(1e15), serialize(-0.0), serialize(100.0);"#),
+        "d:1.0E+25;d:1.0E-5;d:1.5E-7;d:1.0E+17;d:1000000000000000;d:-0;d:100;",
+    );
+}
+
 /// Verifies strings carry an embedded NUL byte and UTF-8 bytes through UNCHANGED, with the byte
 /// length (not character count) as the length prefix.
 ///

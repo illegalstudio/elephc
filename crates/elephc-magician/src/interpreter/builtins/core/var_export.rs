@@ -166,7 +166,8 @@ fn eval_var_export_append_object(
 ) -> Result<(), EvalStatus> {
     let identity = eval_debug_object_identity(value, values);
     let class_name = eval_debug_object_class_name(value, identity, context, values)?;
-    let properties = eval_debug_object_properties(value, identity, &class_name, context, values)?;
+    let properties =
+        eval_object_properties_ignoring_debug_info(value, identity, &class_name, context, values)?;
     if context.has_enum(&class_name) {
         // An enum case renders as `\\Enum::CASE`, never as a property list. Its name is the
         // readonly `name` property php gives every case.

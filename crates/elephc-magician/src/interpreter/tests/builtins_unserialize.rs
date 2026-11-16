@@ -61,6 +61,57 @@ $obj->dump();"#),
     );
 }
 
+/// Verifies a cyclic object graph round-trips: a property naming its own object, and a child's
+/// back-pointer to its enclosing parent, resolve to that object.
+///
+/// `php -n` 8.5.10: `O:4:"Node":2:{s:4:"self";r:1;s:4:"kids";a:1:{i:0;O:4:"Node":2:{s:4:"self";
+/// r:1;s:4:"kids";a:0:{}}}}` then `yes|yes`.
+#[test]
+fn unserialize_round_trips_a_cyclic_object_graph() {
+    assert_eq!(
+        out(br#"class CycNode { public $self; public $kids = []; }
+$a = new CycNode(); $a->self = $a; $c = new CycNode(); $c->self = $a; $a->kids[] = $c;
+$b = unserialize(serialize($a));
+echo $b->self === $b ? "yes" : "no", "|", $b->kids[0]->self === $b ? "yes" : "no";"#),
+        "yes|yes",
+    );
+}
+
+/// Verifies enum cases serialize as `E:` by name (a repeat is an `r:` back-reference) and
+/// unserialize back to the same singletons.
+///
+/// `php -n` 8.5.10: `a:3:{i:0;E:11:"Suit:Hearts";i:1;r:2;i:2;E:11:"Suit:Spades";}` then `111`.
+#[test]
+fn serialize_and_unserialize_round_trip_enum_cases() {
+    assert_eq!(
+        out(br#"enum Suit { case Hearts; case Spades; }
+$s = serialize([Suit::Hearts, Suit::Hearts, Suit::Spades]);
+echo $s, "|";
+$u = unserialize($s);
+echo $u[0] === Suit::Hearts ? 1 : 0, $u[1] === Suit::Hearts ? 1 : 0, $u[2] === Suit::Spades ? 1 : 0;"#),
+        "a:3:{i:0;E:11:\"Suit:Hearts\";i:1;r:2;i:2;E:11:\"Suit:Spades\";}|111",
+    );
+}
+
+/// Verifies `__wakeup()` runs after the properties are restored, innermost object first, and that
+/// a throwing `__wakeup()` guard propagates out of `unserialize()`.
+///
+/// `php -n` 8.5.10: `CBA|9` then `BadMethodCallException` (the class of the caught guard).
+#[test]
+fn unserialize_runs_wakeup_innermost_first_and_propagates_its_throw() {
+    assert_eq!(
+        out(br#"class WA { public $b; public $n = 0; function __wakeup() { echo "A|", $this->n; } }
+class WB { public $c; function __wakeup() { echo "B"; } }
+class WC { function __wakeup() { echo "C"; } }
+class WG { function __wakeup() { throw new \BadMethodCallException("no"); } }
+unserialize('O:2:"WA":2:{s:1:"b";O:2:"WB":1:{s:1:"c";O:2:"WC":0:{}}s:1:"n";i:9;}');
+echo "\n";
+try { unserialize('O:2:"WG":0:{}'); echo "missed"; }
+catch (\BadMethodCallException $e) { echo get_class($e); }"#),
+        "CBA|9\nBadMethodCallException",
+    );
+}
+
 /// Verifies `newInstanceWithoutConstructor()`-shaped allocation: an empty payload still seeds
 /// every declared property's default, because allocation runs BEFORE the (empty) payload loop.
 ///

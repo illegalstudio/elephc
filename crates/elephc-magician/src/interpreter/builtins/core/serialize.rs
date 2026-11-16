@@ -9,8 +9,9 @@
 //!   (`N;`, `b:0|1;`, `i:<int>;`, `d:<float>;`, `s:<byte-len>:"<bytes>";`,
 //!   `a:<count>:{<key><value>...}`, `O:<name-len>:"<name>":<count>:{<key><value>...}`).
 //! - Object property enumeration and visibility reuse the SAME machinery `print_r()`/
-//!   `var_dump()` use (`eval_debug_object_properties`, `crate::interpreter::builtins::core::
-//!   print_r`), so a private/protected property gets the correct NUL-mangled key
+//!   `var_dump()` use (`eval_object_properties_ignoring_debug_info`, which skips the
+//!   `__debugInfo()` list only those two print, `crate::interpreter::builtins::core::print_r`),
+//!   so a private/protected property gets the correct NUL-mangled key
 //!   (`"\0ClassName\0prop"` / `"\0*\0prop"`) instead of a plain (public) one -- the exact bug
 //!   PLAN.md warns about: a wrong mangling here corrupts the app's own cache-freshness metadata
 //!   with no crash, just a wrong decision.
@@ -164,16 +165,12 @@ fn eval_serialize_append_value(
             // `raw_value_word`, bypassing that lossy string conversion entirely) already
             // implements shortest round-trip and was verified against `php -n` 8.5.6 for both
             // this repeating fraction and every terminating case (`1.0` -> `"1"`, `1.5` ->
-            // `"1.5"`) via a standalone `rustc` check before this was written.
+            // `"1.5"`) via a standalone `rustc` check before this was written. `to_string()` never
+            // switches to php's exponent form (`1.0E+25`, `1.0E-5`), so the digits are placed by
+            // `var_export()`'s renderer (the same shortest digits and placement), minus the `.0`
+            // `var_export()` adds to an integral value (`serialize(1.0)` is `d:1;`).
             let bits = values.raw_value_word(value)?;
-            let float = f64::from_bits(bits);
-            let wire = if float.is_nan() {
-                "NAN".to_string()
-            } else if float.is_infinite() {
-                if float.is_sign_negative() { "-INF".to_string() } else { "INF".to_string() }
-            } else {
-                float.to_string()
-            };
+            let wire = eval_serialize_float_wire(f64::from_bits(bits));
             buf.extend_from_slice(format!("d:{wire};").as_bytes());
         }
         EVAL_TAG_STRING => {
@@ -207,6 +204,26 @@ fn eval_serialize_append_value(
             }
             state.objects.push((object_key, index));
             let class_name = eval_debug_object_class_name(value, identity, context, values)?;
+            // An enum case is written by name, `E:<len>:"<Enum>:<Case>";`, never as an object
+            // body; a second occurrence is the `r:` back-reference above, as in php.
+            if context.has_enum(&class_name) || values.enum_exists(&class_name)? {
+                // The case name is the readonly `name` property php gives every case, read the
+                // way `var_export()` reads it.
+                let properties = eval_object_properties_ignoring_debug_info(
+                    value, identity, &class_name, context, values,
+                )?;
+                let case = properties
+                    .iter()
+                    .find(|property| property.name == "name")
+                    .ok_or(EvalStatus::RuntimeFatal)?;
+                let mut wire = class_name.as_bytes().to_vec();
+                wire.push(b':');
+                wire.extend_from_slice(&values.string_bytes(case.value)?);
+                buf.extend_from_slice(format!("E:{}:\"", wire.len()).as_bytes());
+                buf.extend_from_slice(&wire);
+                buf.extend_from_slice(b"\";");
+                return Ok(());
+            }
             if eval_serialize_object_has_method(identity, &class_name, "__serialize", context, values)? {
                 eval_serialize_append_magic_serialize(
                     value, &class_name, context, values, state, buf,
@@ -359,7 +376,7 @@ fn eval_serialize_object_entries(
             return Ok((entries, Some(array)));
         }
     }
-    let entries = eval_debug_object_properties(object, identity, class_name, context, values)?
+    let entries = eval_object_properties_ignoring_debug_info(object, identity, class_name, context, values)?
         .iter()
         .map(|property| (eval_serialize_mangled_property_key(property).into_bytes(), property.value))
         .collect();
@@ -441,6 +458,17 @@ fn eval_serialize_sleep_entries(
         }
     }
     Ok(kept)
+}
+
+/// Renders one float's `d:` payload at `serialize_precision = -1`: the digits and placement of
+/// `var_export()` (`1.0E+25`, `1.0E-5`, `0.1`), without the `.0` it appends to an integral
+/// decimal value (`php -n`: `serialize(1.0)` is `d:1;`, `serialize(-0.0)` is `d:-0;`).
+fn eval_serialize_float_wire(value: f64) -> String {
+    let mut wire = super::var_export::eval_var_export_float(value);
+    if !wire.contains('E') && wire.ends_with(".0") {
+        wire.truncate(wire.len() - 2);
+    }
+    wire
 }
 
 /// Computes one object property's serialized key, NUL-mangling it for protected/private the
