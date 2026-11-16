@@ -313,14 +313,16 @@ fn a_program_that_names_nothing_emits_no_shutdown_code() {
 }
 
 /// A program that names a DIFFERENT function from the same prelude must not pay for the drain
-/// either. `error_reporting()` pulls in the shared error-handling surface, and the shutdown
+/// either. `error_get_last()` pulls in the shared error-handling surface, and the shutdown
 /// registry rides in that same `declarations()` list — so the only thing keeping it out is the
 /// forced-group rule being scoped to `register_shutdown_function`, which this pins.
+///
+/// (`error_reporting()` used to be the probe; it is a native builtin now and needs no prelude.)
 #[test]
 fn naming_a_sibling_surface_does_not_pay_for_the_drain() {
     let dir = make_test_dir("shutdown_sibling");
     let php = dir.join("sibling.php");
-    fs::write(&php, "<?php error_reporting(E_ALL); echo 1; exit(0);\n").unwrap();
+    fs::write(&php, "<?php var_dump(error_get_last()); echo 1; exit(0);\n").unwrap();
     let output = Command::new(elephc_bin())
         .env("XDG_CACHE_HOME", dir.join("cache-root"))
         .current_dir(&dir)
@@ -335,7 +337,7 @@ fn naming_a_sibling_surface_does_not_pay_for_the_drain() {
     );
     let asm = fs::read_to_string(dir.join("sibling.s")).expect("emitted assembly");
     assert!(
-        asm.contains("__elephc_diag_render"),
+        asm.contains("@fn name=error_get_last"),
         "the error surface it DID name must be present"
     );
     assert!(
