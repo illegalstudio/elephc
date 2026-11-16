@@ -281,7 +281,14 @@ pub(crate) fn classify_param_binding(
     if expected == actual {
         return ParamBinding::Identity;
     }
-    if *expected == PhpType::Callable {
+    // `?callable` binds a callable-name string exactly as a bare `callable` does.
+    let nullable_callable = matches!(
+        expected,
+        PhpType::Union(members)
+            if members.contains(&PhpType::Callable)
+                && members.iter().all(|member| matches!(member, PhpType::Callable | PhpType::Void))
+    );
+    if *expected == PhpType::Callable || nullable_callable {
         return classify_callable_string_binding(actual, arg);
     }
     // A union that names the declared class plus exactly one of `false`/`null` is accepted by

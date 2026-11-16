@@ -117,3 +117,19 @@ echo g(1), " ", t(1, 0), " ", t(1, 1), " ", n(1, 5), " ", n(1, null), "\n";
     );
     assert_eq!(out, "array array z array z\n");
 }
+
+/// A value-read `callable` parameter reached by builtins with different return types answers each
+/// call's own result type: the result was typed by the first call site, so the string result of
+/// the second read as an int (`int(0)`), and a string passed to `?callable` was refused.
+#[test]
+fn test_value_read_callable_parameter_result_follows_each_callee() {
+    let out = compile_and_run(
+        r#"<?php
+function y(callable $c): void { if (is_string($c)) echo "s\n"; var_dump($c("four")); }
+y("strlen"); y("ucfirst");
+function b(?callable $cb = null): void { if ($cb === null) { return; } var_dump($cb("four")); }
+b("strrev"); b();
+"#,
+    );
+    assert_eq!(out, "s\nint(4)\ns\nstring(4) \"Four\"\nstring(4) \"ruof\"\n");
+}

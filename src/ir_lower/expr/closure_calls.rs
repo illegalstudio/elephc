@@ -49,6 +49,7 @@ pub(super) fn lower_closure_call(ctx: &mut LoweringContext<'_, '_>, var: &str, a
         }
     }
     let callable = ctx.load_local(var, Some(expr.span));
+    let has_static_target = result_type.is_some();
     let result_type = result_type
         .or_else(|| {
             descriptor_signature
@@ -56,6 +57,18 @@ pub(super) fn lower_closure_call(ctx: &mut LoweringContext<'_, '_>, var: &str, a
                 .map(|sig| descriptor_invoker_result_type(Some(sig)))
         })
         .unwrap_or_else(|| dynamic_callable_result_type(ctx, callable.value, expr));
+    // A `callable` parameter the body reads as a value keeps the caller's value in a boxed Mixed
+    // slot (`Checker::callable_param_storage`), so any call site's callee can run through it. The
+    // joined signature only knows the sites that registered it, and typing the result by it read a
+    // string result as the first site's `int`.
+    let result_type = if !has_static_target
+        && instance_signature.is_none()
+        && ctx.builder.value_php_type(callable.value).codegen_repr() == PhpType::Mixed
+    {
+        PhpType::Mixed
+    } else {
+        result_type
+    };
     if tracked_instance_descriptor_spread {
         return lower_call_user_func_descriptor_invoke_from_value(
             ctx,
