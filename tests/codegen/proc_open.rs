@@ -304,3 +304,65 @@ var_dump($f(0));
     );
     assert_eq!(out, "bool(true)\nbool(true)\n");
 }
+
+/// Coercive mode follows php-src's `int` parameter rules: bools, numeric strings and
+/// in-range floats are accepted, with the null and precision-loss deprecations.
+#[test]
+fn test_proc_nice_coerces_its_priority_like_php() {
+    let out = compile_and_run_capture(
+        r#"<?php
+foreach (['0', ' 0', '0 ', false, null, 0.0, 0.5, '0.5', '1e30', 1e30, NAN, 'abc', '0abc', []] as $value) {
+    try { var_dump(proc_nice($value)); } catch (TypeError $e) { echo $e->getMessage(), "\n"; }
+}
+"#,
+    );
+    let float_given = "proc_nice(): Argument #1 ($priority) must be of type int, float given\n";
+    let string_given = "proc_nice(): Argument #1 ($priority) must be of type int, string given\n";
+    assert_eq!(
+        out.stdout,
+        format!(
+            "{}{string_given}{float_given}{float_given}{string_given}{string_given}\
+             proc_nice(): Argument #1 ($priority) must be of type int, array given\n",
+            "bool(true)\n".repeat(8)
+        )
+    );
+    for deprecation in [
+        "Deprecated: proc_nice(): Passing null to parameter #1 ($priority) of type int is deprecated",
+        "Deprecated: Implicit conversion from float 0.5 to int loses precision",
+        "Deprecated: Implicit conversion from float-string \"0.5\" to int loses precision",
+    ] {
+        assert!(out.stderr.contains(deprecation), "{}", out.stderr);
+    }
+}
+
+/// Under `strict_types` only an int is accepted: the signal is never sent for `'15'`.
+#[test]
+fn test_proc_terminate_and_proc_nice_reject_non_ints_under_strict_types() {
+    let out = compile_and_run(
+        r#"<?php
+declare(strict_types=1);
+$process = proc_open(['sleep', '5'], [], $pipes);
+foreach (['15', 15.0, true, null] as $signal) {
+    try { var_dump(proc_terminate($process, $signal)); } catch (TypeError $e) { echo $e->getMessage(), "\n"; }
+}
+foreach (['0', 0.0, false, null] as $priority) {
+    try { var_dump(proc_nice($priority)); } catch (TypeError $e) { echo $e->getMessage(), "\n"; }
+}
+var_dump(proc_get_status($process)['running']);
+proc_terminate($process, 9);
+proc_close($process);
+"#,
+    );
+    assert_eq!(
+        out,
+        "proc_terminate(): Argument #2 ($signal) must be of type int, string given\n\
+         proc_terminate(): Argument #2 ($signal) must be of type int, float given\n\
+         proc_terminate(): Argument #2 ($signal) must be of type int, true given\n\
+         proc_terminate(): Argument #2 ($signal) must be of type int, null given\n\
+         proc_nice(): Argument #1 ($priority) must be of type int, string given\n\
+         proc_nice(): Argument #1 ($priority) must be of type int, float given\n\
+         proc_nice(): Argument #1 ($priority) must be of type int, false given\n\
+         proc_nice(): Argument #1 ($priority) must be of type int, null given\n\
+         bool(true)\n"
+    );
+}
