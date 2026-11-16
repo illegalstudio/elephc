@@ -23,13 +23,17 @@ pub(super) fn lower_polymorphic_object_prop_get(
 ) -> Result<()> {
     let object_reg = abi::int_result_reg(ctx.emitter);
     ctx.load_value_to_reg(object, object_reg)?;
-    lower_polymorphic_object_prop_get_from_loaded_object(ctx, inst, target_name, property)
+    lower_polymorphic_object_prop_get_from_loaded_object(ctx, inst, Some(object), target_name, property)
 }
 
 /// Dispatches a property read after the raw object payload has been loaded into the result register.
+///
+/// `object` is the raw (non-null) receiver value when the caller has one: a miss then asks the
+/// eval context owning the object, if any, before answering php's undefined-property null.
 fn lower_polymorphic_object_prop_get_from_loaded_object(
     ctx: &mut FunctionContext<'_>,
     inst: &Instruction,
+    object: Option<ValueId>,
     target_name: &str,
     property: &str,
 ) -> Result<()> {
@@ -92,6 +96,28 @@ fn lower_polymorphic_object_prop_get_from_loaded_object(
     }
 
     ctx.emitter.label(&miss_label);
+    if let Some(object) = object.filter(|_| {
+        eval_owner_fallback_available(ctx) && inst.result_php_type.codegen_repr() == PhpType::Mixed
+    }) {
+        // An object of an eval-declared class implementing the interface matches no compiled arm:
+        // its properties live in its owning eval context, which answers before the miss does.
+        let native_miss_label = ctx.next_label("interface_prop_native_miss");
+        let owner_done_label = ctx.next_label("interface_prop_eval_owner_done");
+        builtins::lower_eval_owner_mixed_property_get(
+            ctx,
+            object,
+            property,
+            &native_miss_label,
+            &owner_done_label,
+        )?;
+        ctx.emitter.label(&owner_done_label);
+        store_if_result(ctx, inst)?;
+        abi::emit_jump(ctx.emitter, &done_label);
+        ctx.emitter.label(&native_miss_label);
+        // The bridge call clobbered the result register: reload the object for the warning below.
+        let object_reg = abi::int_result_reg(ctx.emitter);
+        ctx.load_value_to_reg(object, object_reg)?;
+    }
     // The dispatch kept the object in the result register: php names its run-time class.
     if property_fetch_mode(inst).is_read() {
         emit_undefined_property_warning_for_loaded_object(ctx, property);
@@ -1772,7 +1798,7 @@ fn lower_nullable_polymorphic_object_prop_get(
     let done_label = ctx.next_label("nullable_generic_prop_done");
     let object_reg = abi::int_result_reg(ctx.emitter);
     emit_nullable_receiver_object_payload(ctx, object, &null_label, object_reg)?;
-    lower_polymorphic_object_prop_get_from_loaded_object(ctx, inst, target, property)?;
+    lower_polymorphic_object_prop_get_from_loaded_object(ctx, inst, None, target, property)?;
     abi::emit_jump(ctx.emitter, &done_label);
 
     ctx.emitter.label(&null_label);

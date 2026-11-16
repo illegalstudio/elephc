@@ -635,7 +635,8 @@ pub(in crate::codegen::lower_inst) fn lower_eval_owned_property_get(
 /// nor in a stdClass hash, so the native reads answered null for it: compiled
 /// `$provider->singletons` on an eval subclass of a compiled class read nothing. Objects no eval
 /// context owns branch to `miss_label` untouched. The bridge finds the owning context from the
-/// object itself, so this frame passes no context.
+/// object itself, so this frame passes no context. A raw object receiver (an interface-typed
+/// value) is accepted too: it is boxed for the bridge call only, and that box released after.
 pub(in crate::codegen::lower_inst) fn lower_eval_owner_mixed_property_get(
     ctx: &mut FunctionContext<'_>,
     object: ValueId,
@@ -686,18 +687,29 @@ fn lower_eval_owner_mixed_property_get_named(
     miss_label: &str,
     done_label: &str,
 ) -> Result<()> {
-    ctx.load_value_to_result(object)?;
-    abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
-    match ctx.emitter.target.arch {
-        Arch::AArch64 => {
-            ctx.emitter.instruction("cmp x0, #6"); // only object payloads can have an eval owner
-            ctx.emitter.instruction(&format!("b.ne {}", miss_label));
-            ctx.emitter.instruction("mov x0, x1"); // pass the raw object identity to the owner probe
-        }
-        Arch::X86_64 => {
-            ctx.emitter.instruction("cmp rax, 6"); // only object payloads can have an eval owner
-            ctx.emitter.instruction(&format!("jne {}", miss_label));
-            // The unboxed object identity already occupies the first C argument register.
+    // A raw object receiver (an interface- or parent-typed value whose runtime class no compiled
+    // arm matched) is probed as is and boxed only for the bridge call, which takes a cell.
+    let object_ty = ctx.load_value_to_result(object)?.codegen_repr();
+    let raw_object = !matches!(object_ty, PhpType::Mixed | PhpType::Union(_));
+    if raw_object {
+        abi::emit_reg_move(
+            ctx.emitter,
+            abi::int_arg_reg_name(ctx.emitter.target, 0),
+            abi::int_result_reg(ctx.emitter),
+        );
+    } else {
+        abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
+        match ctx.emitter.target.arch {
+            Arch::AArch64 => {
+                ctx.emitter.instruction("cmp x0, #6"); // only object payloads can have an eval owner
+                ctx.emitter.instruction(&format!("b.ne {}", miss_label));
+                ctx.emitter.instruction("mov x0, x1"); // pass the raw object identity to the owner probe
+            }
+            Arch::X86_64 => {
+                ctx.emitter.instruction("cmp rax, 6"); // only object payloads can have an eval owner
+                ctx.emitter.instruction(&format!("jne {}", miss_label));
+                // The unboxed object identity already occupies the first C argument register.
+            }
         }
     }
     let owner_probe = ctx
@@ -713,7 +725,16 @@ fn lower_eval_owner_mixed_property_get_named(
     // without a scope the interpreter refused it "Cannot access private property".
     let pushed_caller_class = push_native_caller_class(ctx)?;
     let object_arg = abi::int_arg_reg_name(ctx.emitter.target, 1);
-    ctx.load_value_to_reg(object, object_arg)?;
+    let mut boxed = EvalBoxedOperands::new();
+    if raw_object {
+        ctx.load_value_to_result(object)?;
+        emit_box_current_value_as_mixed(ctx.emitter, &object_ty);
+        abi::emit_store_to_sp(ctx.emitter, abi::int_result_reg(ctx.emitter), EVAL_TEMP_CELL_OFFSET);
+        boxed.push(EVAL_TEMP_CELL_OFFSET);
+        abi::emit_load_temporary_stack_slot(ctx.emitter, object_arg, EVAL_TEMP_CELL_OFFSET);
+    } else {
+        ctx.load_value_to_reg(object, object_arg)?;
+    }
     let property_ptr_arg = abi::int_arg_reg_name(ctx.emitter.target, 2);
     let property_len_arg = abi::int_arg_reg_name(ctx.emitter.target, 3);
     match name {
@@ -735,7 +756,8 @@ fn lower_eval_owner_mixed_property_get_named(
         .extern_symbol("__elephc_eval_property_get");
     abi::emit_call_label(ctx.emitter, &symbol);
     pop_native_caller_class(ctx, pushed_caller_class);
-    emit_eval_status_check(ctx);
+    emit_eval_status_check_releasing(ctx, &boxed);
+    emit_release_eval_boxed_operands_keeping_result(ctx, &boxed);
     let result_reg = abi::int_result_reg(ctx.emitter);
     abi::emit_load_temporary_stack_slot(ctx.emitter, result_reg, EVAL_RESULT_VALUE_CELL_OFFSET);
     abi::emit_release_temporary_stack(ctx.emitter, EVAL_STACK_BYTES);

@@ -36428,3 +36428,29 @@ echo probe(new Late()), "\n";
     );
     assert_eq!(out, "compiled:Marked:Marked\nother:Late:Late\n");
 }
+
+/// A compiled function reading a property through an interface-typed parameter dispatches on the
+/// compiled implementers' class ids; an object of an `eval()`-declared implementer matches none of
+/// them, and the read answered null instead of asking the eval context that owns the object.
+#[test]
+fn test_interface_typed_property_read_of_eval_declared_object() {
+    let out = compile_and_run(
+        r#"<?php
+interface Marker { function mark(): string; }
+class Marked implements Marker { public string $tag = "M"; function mark(): string { return "Marked"; } }
+function tag_of(Marker $m) { return $m->tag; }
+function describe(Marker $m): string { return $m->tag . ":" . $m->mark(); }
+echo tag_of(new Marked()), "\n";
+eval('class Late implements Marker { public int $n = 7; public string $tag = "L"; function mark(): string { return "Late"; } }');
+$late = new Late();
+var_dump(tag_of($late));
+echo describe($late), "\n";
+eval('class LateList implements Marker { public $tag = [1]; function mark(): string { return "LateList"; } }');
+var_dump(tag_of(new LateList()));
+"#,
+    );
+    assert_eq!(
+        out,
+        "M\nstring(1) \"L\"\nL:Late\narray(1) {\n  [0]=>\n  int(1)\n}\n"
+    );
+}
