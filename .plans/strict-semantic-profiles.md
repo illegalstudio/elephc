@@ -1004,6 +1004,23 @@ the temporary-switch fixture passes all four AST/EIR optimizer combinations with
 a clean heap. The compiler build, all-five-target EIR emission, architecture
 inventory and source hygiene pass. Public admission remains unchanged.
 
+### Numeric producer proof and prepared result binding
+
+Step 102 reuses the shared source-policy traversal in numeric evidence. Recursive
+proof selects each prepared producer's mode and PHP strict-types setting, restores
+the caller after either success or a diagnostic, and applies the validated
+IntegerToFloat binding to its result before a public consumer checks the value.
+Declaration binding remains a consumer boundary with its own physical policy.
+
+The two baseline fixtures failed before this change: all eight combinations of
+physical/producer mode for Overflow, Arithmetic, Coercions and Casts were inverted,
+and a prepared trusted float result was reported as its unbound integer value.
+Both fixtures pass after the fix. Nine focused source/checker tests and the
+compiler build pass in the original checkout, including existing declaration,
+trusted constant, user/builtin call and all-five-target storage controls. The
+baseline failures and the independent successful rerun establish the regression
+and its correction without changing public feature admission.
+
 ### Verification discipline
 
 Count exact test registrations, use narrow package/test-binary filters, and queue
@@ -1131,4 +1148,6 @@ paths. Keep this plan, agent documentation and the current journal log synchroni
 | 99 | `b8f700b046` | feat(strict): guard native builtin input contracts |
 | 100 | `87db018d1b` | feat(strict): implement exact scalar comparison boundaries |
 
-| 101 | this commit | fix(strict): preserve comparison sources and switch lifetimes |
+| 101 | `bed10dc9b4` | fix(strict): preserve comparison sources and switch lifetimes |
+
+| 102 | this commit | fix(strict): retain numeric producer policies and result bindings |

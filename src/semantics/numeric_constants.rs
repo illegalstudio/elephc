@@ -147,22 +147,24 @@ pub(super) fn validate(program: &Program, profile: SemanticProfile) -> Result<()
     if profile.contains(StrictFeature::Coercions) && !definitions.unresolved_namespaces {
         definitions.calls = source_calls::Signatures::collect(program);
     }
-    let mut visitor = NumericValidator { definitions, evidence: Evidence { profile, ..Default::default() }, scopes: Vec::new(), error: None };
+    let mut visitor = NumericValidator { definitions, evidence: Evidence { profile, ..Default::default() }, scopes: Vec::new(), source_modes: Default::default(), error: None };
     walk_program(program, &mut visitor);
     visitor.error.map_or(Ok(()), Err)
 }
 
-/// Applies each operation's physical source mode and lexical class context.
+/// Tracks each operation's producer policy and lexical class context.
 struct NumericValidator {
     definitions: Definitions,
     evidence: Evidence,
     scopes: Vec<(SourceMode, Option<String>, bool)>,
+    source_modes: crate::ast_visit::SourcePolicy,
     error: Option<CompileError>,
 }
 
 impl AstVisitor for NumericValidator {
     /// Tracks nested implementation statements without exempting their user children.
     fn statement(&mut self, stmt: &Stmt) {
+        self.source_modes.enter_statement(stmt);
         let class = match &stmt.kind {
             StmtKind::ClassDecl { name, .. } | StmtKind::InterfaceDecl { name, .. } | StmtKind::EnumDecl { name, .. }
             | StmtKind::TraitDecl { name, .. } =>
@@ -173,7 +175,10 @@ impl AstVisitor for NumericValidator {
     }
 
     /// Restores the lexical class after a declaration or nested statement finishes.
-    fn statement_end(&mut self, _stmt: &Stmt) { self.scopes.pop(); }
+    fn statement_end(&mut self, _stmt: &Stmt) {
+        self.scopes.pop();
+        self.source_modes.leave_statement();
+    }
 
     /// Validates proven declaration values before folding can erase their original scalar kind.
     fn declared_value(&mut self, annotation: &TypeExpr, value: &Expr) {
@@ -186,10 +191,11 @@ impl AstVisitor for NumericValidator {
 
     /// Evaluates only proven scalar evidence, leaving unknown operands to runtime guards.
     fn expression(&mut self, expr: &Expr) {
+        let source = self.source_modes.enter_expression(expr);
         if self.error.is_some() { return; }
-        let (mode, class, strict_types) = self.scopes.last().expect("expressions have an enclosing statement");
-        if *mode == SourceMode::Internal { return; }
-        self.evidence.strict_types = *strict_types;
+        let (_, class, _) = self.scopes.last().expect("expressions have an enclosing statement");
+        if source.mode == SourceMode::Internal { return; }
+        self.evidence.strict_types = source.strict_types;
         if let Err(error) = source_calls::check(expr, class.as_deref(), &self.definitions, &self.evidence) {
             self.error = Some(error);
             return;
@@ -198,10 +204,29 @@ impl AstVisitor for NumericValidator {
             self.error = Some(error);
         }
     }
+
+    /// Restores the operation policy after every child and nested statement has been observed.
+    fn expression_end(&mut self, _expr: &Expr) { self.source_modes.leave_expression(); }
 }
 
-/// Resolves each immutable expression once under its operation policy.
+/// Evaluates a prepared producer under its own policy, then applies its validated result binding.
 fn evaluate(expr: &Expr, checked: bool, class: Option<&str>, definitions: &Definitions, evidence: &mut Evidence) -> Result<Option<Number>, CompileError> {
+    let previous_strict_types = evidence.strict_types;
+    let checked = if expr.producer_binding.is_some() {
+        evidence.strict_types = expr.source_profile.strict_types;
+        expr.source_profile.mode != SourceMode::Internal
+    } else { checked };
+    let result = evaluate_under_policy(expr, checked, class, definitions, evidence);
+    evidence.strict_types = previous_strict_types;
+    result.map(|value| match (expr.producer_binding, value) {
+        (Some(crate::parser::ast::ProducerBinding::IntegerToFloat), Some(Number::Int(value))) =>
+            Some(Number::Float(value as f64)),
+        (_, value) => value,
+    })
+}
+
+/// Memoizes original values without confusing producer arithmetic with its consumer's contract.
+fn evaluate_under_policy(expr: &Expr, checked: bool, class: Option<&str>, definitions: &Definitions, evidence: &mut Evidence) -> Result<Option<Number>, CompileError> {
     let key = (std::ptr::from_ref(expr) as usize, checked, evidence.strict_types);
     if let Some(value) = evidence.values.get(&key) { return Ok(*value); }
     let value = match &expr.kind {

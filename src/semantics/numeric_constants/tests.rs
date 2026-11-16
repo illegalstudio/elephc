@@ -10,6 +10,47 @@
 
 use super::*;
 
+/// Prepared numeric producers select their own operation rules in either physical source mode.
+#[test]
+fn strict_source_prepared_numeric_operation_policies() {
+    let mut failures = Vec::new();
+    for (feature, source) in [
+        (StrictFeature::Overflow, "<?php echo PHP_INT_MAX + 1;"),
+        (StrictFeature::Arithmetic, "<?php echo '1' % 2;"),
+        (StrictFeature::Coercions, "<?php echo 1 + '2';"),
+        (StrictFeature::Casts, "<?php echo (int) 'invalid';"),
+    ] {
+        let profile = SemanticProfile::PERMISSIVE.with(feature, true);
+        for (physical, producer, rejected) in [
+            (SourceMode::Internal, SourceMode::Php, true),
+            (SourceMode::Php, SourceMode::Internal, false),
+        ] {
+            let mut program = parse(source);
+            program[0].source_mode = physical;
+            let StmtKind::Echo(value) = &mut program[0].kind else { panic!("echo fixture"); };
+            value.producer_binding = Some(crate::parser::ast::ProducerBinding::Identity);
+            value.source_profile.mode = producer;
+            let result = validate(&program, profile);
+            if result.is_err() != rejected {
+                failures.push(format!("{feature:?}: physical={physical:?} producer={producer:?}: {result:?}"));
+            }
+        }
+    }
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
+}
+
+/// Constant proof sees a trusted prepared widening before checking a public consumer contract.
+#[test]
+fn strict_source_prepared_numeric_result_binding() {
+    let mut program = parse("<?php function consume(float $value) {} consume(2 + 3);");
+    let StmtKind::ExprStmt(call) = &mut program[1].kind else { panic!("call fixture"); };
+    let ExprKind::FunctionCall { args, .. } = &mut call.kind else { panic!("function fixture"); };
+    args[0].source_profile.mode = SourceMode::Internal;
+    args[0].producer_binding = Some(crate::parser::ast::ProducerBinding::IntegerToFloat);
+    let profile = SemanticProfile::PERMISSIVE.with(StrictFeature::Coercions, true);
+    assert!(validate(&program, profile).is_ok());
+}
+
 /// Original user-call operands remain checked inside defaults and branches removed by folding.
 #[test]
 fn strict_source_call_arguments_preserve_original_declared_scalar_kinds() {
