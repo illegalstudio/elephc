@@ -203,7 +203,7 @@ impl Checker {
                             .get(param_idx)
                             .copied()
                             .unwrap_or(false)
-                            || matches!(expected_ty, PhpType::Mixed));
+                            || crate::types::uses_boxed_reference_payload(expected_ty));
                     if tracks_boxed_reference_output {
                         self.require_boxed_by_ref_storage(
                             expected_ty,

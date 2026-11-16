@@ -606,7 +606,7 @@ order. Repeating an explicit feature option uses the last value.
 
 Integration is in progress. This build accepts the existing strict-locals and
 strict-opcache rules plus strict-dynamic-code, strict-bools, strict-arithmetic,
-strict-overflow, strict-strings, strict-coercions and strict-casts.
+strict-overflow, strict-strings, strict-coercions, strict-casts and strict-comparisons.
 Other registered guarantees,
 including the complete umbrella, fail explicitly until their enforcement is
 complete. Eval embedding entry points reject execution with those profiles too. The [implementation plan](https://github.com/illegalstudio/elephc/issues/2347)
@@ -646,6 +646,27 @@ Explicit float literals and floating-point operations keep IEEE 754 behavior,
 including infinity. This option alone preserves PHP numeric coercions and negative
 integer power; combine it with `--strict-arithmetic` for the separate numeric
 operand and result-kind rules. The same checks apply inside eval and the REPL.
+
+### Strict comparisons
+
+`--strict-comparisons` rejects loose equality (`==`, `!=` and `<>`). Use `===`
+or `!==` for identity. Ordering requires operands of the same scalar kind;
+numeric strings use bytewise ordering, and integer/float pairs require an
+explicit conversion. Arrays and objects, including native value classes,
+cannot use automatic ordering. `switch` matches by identity.
+
+Searches through `in_array` and `array_search` require an explicit true `strict`
+argument. Automatic PHP comparison APIs, including `sort`, `max`, `min` and
+`array_unique`, are rejected. Use an explicit comparator or an identity-based
+loop. User comparators in `usort`, `uasort`, `uksort`, `array_udiff` and
+`array_uintersect` must return an actual integer; their results are not cast.
+
+Known violations produce compile diagnostics before folding. Dynamic ordering,
+mode and comparator-result failures throw `TypeError`. The same contracts apply
+through callables, Reflection, eval and REPL. Casts, arithmetic, boolean
+conditions and implicit parameter conversions remain controlled by their own
+flags. The [label example](../../examples/strict-comparisons/main.php) shows
+bytewise sorting and explicit identity membership.
 
 ### Strict casts
 

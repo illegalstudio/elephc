@@ -64,3 +64,16 @@ fn test_repl_strict_casts_public_domains_and_recovery() {
     assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
     assert_eq!(String::from_utf8_lossy(&output.stdout), "V7");
 }
+
+/// Bytewise ordering and exact kinds persist after a rejected loose-equality submission.
+#[test]
+fn test_repl_strict_comparisons_public_profile_and_recovery() {
+    let fixture = Fixture::new();
+    let output = fixture.run("echo '10' < '9' ? 'L' : 'X';\n1 == '1';\n\
+        try { echo 1 < 2.0; } catch (TypeError $comparisonError) { echo 'T'; }\n\
+        echo 1 === '1' ? 'X' : 'N';\n", &["--strict-comparisons"]);
+    assert_eq!(output.status.code(), Some(1));
+    assert_eq!(String::from_utf8_lossy(&output.stdout), "LTN");
+    assert!(String::from_utf8_lossy(&output.stderr).contains("invalid"),
+        "{}", String::from_utf8_lossy(&output.stderr));
+}

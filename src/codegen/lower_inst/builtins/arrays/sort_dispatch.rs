@@ -312,7 +312,9 @@ pub(super) fn lower_user_sort_static_callback(
     let retain_owed = receiver.store_back_value_before_callback(ctx, array)?;
     let callback_ty = ctx.value_php_type(callback)?.codegen_repr();
     let callback_owner = format!("{} callback", name);
-    if callback_ty == PhpType::Callable && static_callback_operand_is_recoverable(ctx, callback) {
+    if callback_ty == PhpType::Callable && static_callback_operand_is_recoverable(ctx, callback)
+        && !direct_callback_requires_argument_boxing(ctx, callback, &callback_arg_types)?
+    {
         let callback_binding = static_sort_callback_binding(
             ctx,
             callback,

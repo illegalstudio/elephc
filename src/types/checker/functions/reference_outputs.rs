@@ -263,7 +263,7 @@ impl Checker {
         }
         let (name, output_ty) = match &arg.kind {
             ExprKind::Variable(name) => {
-                if output_ty == PhpType::Mixed && arg.span.identifies_a_node() {
+                if crate::types::uses_boxed_reference_payload(&output_ty) && arg.span.identifies_a_node() {
                     self.boxed_reference_promotion_sites
                         .entry((self.current_loop_storage_scope.clone(), arg.span))
                         .or_default()
@@ -271,7 +271,7 @@ impl Checker {
                 }
                 (name, output_ty)
             }
-            ExprKind::ArrayAccess { array, .. } if output_ty == PhpType::Mixed => {
+            ExprKind::ArrayAccess { array, .. } if crate::types::uses_boxed_reference_payload(&output_ty) => {
                 let mut root = array.as_ref();
                 while let ExprKind::ArrayAccess { array, .. } = &root.kind {
                     root = array;

@@ -371,18 +371,18 @@ evidence and outstanding guarantees are recorded below.
 
 ## Implementation progress
 
-Verified through step110 (this commit), with remaining feature admission audits in progress. Issue:
+Verified through step114 (this commit), with remaining feature integration in progress. Issue:
 https://github.com/illegalstudio/elephc/issues/2347.
 
 The full task remains active. The user requested complete implementation, with a
 commit for every verified step and no partial delivery. Do not expose unfinished
-flags as successful no-ops. The public integrated mask still contains only
-Locals, Bools, DynamicCode, Opcache, Arithmetic, Overflow, Strings and Coercions. Existing Locals behavior remains available
+flags as successful no-ops. The public integrated mask contains Locals, Bools, DynamicCode, Opcache, Arithmetic,
+Overflow, Strings, Coercions, Casts and Comparisons. Existing Locals behavior remains available
 but its stronger numeric/reference/eval binding contract is outstanding. All
 other guarantees and the complete umbrella remain explicitly gated until their
 whole contract is enforced.
 
-This progress ledger condenses verified implementation through step110.
+This progress ledger condenses verified implementation through step114.
 Detailed evidence remains in Git history, historical Code Journal plan revisions,
 the linked work logs, and the current agent-facing architecture document
 3739892b. The approved behavior and delivery requirements above are unchanged.
@@ -415,34 +415,20 @@ document3739892b; the complete signed commit ledger stays below.
 
 ### Completion work, in order
 
-1. Audit the remaining numeric call/host paths. Verify initial folding cannot erase required
-   numeric guards or typed source violations. Close any concrete remaining literal,
-   compound-store, update, callable, reference and exception ownership gaps.
-2. Integrate shared conversion plans for implicit assignments, parameters, returns,
-   builtin inputs, callbacks, descriptors, reflection and eval re-entry. Complete
-   source-sensitive/direct builtin handlers and pre-fold AOT builtin checks before
-   admitting Coercions. Complete checked explicit
-   casts with range/domain errors, exact strings and native object cast contracts.
-   Original GMP and SimpleXML cast projections are now checked. Before Casts
-   admission, finish host callbacks and the
-   temporary Reflection Stringable lifetime audit. Runtime gmp_intval range guards and broad
-   object/interface consumers now share reviewed checked paths. Internal
-   implementation helpers must not bypass public contracts.
-3. Finish stable Locals bindings across promotion, parameters, captures, globals,
+1. Strengthen Locals across numeric binding changes, parameters, captures, globals,
    by-reference writes, foreach aliases, loop joins, unset/rebind and eval scopes.
-   Locals alone must not silently enable Overflow or widen an inferred int binding.
-4. Complete Comparisons, Strings, Nullability, Mixed and Initialization through
-   source validation, shared checking/plans, EIR/runtime guards, builtin contracts,
-   walker/VM, references and host boundaries. Preserve explicit formatting and
-   intentional probing/narrowing. Follow the approved boundary defaults above.
-5. Complete exact runtime keys for reads/writes/probes/unset/append/spreads and
-   every producer, including JSON, casts and serialization; pin array element/key
-   contracts and mutators; implement checked ordinary indexing while probes retain
-   missing-value semantics. Preserve COW and references through every failure.
-6. Audit executable/web/REPL/staticlib/cdylib/phpext/eval/callback boundaries and
-   effective cache identity for the whole profile. Update user docs, README,
-   examples and generated metadata. Admit every feature only after its complete
-   guarantee is enforced, then enable the full umbrella and verify combinations.
+   Locals alone must not enable Overflow. The permissive catch-name collision is
+   reproduced in both modes; fix its source-point contract before stronger rules.
+2. Complete Nullability, Mixed and Initialization through source checking, EIR,
+   runtime and all public hosts. Preserve intentional probes and explicit narrowing.
+3. Finish exact keys in every read/write/probe/unset/append/spread and producer,
+   including JSON/casts/serialization. Pin array contracts and mutators; ordinary
+   missing/out-of-range reads throw while probing keeps missing-value semantics.
+   Preserve COW and reference ownership across every failure.
+4. Audit executable/web/REPL/staticlib/cdylib/phpext/eval/callback boundaries,
+   effective cache identity and independent/combined flags for the complete
+   profile. Update docs, README, examples and generated metadata. Enable and
+   verify the full umbrella only after every registered guarantee is enforced.
 
 All five supported targets remain first-class. Local native verification has run
 on Linux x86_64; library/runtime emitter checks cover the complete target matrix.
@@ -465,24 +451,24 @@ Journal architecture document3739892b. Reuse the established mechanisms:
 - Native stores, initialization, references and static publication validate a
   rooted candidate before publication and preserve cleanup/Throwable ownership.
   Eval-owned property sources remain live through aliases and native calls.
-- Scalar comparison, source/builtin comparison modes, bytewise strings, switch
-  matching and operand snapshots have verified cores. Native value-class and
-  remaining host admission checks are still required for Comparisons.
+- Comparisons is admitted after source, native value-class, callable/Reflection,
+  native/eval/REPL and five-target library checks. Argument descriptors own raw
+  scalar/string boxes across free-function and method callback failures.
 - Strings is admitted after source/native/eval/Reflection-callable-independent
   formatting checks. Native XML writes inspect the original selection before
   mutation. Logical string null survives boxing and predicates. Native activation
   snapshots share managed reference identity and retire copied leases after
   writeback; global callback scope stays materialized.
 
-Coercions is admitted after the verified110 audit below. For Casts, retain
-these explicit open checks from the historical notes: PHP's temporary Reflection
-Stringable destruction order (knowledgec1351278), pre-existing references versus
-references introduced by destructors, runtime/opaque ReflectionClass setters,
-and Casts-only eval argument aliases. Stronger Locals work must also revisit the
-native/eval catch-name collision (knowledgea7883b31), in addition to the numeric,
-reference, global and flow cases in the completion checklist. Remaining
-nullability/mixed/initialization, exact keys/types/indexing, hosts and cache
-acceptance requirements above are unchanged.
+Coercions and Casts are publicly admitted after signed110 and111. The completed
+[reference/cast audit](strict-semantic-profile-references.md) retains their
+Reflection, native/eval reference, callback and lifetime proofs. Comparator owner
+and native return/effect foundations are signed112 and113; public Comparisons
+admission is verified114. Its [detailed history](strict-semantic-profile-comparisons.md)
+retains the adapter, reference-storage, dispatch and method-owner corrections. Stronger Locals must revisit the original
+permissive native/eval catch-name collision (knowledgea7883b31) alongside numeric,
+reference, global and flow cases. Nullability/Mixed/Initialization, exact keys/
+types/indexing and full host/cache/combination acceptance remain unfinished.
 
 ### Verification discipline
 
@@ -622,554 +608,55 @@ paths. Keep this plan, agent documentation and the current journal log synchroni
 | 108 | `6904bee88a` | fix(runtime): preserve logical null string identity |
 | 109 | `3bc3f47cf4` | feat(strict): enable string contracts across native hosts |
 | 110 | `ba2bc9f312` | feat(strict): admit exact value contracts across native hosts |
+| 111 | `4727b75ace` | feat(strict): enable checked casts across native hosts |
+| 112 | `c30508e838` | fix(eval): validate comparator returns and retire sort owners |
+| 113 | `7a97ec5e68` | feat(strict): validate native comparator result kinds |
+| 114 | this commit | feat(strict): enable noncoercive comparisons across hosts |
 
 
 ### Latest verified admission checkpoint
 
-109 (`3bc3f47cf4`) admits Strings. Native/eval alias visibility, destructor timing,
-dynamic owner retention, REPL recovery, five-target guards and compiler build
-passed. The full stdout/heap evidence and intermediate red cases are preserved in
-the [admission history](strict-semantic-profile-admissions.md#real-opaque-eval-string-host-parity-109-verified).
-
-### Native Coercions contract admission (110, verified)
-
-109 is signed as3bc3f47cf4 and Strings is publicly admitted. The two preserved
-eval-owned property native-reference fixtures are now registered. They require
-exact Float contracts to reject Int writes at the native assignment before later
-callee effects, plus native catches, nested eval, source intersections, source
-removal, static properties and orphan lifetime controls. Coercions admission is
-provisional only in this uncommitted audit snapshot. The real Magician archive
-will be rebuilt before the two exact native tests; no execution result exists
-yet. Remaining source/prelude/callable/host coverage must be checked before any
-Coercions admission commit.
-
-
-Native110 job116fb542 exited0 after2m52s. Assignment-point63.71s and reference
-lifecycle61.03s both pass with both optimizers and clean heaps: native writes
-reject before following callee effects, native catches/nested eval preserve the
-original value, and removing source declarations restores permitted kinds.
-Shared native parameter/return/builtin PHP fixtures pass public --check and are
-now reused by staged tests plus newly registered public CLI execution checks.
-A REPL exact-binding recovery case is registered. These public execution/source
-and REPL tests remain unverified; Coercions admission is still provisional.
-
-
-Public110 job6e2399ae exited0 after1m52s. Native shared parameter/return/builtin
-CLI matrix6.40s, source evidence/explicit conversion0.59s, REPL exact binding and
-recovery48.69s and compiler build39.44s pass. Before final admission, added direct
-AOT Reflection controls and one real opaque host matrix spanning eval/native
-parameters, returns, methods, descriptors, builtin inputs and Reflection. A
-public library all5-target profile test and the extended existing strict example
-complete the admission checks. These final additions are not yet executed.
-
-
-4e82b956 passed all3 selected five-target compiler tests, then failed the new
-Reflection fixture. Exact retry9c5a39af proves this is permissive no-IR-opt too:
-expected stdout matches, but inline reflectors leak96 blocks8672bytes. Known
-invoke fast paths bypass receiver retirement after lower_member_receiver already
-constructed it. Both fast paths now root the original receiver and retire it
-afterward through a shared helper that detaches the receiver record, pins the
-completed result and clears/releases the receiver slot in LIFO order. The native
-control adds an owned string result. Added CLI assembly-only checks on all5
-targets, reusing a compile-only fixture helper. A separate typed-string missing
-value Coercions probe is registered and unexecuted; no logical-kind claim yet.
-Opaque hosts and the example were not reached by4e82b956. No110 commit/admission.
-
-
-Nativec76ea9eb passed Reflection receiver/result owners13.59s (all4 profile/IR
-controls), all5-target CLI Reflection emission12.38s, opaque native/eval host
-contracts63.72s (both IR modes) and the combined-profile example2.39s. The new
-missing-string probe then reproduced three exact-binding bypasses: argument,
-return and builtin accepted logical null behind Str storage, yielding
-V|NULL|0|NV:0:1 instead of T|T|T|NV:0:1, clean heap. Compiler conversion planning
-now keeps runtime kind validation for accepted Str storage when the declaration
-excludes null. Nullable declarations and explicit conversions retain their
-contracts. The public all5-target compiler fixture now checks that predicate too.
-These latest changes await focused verification; no110 admission commit yet.
-
-
-Final110 verification90c1f7b5 exited0 after3m00s. Public library guards pass
-all5 targets, including logical string-kind checks; the missing-string regression
-passes all4 AST/EIR modes in1.56s with correct nullable/cast controls and clean
-heaps. Shared public native contracts6.25s, Reflection profile/optimizer controls
-14.58s and the extended combined-profile example2.03s pass, followed by compiler
-build59.95s. Earlier verified opaque hosts and five-target Reflection emission
-remain green; the last change is the shared concrete-string declaration guard.
-Source, target, owner, REPL, reference, Reflection and explicit-conversion
-evidence now supports public Coercions independently. No other guarantee was
-enabled. No stored EvalIR shape or profile bit numbering changed. Known
-Reflection receivers now retire on normal and exceptional paths through the
-shared result-preserving owner helper. CLI/checker docs describe the guarantee.
-
-The detailed verified notes through109 moved verbatim into the linked admission
-history, keeping all approved requirements, active audits and the full ledger in
-this plan while restoring room under Code Journal's100k limit. Next111 closes
-the remaining Casts Reflection identity/temporary and opaque-host audits, then
-stronger Locals and the remaining approved guarantees. The full user task stays
-active; the umbrella remains gated until every guarantee is implemented.
-
-
-### Casts Reflection binding identity audit (111, pending)
-
-110 is signed asba2bc9f312. New PHP reference fixture distinguishes four cases:
-an existing property reference versus one introduced by the temporary Stringable
-destructor, each with/without a destructor throw. PHP always converts before the
-destructor; without an original reference it publishes into the property and
-breaks the newly introduced alias (old:second:new), whereas an original reference
-receives the converted value even after property rebinding (new:second:second).
-Successful conversion publishes despite a retirement ValueError. Both native
-lowering and actual opaque Reflection over native declarations are prepared for
-comparison. Casts admission is provisional in this uncommitted experiment only;
-no native execution result exists yet. Remaining source/opaque/alias/host Casts
-checks remain required before admission.
-
-
-111 initial8d8f6923 stopped before execution: the AOT parser rejects reverse
-static-property reference assignment (Unexpected token Ampersand). The fixture
-now creates pre-existing aliases with supported $first =& Class::$text and uses
-runtime-selected eval inside each native destructor for reverse rebinding. PHP
-confirms identical four-case stdout. Both outer native and opaque Reflection
-paths remain unverified, and no binding-identity bug has been claimed yet.
-
-
-111 retry1a222096 stopped during lowering, before native execution: adding opaque
-rebind inside the native destructor requires the staged helper to inject the
-real eval/object-cast preludes. The direct case now also uses the eval-capable
-fixture helper. This is harness setup, not a confirmed publication failure.
-
-111 real baseline1fc635b0 selected exactly one regression and ran with a clean
-heap. Native Reflection setter results differed from PHP only after rebinding
-a pre-existing property reference: the old alias and property both became new,
-where PHP leaves the property bound to second. Confirmed native eval reference
-binding uses static_property_set plus an interpreter-only alias overlay. Work
-in progress adds scoped physical native rebinding with a rooted staging cell,
-shared declaration validation, and protected cleanup. This result does not yet
-admit Casts.
-
-111 current checks: the owning-alias EIR assertion passes for both Casts and
-Coercions on all five targets; Clang assembles the new physical rebind, sharing,
-and captured-destination helpers on all five targets. The existing protected
-commit publication-order test passes. Native alias detachment/write-through
-passes for Casts and Coercions with both IR modes, four clean heaps (135.79s).
-The full Reflection identity/retirement regression is still running. New
-sharing helpers distinguish native cell owners from direct canonical wrapper
-owners and exclude validation/collector leases.
-
-111 native Reflection cases now pass with both IR modes. The opaque outer
-Reflection baseline remains red with clean heap778/778: its temporary argument
-is retired after publication (SDnew) instead of before (SDold). Work in progress
-shares exact evaluation-owner provenance through named/positional binding and
-adds a consuming native class-setter entry using the same static-call publisher.
-No remaining feature has been admitted by this pending work.
-
-111 retry c631b74f stopped at compilation before tests: one native descriptor
-CallArgumentModes initializer needed the new optional retirement field. Fixed
-via the existing Default initializer. The current872db101 prebuild succeeds;
-Clang accepts both capability paths and the consuming class-store ABI on all
-five targets. Its opaque Reflection case now also uses reordered named
-arguments. No full suite was run.
-
-Future112 public Casts source/eval/callable/library checks are prepared in the
-currently unregistered tests/codegen/strict_casts_public.rs and shared scalar
-fixture tests/fixtures/strict/cast_values.php. They remain unrun. Current source
-inputs are frozen while872db101 executes. Both native static promotion and
-Reflection source-owner metadata are gated by the shared neutral profile
-predicate, preserving ordinary source-argument ownership outside checked
-property-reference profiles.
-
-111 verified native reference/Reflection checkpoint872db101 exited0 after4m49s.
-The real native/opaque Reflection fixture now matches all four PHP identity and
-throwing-destructor cases with both IR modes, four clean heaps (142.79s). Opaque
-invocation also verifies reordered named argument ownership. All-five-target
-Clang assembly includes both static binding and consuming class-setter entries.
-Public scalar, source-diagnostic, callable/eval, library, example and REPL tests
-are now registered for the final Casts admission pass. No commit yet.
-
-Public db4bad2c currently passes source evidence/independence, native+opaque
-scalar domains (63.04s), native/eval callable hosts (60.26s), all-five-target
-library emission (0.76s), and example (0.42s). REPL, selector control and final
-build are still running. Casts admission additionally retains the explicit
-historical alias audit: tests/codegen/strict_cast_argument_aliases.rs is prepared
-but not registered while sources are frozen. PHP oracle verifies current-cell
-mutation versus unset/rebind selection for native and eval callees, using
-explicit mixed eval-owned properties and statics to isolate identity from
-implicit conversions. Expected: Ninteger:7|integer:7;Ninteger:42|string:7.9;
-Einteger:42|string:7.9;Ninteger:9|integer:9;. No compiler result exists yet.
-
-Public db4bad2c also passes the real cached REPL (47.26s), then stops at
-protected static selector generation: the new binding label mode needed the
-getter ABI's scope-offset mapping. Added binding to both target mappings. This
-was a compiler unreachable guard for non-public slots, not a numeric cast
-failure. Pending-profile regression tests now select still-staged Comparisons
-instead of candidate Casts. Job1ae14843 queues those narrow controls, the newly
-registered argument-alias audit, and the final compiler build.
-
-### Remaining Casts alias and source-coercion evidence (111, still pending)
-
-Jobd65948d3 confirms the mixed alias failures again with a clean207/207 heap,
-and typed float controls also lose their declaration: actual
-Ninteger:1|integer:1;Einteger:1|integer:1; versus PHP
-Ndouble:1|double:1;Edouble:1|double:1;. Current eval property scalar validation
-is Coercions-only. Extending stable captures alone would not preserve the
-weak PHP declaration rules needed by independent Casts. Native and eval
-property sources must inspect the same original RHS before publication; do not
-sequentially pre-coerce eval sources before native union validation.
-
-The proposed-static-binding probe separately returns Tobject:X:old before any
-Stringable hook (clean48/48); PHP returns Sstring:new:new even though __toString
-replaces its unconstrained source with an array. The initial failure is the
-weak native guard's static-only Stringable class list. Pendingf740df6b adds
-ObjectPlan.eval_stringable, uses the existing live Stringable relation query,
-and shares relation-ABI materialization with ordinary object_is_a lowering.
-The established string conversion ladder already has an exception-safe erased
-object fallback. A new EIR test covers all five targets with/without eval.
-No native result for this guard fix yet. It is NOT yet established that the
-temporary native source registration rejects reentrant mutation too early.
-
-The re-entry probe f740df6b confirmed that issue (STobject:X:old versus PHP
-Sstring:new:new, clean59/59). Implemented validation of a proposed
-NativeReferenceTypeSource passed by value snapshot without installing it in the
-live weak registry. Add a versioned validation ABI while preserving v1. The
-coordinator must snapshot/authenticate existing native sources plus the proposed
-source before ANY PHP callback. Proposed sources use a reserved token distinct
-from registered generations. For Casts-only eval declarations, an optional
-protected external-candidate callback can snapshot all live eval property
-source declarations and coerce each from the same original RHS; existing
-Coercions stays exact. Compare the external candidate with independently
-coerced native/proposed candidates before commit. Weak eval normalization must
-not feed into native union selection, and prospective constraints must not
-become live during __toString. Version two preserves the existing version-one
-entry and operation layout, adds an optional external source provider, and
-authenticates copied proposed sources without registering them. Jobfd456b9d
-passed all four Rust coordinator controls, all-five-target assembly, the real
-proposed-source re-entry regression, both Reflection identity/retirement IR
-modes (164.33s), and the previous exact eval/native assignment-point regression
-(72.03s). The complete job exited0 after8m44s. No commit or Casts admission yet.
-
-Job203e6ef8 now queues stable Casts source/property argument captures and a
-shared eval-source candidate planner used by fake RuntimeValueOps and the
-version-two native external provider, without double adaptation. New neutral
-weak_scalar_binding plans implicit scalar preference and range rules separately
-from checked explicit numeric casts. Immutable source decisions precede PHP,
-and each candidate uses the same original RHS. Physical eval sources remain
-distinct rather than deduplicated by declaration. Declared mixed contributes
-an identity constraint, unlike an untyped property (reconfirmed with PHP and
-existing CJ fact2f43cec8). Native/eval cross-source tests cover both mixed and
-numeric-union conflicts plus removal of a source. This implementation remains
-unverified until the queued job completes.
-Preserve implicit PHP scalar preference/range rules separately from explicit
-checked-cast kernels, and keep every owner/Throwable boundary protected.
-
-Job203e6ef8 stopped at compilation after16s: the new candidate finisher passed
-Result<Option<RuntimeCellHandle>> to the existing owner cleanup helper, which
-accepts Result<RuntimeCellHandle>. Corrected the owned result before mapping to
-Some and removed redundant exact validation after the shared planner. No runtime
-test ran in that job. Casts with eval_bridge now explicitly selects native
-reference validation even when there are no statically declared user properties.
-
-Joba00480ba queues the corrected build, four neutral scalar planner tests, weak
-and existing exact fake-reference controls, all-five-target weak-provider and
-assembler checks, native argument-cell selection, independent native/eval mixed
-and union constraints, proposed source reentry, the previous exact native/eval
-assignment control, and a final compiler build. It also adds the PHP-verified
-weak_property_reference_sources.php fixture: distinct instances of one property
-each invoke Stringable conversion even after the first source retires, and a
-throwing E_DEPRECATED precision handler escapes as TypeError with the original
-RuntimeException as previous while storage remains unchanged. Oracle output is
-SS:new:new;PTypeError:RuntimeException:1:1 (CJb882f71e and458a9819). The bounded
-previous-exception builder roots constructor operands and retires every owner.
-These new runtime paths are implemented but not yet verified. No111 commit yet.
-
-Joba00480ba passed build, all four neutral weak-scalar controls, weak and exact
-fake reference controls, the five-target external-provider policy test, and
-Clang assembly for both Coercions and Casts. The real argument fixture then
-confirmed current-cell mutation and float constraints fixed, but unset/recreate
-still reused the old captured cell: Ninteger:7 and Einteger:7 versus detached
-integer42 with replacement string7.9. Heap250/250 clean; job exited1 after5m05s.
-CJ9110a87e records the concrete cause: the eval unset fallback wrote null
-through the existing backing hash reference after clearing only alias metadata.
-
-Added an eval-owned backing-hash removal fallback to the existing protected
-typed-unset boundary. It reuses the property hash-slot classifier, installs the
-COW table before hash_unset, and performs no table writes after value retirement.
-Fixed native slots retain their existing dispatch; ordinary native objects do
-not acquire eval backing-storage permission. New source fixture controls cover
-two distinct same-declaration sources, retirement during Stringable conversion,
-precision-handler exception chaining, clone/COW aliases and destructor replacement.
-The full PHP oracle output is now
-SS:new:new;PTypeError:RuntimeException:1:1|42:42:7.9D:replaced.
-
-Added a bounded execution-context lease for the external provider. Active native
-callers borrow their existing context; a foreign/fallback heap context retains
-one ABI owner through PHP callbacks. The current candidate remains rooted through
-context cleanup, and any conversion/teardown Throwable is exported after releasing
-the context without dereferencing it again. Pure Stringable probing and execution
-recover an escaped object's owning context. Three ABI lifetime tests cover final
-host release, an existing native activation and nested outer teardown. These are
-implementation safeguards, not a claimed reproduced UAF. New job0dba0d5f/session92441
-queues these tests, all-five-target unset emission/assembly, prior candidate
-controls, all native alias/callback fixtures and final compiler build. No new
-runtime result for these additions yet; no111 commit/admission.
-
-Job0dba0d5f passed build and two lease controls, then stopped at an invalid test
-setup: begin_teardown correctly refuses a context that still has ABI owners.
-Corrected the fixture to release its host owner before entering outer teardown,
-then acquire the nested activation. Job9292c9c6 passed all three lifetime tests,
-all scalar and fake exact/weak controls, both five-target unset tests and both
-coordinator policy/assembler controls. Its native alias fixture then failed after
-the first case with heap memory exhausted (3m11s, exit1). The new unset fallback
-passed the hash only in rax, but the x86_64 COW helper consumes rdi and returns
-rax. Added explicit ABI argument materialization and a five-target structural
-check for the x86 input register (CJ948b621d). The separate inspected older direct
-dynamic-property unset path is tracked as task1fffe7bc for reproduction; it is
-not claimed fixed here. Current joba34a3a4e/session72535 queues the corrected
-unset execution and all remaining reference/callback controls plus compiler build.
-No new runtime result for that correction yet; no111 commit/admission.
-
-Joba34a3a4e passed the real argument selection fixture (82.16s, both IR modes,
-clean heaps) and independent native/eval mixed and union constraints (68.42s).
-The callback fixture then stopped at eval parsing: it used reverse property-to-
-variable reference syntax that the existing eval parser does not support. Changed
-those two setup bindings to the already supported property =& variable direction,
-with the same PHP oracle output, and added a fast parse assertion to the existing
-fake candidate control. No parser language extension was added.
-
-The builtin architecture audit passed:828 registry AOT builtins,484 compiler
-routes, zero structural errors and no backend-dependent homes. I omitted
-ELEPHC_DOCS_PREBUILT=1 and the audit implicitly ran cargo outside the queue;
-this was an execution-protocol mistake, not a source change. It finished before
-the attempted stop. Job5bb61656 then explicitly rebuilt the default Magician
-archive through the queue and passed callback/retirement/COW/destructor/previous
-exception controls (62.72s), proposed-source reentry (63.33s), exact native/eval
-assignment points (71.53s), and compiler build (2m04s). Whole job exit0,5m54s.
-
-Final reference-boundary review restores the direct interpreter's current-context
-visibility now that publication delegates to the native coordinator. Checked
-RuntimeValueOps reference replacement installs a context-only native activation;
-the registry includes its current borrowed context even during outer teardown.
-Inactive tearing-down contexts remain excluded. A unit control covers this
-borrowed-stack case. This is a bounded restoration of the earlier current-context
-validation path, not a claimed reproduced native crash.
-
-Current job834c4b03/session74052 queues final public Casts source, scalar, callable,
-five-target library, example and REPL controls; Reflection binding/retirement;
-native/eval aliases and callbacks; existing exact and default native property
-alias tests; the current-context controls and compiler build. CLI docs now list
-Casts with the accepted features. No111 commit yet. Full plan remains active
-after Casts, including stronger Locals, Comparisons and all remaining flags.
-
-Read-only preparation for the subsequent Comparisons audit: builtin comparison
-selection already lives in the neutral comparison_policy contract (identity
-searches and explicit comparator alternatives). Verify native value-class
-ordering cannot bypass the original-kind gate. Also probe comparator return
-kinds and ownership before admission: eval_user_sort_compare currently delegates
-to borrowed eval_int_value, which coerces to int and releases only its cast
-temporary; the native sort adapter accepts Bool directly and casts Mixed results.
-No native failure or fix for those observations is claimed yet. Keep the public
-admission gated until focused source/runtime/callback proofs close that audit.
-
-### Checked Casts admission (111, verified)
-
-Final job834c4b03 exited0 after16m33s. All17 selected tests passed, each with an
-exact single-test filter. Public source evidence/independence, native and opaque
-numeric domains (71.61s), callable hosts (72.10s), five-target library emission,
-example and real REPL recovery (53.05s) passed. Reference argument selection
-(91.63s), independent native/eval mixed and union sources (87.51s), callbacks,
-precision exception chaining, clone/COW and destructor replacement (80.61s) passed
-with both IR modes and clean heaps. Native/opaque Reflection identity and source
-retirement passed all four cases in both IR modes (161.67s). Static rebinding
-alias owners passed Casts and Coercions with both modes (169.55s). Existing exact
-native/eval reference controls (70.47s), default typed native aliases (44.03s),
-current-context activation and pending-feature controls passed. Default Magician
-and compiler builds passed. Only the two previously documented inherited Rust
-warnings remain; no new warnings were introduced. Earlier five-target structural
-and real assembler checks cover the native coordinator and unset fallback.
-
-Casts is now the ninth accepted semantic feature. Source numeric conversion
-contracts are enforced through shared kernels; implicit declaration rules remain
-independent. Version-two source validation preserves version one, independently
-compares native/eval/proposed candidates, and publishes only after all checks.
-Physical static rebinding, exact argument retirement, eval capture/unset, context
-activation and ownership helpers close the reproduced admission regressions.
-The complete umbrella and remaining seven feature admissions are unfinished.
-Continue stronger Locals and the Comparisons audit before nullability, mixed,
-initialization, arrays, indexing and final cache/host/combination acceptance.
-
-
-### Comparator callback admission audit (112, in progress)
-
-Added two focused Magician probes before production changes: actual integer
-callback returns must retire all sort entry/result owners in permissive and
-checked modes, and strict comparator results must retain their original integer
-kind. The probes cover usort, uasort and uksort; the ownership control also
-reaches builtin fallback from a bytecode user caller. Baseline job ebb80c30 is
-queued behind the existing Elephc docblock and WordPress verification jobs.
-No runtime outcome is claimed yet. Reuse the existing sort entry/root/container
-helpers instead of adding a second ownership lifecycle. Keep original source
-policy authoritative for native adapters and maintain all five target paths.
-
-
-Step112 baseline probes reproduced an outstanding Int(0) owner after permissive
-usort and acceptance of a boolean comparator return under Comparisons. Existing
-compiled single-unit replays established both failures without compiling or
-running a heavy suite outside the queue. Generic sort entries now share the
-existing collector, root inventory and partial-result builder; callbacks retain
-an explicit result owner and checked consumers reject noninteger original kinds.
-Direct writeback uses the existing lvalue/replacement finishers.
-
-Job7907229b passed all seven exact unit gates and the default Magician build
-(exit0,23s). This includes both caller entry modes, all three user sorts, five
-rejected return kinds and failed insertion at each result position, plus ordinary
-sort/key-sort/shuffle regression controls. Two earlier fixture versions stopped
-at unsupported VM syntax; the corrected probe enters through VM and executes
-builtin fallback inside the walker callee. The uksort control uses strcmp rather
-than FakeOps permissive numeric-string ordering. Only inherited warnings remain.
-Current jobc6848415/session35840 runs exporter/docs audits, restores the default
-Magician archive, executes the opaque native-runtime retirement fixture in both
-optimizer modes and builds the compiler. No112 commit yet. Native source-policy
-metadata for subsequent step113 is being prepared separately and remains
-uncommitted, with no native comparator guard claim yet.
-
-
-The first opaque fixture attempt exited UnsupportedConstruct before any output.
-The production eval FFI explicitly rejects pending semantic profiles, including
-Comparisons; staged native lowering bypasses only frontend admission. This is
-an admission guard, not evidence of a parser defect. The echo expression-list
-syntax is supported by the parser. Added a fast parse assertion to distinguish
-these layers. Queued job7d812690/session56173 will check parsing and still meets
-the production admission guard until Comparisons is admitted. Do not claim a
-native heap result from that blocked probe. Move the opaque execution fixture
-into the later complete Comparisons admission verification.
-
-Next native integration keeps the invocation policy in ProfiledFunction EIR,
-so internal physical consumers cannot acquire user strictness from the emitter.
-Runtime adapters must inspect the original boxed comparator result before any
-integer cast, retain it through a catchable failure and support every target.
-Descriptor, runtime-string and static callbacks must share the checked result
-adapter. Comparator-based set operations need the same policy at their runtime
-boundary. Public admission remains gated until those native and host controls
-are verified. The other seven pending feature admissions and stronger Locals
-remain part of the current user request.
-
-
-Job7d812690 passed the exact parser/integer-kind unit, then stopped at the
-expected production pending-profile guard in the checked opaque test (exit1,
-2m22s). The shared-owner integration test now uses a separate permissive PHP
-fixture; the checked-result fixture remains parse-verified for later admission.
-PHP oracle for the permissive fixture:1,2;1,2;1,2;label-1,label-2.
-
-Prepared step113 native integration retains strict_comparisons on ProfiledFunction
-EIR, preserves it through optimizer rewrites, and shares one checked return
-adapter across static/descriptor/string sort callbacks. A borrowed/owned native
-guard checks the original unboxed integer tag before conversion. Comparator set
-operations carry an explicit sixth ABI policy argument and retain their ordinary
-cast path for internal/permissive invocations. New tests cover five-target EIR
-and runtime emission, real cross-assembly, callback result kinds, descriptors,
-string dispatch and heap retirement. These changes are not verified or committed.
-
-Queued job38a0a3a1 was terminated by signal15 while waiting, without running any
-tests; cause unknown. Replacement jobdf0ec42d has a persistent task-owned log in
-target/strict-comparator-checks-_r_y5j68, wrapperPID3698701. It queues three exact
-Magician regressions, the permissive opaque native heap control, all-target
-native guard/EIR/assembler tests, native callback/set-operation runtime control,
-and compiler build. Remove this exact task directory after collecting evidence.
-Registered compiler sources remain frozen during the job. build.rs recursively
-hashes every Rust file under src, including files not registered as Rust modules;
-new unregistered source files are therefore not outside compiler build inputs.
-No112 or113 commit yet; complete profile and stronger Locals work remain active.
-
-
-### Eval comparator return and owner foundation (112, verified)
-
-The shared eval sort collector/root/result builder now supports both precomputed
-sort keys and user comparators. Callback returns are retired independently and
-staged Comparisons consumers require an original integer result. Existing direct
-lvalue finishers balance callback/target/replacement ownership. Seven exact unit
-gates and the default Magician build passed in job7907229b. The three new unit
-gates passed again in current jobdf0ec42d, including the checked fixture parser
-assertion. Exporter generation and all builtin-docs audits passed in queued
-jobc6848415 without generated changes. Only inherited warnings remain.
-
-This is a component foundation commit, with Comparisons still publicly gated.
-The production checked opaque fixture meets that intentional admission guard;
-its runtime heap validation remains part of the subsequent complete admission.
-The permissive opaque control and native callbacks are still running under
-jobdf0ec42d. Step113 native policy/guard changes remain separate and uncommitted.
-
-
-Step112 is signed commit c30508e838808305aa24ab4f0f2dea937e583c65; signature verified against the configured SSH key. Native changes remain uncommitted. Jobdf0ec42d passed all three new Magician regressions, then stopped at a private value_boxing module import in the native adapter. Switched to its public codegen_support re-export. Current jobb310c30b (wrapperPID3719329, same task log) retries only native/permissive runtime gates and compiler build; no new native result is claimed yet.
-
-
-Jobb310c30b passed the real permissive opaque ownership control in both optimizer
-modes with clean heaps (69.57s), native comparator guard emission on every target,
-real ELF/Mach-O cross-assembly on all five targets (0.12s), and the original-source
-EIR/optimizer policy control on all five targets (0.76s). The native result-kind
-fixture then stopped during catalog lowering: the minimal staged helper omitted
-the object-cast prelude needed by a dynamically discoverable settype wrapper.
-Switched that fixture to capture_staged_eval_runtime, which prepares those
-preludes. It executes native functions, not opaque source with a pending profile.
-
-Current job93fb92d4 (wrapperPID3738975, same task-owned log directory) retries the
-native callback fixture, the existing all-target set-comparator boundary test,
-permissive integer-coercion and snapshot/throw-cleanup regressions, then compiler
-build. No runtime result from these new gates is claimed yet. Prepared a separate
-unregistered PHP fixture comparator_native_results.php adding valid integer
-returns through mixed, descriptors, dynamic names and checked set operations.
-Integrate that fixture after the current frozen-input job, then verify those
-positive controls before native foundation commit or public admission.
-
-Read-only preparation for stronger Locals recovered original facta7883b31: its
-catch-name collision occurred in a permissive native/eval host control. It is
-not yet established to be a strict-locals-specific bug, and its root cause and
-fix remain unproven. Keep the original reproduction and separate it from policy
-choices about stable numeric bindings.
-
-
-Job93fb92d4 passed the full native callback fixture without optimizations, including
-expected output and clean heaps. With both optimizers enabled it stopped after
-I1,2; at an uncaught TypeError from the first boolean-result comparator. No113
-commit/admission followed. The baseline AST comparison boundary consulted only
-neutral policies for automatic modes; explicit comparator consumers had no role.
-Added Comparator metadata for usort/uasort/uksort/array_udiff/array_uintersect,
-shared comparison-consumer effects in builtin semantics and precise callback
-summaries, and a focused AST catch-pruning regression plus four-mode native
-execution control. This is a proposed repair pending verification.
-
-The full native fixture now uses comparator_native_results.php and includes
-positive original integer results through mixed, descriptors, dynamic names and
-checked set operations. Job6f08103b (wrapperPID3838754, same task-owned log) queues
-neutral contract roles, catch-pruning, four-mode native execution, five-target
-EIR effects, existing default set-operation boundary/coercion/throw controls,
-the full native callback fixture, affected eval owner/mode regressions, exporter
-and docs audits, restored default Magician archive and final compiler build.
-Sources are frozen; queue position2 behind full-date and generics Claude jobs.
-Comparisons remains publicly gated; the full user-requested implementation and
-all remaining feature admissions stay active after this component work.
-
-
-### Native comparator return foundation (113, verified)
-
-Final job6f08103b exited0 after5m46s. All twelve exact single-test gates passed:
-neutral contract roles; AST catch retention; native execution under all four
-AST/EIR combinations (1.62s); all-five-target EIR source policy and may-throw
-requirements (0.71s); all-target set-operation boundary; default integer-result
-coercion (0.95s); snapshot/throw cleanup (4.43s); full native callback positive
-and negative return cases in both optimizer modes with clean heaps (10.17s);
-and four affected Magician owner/mode gates. The full native cases cover direct
-integer, mixed integer, descriptor and dynamic-name integer returns, both checked
-set operations, rejected bool/float/string/object returns and destructor timing.
-
-Exporter build and all six generation/audit commands passed, without generated
-docs/registry changes. The default Magician archive was restored and final
-compiler build passed. The inherited AtomicU64 deprecation remains. Earlier
-jobb310c30b passed permissive opaque sort ownership in both modes with clean
-heaps (69.57s), native guard emission and actual assembly for all five targets.
-Assembly comments and diff hygiene pass. The neutral Comparator role and shared
-consumer effects preserve TypeError independently of pure callback summaries.
-
-This completes the native component, with public Comparisons admission still
-gated. Next: admit the candidate profile, switch pending-feature controls to the
-next unfinished guarantee, validate native value classes and public callable,
-eval, REPL and library hosts, then continue stronger Locals and the remaining
-six unimplemented feature admissions. Remove the completed task-owned validation
-directory after preserving the verified evidence in Code Journal.
+Verified114 admits Comparisons as the tenth feature, following Strings109,
+Coercions110 and Casts111. Signed112 and113 provide comparator result ownership,
+native source policy and optimizer retention. Public native/opaque domains,
+callable/Reflection hosts, REPL recovery, example, independent flags and all-five-
+target library emission are verified. Job8f891928 passed nine exact primary gates,
+all builtin generation/architecture audits and restored default builds (6m43s).
+Job8cf9054e passed six method-focused gates, repeated the audits and restored
+builds (3m20s). Integer and heap-string argument owners retire on free-function,
+instance-method and static-method failures; source arity and receiver destruction
+remain correct. No generated documentation changed. Local native execution is
+Linux x86_64, with emitter/library checks for the complete supported matrix.
+
+The complete umbrella, stronger Locals and six remaining feature integrations
+remain unfinished. No push, PR or full local suite has been requested or run.
+
+### Completed Coercions and Casts admissions
+
+Signed110 ba2bc9f3129563987301ab391d3578e9a8b314a6 admits Coercions.
+Signed111 4727b75aced908c09988daed550f7d5e602c4b17 admits Casts.
+The [reference and cast admission history](strict-semantic-profile-references.md)
+preserves all intermediate failures, implementation safeguards and final proof.
+Independent native/eval/proposed declaration candidates, stable static rebinding,
+Reflection temporary retirement, capture/unset, COW and context lifetime checks
+are complete. These former Casts admission issues are not open work.
+
+### Next: source-point bindings and stronger Locals
+
+The full authorized task continues with autonomous verified commits. Baseline
+knowledgea9725473 confirms that Locals alone still permits inferred integer
+reassignment to float and PHP overflow promotion; pin the binding without enabling
+Overflow. Knowledgeffd0deed refines the original permissive catch-name collision:
+if an earlier TypeError catch does not execute, its unset does not detach the
+future native TypeError contract, and opaque eval cannot catch a ValueError in
+that name. PHP printsTVN; native printsT then exits255 in both modes. The exact
+fixture tests/fixtures/strict/catch_scope_contract.php is reserved for the next
+regression and repair, and is deliberately excluded from114 staging.
+
+Native eval snapshot contracts must follow binding/value provenance at the eval
+site, not a future frame slot's inferred Object class. Reuse local-store contracts,
+rooted membership guards, generic_local_contracts and persistent reference sources
+for the stronger Locals work. Preserve explicit union/mixed contracts, array-kind
+versus element-contract independence, parameter/capture/global/reference semantics,
+loop joins and legitimate unset/rebind behavior. The completed baseline and
+Comparisons temporary validation directories are removed after evidence capture.

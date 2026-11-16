@@ -251,7 +251,7 @@ pub(super) fn lower_signature_invoker_ref_arg_marker(
             || sig
                 .params
                 .get(index)
-                .is_some_and(|(_, ty)| matches!(ty, PhpType::Mixed));
+                .is_some_and(|(_, ty)| crate::types::uses_boxed_reference_payload(ty));
         if expects_mixed
             && ctx.boxed_reference_promotion_is_authorized(var_name, item.span)
             && !ctx.is_ref_bound_local(var_name)
@@ -282,7 +282,7 @@ pub(super) fn invoker_ref_arg_storage_compatible(
     let Some((_, param_ty)) = param else {
         return true;
     };
-    if variadic_reference || matches!(param_ty, PhpType::Mixed) {
+    if variadic_reference || crate::types::uses_boxed_reference_payload(param_ty) {
         return ctx.local_type(var_name).codegen_repr() == PhpType::Mixed
             || (!ctx.is_ref_bound_local(var_name)
                 && ctx.local_is_promotable_to_ref_cell(var_name)

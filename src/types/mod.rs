@@ -44,7 +44,7 @@ pub(crate) mod pcntl_constants;
 mod model;
 mod reference_layout;
 pub(crate) use reference_layout::{managed_static_property_binding, CanonicalReferencePayload, canonical_property_reference_payload, checked_property_references,
-    static_property_storage_type};
+    static_property_storage_type, uses_boxed_reference_payload};
 pub(crate) mod object_operators;
 /// Return-to-argument storage alias summaries used by ownership lowering.
 mod return_alias;

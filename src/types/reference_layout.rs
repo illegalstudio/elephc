@@ -1,5 +1,5 @@
 //! Purpose:
-//! Classifies property contracts whose managed cells can acquire canonical boxed payloads.
+//! Classifies declared contracts and their managed reference payload layouts.
 //!
 //! Called from:
 //! - Checker promotion, reference argument selection and target/runtime layout adapters.
@@ -9,6 +9,11 @@
 //! - Iterable payloads preserve their concrete container kind; pointers and borrowed storage stay separate.
 
 use super::{ClassInfo, PhpType};
+
+/// Identifies contracts, including PHP arrays and unions, that share a boxed Mixed handle.
+pub(crate) fn uses_boxed_reference_payload(ty: &PhpType) -> bool {
+    ty.codegen_repr() == PhpType::Mixed
+}
 
 /// Selects managed declaration storage for independent checked conversion guarantees.
 pub(crate) fn checked_property_references(profile: elephc_semantics::SemanticProfile) -> bool {

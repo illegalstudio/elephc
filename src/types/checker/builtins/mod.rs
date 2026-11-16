@@ -104,20 +104,20 @@ impl Checker {
         span: crate::span::Span,
         env: &TypeEnv,
     ) -> Result<Option<PhpType>, CompileError> {
-        self.check_builtin_with_source_mode(name, args, span, env, self.semantic_source_mode)
+        self.check_builtin_with_source_mode(name, args, span, env, self.semantic_source_mode, false)
     }
 
     /// Applies the public callable contract while evaluating arguments in their physical source mode.
     pub(crate) fn check_builtin_callable(
         &mut self, name: &str, args: &[Expr], span: crate::span::Span, env: &TypeEnv,
     ) -> Result<Option<PhpType>, CompileError> {
-        self.check_builtin_with_source_mode(name, args, span, env, crate::source::SourceMode::Php)
+        self.check_builtin_with_source_mode(name, args, span, env, crate::source::SourceMode::Php, true)
     }
 
     /// Checks one builtin invocation without changing the source policy of argument expressions.
     fn check_builtin_with_source_mode(
         &mut self, name: &str, args: &[Expr], span: crate::span::Span, env: &TypeEnv,
-        source_mode: crate::source::SourceMode,
+        source_mode: crate::source::SourceMode, callable_boundary: bool,
     ) -> Result<Option<PhpType>, CompileError> {
         // `isset`/`unset` are lazy language constructs: their operands may be an
         // undeclared property routed to `__isset`/`__unset`, which must not be
@@ -237,6 +237,11 @@ impl Checker {
                     ),
                 ));
             }
+            // A later flow join can require descriptor dispatch even for a known builtin.
+            // Prepare that wrapper's reference ABI before contextual specialization returns.
+            let callable_ref_sig = callable_boundary.then(||
+                crate::types::first_class_callable_builtin_sig_with_semantics(name, self.semantic_profile))
+                .flatten();
             // One authority for every builtin that declares a by-reference parameter. Several
             // builtins used to hand-roll this check, which is a catalogue: the ones nobody
             // wrote it for silently accepted a literal and ran, where PHP raises an Error.
@@ -268,6 +273,9 @@ impl Checker {
                     continue;
                 }
                 if self.is_builtin_by_ref_argument_lvalue(arg) {
+                    let boxed_callable_expected = callable_ref_sig.as_ref()
+                        .and_then(|sig| sig.params.get(index)).map(|(_, ty)| ty)
+                        .filter(|ty| crate::types::uses_boxed_reference_payload(ty));
                     if crate::semantics::conversions::checked_casts(self.semantic_profile, source_mode)
                         && matches!(def.spec.semantics.callable,
                             crate::builtins::semantics::BuiltinCallablePolicy::Prepared(_))
@@ -277,9 +285,9 @@ impl Checker {
                     }
                     // A mixed reference can replace a guarded value and require a wider cell.
                     // Publish the same storage transition as an ordinary mixed-reference call.
-                    if def.params.get(index).is_some_and(|(_, ty)| *ty == PhpType::Mixed)
+                    if boxed_callable_expected.is_some() || (def.params.get(index).is_some_and(|(_, ty)| *ty == PhpType::Mixed)
                         && self.guarded_local_storage_type(arg, env)
-                            .is_some_and(|storage| !Self::is_raw_non_null_contract(storage))
+                            .is_some_and(|storage| !Self::is_raw_non_null_contract(storage)))
                     {
                         let actual = self.infer_type(arg, env)?;
                         let output = if def.spec.semantics.preserves_array_reference(index)
@@ -287,6 +295,8 @@ impl Checker {
                                 || matches!(actual, PhpType::Array(_) | PhpType::AssocArray { .. }))
                         {
                             PhpType::php_array()
+                        } else if let Some(expected) = boxed_callable_expected {
+                            expected.clone()
                         } else {
                             PhpType::Mixed
                         };
