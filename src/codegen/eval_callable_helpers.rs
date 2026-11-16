@@ -423,6 +423,14 @@ fn emit_x86_64_eval_dynamic_callable_invoker(
 }
 
 /// Returns the byte offset for one dynamic eval callable descriptor capture.
+/// Byte offsets of the eval context and the wrapped boxed callback in an eval callback adapter.
+pub(crate) fn eval_callback_adapter_capture_offsets() -> (usize, usize) {
+    (
+        dynamic_capture_offset(EVAL_DYNAMIC_CONTEXT_CAPTURE),
+        dynamic_capture_offset(EVAL_DYNAMIC_CALLBACK_CAPTURE),
+    )
+}
+
 fn dynamic_capture_offset(index: usize) -> usize {
     callable_descriptor::CALLABLE_DESC_RUNTIME_CAPTURE_OFFSET + index * 16
 }

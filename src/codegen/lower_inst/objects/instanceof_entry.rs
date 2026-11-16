@@ -38,8 +38,7 @@ pub(in crate::codegen::lower_inst) fn lower_instanceof(ctx: &mut FunctionContext
         .trim_start_matches('\\')
         .eq_ignore_ascii_case("Closure")
     {
-        emit_closure_instanceof(ctx, value, &value_ty)?;
-        return store_if_result(ctx, inst);
+        return lower_closure_class_check(ctx, inst, value);
     }
     if !matches!(
         value_ty,
@@ -77,14 +76,45 @@ pub(in crate::codegen::lower_inst) fn lower_instanceof(ctx: &mut FunctionContext
     store_if_result(ctx, inst)
 }
 
-/// Tests callable storage against PHP's built-in `Closure` class identity. Only a descriptor with
-/// an object handle is a Closure: an implicit string or array callable is not.
-fn emit_closure_instanceof(
+/// Lowers a `Closure` class check (`instanceof Closure`, `is_a($v, 'Closure')`) for one value.
+///
+/// A native closure is a callable descriptor (a `callable` value, or Mixed runtime tag 10) with an
+/// object handle; an implicit string or array callable has none. A closure created inside
+/// `eval()` is a boxed eval object instead (tag 6), whose `Closure` identity only the eval bridge
+/// knows, so with eval in the program a tag-6 subject asks the bridge.
+pub(in crate::codegen::lower_inst) fn lower_closure_class_check(
     ctx: &mut FunctionContext<'_>,
-    value: crate::ir::ValueId,
-    value_ty: &PhpType,
+    inst: &Instruction,
+    value: ValueId,
 ) -> Result<()> {
-    super::super::predicates::emit_closure_identity(ctx, value, value_ty, false)
+    let value_ty = ctx.value_php_type(value)?;
+    let boxed = matches!(value_ty, PhpType::Mixed | PhpType::Union(_))
+        && matches!(value_ty.codegen_repr(), PhpType::Mixed | PhpType::Union(_));
+    if !(boxed && ctx.module.required_runtime_features.eval_bridge) {
+        super::super::predicates::emit_closure_identity(ctx, value, &value_ty, false)?;
+        return store_if_result(ctx, inst);
+    }
+    let eval_object = ctx.next_label("closure_check_eval_object");
+    let done = ctx.next_label("closure_check_done");
+    ctx.load_value_to_reg(value, abi::int_result_reg(ctx.emitter))?;
+    abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction("cmp x0, #6");                              // runtime tag 6 is an object, possibly an eval closure
+            ctx.emitter.instruction(&format!("b.eq {eval_object}"));            // ask the eval bridge about an object subject
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("cmp rax, 6");                              // runtime tag 6 is an object, possibly an eval closure
+            ctx.emitter.instruction(&format!("je {eval_object}"));              // ask the eval bridge about an object subject
+        }
+    }
+    super::super::predicates::emit_closure_identity(ctx, value, &value_ty, false)?;
+    store_if_result(ctx, inst)?;
+    abi::emit_jump(ctx.emitter, &done);
+    ctx.emitter.label(&eval_object);
+    builtins::lower_eval_object_is_a(ctx, inst, value, "Closure", false)?;
+    ctx.emitter.label(&done);
+    Ok(())
 }
 
 /// Tests the synthetic `__PHP_Incomplete_Class` identity carried by class id `-2`.

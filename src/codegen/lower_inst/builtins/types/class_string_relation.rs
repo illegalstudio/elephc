@@ -275,14 +275,17 @@ fn emit_runtime_target(
     }
 
     // -- closure subject: the callable descriptor is in the result register. Only a descriptor
-    // with an object handle is a Closure; an implicit string or array callable (`'strlen'`,
-    // `[$obj, 'm']` passed as a callable) is no object. A Closure is final and implements
+    // with an object handle (or an eval callback adapter wrapping an eval closure) is a Closure;
+    // an implicit string or array callable (`'strlen'`, `[$obj, 'm']` passed as a callable) is
+    // no object. A Closure is final and implements
     // nothing, so its only ancestor is Closure itself, which is_subclass_of() excludes --
     ctx.emitter.label(&closure_subject);
     if exclude_self {
         abi::emit_jump(ctx.emitter, &unrelated);
     } else {
-        crate::codegen_support::callable_descriptor::emit_require_object_handle(ctx.emitter, result, &unrelated);
+        let closure = ctx.next_label("class_relation_closure_identity");
+        crate::codegen::lower_inst::predicates::emit_descriptor_closure_branch(ctx, result, &closure, &unrelated);
+        ctx.emitter.label(&closure);
         if literal_flag.is_none() {
             abi::emit_load_int_immediate(ctx.emitter, result, 1);
             abi::emit_store_to_sp(ctx.emitter, result, 16);
