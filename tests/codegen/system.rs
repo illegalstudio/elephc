@@ -3100,6 +3100,24 @@ fn test_is_callable_dynamic_user_function_string_returns_true() {
     assert_eq!(out, "y");
 }
 
+/// Verifies a dynamic `is_callable()` matches user function names case-insensitively and accepts
+/// one leading `\` on user and builtin names, as PHP resolves function names.
+///
+/// User functions used to match only their exact spelling, and a fully qualified `"\name"`
+/// was never callable.
+#[test]
+fn test_is_callable_dynamic_names_ignore_case_and_a_leading_backslash() {
+    let out = compile_and_run(
+        r#"<?php
+            function my_helper() { return 1; }
+            foreach (explode(",", "MY_HELPER,\\my_helper,\\StrLen,\\\\strlen,\\") as $name) {
+                echo is_callable($name) ? "y" : "n";
+            }
+        "#,
+    );
+    assert_eq!(out, "yyynn");
+}
+
 /// Verifies `is_callable` returns false when a dynamic string names a function that does not exist.
 #[test]
 fn test_is_callable_dynamic_unknown_string_returns_false() {

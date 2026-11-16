@@ -36,7 +36,7 @@ fn emit_aarch64(emitter: &mut Emitter) {
 }
 
 /// Emits the ARM64 runtime helper for string callable lookup.
-/// Scans builtin names (case-insensitive), user functions (exact match),
+/// Scans builtin names and user functions (both case-insensitive),
 /// then checks for `Class::method` format via `__rt_is_callable_static_method_name`.
 /// Input: x0=string pointer, x1=string length. Output: x0=1 (true) or 0 (false).
 fn emit_string_aarch64(emitter: &mut Emitter) {
@@ -44,6 +44,14 @@ fn emit_string_aarch64(emitter: &mut Emitter) {
     emitter.comment("--- runtime: is_callable_string ---");
     emitter.label_global("__rt_is_callable_string");
 
+    // -- a callable string is fully qualified, so one leading backslash is not part of the name --
+    emitter.instruction("cbz x1, __rt_is_callable_string_unqualified");         // an empty name has no namespace separator to drop
+    emitter.instruction("ldrb w9, [x0]");                                       // read the first byte of the candidate name
+    emitter.instruction("cmp w9, #92");                                         // is it the global namespace separator '\\'?
+    emitter.instruction("b.ne __rt_is_callable_string_unqualified");            // keep names without a leading separator unchanged
+    emitter.instruction("add x0, x0, #1");                                      // skip the leading separator, as PHP resolves "\\name" like "name"
+    emitter.instruction("sub x1, x1, #1");                                      // shorten the candidate name by the skipped separator
+    emitter.label("__rt_is_callable_string_unqualified");
     emitter.instruction("sub sp, sp, #80");                                     // reserve lookup frame for string inputs and table cursor state
     emitter.instruction("stp x29, x30, [sp, #64]");                             // save caller frame pointer and return address around string comparisons
     emitter.instruction("add x29, sp, #64");                                    // establish this helper's frame pointer
@@ -124,8 +132,8 @@ fn emit_string_aarch64(emitter: &mut Emitter) {
     emitter.instruction("ldr x3, [x11]");                                       // pass user function name pointer as comparison right side
     emitter.instruction("ldr x4, [x11, #8]");                                   // pass user function name length as comparison right side
     emitter.instruction("str x11, [sp, #40]");                                  // preserve current user table entry across the string comparison call
-    abi::emit_call_label(emitter, "__rt_str_eq");                               // compare user function names exactly, matching current AOT lookup behavior
-    emitter.instruction("cbz x0, __rt_is_callable_string_user_next");           // skip inactive checks when this user name did not match
+    abi::emit_call_label(emitter, "__rt_strcasecmp");                           // compare user function names case-insensitively like PHP function lookup
+    emitter.instruction("cbnz x0, __rt_is_callable_string_user_next");          // skip inactive checks when this user name did not match
     emitter.instruction("ldr x11, [sp, #40]");                                  // reload current user table entry after caller-saved registers were clobbered
     emitter.instruction("ldr x12, [x11, #16]");                                 // load optional active-variant symbol pointer for include-loaded functions
     emitter.instruction("cbz x12, __rt_is_callable_string_true");               // ordinary user functions are callable as soon as their name matches
@@ -657,7 +665,7 @@ fn emit_x86_64(emitter: &mut Emitter) {
 }
 
 /// Emits the x86_64 runtime helper for string callable lookup.
-/// Scans builtin names (case-insensitive), user functions (exact match),
+/// Scans builtin names and user functions (both case-insensitive),
 /// then checks for `Class::method` format via `__rt_is_callable_static_method_name`.
 /// Input: rdi=string pointer, rsi=string length. Output: rax=1 (true) or 0 (false).
 fn emit_string_x86_64(emitter: &mut Emitter) {
@@ -665,6 +673,14 @@ fn emit_string_x86_64(emitter: &mut Emitter) {
     emitter.comment("--- runtime: is_callable_string ---");
     emitter.label_global("__rt_is_callable_string");
 
+    // -- a callable string is fully qualified, so one leading backslash is not part of the name --
+    emitter.instruction("test rsi, rsi");                                       // an empty name has no namespace separator to drop
+    emitter.instruction("je __rt_is_callable_string_unqualified_x86_64");       // keep the empty name unchanged
+    emitter.instruction("cmp BYTE PTR [rdi], 92");                              // is the first byte the global namespace separator '\\'?
+    emitter.instruction("jne __rt_is_callable_string_unqualified_x86_64");      // keep names without a leading separator unchanged
+    emitter.instruction("add rdi, 1");                                          // skip the leading separator, as PHP resolves "\\name" like "name"
+    emitter.instruction("sub rsi, 1");                                          // shorten the candidate name by the skipped separator
+    emitter.label("__rt_is_callable_string_unqualified_x86_64");
     emitter.instruction("push rbp");                                            // preserve caller frame pointer before table scans
     emitter.instruction("mov rbp, rsp");                                        // establish stable frame base for saved string and table cursor
     emitter.instruction("sub rsp, 64");                                         // reserve slots for string pointer, length, table pointer, bounds, entry pointer, and pending range
@@ -746,9 +762,9 @@ fn emit_string_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rsi, QWORD PTR [rbp - 16]");                       // pass candidate string length as comparison left side
     emitter.instruction("mov rdx, QWORD PTR [r11]");                            // pass user function name pointer as comparison right side
     emitter.instruction("mov rcx, QWORD PTR [r11 + 8]");                        // pass user function name length as comparison right side
-    abi::emit_call_label(emitter, "__rt_str_eq");                               // compare user function names exactly, matching current AOT lookup behavior
-    emitter.instruction("test rax, rax");                                       // nonzero means the exact user function name matched
-    emitter.instruction("je __rt_is_callable_string_user_next_x86_64");         // continue scanning when the user name did not match
+    abi::emit_call_label(emitter, "__rt_strcasecmp");                           // compare user function names case-insensitively like PHP function lookup
+    emitter.instruction("test rax, rax");                                       // zero comparison result means the user function name matched
+    emitter.instruction("jne __rt_is_callable_string_user_next_x86_64");        // continue scanning when the user name did not match
     emitter.instruction("mov r11, QWORD PTR [rbp - 48]");                       // reload current entry pointer after comparison
     emitter.instruction("mov r8, QWORD PTR [r11 + 16]");                        // load optional active-variant symbol pointer
     emitter.instruction("test r8, r8");                                         // ordinary functions use a null active-symbol pointer
