@@ -389,7 +389,12 @@ fn eval_reflection_aot_class_flags_uncached(
     } else {
         flags |= EVAL_REFLECTION_CLASS_FLAG_USER_DEFINED;
     }
-    let mut class_flags = values.reflection_class_flags(runtime_class_name)?.unwrap_or(0);
+    let compiled_flags = values.reflection_class_flags(runtime_class_name)?;
+    // The compiled word knows a throwable, however deep below Exception or Error, is not
+    // cloneable; the lifecycle lookup below only sees a non-public `__clone`.
+    let compiled_refuses_clone = compiled_flags
+        .is_some_and(|word| word & EVAL_REFLECTION_CLASS_FLAG_CLONEABLE == 0 && is_class);
+    let mut class_flags = compiled_flags.unwrap_or(0);
     if is_enum {
         class_flags &= !EVAL_REFLECTION_CLASS_FLAG_READONLY;
     }
@@ -420,7 +425,8 @@ fn eval_reflection_aot_class_flags_uncached(
         )? {
             flags |= EVAL_REFLECTION_CLASS_FLAG_INSTANTIABLE;
         }
-        if eval_reflection_aot_lifecycle_method_allows_public_reflection(
+        if !compiled_refuses_clone
+            && eval_reflection_aot_lifecycle_method_allows_public_reflection(
             runtime_class_name,
             "__clone",
             values,

@@ -63,13 +63,39 @@ pub(super) fn reflection_class_is_cloneable(
     classes: &crate::fast_hash::FastMap<String, crate::types::ClassInfo>,
 ) -> bool {
     if !crate::types::builtin_classes::class_allows_clone(class_name, classes) { return false; }
-    if info.is_abstract || is_enum || reflection_class_has_runtime_managed_storage(class_name) {
+    if info.is_abstract
+        || is_enum
+        || reflection_class_has_runtime_managed_storage(class_name)
+        || reflection_class_descends_from_throwable_base(info, classes)
+    {
         return false;
     }
     let clone_key = php_symbol_key("__clone");
     info.method_visibilities
         .get(&clone_key)
         .is_none_or(|visibility| matches!(visibility, Visibility::Public))
+}
+
+/// Whether a class has `Exception` or `Error` among its ancestors, however deep.
+///
+/// A throwable is never cloneable in php, and the runtime-managed name list only names the
+/// builtin ones: `class MyEx extends RuntimeException` must be refused through its chain.
+fn reflection_class_descends_from_throwable_base(
+    info: &crate::types::ClassInfo,
+    classes: &crate::fast_hash::FastMap<String, crate::types::ClassInfo>,
+) -> bool {
+    let mut parent = info.parent.as_deref();
+    for _ in 0..=classes.len() {
+        let Some(name) = parent else {
+            return false;
+        };
+        let name = name.trim_start_matches('\\');
+        if matches!(php_symbol_key(name).as_str(), "exception" | "error") {
+            return true;
+        }
+        parent = classes.get(name).and_then(|class| class.parent.as_deref());
+    }
+    false
 }
 
 /// Returns PHP's `ReflectionClass::isIterable()` value for static class metadata.

@@ -2765,8 +2765,17 @@ fn emit_eval_reflection_class_lookup_data(
 ) {
     let mut entries = Vec::new();
     let mut index = 0usize;
+    let parents: HashMap<String, Option<&str>> = sorted_classes
+        .iter()
+        .map(|&(name, info)| {
+            (
+                php_symbol_key(name.trim_start_matches('\\')),
+                info.parent.as_deref(),
+            )
+        })
+        .collect();
     for (class_name, class_info) in sorted_classes {
-        let flags = eval_reflection_class_flags(class_name, class_info);
+        let flags = eval_reflection_class_flags(class_name, class_info, &parents);
         let source_file = declared_class_source_file(declared_class_source_files, class_name);
         if flags == 0 && source_file.is_none() {
             continue;
@@ -2917,7 +2926,11 @@ fn declared_class_source_file<'a>(
 }
 
 /// Returns eval ReflectionClass flag bits retained for one generated/AOT class.
-fn eval_reflection_class_flags(class_name: &str, class_info: &ClassInfo) -> u64 {
+fn eval_reflection_class_flags(
+    class_name: &str,
+    class_info: &ClassInfo,
+    parents: &HashMap<String, Option<&str>>,
+) -> u64 {
     let mut flags = 0;
     if class_info.is_final {
         flags |= EVAL_REFLECTION_CLASS_FLAG_FINAL;
@@ -2939,7 +2952,7 @@ fn eval_reflection_class_flags(class_name: &str, class_info: &ClassInfo) -> u64 
     // it carried neither: every compiled class answered `isCloneable()` false (so DeepClone never
     // cloned its prototype and built objects through a path that returned null) and
     // `isIterable()` false for every Iterator.
-    if eval_reflection_class_is_cloneable(class_name, class_info) {
+    if eval_reflection_class_is_cloneable(class_name, class_info, parents) {
         flags |= EVAL_REFLECTION_CLASS_FLAG_CLONEABLE;
     }
     if !class_info.is_abstract
@@ -2964,12 +2977,38 @@ fn eval_reflection_class_flags(class_name: &str, class_info: &ClassInfo) -> u64 
     flags
 }
 
+/// Whether a parent chain, starting at `parent`, reaches `Exception` or `Error`.
+///
+/// `parents` maps every generated class key to its parent name; the walk is bounded by the
+/// number of classes so a cyclic table cannot spin.
+fn descends_from_throwable_base<'a>(
+    mut parent: Option<&'a str>,
+    parents: &HashMap<String, Option<&'a str>>,
+) -> bool {
+    for _ in 0..=parents.len() {
+        let Some(name) = parent else {
+            return false;
+        };
+        let key = crate::names::php_symbol_key(name.trim_start_matches('\\'));
+        if matches!(key.as_str(), "exception" | "error") {
+            return true;
+        }
+        parent = parents.get(&key).copied().flatten();
+    }
+    false
+}
+
 /// Returns php's `ReflectionClass::isCloneable()` for one generated class.
 ///
 /// A concrete class is cloneable unless it declares a non-public `__clone`. The classes whose
 /// storage the runtime manages -- throwables, generators, fibers, reflection objects -- are not,
-/// in php as in elephc (their `clone` is refused).
-fn eval_reflection_class_is_cloneable(class_name: &str, class_info: &ClassInfo) -> bool {
+/// in php as in elephc (their `clone` is refused). `parents` maps every generated class to its
+/// parent, to walk a throwable's chain.
+fn eval_reflection_class_is_cloneable(
+    class_name: &str,
+    class_info: &ClassInfo,
+    parents: &HashMap<String, Option<&str>>,
+) -> bool {
     if class_info.is_abstract {
         return false;
     }
@@ -2978,10 +3017,12 @@ fn eval_reflection_class_is_cloneable(class_name: &str, class_info: &ClassInfo) 
         key.as_str(),
         "throwable" | "error" | "exception" | "generator" | "fiber" | "closure"
     ) || key.starts_with("reflection")
-        // Every throwable, however deep below Exception or Error: the interface list is flattened.
+        // Every throwable, however deep below Exception or Error: a user class's interface list
+        // does not carry the Throwable it inherits, so the parent chain is walked.
         || class_info.interfaces.iter().any(|interface| {
             crate::names::php_symbol_key(interface.trim_start_matches('\\')) == "throwable"
-        });
+        })
+        || descends_from_throwable_base(class_info.parent.as_deref(), parents);
     if runtime_managed {
         return false;
     }
