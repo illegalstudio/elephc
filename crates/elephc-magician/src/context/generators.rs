@@ -94,7 +94,11 @@ pub enum EvalGeneratorDelegate {
         position: usize,
     },
     /// Another generator, pumped through the same protocol.
-    Generator { identity: u64 },
+    Generator {
+        identity: u64,
+        /// The generator object, owned by the delegation until it ends or the frame is released.
+        object: RuntimeCellHandle,
+    },
     /// A Traversable the interpreter does NOT own -- a compiled generator, or any Iterator --
     /// pumped through its php-visible `valid`/`current`/`key`/`next` methods.
     ///
@@ -179,6 +183,9 @@ pub struct EvalGeneratorFrame {
     pub delegate: Option<EvalGeneratorDelegate>,
     /// The scope name the next `send()` value is stored under, set by the suspended yield.
     pub pending_send_slot: Option<String>,
+    /// The scope name that receives the delegate's return value when `$x = yield from ...;`
+    /// ends. Kept apart from `pending_send_slot`, which the first resumption consumes.
+    pub delegation_slot: Option<String>,
     /// Set once the generator has advanced past its first yield, which `rewind()` refuses.
     pub advanced: bool,
 }

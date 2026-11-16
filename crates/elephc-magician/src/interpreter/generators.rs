@@ -58,6 +58,7 @@ pub(in crate::interpreter) fn eval_generator_new(
             regions: Vec::new(),
             delegate: None,
             pending_send_slot: None,
+            delegation_slot: None,
             advanced: false,
         },
     );
@@ -221,6 +222,19 @@ fn eval_generator_release_frame(
             if result.is_ok() {
                 result = released;
             }
+        }
+    }
+    // A generator destroyed while suspended inside `yield from` still owns its delegate.
+    let delegate = match frame.delegate.take() {
+        Some(EvalGeneratorDelegate::Array { array, .. }) => Some(array),
+        Some(EvalGeneratorDelegate::Generator { object, .. })
+        | Some(EvalGeneratorDelegate::Foreign { object, .. }) => Some(object),
+        None => None,
+    };
+    if let Some(delegate) = delegate {
+        let released = values.release(delegate);
+        if result.is_ok() {
+            result = released;
         }
     }
     for value in frame.scope.drain_owned_cells() {
@@ -540,8 +554,10 @@ fn eval_generator_execute_value_step(
             EvalGeneratorFlow::Suspended
         }
         EvalGeneratorStep::YieldFrom { source, into } => {
-            let source = eval_expr(&source, context, &mut frame.scope, values)?;
-            frame.pending_send_slot = into;
+            // The delegation OWNS the source: a variable read comes back borrowed from the
+            // scope, so it is copied first, exactly as a yielded value is.
+            let source = eval_generator_kept_expr(&source, frame, context, values)?;
+            frame.delegation_slot = into;
             eval_generator_begin_delegation(frame, source, context, values)?;
             if eval_generator_produce_from_delegate(frame, context, values)? {
                 return Ok(EvalGeneratorFlow::Suspended);
@@ -562,7 +578,7 @@ fn eval_generator_execute_value_step(
         }
         EvalGeneratorStep::Return(value) => {
             let value = match value {
-                Some(expr) => Some(eval_expr(&expr, context, &mut frame.scope, values)?),
+                Some(expr) => Some(eval_generator_kept_expr(&expr, frame, context, values)?),
                 None => None,
             };
             eval_generator_finish(frame, value, values)?;
@@ -731,12 +747,16 @@ fn eval_generator_begin_delegation(
             let identity = values.object_identity(source)?;
             if context.has_eval_generator(identity) {
                 eval_generator_prime(identity, context, values)?;
-                frame.delegate = Some(EvalGeneratorDelegate::Generator { identity });
+                frame.delegate = Some(EvalGeneratorDelegate::Generator {
+                    identity,
+                    object: source,
+                });
                 return Ok(());
             }
             // Not one of ours. php accepts any Traversable here, and a compiled generator is one:
             // it answers the same `valid`/`current`/`key`/`next` methods, so pump it through those.
             if !values.object_is_a(source, "Traversable", false)? {
+                values.release(source)?;
                 return eval_throw_error(
                     "Can use \"yield from\" only with arrays and Traversables",
                     context,
@@ -744,16 +764,19 @@ fn eval_generator_begin_delegation(
                 );
             }
             frame.delegate = Some(EvalGeneratorDelegate::Foreign {
-                object: values.retain(source)?,
+                object: source,
                 generator: identity,
             });
             Ok(())
         }
-        _ => eval_throw_error(
-            "Can use \"yield from\" only with arrays and Traversables",
-            context,
-            values,
-        ),
+        _ => {
+            values.release(source)?;
+            eval_throw_error(
+                "Can use \"yield from\" only with arrays and Traversables",
+                context,
+                values,
+            )
+        }
     }
 }
 
@@ -790,7 +813,7 @@ fn eval_generator_produce_from_delegate(
             eval_generator_set_current(frame, key, value, values)?;
             Ok(true)
         }
-        Some(EvalGeneratorDelegate::Generator { identity }) => {
+        Some(EvalGeneratorDelegate::Generator { identity, .. }) => {
             let valid = context
                 .eval_generator(identity, |inner| {
                     inner.state != EvalGeneratorState::Finished && inner.current_value.is_some()
@@ -837,7 +860,7 @@ fn eval_generator_advance_delegate(
             crate::runtime_hooks::native_generator_next(generator);
             Ok(())
         }
-        Some(EvalGeneratorDelegate::Generator { identity }) => {
+        Some(EvalGeneratorDelegate::Generator { identity, .. }) => {
             eval_generator_step(identity, sent, true, context, values)
         }
     }
@@ -851,14 +874,29 @@ fn eval_generator_end_delegation(
     values: &mut impl RuntimeValueOps,
 ) -> Result<(), EvalStatus> {
     let delegate = frame.delegate.take();
+    // Whether `produced` is already a reference of its own rather than a borrow of the delegate.
+    let mut owned = false;
     let produced = match delegate {
         Some(EvalGeneratorDelegate::Array { array, .. }) => {
             values.release(array)?;
             None
         }
-        Some(EvalGeneratorDelegate::Generator { identity }) => context
-            .eval_generator(identity, |inner| inner.return_value)
-            .flatten(),
+        Some(EvalGeneratorDelegate::Generator { identity, object }) => {
+            let produced = context
+                .eval_generator(identity, |inner| inner.return_value)
+                .flatten();
+            // The return value is retained before this reference to the delegate can free the
+            // generator that owns it.
+            let kept = match (produced, frame.delegation_slot.is_some()) {
+                (Some(value), true) => {
+                    owned = true;
+                    Some(values.retain(value)?)
+                }
+                _ => None,
+            };
+            values.release(object)?;
+            kept
+        }
         Some(EvalGeneratorDelegate::Foreign { object, generator }) => {
             // `$x = yield from $gen;` takes the delegate's own return value, which only a
             // Generator has. Anything else Traversable produces none, exactly as in php.
@@ -872,10 +910,11 @@ fn eval_generator_end_delegation(
         }
         None => None,
     };
-    let Some(name) = frame.pending_send_slot.take() else {
+    let Some(name) = frame.delegation_slot.take() else {
         return Ok(());
     };
     let value = match produced {
+        Some(value) if owned => value,
         Some(value) => values.retain(value)?,
         None => values.null()?,
     };

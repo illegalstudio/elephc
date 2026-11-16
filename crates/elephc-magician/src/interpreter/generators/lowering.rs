@@ -314,14 +314,23 @@ impl Lowering {
     /// `continue` that crosses one has to carry the block with it. `depth` is the number of
     /// regions that stay open.
     fn unwind_regions_to(&mut self, depth: usize) -> Result<(), EvalStatus> {
-        // The region stack itself is NOT popped: the lowering keeps emitting code that is still
+        // The region stack is restored on exit: the lowering keeps emitting code that is still
         // lexically inside these regions, and only the jump about to be emitted leaves them.
-        let bodies: Vec<Vec<EvalStmt>> = self.regions[depth..].iter().rev().cloned().collect();
-        for finally_body in bodies {
+        // While one `finally` copy is lowered the stack is cut to the regions OUTSIDE it, as the
+        // copy runs after its own `try` was left: a `return` in the copy unwinds only the outer
+        // regions, where it used to lower the same body again for ever.
+        let saved = self.regions.clone();
+        let mut outcome = Ok(());
+        for index in (depth..saved.len()).rev() {
             self.steps.push(EvalGeneratorStep::LeaveTry);
-            self.lower_statements(&finally_body)?;
+            self.regions.truncate(index);
+            outcome = self.lower_statements(&saved[index]);
+            if outcome.is_err() {
+                break;
+            }
         }
-        Ok(())
+        self.regions = saved;
+        outcome
     }
 
     /// Points one emitted `EnterTry` at its catch dispatch.

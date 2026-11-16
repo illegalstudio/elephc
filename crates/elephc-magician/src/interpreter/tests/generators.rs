@@ -672,3 +672,71 @@ try {
         "1,caught:boom\n",
     );
 }
+
+/// Verifies `$x = yield from $inner;` receives the delegate's return value.
+///
+/// `php -n` 8.5.6 prints `1R`: the delegate yields 1 and returns `R`, which the outer generator
+/// echoes after the delegation ends. The first resumption used to consume the assignment slot
+/// as if it were a `send()` target, so the return value was dropped.
+#[test]
+fn yield_from_assignment_receives_the_delegates_return_value() {
+    assert_eq!(
+        out(
+            br#"function inner() { yield 1; return 'R'; }
+function outer() { $x = yield from inner(); echo $x; }
+foreach (outer() as $v) { echo $v; }"#
+        ),
+        "1R",
+    );
+}
+
+/// Verifies `yield from $array` leaves the array the caller still owns intact.
+///
+/// `php -n` 8.5.6 prints `12393`: the delegated array is a variable of the generator, so
+/// ending the delegation must not release the reference its scope (and the caller) still holds.
+#[test]
+fn yield_from_an_array_variable_keeps_the_callers_array() {
+    assert_eq!(
+        out(
+            br#"function g($a) { yield from $a; yield 9; }
+$arr = [1, 2, 3];
+foreach (g($arr) as $v) { echo $v; }
+echo count($arr);"#
+        ),
+        "12393",
+    );
+}
+
+/// Verifies a generator returning a parameter variable releases that cell once.
+///
+/// `php -n` 8.5.6 prints `22`: the returned array and the caller's array are both intact after
+/// the generator finishes and its frame is released.
+#[test]
+fn a_generator_returning_a_variable_releases_it_once() {
+    assert_eq!(
+        out(
+            br#"function h($a) { yield 1; return $a; }
+$z = [1, 2];
+$gg = h($z);
+foreach ($gg as $_) {}
+echo count($gg->getReturn()), count($z);"#
+        ),
+        "22",
+    );
+}
+
+/// Verifies a `return` inside a `finally` that follows a yielding `try` lowers and wins.
+///
+/// `php -n` 8.5.6 prints `12`: the `finally` return replaces the `try` return value.
+#[test]
+fn a_return_inside_a_finally_replaces_the_try_return() {
+    assert_eq!(
+        out(
+            br#"function f() { try { yield 1; return 5; } finally { return 2; } }
+$g = f();
+foreach ($g as $v) { echo $v; }
+echo $g->getReturn();"#
+        ),
+        "12",
+    );
+}
