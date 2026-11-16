@@ -39,7 +39,10 @@ mod public_args;
 mod reference_args;
 pub(super) mod reference_return;
 mod string_return;
+mod scalar_param_args;
 mod tagged_args;
+
+pub(in crate::codegen) use scalar_param_args::InvokerScalarGuards;
 
 pub(crate) use string_return::function_returns_owned_string;
 pub(super) use string_return::method_returns_owned_string;
@@ -129,6 +132,9 @@ pub(super) struct RuntimeCallableInvoker<'a> {
     /// A declared default that could not be folded into a materializable value stays `None`, and
     /// the invoker keeps its fatal diagnostic for that slot rather than inventing a value.
     pub(super) defaults: &'a [Option<InvokerDefaultValue>],
+    /// Set for a user callable: boxed arguments bound to its declared non-nullable scalar
+    /// parameters are checked like a direct call's (`scalar_param_args`).
+    pub(super) scalar_guards: Option<InvokerScalarGuards>,
 }
 
 /// Reports whether regular or variadic callable parameters can require runtime normalization.
@@ -152,6 +158,10 @@ struct InvokerEmitContext {
     defaults: InvokerDefaults,
     /// The declared literal parameter currently being decoded, before ABI coercion.
     literal_parameter: Option<(usize, String)>,
+    /// Module facts for the scalar-parameter checks, when this invoker performs them.
+    scalar_guards: Option<InvokerScalarGuards>,
+    /// The declared scalar parameter currently being decoded, when it is checked.
+    scalar_parameter: Option<scalar_param_args::ScalarParameter>,
 }
 
 impl InvokerEmitContext {
@@ -174,6 +184,8 @@ impl InvokerEmitContext {
             mbstring_operation: None,
             mbstring_variable_ref_warnings: false,
             literal_parameter: None,
+            scalar_guards: None,
+            scalar_parameter: None,
         }
     }
 
@@ -182,12 +194,18 @@ impl InvokerEmitContext {
         self.defaults.get(index).cloned().flatten()
     }
 
-    /// Selects a declared false/null contract without narrowing inferred parameter defaults.
+    /// Selects a declared false/null contract without narrowing inferred parameter defaults,
+    /// and the declared scalar parameter a guarded invoker checks.
     fn select_literal_parameter(&mut self, sig: &FunctionSig, index: usize) {
         self.literal_parameter = sig.params.get(index)
             .filter(|(_, ty)| sig.declared_params.get(index).copied().unwrap_or(false)
                 && matches!(ty, PhpType::False | PhpType::Void))
             .map(|(name, _)| (index, name.clone()));
+        self.scalar_parameter = self
+            .scalar_guards
+            .is_some()
+            .then(|| scalar_param_args::select(sig, index))
+            .flatten();
     }
 
     /// Allocates a deterministic local label for generated branches.
@@ -270,6 +288,7 @@ fn emit_runtime_callable_invoker_impl(
         emitter.target,
     );
     ctx.mbstring_operation = invoker.mbstring_operation;
+    ctx.scalar_guards = invoker.scalar_guards.clone();
     ctx.mbstring_variable_ref_warnings = invoker.mbstring_variable_ref_warnings;
 
     emitter.blank();
@@ -718,6 +737,7 @@ fn emit_loaded_indexed_array_callback_call(
     }
 
     ctx.literal_parameter = None;
+    ctx.scalar_parameter = None;
 
     if shape.hidden_argc {
         // The invoker synthesizes argc from the container length; it never consumes a user slot.
@@ -933,6 +953,7 @@ fn emit_loaded_assoc_array_callback_call(
     }
 
     ctx.literal_parameter = None;
+    ctx.scalar_parameter = None;
     if shape.hidden_argc {
         public_args::push_arg_count_from_reg(emitter, count_reg);
         arg_types.push(PhpType::Int);
@@ -3770,6 +3791,7 @@ mod tests {
                     label, sig: &signature, captures: &[], mbstring_operation: None,
                     mbstring_variable_ref_warnings: false, owns_string_return: false,
                     php_return_status: false, defaults: &defaults,
+                    scalar_guards: None,
                 };
                 emit_runtime_callable_invoker_impl(&mut emitter, &mut data, &invoker, true);
             }
@@ -3789,20 +3811,20 @@ mod tests {
         let sig = crate::types::first_class_callable_builtin_sig("trim").unwrap();
         let defaults: InvokerDefaults = vec![None; sig.params.len()];
         let mut state = crate::codegen::shared_state::SharedCodegenState::default();
-        state.cache_runtime_callable_invoker(&sig, &[], false, false, &defaults, "borrowed_result");
+        state.cache_runtime_callable_invoker(&sig, &[], false, false, &defaults, None, "borrowed_result");
         assert!(state
-            .runtime_callable_invoker(&sig, &[], true, false, &defaults)
+            .runtime_callable_invoker(&sig, &[], true, false, &defaults, None)
             .is_none());
-        state.cache_runtime_callable_invoker(&sig, &[], true, false, &defaults, "owned_result");
+        state.cache_runtime_callable_invoker(&sig, &[], true, false, &defaults, None, "owned_result");
         assert_eq!(
             state
-                .runtime_callable_invoker(&sig, &[], false, false, &defaults)
+                .runtime_callable_invoker(&sig, &[], false, false, &defaults, None)
                 .as_deref(),
             Some("borrowed_result")
         );
         assert_eq!(
             state
-                .runtime_callable_invoker(&sig, &[], true, false, &defaults)
+                .runtime_callable_invoker(&sig, &[], true, false, &defaults, None)
                 .as_deref(),
             Some("owned_result")
         );
@@ -3820,13 +3842,13 @@ mod tests {
         left[0] = Some(InvokerDefaultValue::String("left".to_string()));
         right[0] = Some(InvokerDefaultValue::String("right".to_string()));
         let mut state = crate::codegen::shared_state::SharedCodegenState::default();
-        state.cache_runtime_callable_invoker(&sig, &[], false, false, &left, "left_body");
+        state.cache_runtime_callable_invoker(&sig, &[], false, false, &left, None, "left_body");
         assert!(state
-            .runtime_callable_invoker(&sig, &[], false, false, &right)
+            .runtime_callable_invoker(&sig, &[], false, false, &right, None)
             .is_none());
         assert_eq!(
             state
-                .runtime_callable_invoker(&sig, &[], false, false, &left)
+                .runtime_callable_invoker(&sig, &[], false, false, &left, None)
                 .as_deref(),
             Some("left_body")
         );
@@ -3925,6 +3947,7 @@ mod tests {
             owns_string_return: false,
             php_return_status: false,
             defaults: &[None],
+            scalar_guards: None,
         };
         for name in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
             let target = Target::parse(name).unwrap();
@@ -4282,6 +4305,7 @@ mod tests {
             owns_string_return: false,
             php_return_status: false,
             defaults: &defaults,
+            scalar_guards: None,
         };
         emit_runtime_callable_invoker_impl(&mut emitter, &mut DataSection::new(), &invoker, false);
         emitter.output()

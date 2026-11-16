@@ -537,3 +537,71 @@ try { echo f(box(new Bad()), box(null)), "\n"; } catch (Throwable $e) { show($e)
     );
     assert_eq!(out, "toString\nTypeError: f(): Argument #2 ($n) must be of type int, null given, called in F on line 8\nRuntimeException: from toString\ntoString\nf:name3\ntoString\nArgumentCountError: Too few arguments to function g(), 2 passed in F on line 11 and exactly 3 expected\nRuntimeException: from toString\n");
 }
+
+/// Calls through a callable value bind their arguments in the shared runtime invoker, which
+/// never checked declared scalar parameters: `call_user_func_array()`, array callables in
+/// `call_user_func()`, and callbacks invoked by builtins (`array_map()`, `usort()`,
+/// `array_filter()`, `array_reduce()`) bound `null` as `""`/`0` and an object as a string. They
+/// now throw PHP's `TypeError`, naming functions, methods and closures (`{closure:file:line}`) as
+/// PHP does, and a builtin's typed callback keeps its `catch` reachable.
+#[test]
+fn test_calls_through_callable_values_check_scalar_parameters() {
+    let out = compile_and_run(
+        r#"<?php
+function box(mixed $v): mixed { return $v; }
+// PHP adds ", called in <file> on line <n>" for a call made from user code; elephc omits it
+// on the runtime invoker path, so only the part before it is compared.
+function show(Throwable $e): void { echo explode(", called in", str_replace(__FILE__, "F", $e->getMessage()))[0], "\n"; }
+function named(string $s): string { return "n:" . $s; }
+function cmp(int $x, int $y): int { return $x <=> $y; }
+function keep(string $s): bool { return true; }
+class O { public function m(string $s): string { return "m:" . $s; } public static function st(float $f): float { return $f; } }
+$unused = function () { return 1; };
+$null = box(null);
+$c = named(...);
+$f = function (string $s) { return $s; };
+try { echo call_user_func_array($c, [$null]), "\n"; } catch (TypeError $e) { show($e); }
+try { echo call_user_func([new O, 'm'], $null), "\n"; } catch (TypeError $e) { show($e); }
+try { echo call_user_func(['O', 'st'], box([])), "\n"; } catch (TypeError $e) { show($e); }
+try { echo call_user_func_array($f, ['s' => box(new O)]), "\n"; } catch (TypeError $e) { show($e); }
+try { array_map($f, [box(null)]); } catch (TypeError $e) { show($e); }
+try { array_map($c, ["a", box(new O)]); } catch (TypeError $e) { show($e); }
+$a = [box(null), 1];
+try { usort($a, fn(int $x, int $y) => 0); echo "usort closure no\n"; } catch (TypeError $e) { show($e); }
+$a = [box(null), 1];
+try { usort($a, 'cmp'); echo "usort named no\n"; } catch (TypeError $e) { show($e); }
+try { array_filter([box(null)], 'keep'); echo "filter no\n"; } catch (TypeError $e) { show($e); }
+try { array_filter([box([])], fn(string $s) => true); echo "filter closure no\n"; } catch (TypeError $e) { show($e); }
+try { echo array_reduce([box("x")], fn(int $c, int $i) => $c + $i, 0), "\n"; } catch (TypeError $e) { show($e); }
+echo implode(",", array_map(fn(int $i) => $i * 2, [box("3"), box(4.0), box(true)])), " ", call_user_func_array($c, [box(5)]), "\n";
+"#,
+    );
+    assert_eq!(out, "named(): Argument #1 ($s) must be of type string, null given\nO::m(): Argument #1 ($s) must be of type string, null given\nO::st(): Argument #1 ($f) must be of type float, array given\n{closure:F:13}(): Argument #1 ($s) must be of type string, O given\n{closure:F:13}(): Argument #1 ($s) must be of type string, null given\nnamed(): Argument #1 ($s) must be of type string, O given\n{closure:F:21}(): Argument #1 ($x) must be of type int, null given\ncmp(): Argument #1 ($x) must be of type int, null given\nkeep(): Argument #1 ($s) must be of type string, null given\n{closure:F:25}(): Argument #1 ($s) must be of type string, array given\n{closure:F:26}(): Argument #2 ($i) must be of type int, string given\n6,8,2 n:5\n");
+}
+
+/// Through the invoker, every declared scalar applies PHP's coercive rules to a boxed value
+/// like a direct call: numeric strings, the float precision deprecation, the int range check,
+/// `Stringable` objects for `string`, and the type names in the message (`true`, class names).
+#[test]
+fn test_invoker_scalar_parameters_follow_php_coercion() {
+    let out = compile_and_run(
+        r#"<?php
+set_error_handler(function ($no, $msg) { echo "[diag] ", $msg, "\n"; return true; });
+function box(mixed $v): mixed { return $v; }
+class Name { public function __toString(): string { return "name"; } }
+class Plain {}
+function str(string $s): string { return "s:" . $s; }
+function num(int $i): string { return "i:" . $i; }
+function real(float $f): string { return "f:" . $f; }
+function flag(bool $b): string { return $b ? "b:T" : "b:F"; }
+$values = [null, [1], new Plain(), new Name(), true, false, 3, 2.5, "12", " 7 ", "12abc", "1e3", "x", 1e30, "9223372036854775807"];
+foreach (['str', 'num', 'real', 'flag'] as $fn) {
+    foreach ($values as $v) {
+        try { echo implode(",", array_map($fn, [box($v)])), "\n"; }
+        catch (TypeError $e) { echo $e->getMessage(), "\n"; }
+    }
+}
+"#,
+    );
+    assert_eq!(out, "str(): Argument #1 ($s) must be of type string, null given\nstr(): Argument #1 ($s) must be of type string, array given\nstr(): Argument #1 ($s) must be of type string, Plain given\ns:name\ns:1\ns:\ns:3\ns:2.5\ns:12\ns: 7 \ns:12abc\ns:1e3\ns:x\ns:1.0E+30\ns:9223372036854775807\nnum(): Argument #1 ($i) must be of type int, null given\nnum(): Argument #1 ($i) must be of type int, array given\nnum(): Argument #1 ($i) must be of type int, Plain given\nnum(): Argument #1 ($i) must be of type int, Name given\ni:1\ni:0\ni:3\n[diag] Implicit conversion from float 2.5 to int loses precision\ni:2\ni:12\ni:7\nnum(): Argument #1 ($i) must be of type int, string given\ni:1000\nnum(): Argument #1 ($i) must be of type int, string given\nnum(): Argument #1 ($i) must be of type int, float given\ni:9223372036854775807\nreal(): Argument #1 ($f) must be of type float, null given\nreal(): Argument #1 ($f) must be of type float, array given\nreal(): Argument #1 ($f) must be of type float, Plain given\nreal(): Argument #1 ($f) must be of type float, Name given\nf:1\nf:0\nf:3\nf:2.5\nf:12\nf:7\nreal(): Argument #1 ($f) must be of type float, string given\nf:1000\nreal(): Argument #1 ($f) must be of type float, string given\nf:1.0E+30\nf:9.2233720368548E+18\nflag(): Argument #1 ($b) must be of type bool, null given\nflag(): Argument #1 ($b) must be of type bool, array given\nflag(): Argument #1 ($b) must be of type bool, Plain given\nflag(): Argument #1 ($b) must be of type bool, Name given\nb:T\nb:F\nb:T\nb:T\nb:T\nb:T\nb:T\nb:T\nb:T\nb:T\nb:T\n");
+}

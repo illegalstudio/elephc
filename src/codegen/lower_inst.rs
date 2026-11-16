@@ -53,6 +53,9 @@ mod enums;
 pub(super) mod exceptions;
 mod mixed_narrowing;
 mod scalar_param_guard;
+pub(in crate::codegen) use scalar_param_guard::{
+    invoker_numeric_status_reg, INVOKER_FLOAT_PARAM_HELPER, INVOKER_INT_PARAM_HELPER,
+};
 mod numeric_payloads;
 mod numeric_comparisons;
 mod numeric_cast;
@@ -75,7 +78,11 @@ mod spl_storage_write_fetch;
 mod string_write_offsets;
 mod runtime_class_messages;
 mod literal_parameter_guards;
-pub(in crate::codegen) use literal_parameter_guards::emit_boxed_literal_parameter_guard;
+pub(in crate::codegen) use literal_parameter_guards::{
+    emit_boxed_literal_parameter_guard, emit_invoker_class_name_lookup,
+    refuse_invoker_argument_loaded, refuse_invoker_argument_static,
+};
+pub(in crate::codegen) use objects::RUNTIME_TAGS;
 mod scoped_constants;
 mod static_locals;
 mod static_properties;
