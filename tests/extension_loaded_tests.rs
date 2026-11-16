@@ -341,8 +341,10 @@ fn extension_name_matching_is_case_insensitive() {
     );
 }
 
-/// Verifies a bridge-free CLI program reports its built-in json/session modules while leaving
-/// bridge-backed extensions (PDO/hash/openssl/curl) unloaded.
+/// Verifies a bridge-free CLI program reports its built-in json/session/hash modules while
+/// leaving bridge-backed extensions (PDO/openssl/curl) unloaded. `hash` is always built into php
+/// (`php -n` reports it) and elephc reports it too; the other three are a documented divergence:
+/// php's static build has them, elephc reports them only when this program links their bridge.
 #[test]
 fn bridge_free_program_reports_only_core_extensions() {
     let dir = make_test_dir("ext_core_only");
@@ -357,8 +359,8 @@ fn bridge_free_program_reports_only_core_extensions() {
     let out = run_binary(&bin);
     assert_eq!(
         out,
-        "bool(true)\nbool(true)\nbool(false)\nbool(false)\nbool(false)\nbool(false)\n",
-        "CLI core json/session loaded; no bridge extensions reported"
+        "bool(true)\nbool(true)\nbool(false)\nbool(true)\nbool(false)\nbool(false)\n",
+        "CLI core json/session/hash loaded; no bridge extensions reported"
     );
 }
 
@@ -571,7 +573,7 @@ fn with_iconv_reports_extension_loaded() {
 /// in the catalog, and php 8.5.10's own snapshot in `scripts/docs/php_baseline.json` — and
 /// compares module by module.
 ///
-/// MUTATION-CHECKED: adding `Mbstring` to the `const fn`, or dropping `Iconv` from it, must fail
+/// MUTATION-CHECKED: adding `Zlib` to the `const fn`, or dropping `Mbstring` from it, must fail
 /// here. The message names the module and the missing functions so the fix is mechanical.
 #[test]
 fn extension_surface_completeness_matches_php_baseline() {
@@ -651,8 +653,9 @@ fn extension_surface_completeness_matches_php_baseline() {
     );
 
     // Anchors, so a future refactor that makes the loop vacuous still fails here.
-    assert!(!PhpModule::Mbstring.covers_php_function_surface());
-    assert!(!PhpModule::Ctype.covers_php_function_surface());
+    assert!(!PhpModule::Zlib.covers_php_function_surface());
+    assert!(PhpModule::Mbstring.covers_php_function_surface());
+    assert!(PhpModule::Ctype.covers_php_function_surface());
     assert!(PhpModule::Iconv.covers_php_function_surface());
     assert!(PhpModule::Json.covers_php_function_surface());
 }
@@ -662,25 +665,29 @@ fn extension_surface_completeness_matches_php_baseline() {
 /// `extension_loaded('mbstring')` used to be `true` while `mb_strtoupper` did not exist, which is
 /// the shape every `symfony/polyfill-*`-style package reads to decide whether to declare its
 /// replacements: told the extension is there, it declines, and the first call fatals. The pairing
-/// below is the framework-free version of that — for each extension, a function elephc HAS and one
-/// it does NOT — so the over-claim is visible without any library.
+/// below is the framework-free version of that: `zlib` is still partial (a function elephc HAS and
+/// one it does NOT), so it reports not-loaded. `mbstring` (65 of php's 65), `ctype` (11 of 11) and
+/// `iconv` (10 of 10) are complete and must report loaded, in both `extension_loaded()` and
+/// `get_loaded_extensions()`, as php does; they used to answer `false` after their catalogs had
+/// become complete, so polyfill-shaped code took its no-extension path.
 #[test]
 fn partially_covered_extensions_report_not_loaded() {
     let dir = make_test_dir("ext_partial");
     let src = "<?php \
+        var_dump(extension_loaded('zlib'), function_exists('gzcompress'), function_exists('gzopen')); \
         var_dump(extension_loaded('mbstring'), function_exists('mb_strtoupper'), function_exists('mb_substr')); \
         var_dump(extension_loaded('ctype'), function_exists('ctype_alnum'), function_exists('ctype_upper')); \
-        var_dump(extension_loaded('iconv'), function_exists('iconv'), function_exists('iconv_strlen'));";
+        var_dump(extension_loaded('iconv'), function_exists('iconv'), function_exists('iconv_strlen')); \
+        var_dump(in_array('mbstring', get_loaded_extensions(), true), in_array('ctype', get_loaded_extensions(), true));";
     let bin = compile_with_flags(&dir, src, "app", &[]);
     let out = run_binary(&bin);
     assert_eq!(
         out,
-        // mbstring: 4 of php's 65, so not loaded even though `mb_strtoupper` is real.
-        // ctype: 4 of php's 11, same shape.
-        // iconv: 10 of php's 10, so loaded, with no gap behind it.
         "bool(false)\nbool(true)\nbool(false)\n\
-         bool(false)\nbool(true)\nbool(false)\n\
-         bool(true)\nbool(true)\nbool(true)\n",
+         bool(true)\nbool(true)\nbool(true)\n\
+         bool(true)\nbool(true)\nbool(true)\n\
+         bool(true)\nbool(true)\nbool(true)\n\
+         bool(true)\nbool(true)\n",
         "a partially covered extension must report not-loaded; a complete one must report loaded"
     );
 }

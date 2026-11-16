@@ -204,8 +204,9 @@ mod curl_extension_tests {
     /// No extension whose php-src function surface elephc declares only PARTLY may be reported.
     ///
     /// This is the teeth on the derivation: it fails the moment someone puts a name back into the
-    /// membership path by hand. `mbstring` and `ctype` are named explicitly because they are the
-    /// two the old hand-written list claimed while declaring 2/65 and 4/11 of their functions.
+    /// membership path by hand. `mbstring` (65/65) and `ctype` (11/11), which the old hand-written
+    /// list claimed while declaring 2/65 and 4/11, are complete now and must be reported; `zlib`
+    /// is still partial and must not be.
     #[test]
     fn no_partially_covered_extension_is_reported() {
         for name in core_loaded_extensions() {
@@ -217,8 +218,9 @@ mod curl_extension_tests {
                  surface, and it is not one of the three engine surfaces php-src always builds"
             );
         }
-        assert!(!eval_extension_is_loaded("mbstring"));
-        assert!(!eval_extension_is_loaded("ctype"));
+        assert!(eval_extension_is_loaded("mbstring"));
+        assert!(eval_extension_is_loaded("ctype"));
+        assert!(!eval_extension_is_loaded("zlib"));
         assert!(eval_extension_is_loaded("json"), "json is 5/5 and must stay loaded");
     }
 

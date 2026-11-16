@@ -127,8 +127,9 @@ mod tests {
             );
         }
         assert!(complete_surface_modules().any(|module| module == PhpModule::Json));
-        assert!(!complete_surface_modules().any(|module| module == PhpModule::Mbstring));
-        assert!(!complete_surface_modules().any(|module| module == PhpModule::Ctype));
+        // The catalog declares php's whole `mb_*` and `ctype_*` lists, so both are reportable.
+        assert!(complete_surface_modules().any(|module| module == PhpModule::Mbstring));
+        assert!(complete_surface_modules().any(|module| module == PhpModule::Ctype));
         // The three engine surfaces are admitted despite partial coverage, on purpose.
         assert!(complete_surface_modules().any(|module| module == PhpModule::Core));
         assert!(complete_surface_modules().any(|module| module == PhpModule::Standard));

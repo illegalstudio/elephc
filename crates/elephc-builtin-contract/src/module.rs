@@ -208,9 +208,9 @@ impl PhpModule {
     /// state no PHP process is ever in, and code that reacts to it
     /// (`if (!extension_loaded('pcre')) die(...)`) would break on a compiler that provides
     /// `preg_match` perfectly well. Coverage where it is partial: `Core` 42 of php's 62 functions,
-    /// `standard` 404 of 545, `pcre` 7 of 11; `date` is 48 of 48 and is listed here so the eval
-    /// interpreter reports it too — its `date_*` surface reaches eval through the host bridge,
-    /// which the per-backend support tables cannot see.
+    /// `standard` 404 of 545. `pcre` (11 of 11) is complete; `date` (48 of 48) is listed here so
+    /// the eval interpreter reports it too — its `date_*` surface reaches eval through the host
+    /// bridge, which the per-backend support tables cannot see.
     ///
     /// THE LINE IS PHP-SRC'S OWN, not a coverage threshold. `hash` and `random` are also always
     /// built by php-src, and elephc deliberately does NOT claim them here: their reporting is
@@ -246,15 +246,22 @@ impl PhpModule {
             self,
             Self::Bcmath
                 | Self::Calendar
+                | Self::Ctype
                 | Self::Date
                 | Self::Exif
+                | Self::Fileinfo
+                | Self::Gmp
                 | Self::Iconv
                 | Self::Json
+                | Self::Mbstring
                 | Self::Pcntl
+                | Self::Pcre
                 | Self::Pdo
+                | Self::Random
                 | Self::Reflection
                 | Self::Session
                 | Self::Spl
+                | Self::Tokenizer
                 | Self::Xml
                 | Self::Xmlwriter
                 | Self::ZendOpcache

@@ -967,6 +967,8 @@ return call_user_func("inet_ntop", call_user_func_array("inet_pton", ["ip" => "2
 /// `crate::interpreter::builtins::network_env::extension_loaded`'s module doc): with
 /// `--features curl` it both appears in the list and satisfies `in_array`, so this test
 /// reads the expected shape from `cfg!(feature = "curl")` rather than hard-coding one.
+/// The count includes every module whose catalog function list is php's whole list and which
+/// eval implements in full (`ctype`, `mbstring`, `fileinfo`, `gmp` and `tokenizer` among them).
 #[test]
 fn execute_program_dispatches_get_loaded_extensions_builtin() {
     let curl_present = cfg!(feature = "curl");
@@ -988,7 +990,7 @@ return function_exists("get_loaded_extensions");"#,
 
     let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
 
-    let count = if curl_present { 13 } else { 12 };
+    let count = if curl_present { 18 } else { 17 };
     let curl_label = if curl_present { "curl-present" } else { "curl-absent" };
     assert_eq!(
         values.output,
