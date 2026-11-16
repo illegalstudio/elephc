@@ -68,7 +68,12 @@ impl Checker {
                 if references_pcntl_constant {
                     self.require_builtin_library("elephc_pcntl");
                 }
-                if self.extern_functions.contains_key(name.as_str()) {
+                // A call the compiler built itself (the `$_SERVER` seeding calls `getenv()`) names the
+                // builtin, never a program's `extern` of the same name.
+                if self.extern_functions.contains_key(name.as_str())
+                    && (expr.span.is_from_source()
+                        || !crate::types::checker::builtins::is_supported_builtin_function(name.as_str()))
+                {
                     return self.check_extern_function_call(name.as_str(), &args, expr.span, env);
                 }
                 if let Some(ty) = self.check_builtin(name.as_str(), &args, expr.span, env)? {

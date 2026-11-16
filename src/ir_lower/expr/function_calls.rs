@@ -388,9 +388,20 @@ pub(super) fn lower_function_call(ctx: &mut LoweringContext<'_, '_>, name: &Name
         return value;
     }
     let extension_builtin = source_prefers_extension_builtin(canonical);
-    let sig = call_signature(ctx, canonical, extension_builtin);
-    let is_extern = ctx.extern_functions.contains_key(canonical);
-    let is_user_function = ctx.functions.contains_key(canonical) && !extension_builtin;
+    // A call the compiler built itself (the `$_SERVER` seeding calls `getenv()`) names the
+    // builtin, never a program's `extern` (or its function-table entry) of the same name.
+    let shadowed_by_extern =
+        ctx.extern_functions.contains_key(canonical)
+            && !expr.span.is_from_source()
+            && crate::types::checker::builtins::is_supported_builtin_function(canonical);
+    let sig = if shadowed_by_extern {
+        builtin_call_signature(canonical)
+    } else {
+        call_signature(ctx, canonical, extension_builtin)
+    };
+    let is_extern = ctx.extern_functions.contains_key(canonical) && !shadowed_by_extern;
+    let is_user_function =
+        ctx.functions.contains_key(canonical) && !extension_builtin && !shadowed_by_extern;
     if is_user_function {
         if let Some(signature) = sig.as_ref() {
             if let Some(rewrite) =
