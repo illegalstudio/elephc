@@ -130,9 +130,33 @@ unsafe fn call_eval_function_inner(
     };
     clear_result(out);
     let mut values = ElephcRuntimeOps::with_context(context as *const ElephcEvalContext);
-    match execute_context_function_with_namespace_fallback(context, &name, args, &mut values) {
+    let result = execute_context_function_with_namespace_fallback(context, &name, args, &mut values);
+    match undefined_function_as_throwable(context, &name, result, &mut values) {
         Ok(outcome) => write_outcome(outcome, out).code(),
         Err(status) => trace_dynamic_function_call_failure(context, &name, status).code(),
+    }
+}
+
+/// Turns the bridge's "no such function" answer into php's catchable `Error`.
+///
+/// A name no context declares and the bridge cannot answer itself comes back as
+/// `UnsupportedConstruct`, which the compiled caller reports as an uncatchable fatal. php raises
+/// `Error: Call to undefined function NAME()`, which a `catch` (or `finally`) must see, from a
+/// frame with an eval context and from one without alike.
+#[cfg(not(test))]
+fn undefined_function_as_throwable(
+    context: &mut ElephcEvalContext,
+    name: &str,
+    result: Result<interpreter::EvalOutcome, EvalStatus>,
+    values: &mut ElephcRuntimeOps,
+) -> Result<interpreter::EvalOutcome, EvalStatus> {
+    match result {
+        Err(EvalStatus::UnsupportedConstruct)
+            if !interpreter::context_function_is_callable(context, name) =>
+        {
+            interpreter::execute_context_undefined_function_outcome(context, name, values)
+        }
+        other => other,
     }
 }
 
@@ -166,12 +190,13 @@ unsafe fn call_eval_function_array_inner(
     }
     clear_result(out);
     let mut values = ElephcRuntimeOps::with_context(context as *const ElephcEvalContext);
-    match execute_context_function_array_with_namespace_fallback(
+    let result = execute_context_function_array_with_namespace_fallback(
         context,
         &name,
         RuntimeCellHandle::from_raw(arg_array).borrowed(),
         &mut values,
-    ) {
+    );
+    match undefined_function_as_throwable(context, &name, result, &mut values) {
         Ok(outcome) => write_outcome(outcome, out).code(),
         Err(status) => trace_dynamic_function_call_failure(context, &name, status).code(),
     }

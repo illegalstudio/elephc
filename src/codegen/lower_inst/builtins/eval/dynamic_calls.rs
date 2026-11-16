@@ -85,8 +85,6 @@ fn lower_eval_owned_function_call(
     let function_name = function_name.to_string();
     let args_offset = EVAL_STACK_BYTES;
     let stack_bytes = eval_function_call_stack_bytes(inst.operands.len());
-    let missing_label = ctx.next_label("eval_owned_function_missing");
-    let done_label = ctx.next_label("eval_owned_function_done");
     let result_reg = abi::int_result_reg(ctx.emitter).to_string();
 
     abi::emit_reserve_temporary_stack(ctx.emitter, stack_bytes);
@@ -118,22 +116,6 @@ fn lower_eval_owned_function_call(
     // `Call to undefined function <namespace>\\debug_backtrace()` where PHP returns the frames.
     // A null context handle is what the bridge takes for "resolve this yourself".
     ctx.emitter.label(&bridge_serves_label);
-    abi::emit_symbol_address(
-        ctx.emitter,
-        abi::int_arg_reg_name(ctx.emitter.target, 0),
-        &name_label,
-    );
-    abi::emit_load_int_immediate(
-        ctx.emitter,
-        abi::int_arg_reg_name(ctx.emitter.target, 1),
-        name_len as i64,
-    );
-    let can_call_symbol = ctx
-        .emitter
-        .target
-        .extern_symbol("__elephc_eval_bridge_can_call_function");
-    abi::emit_call_label(ctx.emitter, &can_call_symbol);
-    abi::emit_branch_if_int_result_zero(ctx.emitter, &missing_label);
     abi::emit_load_int_immediate(ctx.emitter, &result_reg, 0);
     abi::emit_store_to_sp(ctx.emitter, &result_reg, EVAL_CONTEXT_HANDLE_OFFSET);
     ctx.emitter.label(&owner_found_label);
@@ -169,38 +151,7 @@ fn lower_eval_owned_function_call(
     emit_release_eval_boxed_operands_keeping_result(ctx, &boxed);
     abi::emit_load_temporary_stack_slot(ctx.emitter, &result_reg, EVAL_RESULT_VALUE_CELL_OFFSET);
     abi::emit_release_temporary_stack(ctx.emitter, stack_bytes);
-    abi::emit_jump(ctx.emitter, &done_label);
-
-    // The missing-function path ends the process, so its boxed operands outlive nothing.
-    ctx.emitter.label(&missing_label);
-    abi::emit_release_temporary_stack(ctx.emitter, stack_bytes);
-    emit_eval_owned_function_missing_fatal(ctx, &function_name);
-    ctx.emitter.label(&done_label);
     store_if_result(ctx, inst)
-}
-
-/// Emits the PHP undefined-function fatal when no dynamic declaration owner exists.
-fn emit_eval_owned_function_missing_fatal(ctx: &mut FunctionContext<'_>, function_name: &str) {
-    let message = format!("Fatal error: Call to undefined function {function_name}()\n");
-    let (message_label, message_len) = ctx.data.add_string(message.as_bytes());
-    match ctx.emitter.target.arch {
-        Arch::AArch64 => {
-            ctx.emitter.instruction("mov x0, #2");
-            ctx.emitter.adrp("x1", &message_label);
-            ctx.emitter.add_lo12("x1", "x1", &message_label);
-            ctx.emitter.instruction(&format!("mov x2, #{}", message_len));
-            ctx.emitter.syscall(4);
-            abi::emit_exit(ctx.emitter, 1);
-        }
-        Arch::X86_64 => {
-            ctx.emitter.instruction("mov edi, 2");
-            abi::emit_symbol_address(ctx.emitter, "rsi", &message_label);
-            ctx.emitter.instruction(&format!("mov edx, {}", message_len));
-            ctx.emitter.instruction("mov eax, 1");
-            ctx.emitter.instruction("syscall");
-            abi::emit_exit(ctx.emitter, 1);
-        }
-    }
 }
 
 /// Lowers a native call to a prior eval-declared function using an argument array/hash.
@@ -264,8 +215,6 @@ fn lower_eval_owned_function_call_array(
     super::super::ensure_arg_count(inst, "eval function call array", 1)?;
     let function_name = ctx.function_name_data(expect_data(inst)?)?.to_string();
     let arg_array = expect_operand(inst, 0)?;
-    let missing_label = ctx.next_label("eval_owned_function_array_missing");
-    let done_label = ctx.next_label("eval_owned_function_array_done");
     let result_reg = abi::int_result_reg(ctx.emitter).to_string();
 
     abi::emit_reserve_temporary_stack(ctx.emitter, EVAL_STACK_BYTES);
@@ -297,22 +246,6 @@ fn lower_eval_owned_function_call_array(
     // Same as the positional call above: a name no context declares can still be one the bridge
     // answers itself, and a null context handle is how it is asked to.
     ctx.emitter.label(&bridge_serves_label);
-    abi::emit_symbol_address(
-        ctx.emitter,
-        abi::int_arg_reg_name(ctx.emitter.target, 0),
-        &name_label,
-    );
-    abi::emit_load_int_immediate(
-        ctx.emitter,
-        abi::int_arg_reg_name(ctx.emitter.target, 1),
-        name_len as i64,
-    );
-    let can_call_symbol = ctx
-        .emitter
-        .target
-        .extern_symbol("__elephc_eval_bridge_can_call_function");
-    abi::emit_call_label(ctx.emitter, &can_call_symbol);
-    abi::emit_branch_if_int_result_zero(ctx.emitter, &missing_label);
     abi::emit_load_int_immediate(ctx.emitter, &result_reg, 0);
     abi::emit_store_to_sp(ctx.emitter, &result_reg, EVAL_CONTEXT_HANDLE_OFFSET);
     ctx.emitter.label(&owner_found_label);
@@ -339,12 +272,6 @@ fn lower_eval_owned_function_call_array(
     emit_release_eval_boxed_operands_keeping_result(ctx, &boxed);
     abi::emit_load_temporary_stack_slot(ctx.emitter, &result_reg, EVAL_RESULT_VALUE_CELL_OFFSET);
     abi::emit_release_temporary_stack(ctx.emitter, EVAL_STACK_BYTES);
-    abi::emit_jump(ctx.emitter, &done_label);
-
-    ctx.emitter.label(&missing_label);
-    abi::emit_release_temporary_stack(ctx.emitter, EVAL_STACK_BYTES);
-    emit_eval_owned_function_missing_fatal(ctx, &function_name);
-    ctx.emitter.label(&done_label);
     store_if_result(ctx, inst)
 }
 
@@ -435,7 +362,7 @@ pub(in crate::codegen::lower_inst::builtins) fn lower_eval_object_new_without_co
     emit_eval_status_check(ctx);
     let result_reg = abi::int_result_reg(ctx.emitter);
     abi::emit_load_temporary_stack_slot(ctx.emitter, result_reg, EVAL_RESULT_VALUE_CELL_OFFSET);
-    emit_eval_result_as_type(ctx, &inst.result_php_type)?;
+    emit_eval_owned_result_as_type(ctx, &inst.result_php_type)?;
     abi::emit_release_temporary_stack(ctx.emitter, stack_bytes);
     abi::emit_release_temporary_stack(ctx.emitter, 16);
     abi::emit_jump(ctx.emitter, &done_label);
@@ -504,7 +431,7 @@ pub(in crate::codegen::lower_inst::builtins) fn lower_eval_object_new_dynamic_fa
     let result_reg = abi::int_result_reg(ctx.emitter);
     abi::emit_load_temporary_stack_slot(ctx.emitter, result_reg, EVAL_RESULT_VALUE_CELL_OFFSET);
     // The mixed factory keeps the cell; a constrained `new static` expects the object pointer.
-    emit_eval_result_as_type(ctx, &inst.result_php_type)?;
+    emit_eval_owned_result_as_type(ctx, &inst.result_php_type)?;
     abi::emit_release_temporary_stack(ctx.emitter, stack_bytes);
     abi::emit_release_temporary_stack(ctx.emitter, 16);
     abi::emit_jump(ctx.emitter, &done_label);

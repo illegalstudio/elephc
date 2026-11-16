@@ -215,6 +215,25 @@ pub fn execute_context_new_object_outcome(
     }
 }
 
+/// The outcome of calling a function no context declares and the bridge cannot answer: php's
+/// catchable `Error: Call to undefined function NAME()`, handed back as a Throwable outcome so the
+/// compiled caller unwinds into its `catch` instead of aborting.
+pub fn execute_context_undefined_function_outcome(
+    context: &mut ElephcEvalContext,
+    name: &str,
+    values: &mut impl RuntimeValueOps,
+) -> Result<EvalOutcome, EvalStatus> {
+    let message = format!("Call to undefined function {}()", name.trim_start_matches('\\'));
+    match eval_throw_error::<()>(&message, context, values) {
+        Err(EvalStatus::UncaughtThrowable) => context
+            .take_pending_throw()
+            .map(EvalOutcome::Throwable)
+            .ok_or(EvalStatus::UncaughtThrowable),
+        Err(status) => Err(status),
+        Ok(()) => Err(EvalStatus::RuntimeFatal),
+    }
+}
+
 /// Constructs a runtime Reflection owner from prepared positional arguments.
 pub fn execute_reflection_new_object_outcome(
     context: &mut ElephcEvalContext,

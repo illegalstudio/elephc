@@ -93,3 +93,22 @@ namespace {
         "alive\n",
     ));
 }
+
+/// An undeclared function called from a frame with no eval context of its own throws the
+/// catchable `Error` php does, instead of ending the process with a fatal.
+#[test]
+fn test_undeclared_function_from_a_frame_without_eval_context_is_catchable() {
+    let output = compile_and_run_with_heap_debug(r#"<?php
+function probe() {
+    try { maybe_from_plugin(); } catch (\Error $e) { echo "caught: ", $e->getMessage(), "\n"; }
+    finally { echo "finally\n"; }
+}
+$source = $argc > 0 ? 'echo 1;' : '';
+eval($source);
+echo "\n";
+probe();
+echo "alive\n";
+"#);
+    assert!(output.success, "{}", output.stderr);
+    assert_eq!(output.stdout, "1\ncaught: Call to undefined function maybe_from_plugin()\nfinally\nalive\n");
+}
