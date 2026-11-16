@@ -36383,3 +36383,29 @@ eval($argc > 0 ? $code : '');
         "array(1) {\n  [\"meta\"]=>\n  array(1) {\n    [\"c\"]=>\n    int(0)\n  }\n}\n"
     );
 }
+
+/// With code loaded at run time the class table is not the whole world: an `instanceof Marker`
+/// guard on a `Base` value must not be narrowed to the one COMPILED class satisfying both halves,
+/// since an `eval()`-declared `Late extends Base implements Marker` satisfies them too. The
+/// narrowing folded `$b instanceof Marked` to true for a `Late` (and read its properties from
+/// `Marked`'s layout, a fatal allocation error).
+#[test]
+fn test_instanceof_intersection_is_not_named_when_classes_load_at_run_time() {
+    let out = compile_and_run(
+        r#"<?php
+class Base { public int $base = 0; }
+interface Marker { function mark(): string; }
+class Marked extends Base implements Marker { public string $tag = "M"; function mark(): string { return "Marked"; } }
+function probe(Base $b): string {
+    if ($b instanceof Marker) {
+        return ($b instanceof Marked ? "compiled" : "other") . ":" . $b->mark() . ":" . get_class($b);
+    }
+    return "none";
+}
+echo probe(new Marked()), "\n";
+eval('class Late extends Base implements Marker { public int $n = 7; public string $tag = "L"; function mark(): string { return "Late"; } }');
+echo probe(new Late()), "\n";
+"#,
+    );
+    assert_eq!(out, "compiled:Marked:Marked\nother:Late:Late\n");
+}

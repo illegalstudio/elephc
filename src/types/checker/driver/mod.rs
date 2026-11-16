@@ -143,6 +143,12 @@ pub(super) fn check_types_impl(
     // program, so it does not widen anything; every other eval still does.
     checker.program_has_interpreted_callers =
         checker.program_defers_unknown_classes || program_usage.opaque_eval;
+    // `instanceof` intersections name the compiled classes satisfying both halves, which only
+    // holds when no class can arrive at run time. A closed world compiles every class (its runtime
+    // includes answer from the compiled table and its non-literal `eval` is a runtime error).
+    crate::types::instanceof_intersection::set_open_world(
+        !crate::closed_world::is_enabled() && checker.program_has_interpreted_callers,
+    );
     let mut errors = Vec::new();
 
     errors.extend(validate_yield_contexts(program));

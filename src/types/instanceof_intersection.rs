@@ -11,6 +11,11 @@
 //! the one rule both the checker and the IR lowering consult -- they narrowed independently
 //! before, and disagreeing about `$this` is what made the second read of a property fail where
 //! the first had succeeded.
+//!
+//! The naming is only sound while the class table is the whole world. A program that loads code at
+//! run time (an opaque `eval()`, a runtime include or autoloader, outside a closed-world build) can
+//! declare another class that satisfies both sides, so there the guard target alone stands, as it
+//! did before this module: [`set_open_world`] records that once per compilation for both callers.
 
 use crate::fast_hash::FastMap as HashMap;
 
@@ -23,6 +28,22 @@ use crate::types::PhpType;
 /// a guard matching a large part of the program is not worth encoding precisely -- and a guard
 /// that broad proves little anyway.
 pub(crate) const INTERSECTION_CANDIDATE_LIMIT: usize = 4;
+
+thread_local! {
+    /// Whether the compilation running on this thread can meet classes its table does not hold.
+    static OPEN_WORLD: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// Records, before type checking, whether classes can appear at run time that the class table
+/// does not hold; the checker and the IR lowering of the same compilation then agree on it.
+pub(crate) fn set_open_world(open: bool) {
+    OPEN_WORLD.with(|cell| cell.set(open));
+}
+
+/// Whether the compilation running on this thread can meet classes its table does not hold.
+fn open_world() -> bool {
+    OPEN_WORLD.with(std::cell::Cell::get)
+}
 
 /// Returns true when a value already typed `member` necessarily passes `instanceof target`:
 /// the same name, a subclass, or an interface reached through the ancestor chain and the
@@ -195,6 +216,12 @@ pub(crate) fn narrow_object_to_instanceof(
         return Some(PhpType::Object(current.to_string()));
     }
     if object_type_satisfies(classes, interfaces, target, current) {
+        return None;
+    }
+    // Naming the classes that satisfy both halves needs every class: a class declared at run time
+    // (`eval`, a runtime include) can satisfy them too, and typing it as a compiled one read its
+    // properties from the wrong layout.
+    if open_world() {
         return None;
     }
     let candidates = classes_satisfying_both(classes, interfaces, current, target);
