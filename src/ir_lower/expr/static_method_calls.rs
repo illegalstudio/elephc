@@ -131,15 +131,20 @@ pub(super) fn lower_static_method_call(
                 // A plain variable is read twice as it is; any other expression is evaluated once
                 // into a scratch local first.
                 let plain = matches!(args[0].kind, ExprKind::Variable(_));
-                const SCRATCH: &str = "__elephc_closure_source";
+                // The scratch is a generated local: invisible to `get_defined_vars()`, `compact()`
+                // and eval scopes, and released below so it holds no object past the call.
+                let scratch = (!plain).then(|| {
+                    let ty = materialized_expr_type_for_merge(ctx, &args[0]);
+                    ctx.declare_synthetic_php_local(ty)
+                });
                 let value_name = match &args[0].kind {
                     ExprKind::Variable(name) if plain => name.clone(),
-                    _ => SCRATCH.to_string(),
+                    _ => scratch.clone().expect("a non-variable argument has a scratch"),
                 };
                 let callable_value_name: &str = value_name.as_str();
                 if !plain {
                     let source = Stmt::new(
-                        StmtKind::Assign { name: SCRATCH.to_string(), value: args[0].clone() },
+                        StmtKind::Assign { name: value_name.clone(), value: args[0].clone() },
                         expr.span,
                     );
                     super::super::stmt::lower_stmt(ctx, &source);
@@ -228,6 +233,7 @@ pub(super) fn lower_static_method_call(
                 // The normalization retains the payload it extracts from the boxed value; this
                 // result claims that lease so its consumer releases it.
                 ctx.builder.set_value_ownership(callable.value, Ownership::Owned);
+                super::lazy_isset::release_evaluated_once(ctx, scratch, expr.span);
                 return callable;
             }
         }
