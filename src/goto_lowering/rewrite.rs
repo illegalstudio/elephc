@@ -26,9 +26,10 @@
 //! - `frames` mirrors the `break`/`continue` levels open at the statement being rewritten, the
 //!   program's own and the synthesized ones, so every level count is computed, never guessed.
 //! - Function and class declarations are moved out in front of their loop: this compiler does
-//!   not discover a declaration inside a loop body, and PHP binds them at compile time
-//!   wherever a jump goes. A `namespace`, `use` or `const` declaration inside a loop is
-//!   refused instead: see `plan::Unsupported`.
+//!   not discover a declaration inside a loop body, and it registers the top-level ones for the
+//!   whole program anyway, so a jump neither skips nor repeats them (see
+//!   `hoists_out_of_dispatch` for where PHP differs). A `namespace`, `use` or `const`
+//!   declaration inside a loop is refused instead: see `plan::Unsupported`.
 
 use std::collections::HashMap;
 
@@ -347,8 +348,17 @@ impl Rewriter<'_> {
 
 /// Returns whether a statement inside a dispatch range is moved out in front of the loop.
 ///
-/// These are the declarations PHP binds when it compiles the file, wherever they are written
-/// and whichever way a jump goes around them.
+/// At the top level of a file these are the declarations this compiler registers for the whole
+/// program, wherever they are written: a program without any `goto` already sees them from its
+/// first statement on, so a jump neither skips nor repeats them. A declaration inside a
+/// conditional or another function is not registered that way, with or without a jump; moving
+/// it only keeps it out of the loop body.
+///
+/// PHP does the same for top-level functions and for the classes it binds early. It declares
+/// the others only when their statement runs, among them an enum, a class that implements an
+/// interface, uses a trait or extends a parent that is not bound yet, an interface that extends
+/// another, and a trait that uses a trait. That difference is the compiler's class model, not
+/// something a jump adds.
 fn hoists_out_of_dispatch(kind: &StmtKind) -> bool {
     matches!(
         kind,

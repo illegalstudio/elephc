@@ -470,8 +470,17 @@ A few shapes that PHP accepts are refused at compile time:
 
 Move the label out of the `catch` block or the `switch`, or the declaration out
 of the range the jump covers, to keep the same flow. A declaration written
-between two jumps that do not overlap is fine. Functions and classes declared
-between a `goto` and its label stay declared, as in PHP.
+between two jumps that do not overlap is fine.
+
+A top-level function or class declared between a `goto` and its label stays
+declared: elephc registers the top-level functions and classes of a file for
+the whole program, with or without a `goto`. A declaration inside a conditional
+or inside another function is not one of those, and a jump does not change that
+either. PHP agrees for top-level functions and for the classes it binds early.
+Other declarations exist in PHP only once their statement has run, so a jump
+over one leaves it undeclared there: for example an enum, a class that
+implements an interface, uses a trait or extends a parent that is not bound
+yet, an interface that extends another, or a trait that uses a trait.
 
 `goto` is a reserved word, so it cannot be used as a function name. As in PHP,
 it remains valid as a method or constant name (`$obj->goto()`).

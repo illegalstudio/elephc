@@ -64,6 +64,10 @@ pub(in crate::interpreter) fn execute_statements(
 /// therefore declares the functions that have not been reached yet, and the resumed execution
 /// treats every top-level function declaration as already done. Declarations inside a block
 /// stay tied to that block, as in PHP.
+///
+/// Class-like declarations are not bound this way. PHP binds some of them early too, but
+/// registering one here evaluates its constants and static property defaults, which PHP defers
+/// to the first fetch; binding them correctly needs that deferral first (issue #2374).
 fn execute_statement_sequence(
     statements: &[EvalStmt],
     templates_registered: bool,
