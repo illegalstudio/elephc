@@ -272,9 +272,14 @@ pub(super) fn eval_static_method_call_result_resolved(
     // already has — an AOT class whose static method simply is not the one being called — it
     // reported success on every attempt and this re-dispatch took the identical path again. That
     // is not a deep recursion, it is an unbounded one: four tests aborted the whole test PROCESS
-    // with a stack overflow rather than failing.
-    if !values.class_exists(&class_name)?
-        && eval_spl_autoload_class(&class_name, context, values)?
+    // with a stack overflow rather than failing. The guard is the autoloader's own "already
+    // there" predicate, not `class_exists` alone: a compiled INTERFACE, trait or enum also
+    // answers success without loading anything, and recursed the same way.
+    if !crate::interpreter::builtins::eval_autoload_target_exists(
+        &class_name,
+        context,
+        values,
+    )? && eval_spl_autoload_class(&class_name, context, values)?
     {
         // The autoloader may have made the name known as an ALIAS (`class_alias($real, $alias)`,
         // which is exactly what a framework's facade loader does). The names above were resolved

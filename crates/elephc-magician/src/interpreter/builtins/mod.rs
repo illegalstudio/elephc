@@ -78,6 +78,7 @@ pub(crate) use core::eval_throwable_trace_value;
 pub(in crate::interpreter) use core::eval_throwable_string;
 pub(crate) use symbols::eval_class_name_is_a_bridge;
 pub(crate) use symbols::eval_spl_autoload_class;
+pub(in crate::interpreter) use symbols::eval_autoload_target_exists;
 pub(crate) use symbols::eval_spl_autoload_classlike_definition;
 pub(super) use time::*;
 pub(super) use xml::*;

@@ -416,7 +416,7 @@ fn eval_spl_autoload_class_local(
 ///
 /// PHP uses the same callback registry for classes, interfaces, traits, and enums. A trait must
 /// therefore count as loaded before a dynamically included class can expand its `use Trait` list.
-fn eval_autoload_target_exists(
+pub(in crate::interpreter) fn eval_autoload_target_exists(
     name: &str,
     context: &ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
