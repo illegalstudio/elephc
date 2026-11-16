@@ -130,7 +130,12 @@ pub(super) fn uninitialized_property_marker_offsets(class_info: &ClassInfo) -> V
             // schema default stays absent only so reflection keeps reporting no default. Marking
             // it made an object built without its constructor (`newInstanceWithoutConstructor()`,
             // which DeepClone uses) dump `uninitialized(mixed)` and count no properties.
-            let untyped_promoted = class_info.promoted_properties.contains(property)
+            //
+            // An untyped HOOKED property is born null too: the checker withholds its synthetic
+            // `null` default (the hook owns initialization) but php still initializes a backed
+            // untyped property, so `var_dump(new A)` shows `NULL` for `public $x { set { ... } }`.
+            let untyped_promoted = (class_info.promoted_properties.contains(property)
+                || class_info.property_hooks.contains_key(property))
                 && !class_info
                     .property_declared_slots
                     .get(index)
