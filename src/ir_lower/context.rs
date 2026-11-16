@@ -1121,6 +1121,11 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
             .insert(closure_name.to_string(), format!("{{closure:{context}:{line}}}"));
     }
 
+    /// Returns the label recorded by [`Self::register_closure_display_name`], leaving it in place.
+    pub(crate) fn peek_closure_display_name(&self, closure_name: &str) -> Option<String> {
+        self.closure_display_names.get(closure_name).cloned()
+    }
+
     /// Takes the label recorded by [`Self::register_closure_display_name`] for `closure_name`.
     pub(crate) fn take_closure_display_name(&mut self, closure_name: &str) -> Option<String> {
         self.closure_display_names.remove(closure_name)

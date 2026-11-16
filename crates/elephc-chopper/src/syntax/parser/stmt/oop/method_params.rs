@@ -64,6 +64,7 @@ pub(super) fn parse_method_params(
 ) -> Result<ParsedMethodParams, CompileError> {
     let mut params = Vec::new();
     let mut param_attributes = Vec::new();
+    let mut param_lines = Vec::new();
     let mut variadic = None;
     let mut variadic_by_ref = false;
     let mut variadic_type = None;
@@ -89,6 +90,7 @@ pub(super) fn parse_method_params(
         // PHP 8.0 parameter attributes — also covers attributes preceding a
         // promoted-property modifier such as `#[Inject] public Foo $f`.
         let attributes = crate::syntax::parser::parse_attribute_lists(tokens, pos)?;
+        param_lines.push(tokens.get(*pos).map_or(span.line, |(_, token)| token.span.line));
         // PHP accepts a parameter after the variadic and promoted properties on any method
         // through TOKEN_PARSE; both are rejected while COMPILING the declaration, so the
         // validation build must not fail them.
@@ -227,6 +229,7 @@ pub(super) fn parse_method_params(
             }
         }
     }
+    super::super::params::record_param_lines(span, param_lines);
 
     Ok((
         params,

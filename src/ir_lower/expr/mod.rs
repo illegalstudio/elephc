@@ -330,6 +330,7 @@ pub(super) use assoc_array_literals::{
     property_access_expr_type_for_ir,
 };
 pub(super) use call_return_types::call_return_type;
+pub(super) use scalar_param_guards::install_param_decl_lines;
 pub(super) use call_return_types::eir_user_function_return_type;
 pub(super) use method_metadata::closure_return_method_call_type;
 pub(super) use nullsafe_chain::result_storage_type as nullsafe_chain_result_storage_type;

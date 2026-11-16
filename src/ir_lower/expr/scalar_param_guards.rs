@@ -14,7 +14,9 @@
 //! - The check is one `Op::ScalarParamGuard` (no new basic block): codegen keeps the tag test
 //!   inline and the `TypeError` construction in the function's out-of-line cold section. For
 //!   `int`/`float` it also yields the converted value (PHP's numeric-string and float rules).
-//! - The message reports the call's line (`LoweringContext::call_site_span`).
+//! - The message reports the call's line (`LoweringContext::call_site_span`); an `int`
+//!   binding's precision deprecation reports the parameter's declaration line, which the parser
+//!   records per declaration (`install_param_decl_lines`).
 //! - Coercive mode rejects every non-scalar (`null`, arrays, objects other than a `Stringable`
 //!   bound to `string`, resources); `strict_types=1` additionally requires the exact scalar,
 //!   with PHP's single `int`-to-`float` widening.
@@ -25,6 +27,76 @@
 //!   optimizer keeps the call `may_throw`; both sides share `types::param_binding`'s predicates.
 
 use super::*;
+use std::collections::HashMap;
+
+thread_local! {
+    /// Start line of each parameter of the program's functions and methods, keyed by the
+    /// case-folded callee name the guard message uses (`f`, `C::m`); see
+    /// [`install_param_decl_lines`].
+    static PARAM_DECL_LINES: std::cell::RefCell<HashMap<String, Vec<u32>>> =
+        std::cell::RefCell::new(HashMap::new());
+}
+
+/// Restores the previously installed parameter lines when dropped.
+pub(crate) struct ParamDeclLinesScope {
+    previous: Option<HashMap<String, Vec<u32>>>,
+}
+
+impl Drop for ParamDeclLinesScope {
+    /// Reinstalls the table that was active before this lowering run.
+    fn drop(&mut self) {
+        if let Some(previous) = self.previous.take() {
+            PARAM_DECL_LINES.with(|slot| slot.replace(previous));
+        }
+    }
+}
+
+/// Installs, for one lowering run, the line where each declared parameter starts.
+///
+/// PHP raises the `int` precision deprecation ("Implicit conversion from float ... to int loses
+/// precision") while binding the parameter, so it reports the PARAMETER's line, not the call's.
+/// The AST keeps no span per parameter; the parser records the lines keyed by declaration.
+pub(crate) fn install_param_decl_lines(program: &[Stmt]) -> ParamDeclLinesScope {
+    let mut lines = HashMap::new();
+    for stmt in program {
+        match &stmt.kind {
+            StmtKind::FunctionDecl { name, .. } => {
+                if let Some(params) = crate::parser::stmt::params::param_lines(stmt.span) {
+                    lines.insert(crate::names::php_symbol_key(name), params);
+                }
+            }
+            StmtKind::ClassDecl { name, methods, .. } => {
+                for method in methods {
+                    if let Some(params) = crate::parser::stmt::params::param_lines(method.span) {
+                        lines.insert(
+                            crate::names::php_symbol_key(&format!("{name}::{}", method.name)),
+                            params,
+                        );
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    ParamDeclLinesScope { previous: Some(PARAM_DECL_LINES.with(|slot| slot.replace(lines))) }
+}
+
+/// Records the parameter lines of the closure at `span` under its PHP label, which is the
+/// callee name its guards report (`{closure:file:line}`).
+pub(super) fn register_closure_param_lines(display_name: &str, span: Span) {
+    if let Some(lines) = crate::parser::stmt::params::param_lines(span) {
+        PARAM_DECL_LINES.with(|slot| {
+            slot.borrow_mut().insert(crate::names::php_symbol_key(display_name), lines);
+        });
+    }
+}
+
+/// Returns the line where parameter `index` of `callee` is declared, if known.
+fn param_decl_line(callee: &str, index: usize) -> Option<u32> {
+    PARAM_DECL_LINES.with(|slot| {
+        slot.borrow().get(&crate::names::php_symbol_key(callee)).and_then(|lines| lines.get(index).copied())
+    })
+}
 
 /// Where the decision to guard one operand comes from.
 #[derive(Clone, Copy, Debug)]
@@ -135,13 +207,20 @@ pub(super) fn guard_scalar_param(
     );
     let data = ctx.intern_string(&encoded);
     if matches!(declared, PhpType::Int | PhpType::Float) {
+        // The instruction's span is the line its diagnostics report: an `int` binding's
+        // precision deprecation names the parameter's declaration line, as in PHP.
+        let diagnostic_span = match declared {
+            PhpType::Int => param_decl_line(&callable, index)
+                .map_or(span, |line| Span { line, end_line: line.max(span.end_line), ..span }),
+            _ => span,
+        };
         let converted = ctx.emit_value(
             Op::ScalarParamGuard,
             vec![value.value],
             Some(Immediate::Data(data)),
             declared,
             Op::ScalarParamGuard.default_effects(),
-            Some(span),
+            Some(diagnostic_span),
         );
         // The scalar replaces the box as the call operand, so an owned temporary box has no
         // reader left; a box rooted for the call (a borrow) retires with the call's owners.

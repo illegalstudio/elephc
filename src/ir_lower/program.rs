@@ -88,6 +88,7 @@ pub(crate) fn lower(
     web: bool,
 ) -> Result<Module, LoweringError> {
     crate::compiler_stack::with_compiler_stack(|| {
+        let _param_lines = super::expr::install_param_decl_lines(program);
         lower_on_compiler_stack(program, check_result, target, source_path, web)
     })
 }

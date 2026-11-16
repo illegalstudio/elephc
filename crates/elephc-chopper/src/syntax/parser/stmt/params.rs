@@ -930,6 +930,7 @@ pub(super) fn parse_params(
 > {
     let mut params = Vec::new();
     let mut param_attributes = Vec::new();
+    let mut param_lines = Vec::new();
     let mut variadic = None;
     let mut variadic_by_ref = false;
     let mut variadic_type = None;
@@ -951,6 +952,7 @@ pub(super) fn parse_params(
         }
         // PHP 8.0 parameter attributes (`function f(#[Sensitive] $s)`).
         let attributes = crate::syntax::parser::parse_attribute_lists(tokens, pos)?;
+        param_lines.push(tokens.get(*pos).map_or(span.line, |(_, token)| token.span.line));
         if !validation_only() && variadic.is_some() {
             return Err(CompileError::runtime_unsupported(
                 span,
@@ -1002,6 +1004,7 @@ pub(super) fn parse_params(
         param_attributes.push(attributes);
         params.push((name.to_owned(), type_ann, default, is_ref));
     }
+    record_param_lines(span, param_lines);
     Ok((
         params,
         param_attributes,
@@ -1009,6 +1012,27 @@ pub(super) fn parse_params(
         variadic_by_ref,
         variadic_type,
     ))
+}
+
+thread_local! {
+    /// Source line where each parameter starts (after its attributes), keyed by the start of
+    /// the declaration that owns the list; see [`param_lines`].
+    static PARAM_LINES: std::cell::RefCell<std::collections::HashMap<(u32, u32, u32), Vec<u32>>> =
+        std::cell::RefCell::new(std::collections::HashMap::new());
+}
+
+/// Records the start line of each parameter of the function, method or closure at `span`.
+pub(crate) fn record_param_lines(span: Span, lines: Vec<u32>) {
+    PARAM_LINES.with(|table| table.borrow_mut().insert((span.source_id(), span.line, span.col), lines));
+}
+
+/// Returns the line where each parameter of the function or method declared at `span` starts.
+///
+/// The AST keeps no span per parameter, and PHP reports a few parameter diagnostics (the `int`
+/// precision deprecation) on the parameter's own line, so the parser keeps the lines here,
+/// keyed by the declaration's start position and source.
+pub fn param_lines(span: Span) -> Option<Vec<u32>> {
+    PARAM_LINES.with(|table| table.borrow().get(&(span.source_id(), span.line, span.col)).cloned())
 }
 
 /// Parses a comma-separated list of `Name`s until a token that does not start a name is
