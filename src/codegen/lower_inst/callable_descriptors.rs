@@ -547,11 +547,7 @@ pub(super) fn codegen_can_access_member(
     declaring_class: &str,
     visibility: &Visibility,
 ) -> bool {
-    let current_class = ctx
-        .function
-        .name
-        .rsplit_once("::")
-        .map(|(class_name, _)| class_name);
+    let current_class = ctx.lexical_class();
     match visibility {
         Visibility::Public => true,
         Visibility::Protected => current_class.is_some_and(|current| {
