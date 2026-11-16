@@ -16,6 +16,7 @@ pub(crate) use arrays::numeric_unary::symbol as numeric_unary_symbol;
 pub(crate) mod checked_numeric_cast;
 mod buffers;
 pub(crate) mod semantic_guards;
+pub(crate) mod strict_comparators;
 pub(crate) mod strict_numeric;
 mod callables;
 /// PHP loose-equality (`==`) walkers for boxed Mixed values, arrays, and objects.

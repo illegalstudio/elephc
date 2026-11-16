@@ -116,6 +116,13 @@ impl Instruction {
         }
     }
 
+    /// Reads the original invocation policy without inheriting a synthetic emitter's source mode.
+    pub fn strict_comparisons(&self) -> bool {
+        matches!(self.immediate, Some(Immediate::RuntimeCall(RuntimeCallTarget::ProfiledFunction {
+            strict_comparisons: true, ..
+        })))
+    }
+
     /// Creates a new instruction payload with all semantic metadata attached.
     pub fn new(
         op: Op,

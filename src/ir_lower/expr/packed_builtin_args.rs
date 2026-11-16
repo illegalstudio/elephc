@@ -58,6 +58,8 @@ pub(super) fn lower_packed_builtin_call(
             target, arguments: RuntimeArgumentLayout::IndexedArray,
             php_only: crate::php_only::is_enabled(),
             strict_types: Some(crate::source::current_strict_types()),
+            strict_comparisons: crate::semantics::comparisons::active(
+                ctx.semantic_profile, ctx.builtin_source_mode()),
         })), result_type, effects, Some(expr.span));
     ctx.unguard_call_argument(array.value, expr.span);
     crate::ir_lower::ownership::release_if_owned(ctx, array, Some(expr.span));

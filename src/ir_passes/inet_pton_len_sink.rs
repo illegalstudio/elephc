@@ -99,12 +99,14 @@ fn specialize(function: &mut Function, candidate: InstId) -> bool {
             arguments,
             php_only,
             strict_types,
+            strict_comparisons,
             ..
         })) => RuntimeCallTarget::ProfiledFunction {
             target: RuntimeFnId::InetPtonLen,
             arguments: *arguments,
             php_only: *php_only,
             strict_types: *strict_types,
+            strict_comparisons: *strict_comparisons,
         },
         _ => RuntimeCallTarget::Function(RuntimeFnId::InetPtonLen),
     }));

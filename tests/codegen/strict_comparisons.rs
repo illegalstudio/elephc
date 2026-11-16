@@ -10,6 +10,20 @@
 use crate::support::*;
 use elephc_semantics::{SemanticProfile, StrictFeature};
 
+/// Shared entry and result ownership remains balanced in the accepted permissive runtime.
+#[test]
+fn test_strict_comparison_opaque_permissive_sort_owners() {
+    let source = include_str!("../fixtures/strict/comparator_sort_owners.php");
+    for optimize in [false, true] {
+        let output = StrictFixture::new(source).capture_staged_eval_runtime(
+            SemanticProfile::PERMISSIVE, optimize);
+        assert!(output.success, "opt={optimize}: {} {}", output.stdout, output.stderr);
+        assert_eq!(output.stdout, "1,2;1,2;1,2;label-1,label-2", "opt={optimize}: {}", output.stderr);
+        assert!(output.stderr.contains("HEAP DEBUG: leak summary: clean"),
+            "opt={optimize}: {}", output.stderr);
+    }
+}
+
 /// Isolates accepted and rejected search argument owners, including a permissive baseline.
 #[test]
 fn test_strict_comparison_native_search_owner_paths() {

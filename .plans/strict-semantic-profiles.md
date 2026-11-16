@@ -1095,3 +1095,81 @@ The production checked opaque fixture meets that intentional admission guard;
 its runtime heap validation remains part of the subsequent complete admission.
 The permissive opaque control and native callbacks are still running under
 jobdf0ec42d. Step113 native policy/guard changes remain separate and uncommitted.
+
+
+Step112 is signed commit c30508e838808305aa24ab4f0f2dea937e583c65; signature verified against the configured SSH key. Native changes remain uncommitted. Jobdf0ec42d passed all three new Magician regressions, then stopped at a private value_boxing module import in the native adapter. Switched to its public codegen_support re-export. Current jobb310c30b (wrapperPID3719329, same task log) retries only native/permissive runtime gates and compiler build; no new native result is claimed yet.
+
+
+Jobb310c30b passed the real permissive opaque ownership control in both optimizer
+modes with clean heaps (69.57s), native comparator guard emission on every target,
+real ELF/Mach-O cross-assembly on all five targets (0.12s), and the original-source
+EIR/optimizer policy control on all five targets (0.76s). The native result-kind
+fixture then stopped during catalog lowering: the minimal staged helper omitted
+the object-cast prelude needed by a dynamically discoverable settype wrapper.
+Switched that fixture to capture_staged_eval_runtime, which prepares those
+preludes. It executes native functions, not opaque source with a pending profile.
+
+Current job93fb92d4 (wrapperPID3738975, same task-owned log directory) retries the
+native callback fixture, the existing all-target set-comparator boundary test,
+permissive integer-coercion and snapshot/throw-cleanup regressions, then compiler
+build. No runtime result from these new gates is claimed yet. Prepared a separate
+unregistered PHP fixture comparator_native_results.php adding valid integer
+returns through mixed, descriptors, dynamic names and checked set operations.
+Integrate that fixture after the current frozen-input job, then verify those
+positive controls before native foundation commit or public admission.
+
+Read-only preparation for stronger Locals recovered original facta7883b31: its
+catch-name collision occurred in a permissive native/eval host control. It is
+not yet established to be a strict-locals-specific bug, and its root cause and
+fix remain unproven. Keep the original reproduction and separate it from policy
+choices about stable numeric bindings.
+
+
+Job93fb92d4 passed the full native callback fixture without optimizations, including
+expected output and clean heaps. With both optimizers enabled it stopped after
+I1,2; at an uncaught TypeError from the first boolean-result comparator. No113
+commit/admission followed. The baseline AST comparison boundary consulted only
+neutral policies for automatic modes; explicit comparator consumers had no role.
+Added Comparator metadata for usort/uasort/uksort/array_udiff/array_uintersect,
+shared comparison-consumer effects in builtin semantics and precise callback
+summaries, and a focused AST catch-pruning regression plus four-mode native
+execution control. This is a proposed repair pending verification.
+
+The full native fixture now uses comparator_native_results.php and includes
+positive original integer results through mixed, descriptors, dynamic names and
+checked set operations. Job6f08103b (wrapperPID3838754, same task-owned log) queues
+neutral contract roles, catch-pruning, four-mode native execution, five-target
+EIR effects, existing default set-operation boundary/coercion/throw controls,
+the full native callback fixture, affected eval owner/mode regressions, exporter
+and docs audits, restored default Magician archive and final compiler build.
+Sources are frozen; queue position2 behind full-date and generics Claude jobs.
+Comparisons remains publicly gated; the full user-requested implementation and
+all remaining feature admissions stay active after this component work.
+
+
+### Native comparator return foundation (113, verified)
+
+Final job6f08103b exited0 after5m46s. All twelve exact single-test gates passed:
+neutral contract roles; AST catch retention; native execution under all four
+AST/EIR combinations (1.62s); all-five-target EIR source policy and may-throw
+requirements (0.71s); all-target set-operation boundary; default integer-result
+coercion (0.95s); snapshot/throw cleanup (4.43s); full native callback positive
+and negative return cases in both optimizer modes with clean heaps (10.17s);
+and four affected Magician owner/mode gates. The full native cases cover direct
+integer, mixed integer, descriptor and dynamic-name integer returns, both checked
+set operations, rejected bool/float/string/object returns and destructor timing.
+
+Exporter build and all six generation/audit commands passed, without generated
+docs/registry changes. The default Magician archive was restored and final
+compiler build passed. The inherited AtomicU64 deprecation remains. Earlier
+jobb310c30b passed permissive opaque sort ownership in both modes with clean
+heaps (69.57s), native guard emission and actual assembly for all five targets.
+Assembly comments and diff hygiene pass. The neutral Comparator role and shared
+consumer effects preserve TypeError independently of pure callback summaries.
+
+This completes the native component, with public Comparisons admission still
+gated. Next: admit the candidate profile, switch pending-feature controls to the
+next unfinished guarantee, validate native value classes and public callable,
+eval, REPL and library hosts, then continue stronger Locals and the remaining
+six unimplemented feature admissions. Remove the completed task-owned validation
+directory after preserving the verified evidence in Code Journal.

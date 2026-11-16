@@ -35,7 +35,8 @@ pub(in crate::optimize) fn function_call_effect(name: &str, args: &[Expr]) -> Ef
                     .get(callback_index)
                     .map(expr_call_effect)
                     .unwrap_or_else(conservative_call_effect);
-                return Effect::from_eir(intrinsic_effects).combine(callback_effect);
+                let boundary = crate::builtins::semantics::comparison_boundary_effects(def, &input);
+                return Effect::from_eir(intrinsic_effects | boundary).combine(callback_effect);
             }
             Effect::from_eir(effects)
         } else {

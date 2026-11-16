@@ -177,6 +177,7 @@ pub(super) fn check(expr: &Expr, class: Option<&str>, definitions: &Definitions,
             if let Some(policy) = builtin.spec.comparison_policy() {
                 let rejected = match policy {
                     elephc_builtin_contract::ComparisonPolicy::ComparatorRequired { .. } => true,
+                    elephc_builtin_contract::ComparisonPolicy::Comparator { .. } => false,
                     elephc_builtin_contract::ComparisonPolicy::Identity { parameter } => {
                         if let Some(argument) = sig.params.iter().position(|(name, _)| name == parameter)
                             .and_then(|index| plan.known_regular_argument(sig, index)) {

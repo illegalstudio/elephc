@@ -5962,6 +5962,8 @@ impl crate::builtins::semantics::BuiltinLoweringContext for LoweringContext<'_, 
                     arguments: crate::ir::RuntimeArgumentLayout::Values,
                     php_only: crate::php_only::is_enabled(),
                     strict_types: Some(crate::source::current_strict_types()),
+                    strict_comparisons: crate::semantics::comparisons::active(
+                        self.semantic_profile, self.builtin_source_mode()),
                 }
             }
             target => target,

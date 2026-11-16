@@ -38,6 +38,7 @@ macro_rules! supported_target_cases {
 }
 
 mod aggregate_operand_owners;
+mod strict_comparator_callbacks;
 mod boxed_operators;
 mod loose_comparison_batch;
 mod argument_evaluation_owners;

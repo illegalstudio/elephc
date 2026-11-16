@@ -60,6 +60,7 @@ mod mixed_array_argument_guard;
 mod callback_builtins;
 mod multisort;
 mod sort_dispatch;
+mod comparator_results;
 mod type_validation;
 mod callback_binding;
 mod callback_sources;

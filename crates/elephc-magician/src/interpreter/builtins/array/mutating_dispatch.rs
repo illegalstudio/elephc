@@ -20,7 +20,8 @@ pub(in crate::interpreter) fn eval_builtin_array_mutating_declared_call(
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     if context.semantic_profile().contains(elephc_semantics::StrictFeature::Coercions)
         || context.semantic_profile().contains(elephc_semantics::StrictFeature::Comparisons)
-            && elephc_builtin_contract::lookup(name).is_some_and(|contract| contract.comparison_policy().is_some())
+            && elephc_builtin_contract::lookup(name).and_then(|contract| contract.comparison_policy())
+                .is_some_and(|policy| policy.requires_argument_check())
     {
         let modes = CallArgumentModes::for_builtin(name);
         return with_eval_call_arguments_with_modes(args, &modes, context, scope, values,

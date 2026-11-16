@@ -203,6 +203,8 @@ pub enum RuntimeCallTarget {
         /// PHP parameter strictness at a direct call site; None inherits the invoking caller.
         /// Generated callable wrappers defer this choice instead of capturing their creation site.
         strict_types: Option<bool>,
+        /// Original source comparison guarantees, retained across synthetic callback adapters.
+        strict_comparisons: bool,
     },
 }
 

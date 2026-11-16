@@ -26,6 +26,7 @@ pub(super) fn validate(
             match value { Some(value) => values.truthy(value)?, None => false }
         }
         elephc_builtin_contract::ComparisonPolicy::ComparatorRequired { .. } => false,
+        elephc_builtin_contract::ComparisonPolicy::Comparator { .. } => true,
     };
     if accepted { Ok(()) }
     else { eval_throw_type_error(&policy.message(specification.name), context, values) }

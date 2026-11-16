@@ -588,6 +588,7 @@ impl crate::builtins::semantics::BuiltinLoweringContext
                     arguments: crate::ir::RuntimeArgumentLayout::Values,
                     php_only: self.php_only,
                     strict_types: None,
+                    strict_comparisons: self.semantic_profile.contains(elephc_semantics::StrictFeature::Comparisons),
                 }
             }
             target => target,

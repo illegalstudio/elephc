@@ -22,6 +22,10 @@ use crate::types::PhpType;
 mod numeric;
 pub use numeric::normalize_numeric_result;
 
+#[path = "semantics/comparisons.rs"]
+mod comparisons;
+pub use comparisons::comparison_boundary_effects;
+
 #[cfg(test)]
 #[path = "semantics/profile_tests.rs"]
 mod profile_tests;
@@ -882,6 +886,7 @@ pub fn resolve_builtin_effects(
         BuiltinEffects::Static(effects) => effects,
         BuiltinEffects::Shared(resolve) => resolve(input),
     };
+    effects |= comparison_boundary_effects(def, input);
     let weak_float_int = def
         .params
         .iter()

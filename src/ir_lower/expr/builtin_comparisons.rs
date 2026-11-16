@@ -17,6 +17,7 @@ pub(super) fn validate(
 ) {
     if !crate::semantics::comparisons::active(ctx.semantic_profile, ctx.builtin_source_mode()) { return; }
     let Some(policy) = definition.spec.comparison_policy() else { return; };
+    if !policy.requires_argument_check() { return; }
     let pins = pin_in_flight_owners(ctx, operands, span);
     let accepted = match policy {
         elephc_builtin_contract::ComparisonPolicy::Identity { parameter } => {
@@ -30,6 +31,8 @@ pub(super) fn validate(
         }
         elephc_builtin_contract::ComparisonPolicy::ComparatorRequired { .. } =>
             emit_bool_literal(ctx, false, Some(span)),
+        elephc_builtin_contract::ComparisonPolicy::Comparator { .. } =>
+            unreachable!("callback results are checked at their invocation boundary"),
     };
     crate::ir_lower::semantic_guards::require(ctx, accepted, Op::ThrowTypeError,
         &policy.message(definition.name), Some(span));
