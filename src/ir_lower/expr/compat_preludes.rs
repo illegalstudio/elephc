@@ -531,9 +531,11 @@ pub(super) fn lower_backend_gap_builtin_shape(
         ));
     }
     // A gradual or hash `array_rand()`: the native helper only walks a dense indexed array, and a
-    // hash's key is as likely to be a string. The prelude helper collects the keys first.
+    // hash's key is as likely to be a string. The prelude helper collects the keys first. It
+    // answers ONE key, so only the one-argument form goes there: a `$num` would be dropped.
     if builtin == "array_rand"
-        && (1..=2).contains(&args.len())
+        && args.len() == 1
+        && !is_spread_arg(&args[0])
         && !matches!(
             materialized_expr_type_for_merge(ctx, &args[0]).codegen_repr(),
             PhpType::Array(_)
