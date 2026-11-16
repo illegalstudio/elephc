@@ -463,3 +463,26 @@ echo yn(is_a($a, 'Closure')), yn(is_a($a, 'Closur')), yn(is_subclass_of($a, 'Clo
 "#);
     assert_eq!(out, "yynyyn yynyyn nnnnnn yn yyn nnn ynn\n");
 }
+
+/// A LITERAL target holding a NUL byte names no class either. With eval in the program, a name
+/// subject that no compiled class matches goes to the eval bridge, whose candidate list is
+/// NUL-separated, so `"Ghost\0Dyn"` matched the eval class `Dyn`. Expected output measured with
+/// php 8.5.12.
+#[test]
+fn test_is_a_literal_target_with_nul_byte_and_eval_classes() {
+    let out = compile_and_run_per_argv(
+        r#"<?php
+class Foo {}
+eval('class Dyn extends Foo {}');
+function probe(string $n): string {
+    $r = (is_a($n, 'Foo', true) ? "y" : "n") . (is_subclass_of($n, 'Foo') ? "y" : "n") . " ";
+    $r .= (is_a($n, "Ghost\0Dyn", true) ? "y" : "n") . (is_a($n, "Dyn\0", true) ? "y" : "n") . (is_a($n, "\0Dyn", true) ? "y" : "n");
+    $r .= (is_a($n, "Foo\0Dyn", true) ? "y" : "n") . (is_subclass_of($n, "Foo\0Ghost") ? "y" : "n") . (is_subclass_of($n, "Ghost\0Foo") ? "y" : "n");
+    return $r . "\n";
+}
+echo probe($argv[1] ?? 'Dyn');
+"#,
+        &[&[], &["Foo"]],
+    );
+    assert_eq!(out, ["yy nnnnnn\n", "yn nnnnnn\n"]);
+}

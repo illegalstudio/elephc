@@ -13,8 +13,8 @@
 //!   An object subject dispatches on its runtime class id the same way; a callable descriptor
 //!   (a callable, or a Mixed with runtime tag 10) is a `Closure`, with no other ancestor, only
 //!   when it carries an object handle: an implicit string or array callable is no object.
-//! - A runtime target holding a NUL byte never reaches the eval bridge, which splits its
-//!   candidate list at NUL bytes.
+//! - A target holding a NUL byte, literal or runtime, never reaches the eval bridge, which
+//!   splits its candidate list at NUL bytes.
 
 use super::*;
 
@@ -28,7 +28,9 @@ pub(super) fn lower(
         Some(value) => const_bool_operand(ctx, value)?,
         None => Some(exclude_self),
     };
-    if literal_flag == Some(false) {
+    // No class name holds a NUL byte, so such a target names no class. The eval bridge below
+    // reads its candidate list as NUL-separated names and would match a piece of it.
+    if literal_flag == Some(false) || target.contains('\0') {
         emit_bool_result(ctx, false);
         return store_if_result(ctx, inst);
     }
