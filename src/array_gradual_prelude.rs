@@ -530,6 +530,23 @@ fn decl_fn_elephc_array_reverse_preserve_gradual() -> Stmt {
 
 /// `__elephc_array_pad_gradual` — transcribed from the PHP form.
 fn decl_fn_elephc_array_pad_gradual() -> Stmt {
+    // php 8.0 to 8.2 refused to pad by more than 1048576 elements in one call; 8.3 dropped the
+    // limit, so the check exists only for an older selected profile (the sibling
+    // `__elephc_array_pad_values` has none, and both must answer one call alike).
+    let length_limit = if crate::codegen_support::compile_php_version()
+        < crate::web_prelude::PhpVersion::Php83
+    {
+        vec![s_if(
+            e_binop(e_binop(e_var("target"), BinOp::Sub, e_var("size")), BinOp::Gt, e_int(1048576)),
+            vec![
+                s_throw(e_new("ValueError", vec![e_str("array_pad(): Argument #2 ($length) must be less than or equal to 1048576")])),
+            ],
+            vec![],
+            None,
+        )]
+    } else {
+        Vec::new()
+    };
     function("__elephc_array_pad_gradual")
         .param_untyped("array")
         .param_untyped("length")
@@ -547,14 +564,10 @@ fn decl_fn_elephc_array_pad_gradual() -> Stmt {
                 vec![],
                 None,
             ),
-            s_if(
-                e_binop(e_binop(e_var("target"), BinOp::Sub, e_var("size")), BinOp::Gt, e_int(1048576)),
-                vec![
-                    s_throw(e_new("ValueError", vec![e_str("array_pad(): Argument #2 ($length) must be less than or equal to 1048576")])),
-                ],
-                vec![],
-                None,
-            ),
+        ]
+        .into_iter()
+        .chain(length_limit)
+        .chain([
             s_assign("result", e_array(vec![])),
             s_if(
                 e_binop(e_var("length"), BinOp::Lt, e_int(0)),
@@ -590,6 +603,7 @@ fn decl_fn_elephc_array_pad_gradual() -> Stmt {
             ),
             s_return(e_var("result")),
         ])
+        .collect::<Vec<_>>())
         .build()
 }
 

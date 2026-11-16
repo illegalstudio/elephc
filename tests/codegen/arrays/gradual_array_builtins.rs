@@ -341,6 +341,52 @@ TypeError: array_merge_recursive(): Argument #2 must be of type array, int given
     );
 }
 
+/// `array_sum()`/`array_product()` skip an array or object element with php's warning, and count
+/// a non-numeric string as 0 with the same warning, where the plain operator throws a TypeError.
+/// `php -n` 8.5.10: `int(4)`, `int(1)`, `int(0)` and the three `... is not supported on type`
+/// warnings below.
+#[test]
+fn test_array_sum_and_product_skip_unsupported_elements() {
+    let output = crate::support::compile_and_run_capture_merged(
+        r##"<?php
+function sum_of($values) { return array_sum($values); }
+function product_of($values) { return array_product($values); }
+var_dump(sum_of([1, [2], 3]));
+var_dump(sum_of([1, "abc"]));
+var_dump(product_of([2, "x", 3]));
+"##,
+    );
+    let text = output.stdout;
+    for expected in [
+        "array_sum(): Addition is not supported on type array",
+        "int(4)",
+        "array_sum(): Addition is not supported on type string",
+        "int(1)",
+        "array_product(): Multiplication is not supported on type string",
+        "int(0)",
+    ] {
+        assert!(text.contains(expected), "missing {expected:?} in {text:?}");
+    }
+}
+
+/// php 8.3 dropped `array_pad()`'s 1048576-element limit: `php -n` 8.5.10 pads `[1]` to
+/// 1200000 elements. The run-time helper still threw the 8.2 `ValueError`.
+#[test]
+fn test_gradual_array_pad_has_no_element_limit() {
+    let out = crate::support::compile_and_run_with_heap_size(
+        r##"<?php
+class PadHolder {
+    protected $items = [];
+    public function __construct($items) { $this->items = is_array($items) ? $items : (array) $items; }
+    public function pad($size) { return array_pad($this->items, $size, 0); }
+}
+echo count((new PadHolder([1]))->pad(1200000)), "\n";
+"##,
+        1 << 30,
+    );
+    assert_eq!(out, "1200000\n");
+}
+
 /// A non-array operand raises php's own TypeError when the call runs, not a compile-time refusal.
 #[test]
 fn test_gradual_array_operand_errors_are_phps() {
