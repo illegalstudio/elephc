@@ -22,7 +22,7 @@ fn lower_socket_call_with_place_outputs(
 ) -> Option<LoweredValue> {
     let outputs: [usize; 2] = match php_symbol_key(name.as_str().trim_start_matches('\\')).as_str() {
         "fsockopen" | "pfsockopen" => [2, 3],
-        "stream_socket_client" => [1, 2],
+        "stream_socket_client" | "stream_socket_server" => [1, 2],
         _ => return None,
     };
     let is_place = |arg: &Expr| {

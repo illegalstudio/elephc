@@ -127,7 +127,11 @@ pub(in crate::interpreter) fn eval_stream_socket_client_with_error_result(
         Ok(id) => Ok((values.resource(id)?, 0, String::new())),
         Err(error) => {
             let error_code = i64::from(error.raw_os_error().unwrap_or(0));
-            Ok((values.bool_value(false)?, error_code, error.to_string()))
+            Ok((
+                values.bool_value(false)?,
+                error_code,
+                super::fsockopen::eval_socket_error_message(&error),
+            ))
         }
     }
 }

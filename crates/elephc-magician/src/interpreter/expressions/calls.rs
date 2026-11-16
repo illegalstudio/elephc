@@ -114,11 +114,20 @@ fn eval_call_with_error_name(
     if name == "exec" && args.len() > 1 {
         return eval_builtin_exec_call(args, context, scope, values);
     }
+    // `passthru($command, &$result_code)`: the same reference-target need as `exec` above.
+    if name == "passthru" && args.len() > 1 {
+        return eval_builtin_passthru_call(args, context, scope, values);
+    }
     // Same shape as `fsockopen` above, and intercepted for the same reason: PHP writes
     // `$error_code`/`$error_message` through the caller's own cells, and only this path still
     // holds them.
     if name == "stream_socket_client" {
         return eval_builtin_stream_socket_client_call(args, context, scope, values);
+    }
+    // `stream_socket_server($address, &$error_code, &$error_message)`: the same reference-target
+    // need, once the one-argument form is left behind.
+    if name == "stream_socket_server" && args.len() > 1 {
+        return eval_builtin_stream_socket_server_call(args, context, scope, values);
     }
     // `headers_sent($file, $line)` (Symfony's `NativeSessionStorage::start()`): the evaluated-
     // argument route reads the two outputs as values and writes nothing back, so a call that

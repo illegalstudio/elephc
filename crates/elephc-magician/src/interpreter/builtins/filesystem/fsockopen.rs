@@ -121,8 +121,20 @@ pub(in crate::interpreter) fn eval_fsockopen_with_error_result(
         Ok(id) => Ok((values.resource(id)?, 0, String::new())),
         Err(error) => {
             let error_code = i64::from(error.raw_os_error().unwrap_or(0));
-            Ok((values.bool_value(false)?, error_code, error.to_string()))
+            Ok((values.bool_value(false)?, error_code, eval_socket_error_message(&error)))
         }
+    }
+}
+
+/// The text php writes to a socket builtin's `$error_message`: the plain `strerror()` text.
+///
+/// Rust renders an OS error as `Connection refused (os error 111)`; php (and the compiled path)
+/// write only `Connection refused`.
+pub(in crate::interpreter) fn eval_socket_error_message(error: &std::io::Error) -> String {
+    let text = error.to_string();
+    match (error.raw_os_error(), text.rfind(" (os error ")) {
+        (Some(_), Some(suffix)) => text[..suffix].to_string(),
+        _ => text,
     }
 }
 

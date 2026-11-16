@@ -113,6 +113,40 @@ pub(in crate::interpreter) fn eval_builtin_exec_call(
     })
 }
 
+/// Evaluates `passthru($command, &$result_code)` with a writable reference target.
+///
+/// The command's output is echoed as the one-argument form does; the exit status lands in
+/// `$result_code`, and the call answers `null`, as in php's `php_exec` with `PHP_PASSTHRU`.
+pub(in crate::interpreter) fn eval_builtin_passthru_call(
+    args: &[EvalCallArg],
+    context: &mut ElephcEvalContext,
+    scope: &mut ElephcEvalScope,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    with_eval_call_arguments(args, context, scope, values, |evaluated, context, _, values| {
+        let (bound, _) =
+            bind_evaluated_ref_builtin_args(&["command", "result_code"], &evaluated, false)?;
+        let command = required_evaluated_ref_arg(&bound, 0)?.value;
+        let status = optional_evaluated_ref_arg(&bound, 1);
+        let command = eval_shell_command_string(command, values)?;
+        let (outcome, exit_code) = eval_shell_command_output_with_status(&command);
+        let result = eval_process_outcome_result("passthru", outcome, values)?;
+        if let Some(argument) = status {
+            if let Some(target) = argument.ref_target.clone() {
+                let code = values.int(exit_code)?;
+                eval_write_direct_ref_target(
+                    &target,
+                    code,
+                    context,
+                    values,
+                    Some(ScopeCellOwnership::Owned),
+                )?;
+            }
+        }
+        Ok(result)
+    })
+}
+
 /// Builds the `$output` array: a copy of the current value when it is an array, plus `lines`.
 fn eval_exec_append_lines(
     current: RuntimeCellHandle,

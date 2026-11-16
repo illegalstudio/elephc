@@ -181,6 +181,7 @@ pub(in crate::interpreter) use stream_socket_accept::{
     eval_builtin_stream_socket_accept_call, eval_stream_socket_accept_with_peer_result,
 };
 pub(in crate::interpreter) use stream_socket_client::eval_builtin_stream_socket_client_call;
+pub(in crate::interpreter) use stream_socket_server::eval_builtin_stream_socket_server_call;
 pub(in crate::interpreter) use stream_socket_recvfrom::{
     eval_builtin_stream_socket_recvfrom_call, eval_stream_socket_recvfrom_with_address_result,
 };

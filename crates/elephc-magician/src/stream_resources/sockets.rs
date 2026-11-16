@@ -14,8 +14,14 @@ impl EvalStreamResources {
 
     /// Opens a TCP listener resource for `stream_socket_server()`.
     pub(crate) fn open_tcp_listener(&mut self, address: &str) -> Option<i64> {
-        let listener = TcpListener::bind(eval_tcp_address(address)).ok()?;
-        let local = listener.local_addr().ok()?.to_string();
+        self.open_tcp_listener_result(address).ok()
+    }
+
+    /// Opens a TCP listener resource and preserves the host I/O error on failure, which
+    /// `stream_socket_server()` reports through `$error_code` and `$error_message`.
+    pub(crate) fn open_tcp_listener_result(&mut self, address: &str) -> io::Result<i64> {
+        let listener = TcpListener::bind(eval_tcp_address(address))?;
+        let local = listener.local_addr()?.to_string();
         let id = self.take_next_id();
         self.resource_types.insert(id, "stream");
         self.socket_names.insert(
@@ -26,7 +32,7 @@ impl EvalStreamResources {
             },
         );
         self.socket_listeners.insert(id, listener);
-        Some(id)
+        Ok(id)
     }
 
     /// Opens a connected TCP stream resource.
