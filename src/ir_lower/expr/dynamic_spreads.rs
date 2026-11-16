@@ -108,6 +108,7 @@ pub(super) fn lower_boxed_spread_args(
     let check_in_order = !hidden && !preserve_values;
     let mut converted: Vec<Option<ValueId>> = vec![None; state.slots.len()];
     let mut guarded = vec![false; state.slots.len()];
+    let mut string_slots: Vec<Option<String>> = vec![None; state.slots.len()];
     let bound = check_in_order.then(|| emit_unpassed_parameter_checks(ctx, sig, &state, span));
     for (index, filled) in state.filled.iter().enumerate() {
         if hidden {
@@ -166,6 +167,17 @@ pub(super) fn lower_boxed_spread_args(
                 converted[index] = super::scalar_param_guards::guard_scalar_param(
                     ctx, sig, index, value, source, guard_span, false,
                 ).map(|value| value.value);
+                if converted[index].is_none() && sig.params[index].1.codegen_repr() == PhpType::Str {
+                    // PHP converts an accepted argument while binding it, before the next
+                    // parameter is checked: a `Stringable`'s `__toString()` runs (and may throw)
+                    // ahead of a later parameter's TypeError. The string is rooted in its own
+                    // slot, so a later throw releases it.
+                    let string = coerce_to_string_at_span(ctx, value, Some(guard_span));
+                    let string_slot = ctx.declare_hidden_temp(PhpType::Str);
+                    store_value_into_temp(ctx, &string_slot, PhpType::Str, string, span);
+                    register_owned_call_operand(ctx, ctx.local_slots[&string_slot], span);
+                    string_slots[index] = Some(string_slot);
+                }
             }
         }
     }
@@ -175,7 +187,8 @@ pub(super) fn lower_boxed_spread_args(
             operands.push(value);
             continue;
         }
-        let value = ctx.load_local(&slot, Some(span));
+        let slot = string_slots[index].as_ref().unwrap_or(slot);
+        let value = ctx.load_local(slot, Some(span));
         let owned = crate::ir_lower::ownership::acquire_if_refcounted(ctx, value, Some(span));
         ctx.builder.set_value_ownership(owned.value, Ownership::Owned);
         operands.push(owned.value);
@@ -196,6 +209,9 @@ pub(super) fn lower_boxed_spread_args(
         retire_slot(ctx, collector, span);
     }
     for slot in state.slots.into_iter().rev() {
+        retire_slot(ctx, &slot, span);
+    }
+    for slot in string_slots.into_iter().flatten().rev() {
         retire_slot(ctx, &slot, span);
     }
     for arg in staged.into_iter().rev() {

@@ -512,3 +512,28 @@ echo $n, "\n";
     assert_eq!(output.stdout, "9\n");
     assert!(output.stderr.contains("leak summary: clean"), "{}", output.stderr);
 }
+
+/// PHP converts an accepted `string` argument while binding it, so in a runtime unpack a
+/// `Stringable`'s `__toString()` runs (and its exception wins) before a later parameter is
+/// checked or found missing. The in-order unpack check used to accept the object and only
+/// convert it after every parameter was checked, skipping `__toString()` whenever a later
+/// parameter threw (review of the unpack order).
+#[test]
+fn test_runtime_unpack_converts_a_stringable_before_the_next_parameter() {
+    let out = compile_and_run(
+        r#"<?php
+function box(mixed $v): mixed { return $v; }
+function show(Throwable $e): void { echo get_class($e), ": ", str_replace(__FILE__, "F", $e->getMessage()), "\n"; }
+class Name { public function __toString(): string { echo "toString\n"; return "name"; } }
+class Bad { public function __toString(): string { throw new RuntimeException("from toString"); } }
+function f(string $s, int $n) { return "f:" . $s . $n; }
+function g(int $n, string $s, int $m) { return "g"; }
+try { echo f(...box([new Name(), null])), "\n"; } catch (Throwable $e) { show($e); }
+try { echo f(...box([new Bad(), null])), "\n"; } catch (Throwable $e) { show($e); }
+try { echo f(...box([new Name(), 3])), "\n"; } catch (Throwable $e) { show($e); }
+try { echo g(...box([1, new Name()])), "\n"; } catch (Throwable $e) { show($e); }
+try { echo f(box(new Bad()), box(null)), "\n"; } catch (Throwable $e) { show($e); }
+"#,
+    );
+    assert_eq!(out, "toString\nTypeError: f(): Argument #2 ($n) must be of type int, null given, called in F on line 8\nRuntimeException: from toString\ntoString\nf:name3\ntoString\nArgumentCountError: Too few arguments to function g(), 2 passed in F on line 11 and exactly 3 expected\nRuntimeException: from toString\n");
+}
