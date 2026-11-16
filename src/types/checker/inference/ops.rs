@@ -567,6 +567,11 @@ impl Checker {
         let prev_by_ref_return = self.current_by_ref_return;
         self.current_by_ref_return =
             matches!(&expr.kind, ExprKind::Closure { by_ref_return: true, .. });
+        let prev_return_declares_callable = std::mem::replace(
+            &mut self.current_return_declares_callable,
+            matches!(&expr.kind, ExprKind::Closure { return_type: Some(declared), .. }
+                if crate::types::checker::type_expr_declares_callable(declared)),
+        );
         let previous_loop_storage_scope = self.current_loop_storage_scope.clone();
         let loop_storage_scope = crate::types::nested_loop_storage_scope(
             &previous_loop_storage_scope,
@@ -611,6 +616,7 @@ impl Checker {
         self.end_promotable_walk(&closure_scope);
         self.current_loop_storage_scope = previous_loop_storage_scope;
         self.current_by_ref_return = prev_by_ref_return;
+        self.current_return_declares_callable = prev_return_declares_callable;
         self.closure_depth -= 1;
         body_result?;
         self.resolve_closure_return_type(body, return_type, expr.span, &closure_sig.env)?;

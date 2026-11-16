@@ -117,20 +117,16 @@ impl PhpType {
         matches!(self, Self::Callable | Self::DeclaredCallable)
     }
 
-    /// Returns whether this declared parameter type is `callable`, `?callable`, or a union of
-    /// `callable` with members PHP checks by exact membership (`null`, `false`, arrays,
-    /// objects): a binding of it keeps the PHP value and checks it on entry.
+    /// Returns whether this declared parameter type is `callable` or a union with `callable`:
+    /// a binding of it keeps the PHP value, so PHP's binding check runs on entry.
     ///
-    /// A union that also names a coercible scalar (`int|callable`, `string|callable`) is not
-    /// one: PHP converts a non-callable argument to that scalar, which an entry predicate
-    /// cannot do, so such unions keep the descriptor-typed `callable` member instead (see
-    /// `callable_union_needs_descriptor`).
+    /// A union that also names a coercible scalar (`int|callable`) is checked against its
+    /// members too, but a value one of them accepts is not converted (see
+    /// `callable_union_needs_descriptor` for its stricter compile-time rules).
     pub(crate) fn declares_callable(&self) -> bool {
         match self {
             Self::DeclaredCallable => true,
-            Self::Union(members) => {
-                members.contains(&Self::DeclaredCallable) && !Self::callable_union_needs_descriptor(members)
-            }
+            Self::Union(members) => members.contains(&Self::DeclaredCallable),
             _ => false,
         }
     }

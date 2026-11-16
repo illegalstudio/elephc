@@ -22,6 +22,22 @@ pub(super) fn coerce_to_return_type(
     let return_php_type = ctx.return_php_type.clone();
     let value = ctx.retype_packed_address_for_pointer_sink(value, &return_php_type, span);
     crate::ir_lower::object_boundaries::guard_return(ctx, value, span);
+    // A declared `callable` return keeps the PHP value, so PHP's return check runs here.
+    if ctx.return_type_is_declared && return_php_type.declares_callable() {
+        let display = ctx
+            .builder
+            .function()
+            .display_name
+            .clone()
+            .unwrap_or_else(|| ctx.owner_name().to_string());
+        crate::ir_lower::expr::guard_declared_callable_return(
+            ctx,
+            &display,
+            value,
+            &return_php_type,
+            span.unwrap_or_else(Span::dummy),
+        );
+    }
     if let Some(value) = coerce_container_to_return_type(ctx, value, span) {
         return value;
     }

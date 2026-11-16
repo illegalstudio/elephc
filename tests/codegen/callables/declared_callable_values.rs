@@ -171,3 +171,55 @@ echo u(5), " ", u(fn() => 1), "\n";
          v(): Argument #1 must be of type callable, array given\n2\nint object\n"
     );
 }
+
+/// Verifies a `callable` return type checks the returned value, that a nullable variadic
+/// `?callable ...` admits null while refusing other non-callables, and that a scalar union
+/// (`int|callable`) reached through a `mixed` forwarder still refuses a non-callable array.
+///
+/// These used to pass unchecked: a `callable` return accepted any string, the variadic entry
+/// guard refused null for `?callable`, and the scalar union skipped the entry check.
+#[test]
+fn test_declared_callable_returns_nullable_variadics_and_scalar_unions_check_values() {
+    let out = compile_and_run(
+        r#"<?php
+function bad(int $argc): callable { $n = $argc > 0 ? "missing_function" : "strlen"; return $n; }
+try { bad($argc); } catch (TypeError $e) { echo $e->getMessage(), "\n"; }
+function good(): callable { return "strlen"; }
+echo good()("abc"), "\n";
+function take(?callable ...$fs): int { return count($fs); }
+echo take(null, "strlen"), "\n";
+function pick(int $n): mixed { return $n > 0 ? 5 : null; }
+$bad = pick($argc);
+try { take(null, $bad); } catch (TypeError $e) { echo $e->getMessage(), "\n"; }
+function either(callable|false ...$fs): int { return count($fs); }
+echo either(false, "strlen"), "\n";
+function scalar(int|callable $v): string { return gettype($v); }
+function forward(mixed $v): string { return scalar($v); }
+echo forward(7), " ", forward("strlen"), "\n";
+try { echo forward([]), "\n"; } catch (TypeError $e) { echo $e->getMessage(), "\n"; }
+"#,
+    );
+    assert_eq!(
+        out,
+        "bad(): Return value must be of type callable, string returned\n3\n2\n\
+         take(): Argument #2 must be of type ?callable, int given\n2\ninteger string\n\
+         scalar(): Argument #1 ($v) must be of type callable|int, array given\n"
+    );
+}
+
+/// Verifies a native method reached from eval through a Closure descriptor resolves a callback
+/// name that only eval declared when it binds to a declared `callable` parameter.
+///
+/// The method invoker built for an eval-created descriptor used to skip the eval-callable
+/// conversion, so the eval-only function name was refused as not callable.
+#[test]
+fn test_declared_callable_from_eval_method_descriptor_sees_eval_functions() {
+    let out = compile_and_run(
+        r#"<?php
+class Target { public static function run(callable $f): string { return $f(); } }
+function invoke(Closure $c, string $name): string { return $c($name); }
+eval('function evalOnlyCallback(): string { return "E"; } echo invoke(Closure::fromCallable(["Target", "run"]), "evalOnlyCallback"), "\n";');
+"#,
+    );
+    assert_eq!(out, "E\n");
+}

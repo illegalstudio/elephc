@@ -118,6 +118,10 @@ fn declared_object_reference_can_throw(signature: &FunctionSig) -> bool {
     if signature.params.iter().any(|(_, ty)| ty == &PhpType::False) {
         return true;
     }
+    // A declared `callable` return checks the returned value before it leaves the body.
+    if signature.declared_return && signature.return_type.declares_callable() {
+        return true;
+    }
     // A by-value object parameter also runs the runtime union guard for a
     // `Class|false` / `Class|null` argument before entering the body. Treat every
     // object parameter conservatively so try/catch DCE keeps its handler reachable.
