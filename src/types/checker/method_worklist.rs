@@ -342,9 +342,69 @@ fn name_keyed_rest(
     Some(rest)
 }
 
+/// The last name segments, lowercased, of every free function whose signature differs between
+/// two snapshots of the checker's function table (added and removed ones included): a body names
+/// a function by that segment, which is how its tokens read the call.
+pub(super) fn moved_function_names(
+    before: &HashMap<String, crate::types::FunctionSig>,
+    after: &HashMap<String, crate::types::FunctionSig>,
+) -> Vec<String> {
+    let last_segment = |name: &str| name.rsplit('\\').next().unwrap_or(name).to_ascii_lowercase();
+    let mut names: Vec<String> = after
+        .iter()
+        .filter(|(name, signature)| before.get(*name) != Some(*signature))
+        .map(|(name, _)| last_segment(name))
+        .chain(before.keys().filter(|name| !after.contains_key(*name)).map(|name| last_segment(name)))
+        .collect();
+    names.sort();
+    names.dedup();
+    names
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A body that calls a free function re-specialized during the pass walks again: the class
+    /// table alone moved nothing, so the method used to be replayed with the result it computed
+    /// against the function's previous parameter and return types.
+    #[test]
+    fn a_function_whose_signature_moved_invalidates_its_callers() {
+        let sig = |ret: crate::types::PhpType| crate::types::FunctionSig {
+            params: Vec::new(),
+            param_type_exprs: Vec::new(),
+            param_attributes: Vec::new(),
+            defaults: Vec::new(),
+            return_type: ret,
+            declared_return: false,
+            by_ref_return: false,
+            ref_params: Vec::new(),
+            declared_params: Vec::new(),
+            variadic: None,
+            deprecation: None,
+            is_generator: false,
+        };
+        let mut before = HashMap::default();
+        before.insert("App\\pick".to_string(), sig(crate::types::PhpType::Int));
+        before.insert("stable".to_string(), sig(crate::types::PhpType::Int));
+        let mut after = before.clone();
+        after.insert("App\\pick".to_string(), sig(crate::types::PhpType::Mixed));
+        let moved = moved_function_names(&before, &after);
+        assert_eq!(moved, vec!["pick".to_string()]);
+
+        let mut worklist = MethodWorklist::default();
+        let unit = (0, 0);
+        worklist.results.insert(unit, MethodResult {
+            errors: Vec::new(),
+            seed_params: Vec::new(),
+            tolerated: Vec::new(),
+            tokens: tokens("FunctionCall Name pick"),
+        });
+        worklist.moved = Some(HashSet::from_iter([token_hash("unrelated")]));
+        assert!(worklist.kept_result(unit, "m").is_some(), "nothing the body names moved yet");
+        worklist.also_moved(moved.iter().map(String::as_str));
+        assert!(worklist.kept_result(unit, "m").is_none(), "the callee's signature moved");
+    }
 
     fn tokens(text: &str) -> HashSet<u64> {
         let mut scan = TokenScan::default();

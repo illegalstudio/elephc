@@ -13,6 +13,7 @@ use crate::names::php_symbol_key;
 use crate::parser::ast::ClassMethod;
 use crate::types::{traits::FlattenedClass, FunctionSig, PhpType, TypeEnv};
 
+use super::method_worklist::moved_function_names;
 use super::Checker;
 
 /// How many previously produced class tables the method-pass fixpoint remembers.
@@ -181,6 +182,10 @@ impl Checker {
             passes += 1;
             let mut mark = std::time::Instant::now();
             let classes_before_pass = self.classes.clone();
+            // A free function's signature is re-resolved in the middle of a pass when a later
+            // call site passes another type, and a body walked before that read the old one. The
+            // class-table diff cannot see it, so the functions that moved are named separately.
+            let functions_before_pass = self.functions.clone();
             if trace {
                 clone_secs += mark.elapsed().as_secs_f64();
                 mark = std::time::Instant::now();
@@ -687,6 +692,10 @@ impl Checker {
                 eprintln!("[elephc-worklist] recursive mixed methods grew by {}", grown.len());
             }
             worklist.also_moved(grown.into_iter());
+            // A body that calls a function whose signature this pass changed walks again: it was
+            // checked against the old parameters and return, and replaying it would keep that.
+            let moved_functions = moved_function_names(&functions_before_pass, &self.functions);
+            worklist.also_moved(moved_functions.iter().map(String::as_str));
             // The clone the stabilization check already made, reused rather than repeated.
             recent_tables.push_back(classes_before_pass);
             method_passes_remaining -= 1;
