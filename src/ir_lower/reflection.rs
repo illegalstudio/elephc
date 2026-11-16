@@ -154,12 +154,7 @@ fn insert_bridge_reachable_reflection_methods(
     // (`call_user_func([$p, 'get' . $x])`, `$callable()`), so no fragment scan and no static
     // receiver type can say which Reflection member it reaches. The branch kept every member
     // whenever the bridge linked; the eval-demand pruning must not undo that for these calls.
-    let runtime_named_call = super::program::all_lowered_functions(module).any(|function| {
-        function
-            .instructions
-            .iter()
-            .any(|inst| matches!(inst.op, Op::CallableDescriptorInvoke | Op::ExprCall))
-    });
+    let runtime_named_call = module_has_runtime_named_call(module);
     for class_name in BUILTIN_REFLECTION_CLASS_NAMES {
         if !runtime_named_call && !demand.names_class(class_name) {
             continue;
@@ -178,6 +173,19 @@ fn insert_bridge_reachable_reflection_methods(
     // A fragment whose source is only known at run time can name any class, so every member is
     // already kept and the scan of native calls below would add nothing.
     runtime_named_call || demand.is_everything()
+}
+
+/// Returns whether any lowered function calls through a callable descriptor or an expression call.
+///
+/// Such a call names its method at run time (`$reflector->$m()`, `call_user_func([$r, $m])`,
+/// `$callable()`), so no static receiver type says which member it reaches.
+fn module_has_runtime_named_call(module: &Module) -> bool {
+    super::program::all_lowered_functions(module).any(|function| {
+        function
+            .instructions
+            .iter()
+            .any(|inst| matches!(inst.op, Op::CallableDescriptorInvoke | Op::ExprCall))
+    })
 }
 
 /// Collects Reflection constructors and methods reachable from EIR calls and descriptors.
@@ -308,6 +316,26 @@ fn referenced_builtin_reflection_methods(module: &Module) -> BTreeMap<String, BT
                 }
                 _ => {}
             }
+        }
+    }
+    // Without the bridge (a closed-world build) `insert_bridge_reachable_reflection_methods` kept
+    // nothing, yet a method named only at run time (`$reflector->$m()`, Symfony VarDumper's
+    // `ReflectionCaster::addMap()`) still reaches a Reflection class the program allocates. Keep
+    // every member of the reflectors the scan above found in use, so the descriptor call finds a
+    // body instead of dying on "callable array did not resolve to an invokable target".
+    if !module.required_runtime_features.eval_bridge && module_has_runtime_named_call(module) {
+        let used: Vec<String> = methods
+            .keys()
+            .filter(|name| BUILTIN_REFLECTION_CLASS_NAMES.contains(&name.as_str()))
+            .cloned()
+            .collect();
+        for class_name in used {
+            let Some(class_info) = module.class_infos.get(&class_name) else {
+                continue;
+            };
+            let entry = methods.entry(class_name).or_default();
+            entry.extend(class_info.methods.keys().cloned());
+            entry.extend(class_info.static_methods.keys().cloned());
         }
     }
     // `getAttributes()` answers a boxed array, so `->newInstance()` on its elements is a call on a

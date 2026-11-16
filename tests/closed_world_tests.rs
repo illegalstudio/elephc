@@ -2668,3 +2668,22 @@ fn closed_world_failed_require_throws_a_catchable_error() {
     assert_eq!(stdout, "fallback: Error: Failed opening required 'DIR/missing-1.php'\nfinally\nafter\n");
     assert!(heap.contains("leak summary: clean"), "{heap}");
 }
+
+/// A Reflection method named only at run time still has a body in a strict closed-world build.
+#[test]
+fn closed_world_runtime_named_reflection_method_has_a_body() {
+    let dir = make_test_dir("cw_reflection_dynamic");
+    fs::write(
+        dir.join("main.php"),
+        r#"<?php
+namespace App\Models;
+class Foo {}
+$r = new \ReflectionClass(Foo::class);
+$m = $argc > 5 ? 'getName' : 'getShortName';
+echo $r->$m(), "\n";
+"#,
+    )
+    .unwrap();
+    compile_ok(&dir, &["--closed-world"]);
+    assert_eq!(text(&run(&dir).stdout), "Foo\n");
+}
