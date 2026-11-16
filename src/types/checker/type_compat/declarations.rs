@@ -624,8 +624,20 @@ impl Checker {
             // untaken branch may hold a lazy Error (`[parent::A]` without a parent), which
             // inference reports eagerly, so a failed inference keeps the syntactic answer.
             _ if crate::types::deferred_defaults::default_value_depends_on_scoped_constant(default_expr) => {
-                self.infer_type(default_expr, &TypeEnv::default())
-                    .unwrap_or_else(|_| self.declaration_default_type(default_expr))
+                match self.infer_type(default_expr, &TypeEnv::default()) {
+                    Ok(ty) => ty,
+                    // `Pure::A->value` reads a case directly, so it has no lazy branch to
+                    // protect: the failed read is the diagnostic, not the syntactic guess's
+                    // misleading "got int". `(E::A ? E::A : E::Missing)->value` keeps the
+                    // fallback, because PHP never evaluates the untaken `E::Missing`.
+                    Err(error) if matches!(
+                        &default_expr.kind,
+                        ExprKind::PropertyAccess { object, .. }
+                        | ExprKind::NullsafePropertyAccess { object, .. }
+                            if matches!(object.kind, ExprKind::ScopedConstantAccess { .. })
+                    ) => return Err(error),
+                    Err(_) => self.declaration_default_type(default_expr),
+                }
             }
             _ => self.declaration_default_type(default_expr),
         };
