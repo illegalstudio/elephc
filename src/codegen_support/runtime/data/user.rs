@@ -1572,7 +1572,7 @@ pub(crate) fn emit_runtime_data_user(
         // checking each row's declaring class.
         // Every row carries its physical slot index as its last field, so the diagnostic table
         // below stays parallel to these rows whichever source produced them.
-        let serprop_rows: Vec<(Vec<u8>, usize, u64, u64, usize)> =
+        let mut serprop_rows: Vec<(Vec<u8>, usize, u64, u64, usize)> =
             match builtin_reflection_dump_projection(class_info, class_name) {
                 Some(projection) => projection
                     .into_iter()
@@ -1609,6 +1609,14 @@ pub(crate) fn emit_runtime_data_user(
                     })
                     .collect(),
             };
+        // php lists an enum's `name` before its `value` in a cast; the rows carry explicit slot
+        // offsets, so the order is cosmetic (the var_dump rows get the same hoist).
+        if enums.contains_key(class_name.as_str()) {
+            if let Some(at) = serprop_rows.iter().position(|row| row.0 == b"name") {
+                let row = serprop_rows.remove(at);
+                serprop_rows.insert(0, row);
+            }
+        }
         for (row_index, (mangled, _, _, _, _)) in serprop_rows.iter().enumerate() {
             out.push_str(&format!(
                 ".globl _class_serpname_{}_{}\n_class_serpname_{}_{}:\n",

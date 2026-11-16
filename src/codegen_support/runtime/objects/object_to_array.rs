@@ -40,7 +40,12 @@ fn emit_object_to_array_aarch64(emitter: &mut Emitter) {
     emitter.instruction("add x29, sp, #80");                                    // establish a stable frame pointer for nested helper calls
     emitter.instruction("str x0, [sp, #0]");                                    // save the borrowed object pointer
     emitter.instruction("str x1, [sp, #56]");                                   // save the property-name mode across runtime calls
-    emitter.instruction("bl __rt_obj_prop_count");                              // load the declared property descriptor row count
+    emitter.instruction("cbz x1, __rt_object_to_array_cast_count");             // an explicit cast walks the serialize-property rows
+    emitter.instruction("bl __rt_obj_prop_count");                              // foreach walks the display descriptor rows
+    emitter.instruction("b __rt_object_to_array_count_done");                   // the row count is in x0
+    emitter.label("__rt_object_to_array_cast_count");
+    emitter.instruction("bl __rt_obj_prop_cast_count");                         // keys and values must come from the same table
+    emitter.label("__rt_object_to_array_count_done");
     emitter.instruction("str x0, [sp, #24]");                                   // preserve the row count for the property loop
     emitter.instruction("cmp x0, #4");                                          // tiny hashes still need practical probing capacity
     emitter.instruction("mov x9, #4");                                          // materialize the minimum destination capacity
@@ -68,7 +73,13 @@ fn emit_object_to_array_aarch64(emitter: &mut Emitter) {
     emitter.instruction("stp x1, x2, [sp, #32]");                               // preserve the visibility-mangled key across value boxing
     emitter.instruction("ldr x0, [sp, #0]");                                    // pass the borrowed object pointer again
     emitter.instruction("ldr x1, [sp, #16]");                                   // pass the same declared property row index
+    emitter.instruction("ldr x10, [sp, #56]");                                  // reload the property-name mode
+    emitter.instruction("cbz x10, __rt_object_to_array_cast_value");            // explicit casts read the value from the row the key came from
     abi::emit_call_label(emitter, "__rt_obj_prop_value");
+    emitter.instruction("b __rt_object_to_array_value_done");                   // the boxed value is in x0
+    emitter.label("__rt_object_to_array_cast_value");
+    abi::emit_call_label(emitter, "__rt_obj_prop_cast_value");
+    emitter.label("__rt_object_to_array_value_done");
     emitter.instruction("mov x3, x0");                                          // transfer the fresh Mixed cell into the hash value low word
     emitter.instruction("mov x4, xzr");                                         // boxed Mixed hash entries use no high payload word
     emitter.instruction("mov x5, #7");                                          // runtime hash value tag 7 denotes a Mixed cell
@@ -127,7 +138,13 @@ fn emit_object_to_array_x86_64(emitter: &mut Emitter) {
     emitter.instruction("sub rsp, 80");                                         // reserve aligned property-walk spill slots
     emitter.instruction("mov QWORD PTR [rbp - 8], rdi");                        // save the borrowed object pointer
     emitter.instruction("mov QWORD PTR [rbp - 64], rsi");                       // save the property-name mode across runtime calls
+    emitter.instruction("cmp QWORD PTR [rbp - 64], 0");                         // does this conversion request bare foreach names?
+    emitter.instruction("je __rt_object_to_array_cast_count_x86");              // an explicit cast walks the serialize-property rows
     abi::emit_call_label(emitter, "__rt_obj_prop_count");
+    emitter.instruction("jmp __rt_object_to_array_count_done_x86");             // the row count is in rax
+    emitter.label("__rt_object_to_array_cast_count_x86");
+    abi::emit_call_label(emitter, "__rt_obj_prop_cast_count");                  // keys and values must come from the same table
+    emitter.label("__rt_object_to_array_count_done_x86");
     emitter.instruction("mov QWORD PTR [rbp - 32], rax");                       // preserve the declared property row count
     emitter.instruction("mov rdi, rax");                                        // use the property row count as initial hash capacity
     emitter.instruction("cmp rdi, 4");                                          // tiny hashes still need practical probing capacity
@@ -157,7 +174,13 @@ fn emit_object_to_array_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov QWORD PTR [rbp - 48], rdx");                       // preserve the visibility-mangled key length
     emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // pass the borrowed object pointer again
     emitter.instruction("mov rsi, QWORD PTR [rbp - 24]");                       // pass the same declared property row index
+    emitter.instruction("cmp QWORD PTR [rbp - 64], 0");                         // does this conversion request bare foreach names?
+    emitter.instruction("je __rt_object_to_array_cast_value_x86");              // explicit casts read the value from the row the key came from
     abi::emit_call_label(emitter, "__rt_obj_prop_value");
+    emitter.instruction("jmp __rt_object_to_array_value_done_x86");             // the boxed value is in rax
+    emitter.label("__rt_object_to_array_cast_value_x86");
+    abi::emit_call_label(emitter, "__rt_obj_prop_cast_value");
+    emitter.label("__rt_object_to_array_value_done_x86");
     emitter.instruction("mov rcx, rax");                                        // transfer the fresh Mixed cell into the hash value low word
     emitter.instruction("xor r8d, r8d");                                        // boxed Mixed hash entries use no high payload word
     emitter.instruction("mov r9, 7");                                           // runtime hash value tag 7 denotes a Mixed cell
