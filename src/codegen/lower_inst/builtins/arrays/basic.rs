@@ -500,6 +500,38 @@ pub(crate) fn lower_array_reverse(ctx: &mut FunctionContext<'_>, inst: &Instruct
     }
 }
 
+/// Renumbers the owned hash in the result register and releases that hash afterwards.
+///
+/// `__rt_hash_reindex` builds a NEW owned hash and never releases its input, so the intermediate
+/// reversed hash (its persisted strings and one reference on every heap value) leaked on every
+/// call. The intermediate is spilled across the helper and released with `__rt_decref_hash`
+/// (pointer in the result register on both arches) while the new hash is kept on the stack.
+fn emit_hash_reindex_releasing_source(ctx: &mut FunctionContext<'_>) {
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction("str x0, [sp, #-16]!");                     // keep the intermediate reversed hash for release
+            abi::emit_call_label(ctx.emitter, "__rt_hash_reindex");
+            ctx.emitter.instruction("str x0, [sp, #-16]!");                     // keep the renumbered result across the release
+            ctx.emitter.instruction("ldr x0, [sp, #16]");                       // reload the intermediate reversed hash
+            abi::emit_call_label(ctx.emitter, "__rt_decref_hash");
+            ctx.emitter.instruction("ldr x0, [sp]");                            // restore the renumbered result
+            ctx.emitter.instruction("add sp, sp, #32");                         // drop both spill slots
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("sub rsp, 16");                             // reserve a slot for the intermediate reversed hash
+            ctx.emitter.instruction("mov QWORD PTR [rsp], rax");                // keep the intermediate reversed hash for release
+            ctx.emitter.instruction("mov rdi, rax");                            // pass the reversed hash to the renumbering helper
+            abi::emit_call_label(ctx.emitter, "__rt_hash_reindex");
+            ctx.emitter.instruction("sub rsp, 16");                             // reserve a slot for the renumbered result
+            ctx.emitter.instruction("mov QWORD PTR [rsp], rax");                // keep the renumbered result across the release
+            ctx.emitter.instruction("mov rax, QWORD PTR [rsp + 16]");           // reload the intermediate (the helper reads rax)
+            abi::emit_call_label(ctx.emitter, "__rt_decref_hash");
+            ctx.emitter.instruction("mov rax, QWORD PTR [rsp]");                // restore the renumbered result
+            ctx.emitter.instruction("add rsp, 32");                             // drop both spill slots
+        }
+    }
+}
+
 /// Emits the `preserve_keys = false` arm: the reversed value keeps the source's own shape.
 ///
 /// A HASH takes the key-preserving reverse and then `__rt_hash_reindex`, which is php's rule for
@@ -512,10 +544,7 @@ fn emit_array_reverse_reindexed(ctx: &mut FunctionContext<'_>, array: ValueId) -
         PhpType::AssocArray { .. }
     ) {
         emit_array_reverse_preserve_keys_value(ctx, array)?;
-        if ctx.emitter.target.arch == Arch::X86_64 {
-            ctx.emitter.instruction("mov rdi, rax");                            // pass the reversed hash to the renumbering helper
-        }
-        abi::emit_call_label(ctx.emitter, "__rt_hash_reindex");
+        emit_hash_reindex_releasing_source(ctx);
         return Ok(());
     }
     let elem_ty =
@@ -628,10 +657,7 @@ fn lower_array_reverse_gradual_dynamic(
 
     ctx.emitter.label(&false_case);
     emit_array_reverse_gradual_to_hash(ctx, array)?;
-    if ctx.emitter.target.arch == Arch::X86_64 {
-        ctx.emitter.instruction("mov rdi, rax");                                // pass the reversed hash to the renumbering helper
-    }
-    abi::emit_call_label(ctx.emitter, "__rt_hash_reindex");
+    emit_hash_reindex_releasing_source(ctx);
     crate::codegen::emit_box_current_owned_value_as_mixed(ctx.emitter, &hash_ty);
 
     ctx.emitter.label(&done);
