@@ -62,6 +62,20 @@ pub(crate) const HELPERS: &[&str] = &[
     "__elephc_proc_terminate",
 ];
 
+/// Returns the prelude helpers a public proc builtin's lowering calls, so a runtime callable
+/// wrapper is only emitted when the proc prelude was injected (see
+/// `crate::builtins::registry::dynamic_wrapper_prelude_callees`); empty for any other name.
+pub(crate) fn dynamic_wrapper_helpers(name: &str) -> &'static [&'static str] {
+    match name {
+        "proc_close" => &["__elephc_proc_close"],
+        "proc_get_status" => &["__elephc_proc_get_status"],
+        "proc_nice" => &["__elephc_proc_nice"],
+        "proc_open" => &["__elephc_proc_open", OPEN_PIPES_HELPER],
+        "proc_terminate" => &["__elephc_proc_terminate"],
+        _ => &[],
+    }
+}
+
 /// Returns the prelude helpers to root when `name` is a public proc builtin.
 pub(crate) fn prelude_helpers_for(name: &str) -> impl Iterator<Item = &'static str> {
     let is_proc = elephc_builtin_contract::PROC_FUNCTIONS.contains(&name);
