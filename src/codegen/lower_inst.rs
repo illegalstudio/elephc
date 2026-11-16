@@ -136,6 +136,7 @@ mod runtime_wrappers;
 pub(crate) use runtime_wrappers::builtin_wrapper_result_is_representable;
 mod static_method_calls;
 mod throwable_methods;
+pub(crate) use throwable_methods::is_throwable_standard_method_call_in;
 
 use array_access_runtime::*;
 use call_cleanup::*;

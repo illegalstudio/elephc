@@ -215,6 +215,9 @@ fn validate_call_graph(
 
                 if phpext && enqueue_exported_class_method(module, function, instruction,
                     &functions, &mut queue, &path) { continue; }
+                if is_throwable_payload_read(module, function, instruction) {
+                    continue;
+                }
                 let private_allocation = phpext && instruction.op == Op::DynamicObjectNewWithoutConstructorMixed
                     && crate::phpext::class_helpers::is_allocation_helper(function);
                 if opaque_dynamic_dispatch(instruction.op) && !private_allocation {
@@ -689,6 +692,34 @@ fn enqueue_fixed_array_access_method<'a>(
         return false;
     };
     enqueue_user_body(functions, queue, path, &body.name)
+}
+
+/// Returns whether a method call reads the compact Throwable payload instead of dispatching.
+///
+/// `getMessage()`, `getFile()`, `getLine()`, `getTrace()`, `getPrevious()` and `getCode()` are
+/// final in php and lowered to a read of the Throwable's own fields
+/// (`codegen::lower_inst::is_throwable_standard_method_call_in`), so no method body is reached
+/// and nothing can terminate the process. `Exception::__toString()`, which every thrown exception
+/// makes reachable, renders itself through exactly these calls.
+fn is_throwable_payload_read(
+    module: &Module,
+    function: &Function,
+    instruction: &crate::ir::Instruction,
+) -> bool {
+    if !matches!(instruction.op, Op::MethodCall | Op::NullsafeMethodCall) {
+        return false;
+    }
+    let Some(method) = immediate_string(module, instruction.immediate.as_ref()) else {
+        return false;
+    };
+    let Some(receiver) = instruction.operands.first().copied() else {
+        return false;
+    };
+    let class_name = match function.value(receiver).map(|value| value.php_type.codegen_repr()) {
+        Some(PhpType::Object(class_name)) => class_name,
+        _ => return false,
+    };
+    crate::codegen::lower_inst::is_throwable_standard_method_call_in(module, &class_name, method)
 }
 
 /// Resolves a fixed-class allocation to one emitted lifecycle method implementation body.

@@ -21,6 +21,17 @@ pub(super) fn is_throwable_standard_method_call(
     class_name: &str,
     method_name: &str,
 ) -> bool {
+    is_throwable_standard_method_call_in(ctx.module, class_name, method_name)
+}
+
+/// The module-level form of [`is_throwable_standard_method_call`], for analyses that run over
+/// the EIR module without a codegen context: such a call is lowered to a payload read and never
+/// dispatches to a method body (`crate::exports::safety` relies on it).
+pub(crate) fn is_throwable_standard_method_call_in(
+    module: &crate::ir::Module,
+    class_name: &str,
+    method_name: &str,
+) -> bool {
     let method_key = php_symbol_key(method_name);
     let mut current = Some(class_name.trim_start_matches('\\'));
     let mut pdo_exception_receiver = false;
@@ -29,8 +40,7 @@ pub(super) fn is_throwable_standard_method_call(
             pdo_exception_receiver = true;
             break;
         }
-        current = ctx
-            .module
+        current = module
             .class_infos
             .get(name)
             .and_then(|info| info.parent.as_deref());
@@ -39,7 +49,7 @@ pub(super) fn is_throwable_standard_method_call(
         return false;
     }
     is_throwable_standard_method_key(&method_key)
-        && is_throwable_like_class(ctx, class_name)
+        && class_is_throwable_like_in(module, class_name)
 }
 
 /// Returns true for method keys supplied by PHP's built-in `Throwable` surface.
@@ -56,16 +66,21 @@ pub(super) fn is_throwable_standard_method_key(method_key: &str) -> bool {
 
 /// Returns true when class metadata says the receiver is Throwable-compatible.
 pub(super) fn is_throwable_like_class(ctx: &FunctionContext<'_>, class_name: &str) -> bool {
+    class_is_throwable_like_in(ctx.module, class_name)
+}
+
+/// The module-level body of [`is_throwable_like_class`].
+fn class_is_throwable_like_in(module: &crate::ir::Module, class_name: &str) -> bool {
     let class_name = class_name.trim_start_matches('\\');
     if matches!(class_name, "Throwable") {
         return true;
     }
-    if interface_extends_throwable(ctx, class_name) {
+    if interface_extends_throwable_in(module, class_name) {
         return true;
     }
     let mut current = Some(class_name);
     while let Some(name) = current {
-        let Some(class_info) = ctx.module.class_infos.get(name) else {
+        let Some(class_info) = module.class_infos.get(name) else {
             return false;
         };
         if class_info
@@ -81,16 +96,16 @@ pub(super) fn is_throwable_like_class(ctx: &FunctionContext<'_>, class_name: &st
 }
 
 /// Returns true when an interface is `Throwable` or transitively extends it.
-pub(super) fn interface_extends_throwable(ctx: &FunctionContext<'_>, interface_name: &str) -> bool {
+fn interface_extends_throwable_in(module: &crate::ir::Module, interface_name: &str) -> bool {
     if interface_name == "Throwable" {
         return true;
     }
-    let Some(interface_info) = ctx.module.interface_infos.get(interface_name) else {
+    let Some(interface_info) = module.interface_infos.get(interface_name) else {
         return false;
     };
     interface_info.parents.iter().any(|parent| {
         let parent = parent.trim_start_matches('\\');
-        parent == "Throwable" || interface_extends_throwable(ctx, parent)
+        parent == "Throwable" || interface_extends_throwable_in(module, parent)
     })
 }
 
