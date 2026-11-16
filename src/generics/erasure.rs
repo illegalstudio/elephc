@@ -333,8 +333,9 @@ fn erase_in(stmts: &mut [Stmt], dispatched: &BTreeSet<(String, String)>) {
 /// `put(object $v)`) would run. A `TypeError` thrown on entry is exactly what php-src does, and
 /// unlike a restored hint it leaves the parameter's static type to the call, so the body still
 /// stores it in a property of the template. `null` passes when the hint is nullable or the
-/// parameter defaults to `null`. A variadic is checked element by element, counting argument
-/// positions as php-src numbers them.
+/// parameter defaults to `null`. A variadic is checked element by element, and reported the
+/// way php-src reports it: without the parameter name, a positional element under its own
+/// argument number, and every named element under the number after the last positional one.
 fn native_param_guard(
     class: &str,
     method: &ClassMethod,
@@ -345,9 +346,10 @@ fn native_param_guard(
         e_binop, e_call, e_concat_all, e_instance_of, e_int, e_new_fq, e_not, e_null, e_post_inc,
         e_str, e_var, s_assign, s_expr, s_foreach, s_if,
     };
+    // php-src names a fixed parameter in the message and leaves a variadic one unnamed.
+    let named = if is_variadic_param(method, param) { String::new() } else { format!(" (${param})") };
     let fixed = method.params.iter().position(|(name, _, _, _)| name == param);
-    let is_variadic = method.variadic.as_deref() == Some(param);
-    if fixed.is_none() && !is_variadic {
+    if fixed.is_none() && !is_variadic_param(method, param) {
         return Vec::new();
     }
     let (hint, mut nullable) = match native {
@@ -390,7 +392,7 @@ fn native_param_guard(
         let message = e_concat_all(vec![
             e_str(&format!("{}::{}(): Argument #", class, method.name)),
             position,
-            e_str(&format!(" (${}) must be of type {}, ", param, super::describe_type(native))),
+            e_str(&format!("{} must be of type {}, ", named, super::describe_type(native))),
             e_call("\\gettype", vec![e_var(value)]),
             e_str(" given"),
         ]);
@@ -406,21 +408,34 @@ fn native_param_guard(
         None => {
             // Generated names carry a `#`, which no PHP source can spell, so they cannot take
             // over a parameter or a local of the method, and stay out of `get_defined_vars()`.
-            let position =
-                crate::names::generated_local_name(&format!("__elephc_guard_{param}_position"));
-            let element =
-                crate::names::generated_local_name(&format!("__elephc_guard_{param}_element"));
+            let local = |role: &str| {
+                crate::names::generated_local_name(&format!("__elephc_guard_{param}_{role}"))
+            };
+            let (position, key, element) = (local("position"), local("key"), local("element"));
+            // The number advances past positional elements only: named ones come last and all
+            // share the number that follows them.
+            let advance = s_if(
+                e_call("\\is_int", vec![e_var(&key)]),
+                vec![s_expr(e_post_inc(&position))],
+                Vec::new(),
+                None,
+            );
             vec![
-                s_assign(&position, e_int(method.params.len() as i64)),
+                s_assign(&position, e_int(method.params.len() as i64 + 1)),
                 s_foreach(
                     e_var(param),
-                    None,
+                    Some(&key),
                     &element,
-                    vec![s_expr(e_post_inc(&position)), check(&element, e_var(&position))],
+                    vec![check(&element, e_var(&position)), advance],
                 ),
             ]
         }
     }
+}
+
+/// Returns whether `param` is the method's variadic parameter.
+fn is_variadic_param(method: &ClassMethod, param: &str) -> bool {
+    method.variadic.as_deref() == Some(param)
 }
 
 /// Drops a method's own type parameters, and reads every one of them, and every name in
