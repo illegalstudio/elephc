@@ -487,39 +487,40 @@ echo "\n";
 // Negative controls — genuine mismatches must STILL be rejected
 // ---------------------------------------------------------------------------
 
-/// A plain, NON-recursive `: string` function returning an int must still fail.
+/// A plain, NON-recursive `: string` function returning an int coerces it, as php does.
 ///
-/// The baseline control: the fix must not have loosened return-type checking in general.
+/// The baseline control: an int returned from a `: string` function is not an error in php's
+/// coercive mode, it is converted. php -n 8.5.10 prints `1`; the compiler used to refuse the
+/// program with "return type expects string, got int".
 #[test]
-fn non_recursive_return_type_mismatch_is_still_rejected() {
-    assert_compile_error(
+fn non_recursive_int_return_from_a_string_function_is_coerced() {
+    assert_program_output(
         "recret_neg_plain",
         r#"<?php
 function f(int $x): string { return $x; }
 echo f(1), "\n";
 "#,
-        "Function 'f' return type expects string, got int",
+        "1\n",
     );
 }
 
-/// A RECURSIVE `: string` function whose BASE CASE returns an int must still fail.
+/// A RECURSIVE `: string` function whose BASE CASE returns an int coerces it, as php does.
 ///
-/// The sharpest control for this fix. The pre-fix compiler produced exactly this message for the
-/// *correct* program in `string_recursion_returns_the_declared_type`; here the same message must
-/// still appear, and now it means what it says. Trusting the declared hint for the self-call must
-/// not turn into trusting it for the real returns.
+/// Trusting the declared hint for the self-call must not turn into trusting it for the real
+/// returns: the base case's int still goes through the `: string` coercion. php -n 8.5.10
+/// prints `3`.
 #[test]
-fn recursive_function_with_wrong_base_case_type_is_still_rejected() {
-    assert_compile_error(
+fn recursive_function_with_int_base_case_coerces_to_string() {
+    assert_program_output(
         "recret_neg_base",
         r#"<?php
 function r(int $x): string {
     if ($x > 2) { return $x; }
     return r($x + 1);
 }
-echo r(0), "\n";
+var_dump(r(0));
 "#,
-        "Function 'r' return type expects string, got int",
+        "string(1) \"3\"\n",
     );
 }
 
@@ -558,19 +559,21 @@ echo r(0), "\n";
     );
 }
 
-/// A mutual-recursion cycle with a bad return in ONE leg must still fail.
+/// A mutual-recursion cycle whose ONE leg returns an int coerces that leg, as php does.
 ///
-/// Both legs are declared `: string`; only `b` returns an int. Seeding the cycle with declared
-/// types must not let a genuine mismatch hide behind the other leg.
+/// Both legs are declared `: string`; only `mb` returns an int. Seeding the cycle with declared
+/// types must not skip the other leg's own conversion: `ma(-1)` ends in `mb`'s `return 42`.
+/// php -n 8.5.10 prints `a` then `42`.
 #[test]
-fn mutual_recursion_with_a_bad_leg_is_still_rejected() {
-    assert_compile_error(
+fn mutual_recursion_with_an_int_leg_coerces_it() {
+    assert_program_output(
         "recret_neg_mutual",
         r#"<?php
 function ma(int $x): string { if ($x > 3) { return "a"; } return mb($x + 1); }
 function mb(int $x): string { if ($x > 3) { return 42; } return ma($x + 1); }
 echo ma(0), "\n";
+var_dump(ma(-1));
 "#,
-        "Function 'mb' return type expects string, got int",
+        "a\nstring(2) \"42\"\n",
     );
 }
