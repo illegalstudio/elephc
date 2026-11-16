@@ -1983,10 +1983,11 @@ fn lower_body_into_function(
                 .signature
                 .as_ref()
                 .is_some_and(|signature| signature.variadic.as_deref() == Some(name.as_str()));
-            if variadic && by_ref {
-                // A by-reference variadic is stored as `array<mixed>`, so the declared element
-                // type survives only as the source hint; `callable &...$xs` checks each
-                // referenced value on entry like its by-value form.
+            if variadic {
+                // A variadic's storage need not carry its declared element type: a by-reference
+                // collector is `array<mixed>` and one a descriptor or named arguments can fill is
+                // promoted to an iterable container. The source hint keeps the contract, so a
+                // `callable ...$xs` / `callable &...$xs` checks each value on entry from it.
                 let callable_element = function
                     .signature
                     .as_ref()
@@ -2143,14 +2144,14 @@ fn lower_body_into_function(
         } else if !super::throwable_constructors::lower(ctx) && !super::core_methods::lower(ctx, body) {
             if eager_parameters {
                 // Generators check their parameters eagerly elsewhere; these keep their
-                // place at the start of the body.
+                // place at the start of the body. A declared `callable` is checked once, at
+                // the call, by the generator's eager validator: checking it again here would
+                // read a by-reference binding the caller may have changed since.
                 for (display, position, name, php_type) in &reference_entry_guards {
+                    if php_type.declares_callable() {
+                        continue;
+                    }
                     crate::ir_lower::expr::guard_reference_parameter_entry(ctx, display, *position, name, php_type);
-                }
-                if let Some((display, position, name, element)) = &callable_variadic_guard {
-                    crate::ir_lower::expr::guard_declared_callable_variadic_entry(
-                        ctx, display, *position, name, element,
-                    );
                 }
             }
             crate::ir_lower::reflection_deprecations::emit_pending_prologue(ctx);
