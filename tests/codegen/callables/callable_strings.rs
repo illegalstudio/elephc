@@ -32,6 +32,27 @@ $callback = return_open_named_callable($argv[0]);
 echo $callback("Mixed");
 "#;
 
+/// A runtime string callable whose finite candidate set names no compiled function compiles, as
+/// in php: the call is only an error when it runs. The set (`nope_*`) is fed by literals joined
+/// across a ternary, so the dispatch table is empty; refusing the function at codegen made the
+/// whole program fail to build.
+#[test]
+fn test_finite_string_callable_set_without_targets_compiles() {
+    let out = compile_and_run(
+        r#"<?php
+$f = $argc > 5 ? 'nope_fetch_a' : 'nope_fetch_b';
+if (function_exists($f)) { echo $f('k'); }
+echo "after\n";
+$xs = [1, 2];
+if ($argc > 5) {
+    var_dump(array_map($argc > 6 ? 'nope_a' : 'nope_b', $xs));
+}
+echo "end\n";
+"#,
+    );
+    assert_eq!(out, "after\nend\n");
+}
+
 /// Verifies a builtin function-name string binds to a declared `callable` parameter and is
 /// invoked inside the callee — the repro from the parameter-typing audit.
 #[test]

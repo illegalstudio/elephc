@@ -1366,9 +1366,10 @@ fn lower_runtime_string_descriptor_invoke(
         if runtime_string_callable_has_eval_fallback(ctx) {
             return lower_runtime_string_callable_eval_fallback(ctx, inst, callable, arg_mixed);
         }
-        return Err(CodegenIrError::unsupported(
-            "callable_descriptor_invoke for runtime string with no descriptor targets",
-        ));
+        // A finite candidate set naming no compiled function compiles like php: the call is
+        // only an error if it runs, and then it is the run-time "Call to undefined function".
+        emit_undefined_runtime_string_call_fatal(ctx);
+        return Ok(());
     }
     let (ptr_reg, len_reg) = abi::string_result_regs(ctx.emitter);
     ctx.load_string_value_to_regs(callable, ptr_reg, len_reg)?;
@@ -2846,10 +2847,13 @@ fn emit_runtime_string_descriptor_value_impl(
     let cases =
         runtime_string_descriptor_cases(ctx, None, candidate_names.as_deref(), strict_php)?;
     if cases.is_empty() {
-        return Err(CodegenIrError::unsupported(format!(
-            "{} for runtime string with no descriptor targets",
-            op_name
-        )));
+        // No compiled function answers any name the candidate set allows: every run takes the
+        // miss path, which is the run-time error php raises (nothing is pushed yet).
+        match type_error {
+            Some(message) => super::exceptions::emit_type_error(ctx, message),
+            None => emit_undefined_runtime_string_call_fatal(ctx),
+        }
+        return Ok(());
     }
 
     let (ptr_reg, len_reg) = abi::string_result_regs(ctx.emitter);
