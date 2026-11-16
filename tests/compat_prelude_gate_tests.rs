@@ -19,15 +19,17 @@
 //!   throughout the bug; `an_autoloaded_class_gates_the_prelude` is the one that failed.
 //! - The assembly assertions distinguish the two failure modes a run alone confuses: the NAME
 //!   appears either way, because the runtime's undefined-function message carries it. Only a
-//!   symbol the prelude DECLARES (`__elephc_diag_render`) proves the declaration was compiled.
+//!   symbol the prelude DECLARES (`__elephc_shutdown_function_state`) proves the declaration was
+//!   compiled. `error_reporting()` and the handler stacks became native builtins since, so the
+//!   `Reporter` probe below no longer needs a prelude declaration and the `Guard` one is used.
 //! - The error-handling surface is used as the probe because it is the one that broke, but the
 //!   property under test belongs to the phase, not to that surface: any usage-gated prelude
 //!   injected in `compat-preludes` inherits these assertions.
-//! - The assertions are not vacuous, and the neighbouring project proves it rather than a
-//!   mutation: on the same three-file shape, the autoloaded class NAMING the surface emits
-//!   1 036 342 bytes of assembly with 82 `__elephc_diag_render` hits, and the one naming nothing
-//!   emits 161 650 bytes with 0. The counted symbol therefore reaches zero on an input one line
-//!   away from the passing case. Every expected string was captured from `php 8.5.10`:
+//! - The assertions are not vacuous, and the neighbouring project proved it rather than a
+//!   mutation when the error-handling prelude still declared `__elephc_diag_render`: on the same
+//!   three-file shape, the autoloaded class NAMING the surface emitted 1 036 342 bytes of
+//!   assembly with 82 `__elephc_diag_render` hits, and the one naming nothing emitted 161 650
+//!   bytes with 0. Every expected string was captured from `php 8.5.10`:
 //!   `php -r '$l = error_reporting(); ...'` prints `level=E_ALL handler=yes`.
 
 use std::fs;
@@ -333,21 +335,26 @@ fn a_required_second_file_gates_the_prelude_too() {
 ///
 /// The bare function name appears in the assembly either way — the runtime's undefined-function
 /// message carries it — so a name grep cannot tell "never injected" from "injected but broken".
-/// `__elephc_diag_render` is emitted by the prelude itself, so its presence is the proof.
+/// `__elephc_shutdown_function_state` is declared by the prelude itself and reached from its
+/// `register_shutdown_function()`, so its presence is the proof.
+///
+/// The probe is the `Guard` class, not `Reporter`: `error_reporting()` is a native builtin now
+/// (`error_handling_prelude`'s module docs), so a class that only reads it needs no prelude
+/// declaration at all and the `Reporter` project carries none.
 #[test]
 fn the_autoloaded_gate_emits_the_declaration_not_just_the_name() {
     let asm = emit_project_asm(
         "compatgate_asm_using",
         &[
             ("module.json", MANIFEST),
-            ("src/Reporter.php", REPORTER_USING_SURFACE),
-            ("main.php", ENTRY_AUTOLOADED),
+            ("src/Guard.php", GUARD_USING_LAST_ERROR),
+            ("main.php", ENTRY_GUARD),
         ],
         "main.php",
     );
 
     assert!(
-        asm.contains("__elephc_diag_render"),
+        asm.contains("__elephc_shutdown_function_state"),
         "the prelude's own symbol must be present when an autoloaded class names the surface"
     );
 }
