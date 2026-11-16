@@ -86,7 +86,7 @@ pub(crate) fn emit_closure_bind(emitter: &mut Emitter) {
     emitter.instruction("cbz x0, __rt_closure_bind_native");               // a rejected rebinding binds it like any native closure
     crate::codegen_support::abi::emit_symbol_address(emitter, "x10", "_elephc_eval_wrap_callback_fn");
     emitter.instruction("ldr x10, [x10]");                                      // x10 = generated adapter wrapper, installed with the eval context
-    emitter.instruction("cbz x10, __rt_closure_bind_native");              // no wrapper means no eval context ever existed
+    emitter.instruction("cbz x10, __rt_closure_bind_release_cell");             // no wrapper means no eval context ever existed
     emitter.instruction("ldr x9, [sp, #0]");                                    // reload the adapter descriptor
     emitter.instruction("ldr x0, [x9, #64]");                                   // pass the eval context to the wrapper
     emitter.instruction("ldr x1, [sp, #16]");                                   // pass the owned bound closure cell
@@ -97,7 +97,11 @@ pub(crate) fn emit_closure_bind(emitter: &mut Emitter) {
     emitter.instruction("ldr x0, [sp, #24]");                                   // reload the adapter descriptor
     emitter.instruction("str x0, [sp, #16]");                                   // publish it as the bind result
     emitter.instruction("b __rt_closure_bind_return");                          // return through the shared epilogue
+    emitter.label("__rt_closure_bind_release_cell");
+    emitter.instruction("ldr x0, [sp, #16]");                                   // Magician handed back an owned bound-closure cell nobody will wrap
+    emitter.instruction("bl __rt_decref_mixed");                                // drop it before binding the adapter like a native closure
     emitter.label("__rt_closure_bind_native");
+    emitter.instruction("ldr x0, [sp, #0]");                                    // the callback calls clobbered x0: reload the source descriptor
 
     // -- read the capture shape; a descriptor with no environment has none --
     emitter.instruction("mov x10, #0");                                         // assume zero captures until the environment says otherwise
@@ -284,7 +288,7 @@ fn emit_closure_bind_x86_64(emitter: &mut Emitter) {
     crate::codegen_support::abi::emit_symbol_address(emitter, "r11", "_elephc_eval_wrap_callback_fn");
     emitter.instruction("mov r11, [r11]");                                      // r11 = generated adapter wrapper, installed with the eval context
     emitter.instruction("test r11, r11");                                       // did an eval context ever install it?
-    emitter.instruction("jz __rt_closure_bind_native");                    // no wrapper: bind it like any native closure
+    emitter.instruction("jz __rt_closure_bind_release_cell");                   // no wrapper: drop Magician's cell, then bind it like any native closure
     emitter.instruction("mov r10, [rsp+0]");                                    // reload the adapter descriptor
     emitter.instruction("mov rdi, [r10+64]");                                   // pass the eval context to the wrapper
     emitter.instruction("mov rsi, [rsp+16]");                                   // pass the owned bound closure cell
@@ -295,7 +299,11 @@ fn emit_closure_bind_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rax, [rsp+24]");                                   // reload the adapter descriptor
     emitter.instruction("mov [rsp+16], rax");                                   // publish it as the bind result
     emitter.instruction("jmp __rt_closure_bind_return");                        // return through the shared epilogue
+    emitter.label("__rt_closure_bind_release_cell");
+    emitter.instruction("mov rax, [rsp+16]");                                   // Magician handed back an owned bound-closure cell nobody will wrap
+    emitter.instruction("call __rt_decref_mixed");                              // drop it before binding the adapter like a native closure
     emitter.label("__rt_closure_bind_native");
+    emitter.instruction("mov rdi, [rsp+0]");                                    // the callback calls clobbered rdi: reload the source descriptor
 
     // -- read the capture shape; a descriptor with no environment has none --
     emitter.instruction("xor r9d, r9d");                                        // assume zero captures
