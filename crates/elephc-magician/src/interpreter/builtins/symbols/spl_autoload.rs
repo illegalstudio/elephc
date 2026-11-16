@@ -75,11 +75,52 @@ pub(in crate::interpreter) fn eval_spl_autoload_void_result(
             values.null()
         }
         "spl_autoload" if (1..=2).contains(&evaluated_args.len()) => {
-            eval_spl_autoload_class_value(evaluated_args[0], context, values)?;
+            eval_spl_autoload_default_loader(evaluated_args, context, values)?;
             values.null()
         }
         _ => Err(EvalStatus::RuntimeFatal),
     }
+}
+
+/// Runs php's DEFAULT loader, `spl_autoload($class, $extensions = null)`.
+///
+/// It never calls the registered callbacks: it lower-cases the class name, turns namespace
+/// separators into directory separators, and `include_once`s the first `<name><extension>` file
+/// that exists, trying `.inc,.php` unless the caller listed others. The interpreter resolves a
+/// relative include against the working directory and the calling file's directory, as every
+/// other include here does; it keeps no separate `include_path` list.
+fn eval_spl_autoload_default_loader(
+    evaluated_args: &[RuntimeCellHandle],
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<(), EvalStatus> {
+    let class_bytes = values.string_bytes(evaluated_args[0])?;
+    let class_name = String::from_utf8_lossy(&class_bytes).to_ascii_lowercase().replace('\\', "/");
+    let extensions = match evaluated_args.get(1) {
+        Some(extensions) if values.type_tag(*extensions)? != EVAL_TAG_NULL => {
+            String::from_utf8_lossy(&values.string_bytes(*extensions)?).into_owned()
+        }
+        _ => ".inc,.php".to_string(),
+    };
+    for extension in extensions.split(',') {
+        let relative = format!("{}{extension}", class_name.trim_start_matches('/'));
+        let mut candidate = std::path::PathBuf::from(&relative);
+        if !candidate.exists() && !context.call_dir().is_empty() {
+            candidate = std::path::Path::new(context.call_dir()).join(&relative);
+        }
+        if !candidate.is_file() {
+            continue;
+        }
+        let path = values.string(&candidate.to_string_lossy())?;
+        let mut scope = ElephcEvalScope::new();
+        let included = crate::interpreter::include_exec::eval_include_value_with_use(
+            path, false, true, false, context, &mut scope, values,
+        );
+        let _ = values.release(path);
+        values.release(included?)?;
+        break;
+    }
+    Ok(())
 }
 
 /// Invokes registered callbacks for one unresolved class and reports whether a class became visible.
@@ -170,6 +211,40 @@ fn eval_spl_autoload_queue(
         );
     }
     for (_, owner, callback) in queue {
+        // The queue is a snapshot: a loader that ran earlier may have unregistered a later one,
+        // which php then never calls, and the registry's reference (the only one) is gone with
+        // it. A callback still registered is retained for the length of its own call.
+        let registered = if std::ptr::eq(owner, here) {
+            context.autoload_callbacks().iter().any(|held| held.as_ptr() == callback.as_ptr())
+        } else {
+            unsafe { owner.as_ref() }.is_some_and(|owner| {
+                owner.autoload_callbacks().iter().any(|held| held.as_ptr() == callback.as_ptr())
+            })
+        };
+        if !registered {
+            continue;
+        }
+        let callback = values.retain(callback)?;
+        let outcome = eval_spl_autoload_queue_entry(owner, here, callback, class_name, context, values);
+        values.release(callback)?;
+        if outcome? {
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+
+/// Runs one queued loader on its owner context and reports whether the class became visible.
+#[cfg(not(test))]
+fn eval_spl_autoload_queue_entry(
+    owner: *mut ElephcEvalContext,
+    here: *mut ElephcEvalContext,
+    callback: RuntimeCellHandle,
+    class_name: &str,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<bool, EvalStatus> {
+    {
         if std::ptr::eq(owner, here) {
             eval_invoke_autoload_callback(callback, class_name, context, values)?;
         } else {
@@ -188,11 +263,8 @@ fn eval_spl_autoload_queue(
                 }
             }
         }
-        if eval_autoload_target_exists(class_name, context, values)? {
-            return Ok(true);
-        }
+        eval_autoload_target_exists(class_name, context, values)
     }
-    Ok(false)
 }
 
 /// Moves a Throwable an autoload callback raised from its OWNER context to the probing caller.
@@ -364,8 +436,22 @@ fn eval_spl_autoload_class_local(
     if crate::eval_trace::enabled() {
         eprintln!("[elephc-eval-trace] phase=spl_autoload_local class={class_name:?} callbacks={}", callbacks.len());
     }
+    // The list is a snapshot, and a loader that runs may unregister a later one, which drops the
+    // registry's reference. Every entry is held for the walk and one that is no longer
+    // registered when its turn comes is skipped, as php never calls it.
+    let held = callbacks
+        .iter()
+        .map(|callback| values.retain(*callback))
+        .collect::<Result<Vec<_>, _>>()?;
     let result = (|| {
         for callback in callbacks {
+            if !context
+                .autoload_callbacks()
+                .iter()
+                .any(|registered| registered.as_ptr() == callback.as_ptr())
+            {
+                continue;
+            }
             let callback = eval_callable(callback, context, values).map_err(|status| {
                 if crate::eval_trace::enabled() {
                     eprintln!("[elephc-eval-trace] phase=spl_autoload_callback stage=normalize status={status:?}");
@@ -407,8 +493,15 @@ fn eval_spl_autoload_class_local(
         Ok(false)
     })();
     let release = eval_release_value(context, values, class);
+    let mut held_release = Ok(());
+    for callback in held {
+        if let Err(status) = eval_release_value(context, values, callback) {
+            held_release = Err(status);
+        }
+    }
     context.end_autoload_class(class_name);
     release?;
+    held_release?;
     result
 }
 

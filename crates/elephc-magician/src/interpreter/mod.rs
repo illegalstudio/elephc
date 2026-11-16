@@ -152,7 +152,7 @@ pub(crate) fn register_runtime_spl_autoload_callback(
     // `context` is usually one the bridge just made for this call, so PHP's by-value dedupe
     // has to look across every context that holds loaders.
     #[cfg(not(test))]
-    if runtime_spl_autoload_callback_is_registered(callback, values)? {
+    if runtime_spl_autoload_callback_is_registered(callback, std::ptr::null(), values)? {
         return values.bool_value(true);
     }
     register_spl_autoload_callback_unchecked(callback, prepend, context, values)
@@ -167,7 +167,7 @@ pub(crate) fn remove_runtime_spl_autoload_callback(
     callback: RuntimeCellHandle,
     values: &mut impl RuntimeValueOps,
 ) -> Result<bool, EvalStatus> {
-    unregister_runtime_spl_autoload_callback(callback, values)
+    unregister_runtime_spl_autoload_callback(callback, std::ptr::null(), values)
 }
 
 /// Executes an EvalIR program and returns the eval result cell.
@@ -224,13 +224,13 @@ pub fn execute_program_outcome_with_context(
     }
 }
 
-/// Executes an already materialized runtime include and preserves escaping Throwable cells.
 /// Context-free answer for a compiled include the interpreter would not run; see
 /// `include_exec::fast_include_answer`.
 pub(crate) fn fast_include_answer(path: &str, once: bool, value_discarded: bool) -> bool {
     include_exec::fast_include_answer(path, once, value_discarded)
 }
 
+/// Executes an already materialized runtime include and preserves escaping Throwable cells.
 pub fn execute_include_outcome_with_context(
     context: &mut ElephcEvalContext,
     scope: &mut ElephcEvalScope,

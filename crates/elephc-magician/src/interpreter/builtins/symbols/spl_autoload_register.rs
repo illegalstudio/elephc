@@ -145,6 +145,11 @@ pub(crate) fn register_spl_autoload_callback_unchecked(
     if eval_autoload_callback_position(callback, context, values)?.is_some() {
         return values.bool_value(true);
     }
+    // The queue is request-wide: a loader another context registered counts as registered too.
+    #[cfg(not(test))]
+    if runtime_spl_autoload_callback_is_registered(callback, context as *const ElephcEvalContext, values)? {
+        return values.bool_value(true);
+    }
     let first_callback = context.has_no_autoload_callbacks();
     if first_callback
         && !crate::context::register_global_eval_autoload_context(
@@ -180,9 +185,14 @@ pub(crate) fn register_spl_autoload_callback_unchecked(
 #[cfg(not(test))]
 pub(crate) fn unregister_runtime_spl_autoload_callback(
     callback: RuntimeCellHandle,
+    except: *const ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<bool, EvalStatus> {
     for owner in crate::context::global_eval_autoload_contexts_snapshot() {
+        // The asking context is already borrowed by the caller, which searched it first.
+        if std::ptr::eq(owner as *const ElephcEvalContext, except) {
+            continue;
+        }
         let Some(context) = (unsafe { owner.as_mut() }) else {
             continue;
         };
@@ -210,9 +220,14 @@ pub(crate) fn unregister_runtime_spl_autoload_callback(
 #[cfg(not(test))]
 pub(crate) fn runtime_spl_autoload_callback_is_registered(
     callback: RuntimeCellHandle,
+    except: *const ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<bool, EvalStatus> {
     for owner in crate::context::global_eval_autoload_contexts_snapshot() {
+        // The asking context is already borrowed by the caller, which searched it first.
+        if std::ptr::eq(owner as *const ElephcEvalContext, except) {
+            continue;
+        }
         let Some(context) = (unsafe { owner.as_ref() }) else {
             continue;
         };
@@ -261,6 +276,17 @@ fn eval_spl_autoload_unregister_result(
         eval_validate_spl_autoload_unregister_callback(callable, context, values)
     })?;
     let Some(index) = eval_autoload_callback_position(callback, context, values)? else {
+        // The queue is request-wide: the loader may be one another context registered.
+        #[cfg(not(test))]
+        {
+            let removed = unregister_runtime_spl_autoload_callback(
+                callback,
+                context as *const ElephcEvalContext,
+                values,
+            )?;
+            return values.bool_value(removed);
+        }
+        #[cfg(test)]
         return values.bool_value(false);
     };
     let Some(callback) = context.remove_autoload_callback_at(index) else {
