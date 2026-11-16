@@ -10,19 +10,33 @@
 //!   `proc_open`, `\proc_open` and a namespaced fallback call.
 //! - The function set is exact (`elephc_builtin_contract::PROC_FUNCTIONS`), never a
 //!   prefix: a user `proc_helper()` must not inject the surface or link the bridge.
+//! - A program with an indirect call also counts its string literals, like the other
+//!   preludes' detectors: the callable it invokes may be any name the source spells.
 //! - Soundness beats precision: a missed reference would leave a lowering calling an
 //!   undeclared helper, while a false positive only adds prunable declarations.
 
 use crate::parser::ast::Program;
 
 /// Returns whether any statement references a `proc_*` builtin.
+///
+/// A call this walk cannot name (`$f(0)`, `call_user_func($f)`) may reach a proc builtin
+/// through a string the program spells anywhere, such as `run('proc_nice')` handing it to a
+/// user function, so such a program's string literals count as references too.
 pub(super) fn program_uses_proc(program: &Program) -> bool {
     let usage = crate::prelude_prune::usage::collect(program);
-    usage.functions.iter().any(|name| {
-        name.rsplit('\\').next().is_some_and(|segment| {
-            elephc_builtin_contract::PROC_FUNCTIONS
-                .iter()
-                .any(|candidate| segment.eq_ignore_ascii_case(candidate))
-        })
+    let indirect = usage.dynamic_function_call || usage.introspects;
+    usage
+        .functions
+        .iter()
+        .chain(usage.literals.iter().filter(|_| indirect))
+        .any(|name| is_proc_function(name))
+}
+
+/// Returns whether `name`'s last namespace segment is a proc builtin, case-insensitively.
+fn is_proc_function(name: &str) -> bool {
+    name.rsplit('\\').next().is_some_and(|segment| {
+        elephc_builtin_contract::PROC_FUNCTIONS
+            .iter()
+            .any(|candidate| segment.eq_ignore_ascii_case(candidate))
     })
 }
