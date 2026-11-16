@@ -192,3 +192,22 @@ var_dump(preg_match('/b/', 'a', $none), $none, preg_last_error());
          bool(false)\nint(0)\narray(0) {\n}\nint(0)\n"
     );
 }
+
+/// A positive `preg_split()` `$limit` stops matching once enough pieces are collected, so a
+/// match error past the limit neither fails the call nor sets `preg_last_error()`, in compiled
+/// code and in eval; the same split without room for the remainder still fails.
+#[test]
+fn test_preg_split_limit_skips_errors_past_the_limit() {
+    let source = r#"$s = 'x,' . str_repeat('a', 24) . 'b';
+echo json_encode(preg_split('/,|(a+)+$/', $s, 2)), preg_last_error(), "\n";
+echo json_encode(preg_split('/,|(a+)+$/', $s, 2, PREG_SPLIT_DELIM_CAPTURE)), preg_last_error(), "\n";
+var_dump(preg_split('/,|(a+)+$/', $s, 3));
+echo preg_last_error(), "\n";
+"#;
+    let rest = format!("\"{}b\"", "a".repeat(24));
+    let expected = format!("[\"x\",{rest}]0\n[\"x\",{rest}]0\nbool(false)\n2\n");
+    assert_eq!(compile_and_run(&format!("<?php\n{source}")), expected);
+    let quoted = source.replace('\\', "\\\\").replace('\'', "\\'");
+    let eval = compile_and_run_with_regex(&format!("<?php\neval('{quoted}' . ' // ' . $argc);\n"));
+    assert_eq!(eval, expected);
+}

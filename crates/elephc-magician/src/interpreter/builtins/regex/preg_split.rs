@@ -66,13 +66,16 @@ pub(in crate::interpreter) fn eval_preg_split_result(
     let mut pieces = Vec::<EvalPregSplitPiece>::new();
     let mut cursor = 0;
 
-    for captures in regex.captures_iter(&subject) {
+    // The limit is checked before each match runs: PHP never runs the matches past it, so
+    // their errors must not fail the call.
+    let mut matches = regex.captures_iter(&subject);
+    while !eval_preg_split_reached_limit(&pieces, limit) {
+        let Some(captures) = matches.next() else {
+            break;
+        };
         let Some(matched) = captures.get(0) else {
             continue;
         };
-        if eval_preg_split_reached_limit(&pieces, limit) {
-            break;
-        }
         eval_preg_split_push_piece(
             &mut pieces,
             &subject[cursor..matched.start()],

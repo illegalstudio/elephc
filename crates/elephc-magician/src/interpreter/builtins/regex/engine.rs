@@ -142,24 +142,19 @@ impl Regex {
     }
 
     /// Returns every non-overlapping capture set for this regex and subject.
-    pub(in crate::interpreter) fn captures_iter<'a>(
-        &self,
+    ///
+    /// Matching is lazy: each `next()` runs one match, so a caller that stops early (a
+    /// `preg_split()` `$limit`) never runs, nor records the errors of, matches PHP skips.
+    pub(in crate::interpreter) fn captures_iter<'r, 'a>(
+        &'r self,
         subject: &'a [u8],
-    ) -> std::vec::IntoIter<Captures<'a>> {
-        let mut captures = Vec::new();
-        let Ok(subject_c) = CString::new(subject) else { return captures.into_iter(); };
-        let mut continuation = false;
-        loop {
-            let Some(next) = self.exec_subject(subject, &subject_c, 0, continuation) else {
-                break;
-            };
-            if next.get(0).is_none() {
-                break;
-            }
-            captures.push(next);
-            continuation = true;
+    ) -> CapturesIter<'r, 'a> {
+        CapturesIter {
+            regex: self,
+            subject,
+            subject_c: CString::new(subject).ok(),
+            continuation: false,
         }
-        captures.into_iter()
     }
 
     /// Executes this regex from a byte offset, returning capture offsets on match.
@@ -230,6 +225,33 @@ impl EvalPregModifiers {
             flags |= ELEPHC_PCRE2_EXTENDED;
         }
         flags
+    }
+}
+
+/// Lazy iterator over the non-overlapping matches of one regex in one subject.
+pub(in crate::interpreter) struct CapturesIter<'r, 'a> {
+    regex: &'r Regex,
+    subject: &'a [u8],
+    /// The C-string copy of the subject; `None` once matching has ended.
+    subject_c: Option<CString>,
+    continuation: bool,
+}
+
+impl<'a> Iterator for CapturesIter<'_, 'a> {
+    type Item = Captures<'a>;
+
+    /// Runs the next match, ending the iteration at no match or a match error.
+    fn next(&mut self) -> Option<Captures<'a>> {
+        let subject_c = self.subject_c.as_deref()?;
+        let next = self
+            .regex
+            .exec_subject(self.subject, subject_c, 0, self.continuation)
+            .filter(|captures| captures.get(0).is_some());
+        if next.is_none() {
+            self.subject_c = None;
+        }
+        self.continuation = true;
+        next
     }
 }
 
