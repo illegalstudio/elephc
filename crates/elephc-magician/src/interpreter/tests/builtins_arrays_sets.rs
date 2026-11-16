@@ -36,6 +36,41 @@ return function_exists("array_combine");"#,
     assert_eq!(values.output, "10:20:nz:ftd:v:7:8:");
     assert_eq!(values.get(result), FakeValue::Bool(true));
 }
+/// Verifies `compact()` collects `$this` inside a method and warns for an undefined name, as
+/// `php -n` 8.5.10 does (`this,x` and `compact(): Undefined variable $nope`).
+#[test]
+fn compact_collects_this_and_warns_for_an_undefined_name() {
+    let program = parse_fragment(
+        br#"class CompactProbe { function m() { $x = 1; echo implode(",", array_keys(compact("this", "x", "nope"))); } }
+(new CompactProbe())->m();"#,
+    )
+    .expect("parse eval fragment");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+    execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+    assert_eq!(values.output, "this,x");
+    assert!(values
+        .warnings
+        .iter()
+        .any(|warning| warning.contains("compact(): Undefined variable $nope")));
+}
+
+/// Verifies `array_column()`'s `index_key` value is converted as an array offset: a float
+/// truncates, a bool is 0/1 and null is `""`. `php -n` 8.5.10 builds `[2=>1, 0=>2, ""=>3, 1=>4]`
+/// (with the float and null deprecations); the values used to be appended at 0..3 instead.
+#[test]
+fn array_column_converts_scalar_index_values_like_array_offsets() {
+    let program = parse_fragment(
+        br#"$c = array_column([["a"=>1,"k"=>2.7],["a"=>2,"k"=>false],["a"=>3,"k"=>null],["a"=>4,"k"=>true]], "a", "k");
+echo $c[2], $c[0], $c[""], $c[1], ":", count($c);"#,
+    )
+    .expect("parse eval fragment");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+    execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+    assert_eq!(values.output, "1234:4");
+}
+
 /// Verifies eval `array_column()` extracts present row columns and reindexes them.
 #[test]
 fn execute_program_dispatches_array_column_builtin() {

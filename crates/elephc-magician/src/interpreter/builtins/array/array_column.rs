@@ -61,6 +61,38 @@ pub(in crate::interpreter) fn eval_builtin_array_column(
     eval_array_column_result(array, column_key, index_key, values)
 }
 
+/// Converts a row's `index_key` value the way php converts an array offset: an int or string is
+/// the key, a float truncates (deprecated when it has a fraction), a bool is 0/1 and null is `""`
+/// (deprecated). Answers `None` for any other type, whose entry is appended at the next index.
+fn eval_array_column_offset_key(
+    candidate: RuntimeCellHandle,
+    values: &mut impl RuntimeValueOps,
+) -> Result<Option<RuntimeCellHandle>, EvalStatus> {
+    let key = match values.type_tag(candidate)? {
+        EVAL_TAG_INT | EVAL_TAG_STRING => return Ok(Some(candidate)),
+        EVAL_TAG_FLOAT => {
+            let key = eval_int_value(candidate, values)?;
+            values.int(key)?
+        }
+        EVAL_TAG_BOOL => {
+            let key = values.truthy(candidate)?;
+            values.int(i64::from(key))?
+        }
+        EVAL_TAG_NULL => {
+            values.warning(
+                "Deprecated: Using null as an array offset is deprecated, use an empty string instead\n",
+            )?;
+            values.string("")?
+        }
+        _ => {
+            values.release(candidate)?;
+            return Ok(None);
+        }
+    };
+    values.release(candidate)?;
+    Ok(Some(key))
+}
+
 /// Builds `array_column()`: the `column_key` entry of each row (the whole row for a null key),
 /// keyed by the row's `index_key` entry when that is given and present, else appended.
 pub(in crate::interpreter) fn eval_array_column_result(
@@ -96,12 +128,7 @@ pub(in crate::interpreter) fn eval_array_column_result(
             let has_index = values.array_key_exists(index_key, row)?;
             if values.truthy(has_index)? {
                 let candidate = values.array_get(row, index_key)?;
-                if matches!(
-                    values.type_tag(candidate)?,
-                    EVAL_TAG_INT | EVAL_TAG_STRING
-                ) {
-                    target_key = Some(candidate);
-                }
+                target_key = eval_array_column_offset_key(candidate, values)?;
             }
         }
         let target_key = match target_key {

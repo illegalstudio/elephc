@@ -8,8 +8,9 @@
 //! - Like `get_defined_vars()`, this is a scope intrinsic: the answer depends on the RUNNING
 //!   scope's variables, which only the interpreter's call site can see.
 //! - Each argument is a variable name or an array of names, nested to any depth. A name with no
-//!   visible variable is skipped (php only warns). `$this` is carried by the scope's receiver,
-//!   not an entry, so it is skipped here as in `get_defined_vars()`.
+//!   visible variable is skipped with php's `compact(): Undefined variable $name` warning.
+//!   Unlike `get_defined_vars()`, `compact('this')` collects `$this` inside a method; where
+//!   there is none php skips the name without a warning.
 //! - Laravel's schema `Blueprint::addColumn()` builds every column with
 //!   `compact('type', 'name')`; without it a column's `type` is empty and the grammar looks up
 //!   a method called `type`.
@@ -50,15 +51,17 @@ fn eval_compact_collect(
             let Ok(name) = String::from_utf8(bytes.clone()) else {
                 return Ok(result);
             };
-            if name == "this" {
+            let Some(cell) = scope.visible_cell(&name) else {
+                if name != "this" {
+                    values.warning(&format!("compact(): Undefined variable ${name}"))?;
+                }
                 return Ok(result);
-            }
-            if let Some(cell) = scope.visible_cell(&name) {
-                let key = values.string_bytes_value(&bytes)?;
-                let value = values.retain(cell)?;
-                result = values.array_set(result, key, value)?;
-            }
-            Ok(result)
+            };
+            // `array_set` takes its own reference to the stored value and borrows the key.
+            let key = values.string_bytes_value(&bytes)?;
+            let stored = values.array_set(result, key, cell);
+            values.release(key)?;
+            stored
         }
         EVAL_TAG_ARRAY | EVAL_TAG_ASSOC => {
             let len = values.array_len(names)?;
@@ -67,6 +70,7 @@ fn eval_compact_collect(
                 let item = values.array_get(names, key)?;
                 values.release(key)?;
                 result = eval_compact_collect(item, result, scope, values)?;
+                values.release(item)?;
             }
             Ok(result)
         }
