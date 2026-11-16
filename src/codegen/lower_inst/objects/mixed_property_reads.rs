@@ -462,6 +462,13 @@ pub(super) fn lower_declared_mixed_prop_get(
 
     for (group, label) in magic_groups.iter().zip(magic_labels.iter()) {
         ctx.emitter.label(label);
+        // php reads the object's dynamic-property table first and asks `__get` only on a miss
+        // (`__get` itself usually stores the answer there: `$this->$name = ...`). The row lookup
+        // answers every class of the group from its own hash offset; a class without an
+        // addressable hash, or a table without the name, falls through to the accessor.
+        if magic_calls_get(mode) {
+            emit_table_dynamic_hash_read(ctx, property, &[], &done_label);
+        }
         emit_mixed_magic_get_arm(ctx, Some(&group.class_name), property, mode, &done_label)?;
     }
 
@@ -1163,6 +1170,9 @@ fn emit_table_dynamic_hash_read(
             ctx.emitter.instruction("mov rax, rdi");                            // return the boxed Mixed cell stored in the hash entry
         }
     }
+    // `$r = &$object->name` turned the entry into a reference marker: the read yields the
+    // referenced value, as the typed-receiver hash reads do, not the marker box.
+    emit_follow_dynamic_hash_ref_marker(ctx);
     abi::emit_incref_if_refcounted(ctx.emitter, &PhpType::Mixed);
     abi::emit_release_temporary_stack(ctx.emitter, 16);
     abi::emit_jump(ctx.emitter, done_label);
@@ -1190,8 +1200,8 @@ pub(super) struct MixedClassHashArm {
 /// A hash arm answers only from the per-instance property table and warns on a miss; php asks
 /// `__get` there. Every compiled class with a dynamic-property table got such an arm, so Laravel's
 /// `Fluent` (`$command->name` through `__get`) read null with "Undefined property" and every
-/// schema operation failed. A dynamic property stored on a `__get` class is the one case this
-/// gives up, and php code that has `__get` keeps its data behind it.
+/// schema operation failed. The magic arm that replaces it probes the class's own hash first (`emit_table_dynamic_hash_read`),
+/// so a dynamic property the object really holds is still answered before `__get`, as in php.
 fn read_hash_arms_without_magic(
     ctx: &FunctionContext<'_>,
     arms: Vec<MixedClassHashArm>,

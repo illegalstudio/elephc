@@ -254,6 +254,23 @@ fn lower_native_prop_get_nonnull(
         return lower_stdclass_prop_get(ctx, inst, object, property);
     }
     if let Some(interface_name) = property_interface_receiver(ctx, object)? {
+        // The implementers answer by what php says about EACH of them from this scope: a
+        // private or protected slot refuses, `__get` is asked, a name the class keeps in its
+        // dynamic-property hash is read from it, and the fetch mode (`??`, `isset`, `empty`)
+        // decides what a miss means. The by-class ladder resolves all of that
+        // (`resolve_property_read_arm`); the physical-slot ladder below does not, so it only
+        // answers a name no class resolves any other way (`None`: nothing declares it).
+        let mode = property_fetch_mode(inst);
+        if let Some(mut candidates) = narrowed_receiver_property_candidates(ctx, property, mode, inst)? {
+            candidates.retain(|candidate| {
+                object_type_implements_interface(
+                    ctx,
+                    &candidate.candidate.slot.class_name,
+                    &interface_name,
+                )
+            });
+            return lower_declared_mixed_prop_get(ctx, inst, object, property, candidates, mode);
+        }
         return lower_polymorphic_object_prop_get(ctx, inst, object, &interface_name, property);
     }
     if let Some(class_name) = property_abstract_receiver(ctx, object, property)? {
@@ -1028,7 +1045,7 @@ pub(super) fn emit_scope_dynamic_property_read(
 /// Replaces the boxed hash entry in the result register by the value it holds when the entry is
 /// a reference marker (`$r = &$object->name` made it one): a read yields the referenced value,
 /// as `__rt_stdclass_get` does for stdClass, not the marker (which read as an empty string).
-fn emit_follow_dynamic_hash_ref_marker(ctx: &mut FunctionContext<'_>) {
+pub(super) fn emit_follow_dynamic_hash_ref_marker(ctx: &mut FunctionContext<'_>) {
     let local = ctx.next_label("dyn_hash_ref_follow");
     let retry = format!("{local}_retry");
     let value = format!("{local}_value");
