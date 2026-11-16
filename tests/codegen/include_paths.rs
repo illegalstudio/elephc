@@ -1120,3 +1120,30 @@ fn test_include_once_inside_a_closure_declares_its_interface_once() {
     );
     assert_eq!(out, "late|yes|yes\n");
 }
+
+/// Including an interface file a second time at run time is php's redeclaration FATAL: no
+/// `catch` sees it and the program stops, with the message naming where the interface was
+/// declared. It used to throw a catchable `Error`, so `catch (\Error)` swallowed it and the
+/// loop ran on.
+#[test]
+fn test_runtime_interface_redeclaration_is_an_uncatchable_fatal() {
+    let out = compile_and_run_files_expect_failure(
+        &[
+            (
+                "main.php",
+                "<?php\nfunction load() { include __DIR__ . '/iface.php'; }\nfor ($i = 0; $i < 2; $i++) {\n    try { load(); echo \"ok $i\\n\"; } catch (\\Error $e) { echo 'caught: ', $e->getMessage(), \"\\n\"; }\n}\necho \"after\\n\";\n",
+            ),
+            ("iface.php", "<?php\ninterface A {}\n"),
+        ],
+        "main.php",
+    );
+    assert!(out.starts_with("ok 0\n"), "first include declares the interface: {out}");
+    assert!(!out.contains("caught"), "the redeclaration must not be catchable: {out}");
+    assert!(!out.contains("after"), "the redeclaration must stop the program: {out}");
+    assert!(
+        out.contains("Fatal error: Cannot redeclare interface A (previously declared in ")
+            && out.contains("iface.php:2) in ")
+            && out.contains("iface.php on line 2"),
+        "php's redeclaration fatal names the declaration: {out}"
+    );
+}
