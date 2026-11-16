@@ -453,6 +453,7 @@ fn test_goto_nested_positions() {
 #[test]
 fn test_goto_label_is_not_confused_with_other_colons() {
     let has_label = |src: &str| {
+        /// Returns whether these statements, or the bodies nested in them, hold a jump label.
         fn any(stmts: &[Stmt]) -> bool {
             stmts.iter().any(|stmt| match &stmt.kind {
                 StmtKind::GotoLabel(_) => true,
