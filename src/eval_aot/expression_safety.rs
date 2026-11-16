@@ -87,7 +87,7 @@ where
         ExprKind::Cast { target, expr } => {
             matches!(
                 target,
-                CastType::Int | CastType::Float | CastType::String | CastType::Bool
+                CastType::Int | CastType::Float | CastType::String | CastType::StringFormat | CastType::Bool
             ) && expr_is_eir_function_safe(expr, support, facts, scope_reads)
         }
         ExprKind::Match {

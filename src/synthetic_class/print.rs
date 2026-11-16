@@ -867,6 +867,8 @@ fn render(value: &Expr) -> (String, u8) {
         ExprKind::Negate(inner) => (format!("-{}", at(inner, 85)), 85),
         ExprKind::Not(inner) => (format!("!{}", at(inner, 75)), 75),
         ExprKind::ErrorSuppress(inner) => (format!("@{}", at(inner, 35)), 35),
+        ExprKind::Cast { target: CastType::StringFormat, expr } =>
+            (crate::semantics::strings::formatting_source(&expression(expr)), 100),
         ExprKind::Cast { target, expr } => {
             (format!("({}) {}", cast_type(target), at(expr, 85)), 85)
         }
@@ -1066,6 +1068,7 @@ fn cast_type(target: &CastType) -> &'static str {
         CastType::Int => "int",
         CastType::Float => "float",
         CastType::String => "string",
+        CastType::StringFormat => unreachable!("formatting has its own source expression"),
         CastType::Bool => "bool",
         CastType::Array => "array",
         CastType::Object => "object",

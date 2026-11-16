@@ -57,6 +57,7 @@ pub(crate) use integer_destinations::{
 use integer_destinations::lower_expr_for_parameter;
 pub(crate) mod object_operators;
 mod string_concat;
+pub(super) mod string_contracts;
 mod comparisons;
 mod unary_logic;
 mod branch_conditions;

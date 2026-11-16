@@ -883,7 +883,8 @@ impl ExceptionFlowAnalysis {
     ) -> ThrownTypes {
         let thrown = self.expr_throws_without_binding(expr, bindings, class_context, include_operands);
         if super::semantic_context::implicit_value_boundary_may_throw(expr)
-            || super::semantic_context::comparison_boundary_may_throw(expr) {
+            || super::semantic_context::comparison_boundary_may_throw(expr)
+            || super::semantic_context::string_boundary_may_throw(expr) {
             thrown.combined(ThrownTypes::exact("TypeError"))
         } else { thrown }
     }
@@ -940,7 +941,7 @@ impl ExceptionFlowAnalysis {
                 if super::semantic_context::checked_cast_may_throw(expr) {
                     thrown = thrown.combined(ThrownTypes::unknown());
                 }
-                if matches!(target, CastType::String) {
+                if matches!(target, CastType::String | CastType::StringFormat) {
                     thrown = thrown.combined(self.string_conversion_throws(inner, class_context));
                 } else if matches!(target, CastType::Bool | CastType::Array) {
                     thrown = thrown.combined(self.internal_conversion_throws(inner));

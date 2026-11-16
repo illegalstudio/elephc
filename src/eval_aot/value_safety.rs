@@ -24,7 +24,7 @@ where
         ExprKind::Variable(name) => {
             facts.is_assigned(name) || scope_reads.is_some_and(|reads| reads.contains(name))
         }
-        ExprKind::Cast { target, expr } if matches!(target, CastType::String) => {
+        ExprKind::Cast { target, expr } if matches!(target, CastType::String | CastType::StringFormat) => {
             expr_is_eir_function_safe(expr, support, facts, scope_reads)
         }
         _ => false,

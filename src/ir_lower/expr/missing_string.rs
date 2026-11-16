@@ -648,7 +648,7 @@ fn expr_may_carry_missing_string(
             expr_may_carry_missing_string(value, carried, ctx)
                 || expr_may_carry_missing_string(default, carried, ctx)
         }
-        ExprKind::Cast { target, .. } if matches!(target, CastType::String) => false,
+        ExprKind::Cast { target, .. } if matches!(target, CastType::String | CastType::StringFormat) => false,
         ExprKind::BinaryOp { op: BinOp::Concat, .. } => false,
         ExprKind::BinaryOp { op, right, .. } => {
             matches!(op, BinOp::NullCoalesce)

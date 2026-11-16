@@ -330,7 +330,7 @@ fn infer_unbound_expr_type_syntactic(expr: &Expr) -> PhpType {
         }
 
         ExprKind::Cast {
-            target: CastType::String,
+            target: CastType::String | CastType::StringFormat,
             ..
         } => PhpType::Str,
         ExprKind::Cast {

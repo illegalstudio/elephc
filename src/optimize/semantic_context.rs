@@ -71,6 +71,14 @@ pub(super) fn comparison_boundary_may_throw(expr: &crate::parser::ast::Expr) -> 
     }
 }
 
+/// Preserves original-kind failures independently of operand effects or output conversion.
+pub(super) fn string_boundary_may_throw(expr: &crate::parser::ast::Expr) -> bool {
+    use crate::parser::ast::{BinOp, CastType, ExprKind};
+    enabled(StrictFeature::Strings) && matches!(expr.kind,
+        ExprKind::BinaryOp { op: BinOp::Concat, .. }
+        | ExprKind::Cast { target: CastType::StringFormat, .. })
+}
+
 /// A declared store can reject its source independently of operand effects or retirement.
 pub(super) fn implicit_store_may_throw(stmt: &crate::parser::ast::Stmt) -> bool {
     if matches!(stmt.kind, crate::parser::ast::StmtKind::Assign { .. }) {

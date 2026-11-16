@@ -740,7 +740,7 @@ fn precise_scalar_expr_type(value: &Expr) -> Option<PhpType> {
         ExprKind::Cast { target, .. } => match target {
             CastType::Int => Some(PhpType::Int),
             CastType::Float => Some(PhpType::Float),
-            CastType::String => Some(PhpType::Str),
+            CastType::String | CastType::StringFormat => Some(PhpType::Str),
             CastType::Bool => Some(PhpType::Bool),
             CastType::Array | CastType::Object => None,
         },

@@ -35,7 +35,7 @@ pub(super) fn capture_comparison_operand(
 }
 
 /// Shares the original native-class lifetime policy with an explicit scalar snapshot requirement.
-fn capture_left_operand_with_policy(
+pub(super) fn capture_left_operand_with_policy(
     ctx: &mut LoweringContext<'_, '_>, value: LoweredValue, right: &Expr, span: Span,
     exact: bool,
 ) -> (LoweredValue, Vec<super::call_operand_owners::PinnedInFlightOwner>) {

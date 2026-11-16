@@ -37,7 +37,7 @@ pub(super) fn try_fold_cast(target: &CastType, expr: &Expr) -> Option<ExprKind> 
     match target {
         CastType::Int => try_fold_cast_int(value),
         CastType::Float => try_fold_cast_float(value),
-        CastType::String => try_fold_cast_string(value),
+        CastType::String | CastType::StringFormat => try_fold_cast_string(value),
         // A NAN is truthy, but PHP 8.5 also REPORTS the coercion
         // (`unexpected NAN value was coerced to bool`), and a folded `BoolLiteral` would
         // swallow that warning — `var_dump((bool)NAN)` warns in php-src even though the

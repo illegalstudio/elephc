@@ -355,6 +355,8 @@ pub enum CastType {
     Int,
     Float,
     String,
+    /// Lexer-generated interpolation conversion, retaining its explicit formatting context.
+    StringFormat,
     Bool,
     Array,
     Object,

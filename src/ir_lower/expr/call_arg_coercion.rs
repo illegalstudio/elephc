@@ -946,7 +946,7 @@ fn apply_scalar_param_cast(
     span: Option<crate::span::Span>,
 ) -> LoweredValue {
     match cast {
-        CastType::String => coerce_to_string_at_span(ctx, value, span),
+        CastType::String | CastType::StringFormat => coerce_to_string_at_span(ctx, value, span),
         CastType::Bool => lower_truthy_bool(ctx, value, span),
         // `param_binding::scalar_param_cast` only ever reports the two total scalar casts.
         CastType::Int | CastType::Float | CastType::Array | CastType::Object => value,

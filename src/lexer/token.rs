@@ -69,6 +69,8 @@ pub enum Token {
 
     // Literals
     StringLiteral(String),
+    /// Internal interpolation prefix, never produced by an identifier in user source.
+    StringFormat,
     IntLiteral(i64),
     /// Exact unsigned 2^63 under strict overflow, pending a direct unary minus.
     MinimumIntegerMagnitude,

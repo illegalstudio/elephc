@@ -1151,7 +1151,8 @@ paths. Keep this plan, agent documentation and the current journal log synchroni
 | 101 | `bed10dc9b4` | fix(strict): preserve comparison sources and switch lifetimes |
 
 | 102 | `c7b1e9b122` | fix(strict): retain numeric producer policies and result bindings |
-| 103 | this commit | feat(strict): guard builtin comparison modes and callable boundaries |
+| 103 | `40185b8f12` | feat(strict): guard builtin comparison modes and callable boundaries |
+| 104 | this commit | feat(strict): enforce native string and formatting contracts |
 
 
 ### Builtin comparison policy integration
@@ -1196,3 +1197,36 @@ and verification use the original checkout and its own Cargo target directory.
 Strings source baselines have established 14 rejected cases are still accepted,
 with explicit formatting positive controls passing. New, unregistered Strings
 helpers and fixtures are prepared for the next step and excluded from step103.
+
+
+### Verified string compiler and native integration
+
+String concatenation now checks original string kinds through shared source/type
+helpers and EIR predicates, independently of Coercions. Formatting of scalars and
+Stringable values remains an explicit context; arrays are refused before output.
+The compiler lexer emits an internal StringFormat prefix for every interpolated
+operand, represented by CastType::StringFormat. Folding, type/result/alias
+projections, missing-string handling, source reconstruction and AOT eligibility
+retain this context. Generated source uses braced interpolation when possible and
+a scoped, once-evaluated formatting argument for other prepared expressions.
+
+Native concatenation evaluates and captures both original operands before
+checking them, sharing the existing snapshot and unwind owner helpers. Compound
+stores validate before publication. Native output guards retain temporary owners.
+A focused regression also exposed print's existing omitted temporary retirement:
+print new Stringable left one24-byte object and skipped its destructor. Print now
+uses the same owned-value retirement as echo, with a separate permissive control.
+Another actual integration red showed a lost Stringable catch under AST
+optimization because StringFormat lacked the ordinary String cast throw summary;
+that projection is now shared and its strict/permissive native regression passes
+all4 AST/EIR optimizer combinations with clean heaps.
+
+The14 source rejection baselines and formatting positives pass. Five source,
+producer/consumer, reconstruction and all-five-target EIR tests pass, together
+with5 exact lexer tests and1 Pratt/parser provenance regression. Native controls
+cover all4 AST/EIR combinations for failures, alias snapshots, compound-reference
+writes, output union failures, hooks and owners; the row-label example and
+permissive print controls pass. Final focused verification and compiler build
+passed after the throw-summary repair, together with architecture828, assembly
+comment alignment, example syntax and diff hygiene. Eval and host parity remain
+the next step, and Strings remains staged. No new public profile is admitted.

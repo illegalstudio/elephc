@@ -118,7 +118,9 @@ impl Checker {
                 "Unresolved namespace/use statement",
             )),
             StmtKind::Echo(expr) => {
-                self.infer_type_with_assignment_effects(expr, env)?;
+                let ty = self.infer_type_with_assignment_effects(expr, env)?;
+                crate::semantics::strings::validate_formatting(self.semantic_profile,
+                    self.semantic_source_mode, &ty, expr.span)?;
                 Ok(())
             }
             StmtKind::Assign { .. }

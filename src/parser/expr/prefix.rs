@@ -81,6 +81,13 @@ pub(super) fn parse_prefix(
     }
 
     match &tokens[*pos].0 {
+        Token::StringFormat => {
+            *pos += 1;
+            let inner = parse_expr_bp(tokens, pos, 35)?;
+            Ok(Expr::new(ExprKind::Cast {
+                target: crate::parser::ast::CastType::StringFormat, expr: Box::new(inner),
+            }, span))
+        }
         Token::Plus => parse_unary(tokens, pos, span, ExprKind::UnaryPlus, 35),
         Token::Minus if matches!(tokens.get(*pos + 1), Some((Token::MinimumIntegerMagnitude, _)))
             && !matches!(tokens.get(*pos + 2), Some((Token::StarStar | Token::LParen | Token::LBracket

@@ -15,7 +15,7 @@ use crate::parser::ast::{BinOp, CastType, Expr, ExprKind, Program, Stmt, StmtKin
 
 /// Validates syntax-dependent guarantees without pruning any branch or declaration.
 pub fn validate_source(program: &Program, profile: SemanticProfile) -> Result<(), CompileError> {
-    if ![StrictFeature::DynamicCode, StrictFeature::Bools, StrictFeature::Overflow, StrictFeature::Arithmetic, StrictFeature::Coercions, StrictFeature::Casts, StrictFeature::Comparisons].into_iter().any(|feature| profile.contains(feature)) { return Ok(()); }
+    if ![StrictFeature::DynamicCode, StrictFeature::Bools, StrictFeature::Overflow, StrictFeature::Arithmetic, StrictFeature::Coercions, StrictFeature::Casts, StrictFeature::Comparisons, StrictFeature::Strings].into_iter().any(|feature| profile.contains(feature)) { return Ok(()); }
     crate::compiler_stack::with_compiler_stack(|| {
         super::numeric_constants::validate(program, profile)?;
         let mut validator = SourceValidator { depth: 0, error: None, profile, source_modes: Default::default() };
@@ -36,6 +36,13 @@ impl AstVisitor for SourceValidator {
     /// Tracks physical source for trusted implementation statements and validates raw conditions.
     fn statement(&mut self, stmt: &Stmt) {
         self.source_modes.enter_statement(stmt);
+        if let StmtKind::Echo(value) = &stmt.kind {
+            if let Some(ty) = literal_type(value) {
+                if let Err(error) = super::strings::validate_formatting(self.profile, stmt.source_mode, &ty, value.span) {
+                    self.error = Some(error);
+                }
+            }
+        }
         if super::comparisons::active(self.profile, stmt.source_mode) {
             if let StmtKind::Switch { subject, cases, .. } = &stmt.kind {
                 if let Some(subject) = literal_type(subject) {
@@ -73,6 +80,18 @@ impl AstVisitor for SourceValidator {
     fn expression(&mut self, expr: &Expr) {
         let source_mode = self.source_modes.enter_expression(expr).mode;
         if self.error.is_some() { return; }
+        if super::strings::active(self.profile, source_mode) {
+            let result = match &expr.kind {
+                ExprKind::BinaryOp { left, op: BinOp::Concat, right } => [left, right].into_iter()
+                    .try_for_each(|operand| concat_operand_type(operand).map_or(Ok(()), |ty|
+                        super::strings::validate_concatenation(self.profile, source_mode, &ty, operand.span))),
+                ExprKind::Print(inner) | ExprKind::Cast { target: CastType::StringFormat, expr: inner } =>
+                    literal_type(inner).map_or(Ok(()), |ty|
+                        super::strings::validate_formatting(self.profile, source_mode, &ty, inner.span)),
+                _ => Ok(()),
+            };
+            if let Err(error) = result { self.error = Some(error); return; }
+        }
         if super::comparisons::active(self.profile, source_mode)
         {
             if let ExprKind::BinaryOp { left, op, right } = &expr.kind {
@@ -135,7 +154,7 @@ impl AstVisitor for SourceValidator {
             return;
         };
         let verification_flag = [StrictFeature::DynamicCode, StrictFeature::Overflow, StrictFeature::Bools,
-            StrictFeature::Arithmetic, StrictFeature::Coercions, StrictFeature::Casts, StrictFeature::Comparisons].into_iter()
+            StrictFeature::Arithmetic, StrictFeature::Coercions, StrictFeature::Casts, StrictFeature::Comparisons, StrictFeature::Strings].into_iter()
             .find(|feature| self.profile.contains(*feature)).expect("source verification was requested").flag();
         if self.depth >= 64 {
             self.error = Some(CompileError::new(expr.span,
@@ -180,10 +199,20 @@ fn literal_type(expr: &Expr) -> Option<crate::types::PhpType> {
         ExprKind::UnaryPlus(inner) | ExprKind::Negate(inner) => match literal_type(inner)? { value @ (PhpType::Int | PhpType::Float) => value, _ => return None },
         ExprKind::Cast { target, .. } => match target {
             CastType::Int => PhpType::Int, CastType::Float => PhpType::Float,
-            CastType::Bool => PhpType::Bool, CastType::String => PhpType::Str,
+            CastType::Bool => PhpType::Bool, CastType::String | CastType::StringFormat => PhpType::Str,
             CastType::Array => PhpType::Array(Box::new(PhpType::Never)), _ => return None,
         },
         _ => return None,
+    })
+}
+
+/// Includes obvious object operands without changing numeric native-class source proofs.
+fn concat_operand_type(expr: &Expr) -> Option<crate::types::PhpType> {
+    literal_type(expr).or_else(|| match &expr.kind {
+        ExprKind::NewObject { .. } | ExprKind::NewGeneric { .. } | ExprKind::NewDynamic { .. }
+        | ExprKind::NewDynamicObject { .. } | ExprKind::NewScopedObject { .. } =>
+            Some(crate::types::PhpType::Object("object".into())),
+        _ => None,
     })
 }
 

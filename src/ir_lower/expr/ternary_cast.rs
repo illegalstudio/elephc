@@ -121,6 +121,10 @@ pub(super) fn lower_cast(ctx: &mut LoweringContext<'_, '_>, target: &CastType, i
 pub(super) fn lower_scalar_cast_value(
     ctx: &mut LoweringContext<'_, '_>, target: &CastType, value: LoweredValue, expr: &Expr,
 ) -> LoweredValue {
+    if *target == CastType::StringFormat {
+        let value = super::string_contracts::formatting(ctx, value, expr.span);
+        return lower_scalar_cast_value(ctx, &CastType::String, value, expr);
+    }
     let source_type = ctx.builder.value_php_type(value.value);
     let source_repr = source_type.codegen_repr();
     if matches!(target, CastType::Int | CastType::Float) {

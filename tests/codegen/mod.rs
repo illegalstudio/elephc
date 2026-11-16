@@ -176,5 +176,6 @@ mod fileinfo_stream_magic;
 
 mod strict_conversion_parameters;
 mod strict_comparisons;
+mod strict_strings;
 
 mod strict_conversion_returns;

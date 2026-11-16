@@ -81,7 +81,7 @@ impl ReturnBoundaryFacts {
                 CastType::Int => PhpType::Int,
                 CastType::Float => PhpType::Float,
                 CastType::Bool => PhpType::Bool,
-                CastType::String => PhpType::Str,
+                CastType::String | CastType::StringFormat => PhpType::Str,
                 _ => PhpType::Mixed,
             },
             ExprKind::FunctionCall { name, .. } => with_active_function_effects(|functions|

@@ -13,6 +13,7 @@ pub use elephc_semantics::{SemanticProfile, StrictFeature, StrictRequests, FEATU
 pub(crate) mod numeric;
 pub(crate) mod conversions;
 pub(crate) mod comparisons;
+pub(crate) mod strings;
 mod numeric_constants;
 mod validation;
 pub use validation::validate_source;

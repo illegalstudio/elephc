@@ -69,7 +69,8 @@ impl EscapeInput for CharsEscapeInput<'_, '_> {
 
 /// Scan a double-quoted string with interpolation support.
 /// Returns one or more tokens: for `"Hello $name!"` it returns
-/// `("Hello " . Variable("name") . "!")` (parenthesized, with Dot tokens for concatenation).
+/// A parenthesized concat stream whose variable operand carries the internal StringFormat
+/// prefix, preserving formatting separately from ordinary `.` concatenation.
 pub(in crate::lexer) fn scan_double_string_interpolated(
     cursor: &mut Cursor,
 ) -> Result<Vec<SpannedToken>, CompileError> {
@@ -104,9 +105,12 @@ fn push_interp_part(
         ));
     }
     tokens.push(spanned(Token::Dot, span));
+    tokens.push(spanned(Token::StringFormat, span));
+    tokens.push(spanned(Token::LParen, span));
     for token in part {
         tokens.push(token);
     }
+    tokens.push(spanned(Token::RParen, span));
 }
 
 /// Shared interpolation routine for double-quoted strings and heredoc bodies.

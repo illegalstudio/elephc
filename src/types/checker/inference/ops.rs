@@ -193,7 +193,13 @@ impl Checker {
                 // Strict comparison accepts any types — compares both type and value
                 Ok(PhpType::Bool)
             }
-            BinOp::Concat => Ok(PhpType::Str),
+            BinOp::Concat => {
+                for (value, ty) in [(left, &lt), (right, &rt)] {
+                    crate::semantics::strings::validate_concatenation(self.semantic_profile,
+                        self.semantic_source_mode, ty, value.span)?;
+                }
+                Ok(PhpType::Str)
+            }
             BinOp::And | BinOp::Or | BinOp::Xor => Ok(PhpType::Bool),
             BinOp::BitAnd | BinOp::BitOr | BinOp::BitXor | BinOp::ShiftLeft | BinOp::ShiftRight => {
                 let lt_ok = is_integer_operand_type(self, &lt);

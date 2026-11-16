@@ -1259,6 +1259,7 @@ fn cast_type(target: &CastType) -> &'static str {
         CastType::Int => "Int",
         CastType::Float => "Float",
         CastType::String => "String",
+        CastType::StringFormat => "StringFormat",
         CastType::Bool => "Bool",
         CastType::Array => "Array",
         CastType::Object => "Object",

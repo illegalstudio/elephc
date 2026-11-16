@@ -106,7 +106,9 @@ impl Checker {
             }
             ExprKind::ErrorSuppress(inner) => self.infer_type(inner, env),
             ExprKind::Print(inner) => {
-                self.infer_type(inner, env)?;
+                let ty = self.infer_type(inner, env)?;
+                crate::semantics::strings::validate_formatting(self.semantic_profile,
+                    self.semantic_source_mode, &ty, inner.span)?;
                 Ok(PhpType::Int)
             }
             ExprKind::PreIncrement(name) | ExprKind::PreDecrement(name) => match env.get(name) {
@@ -397,10 +399,14 @@ impl Checker {
                 let source_ty = self.infer_type(inner, env)?;
                 use crate::parser::ast::CastType;
                 self.validate_explicit_numeric_cast(self.semantic_source_mode, target, &source_ty, expr.span)?;
+                if *target == CastType::StringFormat {
+                    crate::semantics::strings::validate_formatting(self.semantic_profile,
+                        self.semantic_source_mode, &source_ty, inner.span)?;
+                }
                 Ok(match target {
                     CastType::Int => PhpType::Int,
                     CastType::Float => PhpType::Float,
-                    CastType::String => PhpType::Str,
+                    CastType::String | CastType::StringFormat => PhpType::Str,
                     CastType::Bool => PhpType::Bool,
                     // Shared with EIR lowering so the static type always names the storage
                     // the lowered conversion produces.
