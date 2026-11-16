@@ -31,11 +31,12 @@ pub(crate) fn parse_fragment_cached(code: &[u8]) -> CachedParseResult {
     if !is_cacheable_fragment(code) {
         return parser::parse_eval_fragment(code).map(Arc::new);
     }
-    if let Some(result) = lock_eval_parse_cache().lookup(code) {
+    let key = fragment_cache_key(code);
+    if let Some(result) = lock_eval_parse_cache().lookup(&key) {
         return result;
     }
     let result = parser::parse_eval_fragment(code).map(Arc::new);
-    lock_eval_parse_cache().insert(code.to_vec(), result.clone());
+    lock_eval_parse_cache().insert(key, result.clone());
     result
 }
 
@@ -81,18 +82,37 @@ pub(crate) fn parse_source_file_at_path(path: &std::path::Path) -> Option<Cached
 /// Builds the identity key for one source file on disk.
 ///
 /// The marker byte keeps these keys disjoint from both fragment keys (raw bytes) and whole-file
-/// content keys (leading `0`), so three different lookups can share one cache.
+/// content keys (leading `0`, fragments lead with `2`), so three different lookups can share one cache.
 fn source_path_cache_key(path: &std::path::Path, metadata: &std::fs::Metadata) -> Option<Vec<u8>> {
     use std::time::UNIX_EPOCH;
 
     let modified = metadata.modified().ok()?.duration_since(UNIX_EPOCH).ok()?;
     let mut key = Vec::with_capacity(path.as_os_str().len() + 32);
     key.push(1);
+    // A relative path names a different file after a `chdir()`, so the working directory is part
+    // of the identity (php expands the path against it before caching).
+    if path.is_relative() {
+        if let Ok(cwd) = std::env::current_dir() {
+            key.extend_from_slice(cwd.to_string_lossy().as_bytes());
+        }
+    }
+    key.push(0);
     key.extend_from_slice(&metadata.len().to_le_bytes());
     key.extend_from_slice(&modified.as_secs().to_le_bytes());
     key.extend_from_slice(&modified.subsec_nanos().to_le_bytes());
     key.extend_from_slice(path.to_string_lossy().as_bytes());
     Some(key)
+}
+
+/// Builds the cache key of an eval fragment: its bytes behind a marker of its own.
+///
+/// A fragment is arbitrary bytes, so without a marker one starting with NUL or 0x01 would share a
+/// key with a whole-file or path entry.
+fn fragment_cache_key(code: &[u8]) -> Vec<u8> {
+    let mut key = Vec::with_capacity(code.len() + 1);
+    key.push(2);
+    key.extend_from_slice(code);
+    key
 }
 
 /// Builds the cache key that separates a whole source file from an eval fragment.
@@ -261,6 +281,18 @@ mod tests {
         cache.insert(b"return 1;".to_vec(), Err(diagnostic(EvalParseError::UnexpectedToken)));
 
         assert!(cache.lookup(b"return 1;").is_none());
+    }
+
+    /// Verifies a fragment starting with a file-key marker byte shares no key with a file entry.
+    #[test]
+    fn fragment_keys_never_collide_with_file_keys() {
+        for lead in [0u8, 1, 2] {
+            let fragment = [lead, b'X'];
+            assert_ne!(fragment_cache_key(&fragment), source_file_cache_key(&fragment[1..]));
+            assert_ne!(fragment_cache_key(&fragment[1..]), source_file_cache_key(&fragment[1..]));
+        }
+        assert_ne!(fragment_cache_key(b"X"), source_file_cache_key(b"X"));
+        assert_ne!(fragment_cache_key(b"\0X"), source_file_cache_key(b"X"));
     }
 
     /// Verifies very large one-off fragments are kept out of the global cache.
