@@ -163,9 +163,29 @@ pub fn emit_array_set_refcounted(emitter: &mut Emitter) {
     // A destination that was already a hash before this call never went through the retain
     // block above, so the payload still needs its ownership transferred here.
     emitter.label("__rt_array_set_refcounted_already_hash");
-    emitter.instruction("ldr x9, [x0, #-8]");                                   // reload the destination's full metadata word (the kind check masked it away)
-    emitter.instruction("lsr x9, x9, #8");                                      // move the runtime value_type tag into the low bits
-    emitter.instruction("and x9, x9, #0x7f");                                   // isolate the value_type tag already carried by the existing hash
+    emitter.instruction("ldr x9, [x0, #16]");                                   // default tag: the hash header's value_type (a hash keeps it at +16, never in the kind word)
+    emitter.instruction("ldr x10, [sp, #16]");                                  // reload the incoming heap payload to derive its own runtime tag
+    emit_branch_if_null_container(
+        emitter,
+        "x10",
+        "x11",
+        "__rt_array_set_refcounted_ah_tag_ready",
+    );
+    emitter.instruction("ldr x11, [x10, #-8]");                                 // load the incoming payload heap kind word
+    emitter.instruction("and x11, x11, #0xff");                                 // isolate the low-byte heap kind tag
+    emitter.instruction("cmp x11, #2");                                         // is the incoming payload an indexed array?
+    emitter.instruction("mov x12, #4");                                         // value_type 4 for nested indexed arrays
+    emitter.instruction("csel x9, x12, x9, eq");                                // keep the array tag when the kind matches
+    emitter.instruction("cmp x11, #3");                                         // is the incoming payload an associative array?
+    emitter.instruction("mov x12, #5");                                         // value_type 5 for nested hashes
+    emitter.instruction("csel x9, x12, x9, eq");                                // keep the hash tag when the kind matches
+    emitter.instruction("cmp x11, #4");                                         // is the incoming payload an object instance?
+    emitter.instruction("mov x12, #6");                                         // value_type 6 for objects
+    emitter.instruction("csel x9, x12, x9, eq");                                // keep the object tag when the kind matches
+    emitter.instruction("cmp x11, #5");                                         // is the incoming payload a boxed Mixed cell?
+    emitter.instruction("mov x12, #7");                                         // value_type 7 for boxed Mixed values
+    emitter.instruction("csel x9, x12, x9, eq");                                // keep the Mixed tag when the kind matches
+    emitter.label("__rt_array_set_refcounted_ah_tag_ready");
     emitter.instruction("str x9, [sp, #32]");                                   // snapshot the tag for the hash insert
     emitter.instruction("ldr x0, [sp, #16]");                                   // reload the borrowed payload for the retain helper
     emitter.instruction("bl __rt_incref");                                      // retain the payload so the hash slot owns its stored reference
@@ -309,6 +329,7 @@ fn emit_array_set_refcounted_linux_x86_64(emitter: &mut Emitter) {
 
     // -- indexed destination + negative/sparse int key: promote to hash then insert --
     emitter.label("__rt_array_set_refcounted_promote");
+    emitter.instruction("mov rdi, rax");                                       // __rt_array_to_hash takes the indexed array in rdi (the helper calls above clobbered it)
     emitter.instruction("call __rt_array_to_hash");                            // build an owned hash preserving order and the existing value_type
     emitter.instruction("mov QWORD PTR [rbp - 32], rax");                      // save the promoted hash pointer
     emitter.instruction("mov rax, QWORD PTR [rbp - 8]");                       // reload the now-superseded unique indexed array
@@ -320,9 +341,29 @@ fn emit_array_set_refcounted_linux_x86_64(emitter: &mut Emitter) {
     // A destination that was already a hash before this call never went through the retain
     // block above, so the payload still needs its ownership transferred here.
     emitter.label("__rt_array_set_refcounted_already_hash");
-    emitter.instruction("mov r10, QWORD PTR [rdi - 8]");                       // reload the destination's metadata word (kind check clobbered r10)
-    emitter.instruction("shr r10, 8");                                         // move the runtime value_type tag into the low bits
-    emitter.instruction("and r10, 0x7f");                                      // isolate the value_type tag already carried by the existing hash
+    emitter.instruction("mov r10, QWORD PTR [rdi + 16]");                      // default tag: the hash header's value_type (a hash keeps it at +16, never in the kind word)
+    emitter.instruction("mov r8, QWORD PTR [rbp - 24]");                       // reload the incoming heap payload to derive its own runtime tag
+    emit_branch_if_null_container(
+        emitter,
+        "r8",
+        "r9",
+        "__rt_array_set_refcounted_ah_tag_ready",
+    );
+    emitter.instruction("mov r9, QWORD PTR [r8 - 8]");                         // load the incoming payload heap kind word
+    emitter.instruction("and r9, 0xff");                                       // isolate the low-byte heap kind tag
+    emitter.instruction("mov r11d, 4");                                        // value_type 4 for nested indexed arrays
+    emitter.instruction("cmp r9, 2");                                          // is the incoming payload an indexed array?
+    emitter.instruction("cmove r10, r11");                                     // keep the array tag when the kind matches
+    emitter.instruction("mov r11d, 5");                                        // value_type 5 for nested hashes
+    emitter.instruction("cmp r9, 3");                                          // is the incoming payload an associative array?
+    emitter.instruction("cmove r10, r11");                                     // keep the hash tag when the kind matches
+    emitter.instruction("mov r11d, 6");                                        // value_type 6 for objects
+    emitter.instruction("cmp r9, 4");                                          // is the incoming payload an object instance?
+    emitter.instruction("cmove r10, r11");                                     // keep the object tag when the kind matches
+    emitter.instruction("mov r11d, 7");                                        // value_type 7 for boxed Mixed values
+    emitter.instruction("cmp r9, 5");                                          // is the incoming payload a boxed Mixed cell?
+    emitter.instruction("cmove r10, r11");                                     // keep the Mixed tag when the kind matches
+    emitter.label("__rt_array_set_refcounted_ah_tag_ready");
     emitter.instruction("mov QWORD PTR [rbp - 40], r10");                      // snapshot the tag for the hash insert
     emitter.instruction("mov rax, QWORD PTR [rbp - 24]");                      // reload the borrowed payload for the retain helper
     emitter.instruction("call __rt_incref");                                   // retain the payload so the hash slot owns its stored reference

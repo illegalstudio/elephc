@@ -41,6 +41,13 @@ fn array_value_type_tag(elem_ty: &PhpType) -> Option<u8> {
     })
 }
 
+/// The runtime tag a hash entry needs for one element written through a one-word setter
+/// (`__rt_array_set_int`): the array value_type of its element type, `0` (int) when the type
+/// leaves the header untouched.
+pub(crate) fn array_entry_runtime_tag(elem_ty: &PhpType) -> u8 {
+    array_value_type_tag(elem_ty).unwrap_or(0)
+}
+
 /// Writes the runtime value_type tag into the array header's packed kind word.
 ///
 /// An array in the result register is stamped by ONE `bl __rt_array_stamp_<tag>`: the inline

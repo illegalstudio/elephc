@@ -52,13 +52,14 @@ pub fn emit_array_set_int(emitter: &mut Emitter) {
 
     emitter.label("__rt_array_set_int_slow");
     // Stack layout: [sp,#0]=array/hash ptr, [sp,#8]=index, [sp,#16]=scalar payload,
-    // [sp,#24]=promoted-hash scratch, [sp,#48/#56]=saved fp/lr.
+    // [sp,#24]=promoted-hash scratch, [sp,#32]=hash entry runtime tag, [sp,#48/#56]=saved fp/lr.
     emitter.instruction("sub sp, sp, #64");                                     // reserve spill space for array, index, payload, promotion scratch, and saved frame state
     emitter.instruction("stp x29, x30, [sp, #48]");                             // preserve the caller frame pointer and return address
     emitter.instruction("add x29, sp, #48");                                    // establish a frame pointer for nested runtime helper calls
     emitter.instruction("str x0, [sp, #0]");                                    // preserve the incoming array/hash pointer for the kind dispatch
     emitter.instruction("str x1, [sp, #8]");                                    // preserve the target index across copy-on-write splitting
     emitter.instruction("str x2, [sp, #16]");                                   // preserve the scalar payload across copy-on-write splitting
+    emitter.instruction("str x3, [sp, #32]");                                   // preserve the payload runtime tag (x3) for the hash entry a promotion inserts
 
     // -- dispatch on the destination's CURRENT runtime storage kind --
     emitter.instruction("ldr x9, [x0, #-8]");                                   // load the packed heap-kind/value_type word
@@ -121,7 +122,13 @@ pub fn emit_array_set_int(emitter: &mut Emitter) {
     emitter.label("__rt_array_set_int_promote");
     emitter.instruction("bl __rt_array_to_hash");                               // build an owned hash preserving order and the existing value_type
     emitter.instruction("str x0, [sp, #24]");                                   // save the promoted hash pointer
-    emitter.instruction("ldr x0, [sp, #0]");                                    // reload the now-superseded unique indexed array
+    emitter.instruction("ldr x0, [sp, #0]");                                    // reload the superseded indexed array to inspect its length
+    emitter.instruction("ldr x9, [x0]");                                        // an empty source gave the hash no element type to inherit
+    emitter.instruction("cbnz x9, __rt_array_set_int_promote_release");         // a non-empty source already stamped its value_type on the hash header
+    emitter.instruction("ldr x10, [sp, #24]");                                  // reload the promoted hash
+    emitter.instruction("ldr x11, [sp, #32]");                                  // reload the payload runtime tag
+    emitter.instruction("str x11, [x10, #16]");                                 // publish the payload tag as the hash value_type so later appends agree
+    emitter.label("__rt_array_set_int_promote_release");
     emitter.instruction("bl __rt_decref_array");                                // release it once its entries are retained by the promoted hash
     emitter.instruction("ldr x0, [sp, #24]");                                   // reload the promoted hash as the insert target
     emitter.instruction("b __rt_array_set_int_hash_insert");
@@ -134,7 +141,7 @@ pub fn emit_array_set_int(emitter: &mut Emitter) {
     emitter.instruction("mov x2, #-1");                                         // key_hi sentinel marks a scalar integer hash key
     emitter.instruction("ldr x3, [sp, #16]");                                   // reload the scalar payload as the hash value low word
     emitter.instruction("mov x4, #0");                                          // scalar hash payloads leave the high value word empty
-    emitter.instruction("mov x5, #0");                                         // homogeneous scalar runtime tag (matches the cleared indexed metadata)
+    emitter.instruction("ldr x5, [sp, #32]");                                   // reload the payload runtime tag (float, bool, callable and pointer words are not ints)
     emitter.instruction("bl __rt_hash_set");                                    // insert the entry, growing/COW-splitting the hash as needed
     emitter.label("__rt_array_set_int_done");
     emitter.instruction("ldp x29, x30, [sp, #48]");                             // restore the caller frame pointer and return address
@@ -165,13 +172,14 @@ fn emit_array_set_int_linux_x86_64(emitter: &mut Emitter) {
 
     emitter.label("__rt_array_set_int_slow");
     // Frame layout: [rbp-8]=array/hash ptr, [rbp-16]=index, [rbp-24]=scalar payload,
-    // [rbp-32]=promoted-hash scratch.
+    // [rbp-32]=promoted-hash scratch, [rbp-40]=hash entry runtime tag.
     emitter.instruction("push rbp");                                            // preserve the caller frame pointer before reserving helper spill slots
     emitter.instruction("mov rbp, rsp");                                        // establish a stable frame base for array, index, and payload spills
-    emitter.instruction("sub rsp, 32");                                         // reserve aligned spill slots for array pointer, index, payload, and promotion scratch
+    emitter.instruction("sub rsp, 48");                                         // reserve aligned spill slots for array pointer, index, payload, promotion scratch, and the payload tag
     emitter.instruction("mov QWORD PTR [rbp - 8], rdi");                        // preserve the incoming array/hash pointer for the kind dispatch
     emitter.instruction("mov QWORD PTR [rbp - 16], rsi");                       // preserve the target index across copy-on-write and growth helpers
     emitter.instruction("mov QWORD PTR [rbp - 24], rdx");                       // preserve the scalar payload across copy-on-write and growth helpers
+    emitter.instruction("mov QWORD PTR [rbp - 40], rcx");                       // preserve the payload runtime tag (rcx) for the hash entry a promotion inserts
 
     // -- dispatch on the destination's CURRENT runtime storage kind --
     emitter.instruction("mov r10, QWORD PTR [rdi - 8]");                        // load the packed heap-kind/value_type word
@@ -232,9 +240,16 @@ fn emit_array_set_int_linux_x86_64(emitter: &mut Emitter) {
 
     // -- indexed destination + negative/sparse int key: promote to hash then insert --
     emitter.label("__rt_array_set_int_promote");
+    emitter.instruction("mov rdi, rax");                                       // __rt_array_to_hash takes the indexed array in rdi (the helper calls above clobbered it)
     emitter.instruction("call __rt_array_to_hash");                            // build an owned hash preserving order and the existing value_type
     emitter.instruction("mov QWORD PTR [rbp - 32], rax");                      // save the promoted hash pointer
-    emitter.instruction("mov rax, QWORD PTR [rbp - 8]");                       // reload the now-superseded unique indexed array
+    emitter.instruction("mov rax, QWORD PTR [rbp - 8]");                       // reload the superseded indexed array to inspect its length
+    emitter.instruction("cmp QWORD PTR [rax], 0");                             // an empty source gave the hash no element type to inherit
+    emitter.instruction("jne __rt_array_set_int_promote_release");             // a non-empty source already stamped its value_type on the hash header
+    emitter.instruction("mov r10, QWORD PTR [rbp - 32]");                      // reload the promoted hash
+    emitter.instruction("mov r11, QWORD PTR [rbp - 40]");                      // reload the payload runtime tag
+    emitter.instruction("mov QWORD PTR [r10 + 16], r11");                      // publish the payload tag as the hash value_type so later appends agree
+    emitter.label("__rt_array_set_int_promote_release");
     emitter.instruction("call __rt_decref_array");                             // release it once its entries are retained by the promoted hash
     emitter.instruction("mov rax, QWORD PTR [rbp - 32]");                      // reload the promoted hash as the insert target
     emitter.instruction("jmp __rt_array_set_int_hash_insert");
@@ -249,10 +264,10 @@ fn emit_array_set_int_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rdx, -1");                                        // key_hi sentinel marks a scalar integer hash key
     emitter.instruction("mov rcx, QWORD PTR [rbp - 24]");                      // reload the scalar payload as the hash value low word
     emitter.instruction("xor r8, r8");                                         // scalar hash payloads leave the high value word empty
-    emitter.instruction("xor r9, r9");                                         // homogeneous scalar runtime tag (matches the cleared indexed metadata)
+    emitter.instruction("mov r9, QWORD PTR [rbp - 40]");                       // reload the payload runtime tag (float, bool, callable and pointer words are not ints)
     emitter.instruction("call __rt_hash_set");                                 // insert the entry, growing/COW-splitting the hash as needed
     emitter.label("__rt_array_set_int_done");
-    emitter.instruction("add rsp, 32");                                        // release scalar set helper spill space
+    emitter.instruction("add rsp, 48");                                        // release scalar set helper spill space
     emitter.instruction("pop rbp");                                            // restore the caller frame pointer before returning
     emitter.instruction("ret");                                                // return with rax holding the current array/hash pointer
 }

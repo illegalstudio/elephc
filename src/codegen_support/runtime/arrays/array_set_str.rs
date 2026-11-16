@@ -289,6 +289,7 @@ fn emit_array_set_str_linux_x86_64(emitter: &mut Emitter) {
 
     // -- indexed destination + negative/sparse int key: promote to hash then insert --
     emitter.label("__rt_array_set_str_promote");
+    emitter.instruction("mov rdi, rax");                                       // __rt_array_to_hash takes the indexed array in rdi (the helper calls above clobbered it)
     emitter.instruction("call __rt_array_to_hash");                            // build an owned hash preserving order and the existing value_type
     emitter.instruction("mov QWORD PTR [rbp - 40], rax");                      // save the promoted hash pointer
     emitter.instruction("mov rax, QWORD PTR [rbp - 8]");                       // reload the now-superseded unique indexed array

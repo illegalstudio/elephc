@@ -98,7 +98,9 @@ pub fn emit_array_push_int(emitter: &mut Emitter) {
 
     // -- destination already promoted to hash: append at PHP's next integer key --
     emitter.label("__rt_array_push_int_already_hash");
-    emitter.instruction("mov x3, #0");                                          // homogeneous scalar runtime tag (matches the cleared indexed metadata)
+    emitter.instruction("ldr x3, [x0, #16]");                                   // runtime tag = the hash header value_type (float, bool and callable arrays keep theirs there)
+    emitter.instruction("cmp x3, #8");                                          // the never placeholder (an empty array promoted before any typed write) means int
+    emitter.instruction("csel x3, xzr, x3, eq");                                // fall back to the plain integer tag for the placeholder
     emitter.instruction("mov x2, #0");                                          // scalar hash payloads leave the high value word empty
     emitter.instruction("b __rt_hash_append");                                  // tail-call: insert at max(int keys) + 1, matching PHP's append rule
 }
@@ -173,6 +175,9 @@ fn emit_array_push_int_linux_x86_64(emitter: &mut Emitter) {
     // -- destination already promoted to hash: append at PHP's next integer key --
     emitter.label("__rt_array_push_int_already_hash");
     emitter.instruction("xor edx, edx");                                        // scalar hash payloads leave the high value word empty
-    emitter.instruction("xor ecx, ecx");                                        // homogeneous scalar runtime tag (matches the cleared indexed metadata)
+    emitter.instruction("mov rcx, QWORD PTR [rdi + 16]");                       // runtime tag = the hash header value_type (float, bool and callable arrays keep theirs there)
+    emitter.instruction("xor r10d, r10d");                                      // zero source for the placeholder fallback
+    emitter.instruction("cmp rcx, 8");                                          // the never placeholder (an empty array promoted before any typed write) means int
+    emitter.instruction("cmove rcx, r10");                                      // fall back to the plain integer tag for the placeholder
     emitter.instruction("jmp __rt_hash_append");                                // tail-call: insert at max(int keys) + 1, matching PHP's append rule
 }

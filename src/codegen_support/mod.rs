@@ -50,7 +50,7 @@ mod value_boxing;
 pub(crate) mod visibility;
 mod wrappers;
 
-pub(crate) use arrays::emit_array_value_type_stamp;
+pub(crate) use arrays::{array_entry_runtime_tag, emit_array_value_type_stamp};
 pub(crate) use compilation_context::{
     compile_is_web_sapi, compile_php_version, ini_overrides, linked_extensions,
     opcache_api_restricted, opcache_manifest_len,

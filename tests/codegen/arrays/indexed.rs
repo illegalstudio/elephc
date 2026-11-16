@@ -57,3 +57,5 @@ mod sorting;
 mod oob_reads;
 #[path = "indexed/sparse_int_key_promotion.rs"]
 mod sparse_int_key_promotion;
+#[path = "indexed/promoted_hash_payloads.rs"]
+mod promoted_hash_payloads;

@@ -115,9 +115,9 @@ pub fn emit_array_push_refcounted(emitter: &mut Emitter) {
     // -- destination already promoted to hash: derive the value_type tag, retain the child,
     //    and append at PHP's next integer key --
     emitter.label("__rt_array_push_refcounted_already_hash");
-    emitter.instruction("sub sp, sp, #32");                                     // reserve a frame across the incref and hash_append calls
-    emitter.instruction("stp x29, x30, [sp, #16]");                             // save frame pointer and return address
-    emitter.instruction("add x29, sp, #16");                                    // establish a frame pointer for the nested helper calls
+    emitter.instruction("sub sp, sp, #48");                                     // reserve a frame across the incref and hash_append calls: hash, child, tag, saved fp/lr
+    emitter.instruction("stp x29, x30, [sp, #32]");                             // save frame pointer and return address above the three spill slots
+    emitter.instruction("add x29, sp, #32");                                    // establish a frame pointer for the nested helper calls
     emitter.instruction("str x0, [sp, #0]");                                    // save the hash pointer
     emitter.instruction("str x1, [sp, #8]");                                    // save the borrowed child heap pointer
     emit_branch_if_null_container(
@@ -147,23 +147,21 @@ pub fn emit_array_push_refcounted(emitter: &mut Emitter) {
     emitter.label("__rt_array_push_refcounted_ah_kind_hash");
     emitter.instruction("mov x11, #5");                                         // encode value_type 5 for nested associative arrays
     emitter.label("__rt_array_push_refcounted_ah_tag_store");
-    emitter.instruction("str x11, [sp, #24]");                                  // snapshot the derived tag for the hash insert
+    emitter.instruction("str x11, [sp, #16]");                                  // snapshot the derived tag for the hash insert
     emitter.instruction("b __rt_array_push_refcounted_ah_retain");
     emitter.label("__rt_array_push_refcounted_ah_tag_ready");
-    emitter.instruction("ldr x11, [x0, #-8]");                                  // fall back to the destination's own homogeneous value_type tag
-    emitter.instruction("lsr x11, x11, #8");                                    // move the runtime value_type tag into the low bits
-    emitter.instruction("and x11, x11, #0x7f");                                 // isolate the value_type tag
-    emitter.instruction("str x11, [sp, #24]");                                  // snapshot the derived tag for the hash insert
+    emitter.instruction("ldr x11, [x0, #16]");                                  // fall back to the hash header value_type (a hash keeps it at +16, never in the kind word)
+    emitter.instruction("str x11, [sp, #16]");                                  // snapshot the derived tag for the hash insert
     emitter.label("__rt_array_push_refcounted_ah_retain");
     emitter.instruction("ldr x0, [sp, #8]");                                    // reload the borrowed child pointer
     emitter.instruction("bl __rt_incref");                                      // retain it so the hash slot owns its stored reference
     emitter.instruction("ldr x0, [sp, #0]");                                    // reload the hash pointer as the hash_append target
     emitter.instruction("ldr x1, [sp, #8]");                                    // reload the retained child pointer as the hash value low word
     emitter.instruction("mov x2, #0");                                         // pointer-backed hash payloads leave the high value word empty
-    emitter.instruction("ldr x3, [sp, #24]");                                   // reload the derived value_type tag
+    emitter.instruction("ldr x3, [sp, #16]");                                   // reload the derived value_type tag
     emitter.instruction("bl __rt_hash_append");                                 // insert at max(int keys) + 1, matching PHP's append rule
-    emitter.instruction("ldp x29, x30, [sp, #16]");                             // restore frame pointer and return address
-    emitter.instruction("add sp, sp, #32");                                     // release the helper frame
+    emitter.instruction("ldp x29, x30, [sp, #32]");                             // restore frame pointer and return address
+    emitter.instruction("add sp, sp, #48");                                     // release the helper frame
     emitter.instruction("ret");                                                 // return with x0 holding the current hash pointer
 }
 
@@ -288,9 +286,7 @@ fn emit_array_push_refcounted_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov QWORD PTR [rbp - 24], r10");                       // snapshot the derived tag for the hash insert
     emitter.instruction("jmp __rt_array_push_refcounted_ah_retain");
     emitter.label("__rt_array_push_refcounted_ah_tag_ready");
-    emitter.instruction("mov r10, QWORD PTR [rdi - 8]");                        // fall back to the destination's own homogeneous value_type tag
-    emitter.instruction("shr r10, 8");                                          // move the runtime value_type tag into the low bits
-    emitter.instruction("and r10, 0x7f");                                       // isolate the value_type tag
+    emitter.instruction("mov r10, QWORD PTR [rdi + 16]");                       // fall back to the hash header value_type (a hash keeps it at +16, never in the kind word)
     emitter.instruction("mov QWORD PTR [rbp - 24], r10");                       // snapshot the derived tag for the hash insert
     emitter.label("__rt_array_push_refcounted_ah_retain");
     emitter.instruction("mov rax, QWORD PTR [rbp - 16]");                       // reload the borrowed child pointer
@@ -303,4 +299,26 @@ fn emit_array_push_refcounted_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rsp, rbp");                                        // restore stack pointer
     emitter.instruction("pop rbp");                                             // restore caller frame pointer
     emitter.instruction("ret");                                                 // return with rax holding the current hash pointer
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::codegen_support::platform::Target;
+
+    /// The AArch64 already-hash arm keeps its tag spill slot clear of the saved frame pair: the
+    /// tag once went to `[sp, #24]`, the slot `stp x29, x30, [sp, #16]` had just filled with the
+    /// return address, so `ret` jumped to the tag.
+    #[test]
+    fn already_hash_arm_does_not_spill_over_the_saved_return_address() {
+        for target in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64"] {
+            let mut emitter = Emitter::new(Target::parse(target).unwrap());
+            emit_array_push_refcounted(&mut emitter);
+            let asm = emitter.output();
+            let arm = &asm[asm.find("__rt_array_push_refcounted_already_hash:").unwrap()..];
+            assert!(arm.contains("stp x29, x30, [sp, #32]"), "{target}: pair above the spills");
+            assert!(arm.contains("str x11, [sp, #16]"), "{target}: tag in its own slot");
+            assert!(!arm.contains("str x11, [sp, #24]"), "{target}: tag must not alias x30");
+        }
+    }
 }

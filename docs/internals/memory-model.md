@@ -1028,6 +1028,10 @@ capacity when necessary, initialize gaps, and publish the new length. Callers
 must still store the returned owner because separation or growth can relocate
 the array. The same conditions apply on AArch64 and x86_64.
 
+The helper also takes the payload's runtime tag (`x3` on AArch64, `rcx` on x86_64): a key that
+is negative or past the end promotes the array to a hash, and the new entry is inserted under
+that tag, so a float, bool, callable or pointer word is not read back as an integer.
+
 ### Copy-on-write containers
 
 Indexed arrays and associative arrays now follow **shared-until-modified** semantics:

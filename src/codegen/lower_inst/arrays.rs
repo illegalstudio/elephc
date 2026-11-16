@@ -2306,6 +2306,7 @@ fn lower_array_set_aarch64(
         | PhpType::Pointer(_)
         | PhpType::Buffer(_) => {
             ctx.load_value_to_reg(value, "x2")?;
+            abi::emit_load_int_immediate(ctx.emitter, "x3", crate::codegen_support::array_entry_runtime_tag(value_ty) as i64); // hash entry tag if this write promotes the array
             abi::emit_call_label(ctx.emitter, "__rt_array_set_int");
         }
         PhpType::Callable => {
@@ -2314,6 +2315,7 @@ fn lower_array_set_aarch64(
             ctx.emitter.instruction("mov x2, x0");                              // pass an array-owned callable descriptor to the indexed-array setter
             ctx.load_value_to_reg(array, "x0")?;
             ctx.load_value_to_reg(index, "x1")?;
+            abi::emit_load_int_immediate(ctx.emitter, "x3", crate::codegen_support::array_entry_runtime_tag(value_ty) as i64); // hash entry tag if this write promotes the array
             abi::emit_call_label(ctx.emitter, "__rt_array_set_int");
         }
         PhpType::Str => {
@@ -2487,6 +2489,7 @@ fn lower_array_set_x86_64(
         | PhpType::Pointer(_)
         | PhpType::Buffer(_) => {
             ctx.load_value_to_reg(value, "rdx")?;
+            abi::emit_load_int_immediate(ctx.emitter, "rcx", crate::codegen_support::array_entry_runtime_tag(value_ty) as i64); // hash entry tag if this write promotes the array
             abi::emit_call_label(ctx.emitter, "__rt_array_set_int");
         }
         PhpType::Callable => {
@@ -2495,6 +2498,7 @@ fn lower_array_set_x86_64(
             ctx.emitter.instruction("mov rdx, rax");                            // pass an array-owned callable descriptor to the indexed-array setter
             ctx.load_value_to_reg(array, "rdi")?;
             ctx.load_value_to_reg(index, "rsi")?;
+            abi::emit_load_int_immediate(ctx.emitter, "rcx", crate::codegen_support::array_entry_runtime_tag(value_ty) as i64); // hash entry tag if this write promotes the array
             abi::emit_call_label(ctx.emitter, "__rt_array_set_int");
         }
         PhpType::Str => {
