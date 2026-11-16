@@ -11,6 +11,7 @@
 //!   answers `false` when it read nothing (php's `fgets($h, 1)`); a non-positive length is php's
 //!   `ValueError`. psysh's readline and many line readers pass a length.
 //! - `fwrite($stream, $data, $length)` writes the first `$length` bytes (none for a negative one).
+//! - `readfile($filename, $use_include_path, $context)` drops both extra arguments the same way.
 //! - The `$context` of `rmdir()`, `unlink()`, `rename()`, `opendir()` and `file()` is evaluated and
 //!   not consulted: the native calls take the default context, which is php's answer for a context
 //!   without wrapper options (psysh's Hoa `File*` classes pass their stream context through).
@@ -34,6 +35,8 @@ pub(crate) const UNLINK_CONTEXT_NAME: &str = "__elephc_unlink_context";
 pub(crate) const RENAME_CONTEXT_NAME: &str = "__elephc_rename_context";
 /// `opendir($directory, $context)`.
 pub(crate) const OPENDIR_CONTEXT_NAME: &str = "__elephc_opendir_context";
+/// `readfile($filename, $use_include_path, $context)`.
+pub(crate) const READFILE_CONTEXT_NAME: &str = "__elephc_readfile_context";
 /// `file($filename, $flags, $context)`.
 pub(crate) const FILE_CONTEXT_NAME: &str = "__elephc_file_context";
 
@@ -46,6 +49,7 @@ pub(crate) const HELPERS: &[&str] = &[
     RENAME_CONTEXT_NAME,
     OPENDIR_CONTEXT_NAME,
     FILE_CONTEXT_NAME,
+    READFILE_CONTEXT_NAME,
 ];
 
 /// The helper a long-form call of `builtin` with `argc` arguments is lowered to, if any.
@@ -58,6 +62,7 @@ pub(crate) fn helper_for(builtin: &str, argc: usize) -> Option<&'static str> {
         ("rename", 3) => RENAME_CONTEXT_NAME,
         ("opendir", 2) => OPENDIR_CONTEXT_NAME,
         ("file", 3) => FILE_CONTEXT_NAME,
+        ("readfile", 2 | 3) => READFILE_CONTEXT_NAME,
         _ => return None,
     })
 }
@@ -160,10 +165,25 @@ fn without_context(name: &str, builtin: &str, params: &[(&str, TypeExpr)]) -> cr
         .build()
 }
 
+/// `__elephc_readfile_context(string $filename, bool $use_include_path = false, mixed $context = null)`.
+///
+/// Both extra arguments are evaluated and not consulted, like the `$context` of the helpers above:
+/// the native `readfile()` opens the path as given.
+fn readfile_context() -> crate::parser::ast::Stmt {
+    function(READFILE_CONTEXT_NAME)
+        .param("filename", TypeExpr::Str)
+        .param_default("use_include_path", TypeExpr::Bool, e_bool(false))
+        .param_default("context", t_mixed(), e_null())
+        .returns(t_mixed())
+        .body(vec![s_return(e_call("readfile", vec![e_var("filename")]))])
+        .build()
+}
+
 /// Returns every helper declaration.
 pub(crate) fn declarations() -> Program {
     php_semantics_declarations(|| {
         vec![
+            readfile_context(),
             fgets_length(),
             fwrite_length(),
             without_context(RMDIR_CONTEXT_NAME, "rmdir", &[("directory", TypeExpr::Str)]),
