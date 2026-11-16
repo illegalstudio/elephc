@@ -106,7 +106,8 @@ foreach ($it as $k => $v) {
 }
 "#,
     );
-    assert_eq!(out, "1:bool(false)\na=1;b=2;2=3;");
+    // php appends at the next free INTEGER key: 0 when every key is a string.
+    assert_eq!(out, "1:bool(false)\na=1;b=2;0=3;");
 }
 
 /// Verifies that array object returns array iterator.

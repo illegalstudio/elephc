@@ -390,12 +390,28 @@ fn array_iterator_construct_body() -> Vec<Stmt> {
 
 /// Builds the synthetic method body for array current.
 fn array_current_body() -> Vec<Stmt> {
-    return_body(value_at(position_expr()))
+    // Past the end php answers null in silence; the raw read would warn about the missing index.
+    vec![
+        if_stmt(
+            binary_expr(position_expr(), BinOp::GtEq, count_expr(values_expr())),
+            return_body(null_expr()),
+            None,
+        ),
+        return_stmt(value_at(position_expr())),
+    ]
 }
 
 /// Builds the synthetic method body for array key.
 fn array_key_body() -> Vec<Stmt> {
-    return_body(key_at(position_expr()))
+    // Past the end php answers null in silence; the raw read would warn about the missing index.
+    vec![
+        if_stmt(
+            binary_expr(position_expr(), BinOp::GtEq, count_expr(keys_expr())),
+            return_body(null_expr()),
+            None,
+        ),
+        return_stmt(key_at(position_expr())),
+    ]
 }
 
 /// Builds the synthetic method body for array next.
@@ -424,10 +440,31 @@ fn array_count_body() -> Vec<Stmt> {
 
 /// Builds the synthetic method body for array append.
 fn array_append_body() -> Vec<Stmt> {
-    vec![
-        property_array_push_stmt(this_expr(), "keys", count_expr(keys_expr())),
-        property_array_push_stmt(this_expr(), "values", var_expr("value")),
-    ]
+    // php appends at the next free INTEGER key (highest integer key + 1, or 0), not at `count()`:
+    // an iterator over string keys appends at 0.
+    let mut body = array_search_prelude();
+    body.push(assign_stmt("next", int_expr(0)));
+    body.push(while_stmt(
+        binary_expr(var_expr("i"), BinOp::Lt, var_expr("limit")),
+        vec![
+            if_stmt(
+                function_call("is_int", vec![key_at(var_expr("i"))]),
+                vec![if_stmt(
+                    binary_expr(key_at(var_expr("i")), BinOp::GtEq, var_expr("next")),
+                    vec![assign_stmt(
+                        "next",
+                        binary_expr(key_at(var_expr("i")), BinOp::Add, int_expr(1)),
+                    )],
+                    None,
+                )],
+                None,
+            ),
+            increment_stmt("i"),
+        ],
+    ));
+    body.push(property_array_push_stmt(this_expr(), "keys", var_expr("next")));
+    body.push(property_array_push_stmt(this_expr(), "values", var_expr("value")));
+    body
 }
 
 /// Builds the synthetic method body for array offset exists.

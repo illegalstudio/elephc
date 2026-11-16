@@ -1196,3 +1196,22 @@ echo $hits, "\n";
         out.stderr
     );
 }
+
+/// `$it[] = $v` appends at php's next free integer key even when every key is a string, and
+/// `key()`/`current()` past the end answer null in silence instead of warning about the index.
+#[test]
+fn test_array_iterator_append_key_and_past_the_end_reads() {
+    let out = compile_and_run_capture(
+        r#"<?php
+$it = new ArrayIterator(["a" => 1, "b" => 2]);
+$it["c"] = 3;
+$it[] = 4;
+$it[7] = 5;
+$it[] = 6;
+foreach ($it as $k => $v) { echo "$k=$v "; }
+var_dump($it->key(), $it->current());
+"#,
+    );
+    assert_eq!(out.stdout, "a=1 b=2 c=3 0=4 7=5 8=6 NULL\nNULL\n");
+    assert!(!out.stderr.contains("Warning"), "{}", out.stderr);
+}
