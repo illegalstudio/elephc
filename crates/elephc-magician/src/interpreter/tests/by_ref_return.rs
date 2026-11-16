@@ -159,8 +159,8 @@ echo $b;"#,
     assert_eq!(
         warnings,
         vec![
-            "Only variable references should be returned by reference".to_string(),
-            "Only variable references should be returned by reference".to_string(),
+            "Notice: Only variable references should be returned by reference".to_string(),
+            "Notice: Only variable references should be returned by reference".to_string(),
         ]
     );
 }

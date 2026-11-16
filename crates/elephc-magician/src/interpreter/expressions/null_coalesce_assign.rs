@@ -597,7 +597,7 @@ pub(in crate::interpreter) fn eval_by_ref_return(
     BY_REF_RETURN_EXECUTIONS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     if !eval_expr_binds_a_reference_source(expr) {
         // Same diagnostic channel every other notice-level message here uses.
-        values.warning("Only variable references should be returned by reference")?;
+        values.warning("Notice: Only variable references should be returned by reference")?;
         let value = eval_expr(expr, context, scope, values)?;
         return Ok(EvalControl::Return(value));
     }
@@ -1120,7 +1120,6 @@ fn evaluate_property_component(
     }
 }
 
-/// Writes an evaluated value back through a previously materialized location.
 /// Stores one ALREADY EVALUATED value into any writable PHP lvalue.
 ///
 /// Ownership follows `eval_assign`'s convention, which is what every other writer here uses: the
@@ -1137,6 +1136,7 @@ pub(in crate::interpreter) fn eval_store_value_in_lvalue(
     write_location(location, value, false, context, scope, values)
 }
 
+/// Writes an evaluated value back through a previously materialized location.
 fn write_location(
     location: EvaluatedLocation,
     value: RuntimeCellHandle,
