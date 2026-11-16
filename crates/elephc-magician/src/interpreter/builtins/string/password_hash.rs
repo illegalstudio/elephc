@@ -107,7 +107,14 @@ pub(in crate::interpreter) fn eval_password_api_values(
                 );
             }
             let password = values.string_bytes(args[0])?;
-            let hash = elephc_crypto::password::hash(until_nul(&password), cost as u32)
+            if password.contains(&0) {
+                return eval_throw_builtin_value_error(
+                    "Bcrypt password must not contain null character",
+                    context,
+                    values,
+                );
+            }
+            let hash = elephc_crypto::password::hash(&password, cost as u32)
                 .ok_or(EvalStatus::RuntimeFatal)?;
             values.string(&hash)
         }

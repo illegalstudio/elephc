@@ -38,3 +38,20 @@ try { password_hash($pw, "zz"); } catch (\ValueError $e) { echo $e->getMessage()
          password_hash(): Argument #2 ($algo) must be a valid password hashing algorithm\n"
     );
 }
+
+/// A password holding a NUL byte is refused with php's `ValueError`, compiled and inside `eval()`,
+/// instead of being hashed up to that byte (two passwords sharing a prefix must not collide).
+#[test]
+fn test_password_hash_rejects_nul_byte_like_php() {
+    let out = compile_and_run(
+        r#"<?php
+$pw = $argc > 0 ? "a" : "";
+try { password_hash($pw . "\0b", PASSWORD_BCRYPT, ["cost" => 4]); echo "no\n"; } catch (\ValueError $e) { echo $e->getMessage(), "\n"; }
+eval('try { password_hash("a\0b", PASSWORD_BCRYPT, ["cost" => 4]); echo "no\n"; } catch (\ValueError $e) { echo $e->getMessage(), "\n"; }');
+"#,
+    );
+    assert_eq!(
+        out,
+        "Bcrypt password must not contain null character\nBcrypt password must not contain null character\n"
+    );
+}

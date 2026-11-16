@@ -213,6 +213,13 @@ fn function_declarations() -> Vec<Stmt> {
                 Vec::new(),
                 None,
             ),
+            // php: bcrypt cannot carry a NUL byte (it would end the password there).
+            s_if(
+                e_call("str_contains", vec![e_var("password"), e_str("\0")]),
+                vec![throw_value_error("Bcrypt password must not contain null character")],
+                Vec::new(),
+                None,
+            ),
             s_return(e_call(
                 "elephc_crypto_password_hash_bcrypt",
                 vec![e_var("password"), e_var("cost")],
