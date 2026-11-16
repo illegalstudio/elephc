@@ -1909,6 +1909,19 @@ pub(crate) fn emit_runtime_data_fixed(
     out
 }
 
+/// Orders `_callable_builtin_table`: the strict-profile builtins first, then the rest, each
+/// range sorted the way `__rt_strcasecmp` orders names (ASCII-lowercased bytes, then length).
+///
+/// `__rt_is_callable_string` binary-searches each range, so a name resolves in a handful of
+/// comparisons instead of a scan over every builtin; a strict call site searches only the first.
+fn callable_builtin_table_order() -> Vec<&'static str> {
+    let strict_builtins: std::collections::HashSet<&'static str> =
+        supported_builtin_function_names_for_profile(true).into_iter().collect();
+    let mut builtins = all_supported_builtin_function_names();
+    builtins.sort_by_cached_key(|name| (!strict_builtins.contains(name), name.to_ascii_lowercase()));
+    builtins
+}
+
 /// Emit symbol data for all first-class-callable builtin functions.
 ///
 /// Produces per-name labels (`_callable_builtin_name_N`), a null-terminated
@@ -1918,9 +1931,7 @@ pub(crate) fn emit_runtime_data_fixed(
 /// routine and callable-invoke paths.
 fn emit_builtin_callable_data(target: Target) -> String {
     let mut out = String::new();
-    let strict_builtins = supported_builtin_function_names_for_profile(true);
-    let mut builtins = all_supported_builtin_function_names();
-    builtins.sort_by_key(|name| !strict_builtins.contains(name));
+    let builtins = callable_builtin_table_order();
     for (idx, name) in builtins.iter().enumerate() {
         out.push_str(&format!(
             ".globl _callable_builtin_name_{0}\n_callable_builtin_name_{0}:\n    .ascii \"{1}\"\n",
@@ -1936,7 +1947,7 @@ fn emit_builtin_callable_data(target: Target) -> String {
     out.push_str(
         ".globl _callable_builtin_strict_count\n_callable_builtin_strict_count:\n",
     );
-    out.push_str(&format!("    .quad {}\n", strict_builtins.len()));
+    out.push_str(&format!("    .quad {}\n", supported_builtin_function_names_for_profile(true).len()));
     out.push_str(&comm_directive("_callable_strict_profile", 8, target));
     out.push_str(".globl _callable_builtin_table\n_callable_builtin_table:\n");
     for (idx, name) in builtins.iter().enumerate() {
@@ -1979,6 +1990,22 @@ fn emit_spl_autoload_extensions_data() -> String {
 mod tests {
     use super::*;
     use crate::codegen_support::platform::{Arch, Platform};
+
+    /// Each range of the builtin callable table is sorted by `__rt_strcasecmp` order, which the
+    /// binary search in `__rt_is_callable_string` relies on, and the strict range comes first.
+    #[test]
+    fn callable_builtin_table_ranges_are_sorted_for_binary_search() {
+        let strict = supported_builtin_function_names_for_profile(true);
+        let order = callable_builtin_table_order();
+        let (head, tail) = order.split_at(strict.len());
+        assert!(head.iter().all(|name| strict.contains(name)));
+        for range in [head, tail] {
+            for pair in range.windows(2) {
+                let key = |name: &str| name.to_ascii_lowercase().into_bytes();
+                assert!(key(pair[0]) < key(pair[1]), "{} must sort before {}", pair[0], pair[1]);
+            }
+        }
+    }
 
     /// Every common symbol carries at least 8-byte alignment, while the heap keeps its
     /// allocator-wide 16-byte granule alignment.
