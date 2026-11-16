@@ -178,6 +178,9 @@ pub(in crate::codegen) struct RuntimeArrayInstanceMethodTargetData {
     /// every callable-array site that splits its table by visibility.
     public: bool,
     sig: std::sync::Arc<FunctionSig>,
+    /// Built by `instance_method_target_base`, so the codegen state keeps `sig` alive and no
+    /// other target shares its address; see `base_table_key`.
+    in_base: bool,
 }
 
 /// Describes how the base pointer of a runtime callable array is materialized.
@@ -2047,18 +2050,29 @@ fn base_table_key(
     ctx: &FunctionContext<'_>,
     targets: &[&RuntimeArrayInstanceMethodTarget],
 ) -> Option<Vec<usize>> {
-    let base = ctx.shared.instance_method_target_base(|| instance_method_target_base(ctx));
-    let base_signatures = ctx.shared.base_target_signatures(|| {
-        base.iter()
+    // Each target says whether it is a base target: asking a set of the base's addresses about
+    // each of a scope's ~23 000 public targets was about 1 100 samples of a sampled one-core
+    // Symfony demo build.
+    #[cfg(test)]
+    {
+        let base = ctx.shared.instance_method_target_base(|| instance_method_target_base(ctx));
+        let base_signatures = base
+            .iter()
             .map(|target| std::sync::Arc::as_ptr(&target.sig) as usize)
-            .collect()
-    });
+            .collect::<crate::fast_hash::FastSet<usize>>();
+        for target in targets {
+            assert_eq!(
+                target.in_base,
+                base_signatures.contains(&(std::sync::Arc::as_ptr(&target.sig) as usize)),
+                "a target's base flag disagrees with the base"
+            );
+        }
+    }
+    #[cfg(not(test))]
+    let _ = ctx;
     targets
         .iter()
-        .map(|target| {
-            let address = std::sync::Arc::as_ptr(&target.sig) as usize;
-            base_signatures.contains(&address).then_some(address)
-        })
+        .map(|target| target.in_base.then(|| std::sync::Arc::as_ptr(&target.sig) as usize))
         .collect()
 }
 
@@ -3111,6 +3125,7 @@ fn emit_runtime_subclass_invokable_descriptor_value(
                     method_name: method_key.into(),
                     impl_class: impl_class.into(),
                     sig: std::sync::Arc::new(sig.clone()),
+                    in_base: false,
                 })
             })
         })
@@ -3848,6 +3863,7 @@ fn scope_private_method_overrides(
                 method_name: method_name.as_str().into(),
                 impl_class: impl_class.into(),
                 sig: std::sync::Arc::new(sig),
+                in_base: false,
             }));
         }
     }
@@ -4078,6 +4094,7 @@ fn instance_method_target_base(ctx: &FunctionContext<'_>) -> Vec<RuntimeArrayIns
                 method_name: method_name.as_str().into(),
                 impl_class: impl_class.into(),
                 sig: std::sync::Arc::new(sig.clone()),
+                in_base: true,
             }));
         }
     }
@@ -4532,6 +4549,7 @@ fn runtime_array_instance_method_targets(
                 method_name: method_name.as_str().into(),
                 impl_class: impl_class.into(),
                 sig: std::sync::Arc::new(sig),
+                in_base: false,
             }));
         }
     }

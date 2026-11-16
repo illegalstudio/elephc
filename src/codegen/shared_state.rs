@@ -140,9 +140,6 @@ pub(crate) struct SharedCodegenState {
     /// scope, the method key and the operand count. A pure function of the module, so no
     /// cache-touch accounting: any worker may build its own.
     mixed_method_candidates: std::cell::RefCell<crate::fast_hash::FastMap<MixedCandidatesKey, MixedCandidates>>,
-    /// Addresses of the signatures in `instance_method_target_base`, which this state keeps
-    /// alive: a target list made only of them is named by those addresses alone.
-    base_target_signatures: std::cell::OnceCell<crate::fast_hash::FastSet<usize>>,
     /// Finished composite instance lookup tables, keyed by the base-signature addresses of
     /// their targets in order. Most callable-array sites of one class scope ask for the same
     /// table; each used to look every target's descriptor up and rebuild the table.
@@ -751,13 +748,6 @@ impl SharedCodegenState {
             .clone()
     }
 
-    /// The signature addresses of the instance-method target base, collected once by `build`.
-    pub(super) fn base_target_signatures(
-        &self,
-        build: impl FnOnce() -> crate::fast_hash::FastSet<usize>,
-    ) -> &crate::fast_hash::FastSet<usize> {
-        self.base_target_signatures.get_or_init(build)
-    }
 
     /// A finished instance lookup table for targets named by `key`.
     ///
@@ -814,7 +804,6 @@ impl SharedCodegenState {
             instance_target_split: std::cell::OnceCell::new(),
             instance_method_targets_by_scope: std::cell::RefCell::new(Default::default()),
             mixed_method_candidates: Default::default(),
-            base_target_signatures: std::cell::OnceCell::new(),
             instance_lookup_tables: Default::default(),
             case_lookup_tables: Default::default(),
             scope_instance_tables: Default::default(),
