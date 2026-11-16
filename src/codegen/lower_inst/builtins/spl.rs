@@ -2219,17 +2219,13 @@ fn emit_extensions_read(ctx: &mut FunctionContext<'_>) {
     abi::emit_load_symbol_to_reg(ctx.emitter, len_reg, EXTS_LEN_SYMBOL, 0);
 }
 
-/// Writes a new autoload extension string and returns the previous value.
+/// Writes a new autoload extension string and returns it, as php's `spl_autoload_extensions()` does
+/// (`RETURN_STR_COPY` of the value just stored, never the previous one).
 fn emit_extensions_write(ctx: &mut FunctionContext<'_>, value: crate::ir::ValueId) -> Result<()> {
     let (ptr_reg, len_reg) = abi::string_result_regs(ctx.emitter);
     ctx.load_string_value_to_regs(value, ptr_reg, len_reg)?;
-    abi::emit_push_reg_pair(ctx.emitter, ptr_reg, len_reg);
-    emit_extensions_read(ctx);
-    let new_ptr = abi::secondary_scratch_reg(ctx.emitter);
-    let new_len = abi::tertiary_scratch_reg(ctx.emitter);
-    abi::emit_pop_reg_pair(ctx.emitter, new_ptr, new_len);
-    abi::emit_store_reg_to_symbol(ctx.emitter, new_ptr, EXTS_PTR_SYMBOL, 0);
-    abi::emit_store_reg_to_symbol(ctx.emitter, new_len, EXTS_LEN_SYMBOL, 0);
+    abi::emit_store_reg_to_symbol(ctx.emitter, ptr_reg, EXTS_PTR_SYMBOL, 0);
+    abi::emit_store_reg_to_symbol(ctx.emitter, len_reg, EXTS_LEN_SYMBOL, 0);
     Ok(())
 }
 

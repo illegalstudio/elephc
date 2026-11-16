@@ -95,12 +95,24 @@ final class __ElephcAutoloadChain {
     public static array $loaders = [];
     public static array $loading = [];
 }
+function __elephc_autoload_check(mixed $callback, string $function, string $expected): void {
+    if (is_callable($callback)) {
+        return;
+    }
+    $reason = 'no array or string given';
+    if (is_string($callback)) {
+        $reason = 'function "' . $callback . '" not found or invalid function name';
+    }
+    throw new TypeError($function . '(): Argument #1 ($callback) must be ' . $expected . ', ' . $reason);
+}
 function __elephc_autoload_register(mixed $callback = null, bool $throw = true, bool $prepend = false): bool {
     // `$throw` is accepted and ignored, as php 8 does.
     $prepend = $prepend && ($throw || true);
     if ($callback === null) {
-        return true;
+        // No callback registers php's default loader, `spl_autoload()`.
+        $callback = 'spl_autoload';
     }
+    __elephc_autoload_check($callback, 'spl_autoload_register', 'a valid callback or null');
     foreach (__ElephcAutoloadChain::$loaders as $loader) {
         if ($loader === $callback) {
             return true;
@@ -114,6 +126,7 @@ function __elephc_autoload_register(mixed $callback = null, bool $throw = true, 
     return true;
 }
 function __elephc_autoload_unregister(mixed $callback): bool {
+    __elephc_autoload_check($callback, 'spl_autoload_unregister', 'a valid callback');
     $kept = [];
     $found = false;
     foreach (__ElephcAutoloadChain::$loaders as $loader) {
@@ -137,6 +150,11 @@ function __elephc_autoload_call(string $class): void {
     __ElephcAutoloadChain::$loading[$key] = true;
     try {
         foreach (__ElephcAutoloadChain::$loaders as $loader) {
+            if ($loader === 'spl_autoload') {
+                // php's default loader searches the include path; the builtin here is the same
+                // no-op `spl_autoload()` a direct call reaches, and it is not a callable value.
+                continue;
+            }
             $loader($class);
             if (class_exists($class, false) || interface_exists($class, false)
                 || trait_exists($class, false) || enum_exists($class, false)) {
