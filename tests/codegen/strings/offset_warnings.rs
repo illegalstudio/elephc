@@ -141,7 +141,7 @@ set_error_handler(function ($no, $message) {
 $a = [];
 $k = str_repeat('k', 5000);
 echo $a[$k];
-echo $undefined;
+echo $a["nokey"];
 echo $a[$k];
 echo "done\n";
 "#,

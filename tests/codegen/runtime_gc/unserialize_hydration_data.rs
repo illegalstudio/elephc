@@ -475,7 +475,7 @@ var_dump($o->p, $o->s, $o->n);
 $o->r();
 for ($i = 0; $i < 50; $i++) {
     $word = str_repeat("z", $i + 3);
-    $c = unserialize('O:1:"A":2:{s:1:"p";s:4:"vvvv";s:1:"s";s:' . strlen($word) . ':"' . $word . '";}');
+    $c = unserialize('O:1:"A":2:{s:1:"p";i:9;s:1:"s";s:' . strlen($word) . ':"' . $word . '";}');
     $d = clone $c;
     $d->s .= "!";
     if ($c->s === $d->s) { echo "alias\n"; }
@@ -489,7 +489,7 @@ var_dump($t->p, $t->s);
     assert!(out.success, "stdout={:?}\nstderr={}", out.stdout, out.stderr);
     assert_eq!(
         out.stdout,
-        "int(5)\nstring(3) \"abc\"\nint(7)\nvvvv|52|53\nobject(P)#3 (1) {\n  [\"x\"]=>\n  NULL\n}\nTyped property A::$n must not be accessed before initialization\nint(1)\nstring(1) \"x\"\n",
+        "int(5)\nstring(3) \"abc\"\nint(7)\n9|52|53\nobject(P)#3 (1) {\n  [\"x\"]=>\n  NULL\n}\nTyped property A::$n must not be accessed before initialization\nint(1)\nstring(1) \"x\"\n",
         "{}",
         out.stderr
     );

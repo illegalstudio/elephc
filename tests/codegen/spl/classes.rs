@@ -917,7 +917,7 @@ try { $f[$r] = 1; } catch (TypeError $e) { echo "set: ", $e->getMessage(), "\n";
 #[test]
 fn test_spl_fixed_array_offset_type_error_uses_declared_throwable_layout() {
     let out = compile_and_run_with_heap_debug(
-        r#"<?php
+        r##"<?php
 $f = new SplFixedArray(2);
 $keep = [];
 for ($i = 0; $i < 200; $i++) {
@@ -932,7 +932,7 @@ for ($i = 0; $i < 200; $i++) {
 $ok = 0;
 foreach ($keep as $i => $s) { if ($s === str_repeat("n", 8 + ($i % 5))) { $ok++; } }
 echo $e->getMessage(), "|", $ok, "\n";
-"#,
+"##,
     );
     assert!(out.success, "program failed: {}", out.stderr);
     assert_eq!(
