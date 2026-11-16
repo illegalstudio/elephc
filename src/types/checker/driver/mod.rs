@@ -84,13 +84,44 @@ use declaration_metadata::{
 /// Returns `Ok((Checker, TypeEnv))` on success or `Err(CompileError)` if any phase reports errors.
 /// The `Checker` carries resolved class/interface/enum/function metadata; `TypeEnv` holds the global type environment.
 /// `options` is copied onto the constructed `Checker` (e.g. `strict_locals`) before any phase runs.
+///
+/// The callee exception summaries the checker routes `try`/`catch` flow with are built before
+/// any body is checked, but which arguments get a runtime scalar-parameter check (and so can
+/// throw `TypeError`) is only known once bodies are typed. When a pass that entered a `try`
+/// recorded guarded arguments its summaries did not include, the whole check runs again with
+/// those arguments installed, until no new one appears. The recorded set only grows, so this
+/// terminates; a program without guarded arguments, or without any `try`, is checked once.
 pub(super) fn check_types_impl(
     program: &Program,
     target: Target,
     options: CheckOptions,
     generics: &crate::generics::GenericContext,
 ) -> Result<(Checker, TypeEnv), CompileError> {
-    let mut checker = Checker::new(target);
+    let mut seed: HashSet<crate::span::Span> = HashSet::new();
+    loop {
+        // Held across the pass: the summaries are built under it, and the checker also
+        // evaluates directly invoked closure bodies through it while it walks a `try`.
+        let _installed = crate::optimize::install_scalar_guard_arg_sites(seed.clone());
+        let mut checker = Checker::new(target);
+        let result = check_types_pass(&mut checker, program, options, generics);
+        if checker.entered_exception_region
+            && !checker.scalar_guard_arg_sites.is_subset(&seed)
+        {
+            seed.extend(checker.scalar_guard_arg_sites.iter().copied());
+            continue;
+        }
+        return result.map(|global_env| (checker, global_env));
+    }
+}
+
+/// One checker pass of [`check_types_impl`] over a fresh `checker`.
+fn check_types_pass(
+    checker: &mut Checker,
+    program: &Program,
+    options: CheckOptions,
+    generics: &crate::generics::GenericContext,
+) -> Result<TypeEnv, CompileError> {
+    let mut checker = checker;
     checker.strict_locals = options.strict_locals;
     // Installed BEFORE any body is walked, because `new Box(5)` is resolved while walking one.
     // Empty on every path that does not run `generics::monomorphize`, which is what makes those
@@ -547,7 +578,7 @@ pub(super) fn check_types_impl(
         return Err(CompileError::from_many(errors));
     }
 
-    Ok((checker, final_global_env))
+    Ok(final_global_env)
 }
 
 /// Prints every class the checker registered, with its id, when `ELEPHC_CLASS_INVENTORY=1`.

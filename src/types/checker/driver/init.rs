@@ -217,6 +217,7 @@ impl Checker {
             mixed_storage_store_sites: HashMap::new(),
             buffer_read_observations: HashMap::new(),
             scalar_guard_arg_sites: HashSet::new(),
+            entered_exception_region: false,
             binding_decision_warnings: HashMap::new(),
             retired_mixed_storage_store_sites: HashSet::new(),
         }
