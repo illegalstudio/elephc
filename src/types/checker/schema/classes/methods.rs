@@ -13,6 +13,7 @@ use crate::errors::CompileError;
 use crate::names::php_symbol_key;
 use crate::parser::ast::{ClassMethod, Visibility};
 use crate::types::traits::FlattenedClass;
+use crate::types::FunctionSig;
 
 use super::super::super::Checker;
 use super::super::validation::{
@@ -20,6 +21,7 @@ use super::super::validation::{
     validate_override_signature, visibility_rank,
 };
 use super::state::ClassBuildState;
+use super::trait_requirements::validate_inherited_implementation;
 use super::{collect_attribute_args, collect_attribute_names};
 
 /// Validates and registers all methods of a flattened class into the build state.
@@ -105,6 +107,14 @@ fn apply_static_method(
     method: &ClassMethod,
 ) -> Result<(), CompileError> {
     let method_key = php_symbol_key(&method.name);
+    let inherited = state
+        .static_method_impl_classes
+        .contains_key(&method_key)
+        .then(|| state.static_sigs.get(&method_key))
+        .flatten();
+    if inherited_method_satisfies_requirement(checker, class, method, &method_key, inherited)? {
+        return Ok(());
+    }
     let mut sig = build_method_sig(checker, method, &class.name)?;
     if class.name == "WeakReference" && method_key == "create" && method.span == crate::span::Span::dummy() {
         // Box the generic object boundary so native Closure descriptors keep their runtime tag.
@@ -162,6 +172,7 @@ fn apply_static_method(
         )?;
     } else if has_override_attribute(method)
         && !interface_declares_method(checker, state, class, &method_key, true)
+        && !satisfies_trait_requirement(checker, class, &method_key)
     {
         return Err(missing_override_target(class, method));
     }
@@ -239,6 +250,14 @@ fn apply_instance_method(
     method: &ClassMethod,
 ) -> Result<(), CompileError> {
     let method_key = php_symbol_key(&method.name);
+    let inherited = state
+        .method_impl_classes
+        .contains_key(&method_key)
+        .then(|| state.method_sigs.get(&method_key))
+        .flatten();
+    if inherited_method_satisfies_requirement(checker, class, method, &method_key, inherited)? {
+        return Ok(());
+    }
     let internal_exception_override = injected_exception_final_override(class, method, &method_key);
     let inherited_declaring_class = state.method_declaring_classes.get(&method_key).cloned();
     let mut sig = build_method_sig(checker, method, &class.name)?;
@@ -307,6 +326,7 @@ fn apply_instance_method(
         }
     } else if has_override_attribute(method)
         && !interface_declares_method(checker, state, class, &method_key, false)
+        && !satisfies_trait_requirement(checker, class, &method_key)
     {
         return Err(missing_override_target(class, method));
     }
@@ -469,6 +489,40 @@ fn interface_declares_method(
         queue.extend(info.parents.iter().cloned());
     }
     false
+}
+
+/// Whether `method_key` implements an abstract method of a trait `class` uses: PHP accepts
+/// `#[\Override]` on it exactly as on an implementation of an interface method.
+fn satisfies_trait_requirement(checker: &Checker, class: &FlattenedClass, method_key: &str) -> bool {
+    checker
+        .trait_method_requirements
+        .get(&class.name)
+        .is_some_and(|requirements| requirements.required.contains(method_key))
+}
+
+/// Whether `method` is a used trait's abstract requirement that the `inherited` implementation
+/// already satisfies (`class Panel extends Widget { use Rows; }` with `Rows` requiring
+/// `Widget::invalidate()`). Such a requirement adds nothing to the schema; registering it would
+/// read as a re-abstraction, or as an override of a final method. The inherited signature must
+/// still be compatible with the requirement, as PHP checks it.
+fn inherited_method_satisfies_requirement(
+    checker: &Checker,
+    class: &FlattenedClass,
+    method: &ClassMethod,
+    method_key: &str,
+    inherited: Option<&FunctionSig>,
+) -> Result<bool, CompileError> {
+    let Some(inherited) = inherited else { return Ok(false) };
+    let is_requirement = method.is_abstract
+        && checker
+            .trait_method_requirements
+            .get(&class.name)
+            .is_some_and(|requirements| requirements.is_imported_requirement(method_key));
+    if !is_requirement {
+        return Ok(false);
+    }
+    validate_inherited_implementation(checker, class, method, inherited)?;
+    Ok(true)
 }
 
 /// Constructs a `CompileError` when a method carries `#[\Override]` but no

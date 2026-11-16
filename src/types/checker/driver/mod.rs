@@ -113,6 +113,8 @@ pub(super) fn check_types_impl(
     errors.extend(flatten_errors);
     (checker.trait_imported_properties, checker.trait_imported_constructors) =
         super::schema::collect_trait_default_origins(program, &flattened_classes);
+    checker.trait_method_requirements =
+        super::schema::collect_trait_method_requirements(program, &flattened_classes);
     // A prelude parsed from PHP text gives its classes real spans, so the statement's source
     // mode is what tells them apart from the program's own classes (`ClassInfo::is_internal`).
     checker.internal_class_decls = program

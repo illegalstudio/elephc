@@ -296,6 +296,9 @@ pub(crate) struct Checker {
     pub trait_imported_properties: HashMap<String, HashSet<String>>,
     /// Classes whose own flattened constructor was imported from a trait.
     pub trait_imported_constructors: HashSet<String>,
+    /// Abstract methods each trait-using class owes to its traits, by class name
+    /// ([`schema::collect_trait_method_requirements`]).
+    pub trait_method_requirements: HashMap<String, schema::TraitMethodRequirements>,
     /// Name of the class currently being type-checked (used for `$this` resolution).
     pub current_class: Option<String>,
     /// Name of the current method being type-checked, when inside a class body.
