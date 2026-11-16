@@ -67,6 +67,7 @@ mod eval_native_method_errors;
 mod eval_foreach_object;
 mod eval_compiled_foreach;
 mod eval_fragment_diagnostics;
+mod eval_scope_lifetimes;
 mod eval_constructors;
 mod eval_heredoc;
 mod eval_reflection_invocation;

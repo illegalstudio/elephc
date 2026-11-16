@@ -316,11 +316,55 @@ fn reload_eval_scope_locals_with_mask(
         ctx.emitter.label(&missing);
         store_missing_scope_entry_to_local(ctx, local, pending_throw)?;
         ctx.emitter.label(&done);
+        if !ctx.is_main {
+            drop_eval_scope_value_snapshot(ctx, local);
+        }
         if let Some(unaccessed) = unaccessed {
             ctx.emitter.label(&unaccessed);
         }
     }
     Ok(())
+}
+
+/// Scope-entry flags of a plain value the scope owns: visible and owned.
+const EVAL_SCOPE_OWNED_VALUE_FLAGS: i64 = EVAL_SCOPE_FLAG_PRESENT | (1 << 4);
+
+/// Scope-entry flags that make an entry more than a copied value: by-reference, a native-storage
+/// binding, a native global name (`crate::abi::SCOPE_FLAG_*` in magician).
+const EVAL_SCOPE_BINDING_FLAGS: i64 = (1 << 3) | (1 << 5) | (1 << 6);
+
+/// Gives back the function frame's eval scope copy of one local once the native slot holds it.
+///
+/// The flush hands the scope its own reference to every local the fragment may read, and the
+/// reload hands the native slot another; the scope's copy then lived until the frame's scope was
+/// freed at return, so `unset($o)` or `$o = null` after an `eval()` no longer ran `$o`'s
+/// destructor where php runs it. Inside a function nothing reads that copy between barriers --
+/// every barrier (`eval`, `extract`) flushes the locals it can reach again first -- so a plain
+/// owned value is dropped right after the reload. A reference or native-storage binding the
+/// fragment made stays, as it links the local to other storage. The top-level frame keeps its
+/// copies: its scope is the global symbol table interpreted functions read `global $x` from.
+fn drop_eval_scope_value_snapshot(ctx: &mut FunctionContext<'_>, local: &EvalSyncLocal) {
+    let keep = ctx.next_label("eval_scope_keep_snapshot");
+    emit_eval_scope_get(ctx, local);
+    let flags_reg = abi::secondary_scratch_reg(ctx.emitter);
+    abi::emit_load_temporary_stack_slot(ctx.emitter, flags_reg, 8);
+    let mask = EVAL_SCOPE_OWNED_VALUE_FLAGS | EVAL_SCOPE_BINDING_FLAGS;
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            // The mask is not a contiguous run of ones, so it cannot be a logical immediate.
+            ctx.emitter.instruction(&format!("mov x11, #{mask}"));              // materialize the visibility, ownership and binding bits
+            ctx.emitter.instruction(&format!("and {flags_reg}, {flags_reg}, x11")); // keep only those bits of the entry flags
+            ctx.emitter.instruction(&format!("cmp {flags_reg}, #{EVAL_SCOPE_OWNED_VALUE_FLAGS}")); // is the entry a plain value the scope owns?
+            ctx.emitter.instruction(&format!("b.ne {keep}"));                   // keep references, bindings and entries the scope does not own
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction(&format!("and {flags_reg}, {mask}"));       // keep the visibility, ownership and binding bits
+            ctx.emitter.instruction(&format!("cmp {flags_reg}, {EVAL_SCOPE_OWNED_VALUE_FLAGS}")); // is the entry a plain value the scope owns?
+            ctx.emitter.instruction(&format!("jne {keep}"));                    // keep references, bindings and entries the scope does not own
+        }
+    }
+    emit_eval_scope_unset_name(ctx, &local.name);
+    ctx.emitter.label(&keep);
 }
 
 /// Reloads synchronized program globals from the eval global scope after eval.
