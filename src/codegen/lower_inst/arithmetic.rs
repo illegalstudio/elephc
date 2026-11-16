@@ -511,10 +511,10 @@ fn lower_mixed_add_runtime_dispatch(ctx: &mut FunctionContext<'_>) -> Result<()>
     load_mixed_cell_at(ctx, 0, abi::int_result_reg(ctx.emitter));
     abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
     emit_branch_if_array_tag(ctx, &array_union);
-    super::exceptions::emit_type_error(ctx, "Unsupported operand types: array + non-array");
+    emit_unsupported_add_operands_error(ctx, true);
 
     ctx.emitter.label(&right_array_error);
-    super::exceptions::emit_type_error(ctx, "Unsupported operand types: non-array + array");
+    emit_unsupported_add_operands_error(ctx, false);
 
     ctx.emitter.label(&array_union);
     emit_mixed_array_union(ctx);
@@ -525,6 +525,66 @@ fn lower_mixed_add_runtime_dispatch(ctx: &mut FunctionContext<'_>) -> Result<()>
     abi::emit_call_label(ctx.emitter, mixed_numeric_helper(MixedNumericOp::Add));
     ctx.emitter.label(&done);
     Ok(())
+}
+
+/// Throws PHP's `Unsupported operand types: <left> + <right>` for a boxed `+` that mixes an array
+/// with a non-array operand.
+///
+/// Like php-src's `zend_binop_error`, the non-array operand is named by its runtime type
+/// (`int`, `float`, `string`, `bool`, `null`, `resource`, `Closure`, or the object's class),
+/// read from the boxed cell the dispatch left on the stack: the right operand at offset 0 when
+/// the array is on the left, the left operand at offset 16 otherwise.
+fn emit_unsupported_add_operands_error(ctx: &mut FunctionContext<'_>, array_on_left: bool) {
+    let int_case = ctx.next_label("mixed_add_error_int");
+    let string_case = ctx.next_label("mixed_add_error_string");
+    let float_case = ctx.next_label("mixed_add_error_float");
+    let bool_case = ctx.next_label("mixed_add_error_bool");
+    let null_case = ctx.next_label("mixed_add_error_null");
+    let object_case = ctx.next_label("mixed_add_error_object");
+    let resource_case = ctx.next_label("mixed_add_error_resource");
+    let closure_case = ctx.next_label("mixed_add_error_closure");
+    let named = ctx.next_label("mixed_add_error_named");
+    let result = abi::int_result_reg(ctx.emitter);
+    load_mixed_cell_at(ctx, if array_on_left { 0 } else { 16 }, result);
+    abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
+    super::builtins::emit_branch_on_gettype_mixed_tag(ctx, 0, &int_case);
+    super::builtins::emit_branch_on_gettype_mixed_tag(ctx, 1, &string_case);
+    super::builtins::emit_branch_on_gettype_mixed_tag(ctx, 2, &float_case);
+    super::builtins::emit_branch_on_gettype_mixed_tag(ctx, 3, &bool_case);
+    super::builtins::emit_branch_on_gettype_mixed_tag(ctx, 6, &object_case);
+    super::builtins::emit_branch_on_gettype_mixed_tag(ctx, 9, &resource_case);
+    super::builtins::emit_branch_on_gettype_mixed_tag(ctx, 10, &closure_case);
+    abi::emit_jump(ctx.emitter, &null_case);
+    for (label, name) in [
+        (&int_case, b"int".as_slice()),
+        (&string_case, b"string".as_slice()),
+        (&float_case, b"float".as_slice()),
+        (&bool_case, b"bool".as_slice()),
+        (&null_case, b"null".as_slice()),
+        (&resource_case, b"resource".as_slice()),
+        (&closure_case, b"Closure".as_slice()),
+    ] {
+        super::builtins::emit_mixed_gettype_case(ctx, label, name, &named);
+    }
+    ctx.emitter.label(&object_case);
+    abi::emit_reg_move(
+        ctx.emitter,
+        result,
+        crate::codegen_support::mixed_unbox_payload_reg(ctx.emitter.target),
+    );
+    super::runtime_class_messages::emit_runtime_class_name_to_string_result(ctx, result, "object");
+    ctx.emitter.label(&named);
+    if array_on_left {
+        super::runtime_class_messages::emit_concat_static_prefix(
+            ctx,
+            "Unsupported operand types: array + ",
+        );
+    } else {
+        super::runtime_class_messages::emit_concat_static_prefix(ctx, "Unsupported operand types: ");
+        super::runtime_class_messages::emit_concat_static_suffix(ctx, " + array");
+    }
+    abi::emit_call_label(ctx.emitter, "__rt_str_persist");
+    super::exceptions::emit_type_error_from_string_result(ctx);
 }
 
 /// Branches when the current unboxed Mixed tag denotes an indexed or associative array.

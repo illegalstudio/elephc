@@ -2501,3 +2501,33 @@ echo Opt::new(1)->add(2)->add(Opt::new(8))->add(null)->value, "\n";
     );
     assert_eq!(out, "11\n");
 }
+
+/// Verifies a runtime `mixed + mixed` that mixes an array with a non-array names both operand
+/// types the way php-src's `zend_binop_error` does (`array + int`, `stdClass + array`, ...),
+/// instead of the placeholder `non-array`.
+#[test]
+fn test_mixed_add_array_with_non_array_names_operand_types() {
+    let out = compile_and_run(
+        r#"<?php
+function add($a, $b) { return $a + $b; }
+$pairs = [[[1], 2], [[1], 1.5], [[1], "s"], [[1], true], [[1], null], [[1], new stdClass()],
+    ["s", [1]], [2, [1]], [null, [1]], [new ArrayObject([]), [1]]];
+foreach ($pairs as $pair) {
+    try { add($pair[0], $pair[1]); } catch (TypeError $e) { echo $e->getMessage(), "\n"; }
+}
+"#,
+    );
+    assert_eq!(
+        out,
+        "Unsupported operand types: array + int\n\
+         Unsupported operand types: array + float\n\
+         Unsupported operand types: array + string\n\
+         Unsupported operand types: array + bool\n\
+         Unsupported operand types: array + null\n\
+         Unsupported operand types: array + stdClass\n\
+         Unsupported operand types: string + array\n\
+         Unsupported operand types: int + array\n\
+         Unsupported operand types: null + array\n\
+         Unsupported operand types: ArrayObject + array\n"
+    );
+}
