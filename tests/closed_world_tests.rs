@@ -2558,13 +2558,11 @@ echo $a->doGet("k", fn($i, $s) => 5), " ", $a->left(), "\n";
 $b = new B;
 echo $b->doGet("z", fn($i, $s) => 6), " ", $b->left(), "\n";
 "#;
-    // No `--heap-debug`: the branch's compiler also reports a bad refcount for this program
-    // (a separate, older defect in the by-ref closure parameter), so only the output is pinned.
-    let dir = make_test_dir("cw_unset_closure");
-    fs::write(dir.join("main.php"), source).unwrap();
-    compile_ok(&dir, &["--closed-world"]);
-    let output = run(&dir);
-    assert_eq!(text(&output.stdout), php_stdout(&dir));
+    // Heap-checked: the by-ref closure parameter's refcount defect this test was once written
+    // around is gone, and symfony/cache runs this shape on every `doGet()` of a `--web` worker.
+    let (stdout, heap, dir) = closed_run("cw_unset_closure", source);
+    assert_eq!(stdout, php_stdout(&dir));
+    assert_eq!(heap, "HEAP DEBUG: leak summary: clean");
 }
 
 /// A date/time method called on a receiver whose class is only known at run time dispatches
