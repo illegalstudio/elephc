@@ -175,6 +175,8 @@ fn eval_native_date_factory_as_called_class(
     else {
         return Ok(result);
     };
+    // The native binder borrows every evaluated operand, so each cell made here is given back
+    // by this function, on the failure paths too.
     let format = values.string("Y-m-d H:i:s.u")?;
     let rendered = eval_native_method_with_evaluated_args_bridge_scope(
         result.borrowed(),
@@ -185,7 +187,15 @@ fn eval_native_date_factory_as_called_class(
         None,
         context,
         values,
-    )?;
+    );
+    values.release(format)?;
+    let rendered = match rendered {
+        Ok(rendered) => rendered,
+        Err(status) => {
+            values.release(object)?;
+            return Err(status);
+        }
+    };
     let timezone = eval_native_method_with_evaluated_args_bridge_scope(
         result.borrowed(),
         date_class,
@@ -195,8 +205,16 @@ fn eval_native_date_factory_as_called_class(
         None,
         context,
         values,
-    )?;
-    eval_native_constructor_with_evaluated_args(
+    );
+    let timezone = match timezone {
+        Ok(timezone) => timezone,
+        Err(status) => {
+            values.release(rendered)?;
+            values.release(object)?;
+            return Err(status);
+        }
+    };
+    let built = eval_native_constructor_with_evaluated_args(
         date_class,
         object.borrowed(),
         vec![
@@ -205,7 +223,13 @@ fn eval_native_date_factory_as_called_class(
         ],
         context,
         values,
-    )?;
+    );
+    values.release(rendered)?;
+    values.release(timezone)?;
+    if let Err(status) = built {
+        values.release(object)?;
+        return Err(status);
+    }
     values.release(result)?;
     Ok(object)
 }
