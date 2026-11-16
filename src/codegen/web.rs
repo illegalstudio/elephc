@@ -37,7 +37,7 @@ use crate::codegen::data_section::{DataSection, StaticLocalRecord};
 use crate::codegen::emit::Emitter;
 use crate::codegen::platform::Arch;
 use crate::codegen::UNINITIALIZED_TYPED_PROPERTY_SENTINEL;
-use crate::ir::Module;
+use crate::ir::{Module, RuntimeFnId};
 use crate::names::{classlike_activation_symbol, ir_global_symbol};
 use std::collections::BTreeSet;
 use super::runtime_metadata::static_properties_hosting_last;
@@ -371,6 +371,12 @@ pub(super) fn emit_web_reset(emitter: &mut Emitter, module: &Module, data: &Data
     emit_core_handler_reset(emitter);
     abi::emit_call_label(emitter, "__rt_resource_inventory_reset");
     abi::emit_call_label(emitter, "__rt_diag_reset");
+    // php drops the previous request's last diagnostic and its run-time class aliases at request
+    // shutdown. Both records outlive the arena wipe (libc copies, a table of arena pointers).
+    abi::emit_call_label(emitter, "__rt_last_error_clear");
+    if super::frame::module_calls_runtime_fn(module, |id| *id == RuntimeFnId::ClassAlias) {
+        abi::emit_call_label(emitter, "__rt_class_alias_release");
+    }
     emit_gc_state_reset(emitter);
 
     // A generator still referenced here is dropped with the arena below, never freed, so its
