@@ -289,3 +289,18 @@ var_dump(elephc_proc_builder_env_reset($probe + 2));
     );
     assert_eq!(out, "boom\nboom\nint(0)\nint(0)\n");
 }
+
+/// A proc builtin named only by a string literal and invoked through a variable or a user
+/// function's callable parameter still gets its prelude helper.
+#[test]
+fn test_proc_nice_through_a_variable_callable_keeps_helper() {
+    let out = compile_and_run(
+        r#"<?php
+function run(callable $f) { var_dump($f(0)); }
+run('proc_nice');
+$f = 'PROC_NICE';
+var_dump($f(0));
+"#,
+    );
+    assert_eq!(out, "bool(true)\nbool(true)\n");
+}
