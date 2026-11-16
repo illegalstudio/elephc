@@ -112,7 +112,6 @@ pub(super) const PHP_ARITY_OVERRIDES: &[(&str, EvalBuiltinArity)] = &[
     ("rand", EvalBuiltinArity::zero_or_exactly(2)),
     ("readdir", EvalBuiltinArity::ranged(0, Some(1))),
     ("rewinddir", EvalBuiltinArity::ranged(0, Some(1))),
-    ("stream_socket_server", EvalBuiltinArity::ranged(1, Some(5))),
     ("strtr", EvalBuiltinArity::exact(2, 3)),
     ("system", EvalBuiltinArity::ranged(1, Some(2))),
 ];

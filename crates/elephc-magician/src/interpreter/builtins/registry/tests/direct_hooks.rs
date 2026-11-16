@@ -107,6 +107,18 @@ fn runtime_builtin_bindings_keep_only_reviewed_signature_adapters() {
         }
         let spec = eval_raw_declared_builtin_spec(contract.name)
             .expect("runtime builtin must have an eval binding");
+        // `serialize` / `unserialize` never take the shared helper from eval
+        // (`elephc_builtin_contract::eval_execution`): an object of an eval-declared class exists
+        // only in the interpreter, so they stay plain interpreter adapters.
+        if matches!(
+            runtime_id,
+            elephc_builtin_contract::RuntimeBuiltinId::Serialize
+                | elephc_builtin_contract::RuntimeBuiltinId::Unserialize
+        ) {
+            assert_eq!(spec.runtime_builtin, None, "{}", contract.name);
+            assert!(spec.direct.is_some() || spec.values.is_some(), "{}", contract.name);
+            continue;
+        }
         assert_eq!(spec.runtime_builtin, Some(runtime_id));
         if matches!(
             runtime_id,
