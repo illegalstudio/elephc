@@ -27,7 +27,7 @@ _Implemented by an injected elephc-PHP prelude._
 ## Signature summary
 
 ```php
-function __elephc_array_rand(array $array, int $num = 1): mixed
+function __elephc_array_rand(mixed $array, int $num = 1): mixed
 ```
 
 ## What the type checker enforces

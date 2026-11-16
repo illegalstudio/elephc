@@ -101,6 +101,9 @@ pub(super) fn lower_closure_call(ctx: &mut LoweringContext<'_, '_>, var: &str, a
     );
     let mut operands = vec![callable.value];
     operands.extend(arg_values.iter().copied());
+    // A first-class `__construct` callable is opaque at this point; php-src binds the
+    // invocation site's `strict_types`, so publish it after the arguments are evaluated.
+    super::object_construction::publish_call_strictness(ctx, expr.span);
     let call = ctx.emit_value(
         Op::ClosureCall,
         operands,

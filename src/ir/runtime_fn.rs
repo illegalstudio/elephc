@@ -137,7 +137,6 @@ pub enum RuntimeFnId {
     ArrayPtrValue,
     ArrayProduct,
     ArrayPush,
-    ArrayRand,
     ArrayReduce,
     ArrayReplace,
     ArrayReplaceRecursive,
@@ -2030,7 +2029,6 @@ impl RuntimeFnId {
         match self {
             RuntimeFnId::MtRand
             | RuntimeFnId::Rand
-            | RuntimeFnId::ArrayRand
             | RuntimeFnId::Shuffle => MonitoringPolicy::GenericTiming,
             RuntimeFnId::MbSendMail => MonitoringPolicy::Io {
                 kind: IoKind::Network,
@@ -2243,7 +2241,6 @@ impl RuntimeFnId {
             // and `array_rand`/`shuffle` reach the same state through a published slot.
             RuntimeFnId::MtRand
             | RuntimeFnId::Rand
-            | RuntimeFnId::ArrayRand
             | RuntimeFnId::Shuffle => &[BuiltinRequirement::Bridge("elephc_random")],
             RuntimeFnId::ElephcPharBzip2Archive => &[BuiltinRequirement::Bridge("elephc_phar")],
             RuntimeFnId::ElephcPharDecompressArchive => &[BuiltinRequirement::Bridge("elephc_phar")],
@@ -3247,7 +3244,6 @@ impl RuntimeFnId {
             RuntimeFnId::ArrayPtrValue => "array_ptr_value",
             RuntimeFnId::ArrayProduct => "array_product",
             RuntimeFnId::ArrayPush => "array_push",
-            RuntimeFnId::ArrayRand => "array_rand",
             RuntimeFnId::ArrayReduce => "array_reduce",
             RuntimeFnId::ArrayReplace => "array_replace",
             RuntimeFnId::ArrayReplaceRecursive => "array_replace_recursive",
