@@ -384,7 +384,6 @@ mod tests {
         // Seven ext/posix bindings run through the PCNTL interpreter adapter.
         assert_eq!(eval_registry, 795 + curl_surface);
         // 83 compiler-internal registry helpers plus the 17 `_`-prefixed helper functions the
-        // Compiler-internal registry helpers plus the 17 `_`-prefixed helper functions the
         // image prelude declares for its own use, plus the ELEVEN
         // `__elephc_opcache_rt_*` runtime script-cache helpers this branch adds.
         //
@@ -489,6 +488,8 @@ mod tests {
         // forwarding homes, plus the `preg_grep` / `preg_last_error*` eval homes.
         // interpreter adapters, plus the GMP and SimpleXML forwarding homes, and the seven
         // ext/posix bridge builtins served by the PCNTL adapter.
+        // interpreter adapters, plus the GMP, SimpleXML, and tidy forwarding homes, and the
+        // seven ext/posix bridge builtins served by the PCNTL adapter.
         assert_eq!(interpreter_adapter, 700 + curl_surface);
         // Includes the eleven `__elephc_opcache_rt_*` helpers: they lower to an eval-bridge
         // call from AOT code and have no eval execution route of their own. So do the four
