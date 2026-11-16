@@ -12,3 +12,6 @@ pub mod str_new_owned;
 pub mod concat_scratch;
 pub mod strbuf;
 pub mod str_append;
+
+pub mod concat;
+pub mod capture_buffer;
