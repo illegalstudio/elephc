@@ -160,6 +160,7 @@ pub(in crate::interpreter) fn eval_array_shuffle_replacement(
     for position in 0..len {
         let source_key = values.array_iter_key(array, position)?;
         entries.push(values.array_get(array, source_key)?);
+        values.release(source_key)?;
     }
 
     for index in (1..entries.len()).rev() {
@@ -171,6 +172,9 @@ pub(in crate::interpreter) fn eval_array_shuffle_replacement(
     for (index, value) in entries.into_iter().enumerate() {
         let key = values.int(i64::try_from(index).map_err(|_| EvalStatus::RuntimeFatal)?)?;
         result = values.array_set(result, key, value)?;
+        // `array_set` retained the value; this loop's own key and value reads are released.
+        values.release(key)?;
+        values.release(value)?;
     }
     Ok(result)
 }
@@ -184,6 +188,10 @@ pub(in crate::interpreter) fn eval_array_reindex_sort_result(
     for (index, entry) in entries.into_iter().enumerate() {
         let key = values.int(i64::try_from(index).map_err(|_| EvalStatus::RuntimeFatal)?)?;
         result = values.array_set(result, key, entry.value)?;
+        // `array_set` retained the value; the entry's own reads are released.
+        values.release(key)?;
+        values.release(entry.source_key)?;
+        values.release(entry.value)?;
     }
     Ok(result)
 }
@@ -196,6 +204,8 @@ pub(in crate::interpreter) fn eval_array_preserve_key_sort_result(
     let mut result = values.assoc_new(entries.len())?;
     for entry in entries {
         result = values.array_set(result, entry.source_key, entry.value)?;
+        values.release(entry.source_key)?;
+        values.release(entry.value)?;
     }
     Ok(result)
 }
@@ -393,7 +403,9 @@ pub(in crate::interpreter) fn eval_array_sort_key_cmp(
             left.partial_cmp(right).unwrap_or(std::cmp::Ordering::Equal)
         }
         (EvalArraySortKey::Natural(left), EvalArraySortKey::Natural(right)) => {
-            eval_natural_bytes_cmp(left, right)
+            // The php-src port `ksort(..., SORT_NATURAL)` and `strnatcmp()` already use: a
+            // digit run compares by value, leading zeros are skipped and never break a tie.
+            super::key_sort_flags::eval_strnatcmp(left, right, false)
         }
         (EvalArraySortKey::String(left), EvalArraySortKey::String(right)) => left.cmp(right),
         (EvalArraySortKey::Object, EvalArraySortKey::Object) => std::cmp::Ordering::Equal,
@@ -411,77 +423,11 @@ pub(in crate::interpreter) fn eval_array_sort_key_rank(key: &EvalArraySortKey) -
     }
 }
 
-/// Compares byte strings with a small PHP-style natural ordering.
-pub(in crate::interpreter) fn eval_natural_bytes_cmp(
-    left: &[u8],
-    right: &[u8],
-) -> std::cmp::Ordering {
-    let mut left_index = 0;
-    let mut right_index = 0;
-    while left_index < left.len() && right_index < right.len() {
-        if left[left_index].is_ascii_digit() && right[right_index].is_ascii_digit() {
-            let order = eval_natural_digit_run_cmp(left, &mut left_index, right, &mut right_index);
-            if order != std::cmp::Ordering::Equal {
-                return order;
-            }
-            continue;
-        }
-
-        let order = left[left_index].cmp(&right[right_index]);
-        if order != std::cmp::Ordering::Equal {
-            return order;
-        }
-        left_index += 1;
-        right_index += 1;
-    }
-    left.len().cmp(&right.len())
-}
-
-/// Compares two natural-sort digit runs and advances both byte indexes past them.
-pub(in crate::interpreter) fn eval_natural_digit_run_cmp(
-    left: &[u8],
-    left_index: &mut usize,
-    right: &[u8],
-    right_index: &mut usize,
-) -> std::cmp::Ordering {
-    let left_start = *left_index;
-    let right_start = *right_index;
-    while *left_index < left.len() && left[*left_index].is_ascii_digit() {
-        *left_index += 1;
-    }
-    while *right_index < right.len() && right[*right_index].is_ascii_digit() {
-        *right_index += 1;
-    }
-
-    let left_digits = &left[left_start..*left_index];
-    let right_digits = &right[right_start..*right_index];
-    let left_trimmed = eval_trim_leading_zeroes(left_digits);
-    let right_trimmed = eval_trim_leading_zeroes(right_digits);
-    left_trimmed
-        .len()
-        .cmp(&right_trimmed.len())
-        .then_with(|| left_trimmed.cmp(right_trimmed))
-        .then_with(|| left_digits.len().cmp(&right_digits.len()))
-}
-
-/// Drops leading zero bytes while keeping one zero for an all-zero digit run.
-pub(in crate::interpreter) fn eval_trim_leading_zeroes(digits: &[u8]) -> &[u8] {
-    let trimmed = digits
-        .iter()
-        .position(|digit| *digit != b'0')
-        .map_or(&digits[digits.len().saturating_sub(1)..], |index| {
-            &digits[index..]
-        });
-    if trimmed.is_empty() {
-        digits
-    } else {
-        trimmed
-    }
-}
-
 /// php's `SORT_*` flag values.
 const EVAL_SORT_REGULAR: i64 = 0;
 const EVAL_SORT_NUMERIC: i64 = 1;
+const EVAL_SORT_STRING: i64 = 2;
+const EVAL_SORT_LOCALE_STRING: i64 = 5;
 const EVAL_SORT_NATURAL: i64 = 6;
 const EVAL_SORT_FLAG_CASE: i64 = 8;
 
@@ -504,7 +450,13 @@ pub(in crate::interpreter) fn eval_array_sort_replacement_with_flags(
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     let domain = flags & !EVAL_SORT_FLAG_CASE;
-    if domain == EVAL_SORT_REGULAR || !eval_array_sort_takes_flags(name) {
+    // php compares in one domain only for SORT_NUMERIC, SORT_STRING, SORT_LOCALE_STRING and
+    // SORT_NATURAL; every other flag value (SORT_DESC, SORT_ASC, garbage) is a regular sort.
+    let known_domain = matches!(
+        domain,
+        EVAL_SORT_NUMERIC | EVAL_SORT_STRING | EVAL_SORT_LOCALE_STRING | EVAL_SORT_NATURAL
+    );
+    if !known_domain || !eval_array_sort_takes_flags(name) {
         return eval_array_sort_replacement(name, array, flags, values);
     }
     let by_key = matches!(name, "krsort" | "ksort");
@@ -552,7 +504,10 @@ fn eval_array_sort_flag_bytes(
     values: &mut impl RuntimeValueOps,
 ) -> Result<Vec<u8>, EvalStatus> {
     let string = values.cast_string(value)?;
-    let mut bytes = values.string_bytes(string)?;
+    let bytes = values.string_bytes(string);
+    // The cast box is this helper's own; only its bytes outlive it.
+    values.release(string)?;
+    let mut bytes = bytes?;
     if case_fold {
         bytes.make_ascii_lowercase();
     }
@@ -606,25 +561,10 @@ fn eval_array_sort_direct_args(
     scope: &mut ElephcEvalScope,
     values: &mut impl RuntimeValueOps,
 ) -> Result<(RuntimeCellHandle, EvalReferenceTarget, i64), EvalStatus> {
-    if !matches!(name, "ksort" | "krsort") {
-        // The value sorts take one optional `$flags`, positionally: a comparison domain.
-        let (array_arg, flags_arg) = match args {
-            [array_arg] => (array_arg, None),
-            [array_arg, flags_arg] if eval_array_sort_takes_flags(name) && !flags_arg.is_spread() => {
-                (array_arg, Some(flags_arg))
-            }
-            _ => return Err(EvalStatus::RuntimeFatal),
-        };
-        let (array, target) =
-            eval_array_sort_direct_arg(std::slice::from_ref(array_arg), context, scope, values)?;
-        let flags = match flags_arg {
-            Some(flags_arg) => {
-                let flags = eval_expr(flags_arg.value(), context, scope, values)?;
-                eval_int_value(flags, values)?
-            }
-            None => EVAL_SORT_REGULAR,
-        };
-        return Ok((array, target, flags));
+    if !eval_array_sort_takes_flags(name) {
+        // `natsort`, `natcasesort` and `shuffle` take the array alone.
+        let (array, target) = eval_array_sort_direct_arg(args, context, scope, values)?;
+        return Ok((array, target, EVAL_SORT_REGULAR));
     }
 
     let mut receiver = None;

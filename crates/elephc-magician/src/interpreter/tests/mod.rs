@@ -72,6 +72,7 @@ mod builtins_strings_encoding;
 mod builtins_strings_openssl;
 mod builtins_strings_text;
 mod builtins_array_replace;
+mod builtins_sort_flags;
 mod builtins_error_log;
 mod builtins_extract;
 mod builtins_set_time_limit;
