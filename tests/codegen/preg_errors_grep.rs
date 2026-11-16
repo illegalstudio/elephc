@@ -153,3 +153,20 @@ echo $failed, ':', preg_last_error(), ':', count($all), count($one), "\n";
     assert_eq!(out.stdout, "12:2:20\n");
     assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
 }
+
+/// A namespaced `preg_grep()` (braced or statement-form namespace) does not suppress the
+/// global one: unqualified global calls and `\preg_grep()` still reach PHP's function.
+#[test]
+fn test_preg_grep_namespaced_homonym_keeps_global_function() {
+    let braced = compile_and_run(r#"<?php
+namespace App { function preg_grep() { return 'app'; } }
+namespace { echo json_encode(preg_grep('/a/', ['a', 'b'])), '|', \App\preg_grep(), "\n"; }
+"#);
+    assert_eq!(braced, "[\"a\"]|app\n");
+    let statement = compile_and_run(r#"<?php
+namespace App;
+function preg_grep() { return 'app'; }
+echo preg_grep(), '|', json_encode(\preg_grep('/a/', ['a', 'b'])), "\n";
+"#);
+    assert_eq!(statement, "app|[\"a\"]\n");
+}

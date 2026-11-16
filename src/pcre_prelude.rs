@@ -9,7 +9,8 @@
 //!
 //! Key details:
 //! - Pay-for-use with a redeclaration guard, like `crate::version_prelude`: a program that
-//!   never mentions `preg_grep` carries nothing, and a program declaring its own keeps it.
+//!   never mentions `preg_grep` carries nothing, and a program declaring its own global
+//!   `preg_grep` keeps it. A namespaced `App\preg_grep` does not suppress the injection.
 //! - The body is PHP's algorithm over the shared regex builtins, so every target and the
 //!   regex runtime detection see ordinary `preg_match()` calls. The pattern is validated
 //!   once up front (an invalid pattern is `false` even for an empty array); each entry is
@@ -107,7 +108,7 @@ pub fn inject_if_used(
 ) -> Program {
     crate::compiler_stack::with_compiler_stack(|| {
         if !(autoloaded || program_uses_surface(&program))
-            || crate::opcache_prelude::detect::program_declares(&program, "preg_grep")
+            || crate::opcache_prelude::detect::program_declares_global(&program, "preg_grep")
         {
             return program;
         }
