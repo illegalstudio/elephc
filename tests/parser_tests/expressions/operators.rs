@@ -10,12 +10,18 @@
 use super::*;
 
 /// Unary plus binds below exponentiation and above multiplication, including object operands.
+///
+/// `+x` is built as `x * 1`, which is what php-src compiles it to: `0 + x` loses the sign of a
+/// negative zero, and php -n 8.5.10 prints `float(-0)` for `$z = -0.0; var_dump(+$z);`.
 #[test]
 fn test_unary_plus_precedence() {
     let stmts = parse_source("<?php echo +$n ** 2 * 3;");
     let expected = Stmt::echo(Expr::binop(
-        Expr::binop(Expr::int_lit(0), BinOp::Add,
-            Expr::binop(Expr::var("n"), BinOp::Pow, Expr::int_lit(2))),
+        Expr::binop(
+            Expr::binop(Expr::var("n"), BinOp::Pow, Expr::int_lit(2)),
+            BinOp::Mul,
+            Expr::int_lit(1),
+        ),
         BinOp::Mul, Expr::int_lit(3),
     ));
     assert_eq!(stmts, vec![expected]);
