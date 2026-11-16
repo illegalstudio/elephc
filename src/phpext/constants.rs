@@ -103,9 +103,12 @@ fn native_schema(
 /// Rejects unresolved widening only after unused declarations have been pruned.
 pub fn validate_native_widening(
     classes: &crate::fast_hash::FastMap<String, crate::types::ClassInfo>, interfaces: &HashMap<String, crate::types::InterfaceInfo>,
+    live_interfaces: &HashSet<String>,
 ) -> Result<(), CompileError> {
     let schemas = classes.iter().map(|(owner, info)| (owner, &info.constants, &info.constant_types))
-        .chain(interfaces.iter().map(|(owner, info)| (owner, &info.constants, &info.constant_types)));
+        .chain(interfaces.iter()
+            .filter(|(owner, _)| live_interfaces.contains(&owner.to_ascii_lowercase()))
+            .map(|(owner, info)| (owner, &info.constants, &info.constant_types)));
     for (owner, values, types) in schemas {
         for (name, value) in values {
             if types.get(name).map(coercion_type).is_some_and(|ty| ty.coerces_integer_to_float())

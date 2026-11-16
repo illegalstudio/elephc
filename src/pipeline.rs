@@ -2219,8 +2219,27 @@ fn compile_config(config: CliConfig, entry: EntryKind<'_>) {
         process::exit(1);
     }
     if emit == Emit::Phpext && !exported_classes.is_empty() {
+        // Pruning keeps an unused interface's declaration and the checker its table entry, so a
+        // widening problem in a constant nothing can reach must not fail the build: an interface
+        // is live when some statement other than its own declaration names it (a constant
+        // access, an `implements`/`extends` list, a type). The Debug text carries every spelling.
+        let mut live_interfaces: crate::fast_hash::FastSet<String> = Default::default();
+        for stmt in &ast {
+            if let crate::parser::ast::StmtKind::InterfaceDecl { name, .. } = &stmt.kind {
+                let quoted = format!("{:?}", name.rsplit('\\').next().unwrap_or(name));
+                // Autoload bookkeeping (`ClassLikeActivate`) names every declared class-like.
+                let named_elsewhere = ast.iter().any(|other| {
+                    !std::ptr::eq(other, stmt)
+                        && !matches!(other.kind, crate::parser::ast::StmtKind::ClassLikeActivate { .. })
+                        && format!("{:?}", other.kind).contains(&quoted)
+                });
+                if named_elsewhere {
+                    live_interfaces.insert(name.to_ascii_lowercase());
+                }
+            }
+        }
         if let Err(error) = crate::phpext::constants::validate_native_widening(
-            &check_result.classes, &check_result.interfaces,
+            &check_result.classes, &check_result.interfaces, &live_interfaces,
         ) {
             crate::progress::clear();
             errors::report(&error.with_file(filename.to_string()));
