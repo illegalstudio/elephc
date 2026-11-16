@@ -159,7 +159,7 @@ fn decl_fn_elephc_filter_var_ext() -> Stmt {
                 None,
             ),
             s_if(
-                e_binop(e_binop(e_call("is_array", vec![e_var("value")]), BinOp::Or, e_call("is_object", vec![e_var("value")])), BinOp::Or, e_call("is_resource", vec![e_var("value")])),
+                e_binop(e_binop(e_call("is_array", vec![e_var("value")]), BinOp::Or, e_binop(e_call("is_object", vec![e_var("value")]), BinOp::And, e_not(e_call("method_exists", vec![e_var("value"), e_str("__toString")])))), BinOp::Or, e_call("is_resource", vec![e_var("value")])),
                 vec![
                     s_return(e_var("failure")),
                 ],
@@ -211,7 +211,7 @@ fn decl_fn_elephc_filter_callback() -> Stmt {
                 None,
             ),
             s_if(
-                e_binop(e_call("is_object", vec![e_var("value")]), BinOp::Or, e_call("is_resource", vec![e_var("value")])),
+                e_binop(e_binop(e_call("is_object", vec![e_var("value")]), BinOp::And, e_not(e_call("method_exists", vec![e_var("value"), e_str("__toString")]))), BinOp::Or, e_call("is_resource", vec![e_var("value")])),
                 vec![
                     s_return(e_bool(false)),
                 ],

@@ -617,6 +617,30 @@ fn test_filter_var_url_email_domain_callback_match_php() {
     assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
 }
 
+/// `filter_var()` converts an object with `__toString` to its string before validating it, and
+/// fails only for an object without one (php-src `php_zval_filter`); Symfony's validators pass
+/// `Stringable` values.
+#[test]
+fn test_filter_var_stringable_objects_match_php() {
+    let out = compile_and_run(
+        r#"<?php
+class Email { function __construct(private string $s) {} function __toString(): string { return $this->s; } }
+class Plain {}
+var_dump(filter_var(new Email('a@b.co'), FILTER_VALIDATE_EMAIL));
+var_dump(filter_var(new Email('nope'), FILTER_VALIDATE_EMAIL));
+var_dump(filter_var(new Email('http://example.com/x'), FILTER_VALIDATE_URL));
+var_dump(filter_var(new Email('abc'), FILTER_CALLBACK, ['options' => 'strtoupper']));
+var_dump(filter_var(new Plain, FILTER_VALIDATE_EMAIL));
+var_dump(filter_var(new Plain, FILTER_CALLBACK, ['options' => 'strtoupper']));
+var_dump(filter_var(new Email('example.com'), FILTER_VALIDATE_DOMAIN));
+"#,
+    );
+    assert_eq!(
+        out,
+        "string(6) \"a@b.co\"\nbool(false)\nstring(20) \"http://example.com/x\"\nstring(3) \"ABC\"\nbool(false)\nbool(false)\nstring(11) \"example.com\"\n"
+    );
+}
+
 /// `foreach ($object as $key => &$value)` over a `stdClass` (laravel/serializable-closure's
 /// `Native::mapPointers()`) walks its properties by reference, and the body may rebind the one it
 /// visits (`$data->{$key} = &$this->closure`). The checker refused the walk outside the class's
