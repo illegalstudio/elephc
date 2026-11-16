@@ -132,6 +132,12 @@ pub(super) fn lower_closed_world_extract(
     );
     super::super::stmt::lower_stmt(ctx, &source);
     super::super::stmt::lower_stmt(ctx, &s_assign(&count_local, e_int(0)));
+    // php answers the number of variables imported, so a key naming no local of this frame (a
+    // variable nothing reads) still counts when it is a valid variable name.
+    super::super::stmt::lower_stmt(
+        ctx,
+        &count_unread_extract_keys(&source_local, &count_local, &targets),
+    );
     for target in targets {
         if skip && initialized.contains(&target) {
             continue;
@@ -157,4 +163,66 @@ pub(super) fn lower_closed_world_extract(
     }
     let _ = e_bool;
     Some(lower_expr(ctx, &e_var(&count_local)))
+}
+
+/// Builds the statement that adds to `count_local` every key of the extracted array that is a
+/// valid variable name (`[A-Za-z_\x80-\xff][A-Za-z0-9_\x80-\xff]*`, not `this`) and names none
+/// of `handled`, the locals the import loop assigns and counts itself.
+fn count_unread_extract_keys(source_local: &str, count_local: &str, handled: &[String]) -> Stmt {
+    use crate::synthetic_class::{e_array, e_binop, e_call, e_index, e_int, e_not, e_str, e_var, s_assign, s_foreach, s_if};
+    // Every ASCII byte that cannot appear in a variable name; bytes 0x80-0xff all can.
+    let invalid: String = (0u8..0x80)
+        .filter(|byte| !byte.is_ascii_alphanumeric() && *byte != b'_')
+        .map(char::from)
+        .collect();
+    let key_local = crate::names::generated_local_name("__elephc_extract_key");
+    let key = || e_var(&key_local);
+    let and = |left, right| e_binop(left, BinOp::And, right);
+    let valid = and(
+        and(
+            and(
+                e_call("is_string", vec![key()]),
+                e_binop(key(), BinOp::StrictNotEq, e_str("")),
+            ),
+            and(
+                e_binop(key(), BinOp::StrictNotEq, e_str("this")),
+                e_not(e_call(
+                    "in_array",
+                    vec![
+                        key(),
+                        e_array(handled.iter().map(|name| e_str(name)).collect()),
+                        crate::synthetic_class::e_bool(true),
+                    ],
+                )),
+            ),
+        ),
+        and(
+            e_binop(
+                e_call("strcspn", vec![key(), e_str(&invalid)]),
+                BinOp::StrictEq,
+                e_call("strlen", vec![key()]),
+            ),
+            e_binop(
+                e_call("strpos", vec![e_str("0123456789"), e_index(key(), e_int(0))]),
+                BinOp::StrictEq,
+                crate::synthetic_class::e_bool(false),
+            ),
+        ),
+    );
+    s_if(
+        e_call("is_array", vec![e_var(source_local)]),
+        vec![s_foreach(
+            e_call("array_keys", vec![e_var(source_local)]),
+            None,
+            &key_local,
+            vec![s_if(
+                valid,
+                vec![s_assign(count_local, e_binop(e_var(count_local), BinOp::Add, e_int(1)))],
+                vec![],
+                None,
+            )],
+        )],
+        vec![],
+        None,
+    )
 }

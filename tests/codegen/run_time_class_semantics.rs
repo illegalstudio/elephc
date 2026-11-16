@@ -129,3 +129,18 @@ echo g(...$m), "\n";
     );
     assert_eq!(out, "x|y\np|q\n");
 }
+
+/// A closed-world `extract()` imports into a local read only after the call, and answers php's
+/// count of imported variables, a key naming no local of the frame included.
+#[test]
+fn test_closed_world_extract_counts_every_imported_variable() {
+    let out = compile_and_run(
+        r#"<?php
+function f(array $a) { $n = extract($a); return $n . ($x ?? ''); }
+echo f(['x' => 1, 'y' => 2]), "\n";
+function g(array $a) { return extract($a); }
+echo g(['ok' => 1, '1bad' => 2, 'bad-name' => 3, 7 => 4, '_u' => 5, "\u{e9}t\u{e9}" => 6]), "\n";
+"#,
+    );
+    assert_eq!(out, "21\n3\n");
+}

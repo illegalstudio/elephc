@@ -2096,6 +2096,7 @@ fn lower_body_into_function(
     ctx.record_non_integer_keyed_locals(body);
     seed_vivified_array_locals(&mut ctx, body, params);
     box_array_reference_sources(&mut ctx, body, params);
+    predeclare_extract_targets(&mut ctx, body);
     ctx.lower_with_final_string_storage(|ctx| {
         if let Some(class) = property_initializers {
             super::property_initializers::lower(ctx, class);
@@ -2188,6 +2189,50 @@ fn box_array_reference_sources(
     names.sort();
     for name in names {
         if ctx.uses_global_storage_for_seeding(&name) || ctx.local_slots.contains_key(&name) {
+            continue;
+        }
+        ctx.declare_local(&name, PhpType::Mixed);
+    }
+}
+
+/// Declares every variable a body names before a closed-world `extract()` in it is lowered.
+///
+/// The native `extract()` assigns the frame's compiled locals, and a local gets its slot when
+/// lowering first reaches it: `$n = extract($a); return $x ?? '';` reached the call before `$x`
+/// had one, so the key was never imported. Declaring the names up front (as gradual, unassigned
+/// locals) gives the call every variable the body can read.
+fn predeclare_extract_targets(ctx: &mut LoweringContext<'_, '_>, body: &[Stmt]) {
+    if !crate::closed_world::is_enabled() {
+        return;
+    }
+    let mut calls_extract = false;
+    let mut names: Vec<String> = Vec::new();
+    crate::parser::ast::visit::walk_nodes(body, &mut |node| {
+        let crate::parser::ast::visit::Node::Expr(expr) = node else {
+            return;
+        };
+        match &expr.kind {
+            ExprKind::FunctionCall { name, .. }
+                if php_symbol_key(name.as_str().trim_start_matches('\\')) == "extract" =>
+            {
+                calls_extract = true;
+            }
+            ExprKind::Variable(name) => names.push(name.clone()),
+            _ => {}
+        }
+    });
+    if !calls_extract {
+        return;
+    }
+    names.sort();
+    names.dedup();
+    for name in names {
+        if name == "this"
+            || crate::superglobals::is_superglobal(&name)
+            || crate::names::is_generated_local_name(&name)
+            || ctx.uses_global_storage_for_seeding(&name)
+            || ctx.local_slots.contains_key(&name)
+        {
             continue;
         }
         ctx.declare_local(&name, PhpType::Mixed);
