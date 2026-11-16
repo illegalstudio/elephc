@@ -441,7 +441,14 @@ unsafe fn eval_dynamic_class_like_exists_inner(
         let _ = values.release(argument);
     }
     if let Some(thrown) = escaped {
-        PROBE_THROWABLE.store(thrown.as_ptr() as usize, std::sync::atomic::Ordering::SeqCst);
+        // A box still parked (its status was never followed by a take) is released before the
+        // slot is reused, rather than overwritten and leaked.
+        let previous = PROBE_THROWABLE.with(|slot| slot.replace(thrown.as_ptr() as usize));
+        if previous != 0 {
+            let _ = values.release(crate::value::RuntimeCellHandle::from_raw(
+                previous as *mut crate::value::RuntimeCell,
+            ));
+        }
         return PROBE_THROWN_STATUS;
     }
     context.sync_global_eval_classes();
@@ -455,9 +462,15 @@ unsafe fn eval_dynamic_class_like_exists_inner(
 #[cfg(not(test))]
 const PROBE_THROWN_STATUS: i32 = 2;
 
-/// Owned Throwable box parked by a probe that returned [`PROBE_THROWN_STATUS`].
 #[cfg(not(test))]
-static PROBE_THROWABLE: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+thread_local! {
+    /// Owned Throwable box parked by a probe that returned [`PROBE_THROWN_STATUS`].
+    ///
+    /// Thread-local like the rest of the probe state: the compiled caller takes it straight after
+    /// the probe on the same thread, and a process-global slot let another thread's probe
+    /// overwrite it.
+    static PROBE_THROWABLE: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
 
 /// Hands the parked probe Throwable (an owned box, or null) to the compiled caller.
 ///
@@ -466,7 +479,7 @@ static PROBE_THROWABLE: std::sync::atomic::AtomicUsize = std::sync::atomic::Atom
 #[cfg(not(test))]
 #[no_mangle]
 pub unsafe extern "C" fn __elephc_eval_take_probe_throwable() -> *mut crate::value::RuntimeCell {
-    PROBE_THROWABLE.swap(0, std::sync::atomic::Ordering::SeqCst) as *mut crate::value::RuntimeCell
+    PROBE_THROWABLE.with(|slot| slot.replace(0)) as *mut crate::value::RuntimeCell
 }
 
 /// Returns the PHP function name of the class-like probe that can start an autoloader.
