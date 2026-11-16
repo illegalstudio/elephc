@@ -67,10 +67,20 @@ pub struct NativeHint {
     /// The hint every type argument must satisfy, without a leading `?`.
     pub ty: TypeExpr,
     /// The parameters (the variadic included) that carried a native hint, each with the hint
-    /// as written.
+    /// as written. A CLASS type parameter spans every member, so its entries are keyed by
+    /// [`NativeHint::member_key`] instead and cover properties and return types too.
     pub params: Vec<(String, TypeExpr)>,
-    /// The native return type as written, when the type parameter took it over too.
+    /// The native return type as written, when a function or method type parameter took it
+    /// over too.
     pub return_type: Option<TypeExpr>,
+}
+
+impl NativeHint {
+    /// Names a member position of a class for a class type parameter's record: a method's
+    /// parameter, or its return type when `param` is `None`. Method names are case-insensitive.
+    pub fn member_key(method: &str, param: Option<&str>) -> String {
+        format!("{}::{}", method.to_ascii_lowercase(), param.unwrap_or(""))
+    }
 }
 
 impl PartialEq for TypeParam {

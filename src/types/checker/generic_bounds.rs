@@ -154,13 +154,22 @@ impl Checker {
                 if defer_implicit_stringable && self.declares_public_tostring(&argument) {
                     continue;
                 }
+                let reason = if obligation.native_hint {
+                    "is not accepted by the native type"
+                } else {
+                    "does not satisfy its bound"
+                };
                 self.report_bound_violation(
                     obligation.from_docblock,
                     obligation.span,
                     format!(
-                        "Generic {} '{}' binds type parameter <{}> to {}, which does not \
-                         satisfy its bound {}",
-                        obligation.kind, obligation.template, obligation.parameter, argument, bound
+                        "Generic {} '{}' binds type parameter <{}> to {}, which {} {}",
+                        obligation.kind,
+                        obligation.template,
+                        obligation.parameter,
+                        argument,
+                        reason,
+                        bound
                     ),
                 )?;
             }

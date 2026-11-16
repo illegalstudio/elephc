@@ -178,8 +178,8 @@ fn apply_to_stmt(mut stmt: Stmt, blocks: &HashMap<(u32, u32), DocBlock>) -> Stmt
             ..
         } => {
             let extends_args = adopt_inherited(block, extends.as_ref());
-            let type_params = adopt_generics(block, generics, extends_args, implements);
-            members::apply(&type_params, properties, methods, blocks);
+            adopt_generics(block, generics, extends_args, implements);
+            members::apply(class_templates(generics), properties, methods, blocks);
         }
         StmtKind::InterfaceDecl {
             generics,
@@ -191,18 +191,18 @@ fn apply_to_stmt(mut stmt: Stmt, blocks: &HashMap<(u32, u32), DocBlock>) -> Stmt
             // An interface has no single parent, so everything it inherits is an interface and
             // everything annotated lands in `interface_args` — which is why `GenericDecl` says
             // `extends_args` is always empty for one.
-            let type_params = adopt_generics(block, generics, Vec::new(), extends);
-            members::apply(&type_params, properties, methods, blocks);
+            adopt_generics(block, generics, Vec::new(), extends);
+            members::apply(class_templates(generics), properties, methods, blocks);
         }
         StmtKind::TraitDecl {
             generics, properties, methods, ..
         } => {
-            let type_params = adopt_generics(block, generics, Vec::new(), &[]);
-            members::apply(&type_params, properties, methods, blocks);
+            adopt_generics(block, generics, Vec::new(), &[]);
+            members::apply(class_templates(generics), properties, methods, blocks);
         }
         // Enums carry no class templates, but their methods may declare their own templates.
         StmtKind::EnumDecl { methods, .. } => {
-            members::apply(&[], &mut [], methods, blocks);
+            members::apply(&mut [], &mut [], methods, blocks);
         }
         StmtKind::NamespaceBlock { body, .. } => {
             let nested = std::mem::take(body);
@@ -228,8 +228,7 @@ fn adopt_annotation(declared: &mut Option<TypeExpr>, annotated: &TypeExpr, own: 
     }
 }
 
-/// Gives a declaration its generic half from `block`, and returns the type parameters now in
-/// scope for its members.
+/// Gives a declaration its generic half from `block`.
 ///
 /// Written syntax wins over an annotation, so a file can migrate one declaration at a time — and
 /// the test is whether the parser built a `GenericDecl` at all, not whether it holds type
@@ -239,25 +238,26 @@ fn adopt_generics(
     generics: &mut Option<Box<GenericDecl>>,
     extends_args: Vec<TypeExpr>,
     inherited_interfaces: &[Name],
-) -> Vec<String> {
-    if let Some(written) = generics.as_ref() {
-        return written
-            .type_params
-            .iter()
-            .map(|param| param.name.clone())
-            .collect();
+) {
+    if generics.is_some() {
+        return;
     }
     let Some(block) = block.filter(|block| block.declares_class_generics()) else {
-        return Vec::new();
+        return;
     };
-    let names = block
-        .type_params
-        .iter()
-        .map(|param| param.name.clone())
-        .collect();
     let interface_args = align_inherited(inherited_interfaces, block);
     *generics = GenericDecl::new(block.type_params.clone(), extends_args, interface_args);
-    names
+}
+
+/// The type parameters in scope for a declaration's members, written or adopted.
+///
+/// Mutable because `members::apply` records on each PHPDoc one the native hint its members let
+/// it replace (`TypeParam::native_hint`).
+fn class_templates(generics: &mut Option<Box<GenericDecl>>) -> &mut [TypeParam] {
+    generics
+        .as_mut()
+        .map(|generics| generics.type_params.as_mut_slice())
+        .unwrap_or_default()
 }
 
 /// Reads the type arguments annotated on a class's single parent.

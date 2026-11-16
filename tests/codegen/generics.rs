@@ -3665,3 +3665,61 @@ echo $vectors->size(), "|", $vectors->data[3]->y, "|", $floats->size();
     );
     assert_eq!(out, "4|1.25|2");
 }
+
+/// A PHPDoc class template that takes over a native hint (`@param T`, `@var T` or `@return T`
+/// on `object`, `array`, ...) keeps it binding: a type argument the hint accepts refines it,
+/// and anything else is compiled at the hint itself, so php-src's TypeError stays an error.
+#[test]
+fn test_docblock_class_template_keeps_the_native_hint_it_takes_over() {
+    let declarations = r#"<?php
+class Model {}
+class User extends Model { public function hi() { return "hi"; } }
+class Other {}
+/** @template T of Model */
+class Box {
+    /** @param T $value */
+    public function __construct(public object $value) {}
+    /** @return T */
+    public function get(): object { return $this->value; }
+}
+/** @template T */
+class Items {
+    /** @param T $items */
+    public function __construct(public array $items) {}
+}
+interface Sink { public function put(object $v): int; }
+/** @template T */
+class Bin implements Sink {
+    /** @param T $v */
+    public function put(object $v): int { return 1; }
+}
+"#;
+    let valid = format!(
+        "{declarations}echo (new Box(new User()))->get()->hi(), \"|\", get_class((new Box(new Other()))->value), \"|\", count((new Items([1, 2]))->items), \"|\", (new Bin())->put(new User());\n"
+    );
+    let warnings = compile_cli_file_with_flags_capturing_stderr(&valid, &[]);
+    assert!(warnings.contains("<T> to Other, which does not satisfy its bound Model"), "{warnings}");
+    assert_eq!(compile_cli_file_and_run_with_flags(&valid, &[]), "hi|Other|2|1");
+    for (code, expected) in [
+        ("new Box(\"x\");", "expects object, got string"),
+        // A dispatched method is erased back to its native `object $v`, not to an untyped one.
+        ("(new Bin())->put(5);", "expects object, got int"),
+        ("new Items(\"x\");", "expects array, got string"),
+        (
+            "/** @extends Box<string> */\nclass Bad extends Box {}",
+            "<T> to string, which is not accepted by the native type object",
+        ),
+        (
+            "/** @template T of Model */\nclass Holder {\n    /** @var T */\n    public object $value;\n    public function __construct() { $this->value = \"x\"; }\n}\nnew Holder();",
+            "expects object, got string",
+        ),
+        (
+            "/** @template T */\nclass Maybe {\n    /** @var ?T */\n    public object $value;\n    public function __construct() { $this->value = null; }\n}\nnew Maybe();",
+            "expects object",
+        ),
+    ] {
+        let error =
+            compile_cli_file_with_flags_expect_failure(&format!("{declarations}{code}\n"), &[]);
+        assert!(error.contains(expected), "{code}: {error}");
+    }
+}

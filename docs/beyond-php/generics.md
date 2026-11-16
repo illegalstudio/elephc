@@ -1202,7 +1202,9 @@ instead:
   `T = Model`. The hint also decides whether the position accepts `null`, whatever a `?T`
   says. Hinted positions that disagree (`object $a` and `callable $b`, both `@param T`) keep
   their native hints; `object` beside the class that bounds the template is not a
-  disagreement, the class speaks for both.
+  disagreement, the class speaks for both. A class template follows the same rule across
+  all its members: `@var T` on a `public object $value` property keeps every `Box<...>` an
+  object holder, and a written `Box<string>` is an error.
 - **A template no position adopts is not a template.** When every annotation naming `T` lost
   to a native hint, the function or method keeps its own name and its native signature.
 

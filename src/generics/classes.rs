@@ -51,6 +51,10 @@ pub struct BoundObligation {
     /// Whether the bound was declared by a PHPDoc `@template T of Foo`. php-src does not enforce
     /// one, so the checker reports its violation as a warning instead of an error.
     pub from_docblock: bool,
+    /// Whether `bound` is the native hint a PHPDoc parameter took over
+    /// (`TypeParam::native_hint`) rather than a declared bound. php-src enforces that hint at
+    /// every member the parameter annotates, so a type argument it does not accept is an error.
+    pub native_hint: bool,
 }
 
 /// A generic class, interface or trait declaration, indexed by the name it is declared under.
@@ -683,20 +687,29 @@ impl Instantiate<'_> {
         // may name its own parameter (`<T : Cmp<T>>`) or a later one, and substituting inside
         // the loop left those as a literal `Cmp<T>` that no class satisfies.
         for (param, (_, argument)) in template.type_params.iter().zip(&bindings) {
+            let obligation = |bound: TypeExpr, native_hint: bool| BoundObligation {
+                template: name.as_str().to_string(),
+                kind: match template.declaration.kind {
+                    StmtKind::InterfaceDecl { .. } => "interface",
+                    StmtKind::TraitDecl { .. } => "trait",
+                    _ => "class",
+                },
+                parameter: super::parameter_name(&param.name).to_string(),
+                bound,
+                argument: argument.clone(),
+                span,
+                from_docblock: param.from_docblock && !native_hint,
+                native_hint,
+            };
             if let Some(bound) = &param.bound {
-                self.obligations.borrow_mut().push(BoundObligation {
-                    template: name.as_str().to_string(),
-                    kind: match template.declaration.kind {
-                        StmtKind::InterfaceDecl { .. } => "interface",
-                        StmtKind::TraitDecl { .. } => "trait",
-                        _ => "class",
-                    },
-                    parameter: super::parameter_name(&param.name).to_string(),
-                    bound: super::substitute_value_type(bound, &bindings),
-                    argument: argument.clone(),
-                    span,
-                    from_docblock: param.from_docblock,
-                });
+                self.obligations
+                    .borrow_mut()
+                    .push(obligation(super::substitute_value_type(bound, &bindings), false));
+            }
+            // A written mention cannot be settled the way a call is: the instantiation it names
+            // is spliced before the checker runs. So the hint is checked like a native bound.
+            if let Some(hint) = &param.native_hint {
+                self.obligations.borrow_mut().push(obligation(hint.ty.clone(), true));
             }
         }
         let instantiated = instantiated_name(&template.declared_name, &bindings);

@@ -21,17 +21,22 @@ use super::DocBlock;
 
 /// Applies class-scoped member annotations and adopts each method's own template declaration.
 pub(super) fn apply(
-    class_params: &[String],
+    class_templates: &mut [TypeParam],
     properties: &mut [ClassProperty],
     methods: &mut [ClassMethod],
     blocks: &HashMap<(u32, u32), DocBlock>,
 ) {
+    anchor_class_hints(class_templates, properties, methods, blocks);
+    let class_templates: &[TypeParam] = class_templates;
+    let class_names: Vec<String> =
+        class_templates.iter().map(|param| param.name.clone()).collect();
+    let class_params = class_names.as_slice();
     for property in properties.iter_mut() {
         if let Some(annotated) = blocks
             .get(&(property.span.line, property.span.col))
             .and_then(|block| block.var_type.as_ref())
         {
-            apply_type(&mut property.type_expr, annotated, class_params, &[]);
+            apply_signature_type(&mut property.type_expr, annotated, class_params, class_templates);
         }
     }
     let mut promoted = Vec::new();
@@ -73,13 +78,24 @@ pub(super) fn apply(
             Vec::new()
         };
         let own = own.as_slice();
+        // The method's own templates shadow a class template of the same name.
+        let templates: Vec<TypeParam> = own
+            .iter()
+            .chain(
+                class_templates
+                    .iter()
+                    .filter(|param| !own.iter().any(|shadow| shadow.name == param.name)),
+            )
+            .cloned()
+            .collect();
+        let templates = templates.as_slice();
         let in_scope = in_scope.as_slice();
         let is_constructor = method.name.eq_ignore_ascii_case("__construct");
         for (name, declared, _, _) in method.params.iter_mut() {
             let Some(annotated) = block.params.get(name) else {
                 continue;
             };
-            if apply_signature_type(declared, annotated, in_scope, own) && is_constructor {
+            if apply_signature_type(declared, annotated, in_scope, templates) && is_constructor {
                 promoted.extend(declared.clone().map(|adopted| (name.clone(), adopted)));
             }
         }
@@ -88,10 +104,10 @@ pub(super) fn apply(
             .as_ref()
             .and_then(|name| block.params.get(name))
         {
-            apply_signature_type(&mut method.variadic_type, annotated, in_scope, own);
+            apply_signature_type(&mut method.variadic_type, annotated, in_scope, templates);
         }
         if let Some(annotated) = &block.return_type {
-            apply_signature_type(&mut method.return_type, annotated, in_scope, own);
+            apply_signature_type(&mut method.return_type, annotated, in_scope, templates);
         }
         // A template whose `@param` lost to a native hint (`@param T $v` on `mixed $v`) but
         // whose `@return T` was adopted is kept: no argument binds it any more, and a call that
@@ -125,36 +141,19 @@ pub(super) fn apply(
     }
 }
 
-/// Applies an annotation only when it mentions a type parameter in scope (class or method) and
-/// refines, rather than contradicts, the native hint.
+/// Applies a property, parameter or return annotation, only when it mentions a type parameter
+/// in scope (class or method) and refines, rather than contradicts, the native hint.
 ///
 /// PHPDoc may sharpen a hint php-src treats loosely (`array`, `iterable`, `callable`, `object`,
-/// none at all, or the bare name of the class it parameterizes, or the bound of a method
-/// template). A native `mixed` is kept. A native class or scalar hint is a contract php-src
-/// enforces and every override is checked against, so it wins:
-/// `getIterator(): Traversable` documented `@return ArrayIterator<TKey, TValue>` stays
-/// `Traversable`.
-fn apply_type(
-    declared: &mut Option<TypeExpr>,
-    annotated: &TypeExpr,
-    in_scope: &[String],
-    method_params: &[TypeParam],
-) -> bool {
-    if !annotated.mentions_type_param(in_scope)
-        || !refines_native(declared.as_ref(), annotated, method_params)
-    {
-        return false;
-    }
-    *declared = Some(annotated.clone());
-    true
-}
-
-/// Applies a parameter or return annotation: `apply_type`'s rule, plus the two a signature needs.
+/// none at all, or the bare name of the class it parameterizes). A native `mixed` is kept. A
+/// native class or scalar hint is a contract php-src enforces and every override is checked
+/// against, so it wins: `getIterator(): Traversable` documented
+/// `@return ArrayIterator<TKey, TValue>` stays `Traversable`.
 ///
-/// A position annotated directly with one of the declaration's own templates (`@param T $m`,
-/// `@return T`) hands its native hint over to the type argument, so it does only where the
-/// template recorded that hint (`anchor_native_hints`) and the checker keeps enforcing it. And
-/// whether the position accepts `null` is the native hint's to say, never the annotation's.
+/// A position annotated directly with a template (`@param T $m`, `@return T`, `@var T`) hands
+/// its native hint over to the type argument, so it does only where the template recorded that
+/// hint (`anchor_native_hints`) and the checker keeps enforcing it. And whether the position
+/// accepts `null` is the native hint's to say, never the annotation's.
 fn apply_signature_type(
     declared: &mut Option<TypeExpr>,
     annotated: &TypeExpr,
@@ -174,10 +173,10 @@ fn apply_signature_type(
 /// Returns the type a parameter or return position takes from its annotation, or `None` when
 /// its native hint wins.
 ///
-/// `own` are the declaration's templates after `anchor_native_hints`. An untyped position takes
-/// the annotation as written. A hinted one annotated directly with a template is adopted when
-/// the hint is the one the template recorded, and any other annotation follows
-/// `refines_native`. Either way the adopted type keeps the native hint's nullability:
+/// `own` are the templates in scope after `anchor_native_hints`: the declaration's own, then
+/// the enclosing class's. An untyped position takes the annotation as written. A hinted one
+/// annotated directly with a PHPDoc template is adopted when the hint is the one the template
+/// recorded, and any other annotation follows `refines_native`. Either way the adopted type keeps the native hint's nullability:
 /// `?Model $m` documented `@param T $m` becomes `?T`, and `Model $m` documented `@param ?T $m`
 /// becomes `T`, because php-src decides from the hint alone whether `null` is accepted.
 pub(super) fn adopted_signature_type(
@@ -188,14 +187,14 @@ pub(super) fn adopted_signature_type(
     let Some(native) = native else {
         return Some(annotated.clone());
     };
-    match direct_template(annotated, own) {
+    match direct_template(annotated, own).filter(|param| param.from_docblock) {
         Some(param) => {
             let hint = param.native_hint.as_ref()?;
             if !hint_covers(&hint.ty, strip_nullable(native)) {
                 return None;
             }
         }
-        None if !refines_native(Some(native), annotated, own) => return None,
+        None if !refines_native(Some(native), annotated, &[]) => return None,
         None => {}
     }
     Some(with_nullability_of(native, annotated))
@@ -266,8 +265,9 @@ pub(super) fn annotated_positions<'a>(
 /// for ONE hint: every natively hinted position annotated directly with it must carry the same
 /// replaceable hint, or an `object` beside the class the others name (the class is the
 /// narrower of the two, so it speaks for both). Positions whose hints differ otherwise record
-/// nothing and keep their hints. An untyped position constrains nothing and simply takes the
-/// template.
+/// nothing and keep their hints. A hint the template cannot replace at all (`int`, `mixed`,
+/// an unrelated class) is not counted: that position keeps it whatever the others do. An
+/// untyped position constrains nothing and simply takes the template.
 pub(super) fn anchor_native_hints(declared: &[TypeParam], positions: &[Position]) -> Vec<TypeParam> {
     declared
         .iter()
@@ -278,6 +278,7 @@ pub(super) fn anchor_native_hints(declared: &[TypeParam], positions: &[Position]
                     direct_template(annotated, std::slice::from_ref(param)).is_some()
                 })
                 .filter_map(|(name, native, _)| native.map(|native| (*name, native)))
+                .filter(|(_, native)| replaceable_by(strip_nullable(native), param))
                 .collect();
             let candidate = hinted
                 .iter()
@@ -286,10 +287,9 @@ pub(super) fn anchor_native_hints(declared: &[TypeParam], positions: &[Position]
                 .or_else(|| hinted.first().map(|(_, native)| strip_nullable(native)));
             let native_hint = candidate
                 .filter(|candidate| {
-                    replaceable_by(candidate, param)
-                        && hinted
-                            .iter()
-                            .all(|(_, native)| hint_covers(candidate, strip_nullable(native)))
+                    hinted
+                        .iter()
+                        .all(|(_, native)| hint_covers(candidate, strip_nullable(native)))
                 })
                 .map(|candidate| NativeHint {
                     ty: candidate.clone(),
@@ -307,6 +307,73 @@ pub(super) fn anchor_native_hints(declared: &[TypeParam], positions: &[Position]
             TypeParam { native_hint, ..param.clone() }
         })
         .collect()
+}
+
+/// Records on each PHPDoc class template the native hint its members let it replace.
+///
+/// The rule is `anchor_native_hints`, applied to every position of the class at once: the
+/// `@var` of each property and the `@param`/`@return` of each method that adopts annotations.
+/// A class template has one type argument per instantiation, so one hint must speak for all of
+/// them. Only a loosely enforced hint qualifies: a class hint (`Model $m`) is never handed to a
+/// class template, bounded or not. Each position is recorded under `NativeHint::member_key`,
+/// which is how an erased dispatched method finds the hint to restore.
+fn anchor_class_hints(
+    class_templates: &mut [TypeParam],
+    properties: &[ClassProperty],
+    methods: &[ClassMethod],
+    blocks: &HashMap<(u32, u32), DocBlock>,
+) {
+    if !class_templates.iter().any(|param| param.from_docblock) {
+        return;
+    }
+    let mut keyed: Vec<(String, Option<&TypeExpr>, &TypeExpr)> = Vec::new();
+    for property in properties {
+        if let Some(annotated) = blocks
+            .get(&(property.span.line, property.span.col))
+            .and_then(|block| block.var_type.as_ref())
+        {
+            keyed.push((format!("${}", property.name), property.type_expr.as_ref(), annotated));
+        }
+    }
+    for method in methods {
+        let Some(block) = blocks.get(&(method.span.line, method.span.col)) else {
+            continue;
+        };
+        if !method.type_params.is_empty() || !method.has_body {
+            continue;
+        }
+        // A method template of the same name shadows the class template in its own signature.
+        let own: &[TypeParam] = if block.declares_generics() { &block.type_params } else { &[] };
+        keyed.extend(
+            annotated_positions(
+                &method.params,
+                method.variadic.as_deref(),
+                method.variadic_type.as_ref(),
+                method.return_type.as_ref(),
+                block,
+            )
+            .into_iter()
+            .filter(|(_, _, annotated)| direct_template(annotated, own).is_none())
+            .map(|(name, native, annotated)| {
+                (NativeHint::member_key(&method.name, name), native, annotated)
+            }),
+        );
+    }
+    let positions: Vec<Position> = keyed
+        .iter()
+        .map(|(key, native, annotated)| (Some(key.as_str()), *native, *annotated))
+        .collect();
+    // Anchored without its bound, so `T of Model` does not claim a native `Model` hint.
+    let unbounded: Vec<TypeParam> = class_templates
+        .iter()
+        .map(|param| TypeParam { bound: None, ..param.clone() })
+        .collect();
+    let anchored = anchor_native_hints(&unbounded, &positions);
+    for (param, anchored) in class_templates.iter_mut().zip(anchored) {
+        if param.from_docblock {
+            param.native_hint = anchored.native_hint;
+        }
+    }
 }
 
 /// Returns whether the recorded hint `hint` speaks for a position natively hinted `native`:
