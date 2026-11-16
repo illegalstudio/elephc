@@ -412,7 +412,7 @@ fn test_error_named_arguments_reject_unknown_extern_parameter() {
 fn test_error_function_declared_return_type_rejects_mismatch_without_call() {
     expect_error(
         "<?php declare(strict_types=1); function foo(): string { return 1; }",
-        "Function 'foo' return type expects Str, got Int",
+        "Function 'foo' return type expects string, got int",
     );
 }
 
@@ -423,7 +423,7 @@ fn test_error_function_declared_return_type_rejects_mismatch_without_call() {
 fn test_error_function_declared_return_type_rejects_mismatch_via_first_class_callable() {
     expect_error(
         "<?php declare(strict_types=1); function foo(): string { return 1; } $f = foo(...);",
-        "Function 'foo' return type expects Str, got Int",
+        "Function 'foo' return type expects string, got int",
     );
 }
 

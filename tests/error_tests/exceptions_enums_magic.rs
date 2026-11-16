@@ -396,7 +396,7 @@ fn test_error_magic_tostring_must_return_string() {
     expect_no_error("<?php class User { public function __toString() { return 123; } }");
     expect_error(
         "<?php declare(strict_types=1); class User { public function __toString() { return 123; } }",
-        "Method 'User::__toString' return type expects Str, got Int",
+        "Method 'User::__toString' return type expects string, got int",
     );
 }
 

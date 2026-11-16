@@ -911,7 +911,7 @@ class Box {
     public int $value = Defaults::VALUE;
 }
 "#,
-        "Property Box::$value default expects Int, got Str",
+        "Property Box::$value default expects int, got string",
     );
 }
 
@@ -1686,11 +1686,11 @@ fn test_strict_types_scalars_into_string_parameter_are_run_time_type_errors() {
 fn test_error_strict_types_rejects_stringable_object_into_string_union() {
     expect_error(
         "<?php declare(strict_types=1); class Label { public function __toString(): string { return 'x'; } } function either(string|iterable $value): string { return ''; } echo either(new Label());",
-        "parameter $value expects Union",
+        "parameter $value expects string|iterable, got Label",
     );
     expect_error(
         "<?php declare(strict_types=1); class Label { public function __toString(): string { return 'x'; } } function many(string ...$values): string { return ''; } echo many(new Label());",
-        "variadic parameter $values expects Str",
+        "variadic parameter $values expects string",
     );
 }
 
@@ -1700,7 +1700,7 @@ fn test_error_strict_types_rejects_stringable_object_into_string_union() {
 fn test_error_strict_types_rejects_stringable_object_string_return() {
     expect_error(
         "<?php declare(strict_types=1); class ReturnLabel { public function __toString(): string { return 'x'; } } function label(): string { return new ReturnLabel(); }",
-        "return type expects Str, got Object",
+        "return type expects string, got ReturnLabel",
     );
 }
 
@@ -1710,11 +1710,11 @@ fn test_error_strict_types_rejects_stringable_object_string_return() {
 fn test_error_weak_binding_rejects_non_stringable_object_into_string_union() {
     expect_error(
         "<?php class Value {} function either(string|iterable $value): string { return ''; } echo either(new Value());",
-        "parameter $value expects Union",
+        "parameter $value expects string|iterable, got Value",
     );
     expect_error(
         "<?php class Value {} function many(string ...$values): string { return ''; } echo many(new Value());",
-        "variadic parameter $values expects Str",
+        "variadic parameter $values expects string",
     );
 }
 
@@ -2564,8 +2564,8 @@ fn test_storage_this_frame_does_not_own_is_never_widened() {
 #[test]
 fn test_widened_by_ref_param_still_validates_its_argument() {
     let source = "<?php function adv(string $s, int &$i): void { $i = \\strpos($s, \":\", $i); } $z = \"str\"; adv(\"a\", $z);";
-    expect_error(source, "parameter $i expects Int, got Str");
-    expect_error_strict(source, "parameter $i expects Int, got Str");
+    expect_error(source, "parameter $i expects int, got string");
+    expect_error_strict(source, "parameter $i expects int, got string");
 }
 
 /// A by-reference parameter its own body widens type-checks, in BOTH modes.

@@ -535,7 +535,7 @@ fn test_error_closure_return_type_rejects_mismatch() {
     expect_no_error("<?php $f = function(): string { return 1; };");
     expect_error(
         "<?php declare(strict_types=1); $f = function(): string { return 1; };",
-        "Closure return type expects Str, got Int",
+        "Closure return type expects string, got int",
     );
 }
 
@@ -795,7 +795,7 @@ fn test_dynamic_cases_call_is_array_for_array_column() {
 enum DynamicChoice: string { case First = "first"; }
 function values(string $class): int { return array_column($class::cases(), "value"); }
 "#,
-        "got Array",
+        "got array<mixed>",
     );
 }
 
