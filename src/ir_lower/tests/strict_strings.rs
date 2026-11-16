@@ -6,7 +6,7 @@
 //!
 //! Key details:
 //! - PHP and LFC source share semantics while interpolation retains formatting intent.
-//! - Public admission stays closed until native and eval consumers are covered.
+//! - Native, eval and public admission tests complement these focused compiler controls.
 
 use crate::source::SourceMode;
 use elephc_semantics::{SemanticProfile, StrictFeature};

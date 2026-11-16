@@ -1,8 +1,8 @@
 //! Purpose:
-//! Gives managed property cells persistent boxed reference identities.
+//! Gives managed reference cells persistent boxed PHP identities.
 //!
 //! Called from:
-//! - Explicit native-reference validation runtime emission and property reference selection.
+//! - Native-reference validation, property selection and eval-scope runtime emission.
 //!
 //! Key details:
 //! - Promotion preserves the cell address, transfers its payload owner and retains header flags.

@@ -371,18 +371,18 @@ evidence and outstanding guarantees are recorded below.
 
 ## Implementation progress
 
-Verified through step108 (this commit), with original-kind admission audits in progress. Issue:
+Verified through step109 (this commit), with remaining feature admission audits in progress. Issue:
 https://github.com/illegalstudio/elephc/issues/2347.
 
 The full task remains active. The user requested complete implementation, with a
 commit for every verified step and no partial delivery. Do not expose unfinished
 flags as successful no-ops. The public integrated mask still contains only
-Locals, Bools, DynamicCode, Opcache, Arithmetic and Overflow. Existing Locals behavior remains available
+Locals, Bools, DynamicCode, Opcache, Arithmetic, Overflow and Strings. Existing Locals behavior remains available
 but its stronger numeric/reference/eval binding contract is outstanding. All
 other guarantees and the complete umbrella remain explicitly gated until their
 whole contract is enforced.
 
-This progress ledger condenses verified implementation through step108.
+This progress ledger condenses verified implementation through step109.
 Detailed evidence remains in Git history, historical Code Journal plan revisions,
 the linked work logs, and the current agent-facing architecture document
 3739892b. The approved behavior and delivery requirements above are unchanged.
@@ -987,7 +987,8 @@ paths. Keep this plan, agent documentation and the current journal log synchroni
 | 105 | `9da37f1595` | feat(strict): enforce eval string and formatting contracts |
 | 106 | `2d69515576` | fix(strict): validate native string updates before mutation |
 | 107 | `73105c526a` | fix(strict): reject logical null string operands |
-| 108 | this commit | fix(runtime): preserve logical null string identity |
+| 108 | `6904bee88a` | fix(runtime): preserve logical null string identity |
+| 109 | this commit | feat(strict): enable string contracts across native hosts |
 
 
 ### Builtin comparison policy integration
@@ -1228,3 +1229,47 @@ concat null check, so the same rule serves other value consumers. No serialized
 shape or semantic ABI bit changed; the existing source-derived runtime identity
 covers the new helpers. Strings remains staged pending real opaque eval,
 callable/reference and remaining host-boundary audits.
+
+
+### Real opaque eval string host parity (109, verified)
+
+The full native Magician fixture covers nullable scope parameters and aliases,
+canonical missing returns, native descriptors through all3 call forms, Stringable
+formatting/hooks/throws, array output, failed compound writes and VM exceptions
+crossing into AOT catches. Reference PHP establishes permissive stdout.
+
+Initialb3fd3b65 selected1 test and stopped on a pre-existing native/eval catch-name
+contract collision (facta7883b31). Formatting and native catches use distinct
+names while that case remains for the stronger local-binding audit. Retry89890af8
+then proved a permissive alias-visibility and destructor-timing regression:
+A:NULL: inside eval versus native string:x after reload, and endDQ rather than
+per-object native unset destruction (fact1aa3ceaf). Both runs eventually had
+balanced owners, so this was observable lifetime, not an exit leak.
+
+Managed native references now authenticate storage and acquire canonical wrapper
+identity through existing typed adapters before scope import. Headerless ABI
+inputs retain the fallback. Eval-scope capability emits those adapters without
+enabling property validation or linking its bridge. After native writeback,
+activation copies retire through a bounded destructor adapter. Interpreter-only
+bindings survive and a surviving borrowed alias acquires the appropriate lease.
+Global scope remains materialized for callbacks between eval entries.
+
+84247404 passed scope ownership, canonical snapshots, retirement and destructor
+adapters on all5 targets; all4 native strict/permissive optimization controls
+passed with exact alias/destructor timing and clean heaps (120.17s), as did the
+public CLI source and independent-coercion checks. The initial REPL expectation
+omitted its ordinary assignment-expression display; corrected expected output
+retains int(7) before T[7]. Final38f24000 exited0 after4m05s: dynamic value/ref
+owner controls64.29s, REPL45.11s, existing canonical native snapshot23.80s, pending
+throw/writeback39.06s, all5-target string guards0.69s and compiler build53.24s.
+Each selected filter was counted to1 before execution. Assembly comments and
+whitespace audits pass. Runtime/source identity covers the additive ABI helper;
+no stored EvalIR shape or profile bit numbering changed.
+
+Strings is now publicly admitted independently, covering compiler/eval/native
+callables/REPL and the previously verified native XML update paths. User CLI and
+runtime docs describe formatting and explicit casts. The complete umbrella and
+remaining guarantees stay gated. Two future Coercions property-reference probe
+files remain unregistered and outside109. Continue with their actual native
+execution and remaining conversion/cast/Locals admission work, then the approved
+nullability/mixed/initialization and exact-array guarantees.

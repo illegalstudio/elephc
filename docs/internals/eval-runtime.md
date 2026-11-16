@@ -191,7 +191,7 @@ the same cleanup helpers for operands and call arguments. The shared dispatcher
 owns fallback argument evaluation and cleanup, including binding failures.
 
 Interpolated operands retain `EvalCastType::StringFormat`, represented by a
-dedicated formatting opcode in the slice. The staged string guarantee checks
+dedicated formatting opcode in the slice. The string guarantee checks
 original concatenation operands before conversion hooks, and refuses implicit
 array formatting in echo, print and interpolation. Explicit string casts retain
 their conversion contract. Walker echo, owned output and both binary consumers
@@ -200,6 +200,13 @@ AOT string-kind predicates also recognize logical null behind concrete string
 storage, such as a missing typed-array entry. Shared Mixed boxers preserve that
 logical kind, and unboxing recognizes legacy string-shaped null cells. Explicit
 formatting and string casts still produce an empty string.
+Native activation snapshots authenticate managed reference storage and promote
+reviewed raw payloads through the shared canonical reference adapters. All names
+then observe the same current child while headerless references retain their ABI
+fallback. After native writeback, activation copies retire through the bounded
+cleanup adapter, preserving interpreter-only bindings and transferring a copied
+lease to a surviving borrowed alias. Global scope remains materialized for
+callbacks between eval entries.
 Native XML compound concatenation also checks the original property operand.
 The shared `ObjectProperty::UpdateRead` adapter validates the update name and
 returns a read-only selection before either consumer enters the writable update

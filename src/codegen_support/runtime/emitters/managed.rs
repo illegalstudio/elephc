@@ -20,7 +20,8 @@ pub(super) fn emit_managed_runtime(emitter: &mut Emitter, features: RuntimeFeatu
     arrays::emit_heap_alloc(emitter);
     arrays::emit_heap_grow_tail(emitter);
     arrays::emit_heap_consolidate(emitter);
-    super::super::reference_cells::emit_reference_cells(emitter, features.native_reference_validation);
+    super::super::reference_cells::emit_reference_cells(emitter, features.native_reference_validation,
+        features.eval_scope || features.eval_bridge);
     if features.native_reference_validation {
         super::super::reference_cells::emit_validation_coordinator(emitter, features.eval_bridge);
         super::super::reference_cells::emit_validation_commit(emitter);

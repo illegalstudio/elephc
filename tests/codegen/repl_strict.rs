@@ -37,3 +37,12 @@ fn test_repl_strict_overflow_public_profile_and_recovery() {
     assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
     assert_eq!(String::from_utf8_lossy(&output.stdout), "AK");
 }
+
+/// String rules survive host caching and a failed compound write keeps the original binding.
+#[test]
+fn test_repl_strict_strings_public_profile_and_recovery() {
+    let fixture = Fixture::new();
+    let output = fixture.run("$value = 7;\ntry { $value .= 'x'; } catch (TypeError $error) { echo 'T'; }\necho \"[$value]\";\n", &["--strict-strings"]);
+    assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
+    assert_eq!(String::from_utf8_lossy(&output.stdout), "int(7)\nT[7]");
+}

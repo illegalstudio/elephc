@@ -79,13 +79,13 @@ pub(crate) fn payload_tag(php_type: &PhpType) -> i64 {
 }
 
 /// Emits managed reference cells with the same ownership rules on every supported target.
-pub(super) fn emit_reference_cells(emitter: &mut Emitter, native_validation: bool) {
+pub(super) fn emit_reference_cells(emitter: &mut Emitter, native_validation: bool, eval_scope: bool) {
     emit_new(emitter);
     emit_value_release(emitter);
     emit_release(emitter);
     emit_clone(emitter);
     mixed_payload::emit_promote_mixed(emitter, native_validation);
-    if native_validation { canonical_promotion::emit(emitter); }
+    if native_validation || eval_scope { canonical_promotion::emit(emitter); }
     mixed_payload::emit_retain_mixed(emitter);
     validation_pins::emit(emitter);
     argument_pins::emit(emitter);
@@ -526,7 +526,7 @@ mod tests {
     fn reference_cell_dispatch_uses_local_stubs_before_global_tail_calls() {
         for name in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
             let mut emitter = Emitter::new(Target::parse(name).unwrap());
-            emit_reference_cells(&mut emitter, false);
+            emit_reference_cells(&mut emitter, false, false);
             super::super::arrays::emit_decref_any(&mut emitter);
             let assembly = emitter.output();
             for entry in ["__rt_decref_any", "__rt_callable_descriptor_release",
@@ -564,7 +564,7 @@ mod tests {
     fn owned_reference_cells_are_complete_on_every_target() {
         for name in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
             let mut emitter = Emitter::new(Target::parse(name).unwrap());
-            emit_reference_cells(&mut emitter, false);
+            emit_reference_cells(&mut emitter, false, false);
             super::super::exceptions::emit_local_ref_cell_release(&mut emitter);
             super::super::arrays::emit_decref_any(&mut emitter);
             super::super::arrays::emit_gc_collect_cycles(&mut emitter);
@@ -607,7 +607,7 @@ mod tests {
     fn unmanaged_reference_escape_guard_is_target_complete() {
         for name in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
             let mut emitter = Emitter::new(Target::parse(name).unwrap());
-            emit_reference_cells(&mut emitter, false);
+            emit_reference_cells(&mut emitter, false, false);
             let assembly = emitter.output();
             assert!(assembly.contains("_rt_unmanaged_ref_borrow_top"), "{name}");
             assert!(assembly.contains("_unmanaged_reference_escape_msg"), "{name}");

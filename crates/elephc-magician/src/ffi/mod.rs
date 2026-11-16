@@ -40,6 +40,7 @@ pub mod opcache_status;
 pub mod reflection_classes;
 pub mod scope;
 mod scope_owners;
+mod scope_snapshot_retirement;
 #[cfg(not(test))]
 pub mod static_members;
 pub mod symbols;

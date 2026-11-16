@@ -13,6 +13,8 @@
 
 use std::collections::{HashMap, HashSet};
 
+mod native_snapshots;
+
 use crate::context::EvalReferenceTarget;
 use crate::value::RuntimeCellHandle;
 

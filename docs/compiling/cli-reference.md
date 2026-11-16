@@ -605,8 +605,8 @@ An explicit `--no-strict-<feature>` overrides the umbrella in either argument
 order. Repeating an explicit feature option uses the last value.
 
 Integration is in progress. This build accepts the existing strict-locals and
-strict-opcache rules plus strict-dynamic-code, strict-bools, strict-arithmetic and
-strict-overflow.
+strict-opcache rules plus strict-dynamic-code, strict-bools, strict-arithmetic,
+strict-overflow and strict-strings.
 Other registered guarantees,
 including the complete umbrella, fail explicitly until their enforcement is
 complete. Eval embedding entry points reject execution with those profiles too. The [implementation plan](https://github.com/illegalstudio/elephc/issues/2347)
@@ -657,6 +657,25 @@ explicit probing or data-filtering contracts. The rule also applies inside eval,
 with either interpreter execution engine. The REPL forwards the guarantee to
 each submitted fragment. It is independent of
 `declare(strict_types=1)` and applies to PHP and LFC user source.
+
+### Strict strings
+
+`--strict-strings` requires original string values for `.` and `.=`. It refuses
+implicit conversion of numbers, booleans, null, arrays and Stringable objects in
+concatenation. Known violations produce a compile diagnostic before folding;
+dynamic violations throw a catchable `TypeError`. A failed compound write leaves
+its destination unchanged, and rejected object operands do not invoke `__toString`.
+
+Echo, print and interpolation remain intentional formatting contexts for scalars
+and Stringable objects. Arrays require an explicit conversion or formatter.
+Use `(string) $value`, interpolation, or a formatter before concatenation when
+conversion is intended. Ordinary function argument coercion remains available
+unless another independently selected guarantee rejects it.
+
+These rules also apply to literal and runtime eval, native callable entry points
+and REPL fragments. PHP and LFC user source share the contract. The
+[`strict-strings` example](../../examples/strict-strings/main.php) formats a row
+number explicitly and concatenates the resulting text.
 
 ### Strict dynamic code
 

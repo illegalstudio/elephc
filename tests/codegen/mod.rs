@@ -180,5 +180,8 @@ mod strict_strings;
 mod strict_string_native_views;
 mod strict_string_missing_reads;
 mod strict_string_boxed_nulls;
+mod strict_string_eval_hosts;
+mod strict_string_public;
+mod strict_scope_snapshot_controls;
 
 mod strict_conversion_returns;
