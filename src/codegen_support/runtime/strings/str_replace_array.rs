@@ -10,7 +10,9 @@
 //! - Iterative PHP semantics: each search element is applied to the result of the prior element, so
 //!   later searches observe earlier replacements; missing array-replacement elements become `""`.
 //! - The inner `__rt_str_replace`/`__rt_str_ireplace` helper produces a concat-buffer result; this
-//!   helper allocates nothing on the heap and borrows the input arrays/subject without freeing them.
+//!   helper allocates nothing itself and borrows the input arrays/subject without freeing them. Once
+//!   the scratch is full the inner helper hands out owned heap blocks; each such intermediate is
+//!   freed as soon as the next pass has consumed it (never the caller's own subject).
 
 use crate::codegen_support::emit::Emitter;
 use crate::codegen::platform::Arch;
@@ -57,13 +59,15 @@ fn emit_array_helper_aarch64(emitter: &mut Emitter, helper: &str, inner: &str) {
     let single_l = format!("{helper}_single");
     let empty_rep_l = format!("{helper}_empty_rep");
     let apply_l = format!("{helper}_apply");
+    let keep_l = format!("{helper}_keep");
     emitter.blank();
     emitter.comment(&format!("--- runtime: {} ---", helper));
     emitter.label_global(helper);
-    // -- set up stack frame (80 bytes) --
-    emitter.instruction("sub sp, sp, #80");                                     // allocate 80 bytes of replacement bookkeeping
-    emitter.instruction("stp x29, x30, [sp, #64]");                             // save frame pointer and return address
-    emitter.instruction("add x29, sp, #64");                                    // establish new frame pointer
+    // -- set up stack frame (96 bytes) --
+    emitter.instruction("sub sp, sp, #96");                                     // allocate 96 bytes of replacement bookkeeping
+    emitter.instruction("stp x29, x30, [sp, #80]");                             // save frame pointer and return address
+    emitter.instruction("add x29, sp, #80");                                    // establish new frame pointer
+    emitter.instruction("str x4, [sp, #64]");                                   // remember the caller's subject: it is borrowed and never freed here
     // -- save the incoming arguments to the frame --
     emitter.instruction("str x1, [sp]");                                        // save search array base pointer
     emitter.instruction("str x2, [sp, #8]");                                    // save replacement pointer (array base or single string)
@@ -132,8 +136,16 @@ fn emit_array_helper_aarch64(emitter: &mut Emitter, helper: &str, inner: &str) {
     emitter.instruction("ldr x5, [sp, #24]");                                   // load the running subject pointer as the inner subject pointer
     emitter.instruction("ldr x6, [sp, #32]");                                   // load the running subject length as the inner subject length
     emitter.instruction(&format!("bl {}", inner));                              // replace this search element throughout the running subject
+    emitter.instruction("ldr x0, [sp, #24]");                                   // the subject this pass consumed
     emitter.instruction("str x1, [sp, #24]");                                   // save the produced string as the new running subject pointer
     emitter.instruction("str x2, [sp, #32]");                                   // save the produced length as the new running subject length
+    emitter.instruction("ldr x6, [sp, #64]");                                   // the caller's own subject
+    emitter.instruction("cmp x0, x6");                                          // was the consumed subject the caller's borrowed string?
+    emitter.instruction(&format!("b.eq {}", keep_l));                           // yes -> not ours to free
+    emitter.instruction("cmp x0, x1");                                          // did the pass hand the same string back (no match)?
+    emitter.instruction(&format!("b.eq {}", keep_l));                           // yes -> it is still the running subject
+    emitter.instruction("bl __rt_heap_free_safe");                              // release a heap-backed intermediate result (scratch results are ignored)
+    emitter.label(&keep_l);
     emitter.instruction("ldr x6, [sp, #56]");                                   // reload the current search-element index
     emitter.instruction("add x6, x6, #1");                                      // advance to the next search element
     emitter.instruction("str x6, [sp, #56]");                                   // save the advanced search-element index
@@ -141,8 +153,8 @@ fn emit_array_helper_aarch64(emitter: &mut Emitter, helper: &str, inner: &str) {
     emitter.label(&done_l);
     emitter.instruction("ldr x1, [sp, #24]");                                   // load the final result string pointer
     emitter.instruction("ldr x2, [sp, #32]");                                   // load the final result string length
-    emitter.instruction("ldp x29, x30, [sp, #64]");                             // restore frame pointer and return address
-    emitter.instruction("add sp, sp, #80");                                     // deallocate the stack frame
+    emitter.instruction("ldp x29, x30, [sp, #80]");                             // restore frame pointer and return address
+    emitter.instruction("add sp, sp, #96");                                     // deallocate the stack frame
     emitter.instruction("ret");                                                 // return the replaced string to the caller
 }
 
@@ -158,12 +170,14 @@ fn emit_array_helper_x86_64(emitter: &mut Emitter, helper: &str, inner: &str) {
     let single_l = format!("{helper}_single");
     let empty_rep_l = format!("{helper}_empty_rep");
     let apply_l = format!("{helper}_apply");
+    let keep_l = format!("{helper}_keep");
     emitter.blank();
     emitter.comment(&format!("--- runtime: {} ---", helper));
     emitter.label_global(helper);
     emitter.instruction("push rbp");                                            // preserve the caller frame pointer
     emitter.instruction("mov rbp, rsp");                                        // establish the helper frame base
-    emitter.instruction("sub rsp, 64");                                         // reserve spill slots for the replacement bookkeeping
+    emitter.instruction("sub rsp, 80");                                         // reserve spill slots for the replacement bookkeeping
+    emitter.instruction("mov QWORD PTR [rbp - 72], rcx");                       // remember the caller's subject: it is borrowed and never freed here
     emitter.instruction("mov QWORD PTR [rbp - 8], rdi");                        // save the search array base pointer
     emitter.instruction("mov QWORD PTR [rbp - 16], rsi");                       // save the replacement pointer (array base or single string)
     emitter.instruction("mov QWORD PTR [rbp - 24], rdx");                       // save the replacement length (-1 marks an array replacement)
@@ -228,8 +242,16 @@ fn emit_array_helper_x86_64(emitter: &mut Emitter, helper: &str, inner: &str) {
     emitter.instruction("mov rcx, QWORD PTR [rbp - 32]");                       // load the running subject pointer as the inner subject pointer
     emitter.instruction("mov r8, QWORD PTR [rbp - 40]");                        // load the running subject length as the inner subject length
     emitter.instruction(&format!("call {}", inner));                            // replace this search element throughout the running subject
+    emitter.instruction("mov rdi, QWORD PTR [rbp - 32]");                       // the subject this pass consumed
     emitter.instruction("mov QWORD PTR [rbp - 32], rax");                       // save the produced string as the new running subject pointer
     emitter.instruction("mov QWORD PTR [rbp - 40], rdx");                       // save the produced length as the new running subject length
+    emitter.instruction("cmp rdi, QWORD PTR [rbp - 72]");                       // was the consumed subject the caller's borrowed string?
+    emitter.instruction(&format!("je {}", keep_l));                             // yes -> not ours to free
+    emitter.instruction("cmp rdi, rax");                                        // did the pass hand the same string back (no match)?
+    emitter.instruction(&format!("je {}", keep_l));                             // yes -> it is still the running subject
+    emitter.instruction("mov rax, rdi");                                        // the heap helper takes the block in rax
+    emitter.instruction("call __rt_heap_free_safe");                            // release a heap-backed intermediate result (scratch results are ignored)
+    emitter.label(&keep_l);
     emitter.instruction("mov rax, QWORD PTR [rbp - 64]");                       // reload the current search-element index
     emitter.instruction("add rax, 1");                                          // advance to the next search element
     emitter.instruction("mov QWORD PTR [rbp - 64], rax");                       // save the advanced search-element index
@@ -237,7 +259,7 @@ fn emit_array_helper_x86_64(emitter: &mut Emitter, helper: &str, inner: &str) {
     emitter.label(&done_l);
     emitter.instruction("mov rax, QWORD PTR [rbp - 32]");                       // load the final result string pointer
     emitter.instruction("mov rdx, QWORD PTR [rbp - 40]");                       // load the final result string length
-    emitter.instruction("add rsp, 64");                                         // release the spill slots
+    emitter.instruction("add rsp, 80");                                         // release the spill slots
     emitter.instruction("pop rbp");                                             // restore the caller frame pointer
     emitter.instruction("ret");                                                 // return the replaced string to the caller
 }
