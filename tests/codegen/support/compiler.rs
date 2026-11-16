@@ -449,6 +449,26 @@ fn try_compile_source_to_asm_with_defines_repr_inner(
     let resolved = elephc::testing_prelude::inject_if_used(resolved, false, &mut prelude_inventory);
     let resolved = elephc::curl_prelude::inject_if_used(resolved, false, &mut prelude_inventory);
     let resolved = elephc::xml_prelude::inject_if_used(resolved, false, &mut prelude_inventory);
+    let ini_overrides = elephc::codegen_support::ini_overrides();
+    let tidy_value = |name: &str| {
+        ini_overrides
+            .iter()
+            .rev()
+            .find(|(key, _)| key.eq_ignore_ascii_case(name))
+            .map_or("", |(_, value)| value.as_str())
+            .to_string()
+    };
+    let tidy_default_config = tidy_value("tidy.default_config");
+    let tidy_open_basedir = tidy_value("open_basedir");
+    let tidy_clean_output = elephc::codegen_support::ini_bool(&tidy_value("tidy.clean_output"));
+    let resolved = elephc::tidy_prelude::inject_if_used(
+        resolved,
+        tidy_clean_output,
+        &tidy_default_config,
+        &tidy_open_basedir,
+        tidy_clean_output,
+        &mut prelude_inventory,
+    );
     let resolved = elephc::fileinfo_prelude::inject_if_used_for_version(
         resolved, false, php_version, &mut prelude_inventory,
     );

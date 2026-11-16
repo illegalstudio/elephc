@@ -99,7 +99,10 @@ class PhpToken implements \Stringable {
         return $name;
     }
 
-    public function is(int|string|array $kind): bool {
+    // Declared `mixed` so this prelude method can reproduce the internal
+    // `Z_PARAM_ARRAY_OR_STR_OR_LONG` rejection of bool/float/null/object. A
+    // userland union type would weakly coerce those values before the body ran.
+    public function is(mixed $kind): bool {
         if (is_int($kind)) { return $this->id === $kind; }
         if (is_string($kind)) { return $this->text === $kind; }
         if (is_array($kind)) {

@@ -177,6 +177,19 @@ jobs:
             examples/xml/elephc.toml \
             examples/xml/elephc.lock
 
+      - name: Materialize catalog libtidy from verified source
+        # The tidy bridge's parser is libtidy itself and the package has no
+        # catalog dependencies. `native add` builds the reviewed direct-CC
+        # recipe against the project's pinned lock (~1 minute from source).
+        shell: elephc-ci-shell {0}
+        run: |
+          ./target/debug/elephc native add libtidy \
+            --target "${{ inputs.target }}" \
+            --manifest-path examples/tidy/elephc.toml
+          git diff --exit-code -- \
+            examples/tidy/elephc.toml \
+            examples/tidy/elephc.lock
+
       - name: Compile and run regex through the production resolver
         shell: elephc-ci-shell {0}
         run: |
@@ -276,6 +289,21 @@ jobs:
           grep -F 'B2: Pencil EUR 1.20' "$RUNNER_TEMP/simplexml.out"
           grep -F 'Under EUR 2: Pencil' "$RUNNER_TEMP/simplexml.out"
 
+      - name: Compile and run tidy through the production resolver
+        # Exercises the chain every tests/codegen/tidy fixture also needs: the
+        # elephc_tidy bridge staticlib linked against the managed libtidy.a from
+        # the project's lock. The malformed `<i>` in the example is repaired to
+        # `</b>`, which proves the output came from real libtidy.
+        shell: elephc-ci-shell {0}
+        run: |
+          ./target/debug/elephc \
+            --target "${{ inputs.target }}" \
+            examples/tidy/main.php
+          ./examples/tidy/main > "$RUNNER_TEMP/tidy.out" 2> "$RUNNER_TEMP/tidy.err"
+          grep -F '<!DOCTYPE html>' "$RUNNER_TEMP/tidy.out"
+          grep -F '      Hello <b>world</b>' "$RUNNER_TEMP/tidy.out"
+          grep -F 'replacing unexpected i with </i>' "$RUNNER_TEMP/tidy.err"
+
       - name: Reinstall locked state offline
         shell: elephc-ci-shell {0}
         run: |
@@ -299,6 +327,11 @@ jobs:
             --offline \
             --target "${{ inputs.target }}" \
             --manifest-path examples/simplexml/elephc.toml
+          ./target/debug/elephc native install \
+            --locked \
+            --offline \
+            --target "${{ inputs.target }}" \
+            --manifest-path examples/tidy/elephc.toml
 
       - name: Audit consumer compilation
         if: always()

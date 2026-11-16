@@ -77,6 +77,11 @@ struct TestBridgeStaticlib {
 /// Lists bridge staticlibs that codegen fixtures may link through `extra_link_libs`.
 const TEST_BRIDGE_STATICLIBS: &[TestBridgeStaticlib] = &[
     TestBridgeStaticlib {
+        lib_name: "elephc_tidy",
+        package: "elephc-tidy",
+        php_extensions: &["tidy"],
+    },
+    TestBridgeStaticlib {
         lib_name: "elephc_tokenizer",
         package: "elephc-tokenizer",
         php_extensions: &["tokenizer"],
@@ -1449,6 +1454,15 @@ fn test_link_plan(
                 for archive in &package.archives {
                     plan.push(LinkItem::managed_archive(archive.clone(), package.name));
                 }
+            }
+        }
+    }
+    // The tidy bridge declares libtidy's symbols without linking them; the managed
+    // `libtidy` package supplies the single archive at final link time.
+    if named.contains("elephc_tidy") {
+        if let Some(archives) = super::tidy_native::tidy_native_archives() {
+            for archive in archives {
+                plan.push(LinkItem::managed_archive(archive, "libtidy"));
             }
         }
     }

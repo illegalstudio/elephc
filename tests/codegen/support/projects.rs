@@ -354,6 +354,14 @@ pub(crate) fn compile_expect_type_error(source: &str) -> String {
     let resolved = elephc::fileinfo_prelude::inject_if_used(resolved, false, &mut prelude_inventory);
     let resolved = elephc::tokenizer_prelude::inject_if_used(resolved, false, &mut prelude_inventory);
     let resolved = elephc::testing_prelude::inject_if_used(resolved, false, &mut prelude_inventory);
+    let resolved = elephc::tidy_prelude::inject_if_used(
+        resolved,
+        false,
+        "",
+        "",
+        false,
+        &mut prelude_inventory,
+    );
     let resolved = elephc::name_resolver::resolve(resolved).expect("name resolve failed");
     let resolved =
         elephc::autoload::run(resolved, &dir, &autoload_registry).expect("autoload failed");

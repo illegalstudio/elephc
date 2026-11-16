@@ -186,6 +186,9 @@ fn print_immediate(out: &mut String, data: &DataPool, immediate: &Immediate) {
         Immediate::PromotableArray => {
             let _ = write!(out, " promotable_array");
         }
+        Immediate::ReflectionConstruction => {
+            let _ = write!(out, " reflection_construction");
+        }
         Immediate::Data(id) => {
             let _ = write!(out, " data[{}]", id.as_raw());
         }

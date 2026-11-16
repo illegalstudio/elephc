@@ -189,6 +189,8 @@ pub(in crate::interpreter) enum EvalDirectHook {
     Xml,
     /// Forwards fileinfo to the compiled host prelude.
     Fileinfo,
+    /// Forwards the tidy surface to the compiled host prelude.
+    Tidy,
     /// Dispatches `number_format(...)`.
     NumberFormat,
     /// Dispatches the bridge-backed OpenSSL cipher builtins.
@@ -463,6 +465,7 @@ impl EvalDirectHook {
             Self::NetworkEnv => eval_builtin_network_env_call(name, args, context, scope, values),
             Self::Pcntl => eval_builtin_pcntl_expr_call(name, args, context, scope, values),
             Self::Fileinfo => eval_builtin_fileinfo_expr_call(name, args, context, scope, values),
+            Self::Tidy => eval_builtin_tidy_expr_call(name, args, context, scope, values),
             Self::Xml => eval_builtin_xml_expr_call(name, args, context, scope, values),
             Self::NumberFormat => eval_builtin_number_format(args, context, scope, values),
             Self::Openssl => {

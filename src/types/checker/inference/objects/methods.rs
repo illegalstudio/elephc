@@ -497,7 +497,13 @@ impl Checker {
         let mut magic_return_ty = None;
         let mut magic_original_args = None;
         if let Some(class_info) = self.classes.get(class_name) {
-            if let Some(sig) = class_info.methods.get(&method_key) {
+            let static_method_call = !class_info.methods.contains_key(&method_key)
+                && class_info.static_methods.contains_key(&method_key);
+            if let Some(sig) = class_info
+                .methods
+                .get(&method_key)
+                .or_else(|| class_info.static_methods.get(&method_key))
+            {
                 if let Some(reason) = sig.deprecation.clone() {
                     let message = if reason.is_empty() {
                         format!("Call to deprecated method: {}::{}()", class_name, method)
@@ -510,10 +516,15 @@ impl Checker {
                     self.warnings
                         .push(crate::errors::CompileWarning::new(expr.span, &message));
                 }
-                if let Some(visibility) = class_info.method_visibilities.get(&method_key) {
+                if let Some(visibility) = class_info
+                    .method_visibilities
+                    .get(&method_key)
+                    .or_else(|| class_info.static_method_visibilities.get(&method_key))
+                {
                     let declaring_class = class_info
                         .method_declaring_classes
                         .get(&method_key)
+                        .or_else(|| class_info.static_method_declaring_classes.get(&method_key))
                         .map(String::as_str)
                         .unwrap_or(class_name);
                     if !self.can_access_member(declaring_class, visibility)
@@ -582,6 +593,13 @@ impl Checker {
                         &format!("Method {}::{}", class_name, method),
                         class_name,
                     )?;
+                }
+                // `$object->staticMethod()` is the static surface called through an object:
+                // its return type comes from the static signature, not the instance table.
+                if static_method_call {
+                    return Ok(late_static_return_type
+                        .clone()
+                        .unwrap_or_else(|| effective_sig.return_type.clone()));
                 }
             } else if let Some(sig) = class_info.methods.get("__call") {
                 let magic_args = Self::magic_call_args(method, args, expr.span);

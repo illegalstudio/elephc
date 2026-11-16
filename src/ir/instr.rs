@@ -229,6 +229,9 @@ pub enum Immediate {
     /// `ArraySet` whose integer key would skip a slot (or is negative) promotes the array to a
     /// hash instead of zero-filling the gap, as PHP does.
     PromotableArray,
+    /// Marks `DynamicObjectNewMixed` as `ReflectionClass::newInstance()` rather than
+    /// `new $class`, so constructor refusals raise `ReflectionException` instead of `Error`.
+    ReflectionConstruction,
     Data(DataId),
     /// Data-pool reference carrying the strict-PHP profile of its physical call site.
     ProfiledData {

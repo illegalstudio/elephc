@@ -122,3 +122,106 @@ echo $object instanceof ReplOwner ? "yes" : "no";
     );
     assert_eq!(out, "child yes");
 }
+
+/// A runtime class string still has to pass PHP's constructor visibility check: the checker
+/// cannot resolve `$class` to a class, so the dynamic-new ladder must raise the same `Error`
+/// php-src raises instead of allocating an object through the constructor-less fallback.
+#[test]
+fn test_dynamic_new_enforces_constructor_visibility_from_global_scope() {
+    let out = compile_and_run(
+        r#"<?php
+class DynVisPrivBox { private function __construct(public string $tag) {} }
+class DynVisProtBox { protected function __construct(public string $tag) {} }
+function dyn_vis_make(string $class, string $tag): string {
+    try {
+        $object = new $class($tag);
+        return (string) $object->tag;
+    } catch (Throwable $error) {
+        return get_class($error) . ':' . $error->getMessage();
+    }
+}
+echo dyn_vis_make('DynVisPrivBox', 'x'), "\n";
+echo dyn_vis_make('DynVisProtBox', 'x'), "\n";
+"#,
+    );
+    assert_eq!(
+        out,
+        "Error:Call to private DynVisPrivBox::__construct() from global scope\n\
+         Error:Call to protected DynVisProtBox::__construct() from global scope\n"
+    );
+}
+
+/// Inside the hierarchy the declaring scope and a descendant scope differ: a private constructor
+/// stays reachable from the class that declares it (including an inherited method whose lexical
+/// scope is that class), but not from a child; a protected constructor is reachable in both
+/// directions and refused from an unrelated sibling.
+#[test]
+fn test_dynamic_new_enforces_constructor_visibility_from_class_scopes() {
+    let out = compile_and_run(
+        r#"<?php
+class DynVisPrivOwner {
+    private function __construct(public string $tag = 'default') {}
+    public static function fromOwner(string $class, string $tag) { return new $class($tag); }
+    public static function fromOwnerNoArgs(string $class) { return new $class; }
+}
+class DynVisPrivChild extends DynVisPrivOwner {
+    public static function fromChild(string $class, string $tag) { return new $class($tag); }
+}
+class DynVisProtOwner {
+    protected function __construct(public string $tag) {}
+    public static function fromOwner(string $class, string $tag) { return new $class($tag); }
+}
+class DynVisProtChild extends DynVisProtOwner {}
+class DynVisProtSibling {
+    public static function fromSibling(string $class, string $tag) { return new $class($tag); }
+}
+function dyn_vis_show(string $label, callable $make): void {
+    try {
+        $object = $make();
+        echo $label, '=', $object->tag, "\n";
+    } catch (Throwable $error) {
+        echo $label, '=', get_class($error), ':', $error->getMessage(), "\n";
+    }
+}
+dyn_vis_show('owner-private', fn() => DynVisPrivOwner::fromOwner('DynVisPrivOwner', 'owner'));
+dyn_vis_show('inherited-child-private', fn() => DynVisPrivChild::fromOwner('DynVisPrivChild', 'inherited'));
+dyn_vis_show('inherited-child-private-default', fn() => DynVisPrivChild::fromOwnerNoArgs('DynVisPrivChild'));
+dyn_vis_show('child-private', fn() => DynVisPrivChild::fromChild('DynVisPrivChild', 'child'));
+dyn_vis_show('child-protected', fn() => DynVisProtOwner::fromOwner('DynVisProtChild', 'protected'));
+dyn_vis_show('sibling-protected', fn() => DynVisProtSibling::fromSibling('DynVisProtOwner', 'sibling'));
+"#,
+    );
+    assert_eq!(
+        out,
+        "owner-private=owner\n\
+         inherited-child-private=inherited\n\
+         inherited-child-private-default=default\n\
+         child-private=Error:Call to private DynVisPrivOwner::__construct() from scope DynVisPrivChild\n\
+         child-protected=protected\n\
+         sibling-protected=Error:Call to protected DynVisProtOwner::__construct() from scope DynVisProtSibling\n"
+    );
+}
+
+/// An inherited private constructor also supplies the arity diagnostic for a dynamic class name:
+/// the descendant has no `__construct` entry of its own, so measuring only the candidate's map
+/// would silently fall through to constructor-less allocation.
+#[test]
+fn test_dynamic_new_inherited_private_constructor_reports_arity_from_the_owner() {
+    let out = compile_and_run(
+        r#"<?php
+class DynVisArityOwner {
+    private function __construct(int $n) {}
+    public static function make(string $class) { return new $class; }
+}
+class DynVisArityChild extends DynVisArityOwner {}
+try {
+    DynVisArityOwner::make('DynVisArityChild');
+} catch (Throwable $error) {
+    echo get_class($error), ':',
+        str_contains($error->getMessage(), 'DynVisArityOwner::__construct()') ? 'owner' : $error->getMessage(),
+        "\n";
+}
+"#,
+    );
+    assert_eq!(out, "ArgumentCountError:owner\n");
+}

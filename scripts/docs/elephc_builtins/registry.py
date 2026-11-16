@@ -36,6 +36,7 @@ AREAS: list[str] = [
     "Web",
     "Image",
     "XML",
+    "Tidy",
 ]
 
 
@@ -84,6 +85,9 @@ REGISTRY_AREA_DEFAULTS: Dict[str, Tuple[str, str]] = {
     # builtin `xml_parse_into_struct`; both PHP modules share one docs area and the
     # narrative page docs/php/xml.md.
     "xml": ("XML", "XML"),
+    # `Area::Tidy`: the 24 `tidy_*` prelude functions and the `tidy`/`tidyNode`
+    # classes, on a pinned static libtidy 5.8.0 from the native catalog.
+    "tidy": ("Tidy", "Tidy"),
     # `ext/random` procedural functions declared by the random prelude.
     "random": ("Math", "Random"),
 }

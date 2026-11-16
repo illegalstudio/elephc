@@ -25,6 +25,8 @@ const BRIDGE_NATIVE_PACKAGES: &[(&str, &[&str])] = &[
     // The parser is libxml2, reached through the Elephc-owned C shim that the
     // managed package builds and archives next to `libxml2.a`.
     ("elephc_xml", &["libxml2"]),
+    // The parser is libtidy, supplied by the managed catalog package.
+    ("elephc_tidy", &["libtidy"]),
     // The bridge is a thin adapter over libgmp.
     ("elephc_gmp", &["gmp"]),
     ("elephc_fileinfo", &["libmagic"]),
