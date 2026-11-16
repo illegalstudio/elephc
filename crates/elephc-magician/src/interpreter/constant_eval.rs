@@ -248,13 +248,15 @@ fn eval_target_dependent_constant(name: &str) -> Option<EvalPredefinedConstant> 
             crate::eval_php_profile::eval_php_version_string(),
         ),
         "PHP_VERSION_ID" => EvalPredefinedConstant::Int(i64::from(
-            crate::eval_php_profile::eval_php_version_id(),
+            crate::eval_php_profile::eval_php_reported_version_id(),
         )),
         "PHP_MAJOR_VERSION" => EvalPredefinedConstant::Int(EVAL_PHP_MAJOR_VERSION),
         "PHP_MINOR_VERSION" => EvalPredefinedConstant::Int(
             crate::eval_php_profile::eval_php_minor_version(),
         ),
-        "PHP_RELEASE_VERSION" => EvalPredefinedConstant::Int(EVAL_PHP_RELEASE_VERSION),
+        "PHP_RELEASE_VERSION" => {
+            EvalPredefinedConstant::Int(crate::eval_php_profile::eval_php_release_version())
+        }
         "PHP_EXTRA_VERSION" => EvalPredefinedConstant::String(EVAL_PHP_EXTRA_VERSION),
         "PHP_SAPI" => EvalPredefinedConstant::String(crate::eval_php_profile::eval_php_sapi()),
         "E_ALL" => EvalPredefinedConstant::Int(crate::eval_php_profile::eval_all_error_mask()),

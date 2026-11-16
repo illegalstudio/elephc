@@ -775,6 +775,21 @@ var_dump(phpversion("json"), phpversion("nope_xyz"));');
     );
 }
 
+/// A pinned patch release (`--php-version 8.5.10`) reaches `eval()` as it reaches compiled code.
+///
+/// The compiled side folded `8.5.10` while the interpreter answered `8.5.0` / `0` / `80500` from
+/// the bare profile, so one binary reported two PHP versions. The compiler forwards the reported
+/// id (`80510`) and the bridge splits it back into the profile and the release.
+#[test]
+fn eval_sees_a_pinned_patch_release() {
+    let source = r#"<?php
+eval('echo PHP_VERSION, "|", PHP_VERSION_ID, "|", PHP_RELEASE_VERSION, "|", phpversion(), "\n";');
+echo PHP_VERSION, "|", PHP_VERSION_ID, "|", PHP_RELEASE_VERSION, "|", phpversion(), "\n";
+"#;
+    let out = run_for_profile("elephc_eval_version_patch", source, "8.5.10");
+    assert_eq!(out, "8.5.10|80510|10|8.5.10\n8.5.10|80510|10|8.5.10\n");
+}
+
 /// `eval()` reports the profile the BINARY was compiled for, not the bridge's own default.
 ///
 /// This is the assertion the default-profile test cannot make. The eval interpreter ships as an

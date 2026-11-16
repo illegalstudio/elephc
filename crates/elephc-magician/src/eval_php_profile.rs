@@ -210,6 +210,12 @@ thread_local! {
     /// The profile the binary embedding this bridge was compiled for.
     static EVAL_PHP_VERSION_ID: Cell<u32> = const { Cell::new(DEFAULT_EVAL_PHP_VERSION_ID) };
 
+    /// The patch release the compilation pinned (`--php-version 8.5.10`), `0` for a bare profile.
+    static EVAL_PHP_RELEASE: Cell<u32> = const { Cell::new(0) };
+
+    /// `PHP_VERSION` for a pinned patch release, leaked once per thread when the pin is set.
+    static EVAL_PHP_PATCHED_VERSION: Cell<Option<&'static str>> = const { Cell::new(None) };
+
     /// Whether the embedding binary was compiled `--web`, which decides `PHP_SAPI`.
     static EVAL_WEB_SAPI: Cell<bool> = const { Cell::new(false) };
 }
@@ -250,19 +256,51 @@ pub(crate) fn eval_php_sapi() -> &'static str {
 /// Selects the PHP profile eval reports on the current thread.
 ///
 /// Ids outside [`EVAL_PHP_PROFILES`] leave the current profile untouched.
+///
+/// An id may carry a pinned patch release (`80510` for `--php-version 8.5.10`): the profile is the
+/// id without its last two digits, and the patch is what [`eval_php_reported_version_id`],
+/// [`eval_php_release_version`] and [`eval_php_version_string`] report on top of it. Every
+/// profile-gated consumer keeps reading [`eval_php_version_id`], the bare profile.
 pub(crate) fn set_eval_php_version_id(id: u32) {
-    if EVAL_PHP_PROFILES.iter().any(|(known, _)| *known == id) {
-        EVAL_PHP_VERSION_ID.with(|cell| cell.set(id));
+    let (profile, patch) = (id - id % 100, id % 100);
+    if EVAL_PHP_PROFILES.iter().any(|(known, _)| *known == profile) {
+        EVAL_PHP_VERSION_ID.with(|cell| cell.set(profile));
+        EVAL_PHP_RELEASE.with(|cell| cell.set(patch));
+        let pinned = EVAL_PHP_PATCHED_VERSION.with(Cell::get);
+        let spelling = format!("{}.{}.{}", profile / 10_000, (profile / 100) % 100, patch);
+        if patch == 0 {
+            EVAL_PHP_PATCHED_VERSION.with(|cell| cell.set(None));
+        } else if pinned != Some(spelling.as_str()) {
+            // Leaked once per distinct pin on this thread: the compiled binary sets it a handful
+            // of times with the same value, and the constant table wants a `'static` string.
+            EVAL_PHP_PATCHED_VERSION.with(|cell| cell.set(Some(Box::leak(spelling.into_boxed_str()))));
+        }
     }
 }
 
-/// Returns `PHP_VERSION_ID` for the profile active on the current thread.
+/// Returns the profile active on the current thread as its bare `PHP_VERSION_ID` (patch `0`).
+///
+/// This is the id every profile-gated behaviour compares against; the program-visible
+/// `PHP_VERSION_ID` is [`eval_php_reported_version_id`].
 pub(crate) fn eval_php_version_id() -> u32 {
     EVAL_PHP_VERSION_ID.with(Cell::get)
 }
 
+/// Returns `PHP_VERSION_ID` as the program sees it: the profile plus any pinned patch release.
+pub(crate) fn eval_php_reported_version_id() -> u32 {
+    eval_php_version_id() + EVAL_PHP_RELEASE.with(Cell::get)
+}
+
+/// Returns `PHP_RELEASE_VERSION`: the pinned patch release, `0` for a bare profile.
+pub(crate) fn eval_php_release_version() -> i64 {
+    i64::from(EVAL_PHP_RELEASE.with(Cell::get))
+}
+
 /// Returns `PHP_VERSION` for the profile active on the current thread.
 pub(crate) fn eval_php_version_string() -> &'static str {
+    if let Some(pinned) = EVAL_PHP_PATCHED_VERSION.with(Cell::get) {
+        return pinned;
+    }
     let id = eval_php_version_id();
     EVAL_PHP_PROFILES
         .iter()
@@ -332,7 +370,7 @@ impl Drop for EvalPhpProfileGuard {
 /// Selects `id` as the eval profile and returns a guard restoring the previous one.
 #[cfg(test)]
 pub(crate) fn scoped_profile(id: u32) -> EvalPhpProfileGuard {
-    let previous = eval_php_version_id();
+    let previous = eval_php_reported_version_id();
     set_eval_php_version_id(id);
     EvalPhpProfileGuard { previous }
 }
@@ -416,6 +454,22 @@ mod tests {
         set_eval_php_version_id(90000);
         assert_eq!(eval_php_version_id(), 80200);
         assert_eq!(eval_php_version_string(), "8.2.0");
+    }
+
+    /// A pinned patch release (`--php-version 8.5.10`, id `80510`) reaches every program-visible
+    /// version value while profile-gated behaviour keeps reading the bare profile, and a later
+    /// bare id clears it.
+    #[test]
+    fn a_pinned_patch_release_reaches_the_version_surface() {
+        let _guard = scoped_profile(80510);
+        assert_eq!(eval_php_version_id(), 80500);
+        assert_eq!(eval_php_reported_version_id(), 80510);
+        assert_eq!(eval_php_release_version(), 10);
+        assert_eq!(eval_php_version_string(), "8.5.10");
+        set_eval_php_version_id(80500);
+        assert_eq!(eval_php_reported_version_id(), 80500);
+        assert_eq!(eval_php_release_version(), 0);
+        assert_eq!(eval_php_version_string(), "8.5.0");
     }
 
     /// The spelling table agrees with the id it is keyed by, so a typo in one

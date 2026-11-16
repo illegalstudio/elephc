@@ -891,7 +891,9 @@ pub(super) fn mark_eval_strict_php_value(ctx: &mut FunctionContext<'_>, strict_p
 /// `--php-version 8.2` would report `8.2.0` natively and `8.5.0` from inside `eval()`. The
 /// bridge defaults to the newest profile, so this call is what makes the older ones true.
 pub(super) fn mark_eval_php_version(ctx: &mut FunctionContext<'_>) {
-    let version_id = i64::from(crate::codegen::compile_php_version().version_id());
+    // The reported id carries a pinned patch release (`--php-version 8.5.10` -> 80510), which the
+    // bridge splits back into the profile and the release.
+    let version_id = i64::from(crate::codegen::compile_php_version().reported_version_id());
     let arg_reg = abi::int_arg_reg_name(ctx.emitter.target, 0);
     abi::emit_load_int_immediate(ctx.emitter, arg_reg, version_id);
     let symbol = ctx
