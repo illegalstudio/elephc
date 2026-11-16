@@ -817,7 +817,7 @@ fn emit_mixed_default(
     // consumed the register holding it) can go straight through the existing
     // general-purpose Mixed-to-string runtime cast.
     ctx.load_value_to_result(value)?;
-    abi::emit_call_label(ctx.emitter, "__rt_mixed_cast_string");
+    super::strings::common::emit_mixed_cast_string_borrowed(ctx);
     emit_box_current_value_as_mixed(ctx.emitter, &PhpType::Str);
 
     ctx.emitter.label(&done_label);
