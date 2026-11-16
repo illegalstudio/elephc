@@ -7,6 +7,8 @@
 //! Key details:
 //! - This code runs in the compiler and emits assembly; it is never a target-program library.
 
+mod resources;
+
 use crate::codegen_support::{abi, emit::Emitter};
 use elephc_memoir::{Arch, GraphLayout, GcStatusSelectors};
 
@@ -151,6 +153,15 @@ impl elephc_memoir::Emitter for Emitter {
     fn emit_cmp_reg_to_symbol(&mut self, reg: &str, symbol: &str) { abi::emit_cmp_reg_to_symbol(self, reg, symbol) }
     /// Delegates emit unary cleanup preserving exception to the established compiler ABI.
     fn emit_unary_cleanup_preserving_exception(&mut self, entry: &str, payload: &str) { abi::emit_unary_cleanup_preserving_exception(self, entry, payload) }
+
+    /// Computes a local slot's address through the existing target ABI.
+    fn emit_frame_slot_address(&mut self, dest: &str, offset: usize) {
+        abi::emit_frame_slot_address(self, dest, offset);
+    }
+    /// Keeps PHP resource identity and subtype decisions in the compiler adapter.
+    fn emit_mixed_resource_identity(&mut self) { resources::emit_identity(self); }
+    /// Keeps the resource inventory's weak-pointer layout authoritative in the compiler.
+    fn emit_mixed_resource_publication(&mut self) { resources::emit_publication(self); }
 
 }
 

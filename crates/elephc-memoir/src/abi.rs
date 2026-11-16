@@ -107,3 +107,8 @@ pub(crate) fn emit_cmp_reg_to_symbol(emitter: &mut impl Emitter, reg: &str, symb
 
 /// Uses the authoritative host emit unary cleanup preserving exception operation.
 pub(crate) fn emit_unary_cleanup_preserving_exception(emitter: &mut impl Emitter, entry: &str, payload: &str) { emitter.emit_unary_cleanup_preserving_exception(entry, payload) }
+
+/// Delegates local frame addressing to the authoritative compiler ABI.
+pub(crate) fn emit_frame_slot_address(emitter: &mut impl Emitter, dest: &str, offset: usize) {
+    emitter.emit_frame_slot_address(dest, offset)
+}

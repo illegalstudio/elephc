@@ -12,18 +12,22 @@ reference counting, cycle collection and candidate proofs, graph traversal,
 container allocation and growth, copy-on-write and cloning, deep release, owned
 strings and scratch allocation, growable output buffers, consuming string append,
 callable-descriptor retirement, hash-entry ownership guards, generation-safe
-buffers, and reference-cell lifetime and pin primitives. It also emits fixed heap, GC, buffer, reference-root
-and string-scratch declarations, keeping their existing order and byte layout.
+buffers, Mixed boxing and persistent references, reference-cell lifetime and pin
+primitives, and protected owner retirement. It also emits fixed heap, GC, buffer,
+reference-root and string-scratch declarations, keeping their existing order and byte layout.
 
 The `Emitter` trait delegates assembly output, symbol spelling, library-boundary
 modes, compiler-owned layout facts and target ABI operations to the compiler.
 `DataTarget` delegates object-format syntax. `ValueFeatures`, `GraphLayout` and
 `GcStatusSelectors` carry the small set of compiler facts needed by the emitters
-without importing PHP types or EIR.
+without importing PHP types or EIR. Resource-boxing hooks retain PHP subtype/id
+policy and inventory publication in the compiler adapter. Shared payload sizes
+and pointer-container tags live in `layout`.
 
 The compiler retains EIR lifetime analysis, ownership optimization and placement,
-PHP reference/type validation, class/coroutine/SPL layout definitions, semantic
-runtime data, helper ordering, runtime object caching, and final linking.
+PHP reference/type validation, resource identity/inventory policy,
+class/coroutine/SPL layout definitions, semantic runtime data, helper ordering,
+runtime object caching, and final linking.
 Memory constants live in Memoir with compatibility re-exports where needed.
 The former compiler memory modules retain thin adapters and integration tests;
 they contain no duplicate implementation.
@@ -34,6 +38,8 @@ PIC, recoverable-library, hosted-extension and dead-strip configurations. The
 value-storage fingerprints also cover optional resource hooks and the complete
 fixed runtime-data block. Storage fingerprints additionally cover growable
 buffers, append metadata variants, callable capture release and hash guards.
+Boxed-value fingerprints cover construction, persistent-reference operations and
+protected reference retirement.
 
 `build.rs` includes this crate's Rust sources in the runtime-cache identity.
 Changes to these emitters therefore invalidate cached runtime objects even when
