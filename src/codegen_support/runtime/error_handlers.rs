@@ -27,8 +27,18 @@ pub(super) fn emit_error_handler_invoke(emitter: &mut Emitter) {
     let arg1 = if arm { "x1" } else { "rsi" };
     emitter.blank();
     emitter.label_global("__rt_error_handler_invoke");
-    emit_frame_enter(emitter, 96);
+    emit_frame_enter(emitter, 112);
     abi::emit_store_to_address(emitter, arg1, stack, 64);
+    // A callback can call PHP code that republishes the diagnostic location. Keep the outer
+    // call site on this invocation's frame so a later notice in the same prelude function
+    // still names the user's file instead of the handler's callee.
+    for (symbol, offset) in [
+        ("_php_diagnostic_file", 80),
+        ("_php_diagnostic_file_len", 88),
+    ] {
+        abi::emit_load_symbol_to_reg(emitter, scratch, symbol, 0);
+        abi::emit_store_to_address(emitter, scratch, stack, offset);
+    }
     for (offset, symbol) in SAVED_FIELDS {
         abi::emit_load_symbol_to_reg(emitter, scratch, symbol, 0);
         abi::emit_store_to_address(emitter, scratch, stack, offset);
@@ -54,10 +64,17 @@ pub(super) fn emit_error_handler_invoke(emitter: &mut Emitter) {
     abi::emit_store_to_address(emitter, result, stack, 72);
     abi::emit_reg_move(emitter, arg0, stack);
     abi::emit_call_label(emitter, "__rt_error_handler_restore");
+    for (symbol, offset) in [
+        ("_php_diagnostic_file", 80),
+        ("_php_diagnostic_file_len", 88),
+    ] {
+        abi::emit_load_from_address(emitter, scratch, stack, offset);
+        abi::emit_store_reg_to_symbol(emitter, scratch, symbol, 0);
+    }
     abi::emit_load_from_address(emitter, scratch, stack, 0);
     abi::emit_store_reg_to_symbol(emitter, scratch, "_exc_call_frame_top", 0);
     abi::emit_load_from_address(emitter, result, stack, 72);
-    emit_frame_leave(emitter, 96);
+    emit_frame_leave(emitter, 112);
     emit_restore(emitter);
     // The saved PHP value and descriptor are independent owners. The optional
     // eval context uses its external release callback rather than a PHP heap slot.

@@ -140,11 +140,19 @@ pub(super) fn lower_object_class_name(
 pub(super) fn lower_scoped_constant(ctx: &mut LoweringContext<'_, '_>, receiver: &StaticReceiver, name: &str, expr: &Expr) -> LoweredValue {
     let class_name = scoped_constant_receiver_name(ctx, receiver);
     let normalized_class_name = class_name.trim_start_matches('\\');
-    if ctx
+    let enum_case = ctx
         .enums
         .get(normalized_class_name)
-        .is_some_and(|enum_info| enum_info.cases.iter().any(|case| case.name == name))
-    {
+        .and_then(|enum_info| enum_info.cases.iter().find(|case| case.name == name))
+        .map(|case| (case.deprecated_mt_rand_php, case.span));
+    if let Some((deprecated, declaration_span)) = enum_case {
+        // php-src evaluates enum case values lazily: the deprecated backing-value read
+        // deprecates once, when the case is first fetched, at the case declaration line.
+        if deprecated {
+            if let Some(span) = declaration_span {
+                super::constants::emit_mt_rand_php_deprecation(ctx, span, span);
+            }
+        }
         let key = format!("{}::{}", normalized_class_name, name);
         let data = ctx.intern_string(&key);
         return ctx.emit_value(
@@ -160,7 +168,12 @@ pub(super) fn lower_scoped_constant(ctx: &mut LoweringContext<'_, '_>, receiver:
         return lower_late_static_scoped_constant(ctx, name, expr);
     }
     if let Some(value) = ctx.scoped_constant_value(&class_name, name) {
-        return lower_expr(ctx, &value);
+        // php-src reports a deprecated constant read at the ACCESS site; the once-per-
+        // declaration key inside the helper still comes from the stored value's span.
+        let previous = ctx.const_deprecation_report_span.replace(expr.span);
+        let lowered = lower_expr(ctx, &value);
+        ctx.const_deprecation_report_span = previous;
+        return lowered;
     }
     let key = format!("{}::{}", class_name, name);
     let data = ctx.intern_string(&key);
@@ -186,6 +199,16 @@ pub(super) fn scoped_constant_receiver_name(ctx: &LoweringContext<'_, '_>, recei
 /// called-class id so that each descendant class that overrides the constant contributes
 /// its own value. Falls back to the lexical (declaring-class) constant value.
 pub(super) fn lower_late_static_scoped_constant(ctx: &mut LoweringContext<'_, '_>, name: &str, expr: &Expr) -> LoweredValue {
+    // Both the lexical fallback and every descendant branch evaluate a stored constant: the
+    // deprecated read belongs to this fetch site, not to the declaration.
+    let previous = ctx.const_deprecation_report_span.replace(expr.span);
+    let lowered = lower_late_static_scoped_constant_inner(ctx, name, expr);
+    ctx.const_deprecation_report_span = previous;
+    lowered
+}
+
+/// Body of `lower_late_static_scoped_constant`, run with the fetch-site span installed.
+fn lower_late_static_scoped_constant_inner(ctx: &mut LoweringContext<'_, '_>, name: &str, expr: &Expr) -> LoweredValue {
     let Some(base_class) = ctx.current_class.clone() else {
         return lower_scoped_constant_fallback(ctx, "static", name, expr);
     };

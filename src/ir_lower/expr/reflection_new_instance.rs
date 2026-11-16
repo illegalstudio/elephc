@@ -8,6 +8,7 @@
 //! - Preserves source-order evaluation, EIR typing, effects, and ownership contracts.
 
 use super::*;
+use std::collections::HashSet;
 
 /// Returns the source arguments that can be forwarded to `new $class(...)`.
 pub(super) fn reflection_class_new_instance_args(args: &[Expr]) -> Vec<Expr> {
@@ -116,6 +117,130 @@ pub(super) fn reflection_class_new_instance_reflected_class(
         "reflectionclass" => reflection_class_reflected_class_from_args(ctx, args),
         "reflectionobject" => reflection_object_reflected_class_from_args(ctx, args),
         _ => None,
+    }
+}
+
+/// Returns the receiver expression of a method-call AST node.
+///
+/// `lower_method_call` keeps the original receiver only for its own dispatch; the nullable
+/// and binding paths receive the receiver as an already lowered value, so the enclosing call
+/// expression is the one place where both can recover the reflected-class annotation.
+fn method_call_receiver_expr(expr: &Expr) -> Option<&Expr> {
+    match &expr.kind {
+        ExprKind::MethodCall { object, .. } | ExprKind::NullsafeMethodCall { object, .. } => {
+            Some(object)
+        }
+        _ => None,
+    }
+}
+
+/// Reports whether a stored class-constant initializer reads `MT_RAND_PHP`.
+fn expression_reads_mt_rand_php(expr: &Expr) -> bool {
+    matches!(
+        &expr.kind,
+        ExprKind::ConstRef(reference)
+            if reference.as_str().trim_start_matches('\\') == "MT_RAND_PHP"
+    )
+}
+
+/// Collects visible class and interface constants whose value reads `MT_RAND_PHP`.
+///
+/// Walks the class hierarchy and its interfaces the way `scoped_constant_value()` resolves a
+/// read, so an inherited or interface-declared constant reports its own declaration site.
+/// Enum cases are handled separately from `ctx.enums`; this only covers ordinary constants.
+fn deprecated_class_constant_declarations(
+    ctx: &LoweringContext<'_, '_>,
+    class_name: &str,
+) -> Vec<(String, Span)> {
+    let mut names = Vec::new();
+    let mut seen = HashSet::new();
+    let mut current = Some(class_name.to_string());
+    while let Some(name) = current {
+        let Some(info) = ctx.classes.get(&name) else {
+            break;
+        };
+        for constant in info.constant_order.iter().chain(info.constants.keys()) {
+            if seen.insert(constant.clone()) {
+                names.push(constant.clone());
+            }
+        }
+        for interface_name in &info.interfaces {
+            collect_interface_constant_names(ctx, interface_name, &mut names, &mut seen);
+        }
+        current = info.parent.clone().filter(|parent| parent != &name);
+    }
+    let mut declarations = Vec::new();
+    for name in names {
+        let Some(value) = ctx.scoped_constant_value(class_name, &name) else {
+            continue;
+        };
+        if expression_reads_mt_rand_php(&value) {
+            declarations.push((name, value.span));
+        }
+    }
+    declarations
+}
+
+/// Appends interface constant names, including parent interfaces, in declaration order.
+fn collect_interface_constant_names(
+    ctx: &LoweringContext<'_, '_>,
+    interface_name: &str,
+    names: &mut Vec<String>,
+    seen: &mut HashSet<String>,
+) {
+    let mut queue = vec![interface_name.to_string()];
+    let mut visited = HashSet::new();
+    while let Some(name) = queue.pop() {
+        if !visited.insert(name.clone()) {
+            continue;
+        }
+        let Some(info) = ctx.interfaces.get(&name) else {
+            continue;
+        };
+        for constant in info.constant_order.iter().chain(info.constants.keys()) {
+            if seen.insert(constant.clone()) {
+                names.push(constant.clone());
+            }
+        }
+        queue.extend(info.parents.iter().cloned());
+    }
+}
+
+/// Raises `MT_RAND_PHP` notices when reflection materializes a constant table.
+///
+/// php-src loads the whole constant table on either `getConstant()` or `getConstants()`, so
+/// every deprecated declaration reports once even when a different constant name is
+/// requested (a missing name still materializes the table). Enum cases report their declaring
+/// case line and share the direct `E::A` guard; ordinary class constants (including inherited
+/// and interface ones) report the reflection call site but keep one guard per declaration.
+pub(super) fn emit_reflection_constant_notice(
+    ctx: &mut LoweringContext<'_, '_>,
+    method: &str,
+    expr: &Expr,
+) {
+    let method = php_symbol_key(method);
+    if method != "getconstant" && method != "getconstants" {
+        return;
+    }
+    let Some(receiver) = method_call_receiver_expr(expr) else {
+        return;
+    };
+    let Some(reflected) = reflection_class_reflected_class(ctx, receiver) else {
+        return;
+    };
+    let reflected = reflected.trim_start_matches('\\').to_string();
+    let call_span = expr.span;
+    let enum_case = ctx.enums.get(&reflected).and_then(|info| {
+        info.cases
+            .iter()
+            .find(|case| case.deprecated_mt_rand_php)
+            .and_then(|case| case.span)
+    });
+    if let Some(declaration_span) = enum_case {
+        super::constants::emit_mt_rand_php_deprecation(ctx, declaration_span, declaration_span);
+    }
+    for (_, declaration_span) in deprecated_class_constant_declarations(ctx, &reflected) {
+        super::constants::emit_mt_rand_php_deprecation(ctx, call_span, declaration_span);
     }
 }
 
