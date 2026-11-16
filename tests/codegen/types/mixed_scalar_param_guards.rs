@@ -424,3 +424,34 @@ try { pure($v, ...[1, 2]); echo "kept?\n"; } catch (TypeError $e) { show($e); }
     );
     assert_eq!(out, "side\nO::m(): Argument #1 ($s) must be of type string, null given, called in F on line 15\nside\nO::s(): Argument #1 ($s) must be of type string, null given, called in F on line 16\nside\nf(): Argument #1 ($s) must be of type string, null given, called in F on line 17\nside\nO::__construct(): Argument #1 ($s) must be of type string, null given, called in F on line 18\nside\nO::m(): Argument #1 ($s) must be of type string, null given, called in F on line 19\nside\nO::p(): Argument #1 ($s) must be of type string, null given, called in F on line 20\nside\nm:ok\npure(): Argument #1 ($s) must be of type string, null given, called in F on line 22\n");
 }
+
+/// A runtime unpack binds parameters in PHP's order: a parameter skipped before a bound one is
+/// "not passed" before anything is checked, then each parameter is either missing (PHP's "Too
+/// few arguments" message, with the passed count) or checked against its declared scalar, so a
+/// `TypeError` for an earlier parameter wins over a later missing one. Before, every missing
+/// parameter threw a generic `ArgumentCountError` ahead of all the parameter checks.
+#[test]
+fn test_runtime_unpack_checks_arity_and_types_in_parameter_order() {
+    let out = compile_and_run(
+        r#"<?php
+function box(mixed $v): mixed { return $v; }
+function show(Throwable $e): void { echo get_class($e), ": ", str_replace(__FILE__, "F", $e->getMessage()), "\n"; }
+function f(string $s, int $n, string $t) { return "ok"; }
+function g(int $n, string $s) { return "g:" . $n . $s; }
+class C { public function m(string $s, int $n) { return "m"; } public static function s(int $n, string $s) { return "s"; } }
+$v = box(null);
+$c = new C();
+try { f($v, ...box([])); } catch (Throwable $e) { show($e); }
+try { f("x", ...box([])); } catch (Throwable $e) { show($e); }
+try { f($v, ...box([1])); } catch (Throwable $e) { show($e); }
+try { f("x", ...box([$v])); } catch (Throwable $e) { show($e); }
+try { f(...box(['s' => $v])); } catch (Throwable $e) { show($e); }
+try { f(...box(['n' => 1, 't' => $v])); } catch (Throwable $e) { show($e); }
+try { f(...box(['s' => "a", 't' => $v])); } catch (Throwable $e) { show($e); }
+try { g(...box([1 => $v])); } catch (Throwable $e) { show($e); }
+try { echo g(...box(["7", "x"])), "\n"; } catch (Throwable $e) { show($e); }
+try { $c->m($v, ...box([])); } catch (Throwable $e) { show($e); }
+"#,
+    );
+    assert_eq!(out, "TypeError: f(): Argument #1 ($s) must be of type string, null given, called in F on line 9\nArgumentCountError: Too few arguments to function f(), 1 passed in F on line 10 and exactly 3 expected\nTypeError: f(): Argument #1 ($s) must be of type string, null given, called in F on line 11\nTypeError: f(): Argument #2 ($n) must be of type int, null given, called in F on line 12\nTypeError: f(): Argument #1 ($s) must be of type string, null given, called in F on line 13\nArgumentCountError: f(): Argument #1 ($s) not passed\nArgumentCountError: f(): Argument #2 ($n) not passed\nTypeError: g(): Argument #1 ($n) must be of type int, null given, called in F on line 16\ng:7x\nTypeError: C::m(): Argument #1 ($s) must be of type string, null given, called in F on line 18\n");
+}
