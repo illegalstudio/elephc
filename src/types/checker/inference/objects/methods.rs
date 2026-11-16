@@ -2091,8 +2091,10 @@ impl Checker {
             let rebound_scope = closure_bind_visibility_scope(self, args, env);
             for (index, arg) in args.iter().enumerate() {
                 if index == 0 {
+                    // Only a closure LITERAL is checked in the bind's scope; any other first
+                    // argument (`$this->factory`, `self::make()`) belongs to the enclosing class.
                     let saved_class = self.current_class.clone();
-                    if rebound_scope.is_some() {
+                    if rebound_scope.is_some() && matches!(arg.kind, ExprKind::Closure { .. }) {
                         self.current_class = rebound_scope.clone();
                     }
                     let mut closure_env = env.clone();

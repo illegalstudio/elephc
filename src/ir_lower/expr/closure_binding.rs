@@ -160,9 +160,13 @@ pub(super) fn lower_static_closure_bind(
     // is lowered in that scope: left in place, it leaked into the rest of the enclosing body
     // (Symfony's `ContractsTrait::doGet()` binds a closure to `CacheItem::class` and then lowered
     // its own `$this->computing` as if written inside `CacheItem`).
+    // Any other first argument (`$this->factory`, `self::make()`) is an ordinary expression of
+    // the enclosing scope: its visibility and `self::` resolve against the class it is written in.
     let saved_class = ctx.current_class.clone();
-    if let Some(scope) = closure_bind_scope_class(ctx, args) {
-        ctx.current_class = Some(scope);
+    if matches!(args.first().map(|arg| &arg.kind), Some(ExprKind::Closure { .. })) {
+        if let Some(scope) = closure_bind_scope_class(ctx, args) {
+            ctx.current_class = Some(scope);
+        }
     }
     match bound_this_capture(ctx, args) {
         Some(BoundThis::Class(class_name)) => ctx.set_bound_closure_this_class(class_name),
