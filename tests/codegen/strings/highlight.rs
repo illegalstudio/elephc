@@ -18,6 +18,22 @@ fn test_highlight_builtins_match_reference_php() {
     assert_eq!(out, EXPECTED);
 }
 
+/// A NUL byte in the source is copied through to the HTML like php does (`php -n` 8.5.10:
+/// 211 bytes, the closing quote and tags after the NUL); the compiled answer used to stop at it.
+#[test]
+fn test_highlight_string_keeps_bytes_after_a_nul() {
+    let out = compile_and_run(
+        r#"<?php
+$html = highlight_string("<?php echo \"a\0b\";", true);
+echo strlen($html), "\n", str_replace("\0", "<NUL>", $html), "\n";
+"#,
+    );
+    assert_eq!(
+        out,
+        "211\n<pre><code style=\"color: #000000\"><span style=\"color: #0000BB\">&lt;?php </span><span style=\"color: #007700\">echo </span><span style=\"color: #DD0000\">\"a<NUL>b\"</span><span style=\"color: #007700\">;</span></code></pre>\n"
+    );
+}
+
 /// The program under test; the file path is `__DIR__`-relative so the test is location-independent.
 const SOURCE: &str = r#"<?php
 echo highlight_string("<?php\necho 1; // c\n", true), "\n";

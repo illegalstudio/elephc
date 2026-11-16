@@ -50,7 +50,10 @@ pub(crate) fn highlight_declarations() -> Program {
             extern_fn("elephc_highlight_render", HIGHLIGHT_BRIDGE)
                 .param("source", CType::Str)
                 .param("length", CType::Int)
-                .returns(CType::Str)
+                .returns(CType::Int)
+                .build(),
+            extern_fn("elephc_highlight_rendered_ptr", HIGHLIGHT_BRIDGE)
+                .returns(CType::Ptr)
                 .build(),
             highlight_string_helper(),
             highlight_file_helper(),
@@ -70,11 +73,20 @@ fn highlight_string_helper() -> Stmt {
         .param_default("return", TypeExpr::Bool, e_bool(false))
         .returns(string_or_bool())
         .body(vec![
+            // The document is binary-safe (php copies a source NUL through), so it is copied out
+            // by length rather than returned as a C string.
             s_assign(
-                "html",
+                "length",
                 e_call(
                     "elephc_highlight_render",
                     vec![e_var("string"), e_call("strlen", vec![e_var("string")])],
+                ),
+            ),
+            s_assign(
+                "html",
+                e_call(
+                    "__elephc_ptr_read_string",
+                    vec![e_call("elephc_highlight_rendered_ptr", vec![]), e_var("length")],
                 ),
             ),
             s_if(e_var("return"), vec![s_return(e_var("html"))], vec![], None),
