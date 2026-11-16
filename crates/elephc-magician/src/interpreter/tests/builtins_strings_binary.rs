@@ -154,6 +154,25 @@ fn execute_program_str_replace_writes_its_count() {
 
     assert_eq!(values.output, "xxcxx 4");
 }
+/// Verifies a named or dynamic `str_replace()` call binds the by-reference `$count` too.
+///
+/// `php -n` 8.5.6 prints `XXb2YYb2`: both spellings write the replacement count.
+#[test]
+fn execute_program_str_replace_named_and_dynamic_calls_write_the_count() {
+    let program = parse_fragment(
+        br#"echo str_replace(search: "a", replace: "X", subject: "aab", count: $c), $c;
+$f = "str_replace";
+echo $f("a", "Y", "aab", $d), $d;"#,
+    )
+    .expect("parse eval fragment");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+
+    execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+    assert_eq!(values.output, "XXb2YYb2");
+}
+
 /// Verifies eval `substr_replace()` dispatches through direct, named, and callable paths.
 #[test]
 fn execute_program_dispatches_substr_replace_builtin() {

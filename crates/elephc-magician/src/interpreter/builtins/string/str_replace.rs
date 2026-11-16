@@ -47,6 +47,45 @@ pub(in crate::interpreter) fn eval_builtin_str_replace(
     Ok(result)
 }
 
+/// Evaluates a `str_replace(...)`/`str_ireplace(...)` call written with names or a spread.
+///
+/// Those spellings never reach the positional direct hook, so the by-reference `$count` target
+/// is taken from the evaluated call arguments, as `preg_replace()` does.
+pub(in crate::interpreter) fn eval_bound_str_replace_call(
+    name: &str,
+    args: &[EvalCallArg],
+    context: &mut ElephcEvalContext,
+    scope: &mut ElephcEvalScope,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    with_eval_call_arguments(args, context, scope, values, |evaluated_args, context, _, values| {
+        let (bound, _) = bind_evaluated_ref_builtin_args(
+            &["search", "replace", "subject", "count"],
+            &evaluated_args,
+            false,
+        )?;
+        let search = required_evaluated_ref_arg(&bound, 0)?;
+        let replace = required_evaluated_ref_arg(&bound, 1)?;
+        let subject = required_evaluated_ref_arg(&bound, 2)?;
+        let mut replacements = 0usize;
+        let result = eval_str_replace_result_counted(
+            name,
+            search.value,
+            replace.value,
+            subject.value,
+            &mut replacements,
+            values,
+        )?;
+        let Some(count) = optional_evaluated_ref_arg(&bound, 3) else {
+            return Ok(result);
+        };
+        let target = count.ref_target.clone().ok_or(EvalStatus::RuntimeFatal)?;
+        let replacements = values.int(replacements as i64)?;
+        eval_write_preg_matches_target(&target, replacements, context, values)?;
+        Ok(result)
+    })
+}
+
 /// Replaces every non-overlapping occurrence of a needle, over php's four argument shapes.
 ///
 /// php: `$search`, `$replace` and `$subject` are each `array|string`, and the return type
@@ -84,7 +123,7 @@ pub(in crate::interpreter) fn eval_str_replace_result(
 }
 
 /// Same as [`eval_str_replace_result`], also counting every replacement made.
-fn eval_str_replace_result_counted(
+pub(in crate::interpreter) fn eval_str_replace_result_counted(
     name: &str,
     search: RuntimeCellHandle,
     replace: RuntimeCellHandle,

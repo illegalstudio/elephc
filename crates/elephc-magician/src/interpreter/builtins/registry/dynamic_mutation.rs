@@ -44,6 +44,9 @@ pub(in crate::interpreter) fn eval_mutating_builtin_with_call_array_args(
         }
         "preg_match" => eval_dynamic_preg_match_call(evaluated_args, context, values)?,
         "preg_match_all" => eval_dynamic_preg_match_all_call(evaluated_args, context, values)?,
+        "str_replace" | "str_ireplace" => {
+            eval_dynamic_str_replace_call(name, evaluated_args, context, values)?
+        }
         "preg_replace" => eval_dynamic_preg_replace_call(evaluated_args, context, values)?,
         "preg_replace_callback" => {
             eval_dynamic_preg_replace_callback_call(evaluated_args, context, values)?
@@ -403,6 +406,44 @@ fn eval_dynamic_preg_replace_call(
     )?;
     let replacement_count = values.int(replacement_count)?;
     eval_write_preg_matches_target(target, replacement_count, context, values)?;
+    Ok(Some(result))
+}
+
+/// Evaluates a dynamic `str_replace()`/`str_ireplace()` call when `$count` is writable.
+///
+/// Named and callable spellings of the call reach here with the by-reference target the caller
+/// captured; without it the three-argument value hook refused the fourth argument outright.
+fn eval_dynamic_str_replace_call(
+    name: &str,
+    evaluated_args: &[EvaluatedCallArg],
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<Option<RuntimeCellHandle>, EvalStatus> {
+    let (bound, _) = bind_evaluated_ref_builtin_args(
+        &["search", "replace", "subject", "count"],
+        evaluated_args,
+        false,
+    )?;
+    let search = required_evaluated_ref_arg(&bound, 0)?;
+    let replace = required_evaluated_ref_arg(&bound, 1)?;
+    let subject = required_evaluated_ref_arg(&bound, 2)?;
+    let Some(count) = optional_evaluated_ref_arg(&bound, 3) else {
+        return Ok(None);
+    };
+    let Some(target) = count.ref_target.as_ref() else {
+        return Ok(None);
+    };
+    let mut replacements = 0usize;
+    let result = eval_str_replace_result_counted(
+        name,
+        search.value,
+        replace.value,
+        subject.value,
+        &mut replacements,
+        values,
+    )?;
+    let replacements = values.int(replacements as i64)?;
+    eval_write_preg_matches_target(target, replacements, context, values)?;
     Ok(Some(result))
 }
 

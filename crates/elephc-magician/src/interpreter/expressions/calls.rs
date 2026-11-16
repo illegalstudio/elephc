@@ -92,6 +92,9 @@ fn eval_call_with_error_name(
     if name == "preg_replace_callback_array" {
         return eval_builtin_preg_replace_callback_array_call(args, context, scope, values);
     }
+    if matches!(name, "str_replace" | "str_ireplace") && !eval_call_args_are_plain_positional(args) {
+        return eval_bound_str_replace_call(name, args, context, scope, values);
+    }
     if name == "openssl_encrypt" {
         return eval_builtin_openssl_encrypt_call(args, context, scope, values);
     }
