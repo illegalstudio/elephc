@@ -553,12 +553,15 @@ fn encode_mov(ops: &[&str]) -> Option<u32> {
     }
     let value = (value as u64) & mask;
     // The assembler's order: MOVZ whenever one chunk holds the value, MOVN when one chunk holds
-    // its complement, else a bitmask immediate (ORR, which cannot name the zero register).
-    if let Some((hw, chunk)) = single_chunk(value, bits) {
-        return Some(wide_move(0x5280_0000, dst, hw, chunk));
-    }
-    if let Some((hw, chunk)) = single_chunk(!value & mask, bits) {
-        return Some(wide_move(0x1280_0000, dst, hw, chunk));
+    // its complement, else a bitmask immediate (ORR, which cannot name the zero register). SP has
+    // no wide-move form (register 31 is the zero register there), so it takes only the ORR.
+    if !dst.sp {
+        if let Some((hw, chunk)) = single_chunk(value, bits) {
+            return Some(wide_move(0x5280_0000, dst, hw, chunk));
+        }
+        if let Some((hw, chunk)) = single_chunk(!value & mask, bits) {
+            return Some(wide_move(0x1280_0000, dst, hw, chunk));
+        }
     }
     if dst.zr {
         return None;
@@ -1859,10 +1862,24 @@ mod tests {
         assert!(invented.is_empty(), "{} invented:\n{}", invented.len(), invented.join("\n"));
     }
 
+    /// `mov sp, #imm` is the bitmask ORR into SP, never a wide move into the zero register.
+    #[test]
+    fn mov_immediate_into_sp_is_the_orr_form() {
+        for (line, word) in [
+            ("mov sp, #0xff", 0xb240_1fff_u32),
+            ("mov wsp, #1", 0x3200_03ff),
+            ("mov sp, #0x10000", 0xb270_03ff),
+        ] {
+            assert_eq!(encode_instruction(line).map(|e| e.word), Some(word), "{line}");
+        }
+    }
+
     /// Forms `as` rejects must not be encoded.
     #[test]
     fn invalid_forms_are_refused() {
         for line in [
+            "mov sp, #0",
+            "mov sp, #-1",
             "add x0, x1, #4097",
             "ldr x0, [x1, #-257]",
             "ldp x1, x2, [x3, #4]",
