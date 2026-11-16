@@ -292,3 +292,44 @@ try { invoke(Closure::fromCallable(["Target", "run"]), "nope"); } catch (TypeErr
         "E int E null E\nTarget::run(): Argument #1 ($f) must be of type callable|int, string given\n"
     );
 }
+
+/// Verifies a generator raises its declared `callable` `TypeError` at the call (before the
+/// Generator exists), checks a by-reference `callable` only once at the call, and that named
+/// arguments to a `callable ...$xs` variadic report PHP's positional argument numbers.
+///
+/// Generators used to check callable parameters only when the body first ran, so the call's
+/// `catch` never saw the error and a later change to a by-reference argument was rechecked;
+/// named arguments promoted the variadic to an iterable container that skipped the check, and
+/// a named entry used to be reported by its name instead of its argument number.
+#[test]
+fn test_declared_callable_generators_and_named_variadics_check_at_the_call() {
+    let out = compile_and_run(
+        r#"<?php
+function g(callable &...$xs): Generator { echo "body\n"; yield 1; }
+function g3(callable $c): Generator { echo "body3\n"; yield 1; }
+function g2(callable &$c): Generator { echo "body2\n"; yield 1; }
+$a = $argc > 0 ? "nope" : "strlen";
+try { $gen = g($a); echo "created\n"; } catch (TypeError $e) { echo $e->getMessage(), "\n"; }
+try { $gen = g3($a); echo "created3\n"; } catch (TypeError $e) { echo $e->getMessage(), "\n"; }
+$b = "strlen";
+$gen2 = g2($b);
+$b = "nope";
+foreach ($gen2 as $_) {}
+echo "done\n";
+function v(callable ...$xs): string { return "ran"; }
+try { v(foo: "nope"); } catch (TypeError $e) { echo $e->getMessage(), "\n"; }
+try { v(foo: "strlen", bar: "nope"); } catch (TypeError $e) { echo $e->getMessage(), "\n"; }
+try { v("strlen", "strrev", z: "nope"); } catch (TypeError $e) { echo $e->getMessage(), "\n"; }
+"#,
+    );
+    assert_eq!(
+        out,
+        "g(): Argument #1 must be of type callable, string given\n\
+         g3(): Argument #1 ($c) must be of type callable, string given\n\
+         body2\n\
+         done\n\
+         v(): Argument #1 must be of type callable, string given\n\
+         v(): Argument #1 must be of type callable, string given\n\
+         v(): Argument #3 must be of type callable, string given\n"
+    );
+}

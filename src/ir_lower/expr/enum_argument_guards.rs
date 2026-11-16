@@ -242,18 +242,17 @@ pub(crate) fn guard_declared_callable_variadic_entry(
     let span = Span::synthetic();
     let key = ctx.declare_hidden_temp(PhpType::Mixed);
     let value = ctx.declare_hidden_temp(PhpType::Mixed);
+    let number = ctx.declare_hidden_temp(PhpType::Int);
     let variable = |local: &str| Expr::new(ExprKind::Variable(local.to_string()), span);
     let literal = |text: String| Expr::new(ExprKind::StringLiteral(text), span);
     let element = variable(&value);
-    let argument = Expr::new(ExprKind::Ternary {
-        condition: Box::new(predicate("is_int", &variable(&key), span)),
-        then_expr: Box::new(Expr::new(ExprKind::BinaryOp {
-            left: Box::new(variable(&key)),
-            op: BinOp::Add,
-            right: Box::new(Expr::new(ExprKind::IntLiteral(first_position as i64), span)),
-        }, span)),
-        else_expr: Box::new(variable(&key)),
-    }, span);
+    // Positional entries are numbered from the variadic's position; a named entry (string key)
+    // reports the next positional number and does not consume one, as PHP does.
+    crate::ir_lower::stmt::lower_stmt(ctx, &Stmt::assign(
+        &number,
+        Expr::new(ExprKind::IntLiteral(first_position as i64), span),
+    ));
+    let argument = variable(&number);
     let message = concat(
         literal(format!("{function}(): Argument #")),
         concat(argument, concat(
@@ -275,12 +274,22 @@ pub(crate) fn guard_declared_callable_variadic_entry(
         elseif_clauses: Vec::new(),
         else_body: None,
     }, span);
+    let advance = Stmt::new(StmtKind::If {
+        condition: predicate("is_int", &variable(&key), span),
+        then_body: vec![Stmt::assign(&number, Expr::new(ExprKind::BinaryOp {
+            left: Box::new(variable(&number)),
+            op: BinOp::Add,
+            right: Box::new(Expr::new(ExprKind::IntLiteral(1), span)),
+        }, span))],
+        elseif_clauses: Vec::new(),
+        else_body: None,
+    }, span);
     let guard = Stmt::new(StmtKind::Foreach {
         array: variable(name),
         key_var: Some(key),
         value_var: value,
         value_by_ref: false,
-        body: vec![check],
+        body: vec![check, advance],
     }, span);
     crate::ir_lower::stmt::lower_stmt(ctx, &guard);
 }
