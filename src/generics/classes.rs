@@ -20,7 +20,6 @@ use std::cell::RefCell;
 use std::collections::HashMap;
 
 use crate::errors::CompileError;
-use crate::generics::splice::substitute_in_body;
 use crate::generics::{instantiated_name, Bindings, MAX_INSTANTIATION_ROUNDS};
 use crate::magic_constants::walker::{walk_program, Pass};
 use crate::names::Name;
@@ -1115,6 +1114,15 @@ fn collect_declared_names(stmts: &[Stmt], names: &mut Vec<String>) {
 /// behind would make the next round treat it as a template and strip it.
 fn instantiate_declaration(template: &Stmt, target: &str, bindings: &Bindings) -> Stmt {
     let mut declaration = template.clone();
+    let erased = match &template.kind {
+        StmtKind::ClassDecl { generics, .. }
+        | StmtKind::InterfaceDecl { generics, .. }
+        | StmtKind::TraitDecl { generics, .. } => generics
+            .as_ref()
+            .map(|generics| super::docblock_params_read_as_mixed(&generics.type_params, bindings))
+            .unwrap_or_default(),
+        _ => Vec::new(),
+    };
     match &mut declaration.kind {
         StmtKind::ClassDecl { name, generics, implements, .. } => {
             // Every instantiation implements the template's marker interface, so `instanceof
@@ -1152,7 +1160,7 @@ fn instantiate_declaration(template: &Stmt, target: &str, bindings: &Bindings) -
     // One substitution helper for classes and functions alike: the walker reaches every type
     // position in the declaration, members included, so a parameter cannot survive in a corner
     // the instantiation forgot.
-    substitute_in_body(vec![declaration], bindings)
+    super::splice::substitute_in_declarations(vec![declaration], bindings, &erased)
         .pop()
         .expect("substituting one declaration yields one declaration")
 }

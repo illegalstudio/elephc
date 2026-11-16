@@ -3996,3 +3996,46 @@ namespace App {
     );
     assert_eq!(out, "8|own");
 }
+
+/// An array annotation with one erased component (`array<int, T>` once `T` is erased or read
+/// as `mixed`) goes back to the plain `array` php-src declares: an erased method still matches
+/// the `array` of its interface or of an overriding child, and an instantiation whose
+/// parameter nothing determines returns its plain `array` through a plain `array` return.
+#[test]
+fn test_docblock_array_annotation_with_an_erased_component_is_a_plain_array() {
+    let out = compile_and_run(
+        r#"<?php
+interface Enum { public function merge(array $xs): int; }
+/** @template T */
+class Coll implements Enum {
+    /** @param array<int, T> $xs */
+    public function merge(array $xs): int { return count($xs); }
+}
+/** @template T */
+class Base {
+    /**
+     * @param array<int, T> $xs
+     * @return array<int, T>
+     */
+    public function merge(array $xs): array { return $xs; }
+}
+class Child extends Base {
+    public function merge(array $xs): array { return $xs; }
+}
+function through(Base $b): string { return implode(",", $b->merge([7, 8])); }
+/** @template T */
+class Plain {
+    /** @return array<int, T> */
+    public function merge(array $xs): array { return $xs; }
+}
+/**
+ * @template T
+ * @return array<int, T>
+ */
+function same(array $xs): array { return $xs; }
+echo (new Coll())->merge([10, 20]), "|", through(new Child()), "|",
+    implode(",", (new Plain())->merge([7, 8])), "|", implode(",", same([5, 6]));
+"#,
+    );
+    assert_eq!(out, "2|7,8|7,8|5,6");
+}

@@ -187,7 +187,9 @@ impl Checker {
         // the next round sees an ordinary method and checks the call properly.
         match &template.return_type {
             Some(ty) => {
-                let substituted = generics::substitute_value_type(ty, &bindings);
+                let erased =
+                    generics::docblock_params_read_as_mixed(&template.type_params, &bindings);
+                let substituted = generics::substitute_signature_type(ty, &bindings, &erased);
                 Ok(Some(self.resolve_type_expr(&substituted, expr.span)?))
             }
             None => Ok(Some(PhpType::Mixed)),

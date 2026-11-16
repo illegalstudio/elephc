@@ -393,6 +393,43 @@ pub(crate) fn mixed_type() -> TypeExpr {
     TypeExpr::Named(Name::unqualified("mixed"))
 }
 
+/// Returns the PHPDoc type parameters `bindings` reads as `mixed`.
+///
+/// Such a parameter is an annotation that could not be honoured, so the positions that mention
+/// it go back to what php-src declares there (see [`substitute_signature_type`]).
+pub(crate) fn docblock_params_read_as_mixed(
+    type_params: &[TypeParam],
+    bindings: &Bindings,
+) -> Vec<String> {
+    type_params
+        .iter()
+        .filter(|param| param.from_docblock)
+        .filter(|param| {
+            bindings.iter().any(|(name, ty)| name == &param.name && is_mixed_type(ty))
+        })
+        .map(|param| param.name.clone())
+        .collect()
+}
+
+/// Substitutes the type arguments into a declared type, giving an array that mentioned one of
+/// the `erased` parameters its native spelling back.
+///
+/// `@return array<int, T>` documents a native `: array`. With `T` read as `mixed` the
+/// substituted `array<int, mixed>` is hash storage of boxed cells, which is not what the
+/// `array` the body returns holds; the plain `array` php-src declares is.
+pub(crate) fn substitute_signature_type(
+    ty: &TypeExpr,
+    bindings: &Bindings,
+    erased: &[String],
+) -> TypeExpr {
+    let substituted = substitute_value_type(ty, bindings);
+    if erased.is_empty() || !ty.mentions_type_param(erased) {
+        substituted
+    } else {
+        erasure::collapse_mixed(substituted)
+    }
+}
+
 /// Returns whether `ty` is the `mixed` type expression.
 pub(crate) fn is_mixed_type(ty: &TypeExpr) -> bool {
     matches!(ty, TypeExpr::Named(name) if name.as_str().eq_ignore_ascii_case("mixed"))

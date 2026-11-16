@@ -500,26 +500,52 @@ fn erase_method(method: &mut ClassMethod, class_params: &[String]) {
 }
 
 /// Collapses `?mixed` and any union with a `mixed` member to `mixed`, which php-src spells only
-/// that way (`?mixed` is a compile error there), and an array whose element types erased to
-/// `mixed` (`array<mixed, mixed>`, `mixed[]`) to the plain `array` php-src sees.
+/// that way (`?mixed` is a compile error there), and an array one of whose element types erased
+/// to `mixed` (`array<mixed, mixed>`, `array<int, mixed>`, `mixed[]`) to the plain `array`
+/// php-src sees. Nested components collapse first.
 ///
-/// The plain keyword matters beyond spelling: `array<mixed, mixed>` is hash storage and `mixed[]`
-/// packed storage, so either one gives the method a physical signature that differs from an
-/// inherited `array` parameter, and the backend cannot adapt a dispatched call across that.
-fn collapse_mixed(ty: TypeExpr) -> TypeExpr {
-    let is_mixed = |t: &TypeExpr| matches!(t, TypeExpr::Named(n) if n.as_str().eq_ignore_ascii_case("mixed"));
+/// The plain keyword matters beyond spelling: `array<int, mixed>` is hash storage and `mixed[]`
+/// a packed vector of boxed cells, and neither is the representation a native `array` parameter
+/// or return has. A signature left at one of them does not match the interface or parent method
+/// it implements, and a body that returns its plain `array` parameter through it reads the
+/// wrong layout.
+pub(crate) fn collapse_mixed(ty: TypeExpr) -> TypeExpr {
+    let is_mixed = |t: &TypeExpr| super::is_mixed_type(t);
     let plain_array = || TypeExpr::Named(crate::names::Name::unqualified("array"));
     match ty {
-        TypeExpr::Nullable(inner) if is_mixed(&inner) => *inner,
-        TypeExpr::Nullable(inner) => TypeExpr::Nullable(Box::new(collapse_mixed(*inner))),
-        TypeExpr::Union(members) if members.iter().any(is_mixed) => {
-            TypeExpr::Named(crate::names::Name::unqualified("mixed"))
+        TypeExpr::Nullable(inner) => {
+            let inner = collapse_mixed(*inner);
+            if is_mixed(&inner) {
+                inner
+            } else {
+                TypeExpr::Nullable(Box::new(inner))
+            }
         }
         TypeExpr::Union(members) => {
-            TypeExpr::Union(members.into_iter().map(collapse_mixed).collect())
+            let members: Vec<TypeExpr> = members.into_iter().map(collapse_mixed).collect();
+            if members.iter().any(is_mixed) {
+                super::mixed_type()
+            } else {
+                TypeExpr::Union(members)
+            }
         }
-        TypeExpr::AssocArray { key, value } if is_mixed(&key) && is_mixed(&value) => plain_array(),
-        TypeExpr::Array(element) if is_mixed(&element) => plain_array(),
+        TypeExpr::AssocArray { key, value } => {
+            let key = collapse_mixed(*key);
+            let value = collapse_mixed(*value);
+            if is_mixed(&key) || is_mixed(&value) {
+                plain_array()
+            } else {
+                TypeExpr::AssocArray { key: Box::new(key), value: Box::new(value) }
+            }
+        }
+        TypeExpr::Array(element) => {
+            let element = collapse_mixed(*element);
+            if is_mixed(&element) {
+                plain_array()
+            } else {
+                TypeExpr::Array(Box::new(element))
+            }
+        }
         other => other,
     }
 }
