@@ -267,7 +267,16 @@ fn eval_array_ucompare_walk(
                 key_callback,
                 context,
                 values,
-            )?;
+            );
+            let matched = match matched {
+                Ok(matched) => matched,
+                Err(status) => {
+                    let _ = values.release(key);
+                    let _ = values.release(value);
+                    let _ = values.release(result);
+                    return Err(status);
+                }
+            };
             matched_everywhere &= matched;
             matched_somewhere |= matched;
         }
@@ -279,6 +288,9 @@ fn eval_array_ucompare_walk(
         if keep {
             result = values.array_set(result, key, value)?;
         }
+        // `array_set` retains what it keeps; this iteration's key and value reads are released.
+        values.release(key)?;
+        values.release(value)?;
     }
     Ok(result)
 }
@@ -298,23 +310,35 @@ fn entry_matches(
     // A built-in key comparison is a direct lookup, as in php.
     if operation.key == Compare::Builtin {
         let exists = values.array_key_exists(key, other)?;
-        if !values.truthy(exists)? {
+        let present = values.truthy(exists);
+        values.release(exists)?;
+        if !present? {
             return Ok(false);
         }
         let candidate = values.array_get(other, key)?;
-        return values_match(operation.value, value, candidate, value_callback, context, values);
+        let matched = values_match(operation.value, value, candidate, value_callback, context, values);
+        values.release(candidate)?;
+        return matched;
     }
     let len = values.array_len(other)?;
     for position in 0..len {
         let candidate_key = values.array_iter_key(other, position)?;
-        if operation.key == Compare::User {
-            let callback = key_callback.ok_or(EvalStatus::RuntimeFatal)?;
-            if !user_says_equal(callback, key, candidate_key, context, values)? {
-                continue;
+        // Every read here is caller-owned: the key and candidate are released after their
+        // comparison, whatever it answered.
+        let matched = (|| {
+            if operation.key == Compare::User {
+                let callback = key_callback.ok_or(EvalStatus::RuntimeFatal)?;
+                if !user_says_equal(callback, key, candidate_key, context, values)? {
+                    return Ok(false);
+                }
             }
-        }
-        let candidate = values.array_get(other, candidate_key)?;
-        if values_match(operation.value, value, candidate, value_callback, context, values)? {
+            let candidate = values.array_get(other, candidate_key)?;
+            let matched = values_match(operation.value, value, candidate, value_callback, context, values);
+            values.release(candidate)?;
+            matched
+        })();
+        values.release(candidate_key)?;
+        if matched? {
             return Ok(true);
         }
     }
@@ -349,5 +373,7 @@ fn user_says_equal(
     values: &mut impl RuntimeValueOps,
 ) -> Result<bool, EvalStatus> {
     let result = eval_evaluated_callable_with_values(callback, vec![left, right], context, values)?;
-    Ok(eval_int_value(result, values)? == 0)
+    let order = eval_int_value(result, values);
+    values.release(result)?;
+    Ok(order? == 0)
 }

@@ -113,15 +113,27 @@ fn eval_array_walk_recursive_ref(
 ) -> Result<(), EvalStatus> {
     let len = {
         let current = eval_reference_target_value(array_target, context, values)?;
-        values.array_len(current)?
+        let len = values.array_len(current);
+        if !current.is_borrowed() {
+            values.release(current)?;
+        }
+        len?
     };
     for position in 0..len {
         let current = eval_reference_target_value(array_target, context, values)?;
         if position >= values.array_len(current)? {
+            if !current.is_borrowed() {
+                values.release(current)?;
+            }
             break;
         }
         let key = values.array_iter_key(current, position)?;
         let value = values.array_get(current, key)?;
+        // As in `array_walk`: the array is re-read each round (the callback may write it through
+        // `&$value`), and that owned read, the key and the value are this round's to release.
+        if !current.is_borrowed() {
+            values.release(current)?;
+        }
         let reference_key =
             eval_array_reference_key(key, values)?.ok_or(EvalStatus::RuntimeFatal)?;
         let child = EvalReferenceTarget::NestedArrayElement {
@@ -129,6 +141,8 @@ fn eval_array_walk_recursive_ref(
             index: reference_key,
         };
         if is_walkable_array(value, values)? {
+            values.release(key)?;
+            values.release(value)?;
             eval_array_walk_recursive_ref(&child, callback, extra, context, values)?;
             continue;
         }
@@ -151,7 +165,10 @@ fn eval_array_walk_recursive_ref(
                 ref_target: None,
             });
         }
-        let _ = eval_evaluated_callable_with_call_array_args(callback, args, context, values)?;
+        let result = eval_evaluated_callable_with_call_array_args(callback, args, context, values)?;
+        values.release(result)?;
+        values.release(key)?;
+        values.release(value)?;
     }
     Ok(())
 }
@@ -168,15 +185,19 @@ fn eval_array_walk_recursive_values(
     for position in 0..len {
         let key = values.array_iter_key(array, position)?;
         let value = values.array_get(array, key)?;
+        // The key and value reads, and the callback's result, are caller-owned.
         if is_walkable_array(value, values)? {
             eval_array_walk_recursive_values(value, callback, extra, context, values)?;
-            continue;
+        } else {
+            let mut args = vec![value, key];
+            if let Some(extra) = extra {
+                args.push(extra);
+            }
+            let result = eval_evaluated_callable_with_values(callback, args, context, values)?;
+            values.release(result)?;
         }
-        let mut args = vec![value, key];
-        if let Some(extra) = extra {
-            args.push(extra);
-        }
-        let _ = eval_evaluated_callable_with_values(callback, args, context, values)?;
+        values.release(key)?;
+        values.release(value)?;
     }
     Ok(())
 }

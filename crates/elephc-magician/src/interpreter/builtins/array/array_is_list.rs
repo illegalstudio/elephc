@@ -52,6 +52,8 @@ fn eval_array_is_list_result(
         let key = values.array_iter_key(array, position)?;
         let is_position = values.type_tag(key)? == EVAL_TAG_INT
             && values.raw_value_word(key)? as i64 == position as i64;
+        // Each key read is caller-owned.
+        values.release(key)?;
         if !is_position {
             return values.bool_value(false);
         }

@@ -84,24 +84,37 @@ pub(in crate::interpreter) fn eval_array_unique_with_flags(
         let value = values.array_get(array, key)?;
         let mut duplicate = false;
         for seen in &kept {
-            let equal = if flags == 0 {
-                let same = eval_values_loosely_equal(*seen, value, values)?;
-                values.bool_value(same)?
+            let same = if flags == 0 {
+                eval_values_loosely_equal(*seen, value, values)?
             } else {
                 let left = values.cast_float(*seen)?;
                 let right = values.cast_float(value)?;
-                values.compare(EvalBinOp::LooseEq, left, right)?
+                let equal = values.compare(EvalBinOp::LooseEq, left, right);
+                values.release(left)?;
+                values.release(right)?;
+                let equal = equal?;
+                let same = values.truthy(equal);
+                values.release(equal)?;
+                same?
             };
-            if values.truthy(equal)? {
+            if same {
                 duplicate = true;
                 break;
             }
         }
+        // Every read is caller-owned: a duplicate's key and value are released at once, a kept
+        // value only after the walk (later values are compared against it).
         if duplicate {
+            values.release(key)?;
+            values.release(value)?;
             continue;
         }
         kept.push(value);
         result = values.array_set(result, key, value)?;
+        values.release(key)?;
+    }
+    for value in kept {
+        values.release(value)?;
     }
     Ok(result)
 }
@@ -118,11 +131,13 @@ pub(in crate::interpreter) fn eval_array_unique_result(
         let key = values.array_iter_key(array, position)?;
         let value = values.array_get(array, key)?;
         let unique_key = values.string_bytes(value)?;
-        if seen.iter().any(|seen_key| seen_key == &unique_key) {
-            continue;
+        if !seen.iter().any(|seen_key| seen_key == &unique_key) {
+            seen.push(unique_key);
+            result = values.array_set(result, key, value)?;
         }
-        seen.push(unique_key);
-        result = values.array_set(result, key, value)?;
+        // `array_set` retains what it keeps; the key and value reads are caller-owned.
+        values.release(key)?;
+        values.release(value)?;
     }
     Ok(result)
 }

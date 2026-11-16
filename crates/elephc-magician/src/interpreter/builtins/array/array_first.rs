@@ -78,6 +78,9 @@ fn eval_array_edge_result(
         ArrayEdge::First => 0,
         ArrayEdge::Last => len - 1,
     };
+    // The key read is caller-owned: it only locates the element, so it is released here.
     let key = values.array_iter_key(array, position)?;
-    values.array_get(array, key)
+    let value = values.array_get(array, key);
+    values.release(key)?;
+    value
 }

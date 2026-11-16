@@ -206,28 +206,45 @@ pub(in crate::interpreter) fn eval_array_push_unshift_declared_call(
     }
     let (array, target) = super::mutation::eval_array_mutation_lvalue_arg(&args[0], context, scope, values)?;
     let mut inserted = Vec::with_capacity(args.len() - 1);
+    // Elements read out of a spread operand are owned reads; the rebuilt array retains what it
+    // stores, so they are released once it is built.
+    let mut spread_reads = Vec::new();
     for arg in &args[1..] {
         if !arg.is_spread() {
             inserted.push(eval_expr(arg.value(), context, scope, values)?);
             continue;
         }
-        let spread = eval_expr(arg.value(), context, scope, values)?;
-        let spread = if values.type_tag(spread)? == EVAL_TAG_OBJECT {
-            crate::interpreter::array_literals::eval_spread_traversable_array(spread, context, values)?
+        let operand = eval_expr(arg.value(), context, scope, values)?;
+        let (spread, materialized) = if values.type_tag(operand)? == EVAL_TAG_OBJECT {
+            let array = crate::interpreter::array_literals::eval_spread_traversable_array(
+                operand, context, values,
+            )?;
+            (array, true)
         } else {
-            spread
+            (operand, false)
         };
         if !matches!(values.type_tag(spread)?, EVAL_TAG_ARRAY | EVAL_TAG_ASSOC) {
             return Err(EvalStatus::RuntimeFatal);
         }
         for position in 0..values.array_len(spread)? {
             let key = values.array_iter_key(spread, position)?;
-            // `array_get` answers an owned cell, which the rebuilt array then takes over.
-            inserted.push(values.array_get(spread, key)?);
+            let element = values.array_get(spread, key);
+            values.release(key)?;
+            let element = element?;
+            inserted.push(element);
+            spread_reads.push(element);
+        }
+        // The array a Traversable spread was materialized into is this call's own temporary.
+        if materialized {
+            values.release(spread)?;
         }
     }
 
-    let replacement = eval_array_push_unshift_replacement(name, array, &inserted, values)?;
+    let replacement = eval_array_push_unshift_replacement(name, array, &inserted, values);
+    for element in spread_reads {
+        values.release(element)?;
+    }
+    let replacement = replacement?;
     let result = eval_array_push_unshift_count_result(array, inserted.len(), values)?;
     eval_write_direct_ref_target(&target, replacement, context, values, None)?;
     Ok(result)

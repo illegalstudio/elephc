@@ -84,6 +84,10 @@ pub(in crate::interpreter) fn eval_array_change_key_case_values(
             key
         };
         result = values.array_set(result, key, value)?;
+        // `array_set` retains what it keeps, as in `array_filter`: this iteration's key (or the
+        // case-folded copy that replaced it) and value read are released.
+        values.release(key)?;
+        values.release(value)?;
     }
     Ok(result)
 }

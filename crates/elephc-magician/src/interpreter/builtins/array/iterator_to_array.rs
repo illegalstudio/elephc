@@ -74,18 +74,26 @@ pub(in crate::interpreter) fn eval_iterator_to_array_result(
         // `iterator_to_array()` takes any Traversable, which is most of the point of it. The
         // array-literal spread already knows how to drain one -- a generator, an `Iterator`, an
         // `IteratorAggregate` -- so this reads the same entries rather than a second walker.
+        // The drained pairs are owned reads and `array_set` retains what it stores (it borrows the
+        // key), so every pair and every positional key is released once stored; keeping them left
+        // one extra reference on each yielded value.
         let entries = eval_spread_source_entries(iterator, context, values)?;
-        let mut result = values.assoc_new(entries.len())?;
+        let mut result = values.assoc_new(entries.len());
         for (position, (key, value)) in entries.into_iter().enumerate() {
-            if preserve_keys {
-                result = values.array_set(result, key, value)?;
-            } else {
-                values.release(key)?;
-                let key = values.int(position as i64)?;
-                result = values.array_set(result, key, value)?;
-            }
+            result = result.and_then(|result| {
+                if preserve_keys {
+                    values.array_set(result, key, value)
+                } else {
+                    let position_key = values.int(position as i64)?;
+                    let stored = values.array_set(result, position_key, value);
+                    values.release(position_key)?;
+                    stored
+                }
+            });
+            values.release(key)?;
+            values.release(value)?;
         }
-        return Ok(result);
+        return result;
     }
     if preserve_keys {
         return eval_array_copy_preserve_keys(iterator, values);

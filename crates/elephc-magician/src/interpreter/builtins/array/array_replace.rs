@@ -99,6 +99,9 @@ fn eval_array_replace_result(
             let key = values.array_iter_key(arg, position)?;
             let value = values.array_get(arg, key)?;
             result = values.array_set(result, key, value)?;
+            // `array_set` retains what it keeps; the key and value reads are caller-owned.
+            values.release(key)?;
+            values.release(value)?;
         }
     }
 
@@ -118,6 +121,7 @@ fn eval_array_replace_retag_as_list_if_packed(
         let key = values.array_iter_key(assoc, position)?;
         let is_sequential_int = values.type_tag(key)? == EVAL_TAG_INT
             && values.raw_value_word(key)? as i64 == position as i64;
+        values.release(key)?;
         if !is_sequential_int {
             return Ok(assoc);
         }
@@ -127,6 +131,8 @@ fn eval_array_replace_retag_as_list_if_packed(
         let key = values.array_iter_key(assoc, position)?;
         let value = values.array_get(assoc, key)?;
         list = values.array_set(list, key, value)?;
+        values.release(key)?;
+        values.release(value)?;
     }
     values.release(assoc)?;
     Ok(list)

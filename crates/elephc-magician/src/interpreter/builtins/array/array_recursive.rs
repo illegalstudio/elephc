@@ -137,6 +137,9 @@ fn eval_array_recursive_is_array(
 }
 
 /// Copies every entry of `source` into `target`, key for key.
+///
+/// `array_set` retains what it stores, so the key and value reads (caller-owned) are released
+/// after each store; keeping them left an extra reference on every copied element.
 fn eval_array_replace_into(
     mut target: RuntimeCellHandle,
     source: RuntimeCellHandle,
@@ -147,11 +150,16 @@ fn eval_array_replace_into(
         let key = values.array_iter_key(source, position)?;
         let value = values.array_get(source, key)?;
         target = values.array_set(target, key, value)?;
+        values.release(key)?;
+        values.release(value)?;
     }
     Ok(target)
 }
 
 /// Replaces `target`'s entries with `source`'s, descending where both hold an array.
+///
+/// Every read (`key`, `value`, `existing`) is caller-owned and released once stored, and so is
+/// the intermediate copy built for a nested array, which `array_set` retains in `target`.
 fn eval_array_replace_recursive_into(
     mut target: RuntimeCellHandle,
     source: RuntimeCellHandle,
@@ -170,7 +178,7 @@ fn eval_array_replace_recursive_into(
         } else {
             None
         };
-        let replacement = match existing {
+        let nested = match existing {
             Some(existing)
                 if eval_array_recursive_is_array(existing, values)?
                     && eval_array_recursive_is_array(value, values)? =>
@@ -178,16 +186,27 @@ fn eval_array_replace_recursive_into(
                 let capacity = values.array_len(existing)?;
                 let copy = values.assoc_new(capacity)?;
                 let copy = eval_array_replace_into(copy, existing, values)?;
-                eval_array_replace_recursive_into(copy, value, values, depth + 1)?
+                Some(eval_array_replace_recursive_into(copy, value, values, depth + 1)?)
             }
-            _ => value,
+            _ => None,
         };
-        target = values.array_set(target, key, replacement)?;
+        target = values.array_set(target, key, nested.unwrap_or(value))?;
+        if let Some(nested) = nested {
+            values.release(nested)?;
+        }
+        if let Some(existing) = existing {
+            values.release(existing)?;
+        }
+        values.release(key)?;
+        values.release(value)?;
     }
     Ok(target)
 }
 
 /// Merges `source` into `target`: integer keys append, a shared string key combines both values.
+///
+/// Every read and every temporary (`key`, `value`, `existing`, the append keys and the
+/// `combined` array) is released once `array_set` has retained what it keeps.
 fn eval_array_merge_recursive_into(
     mut target: RuntimeCellHandle,
     source: RuntimeCellHandle,
@@ -206,10 +225,15 @@ fn eval_array_merge_recursive_into(
             let append_key = values.int(next_key)?;
             next_key = next_key.checked_add(1).ok_or(EvalStatus::RuntimeFatal)?;
             target = values.array_set(target, append_key, value)?;
+            values.release(append_key)?;
+            values.release(key)?;
+            values.release(value)?;
             continue;
         }
         if !eval_array_recursive_has_key(target, key, values)? {
             target = values.array_set(target, key, value)?;
+            values.release(key)?;
+            values.release(value)?;
             continue;
         }
         let existing = values.array_get(target, key)?;
@@ -222,15 +246,22 @@ fn eval_array_merge_recursive_into(
         } else {
             let zero = values.int(0)?;
             combined = values.array_set(combined, zero, existing)?;
+            values.release(zero)?;
         }
         combined = if eval_array_recursive_is_array(value, values)? {
             eval_array_merge_recursive_into(combined, value, values, depth + 1)?
         } else {
             let next = eval_array_next_append_key(combined, values)?;
             let append_key = values.int(next)?;
-            values.array_set(combined, append_key, value)?
+            let combined = values.array_set(combined, append_key, value)?;
+            values.release(append_key)?;
+            combined
         };
         target = values.array_set(target, key, combined)?;
+        values.release(combined)?;
+        values.release(existing)?;
+        values.release(key)?;
+        values.release(value)?;
     }
     Ok(target)
 }
@@ -242,7 +273,9 @@ fn eval_array_recursive_has_key(
     values: &mut impl RuntimeValueOps,
 ) -> Result<bool, EvalStatus> {
     let exists = values.array_key_exists(key, array)?;
-    values.truthy(exists)
+    let present = values.truthy(exists);
+    values.release(exists)?;
+    present
 }
 
 /// Returns the key php's `$array[] = ...` would use: one past the largest integer key, or 0.
@@ -254,8 +287,13 @@ fn eval_array_next_append_key(
     let len = values.array_len(array)?;
     for position in 0..len {
         let key = values.array_iter_key(array, position)?;
-        if values.type_tag(key)? == EVAL_TAG_INT {
-            let key = eval_int_value(key, values)?;
+        let int_key = if values.type_tag(key)? == EVAL_TAG_INT {
+            Some(eval_int_value(key, values)?)
+        } else {
+            None
+        };
+        values.release(key)?;
+        if let Some(key) = int_key {
             if key >= next {
                 next = key.checked_add(1).ok_or(EvalStatus::RuntimeFatal)?;
             }
