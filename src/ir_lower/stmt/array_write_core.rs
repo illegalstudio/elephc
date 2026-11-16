@@ -330,6 +330,19 @@ fn lower_array_assign_with_update(
     value_value = ctx.retype_value_for_container_element(&container_ty, value_value, Some(value.span));
     // A hash whose stamped value type cannot hold the assigned value widens its storage first,
     // like the indexed path does; PHP's untyped arrays keep the runtime value (#1951).
+    // A `static` hash keeps one storage type across calls, so this write cannot widen it the way
+    // it widens an ordinary local: `$s['k'] = $s['k'] + 1` produced a boxed sum, the slot was
+    // rewritten as `array<string, mixed>`, and the next call still read `int` values -- the box's
+    // address. Coerce into the slot's int element BEFORE the widening below looks at the value.
+    if op == Op::HashSet && matches!(ctx.local_kinds.get(array), Some(LocalKind::StaticLocal)) {
+        let current_ty = ctx.builder.value_php_type(array_value.value);
+        value_value = super::array_write_storage::coerce_static_hash_set_value(
+            ctx,
+            &current_ty,
+            value_value,
+            Some(value.span),
+        );
+    }
     let (array_value, hash_storeback) = if op == Op::HashSet {
         super::array_write_storage::prepare_hash_local_write(ctx, array, array_value, value_value, span)
     } else {
@@ -471,40 +484,6 @@ fn lower_array_assign_with_update(
         index_value = coerce_to_int_at_span(ctx, index_value, Some(index.span));
         let buffer_ty = ctx.builder.value_php_type(array_value.value);
         value_value = coerce_buffer_set_value(ctx, &buffer_ty, value_value, Some(value.span));
-    }
-    if op == Op::HashSet {
-        let current_ty = ctx.builder.value_php_type(array_value.value);
-        // A `static` hash keeps one storage type across calls, so this write cannot widen it the
-        // way it widens an ordinary local: `$s['k'] = $s['k'] + 1` produced a boxed sum, the
-        // slot was rewritten as `array<string, mixed>`, and the next call still read `int`
-        // values -- the box's address. Coerce into the slot's int element instead, as the
-        // indexed write does for every local.
-        if matches!(ctx.local_kinds.get(array), Some(LocalKind::StaticLocal)) {
-            value_value = coerce_static_hash_set_value(ctx, &current_ty, value_value, Some(value.span));
-        }
-        let value_ty = ctx.builder.value_php_type(value_value.value);
-        if let Some(updated_ty) = assoc_array_write_updated_type(current_ty, value_ty) {
-            ctx.prepare_mutated_local_owner(array, array_value, updated_ty.clone(), Some(span));
-            let converted = ctx.emit_value(
-                Op::HashToMixed,
-                vec![array_value.value],
-                None,
-                updated_ty.clone(),
-                Op::HashToMixed.default_effects(),
-                Some(span),
-            );
-            ctx.emit_void(
-                Op::HashSet,
-                vec![converted.value, index_value.value, value_value.value],
-                None,
-                Op::HashSet.default_effects(),
-                Some(span),
-            );
-            release_persisted_string_operand(ctx, index_value, span);
-            release_persisted_string_operand(ctx, value_value, span);
-            ctx.store_prepared_mutated_local(array, converted, updated_ty, Some(span));
-            return;
-        }
     }
     if op == Op::ArraySet {
         let (array_value, updated_ty, needs_storeback) =

@@ -2729,3 +2729,20 @@ try {
     );
     assert_eq!(out, "1\nNULL\n1\nCannot unset string offsets\n");
 }
+/// Verifies a boxed sum written into a `static` hash keeps the slot's int element storage.
+#[test]
+fn test_static_hash_counter_keeps_int_elements_across_calls() {
+    let out = compile_and_run(
+        r#"<?php
+function hit() {
+    static $s = ['k' => 0];
+    $s['k'] = $s['k'] + 1;
+    return $s['k'];
+}
+hit();
+hit();
+echo hit(), "\n";
+"#,
+    );
+    assert_eq!(out, "3\n");
+}
