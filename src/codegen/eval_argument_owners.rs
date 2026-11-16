@@ -1,6 +1,12 @@
-//! Purpose: retain argument-reader cells until a native eval call has finished.
-//! Called from: generated constructor, instance-method and static-method bridges.
-//! Key details: zeroed frame slots survive argument staging and native unwinding.
+//! Purpose:
+//! Retains argument-reader cells until a native eval call has finished.
+//!
+//! Called from:
+//! - Generated constructor, instance-method and static-method eval bridges.
+//!
+//! Key details:
+//! - Zeroed frame slots survive argument staging and native unwinding.
+//! - Owner slots sit above the try-handler record of either architecture without overlapping it.
 
 use crate::codegen_support::{abi, emit::Emitter, platform::Arch};
 use crate::codegen_support::try_handlers::TRY_HANDLER_SLOT_SIZE;
@@ -11,6 +17,7 @@ use crate::types::PhpType;
 const AARCH64_OWNER_OFFSET: usize = 32 + TRY_HANDLER_SLOT_SIZE;
 const X86_64_OWNER_PREFIX: usize = 96 + TRY_HANDLER_SLOT_SIZE;
 
+/// Returns the frame size that also reserves one 16-byte owner pair per retained argument.
 pub(super) fn frame_size(emitter: &Emitter, base_size: usize, count: usize) -> usize {
     let owner_bytes = count * 16;
     match emitter.target.arch {
@@ -82,6 +89,8 @@ mod tests {
     use super::*;
     use crate::codegen_support::platform::Target;
 
+    /// Checks the owner slots of every supported target stay 16-byte aligned and clear of the
+    /// try-handler record.
     #[test]
     fn argument_owners_fit_all_supported_target_frames() {
         for name in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {

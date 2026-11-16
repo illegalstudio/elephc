@@ -1,4 +1,12 @@
+//! Purpose:
 //! Collects compiled class-like activation overlays for native runtime metadata.
+//!
+//! Called from:
+//! - The module-level codegen that emits the class-like activation registry.
+//!
+//! Key details:
+//! - Names are sorted PHP lookup keys; compiler-injected declarations (dummy span) are skipped
+//!   because they keep their always-active runtime behaviour.
 
 use std::collections::BTreeSet;
 
@@ -13,6 +21,8 @@ pub(super) struct ActivationRegistryNames {
     pub(super) interfaces: Vec<String>,
 }
 
+/// Collects the sorted lookup keys of every interface and class-like whose metadata needs a
+/// runtime activation binding, from source spans that survive dead-code elimination.
 pub(super) fn collect_activation_registry_names(module: &Module) -> ActivationRegistryNames {
     let mut interfaces = BTreeSet::new();
     // Source spans are retained after AST/EIR dead-code elimination. A
@@ -60,6 +70,7 @@ mod tests {
     use crate::span::Span;
     use crate::types::PhpType;
 
+    /// Checks the registry names are case-folded, deduplicated and filtered by declaration kind.
     #[test]
     fn activation_overlay_names_are_folded_deduplicated_and_kind_filtered() {
         let catalog = SourceCatalog::from_units([crate::resolver::SourceUnit {

@@ -64,6 +64,8 @@ pub(crate) const HELPER_MARKER_OPEN: &str = "@helper key=";
 /// Closes the region opened by `HELPER_MARKER_OPEN`.
 pub(crate) const HELPER_MARKER_CLOSE: &str = "@endhelper";
 
+/// Shortens a name to the fragment embedded in generated labels, capped so a long symbol cannot
+/// blow up label length.
 fn capped_label_fragment(name: &str) -> String {
     let fragment = label_fragment(name);
     match fragment.char_indices().nth(LABEL_FRAGMENT_BUDGET) {
@@ -1618,7 +1620,6 @@ impl<'a> FunctionContext<'a> {
         self.release_mutated_source_local_owner(slot, value)
     }
 
-    /// Returns this body's release/store index, building it on first use.
     /// How many instruction operands and terminators of this body use `value`.
     pub(in crate::codegen) fn value_use_count(&self, value: ValueId) -> usize {
         self.use_counts
@@ -1662,6 +1663,7 @@ impl<'a> FunctionContext<'a> {
         index.get(&slot).map_or(&[], Vec::as_slice)
     }
 
+    /// Returns this body's release/store index, building it on first use.
     pub(in crate::codegen) fn value_uses(&self) -> &value_uses::ValueUseIndex {
         self.value_uses
             .get_or_init(|| value_uses::ValueUseIndex::build(self.function))
@@ -2343,9 +2345,6 @@ impl<'a> FunctionContext<'a> {
         // BYTE string too. `symfony/cache` declares `class \xA9`, one non-ASCII byte, and
         // `get_class()` on it must hand back that one byte -- `as_bytes()` emitted the Rust UTF-8
         // of the byte marker instead, three bytes for one.
-        // Through `literal_bytes`, exactly like `intern_string_data` above: a class name is a PHP
-        // BYTE string too. `symfony/cache` declares `class \xA9`, one non-ASCII byte, and
-        // `get_class()` on it must hand back that one byte.
         let bytes = crate::string_bytes::literal_bytes(value);
         Ok(self.data.add_string(&bytes))
     }
@@ -2431,6 +2430,13 @@ impl<'a> FunctionContext<'a> {
 /// off `--web`, so nothing in the instruction stream would show it. Its presence is decided
 /// earlier, by `error_handling_prelude::inject_if_used` plus the forced-group rule in
 /// `pipeline::compile`, and reading the surviving list here is how codegen learns the answer.
+fn module_declares_shutdown_drain(module: &Module) -> bool {
+    module
+        .functions
+        .iter()
+        .any(|function| function.name == crate::names::SHUTDOWN_RUN_FUNCTION)
+}
+
 /// Decides every whole-module fact before the workers start, so `module_preset` carries them to
 /// all the chunks: an unanswered one is recomputed by each of them.
 pub(super) fn prefill_module_facts(module: &Module, shared: &mut SharedCodegenState) {
@@ -2449,13 +2455,6 @@ pub(super) fn prefill_module_facts(module: &Module, shared: &mut SharedCodegenSt
         shared,
     );
     super::shared_count_guard::module_shares_count_guard(module, shared);
-}
-
-fn module_declares_shutdown_drain(module: &Module) -> bool {
-    module
-        .functions
-        .iter()
-        .any(|function| function.name == crate::names::SHUTDOWN_RUN_FUNCTION)
 }
 
 /// Scans every emitted function-like body for `pcntl_async_signals()` state changes.

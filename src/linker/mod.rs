@@ -1042,11 +1042,19 @@ mod slice_parts_tests {
 
 #[cfg(test)]
 mod probe {
+    /// Measurement scaffolding, run by hand: assembles the `.s` file named by `ELEPHC_PROBE_ASM`
+    /// in the directory `ELEPHC_PROBE_DIR` and prints the timing. It asserts nothing and is
+    /// skipped (it needs both variables) unless asked for with `--ignored`.
     #[test]
     #[ignore]
     fn probe_assemble_existing_s() {
-        let src = std::env::var("ELEPHC_PROBE_ASM").unwrap();
-        let dir = std::env::var("ELEPHC_PROBE_DIR").unwrap();
+        let (Ok(src), Ok(dir)) = (
+            std::env::var("ELEPHC_PROBE_ASM"),
+            std::env::var("ELEPHC_PROBE_DIR"),
+        ) else {
+            eprintln!("set ELEPHC_PROBE_ASM and ELEPHC_PROBE_DIR to run this probe");
+            return;
+        };
         let s = std::path::Path::new(&dir).join("probe.s");
         let _ = std::fs::remove_file(&s);
         std::os::unix::fs::symlink(&src, &s).unwrap();
