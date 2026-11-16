@@ -666,10 +666,16 @@ fn runtime_class_like_is_a(
             let Ok(key) = values.array_iter_key(names, position) else {
                 break;
             };
-            let Ok(name) = values.array_get(names, key) else {
+            // Both reads are caller-owned; the array's release below retires only its own
+            // elements, so each key and name is released here as soon as its bytes are read.
+            let name = values.array_get(names, key);
+            let _ = values.release(key);
+            let Ok(name) = name else {
                 break;
             };
-            let Ok(bytes) = values.string_bytes(name) else {
+            let bytes = values.string_bytes(name);
+            let _ = values.release(name);
+            let Ok(bytes) = bytes else {
                 continue;
             };
             let name = String::from_utf8_lossy(&bytes);

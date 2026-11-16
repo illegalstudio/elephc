@@ -631,13 +631,23 @@ pub(in crate::interpreter) fn eval_reflection_get_attributes_result(
     let mut result = values.array_new(len)?;
     let mut out_index: i64 = 0;
     for position in 0..len {
+        // The key box and the element read are caller-owned, and `array_set` takes its own
+        // reference to what it keeps (see `eval_reflection_string_array_to_vec`), so all three
+        // temporaries are released every round, matching or not.
         let key = values.int(position as i64)?;
-        let element = values.array_get(attrs, key)?;
-        if eval_reflection_attribute_matches_filter(element, &name_filter, flags, context, values)? {
+        let element = values.array_get(attrs, key);
+        values.release(key)?;
+        let element = element?;
+        let matched = eval_reflection_attribute_matches_filter(element, &name_filter, flags, context, values);
+        if matches!(matched, Ok(true)) {
             let out_key = values.int(out_index)?;
-            result = values.array_set(result, out_key, element)?;
+            let stored = values.array_set(result, out_key, element);
+            values.release(out_key)?;
+            result = stored?;
             out_index += 1;
         }
+        values.release(element)?;
+        matched?;
     }
     values.release(attrs)?;
     Ok(Some(result))

@@ -255,14 +255,18 @@ fn eval_reflection_owner_parent_constructor(
                 values.release(value)?;
                 continue;
             }
-            values.property_set(object, &name, value).map_err(|status| {
+            // `property_set` takes its own reference, so the owned read is released on success
+            // and failure alike; keeping it leaked every copied field of every subclass instance.
+            let stored = values.property_set(object, &name, value).map_err(|status| {
                 let tag = values.type_tag(value).ok();
                 trace_native_constructor_error(
                     &format!("owner_field_set:{name}:tag={tag:?}"),
                     class_name,
                     status,
                 )
-            })?;
+            });
+            values.release(value)?;
+            stored?;
         }
         Ok(())
     }));

@@ -200,10 +200,17 @@ fn eval_reflection_apply_class_doc_comment(
     };
     let doc_comment = values.string(doc_comment)?;
     let has_doc_comment = values.bool_value(true)?;
-    eval_reflection_with_declaring_class_scope("ReflectionClass", context, |_| {
+    let stored = eval_reflection_with_declaring_class_scope("ReflectionClass", context, |_| {
         values.property_set(object, "__doc_comment", doc_comment)?;
         values.property_set(object, "__has_doc_comment", has_doc_comment)
-    })?;
+    });
+    // `property_set` takes its own reference, so the two temporaries are released here, as every
+    // other slot writer of this module does; on failure the object is released too.
+    let released = values.release(doc_comment).and(values.release(has_doc_comment));
+    if let Err(status) = stored.and(released) {
+        let _ = values.release(object);
+        return Err(status);
+    }
     Ok(object)
 }
 
