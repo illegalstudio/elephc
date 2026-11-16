@@ -242,7 +242,7 @@ fn apply_instance_method(
     let internal_exception_override = injected_exception_final_override(class, method, &method_key);
     let inherited_declaring_class = state.method_declaring_classes.get(&method_key).cloned();
     let mut sig = build_method_sig(checker, method, &class.name)?;
-    demote_array_access_offset_get_reference(class, &method_key, &mut sig);
+    demote_array_access_offset_get_reference(state, class, checker, &method_key, &mut sig);
     let serializable = state.interfaces.iter().chain(class.implements.iter()).any(|name|
         name.eq_ignore_ascii_case("Serializable") || checker.interface_extends_interface(name, "Serializable"));
     if serializable && method_key == "unserialize"
@@ -627,16 +627,21 @@ fn widen_undeclared_override_parameters(
 /// ABI adapter cannot bridge. Compiling the implementation by value keeps every read correct;
 /// only writes through the returned reference (`$rec['extra']['k'] = …`) stay local.
 fn demote_array_access_offset_get_reference(
+    state: &ClassBuildState,
     class: &FlattenedClass,
+    checker: &Checker,
     method_key: &str,
     sig: &mut crate::types::FunctionSig,
 ) {
+    // The contract arrives through the class's own list, an inherited interface, or an interface
+    // extending `ArrayAccess`.
     if sig.by_ref_return
         && method_key == "offsetget"
-        && class
-            .implements
-            .iter()
-            .any(|name| name.trim_start_matches('\\').eq_ignore_ascii_case("ArrayAccess"))
+        && state.interfaces.iter().chain(class.implements.iter()).any(|name| {
+            let name = name.trim_start_matches('\\');
+            name.eq_ignore_ascii_case("ArrayAccess")
+                || checker.interface_extends_interface(name, "ArrayAccess")
+        })
     {
         sig.by_ref_return = false;
     }
