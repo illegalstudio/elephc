@@ -409,3 +409,25 @@ unlink($path);
         assert!(out.stderr.contains(warning), "{}", out.stderr);
     }
 }
+
+/// A process resource is not a stream: reaching a stream builtin through `mixed`, it is
+/// refused with php-src's TypeError instead of its bridge id being read as a descriptor.
+/// (A statically typed `proc_open()` result is already rejected by the checker.)
+#[test]
+fn test_stream_builtins_reject_a_process_resource() {
+    for (call, message) in [
+        ("pclose($p)", "pclose(): Argument #1 ($handle) must be an open stream resource"),
+        ("fclose($p)", "fclose(): Argument #1 ($stream) must be an open stream resource"),
+        ("fwrite($p, 'x')", "fwrite(): Argument #1 ($stream) must be an open stream resource"),
+        ("feof($p)", "feof(): Argument #1 ($stream) must be an open stream resource"),
+        ("stream_get_contents($p)", "stream_get_contents(): Argument #1 ($stream) must be an open stream resource"),
+    ] {
+        let source = format!(
+            "<?php\nfunction f(mixed $p) {{ return {call}; }}\necho \"start\\n\";\nf(proc_open('true', [], $pipes));\necho \"unreachable\\n\";\n"
+        );
+        let out = compile_and_run_capture(&source);
+        assert!(!out.success, "{source}");
+        assert_eq!(out.stdout, "start\n", "{source}");
+        assert!(out.stderr.contains(message), "{source}\n{}", out.stderr);
+    }
+}
