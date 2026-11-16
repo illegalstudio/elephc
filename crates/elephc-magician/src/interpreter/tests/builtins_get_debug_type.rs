@@ -120,6 +120,19 @@ echo get_debug_type($closed);"#,
     assert_eq!(values.output, "resource (stream):resource (closed)");
 }
 
+/// Verifies a stream context resource is named `resource (stream-context)`, as php does.
+///
+/// `php -n` 8.5.6: `resource (stream-context)` for `get_debug_type(stream_context_create())`.
+#[test]
+fn get_debug_type_names_a_stream_context_resource() {
+    let program = parse_fragment(br#"echo get_debug_type(stream_context_create());"#)
+        .expect("parse fragment");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+    execute_program(&program, &mut scope, &mut values).expect("execute fragment");
+    assert_eq!(values.output, "resource (stream-context)");
+}
+
 /// Verifies named arguments, argument unpacking, `call_user_func`, and a variable-function call
 /// all reach the same registry entry, and that an undefined-variable argument still answers
 /// `"null"` (the warning belongs to the argument's OWN evaluation, not to `get_debug_type`).

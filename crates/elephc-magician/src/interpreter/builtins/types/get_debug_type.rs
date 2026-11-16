@@ -101,11 +101,13 @@ fn eval_get_debug_type_result(
         }
         EVAL_TAG_RESOURCE => {
             let closed = eval_resource_is_closed(value, context, values)?;
-            values.string(if closed {
-                "resource (closed)"
-            } else {
-                "resource (stream)"
-            })
+            if closed {
+                return values.string("resource (closed)");
+            }
+            // The registered type name, as `get_resource_type()` answers it: a stream context
+            // is `stream-context`, every other open handle `stream`.
+            let type_name = eval_resource_type_name(value, context, values)?;
+            values.string(&format!("resource ({type_name})"))
         }
         _ => values.string("null"),
     }
