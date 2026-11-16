@@ -30,6 +30,24 @@ echo eval('return strcspn("22222222aaaa bbb1111 cccc", "1234", 9, 6)
     assert_eq!(out, "6:3:2:0:3");
 }
 
+/// Verifies interpreted `addcslashes()` warns for a malformed `..` range as `php_charmask` does,
+/// keeping the byte-identical result. Output is php 8.5's.
+#[test]
+fn test_eval_addcslashes_warns_for_an_invalid_range() {
+    let out = compile_and_run_capture_with_regex(
+        r#"<?php
+echo eval('return addcslashes("abc.", "c..a") . "|" . addcslashes("abc.", "..a") . "|" . addcslashes("abc.", "a..c");');
+"#,
+    );
+    assert_eq!(out.stdout, "\\ab\\c\\.|\\abc\\.|\\a\\b\\c.", "stderr: {}", out.stderr);
+    for diagnostic in [
+        "Warning: addcslashes(): Invalid '..'-range, '..'-range needs to be incrementing",
+        "Warning: addcslashes(): Invalid '..'-range, no character to the left of '..'",
+    ] {
+        assert!(out.stderr.contains(diagnostic), "missing {diagnostic:?} in {}", out.stderr);
+    }
+}
+
 /// Verifies `preg_quote()` gives eval and compiled code the same answer, delimiter included.
 ///
 /// The interpreter owns a second copy of the escape table, so a divergence here means the two

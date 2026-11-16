@@ -52,12 +52,18 @@ pub(in crate::interpreter) fn eval_addcslashes_values(
     };
     let bytes = values.string_bytes(*string)?;
     let characters = values.string_bytes(*characters)?;
-    values.string_bytes_value(&addcslashes_bytes(&bytes, &characters))
+    let (mask, warnings) = addcslashes_mask(&characters);
+    for warning in warnings {
+        values.warning(&format!("Warning: addcslashes(): {warning}\n"))?;
+    }
+    values.string_bytes_value(&addcslashes_bytes(&bytes, &mask))
 }
 
-/// Builds php's 256-entry character mask, expanding `x..y` ranges.
-fn addcslashes_mask(characters: &[u8]) -> [bool; 256] {
+/// Builds php's 256-entry character mask, expanding `x..y` ranges, with the warnings
+/// `php_charmask` raises for a malformed `..` (its bytes are then not added, as in php).
+fn addcslashes_mask(characters: &[u8]) -> ([bool; 256], Vec<&'static str>) {
     let mut mask = [false; 256];
+    let mut warnings = Vec::new();
     let mut index = 0;
     while index < characters.len() {
         let first = characters[index];
@@ -70,17 +76,27 @@ fn addcslashes_mask(characters: &[u8]) -> [bool; 256] {
                 mask[byte as usize] = true;
             }
             index += 4;
+        } else if index + 1 < characters.len() && first == b'.' && characters[index + 1] == b'.' {
+            warnings.push(if index == 0 {
+                "Invalid '..'-range, no character to the left of '..'"
+            } else if index + 2 >= characters.len() {
+                "Invalid '..'-range, no character to the right of '..'"
+            } else if characters[index - 1] > characters[index + 2] {
+                "Invalid '..'-range, '..'-range needs to be incrementing"
+            } else {
+                "Invalid '..'-range"
+            });
+            index += 1;
         } else {
             mask[first as usize] = true;
             index += 1;
         }
     }
-    mask
+    (mask, warnings)
 }
 
-/// Escapes every byte of `bytes` that `characters` lists.
-fn addcslashes_bytes(bytes: &[u8], characters: &[u8]) -> Vec<u8> {
-    let mask = addcslashes_mask(characters);
+/// Escapes every byte of `bytes` that `mask` selects.
+fn addcslashes_bytes(bytes: &[u8], mask: &[bool; 256]) -> Vec<u8> {
     let mut output = Vec::with_capacity(bytes.len());
     for &byte in bytes {
         if !mask[byte as usize] {
