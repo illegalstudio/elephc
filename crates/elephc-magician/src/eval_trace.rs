@@ -143,7 +143,13 @@ pub(crate) fn arm_include_target_for_test(armed: bool) {
 ///
 /// `putenv()` is the one way a running PHP program can change the answer.
 pub(crate) fn invalidate() {
-    TRACE_STATE.store(TRACE_UNKNOWN, Ordering::Relaxed);
+    forget_verdict(&TRACE_STATE);
+}
+
+/// Resets one verdict slot to unknown; split out so a test can check it on a private slot rather
+/// than on the process-wide `TRACE_STATE` other threads recompute concurrently.
+fn forget_verdict(slot: &AtomicU8) {
+    slot.store(TRACE_UNKNOWN, Ordering::Relaxed);
 }
 
 /// Returns the cached verdict, reading the environment once when it is not known.
@@ -187,11 +193,15 @@ mod tests {
         assert!(!verdict_enables_ffi(TRACE_ON));
     }
 
-    /// Verifies an invalidation forgets the cached verdict.
+    /// Verifies an invalidation forgets a cached verdict. It runs on a private slot: the shared
+    /// `TRACE_STATE` is recomputed by concurrent tests, and the old assertion on it (`<=
+    /// TRACE_ON_FFI`) held for every value the slot can take, so it could not fail.
     #[test]
     fn invalidate_forgets_the_verdict() {
-        invalidate();
-        // Another thread may recompute it at once; either way it is a real verdict or unknown.
-        assert!(TRACE_STATE.load(Ordering::Relaxed) <= TRACE_ON_FFI);
+        for verdict in [TRACE_OFF, TRACE_ON, TRACE_ON_FFI] {
+            let slot = AtomicU8::new(verdict);
+            forget_verdict(&slot);
+            assert_eq!(slot.load(Ordering::Relaxed), TRACE_UNKNOWN);
+        }
     }
 }
