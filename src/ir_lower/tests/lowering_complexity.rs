@@ -1059,6 +1059,33 @@ fn interface_questions_walk_the_class_table_once_not_per_site() {
     assert_eq!(small, large, "class table walks grew with the sites: {small} vs {large}");
 }
 
+/// `count` interfaces in a chain, each extended by the next and implemented by its own class,
+/// with an interface-typed call and an `instanceof` per interface.
+fn many_interfaces_asked(count: usize) -> String {
+    let mut source = String::from("<?php\ninterface I0 { public function run(): int; }\n");
+    for index in 1..count {
+        source.push_str(&format!("interface I{index} extends I{} {{}}\n", index - 1));
+    }
+    for index in 0..count {
+        source.push_str(&format!(
+            "final class C{index} implements I{index} {{ public function run(): int {{ return {index}; }} }}\n\
+             function f{index}(I{index} $r, mixed $m): int {{ return $r->run() + ($m instanceof I{index} ? 1 : 0); }}\n"
+        ));
+    }
+    source.push_str("echo f0(new C0(), new C1()), \"\\n\";\n");
+    source
+}
+
+/// Every interface asked used to walk the whole class table again; one index answers them all.
+/// The lowering tests check that index against the walk (`class_implements_interface_for_ir`).
+#[test]
+fn interface_questions_build_one_index_whatever_the_interfaces() {
+    let small = class_table_walks(&many_interfaces_asked(2));
+    let large = class_table_walks(&many_interfaces_asked(16));
+    assert!(small > 0, "the fixture no longer asks a class table question");
+    assert_eq!(small, large, "class table walks grew with the interfaces: {small} vs {large}");
+}
+
 /// `count` reads of one name on untyped receivers, with enough classes declaring it for a helper.
 fn many_mixed_reads(count: usize) -> String {
     let mut source = String::from("<?php\n");

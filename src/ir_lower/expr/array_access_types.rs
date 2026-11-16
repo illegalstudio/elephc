@@ -57,8 +57,11 @@ pub(super) fn object_name_satisfies_interface_for_ir(
 struct ClassTableFacts {
     address: usize,
     len: usize,
-    /// Interface, as spelled by the question, to every class implementing it.
-    implementors: crate::fast_hash::FastMap<String, crate::fast_hash::FastSet<String>>,
+    /// Interface (lowercased, no leading `\`) to every class implementing it, built in one pass
+    /// over the class table on the first question (`interface_class_index`).
+    interface_classes: Option<crate::fast_hash::FastMap<String, ImplementorSet>>,
+    /// The same sets, keyed by the interface as spelled by the question.
+    implementors: crate::fast_hash::FastMap<String, Option<ImplementorSet>>,
     /// Whether a class the program declared itself implements `ArrayAccess`.
     declares_array_access: Option<bool>,
     /// The program's classes with internal operator handlers, sorted by name.
@@ -172,18 +175,84 @@ pub(in crate::ir_lower) fn class_implements_interface_for_ir(
 ) -> bool {
     with_class_table_facts(ctx, |facts| {
         if !facts.implementors.contains_key(interface_name) {
-            #[cfg(test)]
-            CLASS_TABLE_WALKS.with(|walks| walks.set(walks.get() + 1));
-            let classes = ctx
-                .classes
-                .keys()
-                .filter(|class| class_walk_implements_interface(ctx, class, interface_name))
-                .cloned()
-                .collect();
+            let index = facts.interface_classes.get_or_insert_with(|| interface_class_index(ctx));
+            let key = interface_name.trim_start_matches('\\').to_ascii_lowercase();
+            let classes = index.get(&key).cloned();
             facts.implementors.insert(interface_name.to_string(), classes);
         }
-        facts.implementors[interface_name].contains(class_name.trim_start_matches('\\'))
+        let implements = facts.implementors[interface_name]
+            .as_ref()
+            .is_some_and(|classes| classes.contains(class_name.trim_start_matches('\\')));
+        // Every lowering test checks the index against the walk it replaced.
+        #[cfg(test)]
+        if ctx.classes.contains_key(class_name.trim_start_matches('\\')) {
+            assert_eq!(
+                implements,
+                class_walk_implements_interface(ctx, class_name, interface_name),
+                "{class_name} implements {interface_name}"
+            );
+        }
+        implements
     })
+}
+
+/// The classes implementing one interface.
+type ImplementorSet = std::rc::Rc<crate::fast_hash::FastSet<String>>;
+
+/// Every interface (lowercased, no leading `\`) to the classes implementing it, through parents
+/// and interface parents, as [`class_walk_implements_interface`] answers it for one pair.
+///
+/// One pass over the class table: each interface asked used to walk every class's parent chain
+/// and interface tree again, about 780 samples of a sampled one-core Symfony demo build.
+fn interface_class_index(ctx: &LoweringContext<'_, '_>) -> crate::fast_hash::FastMap<String, ImplementorSet> {
+    #[cfg(test)]
+    CLASS_TABLE_WALKS.with(|walks| walks.set(walks.get() + 1));
+    let mut closures: crate::fast_hash::FastMap<String, std::rc::Rc<Vec<String>>> = Default::default();
+    let mut index: crate::fast_hash::FastMap<String, crate::fast_hash::FastSet<String>> = Default::default();
+    for class in ctx.classes.keys() {
+        let mut implemented: crate::fast_hash::FastSet<String> = Default::default();
+        let mut current = Some(class.trim_start_matches('\\'));
+        while let Some(candidate) = current {
+            let Some(info) = ctx.classes.get(candidate) else {
+                break;
+            };
+            for interface in &info.interfaces {
+                implemented.extend(interface_closure(ctx, interface.trim_start_matches('\\'), &mut closures).iter().cloned());
+            }
+            current = info.parent.as_deref();
+        }
+        for interface in implemented {
+            index.entry(interface).or_default().insert(class.clone());
+        }
+    }
+    index.into_iter().map(|(interface, classes)| (interface, std::rc::Rc::new(classes))).collect()
+}
+
+/// An interface and every interface it extends, lowercased, as
+/// [`interface_extends_interface_for_ir`] follows them.
+fn interface_closure(
+    ctx: &LoweringContext<'_, '_>,
+    interface: &str,
+    closures: &mut crate::fast_hash::FastMap<String, std::rc::Rc<Vec<String>>>,
+) -> std::rc::Rc<Vec<String>> {
+    if let Some(known) = closures.get(interface) {
+        return known.clone();
+    }
+    // A cycle reads its own placeholder rather than recursing forever.
+    closures.insert(interface.to_string(), std::rc::Rc::new(Vec::new()));
+    let mut names = vec![interface.to_ascii_lowercase()];
+    if let Some(info) = ctx.interfaces.get(interface) {
+        for parent in &info.parents {
+            for name in interface_closure(ctx, parent.trim_start_matches('\\'), closures).iter() {
+                if !names.contains(name) {
+                    names.push(name.clone());
+                }
+            }
+        }
+    }
+    let names = std::rc::Rc::new(names);
+    closures.insert(interface.to_string(), names.clone());
+    names
 }
 
 /// Whether a class the program declared itself implements `ArrayAccess`: the built-in containers
@@ -203,7 +272,9 @@ pub(super) fn program_declares_array_access(ctx: &LoweringContext<'_, '_>) -> bo
     declares
 }
 
-/// Walks one class's parents and interface trees.
+/// Walks one class's parents and interface trees: the reference `interface_class_index` is
+/// checked against under test.
+#[cfg(test)]
 fn class_walk_implements_interface(
     ctx: &LoweringContext<'_, '_>,
     class_name: &str,
