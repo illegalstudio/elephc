@@ -1951,6 +1951,9 @@ impl Op {
                 | Op::FiberRuntimeCall
                 | Op::GcControl
                 | Op::CoreBuiltin
+                // A float or boxed truthiness test may raise PHP 8.5's NaN-to-bool warning, so
+                // it publishes its call site like any other warning raiser.
+                | Op::IsTruthy
         )
     }
 

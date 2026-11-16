@@ -32,22 +32,17 @@
 //!   NOTHING ELSE: `INF`, `-INF`, `0.0` and `-0.0` all coerce silently. A fix that warned on
 //!   every float-to-bool coercion would be worse than the original silence, and only these
 //!   controls can tell the two apart.
-//! - elephc does NOT synthesize php-src's ` in <file> on line <n>` message tail. That is the
-//!   house convention for every runtime diagnostic — `foreach_non_iterable_warning.rs` and the
-//!   `ARRAY_FLIP_SKIPPED_MESSAGES` docblock in `hash_flip.rs` both say so explicitly — so these
-//!   tests assert the bare `Warning: <text>` line elephc actually emits.
+//! - Every runtime warning ends in php's ` in <file> on line <n>` tail, naming the line of the
+//!   coercion. `{file}` in an expected stderr stands for the canonical source path; the lines
+//!   were captured from php 8.5.10 (`php -n`).
 
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-/// The exact stderr line elephc emits for one NAN-to-bool coercion.
-///
-/// php-src appends ` in <file> on line <n>`; elephc deliberately does not (see the module
-/// preamble). Keeping the text in one constant makes the message and the counts below impossible
-/// to drift apart.
-const NAN_WARNING: &str = "Warning: unexpected NAN value was coerced to bool\n";
+/// The text of the warning for one NAN-to-bool coercion, before its ` in <file> on line <n>` tail.
+const NAN_WARNING: &str = "Warning: unexpected NAN value was coerced to bool";
 
 static TEST_ID: AtomicUsize = AtomicUsize::new(0);
 
@@ -137,6 +132,8 @@ fn assert_run_for_version(
 ) {
     let dir = make_test_dir(prefix);
     let bin = compile(&dir, source, prefix, php_version);
+    let source_path = fs::canonicalize(dir.join(format!("{prefix}.php"))).expect("canonical source path");
+    let expected_stderr = expected_stderr.replace("{file}", &source_path.display().to_string());
     let output = Command::new(&bin)
         .output()
         .expect("failed to run compiled binary");
@@ -153,16 +150,18 @@ fn assert_run_for_version(
     );
     assert_eq!(
         String::from_utf8_lossy(&output.stderr),
-        expected_stderr,
+        expected_stderr.as_str(),
         "program stderr diverged"
     );
     let _ = fs::remove_dir_all(&dir);
 }
 
-/// Returns `NAN_WARNING` repeated `count` times, i.e. the whole stderr of a program that
-/// coerced a NAN to bool exactly `count` times.
-fn warnings(count: usize) -> String {
-    NAN_WARNING.repeat(count)
+/// Returns the whole stderr of a program that coerced a NAN to bool once on each listed line.
+fn warnings_at(lines: &[u32]) -> String {
+    lines
+        .iter()
+        .map(|line| format!("{NAN_WARNING} in {{file}} on line {line}\n"))
+        .collect()
 }
 
 // ---------------------------------------------------------------------------
@@ -188,7 +187,7 @@ echo f() ? "tern-true\n" : "tern-false\n";
 var_dump(boolval(f()));
 "#,
         "bool(false)\nbool(true)\nif-true\nbool(false)\ntern-true\nbool(true)\n",
-        &warnings(6),
+        &warnings_at(&[3, 4, 5, 6, 7, 8]),
     );
 }
 
@@ -212,7 +211,7 @@ var_dump(f() || false);
 var_dump(false || f());
 "#,
         "n=2\nbool(true)\nbool(true)\nbool(true)\n",
-        &warnings(6),
+        &warnings_at(&[4, 4, 4, 6, 7, 8]),
     );
 }
 
@@ -233,7 +232,7 @@ var_dump((bool)m());
 var_dump(empty(m()));
 "#,
         "bool(true)\nbool(false)\n",
-        &warnings(2),
+        &warnings_at(&[3, 4]),
     );
 }
 
@@ -250,7 +249,7 @@ $a = arr();
 var_dump((bool)$a[0]);
 "#,
         "bool(true)\n",
-        &warnings(1),
+        &warnings_at(&[4]),
     );
 }
 
@@ -269,7 +268,7 @@ function takes(float $x): bool { return (bool)$x; }
 var_dump(takes(nanret()));
 "#,
         "bool(true)\n",
-        &warnings(1),
+        &warnings_at(&[3]),
     );
 }
 
@@ -288,7 +287,7 @@ function passthrough(float $x): float { return $x; }
 var_dump((bool)passthrough(nanret()));
 "#,
         "bool(true)\n",
-        &warnings(1),
+        &warnings_at(&[4]),
     );
 }
 
@@ -363,7 +362,7 @@ function raw(string $k) { $m = ["a" => 1.5]; return $m[$k]; }
 var_dump(empty(raw("zz")));
 "#,
         "bool(true)\n",
-        "Warning: Undefined array key \"zz\"\n",
+        "Warning: Undefined array key \"zz\" in {file} on line 2\n",
     );
 }
 
@@ -438,6 +437,6 @@ var_dump(empty(f()));
 "#,
         Some("8.5"),
         "bool(true)\nbool(false)\n",
-        &warnings(2),
+        &warnings_at(&[3, 4]),
     );
 }
