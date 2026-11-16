@@ -115,9 +115,15 @@ unsafe fn native_iterator_for_object_inner(object: u64) -> u64 {
     let iterator = interpreter::execute_context_native_iterator(context, cell, &mut values);
     let _ = values.release(cell);
     match iterator {
-        // The cell is deliberately kept: it holds the iterator's only reference, which the
-        // compiled loop now owns through the raw pointer it stores as its source.
-        Ok(iterator) => values.raw_value_word(iterator).unwrap_or(0),
+        // The compiled loop keeps only the raw object pointer as its source, so it takes its own
+        // reference to the object and the boxed cell that carried it is released, as
+        // `unwrap_aggregate_inner` does. Keeping the cell leaked one Mixed box per loop.
+        Ok(iterator) => {
+            let word = values.raw_value_word(iterator).unwrap_or(0);
+            let word = if word == 0 { 0 } else { values.retain_raw_heap_word(word).unwrap_or(0) };
+            let _ = values.release(iterator);
+            word
+        }
         Err(_) => {
             let _ = context.take_pending_throw();
             0
