@@ -559,7 +559,7 @@ pub(super) fn lower_array_key_sort(
         None => super::HashSortFlags::Regular,
     };
     match ctx.value_php_type(array)?.codegen_repr() {
-        PhpType::Mixed => super::boxed_mutation::lower_boxed_array_key_sort(
+        PhpType::Mixed | PhpType::Union(_) => super::boxed_mutation::lower_boxed_array_key_sort(
             ctx, inst, array, name, order, flags,
         ),
         PhpType::AssocArray { .. } => {
@@ -597,18 +597,6 @@ pub(super) fn lower_array_key_sort(
              before sorting it by key",
             name, elem
         ))),
-        // A boxed `Mixed` receiver is handled above; a union still dispatches on its runtime tag.
-        PhpType::Union(_) => {
-            let helper = match order {
-                KeySortOrder::Ascending => "__rt_ksort",
-                KeySortOrder::Descending => "__rt_krsort",
-            };
-            let array_arg_reg = abi::int_arg_reg_name(ctx.emitter.target, 0);
-            ctx.load_value_to_reg(array, array_arg_reg)?;
-            super::load_hash_sort_flags(ctx, flags)?;
-            abi::emit_call_label(ctx.emitter, helper);
-            super::store_hash_sort_result(ctx, inst)
-        }
         other => Err(CodegenIrError::unsupported(format!(
             "{} for PHP type {:?}",
             name, other

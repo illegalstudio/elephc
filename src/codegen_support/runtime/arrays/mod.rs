@@ -209,7 +209,6 @@ mod heap_kind;
 mod heap_free;
 mod in_array_mixed_container;
 mod in_array_mixed_int;
-mod ksort;
 mod min_max_container;
 mod natsort;
 
@@ -561,7 +560,6 @@ pub use hash_new::emit_hash_new;
 pub use hash_set::emit_hash_set;
 /// Emit hash set helper.
 pub use hash_sort::emit_hash_sort;
-pub use ksort::emit_ksort;
 /// Emit the hash key/value insertion-order sort helpers.
 pub use hash_spread::emit_hash_spread;
 /// Emit hash spread (array-literal flatten) helper.
