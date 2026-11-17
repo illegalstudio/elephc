@@ -400,10 +400,13 @@ mod validation_gate_tests {
     fn the_gate_reads_its_environment_variable() {
         const TEST_NAME: &str = "the_gate_reads_its_environment_variable";
         if std::env::var("ELEPHC_IR_VALIDATE_PROBE").as_deref() != Ok(TEST_NAME) {
-            assert!(
-                per_pass_validation_enabled(),
-                "per-pass validation must be on when ELEPHC_IR_VALIDATE is unset"
-            );
+            // A developer who exports the knob persistently must not break the suite.
+            if std::env::var_os("ELEPHC_IR_VALIDATE").is_none() {
+                assert!(
+                    per_pass_validation_enabled(),
+                    "per-pass validation must be on when ELEPHC_IR_VALIDATE is unset"
+                );
+            }
             let output = std::process::Command::new(std::env::current_exe().unwrap())
                 .args([TEST_NAME, "--nocapture", "--test-threads=1"])
                 .env("ELEPHC_IR_VALIDATE_PROBE", TEST_NAME)

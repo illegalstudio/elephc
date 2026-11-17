@@ -387,6 +387,20 @@ mod tests {
         assert_eq!(names, vec!["elephc_magician", "sqlite3"]);
     }
 
+    /// Verifies Magician's embedded highlighter replaces the standalone highlight archive.
+    #[test]
+    fn magician_suppresses_the_embedded_highlight_archive() {
+        let plan = LinkPlan::from_items(vec![
+            LinkItem::bridge_archive("libelephc_highlight.a", "elephc_highlight", false),
+            LinkItem::named_runtime("elephc_magician"),
+        ]);
+
+        let normalized = plan.without_redundant_embedded_bridges();
+
+        assert_eq!(normalized.items().len(), 1);
+        assert!(matches!(&normalized.items()[0], LinkItem::NamedLibrary { name, .. } if name == "elephc_magician"));
+    }
+
     /// Verifies standalone crypto and Phar bridges remain when Magician is not requested.
     #[test]
     fn embedded_dependencies_remain_without_their_container() {
