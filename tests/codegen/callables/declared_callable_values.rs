@@ -181,6 +181,35 @@ echo every(foo: "ucwords"), " ", apply(...["ucfirst"]), " ", many(...["lcfirst",
     assert_eq!(out, "Word Word wORD-\n");
 }
 
+/// Verifies literal names spread through several static spreads, mixed with named arguments or
+/// behind a projection with a runtime key still invoke, and that the checker never binds a
+/// spread element to the wrong parameter.
+///
+/// Spread elements used to be matched to parameters at check time: a second spread restarted at
+/// the first open parameter (a false `Undefined function` compile error for `"no_such_function"`
+/// bound to a `string`), a spread split by a named argument or holding a closure was never
+/// recorded, and a keyed literal resolved an entry a runtime key replaces. Each form names a
+/// different builtin so none rides on another's record.
+#[test]
+fn test_declared_callable_spread_literals_follow_php_binding() {
+    let out = compile_and_run(
+        r#"<?php
+function pair(string $a, callable $b): string { return $b($a); }
+function pair2(callable $a, string $b): string { return $a($b); }
+function both(callable $a, callable ...$rest): string { $out = $a("Ab"); foreach ($rest as $f) { $out .= $f("Ab"); } return $out; }
+function both2(callable $a, callable ...$rest): string { $out = $a("Ab"); foreach ($rest as $f) { $out .= $f("Ab"); } return $out; }
+function apply(callable $f): string { return (string) $f("word"); }
+function run(string $key): string { return apply(["cb" => "missing_fn", $key => "md5"]["cb"]); }
+function every(callable ...$fs): int { return 1; }
+echo pair(...["ab"], ...["strtolower"]), " ", pair2(...["ucfirst"], ...["no_such_function"]), "\n";
+echo both(...["lcfirst", "strrev"], extra: "ucwords"), " ", both2(...["strtoupper", function (string $s): string { return $s; }], extra: "trim"), "\n";
+echo run("cb"), "\n";
+try { echo every(...["strlen", "no_such_function"]); } catch (TypeError $e) { echo "TypeError\n"; }
+"#,
+    );
+    assert_eq!(out, "ab No_such_function\nabbAAb ABAbAb\nc47d187067c6cf953245f128b5fde62a\nTypeError\n");
+}
+
 /// Verifies a literal builtin name passed as a named entry of a callable union variadic links the
 /// libraries its wrapper needs.
 #[test]

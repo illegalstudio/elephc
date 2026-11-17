@@ -386,9 +386,11 @@ impl Checker {
         for arg in args {
             let ty = self.infer_type(arg, caller_env)?;
             if let ExprKind::Spread(_) = &arg.kind {
+                // Earlier spreads and named arguments decide which parameter each element
+                // binds, so the whole declaration is consulted.
                 let context = format!("Function '{}' spread argument", name);
                 let mut regular = Vec::new();
-                for i in arg_idx..decl.params.len() {
+                for i in 0..decl.params.len() {
                     let ty = match decl.param_types.get(i).and_then(|t| t.as_ref()) {
                         Some(type_ann) => self.resolve_declared_param_type_hint(type_ann, decl.span, &context)?,
                         None => PhpType::Mixed,
@@ -403,9 +405,7 @@ impl Checker {
                     arg,
                     &regular,
                     variadic_ty.as_ref().map(|ty| (ty, decl.variadic_by_ref)),
-                    caller_env,
-                    &context,
-                )?;
+                );
                 for i in arg_idx..decl.params.len() {
                     if let Some(type_ann) = decl.param_types.get(i).and_then(|t| t.as_ref()) {
                         let declared_ty = self.resolve_declared_param_type_hint(

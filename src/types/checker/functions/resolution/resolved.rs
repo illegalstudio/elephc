@@ -142,18 +142,14 @@ impl Checker {
             let can_widen_by_ref_local = self.by_ref_argument_can_widen_local_to_mixed(arg)
                 || self.boxed_reference_promotion_pending(arg, span);
             if matches!(arg.kind, ExprKind::Spread(_)) {
-                let regular = Self::declared_spread_targets(effective_sig, param_idx, regular_param_count);
-                let variadic_by_ref = variadic_index
-                    .and_then(|index| effective_sig.ref_params.get(index))
-                    .copied()
-                    .unwrap_or(false);
+                // Earlier spreads and named arguments decide which parameter each element
+                // binds, so the whole signature is consulted.
+                let regular = Self::declared_spread_targets(effective_sig, 0, regular_param_count);
                 self.require_declared_callable_spread(
                     arg,
                     &regular,
-                    variadic_elem_ty.as_ref().map(|ty| (ty, variadic_by_ref)),
-                    caller_env,
-                    &format!("Function '{}' spread argument", name),
-                )?;
+                    variadic_elem_ty.as_ref().map(|ty| (ty, false)),
+                );
                 continue;
             }
             if param_idx < regular_param_count {

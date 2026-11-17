@@ -332,6 +332,9 @@ impl Checker {
         context: &str,
         owner: Option<(&str, &str)>,
     ) -> Result<(), CompileError> {
+        // A spread element bound through a projection (`["ucfirst", ...][0]`) is not a bare
+        // literal; record what it may carry, since the projected type can be `mixed`.
+        self.record_static_callable_literals(arg);
         let target = match (actual.codegen_repr(), &static_callable_argument(arg).kind) {
             (PhpType::Str, crate::parser::ast::ExprKind::StringLiteral(name)) => {
                 match crate::types::param_binding::callable_target_from_name(name) {
@@ -380,6 +383,7 @@ impl Checker {
     pub(crate) fn record_declared_callable_literal_name(&mut self, value: &Expr) {
         let crate::parser::ast::ExprKind::StringLiteral(name) = &static_callable_argument(value).kind
         else {
+            self.record_static_callable_literals(value);
             return;
         };
         if let Some(crate::parser::ast::CallableTarget::Function(function)) =
@@ -442,43 +446,86 @@ impl Checker {
             .collect()
     }
 
-    /// Validates the literal names a static spread (`f(...["ucfirst", "strlen"])`) hands to
-    /// declared callable parameters, as a positional literal argument binds them.
+    /// Records the literal names a static spread (`f(...["ucfirst", "strlen"])`) may hand to a
+    /// declared callable parameter of the callee.
     ///
-    /// `regular` lists the still open regular parameters in order (type, by-reference) and
-    /// `variadic` the variadic element, which takes every remaining element. Only an indexed
-    /// array literal without nested spreads is static; a dynamic `...$arr` stays a runtime check.
+    /// Which parameter an element binds depends on the other spreads and named arguments of the
+    /// call, so every string literal is recorded when any parameter (`regular`, `variadic`)
+    /// declares `callable`. Recording a name the call never binds only links an unused wrapper;
+    /// nothing is rejected here, so an unknown name stays PHP's runtime `TypeError`.
     pub(crate) fn require_declared_callable_spread(
         &mut self,
         spread: &Expr,
         regular: &[(PhpType, bool)],
         variadic: Option<(&PhpType, bool)>,
-        env: &TypeEnv,
-        context: &str,
-    ) -> Result<(), CompileError> {
+    ) {
+        if regular.iter().any(|(ty, _)| ty.declares_callable())
+            || variadic.is_some_and(|(ty, _)| ty.declares_callable())
+        {
+            self.record_static_callable_literals(spread);
+        }
+    }
+
+    /// Records every string literal held by a static array literal behind a spread, a named
+    /// argument or an access into that literal (the shape call planning gives a spread element
+    /// bound to a regular parameter).
+    ///
+    /// This over-approximates on purpose: a later runtime key or another spread can decide which
+    /// element binds, and an extra recorded name only links an unused wrapper. A bare literal
+    /// argument is resolved by [`Self::require_declared_callable_arg`] instead.
+    pub(crate) fn record_static_callable_literals(&mut self, expr: &Expr) {
         use crate::parser::ast::ExprKind;
-        let ExprKind::Spread(inner) = &spread.kind else {
-            return Ok(());
-        };
-        let ExprKind::ArrayLiteral(items) = &inner.kind else {
-            return Ok(());
-        };
-        if items.iter().any(|item| matches!(item.kind, ExprKind::Spread(_))) {
-            return Ok(());
+        match &expr.kind {
+            ExprKind::Spread(inner) => self.record_static_array_literal_elements(inner),
+            ExprKind::NamedArg { value, .. } => self.record_static_callable_literals(value),
+            ExprKind::ArrayAccess { array, .. } => self.record_static_array_literal_elements(array),
+            _ => {}
         }
-        for (offset, item) in items.iter().enumerate() {
-            let (expected, by_ref) = match (regular.get(offset), variadic) {
-                (Some((expected, by_ref)), _) => (expected, *by_ref),
-                (None, Some((expected, by_ref))) => (expected, by_ref),
-                (None, None) => break,
-            };
-            if matches!(item.kind, ExprKind::StringLiteral(_)) {
-                self.require_declared_callable_variadic_arg(
-                    expected, &PhpType::Str, item, env, context, by_ref,
-                )?;
+    }
+
+    /// Records the string literals of one static array literal (indexed, keyed or mixed). A
+    /// bare array argument is a callable array, not a list of names, so only the spread and
+    /// projection forms above reach this.
+    fn record_static_array_literal_elements(&mut self, array: &Expr) {
+        use crate::parser::ast::{ArrayEntry, ExprKind};
+        match &array.kind {
+            ExprKind::ArrayLiteral(items) => {
+                for item in items {
+                    self.record_static_callable_literal_element(item);
+                }
             }
+            ExprKind::ArrayLiteralAssoc(entries) => {
+                for (_, value) in entries {
+                    self.record_static_callable_literal_element(value);
+                }
+            }
+            ExprKind::ArrayLiteralMixed(entries) => {
+                for entry in entries {
+                    match entry {
+                        ArrayEntry::Spread(value)
+                        | ArrayEntry::Keyed(_, value)
+                        | ArrayEntry::Value(value) => {
+                            self.record_static_callable_literal_element(value);
+                        }
+                    }
+                }
+            }
+            _ => {}
         }
-        Ok(())
+    }
+
+    /// Records one element of a static array literal: a string literal names a callable, and a
+    /// nested spread contributes its own elements.
+    fn record_static_callable_literal_element(&mut self, element: &Expr) {
+        match &element.kind {
+            crate::parser::ast::ExprKind::StringLiteral(_) => {
+                self.record_declared_callable_literal_name(element);
+            }
+            crate::parser::ast::ExprKind::Spread(inner) => {
+                self.record_static_array_literal_elements(inner);
+            }
+            _ => {}
+        }
     }
 
     fn register_bound_callable_param_sig(
@@ -496,33 +543,13 @@ impl Checker {
     }
 }
 
-/// Returns the expression a statically known argument carries for its parameter.
+/// Returns the value a named argument carries, or the argument itself.
 ///
-/// Call planning wraps a keyed variadic entry as a named argument and rewrites a static spread
-/// into a regular parameter as an access into the spread literal, so a literal callable name
-/// can sit behind either node. Anything not statically known is returned unchanged.
+/// Call planning wraps a keyed variadic entry as a named argument, so a literal callable name
+/// written there sits behind that node.
 fn static_callable_argument(arg: &Expr) -> &Expr {
-    use crate::parser::ast::ExprKind;
     match &arg.kind {
-        ExprKind::NamedArg { value, .. } => static_callable_argument(value),
-        ExprKind::ArrayAccess { array, index } => match (&array.kind, &index.kind) {
-            (ExprKind::ArrayLiteral(items), ExprKind::IntLiteral(position))
-                if !items.iter().any(|item| matches!(item.kind, ExprKind::Spread(_))) =>
-            {
-                usize::try_from(*position)
-                    .ok()
-                    .and_then(|position| items.get(position))
-                    .map_or(arg, static_callable_argument)
-            }
-            (ExprKind::ArrayLiteralAssoc(entries), ExprKind::StringLiteral(key)) => entries
-                .iter()
-                .rev()
-                .find(|(entry_key, _)| {
-                    matches!(&entry_key.kind, ExprKind::StringLiteral(name) if name == key)
-                })
-                .map_or(arg, |(_, value)| static_callable_argument(value)),
-            _ => arg,
-        },
+        crate::parser::ast::ExprKind::NamedArg { value, .. } => static_callable_argument(value),
         _ => arg,
     }
 }
