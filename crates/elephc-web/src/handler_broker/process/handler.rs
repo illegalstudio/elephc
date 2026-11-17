@@ -128,7 +128,10 @@ pub(super) unsafe fn execute_handler_request(handler: extern "C" fn(), mut strea
     // started no slice ends none, and consecutive profiled requests stay
     // separate captures. A pool child serves many requests, so leaving a slice
     // open here would merge the next one into it.
-    probe_route::profile_request_kind(0);
+    let status = request_state::take_status();
+    probe_route::profile_request_end(status);
+    // The web worker counts this request; its work goes on the same row.
+    probe_route::settle_request(status);
     probe_route::clear();
     let complete = request_state::finish_response_stream();
     if !complete {

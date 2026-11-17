@@ -123,7 +123,6 @@ impl<T: std::io::Read + std::io::Write> ReadWrite for T {}
 /// mutual HMAC handshake, receives the folded profile, and renders the same
 /// table (plus optional Speedscope/pprof). Needs no macOS sampler.
 pub(crate) fn run_probe_host(cmd: &MonitorCommand, socket: &str) -> i32 {
-    use std::os::unix::net::UnixStream;
     let key = match resolve_probe_key(cmd, socket) {
         Ok(key) => key,
         Err(error) => {
@@ -131,48 +130,12 @@ pub(crate) fn run_probe_host(cmd: &MonitorCommand, socket: &str) -> i32 {
             return 1;
         }
     };
-    // A path is a local socket; `host:port` is a service somewhere else. The
-    // handshake is identical, so the transport is the only thing that differs —
-    // which is what lets one command read a binary on this machine and a service
-    // on another.
-    let mut stream: Box<dyn ReadWrite> = match remote_target(socket) {
-        Some(target) => match target.connect(cmd.exact) {
-            Ok(stream) => stream,
-            Err(error) => {
-                eprintln!("elephc monitor: {error}");
-                return 1;
-            }
-        },
-        None => match UnixStream::connect(socket) {
-            Ok(stream) => {
-                // The same deadline the TCP path uses. Left unset, a local socket
-                // waited forever where a remote one gave up, so the same command
-                // against the same server had a different contract depending on
-                // the transport — and a wedged peer hung the command with no way
-                // to tell that from a quiet service.
-                let timeout = read_timeout(cmd.exact);
-                let _ = stream.set_read_timeout(Some(timeout));
-                let _ = stream.set_write_timeout(Some(timeout));
-                Box::new(stream)
-            }
-            Err(error) => {
-                eprintln!("elephc monitor: cannot connect to probe at {socket}: {error}");
-                return 1;
-            }
-        },
-    };
-    let nonce_c = probe_nonce();
     let want = if cmd.exact {
         elephc_probe::endpoint::WANT_EXACT
     } else {
         elephc_probe::endpoint::WANT_SAMPLED
     };
-    let folded = match elephc_probe::endpoint::wire::client_handshake_and_fetch(
-        &mut stream,
-        &key,
-        &nonce_c,
-        want,
-    ) {
+    let folded = match fetch_service_answer(socket, &key, want, cmd.exact) {
         Ok(text) => text,
         Err(error) => {
             eprintln!("elephc monitor: {error}");
@@ -259,6 +222,47 @@ pub(crate) fn run_probe_host(cmd: &MonitorCommand, socket: &str) -> i32 {
     print!("{}", why_table(&display, 1));
     print!("{}", probe_io_summary(&folded));
     0
+}
+
+/// Opens a stream to a running service: TCP (optionally TLS) for an address, a
+/// Unix socket for a path, both under the same read and write deadline.
+pub(crate) fn open_service_stream(socket: &str, exact: bool) -> Result<Box<dyn ReadWrite>, String> {
+    use std::os::unix::net::UnixStream;
+    // A path is a local socket; `host:port` is a service somewhere else. The
+    // handshake is identical, so the transport is the only thing that differs —
+    // which is what lets one command read a binary on this machine and a service
+    // on another.
+    match remote_target(socket) {
+        Some(target) => target.connect(exact),
+        None => match UnixStream::connect(socket) {
+            Ok(stream) => {
+                // The same deadline the TCP path uses. Left unset, a local socket
+                // waited forever where a remote one gave up, so the same command
+                // against the same server had a different contract depending on
+                // the transport — and a wedged peer hung the command with no way
+                // to tell that from a quiet service.
+                let timeout = read_timeout(exact);
+                let _ = stream.set_read_timeout(Some(timeout));
+                let _ = stream.set_write_timeout(Some(timeout));
+                Ok(Box::new(stream))
+            }
+            Err(error) => Err(format!("cannot connect to probe at {socket}: {error}")),
+        },
+    }
+}
+
+/// Connects to a running service, proves the build key, and returns the answer
+/// to `want` — one handshake per call, so a poller holds no connection open.
+pub(crate) fn fetch_service_answer(
+    socket: &str,
+    key: &[u8; 32],
+    want: u8,
+    exact: bool,
+) -> Result<String, String> {
+    let mut stream = open_service_stream(socket, exact)?;
+    let nonce_c = probe_nonce();
+    elephc_probe::endpoint::wire::client_handshake_and_fetch(&mut stream, key, &nonce_c, want)
+        .map_err(|error| error.to_string())
 }
 
 /// A per-connection client nonce from the OS RNG (time-seeded fallback).

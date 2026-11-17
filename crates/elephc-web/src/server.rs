@@ -330,6 +330,22 @@ fn run_server(
         ParsedArgs::Run(a) => a,
         ParsedArgs::Exit(code) => return code,
     };
+    // Before any fork, so every worker and handler child inherits the switch.
+    // Refused rather than ignored on a binary that cannot count: a service
+    // its operator believes is monitored, reporting nothing, reads as "no
+    // traffic" — the worst answer a monitor can give.
+    if args.apm && !crate::probe_route::apm_enable(isolation == IsolationMode::Worker) {
+        eprintln!(
+            "error: --apm needs a binary built with --with-apm or --with-monitoring (rebuild with \
+             `elephc --web --with-apm ...`)"
+        );
+        return 2;
+    }
+    // A build with `--apm-collector` counts from the start: the service
+    // records its requests then, `--apm` or not.
+    if !args.apm {
+        crate::probe_route::apm_follow(isolation == IsolationMode::Worker);
+    }
     install_signal_handlers();
     // Install the fork gate before binding so a failure cannot leave a
     // stale Unix socket behind.
@@ -388,11 +404,12 @@ fn run_server(
     #[cfg(not(target_vendor = "apple"))]
     let accept_thread: Option<std::thread::JoinHandle<()>> = None;
     eprintln!(
-        "elephc-web: listening on {} ({} worker{}, isolation={})",
+        "elephc-web: listening on {} ({} worker{}, isolation={}{})",
         args.listen.display(),
         args.workers,
         if args.workers == 1 { "" } else { "s" },
-        isolation.name()
+        isolation.name(),
+        if args.apm { ", apm=on" } else { "" }
     );
     // Supervise: wait for any child; break on a shutdown request (SIGINT/SIGTERM).
     let mut fast_deaths: u32 = 0;
@@ -425,6 +442,9 @@ fn run_server(
             else {
                 continue;
             };
+            // Whatever the worker was serving when it ended is a failed
+            // request; --apm counts it (a no-op otherwise).
+            crate::probe_route::note_dead_worker(pid);
             if SHUTDOWN.load(Ordering::SeqCst) {
                 if children.is_empty() {
                     break;

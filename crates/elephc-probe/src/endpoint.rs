@@ -29,6 +29,17 @@ pub const WANT_SAMPLED: u8 = b'S';
 /// The exact per-function slice, rendered by the instrumentation when the next
 /// one completes.
 pub const WANT_EXACT: u8 = b'E';
+/// The transaction counters of a service started with `--apm`: cumulative
+/// per-route request counts, status classes and latency histograms.
+///
+/// Reading them arms nothing. They are counted whether or not anyone reads,
+/// so a poller asking every second costs the service one handshake and one
+/// pass over a fixed table, and leaves the sampler dormant.
+pub const WANT_TRANSACTIONS: u8 = b'T';
+/// Empties the route table of a service (`apm_runtime::reset_routes`) and
+/// answers what was cleared. A change to the service, so like every answer it
+/// is given only to a client that proved it holds the key.
+pub const WANT_RESET_ROUTES: u8 = b'R';
 
 /// How long the server waits for an exact slice to be rendered.
 ///
@@ -42,22 +53,65 @@ pub const WANT_EXACT: u8 = b'E';
 /// completing after the tenth second was lost with it.
 pub const EXACT_WAIT: Duration = Duration::from_secs(30);
 
-extern "C" {
-    /// Asks the instrumentation to hand back the next slice. Always linked
-    /// beside this crate: `--with-monitoring` adds both bridges together and the
-    /// `--with-<name>` surface refuses to name either alone.
-    fn elephc_instr_capture_arm();
-    /// Copies the rendered slice into `out` (at most `cap` bytes) and returns its
-    /// true length, which may exceed `cap`; 0 when no slice is waiting.
-    fn elephc_instr_capture_take(out: *mut u8, cap: usize) -> usize;
-    /// Disarms a rendezvous this thread armed, so a client that gave up waiting
-    /// does not leave the next request handing its profile to nobody.
-    fn elephc_instr_capture_cancel();
-    /// The pid of a process holding the rendezvous that the instrumentation
-    /// declined to revoke because it could not tell whether that process was
-    /// still writing, or 0. Only ever consulted after a capture times out.
-    fn elephc_instr_capture_blocked_by() -> i32;
+/// The instrumentation's half of an exact capture, published by main's
+/// prologue in a `--with-monitoring` build (`emit_probe_init`), in this order:
+///
+/// 0. `elephc_instr_capture_arm()` — asks for the next slice;
+/// 1. `elephc_instr_capture_take(out, cap) -> usize` — copies the rendered
+///    slice into `out` (at most `cap` bytes) and returns its true length,
+///    which may exceed `cap`; 0 when no slice is waiting;
+/// 2. `elephc_instr_capture_cancel()` — disarms a rendezvous this thread
+///    armed, so a client that gave up waiting does not leave the next request
+///    handing its profile to nobody;
+/// 3. `elephc_instr_capture_blocked_by() -> i32` — the pid of a process
+///    holding the rendezvous that the instrumentation declined to revoke
+///    because it could not tell whether that process was still writing, or 0.
+///
+/// Slots rather than direct calls, because a `--with-apm` build links this
+/// crate without the instrumentation: there they stay zero, and an exact
+/// ask is answered with why there is no profiler.
+#[no_mangle]
+pub static mut elephc_probe_instr_capture: [usize; 4] = [0; 4];
+
+/// Entry `index` of `elephc_probe_instr_capture`, 0 when unpublished.
+fn instr_entry(index: usize) -> usize {
+    unsafe { std::ptr::addr_of!(elephc_probe_instr_capture).cast::<usize>().add(index).read_volatile() }
 }
+
+/// Asks the instrumentation for the next slice.
+unsafe fn elephc_instr_capture_arm() {
+    if let Some(arm) = (instr_entry(0) != 0).then(|| std::mem::transmute::<usize, extern "C" fn()>(instr_entry(0))) {
+        arm();
+    }
+}
+
+/// Copies the waiting slice into `out` and returns its true length.
+unsafe fn elephc_instr_capture_take(out: *mut u8, cap: usize) -> usize {
+    match instr_entry(1) {
+        0 => 0,
+        take => std::mem::transmute::<usize, unsafe extern "C" fn(*mut u8, usize) -> usize>(take)(out, cap),
+    }
+}
+
+/// Disarms a rendezvous this thread armed.
+unsafe fn elephc_instr_capture_cancel() {
+    if let Some(cancel) = (instr_entry(2) != 0).then(|| std::mem::transmute::<usize, extern "C" fn()>(instr_entry(2))) {
+        cancel();
+    }
+}
+
+/// The pid holding the rendezvous, or 0.
+unsafe fn elephc_instr_capture_blocked_by() -> i32 {
+    match instr_entry(3) {
+        0 => 0,
+        blocked_by => std::mem::transmute::<usize, extern "C" fn() -> i32>(blocked_by)(),
+    }
+}
+
+/// What an exact ask is answered with in a binary that has no profiler.
+const NO_PROFILER: &str = "elephc-instr: note: this binary was built with --with-apm, which counts \
+                           transactions and carries no profiler; rebuild it with --with-monitoring \
+                           to profile it\n";
 
 /// Arms the exact profiler and waits for the slice it renders next.
 ///
@@ -127,6 +181,9 @@ fn exact_answer() -> String {
         }
     };
     let _turn = turn;
+    if instr_entry(0) == 0 {
+        return NO_PROFILER.to_string();
+    }
     match exact_slice() {
         Some(profile) if !profile.is_empty() => profile,
         // "No request completed" is one explanation for an empty wait, and it is
@@ -512,6 +569,12 @@ fn clear_stale_socket(path: &str) -> Result<(), String> {
 /// Spawns the endpoint listener on a background thread. Silent on bind failure —
 /// a diagnostic must never take down the profiled process.
 pub fn spawn(path: String) {
+    // Once per process: a build with both the profiler and a collector
+    // reaches this from both of its inits.
+    static SPAWNED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+    if SPAWNED.swap(true, Ordering::AcqRel) {
+        return;
+    }
     std::thread::Builder::new()
         .name("elephc-probe-endpoint".to_string())
         .spawn(move || serve(&path))
@@ -732,6 +795,8 @@ fn handle<S: std::io::Read + std::io::Write>(
     }
     let profile = match want {
         WANT_EXACT => exact_answer(),
+        WANT_TRANSACTIONS => crate::apm_snapshot_text(),
+        WANT_RESET_ROUTES => crate::reset_routes(),
         _ => {
             // Asking for the sampled answer is what starts sampled collection.
             // A service that nobody has asked carries the ring and fills nothing.
@@ -765,7 +830,7 @@ fn handle<S: std::io::Read + std::io::Write>(
 ///
 /// The syscall is tried first because it needs no file descriptor and answers
 /// where `/dev` is not mounted, which is the case the fallback existed for.
-fn os_random<const N: usize>() -> Option<[u8; N]> {
+pub(crate) fn os_random<const N: usize>() -> Option<[u8; N]> {
     let mut out = [0u8; N];
     #[cfg(target_os = "linux")]
     {
@@ -884,24 +949,15 @@ mod tests {
             .expect("nothing to remove is not a failure");
     }
 
-    /// Stub: this crate's tests link without the instrumentation runtime.
-    #[no_mangle]
-    extern "C" fn elephc_instr_capture_arm() {}
-
-    /// Stub: no slice is ever waiting, which is the dormant case.
-    #[no_mangle]
-    extern "C" fn elephc_instr_capture_take(_out: *mut u8, _cap: usize) -> usize {
-        0
-    }
-
-    /// Stub: nothing was armed, so cancelling is a no-op.
-    #[no_mangle]
-    extern "C" fn elephc_instr_capture_cancel() {}
-
-    /// Stub: nothing holds a rendezvous these tests never open.
-    #[no_mangle]
-    extern "C" fn elephc_instr_capture_blocked_by() -> i32 {
-        0
+    /// A binary without the instrumentation (`--with-apm`) says why an exact
+    /// ask gets no profile, rather than waiting for one that cannot come.
+    #[test]
+    fn an_exact_ask_without_a_profiler_says_so() {
+        // The other exact-capture test holds the capture turn: alone, this one
+        // could read "another capture is in progress" (review).
+        let _guard = crate::tests::ROUTE_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        assert_eq!(super::instr_entry(0), 0, "nothing publishes the capture entries in this crate's tests");
+        assert!(super::exact_answer().contains("built with --with-apm"));
     }
 
     /// A second exact request while one is running is told so, not served silence.
@@ -911,6 +967,7 @@ mod tests {
     /// service that had no traffic.
     #[test]
     fn a_second_exact_capture_is_refused_rather_than_taking_the_firsts_answer() {
+        let _guard = crate::tests::ROUTE_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let held = super::EXACT_TURN.lock().expect("take the turn");
         let answer = super::exact_answer();
         drop(held);

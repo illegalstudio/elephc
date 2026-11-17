@@ -142,3 +142,28 @@ fn test_emit_preserve_and_restore_return_value_for_strings() {
         )
     );
 }
+
+/// The `--web` exit with the bridge's return value tells the exit hook that
+/// value, as every other exit does: the hook decides from it whether the run
+/// and an open transaction failed, and was told whatever the output flush
+/// left in the argument register (review).
+#[test]
+fn test_web_exit_tells_the_hook_the_exit_status() {
+    for (target, stash, argument, hook_call) in [
+        (Target::new(Platform::MacOS, Arch::AArch64), "mov x19, x0", "mov x0, x19", "bl _elephc_probe_apm_flush"),
+        (Target::new(Platform::Linux, Arch::X86_64), "mov rbx, rax", "mov edi, ebx", "call elephc_probe_apm_flush"),
+    ] {
+        let mut emitter = Emitter::new(target);
+        emitter.exit_hook = Some(hook_call.split_whitespace().last().unwrap().to_string());
+        emit_exit_with_result_reg(&mut emitter);
+        let asm = emitter.output();
+        let lines: Vec<&str> = asm.lines().map(str::trim).collect();
+        let hook = lines.iter().position(|line| line.starts_with(hook_call)).expect("the hook is called");
+        let flush = lines.iter().position(|line| line.contains("__rt_ob_flush_all")).expect("output is flushed");
+        assert!(lines[..flush].iter().any(|line| line.starts_with(stash)), "{asm}");
+        assert!(
+            lines[flush + 1..hook].iter().any(|line| line.starts_with(argument)),
+            "the status is loaded between the flush and the hook:\n{asm}"
+        );
+    }
+}

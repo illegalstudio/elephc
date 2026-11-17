@@ -520,6 +520,47 @@ pub(crate) fn no_profile_reason(
     }
 }
 
+/// Records a launched script's run as an `--apm` transaction and prints its
+/// history. A store that cannot be written is reported, not fatal: the profile
+/// the run produced is still worth its output.
+fn print_cli_run(
+    cmd: &MonitorCommand,
+    status: &process::ExitStatus,
+    wall_ns: u64,
+    io: super::apm::Io,
+) -> Option<super::apm::Window> {
+    use std::os::unix::process::ExitStatusExt as _;
+    let label = match (status.code(), status.signal()) {
+        (Some(code), _) => format!("exit {code}"),
+        (None, Some(signal)) => format!("killed by signal {signal}"),
+        (None, None) => "ended".to_string(),
+    };
+    match super::apm::record_cli_run(cmd, status.success(), wall_ns, io, &label) {
+        Ok((table, window)) => {
+            print!("{table}");
+            Some(window)
+        }
+        Err(error) => {
+            eprintln!("elephc monitor: {error}");
+            None
+        }
+    }
+}
+
+/// The exit code a launched run hands back under `--apm`.
+///
+/// `monitor --apm` is how a cron line records a script, so it must fail when
+/// the script fails: a wrapper that turns a failed import into exit 0 hides
+/// exactly the runs the history exists to show. The script's own code is
+/// returned, or 128 plus the signal that killed it, as a shell reports it.
+fn launched_run_code(cmd: &MonitorCommand, status: &process::ExitStatus) -> Option<i32> {
+    use std::os::unix::process::ExitStatusExt as _;
+    if !cmd.apm || status.success() {
+        return None;
+    }
+    Some(status.code().unwrap_or_else(|| 128 + status.signal().unwrap_or(0)).max(1))
+}
+
 /// Reads a target that carries the monitoring capability exactly: run it, and
 /// render the profile it prints to stderr — the deterministic counterpart to
 /// sampling. Honors `--dot` / `--html`.
@@ -548,6 +589,7 @@ pub(crate) fn run_instrument(cmd: &MonitorCommand) -> i32 {
     // Inherit stdout (the program's own output shows live); capture stderr, where
     // the instrument profile is written at exit.
     let mut command = process::Command::new(&binary);
+    command.args(&cmd.target_args);
     command.stderr(process::Stdio::piped());
     // The binary carries the hooks but boots dormant, so being asked is what
     // separates "capable" from "profiling". Asking happens over a socketpair only
@@ -561,6 +603,7 @@ pub(crate) fn run_instrument(cmd: &MonitorCommand) -> i32 {
         // The runtime writes the Chrome/Perfetto trace to this path at exit.
         command.env("ELEPHC_INSTR_TRACE", trace_path);
     }
+    let started = std::time::Instant::now();
     let output = match command
         .spawn()
         .and_then(|child| child.wait_with_output())
@@ -571,6 +614,7 @@ pub(crate) fn run_instrument(cmd: &MonitorCommand) -> i32 {
             return 1;
         }
     };
+    let wall_ns = u64::try_from(started.elapsed().as_nanos()).unwrap_or(u64::MAX);
     let stderr = String::from_utf8_lossy(&output.stderr);
     let capture_activated = channel.as_ref().is_some_and(control_channel_activated);
     // Pass through the program's own diagnostics — and only those. A
@@ -596,9 +640,22 @@ pub(crate) fn run_instrument(cmd: &MonitorCommand) -> i32 {
             "elephc monitor: {}",
             no_profile_reason(&output.status, &binary, capture_activated)
         );
+        // A run that died before writing a profile is still a run, and the one
+        // a transaction history most needs to show.
+        if cmd.apm {
+            print_cli_run(cmd, &output.status, wall_ns, super::apm::Io::default());
+            // Under --apm, monitor wraps the run (a cron line): its code is the
+            // script's, and a run that succeeded without a profile succeeded.
+            return launched_run_code(cmd, &output.status).unwrap_or(0);
+        }
         return 1;
     }
     print!("{}", instrument_table(&graph));
+    let this_run = if cmd.apm {
+        print_cli_run(cmd, &output.status, wall_ns, super::apm::io_of(&graph))
+    } else {
+        None
+    };
     let title = cmd.target.trim_end_matches(".php").to_string();
     // The exact capture carries no per-line data, but it can still show the
     // file: every measured function, located, with its cost.
@@ -628,16 +685,22 @@ pub(crate) fn run_instrument(cmd: &MonitorCommand) -> i32 {
         let stacks = exact_stacks(&graph);
         // Same default as the sampled path, deliberately: "the same exports
         // whichever target produced them" is only true if the default is the
-        // same one too.
-        let out_path = cmd
-            .out
-            .clone()
-            .unwrap_or_else(|| format!("{}.speedscope.json", cmd.target.trim_end_matches(".php")));
-        if let Err(error) = write_speedscope(&stacks, &out_path) {
-            eprintln!("elephc monitor: {error}");
-            return 1;
+        // same one too. Except under --apm, which wraps a run (a cron line)
+        // whose exit code must stay the program's: no file nobody asked for
+        // next to the script on every run, and no failure to write one
+        // replacing a successful run's 0 (review). `--out` still exports.
+        let out_path = match (&cmd.out, cmd.apm) {
+            (Some(path), _) => Some(path.clone()),
+            (None, false) => Some(format!("{}.speedscope.json", cmd.target.trim_end_matches(".php"))),
+            (None, true) => None,
+        };
+        if let Some(out_path) = out_path {
+            if let Err(error) = write_speedscope(&stacks, &out_path) {
+                eprintln!("elephc monitor: {error}");
+                return 1;
+            }
+            println!("wrote {out_path}");
         }
-        println!("wrote {out_path}");
         if let Some(pprof_path) = &cmd.pprof_out {
             let folded = php_folded_stacks(&stacks);
             let encoded = crate::pprof_encode::encode_folded_profile(&folded);
@@ -703,17 +766,22 @@ pub(crate) fn run_instrument(cmd: &MonitorCommand) -> i32 {
     if let Some(path) = &cmd.html_out {
         // With a baseline, render two exact frames [baseline, current] so the
         // navigator scrubs between them and the diff mode highlights growth.
-        let html = match &baseline {
-            Some(base) => crate::call_graph::render_html_frames(
-                &[(0, base), (1, &graph)],
-                &title,
-                false,
-                0,
-                true,
-                &assert_outcomes,
-            ),
-            None => crate::call_graph::render_html_exact(&graph, &title, &assert_outcomes),
+        // Under --apm the page also carries the Transactions view: one entry
+        // point for the run's profile and the history its runs belong to.
+        let apm_view = cmd.apm.then(|| super::apm::static_view(cmd, this_run.as_ref()));
+        let frames: Vec<(u128, &crate::call_graph::CallGraph)> = match &baseline {
+            Some(base) => vec![(0, base), (1, &graph)],
+            None => vec![(0, &graph)],
         };
+        let html = crate::call_graph::render_html_page(
+            &frames,
+            &title,
+            false,
+            0,
+            true,
+            &assert_outcomes,
+            apm_view.as_ref(),
+        );
         if let Err(error) = std::fs::write(path, html) {
             eprintln!("elephc monitor: cannot write {path}: {error}");
             return 1;
@@ -732,11 +800,14 @@ pub(crate) fn run_instrument(cmd: &MonitorCommand) -> i32 {
     if !assert_outcomes.is_empty() {
         let (report, ok) = assert_report(&assert_outcomes);
         print!("{report}");
+        // Under --apm a failed script keeps its own code even when a budget
+        // failed too: a cron wrapper must see the script's failure, not the
+        // assertion's 2 (review). A script that succeeded reports the budget.
         if !ok {
-            return 2;
+            return launched_run_code(cmd, &output.status).unwrap_or(2);
         }
     }
-    0
+    launched_run_code(cmd, &output.status).unwrap_or(0)
 }
 
 /// Renders one live frame: the window's hot functions with trend arrows

@@ -164,6 +164,8 @@ fn compile_config(config: CliConfig, entry: EntryKind<'_>) {
         web_isolation,
         web_application,
         with_crates,
+        apm_collector,
+        apm_transactions,
         quiet,
         ini_overrides,
     } = config;
@@ -851,6 +853,21 @@ fn compile_config(config: CliConfig, entry: EntryKind<'_>) {
     };
     timings.record_since("object-cast-prelude", phase_started);
 
+    // Transaction boundaries outside HTTP (Messenger's messages, the methods
+    // `--apm-transaction` names), in a build that counts transactions. After
+    // `autoload::run`, because the boundaries are mostly vendor classes.
+    crate::progress::phase("apm-prelude");
+    let phase_started = Instant::now();
+    let ast = match crate::apm_prelude::inject(ast, &apm_transactions, with_crates.contains("probe")) {
+        Ok(injected) => injected,
+        Err(e) => {
+            crate::progress::clear();
+            errors::report(&e);
+            process::exit(1);
+        }
+    };
+    timings.record_since("apm-prelude", phase_started);
+
     // Desugar PHP's argument-introspection constructs (`func_num_args`, `func_get_args`,
     // `func_get_arg`) into plain PHP: every function scope that uses one gains the hidden
     // `mixed ...$__elephc_func_args` parameter, so the surplus positional arguments PHP
@@ -1215,6 +1232,7 @@ fn compile_config(config: CliConfig, entry: EntryKind<'_>) {
         );
     }
 
+    ir_module.apm_collector = apm_collector;
     backend::emit_and_link(backend::BackendInputs {
         repl_build: entry.is_repl_host(),
         announce_success: !entry.is_test_suite(),

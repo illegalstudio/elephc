@@ -123,7 +123,7 @@ pub(super) fn emit_and_link(inputs: BackendInputs<'_>) {
             Err(error) => {
                 crate::progress::clear();
                 eprintln!(
-                    "Error: --with-monitoring needs a build key and {error}.\n  \
+                    "Error: --with-monitoring and --with-apm need a build key and {error}.\n  \
                      Set ELEPHC_PROBE_KEY to 64 hex characters to supply one."
                 );
                 process::exit(1);

@@ -1151,7 +1151,7 @@ elephc-instr-query: 200 INSERT INTO users (name) VALUES (?)
         let table = instrument_table(&graph);
         assert!(table.contains("network 2"), "{table}");
         assert!(table.contains("network-wait 300 ns"), "{table}");
-        let html = crate::call_graph::render_html_exact(&graph, "network profile", &[]);
+        let html = crate::call_graph::render_html_frames(&[(0, &graph)], "network profile", false, 0, true, &[]);
         assert!(html.contains("\"networkInclN\":5"), "{html}");
         assert!(html.contains("\"networkExclN\":2"), "{html}");
         assert!(html.contains("Net wait"), "{html}");

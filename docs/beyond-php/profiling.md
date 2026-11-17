@@ -61,11 +61,17 @@ The capability matrix is explicit about each dimension:
 | service `--exact` or signed request | not measured separately; wall minus recorded waits is only a derived remainder | exact for one completed request, rooted at `{main}` | exact | exact / exact | exact | exact curl operations and wait | not available | exact DB-driver and network wait | exact request route/trace context |
 | `--live` | sampled CPU, asked over the channel | unavailable | unavailable | unavailable | unavailable | unavailable | unavailable | unavailable | request route tags for `--web`; otherwise untagged |
 | `--attach` | sampled from the outside (`ptrace` on Linux, `/usr/bin/sample` on macOS) | unavailable | unavailable | unavailable | unavailable | unavailable | unavailable | unavailable | unavailable |
+| [`--apm`](apm.md) | not measured | exact per request, request head to handler return, as a latency histogram | request counts per route, not function calls | unavailable | unavailable | unavailable | unavailable | unavailable | every request per route shape, with status classes |
 
 A probe-only binary can emit exact per-route DB and outgoing-network operation
 and wait counters beside its sampled stacks. `--with-monitoring` links both
 runtimes, and the exact runtime owns those callbacks, so the combined
 service-default row above is the one users of the public flag receive.
+
+Profiling answers *where* a run or a request spends its time. To know *which*
+routes are slow, failing or busy over hours and days, start a `--web` service
+with `--apm` and read it with `elephc monitor --apm`: see [Transaction
+monitoring](apm.md).
 
 What *is* the same across all four is the mechanism. Profiling in production is
 normally a *different tool* answering a *smaller question*, an approximation you
@@ -345,13 +351,20 @@ per-line samples:
 💧 retained, ⏳ wait, 🗄 SQL, \# calls. Not every capture has all six.
 
 **The sidebar** ranks functions by the current dimension, searchable, resizable,
-and groupable under classes and namespaces (⊞). Selecting one opens a bottom-up
-panel of its exact callers and callees; clicking a row there walks to that
-neighbour. Panning the graph keeps the selection.
+and groupable under classes and namespaces (⊞). Selecting one opens it in
+place, as Blackfire does: its inclusive and exclusive cost in every dimension
+the capture has, then **Callers** or **Callees** — one button each, the choice
+kept from one function to the next — each with its call count and the time it
+contributes; clicking one opens it in turn, *In the graph* centres the graph on
+it, and a second click on the row folds it. Panning the graph keeps the
+selection.
+
+![A function opened in place, with its figures and its callees](../images/profiling/function.png)
 
 **The ☰ menu** holds *Start over* (back to the graph, timed, nothing selected or
 filtered), *Fit in view*, *Critical path*, the pruning threshold, the theme
-(Auto / Light / Dark), and the shortcut sheet.
+(Auto / Light / Dark), and the shortcut sheet. On a page with no profile yet — a
+monitor page before its first capture — it holds only the theme.
 
 **Keyboard**, all listed under `?`:
 
@@ -681,7 +694,10 @@ frames). The distinct-route table holds 255 entries plus one `<other>` bucket,
 and nothing is interned until someone asks for a profile — an unasked service
 spends none of it, and the window you get is the window you asked for. Past 255
 distinct shapes the surplus is reported as `<other>` rather than dropped, so a
-table that fills says so instead of quietly leaving endpoints out.
+table that fills says so instead of quietly leaving endpoints out. A service
+started with [`--apm`](apm.md) interns a route from the first request it
+answers, because it counts every request from boot; a "not found" answer
+interns nothing.
 
 ## What the numbers are
 
@@ -919,9 +935,9 @@ absent from a `--live` or `--attach` capture):
 
   ![The icicle view](../images/profiling/flame.png)
 
-- The **bottom-up panel** opens under the sidebar when you select a function: its
-  exact callers and callees, each with the call count along that edge and the
-  time it contributes. Click a row to walk to that neighbour. An N+1 reads
+- **Selecting a function** opens it in the list: its figures, then its exact
+  callers or callees, each with the call count along that edge and the time it
+  contributes. Click one to walk to that neighbour. An N+1 reads
   straight off it — `get_user ← list_all ×200`, and `get_user → {prepare,
   execute, fetch} ×200` each.
 - **⚡ Path** (`p`) highlights the heaviest root→leaf chain for the current
@@ -1300,7 +1316,11 @@ sampled function makes inlining visible by difference.
   The table holds 255 shapes plus an `<other>` bucket and is not written to at
   all until someone asks for a profile, so a crawler hitting an unasked service
   exhausts nothing, and one hitting an asked service lands in `<other>` rather
-  than displacing the endpoints you are watching.
+  than displacing the endpoints you are watching. A service started with
+  `--apm` counts every request from boot, so it names routes from boot too —
+  but only once a request is answered with something other than 404, 405 or
+  410; until then those are counted under one `<not found>` row: a crawler
+  still exhausts nothing (see [Transaction monitoring](apm.md)).
 - **Self re-exec.** A program that calls `execve` *without* forking (a graceful
   self-restart) keeps the armed sampling timer, which would kill the new image.
   Call the exported `elephc_probe_disarm` before such an exec. Ordinary
