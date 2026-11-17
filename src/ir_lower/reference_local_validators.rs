@@ -44,14 +44,19 @@ pub(super) fn prepare_argument_binding(ctx: &mut super::context::LoweringContext
 
 /// Generates one typed callback per selected binding contract, without PHP entry metadata.
 pub(super) fn lower_requested(module: &mut Module) -> Result<(), super::LoweringError> {
-    let mut contracts = Vec::new();
+    let mut contracts: Vec<PhpType> = Vec::new();
     for function in module.functions.iter().chain(&module.class_methods).chain(&module.closures)
         .chain(&module.fiber_wrappers).chain(&module.callback_wrappers)
         .chain(&module.runtime_callable_invokers).chain(&module.extern_callback_trampolines)
     {
         for instruction in &function.instructions {
-            if instruction.op == Op::BindLocalRefContract && !contracts.contains(&instruction.result_php_type) {
-                contracts.push(instruction.result_php_type.clone());
+            let contract = match &instruction.immediate {
+                Some(Immediate::EvalScopeStore(metadata)) => metadata.contract.as_ref(),
+                _ if instruction.op == Op::BindLocalRefContract => Some(&instruction.result_php_type),
+                _ => None,
+            };
+            if let Some(contract) = contract.filter(|contract| !contracts.contains(contract)) {
+                contracts.push(contract.clone());
             }
         }
     }

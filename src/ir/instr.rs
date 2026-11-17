@@ -235,6 +235,13 @@ impl Instruction {
     }
 }
 
+/// Source name and producer contract carried out of line to preserve compact EIR instructions.
+#[derive(Debug, Clone, PartialEq)]
+pub struct EvalScopeStoreImmediate {
+    pub name: DataId,
+    pub contract: Option<PhpType>,
+}
+
 /// Literal or metadata operand attached to an opcode.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Immediate {
@@ -266,6 +273,9 @@ pub enum Immediate {
         second: LocalSlotId,
     },
     GlobalName(DataId),
+    /// Static scope name plus the first producer's inferred binding contract.
+    /// Runtime scope identity decides whether this name is fresh or already imported.
+    EvalScopeStore(Box<EvalScopeStoreImmediate>),
     FunctionRef(FunctionId),
     BuiltinRef(BuiltinId),
     RuntimeRef(RuntimeId),

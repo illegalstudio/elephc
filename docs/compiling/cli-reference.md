@@ -959,7 +959,13 @@ throw `TypeError` before changing the original value or its aliases. Each assign
 is validated in source order: a later compatible assignment cannot cancel an earlier
 rejection, and earlier accepted writes remain visible if a later write fails. Scope-only
 literal fragments remain compiled code and can compose with `--strict-dynamic-code`.
-Analysis of bindings first created within an eval fragment is still being integrated.
+A variable first created by a literal fragment keeps its first producer's inferred
+contract across later literal fragments in that activation. An imported `mixed`
+binding or a new binding from an explicitly `mixed` producer remains open. `unset`
+ends the inferred binding before a subsequent literal fragment establishes a new
+one. Identical fragment bodies retain separate contracts for each activation.
+Transporting newly established origins to later native accesses is still being
+integrated.
 
 A body that **calls** `eval()` anywhere is the other side of that coin: the
 eval scope reaches the surrounding function's locals BY NAME, while the kill

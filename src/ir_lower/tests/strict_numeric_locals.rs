@@ -205,3 +205,34 @@ fn strict_literal_eval_eager_publication_emits_on_every_target() {
         crate::codegen::generate_user_asm_from_ir(&module, false, false).unwrap();
     }
 }
+
+/// First-producer metadata is explicit, compact and shared independently of caller activation origins.
+#[test]
+fn strict_literal_eval_fresh_origins_emit_on_every_target() {
+    let source = include_str!("../../../tests/fixtures/strict/eval_fresh_binding_origin.php");
+    let program = crate::parser::parse_with_mode(&crate::lexer::tokenize(source).unwrap(), SourceMode::Php).unwrap();
+    let profile = SemanticProfile::PERMISSIVE.with(StrictFeature::Locals, true)
+        .with(StrictFeature::DynamicCode, true);
+    for name in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+        let target = Target::parse(name).unwrap();
+        let checked = crate::types::checker::check_staged_semantics(&program, target, profile).unwrap();
+        let module = crate::ir_lower::lower_program(&program, &checked, target, false).unwrap();
+        assert!(!module.required_runtime_features.eval_bridge, "{name}: pure compiled fragment");
+        let contracts = module.functions.iter().flat_map(|function| &function.instructions)
+            .filter_map(|inst| match &inst.immediate {
+                Some(crate::ir::Immediate::EvalScopeStore(metadata)) => metadata.contract.as_ref(),
+                _ => None,
+            }).collect::<Vec<_>>();
+        for ty in [crate::types::PhpType::Int, crate::types::PhpType::Str,
+            crate::types::PhpType::Void, crate::types::PhpType::php_array()] {
+            assert!(contracts.contains(&&ty), "{name}: first producer {ty}");
+        }
+        crate::ir::validate_module(&module).unwrap();
+        let assembly = crate::codegen::generate_user_asm_from_ir(&module, false, false).unwrap();
+        assert!(assembly.contains("__rt_eval_scope_set_with_contract"), "{name}");
+        let mut invalid = module.clone();
+        invalid.semantic_profile = profile.with(StrictFeature::Locals, false);
+        assert!(matches!(crate::ir::validate_module(&invalid),
+            Err(crate::ir::ValidationError::SemanticProfileMismatch { .. })), "{name}");
+    }
+}

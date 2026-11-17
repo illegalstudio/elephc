@@ -261,20 +261,38 @@ pub(in crate::interpreter) fn set_reference_alias(
 /// the same global scope its reads and writes resolve through, and recorded so that no later
 /// fragment re-creates it. The released cell, if this scope owned one, goes to the caller.
 pub(in crate::interpreter) fn unset_scope_cell(
-    context: &ElephcEvalContext,
+    context: &mut ElephcEvalContext,
     scope: &mut ElephcEvalScope,
     name: impl Into<String>,
-) -> Option<RuntimeCellHandle> {
+) -> Result<Option<RuntimeCellHandle>, EvalStatus> {
     let name = name.into();
     if scope.is_global_alias(&name) {
+        retire_scope_origin(scope, &name, context)?;
         scope.clear_global_alias(&name);
-        return scope.unset_respecting_references(name);
+        return Ok(scope.unset_respecting_references(name));
     }
     note_superglobal_unset(&name);
     if let Some(global) = eval_superglobal_scope(context, scope, &name) {
-        return unsafe { global.as_mut() }?.unset_respecting_references(name);
+        let global = unsafe { global.as_mut() }.ok_or(EvalStatus::RuntimeFatal)?;
+        retire_scope_origin(global, &name, context)?;
+        return Ok(global.unset_respecting_references(name));
     }
-    scope.unset_respecting_references(name)
+    retire_scope_origin(scope, &name, context)?;
+    Ok(scope.unset_respecting_references(name))
+}
+
+/// Finishes native source retirement before unset may release its last scope value owner.
+fn retire_scope_origin(scope: &mut ElephcEvalScope, name: &str,
+    context: &mut ElephcEvalContext,
+) -> Result<(), EvalStatus> {
+    #[cfg(not(test))]
+    if let Some(thrown) = crate::runtime_hooks::scope_assignment::release_origins(scope, Some(name)) {
+        context.set_pending_throw(thrown);
+        return Err(EvalStatus::UncaughtThrowable);
+    }
+    #[cfg(test)]
+    let _ = (scope, name, context);
+    Ok(())
 }
 
 /// Marks variables as aliases to the context global scope for later reads/writes.

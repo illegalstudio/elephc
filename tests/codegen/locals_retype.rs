@@ -2346,15 +2346,14 @@ fn test_the_single_case_switch_rewrite_vetoes_itself_on_a_marked_default() {
     );
 }
 
-/// Literal eval preserves an imported native binding through the shared reference publisher.
-/// Fragment-owned locals still exercise the separate decision-map integration boundary.
+/// Literal eval retains imported and fragment-created binding contracts through the shared publisher.
 #[test]
 fn test_eval_fragment_composes_with_strict_locals() {
     let own_local = compile_cli_file_and_run_with_flags(
-        "<?php\n$a = \"s\";\necho $a, \"|\";\neval('$b = 1; $b = \"ciao\"; echo $b;');\n",
+        "<?php\n$a = \"s\";\necho $a, \"|\";\ntry { eval('$b = 1; $b = \"ciao\"; echo $b;'); } catch (TypeError $error) { echo 'T'; }\n",
         &["--strict-locals"],
     );
-    assert_eq!(own_local, "s|ciao");
+    assert_eq!(own_local, "s|T");
 
     let caller_local = compile_cli_file_and_run_with_flags(
         "<?php\n$a = 1;\ntry { eval('$a = \"z\";'); } catch (TypeError $error) { echo 'T'; }\necho gettype($a), '|', $a;\n",

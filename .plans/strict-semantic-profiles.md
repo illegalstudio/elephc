@@ -979,3 +979,44 @@ scopes, both IR modes, owned producer effects and rejected array-kind changes,
 with clean heaps. Diff hygiene passes. Full implementation remains active: fresh
 and runtime-established eval origins, remaining binding flow, six pending feature
 families and complete umbrella/host acceptance still need implementation.
+
+
+### Verified125: activation-owned literal eval origins
+
+The dependency-neutral reference bridge now keeps scope/name origins in stable
+two-word slots. An imported or explicitly mixed producer records an open origin,
+which later concrete writes cannot close. Fresh literal producers select an exact
+local validator and one canonical managed reference cell. Identical compiled
+fragment bodies therefore retain different contracts in separate activations.
+Unset and scope retirement detach native source records before their cell owners
+retire. Native teardown contains PHP exits before returning to Rust. Both native
+linked-list scopes and Magician scopes use the same origin publisher and lifetime
+helpers. Exact PHP array kind contracts remain independent from ArrayTypes.
+
+EvalScopeStoreImmediate explicitly carries the static name and producer contract.
+Its entire record is boxed to preserve the production112-byte Instruction bound;
+boxing only the type still enlarged the immediate payload. The EIR validator
+rejects noncanonical contracts and missing Locals profiles. Callback generation
+reuses the existing local membership and protected reference coordinator.
+
+Registry job08b938cd passed two exact stable-address/open-origin/retirement gates.
+Job94229e53 passed default build and pure plus bridge probes, including split
+fragments and repeated unset/rebinding, with clean heaps. An earlier probe found
+a C-ABI cell argument incorrectly passed in the result register, corrected before
+acceptance. Jobd4e5609e passed build and eight exact gates in4m20s: five-target
+EIR, real five-target helper assembly, fresh/imported/mixed/null/array native
+origins in both IR modes, legacy composition, source ordering, finalizer owners,
+imported native contracts and example. Jobbfeb6b59 passed the full builtin docs
+workflow, all audits and default archive restoration in1m58s, with no generated
+diff. The final scope-core assembler gate exposed an Apple conditional branch to
+an external label. It now branches locally before an unconditional propagation
+branch. Finale5c2550f passed build and four exact five-target/native gates in2m34s.
+Assembly comments and diff hygiene pass. No full suite, push or PR was run.
+
+The complete approved implementation remains active. Native-frame exposure of a
+fresh eval name still bypasses its origin: probeeb10dc54 prints
+integer:Wstring:bad|Winteger:1| with clean heaps. The synchronization inventory
+currently publishes every matching frame slot without an initialized-binding
+guard. Next complete initialized origin transport and native-store enforcement,
+then opaque-eval origins b99d1b21, remaining binding flow and the six pending
+feature families plus umbrella and host acceptance.

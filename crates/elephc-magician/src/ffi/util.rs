@@ -61,10 +61,12 @@ pub(crate) fn scope_entry_abi_flags(entry: ScopeEntry) -> u32 {
 
 /// Releases every scope-owned cell and returns an accumulated owned destructor exception.
 pub(crate) fn release_owned_scope_cells(scope: &mut ElephcEvalScope) -> Option<RuntimeCellHandle> {
+    #[cfg(not(test))]
+    let thrown = crate::runtime_hooks::scope_assignment::release_origins(scope, None);
     let cells = scope.drain_owned_cells();
     #[cfg(not(test))]
     {
-        crate::runtime_hooks::release::release_native_cells(cells, None)
+        crate::runtime_hooks::release::release_native_cells(cells, thrown)
     }
     #[cfg(test)]
     {

@@ -31,3 +31,12 @@ pub(crate) fn assign_existing_reference(scope: &mut ElephcEvalScope, name: &str,
     Some((if thrown.is_some() { EvalStatus::UncaughtThrowable }
         else if status == 0 { EvalStatus::Ok } else { EvalStatus::RuntimeFatal }, thrown))
 }
+
+/// Detaches activation sources while the scope still owns their independently retained wrappers.
+pub(crate) fn release_origins(scope: &mut ElephcEvalScope, name: Option<&str>) -> Option<RuntimeCellHandle> {
+    let thrown = unsafe { match name {
+        Some(name) => super::externs::__elephc_eval_scope_origin_unset_v1((scope as *mut ElephcEvalScope).cast(), name.as_ptr(), name.len()),
+        None => super::externs::__elephc_eval_scope_origins_release_v1((scope as *mut ElephcEvalScope).cast()),
+    } };
+    (!thrown.is_null()).then(|| RuntimeCellHandle::from_raw(thrown))
+}

@@ -16,6 +16,12 @@ use crate::codegen::emit::Emitter;
 use crate::codegen::platform::Arch;
 
 mod reference_assignment;
+mod origin_bindings;
+
+/// Shares checked origin publication and retirement with native and Magician scope implementations.
+pub(crate) fn emit_scope_origin_bindings(emitter: &mut Emitter, enabled: bool) {
+    origin_bindings::emit(emitter, enabled);
+}
 
 const EVAL_STATUS_OK: i64 = 0;
 const EVAL_STATUS_RUNTIME_FATAL: i64 = 2;
@@ -66,6 +72,9 @@ fn emit_aarch64_eval_scope_free(emitter: &mut Emitter) {
     emitter.instruction("str x21, [sp, #32]");                                  // preserve the next-entry register
     emitter.instruction("mov x29, sp");                                         // establish a stable frame for nested runtime calls
     emitter.instruction("mov x19, x0");                                         // keep the scope header pointer across entry releases
+    emitter.bl_c("__elephc_eval_scope_origins_release_v1");
+    emitter.instruction("str x0, [sp, #40]");                                   // retain a contained origin-retirement Throwable until scope teardown finishes
+    emitter.instruction("mov x0, x19");                                         // restore the scope after retiring its stable origin slots
     emitter.instruction("ldr x20, [x19]");                                      // load the first entry in the scope list
     emitter.label("__elephc_eval_scope_free_loop");
     emitter.instruction("cbz x20, __elephc_eval_scope_free_header");            // stop when every entry has been released
@@ -84,10 +93,13 @@ fn emit_aarch64_eval_scope_free(emitter: &mut Emitter) {
     emitter.label("__elephc_eval_scope_free_header");
     emitter.instruction("mov x0, x19");                                         // pass the scope header allocation to the heap free helper
     emitter.instruction("bl __rt_heap_free");                                   // release the scope header after all entries
+    emitter.instruction("ldr x0, [sp, #40]");                                   // recover a contained origin-retirement Throwable after releasing the scope
     emitter.instruction("ldr x21, [sp, #32]");                                  // restore the saved next-entry register
     emitter.instruction("ldp x19, x20, [sp, #16]");                             // restore callee-saved scan registers
     emitter.instruction("ldp x29, x30, [sp, #0]");                              // restore frame pointer and return address
     emitter.instruction("add sp, sp, #48");                                     // release the scope-free frame
+    emitter.instruction("cbz x0, __elephc_eval_scope_free_done");               // successful retirement returns through an assembler-local branch
+    emitter.instruction("b __rt_throw_boxed_destructor_exception");             // contained failures propagate only after every scope owner has retired
     emitter.label("__elephc_eval_scope_free_done");
     emitter.instruction("ret");                                                 // return after the scope is fully released
 }
@@ -278,6 +290,9 @@ fn emit_x86_64_eval_scope_free(emitter: &mut Emitter) {
     emitter.instruction("mov rbp, rsp");                                        // establish a stable frame for local scan state
     emitter.instruction("sub rsp, 32");                                         // reserve scope, current-entry, and next-entry slots
     emitter.instruction("mov QWORD PTR [rbp - 8], rdi");                        // save the scope header pointer
+    emitter.bl_c("__elephc_eval_scope_origins_release_v1");
+    emitter.instruction("mov QWORD PTR [rbp - 32], rax");                       // retain a contained origin failure until all scope owners retire
+    emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // restore the scope after retiring its stable origin slots
     emitter.instruction("mov r10, QWORD PTR [rdi]");                            // load the first entry in the scope list
     emitter.instruction("mov QWORD PTR [rbp - 16], r10");                       // store the current entry pointer
     emitter.label("__elephc_eval_scope_free_loop");
@@ -302,8 +317,11 @@ fn emit_x86_64_eval_scope_free(emitter: &mut Emitter) {
     emitter.label("__elephc_eval_scope_free_header");
     emitter.instruction("mov rax, QWORD PTR [rbp - 8]");                        // pass the scope header allocation to the heap free helper
     emitter.instruction("call __rt_heap_free");                                 // release the scope header after all entries
+    emitter.instruction("mov rax, QWORD PTR [rbp - 32]");                       // recover any contained origin failure after scope teardown
     emitter.instruction("add rsp, 32");                                         // release local scan slots
     emitter.instruction("pop rbp");                                             // restore the caller frame pointer
+    emitter.instruction("test rax, rax");                                       // retirement errors escape only after the scope has been fully freed
+    emitter.instruction("jnz __rt_throw_boxed_destructor_exception");           // propagate the contained boxed Throwable without a Rust frame
     emitter.label("__elephc_eval_scope_free_done");
     emitter.instruction("ret");                                                 // return after the scope is fully released
 }

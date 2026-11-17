@@ -198,6 +198,12 @@ fn print_immediate(out: &mut String, data: &DataPool, immediate: &Immediate) {
         Immediate::LocalSlotPair { first, second } => {
             let _ = write!(out, " slots[{},{}]", first.as_raw(), second.as_raw());
         }
+        Immediate::EvalScopeStore(metadata) => {
+            let crate::ir::EvalScopeStoreImmediate { name, contract } = &**metadata;
+            let value = data.global_names.get(name.as_raw() as usize)
+                .map(String::as_str).unwrap_or("<unknown>");
+            let _ = write!(out, " scope[{}:{:?}] origin={contract:?}", name.as_raw(), value);
+        }
         Immediate::GlobalName(id) => {
             let value = data
                 .global_names

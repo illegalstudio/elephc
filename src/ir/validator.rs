@@ -120,8 +120,15 @@ pub fn validate_module(module: &Module) -> Result<(), ValidationError> {
     {
         validate_function(function)?;
         for (index, inst) in function.instructions.iter().enumerate() {
+            if let Some(Immediate::EvalScopeStore(metadata)) = &inst.immediate {
+                if metadata.contract.as_ref().is_some_and(|contract|
+                    crate::semantics::conversions::inferred_binding_contract(contract).as_ref() != Some(contract)) {
+                    return Err(ValidationError::InvalidLocalReferenceContract(InstId::from_raw(index as u32)));
+                }
+            }
             let mut required = inst.arithmetic_policy().requirements().bits();
-            if inst.op == Op::BindLocalRefContract {
+            if inst.op == Op::BindLocalRefContract || matches!(&inst.immediate,
+                Some(Immediate::EvalScopeStore(metadata)) if metadata.contract.is_some()) {
                 required |= elephc_semantics::StrictFeature::Locals.bit();
             }
             if matches!(inst.immediate, Some(Immediate::RuntimeCall(crate::ir::RuntimeCallTarget::CheckedNumericCast(_)
@@ -807,8 +814,11 @@ fn validate_instruction_immediate(
         PromoteLocalRefCell | AliasLocalRefCell | RetainLocalRefCell | AdoptRefCellPtr => require_immediate(inst_id, inst, "local slot pair", |imm| {
             matches!(imm, Imm::LocalSlotPair { .. })
         }),
-        EvalScopeGet | EvalScopeSet => require_immediate(inst_id, inst, "global name", |imm| {
+        EvalScopeGet => require_immediate(inst_id, inst, "global name", |imm| {
             matches!(imm, Imm::GlobalName(_))
+        }),
+        EvalScopeSet => require_immediate(inst_id, inst, "scope store or global name", |imm| {
+            matches!(imm, Imm::GlobalName(_) | Imm::EvalScopeStore(_))
         }),
         ICmp | FCmp | PhpRelCmp => require_immediate(inst_id, inst, "comparison predicate", |imm| {
             matches!(imm, Imm::CmpPredicate(_))

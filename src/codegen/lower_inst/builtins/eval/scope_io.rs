@@ -30,9 +30,7 @@ pub(super) fn emit_eval_scope_set_name(ctx: &mut FunctionContext<'_>, name: &str
         abi::int_arg_reg_name(ctx.emitter.target, 4),
         flags,
     );
-    let symbol = ctx.emitter.target.extern_symbol("__elephc_eval_scope_set");
-    abi::emit_call_label(ctx.emitter, &symbol);
-    emit_eval_status_check(ctx);
+    super::scope_access::emit_scope_set_call(ctx, None);
 }
 
 /// Calls `__elephc_eval_scope_set` for one boxed global value.
@@ -56,9 +54,7 @@ pub(super) fn emit_eval_global_scope_set(ctx: &mut FunctionContext<'_>, global: 
         abi::int_arg_reg_name(ctx.emitter.target, 4),
         flags,
     );
-    let symbol = ctx.emitter.target.extern_symbol("__elephc_eval_scope_set");
-    abi::emit_call_label(ctx.emitter, &symbol);
-    emit_eval_status_check(ctx);
+    super::scope_access::emit_scope_set_call(ctx, None);
 }
 
 /// Marks caller-scope global aliases in the materialized eval scope.
@@ -112,9 +108,7 @@ pub(super) fn emit_eval_scope_set(ctx: &mut FunctionContext<'_>, local: &EvalSyn
         abi::int_arg_reg_name(ctx.emitter.target, 4),
         flags,
     );
-    let symbol = ctx.emitter.target.extern_symbol("__elephc_eval_scope_set");
-    abi::emit_call_label(ctx.emitter, &symbol);
-    emit_eval_status_check(ctx);
+    super::scope_access::emit_scope_set_call(ctx, None);
 }
 
 /// Reloads synchronized locals from the eval scope after the eval interpreter returns.

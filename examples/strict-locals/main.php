@@ -66,3 +66,13 @@ function checkLiteralLabel(): void {
     }
 }
 checkLiteralLabel();
+
+// A binding created inside eval retains its own type until it is unset.
+function checkLiteralCreatedQuantity(): void {
+    try {
+        eval('$quantity = 1; $quantity = 2.5;');
+    } catch (TypeError $error) {
+        echo "The eval-created quantity kept its integer type", PHP_EOL;
+    }
+}
+checkLiteralCreatedQuantity();

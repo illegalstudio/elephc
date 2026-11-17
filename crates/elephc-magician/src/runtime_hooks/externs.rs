@@ -17,6 +17,12 @@ use crate::value::RuntimeCell;
 
 #[cfg(not(test))]
 unsafe extern "C" {
+    /// Detaches all native inferred scope sources and returns an owned contained Throwable.
+    pub(super) fn __elephc_eval_scope_origins_release_v1(scope: *mut c_void) -> *mut RuntimeCell;
+    /// Detaches a single inferred scope source before unset and returns an owned contained Throwable.
+    pub(super) fn __elephc_eval_scope_origin_unset_v1(scope: *mut c_void,
+        name: *const u8, len: usize) -> *mut RuntimeCell;
+
     /// Reports the semantic ABI implemented by the linked native value wrappers.
     pub(super) fn __elephc_eval_runtime_semantics_version() -> u64;
     /// Reports the immutable semantic profile compiled into the native runtime.

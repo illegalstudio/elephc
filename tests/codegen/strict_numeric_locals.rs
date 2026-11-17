@@ -10,6 +10,32 @@
 
 use crate::support::*;
 
+/// Shared fragment bodies retain fresh, imported and explicit mixed producer origins per activation.
+#[test]
+fn test_strict_literal_eval_establishes_fresh_binding_origins() {
+    let source = include_str!("../fixtures/strict/eval_fresh_binding_origin.php");
+    let retirement = include_str!("../fixtures/strict/eval_fresh_binding_retirement.php")
+        .strip_prefix("<?php").unwrap();
+    for mode in ["--ir-opt=off", "--ir-opt=on"] {
+        for strict in [false, true] {
+            for bridge in [false, true] {
+                let source = if bridge { format!("{source}\n{retirement}") } else { source.to_string() };
+                let mut flags = vec![mode, "--heap-debug"];
+                if strict { flags.push("--strict-locals"); }
+                if !bridge { flags.push("--strict-dynamic-code"); }
+                let output = StrictFixture::new(&source).capture(&flags);
+                let expected = if strict { "T|changedO|changedM|N|okA|T|" }
+                    else { "changedW|changedO|changedM|W|okW|changedW|" };
+                let tail = if bridge { if strict { "S|new|new|" } else { "W|new|new|" } } else { "" };
+                assert_eq!(String::from_utf8_lossy(&output.stdout), format!("{expected}{tail}"),
+                    "{flags:?}: {}", String::from_utf8_lossy(&output.stderr));
+                assert!(String::from_utf8_lossy(&output.stderr).contains("HEAP DEBUG: leak summary: clean"),
+                    "{flags:?}: {}", String::from_utf8_lossy(&output.stderr));
+            }
+        }
+    }
+}
+
 /// Every literal assignment validates before later effects while earlier accepted writes remain visible.
 #[test]
 fn test_strict_literal_eval_checks_each_write_before_later_effects() {
@@ -274,7 +300,7 @@ numericScope($argc);
 fn test_strict_numeric_locals_example() {
     let source = include_str!("../../examples/strict-locals/main.php");
     assert_eq!(StrictFixture::new(source).run(&["--strict-locals"]),
-        "Quantity requires an integer or null\nQuantity: 2\nQuantity: 3\nQuantity: not tracked\nThe integer binding kept its value\nArithmetic result: double\nFresh measurement: 2.5\nThe referenced quantity kept its integer value\nThe label kept its string value\nThe conversion kept the label value\nThe literal eval kept the label value\n");
+        "Quantity requires an integer or null\nQuantity: 2\nQuantity: 3\nQuantity: not tracked\nThe integer binding kept its value\nArithmetic result: double\nFresh measurement: 2.5\nThe referenced quantity kept its integer value\nThe label kept its string value\nThe conversion kept the label value\nThe literal eval kept the label value\nThe eval-created quantity kept its integer type\n");
 }
 
 

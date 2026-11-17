@@ -168,6 +168,11 @@ pub unsafe extern "C" fn __elephc_eval_scope_unset(
     let Ok(name) = abi_name_to_string(name_ptr, name_len) else {
         return EvalStatus::RuntimeFatal.code();
     };
+    #[cfg(not(test))]
+    if let Some(thrown) = crate::runtime_hooks::scope_assignment::release_origins(scope, Some(&name)) {
+        *throwable = thrown.as_ptr();
+        return EvalStatus::UncaughtThrowable.code();
+    }
     if let Some(replaced) = scope.unset(name) {
         if let Some(thrown) = release_scope_cell(replaced) {
             *throwable = thrown.as_ptr();

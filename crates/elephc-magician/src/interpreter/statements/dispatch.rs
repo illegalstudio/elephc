@@ -342,7 +342,7 @@ pub(in crate::interpreter) fn execute_stmt(
             Ok(EvalControl::None)
         }
         EvalStmt::UnsetVar { name } => {
-            if let Some(replaced) = unset_scope_cell(context, scope, name.clone()) {
+            if let Some(replaced) = unset_scope_cell(context, scope, name.clone())? {
                 eval_release_value(context, values, replaced)?;
             }
             Ok(EvalControl::None)
