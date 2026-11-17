@@ -187,3 +187,29 @@ echo "\n";
     );
     assert_eq!(out.stdout, "0=>1,0=>2,1=>3,2=>x,\n123x\n");
 }
+
+/// `$object[$i++] ?? $d` over an `ArrayAccess` evaluates the offset once and asks
+/// `offsetExists()` before `offsetGet()`, as php does.
+#[test]
+fn test_array_access_coalesce_pins_a_side_effect_offset() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+class A implements ArrayAccess {
+    public $n = 0;
+    public function offsetExists($o): bool { $this->n++; return true; }
+    public function offsetGet($o): mixed { return $this->n . ":" . $o; }
+    public function offsetSet($o, $v): void {}
+    public function offsetUnset($o): void {}
+}
+$a = new A;
+$i = 0;
+echo $a[$i++] ?? 'd', "\n";
+echo $i, "\n";
+$arr = [5, 6];
+$j = 0;
+echo $arr[$j++] ?? 'd', $arr[$j++] ?? 'd', $arr[$j++] ?? 'd', "\n";
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "1:0\n1\n56d\n");
+}

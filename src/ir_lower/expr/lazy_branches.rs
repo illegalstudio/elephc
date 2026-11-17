@@ -807,17 +807,31 @@ fn lower_array_access_offset_exists_coalesce(
     index: &Expr,
     expr: &Expr,
 ) -> Option<LoweredValue> {
-    if crate::optimize::expr_has_side_effects(index) {
-        return None;
-    }
     let receiver = lower_subscript_receiver_silently(ctx, array);
+    // An offset with side effects (`$a[$i++] ?? $d`) is evaluated ONCE, after the receiver as php
+    // does, and both `offsetExists` and `offsetGet` read it from a hidden temp.
+    let frozen_index;
+    let mut frozen_temp = None;
+    let index = if crate::optimize::expr_has_side_effects(index) {
+        let value = lower_expr(ctx, index);
+        let value_ty = ctx.builder.value_php_type(value.value);
+        let temp = ctx.declare_hidden_temp(value_ty.clone());
+        store_value_into_temp(ctx, &temp, value_ty, value, index.span);
+        frozen_index = Expr::new(ExprKind::Variable(temp.clone()), index.span);
+        frozen_temp = Some(temp);
+        &frozen_index
+    } else {
+        index
+    };
     let receiver_ty = ctx.builder.value_php_type(receiver.value);
     let statically_array_access = type_satisfies_array_access_for_ir(ctx, &receiver_ty);
     let maybe_array_access = matches!(receiver_ty.codegen_repr(), PhpType::Mixed | PhpType::Union(_))
         && !receiver_ty_is_nullable_only(&receiver_ty)
         && super::native_isset::program_may_hold_array_access_objects(ctx);
     if !(statically_array_access || maybe_array_access) {
-        return Some(lower_array_access_from_receiver(ctx, receiver, index, expr, false));
+        let read = lower_array_access_from_receiver(ctx, receiver, index, expr, false);
+        release_evaluated_once(ctx, frozen_temp, expr.span);
+        return Some(read);
     }
     // The receiver is read by `offsetExists` and then by `offsetGet`, and each call consumes the
     // reference it is handed: a second reference, pinned before the first call, serves the second.
@@ -896,7 +910,9 @@ fn lower_array_access_offset_exists_coalesce(
     branch_to(ctx, merge);
 
     ctx.builder.position_at_end(merge);
-    Some(take_owned_temp(ctx, &temp_name, expr.span))
+    let result = take_owned_temp(ctx, &temp_name, expr.span);
+    release_evaluated_once(ctx, frozen_temp, expr.span);
+    Some(result)
 }
 
 /// Whether a type holds nothing but `null`-like members.
