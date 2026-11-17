@@ -5,6 +5,7 @@
 //! - Focused compiler tests for identity extraction.
 //!
 //! Key details:
+//! - Fixed-data fingerprints follow main 6f823197fd after comparison with its original emitter.
 //! - Captured before extraction at 58ee974dc47d68a8984b096c860a7fc6465434e9.
 //! - Fingerprints include output bytes, fixed data and sorted internal-label bookkeeping.
 //! - Every supported target covers executable, PIC, library, extension and dead-strip modes.

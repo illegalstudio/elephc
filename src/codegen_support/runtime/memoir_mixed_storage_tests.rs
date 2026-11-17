@@ -5,6 +5,7 @@
 //! - Focused compiler tests for Mixed storage extraction.
 //!
 //! Key details:
+//! - Fixed-data fingerprints follow main 6f823197fd after comparison with its original emitter.
 //! - Captured before extraction at 775d2eb9bb5c5bdc2c6b0d244796323067705137.
 //! - Fingerprints include output bytes, fixed data and sorted internal-label bookkeeping.
 //! - Every supported target covers executable, PIC, library, extension and dead-strip modes.

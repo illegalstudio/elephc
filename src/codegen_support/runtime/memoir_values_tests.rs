@@ -5,6 +5,7 @@
 //! - Focused compiler unit tests for memory modularization.
 //!
 //! Key details:
+//! - Fixed-data fingerprints follow main 6f823197fd after comparison with its original emitter.
 //! - All supported targets cover independent emission flags and optional memory features.
 //! - Fixed-data bytes and dead-strip label bookkeeping participate in each fingerprint.
 
