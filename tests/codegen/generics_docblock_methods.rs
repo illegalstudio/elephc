@@ -545,3 +545,56 @@ fn test_docblock_template_keeps_a_native_object_hint() {
     );
     assert_eq!(compile_cli_file_and_run_with_flags(&method_accepted, &[]), "obj\n");
 }
+
+/// A return template no parameter binds keeps the written hint.
+///
+/// `@template T` / `@param T $v` / `@return T` above `function id(int $v)` cannot bind `T` from
+/// an argument, so adopting the return annotation would make `id(1)` fail on an undetermined
+/// type argument. The native `int` check stays and the function is not a template.
+#[test]
+fn test_docblock_return_template_without_a_binding_keeps_the_hint() {
+    let source = r#"<?php
+/**
+ * @template T
+ * @param T $v
+ * @return T
+ */
+function id(int $v) { return $v; }
+echo id(1), "\n";
+"#;
+    assert_eq!(compile_cli_file_and_run_with_flags(source, &[]), "1\n");
+    let rejected = r#"<?php
+/**
+ * @template T
+ * @param T $v
+ * @return T
+ */
+function id(int $v) { return $v; }
+echo id("seven");
+"#;
+    let error = compile_cli_file_with_flags_expect_failure(rejected, &[]);
+    assert!(error.contains("expects int"), "{error}");
+}
+
+/// A class template documented on a constructor binds from the call.
+///
+/// `@param T $items` above `__construct(array $items)` mentions the CLASS parameter, so the
+/// annotation is adopted and `new Items([1, 2])` infers `T = array<int>`, as it did before the
+/// adoption rule learned to keep a written hint.
+#[test]
+fn test_docblock_class_template_binds_from_a_documented_constructor() {
+    let source = r#"<?php
+/**
+ * @template T
+ */
+class Items {
+    /** @var T */
+    public $items;
+    /** @param T $items */
+    public function __construct(array $items) { $this->items = $items; }
+}
+$items = new Items([1, 2]);
+echo $items->items[1], "\n";
+"#;
+    assert_eq!(compile_cli_file_and_run_with_flags(source, &[]), "2\n");
+}
