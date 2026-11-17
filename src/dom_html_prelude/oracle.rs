@@ -17,6 +17,8 @@
 
 use super::*;
 
+/// Removes every `span: ...` field from an AST rendering, so a built node (synthetic spans) and a
+/// parsed one (real spans) compare equal.
 fn strip_spans(rendered: &str) -> String {
     let mut cleaned = String::with_capacity(rendered.len());
     let mut rest = rendered;
@@ -49,6 +51,7 @@ fn normalize_parsed(rendered: &str) -> String {
     out.replace("Dom__", "Dom\\\\")
 }
 
+/// Parses the PHP model (`fragments::SRC`) into the declarations the builders must reproduce.
 fn parsed_prelude() -> Program {
     let source = match std::env::var("ELEPHC_DOM_ORACLE_SRC") {
         Ok(path) => std::fs::read_to_string(path).expect("read the PHP model"),

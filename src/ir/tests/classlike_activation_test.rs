@@ -5,6 +5,7 @@ use crate::parser::ast::ClassLikeKind;
 use crate::span::Span;
 use crate::types::PhpType;
 
+/// Builds a module holding one class-like activation instruction for the validator tests.
 fn module() -> Module {
     let catalog = SourceCatalog::from_units([crate::resolver::SourceUnit {
         canonical_path: "/unit.php".into(),

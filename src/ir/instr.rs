@@ -250,7 +250,8 @@ impl Instruction {
                 | Op::StrBitOr
                 | Op::StrBitXor
                 | Op::StrSetOffset
-                // Not `StrCharAt`: `$s[$i]` is an owned one-byte copy, so its release must run.
+                // Not `StrCharAt`: `$s[$i]` is a Borrowed view of one byte of `$s`; the `StrPersist` copy
+                // that stabilizes it is the owned value, and its release must run.
                 | Op::StrInterpolate
         )
     }

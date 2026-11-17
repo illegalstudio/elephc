@@ -12,7 +12,9 @@ use crate::span::Span;
 pub struct SourceId(u32);
 
 impl SourceId {
+    /// Wraps a raw catalog index as a source identity.
     pub const fn from_raw(raw: u32) -> Self { Self(raw) }
+    /// Returns the raw catalog index.
     pub const fn as_raw(self) -> u32 { self.0 }
 }
 
@@ -45,14 +47,17 @@ impl SourceCatalog {
         Ok(catalog)
     }
 
+    /// Returns the identity of the unit read from a canonical path, when the catalog holds it.
     pub fn id_for_path(&self, canonical_path: &Path) -> Option<SourceId> {
         self.ids.get(canonical_path).copied()
     }
 
+    /// Returns the unit a source identity names.
     pub fn get(&self, id: SourceId) -> Option<&SourceUnit> {
         self.units.get(id.0 as usize)
     }
 
+    /// Iterates the units in identity order.
     pub fn iter(&self) -> impl ExactSizeIterator<Item = (SourceId, &SourceUnit)> {
         self.units.iter().enumerate().map(|(index, unit)| (SourceId(index as u32), unit))
     }
@@ -64,11 +69,13 @@ mod tests {
     use crate::codegen::platform::{Arch, Platform, Target};
     use crate::source::SourceMode;
 
+    /// Builds a PHP source unit for a catalog test.
     fn unit(path: impl Into<PathBuf>, text: &str) -> SourceUnit {
         SourceUnit { canonical_path: path.into(), mode: SourceMode::Php, source: text.into() }
     }
 
     #[test]
+    /// Verifies module clones share one source catalog allocation.
     fn source_catalog_handles_share_storage_across_module_clones() {
         let catalog = SourceCatalog::from_units([unit("/entry.php", "<?php echo 1;")]).unwrap();
         let module = crate::ir::Module::with_source_catalog(
@@ -85,6 +92,7 @@ mod tests {
     }
 
     #[test]
+    /// Verifies a module built with an empty catalog keeps it empty.
     fn source_catalog_is_frozen_on_empty_module_construction() {
         let catalog = SourceCatalog::from_units([unit("/entry.php", "<?php echo 1;")]).unwrap();
         let id = catalog.id_for_path(Path::new("/entry.php")).unwrap();
@@ -98,6 +106,7 @@ mod tests {
     }
 
     #[test]
+    /// Verifies source identities follow the catalog order, not discovery order.
     fn source_ids_are_independent_of_discovery_order() {
         let a = unit("/sources/a.php", "<?php echo 1;");
         let b = unit("/sources/b.php", "<?php echo 2;");
@@ -113,6 +122,7 @@ mod tests {
     }
 
     #[test]
+    /// Verifies a failed catalog binding leaves the module catalog untouched.
     fn source_catalog_binding_is_atomic_and_cannot_renumber_ids() {
         let mut module = crate::ir::Module::new(Target::new(Platform::MacOS, Arch::AArch64));
         assert!(module.bind_source_units([unit("/a.php", "first"), unit("/a.php", "changed")]).is_err());
@@ -124,6 +134,7 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
+    /// Verifies a path with non-UTF-8 bytes keeps its identity.
     fn source_identity_preserves_non_utf8_path_bytes() {
         use std::os::unix::ffi::OsStringExt;
         let a = PathBuf::from(std::ffi::OsString::from_vec(b"/source/\x80.php".to_vec()));

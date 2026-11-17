@@ -76,6 +76,7 @@ fn array_fetch_for_write_keeps_typed_keys_integer_only() {
     }
 }
 
+/// Builds a module whose single instruction carries the given source-marker immediate.
 fn source_marker_module(immediate: crate::ir::Immediate) -> crate::ir::Module {
     use crate::ir::{Module, Op, Ownership, SourceCatalog};
     let catalog = SourceCatalog::from_units([crate::resolver::SourceUnit {

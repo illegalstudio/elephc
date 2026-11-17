@@ -448,7 +448,6 @@ fn declares_a_builtin_of_this_build(
     })
 }
 
-/// Splits a canonical function name into its namespace and its local part.
 /// Whether `stmt` always leaves the statement list it sits in: a `return`, `throw`, `break` or
 /// `continue`, or an `if` that constant folding made literally `if (true)` and whose body always
 /// leaves.
@@ -470,6 +469,7 @@ fn always_leaves(stmt: &Stmt) -> bool {
     }
 }
 
+/// Splits a canonical function name into its namespace and its local part.
 fn split_namespace(name: &str) -> (Option<&str>, &str) {
     let name = name.trim_start_matches('\\');
     match name.rsplit_once('\\') {
