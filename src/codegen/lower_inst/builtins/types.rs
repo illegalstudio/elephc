@@ -548,7 +548,7 @@ pub(crate) fn lower_class_name_lookup(
         }
         PhpType::Mixed | PhpType::Union(_) => {
             ctx.load_value_to_result(value)?;
-            emit_mixed_object_class_name(ctx, name);
+            emit_mixed_object_class_name(ctx, name, class_constant);
         }
         PhpType::Str if name == "get_parent_class" => {
             let class_name = const_string_operand(ctx, value)?;
@@ -1227,7 +1227,10 @@ fn emit_branch_to_invokable_receiver(ctx: &mut FunctionContext<'_>, descriptor_r
 }
 
 /// Emits class-name lookup for a boxed Mixed value that may contain an object.
-fn emit_mixed_object_class_name(ctx: &mut FunctionContext<'_>, name: &str) {
+///
+/// With `class_constant` (`$value::class`), a non-object throws `Cannot use "::class" on <type>`
+/// rather than get_class()'s argument TypeError.
+fn emit_mixed_object_class_name(ctx: &mut FunctionContext<'_>, name: &str, class_constant: bool) {
     let object_label = ctx.next_label("get_class_mixed_object");
     let closure_label = ctx.next_label("get_class_mixed_closure");
     let string_label = ctx.next_label("get_parent_class_mixed_string");
@@ -1303,7 +1306,7 @@ fn emit_mixed_object_class_name(ctx: &mut FunctionContext<'_>, name: &str) {
         Arch::AArch64 => "x1",
         Arch::X86_64 => "rdi",
     };
-    emit_implicit_callable_class_lookup_errors(ctx, name, payload, false);
+    emit_implicit_callable_class_lookup_errors(ctx, name, payload, class_constant);
     emit_branch_to_invokable_receiver(ctx, payload, &object_label);
     if name == "get_class" {
         emit_string_result(ctx, b"Closure");
@@ -1330,17 +1333,30 @@ fn emit_mixed_object_class_name(ctx: &mut FunctionContext<'_>, name: &str) {
         }
     }
     ctx.emitter.label(&false_label);
-    emit_class_lookup_type_error(ctx, name, "false");
+    emit_mixed_class_lookup_type_error(ctx, name, "false", class_constant);
     ctx.emitter.label(&true_label);
-    emit_class_lookup_type_error(ctx, name, "true");
+    emit_mixed_class_lookup_type_error(ctx, name, "true", class_constant);
     for (_, type_name, label) in &error_labels {
         ctx.emitter.label(label);
-        emit_class_lookup_type_error(ctx, name, type_name);
+        emit_mixed_class_lookup_type_error(ctx, name, type_name, class_constant);
     }
     ctx.emitter.label(&fallback_error_label);
-    emit_class_lookup_type_error(ctx, name, "unknown");
+    emit_mixed_class_lookup_type_error(ctx, name, "unknown", class_constant);
 
     ctx.emitter.label(&done_label);
+}
+
+/// Throws the TypeError for a non-object `Mixed` payload: get_class()'s argument error, or, for
+/// `$value::class`, `Cannot use "::class" on <type>`, where PHP names a boolean `bool`.
+fn emit_mixed_class_lookup_type_error(
+    ctx: &mut FunctionContext<'_>, name: &str, type_name: &str, class_constant: bool,
+) {
+    if class_constant {
+        let type_name = if matches!(type_name, "true" | "false") { "bool" } else { type_name };
+        super::super::exceptions::emit_type_error(ctx, &format!("Cannot use \"::class\" on {type_name}"));
+    } else {
+        emit_class_lookup_type_error(ctx, name, type_name);
+    }
 }
 
 /// Resolves an unboxed dynamic class-name string for `get_parent_class()`.

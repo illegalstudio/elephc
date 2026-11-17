@@ -161,6 +161,32 @@ echo $kb(new Inv()), "|", $kb('Cls::sm'), "|", $kb([$o, 'm']), "|", $kb(function
     )]);
 }
 
+/// `$v::class` on a callable the IR holds as a Mixed (a `foreach` over an array of callables, a
+/// ternary of two callables) throws `Cannot use "::class" on string` for an implicit string
+/// callable, not get_class()'s argument error, which `get_class($v)` keeps. Expected output
+/// measured with php 8.5.12.
+#[test]
+fn test_class_constant_on_boxed_callable() {
+    let out = compile_and_run_per_argv(
+        r#"<?php
+class Cls { public function m() {} }
+function c(callable $f): callable { return $f; }
+$cbs = ['s' => c('strlen'), 'a' => c([new Cls(), 'm']), 'c' => c(fn() => 1)];
+foreach ($cbs as $k => $v) {
+    try { echo $k, ":", $v::class, "|"; } catch (TypeError $e) { echo $e->getMessage(), "|"; }
+    try { echo get_class($v), "\n"; } catch (TypeError $e) { echo $e->getMessage(), "\n"; }
+}
+$f = $argc > 5 ? c(fn() => 1) : c('strlen');
+try { echo $f::class, "\n"; } catch (TypeError $e) { echo $e->getMessage(), "\n"; }
+"#,
+        &[&[]],
+    );
+    let get_class = "get_class(): Argument #1 ($object) must be of type object";
+    assert_eq!(out, [format!(
+        "s:Cannot use \"::class\" on string|{get_class}, string given\na:Cannot use \"::class\" on array|{get_class}, array given\nc:Closure|Closure\nCannot use \"::class\" on string\n"
+    )]);
+}
+
 /// A missed read from an array of closures leaves null in a `callable` slot, not a descriptor:
 /// `is_object()`, `instanceof Closure`, `is_a()` (literal and runtime target) and gettype() answer
 /// for null instead of reading through the sentinel, held as a callable or passed into a
