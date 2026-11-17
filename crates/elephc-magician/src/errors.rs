@@ -107,6 +107,19 @@ impl EvalParseDiagnostic {
         Self::new(error, line, token)
     }
 
+    /// Builds the diagnostic for a failure the lexer raised over `source`, whose first line is `first_line`.
+    ///
+    /// An unterminated block comment is reported at the line it opened on, as PHP does; every
+    /// other lexical failure keeps the end-of-source position.
+    pub fn from_lexer(error: EvalParseError, code: &[u8], source: &str, first_line: i64) -> Self {
+        if error == EvalParseError::UnterminatedComment {
+            if let Some(line) = crate::lexer::unterminated_comment_line(source, first_line) {
+                return Self::new(error, line, "end of file");
+            }
+        }
+        Self::at_source_end(error, code, "end of file")
+    }
+
     /// Returns the underlying parse failure.
     pub const fn error(&self) -> EvalParseError {
         self.error
@@ -133,6 +146,10 @@ impl EvalParseDiagnostic {
     /// set of continuations. A recursive-descent parser has no such set, and emitting a
     /// different one would be worse than emitting none, so the clause is left out.
     pub fn reason(&self) -> String {
+        if self.error == EvalParseError::UnterminatedComment {
+            // PHP names the line the comment opened on instead of a token.
+            return format!("Unterminated comment starting line {}", self.line);
+        }
         format!("syntax error, unexpected {}", self.token)
     }
 
@@ -324,6 +341,19 @@ mod tests {
 
         assert_eq!(diagnostic.line(), 3);
         assert_eq!(diagnostic.status(), EvalStatus::ParseError);
+    }
+
+    /// Verifies an unterminated block comment is reported at the line it opened on, in PHP's words
+    /// (`php -n`: `Unterminated comment starting line 3`).
+    #[test]
+    fn unterminated_comment_names_its_opening_line() {
+        let code = b"$a=1;\n\n/* never closed\n\n";
+        let source = std::str::from_utf8(code).unwrap();
+        let error = crate::lexer::tokenize(source).unwrap_err();
+        let diagnostic = EvalParseDiagnostic::from_lexer(error, code, source, 1);
+
+        assert_eq!(diagnostic.line(), 3);
+        assert_eq!(diagnostic.reason(), "Unterminated comment starting line 3");
     }
 
     /// Verifies only known unsupported syntax maps to the unsupported ABI status.

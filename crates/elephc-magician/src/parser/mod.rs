@@ -152,8 +152,9 @@ fn push_php_block_tokens(
     // Lexed AT the block's file line, not shifted afterwards: the lexer folds `__LINE__` into a
     // literal while it scans, so a block lexed from line 1 printed its block-relative line
     // (`tests/eval_include_template_tests.rs`, php 8.5.10 counts the whole file).
-    let block_tokens = tokenize_at_line(&source, source_line(code, start))
-        .map_err(|error| EvalParseDiagnostic::at_source_end(error, code, "end of file"))?;
+    let first_line = source_line(code, start);
+    let block_tokens = tokenize_at_line(&source, first_line)
+        .map_err(|error| EvalParseDiagnostic::from_lexer(error, code, &source, first_line))?;
     // Each block is tokenized on its own and therefore ends with the lexer's end-of-file token.
     // Concatenating those would put an end of file in the middle of the file, where every block
     // loop would stop; only the token stream as a whole has one end.
@@ -216,7 +217,7 @@ fn parse_fragment_with(code: &[u8], track_lines: bool) -> Result<EvalProgram, Ev
     }
     let source = normalize_binary_source(code);
     let tokens = tokenize(&source)
-        .map_err(|error| EvalParseDiagnostic::at_source_end(error, code, "end of file"))?;
+        .map_err(|error| EvalParseDiagnostic::from_lexer(error, code, &source, 1))?;
     let parser = Parser::new(tokens, code.len());
     if track_lines { parser.tracking_source_lines() } else { parser }.parse_program()
 }

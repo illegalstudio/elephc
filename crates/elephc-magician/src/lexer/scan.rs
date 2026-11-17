@@ -31,11 +31,31 @@ pub(crate) fn tokenize_at_line(source: &str, line: i64) -> Result<Vec<Token>, Ev
     Lexer { line, ..Lexer::new(source) }.tokenize()
 }
 
+/// Returns the line an unterminated `/*` comment opened on, counted from `line`.
+///
+/// PHP reports `Unterminated comment starting line N` at that line, not at the end of the source.
+/// Re-lexes the source and answers `None` when it does not end in an unterminated comment.
+pub(crate) fn unterminated_comment_line(source: &str, line: i64) -> Option<i64> {
+    let mut lexer = Lexer { line, ..Lexer::new(source) };
+    loop {
+        match lexer.next_tokens() {
+            Ok(batch) if batch.last().is_some_and(|token| *token.kind() == TokenKind::Eof) => {
+                return None;
+            }
+            Ok(_) => {}
+            Err(EvalParseError::UnterminatedComment) => return Some(lexer.comment_start),
+            Err(_) => return None,
+        }
+    }
+}
+
 /// Converts a UTF-8 eval source fragment into parser tokens.
 pub(super) struct Lexer<'a> {
     source: &'a str,
     pos: usize,
     line: i64,
+    /// Line the most recent `/*` comment opened on, kept for the unterminated-comment diagnostic.
+    comment_start: i64,
 }
 
 impl<'a> Lexer<'a> {
@@ -48,6 +68,7 @@ impl<'a> Lexer<'a> {
             source,
             pos: 0,
             line: 1,
+            comment_start: 1,
         }
     }
 
@@ -630,6 +651,7 @@ impl<'a> Lexer<'a> {
 
     /// Advances past a `/* ... */` comment while preserving fragment line metadata.
     fn skip_block_comment(&mut self) -> Result<(), EvalParseError> {
+        self.comment_start = self.line;
         self.bump_char();
         self.bump_char();
         while let Some(ch) = self.peek_char() {
