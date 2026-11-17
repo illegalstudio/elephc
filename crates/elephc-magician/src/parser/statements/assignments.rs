@@ -1044,6 +1044,10 @@ fn reference_bind_statements(
             )
         }
     };
+    let hidden = source.starts_with('\0').then(|| source.clone());
     stmts.push(property_reference_bind_stmt(target, source)?);
+    // The hidden name only carried the source to the bind statement; dropping it releases its
+    // reference like php's temporary, instead of keeping the last value alive to scope end.
+    stmts.extend(hidden.map(|name| EvalStmt::UnsetVar { name }));
     Ok(stmts)
 }

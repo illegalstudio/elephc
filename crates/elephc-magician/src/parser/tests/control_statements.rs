@@ -187,13 +187,14 @@ fn parse_fragment_accepts_foreach_array_destructure_target() {
         value_name,
         value_by_ref,
         body,
-    }] = program.statements()
+    }, EvalStmt::UnsetVar { name: unset_name }] = program.statements()
     else {
-        panic!("expected one foreach statement");
+        panic!("expected one foreach statement then the unset of its hidden binding");
     };
     assert_eq!(array, &EvalExpr::LoadVar("items".to_string()));
     assert_eq!(key_name, &None);
     assert!(value_name.starts_with('\0'));
+    assert_eq!(unset_name, value_name);
     assert!(!value_by_ref);
     assert_eq!(
         body,

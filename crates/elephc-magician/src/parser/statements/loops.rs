@@ -191,13 +191,22 @@ impl Parser {
         };
         let mut body = self.parse_statement_body_or_alternative("endforeach")?;
         body.splice(0..0, key_prologue.into_iter().chain(value_prologue));
-        Ok(vec![EvalStmt::Foreach {
+        // The hidden bindings are dropped with the loop: left in scope, the last row would stay
+        // alive (and its destructors would not run) until the scope ends.
+        let hidden: Vec<String> = [Some(value_name.clone()), key_name.clone()]
+            .into_iter()
+            .flatten()
+            .filter(|name| name.starts_with('\0'))
+            .collect();
+        let mut statements = vec![EvalStmt::Foreach {
             array,
             key_name,
             value_name,
             value_by_ref,
             body,
-        }])
+        }];
+        statements.extend(hidden.into_iter().map(|name| EvalStmt::UnsetVar { name }));
+        Ok(statements)
     }
 
     /// Parses one foreach key or value target: a variable, a pattern, or any other lvalue.

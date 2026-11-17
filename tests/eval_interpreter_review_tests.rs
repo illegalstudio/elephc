@@ -109,3 +109,49 @@ fn generator_closures_keep_statics_per_closure_object() {
 echo \"\\n\";\n";
     assert_stdout("eval_gen_statics", code, "1212\n");
 }
+
+/// The hidden binding a destructuring foreach uses is unset with the loop, so the last row (and
+/// the object it holds) is released as soon as the visible variable lets go (php prints `dafter`).
+#[test]
+fn foreach_destructuring_does_not_keep_the_last_row_alive() {
+    let code = "class D { function __destruct() { echo 'd'; } }\n\
+function f() { foreach ([[new D]] as [$x]) {} $x = null; echo \"after\\n\"; }\n\
+f();\n";
+    assert_stdout("eval_foreach_hidden", code, "dafter\n");
+}
+
+/// `Generator::throw()` on a generator suspended in `yield from` throws INTO the inner generator:
+/// it may catch the exception and keep yielding (php prints the eight lines below).
+#[test]
+fn generator_throw_reaches_the_yield_from_delegate() {
+    let code = "function inner() {\n\
+  try { yield 1; } catch (Exception $e) { echo 'inner caught ', $e->getMessage(), \"\\n\"; yield 2; }\n\
+  yield 3; return 'r';\n}\n\
+function outer() {\n\
+  try { $r = yield from inner(); echo \"ret $r\\n\"; } catch (Exception $e) { echo \"outer caught\\n\"; }\n\
+  yield 9;\n}\n\
+$g = outer(); echo $g->current(), \"\\n\"; echo $g->throw(new Exception('boom')), \"\\n\";\n\
+$g->next(); echo $g->current(), \"\\n\"; $g->next(); echo $g->current(), \"\\n\";\n\
+function inner2() { yield 1; yield 2; }\n\
+function outer2() { try { yield from inner2(); } catch (Exception $e) { echo 'outer2 caught ', $e->getMessage(), \"\\n\"; yield 7; } }\n\
+$h = outer2(); $h->current(); echo $h->throw(new Exception('x')), \"\\n\";\n";
+    let expected = "1\ninner caught boom\n2\n3\nret r\n9\nouter2 caught x\n7\n";
+    assert_stdout("eval_gen_throw_delegate", code, expected);
+}
+
+/// A compiled `define()` of a name an `eval()` already defined answers false and keeps the
+/// interpreter's value (php prints `bool(false)` and `1`; the compiled call used to store 2 in
+/// its own global and answer true).
+#[test]
+fn compiled_define_does_not_overwrite_an_eval_defined_constant() {
+    let source = "<?php\neval('define(\"EV_FIRST\", 1);');\n\
+var_dump(@define('EV_FIRST', 2));\neval('echo EV_FIRST, \"\\n\";');\n";
+    let binary = compile("eval_define_dup", source);
+    let output = run(&binary, "");
+    assert_eq!(
+        String::from_utf8_lossy(&output.stdout),
+        "bool(false)\n1\n",
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}

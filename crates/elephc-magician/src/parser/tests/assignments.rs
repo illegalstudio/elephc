@@ -568,7 +568,7 @@ fn parse_fragment_binds_a_property_target_to_a_property_source() {
     let program =
         parse_fragment(b"$clone->known = &$this->known;").expect("fragment should parse");
     let statements = program.statements();
-    assert_eq!(statements.len(), 2, "expected a hidden binding then the bind");
+    assert_eq!(statements.len(), 3, "expected a hidden binding, the bind, then its unset");
     let EvalStmt::VarReferenceBind { target, source } = &statements[0] else {
         panic!("first statement should bind the source to a hidden name: {statements:?}");
     };
@@ -591,6 +591,7 @@ fn parse_fragment_binds_a_property_target_to_a_property_source() {
             source: target.clone(),
         }
     );
+    assert_eq!(&statements[2], &EvalStmt::UnsetVar { name: target.clone() });
 }
 
 /// Verifies nested array elements can bind to an existing variable reference.
