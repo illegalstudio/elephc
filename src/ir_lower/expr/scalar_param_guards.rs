@@ -39,20 +39,31 @@ thread_local! {
     /// `C::m`); see [`install_param_decl_lines`].
     static PARAM_DECL_LINES: std::cell::RefCell<HashMap<String, Vec<Span>>> =
         std::cell::RefCell::new(HashMap::new());
+    /// The PHP name of each include-variant function symbol, keyed by the case-folded symbol
+    /// (`__elephc_include_variant_<hash>_f` -> `f`); see [`install_param_decl_lines`].
+    static VARIANT_PUBLIC_NAMES: std::cell::RefCell<HashMap<String, String>> =
+        std::cell::RefCell::new(HashMap::new());
 }
 
-/// Restores the previously installed parameter lines when dropped.
+/// Restores the previously installed parameter lines and variant names when dropped.
 pub(crate) struct ParamDeclLinesScope {
-    previous: Option<HashMap<String, Vec<Span>>>,
+    previous: Option<(HashMap<String, Vec<Span>>, HashMap<String, String>)>,
 }
 
 impl Drop for ParamDeclLinesScope {
-    /// Reinstalls the table that was active before this lowering run.
+    /// Reinstalls the tables that were active before this lowering run.
     fn drop(&mut self) {
-        if let Some(previous) = self.previous.take() {
-            PARAM_DECL_LINES.with(|slot| slot.replace(previous));
+        if let Some((lines, names)) = self.previous.take() {
+            PARAM_DECL_LINES.with(|slot| slot.replace(lines));
+            VARIANT_PUBLIC_NAMES.with(|slot| slot.replace(names));
         }
     }
+}
+
+/// Returns the PHP function name behind an include-variant symbol, as recorded by the
+/// program's `FunctionVariantGroup`s (never parsed back out of the symbol's spelling).
+pub(crate) fn variant_public_name(symbol: &str) -> Option<String> {
+    VARIANT_PUBLIC_NAMES.with(|slot| slot.borrow().get(&crate::names::php_symbol_key(symbol)).cloned())
 }
 
 /// Installs, for one lowering run, where each declared parameter starts.
@@ -68,6 +79,8 @@ pub(crate) fn install_param_decl_lines(
     let mut lines = HashMap::new();
     let mut groups = Vec::new();
     collect_param_decl_lines(program, classes, &mut lines, &mut groups);
+    let names = groups.iter().flat_map(|(name, variants)| variants.iter()
+        .map(|variant| (crate::names::php_symbol_key(variant), name.clone()))).collect();
     // A function an included file declares is lowered under a generated variant name, while
     // its guards name the PHP function: give that name the variant's sites when every
     // variant declares its parameters on the same lines of the same file.
@@ -80,7 +93,12 @@ pub(crate) fn install_param_decl_lines(
             }
         }
     }
-    ParamDeclLinesScope { previous: Some(PARAM_DECL_LINES.with(|slot| slot.replace(lines))) }
+    ParamDeclLinesScope {
+        previous: Some((
+            PARAM_DECL_LINES.with(|slot| slot.replace(lines)),
+            VARIANT_PUBLIC_NAMES.with(|slot| slot.replace(names)),
+        )),
+    }
 }
 
 /// Records the parameter sites of the declarations in `stmts`, including those an included

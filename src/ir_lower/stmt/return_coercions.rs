@@ -134,7 +134,8 @@ fn guard_declared_scalar_return(
         }
         return ScalarReturnGuard::Checked(value);
     }
-    // A closure is named by its PHP label (`{closure:file:line}`), not its generated symbol.
+    // Named by its PHP label: `{closure:file:line}` for a closure, the PHP name of an
+    // include-variant function, `class@anonymous::m` for an anonymous class's method.
     let prefix = format!(
         "{}(): Return value must be of type {}, ",
         crate::ir_lower::object_boundaries::callable_label(ctx),
