@@ -32,3 +32,6 @@ pub(crate) fn publish_mixed_symbol(
     if release_previous { abi::emit_call_label(emitter, "__rt_decref_any"); }
     abi::emit_pop_reg(emitter, result);
 }
+
+#[cfg(test)]
+mod memoir_tests;
