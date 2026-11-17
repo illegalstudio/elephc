@@ -69,7 +69,7 @@ unset($box, $name, $throwing, $error);
     eval_release_value(&mut context, &mut values, returned).unwrap();
     assert_eq!(values.output, "r|4|5|5|6|ab:ab|caught|");
     for (id, value) in &values.values {
-        if matches!(value, FakeValue::String(text) if text == "ab") {
+        if matches!(value, FakeValue::String(text) if text == "ab") && !values.held_by_object_slot(*id) {
             assert_eq!(values.cell_owners[id], 0, "computed result {id} escaped: {value:?}");
         }
     }

@@ -861,7 +861,9 @@ fn failed_property_array_rhs_releases_prior_operands() {
         assert_eq!(values.releases.iter().filter(|cell| **cell == object).count(), usize::from(computed));
         let keys = values.values.iter().filter(|(_, value)| matches!(value, FakeValue::Int(0))).collect::<Vec<_>>();
         assert!(!keys.is_empty(), "the key was evaluated before the failed RHS");
-        for (id, _) in keys { assert_eq!(values.cell_owners[id], 0, "retire the staged key"); }
+        for (id, _) in keys.into_iter().filter(|(id, _)| !values.held_by_object_slot(**id)) {
+            assert_eq!(values.cell_owners[id], 0, "retire the staged key");
+        }
         assert_eq!(scope.visible_cell("box"), Some(object));
     }
 }

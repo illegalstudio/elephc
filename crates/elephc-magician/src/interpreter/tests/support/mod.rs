@@ -358,6 +358,16 @@ impl FakeOps {
             .find_map(|(property, value)| (property == name).then_some(*value))
     }
 
+    /// Returns whether any live fake object stores this cell id in a property slot.
+    ///
+    /// The fake never destroys objects, and its slots own what they hold, so a value kept by a
+    /// slot of an object the program already dropped (a thrown error's `code`, an unset local's
+    /// property) keeps an owner no interpreter path can retire. Leak assertions skip those.
+    pub(super) fn held_by_object_slot(&self, id: usize) -> bool {
+        self.values.values().any(|value| matches!(value, FakeValue::Object(properties)
+            if properties.iter().any(|(_, held)| held.as_ptr() as usize == id)))
+    }
+
     /// Returns whether one handle is among an object's stored property values.
     ///
     /// Used to tell a method result that was MINTED for the call from one that is a stored slot
