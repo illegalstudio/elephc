@@ -53,7 +53,8 @@ pub(super) fn lower_assoc_array_literal_as(
         let value_expr = reference_source.unwrap_or(value);
         let key_value = lower_expr(ctx, key);
         let key = root_array_literal_item(ctx, key_value, key.span, &mut roots);
-        let value_operand = lower_expr(ctx, value_expr);
+        let value_operand = lower_reference_literal_value(ctx, value_expr)
+            .unwrap_or_else(|| lower_expr(ctx, value_expr));
         // A packed record address or `null` stored as a pointer value is the pointer word.
         let value_operand = match &hash_ty {
             PhpType::AssocArray { value: value_ty, .. } => {
@@ -66,15 +67,7 @@ pub(super) fn lower_assoc_array_literal_as(
         ctx.emit_void(Op::HashSet, vec![hash.value, key.value, value.value], None, Op::HashSet.default_effects(), Some(expr.span));
         if let Some(source) = reference_source {
             let hash = load_published_container(ctx, owner, hash_ty.clone(), expr.span);
-            let cell = ctx.emit_value(
-                Op::LoadArrayElemRefCell,
-                vec![hash.value, key.value],
-                None,
-                PhpType::Mixed,
-                Op::LoadArrayElemRefCell.default_effects(),
-                Some(value_expr.span),
-            );
-            bind_reference_literal_source(ctx, source, cell, PhpType::Mixed, value_expr.span);
+            bind_reference_literal_entry(ctx, hash.value, key.value, source, value_expr.span);
         }
         if guarded { ctx.refresh_argument_array_guard(hash, expr.span); }
         for slot in roots.into_iter().rev() {
@@ -82,6 +75,85 @@ pub(super) fn lower_assoc_array_literal_as(
         }
     }
     take_published_container(ctx, owner, hash_ty, expr.span)
+}
+
+/// Lowers the value inserted for one `&$name` literal element.
+///
+/// A variable that already owns a reference cell stores the cell's current payload, not the
+/// cell pointer: `lower_expr()` reads the pointer for a Mixed ref-cell local, which would put
+/// an opaque address into the hash.
+pub(super) fn lower_reference_literal_value(
+    ctx: &mut LoweringContext<'_, '_>,
+    source: &Expr,
+) -> Option<LoweredValue> {
+    let ExprKind::Variable(name) = &source.kind else { return None; };
+    if !ctx.is_ref_bound_local(name) {
+        return None;
+    }
+    let slot = ctx.local_slots.get(name).copied()?;
+    Some(ctx.emit_owned_value(
+        Op::LoadRefCellValue,
+        Vec::new(),
+        Some(Immediate::LocalSlot(slot)),
+        PhpType::Mixed,
+        Op::LoadRefCellValue.default_effects(),
+        Some(source.span),
+    ))
+}
+
+/// Binds one `&$name` literal element to reference storage.
+///
+/// A variable that is already a reference must share its existing cell: creating a fresh
+/// cell and rebinding the variable would leave earlier elements (`$a = [&$x]; $b = [&$x];`)
+/// pointing at the old storage. Only the first element promotes the entry from its value.
+pub(super) fn bind_reference_literal_entry(
+    ctx: &mut LoweringContext<'_, '_>,
+    hash: crate::ir::ValueId,
+    key: crate::ir::ValueId,
+    source: &Expr,
+    span: Span,
+) {
+    if let ExprKind::Variable(name) = &source.kind {
+        if ctx.is_ref_bound_local(name) {
+            // The value slot is a dynamic alias (it may hold either a raw value or a cell),
+            // so `LoadLocal` would project the payload. The owner slot holds the managed
+            // cell pointer itself and is the address this literal needs.
+            let slot = ctx
+                .ref_cell_owner_slot(name)
+                .or_else(|| ctx.local_slots.get(name).copied());
+            if let Some(slot) = slot {
+                // `LoadRefCell` projects the cell's PAYLOAD; the binding call needs the
+                // cell address itself, which is the raw slot word for a ref-bound local.
+                let cell = ctx.emit_value(
+                    Op::LoadLocal,
+                    Vec::new(),
+                    Some(Immediate::LocalSlot(slot)),
+                    PhpType::Mixed,
+                    Op::LoadLocal.default_effects(),
+                    Some(span),
+                );
+                ctx.emit_void(
+                    Op::RuntimeCall,
+                    vec![hash, key, cell.value],
+                    Some(Immediate::RuntimeCall(
+                        crate::ir::RuntimeCallTarget::HashEntryBindReference,
+                    )),
+                    crate::ir_lower::effects_lookup::runtime_effects(),
+                    Some(span),
+                );
+                return;
+            }
+        }
+    }
+    let cell = ctx.emit_value(
+        Op::LoadArrayElemRefCell,
+        vec![hash, key],
+        None,
+        PhpType::Mixed,
+        Op::LoadArrayElemRefCell.default_effects(),
+        Some(span),
+    );
+    bind_reference_literal_source(ctx, source, cell, PhpType::Mixed, span);
 }
 
 /// Binds the variable a `&$name` literal element aliases to the entry's managed reference cell.

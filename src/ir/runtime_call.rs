@@ -112,6 +112,12 @@ pub enum RuntimeCallTarget {
     AutoVivifyArray,
     /// Returns an existing hash or allocates an empty one for an undefined local.
     AutoVivifyHash,
+    /// Rebinds an existing hash entry to an already-live managed reference cell.
+    ///
+    /// The entry must already exist (the caller inserts the source value first); the
+    /// runtime promotes it to a reference cell and then replaces that cell with the
+    /// caller's cell, so repeated `[&$x]` elements share one storage.
+    HashEntryBindReference,
     /// Fetches an intermediate array element in write context, installing an
     /// empty child container when the addressed parent slot is missing or null.
     ArrayFetchForWrite,
@@ -270,6 +276,10 @@ impl RuntimeCallTarget {
                 parameters: &[IrType::Heap(IrHeapKind::Hash)],
                 result: IrType::Heap(IrHeapKind::Hash),
             }),
+            RuntimeCallTarget::HashEntryBindReference => Some(RuntimeCallSignature::Polymorphic {
+                min_operands: 3,
+                max_operands: Some(3),
+            }),
             RuntimeCallTarget::ArrayFetchForWrite
             | RuntimeCallTarget::ArrayFetchForWriteAlreadyDiagnosed
             | RuntimeCallTarget::PendingAppendFetchForWrite
@@ -390,6 +400,7 @@ impl RuntimeCallTarget {
             }
             RuntimeCallTarget::AutoVivifyArray => "array.auto_vivify",
             RuntimeCallTarget::AutoVivifyHash => "hash.auto_vivify",
+            RuntimeCallTarget::HashEntryBindReference => "array.hash_entry_bind_reference",
             RuntimeCallTarget::StringWriteOffset => "string.write_offset",
             RuntimeCallTarget::MixedCellResolveForWrite => "array.mixed_cell_resolve_for_write",
             RuntimeCallTarget::MixedCellCopyForWrite => "array.mixed_cell_copy_for_write",

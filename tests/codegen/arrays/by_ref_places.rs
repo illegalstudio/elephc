@@ -358,6 +358,23 @@ echo $value;
     assert_eq!(out, "xy");
 }
 
+/// Repeating `&$value` in later literals reuses the variable's existing cell, so every
+/// earlier element observes the later write instead of keeping a stale copy.
+#[test]
+fn test_repeated_array_literal_references_share_one_cell() {
+    let out = compile_and_run(
+        r#"<?php
+$value = 1;
+$a = [&$value];
+$b = [&$value];
+$c = ["k" => &$value];
+$value = 2;
+echo $a[0], $b[0], $c["k"], $value;
+"#,
+    );
+    assert_eq!(out, "2222");
+}
+
 /// The legacy `array(&$value)` spelling takes the same reference path.
 #[test]
 fn test_legacy_array_literal_reference_aliases_variable() {

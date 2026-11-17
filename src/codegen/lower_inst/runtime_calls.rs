@@ -94,6 +94,7 @@ pub(super) fn lower(
         }
         RuntimeCallTarget::AutoVivifyArray => lower_auto_vivify_array(ctx, inst, false),
         RuntimeCallTarget::AutoVivifyHash => lower_auto_vivify_array(ctx, inst, true),
+        RuntimeCallTarget::HashEntryBindReference => lower_hash_entry_bind_reference(ctx, inst),
         RuntimeCallTarget::StringWriteOffset => super::string_write_offsets::lower_offset(ctx, inst),
         RuntimeCallTarget::WriteDiagnostic => super::string_write_offsets::lower_diagnostic(ctx, inst),
         RuntimeCallTarget::MixedArrayCellHasLiveOwner => super::runtime_array_liveness::lower(ctx, inst),
@@ -625,6 +626,43 @@ fn lower_unary_string(
         ctx.emitter.label(&ready);
     }
     store_if_result(ctx, inst)
+}
+
+/// Rebinds an existing hash entry to a caller-owned managed reference cell.
+///
+/// Operands: the hash, the key and the live cell. The entry was inserted by the lowering
+/// before this call; a miss is a no-op (the value has no reference storage to share).
+fn lower_hash_entry_bind_reference(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+) -> Result<()> {
+    let hash = expect_operand(inst, 0)?;
+    let key = expect_operand(inst, 1)?;
+    let cell = expect_operand(inst, 2)?;
+    let done = ctx.next_label("hash_entry_bind_reference_done");
+    match ctx.emitter.target.arch {
+        crate::codegen_support::platform::Arch::AArch64 => {
+            super::hashes::materialize_hash_key_aarch64(ctx, key)?;
+            ctx.load_value_to_reg(hash, "x0")?;
+            abi::emit_call_label(ctx.emitter, "__rt_hash_get");
+            ctx.emitter.instruction(&format!("cbz x4, {done}"));                // a missing entry has no reference storage to bind
+            ctx.emitter.instruction("add x0, x4, #24");                         // address the entry's low value word
+            ctx.load_value_to_reg(cell, "x1")?;
+            abi::emit_call_label(ctx.emitter, "__rt_hash_entry_bind_reference");
+        }
+        crate::codegen_support::platform::Arch::X86_64 => {
+            super::hashes::materialize_hash_key_x86_64(ctx, key)?;
+            ctx.load_value_to_reg(hash, "rdi")?;
+            abi::emit_call_label(ctx.emitter, "__rt_hash_get");
+            ctx.emitter.instruction(&format!("test r8, r8"));                   // a missing entry has no reference storage to bind
+            ctx.emitter.instruction(&format!("jz {done}"));
+            ctx.emitter.instruction("lea rdi, [r8 + 24]");                      // address the entry's low value word
+            ctx.load_value_to_reg(cell, "rsi")?;
+            abi::emit_call_label(ctx.emitter, "__rt_hash_entry_bind_reference");
+        }
+    }
+    ctx.emitter.label(&done);
+    Ok(())
 }
 
 /// Returns the operand pointer unchanged, or allocates an empty indexed array when it is zero.

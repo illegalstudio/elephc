@@ -437,7 +437,10 @@ pub(super) fn lower_mixed_array_literal(
                 let key = lower_expr(ctx, key);
                 let (key, key_owner) = root_owned_call_operand(ctx, key, span);
                 let value_span = value_expr.span;
-                let value = lower_expr(ctx, value_expr);
+                let value = crate::ir_lower::expr::assoc_array_literals::lower_reference_literal_value(
+                    ctx, value_expr,
+                )
+                .unwrap_or_else(|| lower_expr(ctx, value_expr));
                 let value = retype_pointer_literal_value(ctx, value, pointer_elem.as_ref(), value_span);
                 ctx.emit_void(
                     Op::HashSet,
@@ -447,20 +450,8 @@ pub(super) fn lower_mixed_array_literal(
                     Some(span),
                 );
                 if let Some(source) = reference_source {
-                    let cell = ctx.emit_value(
-                        Op::LoadArrayElemRefCell,
-                        vec![hash.value, key.value],
-                        None,
-                        PhpType::Mixed,
-                        Op::LoadArrayElemRefCell.default_effects(),
-                        Some(value_span),
-                    );
-                    crate::ir_lower::expr::assoc_array_literals::bind_reference_literal_source(
-                        ctx,
-                        source,
-                        cell,
-                        PhpType::Mixed,
-                        value_span,
+                    crate::ir_lower::expr::assoc_array_literals::bind_reference_literal_entry(
+                        ctx, hash.value, key.value, source, value_span,
                     );
                 }
                 if let Some(owner) = key_owner {
