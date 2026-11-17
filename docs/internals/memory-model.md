@@ -74,6 +74,14 @@ the caller's owned nullable exception accumulator and returns the new-throw stat
 Conditional helper-owner retirement receives typed mode/payload offsets and an
 ownership flag bit, preserving the pending exception. The compiler still creates
 and propagates PHP assignment-refusal errors.
+Byte-string copies share the concat reservation protocol or allocate independent
+owned storage. The two reusable C-string destinations start with separate 4 KiB
+inline buffers and can grow into owned heap blocks. Their pointers are borrowed
+until the next overwrite or reset. Memoir emits the declarations and reset, while
+the compiler selects request cleanup timing and arena policy. An already owned
+string or pointer can be adopted directly by a new Mixed cell. Callback cleanup
+loads an owner from its frame slot and clears the slot before releasing the value,
+so reentrant destruction cannot retire the same slot twice.
 Memoir source changes also participate in runtime-object cache identity.
 
 The host API composes assembly output, target ABI and memory-context capabilities.

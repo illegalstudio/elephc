@@ -1,0 +1,112 @@
+//! Purpose:
+//! Adopts native owned payloads directly into fresh Mixed cells.
+//!
+//! Called from:
+//! - Compiler value boxing and native I/O result adapters.
+//!
+//! Key details:
+//! - Inputs already carry the owner being transferred into the cell.
+//! - Result validation and tag selection happen at the call site.
+
+use crate::{Arch, AssemblyEmitter, TargetAbi, ValueTag};
+use crate::layout::{MIXED_CELL_SIZE, MIXED_HEAP_KIND, x86_64_heap_kind_word};
+
+const STRING_TAG: ValueTag = ValueTag::new(1);
+
+/// Adopts the owned string return pair using the expression-result spill sequence.
+pub fn emit_owned_string(emitter: &mut (impl AssemblyEmitter + TargetAbi)) {
+    spill_string(emitter);
+    emit_cell_allocation(emitter);
+    match emitter.arch() {
+        Arch::AArch64 => {
+            emit_aarch64_tag(emitter, "x10", STRING_TAG);
+            emitter.instruction("ldp x11, x12, [sp], #16");                     // recover the transferred pointer and length
+            emitter.instruction("stp x11, x12, [x0, #8]");                      // move both payload words into the new cell
+        }
+        Arch::X86_64 => {
+            emitter.instruction(&format!("mov QWORD PTR [rax], {STRING_TAG}")); // tag the cell as a string
+            emitter.emit_load_temporary_stack_slot("r10", 0);
+            emitter.instruction("mov QWORD PTR [rax + 8], r10");                // move the pointer into the new cell
+            emitter.emit_load_temporary_stack_slot("r10", 8);
+            emitter.instruction("mov QWORD PTR [rax + 16], r10");               // move the length into the new cell
+            emitter.emit_release_temporary_stack(16);
+        }
+    }
+}
+
+/// Adopts the owned string result of a native helper using the paired spill sequence.
+pub fn emit_owned_string_pair(emitter: &mut (impl AssemblyEmitter + TargetAbi)) {
+    spill_string(emitter);
+    emit_cell_allocation(emitter);
+    match emitter.arch() {
+        Arch::AArch64 => {
+            emit_aarch64_tag(emitter, "x9", STRING_TAG);
+            emitter.instruction("ldp x10, x11, [sp], #16");                     // recover the transferred pointer and length
+            emitter.instruction("stp x10, x11, [x0, #8]");                      // transfer the complete string pair
+        }
+        Arch::X86_64 => {
+            emitter.instruction(&format!("mov r10, {STRING_TAG}"));             // prepare the string tag before restoring the pair
+            emitter.instruction("mov QWORD PTR [rax], r10");                    // publish the string tag
+            emitter.emit_load_temporary_stack_slot("r10", 0);
+            emitter.emit_load_temporary_stack_slot("r11", 8);
+            emitter.emit_release_temporary_stack(16);
+            emitter.instruction("mov QWORD PTR [rax + 8], r10");                // transfer the string pointer
+            emitter.instruction("mov QWORD PTR [rax + 16], r11");               // transfer the string length
+        }
+    }
+}
+
+/// Adopts one already-owned pointer in the native result register into a tagged cell.
+pub fn emit_owned_pointer(emitter: &mut (impl AssemblyEmitter + TargetAbi), tag: ValueTag) {
+    emitter.emit_push_reg(emitter.int_result_reg());
+    emit_cell_allocation(emitter);
+    match emitter.arch() {
+        Arch::AArch64 => {
+            emit_aarch64_tag(emitter, "x9", tag);
+            emitter.emit_pop_reg("x10");
+            emitter.instruction("str x10, [x0, #8]");                           // transfer the one-word pointer payload
+            emitter.instruction("str xzr, [x0, #16]");                          // clear the unused high word
+        }
+        Arch::X86_64 => {
+            emitter.instruction(&format!("mov QWORD PTR [rax], {tag}"));        // select the caller's storage tag
+            emitter.emit_pop_reg("r10");
+            emitter.instruction("mov QWORD PTR [rax + 8], r10");                // transfer the one-word pointer payload
+            emitter.instruction("mov QWORD PTR [rax + 16], 0");                 // clear the unused high word
+        }
+    }
+}
+
+/// Preserves the native string pair across cell allocation.
+fn spill_string(emitter: &mut (impl AssemblyEmitter + TargetAbi)) {
+    match emitter.arch() {
+        Arch::AArch64 => emitter.instruction("stp x1, x2, [sp, #-16]!"),        // park the native pointer and length
+        Arch::X86_64 => {
+            emitter.emit_reserve_temporary_stack(16);
+            emitter.emit_store_to_sp("rax", 0);
+            emitter.emit_store_to_sp("rdx", 8);
+        }
+    }
+}
+
+/// Allocates one Mixed cell and stamps its uniform heap header.
+fn emit_cell_allocation(emitter: &mut (impl AssemblyEmitter + TargetAbi)) {
+    emitter.emit_load_int_immediate(emitter.int_result_reg(), MIXED_CELL_SIZE as i64);
+    emitter.emit_call_label("__rt_heap_alloc");
+    match emitter.arch() {
+        Arch::AArch64 => {
+            emitter.instruction(&format!("mov x9, #{MIXED_HEAP_KIND}"));        // materialize the Mixed heap kind
+            emitter.instruction("str x9, [x0, #-8]");                           // stamp the heap header
+        }
+        Arch::X86_64 => {
+            let kind = x86_64_heap_kind_word(MIXED_HEAP_KIND);
+            emitter.instruction(&format!("mov r10, 0x{kind:x}"));               // include the x86_64 heap magic marker
+            emitter.instruction("mov QWORD PTR [rax - 8], r10");                // stamp the heap header
+        }
+    }
+}
+
+/// Writes the storage tag using the scratch register selected by the spill sequence.
+fn emit_aarch64_tag(emitter: &mut impl AssemblyEmitter, scratch: &str, tag: ValueTag) {
+    emitter.instruction(&format!("mov {scratch}, #{tag}"));                     // materialize the selected storage tag
+    emitter.instruction(&format!("str {scratch}, [x0]"));                       // publish the tag in the fresh cell
+}

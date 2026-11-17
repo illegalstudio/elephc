@@ -92,7 +92,7 @@ pub(super) fn emit(emitter: &mut Emitter, module: &Module, data: &DataSection) {
         abi::load_at_offset(emitter, abi::int_result_reg(emitter), 24);
         cleanup.call(emitter, "__rt_decref_hash", false);
     }
-    for symbol in ["_cstr_base", "_cstr2_base", "_print_r_ptr"] {
+    for symbol in elephc_memoir::interop::cstr_scratch::base_symbols().chain(["_print_r_ptr"]) {
         abi::emit_load_symbol_to_reg(emitter, abi::int_result_reg(emitter), symbol, 0);
         abi::emit_store_zero_to_symbol(emitter, symbol, 0);
         cleanup.call(emitter, "__rt_heap_free_safe", false);

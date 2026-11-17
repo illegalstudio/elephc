@@ -96,6 +96,18 @@ whether destruction threw. ABI versioning and hook selection stay in the compile
 the flag bit identifying an extra owner. Its cleanup preserves the pending exception;
 the compiler creates and propagates PHP assignment-refusal errors.
 
+`strings::strcopy` emits both scratch-backed copies and independent owned copies.
+Scratch-backed copies reserve and publish through the concat allocator. Independent
+copies allocate fresh string storage without mbstring identity metadata.
+`interop::cstr_scratch` owns the two reusable NUL-terminated destinations, including
+their inline allocations, growth and reset emission. The host controls when to reset
+them and whether to retire grown blocks individually or reclaim their arena.
+`values::owned_payload` transfers an existing string or pointer owner directly into
+a fresh Mixed cell. The host chooses the storage tag for pointer payloads and
+handles false and null results.
+`frame_owners` clears a typed frame slot before calling the selected release helper.
+Its callers define cleanup order and install the surrounding exception handler.
+
 The compiler retains EIR lifetime analysis, ownership optimization and placement,
 PHP reference/type validation, formatting, output routing, zval pack/unpack,
 resource identity/inventory policy, class/coroutine/SPL layout definitions, platform
@@ -132,6 +144,8 @@ small and large transferred-owner slots on every target and emission mode.
 External ownership adds 150 cases covering complete external-record adapters,
 ordinary and staging-pin release, conditional retirement and the surrounding PHP
 refusal path. These cases also cross-assemble on all five targets and six modes.
+String copies, reusable C-string destinations, frame owner release and both web
+reset paths add 90 assembly fingerprints across the same target and mode matrix.
 
 `build.rs` includes this crate's Rust sources in the runtime-cache identity.
 Changes to these emitters therefore invalidate cached runtime objects even when

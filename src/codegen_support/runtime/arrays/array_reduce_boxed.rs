@@ -207,16 +207,12 @@ fn restore_boundary(emitter: &mut Emitter) {
 
 /// Clears an owner without clobbering either exception-chain or outgoing callback arguments.
 fn clear_slot(emitter: &mut Emitter, offset: usize) {
-    let scratch = abi::secondary_scratch_reg(emitter);
-    abi::emit_load_int_immediate(emitter, scratch, 0);
-    abi::store_at_offset(emitter, scratch, offset);
+    elephc_memoir::frame_owners::emit_clear(emitter, elephc_memoir::FrameOffset::new(offset));
 }
 
 /// Retires an owner with zero-before-release ordering for resumable destructor cleanup.
 fn release_slot(emitter: &mut Emitter, offset: usize, helper: &str) {
-    abi::load_at_offset(emitter, abi::int_result_reg(emitter), offset);
-    clear_slot(emitter, offset);
-    abi::emit_call_label(emitter, helper);
+    elephc_memoir::frame_owners::emit_release(emitter, elephc_memoir::FrameOffset::new(offset), helper);
 }
 
 /// Returns the unboxed low-word register, also used as the exception-chain's older owner.

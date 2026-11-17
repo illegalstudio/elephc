@@ -1067,16 +1067,7 @@ pub(crate) fn emit_runtime_data_fixed(
     out.push_str(&emit_builtin_callable_data(target));
     elephc_memoir::data::append_memory_counters(&mut out, &target);
 
-    out.push_str(&comm_directive("_cstr_buf", 4096, target));
-    out.push_str(&comm_directive("_cstr_buf2", 4096, target));
-    // C-string conversions need a NUL-terminated copy for libc. The 4 KiB inline
-    // buffers stay as the common case; these pointers let the helpers grow into an
-    // owned block when a path, pattern, or command is longer than that, instead of
-    // copying past the buffer into adjacent runtime state.
-    out.push_str(".p2align 3\n.globl _cstr_base\n_cstr_base:\n    .quad _cstr_buf\n");
-    out.push_str(".p2align 3\n.globl _cstr_cap\n_cstr_cap:\n    .quad 4096\n");
-    out.push_str(".p2align 3\n.globl _cstr2_base\n_cstr2_base:\n    .quad _cstr_buf2\n");
-    out.push_str(".p2align 3\n.globl _cstr2_cap\n_cstr2_cap:\n    .quad 4096\n");
+    elephc_memoir::interop::cstr_scratch::append_data(&mut out, &target);
     out.push_str(&comm_directive("_eof_flags", 256, target));
     out.push_str(&comm_directive("_runtime_wrapper_class_buf", 1024, target));
     // Synthetic user-wrapper stream metadata: 256 handles, one kind byte, a

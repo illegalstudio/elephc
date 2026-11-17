@@ -385,16 +385,12 @@ fn restore_boundary(emitter: &mut Emitter) {
 
 /// Clears one root without clobbering a loaded owner or exception-chain argument.
 fn clear_slot(emitter: &mut Emitter, slot: usize) {
-    let scratch = abi::secondary_scratch_reg(emitter);
-    abi::emit_load_int_immediate(emitter, scratch, 0);
-    abi::store_at_offset(emitter, scratch, slot);
+    elephc_memoir::frame_owners::emit_clear(emitter, elephc_memoir::FrameOffset::new(slot));
 }
 
 /// Retires a boxed owner after clearing its root, including when cleanup later resumes.
 fn release_slot(emitter: &mut Emitter, slot: usize) {
-    abi::load_at_offset(emitter, abi::int_result_reg(emitter), slot);
-    clear_slot(emitter, slot);
-    abi::emit_call_label(emitter, "__rt_decref_mixed");
+    elephc_memoir::frame_owners::emit_release(emitter, elephc_memoir::FrameOffset::new(slot), "__rt_decref_mixed");
 }
 
 /// Returns the low payload register of the Mixed unbox ABI.

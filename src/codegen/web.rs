@@ -348,13 +348,7 @@ fn emit_zero_symbol_bytes(emitter: &mut Emitter, symbol: &str, byte_len: usize) 
 /// request heap is reclaimed, so the next request cannot reuse a heap pointer
 /// that now belongs to a different allocation.
 fn emit_cstr_buffer_reset(emitter: &mut Emitter) {
-    let scratch = abi::symbol_scratch_reg(emitter);
-    abi::emit_symbol_address(emitter, scratch, "_cstr_buf");
-    abi::emit_store_reg_to_symbol(emitter, scratch, "_cstr_base", 0);
-    abi::emit_store_imm_to_symbol(emitter, "_cstr_cap", 0, 4096);
-    abi::emit_symbol_address(emitter, scratch, "_cstr_buf2");
-    abi::emit_store_reg_to_symbol(emitter, scratch, "_cstr2_base", 0);
-    abi::emit_store_imm_to_symbol(emitter, "_cstr2_cap", 0, 4096);
+    elephc_memoir::interop::cstr_scratch::emit_reset(emitter);
 }
 
 /// Drains both handler stacks and their eval owners while the request heap is still valid.
