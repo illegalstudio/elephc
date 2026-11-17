@@ -468,6 +468,25 @@ class C { use Needs<int>, Needs<string>; public function foo(): int { return 1; 
     );
 }
 
+/// A requirement a trait satisfies that names `self` is checked for every class using the
+/// trait, so the outcome does not depend on which class is declared first: with
+/// `N::f(): self` and `W::f(): Base`, the class `Other` breaks it in either order. (php 8.5.12
+/// checks the pair once at `W`, with `self` naming `W`, and rejects even `Base` alone.)
+#[test]
+fn test_error_trait_satisfied_self_requirement_is_checked_for_every_user() {
+    let traits = "trait N { abstract public function f(): self; } \
+                  trait W { use N; public function f(): Base { return new Base(); } }";
+    for classes in [
+        "class Base { use W; } class Other { use W; }",
+        "class Other { use W; } class Base { use W; }",
+    ] {
+        expect_error(
+            &format!("<?php {traits} {classes}"),
+            "Cannot change return type when implementing trait method: Other::f",
+        );
+    }
+}
+
 /// Verifies that a class using two traits with a property of the same name but
 /// incompatible visibility reports "incompatible duplicate property".
 #[test]
