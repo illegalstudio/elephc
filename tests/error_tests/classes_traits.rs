@@ -221,6 +221,22 @@ class C { use W; #[\Override] public function foo(): string { return "C"; } }
     );
 }
 
+/// A trait method that satisfies another trait's abstract method, or a second abstract
+/// declaration of it, must keep its signature: php 8.5.12 reports `Declaration of ... must be
+/// compatible with A::foo(...)` for each case below, so none may merge silently. Flattening
+/// accepts only an identical signature for now.
+#[test]
+fn test_error_trait_requirement_merge_needs_a_compatible_signature() {
+    for source in [
+        "<?php trait A { abstract public function foo(int $x): string; } trait B { public function foo(): array { return []; } } class C { use A; use B; }",
+        "<?php trait A { abstract public function foo(int $x): int; } trait B { public function foo(string $s): string { return $s; } } final class C { use A, B; }",
+        "<?php trait A { abstract public function foo(): int; } trait B { abstract public function foo(): string; } class C { use A; use B; public function foo(): int { return 1; } }",
+        "<?php trait A { abstract public function foo(): int; } trait B { abstract public function foo(): string; } abstract class C { use A, B; }",
+    ] {
+        expect_error(source, "with a signature that differs from the abstract trait method it implements");
+    }
+}
+
 /// Verifies that a class using two traits with a property of the same name but
 /// incompatible visibility reports "incompatible duplicate property".
 #[test]
