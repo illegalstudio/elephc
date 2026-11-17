@@ -138,3 +138,6 @@ pub(crate) use unserialize::emit_unserialize;
 
 #[cfg(test)]
 mod json_compatibility_tests;
+
+#[cfg(test)]
+pub(super) use unserialize::emit_owner_records_for_memoir_test;

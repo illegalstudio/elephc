@@ -316,3 +316,5 @@ pub mod local_release;
 pub mod parameter_bindings;
 
 pub mod mixed_payload;
+
+pub mod static_cells;

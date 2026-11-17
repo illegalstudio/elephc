@@ -96,3 +96,9 @@ pub(crate) fn emit_unserialize(emitter: &mut Emitter) {
         }
     }
 }
+
+/// Emits owner records independently of parser semantics for focused memory-boundary tests.
+#[cfg(test)]
+pub(in crate::codegen_support::runtime) fn emit_owner_records_for_memoir_test(emitter: &mut Emitter) {
+    temporaries::emit_unserialize_temporaries(emitter);
+}

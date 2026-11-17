@@ -18,7 +18,8 @@ reference-cell lifetime, wrapper promotion and writable child-slot selection,
 parameter-owner acquisition, original-identity pins, protected cleanup, temporary
 owner retirement, validated boxed object transfers, the object-handle pool, guarded stack mapping,
 zend_string allocation, recursive zval/string/array storage retirement, and memory
-proofs for direct scalar/empty-array cleanup.
+proofs for direct scalar/empty-array cleanup, static binding storage, guard
+records and depth-stamped temporary owner lists.
 It also emits fixed heap, GC, buffer, reference-root, handle-table and string-scratch
 declarations, including raw capture-buffer storage, keeping their existing order
 and byte layout.
@@ -35,7 +36,10 @@ not select an output destination. Zval storage owns copied strings and arrays;
 object and resource payloads remain borrowed native pointers. Mixed wrapper
 promotion receives an optional compiler callback for native type-source association.
 The host also supplies the uninitialized-property sentinel and scalar tags eligible
-for cleanup without child ownership; handler installation stays in the compiler.
+for cleanup without child ownership. Static retirement receives the compiler's
+weak-source unbind callback. Guard primitives receive host owner/spill offsets and
+chain storage; scoped lists receive head/depth symbols. Handler installation,
+failed-constructor destructor policy and parser completion stay in the compiler.
 
 The compiler retains EIR lifetime analysis, ownership optimization and placement,
 PHP reference/type validation, formatting, output routing, zval pack/unpack,
@@ -61,6 +65,8 @@ cover two scratch capacities, C-string storage, recursive zval release, capture
 storage and the compiler routing adapter. Mixed-storage fingerprints cover both
 native reference-validation settings, raw-slot conversion, writable wrapper slots
 and scalar/empty-array release gates through the full compiler cleanup boundary.
+Owner-record fingerprints cover static readers and record size, weak unbinding,
+guard ownership transfer and scoped list detachment through the compiler adapters.
 
 `build.rs` includes this crate's Rust sources in the runtime-cache identity.
 Changes to these emitters therefore invalidate cached runtime objects even when
