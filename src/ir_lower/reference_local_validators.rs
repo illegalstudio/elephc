@@ -14,25 +14,31 @@ use crate::{ir::{Builder, Function, Immediate, IrHeapKind, IrType, LocalSlotId, 
 /// Exposes current owned value bindings through the canonical reference snapshot protocol.
 pub(super) fn prepare_eval_bindings(ctx: &mut super::context::LoweringContext<'_, '_>, span: crate::span::Span) {
     let mut names = ctx.local_slots.keys().filter(|name| {
-        ctx.local_store_contracts.get(&(ctx.loop_storage_scope.clone(), span, (*name).clone()))
-            .is_some_and(|contract| contract.feature == elephc_semantics::StrictFeature::Locals)
-            && ctx.local_is_promotable_to_ref_cell(name)
+        !crate::names::is_generated_local_name(name)
+            && ctx.local_store_contracts.get(&(ctx.loop_storage_scope.clone(), span, (*name).clone()))
+                .is_some_and(|contract| contract.feature == elephc_semantics::StrictFeature::Locals)
+            && ctx.local_can_own_reference_cell(name)
             && (!ctx.is_ref_bound_local(name) || ctx.ref_cell_owner_slot(name).is_some_and(|owner|
-                ctx.slot_is_initialized(owner) && crate::types::canonical_property_reference_payload(
-                    &ctx.builder.local_php_type(owner)).is_some()))
+                (ctx.slot_is_initialized(owner) || ctx.builder.local_php_type(owner) == PhpType::Mixed)
+                    && crate::types::canonical_property_reference_payload(&ctx.builder.local_php_type(owner)).is_some()))
     }).cloned().collect::<Vec<_>>();
     names.sort();
     for name in names {
-        if ctx.is_ref_bound_local(&name) { ctx.bind_local_reference_contract(&name, Some(span)); }
-        else { ctx.promote_local_mixed_ref_cell(&name, Some(span)); }
         let Some(contract) = ctx.local_store_contracts.get(
             &(ctx.loop_storage_scope.clone(), span, name.clone())).cloned() else { continue; };
-        ctx.declare_eval_scope_local();
-        let name = ctx.intern_global_name(&name);
-        ctx.emit_void(Op::EvalScopeBindLocalType, Vec::new(),
-            Some(Immediate::EvalScopeStore(Box::new(crate::ir::EvalScopeStoreImmediate {
-                name, contract: Some(contract.ty),
-            }))), Op::EvalScopeBindLocalType.default_effects(), Some(span));
+        let slot = ctx.local_slots[&name];
+        super::local_binding_state::when_native_bound(ctx, slot, span, |ctx| {
+            if ctx.is_ref_bound_local(&name) && ctx.ref_cell_owner_slot(&name)
+                .is_some_and(|owner| ctx.slot_is_initialized(owner)) {
+                ctx.bind_local_reference_contract(&name, Some(span));
+            } else { ctx.promote_local_mixed_ref_cell(&name, Some(span)); }
+            ctx.declare_eval_scope_local();
+            let name = ctx.intern_global_name(&name);
+            ctx.emit_void(Op::EvalScopeBindLocalType, Vec::new(),
+                Some(Immediate::EvalScopeStore(Box::new(crate::ir::EvalScopeStoreImmediate {
+                    name, contract: Some(contract.ty),
+                }))), Op::EvalScopeBindLocalType.default_effects(), Some(span));
+        });
     }
 }
 

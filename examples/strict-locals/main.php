@@ -99,3 +99,16 @@ function checkRuntimeProducerAlternatives(int $requestCount): void {
     echo "Runtime measurement: ", $measurement, PHP_EOL;
 }
 checkRuntimeProducerAlternatives($argc);
+
+// An unexecuted native declaration does not constrain a fresh eval binding.
+function checkConditionalQuantity(bool $known): void {
+    if ($known) {$quantity=1;}
+    try {
+        eval('$quantity=2.5;');
+        echo "Fresh conditional quantity: ", $quantity, PHP_EOL;
+    } catch (TypeError $error) {
+        echo "The conditional quantity kept its integer type", PHP_EOL;
+    }
+}
+checkConditionalQuantity(true);
+checkConditionalQuantity(false);

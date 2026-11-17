@@ -15,6 +15,8 @@ use crate::support::*;
 fn test_strict_runtime_eval_binding_origins_bundle() {
     let source = format!("{}\n{}", include_str!("../fixtures/strict/eval_runtime_binding_origin.php"),
         include_str!("../fixtures/strict/eval_runtime_producer_contracts.php").strip_prefix("<?php").unwrap());
+    let source = format!("{source}\n{}", include_str!("../fixtures/strict/eval_conditional_native_origins.php")
+        .strip_prefix("<?php").unwrap());
     for mode in ["--ir-opt=off", "--ir-opt=on"] {
         for strict in [false, true] {
             let mut flags = vec![mode, "--heap-debug"];
@@ -22,7 +24,14 @@ fn test_strict_runtime_eval_binding_origins_bundle() {
             let output = StrictFixture::new(&source).capture(&flags);
             let expected = if strict { "Tdouble|2.5|T1|T3.5|open|Tarray|TNULL|T1|new|Tstart|U|T|R|B|" }
                 else { "Winteger|1|Wbad|W2|open|Winteger|Wstring|Wbad|new|W1|U|W|R|W|" };
-            assert_eq!(String::from_utf8_lossy(&output.stdout), expected, "{flags:?}: {}",
+            let conditional = if strict { concat!(
+                "Tinteger:1|Wdouble:2.5|Tinteger:1|Wdouble:2.5|",
+                "Tinteger:1|Tinteger:1|Wdouble:2.5|Wdouble:2.5|",
+                "Tinteger:1|Tinteger:1|Wdouble:2.5|Wdouble:2.5|P|Ddouble:3.5|") }
+                else { concat!("Wdouble:2.5|Wdouble:2.5|Wdouble:2.5|Wdouble:2.5|",
+                    "Wdouble:2.5|Wdouble:2.5|Wdouble:2.5|Wdouble:2.5|",
+                    "Wdouble:2.5|Wdouble:2.5|Wdouble:2.5|Wdouble:2.5|W|Ddouble:3.5|") };
+            assert_eq!(String::from_utf8_lossy(&output.stdout), format!("{expected}{conditional}"), "{flags:?}: {}",
                 String::from_utf8_lossy(&output.stderr));
             assert!(String::from_utf8_lossy(&output.stderr).contains("HEAP DEBUG: leak summary: clean"),
                 "{flags:?}: {}", String::from_utf8_lossy(&output.stderr));
@@ -391,7 +400,7 @@ numericScope($argc);
 fn test_strict_numeric_locals_example() {
     let source = include_str!("../../examples/strict-locals/main.php");
     assert_eq!(StrictFixture::new(source).run(&["--strict-locals"]),
-        "Quantity requires an integer or null\nQuantity: 2\nQuantity: 3\nQuantity: not tracked\nThe integer binding kept its value\nArithmetic result: double\nFresh measurement: 2.5\nThe referenced quantity kept its integer value\nThe label kept its string value\nThe conversion kept the label value\nThe literal eval kept the label value\nThe eval-created quantity kept its integer type\nThe runtime-created quantity kept its integer type\nRuntime measurement: 2.5\n");
+        "Quantity requires an integer or null\nQuantity: 2\nQuantity: 3\nQuantity: not tracked\nThe integer binding kept its value\nArithmetic result: double\nFresh measurement: 2.5\nThe referenced quantity kept its integer value\nThe label kept its string value\nThe conversion kept the label value\nThe literal eval kept the label value\nThe eval-created quantity kept its integer type\nThe runtime-created quantity kept its integer type\nRuntime measurement: 2.5\nThe conditional quantity kept its integer type\nFresh conditional quantity: 2.5\n");
 }
 
 

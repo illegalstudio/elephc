@@ -173,6 +173,7 @@ pub(super) fn detach_rebound_local(
             ctx.emitter.instruction(&format!("je {attached}"));                 // preserve the original alias unless unset detached this name
         }
     }
+    crate::codegen::local_binding_state::mark(ctx, local.slot, false);
     detach_missing_local(ctx, local, pending_throw)?;
     ctx.emitter.label(&attached);
     Ok(())

@@ -233,6 +233,7 @@ pub(super) fn lower_instruction(ctx: &mut FunctionContext<'_>, inst_id: InstId) 
         Op::LocalPlace => local_loads::lower_local_place(ctx, &inst),
         Op::StoreLocal => lower_store_local(ctx, &inst),
         Op::SetLocalBindingState => super::local_binding_state::lower(ctx, &inst),
+        Op::GetNativeBindingState => super::local_binding_state::lower_get(ctx, &inst),
         Op::UnsetLocal => lower_unset_local(ctx, &inst),
         Op::ZeroLocalSlot => lower_zero_local_slot(ctx, &inst),
         Op::LoadRefCell => lower_load_ref_cell(ctx, &inst),

@@ -127,7 +127,7 @@ pub fn validate_module(module: &Module) -> Result<(), ValidationError> {
                 }
             }
             let mut required = inst.arithmetic_policy().requirements().bits();
-            if matches!(inst.op, Op::BindLocalRefContract | Op::SetLocalBindingState | Op::EvalScopeBindLocalType) || matches!(&inst.immediate,
+            if matches!(inst.op, Op::BindLocalRefContract | Op::SetLocalBindingState | Op::GetNativeBindingState | Op::EvalScopeBindLocalType) || matches!(&inst.immediate,
                 Some(Immediate::EvalScopeStore(metadata)) if metadata.contract.is_some()) {
                 required |= elephc_semantics::StrictFeature::Locals.bit();
             }
@@ -801,7 +801,7 @@ fn validate_instruction_immediate(
         PropUnset => require_immediate(inst_id, inst, "property name or initializer physical slot", |imm| {
             matches!(imm, Imm::Data(_) | Imm::PropertyRef { .. })
         }),
-        StrAppend | LocalPlace | LoadLocal | StoreLocal | SetLocalBindingState | UnsetLocal | ZeroLocalSlot | LoadRefCell | LoadRefCellValue | StoreRefCell
+        StrAppend | LocalPlace | LoadLocal | StoreLocal | SetLocalBindingState | GetNativeBindingState | UnsetLocal | ZeroLocalSlot | LoadRefCell | LoadRefCellValue | StoreRefCell
         | ReleaseLocalRefCell | AcquireRefCell | BindLocalRefContract
         | ReleaseLocalSlot | ReleaseRawLocalSlot | PushCallOperandOwner | PopCallOperandOwner
         | LoadStaticLocal | StoreStaticLocal | InitStaticLocal | StaticLocalUninitialized
@@ -1109,6 +1109,17 @@ fn validate_opcode_rules(
                 || !matches!(inst.result_php_type, PhpType::Pointer(_))
             {
                 return Err(ValidationError::ResultTypeMismatch(result));
+            }
+            Ok(())
+        }
+        GetNativeBindingState => {
+            check_count(inst_id, inst, 0, "0")?;
+            let Some(Immediate::LocalSlot(slot)) = inst.immediate else { unreachable!() };
+            if !function.flags.tracks_local_binding_state
+                || !function.locals.get(slot.as_raw() as usize).is_some_and(|local| local.kind == LocalKind::PhpLocal
+                    && local.name.as_deref().is_some_and(|name| !crate::names::is_generated_local_name(name)))
+                || inst.result_php_type != PhpType::Bool {
+                return Err(ValidationError::InvalidLocalReferenceContract(inst_id));
             }
             Ok(())
         }

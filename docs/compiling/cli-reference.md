@@ -976,7 +976,9 @@ the right-hand side, keep explicit `mixed` producers open, and validate aliases
 before mutation. Native copies use the checker-provided binding contract, separately
 from the frame representation. Conditional producers and declared function/builtin
 returns retain their permitted alternatives. `unset` retires the inferred origin
-before rebinding.
+before rebinding. Conditional native origins apply only on paths that actually
+initialized them. A binding first created by eval keeps its own origin on later
+calls, including repeated loop iterations and names recreated after eval `unset`.
 
 A body that **calls** `eval()` anywhere is the other side of that coin: the
 eval scope reaches the surrounding function's locals BY NAME, while the kill

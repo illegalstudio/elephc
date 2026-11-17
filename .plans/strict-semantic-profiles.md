@@ -1166,3 +1166,50 @@ eval activations, with a clean heap. The bound activation must reject and retain
 integer1; the unbound activation may establish a fresh float. Preserve real binding
 presence while adding conditional origin transport. Then continue remaining
 binding flow, six pending semantic families and complete umbrella/host acceptance.
+
+
+### Verified130: conditional native binding provenance
+
+Checker eval capture retains available origin facts across conditional initialization.
+A reusable when_native_bound CFG helper reads explicit GetNativeBindingState EIR
+before native source promotion and type publication. It restores entry MUST
+initialization facts at the join while existing EIR analysis retains MAY alias
+representations. Only real PHP source names qualify; compiler-generated argument
+collectors do not have source presence words. Safe Mixed-owner paths can prepare
+again on later eval calls without changing a raw typed-reference ABI.
+
+Initialized presence alone is insufficient. Private frame words now distinguish
+unbound0, native1 and eval2 origins. Snapshotting still tests nonzero presence.
+Native preparation reads only the native-origin bit. Ordinary native writes and
+scope reloads preserve an established nonzero origin; unset/detachment ends it.
+An eval-created float therefore cannot acquire the int contract of an unexecuted
+native predecessor on a subsequent loop iteration. No frame ABI or runtime type
+universe was added.
+
+Initial5c8f568e found an invalid state read for a generated argument collector;
+EIR inspection636a4839 identified it and source eligibility now excludes it.
+64ff8912 passed basic runtime/literal bound and unbound cases in1m30s,73 allocations
+and frees. Repeated baseline7ec2ef09 showed false-branch firstFloat acceptance
+followed by a wrong second rejection, with a clean heap. Native/eval provenance
+repairs that case:081143a5 passed both proofs in2m28s, repeated88 allocations/frees.
+First full gate5a3a8a64 passed the extended native bundle and target gates, then
+exposed a bridge-only null metadata rejection. Pure null alias isolationb124f360
+passed, and the shared compact native type decoder was found to reject standalone
+null as an empty variant list. It now retains the null-only contract, with focused
+parameter/return/nullable/void controls.
+
+Finalea32a07f passed compiler/default archives and thirteen exact gates in6m02s:
+metadata decoder controls, independent frame storage, conditional CFG and existing
+producer metadata on all five targets, real five-target origin-state assembly,
+combined native origins/producers/conditional/repeated/unset bundle, native
+observation, scalar/null aliases, fresh literal origins, suspended scope ownership,
+settype and example. Both IR modes and permissive/Locals native cases remain heap
+clean. Assembly comments and diff hygiene pass. No full suite, push or PR was run.
+
+Next131 is explicit: probe13af4be7 prints Tdouble:2.5|Winteger:1|Winteger:1|
+for native writes after eval unset/rebinding and a native copy of a runtime-created
+float. The required behavior is Wdouble:3.5|Tdouble:2.5|Tdouble:2.5|. Its isolated
+pure-literal native copy also prints Winteger:1| instead of Tdouble:2.5|. Both
+baselines have clean heaps. Complete native dynamic-origin store/copy transport,
+then remaining binding flow, six pending semantic families and umbrella plus host
+acceptance.

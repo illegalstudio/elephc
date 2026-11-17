@@ -313,3 +313,25 @@ fn strict_eval_native_producer_metadata_emits_on_every_target() {
         assert!(assembly.contains("__elephc_eval_scope_binding_type_v1"), "{name}");
     }
 }
+
+/// Conditional source contracts use provenance guards so absent branches remain available to eval.
+#[test]
+fn strict_eval_conditional_native_origins_use_guarded_cfg_on_every_target() {
+    let source = "<?php function conditionalMetadata(bool $bound): void { if($bound) {$value=1;} eval('$value=2.5;'); } conditionalMetadata($argc>0);";
+    let program = crate::parser::parse_with_mode(&crate::lexer::tokenize(source).unwrap(), SourceMode::Php).unwrap();
+    let profile = SemanticProfile::PERMISSIVE.with(StrictFeature::Locals, true)
+        .with(StrictFeature::DynamicCode, true);
+    for name in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+        let target = Target::parse(name).unwrap();
+        let checked = crate::types::checker::check_staged_semantics(&program, target, profile).unwrap();
+        let module = crate::ir_lower::lower_program(&program, &checked, target, false).unwrap();
+        let function = module.functions.iter().find(|function| function.name == "conditionalMetadata").unwrap();
+        let slot = function.locals.iter().find(|local| local.name.as_deref() == Some("value")).unwrap().id;
+        let guard = function.instructions.iter().find(|inst| inst.op == crate::ir::Op::GetNativeBindingState
+            && inst.immediate == Some(crate::ir::Immediate::LocalSlot(slot))).expect("possible origin uses runtime provenance");
+        assert!(function.blocks.iter().any(|block| matches!(&block.terminator,
+            Some(crate::ir::Terminator::CondBr { cond, .. }) if Some(*cond) == guard.result)), "{name}");
+        crate::ir::validate_module(&module).unwrap();
+        crate::codegen::generate_user_asm_from_ir(&module, false, false).unwrap();
+    }
+}

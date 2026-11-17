@@ -16,9 +16,7 @@ impl Checker {
     /// Captures initialized binding origins before an opaque eval can widen their views.
     pub(crate) fn record_eval_binding_contracts(&mut self, env: &TypeEnv, span: Span) {
         for (name, actual) in env {
-            if self.definitely_bound_locals.contains(name) || self.local_parameter_names.contains(name) {
-                self.record_local_reference_contract(name, actual, span);
-            }
+            self.record_local_reference_contract(name, actual, span);
         }
     }
 

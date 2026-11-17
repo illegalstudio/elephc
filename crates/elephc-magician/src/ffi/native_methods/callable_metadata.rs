@@ -212,7 +212,7 @@ fn native_callable_type_from_spec(
             None => allows_null = true,
         }
     }
-    if variants.is_empty() {
+    if variants.is_empty() && !allows_null {
         return None;
     }
     Some(EvalParameterType::new(variants, allows_null))
@@ -301,4 +301,24 @@ mod tests {
                 if atom == &elephc_generics::Type::atom("false")
         ));
     }
+
+    /// Native source contracts retain standalone null without changing void parameter eligibility.
+    #[test]
+    fn native_type_specs_preserve_standalone_null_and_nullable_contracts() {
+        for position in [NativeCallableTypePosition::Parameter, NativeCallableTypePosition::Return] {
+            let null = native_callable_type_from_spec("null", position).expect("standalone null is a value contract");
+            assert!(null.allows_null());
+            assert!(null.variants().is_empty());
+            for source in ["?int", "int|null"] {
+                let nullable = native_callable_type_from_spec(source, position).unwrap();
+                assert!(nullable.allows_null());
+                assert_eq!(nullable.variants(), &[EvalParameterTypeVariant::Int]);
+            }
+        }
+        assert!(native_callable_type_from_spec("void", NativeCallableTypePosition::Parameter).is_none());
+        assert!(native_callable_type_from_spec("", NativeCallableTypePosition::Parameter).is_none());
+        assert_eq!(native_callable_type_from_spec("void", NativeCallableTypePosition::Return).unwrap().variants(),
+            &[EvalParameterTypeVariant::Void]);
+    }
+
 }

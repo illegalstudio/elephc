@@ -5,11 +5,16 @@
 //! - Frame prologues, SetLocalBindingState lowering and eval snapshot/reload helpers.
 //!
 //! Key details:
-//! - Zero-filled storage is never evidence that a PHP variable was initialized.
+//! - Zero means unbound; native and eval origins use distinct nonzero words.
+//! - Ordinary writes and reloads preserve the current origin until the binding is unset.
 //! - All operations use the shared target ABI helpers and frame-assigned state offsets.
 
 use super::{abi, context::FunctionContext, CodegenIrError, Result};
 use crate::ir::{Immediate, Instruction, LocalSlotId};
+use crate::codegen::platform::Arch;
+
+const NATIVE_ORIGIN: i64 = 1;
+const EVAL_ORIGIN: i64 = 2;
 
 /// Starts native binding flags unbound before EIR parameter and source initialization events.
 pub(super) fn initialize(ctx: &mut FunctionContext<'_>) {
@@ -28,8 +33,34 @@ pub(super) fn lower(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result
     let offset = ctx.binding_state_offsets.get(&slot).copied().ok_or_else(||
         CodegenIrError::invalid_module("source binding has no frame state"))?;
     ctx.load_value_to_result(value)?;
+    let store = ctx.next_label("binding_native_store");
+    let done = ctx.next_label("binding_native_keep_origin");
+    abi::emit_branch_if_int_result_zero(ctx.emitter, &store);
+    let current = abi::secondary_scratch_reg(ctx.emitter);
+    abi::load_at_offset(ctx.emitter, current, offset);
+    abi::emit_branch_if_zero_wide(ctx.emitter, current, &store);
+    abi::emit_jump(ctx.emitter, &done);
+    ctx.emitter.label(&store);
     abi::store_at_offset(ctx.emitter, abi::int_result_reg(ctx.emitter), offset);
+    ctx.emitter.label(&done);
     Ok(())
+}
+
+/// Reads only native provenance while eval-created bindings retain their independent source.
+pub(super) fn lower_get(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+    let Some(Immediate::LocalSlot(slot)) = inst.immediate else {
+        return Err(CodegenIrError::invalid_module("binding state requires a source local slot"));
+    };
+    let offset = ctx.binding_state_offsets.get(&slot).copied().ok_or_else(||
+        CodegenIrError::invalid_module("source binding has no frame state"))?;
+    let result = inst.result.ok_or_else(|| CodegenIrError::invalid_module("binding state read has no result"))?;
+    let register = abi::int_result_reg(ctx.emitter);
+    abi::load_at_offset(ctx.emitter, register, offset);
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => ctx.emitter.instruction(&format!("and {register}, {register}, #{NATIVE_ORIGIN}")), // exclude eval-created binding origins
+        Arch::X86_64 => ctx.emitter.instruction(&format!("and {register}, {NATIVE_ORIGIN}")), // return only the native-origin bit as Bool
+    }
+    ctx.store_result_value(result)
 }
 
 /// Skips a native snapshot when its PHP variable is not bound on the executed source path.
@@ -44,9 +75,16 @@ pub(super) fn branch_if_uninitialized(ctx: &mut FunctionContext<'_>, slot: Local
 pub(super) fn mark(ctx: &mut FunctionContext<'_>, slot: LocalSlotId, initialized: bool) {
     if let Some(offset) = ctx.binding_state_offsets.get(&slot).copied() {
         if initialized {
+            let create = ctx.next_label("binding_eval_create_origin");
+            let done = ctx.next_label("binding_eval_preserve_origin");
             let scratch = abi::secondary_scratch_reg(ctx.emitter);
-            abi::emit_load_int_immediate(ctx.emitter, scratch, 1);
+            abi::load_at_offset(ctx.emitter, scratch, offset);
+            abi::emit_branch_if_zero_wide(ctx.emitter, scratch, &create);
+            abi::emit_jump(ctx.emitter, &done);
+            ctx.emitter.label(&create);
+            abi::emit_load_int_immediate(ctx.emitter, scratch, EVAL_ORIGIN);
             abi::store_at_offset(ctx.emitter, scratch, offset);
+            ctx.emitter.label(&done);
         } else { abi::emit_store_zero_to_local_slot(ctx.emitter, offset); }
     }
 }
@@ -79,4 +117,55 @@ mod tests {
             }
         }
     }
+
+    /// Real assemblers accept native/eval origin updates and native-origin reads on every ABI.
+    #[test]
+    #[ignore = "requires clang with ELF and Apple AArch64 assembler support"]
+    fn binding_origin_state_operations_assemble_on_every_target() {
+        use crate::codegen::{context::FunctionContext, data_section::DataSection, emit::Emitter,
+            shared_state::SharedCodegenState};
+        use crate::ir::{Immediate, Module, Op, Ownership};
+        use std::{io::Write, process::{Command, Stdio}};
+        for (name, triple) in [("linux-x86_64", "x86_64-linux-gnu"),
+            ("linux-aarch64", "aarch64-linux-gnu"), ("macos-aarch64", "arm64-apple-macos11"),
+            ("ios-arm64", "arm64-apple-ios13"), ("ios-sim-arm64", "arm64-apple-ios13-simulator")] {
+            let target = Target::parse(name).unwrap();
+            let module = Module::new(target);
+            let mut function = Function::new("originFlags".into(), IrType::I64, PhpType::Bool);
+            function.flags.tracks_local_binding_state = true;
+            let slot = function.add_local(Some("value".into()), IrType::I64, PhpType::Int, LocalKind::PhpLocal);
+            let mut builder = Builder::new(&mut function);
+            let entry = builder.create_named_block("entry", Vec::new());
+            builder.set_entry(entry); builder.position_at_end(entry);
+            let value = builder.emit(Op::ConstBool, Vec::new(), Some(Immediate::Bool(true)),
+                IrType::I64, PhpType::Bool, Ownership::NonHeap).unwrap();
+            builder.emit(Op::SetLocalBindingState, vec![value], Some(Immediate::LocalSlot(slot)),
+                IrType::Void, PhpType::Void, Ownership::NonHeap);
+            let result = builder.emit(Op::GetNativeBindingState, Vec::new(), Some(Immediate::LocalSlot(slot)),
+                IrType::I64, PhpType::Bool, Ownership::NonHeap).unwrap();
+            builder.terminate(Terminator::Return { value: Some(result) });
+            let layout = frame::layout_for_function(&function, target, false, false, false);
+            let mut emitter = Emitter::new(target); let mut data = DataSection::new();
+            let mut shared = SharedCodegenState::default();
+            {
+                let mut ctx = FunctionContext::new(&module, &function, &mut emitter, &mut data,
+                    &mut shared, layout, false, false, false, None);
+                super::abi::emit_load_int_immediate(ctx.emitter, super::abi::int_result_reg(ctx.emitter), 1);
+                ctx.store_result_value(value).unwrap();
+                super::lower(&mut ctx, &function.instructions[1]).unwrap();
+                super::mark(&mut ctx, slot, true);
+                super::mark(&mut ctx, slot, false);
+                super::mark(&mut ctx, slot, true);
+                super::lower_get(&mut ctx, &function.instructions[2]).unwrap();
+            }
+            let syntax = if target.arch == crate::codegen::platform::Arch::X86_64 { ".intel_syntax noprefix\n" } else { "" };
+            let assembly = format!("{syntax}.text\n{}", emitter.output());
+            let mut process = Command::new("clang").args(["-target", triple, "-x", "assembler", "-c", "-o", "/dev/null", "-"])
+                .stdin(Stdio::piped()).stderr(Stdio::piped()).spawn().expect("clang is required for explicit target validation");
+            process.stdin.take().unwrap().write_all(assembly.as_bytes()).unwrap();
+            let output = process.wait_with_output().unwrap();
+            assert!(output.status.success(), "{name}: {}", String::from_utf8_lossy(&output.stderr));
+        }
+    }
+
 }
