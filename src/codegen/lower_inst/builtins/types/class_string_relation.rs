@@ -218,8 +218,8 @@ fn emit_runtime_target(
 
     // Frame: [0) subject name ptr, [8) its length, [16) the answer when related (the runtime
     // `$allow_string` truthiness for a name, 1 for an object), [24) target ptr, [32) its length,
-    // [40) the object subject's class id.
-    abi::emit_reserve_temporary_stack(ctx.emitter, 48);
+    // [40) the object subject's class id, [48) the eval bridge candidate list ptr, [56) its length.
+    abi::emit_reserve_temporary_stack(ctx.emitter, 64);
     let (ptr, len) = abi::string_result_regs(ctx.emitter);
     ctx.load_string_value_to_regs(target, ptr, len)?;
     abi::emit_store_to_sp(ctx.emitter, ptr, 24);
@@ -368,13 +368,15 @@ fn emit_runtime_target(
         // The bridge splits its candidate list at NUL bytes, so a target holding one would be
         // read as several names. No class name holds a NUL byte: such a target names no class.
         emit_branch_if_slot_string_has_nul(ctx, 24, &unrelated);
-        // Only an eval-declared class can still answer. The bridge treats its first candidate
-        // as the target, so the runtime target name is the whole candidate list.
+        // Only an eval-declared class can still answer, and it may extend or implement a
+        // compiled class-like related to the target. The bridge only walks eval classes, so like
+        // the literal-target probe it gets the target first, then those compiled descendants.
+        emit_eval_candidate_list(ctx, literal_target.as_deref())?;
         for index in 0..2 {
             abi::emit_load_temporary_stack_slot(ctx.emitter, abi::int_arg_reg_name(ctx.emitter.target, index), index * 8);
         }
-        abi::emit_load_temporary_stack_slot(ctx.emitter, abi::int_arg_reg_name(ctx.emitter.target, 2), 24);
-        abi::emit_load_temporary_stack_slot(ctx.emitter, abi::int_arg_reg_name(ctx.emitter.target, 3), 32);
+        abi::emit_load_temporary_stack_slot(ctx.emitter, abi::int_arg_reg_name(ctx.emitter.target, 2), 48);
+        abi::emit_load_temporary_stack_slot(ctx.emitter, abi::int_arg_reg_name(ctx.emitter.target, 3), 56);
         abi::emit_load_int_immediate(ctx.emitter, abi::int_arg_reg_name(ctx.emitter.target, 4), i64::from(exclude_self));
         let symbol = ctx.emitter.target.extern_symbol("__elephc_eval_class_string_relation_v1");
         abi::emit_call_label(ctx.emitter, &symbol);
@@ -391,8 +393,66 @@ fn emit_runtime_target(
         abi::emit_load_temporary_stack_slot(ctx.emitter, result, 16);
     } else { emit_bool_result(ctx, true); }
     ctx.emitter.label(&done);
-    abi::emit_release_temporary_stack(ctx.emitter, 48);
+    abi::emit_release_temporary_stack(ctx.emitter, 64);
     store_if_result(ctx, inst)
+}
+
+/// Saves the eval bridge's NUL-separated candidate list to frame slots 48 and 56: the target,
+/// then every compiled class or interface that is the target or descends from it, which an
+/// eval-declared class may extend or implement. A literal target (already folded to its symbol
+/// key) selects its list at compile time; a runtime target in slots 24 and 32 is matched against
+/// every compiled class-like name, and a name none matches is the whole list on its own.
+fn emit_eval_candidate_list(ctx: &mut FunctionContext<'_>, literal_target: Option<&str>) -> Result<()> {
+    let mut descendants: std::collections::BTreeMap<String, (String, std::collections::BTreeSet<String>)> =
+        std::collections::BTreeMap::new();
+    for (name, ancestors) in ancestor_table(ctx, false) {
+        for ancestor in ancestors {
+            descendants.entry(php_symbol_key(&ancestor))
+                .or_insert_with(|| (ancestor.clone(), std::collections::BTreeSet::new()))
+                .1.insert(name.clone());
+        }
+    }
+    let list = |target: &str, related: &std::collections::BTreeSet<String>| {
+        std::iter::once(target.to_string()).chain(related.iter().cloned()).collect::<Vec<_>>().join("\0")
+    };
+    let (ptr, len) = match ctx.emitter.target.arch {
+        Arch::AArch64 => ("x9", "x10"),
+        Arch::X86_64 => ("r10", "r11"),
+    };
+    let done = ctx.next_label("class_relation_eval_candidates_done");
+    if let Some(key) = literal_target {
+        if let Some((target, related)) = descendants.get(key) {
+            let (label, length) = ctx.data.add_string(list(target, related).as_bytes());
+            abi::emit_symbol_address(ctx.emitter, ptr, &label);
+            abi::emit_load_int_immediate(ctx.emitter, len, length as i64);
+            abi::emit_store_to_sp(ctx.emitter, ptr, 48);
+            abi::emit_store_to_sp(ctx.emitter, len, 56);
+            return Ok(());
+        }
+    } else {
+        for (target, related) in descendants.values() {
+            let selected = ctx.next_label("class_relation_eval_candidates");
+            let next = ctx.next_label("class_relation_eval_candidates_next");
+            emit_match(ctx, 24, target, &selected);
+            emit_match(ctx, 24, &format!("\\{target}"), &selected);
+            abi::emit_jump(ctx.emitter, &next);
+            ctx.emitter.label(&selected);
+            let (label, length) = ctx.data.add_string(list(target, related).as_bytes());
+            abi::emit_symbol_address(ctx.emitter, ptr, &label);
+            abi::emit_load_int_immediate(ctx.emitter, len, length as i64);
+            abi::emit_store_to_sp(ctx.emitter, ptr, 48);
+            abi::emit_store_to_sp(ctx.emitter, len, 56);
+            abi::emit_jump(ctx.emitter, &done);
+            ctx.emitter.label(&next);
+        }
+    }
+    // -- a target no compiled class-like names: only an eval-declared class can match it --
+    abi::emit_load_temporary_stack_slot(ctx.emitter, ptr, 24);
+    abi::emit_load_temporary_stack_slot(ctx.emitter, len, 32);
+    abi::emit_store_to_sp(ctx.emitter, ptr, 48);
+    abi::emit_store_to_sp(ctx.emitter, len, 56);
+    ctx.emitter.label(&done);
+    Ok(())
 }
 
 /// Branches to `found` when the string saved at `slot` (pointer, then length) holds a NUL byte.
