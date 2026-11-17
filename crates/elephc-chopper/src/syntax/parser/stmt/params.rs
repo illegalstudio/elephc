@@ -1026,6 +1026,14 @@ pub(crate) fn record_param_lines(span: Span, lines: Vec<u32>) {
     PARAM_LINES.with(|table| table.borrow_mut().insert((span.source_id(), span.line, span.col), lines));
 }
 
+/// Forgets the parameter lines recorded for included files, whose source identities a new
+/// compile hands out again (`Span::reset_source_ids`): a stale entry would otherwise answer for
+/// a different file's declaration at the same position. The entry file (identity 0) has just
+/// been re-recorded by the compile that calls this.
+pub(crate) fn forget_included_param_lines() {
+    PARAM_LINES.with(|table| table.borrow_mut().retain(|(source_id, _, _), _| *source_id == 0));
+}
+
 /// Returns the line where each parameter of the function or method declared at `span` starts.
 ///
 /// The AST keeps no span per parameter, and PHP reports a few parameter diagnostics (the `int`
@@ -1148,4 +1156,22 @@ pub(super) fn parse_name_list(
         break;
     }
     Ok((names, type_args))
+}
+
+#[cfg(test)]
+mod param_line_tests {
+    use super::*;
+
+    /// A new compile hands included-file source identities out again, so their recorded lines
+    /// are dropped; the entry file's (identity 0), re-recorded by that compile, stay.
+    #[test]
+    fn test_included_param_lines_are_forgotten_per_compile() {
+        let entry = Span::new_in_source(3, 1, 0);
+        let included = Span::new_in_source(3, 1, 7);
+        record_param_lines(entry, vec![3, 4]);
+        record_param_lines(included, vec![5]);
+        forget_included_param_lines();
+        assert_eq!(param_lines(entry), Some(vec![3, 4]));
+        assert_eq!(param_lines(included), None);
+    }
 }
