@@ -42,7 +42,7 @@ pub(crate) fn emit_pcre2_exec_at(emitter: &mut Emitter) {
     emitter.instruction("b __rt_pcre2_exec_at_common");                         // share bounds and capture rebasing
     emitter.label_global("__rt_pcre2_exec_next_at");
     abi::emit_load_int_immediate(emitter, "x6", REG_STARTEND | GLOBAL_NEXT);
-    emitter.label("__rt_pcre2_exec_at_common");
+    emitter.label_shared("__rt_pcre2_exec_at_common");
     emitter.instruction("sub sp, sp, #48");                                     // allocate the helper frame
     emitter.instruction("stp x29, x30, [sp, #32]");                             // save frame pointer and return address
     emitter.instruction("add x29, sp, #32");                                    // set the helper frame pointer
@@ -91,7 +91,7 @@ fn emit_pcre2_exec_at_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("jmp __rt_pcre2_exec_at_common_linux_x86_64");          // share bounds and capture rebasing
     emitter.label_global("__rt_pcre2_exec_next_at");
     emitter.instruction(&format!("mov r11d, {}", REG_STARTEND | GLOBAL_NEXT));  // let PCRE2 continue after the previous match
-    emitter.label("__rt_pcre2_exec_at_common_linux_x86_64");
+    emitter.label_shared("__rt_pcre2_exec_at_common_linux_x86_64");
     emitter.instruction("push rbp");                                            // save the caller frame pointer (re-aligns the stack)
     emitter.instruction("mov rbp, rsp");                                        // set the helper frame pointer
     emitter.instruction("sub rsp, 32");                                         // reserve aligned spill slots
