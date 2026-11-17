@@ -296,3 +296,22 @@ echo preg_last_error(), "\n";
         assert_eq!(out.stdout, expected, "{program}");
     }
 }
+
+/// `preg_replace_callback()` interleaves its matches with the callbacks: a callback sees the
+/// error state of the matches before it, not a later match's backtrack-limit error, and a
+/// nested error a callback recorded stays visible to the next callback; in compiled code and
+/// in eval.
+#[test]
+fn test_preg_replace_callback_does_not_show_later_match_errors() {
+    let source = r#"$s = 'x,' . str_repeat('a', 24) . 'b';
+var_dump(preg_replace_callback('/,|(a+)+$/', function ($m) { echo 'cb:', preg_last_error(), '|'; return '-'; }, $s));
+echo preg_last_error(), "\n";
+var_dump(preg_replace_callback('/,/', function ($m) { echo 'cb:', preg_last_error(), '|'; preg_match('/./u', "\xff"); return '-'; }, 'a,b,c'));
+echo preg_last_error(), "\n";
+"#;
+    let expected = "cb:0|NULL\n2\ncb:0|cb:4|string(5) \"a-b-c\"\n4\n";
+    assert_eq!(compile_and_run(&format!("<?php\n{source}")), expected);
+    let quoted = source.replace('\\', "\\\\").replace('\'', "\\'");
+    let eval = compile_and_run_with_regex(&format!("<?php\neval('{quoted}' . ' // ' . $argc);\n"));
+    assert_eq!(eval, expected);
+}
