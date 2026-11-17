@@ -335,7 +335,7 @@ impl Checker {
         // A spread element bound through a projection (`["ucfirst", ...][0]`) is not a bare
         // literal; record what it may carry, since the projected type can be `mixed`.
         self.record_static_callable_literals(arg);
-        if let Some(arms) = selected_value_arms(static_callable_argument(arg, env)) {
+        if let Some(arms) = selected_value_arms(static_callable_argument(self, arg, env)) {
             // Each arm of `?:`, `??` or `match` is the bound value itself: a literal arm is
             // resolved like a direct literal (an unknown name is a compile error and its
             // libraries are linked). No signature is registered, since the arms may differ.
@@ -352,7 +352,7 @@ impl Checker {
                 }
             }
         }
-        let target = match (actual.codegen_repr(), &static_callable_argument(arg, env).kind) {
+        let target = match (actual.codegen_repr(), &static_callable_argument(self, arg, env).kind) {
             (PhpType::Str, crate::parser::ast::ExprKind::StringLiteral(name)) => {
                 match crate::types::param_binding::callable_target_from_name(name) {
                     Some(target) => Some(target),
@@ -398,7 +398,7 @@ impl Checker {
     /// callable keeps the string. An unknown name is left to the runtime `TypeError`, as PHP
     /// raises it.
     pub(crate) fn record_declared_callable_literal_name(&mut self, value: &Expr, env: &TypeEnv) {
-        let value = static_callable_argument(value, env);
+        let value = static_callable_argument(self, value, env);
         if let Some(arms) = selected_value_arms(value) {
             // Each arm of a conditional is the value itself, so it is a certain callable.
             for arm in arms {
@@ -599,18 +599,18 @@ impl Checker {
 ///
 /// Call planning wraps a keyed variadic entry as a named argument, so a literal callable name
 /// written there sits behind that node too. A string-offset write evaluates to one byte, never
-/// to the name it writes, so an element write is looked through only when `env` proves its base
-/// is not a string (see `assignment_yields_assigned_value`).
-fn static_callable_argument<'e>(arg: &'e Expr, env: &TypeEnv) -> &'e Expr {
+/// to the name it writes, so an element write is looked through only when its base is proven
+/// not to be a string (see `assignment_yields_assigned_value`).
+fn static_callable_argument<'e>(checker: &Checker, arg: &'e Expr, env: &TypeEnv) -> &'e Expr {
     use crate::parser::ast::ExprKind;
     match &arg.kind {
-        ExprKind::NamedArg { value, .. } => static_callable_argument(value, env),
+        ExprKind::NamedArg { value, .. } => static_callable_argument(checker, value, env),
         ExprKind::Assignment { target, value, result_target, .. }
-            if assignment_yields_assigned_value(target, result_target.is_some(), env) =>
+            if assignment_yields_assigned_value(checker, target, result_target.is_some(), env) =>
         {
-            static_callable_argument(value, env)
+            static_callable_argument(checker, value, env)
         }
-        ExprKind::ErrorSuppress(inner) => static_callable_argument(inner, env),
+        ExprKind::ErrorSuppress(inner) => static_callable_argument(checker, inner, env),
         _ => arg,
     }
 }
@@ -619,23 +619,41 @@ fn static_callable_argument<'e>(arg: &'e Expr, env: &TypeEnv) -> &'e Expr {
 /// its right-hand side is the value an enclosing argument or return binds.
 ///
 /// A plain local and a property write do (a compound write stores the combined value, which is
-/// no literal). An element write does only when its base local is known to hold an array or an
-/// object: on a string (or a `mixed`, union or callable local that may hold one) it is a
-/// string-offset write, which evaluates to the one byte it stored.
-fn assignment_yields_assigned_value(target: &Expr, has_result_target: bool, env: &TypeEnv) -> bool {
+/// no literal). An element write does only when its base is a local typed as an array or an
+/// object, or a property declared with an array type: on a string (or on a `mixed`, union,
+/// callable or untyped base that may hold one) it is a string-offset write, which evaluates to
+/// the one byte it stored.
+fn assignment_yields_assigned_value(
+    checker: &Checker,
+    target: &Expr,
+    has_result_target: bool,
+    env: &TypeEnv,
+) -> bool {
     use crate::parser::ast::ExprKind;
+    let holds_array_or_object = |ty: &PhpType| {
+        ty.is_php_array() || matches!(ty, PhpType::Array(_) | PhpType::AssocArray { .. } | PhpType::Object(_))
+    };
     match &target.kind {
         ExprKind::Variable(_) => !has_result_target,
         ExprKind::PropertyAccess { .. } | ExprKind::DynamicPropertyAccess { .. } => true,
-        ExprKind::ArrayAccess { array, .. } => {
-            let ExprKind::Variable(name) = &array.kind else {
-                return false;
-            };
-            matches!(
-                env.get(name),
-                Some(PhpType::Array(_) | PhpType::AssocArray { .. } | PhpType::Object(_))
-            )
-        }
+        ExprKind::ArrayAccess { array, .. } => match &array.kind {
+            ExprKind::Variable(name) => env.get(name).is_some_and(holds_array_or_object),
+            ExprKind::PropertyAccess { object, property } => {
+                let ExprKind::Variable(owner) = &object.kind else {
+                    return false;
+                };
+                let Some(PhpType::Object(class_name)) = env.get(owner) else {
+                    return false;
+                };
+                checker.classes.get(class_name).is_some_and(|info| {
+                    info.visible_property_is_declared(property)
+                        && info.visible_property(property).is_some_and(|(_, (_, ty))| {
+                            ty.is_php_array() || matches!(ty, PhpType::Array(_) | PhpType::AssocArray { .. })
+                        })
+                })
+            }
+            _ => false,
+        },
         _ => false,
     }
 }
@@ -670,9 +688,10 @@ mod tests {
     }
 
     /// Verifies a literal behind an assignment is recorded when the assignment evaluates to it (a
-    /// local, a property, an element of an array or object local) and not for a string-offset
-    /// write, which evaluates to one byte: recording that name would link a wrapper (and its
-    /// libraries) the program never calls.
+    /// local, a property, an element of an array or object local, of an `array` parameter or of
+    /// a property declared `array`) and not for a string-offset write, which evaluates to one
+    /// byte: recording that name would link a wrapper (and its libraries) the program never
+    /// calls.
     #[test]
     fn records_literals_behind_assignments_that_yield_them() {
         let names = recorded_names(
@@ -687,9 +706,13 @@ $a = [""];
 $box = new Box();
 echo apply($n = "strrev"), apply($s[0] = "bin2hex"), pick(), named(), held();
 echo apply($a[0] = "nl2br"), apply($box->cb = "strtolower");
+class Bag { public array $items = []; }
+function pass(array $items): string { return apply($items[0] = "strtoupper"); }
+$bag = new Bag();
+echo pass([""]), apply($bag->items[0] = "lcfirst");
 "#,
         );
-        for name in ["strrev", "lcfirst", "ucwords", "nl2br", "strtolower"] {
+        for name in ["strrev", "lcfirst", "ucwords", "nl2br", "strtolower", "strtoupper"] {
             assert!(names.contains(name), "missing {name} in {names:?}");
         }
         for name in ["ucfirst", "bin2hex"] {

@@ -303,21 +303,24 @@ echo pick(), " ", $s, "\n";
     assert_eq!(out, "TypeError\nn n\n");
 }
 
-/// Verifies a builtin name assigned to a property or to an element of an array local at the call
-/// is the bound callable, as the assignment evaluates to it, so the builtin is linked and runs.
+/// Verifies a builtin name assigned to a property, to an element of an array local or `array`
+/// parameter, or to an element of a property declared `array` at the call is the bound
+/// callable, as the assignment evaluates to it, so the builtin is linked and runs.
 #[test]
 fn test_declared_callable_property_and_array_element_writes_bind_the_name() {
     let out = compile_and_run(
         r#"<?php
-class Box { public $cb; }
+class Box { public $cb; public array $items = []; }
 function app(callable $f): string { return (string) $f("abc"); }
 function pick(): callable { $a = []; return ($a[0] = "ucwords"); }
+function pass(array $items): string { return app($items[0] = "ucwords"); }
 $box = new Box();
 $a = [""];
 echo app($box->cb = "ucfirst"), " ", app($a[0] = "strrev"), " ", pick()("a b"), " ", $box->cb, "\n";
+echo pass([""]), " ", app($box->items[0] = "lcfirst"), "\n";
 "#,
     );
-    assert_eq!(out, "Abc cba A B ucfirst\n");
+    assert_eq!(out, "Abc cba A B ucfirst\nAbc abc\n");
 }
 
 /// Verifies a GMP builtin named as a literal argument or `callable` return value (also as an arm
