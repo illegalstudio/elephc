@@ -266,7 +266,17 @@ fn lower_native_prop_get_nonnull(
         // (`resolve_property_read_arm`); the physical-slot ladder below does not, so it only
         // answers a name no class resolves any other way (`None`: nothing declares it).
         let mode = property_fetch_mode(inst);
-        if let Some(mut candidates) = narrowed_receiver_property_candidates(ctx, property, mode, inst)? {
+        // The by-class ladder answers an OWNED boxed cell. A typed result (`string`, `int`...) is
+        // a borrowed slot read in the IR, which its consumers never release, so the unboxed owned
+        // value the ladder produces would leak: `$reflector->name` through `\Reflector` left the
+        // cell and the string behind on every read. Only a boxed result takes this route.
+        let boxed_result = matches!(
+            inst.result_php_type.codegen_repr(),
+            PhpType::Mixed | PhpType::Union(_)
+        );
+        if let Some(mut candidates) = narrowed_receiver_property_candidates(ctx, property, mode, inst)?
+            .filter(|_| boxed_result)
+        {
             candidates.retain(|candidate| {
                 object_type_implements_interface(
                     ctx,
