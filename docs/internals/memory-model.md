@@ -16,7 +16,8 @@ reference acquisition,
 identity pinning, object-handle recycling, guarded stack allocation/free, byte-string
 concatenation, C-string copies, raw capture buffers, zval storage retirement,
 Mixed-array slot conversion, reference-wrapper promotion and child-slot selection,
-and scalar/empty-array cleanup eligibility checks.
+scalar/empty-array cleanup eligibility checks, static binding storage, guarded
+owner slots and depth-stamped temporary owner lists.
 It also owns fixed heap/GC/buffer state, handle tables and string-scratch
 declarations. It is an ordinary compiler dependency and is never linked as a Rust
 library into compiled PHP programs. Those programs contain the same
@@ -28,7 +29,10 @@ compiler emitter adapter supplies target ABI operations and layout facts to Memo
 storage cleanup releases copied strings/arrays and leaves borrowed native
 object/resource payloads untouched. The compiler supplies the scalar-tag eligibility
 policy and an optional type-source association callback after Mixed promotion;
-exception-handler installation and diagnostic selection remain compiler-owned.
+static retirement receives its weak-source unbind callback, and guard layout and
+scoped-list symbols come from the compiler. Exception-handler installation,
+failed-constructor destructor policy, parser completion and diagnostic selection
+remain compiler-owned.
 Memoir source changes also participate in runtime-object cache identity.
 
 This page explains where every value lives in memory at runtime.

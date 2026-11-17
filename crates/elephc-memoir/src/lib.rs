@@ -72,3 +72,6 @@ pub mod stacks;
 pub mod interop;
 
 pub mod cleanup_fast_paths;
+
+pub mod guarded_owners;
+pub mod scoped_owners;
