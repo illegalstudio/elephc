@@ -164,6 +164,16 @@ fn early_binding_follows_the_lookups_of_the_override_checks() {
         br#"class P { function f(): callable {} } echo class_exists("C") ? "y" : "n"; class C extends P { function f(): Closure {} } echo "ok";"#,
     );
     assert_eq!(output, "yok");
+    // An intersection is accepted as `object` once one of its classes exists, whatever its
+    // order, the class being bound included. With none of them, the class waits.
+    for (source, expected) in [
+        (&br#"interface A {} class P { function f(): object {} } function g() { return new C(); } echo g() instanceof C ? "y" : "n"; class C extends P { function f(): Missing&A {} } class Missing {}"#[..], "y"),
+        (&br#"class P { function f(): object {} } echo class_exists("C") ? "y" : "n"; class C extends P { function f(): Missing&self {} } class Missing {}"#[..], "y"),
+        (&br#"interface A {} class P { function f(Missing&A $a) {} } echo class_exists("C") ? "y" : "n"; class C extends P { function f(object $a) {} } class Missing {}"#[..], "y"),
+        (&br#"class P { function f(): object {} } echo class_exists("C") ? "y" : "n"; class C extends P { function f(): Missing&Also {} } class Missing {} class Also {}"#[..], "n"),
+    ] {
+        assert_eq!(run(source), expected);
+    }
 }
 
 /// Verifies a child PHP cannot check yet is left to its statement even when the check fails
@@ -199,6 +209,14 @@ fn early_binding_reports_incompatible_override_before_the_first_statement() {
         run_failing(br#"class P { function f(): static {} } echo "a"; class C extends P { function f(): Later {} } class Later extends C {}"#),
         ""
     );
+    // An intersection is never `callable`, even one that holds `Closure` or a missing class.
+    for source in [
+        &br#"interface A {} class P { function f(): callable {} } echo "a"; class C extends P { function f(): Closure&A {} } echo "b";"#[..],
+        &br#"interface A {} class P { function f(Closure&A $a) {} } echo "a"; class C extends P { function f(callable $a) {} }"#[..],
+        &br#"class P { function f(): callable {} } echo "a"; class C extends P { function f(): Closure&Missing {} }"#[..],
+    ] {
+        assert_eq!(run_failing(source), "");
+    }
 }
 
 /// Verifies the shapes PHP links only at run time are declared by their statement: an enum, a

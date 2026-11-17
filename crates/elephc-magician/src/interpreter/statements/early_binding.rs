@@ -130,7 +130,12 @@ fn bind_class(
     match result {
         Ok(()) => Ok(true),
         Err(EvalStatus::RuntimeFatal) if !context.has_class(class.name()) => {
-            for name in lookups.required.iter().chain(&lookups.compared) {
+            for names in &lookups.required {
+                if required_lookup_is_missing(names, class, context, values)? {
+                    return Ok(false);
+                }
+            }
+            for name in &lookups.compared {
                 if !type_class_exists(name, class, context, values)? {
                     return Ok(false);
                 }
@@ -149,12 +154,28 @@ pub(super) fn eval_required_override_lookup_is_missing(
     context: &ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<bool, EvalStatus> {
-    for name in context.required_override_lookups() {
-        if !type_class_exists(&name, class, context, values)? {
+    for names in context.required_override_lookups() {
+        if required_lookup_is_missing(&names, class, context, values)? {
             return Ok(true);
         }
     }
     Ok(false)
+}
+
+/// Returns whether none of the classes a type accepted as `object` names exists: PHP needs
+/// only one member of an intersection to decide.
+fn required_lookup_is_missing(
+    names: &[String],
+    class: &EvalClass,
+    context: &ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<bool, EvalStatus> {
+    for name in names {
+        if type_class_exists(name, class, context, values)? {
+            return Ok(false);
+        }
+    }
+    Ok(true)
 }
 
 /// Returns whether the class a declared type names exists, counting the class being bound.

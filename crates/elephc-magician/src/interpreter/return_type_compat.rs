@@ -409,6 +409,28 @@ fn eval_return_variant_accepts_actual_intersection(
     pending_class: Option<&EvalClass>,
     context: &ElephcEvalContext,
 ) -> bool {
+    match expected_variant {
+        // PHP never accepts an intersection as `callable`, not even one that holds `Closure`.
+        EvalParameterTypeVariant::Callable => return false,
+        // PHP accepts an intersection as `object` once it has found one of its classes.
+        EvalParameterTypeVariant::Object => {
+            let members: Vec<String> = actual_type
+                .variants()
+                .iter()
+                .filter_map(|variant| match variant {
+                    EvalParameterTypeVariant::Class(name) => {
+                        eval_resolve_return_class_type_name(name, actual_owner, pending_class, context)
+                    }
+                    _ => None,
+                })
+                .collect();
+            if !members.is_empty() {
+                context.note_required_override_lookup(&members);
+                return true;
+            }
+        }
+        _ => {}
+    }
     actual_type.variants().iter().any(|actual_variant| {
         eval_return_variant_accepts_actual_variant(
             expected_variant,
@@ -451,7 +473,7 @@ fn eval_return_variant_accepts_actual_variant(
         // PHP accepts any class as `object`, but only once it has found the class.
         (EvalParameterTypeVariant::Object, EvalParameterTypeVariant::Class(actual_name)) => {
             if let Some(actual) = eval_resolve_return_class_type_name(actual_name, actual_owner, pending_class, context) {
-                context.note_required_override_lookup(&actual);
+                context.note_required_override_lookup(&[actual]);
             }
             true
         }

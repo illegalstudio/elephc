@@ -21,8 +21,10 @@ use super::*;
 /// The class names the override checks of one class looked up while it was bound early.
 #[derive(Default)]
 pub(crate) struct EvalOverrideLookups {
-    /// Classes PHP has to find even when the check then succeeds: a class accepted as `object`.
-    pub(crate) required: Vec<String>,
+    /// Classes PHP has to find even when the check then succeeds: a type accepted as `object`.
+    /// Each entry is one such type: a single class, or the members of an intersection, of
+    /// which PHP needs to find only one.
+    pub(crate) required: Vec<Vec<String>>,
     /// Classes PHP has to find to compare two different class names.
     pub(crate) compared: Vec<String>,
 }
@@ -38,11 +40,12 @@ impl ElephcEvalContext {
         self.override_lookups.borrow_mut().take().unwrap_or_default()
     }
 
-    /// Records that a check accepted class `name` as `object`, which PHP decides only once it
-    /// has found the class.
-    pub(crate) fn note_required_override_lookup(&self, name: &str) {
+    /// Records that a check accepted a type as `object`, which PHP decides only once it has
+    /// found one of the classes the type names: `names` is a single class, or every member of
+    /// an intersection.
+    pub(crate) fn note_required_override_lookup(&self, names: &[String]) {
         if let Some(lookups) = self.override_lookups.borrow_mut().as_mut() {
-            lookups.required.push(name.to_string());
+            lookups.required.push(names.to_vec());
         }
     }
 
@@ -55,9 +58,9 @@ impl ElephcEvalContext {
         }
     }
 
-    /// Returns the classes the open record says PHP has to find for a check that succeeded.
-    /// Empty when no record is open.
-    pub(crate) fn required_override_lookups(&self) -> Vec<String> {
+    /// Returns the types the open record says PHP has to find for a check that succeeded,
+    /// each as its alternative class names. Empty when no record is open.
+    pub(crate) fn required_override_lookups(&self) -> Vec<Vec<String>> {
         self.override_lookups.borrow().as_ref().map(|lookups| lookups.required.clone()).unwrap_or_default()
     }
 }
