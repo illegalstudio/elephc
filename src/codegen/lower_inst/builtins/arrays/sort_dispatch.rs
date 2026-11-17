@@ -219,6 +219,38 @@ pub(crate) fn emit_hash_receiver_to_packed_list(
     Ok(())
 }
 
+/// Makes the operand `array` (a runtime-promoted hash) read as a packed list of its values.
+///
+/// The original pointer and the temporary list stay on the stack until
+/// [`emit_restore_promoted_operand`] puts the original back and releases the list, so the
+/// operand's own owner is never disturbed. The builtin lowered in between stores its result before
+/// the restore runs.
+pub(crate) fn emit_promoted_operand_as_temp_list(
+    ctx: &mut FunctionContext<'_>,
+    array: ValueId,
+    value_ty: &PhpType,
+) -> Result<()> {
+    let result_reg = abi::int_result_reg(ctx.emitter);
+    ctx.load_value_to_result(array)?;
+    abi::emit_push_reg(ctx.emitter, result_reg);
+    super::values::emit_loaded_assoc_array_values(ctx, value_ty)?;
+    abi::emit_push_reg(ctx.emitter, result_reg);
+    ctx.store_result_value(array)
+}
+
+/// Undoes [`emit_promoted_operand_as_temp_list`]: releases the temporary list and restores the
+/// operand's original hash pointer.
+pub(crate) fn emit_restore_promoted_operand(
+    ctx: &mut FunctionContext<'_>,
+    array: ValueId,
+) -> Result<()> {
+    let result_reg = abi::int_result_reg(ctx.emitter);
+    abi::emit_pop_reg(ctx.emitter, result_reg);
+    abi::emit_call_label(ctx.emitter, "__rt_decref_array");
+    abi::emit_pop_reg(ctx.emitter, result_reg);
+    ctx.store_result_value(array)
+}
+
 /// Calls a mutating indexed-array sort helper after copy-on-write splitting.
 pub(super) fn lower_indexed_array_sort(
     ctx: &mut FunctionContext<'_>,

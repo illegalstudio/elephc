@@ -367,6 +367,9 @@ pub(super) fn lower_iter_current_value(
             let dispatch = !iterator_is_by_ref(ctx, iterator, inst)?;
             let promoted = ctx.next_label("iter_value_promoted");
             let loaded = ctx.next_label("iter_value_loaded");
+            // A `Mixed` element needs a detached cell; a promoted hash entry holds the payload
+            // and tag instead, so that arm boxes a fresh cell of its own and skips the detach.
+            let mixed_element = dispatch && indexed_iter_value_needs_detached_cell(&elem, &result_ty);
             if dispatch {
                 emit_branch_if_promoted_iterator(ctx, offset, &promoted);
             }
@@ -374,7 +377,7 @@ pub(super) fn lower_iter_current_value(
                 Arch::AArch64 => load_current_array_value_aarch64(ctx, offset, &elem)?,
                 Arch::X86_64 => load_current_array_value_x86_64(ctx, offset, &elem)?,
             }
-            if dispatch {
+            if dispatch && !mixed_element {
                 abi::emit_jump(ctx.emitter, &loaded);
                 ctx.emitter.label(&promoted);
                 load_current_promoted_value(ctx, offset, &elem)?;
@@ -390,6 +393,12 @@ pub(super) fn lower_iter_current_value(
             } else {
                 retain_current_indexed_value_if_unboxed(&mut ctx.emitter, &elem, &result_ty);
                 box_current_indexed_value_if_needed(ctx, &elem, &result_ty)?;
+            }
+            if mixed_element {
+                abi::emit_jump(ctx.emitter, &loaded);
+                ctx.emitter.label(&promoted);
+                load_current_hash_call_value_as_mixed(ctx, offset, false, false);
+                ctx.emitter.label(&loaded);
             }
         }
         IteratorSourceKind::Hash => load_current_hash_call_value_as_mixed(ctx, offset, preserve_reference, promote_reference),
