@@ -575,3 +575,21 @@ echo "done\n";
     );
     assert_eq!(out, "caught\ndone\n");
 }
+
+/// `call_user_func('preg_replace', ..., $count)` hands the by-reference `$count` parameter a copy
+/// and raises php's "must be passed by reference, value given" warning, leaving the caller's
+/// variable untouched (the count was written back before).
+#[test]
+fn test_call_user_func_passes_by_reference_parameters_by_value() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+$count = 0;
+$r = call_user_func('preg_replace', '/a/', 'b', 'aaa', -1, $count);
+var_dump($r, $count);
+"#,
+    );
+    assert!(out.success, "{}", out.stderr);
+    assert_eq!(out.stdout, "string(3) \"bbb\"\nint(0)\n");
+    assert!(out.stderr.contains("preg_replace(): Argument #5 ($count) must be passed by reference, value given"), "{}", out.stderr);
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}

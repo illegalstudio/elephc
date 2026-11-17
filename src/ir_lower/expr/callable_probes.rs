@@ -106,7 +106,9 @@ pub(super) fn lower_static_call_user_func(
                 );
             }
             if let Some(callback) = static_call_user_func_callback(ctx, callback_expr) {
-                return lower_static_callable_call(ctx, callback, callback_args, expr);
+                let by_value_args =
+                    bind_call_user_func_args_by_value(ctx, &callback, callback_expr, callback_args, expr);
+                return lower_static_callable_call(ctx, callback, &by_value_args, expr);
             }
             lower_eval_call_user_func_fallback(ctx, callback_expr, callback_args, expr)
         }
@@ -149,6 +151,60 @@ pub(super) fn lower_static_call_user_func(
         }
         _ => None,
     }
+}
+
+/// Binds the arguments `call_user_func()` hands a by-reference parameter by value.
+///
+/// `call_user_func()` never passes a reference: php warns `NAME(): Argument #N ($param) must be
+/// passed by reference, value given` and gives the callee a copy, so `call_user_func('preg_replace',
+/// ..., $count)` leaves `$count` at 0. The argument is evaluated, copied into a hidden temp that
+/// the direct call may write to, and the warning is raised for it.
+fn bind_call_user_func_args_by_value(
+    ctx: &mut LoweringContext<'_, '_>,
+    target: &StaticCallableBinding,
+    callback_expr: &Expr,
+    callback_args: &[Expr],
+    expr: &Expr,
+) -> Vec<Expr> {
+    let signature = match target {
+        StaticCallableBinding::UserFunction(function_name) => ctx.functions.get(function_name).cloned(),
+        StaticCallableBinding::Builtin(function_name) => {
+            crate::types::builtin_call_sig(&php_symbol_key(function_name.trim_start_matches('\\')))
+        }
+        _ => None,
+    };
+    let (Some(signature), ExprKind::StringLiteral(callee)) = (signature, &callback_expr.kind) else {
+        return callback_args.to_vec();
+    };
+    if crate::types::call_args::has_named_args(callback_args) || callback_args.iter().any(is_spread_arg) {
+        return callback_args.to_vec();
+    }
+    let callee = callee.trim_start_matches('\\');
+    let mut bound = Vec::with_capacity(callback_args.len());
+    for (index, arg) in callback_args.iter().enumerate() {
+        if !signature.ref_params.get(index).copied().unwrap_or(false) {
+            bound.push(arg.clone());
+            continue;
+        }
+        let value = lower_expr(ctx, arg);
+        let value_type = ctx.builder.value_php_type(value.value);
+        let temp = ctx.declare_hidden_temp(value_type.clone());
+        store_value_into_temp(ctx, &temp, value_type, value, arg.span);
+        let message = ctx.intern_string(&format!(
+            "Warning: {callee}(): Argument #{} (${}) must be passed by reference, value given\n",
+            index + 1,
+            signature.params[index].0,
+        ));
+        ctx.emit_void(
+            Op::Warn,
+            Vec::new(),
+            Some(Immediate::Data(message)),
+            Op::Warn.default_effects(),
+            Some(expr.span),
+        );
+        bound.push(Expr::new(ExprKind::Variable(temp), arg.span));
+    }
+    bound
 }
 
 /// Recognizes the PHP-permitted explicit callback spelling for `get_defined_vars()`.
