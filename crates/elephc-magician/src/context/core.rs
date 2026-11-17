@@ -245,6 +245,12 @@ pub struct ElephcEvalContext {
 impl ElephcEvalContext {
     /// Creates a context using the current eval bridge ABI version.
     pub fn new() -> Self {
+        // The unit tests give every context a runtime of its own (fake cells numbered from
+        // one), and request statics hold that runtime's handles: a context built after another
+        // would otherwise read the first one's static properties and static locals. Production
+        // builds one context per activation and keeps the statics across them on purpose.
+        #[cfg(test)]
+        super::request_statics::reset_request_statics();
         Self {
             abi_version: ABI_VERSION,
             native_global_sync: None,
