@@ -207,3 +207,4 @@ mod strict_conversion_returns;
 mod strict_static_locals;
 
 mod strict_native_static_bindings;
+mod strict_foreach_bindings;

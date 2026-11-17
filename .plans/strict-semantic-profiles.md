@@ -953,3 +953,22 @@ then structural producers, remaining binding-flow audits, all six pending famili
 and final host/umbrella acceptance. General dynamic boxed eval array operators still
 need their proper structural boundary, recorded separately in factd9f697ef. No full
 suite, push or PR was run.
+
+### Verified143: foreach publication and retirement
+
+Array, Iterator and IteratorAggregate traversal share a focused owner helper.
+Current and optional key are acquired before either binding changes, then value
+is published before key. All displaced/pending leases retire even on callback
+failure. The consuming scope setter balances identical aliases. Source cleanup
+keeps pending return/throw values rooted, and no-key traversal skips key work.
+
+Exact605c12aa passes walker/VM callers with default/Locals and zero remaining
+owners. Final88f16b7f passes in4m08s: archive build10.50s, three focused receiver/
+Traversable unit regressions, both-IR/default-Locals native publication/GC/throwing
+cleanup155.19s and existing eval aggregate owner bundle49.57s. All six exact gates,
+PHP8.5 fixture output/syntax and diff hygiene pass; native heaps are clean. No ABI,
+target emitter or builtin contract changed.
+
+Structural foreach producer alternatives remain open alongside ArrayTypes.
+Continue source-point binding-flow/global audits, six pending semantic families
+and final host/umbrella acceptance. No full suite, push or PR was run.

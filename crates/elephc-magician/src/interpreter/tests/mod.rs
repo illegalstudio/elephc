@@ -119,3 +119,4 @@ mod strict_conversion_returns;
 mod strict_string_conversions;
 
 mod strict_static_locals;
+mod strict_foreach_bindings;

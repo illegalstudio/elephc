@@ -10,6 +10,8 @@
 
 use super::*;
 
+mod foreach_bindings;
+
 /// Executes a PHP `static $name = expr;` declaration in the current eval scope.
 pub(in crate::interpreter) fn execute_static_var_stmt(
     name: &str,
@@ -139,7 +141,7 @@ pub(in crate::interpreter) fn execute_foreach_stmt(
     values: &mut impl RuntimeValueOps,
 ) -> Result<EvalControl, EvalStatus> {
     let array = eval_owned_expr(array, context, scope, values)?;
-    let result = (|| match values.type_tag(array)? {
+    foreach_bindings::with_source(array, context, scope, values, |array, context, scope, values| match values.type_tag(array)? {
         EVAL_TAG_ARRAY | EVAL_TAG_ASSOC => {
             execute_foreach_array_stmt(array, key_name, value_name, body, context, scope, values)
         }
@@ -147,18 +149,7 @@ pub(in crate::interpreter) fn execute_foreach_stmt(
             execute_foreach_object_stmt(array, key_name, value_name, body, context, scope, values)
         }
         _ => Err(EvalStatus::RuntimeFatal),
-    })();
-    let released = eval_release_value(context, values, array);
-    match (result, released) {
-        (Ok(control), Ok(())) => Ok(control),
-        (Err(status), _) => Err(status),
-        (Ok(control), Err(status)) => {
-            if let EvalControl::Return(value) | EvalControl::Throw(value) = control {
-                let _ = eval_release_value(context, values, value);
-            }
-            Err(status)
-        }
-    }
+    })
 }
 
 /// Executes `foreach` over a PHP array value using insertion-order runtime hooks.
@@ -173,32 +164,9 @@ pub(super) fn execute_foreach_array_stmt(
 ) -> Result<EvalControl, EvalStatus> {
     let len = values.array_len(array)?;
     for index in 0..len {
-        let key = values.array_iter_key(array, index)?;
-        let value = values.array_iter_value(array, index)?;
-        if let Some(key_name) = key_name {
-            for replaced in set_scope_cell(
-                context,
-                scope,
-                key_name.to_string(),
-                key,
-                ScopeCellOwnership::Owned,
-                values,
-            )? {
-                values.release(replaced)?;
-            }
-        } else {
-            values.release(key)?;
-        }
-        for replaced in set_scope_cell(
-            context,
-            scope,
-            value_name.to_string(),
-            value,
-            ScopeCellOwnership::Owned,
-            values,
-        )? {
-            values.release(replaced)?;
-        }
+        foreach_bindings::bind(value_name, key_name, context, scope, values,
+            |_, values| values.array_iter_value(array, index),
+            |_, values| values.array_iter_key(array, index))?;
         match execute_statements(body, context, scope, values)? {
             EvalControl::None | EvalControl::Continue => {}
             EvalControl::Break => break,
@@ -227,7 +195,7 @@ pub(super) fn execute_foreach_object_stmt(
     }
     if eval_foreach_object_is_a(object, "IteratorAggregate", context, values)? {
         let iterator = eval_method_call_result(object, "getIterator", Vec::new(), context, values)?;
-        let result = (|| match values.type_tag(iterator)? {
+        return foreach_bindings::with_source(iterator, context, scope, values, |iterator, context, scope, values| match values.type_tag(iterator)? {
             EVAL_TAG_ARRAY | EVAL_TAG_ASSOC => execute_foreach_array_stmt(
                 iterator, key_name, value_name, body, context, scope, values,
             ),
@@ -237,18 +205,7 @@ pub(super) fn execute_foreach_object_stmt(
                 )
             }
             _ => Err(EvalStatus::RuntimeFatal),
-        })();
-        let released = eval_release_value(context, values, iterator);
-        return match (result, released) {
-            (Ok(control), Ok(())) => Ok(control),
-            (Err(status), _) => Err(status),
-            (Ok(control), Err(status)) => {
-                if let EvalControl::Return(value) | EvalControl::Throw(value) = control {
-                    let _ = eval_release_value(context, values, value);
-                }
-                Err(status)
-            }
-        };
+        });
     }
     Err(EvalStatus::RuntimeFatal)
 }
@@ -264,55 +221,22 @@ pub(super) fn execute_foreach_iterator_stmt(
     values: &mut impl RuntimeValueOps,
 ) -> Result<EvalControl, EvalStatus> {
     let result = eval_method_call_result(iterator, "rewind", Vec::new(), context, values)?;
-    values.release(result)?;
+    foreach_bindings::release([result], context, values)?;
     loop {
         let valid = eval_method_call_result(iterator, "valid", Vec::new(), context, values)?;
-        let is_valid = eval_boolean_condition(valid, context, values);
-        values.release(valid)?;
-        if !is_valid? {
+        if !foreach_bindings::condition(valid, context, values)? {
             return Ok(EvalControl::None);
         }
 
-        let value = eval_method_call_result(iterator, "current", Vec::new(), context, values)?;
-        let key = if key_name.is_some() {
-            Some(eval_method_call_result(
-                iterator,
-                "key",
-                Vec::new(),
-                context,
-                values,
-            )?)
-        } else {
-            None
-        };
-        if let Some((key_name, key)) = key_name.zip(key) {
-            for replaced in set_scope_cell(
-                context,
-                scope,
-                key_name.to_string(),
-                key,
-                ScopeCellOwnership::Owned,
-                values,
-            )? {
-                values.release(replaced)?;
-            }
-        }
-        for replaced in set_scope_cell(
-            context,
-            scope,
-            value_name.to_string(),
-            value,
-            ScopeCellOwnership::Owned,
-            values,
-        )? {
-            values.release(replaced)?;
-        }
+        foreach_bindings::bind(value_name, key_name, context, scope, values,
+            |context, values| eval_method_call_result(iterator, "current", Vec::new(), context, values),
+            |context, values| eval_method_call_result(iterator, "key", Vec::new(), context, values))?;
 
         match execute_statements(body, context, scope, values)? {
             EvalControl::None | EvalControl::Continue => {
                 let result =
                     eval_method_call_result(iterator, "next", Vec::new(), context, values)?;
-                values.release(result)?;
+                foreach_bindings::release([result], context, values)?;
             }
             EvalControl::Break => return Ok(EvalControl::None),
             EvalControl::Throw(result) => return Ok(EvalControl::Throw(result)),
