@@ -84,3 +84,6 @@ pub mod weak_cache;
 pub mod hash_entry_references;
 
 pub mod owner_records;
+
+pub mod foreign_release;
+pub mod conditional_owner;

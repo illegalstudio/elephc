@@ -20,7 +20,9 @@ scalar/empty-array cleanup eligibility checks, static binding storage, guarded
 owner slots, depth-stamped temporary owner lists, abandoned activation cleanup
 and hydrated-property owner transfers, non-owning observer caches, hash-entry
 reference promotion and borrowed payload views, temporary/fixed-frame owner record
-publication, exact chain unlink, consuming container boxing and Mixed symbol publication.
+publication, exact chain unlink, consuming container boxing, Mixed symbol publication,
+external record publication, contained foreign-owner release and conditional
+helper-owner retirement.
 It also owns fixed heap/GC/buffer state, handle tables and string-scratch
 declarations. It is an ordinary compiler dependency and is never linked as a Rust
 library into compiled PHP programs. Those programs contain the same
@@ -63,6 +65,15 @@ It follows an existing persistent wrapper before replacing its child owner.
 Transferred temporary ownership and initialization metadata are cleared before
 the displaced value can run a destructor. The compiler retains static-property
 type validation, layout selection and EIR ownership decisions.
+External records receive caller-owned record, visitor and borrowed data registers;
+Memoir initializes every field before linking the record into the supplied chain.
+The compiler retains versioned C ABI wrappers, visitor adaptation and external
+cleanup ownership. Foreign release receives optional staging-owner transfer and
+exception boxing/unboxing hooks. It contains destructor throws below Rust, updates
+the caller's owned nullable exception accumulator and returns the new-throw status.
+Conditional helper-owner retirement receives typed mode/payload offsets and an
+ownership flag bit, preserving the pending exception. The compiler still creates
+and propagates PHP assignment-refusal errors.
 Memoir source changes also participate in runtime-object cache identity.
 
 The host API composes assembly output, target ABI and memory-context capabilities.
