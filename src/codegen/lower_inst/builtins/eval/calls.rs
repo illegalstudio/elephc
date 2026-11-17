@@ -210,7 +210,7 @@ fn lower_closed_world_include(
                 abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
                 ctx.emitter.instruction("cmp rax, 1");                          // runtime tag 1 = string
                 ctx.emitter.instruction("mov rax, rdi");                        // string bytes
-                ctx.emitter.instruction("mov rdx, rsi");                        // string length
+                // The high payload word is already in rdx, as required by the include helper.
                 ctx.emitter.instruction(&format!("je {string_ok}"));
                 ctx.emitter.instruction("xor eax, eax");                        // not a string: no path
                 ctx.emitter.instruction("xor edx, edx");
@@ -346,7 +346,7 @@ fn emit_include_unit_dispatch(
                 ctx.emitter.instruction("cmp rax, 1");                          // runtime tag 1 = string
                 ctx.emitter.instruction(&format!("jne {skip}"));
                 ctx.emitter.instruction("mov rax, rdi");                        // string bytes
-                ctx.emitter.instruction("mov rdx, rsi");                        // string length
+                // mixed_unbox already returns the string length in rdx; rsi is caller scratch.
             }
             ctx.emitter.instruction("test rdx, rdx");                           // an empty path names no unit
             ctx.emitter.instruction(&format!("jz {skip}"));
@@ -434,7 +434,7 @@ fn emit_dynamic_include_fast_path(
                 abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
                 ctx.emitter.instruction("cmp rax, 1");                          // runtime tag 1 = string; anything else takes the bridge
                 ctx.emitter.instruction(&format!("jne {}", slow));
-                // The unboxed string already sits in rdi (bytes) and rsi (length).
+                ctx.emitter.instruction("mov rsi, rdx");                        // move the unboxed length to the bridge's second C argument
             } else {
                 ctx.emitter.instruction("mov rdi, rax");                        // path bytes
                 ctx.emitter.instruction("mov rsi, rdx");                        // path length
