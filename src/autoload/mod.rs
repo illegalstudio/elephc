@@ -20,6 +20,7 @@ pub mod deferral;
 pub mod deferral_memo;
 mod dev_packages;
 mod dynamic_contracts;
+mod eager_variants;
 pub mod prelude_probe;
 pub mod runtime_faults;
 mod index;
@@ -173,6 +174,7 @@ fn run_collecting_included_on_compiler_stack(
     // Eager source manifests declare files that must always be included. Preserve
     // declaration order so their top-level statements execute before the entry program.
     let mut prefix: Program = Vec::new();
+    let eager_variants = eager_variants::ExistingVariants::from_program(&program);
     // Accumulated from every eager file that was READ, including the ones declined below. A
     // declined file is not spliced, so reading this off `prefix` afterwards would miss exactly
     // the polyfills whose functions most need the global fallback — measured: with the two
@@ -303,6 +305,10 @@ fn run_collecting_included_on_compiler_stack(
             }
             nested_includes.extend(loaded_includes);
             declaration_sources.extend(loaded_sources)?;
+            let (loaded, reused) = eager_variants.reuse(loaded, &canonical);
+            for key in reused {
+                declaration_sources.eager_function_files.insert(key, canonical.clone());
+            }
             prefix.extend(loaded);
         }
     }

@@ -89,6 +89,99 @@ fn compile_and_run_project(prefix: &str, files: &[(&str, &str)], entry: &str) ->
 /// A manifest whose only autoload rule is one eager `files` entry.
 const MANIFEST: &str = r#"{"autoload":{"files":["boot/bootstrap.php"]}}"#;
 
+/// Removes each regression fixture even when compilation or an assertion fails.
+struct EagerVariantFixture(PathBuf);
+
+impl Drop for EagerVariantFixture {
+    /// Cleans only the temporary directory created for this fixture.
+    fn drop(&mut self) {
+        let _ = fs::remove_dir_all(&self.0);
+    }
+}
+
+/// Runs the same physical eager/include project under PHP and the real compiler CLI.
+fn assert_eager_variant_reuse(bootstrap: &str, entry: &str, preload: bool) {
+    let fixture = EagerVariantFixture(make_test_dir("eager_variant_reuse"));
+    let dir = &fixture.0;
+    write_project(dir, &[
+        ("composer.json", MANIFEST),
+        ("boot/bootstrap.php", bootstrap),
+        ("main.php", entry),
+        ("preload.php", "<?php require_once __DIR__.'/boot/bootstrap.php';"),
+    ]);
+    let php = Command::new("php").arg("-n").arg("main.php").current_dir(dir)
+        .output().expect("run PHP reference");
+    assert!(php.status.success(), "{}", String::from_utf8_lossy(&php.stderr));
+    let mut command = Command::new(elephc_bin());
+    command.current_dir(dir);
+    if preload {
+        command.args(["--ini", "opcache.enable_cli=1", "--ini"])
+            .arg(format!("opcache.preload={}", dir.join("preload.php").display()));
+    }
+    let compiled = command.arg("main.php").output().expect("compile eager/include fixture");
+    assert!(compiled.status.success(), "{}", String::from_utf8_lossy(&compiled.stderr));
+    let native = Command::new(dir.join("main")).current_dir(dir)
+        .output().expect("run eager/include fixture");
+    assert!(native.status.success(), "{}", String::from_utf8_lossy(&native.stderr));
+    assert_eq!(native.stdout, php.stdout);
+}
+
+/// One physical function is reused and eager effects run once before the entry's once include.
+#[test]
+fn eager_file_reuses_include_variant_before_file_effects() {
+    assert_eager_variant_reuse(
+        "<?php echo eager_reuse_helper(), ':boot|'; function eager_reuse_helper(): string { return 'ok'; }",
+        "<?php require_once __DIR__.'/boot/bootstrap.php'; echo eager_reuse_helper(), ':entry|';",
+        false,
+    );
+}
+
+/// A file with no declarations still executes its eager effects only once.
+#[test]
+fn eager_file_reuses_include_variant_guard_for_effects_only_file() {
+    assert_eager_variant_reuse(
+        "<?php echo 'boot|';",
+        "<?php require_once __DIR__.'/boot/bootstrap.php'; echo 'entry|';",
+        false,
+    );
+}
+
+/// Reuse follows PHP's canonical names for namespaced functions too.
+#[test]
+fn eager_file_reuses_include_variant_in_namespace() {
+    assert_eager_variant_reuse(
+        "<?php namespace EagerReuse; function helper(): string { return 'namespace'; } echo helper(), ':boot|';",
+        "<?php require_once __DIR__.'/boot/bootstrap.php'; echo \\EagerReuse\\helper(), ':entry|';",
+        false,
+    );
+}
+
+/// A preload reaching the eager file shares its variant and does not duplicate its effects.
+#[test]
+fn eager_file_reuses_include_variant_from_preload() {
+    assert_eager_variant_reuse(
+        "<?php function eager_reuse_preload(): string { return 'preload'; } echo eager_reuse_preload(), ':boot|';",
+        "<?php require_once __DIR__.'/preload.php'; echo eager_reuse_preload(), ':entry|';",
+        true,
+    );
+}
+
+/// Matching names in distinct physical files must still be rejected as duplicate declarations.
+#[test]
+fn eager_file_reuses_include_variant_preserves_distinct_file_error() {
+    let fixture = EagerVariantFixture(make_test_dir("eager_variant_collision"));
+    write_project(&fixture.0, &[
+        ("composer.json", MANIFEST),
+        ("boot/bootstrap.php", "<?php function eager_reuse_collision(): int { return 1; }"),
+        ("other.php", "<?php function eager_reuse_collision(): int { return 2; }"),
+        ("main.php", "<?php require_once __DIR__.'/other.php'; echo eager_reuse_collision();"),
+    ]);
+    let compiled = Command::new(elephc_bin()).current_dir(&fixture.0)
+        .args(["--check", "main.php"]).output().expect("check distinct declarations");
+    assert!(!compiled.status.success());
+    assert!(String::from_utf8_lossy(&compiled.stderr).contains("Duplicate function declaration"));
+}
+
 /// The declarations themselves, each behind the guard every polyfill uses.
 const GUARDED_DECLARATIONS: &str = r#"<?php
 
