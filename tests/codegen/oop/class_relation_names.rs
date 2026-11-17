@@ -406,6 +406,28 @@ echo is_a($d, $t, true) ? "y" : "n", is_subclass_of($d, $t) ? "y" : "n", is_a($d
     ]);
 }
 
+/// A missed read from an array of objects leaves the in-band null sentinel in an object slot.
+/// The runtime-target path read it as an object header and crashed; it is null, related to no
+/// class, held in the object slot or passed into a Mixed.
+/// Expected output measured with php 8.5.12.
+#[test]
+fn test_is_a_missing_object_element_runtime_target() {
+    let out = compile_and_run_per_argv(
+        r#"<?php
+class Foo {}
+class Bar extends Foo {}
+function yn(bool $b): string { return $b ? "y" : "n"; }
+function m(mixed $v, string $t): string { return yn(is_a($v, $t)) . yn(is_subclass_of($v, $t)) . yn(is_a($v, 'Foo')) . yn($v instanceof Closure); }
+$objects = [new Bar()];
+$k = (int) ($argv[2] ?? 9);
+$t = $argv[1] ?? 'Foo';
+echo yn(is_a(@$objects[$k], $t)), yn(is_subclass_of(@$objects[$k], $t)), yn(@$objects[$k] instanceof Closure), " ", m(@$objects[$k], $t), "\n";
+"#,
+        &[&[], &["Foo", "0"], &["Bar", "0"]],
+    );
+    assert_eq!(out, ["nnn nnnn\n", "yyn yyyn\n", "ynn ynyn\n"]);
+}
+
 /// A closure is an instance of `Closure`, whether held as a callable or boxed in a Mixed, so a
 /// runtime `Closure` target (any case, backslash-rooted or not) matches it. `Closure` is final
 /// and implements nothing, so `is_subclass_of()` and every other target answer `false`.
