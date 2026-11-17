@@ -1214,6 +1214,29 @@ fn guard_null_for_int_param(
     ctx.builder.position_at_end(accepted);
 }
 
+/// Whether `value` is, through ownership-only forwarding, a `Mixed` cell this lowering boxed
+/// around a statically typed value.
+///
+/// The positional argument step already boxes a typed source for a union parameter (the checker
+/// proved its type, and php's weak mode converts a float or bool bound to `string|int`), so the
+/// runtime tag guard of the reordered pass must only see values whose tag is not known statically.
+fn value_is_box_of_static_value(
+    ctx: &LoweringContext<'_, '_>,
+    mut value: crate::ir::ValueId,
+) -> bool {
+    while let Some(producer) = ctx.builder.value_defining_instruction(value) {
+        match producer.op {
+            Op::MixedBox => return true,
+            Op::Acquire | Op::Borrow | Op::Move => match producer.operands.first() {
+                Some(&source) => value = source,
+                None => return false,
+            },
+            _ => return false,
+        }
+    }
+    false
+}
+
 /// Whether `value` is a Mixed cell that boxes a literal `null` (a defaulted `= null` argument).
 fn value_is_boxed_literal_null(ctx: &LoweringContext<'_, '_>, value: crate::ir::ValueId) -> bool {
     let Some(boxed) = ctx.builder.value_defining_instruction(value) else {
@@ -1943,7 +1966,9 @@ pub(super) fn coerce_operands_to_params(
         } else {
             value
         };
-        let value = if sig.declared_params.get(index).copied().unwrap_or(false) {
+        let value = if sig.declared_params.get(index).copied().unwrap_or(false)
+            && !value_is_box_of_static_value(ctx, value.value)
+        {
             guard_gradual_union_param(ctx, value, declared_param_ty, None)
         } else {
             value
