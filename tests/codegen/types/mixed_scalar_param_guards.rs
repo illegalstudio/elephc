@@ -942,3 +942,27 @@ echo $t, "\n";
         invoker_bodies(&single, "elephc_single_closure_invoker"),
     );
 }
+
+/// A constant default can raise `E_DEPRECATED` (`MT_RAND_PHP`), and a user error handler can
+/// turn that into an exception after the supplied parameters were checked. The string the
+/// check converted must already be rooted then: treating every constant read as unable to throw
+/// leaked it on each caught call (review on the constant-default shortcut).
+#[test]
+fn test_deprecated_constant_default_releases_the_converted_string() {
+    let output = compile_and_run_with_heap_debug(
+        r#"<?php
+class Name { public function __toString(): string { return str_repeat("n", 30); } }
+function box(mixed $v): mixed { return $v; }
+function f(string $s, int $a = MT_RAND_PHP): string { return $s . $a; }
+set_error_handler(function (int $no, string $msg): bool { throw new ErrorException($msg); });
+for ($i = 0; $i < 3; $i++) {
+    try { echo f(box(new Name())), "\n"; } catch (ErrorException $e) { echo "caught\n"; }
+}
+restore_error_handler();
+echo f(box("ok"), 1), "\n";
+"#,
+    );
+    assert!(output.success, "{}", output.stderr);
+    assert_eq!(output.stdout, "caught\ncaught\ncaught\nok1\n");
+    assert!(output.stderr.contains("leak summary: clean"), "{}", output.stderr);
+}
