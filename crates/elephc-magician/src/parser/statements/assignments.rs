@@ -739,6 +739,15 @@ impl Parser {
             value,
         } = target
         {
+            if is_globals_rooted(&append_target) {
+                if require_semicolon {
+                    self.expect_semicolon()?;
+                }
+                return Ok(vec![EvalStmt::Expr(EvalExpr::ArrayAppendAssign {
+                    target: append_target,
+                    value,
+                })]);
+            }
             if require_semicolon {
                 self.expect_semicolon()?;
             }
@@ -755,7 +764,7 @@ impl Parser {
         // A whole-statement ELEMENT write arrives folded as one assignment node; main's statement
         // for it is `DimensionWrite` (or the property-array statements), so unfold it back.
         let target = match target {
-            EvalExpr::Assign { target: element, value } if matches!(element.as_ref(), EvalExpr::ArrayGet { .. }) => {
+            EvalExpr::Assign { target: element, value } if matches!(element.as_ref(), EvalExpr::ArrayGet { .. }) && !is_globals_rooted(&element) => {
                 let EvalExpr::ArrayGet { array, index } = *element else { unreachable!() };
                 if require_semicolon { self.expect_semicolon()?; }
                 return property_array_set_stmt(*array, *index, None, *value).map(|stmt| vec![stmt]);
@@ -768,7 +777,7 @@ impl Parser {
                     _ => unreachable!(),
                 }]);
             }
-            EvalExpr::CompoundAssign { target: element, op, value } if matches!(element.as_ref(), EvalExpr::ArrayGet { .. }) => {
+            EvalExpr::CompoundAssign { target: element, op, value } if matches!(element.as_ref(), EvalExpr::ArrayGet { .. }) && !is_globals_rooted(&element) => {
                 let EvalExpr::ArrayGet { array, index } = *element else { unreachable!() };
                 if require_semicolon { self.expect_semicolon()?; }
                 return property_array_set_stmt(*array, *index, Some(op), *value).map(|stmt| vec![stmt]);

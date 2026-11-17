@@ -21,12 +21,27 @@ pub(super) fn needs_dimension_tail(target: &EvalExpr, next: &TokenKind) -> bool 
         // the `[...]` for the statement tail. Main's shape is `DimensionWrite` for everything
         // except the plain `$name[i] = v` / `$name[] = v` local stores, which keep their fast
         // statements (and the typed-local checks they carry).
-        EvalExpr::ArrayAppendAssign { target, .. } => !matches!(target.as_ref(), EvalExpr::LoadVar(_)),
+        EvalExpr::ArrayAppendAssign { target, .. } => {
+            !matches!(target.as_ref(), EvalExpr::LoadVar(_)) && !is_globals_rooted(target)
+        }
         EvalExpr::Assign { target, .. } => matches!(target.as_ref(),
-            EvalExpr::ArrayGet { array, .. } if !matches!(array.as_ref(), EvalExpr::LoadVar(_))),
-        EvalExpr::CompoundAssign { target, .. } => matches!(target.as_ref(), EvalExpr::ArrayGet { .. }),
+            EvalExpr::ArrayGet { array, .. } if !matches!(array.as_ref(), EvalExpr::LoadVar(_)))
+            && !is_globals_rooted(target),
+        EvalExpr::CompoundAssign { target, .. } => {
+            matches!(target.as_ref(), EvalExpr::ArrayGet { .. }) && !is_globals_rooted(target)
+        }
         _ => false,
     }
+}
+
+/// Returns whether an element chain is rooted in `$GLOBALS`, whose elements are global variables
+/// the expression path writes through (a `DimensionWrite` would write a local array).
+pub(super) fn is_globals_rooted(expr: &EvalExpr) -> bool {
+    let mut root = expr;
+    while let EvalExpr::ArrayGet { array, .. } = root {
+        root = array;
+    }
+    matches!(root, EvalExpr::LoadVar(name) if name == "GLOBALS")
 }
 
 /// Builds a property by-reference binding statement from a parsed property target.
