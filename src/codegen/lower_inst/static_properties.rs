@@ -328,6 +328,24 @@ where
 
     for (slot, label) in slots.iter().zip(&match_labels) {
         ctx.emitter.label(label);
+        // A name php resolves to a private or protected static property outside its scope is a
+        // catchable `Error`, exactly as the direct `C::$name` path refuses at compile time.
+        let visibility = ctx
+            .module
+            .class_infos
+            .get(&slot.declaring_class)
+            .and_then(|info| info.static_property_visibilities.get(&slot.property))
+            .cloned()
+            .unwrap_or(Visibility::Public);
+        if !static_property_is_visible(ctx, &slot.declaring_class, &visibility) {
+            let word = if visibility == Visibility::Private { "private" } else { "protected" };
+            abi::emit_release_temporary_stack(ctx.emitter, 16);
+            super::exceptions::emit_error(
+                ctx,
+                &format!("Cannot access {word} property {class_name}::${}", slot.property),
+            );
+            continue;
+        }
         let branches = dynamic_static_property_branches(
             ctx,
             late_bound,
