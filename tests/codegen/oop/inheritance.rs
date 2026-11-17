@@ -1179,3 +1179,19 @@ var_dump($args['b']);
     );
     assert_eq!(out, "int(42)\n");
 }
+
+/// Verifies a named argument holding a boxed value of the wrong runtime type for a declared
+/// scalar union raises php's TypeError, as the positional form does.
+#[test]
+fn test_named_argument_checks_declared_union_tag() {
+    let out = compile_and_run(
+        r#"<?php
+function m(string|int $mode) { return "ok"; }
+function take(array|string $raw) {
+    try { return m(mode: $raw); } catch (TypeError $e) { return get_class($e); }
+}
+echo take([1]), "|", take("s");
+"#,
+    );
+    assert_eq!(out, "TypeError|ok");
+}

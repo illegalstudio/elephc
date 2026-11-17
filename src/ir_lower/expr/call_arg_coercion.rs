@@ -1631,6 +1631,11 @@ pub(super) fn coerce_operands_to_params(
         } else {
             value
         };
+        let value = if sig.declared_params.get(index).copied().unwrap_or(false) {
+            guard_gradual_union_param(ctx, value, declared_param_ty, None)
+        } else {
+            value
+        };
         if sig.declared_params.get(index).copied().unwrap_or(false)
             && !ctx.php_strict_types
             && is_nullable_string_param(declared_param_ty)
