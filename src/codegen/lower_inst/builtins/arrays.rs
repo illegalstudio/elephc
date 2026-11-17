@@ -79,6 +79,7 @@ use map_results::*;
 use misc_dispatch::*;
 use crate::codegen::lower_inst::receiver_place::ReceiverPlace;
 use sort_dispatch::*;
+pub(crate) use sort_dispatch::emit_hash_receiver_to_packed_list;
 use type_validation::*;
 use callback_binding::*;
 use callback_sources::*;
@@ -116,7 +117,7 @@ pub(crate) use boxed_predicates::{lower_array_find, lower_array_any, lower_array
 pub(crate) use boxed_set_comparator::{lower_array_udiff, lower_array_uintersect};
 pub(crate) use misc_dispatch::{
     lower_array_values, lower_array_keys, lower_array_rand, lower_range,
-    lower_array_pop, lower_array_shift, lower_array_unshift, lower_sort,
+    lower_by_runtime_storage_kind, lower_array_pop, lower_array_shift, lower_array_unshift, lower_sort,
     lower_rsort, lower_asort, lower_arsort, lower_ksort,
     lower_krsort, lower_natsort, lower_natcasesort, lower_shuffle,
     lower_usort, lower_uksort, lower_uasort, lower_array_key_exists,

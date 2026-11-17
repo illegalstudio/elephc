@@ -851,7 +851,7 @@ pub(crate) fn lower_array_merge_recursive(
 /// runtime (`$a = [1, 2]; $a[7] = 3;`). The packed-slot emitters read the length at offset 0 and
 /// the slots from offset 24, so running one over a hash header reads garbage or corrupts the
 /// table. The arm selected here is the one whose helpers match the real heap kind (kind 3 = hash).
-pub(super) fn lower_by_runtime_storage_kind(
+pub(crate) fn lower_by_runtime_storage_kind(
     ctx: &mut FunctionContext<'_>,
     array: ValueId,
     indexed: impl FnOnce(&mut FunctionContext<'_>) -> Result<()>,

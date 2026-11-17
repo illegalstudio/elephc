@@ -192,6 +192,33 @@ pub(super) fn lower_hash_reindexing_sort(
     store_if_result(ctx, inst)
 }
 
+/// Replaces the hash receiver `array` with a packed list of its values, in insertion order.
+///
+/// A runtime-promoted `array<T>` holds only integer keys, and the builtins that renumber integer
+/// keys (`array_splice`, `usort`) see exactly its values, so the packed lowering can then run on
+/// the receiver unchanged.
+pub(crate) fn emit_hash_receiver_to_packed_list(
+    ctx: &mut FunctionContext<'_>,
+    array: ValueId,
+    value_ty: &PhpType,
+    name: &str,
+) -> Result<()> {
+    super::boxed_mutation::require_non_null_hash_receiver(ctx, array, name)?;
+    let receiver = ReceiverPlace::resolve(ctx, array)?;
+    receiver.require_writable(name)?;
+    receiver.prepare_consuming_storeback(ctx, array)?;
+    ensure_unique_hash_sort_source(ctx, array)?;
+    let result_reg = abi::int_result_reg(ctx.emitter);
+    ctx.load_value_to_result(array)?;
+    abi::emit_push_reg(ctx.emitter, result_reg);
+    super::values::emit_loaded_assoc_array_values(ctx, value_ty)?;
+    ctx.store_result_value(array)?;
+    receiver.store_back_after_consuming_split(ctx, array)?;
+    abi::emit_pop_reg(ctx.emitter, result_reg);
+    abi::emit_call_label(ctx.emitter, "__rt_decref_hash");
+    Ok(())
+}
+
 /// Calls a mutating indexed-array sort helper after copy-on-write splitting.
 pub(super) fn lower_indexed_array_sort(
     ctx: &mut FunctionContext<'_>,

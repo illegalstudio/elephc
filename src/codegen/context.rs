@@ -130,6 +130,9 @@ pub(crate) struct FunctionContext<'a> {
     pub(super) numeric_cell_offsets: HashMap<ValueId, usize>,
     pub(super) numeric_local_slots: HashSet<LocalSlotId>,
     pub(super) numeric_values: HashSet<ValueId>,
+    /// Static types a runtime storage-kind dispatch arm substitutes for a value (see
+    /// `lower_inst::runtime_functions::lower_with_promoted_array_dispatch`).
+    pub(super) value_type_overrides: HashMap<ValueId, PhpType>,
     ref_cell_state_offsets: HashMap<LocalSlotId, usize>,
     local_analysis: LocalSlotAnalysis,
     /// Release/store positions of this body, indexed on first use (see `value_uses`).
@@ -299,6 +302,7 @@ impl<'a> FunctionContext<'a> {
             numeric_cell_offsets: layout.numeric_cell_offsets,
             numeric_local_slots: layout.numeric_local_slots,
             numeric_values: layout.numeric_values,
+            value_type_overrides: HashMap::default(),
             ref_cell_state_offsets: layout.ref_cell_state_offsets,
             local_analysis: layout.local_analysis,
             value_uses: std::cell::OnceCell::new(),
@@ -593,6 +597,9 @@ impl<'a> FunctionContext<'a> {
 
     /// Returns a function value or a structured backend error.
     pub(super) fn value_php_type(&self, value: ValueId) -> Result<PhpType> {
+        if let Some(overridden) = self.value_type_overrides.get(&value) {
+            return Ok(overridden.codegen_repr());
+        }
         self.function
             .value(value)
             .map(|metadata| metadata.php_type.codegen_repr())
@@ -628,6 +635,9 @@ impl<'a> FunctionContext<'a> {
 
     /// Returns a function value's source PHP metadata before codegen representation erasure.
     pub(super) fn raw_value_php_type(&self, value: ValueId) -> Result<PhpType> {
+        if let Some(overridden) = self.value_type_overrides.get(&value) {
+            return Ok(overridden.clone());
+        }
         self.function
             .value(value)
             .map(|metadata| metadata.php_type.clone())
