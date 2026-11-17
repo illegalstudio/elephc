@@ -234,7 +234,7 @@ pub(super) fn lower_method_call(
         .expect("call argument scope")
         .live_property_reference_arguments = !args.iter().any(is_spread_arg);
     let call_description = receiver_class
-        .map(|class_name| format!("{class_name}::{dispatch_method}"))
+        .map(|class_name| super::scalar_param_guards::method_guard_description(ctx, &class_name, dispatch_method, false))
         .unwrap_or_else(|| dispatch_method.to_string());
     let previous_description = ctx.call_description.replace(call_description);
     let previous_call_site = ctx.call_site_span.replace(expr.span);

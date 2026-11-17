@@ -866,3 +866,79 @@ echo $n, "\n";
     assert_eq!(output.stdout, "117\n");
     assert!(output.stderr.contains("leak summary: clean"), "{}", output.stderr);
 }
+
+/// PHP names the class that declares the method, not the receiver's: `A::m()` for an inherited
+/// `B::m`, `A::__construct()` for an inherited constructor, and the using class for a trait
+/// method. The `int` precision deprecation reports the parameter's own line, which an inherited
+/// or trait method's parameters only had under the declaring name (review: the guard named the
+/// receiver class and the deprecation fell back to the call line).
+#[test]
+fn test_inherited_and_trait_methods_are_named_by_their_declaring_class() {
+    let out = compile_and_run(
+        r#"<?php
+function box(mixed $v): mixed { return $v; }
+trait T {
+    public function viaTrait(
+        int $n
+    ): int { return $n; }
+}
+class A {
+    public function __construct(string $s = "") {}
+    public function m(string $s): string { return $s; }
+    public static function st(string $s): string { return $s; }
+    public function n(
+        int $n
+    ): int { return $n; }
+}
+class B extends A { use T; }
+function show(Throwable $e): void { echo str_replace(__FILE__, "F", $e->getMessage()), "\n"; }
+set_error_handler(function (int $no, string $msg, string $file, int $line): bool { echo "[$line] $msg\n"; return true; });
+$null = box(null);
+$b = new B();
+try { $b->m($null); } catch (TypeError $e) { show($e); }
+try { B::st($null); } catch (TypeError $e) { show($e); }
+try { new B($null); } catch (TypeError $e) { show($e); }
+try { $b->viaTrait($null); } catch (TypeError $e) { show($e); }
+echo $b->n(box(1.5)), "\n";
+echo $b->viaTrait(box(2.5)), "\n";
+"#,
+    );
+    assert_eq!(
+        out,
+        "A::m(): Argument #1 ($s) must be of type string, null given, called in F on line 21\n\
+A::st(): Argument #1 ($s) must be of type string, null given, called in F on line 22\n\
+A::__construct(): Argument #1 ($s) must be of type string, null given, called in F on line 23\n\
+B::viaTrait(): Argument #1 ($n) must be of type int, null given, called in F on line 24\n\
+[13] Implicit conversion from float 1.5 to int loses precision\n1\n\
+[5] Implicit conversion from float 2.5 to int loses precision\n2\n"
+    );
+}
+
+/// Closures with the same signature share one descriptor invoker: the `TypeError` reads the
+/// closure's label (`{closure:file:line}`) from its descriptor. An invoker per closure doubled
+/// the binary of a program with 200 `fn(int $x)` callbacks (review on the invoker cache key).
+#[test]
+fn test_closures_with_one_signature_share_their_invoker() {
+    let source = r#"<?php
+$fs = [fn(int $x) => $x + 1, fn(int $x) => $x + 2, fn(int $x) => $x + 3];
+$t = 0;
+foreach ($fs as $f) { $t += $f(1); }
+try { array_map($fs[1], [null]); } catch (TypeError $e) { echo str_replace(__FILE__, "F", $e->getMessage()), "\n"; }
+echo $t, "\n";
+"#;
+    let out = compile_and_run(source);
+    assert_eq!(out, "{closure:F:2}(): Argument #1 ($x) must be of type int, null given\n9\n");
+    // As many invoker bodies as with a single closure of that signature.
+    let invoker_bodies = |source: &str, name: &str| {
+        let dir = make_cli_test_dir(name);
+        let (user_asm, _, _) = compile_source_to_asm_with_options(source, &dir, 8_388_608, false, false);
+        user_asm.lines()
+            .filter(|line| line.contains("callable_invoker_") && !line.contains("__") && line.ends_with(':'))
+            .count()
+    };
+    let single = source.replace("fn(int $x) => $x + 2, fn(int $x) => $x + 3", "");
+    assert_eq!(
+        invoker_bodies(source, "elephc_shared_closure_invokers"),
+        invoker_bodies(&single, "elephc_single_closure_invoker"),
+    );
+}
