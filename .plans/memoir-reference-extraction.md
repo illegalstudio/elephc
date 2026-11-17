@@ -3,10 +3,10 @@
 - [x] Rebase the clean branch onto current main.
 - [x] Compare complete fixed runtime data against the original main emitter and refresh affected fixtures.
 - [x] Freeze weak-cache and hash-reference assembly before changing production emitters.
-- [ ] Extract weak-cache publication, borrowed reads and retirement with explicit host class identity.
-- [ ] Extract hash-entry promotion and borrowed dereference, including inline register views.
-- [ ] Validate exact assembly, all target assemblers, focused ownership regressions and compiler-only gates.
-- [ ] Audit the remaining boundary, update documentation, remove temporary artifacts and commit.
+- [x] Extract weak-cache publication, borrowed reads and retirement with explicit host class identity.
+- [x] Extract hash-entry promotion and borrowed dereference, including inline register views.
+- [x] Validate exact assembly, all target assemblers, focused ownership regressions and compiler-only gates.
+- [x] Audit the remaining boundary, update documentation, remove temporary artifacts and commit.
 
 ## Scope
 
@@ -43,3 +43,42 @@ target at three heap sizes. All 270 affected fixture rows were refreshed only
 after that byte comparison. The 60 new reference fingerprints and all 330
 relevant target assembly cases passed before production extraction. The capture
 hooks and independent probe module were removed before committing.
+
+## Boundary audit
+
+The two extracted modules require only AssemblyEmitter and TargetAbi. No semantic
+compiler type or MemoryContext callback is needed. Hash reference tags use the
+existing ValueTag contract. The runtime-cache source walker recursively includes
+both new modules.
+
+Reviewed retained integration includes parser_owners and reference_registry under
+unserialize, JSON construction ownership, eval owner frames, rejected container
+writes, and native property/source metadata. These select parser failure policy,
+physical PHP layouts, descriptor authentication or bridge activation behavior.
+Their storage operations already use the shared memory helpers; moving those
+policies is outside this extraction. Hash cursor resync and successor selection
+remain next to their compiler integration.
+
+No pull request exists for this branch. Publication and the complete remote CI
+matrix remain separate steps; local validation covers native Linux x86_64 and
+assembly for every supported target.
+
+## Results
+
+- Snapshot commit b447f7f969 froze both reference inventories before production
+  changes and refreshed the five data groups only after independent byte equality
+  with the original main emitter.
+- The two Memoir modules preserve 108 weak-cache and 136 hash-reference instruction
+  emission statements. Both new snapshot files are unchanged after extraction.
+- Final queued job df7f65a1 passed: warning-free compiler build, 29 exact compiler
+  checks, four Memoir contract tests, two compile-fail examples and 13 exact native
+  ownership tests. All 480 frozen fingerprints remain identical. Cross-assembler
+  checks cover all five supported targets and every emission mode.
+- Native coverage includes weak-wrapper reuse and recreation, cycles, Closure
+  observers, WeakMap heap accounting, coroutine cancellation, reference COW,
+  growing tables, escaped aliases, successor resync and pop/shift value readers.
+- Cargo/source boundary audit, its 24 Python tests, all 20 PR classifier tests,
+  Rust preambles/function docs, assembly comments and whitespace checks passed.
+- Original-main probes, capture hooks, runner scripts and assembler scratch paths
+  were removed. Main remained at 23314d3e1f. Remote CI and publication are pending;
+  this turn neither opened a PR nor pushed the branch.
