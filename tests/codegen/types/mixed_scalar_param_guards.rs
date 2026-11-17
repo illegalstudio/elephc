@@ -992,3 +992,23 @@ try { new class(box(null)) { public function __construct(float $f) {} }; } catch
     );
     assert_eq!(out, "class@anonymous(): Argument #1 ($s) must be of type string, null given, called in F on line 11\nBase@anonymous(): Argument #1 ($i) must be of type int, null given, called in F on line 12\nI@anonymous(): Argument #1 ($b) must be of type bool, array given, called in F on line 13\nT::q(): Argument #1 ($n) must be of type int, null given, called in F on line 14\nclass@anonymous(): Argument #1 ($f) must be of type float, null given, called in F on line 15\n");
 }
+
+/// An object of a class `eval()` declares is backed by a native `stdClass`, so the callable
+/// invoker's static `Stringable` check missed its `__toString()` and refused it; it now asks the
+/// eval bridge, as the direct-call guard does, and binds the object to `string`. (The value a
+/// builtin callback then receives is converted without the bridge, as on main: issue #2429.)
+#[test]
+fn test_callable_invoker_binds_an_eval_declared_stringable_to_string() {
+    let out = compile_and_run(
+        r#"<?php
+eval('class EV { public function __toString(): string { return "ev"; } }');
+$o = new EV();
+function s(string $s): string { return "[$s]"; }
+echo count(array_map('s', [$o])), "\n";
+echo array_sum(array_map(fn(string $s): int => 1, [$o, $o])), "\n";
+echo call_user_func('s', $o), "\n";
+echo s($o), "\n";
+"#,
+    );
+    assert_eq!(out, "1\n2\n[ev]\n[ev]\n");
+}
