@@ -22,6 +22,13 @@
 //!   its key; a match error stops the scan and returns the entries collected so far with
 //!   `preg_last_error()` still set, like php-src before 8.6. From PHP 8.6 (php-src
 //!   GH-11936) an error left in `preg_last_error()` makes the call return `false`.
+//! - php-src resets the error state once per `preg_grep()` call, so a nested `preg_*`
+//!   error recorded by an entry's `__toString()` survives the later matches and, from 8.6,
+//!   fails the call. Each generated `preg_match()` clears the state, so the body carries
+//!   such an error in `$nested` for the 8.6 check. Two cases still differ from php-src:
+//!   `preg_last_error()` after the call reports the last generated match's outcome rather
+//!   than the carried nested code, and a later `__toString()` whose own `preg_*` call
+//!   succeeds does not clear an earlier carried error.
 
 use crate::parser::ast::{BinOp, CastType, Program, Stmt, TypeExpr};
 use crate::synthetic_class::{
@@ -60,17 +67,31 @@ fn preg_grep_decl() -> Stmt {
                 ),
             ),
             s_assign("result", e_array(vec![])),
+            // php-src resets the error state once per call, and an entry's `__toString()` can
+            // record a nested `preg_*` error that php-src keeps. Each generated `preg_match()`
+            // clears the state again, so a nested error is carried here instead.
+            s_assign("nested", e_const("PREG_NO_ERROR")),
             s_foreach(
                 e_var("array"),
                 Some("key"),
                 "value",
                 vec![
+                    // The state is clean before the conversion (the previous match succeeded),
+                    // so a code read right after it was recorded by `__toString()`.
+                    s_assign("subject", e_cast(CastType::String, e_var("value"))),
+                    s_if(
+                        e_binop(
+                            e_call("preg_last_error", vec![]),
+                            BinOp::StrictNotEq,
+                            e_const("PREG_NO_ERROR"),
+                        ),
+                        vec![s_assign("nested", e_call("preg_last_error", vec![]))],
+                        vec![],
+                        None,
+                    ),
                     s_assign(
                         "matched",
-                        e_call(
-                            "preg_match",
-                            vec![e_var("pattern"), e_cast(CastType::String, e_var("value"))],
-                        ),
+                        e_call("preg_match", vec![e_var("pattern"), e_var("subject")]),
                     ),
                     s_if(
                         e_binop(matched(), BinOp::StrictEq, e_bool(false)),
@@ -90,15 +111,20 @@ fn preg_grep_decl() -> Stmt {
                     ),
                 ],
             ),
-            // PHP 8.6 (php-src GH-11936) returns false instead of the partial result.
+            // PHP 8.6 (php-src GH-11936) returns false instead of the partial result when the
+            // call's own match or an entry's conversion left an error.
             s_if(
                 e_binop(
                     e_binop(e_const("PHP_VERSION_ID"), BinOp::GtEq, e_int(80600)),
                     BinOp::And,
                     e_binop(
-                        e_call("preg_last_error", vec![]),
-                        BinOp::StrictNotEq,
-                        e_const("PREG_NO_ERROR"),
+                        e_binop(
+                            e_call("preg_last_error", vec![]),
+                            BinOp::StrictNotEq,
+                            e_const("PREG_NO_ERROR"),
+                        ),
+                        BinOp::Or,
+                        e_binop(e_var("nested"), BinOp::StrictNotEq, e_const("PREG_NO_ERROR")),
                     ),
                 ),
                 vec![s_return(e_bool(false))],

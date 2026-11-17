@@ -285,12 +285,14 @@ fn test_preg_errors_compiled_and_eval_bundle() {
     let nested_expected = "string(3) \"xBx\"\n4\nstring(3) \"zNz\"\n4\nNULL\n4\nstring(2) \"bB\"\n4\n";
     let grep_expected = "[\"a\"]0\n{\"x\":\"a\"}error\n[]0\n[]0\nbool(false)\n1\n";
     let later_expected = "cb:0|NULL\n2\ncb:0|cb:4|string(5) \"a-b-c\"\n4\n";
+    let grep_error_expected = "{\"x\":\"a\"}4\n[\"a\"]0\n";
     let aot = |body: &str| format!("<?php\n{body}");
     let sources = [
         aot(NESTED_CALLBACK_ERRORS), opaque_eval(NESTED_CALLBACK_ERRORS),
         aot(SPLIT_LIMIT_ERRORS), opaque_eval(SPLIT_LIMIT_ERRORS),
         aot(GREP_PATTERN_CHECK), opaque_eval(GREP_PATTERN_CHECK),
         aot(CALLBACK_LATER_ERRORS), opaque_eval(CALLBACK_LATER_ERRORS),
+        aot(GREP_MATCH_ERROR), opaque_eval(GREP_MATCH_ERROR),
     ];
     assert_bundle_with(
         &[
@@ -307,6 +309,8 @@ fn test_preg_errors_compiled_and_eval_bundle() {
             BundleCase { name: "grep_pattern_check_eval", source: &sources[5], expected: grep_expected },
             BundleCase { name: "callback_later_errors_aot", source: &sources[6], expected: later_expected },
             BundleCase { name: "callback_later_errors_eval", source: &sources[7], expected: later_expected },
+            BundleCase { name: "grep_match_error_aot", source: &sources[8], expected: grep_error_expected },
+            BundleCase { name: "grep_match_error_eval", source: &sources[9], expected: grep_error_expected },
         ],
         compile_and_run_with_regex,
     );
@@ -340,18 +344,46 @@ fn test_preg_grep_eval_unsupported_modifier_is_a_runtime_error() {
     assert!(out.stderr.contains("Fatal error: eval() runtime failed"), "{}", out.stderr);
 }
 
-/// From PHP 8.6 (php-src GH-11936) a match error makes `preg_grep()` return `false` instead of
-/// the entries collected so far, in compiled code and in eval; 8.5 keeps the partial result.
-#[test]
-fn test_preg_grep_match_error_is_false_from_php_8_6() {
-    use elephc::php_version::PhpVersion;
-    let source = r#"echo json_encode(preg_grep('/a/u', ['x' => 'a', 5 => "\xff", 7 => 'a'])), preg_last_error(), "\n";
+/// Fixture: a match error stops `preg_grep()`; a clean call afterwards resets the state.
+const GREP_MATCH_ERROR: &str = r#"echo json_encode(preg_grep('/a/u', ['x' => 'a', 5 => "\xff", 7 => 'a'])), preg_last_error(), "\n";
 echo json_encode(preg_grep('/a/', ['a', 'b'])), preg_last_error(), "\n";
 "#;
-    for (version, first) in [(PhpVersion::Php85, "{\"x\":\"a\"}4"), (PhpVersion::Php86, "false4")] {
-        let expected = format!("{first}\n[\"a\"]0\n");
-        for program in [format!("<?php\n{source}"), opaque_eval(source)] {
-            assert_eq!(compile_and_run_with_regex_and_php_version(&program, version), expected, "{version:?} {program}");
-        }
-    }
+
+/// Fixture: an entry's `__toString()` records a nested `preg_*` error but returns matching
+/// text; `class` names the declaring class so compiled and eval cases can share a bundle.
+fn grep_nested_to_string_result(class: &str) -> String {
+    format!(
+        r#"class {class} {{ public function __toString(): string {{ preg_match('/./u', "\xff"); return 'x'; }} }}
+echo json_encode(preg_grep('/x/', [new {class}(), 'x', 'y'])), "\n";
+"#
+    )
+}
+
+/// From PHP 8.6 (php-src GH-11936) `preg_grep()` returns `false` instead of the entries
+/// collected so far whenever its error state is set at the end: by its own match error, and
+/// by a nested error an entry's `__toString()` recorded (php-src resets the state only once
+/// per call); in compiled code and in eval. The 8.5 cases live in the 8.5 bundle.
+#[test]
+fn test_preg_grep_php_8_6_bundle() {
+    let match_error = "false4\n[\"a\"]0\n";
+    let sources = [
+        format!("<?php\n{GREP_MATCH_ERROR}"),
+        opaque_eval(GREP_MATCH_ERROR),
+        format!("<?php\n{}", grep_nested_to_string_result("GrepNestedAot86")),
+        opaque_eval(&grep_nested_to_string_result("GrepNestedEval86")),
+    ];
+    assert_bundle_with(
+        &[
+            BundleCase { name: "grep_match_error_aot", source: &sources[0], expected: match_error },
+            BundleCase { name: "grep_match_error_eval", source: &sources[1], expected: match_error },
+            BundleCase { name: "grep_nested_to_string_aot", source: &sources[2], expected: "false\n" },
+            BundleCase { name: "grep_nested_to_string_eval", source: &sources[3], expected: "false\n" },
+        ],
+        |source| {
+            compile_and_run_with_regex_and_php_version(
+                source,
+                elephc::php_version::PhpVersion::Php86,
+            )
+        },
+    );
 }
