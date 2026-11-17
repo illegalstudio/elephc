@@ -170,12 +170,15 @@ fn record_arguments(slots: &Slots, args: &[Expr], out: &mut HashSet<String>) {
 }
 
 /// Records one string literal naming a function (a `Class::method` string names no function),
-/// through the arms of a conditional, which are the value itself.
+/// through the arms of a conditional, an assignment or `@`, which all evaluate to it.
 ///
 /// A callable string is fully qualified, so only one leading `\` is dropped: a namespaced name
 /// such as `"Vendor\\xml_parser_create"` names a user function, never the global builtin.
 pub(crate) fn record_literal(expr: &Expr, out: &mut HashSet<String>) {
     match &expr.kind {
+        // An assignment and `@` evaluate to their inner value.
+        ExprKind::Assignment { value, .. } => record_literal(value, out),
+        ExprKind::ErrorSuppress(inner) => record_literal(inner, out),
         ExprKind::Ternary { then_expr, else_expr, .. } => {
             record_literal(then_expr, out);
             record_literal(else_expr, out);

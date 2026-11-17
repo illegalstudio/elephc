@@ -593,13 +593,18 @@ impl Checker {
     }
 }
 
-/// Returns the value a named argument carries, or the argument itself.
+/// Returns the value an argument binds: through a named argument, an assignment
+/// (`apply($name = "strlen")`) or the `@` operator, which all evaluate to their inner value.
 ///
 /// Call planning wraps a keyed variadic entry as a named argument, so a literal callable name
-/// written there sits behind that node.
+/// written there sits behind that node too.
 fn static_callable_argument(arg: &Expr) -> &Expr {
+    use crate::parser::ast::ExprKind;
     match &arg.kind {
-        crate::parser::ast::ExprKind::NamedArg { value, .. } => static_callable_argument(value),
+        ExprKind::NamedArg { value, .. } | ExprKind::Assignment { value, .. } => {
+            static_callable_argument(value)
+        }
+        ExprKind::ErrorSuppress(inner) => static_callable_argument(inner),
         _ => arg,
     }
 }

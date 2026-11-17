@@ -253,6 +253,22 @@ echo $apply("strlen"), " ", $arrow("ucfirst"), " ", (function (callable $f) { re
     assert_eq!(out, "2 Ab 6162 AB ba aB\n");
 }
 
+/// Verifies a literal builtin name bound through an assignment or the `@` operator, which both
+/// evaluate to the literal, is recorded like the bare literal.
+///
+/// Only a bare or named literal used to be recognized, so `apply($name = "strlen")` stopped with
+/// the runtime-only builtin error.
+#[test]
+fn test_declared_callable_literal_behind_assignment_or_silence_invokes() {
+    let out = compile_and_run(
+        r#"<?php
+function app(callable $f): string { return (string) $f("abc"); }
+echo app($name = "strlen"), " ", app(@"strrev"), " ", $name, "\n";
+"#,
+    );
+    assert_eq!(out, "3 cba strlen\n");
+}
+
 /// Verifies a GMP builtin named as a literal argument or `callable` return value (also as an arm
 /// of a ternary or a literal concatenation), or passed to a fresh invokable object or a
 /// first-class callable of a named function, invokes as the call `gmp_abs(...)` would, and that
