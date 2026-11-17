@@ -611,6 +611,10 @@ fn receiver_may_be_object(expr: &Expr, env: &crate::types::TypeEnv) -> bool {
     }
 }
 
+/// Returns whether `expr` is pure and does not name a forbidden local.
+///
+/// An index read counts only when its receiver is not a statically known object, whose
+/// `offsetGet` may change state or return a fresh value on every read.
 pub(super) fn pure_expr(expr: &Expr, forbidden: &[&str], env: &crate::types::TypeEnv) -> bool {
     match &expr.kind {
         ExprKind::IntLiteral(_)
