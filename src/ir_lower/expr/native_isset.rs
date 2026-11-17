@@ -95,9 +95,22 @@ pub(super) fn lower_native_isset_offset_probe_from_value(
     index: &Expr,
     expr: &Expr,
 ) -> LoweredValue {
+    let (array_value, owner) = if ctx.semantic_profile.contains(elephc_semantics::StrictFeature::ArrayKeys) {
+        root_owned_call_operand(ctx, array_value, expr.span)
+    } else { (array_value, None) };
+    let result = lower_native_isset_offset_probe_with_key(ctx, array_value, index, expr);
+    if let Some(owner) = owner { retire_owned_call_operand(ctx, owner, expr.span); }
+    result
+}
+
+/// Shares probe dispatch while its caller keeps an owning receiver alive through key evaluation.
+fn lower_native_isset_offset_probe_with_key(
+    ctx: &mut LoweringContext<'_, '_>, array_value: LoweredValue, index: &Expr, expr: &Expr,
+) -> LoweredValue {
     match array_value.ir_type {
         IrType::Heap(IrHeapKind::Array) => {
             let mut index_value = lower_expr(ctx, index);
+            index_value = crate::ir_lower::array_key_guards::for_receiver(ctx, array_value, index_value, index.span);
             let index_ty = isset_index_expr_key_type(ctx, index, index_value.value);
             let result = if index_ty == PhpType::Int {
                 index_value = coerce_array_key_to_int_at_span(ctx, index_value, Some(index.span), false);
@@ -162,6 +175,7 @@ pub(super) fn lower_native_isset_offset_probe_from_value(
         }
         IrType::Heap(IrHeapKind::Hash) => {
             let index_value = lower_expr(ctx, index);
+            let index_value = crate::ir_lower::array_key_guards::for_receiver(ctx, array_value, index_value, index.span);
             let result = ctx.emit_value(
                 Op::HashIsset,
                 vec![array_value.value, index_value.value],

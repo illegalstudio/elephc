@@ -58,6 +58,7 @@ pub(super) fn lower_assoc_array_literal_as(
         };
         let value = root_array_literal_item(ctx, value_operand, value.span, &mut roots);
         let hash = load_published_container(ctx, owner, hash_ty.clone(), expr.span);
+        let key = crate::ir_lower::array_key_guards::for_receiver(ctx, hash, key, expr.span);
         ctx.emit_void(Op::HashSet, vec![hash.value, key.value, value.value], None, Op::HashSet.default_effects(), Some(expr.span));
         if guarded { ctx.refresh_argument_array_guard(hash, expr.span); }
         for slot in roots.into_iter().rev() {

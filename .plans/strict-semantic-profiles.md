@@ -1052,3 +1052,29 @@ Public ArrayKeys remains gated. Continue receiver-aware dynamic key guards and
 owner/effect handling, then spread/default/reflection identity, eval/reference
 metadata and constructor parity. Remaining binding audits, all six pending
 families and final umbrella acceptance remain active. No full suite, push or PR.
+
+### Verified148: receiver-aware key reads and construction
+
+Rooted EIR membership checks original int|string keys only on PHP-array receiver
+paths. Ordinary reads, native isset and associative literal construction preserve
+string/object dispatch and original operands. Published receiver/value owners
+survive catchable key failure. AST effects and exact TypeError flow retain guards
+and catch blocks when the literal result is otherwise unused.
+
+Retry2c8fbab7 passes selected all-target and native checks. Final7310641f passes
+in1m10s: archives62.65s, existing all-target structural membership1.93s and parameter
+checks1.41s, native shapes1.85s and optimizer parity1.51s. Global96607b0c passes
+PHP/Internal all-target generation32.93s and eight native mode/profile/optimizer
+variants4.09s with clean heaps. All six unique exact gates and diff hygiene pass.
+Temporary payload destruction precedes catch entry and remains safe during GC.
+
+Initial87ab6060 exposed a preexisting boxed ArrayAccess raw-key mismatch, not an
+owner failure. The generic getter materializes a hash tuple before receiver
+dispatch, so boolean true arrives as integer1. PHP preserves boolean. Factcc2980d1
+records the clean-heap reproduction. The current control tests object acceptance;
+raw argument-kind parity is explicitly pending, never claimed from that control.
+
+Public ArrayKeys stays gated. Next repair raw boxed-key dispatch, then mixed/spread
+construction owners, fetch-for-write/mutation paths, builtins, default/reflection/
+spread identity and eval/reference metadata. Complete remaining binding audits,
+all six pending families and final umbrella acceptance. No full suite, push or PR.

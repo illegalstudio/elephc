@@ -98,6 +98,14 @@ pub(super) fn enabled(feature: StrictFeature) -> bool {
         && PROFILE.with(|slot| slot.get().contains(feature))
 }
 
+/// Retains original key checks in reads and literal construction until typed lowering proves them.
+pub(super) fn array_key_boundary_may_throw(expr: &crate::parser::ast::Expr) -> bool {
+    active_profile().contains(StrictFeature::ArrayKeys) && matches!(expr.kind,
+        crate::parser::ast::ExprKind::ArrayAccess { .. }
+        | crate::parser::ast::ExprKind::ArrayLiteralAssoc(_)
+        | crate::parser::ast::ExprKind::ArrayLiteralMixed(_))
+}
+
 /// Preserves catchable overflow unless literal operands prove an operation cannot fail.
 pub(super) fn integer_overflow_may_throw(expr: &crate::parser::ast::Expr) -> bool {
     use crate::parser::ast::{BinOp, ExprKind};

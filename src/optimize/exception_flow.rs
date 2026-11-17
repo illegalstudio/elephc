@@ -884,7 +884,8 @@ impl ExceptionFlowAnalysis {
         let thrown = self.expr_throws_without_binding(expr, bindings, class_context, include_operands);
         if super::semantic_context::implicit_value_boundary_may_throw(expr)
             || super::semantic_context::comparison_boundary_may_throw(expr)
-            || super::semantic_context::string_boundary_may_throw(expr) {
+            || super::semantic_context::string_boundary_may_throw(expr)
+            || super::semantic_context::array_key_boundary_may_throw(expr) {
             thrown.combined(ThrownTypes::exact("TypeError"))
         } else { thrown }
     }

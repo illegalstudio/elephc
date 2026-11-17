@@ -28,8 +28,21 @@ pub(super) fn implicit(ctx: &mut LoweringContext<'_, '_>, value: LoweredValue,
 /// Reuses rooted kind checks while retaining the local store's independently owning guarantee.
 fn membership(ctx: &mut LoweringContext<'_, '_>, value: LoweredValue,
     destination: &PhpType, feature: StrictFeature, span: Span) -> LoweredValue {
+    let source = ctx.source_mode;
+    membership_at_source(ctx, value, destination, feature, source, span)
+}
+
+/// Applies global array key identity to trusted implementation paths as well as user source.
+pub(super) fn array_key(ctx: &mut LoweringContext<'_, '_>, value: LoweredValue, span: Span) -> LoweredValue {
+    membership_at_source(ctx, value, &PhpType::Union(vec![PhpType::Int, PhpType::Str]),
+        StrictFeature::ArrayKeys, crate::source::SourceMode::Php, span)
+}
+
+/// Shares guarded membership and owner handling while keeping source policy explicit.
+fn membership_at_source(ctx: &mut LoweringContext<'_, '_>, value: LoweredValue,
+    destination: &PhpType, feature: StrictFeature, source: crate::source::SourceMode, span: Span) -> LoweredValue {
     let actual = ctx.builder.value_php_type(value.value);
-    match crate::semantics::conversions::membership(ctx.semantic_profile, ctx.source_mode, feature, destination, &actual) {
+    match crate::semantics::conversions::membership(ctx.semantic_profile, source, feature, destination, &actual) {
         ConversionPlan::ExistingBehavior | ConversionPlan::Identity => return value,
         _ => {}
     }
@@ -94,8 +107,10 @@ fn membership(ctx: &mut LoweringContext<'_, '_>, value: LoweredValue,
         accepted = ctx.emit_value(Op::IBitOr, vec![accepted.value, null.value], None, PhpType::Bool,
             Op::IBitOr.default_effects(), Some(span));
     }
-    semantic_guards::require(ctx, accepted, Op::ThrowTypeError,
-        &format!("--{} requires {destination} without implicit conversion", feature.flag()), Some(span));
+    let message = if feature == StrictFeature::ArrayKeys {
+        crate::semantics::array_keys::EXACT_KEY_MESSAGE.to_string()
+    } else { format!("--{} requires {destination} without implicit conversion", feature.flag()) };
+    semantic_guards::require(ctx, accepted, Op::ThrowTypeError, &message, Some(span));
     super::expr::call_operand_owners::unpin_in_flight_owners(ctx, pins, span);
     if let Some(boxed) = guard_box { super::ownership::release_if_owned(ctx, boxed, Some(span)); }
     value

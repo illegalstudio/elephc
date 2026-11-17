@@ -490,6 +490,7 @@ fn lower_array_access_from_values_with_receiver_pins(
     receiver_pins: Vec<super::PinnedInFlightOwner>,
     receiver_owner: Option<crate::ir::LocalSlotId>,
 ) -> LoweredValue {
+    index_value = crate::ir_lower::array_key_guards::for_receiver(ctx, array_value, index_value, index.span);
     if !warn_on_missing && matches!(ctx.builder.value_php_type(array_value.value).codegen_repr(),
         PhpType::Int | PhpType::Float | PhpType::Bool | PhpType::Void | PhpType::Never | PhpType::TaggedScalar)
     {

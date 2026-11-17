@@ -293,6 +293,7 @@ pub(super) fn expr_effect(expr: &Expr) -> Effect {
     if super::semantic_context::implicit_value_boundary_may_throw(expr)
         || super::semantic_context::comparison_boundary_may_throw(expr)
         || super::semantic_context::string_boundary_may_throw(expr)
+        || super::semantic_context::array_key_boundary_may_throw(expr)
         || super::semantic_context::checked_cast_may_throw(expr) { effect.with_may_throw() }
     else { effect }
 }
