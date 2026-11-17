@@ -338,8 +338,6 @@ pub(crate) fn emit_preg_replace_callback(emitter: &mut Emitter) {
     emitter.instruction("b __rt_preg_replace_callback_tail_loop");              // continue copying tail bytes
 
     // -- free regex and return final output slice --
-    emitter.label("__rt_preg_replace_callback_empty_subject");
-    emitter.instruction(&format!("ldr x11, [sp, #{}]", output_write_off));      // load the initialized empty-subject output cursor
     emitter.label("__rt_preg_replace_callback_done");
     emitter.instruction(&format!("str x11, [sp, #{}]", output_write_off));      // save final output pointer
     emit_preg_replace_callback_unlink_boundary(emitter, handler_off);
@@ -720,8 +718,6 @@ fn emit_preg_replace_callback_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("jmp __rt_preg_replace_callback_tail_loop_linux_x86_64"); // continue copying tail bytes
 
     // -- free regex and return final output slice --
-    emitter.label("__rt_preg_replace_callback_empty_subject_linux_x86_64");
-    emitter.instruction(&format!("mov r11, QWORD PTR [rsp + {}]", output_write_off)); // load the initialized empty-subject output cursor
     emitter.label("__rt_preg_replace_callback_done_linux_x86_64");
     emitter.instruction(&format!("mov QWORD PTR [rsp + {}], r11", output_write_off)); // save final output pointer
     emit_preg_replace_callback_unlink_boundary(emitter, handler_off);
