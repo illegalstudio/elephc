@@ -1013,3 +1013,22 @@ and dynamic domain checks, spread/default/reflection identity, eval/reference
 metadata and constructor parity. Foreach producer alternatives, local-flow audits,
 all six pending families and final umbrella acceptance remain active. No full
 suite, push or PR was run.
+
+### Verified146: optimizer array key identity
+
+Literal array reads use the existing scoped profile and neutral key classifier.
+Exact strings keep their kind; duplicate keys replace only the matching typed
+key. Invalid bool/float/null keys decline folding even in unselected entries,
+retaining the original domain failure for later validation and runtime checks.
+
+Job825f14bb passes in2m03s: archives70.04s, two key-fold units, all-five-target
+selected checker/AST/EIR optimization1.02s and native optimizer parity1.30s with
+clean heaps. Jobd4e4fce2 passes the three existing PHP normalization/lossy-float/
+indexed-key controls. All seven unique exact gates, PHP fixture equivalence and
+diff hygiene pass. Numeric strings, actual duplicates, propagated reads, nested
+arrays, embedded NUL and independent string offsets are covered.
+
+Public ArrayKeys remains gated. Continue original-source and dynamic key-domain
+checks, spread/default/reflection identity, eval/reference metadata and constructor
+parity, then the remaining binding audits, six pending families and final umbrella
+acceptance. No full suite, push or PR was run.

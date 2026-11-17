@@ -11,7 +11,7 @@
 use std::cmp::Ordering;
 
 use super::super::*;
-use super::array_key::{php_array_key, PhpArrayKey};
+use super::array_key::{array_key, ArrayKey};
 use super::scalar::{
     condition_scalar_value, compare_scalar_exprs, int_literal, loose_eq, numeric_literal, scalar_value, spaceship_scalar,
     strict_eq, ScalarValue,
@@ -235,12 +235,12 @@ pub(in crate::optimize) fn try_fold_array_access(array: &Expr, index: &Expr) -> 
 /// Returns the array element at a given index when all array elements and the index are scalar
 /// literals.
 ///
-/// The index is normalized through PHP's array-key rules first, so `["a", "b"][true]` and
-/// `["a", "b"]["1"]` both select `"b"`. Only succeeds if every element in the array is a
+/// The index follows the selected key policy, so exact string keys never select packed slots.
+/// Only succeeds if every element in the array is a
 /// scalar literal (required to guarantee the result is foldable) and the index is in range;
 /// an out-of-range index declines so the runtime still emits "Undefined array key".
 fn try_fold_indexed_array_access(items: &[Expr], index: &Expr) -> Option<ExprKind> {
-    let PhpArrayKey::Int(index) = php_array_key(&scalar_value(index)?)? else {
+    let ArrayKey::Int(index) = array_key(&scalar_value(index)?)? else {
         return None;
     };
     let index = usize::try_from(index).ok()?;
@@ -256,16 +256,15 @@ fn try_fold_indexed_array_access(items: &[Expr], index: &Expr) -> Option<ExprKin
 /// Returns the value associated with a matching key in an associative array literal when all
 /// keys and values are scalar literals.
 ///
-/// Keys and the index are normalized through PHP's array-key rules, so `[0 => "a", false =>
-/// "b"]` really is a one-entry array and `[0]` selects `"b"`. Duplicate normalized keys are
-/// last-wins, matching the order the literal is built in. Declines whenever a key cannot be
-/// normalized (a lossy float key) or nothing matches (the runtime owns the warning).
+/// Keys and the index use the selected typed identity, with last-wins replacement only for
+/// matching keys. Declines for rejected exact-key domains, lossy PHP float keys or a missing key,
+/// preserving the original domain check or runtime warning.
 fn try_fold_assoc_array_access(items: &[(Expr, Expr)], index: &Expr) -> Option<ExprKind> {
-    let index = php_array_key(&scalar_value(index)?)?;
+    let index = array_key(&scalar_value(index)?)?;
     let mut selected = None;
 
     for (key, value) in items {
-        let key = php_array_key(&scalar_value(key)?)?;
+        let key = array_key(&scalar_value(key)?)?;
         let value = scalar_value(value)?;
         if key == index {
             selected = Some(value);
