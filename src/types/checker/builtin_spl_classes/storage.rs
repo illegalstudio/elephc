@@ -109,6 +109,14 @@ fn array_iterator_properties() -> Vec<ClassProperty> {
         protected_storage_property("values", array_type()),
         protected_storage_property("position", TypeExpr::Int),
         protected_storage_property("flags", TypeExpr::Int),
+        // The `ArrayObject` this iterator was handed by `getIterator()`: php iterates its live
+        // storage, so `rewind()` re-reads it.
+        storage_property_with_visibility(
+            "source",
+            Some(TypeExpr::Nullable(Box::new(named_type("ArrayObject")))),
+            Some(null_expr()),
+            crate::parser::ast::Visibility::Protected,
+        ),
     ]
 }
 
@@ -138,6 +146,12 @@ fn spl_array_iterator_methods() -> Vec<ClassMethod> {
             ],
             Some(TypeExpr::Void),
             array_iterator_construct_body(),
+        ),
+        method_with_body(
+            "__elephcFollow",
+            vec![param("source", named_type("ArrayObject"))],
+            Some(TypeExpr::Void),
+            vec![property_assign_stmt(this_expr(), "source", var_expr("source"))],
         ),
         method_with_body("current", Vec::new(), Some(mixed_type()), array_current_body()),
         method_with_body("key", Vec::new(), Some(mixed_type()), array_key_body()),
@@ -254,7 +268,11 @@ fn spl_array_object_methods() -> Vec<ClassMethod> {
             "getIterator",
             Vec::new(),
             Some(named_type("ArrayIterator")),
-            return_body(new_object_expr("ArrayIterator", vec![storage()])),
+            vec![
+                assign_stmt("iterator", new_object_expr("ArrayIterator", vec![storage()])),
+                expr_stmt(method_call(var_expr("iterator"), "__elephcFollow", vec![this_expr()])),
+                return_stmt(var_expr("iterator")),
+            ],
         ),
         method_with_body("count", Vec::new(), Some(TypeExpr::Int), return_body(count_expr(storage()))),
         method_with_body(
@@ -425,7 +443,22 @@ fn array_next_body() -> Vec<Stmt> {
 
 /// Builds the synthetic method body for array rewind.
 fn array_rewind_body() -> Vec<Stmt> {
-    vec![property_assign_stmt(this_expr(), "position", int_expr(0))]
+    // An iterator handed out by `ArrayObject::getIterator()` follows the object's live storage.
+    vec![
+        if_stmt(
+            binary_expr(property_access(this_expr(), "source"), BinOp::StrictNotEq, null_expr()),
+            vec![
+                assign_stmt(
+                    "copy",
+                    method_call(property_access(this_expr(), "source"), "getArrayCopy", Vec::new()),
+                ),
+                property_assign_stmt(this_expr(), "keys", function_call("array_keys", vec![var_expr("copy")])),
+                property_assign_stmt(this_expr(), "values", function_call("array_values", vec![var_expr("copy")])),
+            ],
+            None,
+        ),
+        property_assign_stmt(this_expr(), "position", int_expr(0)),
+    ]
 }
 
 /// Builds the synthetic method body for array valid.

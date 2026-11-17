@@ -74,6 +74,7 @@ pub(super) fn required_builtin_spl_metadata_methods(class_name: &str) -> &'stati
         "Exception" | "Error" => &["__toString", "getTraceAsString"],
         "EmptyIterator" => &["current", "key", "next", "rewind", "valid"],
         "ArrayIterator" => &[
+            "__elephcFollow",
             "current",
             "key",
             "next",
