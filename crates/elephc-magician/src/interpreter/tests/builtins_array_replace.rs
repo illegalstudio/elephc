@@ -237,6 +237,27 @@ fn array_replace_is_visible_to_function_exists() {
     assert_eq!(values.get(result), FakeValue::Bool(true));
 }
 
+/// A string-keyed spread into `array_push`/`array_unshift` is a named argument for a variadic
+/// parameter: php throws `ArgumentCountError` instead of appending positionally.
+///
+/// `php -n` 8.5.6: `ArgumentCountError: array_push() does not accept unknown named parameters`,
+/// `ArgumentCountError: array_unshift() does not accept unknown named parameters`, then a plain
+/// list spread still appends (`1,7,8`).
+#[test]
+fn array_push_unshift_reject_string_keyed_spread() {
+    let fragment = br#"function probe($fn) {
+    try { return implode(",", $fn()); } catch (\Throwable $e) { return get_class($e) . ": " . $e->getMessage(); }
+}
+echo probe(function () { $a = [1]; array_push($a, ...['x' => 5]); return $a; }), ":";
+echo probe(function () { $a = [1]; array_unshift($a, 0, ...['x' => 5]); return $a; }), ":";
+echo probe(function () { $a = [1]; array_push($a, ...[7, 8]); return $a; });"#;
+    assert_eq!(
+        out(fragment),
+        "ArgumentCountError: array_push() does not accept unknown named parameters:\
+ArgumentCountError: array_unshift() does not accept unknown named parameters:1,7,8",
+    );
+}
+
 /// A non-array operand of the `array_u*` set family is a catchable `TypeError` (it was an
 /// uncatchable fatal), with the first parameter named and later variadic slots anonymous.
 ///

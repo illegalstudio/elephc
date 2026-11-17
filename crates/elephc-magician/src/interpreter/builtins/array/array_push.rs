@@ -228,6 +228,21 @@ pub(in crate::interpreter) fn eval_array_push_unshift_declared_call(
         }
         for position in 0..values.array_len(spread)? {
             let key = values.array_iter_key(spread, position)?;
+            // A string key unpacks as a NAMED argument, which a variadic parameter refuses.
+            if values.type_tag(key)? == EVAL_TAG_STRING {
+                values.release(key)?;
+                for element in spread_reads.drain(..) {
+                    values.release(element)?;
+                }
+                if materialized {
+                    values.release(spread)?;
+                }
+                return eval_throw_argument_count_error(
+                    &format!("{name}() does not accept unknown named parameters"),
+                    context,
+                    values,
+                );
+            }
             let element = values.array_get(spread, key);
             values.release(key)?;
             let element = element?;
