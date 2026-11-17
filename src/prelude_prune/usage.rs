@@ -1576,6 +1576,13 @@ pub(crate) fn transparent_literal_eval(args: &[Expr]) -> Option<Vec<Stmt>> {
     if fragment_declares(&program) {
         return None;
     }
+    // A fragment opening its own namespace resolves its unqualified calls there; the walks read
+    // the fragment as global source and would prune `Foo\f` for `eval('namespace Foo; f();')`.
+    if program.iter().any(|stmt| {
+        matches!(stmt.kind, StmtKind::NamespaceDecl { .. } | StmtKind::NamespaceBlock { .. })
+    }) {
+        return None;
+    }
     let usage = collect(&program);
     let builtin_only = !usage.opaque_eval
         && !usage.dynamic_function_call
@@ -1650,6 +1657,24 @@ mod tests {
     fn parse(source: &str) -> Program {
         let tokens = crate::lexer::tokenize(source).expect("fixture must tokenize");
         crate::parser::parse(&tokens).expect("fixture must parse")
+    }
+
+    /// A literal eval fragment that opens a namespace is not transparent: its calls resolve there.
+    #[test]
+    fn namespaced_literal_eval_fragment_is_not_transparent() {
+        let program = parse("<?php eval('namespace Foo; return f();'); eval('return f();');");
+        let calls: Vec<_> = program
+            .iter()
+            .filter_map(|stmt| match &stmt.kind {
+                StmtKind::ExprStmt(Expr { kind: ExprKind::FunctionCall { args, .. }, .. }) => {
+                    Some(args.clone())
+                }
+                _ => None,
+            })
+            .collect();
+        assert_eq!(calls.len(), 2);
+        assert!(transparent_literal_eval(&calls[0]).is_none());
+        assert!(transparent_literal_eval(&calls[1]).is_some());
     }
 
     /// Literal XML handlers retain their bodies without activating unrelated native bridges.
