@@ -178,8 +178,6 @@ pub(crate) fn emit_preg_replace_callback(emitter: &mut Emitter) {
     // -- replacement loop --
     emitter.label("__rt_preg_replace_callback_loop");
     emitter.instruction(&format!("ldr x1, [sp, #{}]", current_pos_off));        // load current subject cursor
-    emitter.instruction("ldrb w9, [x1]");                                       // read the current subject byte
-    emitter.instruction("cbz w9, __rt_preg_replace_callback_empty_subject");    // finish when the cursor reaches the null terminator
     emitter.instruction(&format!("ldr x9, [sp, #{}]", limit_off));              // reload replacement limit
     emitter.instruction("cbz x9, __rt_preg_replace_callback_tail");             // limit zero copies the remaining subject unchanged
     emitter.instruction(&format!("ldr x0, [sp, #{}]", handle_off));             // pass compiled opaque handle
@@ -188,7 +186,13 @@ pub(crate) fn emit_preg_replace_callback(emitter: &mut Emitter) {
     emitter.instruction("mov x4, x1");                                          // the search cursor inside the whole subject
     emitter.instruction(&format!("ldr x1, [sp, #{}]", subject_cstr_off));       // pass the WHOLE subject so lookbehind and anchors see what precedes the cursor
     emitter.instruction(&format!("ldr x5, [sp, #{}]", subject_len_off));        // pass the whole subject length as the search end
-    emitter.instruction("bl __rt_pcre2_exec_at");                               // match from the cursor; pairs come back relative to it
+    emitter.instruction(&format!("ldr x6, [sp, #{}]", count_off));              // check whether this search follows a completed replacement
+    emitter.instruction("cbz x6, __rt_preg_replace_callback_exec_first");       // the first search starts at the supplied cursor
+    emitter.instruction("bl __rt_pcre2_exec_next_at");                          // retry empty matches before advancing with PCRE2
+    emitter.instruction("b __rt_preg_replace_callback_exec_ready");             // keep the continuation status
+    emitter.label("__rt_preg_replace_callback_exec_first");
+    emitter.instruction("bl __rt_pcre2_exec_at");                               // start matching against the whole subject
+    emitter.label("__rt_preg_replace_callback_exec_ready");
     emitter.instruction("cbnz x0, __rt_preg_replace_callback_tail");            // copy the remaining subject when there are no more matches
 
     // -- remember unmatched prefix length before this match --
@@ -323,10 +327,6 @@ pub(crate) fn emit_preg_replace_callback(emitter: &mut Emitter) {
     emitter.label("__rt_preg_replace_callback_limit_ready");
     emitter.instruction(&format!("ldr x14, [sp, #{}]", regmatches_ptr_off));    // load dynamic full-match pair before advancing cursor
     emitter.instruction("ldr x9, [x14, #8]");                                   // load full-match signed-64-bit end
-    emitter.instruction("cmp x9, #0");                                          // detect zero-length regex matches
-    emitter.instruction("b.gt __rt_preg_replace_callback_advance_ok");          // use native rm_eo when the match consumed bytes
-    emitter.instruction("mov x9, #1");                                          // force progress for zero-length matches
-    emitter.label("__rt_preg_replace_callback_advance_ok");
     emitter.instruction(&format!("ldr x10, [sp, #{}]", current_pos_off));       // reload current subject cursor
     emitter.instruction("add x10, x10, x9");                                    // move cursor past the current match
     emitter.instruction(&format!("str x10, [sp, #{}]", current_pos_off));       // save next regex search cursor
@@ -587,9 +587,6 @@ fn emit_preg_replace_callback_linux_x86_64(emitter: &mut Emitter) {
     // -- replacement loop --
     emitter.label("__rt_preg_replace_callback_loop_linux_x86_64");
     emitter.instruction(&format!("mov rsi, QWORD PTR [rsp + {}]", current_pos_off)); // reload current subject cursor for regexec
-    emitter.instruction("movzx r9d, BYTE PTR [rsi]");                           // read the current subject byte
-    emitter.instruction("test r9d, r9d");                                       // check whether the cursor reached the null terminator
-    emitter.instruction("jz __rt_preg_replace_callback_empty_subject_linux_x86_64"); // finish when the full subject has been consumed
     emitter.instruction(&format!("cmp QWORD PTR [rsp + {}], 0", limit_off));    // check whether the caller allowed another replacement
     emitter.instruction("je __rt_preg_replace_callback_tail_linux_x86_64");     // limit zero copies the remaining subject unchanged
     emitter.instruction(&format!("mov rdi, QWORD PTR [rsp + {}]", handle_off)); // pass compiled opaque handle
@@ -598,7 +595,13 @@ fn emit_preg_replace_callback_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov r8, rsi");                                         // the search cursor inside the whole subject
     emitter.instruction(&format!("mov rsi, QWORD PTR [rsp + {}]", subject_cstr_off)); // pass the WHOLE subject so lookbehind and anchors see what precedes the cursor
     emitter.instruction(&format!("mov r9, QWORD PTR [rsp + {}]", subject_len_off)); // pass the whole subject length as the search end
-    emitter.instruction("call __rt_pcre2_exec_at");                             // match from the cursor; pairs come back relative to it
+    emitter.instruction(&format!("cmp QWORD PTR [rsp + {}], 0", count_off));    // check whether this search follows a completed replacement
+    emitter.instruction("je __rt_preg_replace_callback_exec_first_linux_x86_64"); // the first search starts at the supplied cursor
+    emitter.instruction("call __rt_pcre2_exec_next_at");                        // retry empty matches before advancing with PCRE2
+    emitter.instruction("jmp __rt_preg_replace_callback_exec_ready_linux_x86_64"); // keep the continuation status
+    emitter.label("__rt_preg_replace_callback_exec_first_linux_x86_64");
+    emitter.instruction("call __rt_pcre2_exec_at");                             // start matching against the whole subject
+    emitter.label("__rt_preg_replace_callback_exec_ready_linux_x86_64");
     emitter.instruction("test eax, eax");                                       // did regexec find another match?
     emitter.instruction("jnz __rt_preg_replace_callback_tail_linux_x86_64");    // copy the remaining subject once no more matches exist
 
@@ -731,10 +734,6 @@ fn emit_preg_replace_callback_linux_x86_64(emitter: &mut Emitter) {
     emitter.label("__rt_preg_replace_callback_limit_ready_linux_x86_64");
     emitter.instruction(&format!("mov r10, QWORD PTR [rsp + {}]", regmatches_ptr_off)); // load dynamic full-match pair before advancing cursor
     emitter.instruction("mov r9, QWORD PTR [r10 + 8]");                         // load full-match signed-64-bit end
-    emitter.instruction("cmp r9, 0");                                           // detect zero-length regex matches
-    emitter.instruction("jg __rt_preg_replace_callback_advance_ok_linux_x86_64"); // use native rm_eo when the match consumed bytes
-    emitter.instruction("mov r9, 1");                                           // force progress for zero-length matches
-    emitter.label("__rt_preg_replace_callback_advance_ok_linux_x86_64");
     emitter.instruction(&format!("mov r10, QWORD PTR [rsp + {}]", current_pos_off)); // reload current subject cursor
     emitter.instruction("add r10, r9");                                         // move cursor past the current match
     emitter.instruction(&format!("mov QWORD PTR [rsp + {}], r10", current_pos_off)); // save next regex search cursor

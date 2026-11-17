@@ -14,11 +14,16 @@
 //! - The offset pairs come back RELATIVE TO THE CURSOR, as the suffix search reported them, so
 //!   the callers' prefix, advance and capture arithmetic is unchanged. A capture that did not
 //!   participate keeps its `-1`.
+//! - `__rt_pcre2_exec_next_at` shares the same arguments but lets PCRE2 continue after the
+//!   previous match, including nonempty retries and UTF-8 advancement after an empty match.
 
-use crate::codegen_support::{emit::Emitter, platform::Arch};
+use crate::codegen_support::{abi, emit::Emitter, platform::Arch};
 
 /// The shim's `REG_STARTEND` execution flag.
 const REG_STARTEND: i64 = 128;
+
+/// The managed shim's continuation flag, including its empty-match retry state.
+const GLOBAL_NEXT: i64 = 1 << 16;
 
 /// __rt_pcre2_exec_at: search a compiled pattern from a cursor inside the whole subject.
 /// Input:  x0=compiled handle, x1=subject base, x2=offset-pair count (at least 1),
@@ -33,6 +38,11 @@ pub(crate) fn emit_pcre2_exec_at(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: pcre2_exec_at ---");
     emitter.label_global("__rt_pcre2_exec_at");
+    emitter.instruction(&format!("mov x6, #{}", REG_STARTEND));                 // begin a search at the supplied cursor
+    emitter.instruction("b __rt_pcre2_exec_at_common");                         // share bounds and capture rebasing
+    emitter.label_global("__rt_pcre2_exec_next_at");
+    abi::emit_load_int_immediate(emitter, "x6", REG_STARTEND | GLOBAL_NEXT);
+    emitter.label("__rt_pcre2_exec_at_common");
     emitter.instruction("sub sp, sp, #48");                                     // allocate the helper frame
     emitter.instruction("stp x29, x30, [sp, #32]");                             // save frame pointer and return address
     emitter.instruction("add x29, sp, #32");                                    // set the helper frame pointer
@@ -42,7 +52,7 @@ pub(crate) fn emit_pcre2_exec_at(emitter: &mut Emitter) {
     emitter.instruction("str x3, [sp, #16]");                                   // keep the pair buffer across the shim call
     emitter.instruction("str x9, [x3]");                                        // REG_STARTEND start bound: the cursor
     emitter.instruction("str x5, [x3, #8]");                                    // REG_STARTEND end bound: the whole subject
-    emitter.instruction(&format!("mov x4, #{}", REG_STARTEND));                 // search from the offset, with the whole subject visible
+    emitter.instruction("mov x4, x6");                                          // pass the selected initial or continuation flags
     emitter.bl_c("elephc_pcre2_v1_exec");                                       // run the match; offsets come back absolute
     emitter.instruction("cbnz w0, __rt_pcre2_exec_at_done");                    // no match leaves nothing to rebase
     emitter.instruction("ldr x9, [sp, #0]");                                    // reload the cursor offset
@@ -77,6 +87,11 @@ fn emit_pcre2_exec_at_linux_x86_64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: pcre2_exec_at ---");
     emitter.label_global("__rt_pcre2_exec_at");
+    emitter.instruction(&format!("mov r11d, {}", REG_STARTEND));                // begin a search at the supplied cursor
+    emitter.instruction("jmp __rt_pcre2_exec_at_common_linux_x86_64");          // share bounds and capture rebasing
+    emitter.label_global("__rt_pcre2_exec_next_at");
+    emitter.instruction(&format!("mov r11d, {}", REG_STARTEND | GLOBAL_NEXT));  // let PCRE2 continue after the previous match
+    emitter.label("__rt_pcre2_exec_at_common_linux_x86_64");
     emitter.instruction("push rbp");                                            // save the caller frame pointer (re-aligns the stack)
     emitter.instruction("mov rbp, rsp");                                        // set the helper frame pointer
     emitter.instruction("sub rsp, 32");                                         // reserve aligned spill slots
@@ -87,7 +102,7 @@ fn emit_pcre2_exec_at_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov QWORD PTR [rbp - 24], rcx");                       // keep the pair buffer across the shim call
     emitter.instruction("mov QWORD PTR [rcx], r10");                            // REG_STARTEND start bound: the cursor
     emitter.instruction("mov QWORD PTR [rcx + 8], r9");                         // REG_STARTEND end bound: the whole subject
-    emitter.instruction(&format!("mov r8d, {}", REG_STARTEND));                 // search from the offset, with the whole subject visible
+    emitter.instruction("mov r8d, r11d");                                       // pass the selected initial or continuation flags
     emitter.bl_c("elephc_pcre2_v1_exec");                                       // run the match; offsets come back absolute
     emitter.instruction("test eax, eax");                                       // did the shim find a match?
     emitter.instruction("jnz __rt_pcre2_exec_at_done_linux_x86_64");            // no match leaves nothing to rebase
