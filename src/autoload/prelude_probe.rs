@@ -24,6 +24,8 @@
 //! - The web environment group retains process entries when an autoloaded file observes them.
 //! - The OPcache and version preludes decide per FUNCTION (`ini_get`, `ini_set`, `opcache_reset`,
 //!   `ini_restore`, ...), so each of their [`PROBED_FUNCTIONS`] is reported under its own name.
+//!   The closure is name-resolved, so a call matches on its resolved name: a vendor's own
+//!   `Vendor\Util\ini_get()` is not the global `ini_get`.
 
 use std::collections::HashSet;
 use std::path::Path;
@@ -93,9 +95,10 @@ pub fn autoloaded_prelude_groups(
             .iter()
             .filter(|(_, detect)| detect(&closure))
             .map(|(group, _)| *group)
-            .chain(PROBED_FUNCTIONS.iter().copied().flatten().copied().filter(|name| {
-                crate::opcache_prelude::detect::program_references(&closure, name)
-            }))
+            .chain(crate::opcache_prelude::detect::resolved_program_references(
+                &closure,
+                &PROBED_FUNCTIONS.iter().copied().flatten().copied().collect::<Vec<_>>(),
+            ))
             .collect()
     });
     // Usage detectors may parse literal eval fragments, so their identities are discarded too.
