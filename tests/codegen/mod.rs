@@ -118,6 +118,7 @@ mod pdo_sqlsrv;
 mod parse_str;
 mod preg_array_forms;
 mod review_g12_fixes;
+mod review_f4b_fixes;
 mod array_references;
 #[cfg(feature = "pdo-oci")]
 mod pdo_oci;

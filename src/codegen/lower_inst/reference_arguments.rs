@@ -1577,36 +1577,49 @@ fn emit_mixed_iterable_unbox_guard_with(
     ctx: &mut FunctionContext<'_>,
     message_for: &impl Fn(&str) -> String,
 ) {
+    // A program that links the eval bridge may be handed an object of a class the interpreter
+    // declared: it has no compiled class id, so the native Traversable matchers say no for it
+    // whatever it implements. The boxed cell is kept on the stack for the bridge probe, and every
+    // exit below drops it again.
+    let bridge = ctx.module.required_runtime_features.eval_bridge;
+    if bridge {
+        let result_reg = abi::int_result_reg(ctx.emitter).to_string();
+        abi::emit_push_reg(ctx.emitter, &result_reg);
+    }
     abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
     let accepted_label = ctx.next_label("mixed_iterable_accepted");
+    let array_accepted_label = ctx.next_label("mixed_iterable_array_accepted");
     let object_label = ctx.next_label("mixed_iterable_object");
     let object_accepted_label = ctx.next_label("mixed_iterable_object_accepted");
+    let wrong_pre_label = ctx.next_label("mixed_iterable_wrong_pre");
     let wrong_label = ctx.next_label("mixed_iterable_wrong_type");
+    let array_target = if bridge { &array_accepted_label } else { &accepted_label };
+    let wrong_target = if bridge { &wrong_pre_label } else { &wrong_label };
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
             ctx.emitter.instruction("cmp x0, #4");                              // runtime tag 4 identifies an indexed array iterable
-            ctx.emitter.instruction(&format!("b.eq {}", accepted_label));       // accept indexed array payloads without object checks
+            ctx.emitter.instruction(&format!("b.eq {}", array_target));         // accept indexed array payloads without object checks
             ctx.emitter.instruction("cmp x0, #5");                              // runtime tag 5 identifies an associative array iterable
-            ctx.emitter.instruction(&format!("b.eq {}", accepted_label));       // accept associative array payloads without object checks
+            ctx.emitter.instruction(&format!("b.eq {}", array_target));         // accept associative array payloads without object checks
             ctx.emitter.instruction("cmp x0, #6");                              // runtime tag 6 identifies an object candidate
             ctx.emitter.instruction(&format!("b.eq {}", object_label));         // validate object candidates against Traversable contracts
-            ctx.emitter.instruction(&format!("b {}", wrong_label));             // reject scalar and resource payloads at the boundary
+            ctx.emitter.instruction(&format!("b {}", wrong_target));            // reject scalar and resource payloads at the boundary
         }
         Arch::X86_64 => {
             ctx.emitter.instruction("cmp rax, 4");                              // runtime tag 4 identifies an indexed array iterable
-            ctx.emitter.instruction(&format!("je {}", accepted_label));         // accept indexed array payloads without object checks
+            ctx.emitter.instruction(&format!("je {}", array_target));           // accept indexed array payloads without object checks
             ctx.emitter.instruction("cmp rax, 5");                              // runtime tag 5 identifies an associative array iterable
-            ctx.emitter.instruction(&format!("je {}", accepted_label));         // accept associative array payloads without object checks
+            ctx.emitter.instruction(&format!("je {}", array_target));           // accept associative array payloads without object checks
             ctx.emitter.instruction("cmp rax, 6");                              // runtime tag 6 identifies an object candidate
             ctx.emitter.instruction(&format!("je {}", object_label));           // validate object candidates against Traversable contracts
-            ctx.emitter.instruction(&format!("jmp {}", wrong_label));           // reject scalar and resource payloads at the boundary
+            ctx.emitter.instruction(&format!("jmp {}", wrong_target));          // reject scalar and resource payloads at the boundary
         }
     }
 
     ctx.emitter.label(&object_label);
     let interface_ids = builtins::type_predicates::traversable_interface_ids(ctx);
     if interface_ids.is_empty() {
-        abi::emit_jump(ctx.emitter, &wrong_label);
+        abi::emit_jump(ctx.emitter, wrong_target);
     } else {
         match ctx.emitter.target.arch {
             Arch::AArch64 => abi::emit_push_reg(ctx.emitter, "x1"),
@@ -1619,6 +1632,20 @@ fn emit_mixed_iterable_unbox_guard_with(
                 &object_accepted_label,
             );
         }
+        let object_rejected_label = ctx.next_label("mixed_iterable_object_rejected");
+        if bridge {
+            // The saved object pointer sits on top of the boxed cell the bridge probe wants.
+            let result_reg = abi::int_result_reg(ctx.emitter).to_string();
+            abi::emit_load_temporary_stack_slot(ctx.emitter, &result_reg, 16);
+            let _ = builtins::emit_eval_object_is_a_named_fallback_from_result(
+                ctx,
+                "Traversable",
+                &object_accepted_label,
+                &object_rejected_label,
+                &object_rejected_label,
+            );
+            ctx.emitter.label(&object_rejected_label);
+        }
         match ctx.emitter.target.arch {
             Arch::AArch64 => {
                 abi::emit_pop_reg(ctx.emitter, "x1");
@@ -1629,20 +1656,32 @@ fn emit_mixed_iterable_unbox_guard_with(
                 abi::emit_load_int_immediate(ctx.emitter, "rax", 6);
             }
         }
-        abi::emit_jump(ctx.emitter, &wrong_label);
+        abi::emit_jump(ctx.emitter, wrong_target);
         ctx.emitter.label(&object_accepted_label);
         match ctx.emitter.target.arch {
             Arch::AArch64 => abi::emit_pop_reg(ctx.emitter, "x1"),
             Arch::X86_64 => abi::emit_pop_reg(ctx.emitter, "rdi"),
         }
+        if bridge {
+            abi::emit_release_temporary_stack(ctx.emitter, 16);
+        }
         abi::emit_jump(ctx.emitter, &accepted_label);
     }
 
+    if bridge {
+        ctx.emitter.label(&wrong_pre_label);
+        abi::emit_release_temporary_stack(ctx.emitter, 16);
+        abi::emit_jump(ctx.emitter, &wrong_label);
+    }
     builtins::arrays::union_type_guard::emit_mixed_wrong_tag_type_error_dispatch(
         ctx,
         &wrong_label,
         message_for,
     );
+    if bridge {
+        ctx.emitter.label(&array_accepted_label);
+        abi::emit_release_temporary_stack(ctx.emitter, 16);
+    }
     ctx.emitter.label(&accepted_label);
 }
 
