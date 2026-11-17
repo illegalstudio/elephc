@@ -185,7 +185,7 @@ pub struct CheckResult {
     pub array_append_element_types: HashMap<(String, Span), Option<PhpType>>,
     /// Source-point value read contracts; these never change a local's reference storage.
     pub local_value_read_types: LocalValueReadTypes,
-    /// Scalar declarations required at each later write, independent of narrowed read views.
+    /// Scalar contracts for writes and reference-promotion sites, independent of read narrowing.
     pub local_store_contracts: LocalStoreContracts,
     /// Checker-authorized call-argument sites that may widen one local to a boxed Mixed cell.
     pub boxed_reference_promotion_sites: HashMap<(String, Span), HashSet<String>>,

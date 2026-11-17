@@ -18,6 +18,29 @@ const PENDING: usize = CONTEXT + 8;
 const OUTCOME: usize = 32;
 const RHS: usize = 112;
 
+/// Registers the hidden owner's live stack binding after canonicalizing its boxed cell.
+pub(in crate::codegen::lower_inst) fn lower_bind_local_ref_contract(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+    let slot = expect_local_slot(inst)?;
+    if ctx.local_kind(slot)? != LocalKind::RefCell || ctx.local_php_type(slot)?.codegen_repr() != PhpType::Mixed {
+        return Err(CodegenIrError::invalid_module("local reference contract requires an owned binding"));
+    }
+    let descriptor = crate::codegen::runtime_metadata::local_reference_descriptor(
+        ctx.module, &inst.result_php_type)?;
+    let offset = ctx.local_offset(slot)?;
+    abi::emit_frame_slot_address(ctx.emitter, abi::int_arg_reg_name(ctx.emitter.target, 0), offset);
+    abi::emit_symbol_address(ctx.emitter, abi::int_arg_reg_name(ctx.emitter.target, 1), &descriptor);
+    abi::emit_call_label(ctx.emitter, "__rt_reference_sources_bind_local");
+    Ok(())
+}
+
+/// Retires a weak source before its stack binding can be cleared, reused, or leave the frame.
+pub(in crate::codegen) fn unbind_local_contract(ctx: &mut FunctionContext<'_>, offset: usize) {
+    if !ctx.module.required_runtime_features.native_reference_validation
+        || !ctx.module.semantic_profile.contains(elephc_semantics::StrictFeature::Locals) { return; }
+    abi::emit_frame_slot_address(ctx.emitter, abi::int_arg_reg_name(ctx.emitter.target, 0), offset);
+    abi::emit_call_label(ctx.emitter, "__rt_reference_sources_unbind_local");
+}
+
 /// Emits a canonical path and returns the join label to place after the unchanged raw fallback.
 pub(super) fn emit_if_canonical(
     ctx: &mut FunctionContext<'_>, inst: &Instruction, slot: LocalSlotId, value: ValueId,

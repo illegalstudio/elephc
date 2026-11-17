@@ -371,18 +371,18 @@ evidence and outstanding guarantees are recorded below.
 
 ## Implementation progress
 
-Verified through step117 (this commit), with remaining feature integration in progress. Issue:
+Verified through step118 (this commit), with remaining feature integration in progress. Issue:
 https://github.com/illegalstudio/elephc/issues/2347.
 
 The full task remains active. The user requested complete implementation, with a
 commit for every verified step and no partial delivery. Do not expose unfinished
 flags as successful no-ops. The public integrated mask contains Locals, Bools, DynamicCode, Opcache, Arithmetic,
-Overflow, Strings, Coercions, Casts and Comparisons. Locals includes the verified116-117 ordinary/nullable numeric binding extension;
+Overflow, Strings, Coercions, Casts and Comparisons. Locals includes the verified116-118 ordinary/nullable numeric binding and caller-reference extensions;
 its complete reference/global/eval and broader binding-flow contract remains outstanding. All
 other guarantees and the complete umbrella remain explicitly gated until their
 whole contract is enforced.
 
-This progress ledger condenses verified implementation through step117.
+This progress ledger condenses verified implementation through step118.
 Detailed evidence remains in Git history, historical Code Journal plan revisions,
 the linked work logs, and the current agent-facing architecture document
 3739892b. The approved behavior and delivery requirements above are unchanged.
@@ -614,7 +614,8 @@ paths. Keep this plan, agent documentation and the current journal log synchroni
 | 114 | `82300f746f` | feat(strict): enable noncoercive comparisons across hosts |
 | 115 | `6daf631e8b` | fix(eval): publish only live native object binding contracts |
 | 116 | `1cb2b34778` | feat(strict): enforce stable numeric local bindings |
-| 117 | this commit | feat(strict): guard nullable numeric binding updates |
+| 117 | `f1b64aa4cd` | feat(strict): guard nullable numeric binding updates |
+| 118 | this commit | feat(strict): preserve numeric caller reference contracts |
 
 
 ### Latest verified admission checkpoint
@@ -738,3 +739,35 @@ preserved, not yet registered, in tests/fixtures/strict/native_untyped_local_con
 and native_eval_local_contract.php, excluded from117 staging. The owned baseline/
 verification directory is removed after evidence capture. Complete broader Locals,
 the other six families and full umbrella/host acceptance before ending the task.
+
+
+### Verified118: caller contracts through native references
+
+Numeric binding contracts now survive boxing for untyped/mixed reference
+parameters and runtime-selected native descriptors. Checker metadata records the
+semantic contract even when a declared numeric union already uses Mixed storage.
+BindLocalRefContract explicitly carries the declaration through EIR, including
+textual output and profile validation. A shared C-ABI callback factory supplies
+borrowed original inputs and independently owned accepted candidates. Exact
+numeric membership callbacks use the existing protected reference coordinator,
+canonical identity and weak source registry. Hidden owner bindings unregister
+before unset, normal frame cleanup and exceptional cleanup. Physical reference
+eligibility and permissive behavior remain unchanged.
+
+Jobbd8c3124 passed the compiler build, eight exact gates and builtin architecture
+audit in2m46s. Both IR modes have clean heaps for invalid and valid numeric
+references, exact large integers, parameter entry, nullable writes, explicit
+numeric union rejection, explicit mixed openness, runtime-selected descriptors,
+unset and exceptional frame exit. The extended example and existing ordinary/
+nullable numeric guards pass. EIR/native callback generation and existing property
+metadata cover all five supported targets. Native execution is Linux x86_64.
+
+This resolves the recorded native untyped-reference baselinea7dce035 for numeric
+contracts. Intermediate jobs8e574690,18ed5c3f,4b25fd6f,7f65ab1a and24539791
+exposed and isolated unknown-descriptor and already-boxed union gaps before final
+acceptance. Their verified successors are permanent regression fixtures. The
+owned verification directory is removed after evidence capture.
+
+Continue native/eval source-point contracts (a6343333), broader stable bindings,
+the remaining six feature families and complete umbrella/host acceptance. The
+saved native_eval_local_contract.php fixture remains untracked for that work.

@@ -101,6 +101,8 @@ pub struct Function {
     /// (passes neutralize or relocate instructions rather than renumbering them), and passes
     /// that copy a body into another function carry the entries along.
     pub inlined_scopes: std::collections::HashMap<InstId, String>,
+    /// Exact local binding accepted by a native reference validator, separate from storage.
+    pub native_local_reference_contract: Option<PhpType>,
 }
 
 impl Function {
@@ -157,6 +159,7 @@ impl Function {
             display_name: None,
             no_epilogue_cleanup_slots: std::collections::HashSet::new(),
             inlined_scopes: std::collections::HashMap::new(),
+            native_local_reference_contract: None,
         }
     }
 

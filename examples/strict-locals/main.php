@@ -29,3 +29,15 @@ $measurement = $argc;
 unset($measurement);
 $measurement = 2.5;
 echo "Fresh measurement: ", $measurement, PHP_EOL;
+
+// Untyped reference parameters retain the calling variable's binding contract.
+function replaceQuantity(&$quantity, mixed $replacement): void {
+    $quantity = $replacement;
+}
+
+$quantity = $argc;
+try {
+    replaceQuantity($quantity, 2.5);
+} catch (TypeError $error) {
+    echo "The referenced quantity kept its integer value", PHP_EOL;
+}

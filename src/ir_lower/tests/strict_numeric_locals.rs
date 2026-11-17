@@ -10,6 +10,39 @@
 use crate::{codegen_support::platform::Target, source::SourceMode};
 use elephc_semantics::{SemanticProfile, StrictFeature};
 
+/// All supported targets transport numeric contracts through the protected native reference ABI.
+#[test]
+fn strict_numeric_reference_callers_generate_exact_native_validators_on_every_target() {
+    let source = format!("{}\n{}", include_str!("../../../tests/fixtures/strict/native_untyped_local_contract.php"),
+        include_str!("../../../tests/fixtures/strict/numeric_reference_lifetimes.php").strip_prefix("<?php").unwrap());
+    let program = crate::parser::parse_with_mode(&crate::lexer::tokenize(&source).unwrap(), SourceMode::Php).unwrap();
+    let profile = SemanticProfile::PERMISSIVE.with(StrictFeature::Locals, true);
+    for name in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+        let target = Target::parse(name).unwrap();
+        let checked = crate::types::checker::check_staged_semantics(&program, target, profile).unwrap();
+        let module = crate::ir_lower::lower_program(&program, &checked, target, false).unwrap();
+        assert!(module.required_runtime_features.native_reference_validation, "{name}");
+        let callbacks = module.functions.iter().filter(|function|
+            function.native_local_reference_contract.is_some()).collect::<Vec<_>>();
+        assert_eq!(callbacks.len(), 4, "{name}: int, float, nullable int and explicit numeric union");
+        for callback in callbacks {
+            assert!(callback.signature.is_none());
+            assert_eq!(callback.params.len(), 2);
+            assert_eq!(callback.no_epilogue_cleanup_slots.len(), 2);
+        }
+        crate::ir::validate_module(&module).unwrap();
+        let printed = crate::ir::print_module(&module);
+        assert!(printed.contains("contract=int"), "{name}: explicit contract in textual EIR");
+        let assembly = crate::codegen::generate_user_asm_from_ir(&module, false, false).unwrap();
+        assert!(assembly.contains("__rt_reference_sources_bind_local"), "{name}");
+        assert!(assembly.contains("__rt_reference_sources_unbind_local"), "{name}");
+        let mut mismatched = module.clone();
+        mismatched.semantic_profile = SemanticProfile::PERMISSIVE;
+        assert!(matches!(crate::ir::validate_module(&mismatched),
+            Err(crate::ir::ValidationError::SemanticProfileMismatch { .. })), "{name}");
+    }
+}
+
 /// Every target lowers catchable local guards after ordinary PHP numeric operations.
 #[test]
 fn strict_numeric_locals_guard_writes_and_updates_on_every_target() {

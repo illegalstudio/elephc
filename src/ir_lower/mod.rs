@@ -38,6 +38,7 @@ mod object_boundaries;
 mod program;
 mod boxed_operators;
 mod reference_property_validators;
+mod reference_local_validators;
 pub use reference_property_validators::enable_native_reference_validation;
 mod property_initializers;
 mod property_default_errors;

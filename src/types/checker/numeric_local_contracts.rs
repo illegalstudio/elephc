@@ -13,6 +13,23 @@ use crate::{errors::CompileError, span::Span, types::{LocalStoreContract, PhpTyp
 use elephc_semantics::{conversions::ConversionPlan, StrictFeature};
 
 impl Checker {
+    /// Carries the binding contract across a call-site promotion to boxed reference storage.
+    pub(crate) fn record_numeric_reference_contract(&mut self, name: &str, actual: &PhpType, span: Span) -> bool {
+        if self.semantic_source_mode == crate::source::SourceMode::Internal
+            || !self.semantic_profile.contains(StrictFeature::Locals) { return false; }
+        let expected = self.typed_local_names.get(name)
+            .or_else(|| self.numeric_local_contracts.get(name))
+            .or_else(|| self.narrowed_local_origins.get(name).map(|origin| &origin.origin))
+            .or_else(|| self.guarded_union_types.get(name).map(|origin| &origin.ty))
+            .unwrap_or(actual);
+        if numeric_contract(expected) {
+            self.local_store_contracts.insert((self.current_loop_storage_scope.clone(), span, name.into()),
+                LocalStoreContract { ty: expected.clone(), feature: StrictFeature::Locals });
+            return true;
+        }
+        false
+    }
+
     /// Retains a numeric binding's original kinds and records an independently owned store guard.
     pub(crate) fn check_numeric_local_store(&mut self, name: &str, incoming: &PhpType,
         span: Span, env: &TypeEnv, source: Option<&crate::parser::ast::Expr>) -> Result<PhpType, CompileError> {

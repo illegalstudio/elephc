@@ -15,6 +15,8 @@ mod native_reference_store;
 #[cfg(test)]
 mod tests;
 pub(super) use native_reference_store::emit_static_if_managed;
+pub(super) use native_reference_store::lower_bind_local_ref_contract;
+pub(in crate::codegen) use native_reference_store::unbind_local_contract;
 pub(in crate::codegen) use owned_output::publish_current_owned_output;
 
 /// Lowers an addressable local store from one SSA operand.
@@ -497,6 +499,7 @@ pub(super) fn release_local_ref_cell_owner(
     value_ty: &PhpType,
 ) -> Result<()> {
     let owner_offset = ctx.local_offset(owner_slot)?;
+    unbind_local_contract(ctx, owner_offset);
     let done = ctx.next_label("release_ref_cell_owner_done");
     match ctx.emitter.target.arch {
         Arch::AArch64 => {

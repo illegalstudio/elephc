@@ -102,6 +102,7 @@ pub enum ValidationError {
     NeverFunctionReturns,
     InvalidReferenceOwner { local: LocalSlotId, owner: LocalSlotId },
     InvalidReferenceArgumentOwner(LocalSlotId),
+    InvalidLocalReferenceContract(InstId),
     InvalidReferenceCallResult { inst: InstId, operand: ValueId },
 }
 
@@ -120,6 +121,9 @@ pub fn validate_module(module: &Module) -> Result<(), ValidationError> {
         validate_function(function)?;
         for (index, inst) in function.instructions.iter().enumerate() {
             let mut required = inst.arithmetic_policy().requirements().bits();
+            if inst.op == Op::BindLocalRefContract {
+                required |= elephc_semantics::StrictFeature::Locals.bit();
+            }
             if matches!(inst.immediate, Some(Immediate::RuntimeCall(crate::ir::RuntimeCallTarget::CheckedNumericCast(_)
                 | crate::ir::RuntimeCallTarget::CheckedRadixInt))) {
                 required |= elephc_semantics::StrictFeature::Casts.bit();
@@ -791,7 +795,7 @@ fn validate_instruction_immediate(
             matches!(imm, Imm::Data(_) | Imm::PropertyRef { .. })
         }),
         StrAppend | LocalPlace | LoadLocal | StoreLocal | UnsetLocal | ZeroLocalSlot | LoadRefCell | LoadRefCellValue | StoreRefCell
-        | ReleaseLocalRefCell | AcquireRefCell
+        | ReleaseLocalRefCell | AcquireRefCell | BindLocalRefContract
         | ReleaseLocalSlot | ReleaseRawLocalSlot | PushCallOperandOwner | PopCallOperandOwner
         | LoadStaticLocal | StoreStaticLocal | InitStaticLocal | StaticLocalUninitialized
         | InvokerRefArg => require_immediate(inst_id, inst, "local slot", |imm| {
@@ -1085,6 +1089,16 @@ fn validate_opcode_rules(
                 || !matches!(inst.result_php_type, PhpType::Pointer(_))
             {
                 return Err(ValidationError::ResultTypeMismatch(result));
+            }
+            Ok(())
+        }
+        BindLocalRefContract => {
+            check_count(inst_id, inst, 0, "0")?;
+            let Some(Immediate::LocalSlot(slot)) = inst.immediate else { unreachable!() };
+            let valid_owner = function.locals.get(slot.as_raw() as usize).is_some_and(|local|
+                local.kind == LocalKind::RefCell && local.php_type.codegen_repr() == PhpType::Mixed);
+            if !valid_owner || crate::semantics::conversions::implicit_contract(&inst.result_php_type).is_none() {
+                return Err(ValidationError::InvalidLocalReferenceContract(inst_id));
             }
             Ok(())
         }

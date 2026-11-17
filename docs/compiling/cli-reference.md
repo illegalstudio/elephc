@@ -843,6 +843,13 @@ so a type-hinted parameter is eligible like an untyped one (a by-REFERENCE
 parameter stays excluded, by the rule above). With `--strict-locals`, a numeric
 parameter also retains its numeric binding contract after entry.
 
+An inferred or declared numeric contract also follows a local passed to an
+untyped or `mixed` reference parameter. A dynamic float written through that
+parameter raises `TypeError` before replacing an integer occupant. Explicit
+numeric unions retain every declared alternative, and an explicit `mixed`
+binding remains open. Detaching a binding with `unset()` or leaving its frame
+retires its reference contract.
+
 Beyond those shared exclusions the shapes are gated differently:
 
 - The **`unset()` kill** and the **straight-line retype** additionally require

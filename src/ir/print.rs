@@ -135,6 +135,9 @@ fn print_instruction(out: &mut String, function: &Function, data: &DataPool, ins
     if let Some(immediate) = &inst.immediate {
         print_immediate(out, data, immediate);
     }
+    if inst.op == crate::ir::Op::BindLocalRefContract {
+        let _ = write!(out, " contract={}", inst.result_php_type);
+    }
     if !inst.effects.is_empty() {
         let _ = write!(out, " ; effects: {}", inst.effects.names().join(", "));
     }

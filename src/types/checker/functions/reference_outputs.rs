@@ -235,6 +235,23 @@ impl Checker {
             return Ok(());
         }
         let actual = guarded_storage.as_ref().unwrap_or(actual);
+        // A declared numeric union can already occupy Mixed storage. Its semantic contract
+        // must reach the caller cell even when this call requires no further physical widening.
+        if crate::types::uses_boxed_reference_payload(expected) {
+            let mut source = arg;
+            while let ExprKind::NamedArg { value, .. } | ExprKind::ErrorSuppress(value) = &source.kind {
+                source = value;
+            }
+            if let ExprKind::Variable(name) = &source.kind {
+                if source.span.identifies_a_node()
+                    && self.record_numeric_reference_contract(name, actual, source.span)
+                {
+                    self.boxed_reference_promotion_sites
+                        .entry((self.current_loop_storage_scope.clone(), source.span))
+                        .or_default().insert(name.clone());
+                }
+            }
+        }
         let output_ty = if expected.is_php_array()
             && array_value
         {
@@ -249,8 +266,8 @@ impl Checker {
             && matches!(actual.codegen_repr(), PhpType::Void | PhpType::Never)
         {
             expected.clone()
-        } else if let Some(storage) = guarded_storage {
-            storage
+        } else if let Some(storage) = &guarded_storage {
+            storage.clone()
         } else {
             return Ok(());
         };

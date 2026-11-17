@@ -10,6 +10,46 @@
 
 use crate::support::*;
 
+/// Reference contracts survive calls and unwind while ending at unset and preserving explicit kinds.
+#[test]
+fn test_strict_numeric_reference_contract_lifetimes_and_explicit_types() {
+    let source = include_str!("../fixtures/strict/numeric_reference_lifetimes.php");
+    for mode in ["--ir-opt=off", "--ir-opt=on"] {
+        for (strict, expected) in [
+            (false, "3.5|Wdouble|2.5|WE|2.5|Wstring|bad|2.5|Wdouble|2.5|WNULL||Wdouble|2.5|"),
+            (true, "3.5|Tinteger|1|TE|2.5|Tdouble|2.5|2.5|Tinteger|1|WNULL||Tinteger|1|"),
+        ] {
+            let mut flags = vec![mode, "--heap-debug"];
+            if strict { flags.push("--strict-locals"); }
+            let output = StrictFixture::new(source).capture(&flags);
+            assert_eq!(String::from_utf8_lossy(&output.stdout), expected, "{flags:?}: {}",
+                String::from_utf8_lossy(&output.stderr));
+            assert!(String::from_utf8_lossy(&output.stderr).contains("HEAP DEBUG: leak summary: clean"),
+                "{flags:?}: {}", String::from_utf8_lossy(&output.stderr));
+        }
+    }
+}
+
+/// Untyped reference parameters validate the caller's original numeric contract before writing.
+#[test]
+fn test_strict_numeric_locals_keep_caller_contract_in_untyped_reference() {
+    let source = include_str!("../fixtures/strict/native_untyped_local_contract.php");
+    for mode in ["--ir-opt=off", "--ir-opt=on"] {
+        for (strict, expected) in [
+            (false, "Wdouble|2.5|Winteger|3|Winteger|9007199254740993|"),
+            (true, "Tinteger|1|Winteger|3|Winteger|9007199254740993|"),
+        ] {
+            let mut flags = vec![mode, "--heap-debug"];
+            if strict { flags.push("--strict-locals"); }
+            let output = StrictFixture::new(source).capture(&flags);
+            assert_eq!(String::from_utf8_lossy(&output.stdout), expected, "{flags:?}: {}",
+                String::from_utf8_lossy(&output.stderr));
+            assert!(String::from_utf8_lossy(&output.stderr).contains("HEAP DEBUG: leak summary: clean"),
+                "{flags:?}: {}", String::from_utf8_lossy(&output.stderr));
+        }
+    }
+}
+
 /// Explicit numeric changes are rejected at statement, expression, branch and parameter writes.
 #[test]
 fn test_strict_numeric_locals_reject_kind_changes_at_source() {
@@ -80,7 +120,7 @@ numericScope($argc);
 fn test_strict_numeric_locals_example() {
     let source = include_str!("../../examples/strict-locals/main.php");
     assert_eq!(StrictFixture::new(source).run(&["--strict-locals"]),
-        "Quantity requires an integer or null\nQuantity: 2\nQuantity: 3\nQuantity: not tracked\nThe integer binding kept its value\nArithmetic result: double\nFresh measurement: 2.5\n");
+        "Quantity requires an integer or null\nQuantity: 2\nQuantity: 3\nQuantity: not tracked\nThe integer binding kept its value\nArithmetic result: double\nFresh measurement: 2.5\nThe referenced quantity kept its integer value\n");
 }
 
 

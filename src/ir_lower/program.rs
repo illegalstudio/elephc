@@ -191,6 +191,7 @@ fn lower_on_compiler_stack(
     super::closure_scopes::specialize_module(&mut module);
     super::effect_refinement::refine_module(&mut module);
     reserve_eval_subclass_property_storage(&mut module);
+    super::reference_local_validators::lower_requested(&mut module)?;
     if super::reference_property_validators::required_by_profile(&module) {
         super::reference_property_validators::enable_native_reference_validation(&mut module)?;
     }

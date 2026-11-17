@@ -1,9 +1,9 @@
 # Strict local binding implementation history
 
-This record preserves steps116-117 candidate investigations and verification. The
+This record preserves steps116-118 candidate investigations and verification. The
 current approved contract and authoritative checkpoint remain in
 [strict-semantic-profiles.md](strict-semantic-profiles.md). Candidate failures
-below are chronological and are superseded by the verified117 checkpoint.
+below are chronological and are superseded by the verified118 checkpoint.
 
 ### Step116 candidate: stable numeric local stores
 
@@ -178,3 +178,32 @@ returns, examples and existing nullable reference/coalesce controls pass with
 clean heaps. Both five-target gates pass. Untyped reference parameter transport
 and opaque eval contract transport remain unfinished, as recorded in facts
 a7dce035 and a6343333.
+
+
+## Verified118: native caller reference transport
+
+The original native_untyped_local_contract.php baseline is now registered and
+passes with TypeError before mutation under Locals, preserving integer1, while
+the default still stores double2.5. Exact integer9007199254740993 survives both
+paths. Job8e574690 first passed the new five-target validator/emitter, native
+regression, existing property metadata, protected C-ABI checks and architecture
+audit in4m54s. Jobs18ed5c3f and4b25fd6f verified parameter, nullable, explicit
+numeric union/mixed, unset, normal/exception cleanup, closure-parameter and
+capture controls. A signature-unknown descriptor still bypassed the contract;
+its checker alias recorder now receives the source-point environment and records
+the same numeric contract used by resolved calls.
+
+Job7f65ab1a stopped on an overly optimistic four-contract assertion: only three
+were generated. Probe24539791 proved a real missing already-boxed numeric union
+contract: a string replacement was accepted. The checker now records numeric
+reference membership before deciding whether physical storage needs widening.
+The permanent lifetime fixture rejects that string, preserves double2.5, permits
+explicit mixed writes and covers runtime-selected descriptors.
+
+Final jobbd8c3124 passed a build without new warnings, eight exact gates and
+the architecture audit in2m46s. Both IR modes have clean heaps. All five targets
+validate/emit the exact local callback ABI and retain existing physical property
+metadata. The extended example and prior ordinary/nullable numeric tests pass.
+The task-owned target/strict-reference-contract-bghxkxqg directory is removed
+after evidence capture. Native/eval scalar contract transport and broader
+Locals remain active, alongside the other six unintegrated families.

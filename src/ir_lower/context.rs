@@ -3905,6 +3905,22 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
     /// Widens a concrete local to boxed `Mixed` storage, then promotes that storage to a
     /// durable heap reference cell suitable for an escaping by-reference parameter.
     pub(crate) fn promote_local_mixed_ref_cell(&mut self, name: &str, span: Option<Span>) {
+        self.promote_local_mixed_ref_cell_storage(name, span);
+        let contract = span.and_then(|span| self.local_store_contracts.get(
+            &(self.loop_storage_scope.clone(), span, name.to_string()))).cloned();
+        if let Some(contract) = contract.filter(|contract|
+            contract.feature == elephc_semantics::StrictFeature::Locals)
+        {
+            if let Some(owner) = self.ref_cell_owner_slot(name) {
+                self.builder.emit_with_effects(Op::BindLocalRefContract, Vec::new(),
+                    Some(Immediate::LocalSlot(owner)), IrType::Void, contract.ty,
+                    Ownership::NonHeap, Op::BindLocalRefContract.default_effects(), span);
+            }
+        }
+    }
+
+    /// Normalizes physical reference storage independently of its semantic binding contract.
+    fn promote_local_mixed_ref_cell_storage(&mut self, name: &str, span: Option<Span>) {
         // The alias map is a MAY fact across branches; owner initialization is a MUST fact.
         // Promote before loading a narrowed view when an earlier alternative only declared
         // the owner, so this path publishes its cell and retires the raw value it replaces.

@@ -920,6 +920,8 @@ pub enum Op {
     /// publisher clears and retires before the displaced value's destructor can execute.
     StoreRefCell,
     PromoteLocalRefCell,
+    /// Registers the result PHP type as the hidden owner's exact binding contract.
+    BindLocalRefContract,
     AliasLocalRefCell,
     /// Retains a nullable owner or authenticates an incoming managed by-ref parameter cell.
     /// Immediate: source/destination slots. Borrowed frame arguments produce null owners.
@@ -1494,6 +1496,7 @@ impl Op {
             PromoteLocalRefCell => {
                 E::READS_LOCAL | E::WRITES_LOCAL | E::ALLOC_HEAP | E::WRITES_HEAP | E::REFCOUNT_OP
             }
+            BindLocalRefContract => E::READS_LOCAL | E::READS_HEAP | E::WRITES_HEAP | E::ALLOC_HEAP | E::REFCOUNT_OP,
             AliasLocalRefCell => E::READS_LOCAL | E::WRITES_LOCAL,
             RetainLocalRefCell => E::READS_LOCAL | E::WRITES_LOCAL | E::READS_HEAP | E::WRITES_HEAP | E::REFCOUNT_OP,
             // The last cell owner can run an arbitrary payload destructor.
@@ -1865,6 +1868,7 @@ impl Op {
             LoadRefCellValue => "load_ref_cell_value",
             StoreRefCell => "store_ref_cell",
             PromoteLocalRefCell => "promote_local_ref_cell",
+            BindLocalRefContract => "bind_local_ref_contract",
             AliasLocalRefCell => "alias_local_ref_cell",
             RetainLocalRefCell => "retain_local_ref_cell",
             ReleaseLocalRefCell => "release_local_ref_cell",

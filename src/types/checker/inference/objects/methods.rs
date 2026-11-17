@@ -125,7 +125,7 @@ impl Checker {
                     // signature is not resolvable here, so the arguments are conservatively
                     // reference-aliased. (`bindTo` above only rebinds `$this`; it invokes
                     // nothing, so its arguments are ordinary by-value reads.)
-                    self.record_unresolved_callee_argument_aliases(args);
+                    self.record_unresolved_callee_argument_aliases(args, env);
                     for arg in args {
                         self.infer_type(arg, env)?;
                     }
@@ -162,12 +162,12 @@ impl Checker {
             // The callee is picked from the runtime class id over every candidate that declares
             // the method, so no single parameter list governs the arguments: any candidate's
             // by-reference parameter would alias the local behind them.
-            self.record_unresolved_callee_argument_aliases(args);
+            self.record_unresolved_callee_argument_aliases(args, env);
             return Ok(self
                 .mixed_receiver_method_return_type(method, args.len())
                 .unwrap_or(PhpType::Mixed));
         }
-        self.record_unresolved_callee_argument_aliases(args);
+        self.record_unresolved_callee_argument_aliases(args, env);
         Ok(PhpType::Int)
     }
 
@@ -284,7 +284,7 @@ impl Checker {
         };
         // A runtime method name resolves no signature, so the arguments are conservatively
         // reference-aliased — see `Checker::record_unresolved_callee_argument_aliases`.
-        self.record_unresolved_callee_argument_aliases(args);
+        self.record_unresolved_callee_argument_aliases(args, env);
         self.infer_type(method, env)?;
         for arg in args {
             self.infer_type(arg, env)?;
@@ -1348,7 +1348,7 @@ impl Checker {
             // The class is not in the closed world (an `eval` fragment may declare it), so no
             // signature governs the arguments: alias them conservatively. Descriptor invocation
             // still owns its Traversable spread walk; ordinary static calls remain array-only.
-            self.record_unresolved_callee_argument_aliases(args);
+            self.record_unresolved_callee_argument_aliases(args, env);
             for arg in args {
                 if allow_by_ref_spread {
                     self.infer_descriptor_call_arg_type(arg, env)?;

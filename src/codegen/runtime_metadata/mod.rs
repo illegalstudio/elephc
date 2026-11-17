@@ -28,3 +28,4 @@ pub(super) use static_members::*;
 
 pub(super) use native_references::emit_native_reference_metadata;
 pub(super) use native_references::checked_boxed_static_descriptor;
+pub(super) use native_references::local_descriptor as local_reference_descriptor;

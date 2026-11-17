@@ -1416,7 +1416,7 @@ impl Checker {
     /// [`Checker::record_reference_alias_root`] at the by-ref slots alone, and must keep doing so —
     /// blanket-disqualifying a resolved by-VALUE call would take the feature away from the
     /// ordinary case it exists for.
-    pub(crate) fn record_unresolved_callee_argument_aliases(&mut self, args: &[Expr]) {
+    pub(crate) fn record_unresolved_callee_argument_aliases(&mut self, args: &[Expr], env: &TypeEnv) {
         for arg in args {
             self.record_reference_alias_root(arg);
             let mut value = arg;
@@ -1434,6 +1434,9 @@ impl Checker {
             // from the pre-call concrete type. `unset()` clears this provenance normally.
             self.boxed_ref_aliased_locals.insert(name.clone());
             if value.span.identifies_a_node() {
+                if let Some(actual) = env.get(name) {
+                    self.record_numeric_reference_contract(name, actual, value.span);
+                }
                 self.boxed_reference_promotion_sites
                     .entry((self.current_loop_storage_scope.clone(), value.span))
                     .or_default()

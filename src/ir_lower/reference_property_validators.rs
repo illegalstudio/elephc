@@ -82,19 +82,7 @@ pub fn enable_native_reference_validation(module: &mut Module) -> Result<(), sup
 /// Creates a native two-parameter function returning exactly one independently owned candidate.
 fn lower_callback(class_id: u64, slot: u32, is_static: bool) -> Function {
     let boxed = IrType::Heap(IrHeapKind::Mixed);
-    let mut function = Function::new(callback_name(class_id, slot, is_static), boxed, PhpType::Mixed);
-    function.flags.is_internal = true;
-    function.flags.is_synthetic = true;
-    function.flags.is_native_reference_validator = true;
-    for (name, ir_type, php_type) in [
-        ("context", IrType::I64, PhpType::Int), ("original", boxed, PhpType::Mixed),
-    ] {
-        function.params.push(FunctionParam {
-            name: name.into(), ir_type, php_type: php_type.clone(), by_ref: false, variadic: false,
-        });
-        let slot = function.add_local(Some(name.into()), ir_type, php_type, LocalKind::BorrowedTemp);
-        function.no_epilogue_cleanup_slots.insert(slot);
-    }
+    let mut function = new_callback(callback_name(class_id, slot, is_static));
     let mut builder = Builder::new(&mut function);
     let entry = builder.create_named_block("entry", Vec::new());
     builder.set_entry(entry);
@@ -117,5 +105,24 @@ fn lower_callback(class_id: u64, slot: u32, is_static: bool) -> Function {
         })), boxed, PhpType::Mixed, Ownership::Owned,
     ).expect("reference declaration coercion produces a candidate");
     builder.terminate(Terminator::Return { value: Some(candidate) });
+    function
+}
+
+/// Creates the shared borrowed-input C ABI independently of the declaration being checked.
+pub(super) fn new_callback(name: String) -> Function {
+    let boxed = IrType::Heap(IrHeapKind::Mixed);
+    let mut function = Function::new(name, boxed, PhpType::Mixed);
+    function.flags.is_internal = true;
+    function.flags.is_synthetic = true;
+    function.flags.is_native_reference_validator = true;
+    for (name, ir_type, php_type) in [
+        ("context", IrType::I64, PhpType::Int), ("original", boxed, PhpType::Mixed),
+    ] {
+        function.params.push(FunctionParam {
+            name: name.into(), ir_type, php_type: php_type.clone(), by_ref: false, variadic: false,
+        });
+        let slot = function.add_local(Some(name.into()), ir_type, php_type, LocalKind::BorrowedTemp);
+        function.no_epilogue_cleanup_slots.insert(slot);
+    }
     function
 }

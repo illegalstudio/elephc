@@ -298,7 +298,7 @@ impl Checker {
                 // No constructor signature means no parameter binding modes either, so every
                 // argument is conservatively reference-aliased — see
                 // `Checker::record_unresolved_callee_argument_aliases`.
-                self.record_unresolved_callee_argument_aliases(args);
+                self.record_unresolved_callee_argument_aliases(args, env);
                 self.infer_type(name_expr, env)?;
                 for arg in args {
                     self.infer_type(arg, env)?;

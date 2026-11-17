@@ -656,7 +656,7 @@ impl Checker {
                 // The callee is only known at runtime, but PHP rejects
                 // unpacking after named arguments while compiling the call.
                 self.require_valid_unresolved_call_argument_order(args, &format!("callable ${}", var))?;
-                self.record_unresolved_callee_argument_aliases(args);
+                self.record_unresolved_callee_argument_aliases(args, env);
                 for arg in args {
                     self.infer_descriptor_call_arg_type(arg, env)?;
                 }
@@ -762,7 +762,7 @@ impl Checker {
         // No signature is known for this callable, so the planner never runs;
         // still apply PHP's syntactic unpack-after-named rule.
         self.require_valid_unresolved_call_argument_order(args, &format!("callable ${}", var))?;
-        self.record_unresolved_callee_argument_aliases(args);
+        self.record_unresolved_callee_argument_aliases(args, env);
         for arg in args {
             self.infer_descriptor_call_arg_type(arg, env)?;
         }
@@ -855,7 +855,7 @@ impl Checker {
                 _ => "callable expression".to_string(),
             };
             self.require_valid_unresolved_call_argument_order(args, &callee_desc)?;
-            self.record_unresolved_callee_argument_aliases(args);
+            self.record_unresolved_callee_argument_aliases(args, env);
             for arg in args {
                 self.infer_descriptor_call_arg_type(arg, env)?;
             }
@@ -1034,7 +1034,7 @@ impl Checker {
         // Everything below this point failed to produce a signature: the return type may still be
         // recoverable from a recorded closure shape, but the PARAMETER binding modes are not.
         self.require_valid_unresolved_call_argument_order(args, "callable expression")?;
-        self.record_unresolved_callee_argument_aliases(args);
+        self.record_unresolved_callee_argument_aliases(args, env);
         for arg in args {
             self.infer_descriptor_call_arg_type(arg, env)?;
         }
@@ -1071,7 +1071,7 @@ impl Checker {
         env: &TypeEnv,
     ) -> Result<PhpType, CompileError> {
         self.require_valid_unresolved_call_argument_order(args, "callable array")?;
-        self.record_unresolved_callee_argument_aliases(args);
+        self.record_unresolved_callee_argument_aliases(args, env);
         for arg in args {
             self.infer_descriptor_call_arg_type(arg, env)?;
         }
@@ -1514,7 +1514,7 @@ impl Checker {
         // conservative; that residual asymmetry only ever withholds a mark, never a kill/retype
         // the pre-scan would have allowed. The KNOWN-signature paths above need nothing:
         // `check_pipe_known_callable_call` rejects a by-reference parameter outright per the RFC.
-        self.record_unresolved_callee_argument_aliases(&synth_args);
+        self.record_unresolved_callee_argument_aliases(&synth_args, env);
         match &callable.kind {
             ExprKind::Closure { body, .. } => {
                 return Ok(infer_return_type_syntactic(body));

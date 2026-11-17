@@ -1518,6 +1518,7 @@ fn emit_ref_cell_owner_epilogue_cleanup_for(
 
 /// Detaches a non-null ref-cell owner before releasing its cell, including throwing payloads.
 fn emit_ref_cell_owner_cleanup(ctx: &mut FunctionContext<'_>, offset: usize, ty: &PhpType) {
+    super::lower_inst::local_stores::unbind_local_contract(ctx, offset);
     let done = ctx.next_label("ref_cell_owner_cleanup_done");
     match ctx.emitter.target.arch {
         Arch::AArch64 => {

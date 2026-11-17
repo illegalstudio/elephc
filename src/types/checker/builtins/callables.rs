@@ -473,7 +473,7 @@ fn check_object_or_array_callable_call(
         // callback arguments — alias them conservatively (see
         // `Checker::record_unresolved_callee_argument_aliases`). This is the shape `$cls::m($a)`
         // and `$obj->$m($a)` desugar to.
-        checker.record_unresolved_callee_argument_aliases(callback_args);
+        checker.record_unresolved_callee_argument_aliases(callback_args, env);
         for arg in callback_args {
             if descriptor_traversable_spread {
                 checker.infer_descriptor_call_arg_type(arg, env)?;
@@ -1188,7 +1188,7 @@ fn check_callback_builtin_call_in_engine_frame(
     {
         // Boxed array reads erase callable signatures. The map runtime resolves
         // these values and validates the selected target's argument contract.
-        checker.record_unresolved_callee_argument_aliases(callback_args);
+        checker.record_unresolved_callee_argument_aliases(callback_args, env);
         for arg in callback_args {
             checker.infer_type(arg, env)?;
         }
@@ -1743,7 +1743,7 @@ pub(crate) fn check_call_user_func_array(
         // of it by reference, so the local holding that array loses kill/retype eligibility. An
         // array LITERAL there is not aliasable (PHP refuses to bind a literal element by
         // reference) and `record_reference_alias_root` correctly stops at it.
-        checker.record_unresolved_callee_argument_aliases(&args[1..]);
+        checker.record_unresolved_callee_argument_aliases(&args[1..], env);
         return Ok(PhpType::Mixed);
     }
     if matches!(callback_ty, PhpType::Callable | PhpType::Mixed | PhpType::Union(_))
@@ -1751,7 +1751,7 @@ pub(crate) fn check_call_user_func_array(
     {
         // A Mixed/Union callback is validated and dispatched at runtime by tag
         // (string name, closure, or array), matching PHP's runtime callable check.
-        checker.record_unresolved_callee_argument_aliases(&args[1..]);
+        checker.record_unresolved_callee_argument_aliases(&args[1..], env);
         return Ok(PhpType::Mixed);
     }
     Err(CompileError::new(
@@ -1921,7 +1921,7 @@ pub(crate) fn check_call_user_func(
             // `eval()` may publish a free function after static declaration collection. The EIR
             // lowering owns this exact string-literal shape through `EvalFunctionCall`; keep the
             // callback runtime-opaque while preserving conservative by-reference aliasing.
-            checker.record_unresolved_callee_argument_aliases(&args[1..]);
+            checker.record_unresolved_callee_argument_aliases(&args[1..], env);
             return Ok(PhpType::Mixed);
         }
         let target = CallableTarget::Function(Name::from(cb_name.clone()));
@@ -1964,7 +1964,7 @@ pub(crate) fn check_call_user_func(
         // The callee is a runtime string. `$cls::m($a)` and `$obj->$m($a)` desugar to this shape
         // (see the `DoubleColon` arm of the Pratt parser), and a by-reference parameter behind it
         // would alias the local, so the arguments lose kill/retype eligibility.
-        checker.record_unresolved_callee_argument_aliases(&args[1..]);
+        checker.record_unresolved_callee_argument_aliases(&args[1..], env);
         for arg in &args[1..] {
             checker.infer_descriptor_call_arg_type(arg, env)?;
         }
@@ -1976,7 +1976,7 @@ pub(crate) fn check_call_user_func(
         // lowering unboxes it and dispatches by tag (string name, closure, or
         // array), matching PHP's runtime callable check. The concrete callee
         // return type is not statically known, so the call yields Mixed.
-        checker.record_unresolved_callee_argument_aliases(&args[1..]);
+        checker.record_unresolved_callee_argument_aliases(&args[1..], env);
         for arg in &args[1..] {
             checker.infer_descriptor_call_arg_type(arg, env)?;
         }
