@@ -29,15 +29,17 @@ pub(in crate::codegen::lower_inst) fn lower_mixed_is_a_literal_target(
     store_if_result(ctx, inst)
 }
 
+/// Whether a class name names PHP's built-in `Closure` (any case, with or without a leading `\`).
+pub(in crate::codegen::lower_inst) fn is_closure_class_name(name: &str) -> bool {
+    name.trim_start_matches('\\').eq_ignore_ascii_case("Closure")
+}
+
 /// Lowers named `instanceof` using runtime class/interface metadata.
 pub(in crate::codegen::lower_inst) fn lower_instanceof(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     let value = expect_operand(inst, 0)?;
     let value_ty = ctx.value_php_type(value)?;
     let class_name = class_name_immediate(ctx, inst)?.to_string();
-    if class_name
-        .trim_start_matches('\\')
-        .eq_ignore_ascii_case("Closure")
-    {
+    if is_closure_class_name(&class_name) {
         return lower_closure_class_check(ctx, inst, value);
     }
     if !matches!(

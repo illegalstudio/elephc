@@ -703,11 +703,6 @@ fn emit_dynamic_non_object_projection_fatal(ctx: &mut FunctionContext<'_>, cast_
     }
 }
 
-/// Whether a class name names PHP's built-in `Closure` (any case, with or without a leading `\`).
-fn is_closure_name(name: &str) -> bool {
-    name.trim_start_matches('\\').eq_ignore_ascii_case("Closure")
-}
-
 /// Lowers `is_a()` and `is_subclass_of()` for object operands and literal targets.
 pub(crate) fn lower_is_a_relation(
     ctx: &mut FunctionContext<'_>,
@@ -727,7 +722,7 @@ pub(crate) fn lower_is_a_relation(
             // `Closure` has no class-info entry for the static walk, so even a literal name
             // takes the runtime comparison (`is_a('Closure', 'Closure', true)`).
             Some(target_class) if optional_const_string_operand(ctx, object)?.is_none()
-                || is_closure_name(&target_class) =>
+                || super::super::objects::is_closure_class_name(&target_class) =>
             {
                 return class_string_relation::lower(ctx, inst, object, &target_class, exclude_self);
             }
@@ -763,7 +758,7 @@ pub(crate) fn lower_is_a_relation(
     // closure, or an eval closure through the eval bridge), and is_subclass_of() never matches.
     if matches!(object_ty, PhpType::Callable | PhpType::Mixed | PhpType::Union(_)) {
         if let Some(target_class) = optional_const_string_operand(ctx, target)? {
-            if target_class.trim_start_matches('\\').eq_ignore_ascii_case("Closure") {
+            if super::super::objects::is_closure_class_name(&target_class) {
                 if exclude_self {
                     emit_bool_result(ctx, false);
                     return store_if_result(ctx, inst);
