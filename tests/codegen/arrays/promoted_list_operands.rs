@@ -188,3 +188,84 @@ array(6) {
 "####);
 }
 
+
+/// array_map over a runtime-promoted list: the null-callback identity, a callback, and several arrays.
+#[test]
+fn test_promoted_operands_array_map() {
+    let out = compile_and_run(
+        r####"<?php
+function mk() { $a = [1, 2]; $a[7] = 3; return $a; }
+(function () { $a = mk(); var_dump(array_map(null, $a)); })();
+(function () { $a = mk(); var_dump(array_map(fn($x) => $x * 2, $a)); })();
+(function () { $a = mk(); $b = mk(); var_dump(array_map(null, $a, $b)); })();
+(function () { $a = mk(); var_dump(array_map(fn($x, $y) => $x + $y, $a, [10, 20, 30])); })();
+"####,
+    );
+    assert_eq!(out, r####"array(3) {
+  [0]=>
+  int(1)
+  [1]=>
+  int(2)
+  [7]=>
+  int(3)
+}
+array(3) {
+  [0]=>
+  int(2)
+  [1]=>
+  int(4)
+  [7]=>
+  int(6)
+}
+array(3) {
+  [0]=>
+  array(2) {
+    [0]=>
+    int(1)
+    [1]=>
+    int(1)
+  }
+  [1]=>
+  array(2) {
+    [0]=>
+    int(2)
+    [1]=>
+    int(2)
+  }
+  [2]=>
+  array(2) {
+    [0]=>
+    int(3)
+    [1]=>
+    int(3)
+  }
+}
+array(3) {
+  [0]=>
+  int(11)
+  [1]=>
+  int(22)
+  [2]=>
+  int(33)
+}
+"####);
+}
+
+/// Three or more promoted operands are each read through their runtime storage kind.
+#[test]
+fn test_promoted_operands_third_operand() {
+    let out = compile_and_run(
+        r####"<?php
+function mk() { $a = [1, 2]; $a[7] = 3; return $a; }
+(function () { $a = mk(); $b = mk(); $c = mk(); echo json_encode(array_merge($a, $b, $c)), "\n"; })();
+(function () { $a = mk(); $b = mk(); $c = mk(); echo json_encode(array_merge($a, [9], $b, $c)), "\n"; })();
+(function () { $a = mk(); $b = mk(); $c = mk(); echo json_encode(array_merge($c, $b, $a, [4])), "\n"; })();
+(function () { $a = mk(); $b = [3]; $c = mk(); echo json_encode(array_diff($a, $b)), json_encode(array_intersect($a, $c)), "\n"; })();
+"####,
+    );
+    assert_eq!(out, r####"[1,2,3,1,2,3,1,2,3]
+[1,2,3,9,1,2,3,1,2,3]
+[1,2,3,1,2,3,1,2,3,4]
+[1,2]{"0":1,"1":2,"7":3}
+"####);
+}

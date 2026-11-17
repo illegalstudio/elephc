@@ -59,6 +59,10 @@ enum PromotedArm {
     TempList,
 }
 
+/// How many statically-packed array operands get a storage-kind dispatch. Each one nests the
+/// builtin's lowering twice, so the emitted code doubles per operand.
+const MAX_DISPATCHED_OPERANDS: usize = 4;
+
 /// Picks how `target` reads a promoted hash operand.
 fn promoted_arm(target: RuntimeFnId, operand_index: usize) -> PromotedArm {
     match target {
@@ -76,14 +80,22 @@ fn promoted_arm(target: RuntimeFnId, operand_index: usize) -> PromotedArm {
 ///
 /// A sparse integer write (`$a = [1, 2]; $a[7] = 3;`) promotes an `array<T>` to hash storage at
 /// run time while its static type stays `array<T>`. For the builtins that read storage through the
-/// static type, the heap kind of each of the first two statically-packed array operands is tested
+/// static type, the heap kind of each of the first few statically-packed array operands is tested
 /// (one call plus a compare on the packed path); a hash is handled as `promoted_arm` says.
 pub(super) fn lower(
     ctx: &mut FunctionContext<'_>,
     inst: &Instruction,
     target: RuntimeFnId,
 ) -> Result<()> {
-    if consumes_possibly_promoted_array(target) {
+    // `array_map(null, $a)` hands back its source untouched (a shared reference). It never reads
+    // the storage, and a hash-typed override would turn that share into a boxed copy that the
+    // static `array<T>` result slot then misreads.
+    let null_callback_identity = target == RuntimeFnId::ArrayMap
+        && inst.operands.len() == 2
+        && inst.operands.first().is_some_and(|callback| {
+            matches!(ctx.value_php_type(*callback), Ok(ty) if ty.codegen_repr() == PhpType::Void)
+        });
+    if consumes_possibly_promoted_array(target) && !null_callback_identity {
         // An `array<mixed>` is how a declared `array` is typed, and it may legitimately hold
         // string keys; the key type this dispatch substitutes (`int`) would be a lie for it, and
         // those consumers already read the storage kind themselves.
@@ -102,7 +114,7 @@ pub(super) fn lower(
                         )
                 ) && !ctx.value_type_overrides.contains_key(operand)
             })
-            .take(if promoted_arm(target, 0) == PromotedArm::ReceiverToList { 1 } else { 2 })
+            .take(if promoted_arm(target, 0) == PromotedArm::ReceiverToList { 1 } else { MAX_DISPATCHED_OPERANDS })
             .collect();
         if !packed.is_empty() {
             // The hash arm reuses the builtin's associative lowering, which does not exist for
