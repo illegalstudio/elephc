@@ -901,13 +901,12 @@ mod tests {
 
     /// Callable wrappers expose only the accepted prefix of a capped builtin declaration.
     ///
-    /// `str_ireplace` is capped at three arguments. `str_replace` accepts php's fourth,
-    /// by-reference `$count` on a DIRECT call (the count prelude serves it), so its cap is the
-    /// whole declaration and so is its callable's arity (php: four parameters). php also reports
-    /// four for `str_ireplace(...)`: that remaining gap is recorded here, not hidden.
+    /// `str_replace` and `str_ireplace` accept php's fourth, by-reference `$count` on a DIRECT
+    /// call (the count prelude serves both), so their cap is the whole declaration and so is
+    /// their callable's arity (php: four parameters). The cap loop below keeps the prefix check.
     #[test]
     fn first_class_callable_sig_stops_at_the_enforced_arity_cap() {
-        for (name, cap) in [("str_replace", 4), ("str_ireplace", 3)] {
+        for (name, cap) in [("str_replace", 4), ("str_ireplace", 4)] {
             assert_eq!(function_sig(name).unwrap().params.len(), 4, "{name} declaration");
             assert_eq!(enforced_arity_bounds(name), Some((3, Some(cap))), "{name} cap");
             let sig = first_class_callable_sig(name).expect("callable signature");
