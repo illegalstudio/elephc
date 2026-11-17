@@ -2308,11 +2308,16 @@ pub(super) fn lower_args_with_signature_options_for_capture(
     operands
 }
 
-/// Returns whether a default is a literal (or a literal array) whose evaluation cannot throw.
+/// Returns whether evaluating a default cannot throw: a literal, a constant (`PHP_EOL`,
+/// `self::X`, an enum case), their negation, or an array of those. Anything else (an operator
+/// such as `1 % 0`, a `new`) may throw, so what the call already holds is rooted first.
 fn default_is_inert(default: &Expr) -> bool {
     match &default.kind {
         ExprKind::StringLiteral(_) | ExprKind::IntLiteral(_) | ExprKind::FloatLiteral(_)
-        | ExprKind::BoolLiteral(_) | ExprKind::Null => true,
+        | ExprKind::BoolLiteral(_) | ExprKind::Null | ExprKind::ConstRef(_)
+        | ExprKind::ClassConstant { .. } | ExprKind::ScopedConstantAccess { .. }
+        | ExprKind::MagicConstant(_) => true,
+        ExprKind::Negate(value) | ExprKind::Not(value) => default_is_inert(value),
         ExprKind::ArrayLiteral(values) => values.iter().all(default_is_inert),
         ExprKind::ArrayLiteralAssoc(entries) => entries.iter()
             .all(|(key, value)| default_is_inert(key) && default_is_inert(value)),

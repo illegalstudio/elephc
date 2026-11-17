@@ -88,9 +88,11 @@ use declaration_metadata::{
 /// The callee exception summaries the checker routes `try`/`catch` flow with are built before
 /// any body is checked, but which arguments get a runtime scalar-parameter check (and so can
 /// throw `TypeError`) is only known once bodies are typed. When a pass that entered a `try`
-/// recorded guarded arguments its summaries did not include, the whole check runs again with
-/// those arguments installed, until no new one appears. The recorded set only grows, so this
-/// terminates; a program without guarded arguments, or without any `try`, is checked once.
+/// recorded, inside a callable body, guarded arguments its summaries did not include, the
+/// whole check runs again with those arguments installed, until no new one appears. The
+/// recorded set only grows, so this terminates. A program without such arguments, or without
+/// any `try`, is checked once: a top-level guarded call is in no callee summary, and a `try`
+/// sees its own guarded calls through the sites recorded so far in the same pass.
 pub(super) fn check_types_impl(
     program: &Program,
     target: Target,
@@ -105,9 +107,9 @@ pub(super) fn check_types_impl(
         let mut checker = Checker::new(target);
         let result = check_types_pass(&mut checker, program, options, generics);
         if checker.entered_exception_region
-            && !checker.scalar_guard_arg_sites.is_subset(&seed)
+            && !checker.summary_scalar_guard_arg_sites.is_subset(&seed)
         {
-            seed.extend(checker.scalar_guard_arg_sites.iter().copied());
+            seed.extend(checker.summary_scalar_guard_arg_sites.iter().copied());
             continue;
         }
         return result.map(|global_env| (checker, global_env));

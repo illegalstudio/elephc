@@ -815,6 +815,10 @@ pub(crate) struct Checker {
     /// Argument spans binding a `mixed`/union value to a declared scalar
     /// parameter, where EIR lowering emits the runtime `TypeError` check.
     pub scalar_guard_arg_sites: HashSet<Span>,
+    /// The subset of `scalar_guard_arg_sites` recorded inside a function, method, closure or
+    /// class body: the only ones a callee exception summary can see (see
+    /// `driver::check_types_impl`).
+    pub summary_scalar_guard_arg_sites: HashSet<Span>,
     /// Whether this pass opened a `try` region, the only place callee exception summaries
     /// change the checker's flow (see `driver::check_types_impl`).
     pub entered_exception_region: bool,
