@@ -204,7 +204,7 @@ impl Checker {
                     self.confirm_promotable_return(e, env);
                     self.record_return_boundary_exception_flow(&returned, env);
                     if self.current_return_declares_callable {
-                        self.record_declared_callable_literal_name(e);
+                        self.record_declared_callable_literal_name(e, env);
                     }
                     // Record the type as observed HERE, in flow order, so the later
                     // flow-insensitive return-coverage pass does not apply a narrowing that

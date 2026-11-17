@@ -72,7 +72,7 @@ impl Checker {
         if !by_ref && expected.declares_callable() {
             // `?callable`, `callable|false` and the other callable unions keep a literal name as
             // the string too, so the runtime dispatch must know it like an exact `callable`.
-            self.record_declared_callable_literal_name(arg);
+            self.record_declared_callable_literal_name(arg, env);
         }
 
         if Self::types_compatible(expected, actual) || self.type_accepts(expected, actual) {
@@ -335,7 +335,7 @@ impl Checker {
         // A spread element bound through a projection (`["ucfirst", ...][0]`) is not a bare
         // literal; record what it may carry, since the projected type can be `mixed`.
         self.record_static_callable_literals(arg);
-        if let Some(arms) = selected_value_arms(static_callable_argument(arg)) {
+        if let Some(arms) = selected_value_arms(static_callable_argument(arg, env)) {
             // Each arm of `?:`, `??` or `match` is the bound value itself: a literal arm is
             // resolved like a direct literal (an unknown name is a compile error and its
             // libraries are linked). No signature is registered, since the arms may differ.
@@ -352,7 +352,7 @@ impl Checker {
                 }
             }
         }
-        let target = match (actual.codegen_repr(), &static_callable_argument(arg).kind) {
+        let target = match (actual.codegen_repr(), &static_callable_argument(arg, env).kind) {
             (PhpType::Str, crate::parser::ast::ExprKind::StringLiteral(name)) => {
                 match crate::types::param_binding::callable_target_from_name(name) {
                     Some(target) => Some(target),
@@ -397,12 +397,12 @@ impl Checker {
     /// the runtime dispatch only knows builtin names written as literals where a declared
     /// callable keeps the string. An unknown name is left to the runtime `TypeError`, as PHP
     /// raises it.
-    pub(crate) fn record_declared_callable_literal_name(&mut self, value: &Expr) {
-        let value = static_callable_argument(value);
+    pub(crate) fn record_declared_callable_literal_name(&mut self, value: &Expr, env: &TypeEnv) {
+        let value = static_callable_argument(value, env);
         if let Some(arms) = selected_value_arms(value) {
             // Each arm of a conditional is the value itself, so it is a certain callable.
             for arm in arms {
-                self.record_declared_callable_literal_name(arm);
+                self.record_declared_callable_literal_name(arm, env);
             }
             return;
         }
@@ -445,7 +445,7 @@ impl Checker {
             return self.require_declared_callable_arg(expected, actual, arg, env, context, None);
         }
         if expected.declares_callable() {
-            self.record_declared_callable_literal_name(arg);
+            self.record_declared_callable_literal_name(arg, env);
         }
         Ok(())
     }
@@ -593,24 +593,50 @@ impl Checker {
     }
 }
 
-/// Returns the value an argument binds: through a named argument, an assignment to a plain
-/// variable (`apply($name = "strlen")`) or the `@` operator, which all evaluate to their inner
-/// value.
+/// Returns the value an argument binds: through a named argument, an assignment whose result
+/// is the assigned value (`apply($name = "strlen")`, `apply($box->cb = "strlen")`) or the `@`
+/// operator, which all evaluate to their inner value.
 ///
 /// Call planning wraps a keyed variadic entry as a named argument, so a literal callable name
-/// written there sits behind that node too. Any other assignment target can change the result
-/// (a string-offset write returns one byte), so it is not looked through.
-fn static_callable_argument(arg: &Expr) -> &Expr {
+/// written there sits behind that node too. A string-offset write evaluates to one byte, never
+/// to the name it writes, so an element write is looked through only when `env` proves its base
+/// is not a string (see `assignment_yields_assigned_value`).
+fn static_callable_argument<'e>(arg: &'e Expr, env: &TypeEnv) -> &'e Expr {
     use crate::parser::ast::ExprKind;
     match &arg.kind {
-        ExprKind::NamedArg { value, .. } => static_callable_argument(value),
-        ExprKind::Assignment { target, value, result_target: None, .. }
-            if matches!(target.kind, ExprKind::Variable(_)) =>
+        ExprKind::NamedArg { value, .. } => static_callable_argument(value, env),
+        ExprKind::Assignment { target, value, result_target, .. }
+            if assignment_yields_assigned_value(target, result_target.is_some(), env) =>
         {
-            static_callable_argument(value)
+            static_callable_argument(value, env)
         }
-        ExprKind::ErrorSuppress(inner) => static_callable_argument(inner),
+        ExprKind::ErrorSuppress(inner) => static_callable_argument(inner, env),
         _ => arg,
+    }
+}
+
+/// Returns whether an assignment to `target` evaluates to the value it assigns, so a literal on
+/// its right-hand side is the value an enclosing argument or return binds.
+///
+/// A plain local and a property write do (a compound write stores the combined value, which is
+/// no literal). An element write does only when its base local is known to hold an array or an
+/// object: on a string (or a `mixed`, union or callable local that may hold one) it is a
+/// string-offset write, which evaluates to the one byte it stored.
+fn assignment_yields_assigned_value(target: &Expr, has_result_target: bool, env: &TypeEnv) -> bool {
+    use crate::parser::ast::ExprKind;
+    match &target.kind {
+        ExprKind::Variable(_) => !has_result_target,
+        ExprKind::PropertyAccess { .. } | ExprKind::DynamicPropertyAccess { .. } => true,
+        ExprKind::ArrayAccess { array, .. } => {
+            let ExprKind::Variable(name) = &array.kind else {
+                return false;
+            };
+            matches!(
+                env.get(name),
+                Some(PhpType::Array(_) | PhpType::AssocArray { .. } | PhpType::Object(_))
+            )
+        }
+        _ => false,
     }
 }
 
@@ -643,23 +669,31 @@ mod tests {
         crate::types::check(&program).expect("fixture must type check").declared_callable_names
     }
 
-    /// Verifies a literal behind an assignment is recorded only when the target is a plain
-    /// variable: a string-offset write evaluates to one byte, never to the name it writes, so
-    /// recording that name would link a wrapper (and its libraries) the program never calls.
+    /// Verifies a literal behind an assignment is recorded when the assignment evaluates to it (a
+    /// local, a property, an element of an array or object local) and not for a string-offset
+    /// write, which evaluates to one byte: recording that name would link a wrapper (and its
+    /// libraries) the program never calls.
     #[test]
-    fn records_literals_behind_plain_variable_assignments_only() {
+    fn records_literals_behind_assignments_that_yield_them() {
         let names = recorded_names(
             r#"<?php
+class Box { public $cb; }
 function apply(callable $f): string { return (string) $f("abc"); }
 function pick(): callable|string { $s = "x"; return ($s[0] = "ucfirst"); }
 function named(): callable|string { return ($n = "lcfirst"); }
+function held(): callable|string { $a = []; return ($a[0] = "ucwords"); }
 $s = "x";
-echo apply($n = "strrev"), apply($s[0] = "bin2hex"), pick(), named();
+$a = [""];
+$box = new Box();
+echo apply($n = "strrev"), apply($s[0] = "bin2hex"), pick(), named(), held();
+echo apply($a[0] = "nl2br"), apply($box->cb = "strtolower");
 "#,
         );
-        assert!(names.contains("strrev"), "{names:?}");
-        assert!(names.contains("lcfirst"), "{names:?}");
-        assert!(!names.contains("ucfirst"), "{names:?}");
-        assert!(!names.contains("bin2hex"), "{names:?}");
+        for name in ["strrev", "lcfirst", "ucwords", "nl2br", "strtolower"] {
+            assert!(names.contains(name), "missing {name} in {names:?}");
+        }
+        for name in ["ucfirst", "bin2hex"] {
+            assert!(!names.contains(name), "unexpected {name} in {names:?}");
+        }
     }
 }

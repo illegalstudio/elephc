@@ -170,17 +170,26 @@ fn record_arguments(slots: &Slots, args: &[Expr], out: &mut HashSet<String>) {
 }
 
 /// Records one string literal naming a function (a `Class::method` string names no function),
-/// through the arms of a conditional, an assignment to a plain variable or `@`, which all
-/// evaluate to it.
+/// through the arms of a conditional, an assignment to a plain variable or a property, or `@`,
+/// which all evaluate to it.
 ///
 /// A callable string is fully qualified, so only one leading `\` is dropped: a namespaced name
 /// such as `"Vendor\\xml_parser_create"` names a user function, never the global builtin.
 pub(crate) fn record_literal(expr: &Expr, out: &mut HashSet<String>) {
     match &expr.kind {
-        // An assignment to a plain variable and `@` evaluate to their inner value; any other
-        // target can change the result (a string-offset write returns one byte).
+        // An assignment to a plain variable or a property and `@` evaluate to their inner
+        // value. An element write is not looked through: before types its base may be a
+        // string, and a string-offset write evaluates to the one byte it stored.
         ExprKind::Assignment { target, value, result_target: None, .. }
             if matches!(target.kind, ExprKind::Variable(_)) =>
+        {
+            record_literal(value, out)
+        }
+        ExprKind::Assignment { target, value, .. }
+            if matches!(
+                target.kind,
+                ExprKind::PropertyAccess { .. } | ExprKind::DynamicPropertyAccess { .. }
+            ) =>
         {
             record_literal(value, out)
         }
@@ -280,10 +289,11 @@ $accept("gmp_and");
         }
     }
 
-    /// Verifies a literal behind an assignment counts only when the target is a plain variable:
-    /// a string-offset write evaluates to one byte, never to the callback name it writes.
+    /// Verifies a literal behind an assignment counts only when the target is a plain variable or
+    /// a property: an element write may be a string-offset write before types, which evaluates
+    /// to one byte, never to the callback name it writes.
     #[test]
-    fn looks_through_plain_variable_assignments_only() {
+    fn looks_through_variable_and_property_assignments_only() {
         let found = literals(
             r#"<?php
 function apply(callable $f) {}
@@ -291,9 +301,13 @@ function pick(): callable|string { $s = "x"; return ($s[0] = "xml_parse_into_str
 $s = "x";
 apply($s[0] = "gmp_abs");
 apply($name = "gmp_neg");
+class Box { public $cb; }
+$box = new Box();
+apply($box->cb = "gmp_sqrt");
 "#,
         );
         assert!(found.contains("gmp_neg"), "{found:?}");
+        assert!(found.contains("gmp_sqrt"), "{found:?}");
         assert!(!found.contains("gmp_abs"), "{found:?}");
         assert!(!found.contains("xml_parse_into_struct"), "{found:?}");
     }

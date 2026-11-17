@@ -1142,7 +1142,7 @@ impl Checker {
                             )?;
                         } else {
                             if !supplied_reference && expected_ty.declares_callable() {
-                                self.record_declared_callable_literal_name(arg);
+                                self.record_declared_callable_literal_name(arg, caller_env);
                             }
                             self.require_compatible_arg_type(
                                 expected_ty,
