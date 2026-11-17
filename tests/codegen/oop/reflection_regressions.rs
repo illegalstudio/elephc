@@ -1067,3 +1067,29 @@ catch (Error $e) { echo get_class($e), ": ", $e->getMessage(), "\n"; }
         "Error: Cannot instantiate enum E\nError: Cannot instantiate enum E\nError: Cannot instantiate enum E\n"
     );
 }
+
+/// An internal class, method or function has no source: php answers `false` for the file name and
+/// both lines, while a user declaration keeps its own file and lines.
+#[test]
+fn test_internal_declarations_report_no_source_file_or_lines() {
+    let out = compile_and_run(
+        r#"<?php
+function mine() {}
+class Mine {}
+$r = new ReflectionClass('ArrayObject');
+var_dump($r->getFileName(), $r->getStartLine(), $r->getEndLine());
+$r = new ReflectionMethod('ArrayObject', 'count');
+var_dump($r->getFileName(), $r->getStartLine());
+$r = new ReflectionFunction('strlen');
+var_dump($r->getFileName(), $r->getStartLine());
+$r = new ReflectionClass('Mine');
+var_dump($r->getFileName() !== false, $r->getStartLine());
+$r = new ReflectionFunction('mine');
+var_dump($r->getFileName() !== false, $r->getStartLine());
+"#,
+    );
+    assert_eq!(
+        out,
+        "bool(false)\nbool(false)\nbool(false)\nbool(false)\nbool(false)\nbool(false)\nbool(false)\nbool(true)\nint(3)\nbool(true)\nint(2)\n"
+    );
+}

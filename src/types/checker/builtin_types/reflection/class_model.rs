@@ -606,17 +606,17 @@ fn builtin_reflection_class_shell() -> FlattenedClass {
             )]),
             builtin_reflection_class_string_method("getName", "__name"),
             builtin_reflection_class_string_method("__toString", "__string"),
-            builtin_reflection_slot_getter(
+            builtin_reflection_source_slot_getter(
                 "getFileName",
                 "__file_name",
                 string_or_bool_type(),
             ),
-            builtin_reflection_slot_getter(
+            builtin_reflection_source_slot_getter(
                 "getStartLine",
                 "__start_line",
                 int_or_bool_type(),
             ),
-            builtin_reflection_slot_getter(
+            builtin_reflection_source_slot_getter(
                 "getEndLine",
                 "__end_line",
                 int_or_bool_type(),

@@ -218,17 +218,17 @@ pub(super) fn builtin_reflection_owner_class(
             Some(TypeExpr::Int),
             int_lit(0),
         ));
-        methods.push(builtin_reflection_slot_getter(
+        methods.push(builtin_reflection_source_slot_getter(
             "getFileName",
             "__file_name",
             string_or_bool_type(),
         ));
-        methods.push(builtin_reflection_slot_getter(
+        methods.push(builtin_reflection_source_slot_getter(
             "getStartLine",
             "__start_line",
             int_or_bool_type(),
         ));
-        methods.push(builtin_reflection_slot_getter(
+        methods.push(builtin_reflection_source_slot_getter(
             "getEndLine",
             "__end_line",
             int_or_bool_type(),

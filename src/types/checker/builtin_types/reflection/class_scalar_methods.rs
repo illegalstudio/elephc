@@ -105,6 +105,41 @@ pub(super) fn builtin_reflection_class_doc_comment_method() -> ClassMethod {
     }
 }
 
+/// Returns a source-location getter (`getFileName`, `getStartLine`, `getEndLine`) that answers
+/// `false` while the reflected declaration has no source file, as php does for internal classes
+/// and functions. The `__file_name` slot stays empty exactly for those declarations.
+pub(super) fn builtin_reflection_source_slot_getter(
+    method_name: &str,
+    property: &str,
+    return_type: TypeExpr,
+) -> ClassMethod {
+    let dummy_span = crate::span::Span::dummy();
+    let mut method = builtin_reflection_class_string_method(method_name, property);
+    method.return_type = Some(return_type);
+    method.body = vec![Stmt::new(
+        StmtKind::Return(Some(Expr::new(
+            ExprKind::Ternary {
+                condition: Box::new(Expr::new(
+                    ExprKind::BinaryOp {
+                        left: Box::new(reflection_this_property("__file_name", dummy_span)),
+                        op: BinOp::StrictNotEq,
+                        right: Box::new(Expr::new(
+                            ExprKind::StringLiteral(String::new()),
+                            dummy_span,
+                        )),
+                    },
+                    dummy_span,
+                )),
+                then_expr: Box::new(reflection_this_property(property, dummy_span)),
+                else_expr: Box::new(Expr::new(ExprKind::BoolLiteral(false), dummy_span)),
+            },
+            dummy_span,
+        ))),
+        dummy_span,
+    )];
+    method
+}
+
 /// Returns a public `ReflectionClass` integer method backed by one private slot.
 pub(super) fn builtin_reflection_class_int_method(method_name: &str, property: &str) -> ClassMethod {
     let dummy_span = crate::span::Span::dummy();

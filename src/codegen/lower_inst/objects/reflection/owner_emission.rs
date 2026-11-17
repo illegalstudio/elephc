@@ -551,6 +551,14 @@ pub(super) fn reflection_source_file(
     metadata: &ReflectionOwnerMetadata,
 ) -> Option<String> {
     if class_name == "ReflectionFunction" {
+        // An internal function has no source file: php answers `false` for it.
+        if metadata
+            .reflected_name
+            .as_deref()
+            .is_some_and(|name| elephc_builtin_contract::lookup(name).is_some())
+        {
+            return None;
+        }
         return metadata
             .reflected_name
             .as_deref()
@@ -567,6 +575,10 @@ pub(super) fn reflection_source_file(
     } else {
         metadata.reflected_name.as_deref()
     };
+    // An internal class has no source file or lines: php answers `false` for both.
+    if reflected_class.is_some_and(|name| elephc_builtin_contract::lookup_class(name).is_some()) {
+        return None;
+    }
     reflected_class
         .and_then(|name| {
             ctx.module
