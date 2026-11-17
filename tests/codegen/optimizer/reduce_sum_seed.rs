@@ -98,6 +98,20 @@ echo gettype($overflow), ":", $overflow, "\n";
     assert!(!main.contains("runtime.array_reduce "), "{main}");
 }
 
+/// A vector tail that fails the gate restarts from the seed, never from the vector total.
+///
+/// The SIMD path needs eight elements on AArch64 and sixteen on x86_64, so sixteen `1`s and a
+/// negative tail make the tail gate fail after the lanes were folded into the accumulator. PHP
+/// answers 16; adding the folded total again would answer 32.
+#[test]
+fn test_reduce_sum_seed_restarts_the_vector_tail_from_the_seed() {
+    let source = r#"<?php
+$values = [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, -1];
+echo array_reduce($values, fn($c, $v) => $c + $v, 1), "\n";
+"#;
+    assert_eq!(compile_and_run(source), "16\n");
+}
+
 /// Only the supported additive body stays on the sum fusion; a multiplicative body takes the
 /// product fusion and any other body keeps the generic boxed reducer.
 #[test]
