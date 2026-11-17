@@ -389,7 +389,8 @@ Socket addresses use `[tcp://]host:port`, `udp://host:port`, `unix:///path`, or
 runs without a shell; a string command runs as `/bin/sh -c`), exactly as PHP 8.5 does on
 macOS and Linux, so a command that cannot be started is PHP's
 `proc_open(): posix_spawn() failed: ...` warning plus `false`. Descriptor specs accept
-`['pipe', 'r'|'w']`, `['file', $path, $mode]`, `['null']`, `['redirect', $n]` and an
+`['pipe', 'r'|'w']`, `['file', $path, $mode]`, `['null']`, `['redirect', $n]`,
+`['socket']` (a Unix-domain socket pair whose parent end lands in `$pipes`) and an
 open stream resource (a file, a socket, a pipe from an earlier `proc_open()`, or a
 variable holding `STDIN`/`STDOUT`/`STDERR`). A `file` spec's path goes through PHP's
 stream wrappers: `file://` URLs, `php://stdin`/`stdout`/`stderr`/`fd/N`, `php://temp` and
@@ -406,6 +407,9 @@ been observed it is reported again by later calls (`cached` is `true`) and retur
 `proc_close()`. A signal death is reported once, and `proc_close()` then answers `-1`,
 also as PHP does.
 
+A process resource released without `proc_close()` (it goes out of scope) releases its
+pipes and reaps the child only if it has already exited, as PHP's resource destructor does.
+
 Differences from PHP:
 
 - `['pty']` descriptors raise PHP's `PTY (pseudoterminal) not supported on this system`
@@ -414,7 +418,10 @@ Differences from PHP:
   `$pipes` streams still read as open afterwards: each now reads EOF and discards writes,
   and a later `fclose()` succeeds instead of PHP's `TypeError`. Close them with `fclose()`
   before `proc_close()`, as PHP's manual recommends.
-- A process resource dropped without `proc_close()` is not reaped.
+- `$pipes` must be a variable (a local, `static`, `global` or by-reference binding). PHP
+  also accepts a property, an array element or a static property
+  (`proc_open($cmd, $spec, $this->pipes)`); elephc rejects those at compile time, so
+  collect the pipes in a variable and assign them afterwards.
 - A `file` spec naming an `http(s)://`, `ftp(s)://`, `phar://`, `zip://` or
   `compress.bzip2://` URL is opened as a plain file path rather than through that wrapper.
 - `STDIN`/`STDOUT`/`STDERR` written directly inside an array literal that also holds

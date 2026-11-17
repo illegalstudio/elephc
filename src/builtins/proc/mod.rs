@@ -56,16 +56,6 @@ const PROC_REQUIREMENTS: &[BuiltinRequirement] = &[BuiltinRequirement::Bridge("e
 /// The prelude helper `proc_open()` calls to collect the pipes array it stores.
 pub(crate) const OPEN_PIPES_HELPER: &str = "__elephc_proc_open_pipes";
 
-/// Every prelude helper a public proc builtin's lowering may call directly.
-pub(crate) const HELPERS: &[&str] = &[
-    "__elephc_proc_close",
-    "__elephc_proc_get_status",
-    "__elephc_proc_nice",
-    "__elephc_proc_open",
-    OPEN_PIPES_HELPER,
-    "__elephc_proc_terminate",
-];
-
 /// Returns the prelude helpers a public proc builtin's lowering calls, so a runtime callable
 /// wrapper is only emitted when the proc prelude was injected (see
 /// `crate::builtins::registry::dynamic_wrapper_prelude_callees`); empty for any other name.
@@ -80,10 +70,10 @@ pub(crate) fn dynamic_wrapper_helpers(name: &str) -> &'static [&'static str] {
     }
 }
 
-/// Returns the prelude helpers to root when `name` is a public proc builtin.
+/// Returns the prelude helpers to root when `name` is a public proc builtin: only that
+/// builtin's own twins, so a program calling just `proc_nice()` prunes the spawning half.
 pub(crate) fn prelude_helpers_for(name: &str) -> impl Iterator<Item = &'static str> {
-    let is_proc = elephc_builtin_contract::PROC_FUNCTIONS.contains(&name);
-    HELPERS.iter().copied().filter(move |_| is_proc)
+    dynamic_wrapper_helpers(name).iter().copied()
 }
 
 /// Builds the shared descriptor for one public proc builtin.
@@ -292,7 +282,7 @@ fn emit_default(
 mod tests {
     use super::*;
 
-    /// Every public proc contract roots every helper, and nothing else roots them.
+    /// Every public proc contract roots its own helper, and nothing else roots them.
     #[test]
     fn every_proc_contract_roots_its_helpers() {
         for name in elephc_builtin_contract::PROC_FUNCTIONS {
@@ -300,5 +290,6 @@ mod tests {
             assert!(helpers.contains(&format!("__elephc_{name}").as_str()), "{name}");
         }
         assert!(prelude_helpers_for("popen").next().is_none());
+        assert_eq!(prelude_helpers_for("proc_nice").collect::<Vec<_>>(), ["__elephc_proc_nice"]);
     }
 }

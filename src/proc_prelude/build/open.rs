@@ -154,6 +154,14 @@ pub(super) fn decl_fn_elephc_proc_descriptor() -> Stmt {
                 None,
             ),
             s_if(
+                e_binop(e_var("type"), BinOp::StrictEq, e_str("socket")),
+                vec![
+                    s_return(e_call("elephc_proc_builder_socket", vec![e_var("builder"), e_var("index")])),
+                ],
+                vec![],
+                None,
+            ),
+            s_if(
                 e_binop(e_var("type"), BinOp::StrictEq, e_str("pty")),
                 vec![
                     s_expr(e_call("__elephc_builtin_warning", vec![e_str("proc_open(): PTY (pseudoterminal) not supported on this system")])),
@@ -249,6 +257,14 @@ pub(super) fn decl_fn_elephc_proc_open() -> Stmt {
                             s_assign("position", e_binop(e_var("position"), BinOp::Add, e_int(1))),
                             s_assign("text", e_cast(CastType::String, e_var("argument"))),
                             s_if(
+                                e_binop(e_binop(e_var("position"), BinOp::StrictEq, e_int(1)), BinOp::And, e_binop(e_var("text"), BinOp::StrictEq, e_str(""))),
+                                vec![
+                                    s_throw(e_new_fq("ValueError", vec![e_str("First element must contain a non-empty program name")])),
+                                ],
+                                vec![],
+                                None,
+                            ),
+                            s_if(
                                 e_call("str_contains", vec![e_var("text"), e_str("\0")]),
                                 vec![
                                     s_throw(e_new_fq("ValueError", vec![e_binop(e_binop(e_str("Command array element "), BinOp::Concat, e_var("position")), BinOp::Concat, e_str(" contains a null byte"))])),
@@ -308,26 +324,28 @@ pub(super) fn decl_fn_elephc_proc_open() -> Stmt {
                     vec![],
                     None,
                 ),
+                // The warnings stay inside the try: an error handler that throws must still
+                // free the builder and the descriptors it already staged.
                 s_try(vec![
                     s_assign("staged", e_call("__elephc_proc_descriptor", vec![e_var("builder"), e_var("index"), e_var("spec"), e_var("raw_streams")])),
+                    // 0 is a failure and 2 a staged file spec that still warns; either way the
+                    // bridge text holds one or more warnings joined by U+001F.
+                    s_if(
+                        e_binop(e_binop(e_var("staged"), BinOp::StrictEq, e_int(0)), BinOp::Or, e_binop(e_var("staged"), BinOp::StrictEq, e_int(2))),
+                        vec![
+                            s_foreach(e_call("explode", vec![e_str("\u{1f}"), e_call("elephc_proc_last_error", vec![])]), None, "warning", vec![
+                                s_expr(e_call("__elephc_builtin_warning", vec![e_var("warning")])),
+                            ]),
+                        ],
+                        vec![],
+                        None,
+                    ),
                 ], vec![
                     (vec!["\\Throwable"], Some("error"), vec![
                         s_expr(e_call("elephc_proc_builder_free", vec![e_var("builder")])),
                         s_throw(e_var("error")),
                     ]),
                 ], None),
-                // 0 is a failure and 2 a staged file spec that still warns; either way the
-                // bridge text holds one or more warnings joined by U+001F.
-                s_if(
-                    e_binop(e_binop(e_var("staged"), BinOp::StrictEq, e_int(0)), BinOp::Or, e_binop(e_var("staged"), BinOp::StrictEq, e_int(2))),
-                    vec![
-                        s_foreach(e_call("explode", vec![e_str("\u{1f}"), e_call("elephc_proc_last_error", vec![])]), None, "warning", vec![
-                            s_expr(e_call("__elephc_builtin_warning", vec![e_var("warning")])),
-                        ]),
-                    ],
-                    vec![],
-                    None,
-                ),
                 s_if(
                     e_binop(e_binop(e_var("staged"), BinOp::StrictNotEq, e_int(1)), BinOp::And, e_binop(e_var("staged"), BinOp::StrictNotEq, e_int(2))),
                     vec![

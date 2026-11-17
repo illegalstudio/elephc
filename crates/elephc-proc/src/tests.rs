@@ -1,6 +1,7 @@
 //! Purpose:
 //! Exercises the proc bridge ABI against real child processes: pipes, files, redirects,
-//! cwd/env, spawn failures, cached waits, signals and `proc_close()` statuses.
+//! cwd/env, sockets, spawn failures, cached waits, signals, `proc_close()` statuses and the
+//! dropped-resource release.
 //!
 //! Called from:
 //! - `cargo test -p elephc-proc` through Rust's test harness.
@@ -361,4 +362,46 @@ fn close_keeps_pipe_numbers_reserved_when_the_table_is_full() {
             assert_ne!(inode(fd), before, "descriptor {fd} must no longer be the pipe");
         }
     });
+}
+
+/// `['socket']` hands the child one end of a socket pair; the parent end reads its writes.
+#[test]
+fn socket_spec_connects_parent_and_child() {
+    let builder = elephc_proc_builder_new();
+    assert_eq!(unsafe { elephc_proc_builder_shell(builder, c"echo pong >&3".as_ptr()) }, 1);
+    assert_eq!(elephc_proc_builder_socket(builder, 3), 1);
+    let process = elephc_proc_spawn(builder);
+    assert!(process >= PROCESS_ID_BASE, "{}", last_error());
+    assert_eq!(elephc_proc_pipe_index(process, 0), 3);
+    assert_eq!(read_all(elephc_proc_pipe_fd(process, 0)), "pong\n");
+    assert_eq!(elephc_proc_close(process), 0);
+}
+
+/// Releasing a dropped process forgets it, reaps a child that already exited, and swaps
+/// its pipe end for a placeholder instead of closing the number.
+#[test]
+fn release_reaps_an_exited_child_and_forgets_it() {
+    let (process, stdout) = shell_with_stdout(c"exit 0");
+    let pid = elephc_proc_pid(process) as libc::pid_t;
+    let before = inode(stdout as c_int);
+    // Wait for the child to exit without reaping it (`WNOWAIT`); a zeroed `si_signo`
+    // means it has not exited yet.
+    for _ in 0..200 {
+        let mut info = std::mem::MaybeUninit::<libc::siginfo_t>::zeroed();
+        let flags = libc::WEXITED | libc::WNOHANG | libc::WNOWAIT;
+        let ready = unsafe { libc::waitid(libc::P_PID, pid as libc::id_t, info.as_mut_ptr(), flags) };
+        if ready == 0 && unsafe { info.assume_init() }.si_signo == libc::SIGCHLD {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+    elephc_proc_release(process);
+    assert_eq!(elephc_proc_pid(process), -1);
+    let mut status = 0;
+    let reaped = unsafe { libc::waitpid(pid, &mut status, libc::WNOHANG) };
+    assert_eq!(reaped, -1, "the child must already be reaped");
+    let after = inode(stdout as c_int);
+    assert!(after.is_some() && after != before, "the pipe number stays reserved by a placeholder");
+    unsafe { libc::close(stdout as c_int) };
+    elephc_proc_release(process);
 }

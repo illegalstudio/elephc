@@ -37,6 +37,9 @@ pub(crate) const HEAP_FATAL_SUFFIX: &str = " bytes) in Unknown on line 0\n";
 
 /// Optional native stream closer installed only by an application worker after its startup reset.
 pub(crate) const WEB_STREAM_CLOSE_SLOT: &str = "_web_application_stream_close";
+/// `elephc_proc_release`'s address, published by every `proc_open()` resource boxing so the
+/// shared runtime's kind-11 destructor can reap a dropped process without naming the bridge.
+pub(crate) const PROC_RELEASE_SLOT: &str = "_elephc_proc_release_fn";
 /// Program-specific close body shared with explicit fclose lowering.
 pub(crate) const WEB_STREAM_CLOSE_ENTRY: &str = "__rt_web_application_close_stream";
 

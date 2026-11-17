@@ -10,8 +10,11 @@
 //! - A resource is a tag-9 Mixed cell: low word = native payload, high word = kind.
 //!   The two readers answer -1 for anything that is not a resource, so the prelude can
 //!   raise php-src's own TypeError texts in PHP.
-//! - A process resource is kind 11 (`PROCESS_RESOURCE_KIND`), which has no scope-exit
-//!   destructor and which `__rt_resource_type_name` reports as `process`.
+//! - A process resource is kind 11 (`PROCESS_RESOURCE_KIND`), which `__rt_resource_type_name`
+//!   reports as `process`. Its scope-exit destructor in `__rt_mixed_free_deep` calls
+//!   `elephc_proc_release` through a runtime slot that `__elephc_proc_resource` publishes,
+//!   like php-src's `proc_open_rsrc_dtor`: the pipes are released and the child is reaped
+//!   with `WNOHANG`.
 //! - `__elephc_resource_close` stamps the same `-id` closed sentinel an explicit
 //!   `fclose()` writes, without touching the native handle, and is a no-op for a value
 //!   that is not an open resource.
@@ -169,9 +172,29 @@ pub(crate) fn lower_elephc_proc_resource(
 ) -> Result<()> {
     super::super::ensure_arg_count(inst, "__elephc_proc_resource", 1)?;
     let process = expect_operand(inst, 0)?;
+    publish_proc_release(ctx);
     ctx.load_value_to_result(process)?;
     box_resource_payload_or_false_result(ctx, "proc_resource", PROCESS_RESOURCE_KIND);
     store_if_result(ctx, inst)
+}
+
+/// Stores `elephc_proc_release`'s address into the runtime slot the kind-11 destructor in
+/// `__rt_mixed_free_deep` calls, so a process dropped without `proc_close()` is released.
+/// Emitted before the operand is loaded, since it clobbers scratch registers.
+fn publish_proc_release(ctx: &mut FunctionContext<'_>) {
+    let entry = ctx.emitter.target.extern_symbol("elephc_proc_release");
+    let slot = crate::codegen_support::runtime::data::PROC_RELEASE_SLOT;
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            abi::emit_extern_symbol_address(ctx.emitter, "x9", &entry);
+            abi::emit_symbol_address(ctx.emitter, "x10", slot);
+            ctx.emitter.instruction("str x9, [x10]");                           // publish the elephc-proc release entry into its runtime slot
+        }
+        Arch::X86_64 => {
+            abi::emit_extern_symbol_address(ctx.emitter, "r9", &entry);
+            abi::emit_store_reg_to_symbol(ctx.emitter, "r9", slot, 0);          // publish the elephc-proc release entry into its runtime slot
+        }
+    }
 }
 
 /// Lowers `__elephc_fd_stream($fd)`: boxes a native descriptor as an ordinary kind-1

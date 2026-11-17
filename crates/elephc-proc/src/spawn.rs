@@ -99,8 +99,7 @@ pub(crate) fn last_errno() -> c_int {
 }
 
 /// Marks `fd` close-on-exec (Linux creates its pipes with `pipe2(O_CLOEXEC)` instead).
-#[cfg(not(target_os = "linux"))]
-fn set_cloexec(fd: c_int) {
+pub(crate) fn set_cloexec(fd: c_int) {
     unsafe {
         let flags = libc::fcntl(fd, libc::F_GETFD);
         if flags >= 0 {
@@ -127,7 +126,7 @@ fn cloexec_pipe() -> Result<[c_int; 2], c_int> {
 }
 
 /// Duplicates `fd` into a fresh close-on-exec descriptor numbered at least `floor`.
-fn dup_cloexec(fd: c_int, floor: c_int) -> Result<c_int, c_int> {
+pub(crate) fn dup_cloexec(fd: c_int, floor: c_int) -> Result<c_int, c_int> {
     let copy = unsafe { libc::fcntl(fd, libc::F_DUPFD_CLOEXEC, floor) };
     if copy < 0 {
         Err(last_errno())
@@ -152,6 +151,24 @@ impl Builder {
         } else {
             self.push(index, read, Some(write));
         }
+        Ok(())
+    }
+
+    /// Stages `['socket']`: a Unix-domain socket pair whose first end stays with the
+    /// parent and whose second end becomes the child descriptor (php-src's
+    /// `set_proc_descriptor_to_socket()`).
+    pub(crate) fn socket(&mut self, index: i64) -> Result<(), String> {
+        let mut ends = [-1 as c_int; 2];
+        if unsafe { libc::socketpair(libc::AF_UNIX, libc::SOCK_STREAM, 0, ends.as_mut_ptr()) } != 0 {
+            return Err(format!(
+                "proc_open(): Unable to create socket pair: {}",
+                strerror(last_errno())
+            ));
+        }
+        for fd in ends {
+            set_cloexec(fd);
+        }
+        self.push(index, ends[1], Some(ends[0]));
         Ok(())
     }
 
@@ -238,8 +255,10 @@ impl Builder {
             }
         }
         let mut actions = std::mem::MaybeUninit::<libc::posix_spawn_file_actions_t>::uninit();
-        if unsafe { libc::posix_spawn_file_actions_init(actions.as_mut_ptr()) } != 0 {
-            return Err(format!("proc_open(): posix_spawn() failed: {}", strerror(last_errno())));
+        // Like every `posix_spawn*` call, init answers its error code rather than setting errno.
+        let initialized = unsafe { libc::posix_spawn_file_actions_init(actions.as_mut_ptr()) };
+        if initialized != 0 {
+            return Err(format!("proc_open(): posix_spawn() failed: {}", strerror(initialized)));
         }
         let result = self.spawn_with_actions(actions.as_mut_ptr());
         unsafe {

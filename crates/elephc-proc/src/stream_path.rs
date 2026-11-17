@@ -23,7 +23,7 @@
 use std::ffi::{CStr, CString};
 use std::os::raw::c_int;
 
-use crate::spawn::{close_quietly, last_errno, strerror};
+use crate::spawn::{close_quietly, dup_cloexec, last_errno, set_cloexec, strerror};
 
 /// Separates the warnings one descriptor spec raises, in emission order.
 pub const WARNING_SEPARATOR: char = '\u{1f}';
@@ -165,7 +165,7 @@ fn open_php(target: &[u8], display: &str, failed: &dyn Fn(&str) -> String) -> Re
         .find(|(name, _)| named(name))
         .map(|(_, fd)| fd);
     if let Some(fd) = standard {
-        return dup_cloexec(fd).map_err(|errno| failed(&strerror(errno)));
+        return dup_cloexec(fd, 0).map_err(|errno| failed(&strerror(errno)));
     }
     if prefixed("fd/") {
         let original = parse_long(&target[3..]).ok_or_else(|| {
@@ -177,7 +177,7 @@ fn open_php(target: &[u8], display: &str, failed: &dyn Fn(&str) -> String) -> Re
                 "The file descriptors must be non-negative numbers smaller than {table}"
             )));
         }
-        return dup_cloexec(original as c_int).map_err(|errno| {
+        return dup_cloexec(original as c_int, 0).map_err(|errno| {
             failed(&format!(
                 "Error duping file descriptor {original}; possibly it doesn't exist: [{errno}]: {}",
                 strerror(errno)
@@ -223,12 +223,6 @@ fn parse_long(text: &[u8]) -> Option<i64> {
     Some(if negative { magnitude.saturating_neg() } else { magnitude })
 }
 
-/// Duplicates `fd` into a fresh close-on-exec descriptor.
-fn dup_cloexec(fd: c_int) -> Result<c_int, c_int> {
-    let copy = unsafe { libc::fcntl(fd, libc::F_DUPFD_CLOEXEC, 0) };
-    if copy < 0 { Err(last_errno()) } else { Ok(copy) }
-}
-
 /// An unlinked, close-on-exec temporary file holding `content`, positioned at its start.
 fn temp_descriptor(content: &[u8]) -> Result<c_int, c_int> {
     let directory = std::env::temp_dir();
@@ -240,9 +234,8 @@ fn temp_descriptor(content: &[u8]) -> Result<c_int, c_int> {
     }
     unsafe {
         libc::unlink(template.as_ptr().cast());
-        let flags = libc::fcntl(fd, libc::F_GETFD);
-        libc::fcntl(fd, libc::F_SETFD, flags | libc::FD_CLOEXEC);
     }
+    set_cloexec(fd);
     let mut written = 0;
     while written < content.len() {
         let count = unsafe {
