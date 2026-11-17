@@ -67,6 +67,16 @@ pub(crate) fn try_canonicalize_cached(path: &Path) -> Option<PathBuf> {
     Some(canonical)
 }
 
+/// Forgets every cached canonical path, as `clearstatcache(true)` empties php's realpath cache.
+///
+/// A symlink swapped under a deployed tree is then resolved again, so an `include_once` key or a
+/// parsed-script lookup does not keep naming the old target for the rest of the TTL.
+pub(crate) fn clear_realpath_cache() {
+    let mut cache = lock_realpath_cache();
+    cache.entries.clear();
+    cache.order.clear();
+}
+
 /// Returns the key one path is cached under: the path expanded against the working directory.
 fn cache_key(path: &Path) -> PathBuf {
     if path.is_relative() {
@@ -198,5 +208,16 @@ mod tests {
     fn relative_paths_are_keyed_by_their_expanded_form() {
         assert!(cache_key(Path::new("bootstrap.php")).is_absolute());
         assert_eq!(cache_key(Path::new("/a/b.php")), PathBuf::from("/a/b.php"));
+    }
+
+    /// Verifies `clearstatcache(true)` empties the memo, so a swapped symlink is resolved afresh.
+    #[test]
+    fn clearing_the_cache_forgets_every_stored_answer() {
+        let mut cache = lock_realpath_cache();
+        cache.insert(PathBuf::from("/cleared/a.php"), PathBuf::from("/real/a.php"));
+        assert!(cache.lookup(Path::new("/cleared/a.php")).is_some());
+        drop(cache);
+        clear_realpath_cache();
+        assert!(lock_realpath_cache().lookup(Path::new("/cleared/a.php")).is_none());
     }
 }
