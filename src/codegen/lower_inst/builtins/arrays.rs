@@ -83,7 +83,7 @@ use crate::codegen::lower_inst::receiver_place::ReceiverPlace;
 use sort_dispatch::*;
 pub(crate) use sort_dispatch::{
     emit_hash_receiver_to_packed_list, emit_promoted_operand_as_temp_list,
-    emit_restore_promoted_operand,
+    emit_restore_promoted_operand, emit_retained_operand_pair,
 };
 use type_validation::*;
 use callback_binding::*;

@@ -337,3 +337,30 @@ int(3)
 int(3)
 "####);
 }
+
+/// Builds the user assembly of an `array_merge` over `count` statically-packed operands.
+fn merge_asm_len(count: usize) -> usize {
+    let dir = make_cli_test_dir("elephc_promoted_merge_asm");
+    let mut source = String::from("<?php\nfunction mk(int $n) { $a = [$n, 2]; if ($n > 99) { $a[7] = 3; } return $a; }\n");
+    let names: Vec<String> = (0..count).map(|index| format!("$a{index}")).collect();
+    for (index, name) in names.iter().enumerate() {
+        source.push_str(&format!("{name} = mk({index});\n"));
+    }
+    source.push_str(&format!("echo count(array_merge({}));\n", names.join(", ")));
+    let (user_asm, _runtime_asm, _) =
+        compile_source_to_asm_with_options(&source, &dir, 8_388_608, false, false);
+    let _ = fs::remove_dir_all(&dir);
+    user_asm.len()
+}
+
+/// The storage-kind normalization of `array_merge` operands grows linearly, not by doubling.
+#[test]
+fn test_promoted_operand_dispatch_grows_linearly_with_operand_count() {
+    let (two, four, six) = (merge_asm_len(2), merge_asm_len(4), merge_asm_len(6));
+    let first_step = four - two;
+    let second_step = six - four;
+    assert!(
+        second_step < first_step * 3 / 2,
+        "array_merge code size doubles per operand: 2 -> {two}, 4 -> {four}, 6 -> {six}"
+    );
+}

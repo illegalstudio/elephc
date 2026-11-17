@@ -847,3 +847,19 @@ pub(super) fn ensure_unique_hash_sort_source(ctx: &mut FunctionContext<'_>, arra
     abi::emit_call_label(ctx.emitter, "__rt_hash_ensure_unique");
     ctx.store_result_value(array)
 }
+
+/// Leaves the same `[original, list]` pair as [`emit_promoted_operand_as_temp_list`] for an
+/// operand that is already a packed list: the list is the original itself, retained once so
+/// [`emit_restore_promoted_operand`] can release it unconditionally.
+pub(crate) fn emit_retained_operand_pair(
+    ctx: &mut FunctionContext<'_>,
+    array: ValueId,
+) -> Result<()> {
+    let result_reg = abi::int_result_reg(ctx.emitter);
+    ctx.load_value_to_result(array)?;
+    abi::emit_push_reg(ctx.emitter, result_reg);
+    abi::emit_call_label(ctx.emitter, "__rt_incref");
+    abi::emit_load_temporary_stack_slot(ctx.emitter, result_reg, 0);
+    abi::emit_push_reg(ctx.emitter, result_reg);
+    Ok(())
+}

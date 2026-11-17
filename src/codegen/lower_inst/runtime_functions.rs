@@ -59,9 +59,13 @@ enum PromotedArm {
     TempList,
 }
 
-/// How many statically-packed array operands get a storage-kind dispatch. Each one nests the
-/// builtin's lowering twice, so the emitted code doubles per operand.
-const MAX_DISPATCHED_OPERANDS: usize = 4;
+/// How many statically-packed array operands get a nested storage-kind dispatch. Each one nests
+/// the builtin's lowering twice, so the emitted code doubles per operand: keep it small.
+const MAX_NESTED_DISPATCHED_OPERANDS: usize = 2;
+
+/// How many operands a linear (`TempList`) normalization covers. Each one adds one fixed-size
+/// kind test and one restore, so the code grows linearly and the cap only bounds stack use.
+const MAX_NORMALIZED_OPERANDS: usize = 16;
 
 /// Picks how `target` reads a promoted hash operand.
 fn promoted_arm(target: RuntimeFnId, operand_index: usize) -> PromotedArm {
@@ -114,7 +118,11 @@ pub(super) fn lower(
                         )
                 ) && !ctx.value_type_overrides.contains_key(operand)
             })
-            .take(if promoted_arm(target, 0) == PromotedArm::ReceiverToList { 1 } else { MAX_DISPATCHED_OPERANDS })
+            .take(match promoted_arm(target, 0) {
+                PromotedArm::ReceiverToList => 1,
+                PromotedArm::TempList => MAX_NORMALIZED_OPERANDS,
+                PromotedArm::HashLowering => MAX_NESTED_DISPATCHED_OPERANDS,
+            })
             .collect();
         if !packed.is_empty() {
             // The hash arm reuses the builtin's associative lowering, which does not exist for
@@ -122,7 +130,11 @@ pub(super) fn lower(
             // the list stayed packed) into a compile error, a dispatch that cannot be lowered is
             // dropped and the packed lowering stands alone, as it did before this dispatch.
             let checkpoint = ctx.emitter.checkpoint();
-            let dispatched = lower_promoted_operands(ctx, inst, target, &packed);
+            let dispatched = if promoted_arm(target, 0) == PromotedArm::TempList {
+                lower_normalized_operands(ctx, inst, target, &packed)
+            } else {
+                lower_promoted_operands(ctx, inst, target, &packed)
+            };
             if dispatched.is_ok() {
                 return dispatched;
             }
@@ -133,6 +145,39 @@ pub(super) fn lower(
         }
     }
     lower_by_static_type(ctx, inst, target)
+}
+
+/// Lowers a builtin that reads only the values of its array operands (`array_merge`,
+/// `array_pad`) once, after normalizing every statically-packed operand to a packed list.
+///
+/// Each operand gets its own kind test: a runtime-promoted hash is replaced by a temporary list
+/// of its values, a packed list is retained so both arms leave the same `[original, list]` pair
+/// on the stack. The builtin is then lowered a single time and the pairs are restored in reverse
+/// order, so the emitted code grows linearly with the operand count instead of doubling.
+fn lower_normalized_operands(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+    target: RuntimeFnId,
+    operands: &[(usize, ValueId)],
+) -> Result<()> {
+    let mut normalized = Vec::with_capacity(operands.len());
+    for &(_, array) in operands {
+        let PhpType::Array(element) = ctx.value_php_type(array)? else {
+            continue;
+        };
+        super::builtins::arrays::lower_by_runtime_storage_kind(
+            ctx,
+            array,
+            |ctx| super::builtins::arrays::emit_retained_operand_pair(ctx, array),
+            |ctx| super::builtins::arrays::emit_promoted_operand_as_temp_list(ctx, array, &element),
+        )?;
+        normalized.push(array);
+    }
+    let result = lower_by_static_type(ctx, inst, target);
+    for array in normalized.into_iter().rev() {
+        super::builtins::arrays::emit_restore_promoted_operand(ctx, array)?;
+    }
+    result
 }
 
 /// Emits the storage-kind dispatch for `operands[0]`, nesting one for each further operand.
