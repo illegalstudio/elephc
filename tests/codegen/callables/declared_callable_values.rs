@@ -254,8 +254,9 @@ echo $apply("strlen"), " ", $arrow("ucfirst"), " ", (function (callable $f) { re
 }
 
 /// Verifies a GMP builtin named as a literal argument or `callable` return value (also as an arm
-/// of a ternary), or passed to an invokable object or a closure whose parameter is `callable`,
-/// invokes through the declared callable, as the call `gmp_abs(...)` would.
+/// of a ternary or a literal concatenation), or passed to a fresh invokable object or a
+/// first-class callable of a named function, invokes as the call `gmp_abs(...)` would, and that
+/// a closure variable, whose target is unknown before types, needs `gmp_abs(...)`.
 ///
 /// The literal used to be recorded without injecting the GMP prelude, so its wrapper had no
 /// helper to forward to and the call stopped with the runtime-only builtin error.
@@ -267,11 +268,38 @@ function apply(callable $f): mixed { return $f(-3); }
 function pick(): callable { return "gmp_neg"; }
 function choose(int $n): callable { return $n > 0 ? "gmp_sqrt" : "gmp_sign"; }
 class Box { public function __invoke(callable $fn) { return $fn(-7); } }
-$viaClosure = function (callable $f) { return $f(9); };
-echo apply("gmp_abs"), " ", pick()(5), " ", choose(1)(16), " ", (new Box())("gmp_neg"), " ", $viaClosure("gmp_sqrt"), "\n";
+echo apply("gmp_abs"), " ", pick()(5), " ", choose(1)(16), " ", (new Box())("gmp_neg"), "\n";
 "#,
     );
-    assert_eq!(out, "3 -5 4 7 3\n");
+    assert_eq!(out, "3 -5 4 7\n");
+    // Each named-target form alone, so none rides on another's prelude injection.
+    for call in [
+        r#""gmp_abs" |> apply(...)"#,
+        r#"(apply(...))("gmp_abs")"#,
+        r#"apply("gmp_" . "abs")"#,
+        r#"apply($argc > 0 ? "gmp_abs" : "gmp_neg")"#,
+    ] {
+        let out = compile_and_run(&format!(
+            "<?php\nfunction apply(callable $f): mixed {{ return $f(-3); }}\necho {call}, \"\\n\";\n"
+        ));
+        assert_eq!(out, "3\n", "{call}");
+    }
+    // A call through a closure variable names no target before types, so its string may be
+    // ordinary text and injects nothing; the documented recovery is `gmp_abs(...)`.
+    let out = compile_and_run(
+        r#"<?php
+$apply = function (callable $f) { return $f(-3); };
+try { echo $apply("gmp_abs"), "\n"; } catch (Error $e) { echo get_class($e), "\n"; }
+"#,
+    );
+    assert_eq!(out, "Error\n");
+    let out = compile_and_run(
+        r#"<?php
+$apply = function (callable $f) { return $f(-3); };
+echo $apply(gmp_abs(...)), "\n";
+"#,
+    );
+    assert_eq!(out, "3\n");
 }
 
 /// Verifies an XML builtin whose lowering calls prelude helpers invokes when named as a literal
@@ -326,6 +354,13 @@ echo apply("iconv_strlen"), " ", pick()("words"), "\n";
 "#,
     );
     assert_eq!(out, "4 5\n");
+    let out = compile_and_run(
+        r#"<?php
+function apply(callable $f): mixed { return $f("word"); }
+echo apply($argc > 0 ? "iconv_strlen" : "strlen"), "\n";
+"#,
+    );
+    assert_eq!(out, "4\n");
 }
 
 /// Verifies a value that is not callable raises PHP's binding `TypeError` when it reaches a

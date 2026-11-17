@@ -130,11 +130,6 @@ pub(crate) struct Usage {
     user_callable_slots: Option<std::rc::Rc<super::callable_slots::UserCallableSlots>>,
     /// Walk state: the callable being scanned declares a `callable` return type.
     returns_callable: bool,
-    /// Merged `callable` parameter lists of every closure and arrow function seen so far.
-    closure_callable_slots: Option<super::callable_slots::Slots>,
-    /// Literals passed to calls through a value, resolved against closure and `__invoke`
-    /// parameters once the walk is complete.
-    pending_value_call_literals: Vec<(super::callable_slots::PendingArgument, String)>,
 }
 
 impl Usage {
@@ -380,7 +375,6 @@ pub(crate) fn collect(program: &[Stmt]) -> Usage {
     for stmt in program {
         scan_stmt(stmt, &mut usage);
     }
-    finish_callable_slot_literals(&mut usage);
     usage
 }
 
@@ -391,21 +385,12 @@ fn user_callable_slots(program: &[Stmt]) -> Option<std::rc::Rc<super::callable_s
 }
 
 /// Records the literals one call hands to the program's own `callable` parameters.
+///
+/// Only a target named before types counts: a function, a method or constructor, a first-class
+/// callable of one (`"x" |> apply(...)`, `(apply(...))("x")`) and `(new Box())("x")` through
+/// `__invoke`. A call through a variable (`$f("x")`) has no knowable target here, so its
+/// arguments may be ordinary text and inject nothing.
 fn record_user_callable_slots(expr: &Expr, usage: &mut Usage) {
-    match &expr.kind {
-        ExprKind::ClosureCall { args, .. } | ExprKind::ExprCall { args, .. } => {
-            super::callable_slots::pending_value_call(args, &mut usage.pending_value_call_literals);
-            return;
-        }
-        ExprKind::Pipe { value, .. } => {
-            super::callable_slots::pending_value_call(
-                std::slice::from_ref(value.as_ref()),
-                &mut usage.pending_value_call_literals,
-            );
-            return;
-        }
-        _ => {}
-    }
     let Some(slots) = usage.user_callable_slots.clone() else {
         return;
     };
@@ -418,19 +403,34 @@ fn record_user_callable_slots(expr: &Expr, usage: &mut Usage) {
         ExprKind::NewObject { args, .. }
         | ExprKind::NewGeneric { args, .. }
         | ExprKind::NewScopedObject { args, .. } => slots.method_call("__construct", args, out),
+        ExprKind::ExprCall { callee, args } => record_named_value_call(&slots, callee, args, out),
+        ExprKind::Pipe { value, callable } => {
+            record_named_value_call(&slots, callable, std::slice::from_ref(value.as_ref()), out);
+        }
         _ => {}
     }
 }
 
-/// Resolves the literals passed through value calls against every closure and `__invoke`
-/// parameter list, once the whole program has been walked.
-fn finish_callable_slot_literals(usage: &mut Usage) {
-    let mut slots = usage.closure_callable_slots.take().unwrap_or_default();
-    if let Some(invoke) = usage.user_callable_slots.as_ref().and_then(|table| table.invoke_slots()) {
-        slots.merge(invoke.clone());
+/// Records the literals a call through a syntactically named callee hands to its `callable`
+/// parameters: a first-class callable of a function or method, or a freshly built object.
+fn record_named_value_call(
+    slots: &super::callable_slots::UserCallableSlots,
+    callee: &Expr,
+    args: &[Expr],
+    out: &mut HashSet<String>,
+) {
+    match &callee.kind {
+        ExprKind::FirstClassCallable(CallableTarget::Function(name)) => {
+            slots.function_call(name.as_str(), args, out);
+        }
+        ExprKind::FirstClassCallable(
+            CallableTarget::Method { method, .. } | CallableTarget::StaticMethod { method, .. },
+        ) => slots.method_call(method, args, out),
+        ExprKind::NewObject { .. } | ExprKind::NewGeneric { .. } | ExprKind::NewScopedObject { .. } => {
+            slots.method_call("__invoke", args, out);
+        }
+        _ => {}
     }
-    let pending = std::mem::take(&mut usage.pending_value_call_literals);
-    super::callable_slots::resolve_value_calls(&slots, &pending, &mut usage.callable_slot_literals);
 }
 
 /// Collects ordinary usage plus the dispatch metadata needed to exclude unreferenced callbacks.
@@ -447,7 +447,6 @@ pub(crate) fn collect_environment(program: &[Stmt]) -> Usage {
         scan_program(program, &mut usage);
         usage.callable_constructor_metadata = None;
     }
-    finish_callable_slot_literals(&mut usage);
     usage
 }
 
@@ -519,7 +518,7 @@ fn scan_literal_eval_fragment(source: Option<&Expr>, usage: &mut Usage) -> bool 
 ///
 /// Returns `None` as soon as one leaf is not a literal, so a partly dynamic expression is
 /// never mistaken for a statically known callable name.
-fn folded_concat_literal(expr: &Expr) -> Option<String> {
+pub(super) fn folded_concat_literal(expr: &Expr) -> Option<String> {
     match &expr.kind {
         ExprKind::StringLiteral(text) => Some(text.clone()),
         ExprKind::BinaryOp { left, right, op: BinOp::Concat } => Some(format!(
@@ -1349,10 +1348,7 @@ fn scan_expr(expr: &Expr, usage: &mut Usage) {
             scan_expr(then_expr, usage);
             scan_expr(else_expr, usage);
         }
-        ExprKind::Closure { params, variadic, variadic_type, body, captures, capture_refs, return_type, .. } => {
-            if let Some(slots) = super::callable_slots::slots_for(params, variadic.is_some(), variadic_type.as_ref()) {
-                usage.closure_callable_slots.get_or_insert_with(Default::default).merge(slots);
-            }
+        ExprKind::Closure { params, variadic, body, captures, capture_refs, return_type, .. } => {
             for name in capture_refs { usage.callable_names.write(name); }
             usage.storage_variables.extend(captures.iter().chain(capture_refs).cloned());
             let mut outer = enter_callable_scope(usage, captures);

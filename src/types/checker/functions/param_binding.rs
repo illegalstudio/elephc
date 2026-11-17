@@ -335,6 +335,23 @@ impl Checker {
         // A spread element bound through a projection (`["ucfirst", ...][0]`) is not a bare
         // literal; record what it may carry, since the projected type can be `mixed`.
         self.record_static_callable_literals(arg);
+        if let Some(arms) = selected_value_arms(static_callable_argument(arg)) {
+            // Each arm of `?:`, `??` or `match` is the bound value itself: a literal arm is
+            // resolved like a direct literal (an unknown name is a compile error and its
+            // libraries are linked). No signature is registered, since the arms may differ.
+            for arm in arms {
+                if matches!(arm.kind, crate::parser::ast::ExprKind::StringLiteral(_))
+                    || selected_value_arms(arm).is_some()
+                {
+                    let arm_ty = if matches!(arm.kind, crate::parser::ast::ExprKind::StringLiteral(_)) {
+                        PhpType::Str
+                    } else {
+                        actual.clone()
+                    };
+                    self.require_declared_callable_arg(expected, &arm_ty, arm, env, context, None)?;
+                }
+            }
+        }
         let target = match (actual.codegen_repr(), &static_callable_argument(arg).kind) {
             (PhpType::Str, crate::parser::ast::ExprKind::StringLiteral(name)) => {
                 match crate::types::param_binding::callable_target_from_name(name) {

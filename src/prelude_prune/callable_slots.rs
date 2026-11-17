@@ -16,9 +16,9 @@
 //!   because this runs before name resolution. That over-approximates only for calls that pass
 //!   a builtin's exact name as a string to a parameter declared `callable` somewhere under the
 //!   same name, which is never ordinary text in practice.
-//! - A call whose callee is a value (`$f("x")`, `(new Box())("x")`, `"x" |> $f`) cannot be named
-//!   before types, so its literals are checked against the merged parameter lists of every
-//!   closure and `__invoke` method once the walk has seen them all.
+//! - Only callees named before types count: a call through a variable (`$f("x")`) may pass
+//!   ordinary text, so it injects nothing; such a prelude-backed name stops with the runtime-only
+//!   builtin error and must be named directly or as `gmp_abs(...)`.
 //! - A spread contributes nothing: the parameter each element binds is only known at run time,
 //!   and the checker never links a prelude-backed wrapper for such a name.
 
@@ -29,7 +29,7 @@ use crate::parser::ast::{Expr, ExprKind, Stmt, StmtKind, TypeExpr};
 
 /// One callee's declared `callable` parameters.
 #[derive(Clone, Debug, Default)]
-pub(crate) struct Slots {
+struct Slots {
     /// Positions of regular parameters declared `callable` (alone or in a union).
     positions: HashSet<usize>,
     /// Names of those parameters, for named arguments.
@@ -42,7 +42,7 @@ pub(crate) struct Slots {
 
 impl Slots {
     /// Merges another declaration of the same name (methods share a name across classes).
-    pub(crate) fn merge(&mut self, other: Slots) {
+    fn merge(&mut self, other: Slots) {
         self.positions.extend(other.positions);
         self.names.extend(other.names);
         self.params.extend(other.params);
@@ -113,12 +113,6 @@ impl UserCallableSlots {
         }
     }
 
-    /// Returns the merged slots of every `__invoke` method, which a call through an object
-    /// value (`$box("x")`, `(new Box())("x")`) reaches.
-    pub(crate) fn invoke_slots(&self) -> Option<&Slots> {
-        self.methods.get("__invoke")
-    }
-
     /// Records the literals one call hands to callable parameters of a user function.
     pub(crate) fn function_call(&self, name: &str, args: &[Expr], out: &mut HashSet<String>) {
         if let Some(slots) = self.functions.get(&callee_key(name)) {
@@ -136,7 +130,7 @@ impl UserCallableSlots {
 }
 
 /// Builds the slots of one parameter list, or `None` when nothing in it is callable.
-pub(crate) fn slots_for(
+fn slots_for(
     params: &[(String, Option<TypeExpr>, Option<Expr>, bool)],
     has_variadic: bool,
     variadic_type: Option<&TypeExpr>,
@@ -175,45 +169,6 @@ fn record_arguments(slots: &Slots, args: &[Expr], out: &mut HashSet<String>) {
     }
 }
 
-/// Where a literal sits in a call whose callee is a value (`$f(...)`, `(expr)(...)`, a pipe).
-#[derive(Clone, Debug)]
-pub(crate) enum PendingArgument {
-    Positional(usize),
-    Named(String),
-}
-
-/// Collects the literal names of a value call's arguments, to resolve once every closure and
-/// `__invoke` parameter list of the program is known.
-pub(crate) fn pending_value_call(args: &[Expr], pending: &mut Vec<(PendingArgument, String)>) {
-    for (index, arg) in args.iter().enumerate() {
-        let (position, value) = match &arg.kind {
-            ExprKind::NamedArg { name, value } => (PendingArgument::Named(name.clone()), value.as_ref()),
-            ExprKind::Spread(_) => continue,
-            _ => (PendingArgument::Positional(index), arg),
-        };
-        let mut names = HashSet::new();
-        record_literal(value, &mut names);
-        pending.extend(names.into_iter().map(|name| (position.clone(), name)));
-    }
-}
-
-/// Resolves the pending value-call literals against the merged closure and `__invoke` slots.
-pub(crate) fn resolve_value_calls(
-    slots: &Slots,
-    pending: &[(PendingArgument, String)],
-    out: &mut HashSet<String>,
-) {
-    for (position, name) in pending {
-        let bound = match position {
-            PendingArgument::Positional(index) => slots.positional(*index),
-            PendingArgument::Named(param) => slots.named(param),
-        };
-        if bound {
-            out.insert(name.clone());
-        }
-    }
-}
-
 /// Records one string literal naming a function (a `Class::method` string names no function),
 /// through the arms of a conditional, which are the value itself.
 ///
@@ -237,8 +192,12 @@ pub(crate) fn record_literal(expr: &Expr, out: &mut HashSet<String>) {
                 record_literal(default, out);
             }
         }
-        ExprKind::StringLiteral(text) => {
-            let Some(name) = crate::names::literal_symbol_name(text) else {
+        ExprKind::StringLiteral(_) | ExprKind::BinaryOp { .. } => {
+            // A concatenation of literals folds to one name before type checking sees it.
+            let Some(text) = super::usage::folded_concat_literal(expr) else {
+                return;
+            };
+            let Some(name) = crate::names::literal_symbol_name(&text) else {
                 return;
             };
             let name = name.strip_prefix('\\').unwrap_or(&name);
@@ -285,28 +244,31 @@ apply(...["bin2hex", "sha1"]);
         }
     }
 
-    /// Verifies literals passed through value calls (a closure variable, an invokable object, a
-    /// pipe) count only where some closure or `__invoke` parameter at that position declares
-    /// `callable`.
+    /// Verifies literals passed through syntactically named value calls (a first-class callable
+    /// in a pipe or a call, a fresh object's `__invoke`) and literal concatenations count, while a
+    /// call through a variable never does, even beside a closure that declares `callable`.
     #[test]
-    fn resolves_value_call_literals_against_closure_and_invoke_params() {
+    fn records_only_named_value_call_targets() {
         let found = literals(
             r#"<?php
 class Box { public function __invoke(string $label, callable $fn) {} }
-$apply = function (callable $f) {};
-$apply("gmp_abs");
-$piped = "gmp_neg" |> $apply;
-(new Box())("gmp_add", "gmp_sqrt");
-$other = function (string $s) {};
-$other(s: "gmp_sub");
+function apply(callable $f) {}
+$piped = "gmp_neg" |> apply(...);
+(apply(...))("gmp_sqrt");
+(new Box())("gmp_add", "gmp_abs");
+apply("gmp_" . "sub");
+$accept = function (callable $f) {};
+$text = function (string $s) { return $s; };
+echo $text("xml_parser_create");
+$accept("gmp_and");
 "#,
         );
-        for name in ["gmp_abs", "gmp_neg", "gmp_sqrt"] {
+        for name in ["gmp_neg", "gmp_sqrt", "gmp_abs", "gmp_sub"] {
             assert!(found.contains(name), "missing {name} in {found:?}");
         }
-        assert!(!found.contains("gmp_sub"), "{found:?}");
-        let without_callable_params = literals("<?php $f = function (string $s) {}; $f(\"gmp_abs\");");
-        assert!(without_callable_params.is_empty(), "{without_callable_params:?}");
+        for name in ["gmp_add", "xml_parser_create", "gmp_and"] {
+            assert!(!found.contains(name), "unexpected {name} in {found:?}");
+        }
     }
 
     /// Verifies a namespaced callback string keeps its namespace, so a user function named like

@@ -1210,4 +1210,11 @@ echo $apply("no_such_function");
 "#,
         "Undefined function for first-class callable: no_such_function",
     );
+    expect_error(
+        r#"<?php
+function apply(callable $f): int { return 1; }
+echo apply($argc > 0 ? "strlen" : "no_such_function");
+"#,
+        "Undefined function for first-class callable: no_such_function",
+    );
 }
