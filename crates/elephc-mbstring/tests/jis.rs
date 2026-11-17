@@ -2,7 +2,7 @@
 //! Checks JIS and ISO-2022-JP scalar output, shifted input, validation, and legacy cuts.
 //!
 //! Called from:
-//! - `cargo test -p elephc-mbstring --test jis`.
+//! - `cargo test -p elephc-mbstring --test engine jis::`.
 //!
 //! Key details:
 //! - Every byte pair is tested under each encoding's initial modes against independent PHP hashes.
