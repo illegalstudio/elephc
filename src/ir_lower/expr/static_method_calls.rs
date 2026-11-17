@@ -134,8 +134,7 @@ pub(super) fn lower_static_method_call(
                 // The scratch is a generated local: invisible to `get_defined_vars()`, `compact()`
                 // and eval scopes, and released below so it holds no object past the call.
                 let scratch = (!plain).then(|| {
-                    let ty = materialized_expr_type_for_merge(ctx, &args[0]);
-                    ctx.declare_synthetic_php_local(ty)
+                    ctx.declare_synthetic_php_local(PhpType::Mixed)
                 });
                 let value_name = match &args[0].kind {
                     ExprKind::Variable(name) if plain => name.clone(),
