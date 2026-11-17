@@ -67,7 +67,8 @@ fn native_callable_return_contracts_preserve_descriptor_owners() {
             assert_eq!(result, Ok(descriptor));
             assert!(!values.releases.contains(&descriptor));
         } else {
-            assert_eq!(result, Err(EvalStatus::RuntimeFatal));
+            // php throws a catchable TypeError for a return value of the wrong type.
+            assert_eq!(result, Err(EvalStatus::UncaughtThrowable));
             assert_eq!(values.releases.iter().filter(|cell| **cell == descriptor).count(), 1);
         }
     }
