@@ -144,6 +144,11 @@ fn stmt_contains_yield(stmt: &Stmt) -> bool {
         StmtKind::StaticPropertyElementRefAssign { index, source, .. } => {
             expr_contains_yield(index) || expr_contains_yield(source)
         }
+        StmtKind::DynamicStaticPropertyWrite { property, index, value, .. } => {
+            expr_contains_yield(property)
+                || index.as_ref().is_some_and(expr_contains_yield)
+                || expr_contains_yield(value)
+        }
         _ => false,
     }
 }
@@ -168,6 +173,9 @@ fn expr_contains_yield(expr: &Expr) -> bool {
         | ExprKind::Throw(inner)
         | ExprKind::ErrorSuppress(inner)
         | ExprKind::Spread(inner)
+        | ExprKind::Clone(inner)
+        | ExprKind::ArrayReference(inner)
+        | ExprKind::Print(inner)
         | ExprKind::Cast { expr: inner, .. }
         | ExprKind::PtrCast { expr: inner, .. } => expr_contains_yield(inner),
         ExprKind::NullCoalesce { value, default } => {
@@ -238,6 +246,11 @@ fn expr_contains_yield(expr: &Expr) -> bool {
             expr_contains_yield(object) || expr_contains_yield(property)
         }
         ExprKind::NamedArg { value, .. } => expr_contains_yield(value),
+        ExprKind::Assignment { target, value, .. } => {
+            expr_contains_yield(target) || expr_contains_yield(value)
+        }
+        ExprKind::DynamicStaticPropertyAccess { property, .. } => expr_contains_yield(property),
+        ExprKind::DynamicScopedConstantAccess { receiver, .. } => expr_contains_yield(receiver),
         ExprKind::BufferNew { len, .. } => expr_contains_yield(len),
         _ => false,
     }

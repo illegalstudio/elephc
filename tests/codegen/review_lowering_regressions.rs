@@ -171,3 +171,16 @@ var_dump(1.5e25 < "1.5E+25x", -2.5e-7 < "-2.5E-7x", 3.0e20 > "3.0E+2x");
 "#);
     assert_eq!(out, "bool(true)\nbool(false)\nbool(false)\nbool(true)\nbool(true)\nbool(false)\n");
 }
+
+/// A `yield` nested in an expression-position assignment makes its function a generator, like
+/// one in a statement-position assignment.
+#[test]
+fn test_yield_inside_an_expression_position_assignment_is_a_generator() {
+    let out = compile_and_run(r#"<?php
+function g2() { if ($b = (yield 5)) { echo "got $b\n"; } }
+$g = g2(); echo $g->current(), "\n"; $g->send(3);
+function g3() { echo strlen($s = (yield 1)), "\n"; }
+$g = g3(); $g->current(); $g->send("abcd");
+"#);
+    assert_eq!(out, "5\ngot 3\n4\n");
+}
