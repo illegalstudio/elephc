@@ -248,7 +248,7 @@ pub(super) fn program_may_hold_array_access_objects(ctx: &LoweringContext<'_, '_
         || ctx.eval_executed()
         || ctx.can_resolve_runtime_dynamic_functions()
         || ctx.program_loads_code_at_run_time()
-        || ctx.classes.contains_key("WeakMap")
+        || ctx.program_names_weak_map()
         || super::array_access_types::program_declares_array_access(ctx)
 }
 

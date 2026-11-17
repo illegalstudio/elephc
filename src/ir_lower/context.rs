@@ -356,6 +356,10 @@ thread_local! {
     /// Whether the program being lowered can load PHP at run time: an include the resolver could
     /// not expand, or an `eval()`.
     static PROGRAM_LOADS_CODE_AT_RUN_TIME: Cell<bool> = const { Cell::new(false) };
+    /// Whether the program being lowered names `WeakMap` (a class reference or a string literal),
+    /// as opposed to the class being declared only because a dynamic `new $name` widens the
+    /// prelude.
+    static PROGRAM_NAMES_WEAK_MAP: Cell<bool> = const { Cell::new(false) };
     /// `CheckResult::ref_param_escaping_callees` for the program being lowered.
     static REF_PARAM_ESCAPING_CALLEES: std::cell::RefCell<HashSet<String>> =
         std::cell::RefCell::new(HashSet::default());
@@ -518,6 +522,25 @@ impl Drop for ProgramLoadsCodeGuard {
     fn drop(&mut self) {
         PROGRAM_LOADS_CODE_AT_RUN_TIME.with(|loads| loads.set(self.previous));
     }
+}
+
+/// Restores the enclosing lowering invocation's `WeakMap` naming fact on drop.
+pub(crate) struct ProgramNamesWeakMapGuard {
+    previous: bool,
+}
+
+impl Drop for ProgramNamesWeakMapGuard {
+    /// Restores the enclosing invocation's program-names-WeakMap fact.
+    fn drop(&mut self) {
+        PROGRAM_NAMES_WEAK_MAP.with(|names| names.set(self.previous));
+    }
+}
+
+/// Records, for one complete program-lowering invocation, whether the program names `WeakMap`;
+/// see [`LoweringContext::program_names_weak_map`].
+pub(crate) fn set_program_names_weak_map(names: bool) -> ProgramNamesWeakMapGuard {
+    let previous = PROGRAM_NAMES_WEAK_MAP.with(|current| current.replace(names));
+    ProgramNamesWeakMapGuard { previous }
 }
 
 /// Records, for one complete program-lowering invocation, whether the program can load PHP at
@@ -2730,6 +2753,12 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
     /// such names links the interpreter; a program that cannot load any keeps php's plain answer.
     pub(crate) fn program_loads_code_at_run_time(&self) -> bool {
         PROGRAM_LOADS_CODE_AT_RUN_TIME.with(Cell::get)
+    }
+
+    /// Whether the program names `WeakMap`, so a boxed value can hold one. The class is also
+    /// declared, unused, when a dynamic `new $name` widens the prelude; that alone builds none.
+    pub(crate) fn program_names_weak_map(&self) -> bool {
+        PROGRAM_NAMES_WEAK_MAP.with(Cell::get)
     }
 
     /// Records that an `eval()` call was lowered, even when its fragment

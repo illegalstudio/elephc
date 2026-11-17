@@ -97,6 +97,25 @@ pub(crate) fn lower(
     })
 }
 
+/// Whether the program names `WeakMap`, beyond the prelude's own declaration of it.
+///
+/// `WeakMap` is declared whenever a dynamic `new $name` widens the prelude, and a boxed value can
+/// only hold one when the program names it; `isset` on a boxed value links the eval bridge on its
+/// account, so a program that merely constructs classes by a computed name must not count.
+fn program_names_weak_map(program: &Program, check_result: &CheckResult) -> bool {
+    if !check_result.classes.contains_key("WeakMap") {
+        return false;
+    }
+    let prelude_weak_map = |stmt: &Stmt| {
+        matches!(&stmt.kind, StmtKind::ClassDecl { name, .. }
+            if name == "WeakMap" || name == "__ElephcWeakMapIterator")
+    };
+    program.iter().filter(|stmt| !prelude_weak_map(stmt)).any(|stmt| {
+        let usage = crate::prelude_prune::usage::collect(std::slice::from_ref(stmt));
+        usage.classes.contains("weakmap") || usage.literals.contains("weakmap")
+    })
+}
+
 /// The lowering body, running on the stack [`lower`] established.
 fn lower_on_compiler_stack(
     program: &Program,
@@ -141,6 +160,8 @@ fn lower_on_compiler_stack(
                 || dynamic_code_load
                 || CLASS_FILES_DEFERRED.load(std::sync::atomic::Ordering::Relaxed)),
     );
+    let _program_names_weak_map =
+        super::context::set_program_names_weak_map(program_names_weak_map(program, check_result));
     let mut module = match source_catalog {
         Some(catalog) => Module::with_source_catalog(target, catalog),
         None => Module::new(target),
