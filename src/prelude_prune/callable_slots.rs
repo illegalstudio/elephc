@@ -170,14 +170,20 @@ fn record_arguments(slots: &Slots, args: &[Expr], out: &mut HashSet<String>) {
 }
 
 /// Records one string literal naming a function (a `Class::method` string names no function),
-/// through the arms of a conditional, an assignment or `@`, which all evaluate to it.
+/// through the arms of a conditional, an assignment to a plain variable or `@`, which all
+/// evaluate to it.
 ///
 /// A callable string is fully qualified, so only one leading `\` is dropped: a namespaced name
 /// such as `"Vendor\\xml_parser_create"` names a user function, never the global builtin.
 pub(crate) fn record_literal(expr: &Expr, out: &mut HashSet<String>) {
     match &expr.kind {
-        // An assignment and `@` evaluate to their inner value.
-        ExprKind::Assignment { value, .. } => record_literal(value, out),
+        // An assignment to a plain variable and `@` evaluate to their inner value; any other
+        // target can change the result (a string-offset write returns one byte).
+        ExprKind::Assignment { target, value, result_target: None, .. }
+            if matches!(target.kind, ExprKind::Variable(_)) =>
+        {
+            record_literal(value, out)
+        }
         ExprKind::ErrorSuppress(inner) => record_literal(inner, out),
         ExprKind::Ternary { then_expr, else_expr, .. } => {
             record_literal(then_expr, out);
@@ -272,6 +278,24 @@ $accept("gmp_and");
         for name in ["gmp_add", "xml_parser_create", "gmp_and"] {
             assert!(!found.contains(name), "unexpected {name} in {found:?}");
         }
+    }
+
+    /// Verifies a literal behind an assignment counts only when the target is a plain variable:
+    /// a string-offset write evaluates to one byte, never to the callback name it writes.
+    #[test]
+    fn looks_through_plain_variable_assignments_only() {
+        let found = literals(
+            r#"<?php
+function apply(callable $f) {}
+function pick(): callable|string { $s = "x"; return ($s[0] = "xml_parse_into_struct"); }
+$s = "x";
+apply($s[0] = "gmp_abs");
+apply($name = "gmp_neg");
+"#,
+        );
+        assert!(found.contains("gmp_neg"), "{found:?}");
+        assert!(!found.contains("gmp_abs"), "{found:?}");
+        assert!(!found.contains("xml_parse_into_struct"), "{found:?}");
     }
 
     /// Verifies a namespaced callback string keeps its namespace, so a user function named like

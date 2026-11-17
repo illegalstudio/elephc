@@ -269,6 +269,23 @@ echo app($name = "strlen"), " ", app(@"strrev"), " ", $name, "\n";
     assert_eq!(out, "3 cba strlen\n");
 }
 
+/// Verifies a string-offset write passed to a `callable` parameter binds the byte it evaluates
+/// to, not the name it writes: the name is neither checked at compile time nor recorded, and
+/// the byte fails the entry check like any other non-callable string.
+#[test]
+fn test_declared_callable_string_offset_write_binds_its_byte() {
+    let out = compile_and_run(
+        r#"<?php
+function app(callable $f): string { return (string) $f("abc"); }
+function pick(): callable|string { $s = "x"; return ($s[0] = "no_such_function"); }
+$s = "x";
+try { echo app($s[0] = "no_such_function"), "\n"; } catch (TypeError $e) { echo "TypeError\n"; }
+echo pick(), " ", $s, "\n";
+"#,
+    );
+    assert_eq!(out, "TypeError\nn n\n");
+}
+
 /// Verifies a GMP builtin named as a literal argument or `callable` return value (also as an arm
 /// of a ternary or a literal concatenation), or passed to a fresh invokable object or a
 /// first-class callable of a named function, invokes as the call `gmp_abs(...)` would, and that

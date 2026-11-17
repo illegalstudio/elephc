@@ -593,15 +593,20 @@ impl Checker {
     }
 }
 
-/// Returns the value an argument binds: through a named argument, an assignment
-/// (`apply($name = "strlen")`) or the `@` operator, which all evaluate to their inner value.
+/// Returns the value an argument binds: through a named argument, an assignment to a plain
+/// variable (`apply($name = "strlen")`) or the `@` operator, which all evaluate to their inner
+/// value.
 ///
 /// Call planning wraps a keyed variadic entry as a named argument, so a literal callable name
-/// written there sits behind that node too.
+/// written there sits behind that node too. Any other assignment target can change the result
+/// (a string-offset write returns one byte), so it is not looked through.
 fn static_callable_argument(arg: &Expr) -> &Expr {
     use crate::parser::ast::ExprKind;
     match &arg.kind {
-        ExprKind::NamedArg { value, .. } | ExprKind::Assignment { value, .. } => {
+        ExprKind::NamedArg { value, .. } => static_callable_argument(value),
+        ExprKind::Assignment { target, value, result_target: None, .. }
+            if matches!(target.kind, ExprKind::Variable(_)) =>
+        {
             static_callable_argument(value)
         }
         ExprKind::ErrorSuppress(inner) => static_callable_argument(inner),
@@ -622,5 +627,39 @@ pub(crate) fn selected_value_arms(expr: &Expr) -> Option<Vec<&Expr>> {
             Some(arms.iter().map(|(_, result)| result).chain(default.as_deref()).collect())
         }
         _ => None,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    /// Type checks one source fixture through the real frontend and returns the builtin names
+    /// it records as declared callables.
+    fn recorded_names(source: &str) -> std::collections::BTreeSet<String> {
+        let tokens = crate::lexer::tokenize(source).expect("fixture must tokenize");
+        let program = crate::parser::parse(&tokens).expect("fixture must parse");
+        let program = crate::name_resolver::resolve(program).expect("fixture must resolve");
+        let program = crate::func_args::desugar(program).expect("fixture must desugar");
+        let program = crate::optimize::fold_constants(program);
+        crate::types::check(&program).expect("fixture must type check").declared_callable_names
+    }
+
+    /// Verifies a literal behind an assignment is recorded only when the target is a plain
+    /// variable: a string-offset write evaluates to one byte, never to the name it writes, so
+    /// recording that name would link a wrapper (and its libraries) the program never calls.
+    #[test]
+    fn records_literals_behind_plain_variable_assignments_only() {
+        let names = recorded_names(
+            r#"<?php
+function apply(callable $f): string { return (string) $f("abc"); }
+function pick(): callable|string { $s = "x"; return ($s[0] = "ucfirst"); }
+function named(): callable|string { return ($n = "lcfirst"); }
+$s = "x";
+echo apply($n = "strrev"), apply($s[0] = "bin2hex"), pick(), named();
+"#,
+        );
+        assert!(names.contains("strrev"), "{names:?}");
+        assert!(names.contains("lcfirst"), "{names:?}");
+        assert!(!names.contains("ucfirst"), "{names:?}");
+        assert!(!names.contains("bin2hex"), "{names:?}");
     }
 }
