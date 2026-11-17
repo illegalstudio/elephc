@@ -1633,6 +1633,13 @@ fn static_relation_holds(
     exclude_self: bool,
     allow_string_subject: bool,
 ) -> Result<bool> {
+    // The marker a generic class template leaves behind is invisible to reflection: php-src has
+    // a class there, so `is_a`/`is_subclass_of` against it answer false.
+    if let Some(target_class) = optional_const_string_operand(ctx, target)? {
+        if super::class_relations::reflection_hidden_interface(ctx, &target_class) {
+            return Ok(false);
+        }
+    }
     // PHP takes a class NAME as readily as an object here, and answering `false` for the name
     // form is a silent wrong answer rather than a refusal (issue #1113). A literal name is as
     // decidable as a typed object: the parent and interface walks below need a class name, and
@@ -1744,6 +1751,10 @@ fn declared_names(ctx: &FunctionContext<'_>, name: &str) -> Result<Vec<String>> 
             "get_declared_traits" => crate::codegen::declared_trait_names(),
             _ => unreachable!(),
         };
+    }
+    if name == "get_declared_interfaces" {
+        // The marker a generic class template leaves answers `instanceof` only.
+        names.retain(|name| !super::class_relations::reflection_hidden_interface(ctx, name));
     }
     if names.is_empty() {
         names = match name {
