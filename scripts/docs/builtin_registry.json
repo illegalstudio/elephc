@@ -15412,7 +15412,7 @@
     },
     "area": "Misc",
     "canonical_name": "__elephc_refl_row",
-    "description": "Finds the reflection table row of a class-like by lowercase name, or -1.",
+    "description": "Finds the reflection table row of a class-like by lowercase name, or 0 (row 0 is a blank).",
     "eval": {
       "kind": "none",
       "supported": false,
@@ -17209,7 +17209,7 @@
       "checker_line": null,
       "codegen_file": "src/image_prelude.rs",
       "codegen_function": "_cairo_clamp8",
-      "codegen_line": 12444,
+      "codegen_line": 12452,
       "notes": [
         "Implemented by the compiler-injected image prelude."
       ],
@@ -17294,7 +17294,7 @@
       "checker_line": null,
       "codegen_file": "src/image_prelude.rs",
       "codegen_function": "_cairo_color",
-      "codegen_line": 12471,
+      "codegen_line": 12479,
       "notes": [
         "Implemented by the compiler-injected image prelude."
       ],
@@ -17379,7 +17379,7 @@
       "checker_line": null,
       "codegen_file": "src/image_prelude.rs",
       "codegen_function": "_cairo_fx",
-      "codegen_line": 12421,
+      "codegen_line": 12429,
       "notes": [
         "Implemented by the compiler-injected image prelude."
       ],
@@ -17450,7 +17450,7 @@
       "checker_line": null,
       "codegen_file": "src/image_prelude.rs",
       "codegen_function": "_cairo_pack",
-      "codegen_line": 12432,
+      "codegen_line": 12440,
       "notes": [
         "Implemented by the compiler-injected image prelude."
       ],
@@ -17542,7 +17542,7 @@
       "checker_line": null,
       "codegen_file": "src/image_prelude.rs",
       "codegen_function": "_elephc_img_output",
-      "codegen_line": 3544,
+      "codegen_line": 3552,
       "notes": [
         "Implemented by the compiler-injected image prelude."
       ],
@@ -17627,7 +17627,7 @@
       "checker_line": null,
       "codegen_file": "src/image_prelude.rs",
       "codegen_function": "_gmagick_norm_color",
-      "codegen_line": 10166,
+      "codegen_line": 10174,
       "notes": [
         "Implemented by the compiler-injected image prelude."
       ],
@@ -17691,7 +17691,7 @@
       "checker_line": null,
       "codegen_file": "src/image_prelude.rs",
       "codegen_function": "_gmagick_parse_color",
-      "codegen_line": 10149,
+      "codegen_line": 10157,
       "notes": [
         "Implemented by the compiler-injected image prelude."
       ],
@@ -17755,7 +17755,7 @@
       "checker_line": null,
       "codegen_file": "src/image_prelude.rs",
       "codegen_function": "_gmagick_pixel_from_int",
-      "codegen_line": 10193,
+      "codegen_line": 10201,
       "notes": [
         "Implemented by the compiler-injected image prelude."
       ],
@@ -17819,7 +17819,7 @@
       "checker_line": null,
       "codegen_file": "src/image_prelude.rs",
       "codegen_function": "_imagick_code_to_fmt",
-      "codegen_line": 4434,
+      "codegen_line": 4442,
       "notes": [
         "Implemented by the compiler-injected image prelude."
       ],
@@ -17883,7 +17883,7 @@
       "checker_line": null,
       "codegen_file": "src/image_prelude.rs",
       "codegen_function": "_imagick_color_name",
-      "codegen_line": 4172,
+      "codegen_line": 4180,
       "notes": [
         "Implemented by the compiler-injected image prelude."
       ],
@@ -17947,7 +17947,7 @@
       "checker_line": null,
       "codegen_file": "src/image_prelude.rs",
       "codegen_function": "_imagick_fmt_from_path",
-      "codegen_line": 4485,
+      "codegen_line": 4493,
       "notes": [
         "Implemented by the compiler-injected image prelude."
       ],
@@ -18011,7 +18011,7 @@
       "checker_line": null,
       "codegen_file": "src/image_prelude.rs",
       "codegen_function": "_imagick_fmt_to_code",
-      "codegen_line": 4382,
+      "codegen_line": 4390,
       "notes": [
         "Implemented by the compiler-injected image prelude."
       ],
@@ -18075,7 +18075,7 @@
       "checker_line": null,
       "codegen_file": "src/image_prelude.rs",
       "codegen_function": "_imagick_hexval",
-      "codegen_line": 4139,
+      "codegen_line": 4147,
       "notes": [
         "Implemented by the compiler-injected image prelude."
       ],
@@ -18139,7 +18139,7 @@
       "checker_line": null,
       "codegen_file": "src/image_prelude.rs",
       "codegen_function": "_imagick_norm_color",
-      "codegen_line": 4355,
+      "codegen_line": 4363,
       "notes": [
         "Implemented by the compiler-injected image prelude."
       ],
@@ -18210,7 +18210,7 @@
       "checker_line": null,
       "codegen_file": "src/image_prelude.rs",
       "codegen_function": "_imagick_pack2",
-      "codegen_line": 4505,
+      "codegen_line": 4513,
       "notes": [
         "Implemented by the compiler-injected image prelude."
       ],
@@ -18281,7 +18281,7 @@
       "checker_line": null,
       "codegen_file": "src/image_prelude.rs",
       "codegen_function": "_imagick_parse_color",
-      "codegen_line": 4255,
+      "codegen_line": 4263,
       "notes": [
         "Implemented by the compiler-injected image prelude."
       ],
@@ -18345,7 +18345,7 @@
       "checker_line": null,
       "codegen_file": "src/image_prelude.rs",
       "codegen_function": "_imagick_pixel_from_int",
-      "codegen_line": 4517,
+      "codegen_line": 4525,
       "notes": [
         "Implemented by the compiler-injected image prelude."
       ],
@@ -31601,7 +31601,7 @@
       "checker_line": null,
       "codegen_file": "src/image_prelude.rs",
       "codegen_function": "cairo_arc",
-      "codegen_line": 13534,
+      "codegen_line": 13542,
       "notes": [
         "Implemented by the compiler-injected image prelude."
       ],
@@ -31735,7 +31735,7 @@
       "checker_line": null,
       "codegen_file": "src/image_prelude.rs",
       "codegen_function": "cairo_arc_negative",
-      "codegen_line": 13550,
+      "codegen_line": 13558,
       "notes": [
         "Implemented by the compiler-injected image prelude."
       ],
@@ -31834,7 +31834,7 @@
       "checker_line": null,
       "codegen_file": "src/image_prelude.rs",
       "codegen_function": "cairo_close_path",
-      "codegen_line": 13566,
+      "codegen_line": 13574,
       "notes": [
         "Implemented by the compiler-injected image prelude."
       ],
@@ -31898,7 +31898,7 @@
       "checker_line": null,
       "codegen_file": "src/image_prelude.rs",
       "codegen_function": "cairo_create",
-      "codegen_line": 13354,
+      "codegen_line": 13362,
       "notes": [
         "Implemented by the compiler-injected image prelude."
       ],
@@ -32004,7 +32004,7 @@
       "checker_line": null,
       "codegen_file": "src/image_prelude.rs",
       "codegen_function": "cairo_curve_to",
-      "codegen_line": 13502,
+      "codegen_line": 13510,
       "notes": [
         "Implemented by the compiler-injected image prelude."
       ],
@@ -32110,7 +32110,7 @@
       "checker_line": null,
       "codegen_file": "src/image_prelude.rs",
       "codegen_function": "cairo_fill",
-      "codegen_line": 13610,
+      "codegen_line": 13618,
       "notes": [
         "Implemented by the compiler-injected image prelude."
       ],
@@ -32174,7 +32174,7 @@
       "checker_line": null,
       "codegen_file": "src/image_prelude.rs",
       "codegen_function": "cairo_fill_preserve",
-      "codegen_line": 13621,
+      "codegen_line": 13629,
       "notes": [
         "Implemented by the compiler-injected image prelude."
       ],
@@ -32238,7 +32238,7 @@
       "checker_line": null,
       "codegen_file": "src/image_prelude.rs",
       "codegen_function": "cairo_get_current_point",
-      "codegen_line": 13727,
+      "codegen_line": 13735,
       "notes": [
         "Implemented by the compiler-injected image prelude."
       ],
@@ -32302,7 +32302,7 @@
       "checker_line": null,
       "codegen_file": "src/image_prelude.rs",
       "codegen_function": "cairo_identity_matrix",
-      "codegen_line": 13716,
+      "codegen_line": 13724,
       "notes": [
         "Implemented by the compiler-injected image prelude."
       ],
@@ -32380,7 +32380,7 @@
       "checker_line": null,
       "codegen_file": "src/image_prelude.rs",
       "codegen_function": "cairo_image_surface_create",
-      "codegen_line": 13296,
+      "codegen_line": 13304,
       "notes": [
         "Implemented by the compiler-injected image prelude."
       ],
@@ -32458,7 +32458,7 @@
       "checker_line": null,
       "codegen_file": "src/image_prelude.rs",
       "codegen_function": "cairo_image_surface_create_from_png",
-      "codegen_line": 13309,
+      "codegen_line": 13317,
       "notes": [
         "Implemented by the compiler-injected image prelude."
       ],
@@ -32522,7 +32522,7 @@
       "checker_line": null,
       "codegen_file": "src/image_prelude.rs",
       "codegen_function": "cairo_image_surface_get_height",
-      "codegen_line": 13331,
+      "codegen_line": 13339,
       "notes": [
         "Implemented by the compiler-injected image prelude."
       ],
@@ -32586,7 +32586,7 @@
       "checker_line": null,
       "codegen_file": "src/image_prelude.rs",
       "codegen_function": "cairo_image_surface_get_width",
-      "codegen_line": 13320,
+      "codegen_line": 13328,
       "notes": [
         "Implemented by the compiler-injected image prelude."
       ],
@@ -32664,7 +32664,7 @@
       "checker_line": null,
       "codegen_file": "src/image_prelude.rs",
       "codegen_function": "cairo_line_to",
-      "codegen_line": 13489,
+      "codegen_line": 13497,
       "notes": [
         "Implemented by the compiler-injected image prelude."
       ],
@@ -32734,7 +32734,7 @@
       "checker_line": null,
       "codegen_file": "src/image_prelude.rs",
       "codegen_function": "cairo_matrix_init_identity",
-      "codegen_line": 13826,
+      "codegen_line": 13834,
       "notes": [
         "Implemented by the compiler-injected image prelude."
       ],
@@ -32790,7 +32790,7 @@
       "checker_line": null,
       "codegen_file": "src/image_prelude.rs",
       "codegen_function": "cairo_matrix_init_rotate",
-      "codegen_line": 13860,
+      "codegen_line": 13868,
       "notes": [
         "Implemented by the compiler-injected image prelude."
       ],
@@ -32861,7 +32861,7 @@
       "checker_line": null,
       "codegen_file": "src/image_prelude.rs",
       "codegen_function": "cairo_matrix_init_scale",
-      "codegen_line": 13848,
+      "codegen_line": 13856,
       "notes": [
         "Implemented by the compiler-injected image prelude."
       ],
@@ -32939,7 +32939,7 @@
       "checker_line": null,
       "codegen_file": "src/image_prelude.rs",
       "codegen_function": "cairo_matrix_init_translate",
-      "codegen_line": 13836,
+      "codegen_line": 13844,
       "notes": [
         "Implemented by the compiler-injected image prelude."
       ],
@@ -33017,7 +33017,7 @@
       "checker_line": null,
       "codegen_file": "src/image_prelude.rs",
       "codegen_function": "cairo_matrix_multiply",
-      "codegen_line": 13873,
+      "codegen_line": 13881,
       "notes": [
         "Implemented by the compiler-injected image prelude."
       ],
@@ -33102,7 +33102,7 @@
       "checker_line": null,
       "codegen_file": "src/image_prelude.rs",
       "codegen_function": "cairo_matrix_transform_point",
-      "codegen_line": 13885,
+      "codegen_line": 13893,
       "notes": [
         "Implemented by the compiler-injected image prelude."
       ],
@@ -33194,7 +33194,7 @@
       "checker_line": null,
       "codegen_file": "src/image_prelude.rs",
       "codegen_function": "cairo_move_to",
-      "codegen_line": 13476,
+      "codegen_line": 13484,
       "notes": [
         "Implemented by the compiler-injected image prelude."
       ],
@@ -33272,7 +33272,7 @@
       "checker_line": null,
       "codegen_file": "src/image_prelude.rs",
       "codegen_function": "cairo_new_path",
-      "codegen_line": 13577,
+      "codegen_line": 13585,
       "notes": [
         "Implemented by the compiler-injected image prelude."
       ],
@@ -33336,7 +33336,7 @@
       "checker_line": null,
       "codegen_file": "src/image_prelude.rs",
       "codegen_function": "cairo_new_sub_path",
-      "codegen_line": 13588,
+      "codegen_line": 13596,
       "notes": [
         "Implemented by the compiler-injected image prelude."
       ],
@@ -33400,7 +33400,7 @@
       "checker_line": null,
       "codegen_file": "src/image_prelude.rs",
       "codegen_function": "cairo_paint",
-      "codegen_line": 13599,
+      "codegen_line": 13607,
       "notes": [
         "Implemented by the compiler-injected image prelude."
       ],
@@ -33492,7 +33492,7 @@
       "checker_line": null,
       "codegen_file": "src/image_prelude.rs",
       "codegen_function": "cairo_pattern_add_color_stop_rgb",
-      "codegen_line": 13795,
+      "codegen_line": 13803,
       "notes": [
         "Implemented by the compiler-injected image prelude."
       ],
@@ -33619,7 +33619,7 @@
       "checker_line": null,
       "codegen_file": "src/image_prelude.rs",
       "codegen_function": "cairo_pattern_add_color_stop_rgba",
-      "codegen_line": 13810,
+      "codegen_line": 13818,
       "notes": [
         "Implemented by the compiler-injected image prelude."
       ],
@@ -33739,7 +33739,7 @@
       "checker_line": null,
       "codegen_file": "src/image_prelude.rs",
       "codegen_function": "cairo_pattern_create_linear",
-      "codegen_line": 13765,
+      "codegen_line": 13773,
       "notes": [
         "Implemented by the compiler-injected image prelude."
       ],
@@ -33859,7 +33859,7 @@
       "checker_line": null,
       "codegen_file": "src/image_prelude.rs",
       "codegen_function": "cairo_pattern_create_radial",
-      "codegen_line": 13779,
+      "codegen_line": 13787,
       "notes": [
         "Implemented by the compiler-injected image prelude."
       ],
@@ -33972,7 +33972,7 @@
       "checker_line": null,
       "codegen_file": "src/image_prelude.rs",
       "codegen_function": "cairo_pattern_create_rgb",
-      "codegen_line": 13752,
+      "codegen_line": 13760,
       "notes": [
         "Implemented by the compiler-injected image prelude."
       ],
@@ -34071,7 +34071,7 @@
       "checker_line": null,
       "codegen_file": "src/image_prelude.rs",
       "codegen_function": "cairo_pattern_create_rgba",
-      "codegen_line": 13738,
+      "codegen_line": 13746,
       "notes": [
         "Implemented by the compiler-injected image prelude."
       ],
@@ -34184,7 +34184,7 @@
       "checker_line": null,
       "codegen_file": "src/image_prelude.rs",
       "codegen_function": "cairo_rectangle",
-      "codegen_line": 13519,
+      "codegen_line": 13527,
       "notes": [
         "Implemented by the compiler-injected image prelude."
       ],
@@ -34276,7 +34276,7 @@
       "checker_line": null,
       "codegen_file": "src/image_prelude.rs",
       "codegen_function": "cairo_restore",
-      "codegen_line": 13376,
+      "codegen_line": 13384,
       "notes": [
         "Implemented by the compiler-injected image prelude."
       ],
@@ -34347,7 +34347,7 @@
       "checker_line": null,
       "codegen_file": "src/image_prelude.rs",
       "codegen_function": "cairo_rotate",
-      "codegen_line": 13680,
+      "codegen_line": 13688,
       "notes": [
         "Implemented by the compiler-injected image prelude."
       ],
@@ -34418,7 +34418,7 @@
       "checker_line": null,
       "codegen_file": "src/image_prelude.rs",
       "codegen_function": "cairo_save",
-      "codegen_line": 13365,
+      "codegen_line": 13373,
       "notes": [
         "Implemented by the compiler-injected image prelude."
       ],
@@ -34496,7 +34496,7 @@
       "checker_line": null,
       "codegen_file": "src/image_prelude.rs",
       "codegen_function": "cairo_scale",
-      "codegen_line": 13667,
+      "codegen_line": 13675,
       "notes": [
         "Implemented by the compiler-injected image prelude."
       ],
@@ -34581,7 +34581,7 @@
       "checker_line": null,
       "codegen_file": "src/image_prelude.rs",
       "codegen_function": "cairo_set_fill_rule",
-      "codegen_line": 13464,
+      "codegen_line": 13472,
       "notes": [
         "Implemented by the compiler-injected image prelude."
       ],
@@ -34659,7 +34659,7 @@
       "checker_line": null,
       "codegen_file": "src/image_prelude.rs",
       "codegen_function": "cairo_set_line_cap",
-      "codegen_line": 13440,
+      "codegen_line": 13448,
       "notes": [
         "Implemented by the compiler-injected image prelude."
       ],
@@ -34737,7 +34737,7 @@
       "checker_line": null,
       "codegen_file": "src/image_prelude.rs",
       "codegen_function": "cairo_set_line_join",
-      "codegen_line": 13452,
+      "codegen_line": 13460,
       "notes": [
         "Implemented by the compiler-injected image prelude."
       ],
@@ -34815,7 +34815,7 @@
       "checker_line": null,
       "codegen_file": "src/image_prelude.rs",
       "codegen_function": "cairo_set_line_width",
-      "codegen_line": 13428,
+      "codegen_line": 13436,
       "notes": [
         "Implemented by the compiler-injected image prelude."
       ],
@@ -34893,7 +34893,7 @@
       "checker_line": null,
       "codegen_file": "src/image_prelude.rs",
       "codegen_function": "cairo_set_matrix",
-      "codegen_line": 13692,
+      "codegen_line": 13700,
       "notes": [
         "Implemented by the compiler-injected image prelude."
       ],
@@ -34971,7 +34971,7 @@
       "checker_line": null,
       "codegen_file": "src/image_prelude.rs",
       "codegen_function": "cairo_set_source",
-      "codegen_line": 13416,
+      "codegen_line": 13424,
       "notes": [
         "Implemented by the compiler-injected image prelude."
       ],
@@ -35063,7 +35063,7 @@
       "checker_line": null,
       "codegen_file": "src/image_prelude.rs",
       "codegen_function": "cairo_set_source_rgb",
-      "codegen_line": 13387,
+      "codegen_line": 13395,
       "notes": [
         "Implemented by the compiler-injected image prelude."
       ],
@@ -35176,7 +35176,7 @@
       "checker_line": null,
       "codegen_file": "src/image_prelude.rs",
       "codegen_function": "cairo_set_source_rgba",
-      "codegen_line": 13401,
+      "codegen_line": 13409,
       "notes": [
         "Implemented by the compiler-injected image prelude."
       ],
@@ -35268,7 +35268,7 @@
       "checker_line": null,
       "codegen_file": "src/image_prelude.rs",
       "codegen_function": "cairo_stroke",
-      "codegen_line": 13632,
+      "codegen_line": 13640,
       "notes": [
         "Implemented by the compiler-injected image prelude."
       ],
@@ -35332,7 +35332,7 @@
       "checker_line": null,
       "codegen_file": "src/image_prelude.rs",
       "codegen_function": "cairo_stroke_preserve",
-      "codegen_line": 13643,
+      "codegen_line": 13651,
       "notes": [
         "Implemented by the compiler-injected image prelude."
       ],
@@ -35403,7 +35403,7 @@
       "checker_line": null,
       "codegen_file": "src/image_prelude.rs",
       "codegen_function": "cairo_surface_write_to_png",
-      "codegen_line": 13342,
+      "codegen_line": 13350,
       "notes": [
         "Implemented by the compiler-injected image prelude."
       ],
@@ -35481,7 +35481,7 @@
       "checker_line": null,
       "codegen_file": "src/image_prelude.rs",
       "codegen_function": "cairo_transform",
-      "codegen_line": 13704,
+      "codegen_line": 13712,
       "notes": [
         "Implemented by the compiler-injected image prelude."
       ],
@@ -35566,7 +35566,7 @@
       "checker_line": null,
       "codegen_file": "src/image_prelude.rs",
       "codegen_function": "cairo_translate",
-      "codegen_line": 13654,
+      "codegen_line": 13662,
       "notes": [
         "Implemented by the compiler-injected image prelude."
       ],
@@ -35658,7 +35658,7 @@
       "checker_line": null,
       "codegen_file": "src/name_resolver/expressions.rs",
       "codegen_function": "rewrite_date_procedural_call",
-      "codegen_line": 992,
+      "codegen_line": 1018,
       "notes": [
         "Rewritten by the name resolver into a constructor or method call on the corresponding builtin class before type checking."
       ],
@@ -35743,7 +35743,7 @@
       "checker_line": null,
       "codegen_file": "src/name_resolver/expressions.rs",
       "codegen_function": "rewrite_date_procedural_call",
-      "codegen_line": 991,
+      "codegen_line": 1017,
       "notes": [
         "Rewritten by the name resolver into a constructor or method call on the corresponding builtin class before type checking."
       ],
@@ -35814,7 +35814,7 @@
       "checker_line": null,
       "codegen_file": "src/name_resolver/expressions.rs",
       "codegen_function": "rewrite_date_procedural_call",
-      "codegen_line": 995,
+      "codegen_line": 1021,
       "notes": [
         "Rewritten by the name resolver into a constructor or method call on the corresponding builtin class before type checking."
       ],
@@ -35899,7 +35899,7 @@
       "checker_line": null,
       "codegen_file": "src/name_resolver/expressions.rs",
       "codegen_function": "rewrite_date_procedural_call",
-      "codegen_line": 990,
+      "codegen_line": 1016,
       "notes": [
         "Rewritten by the name resolver into a constructor or method call on the corresponding builtin class before type checking."
       ],
@@ -45350,7 +45350,7 @@
       "checker_line": null,
       "codegen_file": "src/name_resolver/expressions.rs",
       "codegen_function": "rewrite_date_procedural_call",
-      "codegen_line": 1143,
+      "codegen_line": 1169,
       "notes": [
         "Rewritten by the name resolver into a constructor or method call on the corresponding builtin class before type checking."
       ],
@@ -45428,7 +45428,7 @@
       "checker_line": null,
       "codegen_file": "src/name_resolver/expressions.rs",
       "codegen_function": "rewrite_date_procedural_call",
-      "codegen_line": 968,
+      "codegen_line": 994,
       "notes": [
         "Rewritten by the name resolver into a constructor or method call on the corresponding builtin class before type checking."
       ],
@@ -45513,7 +45513,7 @@
       "checker_line": null,
       "codegen_file": "src/name_resolver/expressions.rs",
       "codegen_function": "rewrite_date_procedural_call",
-      "codegen_line": 972,
+      "codegen_line": 998,
       "notes": [
         "Rewritten by the name resolver into a constructor or method call on the corresponding builtin class before type checking."
       ],
@@ -45598,7 +45598,7 @@
       "checker_line": null,
       "codegen_file": "src/name_resolver/expressions.rs",
       "codegen_function": "rewrite_date_procedural_call",
-      "codegen_line": 969,
+      "codegen_line": 995,
       "notes": [
         "Rewritten by the name resolver into a constructor or method call on the corresponding builtin class before type checking."
       ],
@@ -45683,7 +45683,7 @@
       "checker_line": null,
       "codegen_file": "src/name_resolver/expressions.rs",
       "codegen_function": "rewrite_date_procedural_call",
-      "codegen_line": 975,
+      "codegen_line": 1001,
       "notes": [
         "Rewritten by the name resolver into a constructor or method call on the corresponding builtin class before type checking."
       ],
@@ -45782,7 +45782,7 @@
       "checker_line": null,
       "codegen_file": "src/name_resolver/expressions.rs",
       "codegen_function": "rewrite_date_procedural_call",
-      "codegen_line": 1151,
+      "codegen_line": 1177,
       "notes": [
         "Rewritten by the name resolver into a constructor or method call on the corresponding builtin class before type checking."
       ],
@@ -46124,7 +46124,7 @@
       "checker_line": null,
       "codegen_file": "src/name_resolver/expressions.rs",
       "codegen_function": "rewrite_date_procedural_call",
-      "codegen_line": 1140,
+      "codegen_line": 1166,
       "notes": [
         "Rewritten by the name resolver into a constructor or method call on the corresponding builtin class before type checking."
       ],
@@ -46209,7 +46209,7 @@
       "checker_line": null,
       "codegen_file": "src/name_resolver/expressions.rs",
       "codegen_function": "rewrite_date_procedural_call",
-      "codegen_line": 1142,
+      "codegen_line": 1168,
       "notes": [
         "Rewritten by the name resolver into a constructor or method call on the corresponding builtin class before type checking."
       ],
@@ -46272,7 +46272,7 @@
       "checker_line": null,
       "codegen_file": "src/name_resolver/expressions.rs",
       "codegen_function": "rewrite_date_procedural_call",
-      "codegen_line": 1087,
+      "codegen_line": 1113,
       "notes": [
         "Rewritten by the name resolver into a constructor or method call on the corresponding builtin class before type checking."
       ],
@@ -46328,7 +46328,7 @@
       "checker_line": null,
       "codegen_file": "src/name_resolver/expressions.rs",
       "codegen_function": "rewrite_date_procedural_call",
-      "codegen_line": 1137,
+      "codegen_line": 1163,
       "notes": [
         "Rewritten by the name resolver into a constructor or method call on the corresponding builtin class before type checking."
       ],
@@ -46399,7 +46399,7 @@
       "checker_line": null,
       "codegen_file": "src/name_resolver/expressions.rs",
       "codegen_function": "rewrite_date_procedural_call",
-      "codegen_line": 1157,
+      "codegen_line": 1183,
       "notes": [
         "Rewritten by the name resolver into a constructor or method call on the corresponding builtin class before type checking."
       ],
@@ -46491,7 +46491,7 @@
       "checker_line": null,
       "codegen_file": "src/name_resolver/expressions.rs",
       "codegen_function": "rewrite_date_procedural_call",
-      "codegen_line": 1152,
+      "codegen_line": 1178,
       "notes": [
         "Rewritten by the name resolver into a constructor or method call on the corresponding builtin class before type checking."
       ],
@@ -46583,7 +46583,7 @@
       "checker_line": null,
       "codegen_file": "src/name_resolver/expressions.rs",
       "codegen_function": "rewrite_date_procedural_call",
-      "codegen_line": 1145,
+      "codegen_line": 1171,
       "notes": [
         "Rewritten by the name resolver into a constructor or method call on the corresponding builtin class before type checking."
       ],
@@ -46654,7 +46654,7 @@
       "checker_line": null,
       "codegen_file": "src/name_resolver/expressions.rs",
       "codegen_function": "rewrite_date_procedural_call",
-      "codegen_line": 1150,
+      "codegen_line": 1176,
       "notes": [
         "Rewritten by the name resolver into a constructor or method call on the corresponding builtin class before type checking."
       ],
@@ -46718,7 +46718,7 @@
       "checker_line": null,
       "codegen_file": "src/name_resolver/expressions.rs",
       "codegen_function": "rewrite_date_procedural_call",
-      "codegen_line": 981,
+      "codegen_line": 1007,
       "notes": [
         "Rewritten by the name resolver into a constructor or method call on the corresponding builtin class before type checking."
       ],
@@ -46789,7 +46789,7 @@
       "checker_line": null,
       "codegen_file": "src/name_resolver/expressions.rs",
       "codegen_function": "rewrite_date_procedural_call",
-      "codegen_line": 978,
+      "codegen_line": 1004,
       "notes": [
         "Rewritten by the name resolver into a constructor or method call on the corresponding builtin class before type checking."
       ],
@@ -46867,7 +46867,7 @@
       "checker_line": null,
       "codegen_file": "src/name_resolver/expressions.rs",
       "codegen_function": "rewrite_date_procedural_call",
-      "codegen_line": 1144,
+      "codegen_line": 1170,
       "notes": [
         "Rewritten by the name resolver into a constructor or method call on the corresponding builtin class before type checking."
       ],
@@ -46952,7 +46952,7 @@
       "checker_line": null,
       "codegen_file": "src/name_resolver/expressions.rs",
       "codegen_function": "rewrite_date_procedural_call",
-      "codegen_line": 982,
+      "codegen_line": 1008,
       "notes": [
         "Rewritten by the name resolver into a constructor or method call on the corresponding builtin class before type checking."
       ],
@@ -47067,7 +47067,7 @@
       "checker_line": null,
       "codegen_file": "src/name_resolver/expressions.rs",
       "codegen_function": "rewrite_date_procedural_call",
-      "codegen_line": 1073,
+      "codegen_line": 1099,
       "notes": [
         "Rewritten by the name resolver into a constructor or method call on the corresponding builtin class before type checking."
       ],
@@ -47203,7 +47203,7 @@
       "checker_line": null,
       "codegen_file": "src/name_resolver/expressions.rs",
       "codegen_function": "rewrite_date_procedural_call",
-      "codegen_line": 1073,
+      "codegen_line": 1099,
       "notes": [
         "Rewritten by the name resolver into a constructor or method call on the corresponding builtin class before type checking."
       ],
@@ -47330,7 +47330,7 @@
       "checker_line": null,
       "codegen_file": "src/name_resolver/expressions.rs",
       "codegen_function": "rewrite_date_procedural_call",
-      "codegen_line": 1154,
+      "codegen_line": 1180,
       "notes": [
         "Rewritten by the name resolver into a constructor or method call on the corresponding builtin class before type checking."
       ],
@@ -47422,7 +47422,7 @@
       "checker_line": null,
       "codegen_file": "src/name_resolver/expressions.rs",
       "codegen_function": "rewrite_date_procedural_call",
-      "codegen_line": 1146,
+      "codegen_line": 1172,
       "notes": [
         "Rewritten by the name resolver into a constructor or method call on the corresponding builtin class before type checking."
       ],
@@ -47493,7 +47493,7 @@
       "checker_line": null,
       "codegen_file": "src/name_resolver/expressions.rs",
       "codegen_function": "rewrite_date_procedural_call",
-      "codegen_line": 1147,
+      "codegen_line": 1173,
       "notes": [
         "Rewritten by the name resolver into a constructor or method call on the corresponding builtin class before type checking."
       ],
@@ -47564,7 +47564,7 @@
       "checker_line": null,
       "codegen_file": "src/name_resolver/expressions.rs",
       "codegen_function": "rewrite_date_procedural_call",
-      "codegen_line": 1148,
+      "codegen_line": 1174,
       "notes": [
         "Rewritten by the name resolver into a constructor or method call on the corresponding builtin class before type checking."
       ],
@@ -47635,7 +47635,7 @@
       "checker_line": null,
       "codegen_file": "src/name_resolver/expressions.rs",
       "codegen_function": "rewrite_date_procedural_call",
-      "codegen_line": 1149,
+      "codegen_line": 1175,
       "notes": [
         "Rewritten by the name resolver into a constructor or method call on the corresponding builtin class before type checking."
       ],
@@ -49342,7 +49342,7 @@
       "checker_line": null,
       "codegen_file": "src/name_resolver/expressions.rs",
       "codegen_function": "rewrite_date_procedural_call",
-      "codegen_line": 1036,
+      "codegen_line": 1062,
       "notes": [
         "Rewritten by the name resolver into a constructor or method call on the corresponding builtin class before type checking."
       ],
@@ -49422,7 +49422,7 @@
       "checker_line": null,
       "codegen_file": "src/name_resolver/expressions.rs",
       "codegen_function": "rewrite_date_procedural_call",
-      "codegen_line": 1036,
+      "codegen_line": 1062,
       "notes": [
         "Rewritten by the name resolver into a constructor or method call on the corresponding builtin class before type checking."
       ],
@@ -50472,7 +50472,7 @@
       "checker_line": null,
       "codegen_file": "src/image_prelude.rs",
       "codegen_function": "exif_imagetype",
-      "codegen_line": 3903,
+      "codegen_line": 3911,
       "notes": [
         "Implemented by the compiler-injected image prelude."
       ],
@@ -50557,7 +50557,7 @@
       "checker_line": null,
       "codegen_file": "src/image_prelude.rs",
       "codegen_function": "exif_read_data",
-      "codegen_line": 3940,
+      "codegen_line": 3948,
       "notes": [
         "Implemented by the compiler-injected image prelude."
       ],
@@ -50642,7 +50642,7 @@
       "checker_line": null,
       "codegen_file": "src/image_prelude.rs",
       "codegen_function": "exif_tagname",
-      "codegen_line": 3921,
+      "codegen_line": 3929,
       "notes": [
         "Implemented by the compiler-injected image prelude."
       ],
@@ -50727,7 +50727,7 @@
       "checker_line": null,
       "codegen_file": "src/image_prelude.rs",
       "codegen_function": "exif_thumbnail",
-      "codegen_line": 3987,
+      "codegen_line": 3995,
       "notes": [
         "Implemented by the compiler-injected image prelude."
       ],
@@ -57308,7 +57308,7 @@
       "checker_line": null,
       "codegen_file": "src/name_resolver/expressions.rs",
       "codegen_function": "rewrite_date_procedural_call",
-      "codegen_line": 1004,
+      "codegen_line": 1030,
       "notes": [
         "Rewritten by the name resolver into a constructor or method call on the corresponding builtin class before type checking."
       ],
@@ -59655,7 +59655,7 @@
       "checker_line": null,
       "codegen_file": "src/image_prelude.rs",
       "codegen_function": "gd_info",
-      "codegen_line": 3656,
+      "codegen_line": 3664,
       "notes": [
         "Implemented by the compiler-injected image prelude."
       ],
@@ -63393,7 +63393,7 @@
       "checker_line": null,
       "codegen_file": "src/image_prelude.rs",
       "codegen_function": "getimagesize",
-      "codegen_line": 3833,
+      "codegen_line": 3841,
       "notes": [
         "Implemented by the compiler-injected image prelude."
       ],
@@ -63457,7 +63457,7 @@
       "checker_line": null,
       "codegen_file": "src/image_prelude.rs",
       "codegen_function": "getimagesizefromstring",
-      "codegen_line": 3856,
+      "codegen_line": 3864,
       "notes": [
         "Implemented by the compiler-injected image prelude."
       ],
@@ -64281,7 +64281,7 @@
       "checker_line": null,
       "codegen_file": "src/name_resolver/expressions.rs",
       "codegen_function": "rewrite_date_procedural_call",
-      "codegen_line": 1084,
+      "codegen_line": 1110,
       "notes": [
         "Rewritten by the name resolver into a constructor or method call on the corresponding builtin class before type checking."
       ],
@@ -73387,7 +73387,7 @@
       "checker_line": null,
       "codegen_file": "src/name_resolver/expressions.rs",
       "codegen_function": "rewrite_date_procedural_call",
-      "codegen_line": 1093,
+      "codegen_line": 1119,
       "notes": [
         "Rewritten by the name resolver into a constructor or method call on the corresponding builtin class before type checking."
       ],
@@ -73597,7 +73597,7 @@
       "checker_line": null,
       "codegen_file": "src/name_resolver/expressions.rs",
       "codegen_function": "rewrite_date_procedural_call",
-      "codegen_line": 996,
+      "codegen_line": 1022,
       "notes": [
         "Rewritten by the name resolver into a constructor or method call on the corresponding builtin class before type checking."
       ],
@@ -79684,7 +79684,7 @@
       "checker_line": null,
       "codegen_file": "src/name_resolver/expressions.rs",
       "codegen_function": "rewrite_date_procedural_call",
-      "codegen_line": 910,
+      "codegen_line": 936,
       "notes": [
         "Rewritten by the name resolver into a constructor or method call on the corresponding builtin class before type checking."
       ],
@@ -79762,7 +79762,7 @@
       "checker_line": null,
       "codegen_file": "src/image_prelude.rs",
       "codegen_function": "image_type_to_extension",
-      "codegen_line": 3737,
+      "codegen_line": 3745,
       "notes": [
         "Implemented by the compiler-injected image prelude."
       ],
@@ -79833,7 +79833,7 @@
       "checker_line": null,
       "codegen_file": "src/image_prelude.rs",
       "codegen_function": "image_type_to_mime_type",
-      "codegen_line": 3666,
+      "codegen_line": 3674,
       "notes": [
         "Implemented by the compiler-injected image prelude."
       ],
@@ -79911,7 +79911,7 @@
       "checker_line": null,
       "codegen_file": "src/image_prelude.rs",
       "codegen_function": "imageaffine",
-      "codegen_line": 3210,
+      "codegen_line": 3218,
       "notes": [
         "Implemented by the compiler-injected image prelude."
       ],
@@ -79996,7 +79996,7 @@
       "checker_line": null,
       "codegen_file": "src/image_prelude.rs",
       "codegen_function": "imageaffinematrixconcat",
-      "codegen_line": 3239,
+      "codegen_line": 3247,
       "notes": [
         "Implemented by the compiler-injected image prelude."
       ],
@@ -80074,7 +80074,7 @@
       "checker_line": null,
       "codegen_file": "src/image_prelude.rs",
       "codegen_function": "imagealphablending",
-      "codegen_line": 2509,
+      "codegen_line": 2517,
       "notes": [
         "Implemented by the compiler-injected image prelude."
       ],
@@ -80152,7 +80152,7 @@
       "checker_line": null,
       "codegen_file": "src/image_prelude.rs",
       "codegen_function": "imageantialias",
-      "codegen_line": 3364,
+      "codegen_line": 3372,
       "notes": [
         "Implemented by the compiler-injected image prelude."
       ],
@@ -80272,7 +80272,7 @@
       "checker_line": null,
       "codegen_file": "src/image_prelude.rs",
       "codegen_function": "imagearc",
-      "codegen_line": 2750,
+      "codegen_line": 2758,
       "notes": [
         "Implemented by the compiler-injected image prelude."
       ],
@@ -80399,7 +80399,7 @@
       "checker_line": null,
       "codegen_file": "src/image_prelude.rs",
       "codegen_function": "imagebmp",
-      "codegen_line": 3619,
+      "codegen_line": 3627,
       "notes": [
         "Implemented by the compiler-injected image prelude."
       ],
@@ -80512,7 +80512,7 @@
       "checker_line": null,
       "codegen_file": "src/image_prelude.rs",
       "codegen_function": "imagechar",
-      "codegen_line": 2930,
+      "codegen_line": 2938,
       "notes": [
         "Implemented by the compiler-injected image prelude."
       ],
@@ -80646,7 +80646,7 @@
       "checker_line": null,
       "codegen_file": "src/image_prelude.rs",
       "codegen_function": "imagecharup",
-      "codegen_line": 2947,
+      "codegen_line": 2955,
       "notes": [
         "Implemented by the compiler-injected image prelude."
       ],
@@ -80766,7 +80766,7 @@
       "checker_line": null,
       "codegen_file": "src/image_prelude.rs",
       "codegen_function": "imagecolorallocate",
-      "codegen_line": 2223,
+      "codegen_line": 2231,
       "notes": [
         "Implemented by the compiler-injected image prelude."
       ],
@@ -80879,7 +80879,7 @@
       "checker_line": null,
       "codegen_file": "src/image_prelude.rs",
       "codegen_function": "imagecolorallocatealpha",
-      "codegen_line": 2237,
+      "codegen_line": 2245,
       "notes": [
         "Implemented by the compiler-injected image prelude."
       ],
@@ -80985,7 +80985,7 @@
       "checker_line": null,
       "codegen_file": "src/image_prelude.rs",
       "codegen_function": "imagecolorat",
-      "codegen_line": 2335,
+      "codegen_line": 2343,
       "notes": [
         "Implemented by the compiler-injected image prelude."
       ],
@@ -81084,7 +81084,7 @@
       "checker_line": null,
       "codegen_file": "src/image_prelude.rs",
       "codegen_function": "imagecolorclosest",
-      "codegen_line": 2404,
+      "codegen_line": 2412,
       "notes": [
         "Implemented by the compiler-injected image prelude."
       ],
@@ -81197,7 +81197,7 @@
       "checker_line": null,
       "codegen_file": "src/image_prelude.rs",
       "codegen_function": "imagecolorclosestalpha",
-      "codegen_line": 2418,
+      "codegen_line": 2426,
       "notes": [
         "Implemented by the compiler-injected image prelude."
       ],
@@ -81310,7 +81310,7 @@
       "checker_line": null,
       "codegen_file": "src/image_prelude.rs",
       "codegen_function": "imagecolorclosesthwb",
-      "codegen_line": 2433,
+      "codegen_line": 2441,
       "notes": [
         "Implemented by the compiler-injected image prelude."
       ],
@@ -81402,7 +81402,7 @@
       "checker_line": null,
       "codegen_file": "src/image_prelude.rs",
       "codegen_function": "imagecolordeallocate",
-      "codegen_line": 2361,
+      "codegen_line": 2369,
       "notes": [
         "Implemented by the compiler-injected image prelude."
       ],
@@ -81494,7 +81494,7 @@
       "checker_line": null,
       "codegen_file": "src/image_prelude.rs",
       "codegen_function": "imagecolorexact",
-      "codegen_line": 2375,
+      "codegen_line": 2383,
       "notes": [
         "Implemented by the compiler-injected image prelude."
       ],
@@ -81607,7 +81607,7 @@
       "checker_line": null,
       "codegen_file": "src/image_prelude.rs",
       "codegen_function": "imagecolorexactalpha",
-      "codegen_line": 2389,
+      "codegen_line": 2397,
       "notes": [
         "Implemented by the compiler-injected image prelude."
       ],
@@ -81706,7 +81706,7 @@
       "checker_line": null,
       "codegen_file": "src/image_prelude.rs",
       "codegen_function": "imagecolormatch",
-      "codegen_line": 2563,
+      "codegen_line": 2571,
       "notes": [
         "Implemented by the compiler-injected image prelude."
       ],
@@ -81798,7 +81798,7 @@
       "checker_line": null,
       "codegen_file": "src/image_prelude.rs",
       "codegen_function": "imagecolorresolve",
-      "codegen_line": 2447,
+      "codegen_line": 2455,
       "notes": [
         "Implemented by the compiler-injected image prelude."
       ],
@@ -81911,7 +81911,7 @@
       "checker_line": null,
       "codegen_file": "src/image_prelude.rs",
       "codegen_function": "imagecolorresolvealpha",
-      "codegen_line": 2461,
+      "codegen_line": 2469,
       "notes": [
         "Implemented by the compiler-injected image prelude."
       ],
@@ -82038,7 +82038,7 @@
       "checker_line": null,
       "codegen_file": "src/image_prelude.rs",
       "codegen_function": "imagecolorset",
-      "codegen_line": 2577,
+      "codegen_line": 2585,
       "notes": [
         "Implemented by the compiler-injected image prelude."
       ],
@@ -82144,7 +82144,7 @@
       "checker_line": null,
       "codegen_file": "src/image_prelude.rs",
       "codegen_function": "imagecolorsforindex",
-      "codegen_line": 2348,
+      "codegen_line": 2356,
       "notes": [
         "Implemented by the compiler-injected image prelude."
       ],
@@ -82215,7 +82215,7 @@
       "checker_line": null,
       "codegen_file": "src/image_prelude.rs",
       "codegen_function": "imagecolorstotal",
-      "codegen_line": 2498,
+      "codegen_line": 2506,
       "notes": [
         "Implemented by the compiler-injected image prelude."
       ],
@@ -82286,7 +82286,7 @@
       "checker_line": null,
       "codegen_file": "src/image_prelude.rs",
       "codegen_function": "imagecolortransparent",
-      "codegen_line": 2476,
+      "codegen_line": 2484,
       "notes": [
         "Implemented by the compiler-injected image prelude."
       ],
@@ -82378,7 +82378,7 @@
       "checker_line": null,
       "codegen_file": "src/image_prelude.rs",
       "codegen_function": "imageconvolution",
-      "codegen_line": 3279,
+      "codegen_line": 3287,
       "notes": [
         "Implemented by the compiler-injected image prelude."
       ],
@@ -82512,7 +82512,7 @@
       "checker_line": null,
       "codegen_file": "src/image_prelude.rs",
       "codegen_function": "imagecopy",
-      "codegen_line": 2988,
+      "codegen_line": 2996,
       "notes": [
         "Implemented by the compiler-injected image prelude."
       ],
@@ -82681,7 +82681,7 @@
       "checker_line": null,
       "codegen_file": "src/image_prelude.rs",
       "codegen_function": "imagecopymerge",
-      "codegen_line": 3009,
+      "codegen_line": 3017,
       "notes": [
         "Implemented by the compiler-injected image prelude."
       ],
@@ -82857,7 +82857,7 @@
       "checker_line": null,
       "codegen_file": "src/image_prelude.rs",
       "codegen_function": "imagecopymergegray",
-      "codegen_line": 3031,
+      "codegen_line": 3039,
       "notes": [
         "Implemented by the compiler-injected image prelude."
       ],
@@ -83040,7 +83040,7 @@
       "checker_line": null,
       "codegen_file": "src/image_prelude.rs",
       "codegen_function": "imagecopyresampled",
-      "codegen_line": 3077,
+      "codegen_line": 3085,
       "notes": [
         "Implemented by the compiler-injected image prelude."
       ],
@@ -83230,7 +83230,7 @@
       "checker_line": null,
       "codegen_file": "src/image_prelude.rs",
       "codegen_function": "imagecopyresized",
-      "codegen_line": 3053,
+      "codegen_line": 3061,
       "notes": [
         "Implemented by the compiler-injected image prelude."
       ],
@@ -83364,7 +83364,7 @@
       "checker_line": null,
       "codegen_file": "src/image_prelude.rs",
       "codegen_function": "imagecreate",
-      "codegen_line": 2210,
+      "codegen_line": 2218,
       "notes": [
         "Implemented by the compiler-injected image prelude."
       ],
@@ -83435,7 +83435,7 @@
       "checker_line": null,
       "codegen_file": "src/image_prelude.rs",
       "codegen_function": "imagecreatefrombmp",
-      "codegen_line": 3445,
+      "codegen_line": 3453,
       "notes": [
         "Implemented by the compiler-injected image prelude."
       ],
@@ -83499,7 +83499,7 @@
       "checker_line": null,
       "codegen_file": "src/image_prelude.rs",
       "codegen_function": "imagecreatefromgif",
-      "codegen_line": 3425,
+      "codegen_line": 3433,
       "notes": [
         "Implemented by the compiler-injected image prelude."
       ],
@@ -83563,7 +83563,7 @@
       "checker_line": null,
       "codegen_file": "src/image_prelude.rs",
       "codegen_function": "imagecreatefromjpeg",
-      "codegen_line": 3405,
+      "codegen_line": 3413,
       "notes": [
         "Implemented by the compiler-injected image prelude."
       ],
@@ -83627,7 +83627,7 @@
       "checker_line": null,
       "codegen_file": "src/image_prelude.rs",
       "codegen_function": "imagecreatefrompng",
-      "codegen_line": 3385,
+      "codegen_line": 3393,
       "notes": [
         "Implemented by the compiler-injected image prelude."
       ],
@@ -83691,7 +83691,7 @@
       "checker_line": null,
       "codegen_file": "src/image_prelude.rs",
       "codegen_function": "imagecreatefromstring",
-      "codegen_line": 3505,
+      "codegen_line": 3513,
       "notes": [
         "Implemented by the compiler-injected image prelude."
       ],
@@ -83755,7 +83755,7 @@
       "checker_line": null,
       "codegen_file": "src/image_prelude.rs",
       "codegen_function": "imagecreatefromtga",
-      "codegen_line": 3485,
+      "codegen_line": 3493,
       "notes": [
         "Implemented by the compiler-injected image prelude."
       ],
@@ -83819,7 +83819,7 @@
       "checker_line": null,
       "codegen_file": "src/image_prelude.rs",
       "codegen_function": "imagecreatefromwebp",
-      "codegen_line": 3465,
+      "codegen_line": 3473,
       "notes": [
         "Implemented by the compiler-injected image prelude."
       ],
@@ -83890,7 +83890,7 @@
       "checker_line": null,
       "codegen_file": "src/image_prelude.rs",
       "codegen_function": "imagecreatetruecolor",
-      "codegen_line": 2197,
+      "codegen_line": 2205,
       "notes": [
         "Implemented by the compiler-injected image prelude."
       ],
@@ -83970,7 +83970,7 @@
       "checker_line": null,
       "codegen_file": "src/image_prelude.rs",
       "codegen_function": "imagecrop",
-      "codegen_line": 3124,
+      "codegen_line": 3132,
       "notes": [
         "Implemented by the compiler-injected image prelude."
       ],
@@ -84064,7 +84064,7 @@
       "checker_line": null,
       "codegen_file": "src/image_prelude.rs",
       "codegen_function": "imagecropauto",
-      "codegen_line": 3149,
+      "codegen_line": 3157,
       "notes": [
         "Implemented by the compiler-injected image prelude."
       ],
@@ -84184,7 +84184,7 @@
       "checker_line": null,
       "codegen_file": "src/image_prelude.rs",
       "codegen_function": "imagedashedline",
-      "codegen_line": 2665,
+      "codegen_line": 2673,
       "notes": [
         "Implemented by the compiler-injected image prelude."
       ],
@@ -84283,7 +84283,7 @@
       "checker_line": null,
       "codegen_file": "src/image_prelude.rs",
       "codegen_function": "imagedestroy",
-      "codegen_line": 2289,
+      "codegen_line": 2297,
       "notes": [
         "Implemented by the compiler-injected image prelude."
       ],
@@ -84382,7 +84382,7 @@
       "checker_line": null,
       "codegen_file": "src/image_prelude.rs",
       "codegen_function": "imageellipse",
-      "codegen_line": 2716,
+      "codegen_line": 2724,
       "notes": [
         "Implemented by the compiler-injected image prelude."
       ],
@@ -84502,7 +84502,7 @@
       "checker_line": null,
       "codegen_file": "src/image_prelude.rs",
       "codegen_function": "imagefill",
-      "codegen_line": 2802,
+      "codegen_line": 2810,
       "notes": [
         "Implemented by the compiler-injected image prelude."
       ],
@@ -84643,7 +84643,7 @@
       "checker_line": null,
       "codegen_file": "src/image_prelude.rs",
       "codegen_function": "imagefilledarc",
-      "codegen_line": 2771,
+      "codegen_line": 2779,
       "notes": [
         "Implemented by the compiler-injected image prelude."
       ],
@@ -84798,7 +84798,7 @@
       "checker_line": null,
       "codegen_file": "src/image_prelude.rs",
       "codegen_function": "imagefilledellipse",
-      "codegen_line": 2733,
+      "codegen_line": 2741,
       "notes": [
         "Implemented by the compiler-injected image prelude."
       ],
@@ -84911,7 +84911,7 @@
       "checker_line": null,
       "codegen_file": "src/image_prelude.rs",
       "codegen_function": "imagefilledpolygon",
-      "codegen_line": 2875,
+      "codegen_line": 2883,
       "notes": [
         "Implemented by the compiler-injected image prelude."
       ],
@@ -85024,7 +85024,7 @@
       "checker_line": null,
       "codegen_file": "src/image_prelude.rs",
       "codegen_function": "imagefilledrectangle",
-      "codegen_line": 2699,
+      "codegen_line": 2707,
       "notes": [
         "Implemented by the compiler-injected image prelude."
       ],
@@ -85151,7 +85151,7 @@
       "checker_line": null,
       "codegen_file": "src/image_prelude.rs",
       "codegen_function": "imagefilltoborder",
-      "codegen_line": 2817,
+      "codegen_line": 2825,
       "notes": [
         "Implemented by the compiler-injected image prelude."
       ],
@@ -85278,7 +85278,7 @@
       "checker_line": null,
       "codegen_file": "src/image_prelude.rs",
       "codegen_function": "imagefilter",
-      "codegen_line": 3263,
+      "codegen_line": 3271,
       "notes": [
         "Implemented by the compiler-injected image prelude."
       ],
@@ -85384,7 +85384,7 @@
       "checker_line": null,
       "codegen_file": "src/image_prelude.rs",
       "codegen_function": "imageflip",
-      "codegen_line": 3173,
+      "codegen_line": 3181,
       "notes": [
         "Implemented by the compiler-injected image prelude."
       ],
@@ -85455,7 +85455,7 @@
       "checker_line": null,
       "codegen_file": "src/image_prelude.rs",
       "codegen_function": "imagefontheight",
-      "codegen_line": 2976,
+      "codegen_line": 2984,
       "notes": [
         "Implemented by the compiler-injected image prelude."
       ],
@@ -85519,7 +85519,7 @@
       "checker_line": null,
       "codegen_file": "src/image_prelude.rs",
       "codegen_function": "imagefontwidth",
-      "codegen_line": 2964,
+      "codegen_line": 2972,
       "notes": [
         "Implemented by the compiler-injected image prelude."
       ],
@@ -85597,7 +85597,7 @@
       "checker_line": null,
       "codegen_file": "src/image_prelude.rs",
       "codegen_function": "imagegammacorrect",
-      "codegen_line": 3305,
+      "codegen_line": 3313,
       "notes": [
         "Implemented by the compiler-injected image prelude."
       ],
@@ -85675,7 +85675,7 @@
       "checker_line": null,
       "codegen_file": "src/image_prelude.rs",
       "codegen_function": "imagegetinterpolation",
-      "codegen_line": 3333,
+      "codegen_line": 3341,
       "notes": [
         "Implemented by the compiler-injected image prelude."
       ],
@@ -85746,7 +85746,7 @@
       "checker_line": null,
       "codegen_file": "src/image_prelude.rs",
       "codegen_function": "imagegif",
-      "codegen_line": 3607,
+      "codegen_line": 3615,
       "notes": [
         "Implemented by the compiler-injected image prelude."
       ],
@@ -85824,7 +85824,7 @@
       "checker_line": null,
       "codegen_file": "src/image_prelude.rs",
       "codegen_function": "imageinterlace",
-      "codegen_line": 3344,
+      "codegen_line": 3352,
       "notes": [
         "Implemented by the compiler-injected image prelude."
       ],
@@ -85895,7 +85895,7 @@
       "checker_line": null,
       "codegen_file": "src/image_prelude.rs",
       "codegen_function": "imageistruecolor",
-      "codegen_line": 2301,
+      "codegen_line": 2309,
       "notes": [
         "Implemented by the compiler-injected image prelude."
       ],
@@ -85973,7 +85973,7 @@
       "checker_line": null,
       "codegen_file": "src/image_prelude.rs",
       "codegen_function": "imagejpeg",
-      "codegen_line": 3594,
+      "codegen_line": 3602,
       "notes": [
         "Implemented by the compiler-injected image prelude."
       ],
@@ -86058,7 +86058,7 @@
       "checker_line": null,
       "codegen_file": "src/image_prelude.rs",
       "codegen_function": "imagelayereffect",
-      "codegen_line": 2613,
+      "codegen_line": 2621,
       "notes": [
         "Implemented by the compiler-injected image prelude."
       ],
@@ -86164,7 +86164,7 @@
       "checker_line": null,
       "codegen_file": "src/image_prelude.rs",
       "codegen_function": "imageline",
-      "codegen_line": 2648,
+      "codegen_line": 2656,
       "notes": [
         "Implemented by the compiler-injected image prelude."
       ],
@@ -86277,7 +86277,7 @@
       "checker_line": null,
       "codegen_file": "src/image_prelude.rs",
       "codegen_function": "imageopenpolygon",
-      "codegen_line": 2854,
+      "codegen_line": 2862,
       "notes": [
         "Implemented by the compiler-injected image prelude."
       ],
@@ -86362,7 +86362,7 @@
       "checker_line": null,
       "codegen_file": "src/image_prelude.rs",
       "codegen_function": "imagepalettecopy",
-      "codegen_line": 2599,
+      "codegen_line": 2607,
       "notes": [
         "Implemented by the compiler-injected image prelude."
       ],
@@ -86433,7 +86433,7 @@
       "checker_line": null,
       "codegen_file": "src/image_prelude.rs",
       "codegen_function": "imagepalettetotruecolor",
-      "codegen_line": 2535,
+      "codegen_line": 2543,
       "notes": [
         "Implemented by the compiler-injected image prelude."
       ],
@@ -86518,7 +86518,7 @@
       "checker_line": null,
       "codegen_file": "src/image_prelude.rs",
       "codegen_function": "imagepng",
-      "codegen_line": 3579,
+      "codegen_line": 3587,
       "notes": [
         "Implemented by the compiler-injected image prelude."
       ],
@@ -86617,7 +86617,7 @@
       "checker_line": null,
       "codegen_file": "src/image_prelude.rs",
       "codegen_function": "imagepolygon",
-      "codegen_line": 2833,
+      "codegen_line": 2841,
       "notes": [
         "Implemented by the compiler-injected image prelude."
       ],
@@ -86730,7 +86730,7 @@
       "checker_line": null,
       "codegen_file": "src/image_prelude.rs",
       "codegen_function": "imagerectangle",
-      "codegen_line": 2682,
+      "codegen_line": 2690,
       "notes": [
         "Implemented by the compiler-injected image prelude."
       ],
@@ -86843,7 +86843,7 @@
       "checker_line": null,
       "codegen_file": "src/image_prelude.rs",
       "codegen_function": "imageresolution",
-      "codegen_line": 2312,
+      "codegen_line": 2320,
       "notes": [
         "Implemented by the compiler-injected image prelude."
       ],
@@ -86942,7 +86942,7 @@
       "checker_line": null,
       "codegen_file": "src/image_prelude.rs",
       "codegen_function": "imagerotate",
-      "codegen_line": 3185,
+      "codegen_line": 3193,
       "notes": [
         "Implemented by the compiler-injected image prelude."
       ],
@@ -87034,7 +87034,7 @@
       "checker_line": null,
       "codegen_file": "src/image_prelude.rs",
       "codegen_function": "imagesavealpha",
-      "codegen_line": 2522,
+      "codegen_line": 2530,
       "notes": [
         "Implemented by the compiler-injected image prelude."
       ],
@@ -87128,7 +87128,7 @@
       "checker_line": null,
       "codegen_file": "src/image_prelude.rs",
       "codegen_function": "imagescale",
-      "codegen_line": 3101,
+      "codegen_line": 3109,
       "notes": [
         "Implemented by the compiler-injected image prelude."
       ],
@@ -87222,7 +87222,7 @@
       "checker_line": null,
       "codegen_file": "src/image_prelude.rs",
       "codegen_function": "imagesetinterpolation",
-      "codegen_line": 3320,
+      "codegen_line": 3328,
       "notes": [
         "Implemented by the compiler-injected image prelude."
       ],
@@ -87314,7 +87314,7 @@
       "checker_line": null,
       "codegen_file": "src/image_prelude.rs",
       "codegen_function": "imagesetpixel",
-      "codegen_line": 2252,
+      "codegen_line": 2260,
       "notes": [
         "Implemented by the compiler-injected image prelude."
       ],
@@ -87406,7 +87406,7 @@
       "checker_line": null,
       "codegen_file": "src/image_prelude.rs",
       "codegen_function": "imagesetthickness",
-      "codegen_line": 2635,
+      "codegen_line": 2643,
       "notes": [
         "Implemented by the compiler-injected image prelude."
       ],
@@ -87512,7 +87512,7 @@
       "checker_line": null,
       "codegen_file": "src/image_prelude.rs",
       "codegen_function": "imagestring",
-      "codegen_line": 2896,
+      "codegen_line": 2904,
       "notes": [
         "Implemented by the compiler-injected image prelude."
       ],
@@ -87646,7 +87646,7 @@
       "checker_line": null,
       "codegen_file": "src/image_prelude.rs",
       "codegen_function": "imagestringup",
-      "codegen_line": 2913,
+      "codegen_line": 2921,
       "notes": [
         "Implemented by the compiler-injected image prelude."
       ],
@@ -87745,7 +87745,7 @@
       "checker_line": null,
       "codegen_file": "src/image_prelude.rs",
       "codegen_function": "imagesx",
-      "codegen_line": 2267,
+      "codegen_line": 2275,
       "notes": [
         "Implemented by the compiler-injected image prelude."
       ],
@@ -87809,7 +87809,7 @@
       "checker_line": null,
       "codegen_file": "src/image_prelude.rs",
       "codegen_function": "imagesy",
-      "codegen_line": 2278,
+      "codegen_line": 2286,
       "notes": [
         "Implemented by the compiler-injected image prelude."
       ],
@@ -87887,7 +87887,7 @@
       "checker_line": null,
       "codegen_file": "src/image_prelude.rs",
       "codegen_function": "imagetruecolortopalette",
-      "codegen_line": 2547,
+      "codegen_line": 2555,
       "notes": [
         "Implemented by the compiler-injected image prelude."
       ],
@@ -87957,7 +87957,7 @@
       "checker_line": null,
       "codegen_file": "src/image_prelude.rs",
       "codegen_function": "imagetypes",
-      "codegen_line": 3646,
+      "codegen_line": 3654,
       "notes": [
         "Implemented by the compiler-injected image prelude."
       ],
@@ -88027,7 +88027,7 @@
       "checker_line": null,
       "codegen_file": "src/image_prelude.rs",
       "codegen_function": "imagewebp",
-      "codegen_line": 3633,
+      "codegen_line": 3641,
       "notes": [
         "Implemented by the compiler-injected image prelude."
       ],
@@ -89572,7 +89572,7 @@
       "checker_line": null,
       "codegen_file": "src/image_prelude.rs",
       "codegen_function": "iptcembed",
-      "codegen_line": 4063,
+      "codegen_line": 4071,
       "notes": [
         "Implemented by the compiler-injected image prelude."
       ],
@@ -89650,7 +89650,7 @@
       "checker_line": null,
       "codegen_file": "src/image_prelude.rs",
       "codegen_function": "iptcparse",
-      "codegen_line": 4013,
+      "codegen_line": 4021,
       "notes": [
         "Implemented by the compiler-injected image prelude."
       ],
@@ -94092,7 +94092,7 @@
       "checker_line": null,
       "codegen_file": "src/name_resolver/expressions.rs",
       "codegen_function": "rewrite_date_procedural_call",
-      "codegen_line": 1010,
+      "codegen_line": 1036,
       "notes": [
         "Rewritten by the name resolver into a constructor or method call on the corresponding builtin class before type checking."
       ],
@@ -94170,7 +94170,7 @@
       "checker_line": null,
       "codegen_file": "src/name_resolver/expressions.rs",
       "codegen_function": "rewrite_date_procedural_call",
-      "codegen_line": 1013,
+      "codegen_line": 1039,
       "notes": [
         "Rewritten by the name resolver into a constructor or method call on the corresponding builtin class before type checking."
       ],
@@ -94241,7 +94241,7 @@
       "checker_line": null,
       "codegen_file": "src/name_resolver/expressions.rs",
       "codegen_function": "rewrite_date_procedural_call",
-      "codegen_line": 1005,
+      "codegen_line": 1031,
       "notes": [
         "Rewritten by the name resolver into a constructor or method call on the corresponding builtin class before type checking."
       ],
@@ -94305,7 +94305,7 @@
       "checker_line": null,
       "codegen_file": "src/name_resolver/expressions.rs",
       "codegen_function": "rewrite_date_procedural_call",
-      "codegen_line": 999,
+      "codegen_line": 1025,
       "notes": [
         "Rewritten by the name resolver into a constructor or method call on the corresponding builtin class before type checking."
       ],
@@ -94383,7 +94383,7 @@
       "checker_line": null,
       "codegen_file": "src/name_resolver/expressions.rs",
       "codegen_function": "rewrite_date_procedural_call",
-      "codegen_line": 1007,
+      "codegen_line": 1033,
       "notes": [
         "Rewritten by the name resolver into a constructor or method call on the corresponding builtin class before type checking."
       ],
@@ -94461,7 +94461,7 @@
       "checker_line": null,
       "codegen_file": "src/name_resolver/expressions.rs",
       "codegen_function": "rewrite_date_procedural_call",
-      "codegen_line": 1003,
+      "codegen_line": 1029,
       "notes": [
         "Rewritten by the name resolver into a constructor or method call on the corresponding builtin class before type checking."
       ],
@@ -94525,7 +94525,7 @@
       "checker_line": null,
       "codegen_file": "src/name_resolver/expressions.rs",
       "codegen_function": "rewrite_date_procedural_call",
-      "codegen_line": 1014,
+      "codegen_line": 1040,
       "notes": [
         "Rewritten by the name resolver into a constructor or method call on the corresponding builtin class before type checking."
       ],
@@ -94603,7 +94603,7 @@
       "checker_line": null,
       "codegen_file": "src/name_resolver/expressions.rs",
       "codegen_function": "rewrite_date_procedural_call",
-      "codegen_line": 1006,
+      "codegen_line": 1032,
       "notes": [
         "Rewritten by the name resolver into a constructor or method call on the corresponding builtin class before type checking."
       ],
@@ -95616,7 +95616,7 @@
       "checker_line": null,
       "codegen_file": "src/name_resolver/expressions.rs",
       "codegen_function": "rewrite_date_procedural_call",
-      "codegen_line": 1002,
+      "codegen_line": 1028,
       "notes": [
         "Rewritten by the name resolver into a constructor or method call on the corresponding builtin class before type checking."
       ],
@@ -96732,7 +96732,7 @@
       "checker_line": null,
       "codegen_file": "src/backend_gap_prelude.rs",
       "codegen_function": "levenshtein",
-      "codegen_line": 796,
+      "codegen_line": 814,
       "notes": [
         "Implemented by the compiler-injected backend-gap prelude."
       ],
@@ -120614,7 +120614,7 @@
       "checker_line": null,
       "codegen_file": "src/opcache_prelude/build.rs",
       "codegen_function": "opcache_compile_file",
-      "codegen_line": 983,
+      "codegen_line": 1007,
       "notes": [
         "Implemented by the compiler-injected OPcache prelude."
       ],
@@ -120932,7 +120932,7 @@
       "checker_line": null,
       "codegen_file": "src/opcache_prelude/build.rs",
       "codegen_function": "opcache_is_script_cached_in_file_cache",
-      "codegen_line": 1001,
+      "codegen_line": 1025,
       "notes": [
         "Implemented by the compiler-injected OPcache prelude."
       ],
@@ -120996,7 +120996,7 @@
       "checker_line": null,
       "codegen_file": "src/opcache_prelude/build.rs",
       "codegen_function": "opcache_jit_blacklist",
-      "codegen_line": 1064,
+      "codegen_line": 1088,
       "notes": [
         "Implemented by the compiler-injected OPcache prelude."
       ],
@@ -122673,7 +122673,7 @@
       "checker_line": null,
       "codegen_file": "src/password_prelude.rs",
       "codegen_function": "password_algos",
-      "codegen_line": 224,
+      "codegen_line": 231,
       "notes": [
         "Implemented by the compiler-injected password prelude."
       ],
@@ -136853,7 +136853,7 @@
       "checker_line": null,
       "codegen_file": "src/image_prelude.rs",
       "codegen_function": "read_exif_data",
-      "codegen_line": 3974,
+      "codegen_line": 3982,
       "notes": [
         "Implemented by the compiler-injected image prelude."
       ],
@@ -145884,11 +145884,11 @@
           "type": "string"
         },
         {
-          "by_ref": false,
+          "by_ref": true,
           "default": null,
           "name": "count",
           "optional": true,
-          "type": "mixed"
+          "type": "int"
         }
       ],
       "required_param_count": 3,
@@ -146031,7 +146031,7 @@
           "type": "string"
         },
         {
-          "by_ref": false,
+          "by_ref": true,
           "default": "null",
           "name": "count",
           "optional": true,
@@ -154952,7 +154952,7 @@
       "checker_line": null,
       "codegen_file": "src/name_resolver/expressions.rs",
       "codegen_function": "rewrite_date_procedural_call",
-      "codegen_line": 1093,
+      "codegen_line": 1119,
       "notes": [
         "Rewritten by the name resolver into a constructor or method call on the corresponding builtin class before type checking."
       ],
@@ -156259,7 +156259,7 @@
       "checker_line": null,
       "codegen_file": "src/name_resolver/expressions.rs",
       "codegen_function": "rewrite_date_procedural_call",
-      "codegen_line": 985,
+      "codegen_line": 1011,
       "notes": [
         "Rewritten by the name resolver into a constructor or method call on the corresponding builtin class before type checking."
       ],
@@ -159841,7 +159841,7 @@
       "checker_line": null,
       "codegen_file": "src/name_resolver/expressions.rs",
       "codegen_function": "rewrite_date_procedural_call",
-      "codegen_line": 1123,
+      "codegen_line": 1149,
       "notes": [
         "Rewritten by the name resolver into a constructor or method call on the corresponding builtin class before type checking."
       ],
@@ -159990,7 +159990,7 @@
       "checker_line": null,
       "codegen_file": "src/name_resolver/expressions.rs",
       "codegen_function": "rewrite_date_procedural_call",
-      "codegen_line": 986,
+      "codegen_line": 1012,
       "notes": [
         "Rewritten by the name resolver into a constructor or method call on the corresponding builtin class before type checking."
       ],
@@ -160068,7 +160068,7 @@
       "checker_line": null,
       "codegen_file": "src/name_resolver/expressions.rs",
       "codegen_function": "rewrite_date_procedural_call",
-      "codegen_line": 1158,
+      "codegen_line": 1184,
       "notes": [
         "Rewritten by the name resolver into a constructor or method call on the corresponding builtin class before type checking."
       ],
@@ -160139,7 +160139,7 @@
       "checker_line": null,
       "codegen_file": "src/name_resolver/expressions.rs",
       "codegen_function": "rewrite_date_procedural_call",
-      "codegen_line": 1159,
+      "codegen_line": 1185,
       "notes": [
         "Rewritten by the name resolver into a constructor or method call on the corresponding builtin class before type checking."
       ],
@@ -160210,7 +160210,7 @@
       "checker_line": null,
       "codegen_file": "src/name_resolver/expressions.rs",
       "codegen_function": "rewrite_date_procedural_call",
-      "codegen_line": 1117,
+      "codegen_line": 1143,
       "notes": [
         "Rewritten by the name resolver into a constructor or method call on the corresponding builtin class before type checking."
       ],
@@ -160360,7 +160360,7 @@
       "checker_line": null,
       "codegen_file": "src/name_resolver/expressions.rs",
       "codegen_function": "rewrite_date_procedural_call",
-      "codegen_line": 1132,
+      "codegen_line": 1158,
       "notes": [
         "Rewritten by the name resolver into a constructor or method call on the corresponding builtin class before type checking."
       ],
@@ -162110,7 +162110,7 @@
       "checker_line": null,
       "codegen_file": "src/name_resolver/expressions.rs",
       "codegen_function": "rewrite_date_procedural_call",
-      "codegen_line": 1017,
+      "codegen_line": 1043,
       "notes": [
         "Rewritten by the name resolver into a constructor or method call on the corresponding builtin class before type checking."
       ],
