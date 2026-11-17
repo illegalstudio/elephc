@@ -670,3 +670,32 @@ echo $n, "\n";
     assert_eq!(output.stdout, "120\n");
     assert!(output.stderr.contains("leak summary: clean"), "{}", output.stderr);
 }
+
+/// PHP evaluates every argument, the spread source included, before it checks any parameter:
+/// a refused prefix before a runtime spread must not skip the spread's side effects, nor hide
+/// an exception it throws. The prefix was checked before the spread was read (review on the
+/// spread-prefix follow-up).
+#[test]
+fn test_positional_spread_prefix_is_checked_after_the_spread_is_evaluated() {
+    let output = compile_and_run_with_heap_debug(
+        r#"<?php
+function f(string $s, int $n, int $a, int $b): string { return $s . $n . $a . $b; }
+function box(mixed $v): mixed { return $v; }
+function side(): int { echo "side\n"; return 0; }
+function boom(): int { throw new RuntimeException("boom"); }
+function show(Throwable $e): void { echo get_class($e), ": ", str_replace(__FILE__, "F", $e->getMessage()), "\n"; }
+$null = box(null);
+$lists = [[1, 2]];
+for ($i = 0; $i < 2; $i++) {
+    try { echo f($null, box(1), ...$lists[side()]), "\n"; } catch (Throwable $e) { show($e); }
+    try { echo f($null, box(1), ...$lists[boom()]), "\n"; } catch (Throwable $e) { show($e); }
+    try { echo f(box("x"), box("q"), ...$lists[side()]), "\n"; } catch (Throwable $e) { show($e); }
+    echo f(box("x"), box(" 7"), ...$lists[side()]), "\n";
+}
+"#,
+    );
+    assert!(output.success, "{}", output.stderr);
+    let round = "side\nTypeError: f(): Argument #1 ($s) must be of type string, null given, called in F on line 10\nRuntimeException: boom\nside\nTypeError: f(): Argument #2 ($n) must be of type int, string given, called in F on line 12\nside\nx712\n";
+    assert_eq!(output.stdout, round.repeat(2));
+    assert!(output.stderr.contains("leak summary: clean"), "{}", output.stderr);
+}
