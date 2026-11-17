@@ -148,6 +148,7 @@ mod outlined_method_calls;
 mod deepclone_shapes;
 mod destructors;
 mod destructor_unwind_calls;
+mod review_classes_closures;
 mod reference_property_payload;
 mod references;
 mod runtime_gc;

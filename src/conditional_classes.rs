@@ -67,8 +67,8 @@ fn count_class_likes(stmts: &[Stmt], counts: &mut HashMap<String, usize>) {
 
 /// Borrows the statement lists nested directly in `kind` that can hold a class declaration.
 ///
-/// Function and class bodies are deliberately absent: a class declared inside a function body is
-/// bound per call, which hoisting would not model.
+/// A function body counts as conditional: the class it declares is bound when the function first
+/// runs. Class bodies stay absent (a class cannot declare a class).
 fn child_bodies(kind: &StmtKind) -> Vec<&Vec<Stmt>> {
     match kind {
         StmtKind::Synthetic(body)
@@ -77,7 +77,8 @@ fn child_bodies(kind: &StmtKind) -> Vec<&Vec<Stmt>> {
         | StmtKind::While { body, .. }
         | StmtKind::DoWhile { body, .. }
         | StmtKind::For { body, .. }
-        | StmtKind::Foreach { body, .. } => vec![body],
+        | StmtKind::Foreach { body, .. }
+        | StmtKind::FunctionDecl { body, .. } => vec![body],
         StmtKind::If {
             then_body,
             elseif_clauses,
@@ -153,6 +154,16 @@ impl Hoister {
     fn rewrite_kind(&mut self, kind: StmtKind, conditional: bool) -> StmtKind {
         match kind {
             StmtKind::Synthetic(body) => StmtKind::Synthetic(self.rewrite_stmts(body, conditional)),
+            // A class declared once inside a function body has one possible body, and php binds it
+            // for the whole script once the function has run: hoist it like a conditional one.
+            StmtKind::FunctionDecl {
+                name, type_params, params, param_attributes, variadic, variadic_by_ref,
+                variadic_type, return_type, by_ref_return, body,
+            } => StmtKind::FunctionDecl {
+                name, type_params, params, param_attributes, variadic, variadic_by_ref,
+                variadic_type, return_type, by_ref_return,
+                body: self.rewrite_stmts(body, true),
+            },
             StmtKind::NamespaceBlock { name, body } => StmtKind::NamespaceBlock {
                 name,
                 body: self.rewrite_stmts(body, conditional),
