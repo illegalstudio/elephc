@@ -102,3 +102,6 @@ pub(crate) fn emit_unserialize(emitter: &mut Emitter) {
 pub(in crate::codegen_support::runtime) fn emit_owner_records_for_memoir_test(emitter: &mut Emitter) {
     temporaries::emit_unserialize_temporaries(emitter);
 }
+
+#[cfg(test)]
+mod memoir_tests;
