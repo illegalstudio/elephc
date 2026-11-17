@@ -154,9 +154,9 @@ return $this->setTimestamp(__elephc_mktime_raw($h, $mi, $se, 1, $day, $year));
 "#;
 
 /// `setISODate(int $year, int $week, int $dayOfWeek = 1): static` — set the date from an ISO 8601
-/// week date, keeping the time-of-day. The body is the parsed `SET_ISODATE_SRC`; the return type
-/// is declared as `class_name` since synthetic methods do not get body-driven return inference.
-pub(super) fn datetime_set_isodate(class_name: &str) -> ClassMethod {
+/// week date, keeping the time-of-day. The body is the parsed `SET_ISODATE_SRC`; it returns what
+/// `setTimestamp()` returns, so the return type is declared late-static `static` like that setter.
+pub(super) fn datetime_set_isodate() -> ClassMethod {
     let body = super::bodies::set_isodate();
     ClassMethod {
         type_params: Vec::new(),
@@ -180,7 +180,7 @@ pub(super) fn datetime_set_isodate(class_name: &str) -> ClassMethod {
         variadic: None,
         variadic_by_ref: false,
         variadic_type: None,
-        return_type: Some(TypeExpr::Named(Name::unqualified(class_name))),
+        return_type: Some(late_static_return()),
         by_ref_return: false,
         body,
         span: dummy(),
