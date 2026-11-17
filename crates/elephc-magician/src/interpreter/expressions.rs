@@ -22,7 +22,7 @@ use owned::*;
 pub(in crate::interpreter) use owned::{copy_scope_value, eval_output_expr};
 
 pub(in crate::interpreter) use evaluation::{
-    eval_array_access_object_matches, eval_array_get_result, eval_binary_result,
+    eval_array_access_object_matches, eval_array_get_result, eval_binary_result, warn_missing_array_key,
     eval_closure_object_expr, eval_dynamic_class_name, eval_dynamic_member_name, eval_match_expr,
     eval_new_object_result,
 };
@@ -320,6 +320,7 @@ fn eval_expr_with_result_ownership(
             }
             with_eval_operands(&[array, index], context, scope, values, |args, context, _, values| {
                 let result = eval_array_get_result(args[0], args[1], context, values)?;
+                warn_missing_array_key(args[0], args[1], result, context, values)?;
                 if result.is_borrowed() { values.retain(result) } else { Ok(result) }
             })
         }

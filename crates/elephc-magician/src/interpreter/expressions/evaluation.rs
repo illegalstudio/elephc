@@ -378,6 +378,45 @@ pub(in crate::interpreter) fn eval_array_get_result(
     eval_method_call_result(array, "offsetGet", vec![index], context, values)
 }
 
+/// Raises php's `Undefined array key` warning when reading `array[index]` produced null because
+/// the key is absent.
+///
+/// Quiet fetches (`isset`, `empty`, `??`) and `@` stay silent, as in php. A key that exists with a
+/// null value is a plain read and warns nothing.
+pub(in crate::interpreter) fn warn_missing_array_key(
+    array: RuntimeCellHandle,
+    index: RuntimeCellHandle,
+    result: RuntimeCellHandle,
+    context: &ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<(), EvalStatus> {
+    if context.errors_suppressed() || context.quiet_property_fetch() || !values.is_null(result)? {
+        return Ok(());
+    }
+    if !matches!(values.type_tag(array)?, EVAL_TAG_ARRAY | EVAL_TAG_ASSOC) {
+        return Ok(());
+    }
+    let Some(key) = eval_array_reference_key(index, values)? else {
+        return Ok(());
+    };
+    let key_value = eval_array_reference_key_value(&key, values)?;
+    let exists = values.array_key_exists(key_value, array);
+    values.release(key_value)?;
+    let exists = exists?;
+    let present = values.truthy(exists);
+    values.release(exists)?;
+    if present? {
+        return Ok(());
+    }
+    let message = match key {
+        EvalArrayReferenceKey::Int(key) => format!("Undefined array key {key}"),
+        EvalArrayReferenceKey::String(bytes) => {
+            format!("Undefined array key \"{}\"", String::from_utf8_lossy(&bytes))
+        }
+    };
+    values.warning(&message)
+}
+
 /// Returns whether an object value satisfies PHP's `ArrayAccess` interface.
 pub(in crate::interpreter) fn eval_array_access_object_matches(
     value: RuntimeCellHandle,

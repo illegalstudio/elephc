@@ -147,7 +147,11 @@ pub(in crate::interpreter) fn eval_array_iterator_method_result(
             let [key] = evaluated_args else {
                 return Err(EvalStatus::RuntimeFatal);
             };
-            values.array_get(storage, *key)?
+            let value = values.array_get(storage, *key)?;
+            crate::interpreter::expressions::warn_missing_array_key(
+                storage, *key, value, context, values,
+            )?;
+            value
         }
         "offsetexists" => {
             let [key] = evaluated_args else {

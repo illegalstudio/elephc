@@ -499,7 +499,10 @@ fn array_offset_get_body() -> Vec<Stmt> {
             increment_stmt("i"),
         ],
     ));
-    body.push(return_stmt(null_expr()));
+    // php: `Warning: Undefined array key` for an absent offset. Reading an empty array at the
+    // offset raises exactly that warning (quoted string or bare int) and yields null.
+    body.push(assign_stmt("absent", empty_array_expr()));
+    body.push(return_stmt(array_access(var_expr("absent"), var_expr("offset"))));
     body
 }
 
