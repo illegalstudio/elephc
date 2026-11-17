@@ -70,3 +70,5 @@ pub mod object_handles;
 pub mod stacks;
 
 pub mod interop;
+
+pub mod cleanup_fast_paths;

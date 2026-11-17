@@ -14,7 +14,9 @@ callable capture release, hash ownership guards, buffers, Mixed boxing, persiste
 references, unboxing, protected cleanup, temporary-owner transfers,
 reference acquisition,
 identity pinning, object-handle recycling, guarded stack allocation/free, byte-string
-concatenation, C-string copies, raw capture buffers and zval storage retirement.
+concatenation, C-string copies, raw capture buffers, zval storage retirement,
+Mixed-array slot conversion, reference-wrapper promotion and child-slot selection,
+and scalar/empty-array cleanup eligibility checks.
 It also owns fixed heap/GC/buffer state, handle tables and string-scratch
 declarations. It is an ordinary compiler dependency and is never linked as a Rust
 library into compiled PHP programs. Those programs contain the same
@@ -24,8 +26,10 @@ layout definitions, PHP formatting and output routing, zval pack/unpack,
 platform mapping flags, semantic runtime data, helper ordering and linking. The
 compiler emitter adapter supplies target ABI operations and layout facts to Memoir. Capture cleanup receives a compiler callback for its mode reset. Zval
 storage cleanup releases copied strings/arrays and leaves borrowed native
-object/resource payloads untouched. Memoir source changes also participate in
-runtime-object cache identity.
+object/resource payloads untouched. The compiler supplies the scalar-tag eligibility
+policy and an optional type-source association callback after Mixed promotion;
+exception-handler installation and diagnostic selection remain compiler-owned.
+Memoir source changes also participate in runtime-object cache identity.
 
 This page explains where every value lives in memory at runtime.
 

@@ -314,3 +314,5 @@ pub fn emit_unmanaged_borrow_lookup(emitter: &mut impl Emitter) {
 pub mod local_release;
 
 pub mod parameter_bindings;
+
+pub mod mixed_payload;
