@@ -2726,6 +2726,26 @@ mod tests {
         assert!(!used.contains("App\\Missing"), "{used:?}");
     }
 
+    /// A two-element data pair holding a class string next to a number is no use of the class, so
+    /// `class_exists($class, false)` keeps its probe-only answer; a callable pair still is a use.
+    #[test]
+    fn a_data_pair_holding_a_class_string_is_not_a_use() {
+        let classify = |source: &str| {
+            let tokens = crate::lexer::tokenize(source).expect("tokenization should succeed");
+            let parsed = crate::parser::parse(&tokens).expect("parsing should succeed");
+            let resolved = crate::name_resolver::resolve(parsed).expect("resolution should succeed");
+            probe_only_class_names(&resolved)
+        };
+        let data = classify(
+            "<?php namespace App; var_dump(class_exists(Missing::class, false)); $x = Missing::class; $pair = [$x, 42];",
+        );
+        assert!(data.contains("App\\Missing"), "{data:?}");
+        let callable = classify(
+            "<?php namespace App; var_dump(class_exists(Missing::class, false)); $x = Missing::class; $pair = [$x, 'run'];",
+        );
+        assert!(!callable.contains("App\\Missing"), "{callable:?}");
+    }
+
     /// Verifies loaded declaration paths use PHP's case-insensitive symbol keys.
     #[test]
     fn declaration_source_files_normalize_class_and_function_names() {

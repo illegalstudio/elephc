@@ -1586,7 +1586,17 @@ fn collect_refs_expr(expr: &Expr, out: &mut ReferenceSet) {
         }
         ExprKind::ArrayLiteral(items) => {
             if items.len() == 2 {
-                collect_dynamic_class_target_candidates(&items[0], out);
+                // A pair whose second element is a number, boolean or null is data, not a callable:
+                // its first element is no class use (`[$class, 42]`).
+                if !matches!(
+                    items[1].kind,
+                    ExprKind::IntLiteral(_)
+                        | ExprKind::FloatLiteral(_)
+                        | ExprKind::BoolLiteral(_)
+                        | ExprKind::Null
+                ) {
+                    collect_dynamic_class_target_candidates(&items[0], out);
+                }
                 push_callable_array_class(items, out);
             }
             for i in items {
