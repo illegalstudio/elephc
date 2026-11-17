@@ -2881,7 +2881,12 @@ fn emit_runtime_string_descriptor_value_impl(
         );
         abi::emit_jump(ctx.emitter, &done_label);
         ctx.emitter.label(&miss_label);
-        emit_undefined_runtime_string_call_fatal(ctx);
+        if let Some(message) = type_error {
+            abi::emit_release_temporary_stack(ctx.emitter, 16);
+            super::exceptions::emit_type_error(ctx, message);
+        } else {
+            emit_undefined_runtime_string_call_fatal(ctx);
+        }
         ctx.emitter.label(&done_label);
         abi::emit_release_temporary_stack(ctx.emitter, 16);
         return Ok(());

@@ -558,3 +558,20 @@ echo $f("abc"), "\n";
         "get_called_class\nget_called_class() called without object from outside a class\nABC\n"
     );
 }
+
+/// A name missing from a module with more compiled functions than the inline lookup limit raises
+/// the builtin's catchable `TypeError`, not the "undefined function" fatal of the table path.
+#[test]
+fn test_unknown_callback_name_over_the_table_limit_throws_type_error() {
+    let out = compile_and_run(
+        r#"<?php
+function f1($c, $v) { return $c + $v; }
+function f2() {} function f3() {} function f4() {} function f5() {}
+function f6() {} function f7() {} function f8() {} function f9() {} function f10() {}
+$cb = $argc > 5 ? 'f1' : 'no_such_fn';
+try { array_filter([1, 2], $cb); echo "no\n"; } catch (TypeError $e) { echo "caught\n"; }
+echo "done\n";
+"#,
+    );
+    assert_eq!(out, "caught\ndone\n");
+}
