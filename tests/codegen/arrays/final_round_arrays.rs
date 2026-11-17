@@ -148,3 +148,42 @@ echo json_encode(g([['a' => 1], ['a' => 2]])), "\n";
     assert!(out.success, "program failed: {}", out.stderr);
     assert_eq!(out.stdout, "[1,2]\n");
 }
+
+/// `ArrayObject::getIterator()` iterates the object's live storage: an element added after the
+/// iterator was handed out is seen when the iteration starts.
+#[test]
+fn test_array_object_iterator_follows_live_storage() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+$o = new ArrayObject([1, 2]);
+$it = $o->getIterator();
+$o[] = 3;
+foreach ($it as $k => $v) echo "$k=$v,";
+echo "\n";
+$o['x'] = 'y';
+$it->rewind();
+echo count($it), $it->key(), "\n";
+foreach ($o as $v) echo $v;
+echo "\n";
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "0=1,1=2,2=3,\n40\n123y\n");
+}
+
+/// `array_walk_recursive()` reached through a callable spelling (a string callable and a
+/// first-class callable) walks nested and string elements like the direct call.
+#[test]
+fn test_array_walk_recursive_through_callable_spellings() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+$a = [1, [2, 3], "x"];
+$name = 'array_walk_recursive'; $name($a, function ($v, $k) { echo "$k=>$v,"; });
+echo "\n";
+$f = array_walk_recursive(...);
+$f($a, function ($v) { echo $v; });
+echo "\n";
+"#,
+    );
+    assert_eq!(out.stdout, "0=>1,0=>2,1=>3,2=>x,\n123x\n");
+}

@@ -210,6 +210,23 @@ pub(super) fn lower_static_callable_call(
             {
                 return Some(value);
             }
+            // `call_user_func('array_walk_recursive', ...)` takes the PHP helpers a direct call
+            // does: the native walkers only read some element shapes and refused the others.
+            if matches!(
+                php_symbol_key(function_name.trim_start_matches('\\')).as_str(),
+                "array_walk" | "array_walk_recursive"
+            ) && (2..=3).contains(&callback_args.len())
+                && !callback_args.iter().any(is_spread_arg)
+            {
+                return Some(lower_function_call(
+                    ctx,
+                    &crate::names::Name::unqualified(
+                        php_symbol_key(function_name.trim_start_matches('\\')),
+                    ),
+                    callback_args,
+                    expr,
+                ));
+            }
             // The internal-pointer builtins carry their cursor through a lowering of their own
             // (`array_pointer_semantics`), not through the generic runtime-signature call this
             // path emits: `array_map('current', $rows)` (Doctrine's Paginator) produced a

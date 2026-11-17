@@ -1221,6 +1221,11 @@ impl RuntimeFnId {
             // The by-reference `$count` is served by `crate::str_replace_count_prelude` for a
             // DIRECT four-argument call; the native helper behind a callable wrapper takes three.
             RuntimeFnId::StrReplace | RuntimeFnId::StrIreplace => truncate_callable_params(sig, 3),
+            // The native walkers take the array and the callback; the optional `$arg` is served
+            // by the PHP helpers a direct call is lowered to.
+            RuntimeFnId::ArrayWalk | RuntimeFnId::ArrayWalkRecursive => {
+                truncate_callable_params(sig, 2)
+            }
             RuntimeFnId::CloneWith => {
                 set_callable_param_type(sig, 0, PhpType::Mixed);
                 // Dynamic callable arguments reach the runtime before their PHP parameter type
