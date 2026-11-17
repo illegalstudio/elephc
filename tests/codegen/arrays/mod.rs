@@ -47,6 +47,7 @@ mod widened_signatures;
 mod write_evaluation_order;
 mod generic_array_contract;
 mod hash_positional_mutators;
+mod promoted_list;
 mod register_convention_regressions;
 mod float_key_diagnostics;
 mod float_key_compound_receivers;
