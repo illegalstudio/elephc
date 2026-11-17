@@ -31691,14 +31691,14 @@ echo wrapAll($values);
     assert_eq!(out, "SrA=kept;sRa=wrapped:1;sRa=wrapped:k;count=3");
 }
 
-/// Verifies missing eval require aborts through the runtime eval fatal path.
+/// Verifies a missing eval require ends in php's uncaught Error (3064ea165e), as `php -n` does.
 #[test]
 fn test_eval_fragment_missing_require_fails() {
     let err =
         compile_and_run_expect_failure("<?php eval('require \"missing-eval-require.php\";');");
     assert!(
-        err.contains("Fatal error: eval() runtime failed"),
-        "stderr did not contain eval runtime fatal: {err}"
+        err.contains("Fatal error: Uncaught Error: Failed opening required 'missing-eval-require.php'"),
+        "stderr did not contain the uncaught require Error: {err}"
     );
 }
 
