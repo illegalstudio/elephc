@@ -245,3 +245,29 @@ Error: Object of class P could not be converted to string\n\
         assert_eq!(out.stderr.matches("Array to string conversion").count(), 3, "{}", out.stderr);
     }
 }
+
+/// A `__toString()` that throws during `preg_grep()` releases the partial result and the
+/// entry temporaries, so catching and retrying leaks nothing, in compiled code and in eval.
+#[test]
+fn test_preg_grep_throwing_to_string_heap_clean() {
+    let source = r#"class T { public function __toString(): string { throw new Exception('no'); } }
+class U { public function __toString(): string { return 'ua'; } }
+$items = ['a', 'k' => 'ab', 2 => new U(), 3 => new T(), 4 => 'b'];
+$caught = 0;
+for ($i = 0; $i < 3; $i++) {
+    try { preg_grep('/a/', $items); } catch (Exception $e) { $caught += $e->getMessage() === 'no' ? 1 : 0; }
+}
+$kept = preg_grep('/a/', ['a', 'b', 'ca', 1, new U()]);
+echo $caught, ':', count($kept), "\n";
+"#;
+    let quoted = source.replace('\\', "\\\\").replace('\'', "\\'");
+    for program in [
+        format!("<?php\n{source}"),
+        format!("<?php\neval('{quoted}' . ' // ' . $argc);\n"),
+    ] {
+        let out = compile_and_run_with_heap_debug_and_regex(&program);
+        assert!(out.success, "{}", out.stderr);
+        assert_eq!(out.stdout, "3:3\n", "{program}");
+        assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{program}\n{}", out.stderr);
+    }
+}

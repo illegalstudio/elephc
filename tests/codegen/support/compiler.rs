@@ -936,10 +936,25 @@ pub(crate) fn compile_and_run_capture_with_regex(source: &str) -> ProgramOutput 
     compile_and_run_capture_with_optional_regex(source, true)
 }
 
+/// Compiles and runs a heap-debug fixture with `--with-regex`, so eval'd code reaches the
+/// regex provider while the leak summary still covers its allocations.
+pub(crate) fn compile_and_run_with_heap_debug_and_regex(source: &str) -> ProgramOutput {
+    compile_and_run_capture_with_regex_options(source, true, true)
+}
+
 /// Compiles and captures one fixture while optionally enabling managed regex support.
 fn compile_and_run_capture_with_optional_regex(
     source: &str,
     with_regex: bool,
+) -> ProgramOutput {
+    compile_and_run_capture_with_regex_options(source, with_regex, false)
+}
+
+/// Compiles and captures one fixture with the given regex and heap-debug options.
+fn compile_and_run_capture_with_regex_options(
+    source: &str,
+    with_regex: bool,
+    heap_debug: bool,
 ) -> ProgramOutput {
     let id = TEST_ID.fetch_add(1, Ordering::SeqCst);
     let tid = std::thread::current().id();
@@ -949,7 +964,7 @@ fn compile_and_run_capture_with_optional_regex(
 
     let (user_asm, runtime_asm, required_libraries) =
         compile_source_to_asm_with_options_and_regex(
-            source, &dir, 8_388_608, false, false, false, with_regex,
+            source, &dir, 8_388_608, false, false, heap_debug, with_regex,
         );
     let runtime_obj = runtime_obj_for_asm(&runtime_asm);
     let output = assemble_and_run_capture(

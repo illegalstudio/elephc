@@ -10,6 +10,8 @@
 //!   match error stops the scan with the entries collected so far.
 //! - An entry's string value is PHP's string conversion: an object runs `__toString()` (or
 //!   throws PHP's conversion `Error`), and an array warns and matches as `"Array"`.
+//! - Entry keys and values are leased temporaries, and a throwing `__toString()` releases
+//!   the partial result before the exception propagates.
 //! - Unlike the other eval `preg_*` builtins, which treat a malformed pattern as a runtime
 //!   fatal, an invalid pattern returns `false` with `PREG_INTERNAL_ERROR`, like the AOT
 //!   prelude and PHP.
@@ -74,19 +76,50 @@ pub(in crate::interpreter) fn eval_preg_grep_result(
     };
     let len = values.array_len(array)?;
     let mut result = values.assoc_new(len)?;
-    for position in 0..len {
-        let key = values.array_iter_key(array, position)?;
-        let value = values.array_get(array, key)?;
-        let subject = eval_preg_grep_subject(value, context, values)?;
-        let matched = regex.is_match(&subject);
-        if eval_preg_failed() {
-            break;
-        }
-        if matched != invert {
-            result = values.array_set(result, key, value)?;
+    match eval_preg_grep_fill(&regex, array, len, invert, &mut result, context, values) {
+        Ok(()) => Ok(result),
+        // A throwing `__toString()` (or a failed runtime op) abandons the partial result; the
+        // release keeps the original status, so the pending exception stays the one thrown.
+        Err(status) => {
+            let _ = eval_release_value(context, values, result);
+            Err(status)
         }
     }
-    Ok(result)
+}
+
+/// Copies the matching entries of `array` into `result`, stopping at a match error.
+///
+/// Each key and value read is a leased temporary released on every exit; `array_set`
+/// retains what it stores.
+fn eval_preg_grep_fill(
+    regex: &Regex,
+    array: RuntimeCellHandle,
+    len: usize,
+    invert: bool,
+    result: &mut RuntimeCellHandle,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<(), EvalStatus> {
+    for position in 0..len {
+        let key = values.array_iter_key(array, position)?;
+        let mut failed = false;
+        with_eval_value_lease(key, context, values, |key, context, values| {
+            let value = values.array_get(array, key)?;
+            with_eval_value_lease(value, context, values, |value, context, values| {
+                let subject = eval_preg_grep_subject(value.borrowed(), context, values)?;
+                let matched = regex.is_match(&subject);
+                failed = eval_preg_failed();
+                if !failed && matched != invert {
+                    *result = values.array_set(*result, key, value)?;
+                }
+                Ok(())
+            })
+        })?;
+        if failed {
+            break;
+        }
+    }
+    Ok(())
 }
 
 /// Converts one entry to the bytes PHP matches: `__toString()` for objects (PHP's `Error`
