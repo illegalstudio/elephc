@@ -2089,5 +2089,10 @@ mod memoir_tests {
         assert_eq!(crate::linker::bridge_lib_for_flag("memoir"), None);
         assert_eq!(crate::linker::archive_filename_for_flag("memoir"), None);
         assert!(!crate::linker::crate_flag_names().contains(&"memoir"));
+        assert!(!super::with_flag_names().contains(&"memoir"));
+        let report = super::capability_report();
+        assert!(!report.split_whitespace().any(|field| {
+            matches!(field, "memoir" | "libelephc_memoir.a" | "native:memoir")
+        }), "unexpected Memoir capability in:\n{report}");
     }
 }

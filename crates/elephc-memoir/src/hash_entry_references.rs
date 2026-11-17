@@ -332,4 +332,3 @@ pub fn emit_inline_entry_deref<E: AssemblyEmitter + TargetAbi>(
     }
     emitter.label(done_label);
 }
-

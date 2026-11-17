@@ -124,6 +124,28 @@ chooses when validation and commit run.
 and installs a guard that can free it during unwind. The caller supplies the frame
 layout and selects the warning and its timing.
 
+The typed and boxed container emitters carry the storage conversions, indexed
+replacement and hash retirement beneath the compiler's key and promotion policy.
+An indexed replacement or hash removal publishes its state before releasing the
+former owner so a reentrant destructor sees the new state. `frame_owners` and
+`cleanup_preserve` transfer frame owners and pending exceptions across guarded
+releases. Container cleanup delegates handler installation and Throwable chaining
+to the host exception ABI.
+
+`values::object_clone_slots` acquires owners for direct and tagged clone slots
+using the host's class metadata and independently preserves each path's string
+handling. The native eval scope allocates and retires its stored nodes in Memoir.
+A bounded deserializer registry takes a lease for each published cell and
+delegates its final release to the existing scoped owner chain. A stream row
+detaches both stored strings before destroying either allocation, and byte-view
+consumers can stage a borrowed string byte through an aligned native stack slot.
+
+`buffers::output` owns the output stack's pointer, length and capacity storage,
+along with allocation, append, snapshot, truncation, depth reset and detachment.
+Detachment clears the slot and frees its bytes and name before the host dispatches
+callback retirement. PHP output flags, callback handling and flush policy stay
+in the compiler.
+
 The compiler retains EIR lifetime analysis, ownership optimization and placement,
 PHP reference/type validation, formatting, output routing, zval pack/unpack,
 resource identity/inventory policy, class/coroutine/SPL layout definitions, platform
@@ -179,6 +201,10 @@ Compiler adapters construct layouts from their authoritative ABI constants.
 `ScopedOwnerState` names head and depth symbols instead of passing two positional
 strings. These contracts configure emission; they add no target runtime checks.
 
+The native lifecycle fingerprints cover 30 combinations of target and emission
+mode, including container conversions and mutation, protected cleanup, tagged
+clones, native eval and registry storage, and output buffer storage and emitters.
+
 ## Boundary gates
 
 Run `python3 -B scripts/audit_memoir_boundary.py` from the workspace to audit Cargo
@@ -188,7 +214,8 @@ semantic types, and native export/link attributes. Cargo dependency aliases,
 target-specific entries and indirect workspace consumers are checked. Build/dev
 consumers remain host tools. Source comments and literals do not count as imports
 or attributes. The compiled CLI/bridge-catalog test checks generated-program
-capabilities and archive registration against the live catalog.
+capabilities, the public capability report and archive registration against the
+live catalog.
 
 All three host CI builders run the boundary audit and its regression tests, plus
 Memoir unit tests and compile-fail documentation examples. The existing assembly
