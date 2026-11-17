@@ -1,5 +1,5 @@
 //! Purpose:
-//! Emits immutable native property validators and physical binding rows from typed EIR callbacks.
+//! Emits native property/local validators and physical binding rows from typed EIR callbacks.
 //!
 //! Called from:
 //! - Final user assembly emission when native reference validation is selected.

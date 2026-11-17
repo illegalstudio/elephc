@@ -1,5 +1,5 @@
 //! Purpose:
-//! Verifies stable numeric local bindings independently of coercion and overflow flags.
+//! Verifies stable local value contracts independently of conversion and element policies.
 //!
 //! Called from:
 //! - Focused strict local CLI and native codegen tests.
@@ -9,6 +9,40 @@
 //! - Rejected candidates preserve the previous occupant and balanced ownership.
 
 use crate::support::*;
+
+/// Valid scalar, nominal and container replacements keep exact values and balanced ownership.
+#[test]
+fn test_strict_local_value_contracts_accept_valid_reference_and_union_members() {
+    let source = include_str!("../fixtures/strict/local_binding_members.php");
+    for mode in ["--ir-opt=off", "--ir-opt=on"] {
+        let output = StrictFixture::new(source).capture(&["--strict-locals", "--heap-debug", mode]);
+        assert_eq!(String::from_utf8_lossy(&output.stdout),
+            "NULL|after|boolean||Tafter|TNULL|LocalValueChild|DTLocalValueBase|TLocalValueChild|next|Tarray|next|boolean|TNULL|next|2|",
+            "{mode}: {}", String::from_utf8_lossy(&output.stderr));
+        assert!(String::from_utf8_lossy(&output.stderr).contains("HEAP DEBUG: leak summary: clean"),
+            "{mode}: {}", String::from_utf8_lossy(&output.stderr));
+    }
+}
+
+/// Original value kinds and nominal contracts survive dynamic stores and reference calls.
+#[test]
+fn test_strict_local_value_contracts_guard_original_kinds() {
+    let source = include_str!("../fixtures/strict/scalar_binding_contracts.php");
+    for mode in ["--ir-opt=off", "--ir-opt=on"] {
+        for (strict, expected) in [
+            (false, "Winteger|2|Winteger|2|Winteger|2|WOtherScalarBinding|Winteger|array|next|Winteger|2|integer|2|"),
+            (true, "Tstring|before|Tboolean|1|TNULL||TOriginalScalarBinding|Tarray|array|next|Tboolean|1|integer|2|"),
+        ] {
+            let mut flags = vec![mode, "--heap-debug"];
+            if strict { flags.push("--strict-locals"); }
+            let output = StrictFixture::new(source).capture(&flags);
+            assert_eq!(String::from_utf8_lossy(&output.stdout), expected, "{flags:?}: {}",
+                String::from_utf8_lossy(&output.stderr));
+            assert!(String::from_utf8_lossy(&output.stderr).contains("HEAP DEBUG: leak summary: clean"),
+                "{flags:?}: {}", String::from_utf8_lossy(&output.stderr));
+        }
+    }
+}
 
 /// Opaque eval validates an original native numeric binding before replacing its shared child.
 #[test]
@@ -140,7 +174,7 @@ numericScope($argc);
 fn test_strict_numeric_locals_example() {
     let source = include_str!("../../examples/strict-locals/main.php");
     assert_eq!(StrictFixture::new(source).run(&["--strict-locals"]),
-        "Quantity requires an integer or null\nQuantity: 2\nQuantity: 3\nQuantity: not tracked\nThe integer binding kept its value\nArithmetic result: double\nFresh measurement: 2.5\nThe referenced quantity kept its integer value\n");
+        "Quantity requires an integer or null\nQuantity: 2\nQuantity: 3\nQuantity: not tracked\nThe integer binding kept its value\nArithmetic result: double\nFresh measurement: 2.5\nThe referenced quantity kept its integer value\nThe label kept its string value\n");
 }
 
 

@@ -371,18 +371,18 @@ evidence and outstanding guarantees are recorded below.
 
 ## Implementation progress
 
-Verified through step119 (this commit), with remaining feature integration in progress. Issue:
+Verified through step120 (this commit), with remaining feature integration in progress. Issue:
 https://github.com/illegalstudio/elephc/issues/2347.
 
 The full task remains active. The user requested complete implementation, with a
 commit for every verified step and no partial delivery. Do not expose unfinished
 flags as successful no-ops. The public integrated mask contains Locals, Bools, DynamicCode, Opcache, Arithmetic,
-Overflow, Strings, Coercions, Casts and Comparisons. Locals includes the verified116-118 ordinary/nullable numeric binding, caller-reference and native/eval extensions;
+Overflow, Strings, Coercions, Casts and Comparisons. Locals includes the verified116-120 numeric/value binding, native reference and eval extensions;
 its complete reference/global/eval and broader binding-flow contract remains outstanding. All
 other guarantees and the complete umbrella remain explicitly gated until their
 whole contract is enforced.
 
-This progress ledger condenses verified implementation through step119.
+This progress ledger condenses verified implementation through step120.
 Detailed evidence remains in Git history, historical Code Journal plan revisions,
 the linked work logs, and the current agent-facing architecture document
 3739892b. The approved behavior and delivery requirements above are unchanged.
@@ -616,7 +616,8 @@ paths. Keep this plan, agent documentation and the current journal log synchroni
 | 116 | `1cb2b34778` | feat(strict): enforce stable numeric local bindings |
 | 117 | `f1b64aa4cd` | feat(strict): guard nullable numeric binding updates |
 | 118 | `bfab7777ec` | feat(strict): preserve numeric caller reference contracts |
-| 119 | this commit | feat(strict): preserve native numeric contracts during eval |
+| 119 | `4b72179d63` | feat(strict): preserve native numeric contracts during eval |
+| 120 | this commit | feat(strict): preserve scalar and nominal local value contracts |
 
 
 ### Latest verified admission checkpoint
@@ -812,3 +813,46 @@ and replacing array elements remain passing openness controls. Complete those
 boundaries, six unintegrated feature families and full umbrella/host acceptance.
 The owned target/strict-native-eval-8r76iwqo directory is removed after baseline
 evidence capture; follow-up fixture sources are preserved when needed.
+
+
+### Verified120: scalar, nominal and array-kind local contracts
+
+The shared origin helper is now src/types/checker/local_binding_contracts.rs;
+inferred_local_contracts replaces the numeric-only per-body map. Scalar/null,
+nominal and union membership uses the existing independently owned Locals plans,
+rooted pre-store checks and protected native reference callbacks. Inferred array
+contracts preserve the PHP array kind without pinning element or packed/hash
+storage details; a narrow inferred-array merge accepts that guarded broad view.
+Concrete declared element contracts retain the existing structural/layout checker.
+Callbacks now cover scalar, false/null, class and array membership. Accepted
+boxed nulls become unboxed null storage after retiring only their owned source,
+fixing the40-byte leak exposed by a valid null replacement.
+
+Job8f868713 passed build, five exact gates and architecture audit in3m42s.
+Probe7bd2efe1 validated scalar, subclass, array, false/null, union and declared
+array controls, and exposed the boxed-null leak before acceptance. Job21481870
+then passed build, eight exact gates and architecture audit in6m02s. The expanded
+all-five-target gate includes nominal/array/false/null callbacks. Native both IR
+modes have clean heaps for rejected and accepted writes, explicit mixed/union,
+array element openness, nullable numerics, unset/rebind, opaque eval and future
+catch names. The opaque eval and catch regressions took115.88s and57.52s.
+
+Final job58a74c9d passed build and six exact gates in42s after adding string/null
+references, one-time destructor retirement on rejection, the extended example
+and existing include/CLI flag controls. Both native modes are heap-clean;
+legacy literal-eval freedom still passes its old test and is identified below
+as an unfinished stronger-Locals boundary, not accepted final semantics.
+
+This resolves direct/ordinary-reference nonnumeric baselined59f314d. Remaining
+stronger Locals includes runtime-established/reverse eval origins (b99d1b21),
+known literal eval decision maps, and mutating builtin publications. Probeb863be83
+shows settype still changes bool to int and int to string under Locals; the latter
+also leaks an original40-byte int box in both profiles. Numeric string increment
+is a passing control (Locals rejects the promoted int and preserves string9).
+Null array append remains an inherited backend refusal in both profiles.
+
+The full approved task remains active: complete these boundaries, broader
+global/capture/foreach flow and remaining feature families, then verify the full
+umbrella and hosts. The task-owned verification directory is removed after
+baseline evidence capture; the reverse-eval and settype sources remain saved for
+the next implementation steps.

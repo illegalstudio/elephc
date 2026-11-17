@@ -1,9 +1,9 @@
 # Strict local binding implementation history
 
-This record preserves steps116-119 candidate investigations and verification. The
+This record preserves steps116-120 candidate investigations and verification. The
 current approved contract and authoritative checkpoint remain in
 [strict-semantic-profiles.md](strict-semantic-profiles.md). Candidate failures
-below are chronological and are superseded by the verified119 checkpoint.
+below are chronological and are superseded by the verified120 checkpoint.
 
 ### Step116 candidate: stable numeric local stores
 
@@ -234,3 +234,31 @@ followed by a native int write for an absence control. Probec045a07a also shows
 Locals still accepts dynamic Mixed replacements of inferred nonnumeric bindings.
 These are ongoing work in the approved stronger Locals phase, not completed
 guarantees. The complete umbrella remains gated.
+
+
+## Verified120: shared value binding membership
+
+The numeric helper/map are renamed local_binding_contracts/inferred_local_contracts
+and retain scalar/null, nominal and union origins. Inferred arrays project only
+the PHP array kind, preserving element-policy independence and explicit mixed
+openness. Concrete declared element types keep their structural/layout checks.
+The first candidate49f309be exposed an old array<int>-to-array merge rejection;
+a guarded inferred-array merge fixes it without relaxing declared element types.
+Job8f868713 passed build/five exact gates/audit in3m42s.
+
+Controls7bd2efe1 found one accepted boxed-null leak (kind5/tag8,40bytes).
+value_storage now returns an unboxed null and retires an owned original after
+membership. Job21481870 passed build/eight exact gates/audit in6m02s, including
+all-five-target callbacks and native valid/invalid values, nullable/union/mixed,
+array openness, refs, unset/rebind, opaque eval and catch scope. Final58a74c9d
+passed build/six exact gates in42s after string/null reference, destructor,
+example and legacy flag/include coverage. Both native modes have clean heaps.
+
+Further boundaries are actual baselines, not speculative implementation tasks:
+74d58bb9 prints Winteger1 after eval creates a float and native code overwrites
+it; b863be83 shows settype bypasses local contracts and int-to-string leaks an
+original40-byte int box in both profiles. Existing literal eval freedom is
+explicitly pinned by test_eval_fragment_composes_with_strict_locals and its empty
+eval AOT decision maps; the approved complete profile must replace that legacy
+expectation. String numeric increment already rejects a resulting int correctly.
+Null append is unsupported in both profiles and is not a new regression.

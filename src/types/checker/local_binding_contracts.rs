@@ -1,5 +1,5 @@
 //! Purpose:
-//! Keeps numeric local bindings stable without enabling arithmetic or overflow policies.
+//! Keeps local value contracts stable independently of conversion and array element policies.
 //!
 //! Called from:
 //! - Whole-local assignments and prefix/postfix update checking.
@@ -13,34 +13,34 @@ use crate::{errors::CompileError, span::Span, types::{LocalStoreContract, PhpTyp
 use elephc_semantics::{conversions::ConversionPlan, StrictFeature};
 
 impl Checker {
-    /// Captures current initialized numeric bindings before an opaque eval can widen their views.
-    pub(crate) fn record_numeric_eval_contracts(&mut self, env: &TypeEnv, span: Span) {
+    /// Captures initialized binding origins before an opaque eval can widen their views.
+    pub(crate) fn record_eval_binding_contracts(&mut self, env: &TypeEnv, span: Span) {
         for (name, actual) in env {
             if self.definitely_bound_locals.contains(name) || self.local_parameter_names.contains(name) {
-                self.record_numeric_reference_contract(name, actual, span);
+                self.record_local_reference_contract(name, actual, span);
             }
         }
     }
 
-    /// Carries the binding contract across a call-site promotion to boxed reference storage.
-    pub(crate) fn record_numeric_reference_contract(&mut self, name: &str, actual: &PhpType, span: Span) -> bool {
+    /// Carries the semantic binding contract across promotion to boxed reference storage.
+    pub(crate) fn record_local_reference_contract(&mut self, name: &str, actual: &PhpType, span: Span) -> bool {
         if self.semantic_source_mode == crate::source::SourceMode::Internal
             || !self.semantic_profile.contains(StrictFeature::Locals) { return false; }
         let expected = self.typed_local_names.get(name)
-            .or_else(|| self.numeric_local_contracts.get(name))
+            .or_else(|| self.inferred_local_contracts.get(name))
             .or_else(|| self.narrowed_local_origins.get(name).map(|origin| &origin.origin))
             .or_else(|| self.guarded_union_types.get(name).map(|origin| &origin.ty))
             .unwrap_or(actual);
-        if numeric_contract(expected) {
+        if let Some(expected) = binding_contract(expected, self.typed_local_names.contains_key(name)) {
             self.local_store_contracts.insert((self.current_loop_storage_scope.clone(), span, name.into()),
-                LocalStoreContract { ty: expected.clone(), feature: StrictFeature::Locals });
+                LocalStoreContract { ty: expected, feature: StrictFeature::Locals });
             return true;
         }
         false
     }
 
-    /// Retains a numeric binding's original kinds and records an independently owned store guard.
-    pub(crate) fn check_numeric_local_store(&mut self, name: &str, incoming: &PhpType,
+    /// Retains original binding kinds and records an independently owned pre-store guard.
+    pub(crate) fn check_local_binding_store(&mut self, name: &str, incoming: &PhpType,
         span: Span, env: &TypeEnv, source: Option<&crate::parser::ast::Expr>) -> Result<PhpType, CompileError> {
         if self.semantic_source_mode == crate::source::SourceMode::Internal
             || !self.semantic_profile.contains(StrictFeature::Locals) { return Ok(incoming.clone()); }
@@ -49,15 +49,19 @@ impl Checker {
             self.local_store_contracts.remove(&key);
         }
         let declared = self.typed_local_names.get(name);
-        let original = declared.or_else(|| self.numeric_local_contracts.get(name))
+        let original = declared.or_else(|| self.inferred_local_contracts.get(name))
             .or_else(|| self.narrowed_local_origins.get(name).map(|origin| &origin.origin))
             .or_else(|| self.guarded_union_types.get(name).map(|origin| &origin.ty))
             .or_else(|| env.get(name).filter(|_| self.definitely_bound_locals.contains(name)
                 || self.local_binding_depth.contains_key(name) || self.active_globals.contains(name)
                 || self.static_local_names.contains(name))).unwrap_or(incoming);
-        if !numeric_contract(original) { return Ok(incoming.clone()); }
-        let expected = original.clone();
-        if declared.is_none() { self.numeric_local_contracts.insert(name.to_string(), expected.clone()); }
+        let Some(expected) = binding_contract(original, declared.is_some()) else { return Ok(incoming.clone()); };
+        if declared.is_none() { self.inferred_local_contracts.insert(name.to_string(), expected.clone()); }
+        // Array element and storage changes do not change the PHP array value kind.
+        if expected.is_php_array() && (incoming.is_php_array()
+            || matches!(incoming, PhpType::Array(_) | PhpType::AssocArray { .. })) {
+            return Ok(incoming.clone());
+        }
         match crate::semantics::conversions::membership(self.semantic_profile,
             self.semantic_source_mode, StrictFeature::Locals, &expected, incoming) {
             ConversionPlan::Reject(_) => Err(CompileError::new(span, &format!(
@@ -66,7 +70,7 @@ impl Checker {
                 self.local_store_contracts.insert(key, LocalStoreContract {
                     ty: expected.clone(), feature: StrictFeature::Locals,
                 });
-                let view = guarded_numeric_view(self, &expected, incoming);
+                let view = guarded_binding_view(self, &expected, incoming);
                 let non_null = self.strip_void_from_union(&view);
                 Ok(if non_null != view && source.is_some_and(|source|
                     self.stored_value_is_non_null(source, &non_null, env)) { non_null } else { view })
@@ -76,18 +80,14 @@ impl Checker {
     }
 }
 
-/// Recognizes numeric contracts without pinning array elements or consuming mixed declarations.
-fn numeric_contract(ty: &PhpType) -> bool {
-    match ty {
-        PhpType::Int | PhpType::Float => true,
-        PhpType::Union(members) => members.iter().any(numeric_contract)
-            && members.iter().all(|member| *member == PhpType::Void || numeric_contract(member)),
-        _ => false,
-    }
+/// Leaves concrete declared element contracts with their existing structural/layout checker.
+fn binding_contract(ty: &PhpType, declared: bool) -> Option<PhpType> {
+    if declared && !crate::semantics::conversions::permits_guarded_unknown(ty) { return None; }
+    crate::semantics::conversions::inferred_binding_contract(ty)
 }
 
-/// Preserves a successful numeric source view without treating permitted null as a produced value.
-fn guarded_numeric_view(checker: &Checker, expected: &PhpType, incoming: &PhpType) -> PhpType {
+/// Preserves a successful source view without treating permitted null as a produced value.
+fn guarded_binding_view(checker: &Checker, expected: &PhpType, incoming: &PhpType) -> PhpType {
     let PhpType::Union(members) = incoming else { return expected.clone(); };
     let mut accepted = Vec::new();
     for member in members {

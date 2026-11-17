@@ -111,6 +111,18 @@ pub(crate) fn permits_guarded_unknown(ty: &PhpType) -> bool {
     }
 }
 
+/// Keeps inferred PHP value contracts independent from physical layout and array element policy.
+pub(crate) fn inferred_binding_contract(ty: &PhpType) -> Option<PhpType> {
+    Some(match ty {
+        PhpType::Int | PhpType::Float | PhpType::Bool | PhpType::False | PhpType::Str
+        | PhpType::Void | PhpType::Object(_) => ty.clone(),
+        PhpType::Array(_) | PhpType::AssocArray { .. } => PhpType::php_array(),
+        PhpType::Union(members) if !members.is_empty() => crate::types::checker::normalize_union_members(
+            members.iter().map(inferred_binding_contract).collect::<Option<Vec<_>>>()?),
+        _ => return None,
+    })
+}
+
 /// Distinguishes the literal false declaration from a contract accepting every boolean.
 pub(crate) fn only_false(ty: &PhpType) -> bool {
     match ty {

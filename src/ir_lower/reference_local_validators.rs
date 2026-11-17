@@ -1,5 +1,5 @@
 //! Purpose:
-//! Preserves exact local contracts after promotion to canonical boxed reference storage.
+//! Preserves local value contracts after promotion to canonical boxed reference storage.
 //!
 //! Called from:
 //! - Final module lowering after user functions and their reference promotions are complete.
@@ -11,7 +11,7 @@
 use crate::{ir::{Builder, Function, Immediate, IrHeapKind, IrType, LocalSlotId, Module,
     Op, Ownership, PhpTypePredicate, Terminator}, types::PhpType};
 
-/// Exposes current owned numeric bindings through the canonical reference snapshot protocol.
+/// Exposes current owned value bindings through the canonical reference snapshot protocol.
 pub(super) fn prepare_eval_bindings(ctx: &mut super::context::LoweringContext<'_, '_>, span: crate::span::Span) {
     let mut names = ctx.local_slots.keys().filter(|name| {
         ctx.local_store_contracts.get(&(ctx.loop_storage_scope.clone(), span, (*name).clone()))
@@ -24,7 +24,7 @@ pub(super) fn prepare_eval_bindings(ctx: &mut super::context::LoweringContext<'_
     for name in names { ctx.promote_local_mixed_ref_cell(&name, Some(span)); }
 }
 
-/// Generates one typed callback per selected numeric binding contract, without PHP entry metadata.
+/// Generates one typed callback per selected binding contract, without PHP entry metadata.
 pub(super) fn lower_requested(module: &mut Module) -> Result<(), super::LoweringError> {
     let mut contracts = Vec::new();
     for function in module.functions.iter().chain(&module.class_methods).chain(&module.closures)
@@ -43,13 +43,15 @@ pub(super) fn lower_requested(module: &mut Module) -> Result<(), super::Lowering
     for (index, contract) in contracts.into_iter().enumerate() {
         let message = module.data.intern_string(&format!(
             "--strict-locals requires {contract} without implicit conversion"));
-        module.add_function(lower_callback(index, contract, message));
+        let function = lower_callback(index, contract, message, &mut module.data);
+        module.add_function(function);
     }
     Ok(())
 }
 
 /// Checks original PHP kinds before acquiring the independently owned successful candidate.
-fn lower_callback(index: usize, contract: PhpType, message: crate::ir::DataId) -> Function {
+fn lower_callback(index: usize, contract: PhpType, message: crate::ir::DataId,
+    data: &mut crate::ir::DataPool) -> Function {
     let boxed = IrType::Heap(IrHeapKind::Mixed);
     let mut function = super::reference_property_validators::new_callback(
         format!("__eir_reference_local_{index}"));
@@ -64,24 +66,49 @@ fn lower_callback(index: usize, contract: PhpType, message: crate::ir::DataId) -
         Some(Immediate::LocalSlot(LocalSlotId::from_raw(1))), boxed, PhpType::Mixed,
         Ownership::Borrowed).expect("original candidate is borrowed");
     let kinds = crate::semantics::conversions::implicit_contract(&contract)
-        .expect("checked numeric local has an exact membership contract");
+        .expect("checked local has an exact membership contract");
     use elephc_semantics::conversions::ValueKind;
-    let mut condition = None;
+    let mut conditions = Vec::new();
+    let false_only = crate::semantics::conversions::only_false(&contract);
     for (kind, predicate) in [(ValueKind::Integer, Some(PhpTypePredicate::Int)),
-        (ValueKind::Float, Some(PhpTypePredicate::Float)), (ValueKind::Null, None)]
+        (ValueKind::Float, Some(PhpTypePredicate::Float)),
+        (ValueKind::Boolean, Some(PhpTypePredicate::Bool)),
+        (ValueKind::String, Some(PhpTypePredicate::String)), (ValueKind::Null, None)]
     {
-        if !kinds.allows(kind) { continue; }
+        if !kinds.allows(kind) || (false_only && kind == ValueKind::Boolean) { continue; }
         let (op, immediate) = predicate.map_or((Op::IsNull, None),
             |predicate| (Op::TypePredicate, Some(Immediate::TypePredicate(predicate))));
         let next = builder.emit(op, vec![original], immediate, IrType::I64, PhpType::Bool,
             Ownership::NonHeap).expect("kind predicate has a boolean result");
-        condition = Some(match condition {
-            None => next,
-            Some(previous) => builder.emit(Op::IBitOr, vec![previous, next], None,
-                IrType::I64, PhpType::Bool, Ownership::NonHeap).expect("kind union is boolean"),
-        });
+        conditions.push(next);
     }
-    builder.terminate(Terminator::CondBr { cond: condition.expect("numeric contract has a member"),
+    if false_only {
+        let no = builder.emit(Op::ConstBool, Vec::new(), Some(Immediate::Bool(false)),
+            IrType::I64, PhpType::Bool, Ownership::NonHeap).expect("false has a scalar value");
+        conditions.push(builder.emit(Op::StrictEq, vec![original, no], None,
+            IrType::I64, PhpType::Bool, Ownership::NonHeap).expect("literal membership is boolean"));
+    }
+    for class in crate::semantics::conversions::nominal_members(&contract) {
+        let (op, immediate) = if class.is_empty() || class.eq_ignore_ascii_case("object") {
+            (Op::TypePredicate, Immediate::TypePredicate(PhpTypePredicate::Object))
+        } else { (Op::InstanceOf, Immediate::Data(data.intern_class_name(class))) };
+        conditions.push(builder.emit(op, vec![original], Some(immediate),
+            IrType::I64, PhpType::Bool, Ownership::NonHeap).expect("nominal membership is boolean"));
+    }
+    for constraint in crate::semantics::conversions::runtime_constraints(&contract) {
+        let predicate = match constraint {
+            crate::semantics::conversions::RuntimeConstraint::Array => PhpTypePredicate::Array,
+            _ => unreachable!("inferred binding planner selected an unsupported constraint"),
+        };
+        conditions.push(builder.emit(Op::TypePredicate, vec![original],
+            Some(Immediate::TypePredicate(predicate)), IrType::I64, PhpType::Bool,
+            Ownership::NonHeap).expect("container membership is boolean"));
+    }
+    let condition = conditions.into_iter().reduce(|left, right|
+        builder.emit(Op::IBitOr, vec![left, right], None, IrType::I64,
+            PhpType::Bool, Ownership::NonHeap).expect("membership union is boolean"))
+        .expect("binding contract has a member");
+    builder.terminate(Terminator::CondBr { cond: condition,
         then_target: accepted, then_args: Vec::new(), else_target: rejected, else_args: Vec::new() });
     builder.position_at_end(rejected);
     builder.emit(Op::ThrowTypeError, Vec::new(), Some(Immediate::Data(message)),

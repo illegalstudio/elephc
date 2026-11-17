@@ -1,5 +1,5 @@
 //! Purpose:
-//! Checks numeric local membership guards across the supported target matrix.
+//! Checks local value membership guards across the supported target matrix.
 //!
 //! Called from:
 //! - Focused strict local EIR and code generation verification.
@@ -9,6 +9,30 @@
 
 use crate::{codegen_support::platform::Target, source::SourceMode};
 use elephc_semantics::{SemanticProfile, StrictFeature};
+
+/// Every supported backend preserves value membership without enabling array element restrictions.
+#[test]
+fn strict_local_value_membership_emits_on_every_target() {
+    let source = format!("{}\n{}", include_str!("../../../tests/fixtures/strict/scalar_binding_contracts.php"),
+        include_str!("../../../tests/fixtures/strict/local_binding_members.php").strip_prefix("<?php").unwrap());
+    let program = crate::parser::parse_with_mode(&crate::lexer::tokenize(&source).unwrap(), SourceMode::Php).unwrap();
+    let profile = SemanticProfile::PERMISSIVE.with(StrictFeature::Locals, true);
+    for name in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+        let target = Target::parse(name).unwrap();
+        let checked = crate::types::checker::check_staged_semantics(&program, target, profile).unwrap();
+        for expected in [crate::types::PhpType::Str, crate::types::PhpType::Bool,
+            crate::types::PhpType::Void, crate::types::PhpType::Object("OriginalScalarBinding".into()),
+            crate::types::PhpType::php_array()] {
+            assert!(checked.local_store_contracts.values().any(|contract|
+                contract.feature == StrictFeature::Locals && contract.ty == expected), "{name}: {expected}");
+        }
+        let module = crate::ir_lower::lower_program(&program, &checked, target, false).unwrap();
+        assert!(!module.semantic_profile.contains(StrictFeature::ArrayTypes));
+        assert!(!module.semantic_profile.contains(StrictFeature::Coercions));
+        crate::ir::validate_module(&module).unwrap();
+        crate::codegen::generate_user_asm_from_ir(&module, false, false).unwrap();
+    }
+}
 
 /// Numeric eval plans preserve existing binding origins without using future scalar frame slots.
 #[test]

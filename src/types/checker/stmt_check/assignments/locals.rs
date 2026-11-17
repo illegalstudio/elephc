@@ -286,7 +286,7 @@ fn check_assign_value_type(
             });
         }
     }
-    ty = checker.check_numeric_local_store(name, &ty, span, env, Some(value))?;
+    ty = checker.check_local_binding_store(name, &ty, span, env, Some(value))?;
     let stored_non_null = checker.stored_value_is_non_null(value, &ty, env);
     // An array element or other unproved read can carry null even when its checker
     // type omits it. A nullable destination must not turn that store into a proof.
@@ -551,7 +551,7 @@ pub(super) fn check_ref_assign(
     }
     // A new reference replaces this name's binding; a self-alias keeps its existing contract.
     if !matches!(&source.kind, ExprKind::Variable(name) if name == target) {
-        checker.numeric_local_contracts.remove(target);
+        checker.inferred_local_contracts.remove(target);
     }
     if crate::names::append_update_alias_kind(target).is_some() {
         // The parser's writable-cell lease is representation-neutral, not a value snapshot.
@@ -1201,6 +1201,13 @@ fn merge_local_assignment_type(
     }
     if let Some(existing) = env.get(name) {
         let merged_ty = checker.merged_assignment_type(existing, ty).or_else(|| {
+            // Locals owns the PHP container kind. Element and packed/hash representation
+            // changes remain legal for inferred arrays until ArrayTypes supplies its contract.
+            (!checker.typed_local_names.contains_key(name)
+                && checker.inferred_local_contracts.get(name).is_some_and(PhpType::is_php_array)
+                && (ty.is_php_array() || matches!(ty, PhpType::Array(_) | PhpType::AssocArray { .. })))
+                .then(PhpType::php_array)
+        }).or_else(|| {
             // An inferred boolean flag can widen into a scalar union that already contains
             // every bool value. Its ordinary local slot can become boxed; declared or
             // externally shared boolean storage must retain its existing contract.

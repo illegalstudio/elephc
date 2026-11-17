@@ -115,6 +115,13 @@ pub(super) fn local_store(ctx: &mut LoweringContext<'_, '_>, name: &str, value: 
 /// Extracts only a kind already accepted by the guard, preserving its PHP-visible value.
 pub(super) fn value_storage(ctx: &mut LoweringContext<'_, '_>, value: LoweredValue,
     destination: &PhpType, span: Span) -> LoweredValue {
+    if *destination == PhpType::Void {
+        // An accepted boxed null owns storage, while the null binding itself owns no box.
+        let null = ctx.emit_value(Op::ConstNull, Vec::new(), None, PhpType::Void,
+            Op::ConstNull.default_effects(), Some(span));
+        if ctx.value_is_owning_temporary(value) { super::ownership::release_if_owned(ctx, value, Some(span)); }
+        return null;
+    }
     if crate::ir::IrType::from_php(&destination.codegen_repr()) == crate::ir::IrType::TaggedScalar {
         let result = super::stmt::coerce_to_tagged_scalar(ctx, value, Some(span));
         if result.value != value.value && ctx.value_is_owning_temporary(value) {

@@ -44,7 +44,7 @@ mod loop_backedges;
 mod method_pass;
 mod member_receivers;
 mod local_values;
-mod numeric_local_contracts;
+mod local_binding_contracts;
 mod binding_flow;
 mod mixed_storage_scan;
 mod semantic_rules;
@@ -640,8 +640,8 @@ pub(crate) struct Checker {
     /// typed parameters here made them permanently monomorphic and rejected that valid PHP
     /// with `cannot reassign $v from float to string`.
     pub typed_local_names: HashMap<String, PhpType>,
-    /// First numeric binding contracts, independent of flow views and physical storage.
-    pub numeric_local_contracts: HashMap<String, PhpType>,
+    /// Inferred value contracts, independent of flow views, array elements and physical storage.
+    pub inferred_local_contracts: HashMap<String, PhpType>,
     /// The `unset()` ARGUMENTS whose local binding the checker killed, as span -> the SET of local
     /// NAMES killed there. EIR lowering consults these to abandon the old frame slot instead of
     /// null-storing into it. The name is half the key: a `Span` has no file identity and include
@@ -818,7 +818,7 @@ pub(crate) struct SavedLocalBindingScope {
     parameters: HashSet<String>,
     boxed_parameters: HashSet<String>,
     typed: HashMap<String, PhpType>,
-    numeric_contracts: HashMap<String, PhpType>,
+    inferred_contracts: HashMap<String, PhpType>,
     mixed_storage: HashSet<String>,
     guarded_unions: HashMap<String, GuardedLocalStorage>,
     pending_ref_captures: HashSet<String>,
@@ -1043,7 +1043,7 @@ impl Checker {
             parameters: std::mem::take(&mut self.local_parameter_names),
             boxed_parameters: std::mem::take(&mut self.boxed_parameter_locals),
             typed: std::mem::take(&mut self.typed_local_names),
-            numeric_contracts: std::mem::take(&mut self.numeric_local_contracts),
+            inferred_contracts: std::mem::take(&mut self.inferred_local_contracts),
             // The mixed-storage marking describes ONE frame: a name boxed in the caller says
             // nothing about a same-named local in the callee, and leaking the set inward would
             // box a callee local the pre-scan never marked.
@@ -1088,7 +1088,7 @@ impl Checker {
         self.local_parameter_names = saved.parameters;
         self.boxed_parameter_locals = saved.boxed_parameters;
         self.typed_local_names = saved.typed;
-        self.numeric_local_contracts = saved.numeric_contracts;
+        self.inferred_local_contracts = saved.inferred_contracts;
         self.mixed_storage_locals = saved.mixed_storage;
         self.guarded_union_types = saved.guarded_unions;
         self.pending_ref_capture_invalidations = saved.pending_ref_captures;
@@ -1236,7 +1236,7 @@ impl Checker {
     /// `$f()` signature would survive an `unset($f)`.
     pub(crate) fn clear_local_binding_metadata(&mut self, name: &str) {
         self.record_loop_binding_end(name);
-        self.numeric_local_contracts.remove(name);
+        self.inferred_local_contracts.remove(name);
         self.guarded_union_types.remove(name);
         self.pending_ref_capture_invalidations.remove(name);
         self.boxed_parameter_locals.remove(name);
@@ -1435,7 +1435,7 @@ impl Checker {
             self.boxed_ref_aliased_locals.insert(name.clone());
             if value.span.identifies_a_node() {
                 if let Some(actual) = env.get(name) {
-                    self.record_numeric_reference_contract(name, actual, value.span);
+                    self.record_local_reference_contract(name, actual, value.span);
                 }
                 self.boxed_reference_promotion_sites
                     .entry((self.current_loop_storage_scope.clone(), value.span))

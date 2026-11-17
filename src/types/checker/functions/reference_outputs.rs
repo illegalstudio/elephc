@@ -235,7 +235,7 @@ impl Checker {
             return Ok(());
         }
         let actual = guarded_storage.as_ref().unwrap_or(actual);
-        // A declared numeric union can already occupy Mixed storage. Its semantic contract
+        // A declared value union can already occupy Mixed storage. Its semantic contract
         // must reach the caller cell even when this call requires no further physical widening.
         if crate::types::uses_boxed_reference_payload(expected) {
             let mut source = arg;
@@ -244,7 +244,7 @@ impl Checker {
             }
             if let ExprKind::Variable(name) = &source.kind {
                 if source.span.identifies_a_node()
-                    && self.record_numeric_reference_contract(name, actual, source.span)
+                    && self.record_local_reference_contract(name, actual, source.span)
                 {
                     self.boxed_reference_promotion_sites
                         .entry((self.current_loop_storage_scope.clone(), source.span))

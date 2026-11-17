@@ -768,6 +768,14 @@ without enabling strict-dynamic-code.
 |---|---|---|---|
 | `--strict-locals` | - | off | Keep local binding types stable, including integer/float changes. |
 
+Assignments preserve scalar, null and nominal object contracts, including writes
+through untyped references. A dynamically typed candidate is checked before the
+previous value changes. Subclasses and explicitly declared union members remain
+valid, and an explicit `mixed` binding remains open. For inferred arrays, this
+guarantee preserves the PHP `array` kind; key and element restrictions belong to
+their respective strict options. Existing declared array element types remain
+authoritative.
+
 By default (permissive mode) an **untyped** local variable is allowed to
 change type during its lifetime in three shapes that would otherwise be a
 compile error:

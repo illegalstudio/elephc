@@ -182,7 +182,7 @@ impl Checker {
             numeric_region_retypes: HashSet::new(),
             numeric_region_dependents: HashMap::new(),
             typed_local_names: HashMap::new(),
-            numeric_local_contracts: HashMap::new(),
+            inferred_local_contracts: HashMap::new(),
             local_bind_kill_sites: HashMap::new(),
             local_ref_detach_sites: HashMap::new(),
             retired_ref_detach_sites: HashSet::new(),
