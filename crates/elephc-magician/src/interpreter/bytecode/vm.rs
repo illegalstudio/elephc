@@ -357,7 +357,10 @@ fn load_local(
     if let Some(value) = visible_scope_cell(context, scope, name) {
         copy_scope_value(value, context, values)
     } else {
-        values.warning(&format!("Warning: Undefined variable ${name}\n"))?;
+        // Same rule as the tree-walking read: `@`, `??` and `isset()` keep it quiet.
+        if !context.errors_suppressed() && !context.quiet_property_fetch() {
+            values.warning(&format!("Undefined variable ${name}"))?;
+        }
         values.null()
     }
 }

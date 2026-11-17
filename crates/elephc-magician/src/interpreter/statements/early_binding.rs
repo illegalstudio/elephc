@@ -49,6 +49,29 @@ pub(super) fn bind_program_declarations(
     scope: &mut ElephcEvalScope,
     values: &mut impl RuntimeValueOps,
 ) -> Result<Vec<bool>, EvalStatus> {
+    // A function bound here records the strict-types mode in force at its declaration, and the
+    // `declare(strict_types=1)` statement (php: the file's first) has not run yet. Bind under
+    // the mode the program declares, and put the caller's mode back: the statement itself sets
+    // it again when execution reaches it.
+    let declared_strict = statements.iter().find_map(|stmt| match stmt {
+        EvalStmt::DeclareStrictTypes(enabled) => Some(*enabled),
+        _ => None,
+    });
+    let previous_strict = declared_strict.map(|enabled| context.set_strict_types(enabled));
+    let result = bind_program_declarations_in_mode(statements, context, scope, values);
+    if let Some(previous) = previous_strict {
+        context.set_strict_types(previous);
+    }
+    result
+}
+
+/// Body of [`bind_program_declarations`], run under the program's own strict-types mode.
+fn bind_program_declarations_in_mode(
+    statements: &[EvalStmt],
+    context: &mut ElephcEvalContext,
+    scope: &mut ElephcEvalScope,
+    values: &mut impl RuntimeValueOps,
+) -> Result<Vec<bool>, EvalStatus> {
     let mut bound = Vec::new();
     let mut early: HashSet<String> = HashSet::new();
     for (index, stmt) in statements.iter().enumerate() {
