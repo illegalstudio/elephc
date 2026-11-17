@@ -197,6 +197,10 @@ pub(crate) fn lower_elephc_normalize_callable(
 ) -> Result<()> {
     ensure_arg_count(inst, "__elephc_normalize_callable", 1)?;
     let value = expect_operand(inst, 0)?;
+    if let Some(Immediate::Bool(dynamic)) = inst.immediate {
+        super::super::callables::emit_factory_callable_descriptor(ctx, value, dynamic)?;
+        return store_if_result(ctx, inst);
+    }
     match ctx.value_php_type(value)? {
         PhpType::Callable => {
             ctx.load_value_to_result(value)?;
@@ -206,7 +210,7 @@ pub(crate) fn lower_elephc_normalize_callable(
             // A declared `callable` resolves a runtime name among user functions, static
             // methods and the literal names bound to declared callables, so its conversion
             // does not emit a wrapper for every builtin.
-            if inst.immediate == Some(crate::ir::Immediate::Bool(true)) {
+            if inst.immediate == Some(crate::ir::Immediate::DeclaredCallableNames) {
                 ctx.declared_callable_candidates = Some(declared_callable_runtime_names(ctx));
             }
             let lowered = super::super::callables::emit_runtime_mixed_callable_descriptor_value(

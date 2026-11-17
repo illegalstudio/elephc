@@ -109,7 +109,7 @@ invocation target kinds alone do not distinguish these PHP value forms. Each glo
 entry explicitly branches to its shared body so linker section collection retains it.
 
 A declared `callable` reaches codegen as a boxed `Mixed` cell (see `DeclaredCallable` in the
-type checker guide). `Op::NormalizeCallable` with the `Immediate::Bool(true)` marker lowers it
+type checker guide). `Op::NormalizeCallable` with the `Immediate::DeclaredCallableNames` marker lowers it
 through `lower_elephc_normalize_callable` with `declared_callable_candidates` set, so the string
 dispatch only emits cases for the program's functions, its static methods and the recorded
 literal builtin names (`declared_callable_name_cases`, which skips a name whose prelude helpers

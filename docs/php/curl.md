@@ -957,6 +957,10 @@ that is itself an array), and an object inside a nested array.
 
 ### Memory and lifetime
 
+- **Callbacks retain their captured handles.** A callback that captures its own
+  handle forms a reference cycle. The runtime cycle collector can reclaim it once
+  the handle and callback are unreachable. Callback normalization releases its
+  temporary descriptor owner after installation.
 - **`curl_version()` and the array form of `curl_getinfo()` leak on every call.**
   Both build their array by decoding a JSON blob with the ordinary `json_decode()`
   builtin, and `json_decode()` never releases the value it decodes — a

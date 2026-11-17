@@ -65,7 +65,9 @@ pub(crate) use reflection::{
 };
 
 /// Injects the builtin `DateTimeInterface`, `DateTimeZone`, and `DateTimeImmutable` declarations.
-pub(crate) use datetime::{inject_builtin_datetime, program_may_reference_datetime};
+pub(crate) use datetime::{
+    inject_builtin_datetime, is_tentative_late_static_return, program_may_reference_datetime,
+};
 
 /// Injects the builtin `DatePeriod` Iterator class (the `(start, interval, end)` form).
 pub(crate) use date_period::inject_builtin_date_period;

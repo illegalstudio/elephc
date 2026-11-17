@@ -61,3 +61,6 @@ pub const SCOPED_WRITE_TEMP_PREFIX: &str = "__elephc_scoped_write_";
 /// skips the exceptional copy's rethrow — the same path a function's `return` in `finally`
 /// already takes.
 pub const INCLUDE_RETURN_BREAK_ATTRIBUTE: &str = "__elephc_include_return";
+
+/// Internal method marker for dynamic callable syntax, distinct from the PHP factory.
+pub const DYNAMIC_CALLABLE_FACTORY: &str = "\0dynamic_callable_factory";

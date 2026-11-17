@@ -1206,12 +1206,12 @@ fn scan_expr(expr: &Expr, usage: &mut Usage) {
         // declaration the program goes on to use, and the failure surfaces as an undefined
         // class rather than as anything pointing back here.
         ExprKind::FirstClassCallable(CallableTarget::Method { object, method }) => {
-            if method.eq_ignore_ascii_case("fromCallable") { usage.callable_names.unknown_call(); }
+            if method.eq_ignore_ascii_case("fromCallable") || method == crate::parser::ast::DYNAMIC_CALLABLE_FACTORY { usage.callable_names.unknown_call(); }
             record_method(usage, method);
             scan_expr(object, usage);
         }
         ExprKind::FirstClassCallable(CallableTarget::StaticMethod { receiver, method }) => {
-            if method.eq_ignore_ascii_case("fromCallable") { usage.callable_names.unknown_call(); }
+            if method.eq_ignore_ascii_case("fromCallable") || method == crate::parser::ast::DYNAMIC_CALLABLE_FACTORY { usage.callable_names.unknown_call(); }
             if let crate::parser::ast::StaticReceiver::Named(name) = receiver {
                 record_class(usage, &name.as_canonical());
             }
@@ -1375,7 +1375,7 @@ fn scan_expr(expr: &Expr, usage: &mut Usage) {
                 scan_constructor_callbacks(usage, receiver, args);
             }
             // An alias may hide the Closure class before name resolution.
-            if method.eq_ignore_ascii_case("fromCallable") && !args.is_empty()
+            if (method.eq_ignore_ascii_case("fromCallable") || method == crate::parser::ast::DYNAMIC_CALLABLE_FACTORY) && !args.is_empty()
                 && !args.first().is_some_and(|arg| record_callback_slot(usage, arg, false))
             {
                 usage.callable_names.unknown_call();
@@ -1385,7 +1385,8 @@ fn scan_expr(expr: &Expr, usage: &mut Usage) {
                 record_class(usage, &class);
                 // `Closure::fromCallable('f')` invokes what it names, like `call_user_func`; one
                 // whose argument this walk cannot read is a dynamic call.
-                if php_symbol_key(&class) == "closure" && php_symbol_key(method) == "fromcallable" {
+                if php_symbol_key(&class) == "closure" && (php_symbol_key(method) == "fromcallable"
+                    || method == crate::parser::ast::DYNAMIC_CALLABLE_FACTORY) {
                     let read = args.iter().fold(false, |seen, arg| {
                         record_literal_callable(usage, arg) || seen
                     });

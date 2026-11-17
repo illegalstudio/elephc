@@ -148,3 +148,19 @@ fn matches_case_insensitive(name: &str, keywords: &[&str]) -> bool {
         .iter()
         .any(|keyword| name.eq_ignore_ascii_case(keyword))
 }
+
+/// Converts a dynamic callable expression once through the global Closure factory.
+/// Keeping an ordinary AST call lets existing walkers preserve evaluation and ownership.
+pub(super) fn dynamic_first_class_callable(callee: Expr, span: Span) -> Expr {
+    Expr::new(
+        ExprKind::StaticMethodCall {
+            receiver: StaticReceiver::Named(crate::names::Name::from_parts(
+                crate::names::NameKind::FullyQualified,
+                vec!["Closure".to_string()],
+            )),
+            method: crate::parser::ast::DYNAMIC_CALLABLE_FACTORY.to_string(),
+            args: vec![callee],
+        },
+        span,
+    )
+}

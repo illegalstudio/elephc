@@ -1218,3 +1218,12 @@ echo apply($argc > 0 ? "strlen" : "no_such_function");
         "Undefined function for first-class callable: no_such_function",
     );
 }
+
+/// The explicit Closure factory rejects names outside its shared visible signature.
+#[test]
+fn test_issue_828_dynamic_first_class_callable_factory_unknown_named_argument() {
+    expect_error(
+        "<?php $name = 'strtoupper'; Closure::fromCallable(nope: $name);",
+        "has no parameter $nope",
+    );
+}

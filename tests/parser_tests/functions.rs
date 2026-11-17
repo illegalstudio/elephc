@@ -1090,3 +1090,28 @@ fn test_parse_byref_not_intersection() {
         other => panic!("Expected FunctionDecl, got {:?}", other),
     }
 }
+
+/// Dynamic callable syntax uses the existing global Closure conversion path.
+#[test]
+fn test_issue_828_dynamic_first_class_callable_parser() {
+    for source in ["$callback", "$this", "($callback)", "$callbacks[0]", "factory()", "($box->callback)"] {
+        let stmts = parse_source(&format!("<?php $f = {source}(...);"));
+        let StmtKind::Assign { value, .. } = &stmts[0].kind else { panic!("assignment"); };
+        let ExprKind::StaticMethodCall { receiver, method, args } = &value.kind else {
+            panic!("expected callable conversion: {:?}", value.kind);
+        };
+        assert!(matches!(receiver, StaticReceiver::Named(name) if name.kind == elephc::names::NameKind::FullyQualified && name.as_str() == "Closure"));
+        assert_eq!(method, elephc::parser::ast::DYNAMIC_CALLABLE_FACTORY);
+        assert_eq!(args.len(), 1);
+    }
+}
+
+/// A callable placeholder cannot be mixed with arguments or a trailing comma.
+#[test]
+fn test_issue_828_dynamic_first_class_callable_invalid_syntax() {
+    for source in ["$f(...,)", "$f(1, ...)", "($f)(..., 1)", "$a[0](...,)"] {
+        assert!(parse_fails(&format!("<?php {source};")), "{source}");
+    }
+    let stmts = parse_source("<?php $f(...$args);");
+    assert!(matches!(&stmts[0].kind, StmtKind::ExprStmt(Expr { kind: ExprKind::ClosureCall { .. }, .. })));
+}

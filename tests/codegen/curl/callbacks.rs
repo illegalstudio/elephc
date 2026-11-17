@@ -704,18 +704,8 @@ fn curl_multi_exec_re_raises_a_callback_exception() {
 /// same handles three times instead of once must therefore leak no more than running
 /// them once.
 ///
-/// `__elephc_normalize_callable($closure)` used to leak one block per installed callable
-/// (its retain on an already-owned descriptor was never released); its owned result is now
-/// moved into the prelude's local, so the installed callables balance.
-///
-/// ONE PRE-EXISTING LEAK IS DELIBERATELY NOT ASSERTED AWAY HERE, because it is not
-/// reachable only through curl and reproduces with no curl call in the program:
-///   * The descriptor invoker leaks the boxed arguments it materializes into DECLARED
-///     parameters. `ob_start(function (string $b, int $p): string {{ … }})` leaks four
-///     blocks per flush and `array_map(function (string $s): string {{ … }}, $xs)` leaks
-///     per element, both with no curl involved. A callback declaring no parameters is
-///     balanced, which is why this fixture uses one: it isolates what the curl adapter
-///     itself owns.
+/// Callable normalization owns its temporary descriptor, so installing callbacks
+/// and invoking them repeatedly must leave no outstanding blocks.
 #[test]
 fn curl_callbacks_do_not_leak_per_transfer() {
     if skip_without_curl_native("curl_callbacks_do_not_leak_per_transfer") {
@@ -759,8 +749,7 @@ fn curl_callbacks_do_not_leak_per_transfer() {
     );
     assert_eq!(
         once_leaked, 0,
-        "installed callables must balance (the normalized descriptor is owned once), got \
-         {once_leaked} leaked blocks for three handles"
+        "installed callback descriptors must be released, got {once_leaked} leaked blocks"
     );
 }
 
@@ -1028,18 +1017,11 @@ fn curl_callback_throw_clears_a_previous_transfers_error_state() {
     assert_eq!(out, "first=err|msg=set|caught|errno=0|msg=empty");
 }
 
-/// REVIEW FIX (Important 6) — PINS A KNOWN LIMITATION, NOT A GUARANTEE.
-///
-/// A callback that captures its own `CurlHandle` closes a reference cycle
-/// (`CurlHandle -> __elephc_callbacks -> Closure -> $ch`). The targeted cycle collector
-/// reclaims that island once the last outside reference drops, like Zend's collector
-/// reclaims it in php-src, so capturing the handle must leak no more than not capturing it.
-///
-/// This used to leak the whole libcurl session: the extra `__elephc_normalize_callable`
-/// retain was an outside reference that kept the cycle rooted.
+/// A callback that captures its own handle is reclaimed with its reference cycle.
+/// Both shapes must balance allocations after normalized descriptor owners retire.
 #[test]
-fn curl_callback_capturing_its_own_handle_is_collected() {
-    if skip_without_curl_native("curl_callback_capturing_its_own_handle_is_collected") {
+fn curl_callback_capturing_its_own_handle_releases_the_session() {
+    if skip_without_curl_native("curl_callback_capturing_its_own_handle_releases_the_session") {
         return;
     }
     let server = LocalHttpServer::spawn_hello();
@@ -1053,12 +1035,14 @@ fn curl_callback_capturing_its_own_handle_is_collected() {
         } else {
             "use (&$total)"
         };
+        let read_handle = if capture { "curl_errno($ch);" } else { "" };
         format!(
             r#"<?php
         function fetch(): void {{
             $total = 0;
             $ch = curl_init("{url}");
             curl_setopt($ch, CURLOPT_WRITEFUNCTION, function () {use_clause}: int {{
+                {read_handle}
                 $total = $total + 1;
                 return 10;
             }});
@@ -1083,11 +1067,8 @@ fn curl_callback_capturing_its_own_handle_is_collected() {
     let (cap_allocs, cap_frees) = parse_gc_stats(&capturing.stderr);
     let cap_leaked = cap_allocs as i64 - cap_frees as i64;
 
-    assert_eq!(
-        cap_leaked, plain_leaked,
-        "capturing $ch must not leak the libcurl session: capturing leaked {cap_leaked}, \
-         non-capturing leaked {plain_leaked}"
-    );
+    assert_eq!(plain_leaked, 0, "non-capturing callbacks must release their owners");
+    assert_eq!(cap_leaked, 0, "capturing callbacks must release their reference cycles");
 }
 
 /// REVIEW FIX ROUND 2. The "no callback runs after a throw" gate must be scoped to ONE

@@ -479,11 +479,9 @@ function curl_setopt(CurlHandle $handle, int $option, mixed $value): bool {
         // returns: $normalized is a live local until then, so the descriptor cannot be
         // released between the two statements.
         //
-        // A callback that captures its own handle closes a reference cycle
-        // (CurlHandle -> __elephc_callbacks -> Closure -> captured $ch); the targeted
-        // cycle collector reclaims it once the last outside reference drops. Pinned by
-        // `curl_callback_capturing_its_own_handle_is_collected` in
-        // tests/codegen/curl/callbacks.rs.
+        // Capturing this handle forms a cycle through this array and the closure.
+        // The runtime cycle collector can reclaim it once descriptor temporaries
+        // release their independent owners. Covered by the callback ownership tests.
         $handle->__elephc_callbacks[$slot] = $normalized;
         if ($slot === 0) {
             // php-src keeps ONE write mode: installing CURLOPT_WRITEFUNCTION selects

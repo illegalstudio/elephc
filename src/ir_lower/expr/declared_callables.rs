@@ -12,7 +12,7 @@
 //! - Only a site that invokes the value, or stores it where a `Callable` descriptor is
 //!   expected, converts it with `Op::NormalizeCallable`; the conversion yields an owned
 //!   descriptor and retires an owned source value.
-//! - Those conversions carry `Immediate::Bool(true)`, which bounds runtime name resolution
+//! - Those conversions carry `Immediate::DeclaredCallableNames`, which bounds runtime name resolution
 //!   (see `lower_elephc_normalize_callable`) so a program does not link every builtin wrapper.
 
 use super::*;
@@ -33,7 +33,7 @@ pub(crate) fn normalize_declared_callable(
     let descriptor = ctx.emit_owned_value(
         Op::NormalizeCallable,
         vec![value.value],
-        Some(Immediate::Bool(true)),
+        Some(Immediate::DeclaredCallableNames),
         PhpType::Callable,
         Op::NormalizeCallable.default_effects(),
         Some(span),

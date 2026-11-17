@@ -232,6 +232,10 @@ pub enum Immediate {
     /// Marks `DynamicObjectNewMixed` as `ReflectionClass::newInstance()` rather than
     /// `new $class`, so constructor refusals raise `ReflectionException` instead of `Error`.
     ReflectionConstruction,
+    /// Marks `NormalizeCallable` on a value declared `callable`: a runtime name it resolves is
+    /// limited to user functions, static methods and the builtin names written as literals at
+    /// declared callables (`Module::declared_callable_names`).
+    DeclaredCallableNames,
     Data(DataId),
     /// Data-pool reference carrying the strict-PHP profile of its physical call site.
     ProfiledData {
@@ -1241,6 +1245,7 @@ pub enum Op {
     /// Reinterprets one runtime callable descriptor as an opaque bridge pointer.
     CallablePtr,
     /// Normalizes any supported PHP callable form into an owned descriptor.
+    /// Bool selects scoped factory validation: true throws Error, false throws TypeError.
     NormalizeCallable,
     /// Returns the address of one compiler-emitted PDO callback adapter.
     PdoAdapterAddr,
@@ -1611,10 +1616,12 @@ impl Op {
             // Stores one raw int into preallocated spare capacity and advances the header length.
             ArrayPushReserved => E::WRITES_HEAP,
             MixedBox | MixedClone | ArrayToMixed | HashToMixed | ArrayNew | HashNew | ObjectNew
-            | FirstClassCallableNew | CallableValueNew | CallableArrayNew | NormalizeCallable | BufferNew
+            | FirstClassCallableNew | CallableValueNew | CallableArrayNew | BufferNew
             | GeneratorNew => {
                 E::ALLOC_HEAP
             }
+            NormalizeCallable => E::READS_HEAP | E::WRITES_HEAP | E::READS_GLOBAL
+                | E::ALLOC_HEAP | E::REFCOUNT_OP | E::MAY_THROW | E::MAY_FATAL,
             ClosureNew => E::READS_LOCAL | E::WRITES_LOCAL
                 | E::READS_HEAP | E::WRITES_HEAP | E::READS_GLOBAL
                 | E::WRITES_GLOBAL | E::ALLOC_HEAP | E::MAY_THROW | E::REFCOUNT_OP,

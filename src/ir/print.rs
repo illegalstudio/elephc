@@ -189,6 +189,9 @@ fn print_immediate(out: &mut String, data: &DataPool, immediate: &Immediate) {
         Immediate::ReflectionConstruction => {
             let _ = write!(out, " reflection_construction");
         }
+        Immediate::DeclaredCallableNames => {
+            let _ = write!(out, " declared_callable_names");
+        }
         Immediate::Data(id) => {
             let _ = write!(out, " data[{}]", id.as_raw());
         }
