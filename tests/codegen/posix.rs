@@ -425,3 +425,47 @@ fn test_refused_int_operand_throw_preserves_catch_visible_store() {
     );
     assert_eq!(out, "222");
 }
+
+/// Refuses numeric strings outside PHP's `int` range instead of collapsing them to pid 0.
+///
+/// `"1e999"` used to pass the grammar check and convert through infinity to 0, which would
+/// signal the caller's process group; probes use signal 0 so a regression stays harmless.
+#[test]
+fn test_posix_int_operands_reject_out_of_range_numeric_strings() {
+    let out = compile_and_run_capture(
+        r#"<?php
+        function kill(mixed $pid): string {
+            try { return var_export(posix_kill($pid, 0), true); }
+            catch (Throwable $error) { return get_class($error) . ': ' . $error->getMessage(); }
+        }
+        function message(mixed $code): string {
+            try { return posix_strerror($code); }
+            catch (Throwable $error) { return get_class($error) . ': ' . $error->getMessage(); }
+        }
+        foreach (['1e999', '9223372036854775808', ' 1e20 ', '9223372036854775807'] as $value) {
+            echo kill($value), "\n";
+        }
+        echo message('-1e999'), "\n";
+        try { posix_kill('1e999', 0); } catch (TypeError $error) { echo $error->getMessage(), "\n"; }
+        try { posix_strerror(' 1e20 '); } catch (TypeError $error) { echo $error->getMessage(), "\n"; }
+        echo eval('
+            $parts = [];
+            foreach (["1e999", "9223372036854775808", " 1e20 "] as $value) {
+                try { $parts[] = var_export(posix_kill($value, 0), true); }
+                catch (TypeError $error) { $parts[] = $error->getMessage(); }
+            }
+            return implode("\n", $parts);
+        ');"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    let kill = "posix_kill(): Argument #1 ($process_id) must be of type int, string given";
+    let message = "posix_strerror(): Argument #1 ($error_code) must be of type int, string given";
+    assert_eq!(
+        out.stdout,
+        format!(
+            "TypeError: {kill}\nTypeError: {kill}\nTypeError: {kill}\n\
+             ValueError: posix_kill(): Argument #1 ($process_id) must be between 2147483648 and 2147483647\n\
+             TypeError: {message}\n{kill}\n{message}\n{kill}\n{kill}\n{kill}"
+        )
+    );
+}
