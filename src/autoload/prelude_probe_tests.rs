@@ -270,22 +270,42 @@ fn probe_detects_weak_references_in_autoloaded_classes() {
 #[test]
 fn probe_detects_per_function_ini_and_opcache_calls_in_autoloaded_classes() {
     let project = ProbeProject::new();
-    let defines = std::collections::HashSet::new();
     let probed: Vec<&str> = super::PROBED_FUNCTIONS.iter().copied().flatten().copied().collect();
     for name in &probed {
-        fs::write(project.0.join("src/Probe.php"), format!(
-            "<?php namespace App; class Probe {{ public function read() {{ return \\{name}('x'); }} }}",
-        )).unwrap();
-        let (registry, program) = Registry::build(&project.0, parse("<?php new App\\Probe();"));
-        let groups = autoloaded_prelude_groups(&program, &project.0, &registry, &defines);
-        let reported: Vec<&str> = probed.iter().copied().filter(|n| groups.contains(n)).collect();
-        assert_eq!(reported, [*name], "autoloaded {name}() call was not reported alone");
+        // Fully qualified, and unqualified through PHP's global fallback in a namespace.
+        for call in [format!("\\{name}"), name.to_string()] {
+            let body = format!("return {call}('x');");
+            let groups = groups_for_method_body(&project, &body);
+            let reported: Vec<&str> = probed.iter().copied().filter(|n| groups.contains(n)).collect();
+            assert_eq!(reported, [*name], "autoloaded {call}() call was not reported alone");
+        }
     }
-    // A callable string still names the function, exactly as the entry-program detector says.
-    fs::write(project.0.join("src/Probe.php"),
-        "<?php namespace App; class Probe { public function has() { return \\function_exists('opcache_reset'); } }",
-    ).unwrap();
-    let (registry, program) = Registry::build(&project.0, parse("<?php new App\\Probe();"));
-    let groups = autoloaded_prelude_groups(&program, &project.0, &registry, &defines);
-    assert!(groups.contains("opcache_reset"), "function_exists('opcache_reset') was missed");
+    // A callable string, and a literal eval fragment, still name the function, exactly as the
+    // entry-program detector says.
+    for body in [
+        "return \\function_exists('opcache_reset');",
+        "return eval('return \\\\opcache_reset();');",
+    ] {
+        let groups = groups_for_method_body(&project, body);
+        assert!(groups.contains("opcache_reset"), "{body} was missed");
+    }
+}
+
+/// A vendor's own namespaced `ini_get()`, declared and called in vendor code, is a different
+/// function and does not pull in the global INI wrapper.
+#[test]
+fn probe_ignores_namespaced_functions_that_share_a_prelude_name() {
+    let project = ProbeProject::new();
+    fs::write(
+        project.0.join("composer.json"),
+        r#"{"autoload":{"psr-4":{"App\\":"src/"},"files":["src/functions.php"]}}"#,
+    )
+    .unwrap();
+    fs::write(
+        project.0.join("src/functions.php"),
+        "<?php namespace Vendor\\Util; function ini_get($k) { return $k; }",
+    )
+    .unwrap();
+    let groups = groups_for_method_body(&project, "return \\Vendor\\Util\\ini_get('x');");
+    assert!(!groups.contains("ini_get"), "Vendor\\Util\\ini_get() was taken for ini_get()");
 }
