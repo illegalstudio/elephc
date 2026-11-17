@@ -496,3 +496,30 @@ echo (new Aliased())->bar(), (new Aliased())->foo(), (new Replaced())->foo(), (n
     );
     assert_eq!(out, "b1rw\n");
 }
+
+/// A trait method that satisfies a nested requirement is checked with its `self` and `parent`
+/// types naming the consuming class or enum, and an alias of a method excluded by `insteadof`
+/// still satisfies a requirement, so a class may replace it, as php 8.5.12 accepts.
+#[test]
+fn test_trait_satisfied_requirement_relative_types_and_excluded_alias() {
+    let out = compile_and_run(
+        r#"<?php
+class Base {}
+trait N { abstract public function same(self $o): string; abstract public function up(parent $p): string; }
+trait A { use N; public function same(self $o): string { return "s"; } public function up(parent $p): string { return "u"; } }
+final class C extends Base { use A; }
+trait EN { abstract public function same(self $o): string; }
+trait EA { use EN; public function same(self $o): string { return "e"; } }
+enum E { use EA; case X; }
+trait Bar { abstract public function bar(): int; }
+trait P { public function foo(): int { return 1; } }
+trait Q { public function foo(): int { return 2; } }
+trait W { use Bar, P, Q { P::foo insteadof Q; Q::foo as bar; } }
+final class D { use W; public function bar(): string { return "d"; } }
+final class F { use W; }
+$c = new C();
+echo $c->same($c), $c->up(new Base()), E::X->same(E::X), (new D())->foo(), (new D())->bar(), (new F())->bar(), "\n";
+"#,
+    );
+    assert_eq!(out, "sue1d2\n");
+}

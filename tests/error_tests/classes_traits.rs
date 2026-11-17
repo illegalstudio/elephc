@@ -430,6 +430,23 @@ class C { use W; }
     );
 }
 
+/// An alias of a method excluded by `insteadof` still satisfies a requirement of the trait that
+/// takes it, so it must be compatible with it, as php 8.5.12 reports
+/// `Declaration of W::bar(): string must be compatible with N::bar(): int`.
+#[test]
+fn test_error_alias_of_excluded_method_must_satisfy_requirement() {
+    expect_error(
+        r#"<?php
+trait N { abstract public function bar(): int; }
+trait P { public function foo(): int { return 1; } }
+trait Q { public function foo(): string { return "q"; } }
+trait W { use N, P, Q { P::foo insteadof Q; Q::foo as bar; } }
+class C { use W; }
+"#,
+        "Cannot change return type when implementing trait method: C::bar",
+    );
+}
+
 /// Two instantiations of one generic trait are two traits whose methods share the template's
 /// declaration: each instantiation's requirement is checked, not only the first.
 #[test]
