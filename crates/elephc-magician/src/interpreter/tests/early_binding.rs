@@ -171,6 +171,10 @@ fn early_binding_follows_the_lookups_of_the_override_checks() {
         (&br#"class P { function f(): object {} } echo class_exists("C") ? "y" : "n"; class C extends P { function f(): Missing&self {} } class Missing {}"#[..], "y"),
         (&br#"interface A {} class P { function f(Missing&A $a) {} } echo class_exists("C") ? "y" : "n"; class C extends P { function f(object $a) {} } class Missing {}"#[..], "y"),
         (&br#"class P { function f(): object {} } echo class_exists("C") ? "y" : "n"; class C extends P { function f(): Missing&Also {} } class Missing {} class Also {}"#[..], "n"),
+        // `Closure` is a class PHP always finds, although the runtime keeps no entry for it.
+        (&br#"class P { function f(): object {} } function g() { return new C(); } echo g() instanceof C ? "y" : "n"; class C extends P { function f(): Missing&Closure {} } class Missing {}"#[..], "y"),
+        (&br#"class P { function f(): object {} } echo class_exists("C") ? "y" : "n"; class C extends P { function f(): Closure {} }"#[..], "y"),
+        (&br#"class P { function f(Closure&Missing $a) {} } echo class_exists("C") ? "y" : "n"; class C extends P { function f(object $a) {} } class Missing {}"#[..], "y"),
     ] {
         assert_eq!(run(source), expected);
     }

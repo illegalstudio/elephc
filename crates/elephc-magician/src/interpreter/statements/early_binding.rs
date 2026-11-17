@@ -239,13 +239,17 @@ fn class_like_key(name: &str) -> String {
 
 /// Returns whether a class, interface, trait, enum or generic template of this name exists,
 /// declared by eval code or known to the runtime. Nothing is autoloaded.
+///
+/// `Closure` always exists: closures use callable storage, so the runtime has no class entry
+/// for it, and `class_exists()` names it the same way.
 fn class_like_exists(
     name: &str,
     context: &ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<bool, EvalStatus> {
     let name = name.trim_start_matches('\\');
-    Ok(context.generic_template(name).is_some()
+    Ok(name.eq_ignore_ascii_case("Closure")
+        || context.generic_template(name).is_some()
         || context.has_class(name)
         || context.has_interface(name)
         || context.has_trait(name)
