@@ -378,6 +378,16 @@ fn compute_wider_override_classes(
     let Some(site_fixed) = fixed_param_count(storage_sig) else {
         return Vec::new();
     };
+    // A private method belongs to the class that declared it: a descendant's same-named method
+    // is a different method, never an override this site could enter.
+    if ctx.classes.get(base).is_some_and(|info| {
+        matches!(
+            info.method_visibilities.get(method_key),
+            Some(crate::parser::ast::Visibility::Private)
+        )
+    }) {
+        return Vec::new();
+    }
     let site_variadic = storage_sig.variadic.is_some();
     let mut found = Vec::new();
     // This runs for every method call on an object receiver. Only the concrete classes that

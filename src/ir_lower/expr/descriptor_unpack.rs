@@ -205,6 +205,18 @@ pub(super) fn lower_descriptor_unpack_source(
         let promote = ctx.builder.create_named_block("descriptor.unpack.value.ref", Vec::new());
         let plain = ctx.builder.create_named_block("descriptor.unpack.value.plain", Vec::new());
         let loaded = ctx.builder.create_named_block("descriptor.unpack.value.loaded", Vec::new());
+        // A string key names its parameter, so the positional counter says nothing about it:
+        // the element is promoted and the invoker decides by the parameter it names.
+        let by_position = ctx.builder.create_named_block("descriptor.unpack.value.position", Vec::new());
+        branch_on_key_type(
+            ctx,
+            &key_slot,
+            crate::ir::PhpTypePredicate::String,
+            promote,
+            by_position,
+            span,
+        );
+        ctx.builder.position_at_end(by_position);
         let next = ctx.load_local(&state.next_index, Some(span));
         let bound = emit_i64_at_span(ctx, by_ref_from as i64, span);
         let reaches = super::dynamic_spreads::compare_ints(ctx, next.value, bound.value, CmpPredicate::Sge, span);

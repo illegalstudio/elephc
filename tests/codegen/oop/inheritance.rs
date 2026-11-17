@@ -1145,3 +1145,37 @@ echo via_parent($d);
     assert_eq!(out.stdout, "MyDate my:2024-02-03|NULL\nMyDate|my:2024");
     assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
 }
+
+/// Verifies a private method called from its own class is not re-dispatched to a descendant's
+/// same-named method that declares extra defaulted parameters.
+#[test]
+fn test_private_method_call_ignores_descendant_wider_redeclaration() {
+    let out = compile_and_run(
+        r#"<?php
+class P {
+    private function m(int $a): string { return "P:$a"; }
+    public function go(): string { return $this->m(1); }
+}
+class C extends P {
+    public function m(int $a, int $b = 5): string { return "C:$a,$b"; }
+}
+echo (new C)->go(), "|", (new C)->m(2);
+"#,
+    );
+    assert_eq!(out, "P:1|C:2,5");
+}
+
+/// Verifies spreading a string-keyed array binds the element named after a by-reference
+/// parameter to its source slot, whatever its position in the array.
+#[test]
+fn test_spread_of_string_keys_binds_by_reference_parameter() {
+    let out = compile_and_run(
+        r#"<?php
+function f($a, &$b) { $b = 42; }
+$args = ['a' => 1, 'b' => 9];
+f(...$args);
+var_dump($args['b']);
+"#,
+    );
+    assert_eq!(out, "int(42)\n");
+}
