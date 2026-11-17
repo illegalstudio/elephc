@@ -50,7 +50,12 @@ pub(super) fn lower_array_push(ctx: &mut LoweringContext<'_, '_>, array: &str, v
     // writers still require the detached cell published by load_array_local_for_write.
     // PHP 8 auto-vivifies a missing variable on `$a[] = ...`. The checker admitted the
     // write, so declare a generic boxed array local before loading it for the append.
-    if !ctx.has_local_slot(array) && !ctx.is_ref_bound_local(array) {
+    // A `$GLOBALS['x']` alias has no slot of its own: it IS the global's storage, so seeding an
+    // empty array here replaced the global's existing elements before the append.
+    if !ctx.has_local_slot(array)
+        && !ctx.is_ref_bound_local(array)
+        && !crate::globals_array::is_alias(array)
+    {
         let array_ty = PhpType::Array(Box::new(PhpType::Mixed));
         ctx.declare_local(array, array_ty.clone());
         let empty = ctx.emit_value(

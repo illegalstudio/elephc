@@ -620,6 +620,11 @@ impl Checker {
                     // The operand is a silent probe for this walk too: `isset(self::$p)` on a
                     // class without `$p` is php's `false`, not an undefined-property refusal.
                     let probing = php_symbol_key(builtin_name) != "unset";
+                    if !probing {
+                        for arg in &expanded_args {
+                            self.widen_nested_unset_receiver(arg, env);
+                        }
+                    }
                     for arg in &expanded_args {
                         let probe = null_probe::begin_null_probe_root(self, arg, env);
                         if probing {
@@ -1466,6 +1471,41 @@ impl Checker {
             );
             env.insert(name.clone(), PhpType::Mixed);
         }
+    }
+
+    /// Gives a local that `unset($a[$k][$j])` shortens a nested array element of boxed storage.
+    ///
+    /// The unset removes `$j` without renumbering, so the child list becomes a sparse hash and is
+    /// written back into the parent slot. A parent typed `array<array<int>>` (or a hash of such
+    /// children) has no slot representation for the hash child -- the write-back was refused at
+    /// code generation ("array_set element Array(Int) with value AssocArray"). Boxed `Mixed`
+    /// storage holds either shape, exactly as for the splice receiver below.
+    fn widen_nested_unset_receiver(&mut self, arg: &Expr, env: &mut TypeEnv) {
+        let ExprKind::ArrayAccess { array, .. } = &arg.kind else {
+            return;
+        };
+        let ExprKind::ArrayAccess { array: root, .. } = &array.kind else {
+            return;
+        };
+        let ExprKind::Variable(receiver) = &root.kind else {
+            return;
+        };
+        let nested_child = |ty: &PhpType| {
+            matches!(ty.codegen_repr(), PhpType::Array(_) | PhpType::AssocArray { .. })
+        };
+        let needs_box = match env.get(receiver).map(PhpType::codegen_repr) {
+            Some(PhpType::Array(child)) => nested_child(&child),
+            Some(PhpType::AssocArray { value, .. }) => nested_child(&value),
+            _ => false,
+        };
+        if !needs_box {
+            return;
+        }
+        self.by_ref_local_storage_types.insert(
+            (self.current_loop_storage_scope.clone(), receiver.clone()),
+            PhpType::Mixed,
+        );
+        env.insert(receiver.clone(), PhpType::Mixed);
     }
 
     /// Gives a hash local spliced by `array_splice()` the boxed gradual storage the splice needs.

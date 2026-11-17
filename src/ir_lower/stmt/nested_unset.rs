@@ -402,61 +402,27 @@ fn lower_nested_unset_non_array_child(
     leaf_key: LoweredValue,
     span: Span,
 ) {
-    let child_ty = ctx.builder.value_php_type(child.value);
-    let child_name = ctx.declare_synthetic_php_local(child_ty.clone());
-    let held_child = crate::ir_lower::ownership::copy_assignment_value(ctx, child, Some(span));
-    ctx.store_local(&child_name, held_child, child_ty, Some(span));
-    let key_ty = ctx.builder.value_php_type(leaf_key.value);
-    let key_name = ctx.declare_synthetic_php_local(key_ty.clone());
-    let held_key = crate::ir_lower::ownership::copy_assignment_value(ctx, leaf_key, Some(span));
-    ctx.store_local(&key_name, held_key, key_ty, Some(span));
-    let var = |name: &str| Expr::new(ExprKind::Variable(name.to_string()), span);
-    let call = |function: &str| {
-        Expr::new(
-            ExprKind::FunctionCall {
-                name: crate::names::Name::unqualified(function),
-                args: vec![var(&child_name)],
-            },
-            span,
-        )
+    // `OffsetUnset` answers a non-array cell by its runtime payload: an `ArrayAccess` object has
+    // its `offsetUnset()` called through the runtime helper, null is quiet, false reports its
+    // deprecation, a string and any other scalar raise php's `Error`. A synthesized
+    // `$child->offsetUnset()` call instead dispatched over every class that declares the method
+    // and dragged `Phar::offsetUnset` into the link without its archive library.
+    let child = if matches!(
+        ctx.builder.value_php_type(child.value).codegen_repr(),
+        PhpType::Mixed
+    ) {
+        child
+    } else {
+        ctx.box_value_as_mixed(child, PhpType::Mixed, Some(span))
     };
-    let unset_offset = Stmt::new(
-        StmtKind::ExprStmt(Expr::new(
-            ExprKind::MethodCall {
-                object: Box::new(var(&child_name)),
-                method: "offsetUnset".to_string(),
-                args: vec![var(&key_name)],
-            },
-            span,
-        )),
-        span,
+    ctx.emit_value(
+        Op::OffsetUnset,
+        vec![child.value, leaf_key.value],
+        None,
+        PhpType::Bool,
+        Op::OffsetUnset.default_effects(),
+        Some(span),
     );
-    let refuse_string = Stmt::new(
-        StmtKind::Throw(Expr::new(
-            ExprKind::NewObject {
-                class_name: crate::names::Name::unqualified("Error"),
-                args: vec![Expr::new(
-                    ExprKind::StringLiteral("Cannot unset string offsets".into()),
-                    span,
-                )],
-            },
-            span,
-        )),
-        span,
-    );
-    let dispatch = Stmt::new(
-        StmtKind::If {
-            condition: call("is_object"),
-            then_body: vec![unset_offset],
-            elseif_clauses: vec![(call("is_string"), vec![refuse_string])],
-            else_body: None,
-        },
-        span,
-    );
-    crate::ir_lower::stmt::lower_stmt(ctx, &dispatch);
-    let null = LoweredValue { value: ctx.builder.emit_const_null(), ir_type: IrType::I64 };
-    ctx.unset_local(&child_name, null, Some(span));
-    ctx.unset_local(&key_name, null, Some(span));
     if ctx.value_is_owning_temporary(child) {
         crate::ir_lower::ownership::release_if_owned(ctx, child, Some(span));
     }
