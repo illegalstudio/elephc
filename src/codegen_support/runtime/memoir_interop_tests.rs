@@ -5,7 +5,7 @@
 //! - Focused compiler tests for string and interoperability extraction.
 //!
 //! Key details:
-//! - Fixed-data fingerprints follow main 6f823197fd after comparison with its original emitter.
+//! - Fixed-data fingerprints follow main 23314d3e1f after comparison with its original emitter.
 //! - Captured before extraction at 9f41af9a4941cd37fa5e26265adc24a917bd9b68.
 //! - Fingerprints include output bytes, fixed data and sorted internal-label bookkeeping.
 //! - Every supported target covers executable, PIC, library, extension and dead-strip modes.

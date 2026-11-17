@@ -649,3 +649,6 @@ pub use gc_frame_slots::emit_gc_frame_slots;
 
 #[cfg(test)]
 mod memoir_extraction_tests;
+
+#[cfg(test)]
+mod memoir_reference_tests;
