@@ -140,6 +140,24 @@ is not linked; pass its name as a string literal or as a first-class callable\na
     );
 }
 
+/// Verifies a builtin named as a literal at a callable union parameter (`?callable`,
+/// `callable|false`, `?callable ...$fs`) still invokes when it reaches the callee as a string.
+///
+/// Only an exact `callable` parameter used to record the literal name for the runtime dispatch,
+/// so each of these calls stopped with the runtime-only builtin error instead of `Word`.
+#[test]
+fn test_declared_callable_unions_keep_literal_builtin_names_invokable() {
+    let out = compile_and_run(
+        r#"<?php
+function nullable(?callable $f): string { return $f === null ? "" : $f("word"); }
+function orFalse(callable|false $f): string { return $f === false ? "" : $f("word"); }
+function many(?callable ...$fs): string { $out = ""; foreach ($fs as $f) { $out .= $f === null ? "-" : $f("word"); } return $out; }
+echo nullable("ucfirst"), " ", orFalse("strrev"), " ", many("strtoupper", null), "\n";
+"#,
+    );
+    assert_eq!(out, "Word drow WORD-\n");
+}
+
 /// Verifies a value that is not callable raises PHP's binding `TypeError` when it reaches a
 /// declared `callable`, including through a `mixed` forwarder, and that `?callable` admits null.
 #[test]

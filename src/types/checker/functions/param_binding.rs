@@ -69,6 +69,11 @@ impl Checker {
         if !by_ref && *expected == PhpType::DeclaredCallable {
             return self.require_declared_callable_arg(expected, actual, arg, env, context, owner);
         }
+        if !by_ref && expected.declares_callable() {
+            // `?callable`, `callable|false` and the other callable unions keep a literal name as
+            // the string too, so the runtime dispatch must know it like an exact `callable`.
+            self.record_declared_callable_literal_name(arg);
+        }
 
         if Self::types_compatible(expected, actual) || self.type_accepts(expected, actual) {
             return Ok(());
@@ -365,14 +370,15 @@ impl Checker {
         self.require_compatible_arg_type(expected, actual, arg.span, context)
     }
 
-    /// Records a function name a `callable` return type returns as a string literal.
+    /// Records a function name written as a string literal where a declared `callable` keeps
+    /// the string: a `callable` return value, or an argument for a callable union parameter.
     ///
-    /// The value leaves the function as the plain string, so invoking it later resolves the
-    /// name at run time; the runtime dispatch only knows builtin names written as literals
-    /// where a declared callable keeps the string. An unknown name is left to the return
-    /// value's runtime `TypeError`, as PHP raises it.
-    pub(crate) fn record_declared_callable_literal_return(&mut self, returned: &Expr) {
-        let crate::parser::ast::ExprKind::StringLiteral(name) = &returned.kind else {
+    /// The value stays the plain string, so invoking it later resolves the name at run time;
+    /// the runtime dispatch only knows builtin names written as literals where a declared
+    /// callable keeps the string. An unknown name is left to the runtime `TypeError`, as PHP
+    /// raises it.
+    pub(crate) fn record_declared_callable_literal_name(&mut self, value: &Expr) {
+        let crate::parser::ast::ExprKind::StringLiteral(name) = &value.kind else {
             return;
         };
         if let Some(crate::parser::ast::CallableTarget::Function(function)) =
