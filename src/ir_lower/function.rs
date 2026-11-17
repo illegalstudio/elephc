@@ -3011,33 +3011,16 @@ fn direct_closure_return_expr_type(
         if first == second {
             return first;
         }
-        if first == PhpType::Mixed || second == PhpType::Mixed {
-            return PhpType::Mixed;
-        }
-    }
-    // A ternary whose arm is read at run time (an untyped parameter, an element, a property) can
-    // yield that arm's own type, so the syntactic join -- where a string arm absorbs the other --
-    // would convert it: `fn ($v) => $v instanceof Closure ? 'closure' : $v` answered `string`,
-    // and the boolean `true` came back as the byte `"` (`array_map` over an options array, in
-    // Symfony's OptionsResolver). Arms that agree keep their type, an unknown arm makes the whole
-    // expression `Mixed`, and two known, different arms keep the syntactic coercion rule.
-    let ternary_arms = match &expr.kind {
-        ExprKind::Ternary { then_expr, else_expr, .. } => Some((then_expr, else_expr)),
-        ExprKind::ShortTernary { value, default } => Some((value, default)),
-        _ => None,
-    };
-    if let Some((then_expr, else_expr)) = ternary_arms {
-        let then_ty = direct_closure_return_expr_type(
-            then_expr, captures, params, ctx,
-        );
-        let else_ty = direct_closure_return_expr_type(
-            else_expr, captures, params, ctx,
-        );
-        if then_ty == else_ty {
-            return then_ty;
-        }
+        // A ternary whose arm is read at run time (an untyped parameter, an element, a property)
+        // can yield that arm's own type, so the syntactic join -- where a string arm absorbs the
+        // other -- would convert it: `fn ($v) => $v instanceof Closure ? 'closure' : $v` answered
+        // `string`, and the boolean `true` came back as the byte `"` (`array_map` over an options
+        // array, in Symfony's OptionsResolver). Arms that agree keep their type, an unknown arm
+        // makes the whole expression `Mixed`, and two known, different arms keep the syntactic
+        // coercion rule. The arms are typed once: typing them again per decision made a nest of
+        // ternaries cost 2^depth.
         let unknown = |ty: &PhpType| matches!(ty, PhpType::Mixed | PhpType::Union(_));
-        if unknown(&then_ty) || unknown(&else_ty) {
+        if unknown(&first) || unknown(&second) {
             return PhpType::Mixed;
         }
     }
