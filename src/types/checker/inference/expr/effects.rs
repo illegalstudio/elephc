@@ -1787,8 +1787,11 @@ impl Checker {
                             && storage.codegen_repr() == PhpType::Mixed
                             && current
                                 .as_ref()
-                                .is_some_and(|current| current.codegen_repr() != PhpType::Mixed)
+                                .is_none_or(|current| current.codegen_repr() != PhpType::Mixed)
                         {
+                            // An undefined variable in this branch may already have a concrete
+                            // frame slot from another branch. Require boxed storage from its
+                            // first store so a nullable reference cannot write a box into bool.
                             self.by_ref_local_storage_types.insert(
                                 (self.current_loop_storage_scope.clone(), name.clone()),
                                 storage.clone(),
