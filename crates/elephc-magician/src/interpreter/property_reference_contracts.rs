@@ -50,6 +50,13 @@ pub(crate) fn eval_validate_property_reference(
     reference: RuntimeCellHandle, value: RuntimeCellHandle,
     context: &mut ElephcEvalContext, values: &mut impl RuntimeValueOps,
 ) -> Result<(), EvalStatus> {
+    if context.semantic_profile().contains(elephc_semantics::StrictFeature::Locals) {
+        for declared in context.local_reference_types(reference) {
+            if !eval_declared_value_type_accepts_exact(&declared, None, None, value, context, values)? {
+                return eval_throw_type_error("Cannot change a strict local binding's value type", context, values);
+            }
+        }
+    }
     if !context.semantic_profile().contains(elephc_semantics::StrictFeature::Coercions) { return Ok(()); }
     for source in context.property_reference_types(reference) {
         eval_validate_property_contract(&source.owner, &source.property, &source.declared,

@@ -25,7 +25,7 @@ use crate::interpreter::{
     eval_inc_dec_value, eval_output_value, eval_boolean_condition, finish_eval_argument_values, release_function_args,
     eval_pcntl_maybe_dispatch, eval_release_value, eval_unary_value,
     finish_activation_scope, set_owned_scope_cell, visible_scope_cell, EvalControl, RuntimeValueOps,
-    warn_eval_discarded_function_call,
+    warn_eval_discarded_function_call, local_producer_contract, store_local_with_origin,
 };
 use crate::runtime_hooks::owner_frames::with_runtime_owners;
 use crate::scope::ElephcEvalScope;
@@ -68,6 +68,8 @@ struct Vm {
     stack: Vec<RuntimeCellHandle>,
     /// Callees selected before evaluating nested argument calls.
     prepared_calls: Vec<Arc<CompiledBody>>,
+    /// Copied source facts nested in assignment evaluation order, without value owners.
+    prepared_stores: Vec<Option<crate::eval_ir::EvalParameterType>>,
     max_frames: usize,
     result: Option<EvalControl>,
 }
@@ -80,6 +82,7 @@ impl Vm {
             scopes: Vec::new(),
             stack: Vec::new(),
             prepared_calls: Vec::new(),
+            prepared_stores: Vec::new(),
             max_frames: 0,
             result: None,
         }
@@ -197,10 +200,22 @@ fn step(
             let value = load_local(vm, &name, context, scope, values)?;
             vm.stack.push(value);
         }
+        Op::PrepareStore(index) => {
+            let body = current_body(vm)?;
+            let source = body.store_sources.get(index as usize).ok_or(EvalStatus::RuntimeFatal)?;
+            let slot = vm.frames.last().ok_or(EvalStatus::RuntimeFatal)?.scope_slot;
+            let scope = frame_scope(slot, &mut vm.scopes, scope);
+            let producer = local_producer_contract(source, context, scope);
+            vm.prepared_stores.push(producer);
+        }
         Op::Store(slot) => {
             let name = local_name(vm, slot)?;
+            let producer = vm.prepared_stores.pop().ok_or(EvalStatus::RuntimeFatal)?;
             let value = pop(&mut vm.stack)?;
-            store_local(vm, &name, value, context, scope, values)?;
+            let slot = vm.frames.last().ok_or(EvalStatus::RuntimeFatal)?.scope_slot;
+            let scope = frame_scope(slot, &mut vm.scopes, scope);
+            let replaced = store_local_with_origin(context, scope, name, value, producer, values)?;
+            for cell in replaced { eval_release_value(context, values, cell)?; }
         }
         Op::Pop => {
             let value = pop(&mut vm.stack)?;

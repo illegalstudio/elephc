@@ -144,6 +144,7 @@ impl ScopeEntry {
 pub struct ElephcEvalScope {
     entries: HashMap<String, ScopeEntry>,
     local_types: HashMap<String, crate::eval_ir::EvalParameterType>,
+    inferred_local_types: HashMap<String, crate::eval_ir::EvalParameterType>,
     native_storage_types: HashMap<String, crate::eval_ir::EvalParameterType>,
     native_detached_names: HashSet<String>,
     aot_visible_names: HashSet<String>,
@@ -158,6 +159,7 @@ impl ElephcEvalScope {
         Self {
             entries: HashMap::new(),
             local_types: HashMap::new(),
+            inferred_local_types: HashMap::new(),
             native_storage_types: HashMap::new(),
             native_detached_names: HashSet::new(),
             aot_visible_names: HashSet::new(),
@@ -182,6 +184,16 @@ impl ElephcEvalScope {
         self.local_types.remove(name);
     }
 
+    /// Records the first successful producer's contract until this binding is unset.
+    pub(crate) fn infer_local_type(&mut self, name: String, declared: crate::eval_ir::EvalParameterType) {
+        self.inferred_local_types.entry(name).or_insert(declared);
+    }
+
+    /// Returns a successful producer's contract, including explicitly open mixed origins.
+    pub(crate) fn inferred_local_type(&self, name: &str) -> Option<&crate::eval_ir::EvalParameterType> {
+        self.inferred_local_types.get(name)
+    }
+
     /// Refreshes a native reference contract, which ends when eval unsets the imported name.
     pub(crate) fn set_native_storage_type(&mut self, name: String, ty: Option<crate::eval_ir::EvalParameterType>) {
         self.native_storage_types.remove(&name);
@@ -201,12 +213,14 @@ impl ElephcEvalScope {
     /// Collects explicit contracts from every visible name sharing this PHP reference group.
     pub(crate) fn local_type_contracts(&self, name: &str) -> Vec<crate::eval_ir::EvalParameterType> {
         let mut types = self.local_type(name).cloned().into_iter().collect::<Vec<_>>();
+        if let Some(ty) = self.inferred_local_type(name).filter(|ty| !types.contains(ty)) { types.push(ty.clone()); }
         if let Some(ty) = self.native_storage_types.get(name).filter(|ty| !types.contains(ty)) {
             types.push(ty.clone());
         }
         if let Some(entry) = self.entry(name).filter(|entry| entry.flags().is_visible() && entry.flags().by_ref) {
             for (alias, alias_entry) in &self.entries {
                 if alias_entry.flags().is_visible() && alias_entry.flags().by_ref && alias_entry.cell() == entry.cell() {
+                    if let Some(ty) = self.inferred_local_type(alias).filter(|ty| !types.contains(ty)) { types.push(ty.clone()); }
                     if let Some(ty) = self.local_type(alias).filter(|ty| !types.contains(ty)) { types.push(ty.clone()); }
                     if let Some(ty) = self.native_storage_types.get(alias).filter(|ty| !types.contains(ty)) { types.push(ty.clone()); }
                 }
@@ -369,6 +383,7 @@ impl ElephcEvalScope {
         self.bump_generation();
         let name = name.into();
         self.native_storage_types.remove(&name);
+        self.inferred_local_types.remove(&name);
         if self.aot_visible_names.contains(&name) { self.native_detached_names.insert(name.clone()); }
         self.reference_targets.remove(&name);
         let previous = self
@@ -384,6 +399,7 @@ impl ElephcEvalScope {
     ) -> Option<RuntimeCellHandle> {
         let name = name.into();
         self.native_storage_types.remove(&name);
+        self.inferred_local_types.remove(&name);
         if self.aot_visible_names.contains(&name) { self.native_detached_names.insert(name.clone()); }
         let Some(entry) = self.entries.get(&name).copied() else {
             return self.unset(name);
@@ -547,6 +563,7 @@ impl ElephcEvalScope {
 
     /// Removes every entry and returns runtime cells owned by the scope.
     pub fn drain_owned_cells(&mut self) -> Vec<RuntimeCellHandle> {
+        self.inferred_local_types.clear();
         self.aot_visible_names.clear();
         self.reference_targets.clear();
         self.entries

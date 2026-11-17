@@ -10,6 +10,25 @@
 
 use crate::support::*;
 
+/// Runtime source establishes stable origins that survive native re-entry, aliases and unset.
+#[test]
+fn test_strict_runtime_eval_binding_origins_bundle() {
+    let source = include_str!("../fixtures/strict/eval_runtime_binding_origin.php");
+    for mode in ["--ir-opt=off", "--ir-opt=on"] {
+        for strict in [false, true] {
+            let mut flags = vec![mode, "--heap-debug"];
+            if strict { flags.push("--strict-locals"); }
+            let output = StrictFixture::new(source).capture(&flags);
+            let expected = if strict { "Tdouble|2.5|T1|T3.5|open|Tarray|TNULL|T1|new|Tstart|" }
+                else { "Winteger|1|Wbad|W2|open|Winteger|Wstring|Wbad|new|W1|" };
+            assert_eq!(String::from_utf8_lossy(&output.stdout), expected, "{flags:?}: {}",
+                String::from_utf8_lossy(&output.stderr));
+            assert!(String::from_utf8_lossy(&output.stderr).contains("HEAP DEBUG: leak summary: clean"),
+                "{flags:?}: {}", String::from_utf8_lossy(&output.stderr));
+        }
+    }
+}
+
 /// Native stores and typed reference calls preserve eval-created origins and the original owned RHS.
 #[test]
 fn test_strict_literal_eval_preserves_origins_during_native_stores() {
@@ -371,7 +390,7 @@ numericScope($argc);
 fn test_strict_numeric_locals_example() {
     let source = include_str!("../../examples/strict-locals/main.php");
     assert_eq!(StrictFixture::new(source).run(&["--strict-locals"]),
-        "Quantity requires an integer or null\nQuantity: 2\nQuantity: 3\nQuantity: not tracked\nThe integer binding kept its value\nArithmetic result: double\nFresh measurement: 2.5\nThe referenced quantity kept its integer value\nThe label kept its string value\nThe conversion kept the label value\nThe literal eval kept the label value\nThe eval-created quantity kept its integer type\n");
+        "Quantity requires an integer or null\nQuantity: 2\nQuantity: 3\nQuantity: not tracked\nThe integer binding kept its value\nArithmetic result: double\nFresh measurement: 2.5\nThe referenced quantity kept its integer value\nThe label kept its string value\nThe conversion kept the label value\nThe literal eval kept the label value\nThe eval-created quantity kept its integer type\nThe runtime-created quantity kept its integer type\n");
 }
 
 

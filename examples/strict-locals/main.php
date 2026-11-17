@@ -77,3 +77,15 @@ function checkLiteralCreatedQuantity(): void {
     }
 }
 checkLiteralCreatedQuantity();
+
+// Runtime-selected source preserves the same contract when execution returns to native code.
+function checkRuntimeCreatedQuantity(int $requestCount): void {
+    $source = $requestCount > 0 ? '$quantity = 1;' : '$quantity = 0;';
+    eval($source);
+    try {
+        $quantity = 2.5;
+    } catch (TypeError $error) {
+        echo "The runtime-created quantity kept its integer type", PHP_EOL;
+    }
+}
+checkRuntimeCreatedQuantity($argc);

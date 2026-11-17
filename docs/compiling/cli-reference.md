@@ -969,8 +969,11 @@ literal eval calls. Snapshots follow actual initialization paths: reserved frame
 storage and an unexecuted conditional declaration do not establish a binding.
 Literal-created bindings retain their contracts in later native assignments and
 by-reference calls. Rejected candidates preserve the current value, and valid
-writes remain visible to subsequent eval calls. Origins first established by
-opaque runtime source are still being integrated.
+writes remain visible to subsequent eval calls. Bindings first established by
+runtime-provided source also retain their successful producer contracts across
+native re-entry. Interpreter assignments copy producer facts before evaluating
+the right-hand side, keep explicit `mixed` producers open, and validate aliases
+before mutation. `unset` retires the inferred origin before rebinding.
 
 A body that **calls** `eval()` anywhere is the other side of that coin: the
 eval scope reaches the surrounding function's locals BY NAME, while the kill

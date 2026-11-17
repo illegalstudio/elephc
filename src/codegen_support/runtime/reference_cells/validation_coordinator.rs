@@ -27,7 +27,8 @@ pub(in crate::codegen_support::runtime) fn emit(emitter: &mut Emitter, eval_brid
     for (index, offset) in [8, 16, 24, 32, PROPOSED].into_iter().enumerate() {
         abi::store_at_offset(emitter, abi::int_arg_reg_name(emitter.target, index), offset);
     }
-    if eval_bridge && emitter.semantic_profile.contains(elephc_semantics::StrictFeature::Coercions) {
+    if eval_bridge && (emitter.semantic_profile.contains(elephc_semantics::StrictFeature::Coercions)
+        || emitter.semantic_profile.contains(elephc_semantics::StrictFeature::Locals)) {
         // Exact eval sources see the original RHS before native property coercion can change it.
         abi::load_at_offset(emitter, abi::int_arg_reg_name(emitter.target, 0), 8);
         abi::load_at_offset(emitter, abi::int_arg_reg_name(emitter.target, 1), 16);
@@ -125,22 +126,24 @@ mod tests {
     #[test]
     fn native_reference_coordinator_checks_eval_sources_on_every_target() {
         for name in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
-            for enabled in [false, true] {
-                let target = Target::parse(name).unwrap();
-                let mut emitter = Emitter::new(target);
-                emitter.semantic_profile = elephc_semantics::SemanticProfile::PERMISSIVE
-                    .with(elephc_semantics::StrictFeature::Coercions, enabled);
-                emit(&mut emitter, true);
-                let assembly = emitter.output();
-                let eval = assembly.find(&target.extern_symbol("__elephc_eval_reference_validate_v1"));
-                assert_eq!(eval.is_some(), enabled, "{name} strict={enabled}");
-                if let Some(eval) = eval {
-                    let native = assembly.find(&target.extern_symbol("__elephc_reference_validate_v2")).unwrap();
-                    assert!(eval < native, "{name}: original candidate checked before native coercion");
-                    assert!(assembly[eval..native].contains("__rt_reference_validate_native_done"),
-                        "{name}: rejected candidates return before native validation or publication");
+            for feature in [elephc_semantics::StrictFeature::Coercions, elephc_semantics::StrictFeature::Locals] {
+                for enabled in [false, true] {
+                    let target = Target::parse(name).unwrap();
+                    let mut emitter = Emitter::new(target);
+                    emitter.semantic_profile = elephc_semantics::SemanticProfile::PERMISSIVE
+                        .with(feature, enabled);
+                    emit(&mut emitter, true);
+                    let assembly = emitter.output();
+                    let eval = assembly.find(&target.extern_symbol("__elephc_eval_reference_validate_v1"));
+                    assert_eq!(eval.is_some(), enabled, "{name} strict={enabled}");
+                    if let Some(eval) = eval {
+                        let native = assembly.find(&target.extern_symbol("__elephc_reference_validate_v2")).unwrap();
+                        assert!(eval < native, "{name}: original candidate checked before native coercion");
+                        assert!(assembly[eval..native].contains("__rt_reference_validate_native_done"),
+                            "{name}: rejected candidates return before native validation or publication");
+                    }
+                    assert!(!assembly.contains("__rt_throw_current"), "{name}: exceptions cross Rust as status values");
                 }
-                assert!(!assembly.contains("__rt_throw_current"), "{name}: exceptions cross Rust as status values");
             }
         }
     }
@@ -153,7 +156,8 @@ mod tests {
         for (name, triple) in [("linux-x86_64", "x86_64-linux-gnu"),
             ("linux-aarch64", "aarch64-linux-gnu"), ("macos-aarch64", "arm64-apple-macos11"),
             ("ios-arm64", "arm64-apple-ios13"), ("ios-sim-arm64", "arm64-apple-ios13-simulator")] {
-            for feature in [elephc_semantics::StrictFeature::Coercions, elephc_semantics::StrictFeature::Casts] {
+            for feature in [elephc_semantics::StrictFeature::Coercions, elephc_semantics::StrictFeature::Casts,
+                elephc_semantics::StrictFeature::Locals] {
                 let target = Target::parse(name).unwrap();
                 let mut emitter = Emitter::new(target);
                 emitter.semantic_profile = elephc_semantics::SemanticProfile::PERMISSIVE

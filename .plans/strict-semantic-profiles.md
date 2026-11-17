@@ -1088,3 +1088,42 @@ permissive controls. Diff hygiene passes. No full suite, push or PR was run.
 Continue the complete approved implementation. Opaque runtime-origin transport
 b99d1b21 remains open; then complete remaining binding flow, six pending feature
 families and complete umbrella/host acceptance.
+
+
+### Verified128: runtime-established eval binding origins
+
+A focused source-aware store helper captures producer contracts before RHS effects
+and records only successful fresh bindings. Inferred origins live separately from
+explicit declarations and physical native snapshot contracts. Existing mixed imports
+and explicitly mixed producers stay open. Closed origins reuse persistent reference
+storage and weak context allocation lifetimes, so native stores consult the same
+canonical reference coordinator after eval returns. Unset and scope drain retire
+inferred name metadata; surviving aliases retain their shared storage constraints.
+
+The bytecode VM has an explicit PrepareStore opcode and immutable source metadata.
+Nested assignments preserve producer evaluation order without storing runtime owners
+in cached code. Walker and VM consume the same helper. The existing protected exact
+eval prepass now checks local-reference types under Locals independently from the
+property Coercions policy; weak property coercion remains selected independently.
+
+Build5e678b2d and basic native probe8e73ce38 passed, resolving the original
+b99d1b21 baseline: default Winteger|1 versus Locals Tdouble|2.5, both heap-clean.
+Job243e5fad passed build and eight exact gates in4m51s: both-engine first-value
+and openness/independent-copy ownership tests, five-target prepass selection, weak
+property independence, real five-target clang assembly, native opaque origins,
+existing literal native stores and fresh literal origins. The native opaque test
+took116.68s, covers both IR modes/default/Locals and has clean heaps for string,
+array, null, reference alias, unset and mixed cases. It now uses the existing bundle
+timeout suffix. Finald707cd44 passed build, both exact engine gates, unique bundle
+registration, updated runtime-source example, assembly comments and diff hygiene
+in1m10s. The redundant generic membership adapter was removed because the existing
+validator already checks exact kinds. No builtin homes/signatures, generated docs,
+full suite, push or PR were changed.
+
+Producer baselinec737d63d is now explicit for the next step: a runtime conditional
+int/float producer followed by a float store rejects, while a copied native int
+producer can retype to string. It prints T|W| with a clean heap; expected is U|T|.
+The current helper still needs complete alternative propagation and native logical
+producer metadata, separate from physical storage. Continue this and the complete
+approved task, including remaining binding flow, six pending families and umbrella
+plus host acceptance.

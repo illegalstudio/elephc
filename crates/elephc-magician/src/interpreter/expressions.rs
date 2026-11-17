@@ -242,12 +242,14 @@ fn eval_expr_with_result_ownership(
             }
         }
         EvalExpr::Assign { name, value } => {
+            let producer = local_producer_contract(value, context, scope);
             let value = eval_owned_expr(value, context, scope, values)?;
-            for replaced in set_owned_scope_cell(
+            for replaced in store_local_with_origin(
                 context,
                 scope,
                 name.clone(),
                 value,
+                producer,
                 values,
             )? {
                 eval_release_value(context, values, replaced)?;
