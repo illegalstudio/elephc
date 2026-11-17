@@ -44,6 +44,12 @@ pub(super) fn lower_positional_spread_args_with_signature(
         return None;
     }
 
+    // PHP checks parameter types at the callee, after every argument (the spread source
+    // included) was evaluated: the prefix stays boxed and is checked once the spread is read.
+    let previous_deferral = ctx.scalar_guard_deferral;
+    if !capture_values {
+        ctx.scalar_guard_deferral = Some((ctx.expression_depth, false));
+    }
     let mut operands = Vec::with_capacity(regular_param_count);
     for (index, arg) in args[..spread_idx].iter().enumerate() {
         let previous = capture_output.filter(|(output, _)| *output == index && !capture_values)
@@ -57,6 +63,7 @@ pub(super) fn lower_positional_spread_args_with_signature(
             operands.push(root_evaluated_call_argument(ctx, lowered, arg.span).value);
         }
     }
+    ctx.scalar_guard_deferral = previous_deferral;
 
     let spread_type = indexed_spread_source_type(ctx, inner)?;
     let spread = lower_expr(ctx, inner);
@@ -65,6 +72,15 @@ pub(super) fn lower_positional_spread_args_with_signature(
     store_value_into_temp(ctx, &temp_name, spread_type, spread, args[spread_idx].span);
     let spread_expr = Expr::new(ExprKind::Variable(temp_name), inner.span);
     let spread_value = lower_expr(ctx, &spread_expr);
+    // The prefix parameters come before the unpacked ones, so their checks run before the
+    // unpacked count is checked, as PHP's parameter-order binding does.
+    if !capture_values && spread_idx > 0 {
+        let sources = args[..spread_idx]
+            .iter()
+            .map(|arg| super::scalar_param_guards::GuardSource::Recorded(arg.span))
+            .collect::<Vec<_>>();
+        operands = coerce_operands_to_params_guarded(ctx, sig, operands, Some(&sources), true);
+    }
     if let Some(name) = builtin_name {
         emit_builtin_spread_arity_guard(
             ctx, spread_value.value, required_len,
@@ -79,7 +95,6 @@ pub(super) fn lower_positional_spread_args_with_signature(
 
     // Spread elements have no checker record of their own: leave a boxed element for the
     // scalar-parameter check, which runs from its value after every element was read.
-    let previous_deferral = ctx.scalar_guard_deferral;
     if !capture_values {
         ctx.scalar_guard_deferral = Some((ctx.expression_depth, true));
     }
