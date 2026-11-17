@@ -17,16 +17,21 @@ class Invokable828 {
     public function __invoke(): int { return 9; }
 }
 function wrap828(callable $method): Closure { return $method(...); }
+function wrapFactory828(callable $method): Closure {
+    return Closure::fromCallable(...[], callback: $method);
+}
 $total = 0;
 for ($i = 0; $i < 3; $i++) {
     $object = new Invokable828();
     $saved = $object(...);
     $discard = wrap828($saved);
+    $factory = wrapFactory828($saved);
     $saved(...);
     unset($object);
     $total += $discard();
     unset($saved);
     unset($discard);
+    unset($factory);
 }
 echo $total;
 "#);

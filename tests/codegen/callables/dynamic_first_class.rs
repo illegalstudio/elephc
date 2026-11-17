@@ -104,3 +104,46 @@ try { $f = Closure::fromCallable($name); } catch (TypeError $e) { echo get_class
 "#);
     assert_eq!(out, "Error|Error|Error|TypeError");
 }
+
+/// All callable storage shapes preserve runtime receivers and key-based array selectors.
+#[test]
+fn test_issue_828_dynamic_first_class_callable_storage_shapes() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+class Parent828 {}
+class Child828 extends Parent828 {
+    public function __invoke(): string { return "invoke|"; }
+    public function read(): string { return "array|"; }
+}
+function objectWrap828(object $value): Closure { return $value(...); }
+function parentWrap828(Parent828 $value): Closure { return $value(...); }
+function iterableWrap828(iterable $value): Closure { return $value(...); }
+$object = new Child828();
+$assoc = [1 => "read", 0 => $object];
+$closure = $assoc(...);
+echo $closure();
+$iterable = iterableWrap828($assoc);
+echo $iterable();
+$generic = objectWrap828($object);
+echo $generic();
+$parent = parentWrap828($object);
+echo $parent();
+$plain = new Parent828();
+try { $invalid = $plain(...); } catch (Error $e) { echo get_class($e); }
+"#);
+    assert_eq!(out.stdout, "array|array|invoke|invoke|Error", "{}", out.stderr);
+    assert!(out.success, "{}", out.stderr);
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
+/// The explicit factory shares named and unpacked argument planning with ordinary calls.
+#[test]
+fn test_issue_828_dynamic_first_class_callable_factory_arguments() {
+    let out = compile_and_run(r#"<?php
+$name = "strtoupper";
+$spread = Closure::fromCallable(...[$name]);
+echo $spread("ok"), "|";
+$named = Closure::fromCallable(callback: $name);
+echo $named("yes");
+"#);
+    assert_eq!(out, "OK|YES");
+}

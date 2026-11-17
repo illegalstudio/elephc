@@ -1092,10 +1092,10 @@ impl Checker {
         // `$scope` is accepted and ignored (closed-world visibility).
         if class_name.trim_start_matches('\\') == "Closure"
             && (method == crate::parser::ast::DYNAMIC_CALLABLE_FACTORY
-                || php_symbol_key(method) == "fromcallable") && args.len() == 1
+                || php_symbol_key(method) == "fromcallable")
         {
-            self.infer_type(&args[0], env)?;
-            return Ok(PhpType::Callable);
+            let sig = crate::types::signatures::closure_factory_signature();
+            return self.check_known_callable_call(&sig, args, expr.span, env, "Closure::fromCallable");
         }
         if class_name.trim_start_matches('\\') == "Closure" && php_symbol_key(method) == "bind" {
             for arg in args {

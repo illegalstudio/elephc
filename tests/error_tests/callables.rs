@@ -1178,3 +1178,12 @@ fn test_source_variadic_override_rejects_hidden_argc_abi_mismatch() {
         "the inherited signature cannot be widened to collect surplus arguments",
     );
 }
+
+/// The explicit Closure factory rejects names outside its shared visible signature.
+#[test]
+fn test_issue_828_dynamic_first_class_callable_factory_unknown_named_argument() {
+    expect_error(
+        "<?php $name = 'strtoupper'; Closure::fromCallable(nope: $name);",
+        "has no parameter $nope",
+    );
+}

@@ -11,15 +11,28 @@ use super::*;
 
 /// Validates the selected callable before acquiring its returned descriptor owner.
 pub(super) fn lower(
-    ctx: &mut LoweringContext<'_, '_>, source: &Expr, method: &str, expr: &Expr,
+    ctx: &mut LoweringContext<'_, '_>, args: &[Expr], method: &str, expr: &Expr,
 ) -> LoweredValue {
-    let staging = prepublish_call_result(ctx, &PhpType::Callable, expr.span);
-    let value = lower_expr(ctx, source);
-    let (value, owner) = root_closure_bind_operand(ctx, value, expr.span);
+    let result_name = ctx.declare_owned_hidden_temp(PhpType::Callable);
+    let result_owner = ctx.local_slots[&result_name];
+    register_owned_call_operand(ctx, result_owner, expr.span);
+    let sig = crate::types::signatures::closure_factory_signature();
+    let operands = lower_args_with_signature(ctx, Some(&sig), args);
+    let value = LoweredValue { value: operands[0], ir_type: ctx.builder.value_type(operands[0]) };
+    let value = if matches!(ctx.builder.value_php_type(value.value).codegen_repr(), PhpType::Mixed | PhpType::Union(_)) {
+        value
+    } else { ctx.box_value_as_mixed(value, PhpType::Mixed, Some(expr.span)) };
+    let value = if ctx.value_is_owning_temporary(value) { value } else {
+        crate::ir_lower::ownership::acquire_if_refcounted(ctx, value, Some(expr.span))
+    };
+    let source_name = ctx.declare_owned_hidden_temp(PhpType::Mixed);
+    ctx.store_local(&source_name, value, PhpType::Mixed, Some(expr.span));
+    let owner = ctx.local_slots[&source_name];
+    register_owned_call_operand(ctx, owner, expr.span);
+    let value = ctx.load_local(&source_name, Some(expr.span));
     let dynamic = method == crate::parser::ast::DYNAMIC_CALLABLE_FACTORY;
     let exception = if dynamic { "Error" } else { "TypeError" };
     let message = if dynamic { "Value is not callable" } else { "Failed to create closure from callable" };
-    let ty = ctx.builder.value_php_type(value.value).codegen_repr();
     let target = crate::ir::RuntimeFnId::IsCallable;
     let valid = ctx.emit_value(Op::RuntimeCall, vec![value.value],
         Some(Immediate::RuntimeCall(crate::ir::RuntimeCallTarget::Function(target))),
@@ -31,18 +44,44 @@ pub(super) fn lower(
     ctx.builder.position_at_end(rejected);
     crate::ir_lower::stmt::lower_throw_access_exception(ctx, exception, message, expr.span);
     ctx.builder.position_at_end(accepted);
-    let descriptor = if matches!(ty, PhpType::Callable | PhpType::Str | PhpType::Mixed | PhpType::Union(_)
-        | PhpType::Object(_)) || matches!(&ty, PhpType::Array(element)
-            if matches!(element.codegen_repr(), PhpType::Mixed | PhpType::Str))
-    {
-        ctx.emit_owned_value(Op::NormalizeCallable, vec![value.value], None,
-            PhpType::Callable, Op::NormalizeCallable.default_effects(), Some(expr.span))
-    } else {
-        // Statically invalid storage cannot reach this edge after is_callable rejected it.
-        ctx.emit_value(Op::ConstNull, Vec::new(), None, PhpType::Callable,
-            Op::ConstNull.default_effects(), Some(expr.span))
-    };
-    stage_call_result(ctx, staging.as_ref(), descriptor, expr.span);
-    if let Some(owner) = owner { retire_owned_call_operand(ctx, owner, expr.span); }
-    take_prepublished_call_result(ctx, staging, descriptor, expr.span)
+    // Canonicalize both indexed and associative callable pairs by key, not insertion order.
+    // The non-array arm preserves the runtime object class for the shared __invoke ladder.
+    let array = ctx.emit_value(Op::TypePredicate, vec![value.value],
+        Some(Immediate::TypePredicate(crate::ir::PhpTypePredicate::Array)), PhpType::Bool,
+        Op::TypePredicate.default_effects(), Some(expr.span));
+    let array_block = ctx.builder.create_named_block("callable.array", Vec::new());
+    let other_block = ctx.builder.create_named_block("callable.other", Vec::new());
+    let merge = ctx.builder.create_named_block("callable.normalized", Vec::new());
+    ctx.builder.terminate(Terminator::CondBr { cond: array.value,
+        then_target: array_block, then_args: Vec::new(), else_target: other_block, else_args: Vec::new() });
+    ctx.builder.position_at_end(array_block);
+    let pair_type = PhpType::Array(Box::new(PhpType::Mixed));
+    let pair = ctx.emit_owned_value(Op::ArrayNew, Vec::new(), Some(Immediate::Capacity(2)),
+        pair_type, Op::ArrayNew.default_effects(), Some(expr.span));
+    let (pair, pair_owner) = root_closure_bind_operand(ctx, pair, expr.span);
+    for key in [0, 1] {
+        let index = lower_int_literal(ctx, key, expr);
+        let warn = emit_bool_literal(ctx, false, Some(expr.span));
+        let item = ctx.emit_owned_value(Op::RuntimeCall, vec![value.value, index.value, warn.value], None,
+            PhpType::Mixed, Op::RuntimeCall.default_effects(), Some(expr.span));
+        ctx.emit_void(Op::ArrayPush, vec![pair.value, item.value], None,
+            Op::ArrayPush.default_effects(), Some(expr.span));
+        crate::ir_lower::stmt::release_indexed_array_write_operand(ctx, Some(&PhpType::Mixed), item, expr.span);
+    }
+    let descriptor = ctx.emit_owned_value(Op::NormalizeCallable, vec![pair.value], None,
+        PhpType::Callable, Op::NormalizeCallable.default_effects(), Some(expr.span));
+    ctx.store_local(&result_name, descriptor, PhpType::Callable, Some(expr.span));
+    if let Some(owner) = pair_owner { retire_owned_call_operand(ctx, owner, expr.span); }
+    branch_to(ctx, merge);
+    ctx.builder.position_at_end(other_block);
+    let descriptor = ctx.emit_owned_value(Op::NormalizeCallable, vec![value.value], None,
+        PhpType::Callable, Op::NormalizeCallable.default_effects(), Some(expr.span));
+    ctx.store_local(&result_name, descriptor, PhpType::Callable, Some(expr.span));
+    branch_to(ctx, merge);
+    ctx.builder.position_at_end(merge);
+    retire_owned_call_operand(ctx, owner, expr.span);
+    let descriptor = ctx.load_local(&result_name, Some(expr.span));
+    let descriptor = crate::ir_lower::ownership::acquire_if_refcounted(ctx, descriptor, Some(expr.span));
+    retire_owned_call_operand(ctx, result_owner, expr.span);
+    descriptor
 }
