@@ -93,6 +93,17 @@ pub(super) fn program_uses_xml(program: &[Stmt]) -> bool {
     })
 }
 
+/// Returns whether an XML function name is written as a literal where a user `callable`
+/// parameter or return keeps it (`apply("xml_parse_into_struct")`): invoking it runs the
+/// wrapper, which calls the prelude helpers exactly as a direct call does.
+pub(super) fn program_names_xml_callable(program: &[Stmt]) -> bool {
+    let literals = crate::prelude_prune::usage::collect(program).callable_slot_literals;
+    !literals.is_empty()
+        && literals
+            .iter()
+            .any(|name| xml_functions().iter().any(|candidate| name.eq_ignore_ascii_case(candidate)))
+}
+
 /// Returns whether a resolved name is one of the xml global functions. Function names are
 /// case-insensitive, but a name with namespace segments is unrelated to the global surface.
 fn name_is_xml_function(name: &Name) -> bool {

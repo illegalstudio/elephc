@@ -388,7 +388,7 @@ impl Checker {
             .iter()
             .flatten()
             .chain(decl.variadic_type.iter())
-            .any(crate::types::checker::functions::param_binding::type_expr_declares_callable);
+            .any(crate::parser::ast::TypeExpr::declares_callable);
         let mut param_types = Vec::new();
         let mut arg_idx = 0;
         for arg in args {

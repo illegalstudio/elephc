@@ -531,8 +531,8 @@ impl Checker {
     /// costs nothing beyond the wrapper itself.
     ///
     /// A spread or projection element may just as well be ordinary text for another parameter,
-    /// so a builtin that needs a bridge or system library, a prelude helper, or GMP's prelude is
-    /// not recorded: its requirement would change what the program links (or fail to build the
+    /// so a builtin that needs a bridge or system library, or whose wrapper calls a prelude
+    /// helper (`array_rand`, XML, GMP), is not recorded: its requirement would change what the program links (or fail to build the
     /// wrapper) for a name that may never be called. Such a builtin bound only this way stops
     /// with the runtime-only builtin error, like a name selected at run time.
     fn record_possible_callable_literal_name(&mut self, value: &Expr) {
@@ -547,10 +547,7 @@ impl Checker {
         let key = crate::names::php_symbol_key(function.as_str().trim_start_matches('\\'));
         if crate::builtins::registry::lookup(&key).is_some_and(|def| {
             !crate::builtins::registry::builtin_requirements_are_empty(def)
-                || !crate::builtins::registry::dynamic_wrapper_prelude_callees(&key).is_empty()
-                || elephc_builtin_contract::lookup(&key).is_some_and(|contract| {
-                    contract.module == elephc_builtin_contract::PhpModule::Gmp
-                })
+                || !crate::builtins::registry::callable_wrapper_prelude_helpers(&key).is_empty()
         }) {
             return;
         }
@@ -580,17 +577,5 @@ fn static_callable_argument(arg: &Expr) -> &Expr {
     match &arg.kind {
         crate::parser::ast::ExprKind::NamedArg { value, .. } => static_callable_argument(value),
         _ => arg,
-    }
-}
-
-/// Returns whether a declared type hint is `callable`, alone or in a nullable or union type,
-/// without resolving it (a `callable(...)` signature type is stored as a descriptor instead).
-pub(crate) fn type_expr_declares_callable(hint: &crate::parser::ast::TypeExpr) -> bool {
-    use crate::parser::ast::TypeExpr;
-    match hint {
-        TypeExpr::Named(name) => name.as_str().trim_start_matches('\\').eq_ignore_ascii_case("callable"),
-        TypeExpr::Nullable(inner) => type_expr_declares_callable(inner),
-        TypeExpr::Union(members) => members.iter().any(type_expr_declares_callable),
-        _ => false,
     }
 }

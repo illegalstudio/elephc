@@ -232,6 +232,47 @@ echo take(...["x", "ucwords"], extra: "lcfirst"), " ", apply2(...["bin2hex"], n:
     assert_eq!(out, "xAbab 6162 none sba_pmg\n");
 }
 
+/// Verifies a GMP builtin named as a literal argument or `callable` return value invokes through
+/// the declared callable, as the call `gmp_abs(...)` would.
+///
+/// The literal used to be recorded without injecting the GMP prelude, so its wrapper had no
+/// helper to forward to and the call stopped with the runtime-only builtin error.
+#[test]
+fn test_declared_callable_gmp_literal_injects_its_prelude() {
+    let out = compile_and_run(
+        r#"<?php
+function apply(callable $f): mixed { return $f(-3); }
+function pick(): callable { return "gmp_neg"; }
+echo apply("gmp_abs"), " ", pick()(5), "\n";
+"#,
+    );
+    assert_eq!(out, "3 -5\n");
+}
+
+/// Verifies an XML builtin whose lowering calls prelude helpers invokes when named as a literal
+/// argument, and that the same names spread as ordinary text build without the XML prelude.
+///
+/// The literal used to build a wrapper calling an XML prelude helper that was never injected,
+/// which failed compilation (`call to unknown function`), even when the name was only text.
+#[test]
+fn test_declared_callable_xml_literal_injects_its_prelude() {
+    let out = compile_and_run(
+        r#"<?php
+function setH(callable $f, XMLParser $p): bool { return $f($p, null, null); }
+$p = xml_parser_create();
+var_dump(setH("xml_set_element_handler", $p));
+"#,
+    );
+    assert_eq!(out, "bool(true)\n");
+    let out = compile_and_run(
+        r#"<?php
+function text(callable $f, string $text): string { return $f($text); }
+echo text(...["strrev", "xml_parse_into_struct"]), " ", text(...["strrev", "xml_set_element_handler"]), "\n";
+"#,
+    );
+    assert_eq!(out, "tcurts_otni_esrap_lmx reldnah_tnemele_tes_lmx\n");
+}
+
 /// Verifies a literal builtin name passed as a named entry of a callable union variadic links the
 /// libraries its wrapper needs.
 #[test]

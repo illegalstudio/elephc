@@ -123,6 +123,13 @@ pub(crate) struct Usage {
     callable_parameter_proof: Option<super::environment_parameters::ParameterProof>,
     /// Reachable global bindings whose mutation can invalidate top-level callable identities.
     callable_global_writes: HashSet<String>,
+    /// Function names written as string literals where a user `callable` parameter or return
+    /// keeps them (`apply("gmp_abs")`); a prelude whose wrapper they need treats them as calls.
+    pub(crate) callable_slot_literals: HashSet<String>,
+    /// The program's own `callable` parameter table, built once per collection.
+    user_callable_slots: Option<std::rc::Rc<super::callable_slots::UserCallableSlots>>,
+    /// Walk state: the callable being scanned declares a `callable` return type.
+    returns_callable: bool,
 }
 
 impl Usage {
@@ -364,16 +371,44 @@ fn record_builtin_callbacks(usage: &mut Usage, name: &str, args: &[Expr]) -> boo
 
 /// Collects direct and literal-indirect function references from a program.
 pub(crate) fn collect(program: &[Stmt]) -> Usage {
-    let mut usage = Usage::default();
+    let mut usage = Usage { user_callable_slots: user_callable_slots(program), ..Usage::default() };
     for stmt in program {
         scan_stmt(stmt, &mut usage);
     }
     usage
 }
 
+/// Builds the program's `callable` parameter table, or `None` when it declares none.
+fn user_callable_slots(program: &[Stmt]) -> Option<std::rc::Rc<super::callable_slots::UserCallableSlots>> {
+    let slots = super::callable_slots::UserCallableSlots::from_program(program);
+    (!slots.is_empty()).then(|| std::rc::Rc::new(slots))
+}
+
+/// Records the literals one call hands to the program's own `callable` parameters.
+fn record_user_callable_slots(expr: &Expr, usage: &mut Usage) {
+    let Some(slots) = usage.user_callable_slots.clone() else {
+        return;
+    };
+    let out = &mut usage.callable_slot_literals;
+    match &expr.kind {
+        ExprKind::FunctionCall { name, args } => slots.function_call(name.as_str(), args, out),
+        ExprKind::MethodCall { method, args, .. }
+        | ExprKind::NullsafeMethodCall { method, args, .. }
+        | ExprKind::StaticMethodCall { method, args, .. } => slots.method_call(method, args, out),
+        ExprKind::NewObject { args, .. }
+        | ExprKind::NewGeneric { args, .. }
+        | ExprKind::NewScopedObject { args, .. } => slots.method_call("__construct", args, out),
+        _ => {}
+    }
+}
+
 /// Collects ordinary usage plus the dispatch metadata needed to exclude unreferenced callbacks.
 pub(crate) fn collect_environment(program: &[Stmt]) -> Usage {
-    let mut usage = Usage { environment_mode: true, ..Usage::default() };
+    let mut usage = Usage {
+        environment_mode: true,
+        user_callable_slots: user_callable_slots(program),
+        ..Usage::default()
+    };
     scan_program(program, &mut usage);
     // A native callback can be the only opaque call, with no source helper to activate the gate.
     if usage.has_constructor_calls && !usage.callable_names.has_unknown_target() {
@@ -580,7 +615,12 @@ fn scan_callable(
     if let Some(ty) = return_type {
         scan_type(ty, usage);
     }
+    let outer_returns_callable = std::mem::replace(
+        &mut usage.returns_callable,
+        return_type.is_some_and(crate::parser::ast::TypeExpr::declares_callable),
+    );
     scan_program(body, usage);
+    usage.returns_callable = outer_returns_callable;
     leave_callable_scope(usage, outer);
 }
 
@@ -661,6 +701,11 @@ fn scan_stmt(stmt: &Stmt, usage: &mut Usage) {
             usage.storage_variables.extend(catches.iter().filter_map(|c| c.variable.clone()));
         }
         _ => {}
+    }
+    if let StmtKind::Return(Some(expr)) = &stmt.kind {
+        if usage.returns_callable {
+            super::callable_slots::record_literal(expr, &mut usage.callable_slot_literals);
+        }
     }
     match &stmt.kind {
         StmtKind::Echo(expr)
@@ -1032,6 +1077,7 @@ fn scan_expr(expr: &Expr, usage: &mut Usage) {
         | ExprKind::NewGeneric { args, .. } | ExprKind::NewDynamic { args, .. }
         | ExprKind::NewDynamicObject { args, .. } | ExprKind::NewScopedObject { args, .. } => {
             usage.callable_names.arguments(args);
+            record_user_callable_slots(expr, usage);
         }
         _ => {}
     }
@@ -1270,13 +1316,18 @@ fn scan_expr(expr: &Expr, usage: &mut Usage) {
             scan_expr(then_expr, usage);
             scan_expr(else_expr, usage);
         }
-        ExprKind::Closure { params, variadic, body, captures, capture_refs, .. } => {
+        ExprKind::Closure { params, variadic, body, captures, capture_refs, return_type, .. } => {
             for name in capture_refs { usage.callable_names.write(name); }
             usage.storage_variables.extend(captures.iter().chain(capture_refs).cloned());
             let mut outer = enter_callable_scope(usage, captures);
             scan_params(params, None, usage);
             if let Some(name) = variadic { usage.callable_names.write(name); }
+            let outer_returns_callable = std::mem::replace(
+                &mut usage.returns_callable,
+                return_type.as_ref().is_some_and(crate::parser::ast::TypeExpr::declares_callable),
+            );
             scan_program(body, usage);
+            usage.returns_callable = outer_returns_callable;
             if let Some(outer) = &mut outer {
                 usage.callable_names.propagate_capture_calls(outer, captures);
             }

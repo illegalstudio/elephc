@@ -181,6 +181,18 @@ pub enum TypeExpr {
 }
 
 impl TypeExpr {
+    /// Returns whether this hint is `callable`, alone or in a nullable or union type, before
+    /// name resolution. A `callable(...)` signature type is stored as a descriptor instead, so
+    /// it does not count.
+    pub fn declares_callable(&self) -> bool {
+        match self {
+            TypeExpr::Named(name) => name.as_str().trim_start_matches('\\').eq_ignore_ascii_case("callable"),
+            TypeExpr::Nullable(inner) => inner.declares_callable(),
+            TypeExpr::Union(members) => members.iter().any(TypeExpr::declares_callable),
+            _ => false,
+        }
+    }
+
     /// Returns whether this type expression contains PHP's late-bound `static` class type.
     pub fn contains_late_static(&self) -> bool {
         match self {

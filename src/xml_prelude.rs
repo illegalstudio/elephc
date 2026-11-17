@@ -52,7 +52,7 @@ pub(crate) fn xml_declarations() -> Program {
 /// Also run by `crate::autoload::prelude_probe` over the autoload closure, whose files are only
 /// loaded after this prelude has been decided.
 pub(crate) fn program_uses_surface(program: &[crate::parser::ast::Stmt]) -> bool {
-    detect::program_uses_xml(program)
+    detect::program_uses_xml(program) || detect::program_names_xml_callable(program)
 }
 
 /// Injects the XML prelude when the program references XML, XMLWriter, or SimpleXML's
@@ -81,7 +81,7 @@ fn inject_if_used_on_compiler_stack(
     force: bool,
     inventory: &mut crate::optimize::reachability::PreludeInventory,
 ) -> Program {
-    if !force && !detect::program_uses_xml(&program) {
+    if !force && !program_uses_surface(&program) {
         return program;
     }
     let mut combined = xml_declarations();
