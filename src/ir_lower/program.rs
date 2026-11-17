@@ -353,7 +353,9 @@ fn validate_lowered_module(module: &Module) -> Result<(), ValidationError> {
     }
     match first_error {
         Some(error) => Err(error),
-        None => Ok(()),
+        // Every body passed, so what is left is what `validate_module` checks beyond them: the
+        // module-level references (source catalog entries, class-like activations).
+        None => crate::ir::validate_module_references(module),
     }
 }
 
