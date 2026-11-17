@@ -24,8 +24,17 @@ It also emits fixed heap, GC, buffer, reference-root, handle-table and string-sc
 declarations, including raw capture-buffer storage, keeping their existing order
 and byte layout.
 
-The `Emitter` trait delegates assembly output, symbol spelling, library-boundary
-modes, compiler-owned layout facts and target ABI operations to the compiler.
+The `Emitter` facade composes three independent host capabilities:
+
+| Capability | Responsibility |
+|---|---|
+| `AssemblyEmitter` | Text, labels, comments and raw directives |
+| `TargetAbi` | Target conventions, registers, frames, calls and symbol spelling |
+| `MemoryContext` | Layout facts and explicit compiler-owned semantic hooks |
+
+The ABI forwarding layer requires only `TargetAbi`; protected release forwarding
+requires `MemoryContext`. The compiler implements each capability using its existing
+ABI and output services.
 `DataTarget` delegates object-format syntax. `ValueFeatures`, `GraphLayout` and
 `GcStatusSelectors` carry the small set of compiler facts needed by the emitters
 without importing PHP types or EIR. Resource-boxing hooks retain PHP subtype/id
@@ -71,3 +80,29 @@ guard ownership transfer and scoped list detachment through the compiler adapter
 `build.rs` includes this crate's Rust sources in the runtime-cache identity.
 Changes to these emitters therefore invalidate cached runtime objects even when
 no compiler-local emitter source changes.
+
+## Typed configuration
+
+`HeapKind` contains only a storage-kind byte, while `ValueTag` represents a boxed
+or container value tag. Their Rust types cannot be substituted for one another.
+`RecordOffset` and `FrameOffset` address aligned owner words from different bases.
+`GuardLayout` pairs them and rejects an owner overlapping the activation prefix.
+Compiler adapters construct layouts from their authoritative ABI constants.
+`ScopedOwnerState` names head and depth symbols instead of passing two positional
+strings. These contracts configure emission; they add no target runtime checks.
+
+## Boundary gates
+
+Run `python3 -B scripts/audit_memoir_boundary.py` from the workspace to audit Cargo
+metadata and Rust source. The gate rejects dependencies in Memoir, native crate
+outputs/build hooks, workspace production consumers outside the compiler, PHP/EIR
+semantic types, and native export/link attributes. Cargo dependency aliases,
+target-specific entries and indirect workspace consumers are checked. Build/dev
+consumers remain host tools. Source comments and literals do not count as imports
+or attributes. The compiled CLI/bridge-catalog test checks generated-program
+capabilities and archive registration against the live catalog.
+
+All three host CI builders run the boundary audit and its regression tests, plus
+Memoir unit tests and compile-fail documentation examples. The existing assembly
+fingerprints remain the output contract, including the allocator/collector
+cross-assembler matrix.

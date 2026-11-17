@@ -15,7 +15,9 @@ mod abi;
 pub mod layout;
 pub mod cleanup;
 pub use architecture::Arch;
-pub use emitter::{Emitter, GraphLayout, GcStatusSelectors};
+pub use emitter::{Emitter, AssemblyEmitter, TargetAbi, MemoryContext, GraphLayout, GcStatusSelectors};
+mod contracts;
+pub use contracts::{HeapKind, ValueTag, RecordOffset, FrameOffset, GuardLayout, ScopedOwnerState};
 
 pub mod decref_any;
 pub mod decref_array;

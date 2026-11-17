@@ -11,6 +11,12 @@
 
 use crate::codegen_support::{abi, emit::Emitter};
 use crate::codegen_support::runtime::exceptions::emit_guarded_cleanup_call;
+use elephc_memoir::ScopedOwnerState;
+
+/// Names the owner-list state independently of parser completion policy.
+const TEMPORARIES: ScopedOwnerState<'static> = ScopedOwnerState {
+    head: "_unser_temporaries", depth: "_unser_active",
+};
 
 /// Emits context-owned data retention, prefix detachment and bounded completion helpers.
 pub(super) fn emit_unserialize_temporaries(emitter: &mut Emitter) {
@@ -21,12 +27,12 @@ pub(super) fn emit_unserialize_temporaries(emitter: &mut Emitter) {
 
 /// Emits scoped owner storage through the compiler-selected parser state.
 fn emit_defer_data(emitter: &mut Emitter) {
-    elephc_memoir::scoped_owners::emit_defer_data(emitter, "_unser_temporaries", "_unser_active");
+    elephc_memoir::scoped_owners::emit_defer_data(emitter, TEMPORARIES);
 }
 
 /// Emits scoped owner storage through the compiler-selected parser state.
 fn emit_detach_data(emitter: &mut Emitter) {
-    elephc_memoir::scoped_owners::emit_detach_data(emitter, "_unser_temporaries", "_unser_active");
+    elephc_memoir::scoped_owners::emit_detach_data(emitter, TEMPORARIES);
 }
 
 /// Releases detached data after context restoration, returning the parsed owner or propagating cleanup.

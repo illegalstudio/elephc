@@ -86,3 +86,8 @@ pub const MIXED_CELL_SIZE: usize = 24;
 pub const REFERENCE_CELL_SIZE: usize = 16;
 /// Raw nullable pointer-container tag, normalized to integer/null before boxing.
 pub const POINTER_ARRAY_VALUE_TYPE: i64 = 13;
+
+/// Typed indexed-array storage kind used by memory eligibility probes.
+pub const ARRAY_KIND: crate::HeapKind = crate::HeapKind::new(ARRAY_HEAP_KIND);
+/// Typed boxed-cell storage kind used by memory eligibility probes.
+pub const MIXED_KIND: crate::HeapKind = crate::HeapKind::new(MIXED_HEAP_KIND);

@@ -9,10 +9,11 @@
 //! - Taking an owner clears its slot before any release can invoke user code.
 //! - Constructor policy and exception-handler installation stay in the compiler.
 
-use crate::{abi, Arch, Emitter};
+use crate::{abi, Arch, Emitter, GuardLayout};
 
 /// Emits guard insertion/removal for the host activation-chain ABI.
-pub fn emit_guard_chain(emitter: &mut impl Emitter, owner_offset: usize, head_symbol: &str) {
+pub fn emit_guard_chain(emitter: &mut impl Emitter, layout: GuardLayout, head_symbol: &str) {
+    let owner_offset = layout.owner().bytes();
     if emitter.arch() == Arch::AArch64 { aarch64(emitter, owner_offset, head_symbol); }
     else { x86_64(emitter, owner_offset, head_symbol); }
 }
@@ -78,7 +79,9 @@ fn x86_64(emitter: &mut impl Emitter, owner_offset: usize, head_symbol: &str) {
 }
 
 /// Loads the callback record and consumes its owner slot without releasing the value yet.
-pub fn emit_take_guard_owner(emitter: &mut impl Emitter, owner_offset: usize, argument_offset: usize) {
+pub fn emit_take_guard_owner(emitter: &mut impl Emitter, layout: GuardLayout) {
+    let owner_offset = layout.owner().bytes();
+    let argument_offset = layout.argument().bytes();
     if emitter.arch() == Arch::AArch64 {
         emitter.instruction(&format!("ldr x9, [sp, #{argument_offset}]"));      // recover the cleanup record passed as the first C argument
         emitter.instruction(&format!("ldr x0, [x9, #{owner_offset}]"));         // transfer the guarded owner to the native GC convention
@@ -91,7 +94,7 @@ pub fn emit_take_guard_owner(emitter: &mut impl Emitter, owner_offset: usize, ar
 }
 
 /// Transfers the guard owner into the selected native release protocol.
-pub fn emit_release_body(emitter: &mut impl Emitter, symbol: &str, owner_offset: usize, argument_offset: usize) {
-    emit_take_guard_owner(emitter, owner_offset, argument_offset);
+pub fn emit_release_body(emitter: &mut impl Emitter, symbol: &str, layout: GuardLayout) {
+    emit_take_guard_owner(emitter, layout);
     abi::emit_call_label(emitter, symbol);
 }

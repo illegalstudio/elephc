@@ -7,8 +7,6 @@
 //! Key details:
 //! - This code runs in the compiler and emits assembly; it is never a target-program library.
 
-use crate::Arch;
-
 /// Compiler-owned PHP object layout consumed by pure graph visitors.
 #[derive(Clone, Copy)]
 pub struct GraphLayout {
@@ -69,125 +67,14 @@ pub struct GcStatusSelectors {
     pub runs: i64,
 }
 
-/// Host services used exclusively while generating assembly in the compiler.
-pub trait Emitter {
-    /// Returns the target platform flags for an anonymous private memory mapping.
-    fn anonymous_private_map_flags(&self) -> i32;
-    /// Provides the compiler arch contract.
-    fn arch(&self) -> Arch;
-    /// Provides the compiler extern symbol contract.
-    fn extern_symbol(&self, name: &str) -> String;
-    /// Provides the compiler line comment prefix contract.
-    fn line_comment_prefix(&self) -> &'static str;
-    /// Provides the compiler cdylib boundary contract.
-    fn cdylib_boundary(&self) -> bool;
-    /// Provides the compiler phpext output contract.
-    fn phpext_output(&self) -> bool;
-    /// Provides the compiler graph layout contract.
-    fn graph_layout(&self) -> GraphLayout;
-    /// Provides the compiler gc status selectors contract.
-    fn gc_status_selectors(&self) -> GcStatusSelectors;
-    /// Delegates instruction emission to the host.
-    fn instruction(&mut self, text: &str);
-    /// Delegates label emission to the host.
-    fn label(&mut self, name: &str);
-    /// Delegates label global emission to the host.
-    fn label_global(&mut self, name: &str);
-    /// Delegates label shared emission to the host.
-    fn label_shared(&mut self, name: &str);
-    /// Delegates blank emission to the host.
-    fn blank(&mut self);
-    /// Delegates comment emission to the host.
-    fn comment(&mut self, text: &str);
-    /// Delegates bl c emission to the host.
-    fn bl_c(&mut self, name: &str);
-    /// Delegates syscall emission to the host.
-    fn syscall(&mut self, macos_num: u32);
-    /// Delegates save exception handler emission to the host.
-    fn save_exception_handler(&mut self);
-    /// Delegates emit branch if equal wide to the authoritative target ABI.
-    fn emit_branch_if_equal_wide(&mut self, label: &str);
-    /// Delegates emit branch if int result nonzero to the authoritative target ABI.
-    fn emit_branch_if_int_result_nonzero(&mut self, label: &str);
-    /// Delegates emit branch if int result zero to the authoritative target ABI.
-    fn emit_branch_if_int_result_zero(&mut self, label: &str);
-    /// Delegates emit call label to the authoritative target ABI.
-    fn emit_call_label(&mut self, label: &str);
-    /// Delegates emit call reg to the authoritative target ABI.
-    fn emit_call_reg(&mut self, reg: &str);
-    /// Delegates emit frame prologue to the authoritative target ABI.
-    fn emit_frame_prologue(&mut self, frame_size: usize);
-    /// Delegates emit frame restore to the authoritative target ABI.
-    fn emit_frame_restore(&mut self, frame_size: usize);
-    /// Delegates emit jump to the authoritative target ABI.
-    fn emit_jump(&mut self, label: &str);
-    /// Delegates emit load from address to the authoritative target ABI.
-    fn emit_load_from_address(&mut self, reg: &str, addr_reg: &str, byte_offset: usize);
-    /// Delegates emit load int immediate to the authoritative target ABI.
-    fn emit_load_int_immediate(&mut self, reg: &str, value: i64);
-    /// Delegates emit load symbol to reg to the authoritative target ABI.
-    fn emit_load_symbol_to_reg(&mut self, reg: &str, symbol: &str, byte_offset: usize);
-    /// Delegates emit local symbol address to the authoritative target ABI.
-    fn emit_local_symbol_address(&mut self, dest: &str, symbol: &str);
-    /// Delegates emit pop reg to the authoritative target ABI.
-    fn emit_pop_reg(&mut self, reg: &str);
-    /// Delegates emit push reg to the authoritative target ABI.
-    fn emit_push_reg(&mut self, reg: &str);
-    /// Delegates emit reg move to the authoritative target ABI.
-    fn emit_reg_move(&mut self, dst: &str, src: &str);
-    /// Delegates emit return to the authoritative target ABI.
-    fn emit_return(&mut self);
-    /// Delegates emit store imm to symbol to the authoritative target ABI.
-    fn emit_store_imm_to_symbol(&mut self, symbol: &str, byte_offset: usize, imm: i64);
-    /// Delegates emit store reg to symbol to the authoritative target ABI.
-    fn emit_store_reg_to_symbol(&mut self, reg: &str, symbol: &str, byte_offset: usize);
-    /// Delegates emit store zero to local slot to the authoritative target ABI.
-    fn emit_store_zero_to_local_slot(&mut self, offset: usize);
-    /// Delegates emit store zero to symbol to the authoritative target ABI.
-    fn emit_store_zero_to_symbol(&mut self, symbol: &str, byte_offset: usize);
-    /// Delegates emit symbol address to the authoritative target ABI.
-    fn emit_symbol_address(&mut self, dest: &str, symbol: &str);
-    /// Delegates int arg reg name to the authoritative target ABI.
-    fn int_arg_reg_name(&self, idx: usize) -> &'static str;
-    /// Delegates int result reg to the authoritative target ABI.
-    fn int_result_reg(&self) -> &'static str;
-    /// Delegates load at offset to the authoritative target ABI.
-    fn load_at_offset(&mut self, reg: &str, offset: usize);
-    /// Delegates secondary scratch reg to the authoritative target ABI.
-    fn secondary_scratch_reg(&self) -> &'static str;
-    /// Delegates store at offset to the authoritative target ABI.
-    fn store_at_offset(&mut self, reg: &str, offset: usize);
-    /// Delegates string result regs to the authoritative target ABI.
-    fn string_result_regs(&self) -> (&'static str, &'static str);
-    /// Contains throws while releasing a weak observer through the compiler boundary.
-    fn emit_guarded_cleanup_call(&mut self, entry: &str, payload: &str, pending_offset: usize);
-    /// Returns the configured string scratch capacity.
-    fn concat_capacity(&self) -> usize;
-    /// Emits raw target directives while preserving their exact ordering.
-    fn raw(&mut self, text: &str);
-    /// Keeps reference-registry status translation in the compiler.
-    fn emit_reference_source_success(&mut self);
-    /// Supplies the compiler's marker for an uninitialized PHP property payload.
-    fn uninitialized_property_sentinel(&self) -> i64;
+mod output;
+mod target;
+mod context;
+pub use output::AssemblyEmitter;
+pub use target::TargetAbi;
+pub use context::MemoryContext;
 
-    /// Delegates emit cdylib exit escape to the established compiler ABI.
-    fn emit_cdylib_exit_escape(&mut self);
-    /// Delegates emit store to address to the established compiler ABI.
-    fn emit_store_to_address(&mut self, reg: &str, addr_reg: &str, byte_offset: usize);
-    /// Delegates emit store zero to address to the established compiler ABI.
-    fn emit_store_zero_to_address(&mut self, addr_reg: &str, byte_offset: usize);
-    /// Delegates tertiary scratch reg to the established compiler ABI.
-    fn tertiary_scratch_reg(&self) -> &'static str;
-    /// Delegates emit cmp reg to symbol to the established compiler ABI.
-    fn emit_cmp_reg_to_symbol(&mut self, reg: &str, symbol: &str);
-    /// Delegates emit unary cleanup preserving exception to the established compiler ABI.
-    fn emit_unary_cleanup_preserving_exception(&mut self, entry: &str, payload: &str);
+/// Composes output, target ABI and memory-context capabilities for complete emitters.
+pub trait Emitter: AssemblyEmitter + TargetAbi + MemoryContext {}
 
-    /// Uses the host ABI to address a local slot in the active native frame.
-    fn emit_frame_slot_address(&mut self, dest: &str, offset: usize);
-    /// Emits PHP resource policy inside the Mixed boxing frame, including its resource entry label.
-    fn emit_mixed_resource_identity(&mut self);
-    /// Publishes the boxed result through the compiler's weak resource inventory layout.
-    fn emit_mixed_resource_publication(&mut self);
-
-}
+impl<T: AssemblyEmitter + TargetAbi + MemoryContext> Emitter for T {}
