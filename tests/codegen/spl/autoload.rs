@@ -1235,7 +1235,7 @@ fn test_register_with_use_capture_falls_back_to_psr4() {
 /// Verifies SPL autoload extensions round trip.
 #[test]
 fn test_spl_autoload_extensions_round_trip() {
-    // Read default, write new value (returns old), read again returns the new value.
+    // Read default; setting returns the new value (php -n: ".inc,.php\n.php,.inc\n.php,.inc"); read again returns it.
     let out = compile_and_run(
         r#"<?php
 echo spl_autoload_extensions();
@@ -1246,7 +1246,7 @@ echo "\n";
 echo spl_autoload_extensions();
 "#,
     );
-    assert_eq!(out, ".inc,.php\n.inc,.php\n.php,.inc");
+    assert_eq!(out, ".inc,.php\n.php,.inc\n.php,.inc");
 }
 
 /// Verifies SPL autoload extensions null arg is readonly.

@@ -608,7 +608,7 @@ krsort($matrix["missing"]);
 }
 
 /// Verifies natsort sorts values naturally (human ordering), preserving key-value associations.
-/// Fixture: [3, 1, 2] → natural sort [1, 2, 3] → first element $a[0] should be 1.
+/// Fixture: [3, 1, 2] keeps its keys (php -n prints 3 for $a[0] after natsort), so $a[0] is still 3.
 #[test]
 fn test_natsort() {
     let out = compile_and_run(
@@ -618,11 +618,11 @@ natsort($a);
 echo $a[0];
 "#,
     );
-    assert_eq!(out, "1");
+    assert_eq!(out, "3");
 }
 
 /// Verifies natcasesort sorts values naturally case-insensitively, preserving key-value associations.
-/// Fixture: [3, 1, 2] → case-insensitive natural sort [1, 2, 3] → first element $a[0] should be 1.
+/// Fixture: [3, 1, 2] keeps its keys (php -n prints 3 for $a[0] after natcasesort), so $a[0] is still 3.
 #[test]
 fn test_natcasesort() {
     let out = compile_and_run(
@@ -632,7 +632,7 @@ natcasesort($a);
 echo $a[0];
 "#,
     );
-    assert_eq!(out, "1");
+    assert_eq!(out, "3");
 }
 
 /// Verifies compiled PHP output for sort string array.
