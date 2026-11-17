@@ -1095,3 +1095,17 @@ controls pass. A cache warmed with signed148 creates a different runtime object
 with149, changes the PHP getter argument from integer to boolean, and reuses the
 new object on the next compile. Default compiler/bridge builds, assembly comments
 and diff hygiene pass. Public ArrayKeys admission remains gated.
+
+### Verified150: mixed literal construction owners and key checks
+
+Mixed keyed/spread literals reuse published container slots, rooted operands and
+original-key guards. Hash growth writes back into the construction slot. The RHS
+is evaluated and rooted before key validation; partial arrays and temporary operands
+retire on key, spread and later-expression exceptions. Spread inputs retain their
+own owners and pointer-valued storage remains unchanged.
+
+Job39ab46c8 passes all-five-target generation and eight native mode/profile/optimizer
+variants (2.03s/2.91s), with clean heaps. PHP cross-check confirms default spread
+renumbering and Error classification. Finalb3d8cb95 passes in1m42s: default compiler
+and bridge builds49.52s plus five exact legacy spread-owner and pointer-storage
+controls. All seven unique gates and diff hygiene pass. ArrayKeys remains gated.

@@ -8,6 +8,7 @@
 //! - Preserves source-order evaluation, EIR typing, effects, and ownership contracts.
 //! - An `(array)` cast used as an element is typed by the shared `ArrayCast` classification
 //!   from the type lowering attaches to the source, so the literal stores that array.
+//! - Mixed keyed/spread construction roots its partial hash and each in-flight operand.
 
 use super::*;
 use crate::parser::ast::ArrayEntry;
@@ -403,20 +404,18 @@ pub(super) fn lower_mixed_array_literal(
     expr: &Expr,
 ) -> LoweredValue {
     let hash_ty = assoc_array_literal_type_from_entries(ctx, entries, expr);
-    let value_ty = match hash_ty.codegen_repr() {
-        PhpType::AssocArray { value, .. } => value.codegen_repr(),
-        _ => PhpType::Mixed,
-    };
     let pointer_elem = literal_pointer_element_type(&hash_ty);
     let hash = ctx.emit_value(
         Op::HashNew,
         Vec::new(),
         Some(Immediate::Capacity(entries.len() as u32)),
-        hash_ty,
+        hash_ty.clone(),
         Op::HashNew.default_effects(),
         Some(expr.span),
     );
+    let owner = publish_constructed_container(ctx, hash, expr.span);
     for entry in entries {
+        let mut roots = Vec::new();
         match entry {
             ArrayEntry::Spread(source) => {
                 let span = source.span;
@@ -428,15 +427,20 @@ pub(super) fn lower_mixed_array_literal(
                 } else {
                     source
                 };
+                let source = root_array_literal_item(ctx, source, span, &mut roots);
+                let hash = load_published_container(ctx, owner, hash_ty.clone(), span);
                 lower_hash_spread_into_hash_from_value(ctx, hash, source, span);
             }
             ArrayEntry::Keyed(key, value) => {
                 let span = key.span;
                 let key = lower_expr(ctx, key);
-                let (key, key_owner) = root_owned_call_operand(ctx, key, span);
+                let key = root_array_literal_item(ctx, key, span, &mut roots);
                 let value_span = value.span;
                 let value = lower_expr(ctx, value);
                 let value = retype_pointer_literal_value(ctx, value, pointer_elem.as_ref(), value_span);
+                let value = root_array_literal_item(ctx, value, value_span, &mut roots);
+                let hash = load_published_container(ctx, owner, hash_ty.clone(), span);
+                let key = crate::ir_lower::array_key_guards::for_receiver(ctx, hash, key, span);
                 ctx.emit_void(
                     Op::HashSet,
                     vec![hash.value, key.value, value.value],
@@ -444,14 +448,13 @@ pub(super) fn lower_mixed_array_literal(
                     Op::HashSet.default_effects(),
                     Some(span),
                 );
-                if let Some(owner) = key_owner {
-                    retire_owned_call_operand(ctx, owner, span);
-                }
             }
             ArrayEntry::Value(value) => {
                 let span = value.span;
                 let value = lower_expr(ctx, value);
                 let value = retype_pointer_literal_value(ctx, value, pointer_elem.as_ref(), span);
+                let value = root_array_literal_item(ctx, value, span, &mut roots);
+                let hash = load_published_container(ctx, owner, hash_ty.clone(), span);
                 ctx.emit_void(
                     Op::RuntimeCall,
                     vec![hash.value, value.value],
@@ -459,11 +462,13 @@ pub(super) fn lower_mixed_array_literal(
                     effects_lookup::runtime_effects(),
                     Some(span),
                 );
-                release_value_after_retaining_insert(ctx, Some(&value_ty), value, span);
             }
         }
+        for slot in roots.into_iter().rev() {
+            retire_owned_call_operand(ctx, slot, expr.span);
+        }
     }
-    hash
+    take_published_container(ctx, owner, hash_ty, expr.span)
 }
 
 /// Returns the hash type for a mixed literal, merging every entry's value type.
