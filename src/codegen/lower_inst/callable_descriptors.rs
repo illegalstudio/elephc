@@ -69,6 +69,20 @@ pub(super) fn lower_first_class_callable_new(ctx: &mut FunctionContext<'_>, inst
     store_callable_descriptor(ctx, inst)
 }
 
+/// Returns whether the prelude helpers a builtin's wrapper calls exist in the lowered module,
+/// as the ordinary runtime callable table requires: GMP's wrappers forward to its prelude, and
+/// `array_rand` to a random helper. A recorded name without them is skipped instead of failing
+/// codegen; invoking it then reports the runtime-only builtin error.
+fn declared_callable_wrapper_helpers_present(ctx: &FunctionContext<'_>, key: &str) -> bool {
+    let declared = |callee: &str| {
+        ctx.module.functions.iter().any(|function| php_symbol_key(&function.name) == php_symbol_key(callee))
+    };
+    let gmp = elephc_builtin_contract::lookup(key)
+        .is_some_and(|contract| contract.module == elephc_builtin_contract::PhpModule::Gmp);
+    crate::builtins::registry::dynamic_wrapper_prelude_callees(key).iter().all(|callee| declared(callee))
+        && (!gmp || ctx.module.functions.iter().any(|function| function.name == "__elephc_gmp_abs"))
+}
+
 /// Builds runtime string dispatch cases for the function names a declared `callable` kept as
 /// a string literal (`module.declared_callable_names`).
 ///
@@ -89,6 +103,7 @@ pub(super) fn declared_callable_name_cases(
         if candidate_names.is_some_and(|candidates| !candidates.iter().any(|candidate| *candidate == key))
             || ctx.module.functions.iter().any(|function| php_symbol_key(&function.name) == key)
             || crate::builtins::registry::lookup(&key).is_none()
+            || !declared_callable_wrapper_helpers_present(ctx, &key)
         {
             continue;
         }

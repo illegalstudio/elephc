@@ -381,31 +381,22 @@ impl Checker {
             }
         }
 
+        // Spreads and named arguments decide which parameter a spread element binds, so a
+        // possible callable literal anywhere in the planned arguments is recorded.
+        let call_declares_callable = decl
+            .param_types
+            .iter()
+            .flatten()
+            .chain(decl.variadic_type.iter())
+            .any(crate::types::checker::functions::param_binding::type_expr_declares_callable);
         let mut param_types = Vec::new();
         let mut arg_idx = 0;
         for arg in args {
+            if call_declares_callable {
+                self.record_static_callable_literals(arg);
+            }
             let ty = self.infer_type(arg, caller_env)?;
             if let ExprKind::Spread(_) = &arg.kind {
-                // Earlier spreads and named arguments decide which parameter each element
-                // binds, so the whole declaration is consulted.
-                let context = format!("Function '{}' spread argument", name);
-                let mut regular = Vec::new();
-                for i in 0..decl.params.len() {
-                    let ty = match decl.param_types.get(i).and_then(|t| t.as_ref()) {
-                        Some(type_ann) => self.resolve_declared_param_type_hint(type_ann, decl.span, &context)?,
-                        None => PhpType::Mixed,
-                    };
-                    regular.push((ty, decl.ref_params.get(i).copied().unwrap_or(false)));
-                }
-                let variadic_ty = match &decl.variadic_type {
-                    Some(declared) => Some(self.resolve_declared_param_type_hint(declared, decl.span, &context)?),
-                    None => None,
-                };
-                self.require_declared_callable_spread(
-                    arg,
-                    &regular,
-                    variadic_ty.as_ref().map(|ty| (ty, decl.variadic_by_ref)),
-                );
                 for i in arg_idx..decl.params.len() {
                     if let Some(type_ann) = decl.param_types.get(i).and_then(|t| t.as_ref()) {
                         let declared_ty = self.resolve_declared_param_type_hint(

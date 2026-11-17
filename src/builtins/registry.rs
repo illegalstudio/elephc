@@ -161,6 +161,17 @@ pub fn dynamic_wrapper_prelude_callees(name: &str) -> &'static [&'static str] {
     }
 }
 
+/// Returns whether a builtin links nothing beyond its own wrapper: no bridge, system or macOS
+/// library and no runtime feature, as resolved for a call with no static arguments.
+pub fn builtin_requirements_are_empty(def: &BuiltinDef) -> bool {
+    match def.spec.semantics.requirements {
+        crate::builtins::semantics::BuiltinRequirements::Static(requirements) => requirements.is_empty(),
+        crate::builtins::semantics::BuiltinRequirements::Shared(resolve) => {
+            resolve(&crate::builtins::semantics::BuiltinRequirementInput { args: &[] }).is_empty()
+        }
+    }
+}
+
 /// Looks up a PHP builtin by name, using case-insensitive matching.
 ///
 /// Returns `None` if the name is not registered in the inventory.

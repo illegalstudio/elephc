@@ -199,7 +199,7 @@ function pair2(callable $a, string $b): string { return $a($b); }
 function both(callable $a, callable ...$rest): string { $out = $a("Ab"); foreach ($rest as $f) { $out .= $f("Ab"); } return $out; }
 function both2(callable $a, callable ...$rest): string { $out = $a("Ab"); foreach ($rest as $f) { $out .= $f("Ab"); } return $out; }
 function apply(callable $f): string { return (string) $f("word"); }
-function run(string $key): string { return apply(["cb" => "missing_fn", $key => "md5"]["cb"]); }
+function run(string $key): string { return apply(["cb" => "missing_fn", $key => "bin2hex"]["cb"]); }
 function every(callable ...$fs): int { return 1; }
 echo pair(...["ab"], ...["strtolower"]), " ", pair2(...["ucfirst"], ...["no_such_function"]), "\n";
 echo both(...["lcfirst", "strrev"], extra: "ucwords"), " ", both2(...["strtoupper", function (string $s): string { return $s; }], extra: "trim"), "\n";
@@ -207,7 +207,29 @@ echo run("cb"), "\n";
 try { echo every(...["strlen", "no_such_function"]); } catch (TypeError $e) { echo "TypeError\n"; }
 "#,
     );
-    assert_eq!(out, "ab No_such_function\nabbAAb ABAbAb\nc47d187067c6cf953245f128b5fde62a\nTypeError\n");
+    assert_eq!(out, "ab No_such_function\nabbAAb ABAbAb\n776f7264\nTypeError\n");
+}
+
+/// Verifies spread literals reach a declared callable when a named argument makes call planning
+/// split the spread: the overflow of a spread past a non-callable parameter into a callable
+/// variadic, and a spread filling an optional callable parameter (planned as
+/// `count($spread) > 0 ? $spread[0] : default`). Ordinary text in a spread that names a builtin
+/// needing a prelude (`gmp_abs`) must not break the build.
+///
+/// Those spreads were checked only through the regular slot they fill, so a string bound past a
+/// `string` parameter or behind the default ternary was never recorded and stopped at run time.
+#[test]
+fn test_declared_callable_spread_literals_through_named_call_plans() {
+    let out = compile_and_run(
+        r#"<?php
+function take(string $label, callable ...$fs): string { $out = $label; foreach ($fs as $f) { $out .= $f("Ab"); } return $out; }
+function apply2(?callable $f = null, int $n = 1): string { return $f === null ? "none" : (string) $f("ab"); }
+function text(callable $f, string $text): string { return $f($text); }
+$empty = [];
+echo take(...["x", "ucwords"], extra: "lcfirst"), " ", apply2(...["bin2hex"], n: 2), " ", apply2(...$empty, n: 2), " ", text(...["strrev", "gmp_abs"]), "\n";
+"#,
+    );
+    assert_eq!(out, "xAbab 6162 none sba_pmg\n");
 }
 
 /// Verifies a literal builtin name passed as a named entry of a callable union variadic links the

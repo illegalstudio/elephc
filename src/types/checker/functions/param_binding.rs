@@ -446,39 +446,38 @@ impl Checker {
             .collect()
     }
 
-    /// Records the literal names a static spread (`f(...["ucfirst", "strlen"])`) may hand to a
-    /// declared callable parameter of the callee.
-    ///
-    /// Which parameter an element binds depends on the other spreads and named arguments of the
-    /// call, so every string literal is recorded when any parameter (`regular`, `variadic`)
-    /// declares `callable`. Recording a name the call never binds only links an unused wrapper;
-    /// nothing is rejected here, so an unknown name stays PHP's runtime `TypeError`.
-    pub(crate) fn require_declared_callable_spread(
-        &mut self,
-        spread: &Expr,
-        regular: &[(PhpType, bool)],
-        variadic: Option<(&PhpType, bool)>,
-    ) {
-        if regular.iter().any(|(ty, _)| ty.declares_callable())
-            || variadic.is_some_and(|(ty, _)| ty.declares_callable())
-        {
-            self.record_static_callable_literals(spread);
-        }
+    /// Returns whether any parameter of a call target (`regular`, then the variadic element)
+    /// declares `callable`, alone or in a union.
+    pub(crate) fn call_declares_callable(regular: &[(PhpType, bool)], variadic: Option<&PhpType>) -> bool {
+        regular.iter().any(|(ty, _)| ty.declares_callable())
+            || variadic.is_some_and(PhpType::declares_callable)
     }
 
     /// Records every string literal held by a static array literal behind a spread, a named
     /// argument or an access into that literal (the shape call planning gives a spread element
     /// bound to a regular parameter).
     ///
-    /// This over-approximates on purpose: a later runtime key or another spread can decide which
-    /// element binds, and an extra recorded name only links an unused wrapper. A bare literal
-    /// argument is resolved by [`Self::require_declared_callable_arg`] instead.
+    /// This over-approximates on purpose: a later runtime key, another spread or a named argument
+    /// decides which element binds where, so these names are only possible callables. They are
+    /// recorded through [`Self::record_possible_callable_literal_name`], which never adds a
+    /// library or prelude requirement. A bare literal argument is resolved by
+    /// [`Self::require_declared_callable_arg`] instead.
     pub(crate) fn record_static_callable_literals(&mut self, expr: &Expr) {
         use crate::parser::ast::ExprKind;
         match &expr.kind {
             ExprKind::Spread(inner) => self.record_static_array_literal_elements(inner),
             ExprKind::NamedArg { value, .. } => self.record_static_callable_literals(value),
             ExprKind::ArrayAccess { array, .. } => self.record_static_array_literal_elements(array),
+            // Planning binds an optional parameter filled by a spread as
+            // `count($spread) > 0 ? $spread[0] : default`.
+            ExprKind::Ternary { then_expr, else_expr, .. } => {
+                self.record_static_callable_literal_element(then_expr);
+                self.record_static_callable_literal_element(else_expr);
+            }
+            ExprKind::ShortTernary { value, default } => {
+                self.record_static_callable_literal_element(value);
+                self.record_static_callable_literal_element(default);
+            }
             _ => {}
         }
     }
@@ -519,13 +518,43 @@ impl Checker {
     fn record_static_callable_literal_element(&mut self, element: &Expr) {
         match &element.kind {
             crate::parser::ast::ExprKind::StringLiteral(_) => {
-                self.record_declared_callable_literal_name(element);
+                self.record_possible_callable_literal_name(element);
             }
             crate::parser::ast::ExprKind::Spread(inner) => {
                 self.record_static_array_literal_elements(inner);
             }
-            _ => {}
+            _ => self.record_static_callable_literals(element),
         }
+    }
+
+    /// Records a string literal that may reach a declared callable, when linking its wrapper
+    /// costs nothing beyond the wrapper itself.
+    ///
+    /// A spread or projection element may just as well be ordinary text for another parameter,
+    /// so a builtin that needs a bridge or system library, a prelude helper, or GMP's prelude is
+    /// not recorded: its requirement would change what the program links (or fail to build the
+    /// wrapper) for a name that may never be called. Such a builtin bound only this way stops
+    /// with the runtime-only builtin error, like a name selected at run time.
+    fn record_possible_callable_literal_name(&mut self, value: &Expr) {
+        let crate::parser::ast::ExprKind::StringLiteral(name) = &value.kind else {
+            return;
+        };
+        let Some(crate::parser::ast::CallableTarget::Function(function)) =
+            crate::types::param_binding::callable_target_from_name(name)
+        else {
+            return;
+        };
+        let key = crate::names::php_symbol_key(function.as_str().trim_start_matches('\\'));
+        if crate::builtins::registry::lookup(&key).is_some_and(|def| {
+            !crate::builtins::registry::builtin_requirements_are_empty(def)
+                || !crate::builtins::registry::dynamic_wrapper_prelude_callees(&key).is_empty()
+                || elephc_builtin_contract::lookup(&key).is_some_and(|contract| {
+                    contract.module == elephc_builtin_contract::PhpModule::Gmp
+                })
+        }) {
+            return;
+        }
+        self.declared_callable_names.insert(function.as_str().to_string());
     }
 
     fn register_bound_callable_param_sig(
@@ -551,5 +580,17 @@ fn static_callable_argument(arg: &Expr) -> &Expr {
     match &arg.kind {
         crate::parser::ast::ExprKind::NamedArg { value, .. } => static_callable_argument(value),
         _ => arg,
+    }
+}
+
+/// Returns whether a declared type hint is `callable`, alone or in a nullable or union type,
+/// without resolving it (a `callable(...)` signature type is stored as a descriptor instead).
+pub(crate) fn type_expr_declares_callable(hint: &crate::parser::ast::TypeExpr) -> bool {
+    use crate::parser::ast::TypeExpr;
+    match hint {
+        TypeExpr::Named(name) => name.as_str().trim_start_matches('\\').eq_ignore_ascii_case("callable"),
+        TypeExpr::Nullable(inner) => type_expr_declares_callable(inner),
+        TypeExpr::Union(members) => members.iter().any(type_expr_declares_callable),
+        _ => false,
     }
 }

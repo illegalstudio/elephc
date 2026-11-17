@@ -945,9 +945,18 @@ impl Checker {
         }
 
         let variadic_elem_ty = self.variadic_argument_element_type(sig, span, callee_desc)?;
+        // Spreads and named arguments decide which parameter a spread element binds, so a
+        // possible callable literal anywhere in the planned arguments is recorded.
+        let call_declares_callable = Self::call_declares_callable(
+            &Self::declared_spread_targets(sig, 0, regular_param_count),
+            variadic_elem_ty.as_ref(),
+        );
 
         let mut param_idx = 0usize;
         for arg in args {
+            if call_declares_callable {
+                self.record_static_callable_literals(arg);
+            }
             let descriptor_projected = descriptor_invocation
                 && descriptor_projections
                     .get(param_idx)
@@ -965,14 +974,6 @@ impl Checker {
             let can_widen_by_ref_local = self.by_ref_argument_can_widen_local_to_mixed(arg)
                 || self.boxed_reference_promotion_pending(arg, span);
             if matches!(arg.kind, ExprKind::Spread(_)) {
-                // Earlier spreads and named arguments decide which parameter each element
-                // binds, so the whole signature is consulted.
-                let regular = Self::declared_spread_targets(sig, 0, regular_param_count);
-                self.require_declared_callable_spread(
-                    arg,
-                    &regular,
-                    variadic_elem_ty.as_ref().map(|ty| (ty, false)),
-                );
                 continue;
             }
             if param_idx < regular_param_count {
