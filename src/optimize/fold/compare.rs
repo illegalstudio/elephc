@@ -225,17 +225,33 @@ fn compare_float_to_string(left: f64, right: &str) -> Option<Ordering> {
 }
 
 /// The string php writes for `value` at the default precision, when Rust's shortest
-/// representation is certain to match it: finite, in `[1e-4, 1e14)` (php writes exponents from 1e14), at most 14 significant
-/// digits. Returns `None` otherwise.
+/// representation is certain to match it: finite, non-zero, at most 14 significant digits.
+/// Plain decimal notation covers `[1e-4, 1e14)`; outside it php goes exponential (`1.0E+14`,
+/// `1.5E-5`), which is rebuilt from Rust's shortest scientific form. Returns `None` otherwise.
 fn plain_float_string(value: f64) -> Option<String> {
     let magnitude = value.abs();
-    if !value.is_finite() || !(1e-4..1e14).contains(&magnitude) {
+    if !value.is_finite() || magnitude == 0.0 {
         return None;
     }
     let text = format!("{}", value);
     let digits = text.trim_start_matches('-').replace('.', "");
     let significant = digits.trim_start_matches('0').trim_end_matches('0');
-    (significant.len() <= 14).then_some(text)
+    if significant.len() > 14 {
+        return None;
+    }
+    if (1e-4..1e14).contains(&magnitude) {
+        return Some(text);
+    }
+    let scientific = format!("{:e}", value);
+    let (mantissa, exponent) = scientific.split_once('e')?;
+    let mantissa = if mantissa.contains('.') {
+        mantissa.to_string()
+    } else {
+        format!("{mantissa}.0")
+    };
+    let exponent: i32 = exponent.parse().ok()?;
+    let sign = if exponent < 0 { '-' } else { '+' };
+    Some(format!("{mantissa}E{sign}{}", exponent.abs()))
 }
 
 /// PHP 8's `zend_compare()` over two scalar literals.

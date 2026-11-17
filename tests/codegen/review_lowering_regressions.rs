@@ -127,3 +127,47 @@ echo $n;
 "#);
     assert_eq!(out, "1");
 }
+
+/// The parser's hidden temporaries for a conditional dynamic-property append and for an
+/// element reference are generated locals: `get_defined_vars()` lists only the PHP variables.
+#[test]
+fn test_parser_desugar_temporaries_are_not_php_visible() {
+    let out = compile_and_run(r#"<?php
+function f($o, $c) {
+    $o->{$c ? 'a' : 'b'}[] = 1;
+    $arr = [];
+    $src = [1];
+    $arr[] = &$src[0];
+    return array_keys(get_defined_vars());
+}
+echo json_encode(f(new stdClass, true));
+"#);
+    assert_eq!(out, "[\"o\",\"c\",\"arr\",\"src\"]");
+}
+
+/// An `include` inside the source of a reference assignment (`$a = &$arr[(require ...)]`) is
+/// resolved like any other expression; it used to survive to the checker and panic.
+#[test]
+fn test_include_inside_a_reference_assignment_source_is_resolved() {
+    let out = compile_and_run_files(
+        &[
+            ("main.php", "<?php\n$arr = [];\n$a = &$arr[(require __DIR__ . '/key.php')];\n$a = 5;\necho json_encode($arr);\n"),
+            ("key.php", "<?php return 0;"),
+        ],
+        "main.php",
+    );
+    assert_eq!(out, "[5]");
+}
+
+/// A float of magnitude 1e14 or more is written exponentially by php (`1.0E+14`), so the fold
+/// must not compare its plain decimal form against a non-numeric string.
+#[test]
+fn test_float_at_1e14_compares_by_its_exponential_string_form() {
+    let out = compile_and_run(r#"<?php
+var_dump(1e14 < "1.0E+14x");
+var_dump(1e14 > "100000000000000x");
+var_dump(1e13 < "1.0E+13x");
+var_dump(1.5e25 < "1.5E+25x", -2.5e-7 < "-2.5E-7x", 3.0e20 > "3.0E+2x");
+"#);
+    assert_eq!(out, "bool(true)\nbool(false)\nbool(false)\nbool(true)\nbool(true)\nbool(false)\n");
+}
