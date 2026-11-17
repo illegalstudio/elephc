@@ -86,15 +86,7 @@ pub(super) fn finish_property_unset_receiver(
     finish_receiver(plan, owners, context, scope, values, true, true, None)
 }
 
-/// Fetches an unset dimension receiver whose selected value will feed another dimension.
-pub(super) fn finish_dimension_unset_receiver(
-    plan: PreparedWriteReceiver<'_>, owners: &mut Vec<RuntimeCellHandle>,
-    context: &mut ElephcEvalContext, scope: &mut ElephcEvalScope, values: &mut impl RuntimeValueOps,
-) -> Result<RuntimeCellHandle, EvalStatus> {
-    finish_receiver(plan, owners, context, scope, values, true, false, None)
-}
-
-/// Like `finish_dimension_unset_receiver`, recording the storage chain so a rebuilt array can be
+/// Fetches an unset dimension receiver whose selected value feeds another dimension, recording the storage chain so a rebuilt array can be
 /// written back leaf to root.
 pub(super) fn finish_dimension_unset_receiver_tracked(
     plan: PreparedWriteReceiver<'_>, owners: &mut Vec<RuntimeCellHandle>, trail: &mut Vec<Parent>,

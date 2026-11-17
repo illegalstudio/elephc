@@ -99,8 +99,10 @@ return $r->seen[0];"#,
 
     assert!(matches!(values.get(result), FakeValue::Array(elements) if elements.len() == 1));
     // `array_set` takes its own reference like the runtime wrapper, so the stored element is
-    // held 3 times; one fewer means the array holds a reference nobody minted for it.
-    assert_eq!(values.refcount(result), 3);
+    // held 2 times: by-value array arguments are separated into their own copy on binding, so
+    // the stored element no longer shares a cell with the constructed object's property; its
+    // holders are exactly the array slot and the read result (no over-release is asserted below).
+    assert_eq!(values.refcount(result), 2);
     assert!(values.over_releases().is_empty());
 }
 
