@@ -444,6 +444,11 @@ fn without_shadowing_names(
             })
             .map(|mut stmt| {
                 stmt.kind = match stmt.kind {
+                    // Only the global namespace can shadow a builtin: inside a named block the bare
+                    // name is `Ns\name`, a different function php accepts.
+                    StmtKind::NamespaceBlock { name, body } if name.is_some() => {
+                        StmtKind::NamespaceBlock { name, body }
+                    }
                     StmtKind::NamespaceBlock { name, body } => StmtKind::NamespaceBlock {
                         name,
                         body: filter(body, owned),
@@ -716,6 +721,19 @@ mod tests {
         };
         assert!(then_body.is_empty(), "the shadowing declaration must be dropped");
         assert_eq!(program.len(), 2, "nothing else may be removed");
+    }
+
+    /// A function declared in a NAMED namespace is a different function from the global builtin of
+    /// the same bare name, and php accepts it: the filter must not drop it.
+    #[test]
+    fn a_namespaced_function_named_like_an_owned_builtin_is_kept() {
+        let program = without_shadowing_declarations(parse(
+            "<?php namespace App { function error_get_last() { return 1; } } namespace { echo 1; }",
+        ));
+        let StmtKind::NamespaceBlock { body, .. } = &program[0].kind else {
+            panic!("expected the namespace block to survive");
+        };
+        assert_eq!(body.len(), 1, "the namespaced declaration must be kept");
     }
 
     /// A declaration this prelude does not own is left where it is, however it is nested.
