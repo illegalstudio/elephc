@@ -577,10 +577,12 @@ pub(super) fn static_method_callback_is_callable(
         return false;
     };
     let method_key = php_symbol_key(method);
-    if !class_info.static_methods.contains_key(&method_key) {
-        return false;
-    }
-    class_info.static_method_visibilities.get(&method_key) == Some(&Visibility::Public)
+    // A public `__callStatic()` makes every name callable, as php's `is_callable()` reports.
+    let is_public_static = |key: &str| {
+        class_info.static_methods.contains_key(key)
+            && class_info.static_method_visibilities.get(key) == Some(&Visibility::Public)
+    };
+    is_public_static(&method_key) || is_public_static("__callstatic")
 }
 
 /// Converts a static `call_user_func_array()` argument array into call arguments.

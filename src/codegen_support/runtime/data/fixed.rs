@@ -2120,6 +2120,9 @@ fn emit_builtin_callable_data(target: Target) -> String {
     out.push_str(".globl _callable_call_name\n_callable_call_name:\n");
     out.push_str("    .ascii \"__call\"\n");
     out.push_str(".p2align 3\n");
+    out.push_str(".globl _callable_call_static_name\n_callable_call_static_name:\n");
+    out.push_str("    .ascii \"__callStatic\"\n");
+    out.push_str(".p2align 3\n");
     out.push_str(".globl _callable_builtin_count\n_callable_builtin_count:\n");
     out.push_str(&format!("    .quad {}\n", builtins.len()));
     out.push_str(

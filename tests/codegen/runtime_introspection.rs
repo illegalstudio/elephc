@@ -173,3 +173,25 @@ echo eval('$c = "is_countable"; return $c(7) ? "bad" : "eval-var";'), "\n";
         "call|cuf|cufa|callable|fcc\nbool(true)\nbool(false)\nbool(true)\n[true,false,true,false]\neval-call|eval-var\n"
     );
 }
+
+/// `is_callable()` answers true for `Class::missing` and `[Class::class, 'missing']` when the class
+/// has a public `__callStatic()`, in a literal probe and in a runtime-built one, and false for a
+/// class without it.
+#[test]
+fn test_is_callable_honours_call_static_for_static_forms() {
+    let out = compile_and_run(
+        r#"<?php
+class W { public static function real() {} public static function __callStatic($n, $a) { return 1; } }
+class V { public static function real() {} }
+$a = ['W', 'zzz'];
+$s = 'W::qqq';
+$v = ['V', 'zzz'];
+var_dump(is_callable('W::missing'), is_callable([W::class, 'missing']), is_callable(['W', 'ghost']));
+var_dump(is_callable($a), is_callable($s), is_callable($v), is_callable(['V', 'zzz']), is_callable(['W', 'real']));
+"#,
+    );
+    assert_eq!(
+        out,
+        "bool(true)\nbool(true)\nbool(true)\nbool(true)\nbool(true)\nbool(false)\nbool(false)\nbool(true)\n"
+    );
+}

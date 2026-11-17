@@ -824,10 +824,13 @@ pub(in crate::codegen::lower_inst) fn static_method_string_is_callable(
         return false;
     };
     let method_key = php_symbol_key(method_name);
-    if !class_info.static_methods.contains_key(&method_key) {
-        return false;
-    }
-    class_info.static_method_visibilities.get(&method_key) == Some(&Visibility::Public)
+    // php reports `Class::missing` callable when the class forwards it through a public
+    // `__callStatic()`, the static twin of the `__call()` fallback of `[$object, 'missing']`.
+    let is_public_static = |key: &str| {
+        class_info.static_methods.contains_key(key)
+            && class_info.static_method_visibilities.get(key) == Some(&Visibility::Public)
+    };
+    is_public_static(&method_key) || is_public_static("__callstatic")
 }
 
 /// Answers a literal existence probe from the class's request-scoped LOAD flag, when it has one.

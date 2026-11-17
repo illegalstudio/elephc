@@ -29,6 +29,7 @@ fn emit_aarch64(emitter: &mut Emitter) {
     emit_method_name_aarch64(emitter);
     emit_method_name_or_magic_aarch64(emitter);
     emit_static_method_name_aarch64(emitter);
+    emit_static_method_name_or_magic_aarch64(emitter);
     emit_object_aarch64(emitter);
     emit_array_aarch64(emitter);
     emit_assoc_aarch64(emitter);
@@ -255,14 +256,40 @@ fn emit_method_name_or_magic_aarch64(emitter: &mut Emitter) {
     emitter.instruction("ret");                                                 // return the boolean result in x0
 }
 
+/// Emits the ARM64 runtime helper for `Class::method` and `[Class::class, 'method']` callables.
+/// php calls the pair callable when the class has the public static method OR a `__callStatic()`,
+/// so this asks `__rt_is_callable_static_method_exact` for the name first and for
+/// `"__callStatic"` second, the static twin of `__rt_is_callable_method_name_or_magic`.
+/// Input: x0=class name ptr, x1=class name len, x2=method name ptr, x3=method name len. Output: x0=1 or 0.
+fn emit_static_method_name_or_magic_aarch64(emitter: &mut Emitter) {
+    emitter.blank();
+    emitter.comment("--- runtime: is_callable_static_method_name ---");
+    emitter.label_global("__rt_is_callable_static_method_name");
+
+    emitter.instruction("sub sp, sp, #48");                                     // reserve frame for the class string across the first lookup
+    emitter.instruction("stp x29, x30, [sp, #32]");                             // save caller frame pointer and return address
+    emitter.instruction("add x29, sp, #32");                                    // establish this helper's frame pointer
+    emitter.instruction("stp x0, x1, [sp, #0]");                                // keep the class string for the __callStatic() retry
+    abi::emit_call_label(emitter, "__rt_is_callable_static_method_exact");      // does the class expose the named public static method?
+    emitter.instruction("cbnz x0, __rt_is_callable_static_method_name_done");   // a real public static method is callable
+    emitter.instruction("ldp x0, x1, [sp, #0]");                                // reload the class string
+    abi::emit_symbol_address(emitter, "x2", "_callable_call_static_name");
+    emitter.instruction("mov x3, #12");                                         // method string length for "__callStatic"
+    abi::emit_call_label(emitter, "__rt_is_callable_static_method_exact");      // a public __callStatic() makes every name callable
+    emitter.label("__rt_is_callable_static_method_name_done");
+    emitter.instruction("ldp x29, x30, [sp, #32]");                             // restore caller frame pointer and return address
+    emitter.instruction("add sp, sp, #48");                                     // release the retry frame
+    emitter.instruction("ret");                                                 // return the boolean result in x0
+}
+
 /// Emits the ARM64 runtime helper for static method callable lookup.
 /// Compares the given class name and method name against the global static method table
 /// (both compared case-insensitively). Handles leading backslash normalization.
 /// Input: x0=class name ptr, x1=class name len, x2=method name ptr, x3=method name len. Output: x0=1 or 0.
 fn emit_static_method_name_aarch64(emitter: &mut Emitter) {
     emitter.blank();
-    emitter.comment("--- runtime: is_callable_static_method_name ---");
-    emitter.label_global("__rt_is_callable_static_method_name");
+    emitter.comment("--- runtime: is_callable_static_method_exact ---");
+    emitter.label_global("__rt_is_callable_static_method_exact");
 
     emitter.instruction("sub sp, sp, #80");                                     // reserve frame for class string, method string, and table cursor
     emitter.instruction("stp x29, x30, [sp, #64]");                             // save caller frame pointer and return address around comparisons
@@ -657,6 +684,7 @@ fn emit_x86_64(emitter: &mut Emitter) {
     emit_method_name_x86_64(emitter);
     emit_method_name_or_magic_x86_64(emitter);
     emit_static_method_name_x86_64(emitter);
+    emit_static_method_name_or_magic_x86_64(emitter);
     emit_object_x86_64(emitter);
     emit_array_x86_64(emitter);
     emit_assoc_x86_64(emitter);
@@ -886,14 +914,41 @@ fn emit_method_name_or_magic_x86_64(emitter: &mut Emitter) {
     emitter.instruction("ret");                                                 // return the boolean result in rax
 }
 
+/// Emits the x86_64 runtime helper for `Class::method` and `[Class::class, 'method']` callables;
+/// see the ARM64 twin.
+/// Input: rdi=class name ptr, rsi=class name len, rdx=method name ptr, rcx=method name len. Output: rax=1 or 0.
+fn emit_static_method_name_or_magic_x86_64(emitter: &mut Emitter) {
+    emitter.blank();
+    emitter.comment("--- runtime: is_callable_static_method_name ---");
+    emitter.label_global("__rt_is_callable_static_method_name");
+
+    emitter.instruction("push rbp");                                            // preserve caller frame pointer around the two lookups
+    emitter.instruction("mov rbp, rsp");                                        // establish a stable frame base for the saved class string
+    emitter.instruction("sub rsp, 16");                                         // reserve an aligned pair of slots for the class string
+    emitter.instruction("mov QWORD PTR [rbp - 8], rdi");                        // keep the class string pointer for the __callStatic() retry
+    emitter.instruction("mov QWORD PTR [rbp - 16], rsi");                       // keep the class string length for the __callStatic() retry
+    abi::emit_call_label(emitter, "__rt_is_callable_static_method_exact");      // does the class expose the named public static method?
+    emitter.instruction("test rax, rax");                                       // did the named public static method match?
+    emitter.instruction("jne __rt_is_callable_static_method_name_done_x86_64"); // a real public static method is callable
+    emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // reload the class string pointer
+    emitter.instruction("mov rsi, QWORD PTR [rbp - 16]");                       // reload the class string length
+    abi::emit_symbol_address(emitter, "rdx", "_callable_call_static_name");
+    emitter.instruction("mov ecx, 12");                                         // method string length for "__callStatic"
+    abi::emit_call_label(emitter, "__rt_is_callable_static_method_exact");      // a public __callStatic() makes every name callable
+    emitter.label("__rt_is_callable_static_method_name_done_x86_64");
+    emitter.instruction("add rsp, 16");                                         // release the class string slots
+    emitter.instruction("pop rbp");                                             // restore caller frame pointer
+    emitter.instruction("ret");                                                 // return the boolean result in rax
+}
+
 /// Emits the x86_64 runtime helper for static method callable lookup.
 /// Compares the given class name and method name against the global static method table
 /// (both compared case-insensitively). Handles leading backslash normalization.
 /// Input: rdi=class name ptr, rsi=class name len, rdx=method name ptr, rcx=method name len. Output: rax=1 or 0.
 fn emit_static_method_name_x86_64(emitter: &mut Emitter) {
     emitter.blank();
-    emitter.comment("--- runtime: is_callable_static_method_name ---");
-    emitter.label_global("__rt_is_callable_static_method_name");
+    emitter.comment("--- runtime: is_callable_static_method_exact ---");
+    emitter.label_global("__rt_is_callable_static_method_exact");
 
     emitter.instruction("push rbp");                                            // preserve caller frame pointer before static method table scan
     emitter.instruction("mov rbp, rsp");                                        // establish stable frame base for class and method strings
