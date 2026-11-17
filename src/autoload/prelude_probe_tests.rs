@@ -374,3 +374,25 @@ fn probe_reports_prelude_functions_the_autoload_closure_declares() {
     assert!(!functions.declares("ini_get"));
     assert!(functions.references("ini_get"));
 }
+
+/// An opaque `eval` in an autoloaded class is reported, so a configured binary still gets the
+/// OPcache declarations its interpreter-backed fragment may call.
+#[test]
+fn probe_reports_bridge_eval_in_autoloaded_classes() {
+    let project = ProbeProject::new();
+    let opaque = functions_for(
+        &project,
+        "",
+        &[(
+            "src/Probe.php",
+            "<?php namespace App; class Probe { public function run(string $code) { return eval($code); } }",
+        )],
+    );
+    assert!(opaque.has_bridge_eval());
+    let none = functions_for(
+        &project,
+        "",
+        &[("src/Probe.php", "<?php namespace App; class Probe { public function run() { return 1; } }")],
+    );
+    assert!(!none.has_bridge_eval());
+}

@@ -176,6 +176,7 @@ mod tests {
         let facts = AutoloadedFunctions::for_test(
             &["php_sapi_name", "zend_version"],
             &["zend_version"],
+            false,
         );
         let injected = inject_if_used(
             crate::parser::parse(&crate::lexer::tokenize("<?php echo 1;").unwrap()).unwrap(),
