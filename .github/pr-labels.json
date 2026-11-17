@@ -9,7 +9,8 @@
   ],
   "domainAreas": [
     "area:web",
-    "area:magician"
+    "area:magician",
+    "area:memory"
   ],
   "typePrefixes": {
     "feat": "type:feature",
@@ -81,6 +82,10 @@
     "area:runtime": {
       "color": "0052CC",
       "description": "Touches runtime helpers, GC, ownership, or bridge runtimes."
+    },
+    "area:memory": {
+      "color": "0E8A16",
+      "description": "Touches compiler-side memory management in elephc-memoir."
     },
     "area:builtins": {
       "color": "A2EEEF",
@@ -273,8 +278,12 @@
         "^src/codegen_support/runtime(?:/|\\.rs$)",
         "^src/codegen/runtime(?:/|\\.rs$)",
         "^src/runtime_cache\\.rs$",
-        "^crates/elephc-(?!web(?:/|$)|magician(?:/|$))"
+        "^crates/elephc-(?!web(?:/|$)|magician(?:/|$)|memoir(?:/|$))"
       ]
+    },
+    {
+      "label": "area:memory",
+      "patterns": ["^crates/elephc-memoir/"]
     },
     {
       "label": "area:builtins",

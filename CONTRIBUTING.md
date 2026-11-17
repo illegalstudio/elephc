@@ -103,10 +103,14 @@ following namespaces by hand:
 | Namespace | Meaning | Values |
 |---|---|---|
 | `type:*` | The intent of the change. Exactly one is assigned from the conventional PR title, falling back to the branch prefix. | `type:feature`, `type:fix`, `type:docs`, `type:refactor`, `type:chore`, `type:test`, `type:triage` |
-| `area:*` | The primary compiler or repository components affected by the changed paths. Up to three are assigned. | `area:lexer`, `area:parser`, `area:resolver`, `area:types`, `area:optimizer`, `area:eir`, `area:codegen`, `area:runtime`, `area:builtins`, `area:web`, `area:magician`, `area:platform`, `area:tooling-ci`, `area:docs`, `area:triage` |
+| `area:*` | The primary compiler or repository components affected by the changed paths. Up to three are assigned. | `area:lexer`, `area:parser`, `area:resolver`, `area:types`, `area:optimizer`, `area:eir`, `area:codegen`, `area:runtime`, `area:memory`, `area:builtins`, `area:web`, `area:magician`, `area:platform`, `area:tooling-ci`, `area:docs`, `area:triage` |
 | `target:*` | A target explicitly affected by the title, branch, or changed paths. Target-neutral changes receive no target label. | `target:linux-x86_64`, `target:linux-aarch64`, `target:macos-aarch64`, `target:ios-arm64`, `target:ios-sim-arm64`, `target:windows-x86_64`, `target:wasm32-wasi` |
 | `size:*` | Review size derived from the number of changed files and total added plus deleted lines. Exactly one is assigned. | `size:xs`, `size:s`, `size:m`, `size:l`, `size:xl` |
 | `scope:*` | Additional review attention for unusually broad changes. | `scope:multi-area` |
+
+Code and package files under `crates/elephc-memoir/` receive `area:memory`.
+Memory, web and Magician areas are retained when a PR exceeds the three-area cap.
+PRs that change only documentation receive `area:docs`.
 
 The recognized conventional prefixes map directly to type labels: `feat:` and
 `feature:` become `type:feature`; `fix:` becomes `type:fix`; `docs:` becomes
