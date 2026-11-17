@@ -70,17 +70,14 @@ fn a_class_with_a_missing_parent_throws_instead_of_being_refused() {
     assert_eq!(refusal_description(br#"class C extends NoSuchParent {}"#), "");
 }
 
-/// Verifies a path that already describes itself keeps its own message.
+/// Verifies an undefined constant is no longer a refusal: php throws a catchable `Error`.
 ///
-/// This is the half that makes the fallbacks safe to add everywhere. `undefined constant "X"` is
-/// written by the constant lookup, deeper than either fallback; if first-writer-wins were not
-/// respected, this would read `unsupported Const expression` and the change would have made
-/// diagnostics WORSE while appearing to make them better.
+/// `php -n` 8.5.6 raises `Error: Undefined constant "UNDEFINED_CONSTANT_NAME"` -- a throwable a
+/// script can catch -- so the interpreter throws it too and there is no refusal description to
+/// write. The first-writer-wins rule that keeps a path's own message safe from the fallbacks is
+/// pinned by the other refusals in this file.
 #[test]
 fn a_path_that_names_itself_is_not_overwritten_by_the_fallback() {
-    assert_eq!(
-        refusal_description(br#"echo UNDEFINED_CONSTANT_NAME;"#),
-        ": undefined constant \"UNDEFINED_CONSTANT_NAME\"",
-    );
+    assert_eq!(refusal_description(br#"echo UNDEFINED_CONSTANT_NAME;"#), "");
 }
 
