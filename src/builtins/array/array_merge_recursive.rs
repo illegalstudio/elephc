@@ -35,7 +35,10 @@ builtin! {
 fn check(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
     let accepted = crate::types::checker::builtins::array_arg_is_gradually_acceptable;
     let mut key: Option<PhpType> = None;
-    let mut concrete = cx.args.len() == 2;
+    // The native runtime merge combines a collision of two lists into a list of lists (php
+    // appends them) and leaks its temporaries, so every call goes through the prelude helper,
+    // which follows php's own algorithm.
+    let mut concrete = false;
     for arg in cx.args.iter() {
         let ty = cx.checker.infer_type(arg, cx.env)?;
         if !accepted(&ty) {

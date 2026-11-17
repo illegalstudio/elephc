@@ -1028,7 +1028,8 @@ pub fn inject_if_used(
         .collect();
     let needs_standard_gaps = !standard_gaps.is_empty();
     // And so is `str_replace()`'s by-reference `$count`, which the native helper does not keep.
-    let needs_str_replace_count = usage.references("str_replace");
+    let needs_str_replace_count =
+        usage.references("str_replace") || usage.references("str_ireplace");
     // And so is `implode()` over objects or floats, which the native joiners cannot render.
     let needs_implode_values = usage.references("implode") || usage.references("join");
     // And so is `array_sum()` / `array_product()` over anything but a list of ints or floats.

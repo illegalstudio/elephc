@@ -376,6 +376,24 @@ pub(super) fn lower_backend_gap_builtin_shape(
             expr,
         ));
     }
+    // A NAMED `str_replace()` / `str_ireplace()` argument: the native helper takes three operands
+    // and the by-reference `$count` default would fill a fourth, so the prelude helper (whose
+    // parameters carry php's names, `$count` optional) binds the call by name.
+    if matches!(builtin.as_str(), "str_replace" | "str_ireplace")
+        && crate::types::call_args::has_named_args(args)
+        && !args.iter().any(is_spread_arg)
+    {
+        return Some(lower_function_call(
+            ctx,
+            &crate::names::Name::unqualified(if builtin == "str_ireplace" {
+                crate::str_replace_count_prelude::STR_IREPLACE_COUNT_NAME
+            } else {
+                crate::str_replace_count_prelude::STR_REPLACE_COUNT_NAME
+            }),
+            args,
+            expr,
+        ));
+    }
     if crate::types::call_args::has_named_args(args)
         || (builtin != "array_unshift" && args.iter().any(is_spread_arg))
     {
@@ -920,7 +938,7 @@ pub(super) fn lower_backend_gap_builtin_shape(
         ));
     }
     // `str_replace()` over a gradual search or replace: see `crate::str_replace_count_prelude`.
-    if builtin == "str_replace"
+    if matches!(builtin.as_str(), "str_replace" | "str_ireplace")
         && args.len() == 3
         && !crate::types::call_args::has_named_args(args)
         && !args.iter().any(is_spread_arg)
@@ -935,7 +953,11 @@ pub(super) fn lower_backend_gap_builtin_shape(
         return Some(lower_function_call(
             ctx,
             &crate::names::Name::unqualified(
-                crate::str_replace_count_prelude::STR_REPLACE_COUNT_NAME,
+                if builtin == "str_ireplace" {
+                    crate::str_replace_count_prelude::STR_IREPLACE_COUNT_NAME
+                } else {
+                    crate::str_replace_count_prelude::STR_REPLACE_COUNT_NAME
+                },
             ),
             args,
             expr,
@@ -1051,6 +1073,7 @@ pub(super) fn lower_backend_gap_builtin_shape(
         }
         ("levenshtein", 2) => crate::backend_gap_prelude::LEVENSHTEIN_TWO_ARG_NAME,
         ("str_replace", 4) => crate::str_replace_count_prelude::STR_REPLACE_COUNT_NAME,
+        ("str_ireplace", 4) => crate::str_replace_count_prelude::STR_IREPLACE_COUNT_NAME,
         ("exec", 1..=3) => crate::exec_prelude::EXEC_FULL_NAME,
         ("passthru", 2) => crate::exec_prelude::PASSTHRU_FULL_NAME,
         ("fputcsv", 5..=6) => crate::csv_prelude::FPUTCSV_FULL_NAME,

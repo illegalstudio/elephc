@@ -63,3 +63,35 @@ echo json_encode(g([[1,2],[3,4]])), "\n";
     assert!(out.success, "program failed: {}", out.stderr);
     assert_eq!(out.stdout, "[[1,2],{\"1\":4}]\n");
 }
+
+/// A named `str_replace()` / `str_ireplace()` call binds by name (no stray fourth operand), and
+/// `str_ireplace()` fills its by-reference `$count` as php does.
+#[test]
+fn test_named_str_replace_and_ireplace_count() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+echo str_replace(subject: "aab", search: "b", replace: "c"), "\n";
+echo implode(",", str_replace(subject: ["aab", "bb"], search: "b", replace: "c")), "\n";
+echo str_ireplace(subject: "aBb", search: "b", replace: "c"), "\n";
+echo str_ireplace("B", "c", "aBb", $n), $n, "\n";
+echo str_replace(search: "b", replace: "c", subject: "aab", count: $m), $m, "\n";
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "aac\naac,cc\nacc\nacc2\naac1\n");
+}
+
+/// `array_merge_recursive()` appends the lists of a shared key (php renumbers them) instead of
+/// nesting them.
+#[test]
+fn test_array_merge_recursive_merges_nested_lists() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+echo json_encode(array_merge_recursive([1, 2], [3])), "\n";
+echo json_encode(array_merge_recursive(['a' => [1, 2]], ['a' => [3]])), "\n";
+echo json_encode(array_merge_recursive(['a' => 1], ['a' => 2], ['b' => 'x'])), "\n";
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "[1,2,3]\n{\"a\":[1,2,3]}\n{\"a\":[1,2],\"b\":\"x\"}\n");
+}

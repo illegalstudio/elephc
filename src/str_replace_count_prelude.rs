@@ -34,9 +34,18 @@ use crate::synthetic_class::{
 /// Reserved helper the four-argument `str_replace()` call is routed to.
 pub(crate) const STR_REPLACE_COUNT_NAME: &str = "__elephc_str_replace_count";
 
+/// Reserved helper the four-argument `str_ireplace()` call is routed to: the same helper, matching
+/// ASCII case-insensitively as `str_ireplace` does.
+pub(crate) const STR_IREPLACE_COUNT_NAME: &str = "__elephc_str_ireplace_count";
+
 /// Returns the helper declaration for injection.
 pub(crate) fn declarations() -> Program {
-    php_semantics_declarations(|| vec![decl_fn_str_replace_count()])
+    php_semantics_declarations(|| {
+        vec![
+            decl_fn_str_replace_count(STR_REPLACE_COUNT_NAME, false),
+            decl_fn_str_replace_count(STR_IREPLACE_COUNT_NAME, true),
+        ]
+    })
 }
 
 /// `(string) $name`.
@@ -45,25 +54,36 @@ fn as_string(name: &str) -> Expr {
 }
 
 /// `$count += substr_count($text, $needle); $text = str_replace($needle, <with>, $text);`
-fn count_then_replace(with: Expr) -> Vec<Stmt> {
+///
+/// The case-insensitive twin counts over the lowercased text and needle (both ASCII-only, as
+/// `str_ireplace` is) and replaces through `str_ireplace`.
+fn count_then_replace(with: Expr, insensitive: bool) -> Vec<Stmt> {
+    let lowered = |name: &str| {
+        if insensitive {
+            e_call("strtolower", vec![e_var(name)])
+        } else {
+            e_var(name)
+        }
+    };
+    let replace_fn = if insensitive { "str_ireplace" } else { "str_replace" };
     vec![
         s_assign(
             "count",
             e_binop(
                 e_var("count"),
                 BinOp::Add,
-                e_call("substr_count", vec![e_var("text"), e_var("needle")]),
+                e_call("substr_count", vec![lowered("text"), lowered("needle")]),
             ),
         ),
         s_assign(
             "text",
-            e_call("str_replace", vec![e_var("needle"), with, e_var("text")]),
+            e_call(replace_fn, vec![e_var("needle"), with, e_var("text")]),
         ),
     ]
 }
 
-/// Builds the declaration.
-fn decl_fn_str_replace_count() -> Stmt {
+/// Builds the declaration of the helper `fn_name`, case-insensitive when `insensitive`.
+fn decl_fn_str_replace_count(fn_name: &str, insensitive: bool) -> Stmt {
     let subject_array = s_if(
         e_call("is_array", vec![e_var("subject")]),
         vec![
@@ -78,7 +98,7 @@ fn decl_fn_str_replace_count() -> Stmt {
                         "out",
                         e_var("key"),
                         e_call(
-                            STR_REPLACE_COUNT_NAME,
+                            fn_name,
                             vec![
                                 e_var("search"),
                                 e_var("replace"),
@@ -105,7 +125,7 @@ fn decl_fn_str_replace_count() -> Stmt {
         vec![],
         None,
     ));
-    single_search.extend(count_then_replace(as_string("replace")));
+    single_search.extend(count_then_replace(as_string("replace"), insensitive));
     single_search.push(s_return(e_var("text")));
     let mut each_search = vec![
         s_assign("needle", as_string("candidate")),
@@ -131,7 +151,7 @@ fn decl_fn_str_replace_count() -> Stmt {
             None,
         ),
     ];
-    each_search.extend(count_then_replace(e_var("with")));
+    each_search.extend(count_then_replace(e_var("with"), insensitive));
     let body = vec![
         s_assign("count", e_int(0)),
         subject_array,
@@ -158,7 +178,7 @@ fn decl_fn_str_replace_count() -> Stmt {
         s_foreach(e_var("search"), None, "candidate", each_search),
         s_return(e_var("text")),
     ];
-    function(STR_REPLACE_COUNT_NAME)
+    function(fn_name)
         .param_untyped("search")
         .param_untyped("replace")
         .param_untyped("subject")

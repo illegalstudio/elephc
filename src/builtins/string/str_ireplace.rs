@@ -6,8 +6,8 @@
 //!   `crate::builtins::registry`.
 //!
 //! Key details:
-//! - The declared signature includes an optional `count` param, but `max_args: 3`
-//!   caps arity so only three arguments are accepted, matching PHP's practical use.
+//! - The by-reference `$count` (fourth argument) is routed to
+//!   `crate::str_replace_count_prelude`, exactly as `str_replace`'s is.
 //! - php's return type is subject-shaped exactly as `str_replace`'s is
 //!   (`str_ireplace(['A','B'], ['x','y'], ['ab','BA'])` answers `['xy', 'yx']`), and the same
 //!   backend path serves both, so the two share one result-type resolver.
