@@ -182,7 +182,7 @@ impl Checker {
             }
             StmtKind::Global { vars } => locals::check_global(self, vars, env),
             StmtKind::StaticVar { name, init } => {
-                locals::check_static_var(self, name, init, env)
+                locals::check_static_var(self, name, init, stmt.span, env)
             }
             StmtKind::StaticPropertyAssign {
                 receiver,

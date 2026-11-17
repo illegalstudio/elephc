@@ -36,16 +36,27 @@ impl Checker {
         }
     }
 
+    /// Resolves an original producer contract before flow narrowing or destination rebinding.
+    pub(crate) fn local_binding_origin(&self, name: &str, actual: &PhpType) -> PhpType {
+        self.typed_local_names.get(name)
+            .or_else(|| self.inferred_local_contracts.get(name))
+            .or_else(|| self.narrowed_local_origins.get(name).map(|origin| &origin.origin))
+            .or_else(|| self.guarded_union_types.get(name).map(|origin| &origin.ty))
+            .unwrap_or(actual).clone()
+    }
+
+    /// Captures a copied initializer's producer while its original binding metadata is available.
+    pub(crate) fn copied_binding_origin(&self, source: &crate::parser::ast::Expr, env: &TypeEnv) -> Option<PhpType> {
+        let name = copy_producer_local(source)?;
+        env.get(name).map(|actual| self.local_binding_origin(name, actual))
+    }
+
     /// Carries the semantic binding contract across promotion to boxed reference storage.
     pub(crate) fn record_local_reference_contract(&mut self, name: &str, actual: &PhpType, span: Span) -> bool {
         if self.semantic_source_mode == crate::source::SourceMode::Internal
             || !self.semantic_profile.contains(StrictFeature::Locals) { return false; }
-        let expected = self.typed_local_names.get(name)
-            .or_else(|| self.inferred_local_contracts.get(name))
-            .or_else(|| self.narrowed_local_origins.get(name).map(|origin| &origin.origin))
-            .or_else(|| self.guarded_union_types.get(name).map(|origin| &origin.ty))
-            .unwrap_or(actual);
-        if let Some(expected) = binding_contract(expected, self.typed_local_names.contains_key(name)) {
+        let expected = self.local_binding_origin(name, actual);
+        if let Some(expected) = binding_contract(&expected, self.typed_local_names.contains_key(name)) {
             self.local_store_contracts.insert((self.current_loop_storage_scope.clone(), span, name.into()),
                 LocalStoreContract { ty: expected, feature: StrictFeature::Locals });
             return true;

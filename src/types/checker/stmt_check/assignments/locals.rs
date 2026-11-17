@@ -1688,12 +1688,12 @@ pub(super) fn check_static_var(
     checker: &mut Checker,
     name: &str,
     init: &Expr,
+    span: Span,
     env: &mut TypeEnv,
 ) -> Result<(), CompileError> {
-    // A `static` local's storage outlives the call, so its binding is never killable — record
-    // it before inference so an erroring initializer still marks the name.
-    checker.record_loop_binding_end(name);
-    checker.invalidate_local_flow_narrowing(name, env);
+    let retired = checker.binding_retirement_type(name, env);
+    let origin = checker.copied_binding_origin(init, env);
+    // Persistent storage survives the activation, while the declaration replaces its local name.
     checker.static_local_names.insert(name.to_string());
     let ty = match checker.infer_type_with_assignment_effects(init, env) {
         Ok(ty) => ty,
@@ -1703,7 +1703,16 @@ pub(super) fn check_static_var(
             return Err(error);
         }
     };
+    checker.invalidate_local_flow_narrowing(name, env);
+    checker.clear_local_binding_metadata(name);
     checker.active_statics.insert(name.to_string());
+    if checker.semantic_profile.contains(elephc_semantics::StrictFeature::Locals)
+        && checker.semantic_source_mode != crate::source::SourceMode::Internal
+    {
+        checker.inferred_local_contracts.insert(name.to_string(), origin.unwrap_or_else(|| ty.clone()));
+        checker.record_local_reference_contract(name, &ty, span);
+    }
     env.insert(name.to_string(), ty);
+    checker.record_binding_retirement_exception_flow(&retired, env);
     Ok(())
 }

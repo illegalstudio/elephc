@@ -2890,10 +2890,10 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         // and store, so cleanup loads must be typed after this store's widening.
         // For ref-bound locals, keep the existing slot type to avoid widening
         // Int→Mixed mid-function (which would break earlier loads that expect I64).
-        // The codegen narrows Mixed→Int at the store point instead.
+        // Canonical cells expose their actual boxed tag; legacy references keep their raw ABI.
         let is_ref_bound = self.is_ref_bound_local(name);
         let widen_type = if is_ref_bound {
-            previous_type.clone()
+            self.builder.local_php_type(slot)
         } else {
             php_type.clone()
         };
@@ -4094,7 +4094,12 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         value_type: PhpType,
         span: Option<Span>,
     ) {
-        self.bind_ref_cell_ptr_impl(target, cell_ptr, value_type, false, false, span);
+        self.bind_ref_cell_ptr_impl(target, cell_ptr, value_type, false, false, false, span);
+    }
+
+    /// Retains a canonical static binding without changing an earlier raw frame payload ABI.
+    pub(crate) fn bind_static_ref_cell_ptr(&mut self, target: &str, cell_ptr: LoweredValue, span: Span) {
+        self.bind_ref_cell_ptr_impl(target, cell_ptr, PhpType::Mixed, true, false, true, Some(span));
     }
 
     /// Retains a property cell before replacing the target, which may own the source object.
@@ -4106,7 +4111,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         span: Option<Span>,
     ) {
         let staged = self.declare_synthetic_php_local(value_type.clone());
-        self.bind_ref_cell_ptr_impl(&staged, cell_ptr, value_type, true, false, span);
+        self.bind_ref_cell_ptr_impl(&staged, cell_ptr, value_type, true, false, false, span);
         self.alias_local_ref_cell(target, &staged, span);
         self.release_ref_cell_owner(&staged, span);
     }
@@ -4131,7 +4136,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         value_type: PhpType,
         span: Option<Span>,
     ) {
-        self.bind_ref_cell_ptr_impl(staged, cell_ptr, value_type, true, true, span);
+        self.bind_ref_cell_ptr_impl(staged, cell_ptr, value_type, true, true, false, span);
     }
 
     /// Binds a borrowed or owned cell, retiring the previous binding before publishing the new one.
@@ -4142,13 +4147,18 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         value_type: PhpType,
         owns_cell: bool,
         adopts_cell: bool,
+        preserve_storage: bool,
         span: Option<Span>,
     ) {
         self.clear_static_callable_local(target);
         self.clear_fiber_start_sig(target);
         self.release_replaced_local_before_ref_alias(target, span);
         let target_slot = self.declare_local(target, value_type.clone());
-        self.set_local_type(target, value_type.clone());
+        if preserve_storage {
+            self.set_local_logical_type(target, value_type.clone());
+        } else {
+            self.set_local_type(target, value_type.clone());
+        }
         let immediate = if owns_cell {
             let owner = self.declare_ref_cell_owner(target, value_type.clone());
             self.mark_slot_initialized(owner);

@@ -63,6 +63,7 @@ mod includes;
 mod exceptions;
 mod control_exit;
 mod declarations;
+mod static_bindings;
 mod instance_property_writes;
 mod readonly_receiver_guard;
 mod static_property_writes;

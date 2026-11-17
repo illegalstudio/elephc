@@ -141,6 +141,9 @@ pub(super) fn lower_global(ctx: &mut LoweringContext<'_, '_>, vars: &[String]) {
 /// the constructor once, not on every call. The initializer is lowered first, out of line,
 /// because its type is what declares the slot the guard then names.
 pub(super) fn lower_static_var(ctx: &mut LoweringContext<'_, '_>, name: &str, init: &Expr, span: Span) {
+    if !ctx.builder.function().flags.is_main {
+        return super::static_bindings::lower(ctx, name, init, span);
+    }
     let entry_block = ctx
         .builder
         .insertion_block()

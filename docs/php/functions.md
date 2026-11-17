@@ -383,6 +383,16 @@ counter(); // 2
 The initializer is optional: `static $x;` declares the variable with an
 implicit `null` initial value, exactly like `static $x = null;`.
 
+A function static declaration binds the local name when execution reaches it.
+Earlier references to that name keep their previous value. If initialization throws,
+the previous local binding remains available to the catch. Recursive initialization
+keeps the first value successfully installed by an inner call.
+
+With `--strict-locals`, the persistent binding keeps its initializer's original
+contract, including union alternatives. A rejected replacement throws `TypeError`
+before changing the stored value. See
+[the static binding example](../../examples/strict-static-locals/main.php).
+
 ## Pass by reference
 
 ```php

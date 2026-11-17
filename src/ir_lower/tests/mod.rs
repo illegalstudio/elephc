@@ -71,6 +71,7 @@ mod buffer_element_updates;
 mod ref_local_append;
 mod foreach_hash_scalars;
 mod settype_foreach;
+mod strict_static_bindings;
 mod string_offset_lifetime;
 mod string_offset_writes;
 mod arrays;

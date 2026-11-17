@@ -205,3 +205,5 @@ mod strict_static_rebind_candidates;
 mod strict_conversion_returns;
 
 mod strict_static_locals;
+
+mod strict_native_static_bindings;

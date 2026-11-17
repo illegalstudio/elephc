@@ -21,6 +21,16 @@ const RHS: usize = 112;
 /// Registers a hidden owner after canonicalizing its current declared payload layout.
 pub(in crate::codegen::lower_inst) fn lower_bind_local_ref_contract(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     let slot = expect_local_slot(inst)?;
+    if ctx.local_kind(slot)? == LocalKind::StaticLocal {
+        let name = ctx.function.locals[slot.as_raw() as usize].name.as_deref()
+            .ok_or_else(|| CodegenIrError::invalid_module("static contract has no source name"))?;
+        let symbol = crate::names::static_local_symbol(&ctx.function.name, name);
+        let descriptor = crate::codegen::runtime_metadata::local_reference_descriptor(ctx.module, &inst.result_php_type)?;
+        abi::emit_symbol_address(ctx.emitter, abi::int_arg_reg_name(ctx.emitter.target, 0), &symbol);
+        abi::emit_symbol_address(ctx.emitter, abi::int_arg_reg_name(ctx.emitter.target, 1), &descriptor);
+        abi::emit_call_label(ctx.emitter, "__rt_reference_sources_bind_local");
+        return Ok(());
+    }
     if ctx.local_kind(slot)? != LocalKind::RefCell {
         return Err(CodegenIrError::invalid_module("local reference contract requires an owned binding"));
     }

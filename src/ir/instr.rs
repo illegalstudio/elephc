@@ -957,6 +957,8 @@ pub enum Op {
     LoadGlobal,
     StoreGlobal,
     LoadStaticLocal,
+    /// Borrows the process-lifetime managed cell for an activation static binding.
+    LoadStaticLocalRefCell,
     StoreStaticLocal,
     InitStaticLocal,
     /// Answers whether a static local's one-time initializer has not run yet: `I64` 1 before
@@ -1508,6 +1510,7 @@ impl Op {
             ConstEnumCase => E::ALLOC_HEAP,
             LoadCalledClassId => E::READS_LOCAL,
             LoadLocal | LoadStaticLocal | ClosureCapture => E::READS_LOCAL,
+            LoadStaticLocalRefCell => E::READS_GLOBAL,
             LoadRefCell => E::READS_LOCAL | E::READS_HEAP,
             LoadRefCellValue => E::READS_LOCAL | E::READS_HEAP | E::ALLOC_HEAP | E::REFCOUNT_OP,
             StoreLocal | SetLocalBindingState | UnsetLocal | ZeroLocalSlot | ListUnpack | FinallyEnter | FinallyExit => {
@@ -1544,12 +1547,13 @@ impl Op {
             // late-static visibility fatal before exposing the writable symbol slot.
             LoadStaticPropertyRefCell => E::READS_GLOBAL | E::WRITES_GLOBAL | E::READS_HEAP
                 | E::WRITES_HEAP | E::ALLOC_HEAP | E::REFCOUNT_OP | E::MAY_THROW | E::MAY_FATAL,
+            // A recursive initializer loser can retire a value with a PHP destructor.
+            InitStaticLocal => E::php_callback(),
             CatchBind => E::READS_GLOBAL | E::WRITES_GLOBAL,
             // Declaration conversion and displaced-value cleanup can reenter arbitrary PHP.
             StoreStaticProperty | StoreReflectionStaticProperty => E::php_callback(),
             StoreGlobal
             | StoreStaticLocal
-            | InitStaticLocal
             | IncludeOnceMark
             | FunctionVariantMark
             | TryPushHandler
@@ -1908,6 +1912,7 @@ impl Op {
             LoadGlobal => "load_global",
             StoreGlobal => "store_global",
             LoadStaticLocal => "load_static_local",
+            LoadStaticLocalRefCell => "load_static_local_ref_cell",
             StoreStaticLocal => "store_static_local",
             InitStaticLocal => "init_static_local",
             StaticLocalUninitialized => "static_local_uninitialized",

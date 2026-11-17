@@ -813,7 +813,7 @@ fn validate_instruction_immediate(
         StrAppend | LocalPlace | LoadLocal | StoreLocal | SetLocalBindingState | GetNativeBindingState | GetEvalBindingState | UnsetLocal | ZeroLocalSlot | LoadRefCell | LoadRefCellValue | StoreRefCell
         | ReleaseLocalRefCell | AcquireRefCell | BindLocalRefContract
         | ReleaseLocalSlot | ReleaseRawLocalSlot | PushCallOperandOwner | PopCallOperandOwner
-        | LoadStaticLocal | StoreStaticLocal | InitStaticLocal | StaticLocalUninitialized
+        | LoadStaticLocal | LoadStaticLocalRefCell | StoreStaticLocal | InitStaticLocal | StaticLocalUninitialized
         | InvokerRefArg => require_immediate(inst_id, inst, "local slot", |imm| {
             matches!(imm, Imm::LocalSlot(_))
         }),
@@ -1103,8 +1103,15 @@ fn validate_opcode_rules(
             { return Err(ValidationError::ResultTypeMismatch(result)); }
             Ok(())
         }
-        LocalPlace => {
+        LocalPlace | LoadStaticLocalRefCell => {
             check_count(inst_id, inst, 0, "0")?;
+            if inst.op == LoadStaticLocalRefCell {
+                let Some(Immediate::LocalSlot(slot)) = inst.immediate else { unreachable!() };
+                if function.flags.is_main || !function.locals.get(slot.as_raw() as usize).is_some_and(|local|
+                    local.kind == LocalKind::StaticLocal && local.php_type == PhpType::Mixed) {
+                    return Err(ValidationError::InvalidLocalReferenceContract(inst_id));
+                }
+            }
             let result = inst.result.ok_or(ValidationError::InstructionResultMissing(inst_id))?;
             if inst.result_type != IrType::I64 || !matches!(inst.result_php_type, PhpType::Pointer(_))
                 || inst.result_ownership != Ownership::NonHeap
@@ -1165,8 +1172,10 @@ fn validate_opcode_rules(
             check_count(inst_id, inst, 0, "0")?;
             let Some(Immediate::LocalSlot(slot)) = inst.immediate else { unreachable!() };
             let valid_owner = function.locals.get(slot.as_raw() as usize).is_some_and(|local|
-                local.kind == LocalKind::RefCell
-                    && crate::types::canonical_property_reference_payload(&local.php_type).is_some());
+                (local.kind == LocalKind::RefCell
+                    && crate::types::canonical_property_reference_payload(&local.php_type).is_some())
+                    || (local.kind == LocalKind::StaticLocal && local.php_type == PhpType::Mixed
+                        && !function.flags.is_main));
             if !valid_owner || crate::semantics::conversions::implicit_contract(&inst.result_php_type).is_none() {
                 return Err(ValidationError::InvalidLocalReferenceContract(inst_id));
             }

@@ -19,6 +19,8 @@ use crate::types::PhpType;
 
 mod property_unset;
 mod mixed_payload;
+mod function_statics;
+pub(crate) use function_statics::detach as detach_function_static;
 mod mixed_symbol;
 mod property_payload;
 mod iterable_payload;

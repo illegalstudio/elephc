@@ -989,6 +989,13 @@ fn emit_main_static_local_cleanup(ctx: &mut FunctionContext<'_>) {
             0,
         );
         abi::emit_branch_if_int_result_zero(ctx.emitter, &done);
+        if record.managed_reference {
+            crate::codegen_support::runtime::reference_cells::detach_function_static(
+                ctx.emitter, &record, ctx.module.required_runtime_features.native_reference_validation);
+            abi::emit_call_label(ctx.emitter, "__rt_reference_cell_release");
+            ctx.emitter.label(&done);
+            continue;
+        }
         emit_static_symbol_value_cleanup(ctx, &record.symbol, &ty);
         abi::emit_store_zero_to_symbol(ctx.emitter, &record.symbol, 0);
         abi::emit_store_zero_to_symbol(ctx.emitter, &record.symbol, 8);

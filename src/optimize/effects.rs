@@ -103,7 +103,6 @@ pub(super) fn stmt_effect(stmt: &Stmt) -> Effect {
         StmtKind::Echo(expr) => output_effect(expr_effect(expr)),
         StmtKind::ExprStmt(expr)
         | StmtKind::ConstDecl { value: expr, .. }
-        | StmtKind::StaticVar { init: expr, .. }
         | StmtKind::ListUnpack { value: expr, .. }
             => expr_effect(expr),
         StmtKind::Return(Some(expr)) => {
@@ -112,6 +111,10 @@ pub(super) fn stmt_effect(stmt: &Stmt) -> Effect {
                 effect.with_may_throw()
             } else { effect }
         }
+        // Rebinding a reached static can retire a local object; recursive initializers can
+        // also discard their outer result after an inner call has initialized the storage.
+        StmtKind::StaticVar { init, .. } => expr_effect(init)
+            .with_side_effects().with_may_throw().with_writes_globals(),
         StmtKind::Throw(expr) => expr_effect(expr).with_side_effects().with_may_throw(),
         StmtKind::Assign { name, value }
         | StmtKind::TypedAssign { name, value, .. } => {

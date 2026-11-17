@@ -858,3 +858,34 @@ the initialized value. Current reflection evaluates missing initializers. Factb8
 records this open gap; do not cache its placeholder as a successful binding.
 Continue native/static and foreach flow, all six pending families, and full host/
 umbrella acceptance. No full suite, push or PR was run.
+
+### Verified139: native static activation lifetimes
+
+Function static metadata now owns a canonical managed cell with a boxed physical
+payload. The PHP name remains an activation alias, retained after successful
+initialization. Prior aliases keep their original binding. Displaced values stay
+pinned until publication, and process/request/application cleanup detaches the
+persistent owner before releasing it. Top-level statics retain their existing path.
+Original initializer producer contracts survive narrowing, including open mixed.
+Canonical writes reuse the existing Mixed publisher independently of validation.
+Scalar string reference arguments preserve the original place instead of casting
+to a retired value temporary. AST/EIR effects include static publication callbacks.
+
+Final queue b631f49e passes in2m50s: default build38.66s, all-five-target EIR0.75s,
+real clang1.51s, settype-foreach1.01s, optimizer destructor boundary0.01s, expanded
+native bundle7.93s and existing valid-reference/union bundle1.15s. Twenty-two probe
+outcomes are preserved; nineteen execute with clean heaps, while three inherited
+checker refusals remain for the next step. The new static example passes both IR
+modes with clean heaps. The previous interpreted lifetime bundle also passes in
+queue4ba0b630 (135.75s). PHP output, syntax and hygiene checks pass.
+
+The first raw-address prototype failed default float writes and exceptional reads;
+canonical cells correct both. A final effect test initially lacked any possible
+destructor, so closed-world catch removal was valid. Its corrected real-destructor
+fixture passes without changes to exception-flow precision.
+
+Next: detach a reached static activation on unset, accept boxed reference writes
+through its existing canonical cell, and remove checker restrictions that assume
+raw static payloads. Dynamic Reflection placeholders, foreach producer flow, all
+six pending semantic families and final host/umbrella acceptance remain active.
+No full local suite, push or PR was run.

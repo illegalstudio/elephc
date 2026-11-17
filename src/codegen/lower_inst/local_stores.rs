@@ -800,7 +800,18 @@ pub(in crate::codegen) fn store_value_to_ref_cell_as(
     target_ty: &PhpType,
     previous: RefCellStorePrevious,
 ) -> Result<()> {
-    store_value_to_raw_ref_cell_as(ctx, slot, value, target_ty, previous)
+    let raw = ctx.next_label("reference_store_legacy");
+    let done = ctx.next_label("reference_store_complete");
+    abi::load_at_offset(ctx.emitter, abi::int_result_reg(ctx.emitter), ctx.local_offset(slot)?);
+    abi::emit_call_label(ctx.emitter, "__rt_reference_cell_canonical");
+    abi::emit_branch_if_int_result_zero(ctx.emitter, &raw);
+    // Canonical cells preserve the actual PHP tag even when the legacy alias has a scalar ABI.
+    store_value_to_raw_ref_cell_as(ctx, slot, value, &PhpType::Mixed, previous)?;
+    abi::emit_jump(ctx.emitter, &done);
+    ctx.emitter.label(&raw);
+    store_value_to_raw_ref_cell_as(ctx, slot, value, target_ty, previous)?;
+    ctx.emitter.label(&done);
+    Ok(())
 }
 
 /// Returns whether `value` is an owned in-place `++`/`--` result.

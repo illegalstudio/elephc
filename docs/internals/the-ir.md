@@ -772,10 +772,20 @@ Each instruction has:
 | `LoadGlobal(name)` | none | declared type | `reads_global` |
 | `StoreGlobal(name, value)` | value | `Void` | `writes_global`, maybe `refcount_op` |
 | `LoadStaticLocal(slot)` | none | slot type | `reads_global` |
+| `LoadStaticLocalRefCell(slot)` | none | borrowed managed cell address (`I64`) | `reads_global` |
 | `StoreStaticLocal(slot, value)` | value | `Void` | `writes_global`, maybe `refcount_op` |
-| `InitStaticLocal(slot, value)` | value | `Void` | `reads_global`, `writes_global`, maybe allocation/refcount effects |
+| `InitStaticLocal(slot, value)` | value | `Void` | PHP callback effects, including allocation and cleanup throws |
 | `LoadStaticProperty(class, property)` | none | property type | `reads_global`, maybe `may_deopt` for late static |
 | `StoreStaticProperty(class, property, value, mode?, owner?)` | original value, optional assignment-site Bool and borrowed unwind owner | `Void` | `writes_global`, maybe `refcount_op`, `may_deopt` |
+
+Function static metadata owns a managed reference cell with a canonical boxed
+payload. `LoadStaticLocalRefCell` borrows that cell; the reached activation binding
+retains its own lease through `BindRefCellPtr`. The PHP name and persistent metadata
+use distinct slots, so earlier aliases keep their original storage and failed
+initializers preserve the previous binding. `BindLocalRefContract` can attach an
+immutable strict contract to the persistent symbol independently of its boxed
+payload. Process and request cleanup detach that owner before releasing it.
+Top-level static storage keeps its raw symbol layout.
 
 `UnsetLocal` and `ZeroLocalSlot` both clear a slot at its own storage type and
 differ only in the bit pattern, which is what each caller needs. `UnsetLocal`

@@ -424,6 +424,7 @@ pub(super) fn lower_instruction(ctx: &mut FunctionContext<'_>, inst_id: InstId) 
         Op::InstanceOfDynamic => objects::lower_instanceof_dynamic(ctx, &inst),
         Op::ScopedConstantGet => scoped_constants::lower_scoped_constant_get(ctx, &inst),
         Op::LoadStaticLocal => static_locals::lower_load_static_local(ctx, &inst),
+        Op::LoadStaticLocalRefCell => static_locals::lower_load_static_local_ref_cell(ctx, &inst),
         Op::StoreStaticLocal => static_locals::lower_store_static_local(ctx, &inst),
         Op::InitStaticLocal => static_locals::lower_init_static_local(ctx, &inst),
         Op::StaticLocalUninitialized => {
