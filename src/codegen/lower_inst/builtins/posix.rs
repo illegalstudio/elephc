@@ -12,6 +12,9 @@
 //!   stored as a boxed `Mixed` cell is inspected at run time so `int|resource` values take the
 //!   matching path, while inline `TaggedScalar` unions such as `?int` use the int conversion.
 //! - A closed stream (negative release sentinel) throws PHP's `TypeError` before the probe.
+//! - Integer operands pass `emit_int_param_guard()` first: values PHP's coercive `int` check
+//!   refuses throw `TypeError` (or warn and return false for `posix_isatty()`) instead of
+//!   reaching the weak cast, which would turn `[]` or `"abc"` into pid 0.
 
 use crate::codegen::context::FunctionContext;
 use crate::codegen::platform::Arch;
@@ -24,10 +27,42 @@ use super::{ensure_arg_count, expect_operand, store_if_result};
 
 /// Runtime `Mixed` tag carried by boxed resource values.
 const MIXED_TAG_RESOURCE: i64 = 9;
+/// Runtime `Mixed` tag carried by boxed string values.
+const MIXED_TAG_STRING: u8 = 1;
+
+/// What a refused integer operand does once its diagnostic is built.
+#[derive(Clone, Copy)]
+pub(super) enum IntParamRejection<'a> {
+    /// Throws the message as a catchable `TypeError`.
+    Throw,
+    /// Emits the message as a warning, loads `false` and jumps to the given label.
+    WarnFalse(&'a str),
+}
+
+impl IntParamRejection<'_> {
+    /// Whether the guarded parameter is `posix_isatty()`'s `int|resource`, which admits streams.
+    fn admits_resources(self) -> bool {
+        matches!(self, Self::WarnFalse(_))
+    }
+}
 
 /// Lowers `posix_kill()` and raises PHP's `ValueError` for a process id outside `pid_t`.
 pub(super) fn lower_kill(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     ensure_arg_count(inst, "posix_kill", 2)?;
+    // Both operands are validated before either is converted: a refused value must throw,
+    // never coerce to pid 0 or -1 and signal a whole process group.
+    emit_int_param_guard(
+        ctx,
+        expect_operand(inst, 0)?,
+        "posix_kill(): Argument #1 ($process_id) must be of type int, ",
+        IntParamRejection::Throw,
+    )?;
+    emit_int_param_guard(
+        ctx,
+        expect_operand(inst, 1)?,
+        "posix_kill(): Argument #2 ($signal) must be of type int, ",
+        IntParamRejection::Throw,
+    )?;
     load_as_int(ctx, expect_operand(inst, 0)?, "posix_kill process_id")?;
     abi::emit_push_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
     load_as_int(ctx, expect_operand(inst, 1)?, "posix_kill signal")?;
@@ -63,6 +98,16 @@ pub(super) fn lower_isatty(ctx: &mut FunctionContext<'_>, inst: &Instruction) ->
     ensure_arg_count(inst, "posix_isatty", 1)?;
     let operand = expect_operand(inst, 0)?;
     let raw_type = ctx.raw_value_php_type(operand)?;
+    let done = ctx.next_label("posix_isatty_done");
+    if !matches!(raw_type, PhpType::Resource(_)) {
+        // Resources pass the guard; PHP warns and returns false for any other refused value.
+        emit_int_param_guard(
+            ctx,
+            operand,
+            "posix_isatty(): Argument #1 ($file_descriptor) must be of type int|resource, ",
+            IntParamRejection::WarnFalse(&done),
+        )?;
+    }
     if let PhpType::Resource(_) = raw_type {
         ctx.load_value_to_result(operand)?;
         emit_reject_closed_stream(ctx);
@@ -73,7 +118,6 @@ pub(super) fn lower_isatty(ctx: &mut FunctionContext<'_>, inst: &Instruction) ->
     } else {
         load_as_int(ctx, operand, "posix_isatty file_descriptor")?;
     }
-    let done = ctx.next_label("posix_isatty_done");
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
             // -- probe the descriptor and skip the range warning on a boolean status --
@@ -160,4 +204,151 @@ fn emit_fd_range_warning(ctx: &mut FunctionContext<'_>) {
     abi::emit_symbol_address(ctx.emitter, pointer_reg, &label);
     abi::emit_load_int_immediate(ctx.emitter, length_reg, len as i64);
     abi::emit_call_label(ctx.emitter, "__rt_diag_warning");
+}
+
+/// Refuses an operand that PHP's coercive `int` parameter check rejects, before any conversion.
+///
+/// `prefix` is the message up to the runtime type word (`"f(): Argument #1 ($x) must be of type
+/// int, "`). Ints, bools, floats, nulls and `TaggedScalar` unions pass untouched: `load_as_int()`
+/// applies their conversions and diagnostics afterwards. A string passes only when it is fully
+/// numeric; a boxed operand is unboxed and refused when it holds anything other than those
+/// scalars, so arrays, objects, resources, closures and non-numeric strings never reach the
+/// weak cast that would turn them into 0 or 1. Boxed resources pass only for the
+/// `int|resource` warning mode of `posix_isatty()`, which resolves them to descriptors itself.
+pub(super) fn emit_int_param_guard(
+    ctx: &mut FunctionContext<'_>,
+    operand: crate::ir::ValueId,
+    prefix: &str,
+    rejection: IntParamRejection<'_>,
+) -> Result<()> {
+    match ctx.raw_value_php_type(operand)?.codegen_repr() {
+        PhpType::Str => {
+            let accepted = ctx.next_label("int_param_string_ok");
+            let refused = ctx.next_label("int_param_string_refused");
+            ctx.load_value_to_result(operand)?;
+            abi::emit_call_label(ctx.emitter, "__rt_str_looks_like_int_for_coercion");
+            abi::emit_branch_if_int_result_zero(ctx.emitter, &refused);
+            abi::emit_jump(ctx.emitter, &accepted);
+            ctx.emitter.label(&refused);
+            emit_int_param_rejection(ctx, prefix, "string", rejection);
+            ctx.emitter.label(&accepted);
+        }
+        PhpType::Mixed | PhpType::Union(_) => emit_boxed_int_param_guard(ctx, operand, prefix, rejection)?,
+        _ => {}
+    }
+    Ok(())
+}
+
+/// Unboxes a `Mixed` operand and refuses every runtime tag PHP cannot coerce to `int`.
+fn emit_boxed_int_param_guard(
+    ctx: &mut FunctionContext<'_>,
+    operand: crate::ir::ValueId,
+    prefix: &str,
+    rejection: IntParamRejection<'_>,
+) -> Result<()> {
+    let accepted = ctx.next_label("int_param_boxed_ok");
+    let string_arm = ctx.next_label("int_param_boxed_string");
+    crate::codegen::lower_inst::call_operands::load_value_to_first_int_arg(ctx, operand)?;
+    abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
+    let tag_reg = abi::int_result_reg(ctx.emitter);
+    let mut refused = Vec::new();
+    for (tag, name) in crate::codegen::lower_inst::objects::RUNTIME_TAGS {
+        let target = match (tag, name) {
+            (MIXED_TAG_STRING, _) => string_arm.clone(),
+            (_, "int" | "float" | "bool" | "null") => accepted.clone(),
+            (_, "resource") if rejection.admits_resources() => accepted.clone(),
+            _ => {
+                let label = ctx.next_label(&format!("int_param_refuse_{name}"));
+                refused.push((tag, name, label.clone()));
+                label
+            }
+        };
+        crate::codegen::lower_inst::enums::emit_mixed_tag_branch(ctx, tag_reg, i64::from(tag), &target);
+    }
+    // `__rt_mixed_unbox` peels nested boxes, so no other tag reaches this fall-through.
+    emit_int_param_rejection(ctx, prefix, "mixed", rejection);
+    for (tag, name, label) in refused {
+        ctx.emitter.label(&label);
+        if tag == crate::codegen::lower_inst::objects::OBJECT_TAG {
+            emit_object_int_param_rejection(ctx, prefix, rejection);
+        } else {
+            emit_int_param_rejection(ctx, prefix, name, rejection);
+        }
+    }
+    ctx.emitter.label(&string_arm);
+    let (string_ptr, string_len) = abi::string_result_regs(ctx.emitter);
+    let payload = crate::codegen_support::mixed_unbox_payload_reg(ctx.emitter.target);
+    let payload_len = match ctx.emitter.target.arch {
+        Arch::AArch64 => "x2",
+        Arch::X86_64 => "rdx",
+    };
+    abi::emit_reg_move(ctx.emitter, string_len, payload_len);
+    abi::emit_reg_move(ctx.emitter, string_ptr, payload);
+    abi::emit_call_label(ctx.emitter, "__rt_str_looks_like_int_for_coercion");
+    let string_refused = ctx.next_label("int_param_refuse_string");
+    abi::emit_branch_if_int_result_zero(ctx.emitter, &string_refused);
+    abi::emit_jump(ctx.emitter, &accepted);
+    ctx.emitter.label(&string_refused);
+    emit_int_param_rejection(ctx, prefix, "string", rejection);
+    ctx.emitter.label(&accepted);
+    Ok(())
+}
+
+/// Throws or warns `<prefix><given> given` for a statically named runtime type.
+fn emit_int_param_rejection(
+    ctx: &mut FunctionContext<'_>,
+    prefix: &str,
+    given: &str,
+    rejection: IntParamRejection<'_>,
+) {
+    match rejection {
+        IntParamRejection::Throw => {
+            super::super::exceptions::emit_type_error(ctx, &format!("{prefix}{given} given"));
+        }
+        IntParamRejection::WarnFalse(done) => {
+            super::super::runtime_class_messages::emit_static_diagnostic(
+                ctx,
+                &format!("Warning: {prefix}{given} given\n"),
+                true,
+            );
+            emit_false_result(ctx, done);
+        }
+    }
+}
+
+/// Throws or warns `<prefix><Class> given` for the unboxed object in the payload register.
+fn emit_object_int_param_rejection(
+    ctx: &mut FunctionContext<'_>,
+    prefix: &str,
+    rejection: IntParamRejection<'_>,
+) {
+    let payload = crate::codegen_support::mixed_unbox_payload_reg(ctx.emitter.target);
+    let result = abi::int_result_reg(ctx.emitter);
+    abi::emit_reg_move(ctx.emitter, result, payload);
+    super::super::runtime_class_messages::emit_runtime_class_name_to_string_result(ctx, result, "object");
+    match rejection {
+        IntParamRejection::Throw => {
+            super::super::runtime_class_messages::emit_concat_static_prefix(ctx, prefix);
+            super::super::runtime_class_messages::emit_concat_static_suffix(ctx, " given");
+            abi::emit_call_label(ctx.emitter, "__rt_str_persist");
+            super::super::exceptions::emit_type_error_from_string_result(ctx);
+        }
+        IntParamRejection::WarnFalse(done) => {
+            let (name_ptr, name_len) = abi::string_result_regs(ctx.emitter);
+            abi::emit_push_reg_pair(ctx.emitter, name_ptr, name_len);
+            super::super::runtime_class_messages::emit_static_diagnostic(ctx, &format!("Warning: {prefix}"), false);
+            let (fragment_ptr, fragment_len) =
+                super::super::runtime_class_messages::diagnostic_fragment_regs(ctx.emitter);
+            abi::emit_pop_reg_pair(ctx.emitter, fragment_ptr, fragment_len);
+            abi::emit_call_label(ctx.emitter, "__rt_diag_warning_fragment");
+            super::super::runtime_class_messages::emit_static_diagnostic(ctx, " given\n", true);
+            emit_false_result(ctx, done);
+        }
+    }
+}
+
+/// Loads PHP `false` into the integer result register and jumps to the builtin's result store.
+fn emit_false_result(ctx: &mut FunctionContext<'_>, done: &str) {
+    abi::emit_load_int_immediate(ctx.emitter, abi::int_result_reg(ctx.emitter), 0);
+    abi::emit_jump(ctx.emitter, done);
 }

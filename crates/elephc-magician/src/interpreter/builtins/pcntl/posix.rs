@@ -7,6 +7,8 @@
 //!
 //! Key details:
 //! - Errno state lives in the bridge, so eval and compiled code observe one `posix_get_last_error()`.
+//! - Integer operands follow PHP's coercive `int` parameter rules before any bridge call, so a
+//!   refused `posix_kill()` operand throws instead of coercing to a process-group id.
 //! - `posix_isatty()` resolves eval-owned streams to their host descriptor; host stream payloads
 //!   below the eval namespace already are native descriptors.
 
@@ -35,8 +37,12 @@ pub(super) fn eval_posix_result(
         }
         "posix_isatty" => eval_posix_isatty(args, context, values)?,
         "posix_kill" => {
-            let process_id = eval_int_value(eval_pcntl_required_arg(args, 0)?.value, values)?;
-            let signal = eval_int_value(eval_pcntl_required_arg(args, 1)?.value, values)?;
+            // Both operands are validated before the bridge runs: a refused value must throw,
+            // never coerce to pid 0 or -1 and signal a whole process group.
+            let process_id = eval_pcntl_required_arg(args, 0)?.value;
+            let process_id = eval_int_param(process_id, name, 1, "process_id", context, values)?;
+            let signal = eval_pcntl_required_arg(args, 1)?.value;
+            let signal = eval_int_param(signal, name, 2, "signal", context, values)?;
             match elephc_pcntl::elephc_posix_kill(process_id, signal) {
                 elephc_pcntl::POSIX_KILL_PID_OUT_OF_RANGE => eval_throw_builtin_value_error(
                     elephc_pcntl::POSIX_KILL_PID_RANGE_MESSAGE,
@@ -46,7 +52,7 @@ pub(super) fn eval_posix_result(
                 status => values.bool_value(status == 1)?,
             }
         }
-        "posix_strerror" => eval_pcntl_strerror(args, values)?,
+        "posix_strerror" => eval_pcntl_strerror(name, args, context, values)?,
         _ => return Ok(None),
     };
     Ok(Some(result))
@@ -89,7 +95,17 @@ fn eval_posix_isatty(
             }
         }
     } else {
-        eval_int_value(operand, values)?
+        match eval_weak_int_param(operand, "posix_isatty", 1, "file_descriptor", values)? {
+            Some(fd) => fd,
+            None => {
+                // PHP's own int|resource check warns and returns false instead of throwing.
+                let given = eval_given_type_name(operand, context, values)?;
+                values.warning(&format!(
+                    "Warning: posix_isatty(): Argument #1 ($file_descriptor) must be of type int|resource, {given} given\n"
+                ))?;
+                return values.bool_value(false);
+            }
+        }
     };
     match elephc_pcntl::elephc_posix_isatty(fd) {
         elephc_pcntl::POSIX_ISATTY_FD_OUT_OF_RANGE => {

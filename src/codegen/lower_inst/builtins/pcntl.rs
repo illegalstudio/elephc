@@ -1330,6 +1330,12 @@ fn emit_validate_priority_mode(ctx: &mut FunctionContext<'_>, name: &str, argume
 /// Lowers `pcntl_strerror()` / `posix_strerror()` and persists libc's borrowed message as an owned PHP string.
 fn lower_strerror(ctx: &mut FunctionContext<'_>, inst: &Instruction, name: &str) -> Result<()> {
     ensure_arg_count(inst, name, 1)?;
+    super::posix::emit_int_param_guard(
+        ctx,
+        expect_operand(inst, 0)?,
+        &format!("{name}(): Argument #1 ($error_code) must be of type int, "),
+        super::posix::IntParamRejection::Throw,
+    )?;
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
             ctx.emitter.instruction("sub sp, sp, #16");                         // reserve aligned output storage for the message length
