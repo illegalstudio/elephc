@@ -631,7 +631,9 @@ pub(super) fn emit_builtin_call_value_with_source_mode(
         }
         ctx.end_argument_guard_scope();
     }
-    if is_eval && eval_needs_barrier {
+    if is_eval && (eval_needs_barrier || eval_literal.is_some_and(|fragment|
+        eval_literal_scope_barrier_writes(ctx, fragment).is_some()))
+    {
         crate::ir_lower::reference_local_validators::prepare_eval_bindings(ctx, span);
     }
     let call = ctx.emit_value(

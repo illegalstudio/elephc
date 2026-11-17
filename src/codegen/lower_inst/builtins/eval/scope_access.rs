@@ -41,7 +41,9 @@ pub(in crate::codegen::lower_inst::builtins) fn lower_eval_scope_set(
     let result_reg = abi::int_result_reg(ctx.emitter);
     abi::emit_store_to_sp(ctx.emitter, result_reg, EVAL_TEMP_CELL_OFFSET);
     load_eval_scope_operand_to_arg(ctx, scope, 0)?;
-    emit_eval_scope_set_for_loaded_scope(ctx, &name, EVAL_SCOPE_FLAG_OWNED);
+    let flags = EVAL_SCOPE_FLAG_OWNED | if ctx.module.semantic_profile.contains(
+        elephc_semantics::StrictFeature::Locals) { EVAL_SCOPE_FLAG_ASSIGN_REFERENCE } else { 0 };
+    emit_eval_scope_set_for_loaded_scope(ctx, &name, flags);
     abi::emit_release_temporary_stack(ctx.emitter, EVAL_STACK_BYTES);
     Ok(())
 }

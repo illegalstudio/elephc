@@ -16,14 +16,14 @@ use super::*;
 
 /// Collects PHP-visible locals that the current conservative scope sync can round-trip.
 pub(super) fn eval_sync_locals(ctx: &FunctionContext<'_>) -> Vec<EvalSyncLocal> {
-    eval_sync_function_locals(ctx.function)
+    eval_sync_function_locals(ctx.function, ctx.module.semantic_profile.contains(elephc_semantics::StrictFeature::Locals))
         .into_iter()
         .filter(|local| !local_uses_eval_global_sync(ctx, Some(&local.name)))
         .collect()
 }
 
 /// Maps PHP parameter names to their active COW shadows, never exposing incoming ABI duplicates.
-fn eval_sync_function_locals(function: &Function) -> Vec<EvalSyncLocal> {
+fn eval_sync_function_locals(function: &Function, include_null_bindings: bool) -> Vec<EvalSyncLocal> {
     let shadows = function.locals.iter()
         .filter(|local| local.kind == LocalKind::PhpLocal)
         .filter_map(|local| local.name.as_deref()?.strip_suffix("#cow"))
@@ -47,7 +47,7 @@ fn eval_sync_function_locals(function: &Function) -> Vec<EvalSyncLocal> {
                 return None;
             }
             let ty = local.php_type.codegen_repr();
-            eval_sync_type_supported(&ty).then_some(EvalSyncLocal {
+            (eval_sync_type_supported(&ty) || (include_null_bindings && ty == PhpType::Void)).then_some(EvalSyncLocal {
                 name: name.to_string(), slot: local.id, ty,
             })
         }).collect()
@@ -375,7 +375,9 @@ fn main_eval_local_supplies_global(ctx: &FunctionContext<'_>, name: &str) -> boo
         && ctx.function.locals.iter().any(|local| {
             local.kind == LocalKind::PhpLocal
                 && local.name.as_deref() == Some(name)
-                && eval_sync_type_supported(&local.php_type.codegen_repr())
+                && (eval_sync_type_supported(&local.php_type.codegen_repr())
+                    || (ctx.module.semantic_profile.contains(elephc_semantics::StrictFeature::Locals)
+                        && local.php_type == PhpType::Void))
         })
 }
 
@@ -422,7 +424,7 @@ mod tests {
         }
         let text = function.add_local(Some("text".to_string()), IrType::Str, PhpType::Str, LocalKind::PhpLocal);
         expected.push(("text".to_string(), text));
-        let actual = eval_sync_function_locals(&function).into_iter()
+        let actual = eval_sync_function_locals(&function, false).into_iter()
             .map(|local| (local.name, local.slot)).collect::<Vec<_>>();
         assert_eq!(actual, expected);
     }
@@ -451,7 +453,7 @@ mod tests {
         ] {
             function.add_local(Some(hidden), IrType::Str, PhpType::Str, LocalKind::PhpLocal);
         }
-        let actual = eval_sync_function_locals(&function).into_iter()
+        let actual = eval_sync_function_locals(&function, false).into_iter()
             .map(|local| (local.name, local.slot)).collect::<Vec<_>>();
         assert_eq!(actual, vec![("__elephc_func_arg_value".to_string(), visible)]);
     }

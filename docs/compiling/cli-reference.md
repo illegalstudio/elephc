@@ -953,11 +953,11 @@ new kind. These checks do not enable `--strict-coercions`, `--strict-arithmetic`
 `--strict-casts` or `--strict-comparisons`. See
 [`examples/strict-locals/main.php`](https://github.com/illegalstudio/elephc/blob/main/examples/strict-locals/main.php).
 
-`eval()`'d code — whether AOT-lowered from a literal fragment or run through
-the optional Magician interpreter bridge — reads and writes its locals through
-a boxed `Mixed` scope representation rather than a typed frame slot, so it was
-never subject to the monomorphic-local check `--strict-locals` restores.
-`--strict-locals` therefore has no effect inside `eval()` fragments.
+Native bindings retain their contracts when literal AOT eval or the optional
+Magician interpreter writes through their imported scope entries. Rejected writes
+throw `TypeError` before changing the original value or its aliases. Scope-only
+literal fragments remain compiled code and can compose with `--strict-dynamic-code`.
+Analysis of bindings first created within an eval fragment is still being integrated.
 
 A body that **calls** `eval()` anywhere is the other side of that coin: the
 eval scope reaches the surrounding function's locals BY NAME, while the kill

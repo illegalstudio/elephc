@@ -58,6 +58,8 @@ fn store_mixed_scope_cell_to_logical_local(
     let rejected = ctx.next_label("eval_local_reload_rejected");
     scope_reload_checks::guard_heap_replacement(ctx, &local.ty, &local.name, pending_throw, &rejected);
     match local.ty.codegen_repr() {
+        // Raw null storage has no payload; canonical shared snapshots are handled separately.
+        PhpType::Void => {},
         PhpType::Mixed | PhpType::Union(_) => {
             abi::emit_incref_if_refcounted(ctx.emitter, &PhpType::Mixed);
             replace_owned_eval_local(ctx, local, pending_throw)?;
@@ -146,6 +148,8 @@ fn store_mixed_scope_cell_to_ref_cell(
         &rejected,
     );
     match payload_ty.codegen_repr() {
+        // Shared canonical null references took the wrapper-identity branch above.
+        PhpType::Void => {},
         PhpType::Mixed | PhpType::Union(_) => {
             abi::emit_incref_if_refcounted(ctx.emitter, &PhpType::Mixed);
             replace_owned_eval_ref_cell(ctx, local, payload_ty, pending_throw)?;
@@ -410,6 +414,7 @@ pub(super) fn store_missing_scope_entry_to_local(
 ) -> Result<()> {
     scope_reload_checks::detach_missing_local(ctx, local, pending_throw)?;
     match local.ty.codegen_repr() {
+        PhpType::Void => {},
         PhpType::Mixed | PhpType::Union(_) => {
             ensure_eval_local_writeback_owns_value(ctx, local)?;
             ctx.release_local_before_refcounted_writeback(local.slot)?;

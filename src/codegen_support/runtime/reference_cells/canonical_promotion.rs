@@ -15,6 +15,7 @@ use crate::types::CanonicalReferencePayload;
 pub(crate) fn promotion_entry(payload: CanonicalReferencePayload) -> &'static str {
     match payload {
         CanonicalReferencePayload::Boxed => "__rt_reference_cell_promote_mixed",
+        CanonicalReferencePayload::Null => "__rt_reference_cell_promote_null",
         CanonicalReferencePayload::Int => "__rt_reference_cell_promote_int",
         CanonicalReferencePayload::Float => "__rt_reference_cell_promote_float",
         CanonicalReferencePayload::Bool => "__rt_reference_cell_promote_bool",
@@ -28,7 +29,8 @@ pub(crate) fn promotion_entry(payload: CanonicalReferencePayload) -> &'static st
 
 /// Emits one typed entry per raw value layout, sharing ordinary boxing and reference promotion.
 pub(super) fn emit(emitter: &mut Emitter) {
-    for (payload, ty) in [(CanonicalReferencePayload::Int, PhpType::Int),
+    for (payload, ty) in [(CanonicalReferencePayload::Null, PhpType::Void),
+        (CanonicalReferencePayload::Int, PhpType::Int),
         (CanonicalReferencePayload::Float, PhpType::Float),
         (CanonicalReferencePayload::Bool, PhpType::Bool),
         (CanonicalReferencePayload::String, PhpType::Str),
@@ -117,8 +119,8 @@ mod tests {
             process.stdin.take().unwrap().write_all(assembly.as_bytes()).unwrap();
             let output = process.wait_with_output().unwrap();
             assert!(output.status.success(), "{name}: {}", String::from_utf8_lossy(&output.stderr));
-            assert_eq!(assembly.matches("__rt_reference_cell_canonical").count(), 8, "{name}");
-            assert_eq!(assembly.matches("__rt_reference_cell_promote_mixed").count(), 8, "{name}");
+            assert_eq!(assembly.matches("__rt_reference_cell_canonical").count(), 9, "{name}");
+            assert_eq!(assembly.matches("__rt_reference_cell_promote_mixed").count(), 9, "{name}");
         }
     }
 }

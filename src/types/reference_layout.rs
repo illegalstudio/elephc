@@ -43,6 +43,7 @@ pub(crate) fn static_property_storage_type(
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum CanonicalReferencePayload {
     Boxed,
+    Null,
     Int,
     Float,
     Bool,
@@ -58,6 +59,7 @@ pub(crate) fn canonical_property_reference_payload(ty: &PhpType) -> Option<Canon
     if !declaration_contract(ty) { return None; }
     Some(match ty.codegen_repr() {
         PhpType::Mixed => CanonicalReferencePayload::Boxed,
+        PhpType::Void => CanonicalReferencePayload::Null,
         PhpType::Int => CanonicalReferencePayload::Int,
         PhpType::Float => CanonicalReferencePayload::Float,
         PhpType::Bool => CanonicalReferencePayload::Bool,
@@ -108,6 +110,7 @@ mod tests {
     /// Nullable declarations select their actual ABI without admitting unrelated pointer layouts.
     #[test]
     fn canonical_property_reference_payload_preserves_nullable_layouts() {
+        assert_eq!(canonical_property_reference_payload(&PhpType::Void), Some(CanonicalReferencePayload::Null));
         assert_eq!(canonical_property_reference_payload(&PhpType::Union(vec![PhpType::Int, PhpType::Void])),
             Some(CanonicalReferencePayload::NullableInt));
         for members in [vec![PhpType::Str, PhpType::Void], vec![PhpType::Int, PhpType::Str],

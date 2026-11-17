@@ -2346,14 +2346,8 @@ fn test_the_single_case_switch_rewrite_vetoes_itself_on_a_marked_default() {
     );
 }
 
-/// `--strict-locals` and eval-AOT compose: a literal `eval` fragment still retypes its own locals
-/// and still writes the caller's, because the fragment goes through the dynamic scope map rather
-/// than the AOT local-slot checker the flag tightens.
-///
-/// Structural, not incidental: the eval-AOT lowerers are handed EMPTY decision maps
-/// (`ir_lower::function::eval_aot_decision_maps`), so no binding decision — and no strict-mode
-/// refusal of one — can reach a fragment. Run through the real CLI so the flag under test is the
-/// one users pass.
+/// Literal eval preserves an imported native binding through the shared reference publisher.
+/// Fragment-owned locals still exercise the separate decision-map integration boundary.
 #[test]
 fn test_eval_fragment_composes_with_strict_locals() {
     let own_local = compile_cli_file_and_run_with_flags(
@@ -2363,10 +2357,10 @@ fn test_eval_fragment_composes_with_strict_locals() {
     assert_eq!(own_local, "s|ciao");
 
     let caller_local = compile_cli_file_and_run_with_flags(
-        "<?php\n$a = 1;\neval('$a = \"z\";');\necho $a;\n",
+        "<?php\n$a = 1;\ntry { eval('$a = \"z\";'); } catch (TypeError $error) { echo 'T'; }\necho gettype($a), '|', $a;\n",
         &["--strict-locals"],
     );
-    assert_eq!(caller_local, "z");
+    assert_eq!(caller_local, "Tinteger|1");
 }
 
 /// The REJECTION counterpart to `test_eval_fragment_composes_with_strict_locals`: drives the real

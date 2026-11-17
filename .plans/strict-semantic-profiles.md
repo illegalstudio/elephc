@@ -371,7 +371,7 @@ evidence and outstanding guarantees are recorded below.
 
 ## Implementation progress
 
-Verified through step121 (this commit), with remaining feature integration in progress. Issue:
+Verified through step122 (this commit), with remaining feature integration in progress. Issue:
 https://github.com/illegalstudio/elephc/issues/2347.
 
 The full task remains active. The user requested complete implementation, with a
@@ -893,3 +893,45 @@ The complete implementation remains active: literal eval decision maps and their
 old permissive expectations (37ae1f9b), runtime-established reverse eval origins
 (b99d1b21), remaining global/capture/foreach/mutation flow, the six unintegrated
 feature families and full umbrella/host acceptance still require completion.
+
+
+### Verified122: imported native contracts across literal eval
+
+Literal scope writes prepare existing caller source contracts even when the AOT
+planner avoids an interpreter barrier. BindLocalRefContract now selects typed
+canonical promotion for a supported owned payload, without relabeling the raw
+alias ABI. A null payload has an explicit canonical layout, and Locals-only null
+snapshot and reload support keeps raw null references visible at this boundary.
+
+A scope-set input flag distinguishes assignment from native snapshot installation.
+Both Magician scope assignment and the scope-only native map use the existing
+protected reference_replace_v2 and release_v3 contracts. The native helper uses
+shared ABI operations, preserving its old wrapper while validating before mutation
+and consuming candidate/displaced owners before propagating a contained Throwable.
+EvalScopeSet now explicitly models MAY_THROW. Repeated installation of an owned
+snapshot retires the previous lease even if both pointers are equal, fixing the
+pure-scope wrapper/child80-byte leak found during acceptance.
+
+The native scope-only implementation and Magician scope implementation are distinct.
+A literal unset in a combined fixture selects Magician for the module, so it cannot
+stand in for scope-only coverage. Isolated scalar probes first exposed that missing
+native path, which is now independently tested. The pure target gate asserts that
+Locals plus DynamicCode remains AOT and does not select the interpreter bridge.
+
+Joba09659ce passed the build and eight exact gates before the updated example
+exposed the existing body-wide eval/unset restriction. Those gates cover pure and
+bridge native scalar/null/reference/union/mixed behavior in both IR modes with
+clean heaps, all-five-target EIR, legacy imported-binding expectations, numeric and
+settype controls, layout classification, and real clang assembly for scope helpers
+and canonical promotions on all five targets. The example's eval demonstration is
+in a dedicated function so the earlier unset demonstration keeps its own body.
+Final jobe23097c1 passed the build, updated example and opaque-eval bundle in2m08s;
+the opaque bundle took116.72s. All changed emitter comments and diff hygiene pass.
+Default Magician/compiler archives were built. No full suite, push or PR was run.
+
+The full approved implementation remains active. Fragment-owned local decisions
+still need isolated source facts or runtime origin transport: the first part of
+test_eval_fragment_composes_with_strict_locals deliberately retains its previous
+own-local expectation for now; its imported native-binding part now catches the
+TypeError and observes integer1. Reverse eval origins b99d1b21, broader binding
+flow and the six remaining feature families plus umbrella/host acceptance remain.

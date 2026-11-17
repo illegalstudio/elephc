@@ -10,6 +10,30 @@
 
 use crate::support::*;
 
+/// Native and bridge-backed literal eval retain scalar contracts, references and exact owners.
+#[test]
+fn test_strict_literal_eval_preserves_native_binding_contracts() {
+    let source = include_str!("../fixtures/strict/literal_eval_binding_contracts.php");
+    assert_eq!(StrictFixture::new("<?php $value = 1; eval('$value = 2.5;'); echo gettype($value), ':', $value;")
+        .run(&["--strict-dynamic-code"]), "double:2.5");
+    let expected = concat!("Tinteger:1|Tinteger:1:1|3:3|double:2.5|double:2.5|",
+        "Tboolean:1:1|Tstring:kept:kept|Tdouble:2.5:2.5|TNULL::|");
+    for mode in ["--ir-opt=off", "--ir-opt=on"] {
+        for bridge in [false, true] {
+            let source = if bridge { format!("{source}\n$value = 1; eval('unset($value); $value = 2.5;'); echo gettype($value), ':', $value, '|';") }
+                else { source.to_string() };
+            let mut flags = vec!["--strict-locals", "--heap-debug", mode];
+            if !bridge { flags.push("--strict-dynamic-code"); }
+            let output = StrictFixture::new(&source).capture(&flags);
+            assert!(output.status.success(), "{flags:?}: {}", String::from_utf8_lossy(&output.stderr));
+            let expected = if bridge { format!("{expected}double:2.5|") } else { expected.to_string() };
+            assert_eq!(String::from_utf8_lossy(&output.stdout), expected, "{flags:?}: {}", String::from_utf8_lossy(&output.stderr));
+            assert!(String::from_utf8_lossy(&output.stderr).contains("HEAP DEBUG: leak summary: clean"),
+                "{flags:?}: {}", String::from_utf8_lossy(&output.stderr));
+        }
+    }
+}
+
 /// Mutating conversion validates the original binding, including aliases and named argument effects.
 #[test]
 fn test_strict_settype_preserves_local_contracts_and_owned_outputs() {
@@ -199,7 +223,7 @@ numericScope($argc);
 fn test_strict_numeric_locals_example() {
     let source = include_str!("../../examples/strict-locals/main.php");
     assert_eq!(StrictFixture::new(source).run(&["--strict-locals"]),
-        "Quantity requires an integer or null\nQuantity: 2\nQuantity: 3\nQuantity: not tracked\nThe integer binding kept its value\nArithmetic result: double\nFresh measurement: 2.5\nThe referenced quantity kept its integer value\nThe label kept its string value\nThe conversion kept the label value\n");
+        "Quantity requires an integer or null\nQuantity: 2\nQuantity: 3\nQuantity: not tracked\nThe integer binding kept its value\nArithmetic result: double\nFresh measurement: 2.5\nThe referenced quantity kept its integer value\nThe label kept its string value\nThe conversion kept the label value\nThe literal eval kept the label value\n");
 }
 
 

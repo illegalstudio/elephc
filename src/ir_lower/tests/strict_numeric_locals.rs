@@ -153,3 +153,27 @@ fn strict_settype_local_contracts_emit_on_every_target() {
         crate::codegen::generate_user_asm_from_ir(&module, false, false).unwrap();
     }
 }
+
+/// Literal eval publishes through scalar native sources while keeping its fully compiled scope runtime.
+#[test]
+fn strict_literal_eval_binding_contracts_emit_on_every_target() {
+    let source = include_str!("../../../tests/fixtures/strict/literal_eval_binding_contracts.php");
+    let program = crate::parser::parse_with_mode(&crate::lexer::tokenize(source).unwrap(), SourceMode::Php).unwrap();
+    let profile = SemanticProfile::PERMISSIVE.with(StrictFeature::Locals, true)
+        .with(StrictFeature::DynamicCode, true);
+    for name in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+        let target = Target::parse(name).unwrap();
+        let checked = crate::types::checker::check_staged_semantics(&program, target, profile).unwrap();
+        let module = crate::ir_lower::lower_program(&program, &checked, target, false).unwrap();
+        assert!(module.required_runtime_features.eval_scope, "{name}");
+        assert!(!module.required_runtime_features.eval_bridge, "{name}: literal source remains AOT");
+        let contracts = module.functions.iter().filter_map(|function| function.native_local_reference_contract.as_ref())
+            .collect::<Vec<_>>();
+        for contract in [crate::types::PhpType::Bool, crate::types::PhpType::Str,
+            crate::types::PhpType::Float, crate::types::PhpType::Void] {
+            assert!(contracts.contains(&&contract), "{name}: {contract}");
+        }
+        crate::ir::validate_module(&module).unwrap();
+        crate::codegen::generate_user_asm_from_ir(&module, false, false).unwrap();
+    }
+}

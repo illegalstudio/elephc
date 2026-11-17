@@ -91,6 +91,15 @@ pub unsafe extern "C" fn __elephc_eval_scope_set(
     } else {
         ScopeCellOwnership::Borrowed
     };
+    #[cfg(not(test))]
+    if flags & crate::abi::SCOPE_FLAG_ASSIGN_REFERENCE != 0 && flags & SCOPE_FLAG_NATIVE_SNAPSHOT == 0 {
+        if let Some((status, thrown)) = crate::runtime_hooks::scope_assignment::assign_existing_reference(
+            scope, &name, RuntimeCellHandle::from_raw(cell), ownership,
+        ) {
+            *throwable = thrown.map_or(std::ptr::null_mut(), RuntimeCellHandle::as_ptr);
+            return status.code();
+        }
+    }
     let replaced = scope.set_from_aot(name.clone(), RuntimeCellHandle::from_raw(cell), ownership);
     if flags & SCOPE_FLAG_NATIVE_SNAPSHOT != 0 {
         scope.mark_name_clean(&name);

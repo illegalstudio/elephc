@@ -55,3 +55,14 @@ try {
 } catch (TypeError $error) {
     echo "The conversion kept the label value", PHP_EOL;
 }
+
+// Literal eval retains the contract of a binding imported from native code.
+function checkLiteralLabel(): void {
+    $label = 'Quantity';
+    try {
+        eval('$label = 1;');
+    } catch (TypeError $error) {
+        echo "The literal eval kept the label value", PHP_EOL;
+    }
+}
+checkLiteralLabel();

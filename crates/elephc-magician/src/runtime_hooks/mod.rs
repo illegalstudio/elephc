@@ -22,6 +22,8 @@ mod tags;
 pub(crate) mod owner_frames;
 #[cfg(not(test))]
 pub(crate) mod release;
+#[cfg(not(test))]
+pub(crate) mod scope_assignment;
 
 #[cfg(not(test))]
 use crate::errors::EvalStatus;

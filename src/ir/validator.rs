@@ -1096,7 +1096,8 @@ fn validate_opcode_rules(
             check_count(inst_id, inst, 0, "0")?;
             let Some(Immediate::LocalSlot(slot)) = inst.immediate else { unreachable!() };
             let valid_owner = function.locals.get(slot.as_raw() as usize).is_some_and(|local|
-                local.kind == LocalKind::RefCell && local.php_type.codegen_repr() == PhpType::Mixed);
+                local.kind == LocalKind::RefCell
+                    && crate::types::canonical_property_reference_payload(&local.php_type).is_some());
             if !valid_owner || crate::semantics::conversions::implicit_contract(&inst.result_php_type).is_none() {
                 return Err(ValidationError::InvalidLocalReferenceContract(inst_id));
             }

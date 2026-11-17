@@ -3906,6 +3906,11 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
     /// durable heap reference cell suitable for an escaping by-reference parameter.
     pub(crate) fn promote_local_mixed_ref_cell(&mut self, name: &str, span: Option<Span>) {
         self.promote_local_mixed_ref_cell_storage(name, span);
+        self.bind_local_reference_contract(name, span);
+    }
+
+    /// Attaches a semantic source without changing an existing reference's declared payload ABI.
+    pub(crate) fn bind_local_reference_contract(&mut self, name: &str, span: Option<Span>) {
         let contract = span.and_then(|span| self.local_store_contracts.get(
             &(self.loop_storage_scope.clone(), span, name.to_string()))).cloned();
         if let Some(contract) = contract.filter(|contract|
