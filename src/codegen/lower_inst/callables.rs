@@ -633,6 +633,9 @@ fn emit_runtime_mixed_callable_descriptor_value_impl(
     ctx.emitter.label(&fatal_label);
     if let Some(slot) = eval_fallback_slot {
         emit_eval_closure_descriptor_fallback(ctx, callable, slot, &done_label)?;
+        if ctx.declared_callable_candidates.is_some() && invalid_type_error.is_none() {
+            emit_unlinked_declared_callable_builtin_error_from_mixed(ctx, callable)?;
+        }
     }
     if let Some(message) = invalid_type_error {
         super::exceptions::emit_type_error(ctx, message);
@@ -1281,6 +1284,10 @@ fn emit_runtime_string_descriptor_value_from_unboxed(
     abi::emit_jump(ctx.emitter, &miss_label);
 
     ctx.emitter.label(&miss_label);
+    // With an eval fallback the eval frame may still resolve the builtin; its miss path checks.
+    if ctx.declared_callable_candidates.is_some() && type_error.is_none() && eval_fallback.is_none() {
+        emit_unlinked_declared_callable_builtin_error(ctx);
+    }
     if let Some(fallback) = eval_fallback {
         abi::emit_release_temporary_stack(ctx.emitter, 16);
         abi::emit_jump(ctx.emitter, fallback);
@@ -1292,6 +1299,80 @@ fn emit_runtime_string_descriptor_value_from_unboxed(
     }
     ctx.emitter.label(&done_label);
     abi::emit_release_temporary_stack(ctx.emitter, 16);
+    Ok(())
+}
+
+/// Throws a catchable `Error` naming a builtin that a declared `callable` cannot call.
+///
+/// A declared `callable` resolves runtime names among the program's own functions, its static
+/// methods and the builtins written as literals at `callable` arguments, so a binary does not
+/// carry a wrapper for every builtin. A name that misses that set but that `is_callable()`
+/// accepts (the native table covers every builtin, user function and static method) is
+/// therefore a builtin selected only at run time. Any other miss falls through to the
+/// caller's eval fallback or fatal. Expects the stripped name on the temporary stack
+/// (pointer at offset 0, length at 8) and leaves it there on the fall-through path.
+fn emit_unlinked_declared_callable_builtin_error(ctx: &mut FunctionContext<'_>) {
+    let other_miss = ctx.next_label("declared_callable_other_miss");
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            abi::emit_load_temporary_stack_slot(ctx.emitter, "x0", 0);
+            abi::emit_load_temporary_stack_slot(ctx.emitter, "x1", 8);
+            abi::emit_call_label(ctx.emitter, "__rt_is_callable_string");
+            ctx.emitter.instruction(&format!("cbz x0, {}", other_miss));        // a name is_callable() refuses keeps the existing miss path
+        }
+        Arch::X86_64 => {
+            abi::emit_load_temporary_stack_slot(ctx.emitter, "rdi", 0);
+            abi::emit_load_temporary_stack_slot(ctx.emitter, "rsi", 8);
+            abi::emit_call_label(ctx.emitter, "__rt_is_callable_string");
+            ctx.emitter.instruction("test rax, rax");                           // did is_callable() accept the name?
+            ctx.emitter.instruction(&format!("je {}", other_miss));             // a name is_callable() refuses keeps the existing miss path
+        }
+    }
+    let (ptr_reg, len_reg) = abi::string_result_regs(ctx.emitter);
+    abi::emit_pop_reg_pair(ctx.emitter, ptr_reg, len_reg);
+    super::call_argument_unpack::emit_dynamic_message(
+        ctx,
+        b"Cannot call ",
+        b"() through a declared callable: a builtin named only at run time is not linked; \
+pass its name as a string literal or as a first-class callable",
+    );
+    super::exceptions::emit_error_from_string_result(ctx);
+    ctx.emitter.label(&other_miss);
+}
+
+/// Runs [`emit_unlinked_declared_callable_builtin_error`] after the eval fallback missed.
+///
+/// The string-name miss defers to eval first, because a callback reached inside an eval frame
+/// can still name any builtin. When eval resolves nothing either, a boxed string that
+/// `is_callable()` accepts is reported as an unlinked builtin; any other value falls through.
+fn emit_unlinked_declared_callable_builtin_error_from_mixed(
+    ctx: &mut FunctionContext<'_>,
+    callable: ValueId,
+) -> Result<()> {
+    let not_string = ctx.next_label("declared_callable_eval_miss_not_string");
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.load_value_to_reg(callable, "x0")?;
+            abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
+            ctx.emitter.instruction(&format!("cmp x0, #{}", MIXED_TAG_STRING)); // only a callable name can be an unlinked builtin
+            ctx.emitter.instruction(&format!("b.ne {}", not_string));           // other boxed values keep the existing fatal
+        }
+        Arch::X86_64 => {
+            ctx.load_value_to_reg(callable, "rax")?;
+            abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
+            ctx.emitter.instruction(&format!("cmp rax, {}", MIXED_TAG_STRING)); // only a callable name can be an unlinked builtin
+            ctx.emitter.instruction(&format!("jne {}", not_string));            // other boxed values keep the existing fatal
+        }
+    }
+    let (ptr_reg, len_reg) = abi::string_result_regs(ctx.emitter);
+    if ctx.emitter.target.arch == Arch::X86_64 {
+        ctx.emitter.instruction(&format!("mov {}, rdi", ptr_reg));              // move the unboxed string pointer into the string result register
+    }
+    emit_strip_callable_name_separator(ctx, ptr_reg, len_reg);
+    abi::emit_push_reg_pair(ctx.emitter, ptr_reg, len_reg);
+    emit_unlinked_declared_callable_builtin_error(ctx);
+    abi::emit_release_temporary_stack(ctx.emitter, 16);
+    ctx.emitter.label(&not_string);
     Ok(())
 }
 

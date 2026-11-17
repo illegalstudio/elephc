@@ -92,6 +92,54 @@ echo piped("strrev", "abc"), " ", mapped("strtoupper"), " ", rebound(function ()
     assert_eq!(out, "13A2\ncba A,B InstanceCallable\n");
 }
 
+/// Verifies a builtin whose name exists only at run time, never as a string literal at a
+/// `callable` argument, raises a catchable `Error` naming it when a declared `callable` invokes
+/// it, while runtime-selected user functions still run.
+///
+/// This is a documented elephc limit, not PHP output (PHP prints `A`): a declared `callable`
+/// links only the builtins named as literals, so a binary does not carry a wrapper for every
+/// builtin. The call used to stop with an uncatchable `Call to undefined function <dynamic>()`.
+#[test]
+fn test_declared_callable_runtime_only_builtin_raises_a_named_error() {
+    let out = compile_and_run(
+        r#"<?php
+function shout(string $s): string { return strtoupper($s) . "!"; }
+function apply(callable $f, string $s): string { return $f($s); }
+$builtin = strrev("reppuotrts");
+$user = strrev("tuohs");
+echo is_callable($builtin) ? "callable" : "not callable", "\n";
+echo apply($user, "a"), "\n";
+try { echo apply($builtin, "a"), "\n"; } catch (Error $e) { echo get_class($e), ": ", $e->getMessage(), "\n"; }
+echo "after\n";
+"#,
+    );
+    assert_eq!(
+        out,
+        "callable\nA!\nError: Cannot call strtoupper() through a declared callable: a builtin named \
+only at run time is not linked; pass its name as a string literal or as a first-class callable\nafter\n"
+    );
+}
+
+/// Verifies the named `Error` for a runtime-only builtin also fires when the invoking function
+/// owns an eval context: the eval callback fallback runs first (it resolves functions declared
+/// inside `eval()`) and the error is raised only after it misses.
+#[test]
+fn test_declared_callable_runtime_only_builtin_error_with_eval_fallback() {
+    let out = compile_and_run(
+        r#"<?php
+function apply(callable $f, string $s): string { eval('$unused = 1;'); return $f($s); }
+$builtin = strrev("reppuotrts");
+try { echo apply($builtin, "a"), "\n"; } catch (Error $e) { echo $e->getMessage(), "\n"; }
+echo "after\n";
+"#,
+    );
+    assert_eq!(
+        out,
+        "Cannot call strtoupper() through a declared callable: a builtin named only at run time \
+is not linked; pass its name as a string literal or as a first-class callable\nafter\n"
+    );
+}
+
 /// Verifies a value that is not callable raises PHP's binding `TypeError` when it reaches a
 /// declared `callable`, including through a `mixed` forwarder, and that `?callable` admits null.
 #[test]
