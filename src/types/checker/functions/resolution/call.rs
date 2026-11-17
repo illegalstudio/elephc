@@ -627,16 +627,14 @@ impl Checker {
                         decl.span,
                         &format!("Function '{}' variadic parameter ${}", name, vname),
                     )?;
-                    if elem_ty == PhpType::DeclaredCallable && !decl.variadic_by_ref {
-                        self.require_declared_callable_arg(
-                            &elem_ty,
-                            &ty,
-                            arg,
-                            caller_env,
-                            &format!("Function '{}' variadic parameter ${}", name, vname),
-                            None,
-                        )?;
-                    }
+                    self.require_declared_callable_variadic_arg(
+                        &elem_ty,
+                        &ty,
+                        arg,
+                        caller_env,
+                        &format!("Function '{}' variadic parameter ${}", name, vname),
+                        decl.variadic_by_ref,
+                    )?;
                     self.require_compatible_arg_type(
                         &elem_ty,
                         &ty,

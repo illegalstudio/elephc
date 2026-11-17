@@ -141,21 +141,42 @@ is not linked; pass its name as a string literal or as a first-class callable\na
 }
 
 /// Verifies a builtin named as a literal at a callable union parameter (`?callable`,
-/// `callable|false`, `?callable ...$fs`) still invokes when it reaches the callee as a string.
+/// `callable|false`) or a callable variadic element (`?callable ...$fs`, `callable ...$fs`)
+/// still invokes when it reaches the callee as a string.
 ///
-/// Only an exact `callable` parameter used to record the literal name for the runtime dispatch,
-/// so each of these calls stopped with the runtime-only builtin error instead of `Word`.
+/// `ucfirst`, `lcfirst` and `ucwords` have no runtime-selected wrapper, so only a recorded
+/// literal name links one; each form names a different builtin so none rides on another's
+/// record. Only an exact `callable` parameter used to record it, so these calls stopped with a
+/// runtime error.
 #[test]
 fn test_declared_callable_unions_keep_literal_builtin_names_invokable() {
     let out = compile_and_run(
         r#"<?php
 function nullable(?callable $f): string { return $f === null ? "" : $f("word"); }
 function orFalse(callable|false $f): string { return $f === false ? "" : $f("word"); }
-function many(?callable ...$fs): string { $out = ""; foreach ($fs as $f) { $out .= $f === null ? "-" : $f("word"); } return $out; }
-echo nullable("ucfirst"), " ", orFalse("strrev"), " ", many("strtoupper", null), "\n";
+function many(?callable ...$fs): string { $out = ""; foreach ($fs as $f) { $out .= $f === null ? "-" : $f("WORD"); } return $out; }
+function every(callable ...$fs): string { $out = ""; foreach ($fs as $f) { $out .= $f("word"); } return $out; }
+echo nullable("ucfirst"), " ", orFalse("strrev"), " ", many("lcfirst", null), " ", every("ucwords"), "\n";
 "#,
     );
-    assert_eq!(out, "Word drow WORD-\n");
+    assert_eq!(out, "Word drow wORD- Word\n");
+}
+
+/// Verifies a literal builtin name kept by a callable union parameter or a `callable` return
+/// links the libraries its wrapper needs, as `iconv_strlen(...)` does.
+///
+/// Recording only the name left `elephc_iconv` out of the link plan, so the program failed to
+/// link unless something else used iconv.
+#[test]
+fn test_declared_callable_literal_builtin_names_link_their_libraries() {
+    let out = compile_and_run(
+        r#"<?php
+function apply(?callable $f): mixed { return $f("word"); }
+function pick(): callable { return "iconv_strlen"; }
+echo apply("iconv_strlen"), " ", pick()("words"), "\n";
+"#,
+    );
+    assert_eq!(out, "4 5\n");
 }
 
 /// Verifies a value that is not callable raises PHP's binding `TypeError` when it reaches a

@@ -1177,16 +1177,18 @@ impl Checker {
                             &format!("{} variadic parameter ${}", callee_desc, vname),
                         )?;
                     }
-                    if *expected_ty == PhpType::DeclaredCallable {
-                        self.require_declared_callable_arg(
-                            expected_ty,
-                            &actual_ty,
-                            arg,
-                            caller_env,
-                            &format!("{} variadic parameter ${}", callee_desc, vname),
-                            None,
-                        )?;
-                    }
+                    let variadic_by_ref = variadic_index
+                        .and_then(|index| sig.ref_params.get(index))
+                        .copied()
+                        .unwrap_or(false);
+                    self.require_declared_callable_variadic_arg(
+                        expected_ty,
+                        &actual_ty,
+                        arg,
+                        caller_env,
+                        &format!("{} variadic parameter ${}", callee_desc, vname),
+                        variadic_by_ref,
+                    )?;
                     self.require_compatible_arg_type(
                         expected_ty,
                         &actual_ty,

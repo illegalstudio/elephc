@@ -1181,3 +1181,18 @@ fn test_error_scalar_callable_union_rejects_non_callables() {
         expect_error(source, expected);
     }
 }
+
+/// Verifies a literal name that names nothing is a compile error for an element of a declared
+/// `callable ...$fs` variadic too, as it is for a regular `callable` parameter, also when the
+/// callee's signature was resolved before the call.
+#[test]
+fn test_error_declared_callable_variadic_rejects_unknown_literal_name() {
+    expect_error(
+        r#"<?php
+function every(callable ...$fs): int { return count($fs); }
+echo every("strlen");
+echo every("no_such_function");
+"#,
+        "Undefined function for first-class callable: no_such_function",
+    );
+}

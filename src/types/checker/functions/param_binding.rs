@@ -384,8 +384,40 @@ impl Checker {
         if let Some(crate::parser::ast::CallableTarget::Function(function)) =
             crate::types::param_binding::callable_target_from_name(name)
         {
+            // The wrapper the dispatch builds for a builtin needs its libraries linked, as
+            // `name(...)` links them.
+            let key = crate::names::php_symbol_key(function.as_str().trim_start_matches('\\'));
+            self.require_first_class_callable_builtin_libraries(&key);
             self.declared_callable_names.insert(function.as_str().to_string());
         }
+    }
+
+    /// Validates one argument collected by a declared `callable ...$fs` variadic (or a callable
+    /// union element such as `?callable ...$fs`), as a regular parameter of that type binds it.
+    ///
+    /// An exact `callable` element resolves a literal name or callable array like a regular
+    /// `callable` parameter (an unknown literal name is a compile error); a callable union
+    /// element records a literal name for the runtime dispatch. A by-reference element binds a
+    /// variable, never a literal, so it is left to the entry check.
+    pub(crate) fn require_declared_callable_variadic_arg(
+        &mut self,
+        expected: &PhpType,
+        actual: &PhpType,
+        arg: &Expr,
+        env: &TypeEnv,
+        context: &str,
+        by_ref: bool,
+    ) -> Result<(), CompileError> {
+        if by_ref {
+            return Ok(());
+        }
+        if *expected == PhpType::DeclaredCallable {
+            return self.require_declared_callable_arg(expected, actual, arg, env, context, None);
+        }
+        if expected.declares_callable() {
+            self.record_declared_callable_literal_name(arg);
+        }
+        Ok(())
     }
 
     fn register_bound_callable_param_sig(

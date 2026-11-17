@@ -302,6 +302,17 @@ impl Checker {
                             &format!("Function '{}' variadic parameter ${}", name, vname),
                         )?;
                     }
+                    self.require_declared_callable_variadic_arg(
+                        expected_ty,
+                        &actual_ty,
+                        arg,
+                        caller_env,
+                        &format!("Function '{}' variadic parameter ${}", name, vname),
+                        variadic_index
+                            .and_then(|index| effective_sig.ref_params.get(index))
+                            .copied()
+                            .unwrap_or(false),
+                    )?;
                     self.require_compatible_arg_type(
                         expected_ty,
                         &actual_ty,
