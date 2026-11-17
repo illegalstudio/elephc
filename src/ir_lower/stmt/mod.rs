@@ -394,8 +394,12 @@ fn lower_stmt_once(ctx: &mut LoweringContext<'_, '_>, stmt: &Stmt) {
                         .is_some_and(|info| info.properties.iter().any(|(name, _)| *name == cursor))
                 });
             if has_cursor {
-                let zero = Expr::new(ExprKind::IntLiteral(0), stmt.span);
-                lower_property_assign(ctx, object, &cursor, &zero, stmt.span);
+                // Not the statement's span: the checker records the written property's readonly
+                // violation under it, and the hidden cursor (an ordinary, always initialized
+                // property) would re-enter that guard and throw on a legal first write.
+                let span = crate::span::Span::dummy();
+                let zero = Expr::new(ExprKind::IntLiteral(0), span);
+                lower_property_assign(ctx, object, &cursor, &zero, span);
             }
         }
         StmtKind::PropertyRefAssign {
