@@ -37,7 +37,11 @@ pub fn emit_gc_object_children(e: &mut Emitter) {
     abi::emit_return(e);
     fiber(e);
     let mut generator_fields = vec![fibers::FIBER_TRANSFER_VALUE_OFFSET, fibers::FIBER_PENDING_THROW_OFFSET];
-    generator_fields.extend((0..fibers::FIBER_START_ARGS_MAX).map(|i| fibers::FIBER_START_ARGS_OFFSET + i * 8));
+    // A generator owns more start-argument slots than a Fiber (the trailing ones sit past the
+    // Fiber fields), and a capture cycle through any of them must be visible to the collector.
+    generator_fields.extend(
+        (0..fibers::GENERATOR_START_ARGS_MAX as usize).map(|i| fibers::generator_start_arg_offset(i) as i32),
+    );
     use crate::codegen_support::runtime::generators::coro;
     generator_fields.extend([coro::GEN_LAST_KEY_OFFSET, coro::GEN_LAST_VALUE_OFFSET, coro::GEN_RETURN_VALUE_OFFSET]);
     fixed(e, "generator", &["_generator_class_id"], fibers::FIBER_OBJECT_SIZE, &generator_fields);

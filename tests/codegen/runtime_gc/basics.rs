@@ -191,3 +191,26 @@ echo $x[0];
     );
     assert_eq!(out, "1");
 }
+
+/// A cycle through a generator start argument past the seventh slot is collected: the cycle
+/// collector traced only the Fiber's seven start slots, so an object captured by a generator
+/// closure with many captures kept its generator alive, and the generator kept it.
+#[test]
+fn test_gc_collects_a_cycle_through_a_trailing_generator_start_argument() {
+    let out = compile_and_run(
+        r#"<?php
+class N { public $g; function __destruct() { echo "destroyed\n"; } }
+function mk() {
+    $a = 1; $b = 2; $c = 3; $d = 4; $e = 5; $f = 6; $g = 7; $h = 8; $i = 9;
+    $n = new N();
+    $gen = (function () use ($a, $b, $c, $d, $e, $f, $g, $h, $i, $n) { yield $a; yield $n; })();
+    $n->g = $gen;
+}
+mk();
+echo "before\n";
+gc_collect_cycles();
+echo "after\n";
+"#,
+    );
+    assert_eq!(out, "before\ndestroyed\nafter\n");
+}
