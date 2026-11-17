@@ -37,3 +37,8 @@ pub mod owned_container;
 pub mod owned_payload;
 
 pub mod boxed_array;
+pub mod array_to_mixed;
+pub mod hash_to_mixed;
+pub mod array_to_hash;
+pub mod array_set_refcounted;
+pub mod hash_unset;
