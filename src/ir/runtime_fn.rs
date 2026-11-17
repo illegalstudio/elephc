@@ -1328,8 +1328,13 @@ impl RuntimeFnId {
                 // Every invocation route receives the same owned hash-capable Mixed cell.
                 // Do not let an FCC wrapper narrow that ABI to a packed Array<Mixed> pointer.
                 sig.return_type = PhpType::php_array();
+                // The contract is variadic for eval, but compiled code lowers only the
+                // two-array form: a wrapper operand for the tail would reach the lowering as a
+                // fourth argument ("array_udiff expected 3 args, got 4").
+                truncate_callable_params(sig, 3);
+                sig.variadic = None;
             }
-            RuntimeFnId::ZvalPack | RuntimeFnId::ElephcZvalPack => {
+            RuntimeFnId::ZvalPack| RuntimeFnId::ElephcZvalPack => {
                 if let Some((_, value_ty)) = sig.params.get_mut(0) {
                     *value_ty = PhpType::Mixed;
                 }

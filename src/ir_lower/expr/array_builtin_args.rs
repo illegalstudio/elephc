@@ -500,6 +500,23 @@ fn lower_planned_builtin_call_args(
     if let Some(literal_args) = hoist_literal_assignment_args(ctx, args) {
         return lower_builtin_call_args(ctx, name, sig, &literal_args);
     }
+    // The contracts of array_udiff/array_uintersect are variadic for eval, but the compiled
+    // lowering takes exactly two arrays and the comparator: a variadic tail operand (empty for a
+    // named-argument spread) would reach it as a fourth argument.
+    let fixed_arity_sig = matches!(canonical.as_str(), "array_udiff" | "array_uintersect")
+        .then(|| sig.cloned())
+        .flatten()
+        .map(|mut fixed| {
+            fixed.params.truncate(3);
+            fixed.param_type_exprs.truncate(3);
+            fixed.param_attributes.truncate(3);
+            fixed.defaults.truncate(3);
+            fixed.ref_params.truncate(3);
+            fixed.declared_params.truncate(3);
+            fixed.variadic = None;
+            fixed
+        });
+    let sig = fixed_arity_sig.as_ref().or(sig);
     promote_indexed_receiver_for_key_preserving_sort(ctx, &canonical, args);
     let argument_lowering = crate::builtins::registry::lookup(&canonical)
         .map(|def| def.spec.semantics.argument_lowering)
