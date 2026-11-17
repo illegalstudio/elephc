@@ -287,8 +287,13 @@ impl EvalBuiltinSpec {
     }
 
     /// Returns whether any fixed parameter is declared `string`.
+    ///
+    /// `implode()`/`join()` are the exception: their first parameter is really `array|string`
+    /// (the eval profile spells it `string` for the join separator), and the builtin itself
+    /// reports php's overload errors and converts a Stringable separator or element, so an
+    /// object must reach it untouched.
     pub(in crate::interpreter) fn has_string_param(&self) -> bool {
-        self.params.iter().any(|param| param.string_param)
+        !matches!(self.name, "implode" | "join") && self.params.iter().any(|param| param.string_param)
     }
 
     /// Returns the default value for one PHP parameter slot.

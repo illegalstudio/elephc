@@ -69,6 +69,9 @@ fn push_fast_call(
     values: &mut impl RuntimeValueOps,
 ) -> Result<(), EvalStatus> {
     let mut function_scope = Box::new(ElephcEvalScope::new());
+    // The written-call `debug_backtrace()` lists the interpreter's call frames, which a tree
+    // walked activation pushes around its body; a bytecode activation must show up there too.
+    let call_frame = crate::context::EvalCallFrame::function(body.name.clone(), Some(args.clone()), context);
     let mut pending = args.into_iter();
     for name in body.params.iter() {
         let Some(value) = pending.next() else { break };
@@ -81,6 +84,7 @@ fn push_fast_call(
     context.push_function(&body.name);
     context.push_class_scope(String::new());
     context.push_called_class_scope(String::new());
+    context.push_call_frame(call_frame);
     let mut arguments = EvalFunctionArgsFrame::new(body.params.clone(), body.params.len(), Vec::new());
     arguments.bind_scope(&function_scope);
     context.push_function_args(arguments);
@@ -144,6 +148,7 @@ pub(super) fn leave_frame(
         let passed = release_function_args(passed, context, values);
         context.pop_called_class_scope();
         context.pop_class_scope();
+        context.pop_call_frame();
         let finished = match passed {
             Ok(passed) => finish_activation_scope(&mut function_scope, Ok(passed), context, values),
             Err(status) => {
@@ -179,6 +184,7 @@ pub(super) fn unwind(vm: &mut Vm, baseline: usize, context: &mut ElephcEvalConte
                 let _ = release_function_args(Err(EvalStatus::RuntimeFatal), context, values);
                 context.pop_called_class_scope();
                 context.pop_class_scope();
+                context.pop_call_frame();
                 let _ = finish_activation_scope(&mut function_scope, Err(EvalStatus::RuntimeFatal), context, values);
                 context.pop_function();
             }
