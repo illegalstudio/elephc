@@ -57,6 +57,11 @@ pub(in crate::interpreter) fn execute_class_decl_stmt(
         validate_concrete_class_aot_parent_requirements(class, context, values)?;
         validate_concrete_class_aot_interface_requirements(class, context, values, false)?;
     }
+    // While the class is bound early, an override PHP accepts only once it has found a class
+    // keeps the class for its statement when that class does not exist yet.
+    if eval_required_override_lookup_is_missing(class, context, values)? {
+        return Err(EvalStatus::RuntimeFatal);
+    }
     if context.define_class(class.clone()) {
         if let Some(parent) = native_parent.as_deref() {
             if !context.define_native_class_parent(class.name(), parent) {

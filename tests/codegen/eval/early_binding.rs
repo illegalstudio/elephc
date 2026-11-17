@@ -28,6 +28,7 @@ fn dynamic_eval(body: &str) -> String {
 ///   statement, each evaluated at its first use;
 /// - `undecidable_override`: a child whose override names a class declared by an earlier
 ///   statement is linked when its own statement runs;
+/// - `compiled_parent`: the same holds when the parent is a class of the compiled program;
 /// - `parent_defaults`: a class copies its parent's defaults when it is bound, before the
 ///   first statement for an early-bound class, which then evaluates them again, and at its
 ///   statement for a class with `__toString`, which copies the value already evaluated. It
@@ -72,6 +73,13 @@ class Shelf { function pick(): Item { return new Item(); } }
 class Library extends Shelf { function pick(): Book { return new Book(); } }
 echo class_exists("Library") ? "yes" : "no", get_class((new Library())->pick());
 "#);
+    let compiled_parent = dynamic_eval(r#"
+echo class_exists("EvalShelf") ? "yes" : "no", "|";
+class EvalShelf extends NativeShelf { function pick(): LaterBox { return new LaterBox(); } }
+class LaterBox extends stdClass {}
+echo class_exists("EvalShelf") ? "yes" : "no", get_class((new EvalShelf())->pick());
+"#)
+    .replacen("<?php\n", "<?php\nclass NativeShelf { function pick(): stdClass { return new stdClass(); } }\n", 1);
     let handler = "<?php\nset_error_handler(function ($level, $message) { echo '[d]'; return true; });\n";
     let parent_defaults = dynamic_eval(r#"
 class Dated { public $a = DATE_RFC7231; }
@@ -87,6 +95,7 @@ echo "c"; new DatedChild;
         BundleCase { name: "jump", source: &jump, expected: "s2" },
         BundleCase { name: "lazy_members", source: &lazy_members, expected: "yes|12o" },
         BundleCase { name: "undecidable_override", source: &undecidable_override, expected: "yesno|yesBook" },
+        BundleCase { name: "compiled_parent", source: &compiled_parent, expected: "no|yesLaterBox" },
         BundleCase { name: "parent_defaults", source: &parent_defaults, expected: "p[d]sc[d]" },
     ]);
 }

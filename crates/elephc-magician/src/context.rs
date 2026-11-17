@@ -28,6 +28,7 @@ mod native_function;
 mod native_metadata;
 mod native_signatures;
 mod normalization;
+mod override_lookups;
 pub(crate) mod pcntl_runtime;
 mod reference_metadata;
 mod reflection_registry;

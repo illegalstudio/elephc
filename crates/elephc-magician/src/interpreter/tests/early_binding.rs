@@ -144,6 +144,41 @@ fn early_binding_binds_child_whose_overrides_need_no_lookup() {
     assert_eq!(output, "yyy");
 }
 
+/// Verifies binding follows the lookups the override checks really make: an intersection is
+/// accepted through the member its parent names, whatever its order, without looking up the
+/// other; `self` is compared with a class alias a later statement defines; and `Closure` is
+/// accepted as `callable`.
+#[test]
+fn early_binding_follows_the_lookups_of_the_override_checks() {
+    for source in [
+        &br#"interface A {} class P { function f(): A {} } echo class_exists("D") ? "y" : "n"; class C extends P { function f(): A&B {} } class D extends C {} echo class_exists("D") ? "y" : "n";"#[..],
+        &br#"interface A {} class P { function f(): A {} } echo class_exists("D") ? "y" : "n"; class C extends P { function f(): B&A {} } class D extends C {} echo class_exists("D") ? "y" : "n";"#[..],
+    ] {
+        assert_eq!(run(source), "yy");
+    }
+    let output = run(
+        br#"class Q { function f(): Alias {} } echo "b"; class_alias("Q", "Alias"); class R extends Q { function f(): self { return $this; } } echo (new R)->f() instanceof Q ? "y" : "n";"#,
+    );
+    assert_eq!(output, "by");
+    let output = run(
+        br#"class P { function f(): callable {} } echo class_exists("C") ? "y" : "n"; class C extends P { function f(): Closure {} } echo "ok";"#,
+    );
+    assert_eq!(output, "yok");
+}
+
+/// Verifies a child PHP cannot check yet is left to its statement even when the check fails
+/// there: the statements before it run first.
+#[test]
+fn early_binding_reports_undecidable_override_at_its_statement() {
+    for source in [
+        &br#"interface A {} class P { function f(): A&Missing {} } echo "a"; class C extends P { function f(): A {} }"#[..],
+        &br#"class P { function f(): Missing {} } echo "a"; class C extends P { function f(): self {} } class Missing {}"#[..],
+        &br#"class P { function f(): callable {} } echo "a"; class C extends P { function f(): Later {} } class Later {}"#[..],
+    ] {
+        assert_eq!(run_failing(source), "a");
+    }
+}
+
 /// Verifies an override PHP rejects without a lookup still stops the fragment before any
 /// statement runs, even when it names a class that does not exist.
 #[test]
@@ -154,6 +189,14 @@ fn early_binding_reports_incompatible_override_before_the_first_statement() {
     );
     assert_eq!(
         run_failing(br#"echo "a"; class P { function f(): int {} } class C extends P { function f(): Zed {} }"#),
+        ""
+    );
+    assert_eq!(
+        run_failing(br#"interface A {} class K {} class P { function f(): A&Missing {} } echo "a"; class C extends P { function f(): K {} }"#),
+        ""
+    );
+    assert_eq!(
+        run_failing(br#"class P { function f(): static {} } echo "a"; class C extends P { function f(): Later {} } class Later extends C {}"#),
         ""
     );
 }
