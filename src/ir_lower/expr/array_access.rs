@@ -837,9 +837,9 @@ pub(crate) fn lower_array_access_from_lowered_receiver(
 
 /// Returns the statically-known key type for an array index expression.
 /// Used to decide between Op::ArrayGet (int key) and Op::ArrayGetMixedKey.
-pub(crate) fn index_expr_key_type(_ctx: &LoweringContext<'_, '_>, index: &Expr) -> PhpType {
-    let ty = infer_expr_type_syntactic(index);
-    normalized_array_key_type(index, ty)
+pub(crate) fn index_expr_key_type(ctx: &LoweringContext<'_, '_>, index: &Expr) -> PhpType {
+    let ty = infer_expr_type_syntactic(index, ctx.semantic_profile);
+    normalized_array_key_type(index, ty, ctx.semantic_profile)
 }
 
 /// Refines a read key's syntactic type from its lowered SSA value when it is definitely a string.
@@ -850,7 +850,7 @@ pub(super) fn lowered_index_expr_key_type(
 ) -> PhpType {
     let syntactic = index_expr_key_type(ctx, index);
     if syntactic == PhpType::Int && ctx.builder.value_php_type(index_value) == PhpType::Str {
-        return normalized_array_key_type(index, PhpType::Str);
+        return normalized_array_key_type(index, PhpType::Str, ctx.semantic_profile);
     }
     syntactic
 }
@@ -871,7 +871,7 @@ pub(super) fn isset_index_expr_key_type(
     }
     match lowered {
         ty @ (PhpType::Str | PhpType::Mixed | PhpType::Union(_)) => {
-            normalized_array_key_type(index, ty)
+            normalized_array_key_type(index, ty, ctx.semantic_profile)
         }
         _ => syntactic,
     }
@@ -890,23 +890,23 @@ pub(super) fn array_access_result_type(
             PhpType::Array(elem_ty) => {
                 array_access_element_result_type(normalize_value_php_type(*elem_ty))
             }
-            _ => fallback_expr_type(expr),
+            _ => fallback_expr_type(expr, ctx.semantic_profile),
         },
         Op::HashGet | Op::HashGetSilent => match ctx.builder.value_php_type(array).codegen_repr() {
             PhpType::AssocArray { value, .. } => {
                 array_access_element_result_type(normalize_value_php_type(*value))
             }
-            _ => fallback_expr_type(expr),
+            _ => fallback_expr_type(expr, ctx.semantic_profile),
         },
         Op::BufferGet => match ctx.builder.value_php_type(array).codegen_repr() {
             PhpType::Buffer(elem_ty) => normalize_value_php_type(elem_ty.storage_value_type()),
-            _ => fallback_expr_type(expr),
+            _ => fallback_expr_type(expr, ctx.semantic_profile),
         },
         Op::RuntimeCall => array_access_runtime_call_result_type(ctx, array, expr),
         Op::ArrayGetMixedKey | Op::ArrayGetMixedKeySilent => PhpType::Mixed,
         _ => match ctx.builder.value_php_type(array).codegen_repr() {
             PhpType::Mixed | PhpType::Union(_) => PhpType::Mixed,
-            _ => fallback_expr_type(expr),
+            _ => fallback_expr_type(expr, ctx.semantic_profile),
         },
     }
 }
@@ -932,11 +932,11 @@ pub(super) fn array_access_runtime_call_result_type(
     let array_ty = ctx.builder.value_php_type(array);
     if let Some((class_name, _)) = singular_object_class(&array_ty) {
         return array_access_offset_get_return_type(ctx, class_name)
-            .unwrap_or_else(|| fallback_expr_type(expr));
+            .unwrap_or_else(|| fallback_expr_type(expr, ctx.semantic_profile));
     }
     match array_ty.codegen_repr() {
         PhpType::Mixed => PhpType::Mixed,
-        _ => fallback_expr_type(expr),
+        _ => fallback_expr_type(expr, ctx.semantic_profile),
     }
 }
 

@@ -991,3 +991,25 @@ shape inference, pre-fold validation, EIR/eval key guards, constructors/builtins
 and cache/combination coverage before enabling it. Foreach producer alternatives,
 remaining local-flow audits, all six pending families and final umbrella acceptance
 stay active. No full suite, push or PR was run.
+
+### Verified145: profile-aware array key shapes
+
+The immutable profile now flows explicitly through syntactic expression/return
+inference, declaration defaults, loop storage, lvalue checks and EIR fallback
+classification. Exact strings retain their kind, including value-derived builtin
+keys. Parser append storage conservatively supports either key policy without a
+parser-global semantic switch.
+
+Finald67b1a33 passes in4m07s: default archives73.41s, updated all-target selected
+frontend2.59s, both-IR/default-exact native shapes1.79s, four existing inference/
+PHP-normalization/append controls and builtin exporter61.63s. Together with the
+two unchanged metadata/recursive-inference units in410c0442, all eight unique
+exact gates pass. PHP/Internal sources, nested numeric-string appends, clean heaps,
+assembly comments, docs regeneration, three audits and diff hygiene pass. Generated
+pages and registries stay unchanged.
+
+Public ArrayKeys remains gated. Continue optimizer key identity, original-source
+and dynamic domain checks, spread/default/reflection identity, eval/reference
+metadata and constructor parity. Foreach producer alternatives, local-flow audits,
+all six pending families and final umbrella acceptance remain active. No full
+suite, push or PR was run.

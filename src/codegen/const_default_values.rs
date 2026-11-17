@@ -443,7 +443,7 @@ fn resolve_numeric_binary_default(
         let kind = resolved_scalar_literal(resolve_const_default_at(expr, context, depth + 1)?)?;
         let literal = expr.with_kind(kind);
         if let Some(rule) = crate::semantics::numeric::operand_rule(context.module.semantic_profile, expr.source_profile.mode, op) {
-            let actual = crate::types::checker::infer_expr_type_syntactic(&literal);
+            let actual = crate::types::checker::infer_expr_type_syntactic(&literal, elephc_semantics::SemanticProfile::PERMISSIVE);
             if !rule.domain.allows(crate::semantics::numeric::value_kind(&actual)) { return None; }
         }
         // Full numeric strings, booleans and null normalize without warnings after domain checks.

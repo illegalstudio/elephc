@@ -774,21 +774,21 @@ fn property_result_type(
                 .get(&class_name)
                 .and_then(|info| info.fields.iter().find(|field| field.name == property))
             else {
-                return fallback_expr_type(expr);
+                return fallback_expr_type(expr, ctx.semantic_profile);
             };
             return normalize_value_php_type(field.php_type.clone());
         }
         if let Some(class_name) = packed_receiver_class(ctx, &object_ty) {
             let normalized = class_name.trim_start_matches('\\');
             let Some(class_info) = ctx.packed_classes.get(normalized) else {
-                return fallback_expr_type(expr);
+                return fallback_expr_type(expr, ctx.semantic_profile);
             };
             let Some(field) = class_info.fields.iter().find(|field| field.name == property) else {
-                return fallback_expr_type(expr);
+                return fallback_expr_type(expr, ctx.semantic_profile);
             };
             return normalize_value_php_type(field.php_type.codegen_repr());
         }
-        return fallback_expr_type(expr);
+        return fallback_expr_type(expr, ctx.semantic_profile);
     };
     let nullable =
         nullable || (receiver_miss_is_null && value_may_carry_container_miss(ctx, object));
@@ -807,7 +807,7 @@ fn property_result_type(
         if ctx.interfaces.contains_key(normalized) {
             return PhpType::Mixed;
         }
-        return fallback_expr_type(expr);
+        return fallback_expr_type(expr, ctx.semantic_profile);
     };
     if let Some(property_ty) = runtime_property_type_override(ctx, normalized, property) {
         let property_ty = normalize_value_php_type(property_ty);
@@ -857,7 +857,7 @@ fn property_result_type(
                 PhpType::Mixed
             };
         }
-        return fallback_expr_type(expr);
+        return fallback_expr_type(expr, ctx.semantic_profile);
     };
     let property_ty = normalize_value_php_type(property_ty.clone());
     if nullable {
@@ -1462,7 +1462,7 @@ fn scalar_property_probe_receiver(ctx: &LoweringContext<'_, '_>, value: ValueId)
 fn expr_receiver_type_for_probe(ctx: &LoweringContext<'_, '_>, object: &Expr) -> PhpType {
     match &object.kind {
         ExprKind::Variable(name) => ctx.local_type(name),
-        _ => infer_expr_type_syntactic(object),
+        _ => infer_expr_type_syntactic(object, ctx.semantic_profile),
     }
 }
 
@@ -1481,7 +1481,7 @@ pub(super) fn dynamic_property_get_result_type(
         return PhpType::Mixed;
     }
     let Some((class_name, nullable)) = singular_object_class(&object_ty) else {
-        return fallback_expr_type(expr);
+        return fallback_expr_type(expr, ctx.semantic_profile);
     };
     let nullable = nullable || value_may_carry_container_miss(ctx, object);
     let normalized = class_name.trim_start_matches('\\');
@@ -1493,7 +1493,7 @@ pub(super) fn dynamic_property_get_result_type(
         };
     }
     let Some(class_info) = ctx.classes.get(normalized) else {
-        return fallback_expr_type(expr);
+        return fallback_expr_type(expr, ctx.semantic_profile);
     };
     // A class with a per-instance property hash can answer a name no declaration mentions, so the
     // declared-slot union below would describe the wrong storage: the hash holds boxed `mixed`.
@@ -1523,7 +1523,7 @@ pub(super) fn dynamic_property_get_result_type(
             }
         })
         .collect::<Vec<_>>();
-    normalize_union_members(members).unwrap_or_else(|| fallback_expr_type(expr))
+    normalize_union_members(members).unwrap_or_else(|| fallback_expr_type(expr, ctx.semantic_profile))
 }
 
 /// Returns whether php resolves `property` on `class_name` to a DYNAMIC property in this scope.

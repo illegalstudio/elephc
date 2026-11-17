@@ -196,7 +196,7 @@ fn lower_numeric_binary_values(
         op,
         lhs.ir_type,
         rhs.ir_type,
-        &fallback_expr_type(expr),
+        &fallback_expr_type(expr, ctx.semantic_profile),
         numeric_binary_identity(op, left, right),
         policy,
     );
@@ -209,7 +209,7 @@ fn lower_numeric_binary_values(
         // overflow-capable `+`/`-`/`*` operands `Mixed`.
         if lhs.ir_type == IrType::I64
             && rhs.ir_type == IrType::I64
-            && fallback_expr_type(expr) == PhpType::Mixed
+            && fallback_expr_type(expr, ctx.semantic_profile) == PhpType::Mixed
         {
             return ctx.emit_value(
                 Op::ICheckedPow,

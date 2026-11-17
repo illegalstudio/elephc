@@ -207,7 +207,7 @@ impl Checker {
                 let mut key_ty: Option<PhpType> = None;
                 let mut val_ty: Option<PhpType> = None;
                 for (k, v) in pairs {
-                    let kt = normalized_array_key_type(k, self.infer_type(k, env)?);
+                    let kt = normalized_array_key_type(k, self.infer_type(k, env)?, self.semantic_profile);
                     let vt = self.infer_type(v, env)?;
                     key_ty = Some(match key_ty {
                         Some(current) if current == kt => current,

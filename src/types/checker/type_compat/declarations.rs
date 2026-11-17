@@ -503,7 +503,7 @@ impl Checker {
                 return ty.clone();
             }
         }
-        infer_expr_type_syntactic(expression)
+        infer_expr_type_syntactic(expression, self.semantic_profile)
     }
 
     /// Semantically resolves a declaration default when it is a scoped constant access, then

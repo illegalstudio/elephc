@@ -519,7 +519,7 @@ pub(super) fn assoc_array_literal_type_from_entries(
         );
     }
     if matches!(value_ty, PhpType::Never) {
-        return fallback_expr_type(expr);
+        return fallback_expr_type(expr, ctx.semantic_profile);
     }
     PhpType::AssocArray {
         key: Box::new(PhpType::Mixed),
@@ -748,7 +748,7 @@ pub(crate) fn array_literal_type_for_ir(
     expr: &Expr,
 ) -> PhpType {
     if items.is_empty() {
-        return fallback_expr_type(expr);
+        return fallback_expr_type(expr, ctx.semantic_profile);
     }
     // Each spread source's storage is typed once and read by the shape check, the pointer probe
     // and the ordinary merge below: a source holding a nested merge (`$m ?? [...$inner, null]`)
@@ -1051,7 +1051,7 @@ fn array_literal_element_type_for_ir_unboxed(
         ExprKind::ConstRef(name) => ctx
             .constant_value(name.as_str())
             .map(|(_, ty)| ir_array_storage_type(ty))
-            .unwrap_or_else(|| ir_array_storage_type(infer_expr_type_syntactic(item))),
+            .unwrap_or_else(|| ir_array_storage_type(infer_expr_type_syntactic(item, ctx.semantic_profile))),
         ExprKind::ScopedConstantAccess { receiver, name } => {
             scoped_constant_value_type_for_ir(ctx, receiver, name, item)
         }
@@ -1059,7 +1059,7 @@ fn array_literal_element_type_for_ir_unboxed(
             local_values::projected_local_value_type(ctx, name, item.span).or_else(|| ctx.local_types
                 .get(name)
                 .cloned())
-                .unwrap_or_else(|| infer_expr_type_syntactic(item)),
+                .unwrap_or_else(|| infer_expr_type_syntactic(item, ctx.semantic_profile)),
         ),
         ExprKind::FunctionCall { name, .. } => {
             let canonical = name.as_str();
@@ -1076,35 +1076,35 @@ fn array_literal_element_type_for_ir_unboxed(
             if let Some(resolved) = builtin_call_result_type_for_ir(ctx, item.span) {
                 return resolved;
             }
-            ir_array_storage_type(infer_expr_type_syntactic(item))
+            ir_array_storage_type(infer_expr_type_syntactic(item, ctx.semantic_profile))
         }
         // Calls must use declared EIR return metadata rather than the syntactic `Int` fallback,
         // or an object result is cast into an incorrectly stamped scalar array.
         ExprKind::MethodCall { object, method, .. } => {
             method_call_expr_type_for_ir(ctx, object, method)
                 .map(materializable_array_element_type)
-                .unwrap_or_else(|| ir_array_storage_type(infer_expr_type_syntactic(item)))
+                .unwrap_or_else(|| ir_array_storage_type(infer_expr_type_syntactic(item, ctx.semantic_profile)))
         }
         ExprKind::StaticMethodCall { receiver, method, .. } => {
             static_method_call_expr_type_for_ir(ctx, receiver, method)
                 .map(materializable_array_element_type)
-                .unwrap_or_else(|| ir_array_storage_type(infer_expr_type_syntactic(item)))
+                .unwrap_or_else(|| ir_array_storage_type(infer_expr_type_syntactic(item, ctx.semantic_profile)))
         }
         ExprKind::ArrayAccess { array, .. } => array_access_expr_value_type_for_ir(ctx, array)
-            .unwrap_or_else(|| ir_array_storage_type(infer_expr_type_syntactic(item))),
+            .unwrap_or_else(|| ir_array_storage_type(infer_expr_type_syntactic(item, ctx.semantic_profile))),
         ExprKind::PropertyAccess { object, property } => property_access_expr_type_for_ir(
             ctx,
             object,
             property,
         )
-        .unwrap_or_else(|| ir_array_storage_type(infer_expr_type_syntactic(item))),
+        .unwrap_or_else(|| ir_array_storage_type(infer_expr_type_syntactic(item, ctx.semantic_profile))),
         // A static buffer or pointer slot holds a raw word the syntactic `int` would cast.
         ExprKind::StaticPropertyAccess { receiver, property } => {
             static_property_word_type(ctx, receiver, property, item)
                 .map(ir_array_storage_type)
-                .unwrap_or_else(|| ir_array_storage_type(infer_expr_type_syntactic(item)))
+                .unwrap_or_else(|| ir_array_storage_type(infer_expr_type_syntactic(item, ctx.semantic_profile)))
         }
-        _ => ir_array_storage_type(infer_expr_type_syntactic(item)),
+        _ => ir_array_storage_type(infer_expr_type_syntactic(item, ctx.semantic_profile)),
     }
 }
 

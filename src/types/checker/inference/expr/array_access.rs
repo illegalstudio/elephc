@@ -54,7 +54,7 @@ impl Checker {
         self.buffer_read_observations.entry(expr.span)
             .and_modify(|previous| *previous &= buffer)
             .or_insert(buffer);
-        let normalized_idx_ty = normalized_array_key_type(index, idx_ty.clone());
+        let normalized_idx_ty = normalized_array_key_type(index, idx_ty.clone(), self.semantic_profile);
         match &arr_ty {
             PhpType::Str => {
                 if !is_valid_string_offset_index(index, &idx_ty) {

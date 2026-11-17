@@ -2822,7 +2822,7 @@ fn direct_closure_return_expr_type(
             }
         }
     }
-    crate::types::checker::infer_expr_type_syntactic(expr)
+    crate::types::checker::infer_expr_type_syntactic(expr, ctx.semantic_profile)
 }
 
 /// Returns literal storage for a closure return, resolving elements and spread keys
@@ -2932,7 +2932,7 @@ fn direct_closure_return_assoc_literal_type(
     for (key, value) in pairs {
         let next_key = crate::types::normalized_array_key_type(
             key,
-            crate::types::checker::infer_expr_type_syntactic(key),
+            crate::types::checker::infer_expr_type_syntactic(key, ctx.semantic_profile), ctx.semantic_profile,
         );
         let next_value = direct_closure_return_array_item_type(
             value,

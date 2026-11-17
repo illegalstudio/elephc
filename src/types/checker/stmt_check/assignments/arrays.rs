@@ -44,7 +44,7 @@ pub(super) fn check_array_assign(
     if !env.contains_key(array) {
         let idx_ty = checker.infer_type_with_assignment_effects(index, env)?;
         let val_ty = checker.infer_type_with_assignment_effects(value, env)?;
-        let key_ty = normalized_array_key_type(index, idx_ty);
+        let key_ty = normalized_array_key_type(index, idx_ty, checker.semantic_profile);
         let created = if key_ty == PhpType::Int {
             PhpType::Array(Box::new(val_ty))
         } else {
@@ -71,7 +71,7 @@ pub(super) fn check_array_assign(
         return check_string_offset_assign(array, index, &idx_ty, value, span);
     }
     if let PhpType::Array(elem_ty) = &arr_ty {
-        let normalized_idx_ty = normalized_array_key_type(index, idx_ty.clone());
+        let normalized_idx_ty = normalized_array_key_type(index, idx_ty.clone(), checker.semantic_profile);
         // A foreach loop key is a boxed `Mixed` cell at runtime (`Op::IterCurrentKey`)
         // even when the checker types it as `Int`/`Str` from the source array, so it
         // may hold either an integer or a string and the destination must stay indexed
@@ -97,7 +97,7 @@ pub(super) fn check_array_assign(
         let forces_hash = matches!(normalized_idx_ty, PhpType::Str)
             || (matches!(idx_ty, PhpType::Str) && !index_is_foreach_key)
             || (matches!(elem_ty.as_ref(), PhpType::Never)
-                && (static_array_key_forces_hash_storage(index)
+                && (static_array_key_forces_hash_storage(index, checker.semantic_profile)
                     || (matches!(normalized_idx_ty, PhpType::Int)
                         && !index_is_foreach_key
                         && !checker.index_is_packed_loop_counter(array, index)
@@ -127,7 +127,7 @@ pub(super) fn check_array_assign(
         let forces_hash = forces_hash
             || (!promotable
                 && !matches!(elem_ty.as_ref(), PhpType::Never)
-                && nonempty_array_key_forces_hash_storage(index));
+                && nonempty_array_key_forces_hash_storage(index, checker.semantic_profile));
         if promotable {
             checker.record_promotable_array_local(array);
         }
@@ -138,7 +138,7 @@ pub(super) fn check_array_assign(
             && matches!(normalized_idx_ty, PhpType::Int)
             && !index_is_foreach_key
             && !matches!(idx_ty, PhpType::Mixed | PhpType::Union(_))
-            && !nonempty_array_key_stays_in_range(index);
+            && !nonempty_array_key_stays_in_range(index, checker.semantic_profile);
         if skips_nonempty_slot {
             checker
                 .sparse_key_write_sites
@@ -200,7 +200,7 @@ pub(super) fn check_array_assign(
     {
         let merged_key = merge_array_key_types(
             *key.clone(),
-            normalized_array_key_type(index, idx_ty),
+            normalized_array_key_type(index, idx_ty, checker.semantic_profile),
         );
         let merged_value = if **existing_value == val_ty {
             *existing_value.clone()

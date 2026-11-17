@@ -196,7 +196,7 @@ pub(super) fn lower_const_ref(
         Op::LoadGlobal,
         Vec::new(),
         Some(Immediate::GlobalName(data)),
-        super::fallback_expr_type(expr),
+        super::fallback_expr_type(expr, ctx.semantic_profile),
         Op::LoadGlobal.default_effects(),
         Some(expr.span),
     )

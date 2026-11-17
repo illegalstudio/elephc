@@ -471,7 +471,7 @@ pub(super) fn lower_scoped_constant_fallback(ctx: &mut LoweringContext<'_, '_>, 
         Op::ScopedConstantGet,
         Vec::new(),
         Some(Immediate::Data(data)),
-        fallback_expr_type(expr),
+        fallback_expr_type(expr, ctx.semantic_profile),
         Op::ScopedConstantGet.default_effects(),
         Some(expr.span),
     )

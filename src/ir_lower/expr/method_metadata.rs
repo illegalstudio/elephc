@@ -244,7 +244,7 @@ pub(super) fn method_call_result_type_for_receiver_type(
         {
             return PhpType::Mixed;
         }
-        return fallback_expr_type(expr);
+        return fallback_expr_type(expr, ctx.semantic_profile);
     };
     let return_ty = if let Some((receiver_name, _)) = singular_object_class(object_ty) {
         instance_method_late_static_return_for_ir(ctx, receiver_name, &php_symbol_key(method))

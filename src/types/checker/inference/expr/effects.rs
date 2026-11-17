@@ -450,7 +450,7 @@ impl Checker {
                 }
                 if crate::types::checker::is_unset_call(builtin_name) {
                     for arg in &expanded_args {
-                        promote_indexed_local_for_element_unset(arg, env);
+                        promote_indexed_local_for_element_unset(arg, env, self.semantic_profile);
                     }
                     // `unset($a)` on an eligible local KILLS the binding, which is what PHP
                     // does: a later read is "Undefined variable" and a later assignment binds
@@ -962,7 +962,7 @@ fn openssl_encrypt_tag_arg(args: &[Expr]) -> Option<&Expr> {
 /// the local as `AssocArray<Int, T>` makes its literal build as a hash, so the element removal
 /// lowers through `HashUnset`. Only plain `$var[$key]` targets on a currently-packed array are
 /// affected; associative arrays, objects, and non-variable receivers are left unchanged.
-fn promote_indexed_local_for_element_unset(arg: &Expr, env: &mut TypeEnv) {
+fn promote_indexed_local_for_element_unset(arg: &Expr, env: &mut TypeEnv, profile: elephc_semantics::SemanticProfile) {
     let ExprKind::ArrayAccess { array, index, .. } = &arg.kind else {
         return;
     };
@@ -974,7 +974,7 @@ fn promote_indexed_local_for_element_unset(arg: &Expr, env: &mut TypeEnv) {
     };
     let idx_ty = crate::types::array_keys::normalized_array_key_type(
         index,
-        super::super::syntactic::infer_expr_type_syntactic(index),
+        super::super::syntactic::infer_expr_type_syntactic(index, profile), profile,
     );
     let key_ty = if idx_ty == PhpType::Int {
         PhpType::Int

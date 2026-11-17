@@ -1053,7 +1053,7 @@ impl Checker {
                 }
             }
             ExprKind::Closure { body, .. } => {
-                let ret_ty = infer_return_type_syntactic(body);
+                let ret_ty = infer_return_type_syntactic(body, self.semantic_profile);
                 return Ok(self.nullable_callable_result(ret_ty, nullable_callable));
             }
             _ => {}
@@ -1517,7 +1517,7 @@ impl Checker {
         self.record_unresolved_callee_argument_aliases(&synth_args, env);
         match &callable.kind {
             ExprKind::Closure { body, .. } => {
-                return Ok(infer_return_type_syntactic(body));
+                return Ok(infer_return_type_syntactic(body, self.semantic_profile));
             }
             ExprKind::Variable(var_name) => {
                 if let Some(ret_ty) = self.closure_return_types.get(var_name) {

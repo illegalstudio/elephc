@@ -216,7 +216,7 @@ fn reflection_property_physical_receiver_is_compatible(
 ) -> bool {
     let object_ty = match &object.kind {
         ExprKind::Variable(name) => ctx.local_type(name),
-        _ => infer_expr_type_syntactic(object),
+        _ => infer_expr_type_syntactic(object, ctx.semantic_profile),
     };
     let PhpType::Object(receiver_class) = object_ty.codegen_repr() else {
         return false;

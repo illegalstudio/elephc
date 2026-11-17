@@ -221,7 +221,7 @@ pub(super) fn check_property_array_assign(
 ) -> Result<(), CompileError> {
     let obj_ty = checker.infer_type_with_assignment_effects(object, env)?;
     let idx_ty = checker.infer_type_with_assignment_effects(index, env)?;
-    let normalized_idx_ty = property_write_key_type(normalized_array_key_type(index, idx_ty.clone()));
+    let normalized_idx_ty = property_write_key_type(normalized_array_key_type(index, idx_ty.clone(), checker.semantic_profile));
     let val_ty = checker.infer_type_with_assignment_effects(value, env)?;
     let obj_ty = checker.union_single_object_class(&obj_ty)
         .filter(|_| matches!(&obj_ty, PhpType::Union(members)
@@ -1144,10 +1144,10 @@ pub(super) fn updated_array_property_assign_type(
         PhpType::Array(elem_ty) => {
             if !matches!(normalized_idx_ty, PhpType::Int)
                 || (matches!(elem_ty.as_ref(), PhpType::Never)
-                    && static_array_key_forces_hash_storage(index))
+                    && static_array_key_forces_hash_storage(index, checker.semantic_profile))
                 || (instance_slot
                     && !property_has_declared_type
-                    && untyped_property_key_may_skip(index))
+                    && untyped_property_key_may_skip(index, checker.semantic_profile))
             {
                 // A declared `array<T>` is a packed vector that keeps its storage, so a key
                 // that is not provably an integer would be coerced into an index and a string
@@ -1276,8 +1276,8 @@ pub(super) fn property_write_key_type(key: PhpType) -> PhpType {
 /// that is provably `0` is always in range. Every other integer key takes hash storage, where a
 /// gap costs nothing, exactly as `array_key_contiguity_is_unproven` decides for an empty local.
 /// No loop-counter exception applies, because any call in the loop may reset the property.
-fn untyped_property_key_may_skip(index: &Expr) -> bool {
-    static_array_key_forces_hash_storage(index) || array_key_contiguity_is_unproven(index)
+fn untyped_property_key_may_skip(index: &Expr, profile: elephc_semantics::SemanticProfile) -> bool {
+    static_array_key_forces_hash_storage(index, profile) || array_key_contiguity_is_unproven(index)
 }
 
 /// Returns true if `ty` is a valid PHP array key type (Int, Str, or Mixed).

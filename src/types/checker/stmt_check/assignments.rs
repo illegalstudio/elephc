@@ -72,7 +72,7 @@ impl Checker {
             self.check_stmt(stmt, env)?;
         }
         let index_type = self.infer_type_with_assignment_effects(index, env)?;
-        if normalized_array_key_type(index, index_type) != PhpType::Int {
+        if normalized_array_key_type(index, index_type, self.semantic_profile) != PhpType::Int {
             return Ok(false);
         }
 

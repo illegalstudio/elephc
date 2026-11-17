@@ -727,7 +727,7 @@ pub(super) fn instance_callable_object_class_and_nullability(
         ExprKind::Clone(inner) => {
             return instance_callable_object_class_and_nullability(ctx, inner);
         }
-        _ => infer_expr_type_syntactic(object),
+        _ => infer_expr_type_syntactic(object, ctx.semantic_profile),
     };
     let (class_name, nullable) = singular_object_class(&object_type)?;
     normalized_class_name(class_name).map(|class_name| (class_name, nullable))

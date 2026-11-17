@@ -711,7 +711,7 @@ impl Checker {
                         &normalized_args,
                         sig,
                         regular_param_count,
-                        env,
+                        env, self.semantic_profile,
                     )
                     && !method_variadic_param_is_by_ref(sig)
                 {
@@ -1439,7 +1439,7 @@ impl Checker {
                         &normalized_args,
                         sig,
                         regular_param_count,
-                        env,
+                        env, self.semantic_profile,
                     )
                     && !method_variadic_param_is_by_ref(sig)
                 {
@@ -1631,7 +1631,7 @@ fn method_variadic_tail_needs_iterable(
     args: &[Expr],
     sig: &FunctionSig,
     regular_param_count: usize,
-    env: &TypeEnv,
+    env: &TypeEnv, profile: elephc_semantics::SemanticProfile,
 ) -> bool {
     if sig.variadic.is_none() {
         return false;
@@ -1640,7 +1640,7 @@ fn method_variadic_tail_needs_iterable(
     if args.iter().any(|arg| {
         matches!(
             &arg.kind,
-            ExprKind::Spread(inner) if spread_source_keeps_runtime_keys(inner, env)
+            ExprKind::Spread(inner) if spread_source_keeps_runtime_keys(inner, env, profile)
         )
     }) {
         return true;
@@ -1691,7 +1691,7 @@ fn method_variadic_param_is_by_ref(sig: &FunctionSig) -> bool {
 }
 
 /// Returns true when a spread source can carry string keys into a variadic method tail.
-fn spread_source_keeps_runtime_keys(expr: &Expr, env: &TypeEnv) -> bool {
+fn spread_source_keeps_runtime_keys(expr: &Expr, env: &TypeEnv, profile: elephc_semantics::SemanticProfile) -> bool {
     match &expr.kind {
         ExprKind::Variable(name) => matches!(
             env.get(name),
@@ -1699,7 +1699,7 @@ fn spread_source_keeps_runtime_keys(expr: &Expr, env: &TypeEnv) -> bool {
         ),
         ExprKind::ArrayLiteralAssoc(_) => true,
         _ => matches!(
-            crate::types::checker::infer_expr_type_syntactic(expr),
+            crate::types::checker::infer_expr_type_syntactic(expr, profile),
             PhpType::AssocArray { .. } | PhpType::Iterable
         ),
     }

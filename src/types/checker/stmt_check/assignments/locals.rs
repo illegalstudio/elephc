@@ -506,7 +506,7 @@ pub(super) fn check_ref_assign(
                 _ => false,
             };
             let index_ty = checker.infer_type_with_assignment_effects(index, env)?;
-            let normalized_index_ty = normalized_array_key_type(index, index_ty);
+            let normalized_index_ty = normalized_array_key_type(index, index_ty, checker.semantic_profile);
             let valid_php_key = matches!(
                 normalized_index_ty,
                 PhpType::Int | PhpType::Str | PhpType::Mixed
@@ -865,7 +865,7 @@ fn reflection_class_assignment_target(
         _ => match env
             .get(variable_name(class_arg).unwrap_or_default())
             .cloned()
-            .unwrap_or_else(|| crate::types::checker::infer_expr_type_syntactic(class_arg))
+            .unwrap_or_else(|| crate::types::checker::infer_expr_type_syntactic(class_arg, checker.semantic_profile))
             .codegen_repr()
         {
             PhpType::Object(class_name) if !class_name.is_empty() => Some(class_name),
@@ -991,7 +991,7 @@ fn resolve_callable_array_target(
     let receiver_ty = env
         .get(variable_name(receiver).unwrap_or_default())
         .cloned()
-        .unwrap_or_else(|| crate::types::checker::infer_expr_type_syntactic(receiver));
+        .unwrap_or_else(|| crate::types::checker::infer_expr_type_syntactic(receiver, checker.semantic_profile));
     if checker.invokable_class_for_type(&receiver_ty).is_some() {
         return Ok(Some(CallableTarget::Method {
             object: Box::new(receiver.clone()),

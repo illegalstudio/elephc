@@ -251,7 +251,7 @@ pub(super) fn dynamic_callable_result_type(
 ) -> PhpType {
     match ctx.builder.value_php_type(callable).codegen_repr() {
         PhpType::Callable | PhpType::Str | PhpType::Array(_) | PhpType::Mixed | PhpType::Union(_) => PhpType::Mixed,
-        _ => fallback_expr_type(expr),
+        _ => fallback_expr_type(expr, ctx.semantic_profile),
     }
 }
 

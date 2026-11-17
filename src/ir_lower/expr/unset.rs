@@ -455,13 +455,13 @@ pub(super) fn unset_dynamic_property_access_has_direct_lowering(
 fn unset_operand_type(ctx: &LoweringContext<'_, '_>, expr: &Expr) -> PhpType {
     match &expr.kind {
         ExprKind::Variable(name) => ctx.local_types.get(name).cloned()
-            .unwrap_or_else(|| infer_expr_type_syntactic(expr)),
+            .unwrap_or_else(|| infer_expr_type_syntactic(expr, ctx.semantic_profile)),
         ExprKind::FunctionCall { name, .. }
             if ctx.functions.contains_key(name.as_str()) || ctx.extern_functions.contains_key(name.as_str()) =>
         {
             call_return_type(ctx, name.as_str(), &[])
         }
-        ExprKind::FunctionCall { .. } => infer_expr_type_syntactic(expr),
+        ExprKind::FunctionCall { .. } => infer_expr_type_syntactic(expr, ctx.semantic_profile),
         _ => super::array_cast_source::array_cast_source_type_for_ir(ctx, expr),
     }
 }

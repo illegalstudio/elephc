@@ -99,11 +99,11 @@ fn spread_after_named_error(span: crate::span::Span, callee_desc: &str) -> Compi
 
 /// Returns a boolean vector indicating which argument positions contain assoc-spread sources
 /// (arrays with string keys that map to named arguments after spread expansion).
-fn assoc_spread_sources(args: &[Expr], env: &TypeEnv) -> Vec<bool> {
+fn assoc_spread_sources(args: &[Expr], env: &TypeEnv, profile: elephc_semantics::SemanticProfile) -> Vec<bool> {
     call_args::expand_static_assoc_spread_args(args)
         .iter()
         .map(|arg| match &arg.kind {
-            ExprKind::Spread(inner) => is_assoc_spread_source(inner, env),
+            ExprKind::Spread(inner) => is_assoc_spread_source(inner, env, profile),
             _ => false,
         })
         .collect()
@@ -124,12 +124,12 @@ fn descriptor_spread_sources(args: &[Expr]) -> Vec<bool> {
 
 /// Returns true if the expression is or expands to an assoc-array at runtime,
 /// which means spread arguments from it should be treated as named arguments.
-fn is_assoc_spread_source(expr: &Expr, env: &TypeEnv) -> bool {
+fn is_assoc_spread_source(expr: &Expr, env: &TypeEnv, profile: elephc_semantics::SemanticProfile) -> bool {
     match &expr.kind {
         ExprKind::Variable(name) => matches!(env.get(name), Some(PhpType::AssocArray { .. })),
         ExprKind::ArrayLiteralAssoc(_) | ExprKind::ArrayLiteralMixed(_) => true,
         _ => matches!(
-            crate::types::checker::infer_expr_type_syntactic(expr),
+            crate::types::checker::infer_expr_type_syntactic(expr, profile),
             PhpType::AssocArray { .. }
         ),
     }
@@ -603,7 +603,7 @@ impl Checker {
         allow_unknown_named_variadic: bool,
         env: &TypeEnv,
     ) -> Result<call_args::CallArgPlan, CompileError> {
-        let assoc_spread_sources = assoc_spread_sources(args, env);
+        let assoc_spread_sources = assoc_spread_sources(args, env, self.semantic_profile);
         call_args::plan_call_args_with_regular_param_count_and_assoc_spreads(
             sig,
             args,

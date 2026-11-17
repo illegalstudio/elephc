@@ -328,9 +328,9 @@ pub(super) fn require_array_combine_value_layout(value_elem_ty: &PhpType) -> Res
 pub(super) fn require_array_fill_keys_result_type(
     key_elem_ty: &PhpType,
     value_ty: &PhpType,
-    result_ty: &PhpType,
+    result_ty: &PhpType, profile: elephc_semantics::SemanticProfile,
 ) -> Result<()> {
-    let expected_key_ty = array_key_type_from_value_type(key_elem_ty.clone()).codegen_repr();
+    let expected_key_ty = array_key_type_from_value_type(key_elem_ty.clone(), profile).codegen_repr();
     match result_ty {
         PhpType::AssocArray { key, value }
             if key.codegen_repr() == expected_key_ty && value.codegen_repr() == *value_ty =>
@@ -358,8 +358,8 @@ pub(super) fn require_array_combine_result_type(value_elem_ty: &PhpType, result_
 }
 
 /// Verifies `array_flip()` produces a hash with normalized keys and integer source indexes.
-pub(super) fn require_array_flip_result_type(value_elem_ty: &PhpType, result_ty: &PhpType) -> Result<()> {
-    let expected_key_ty = array_key_type_from_value_type(value_elem_ty.clone()).codegen_repr();
+pub(super) fn require_array_flip_result_type(value_elem_ty: &PhpType, result_ty: &PhpType, profile: elephc_semantics::SemanticProfile) -> Result<()> {
+    let expected_key_ty = array_key_type_from_value_type(value_elem_ty.clone(), profile).codegen_repr();
     match result_ty {
         PhpType::AssocArray { key, value }
             if key.codegen_repr() == expected_key_ty && value.codegen_repr() == PhpType::Int =>

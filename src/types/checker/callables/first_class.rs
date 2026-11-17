@@ -620,7 +620,7 @@ impl Checker {
                     _ => None,
                 }
                 .unwrap_or_else(|| {
-                    crate::types::checker::infer_expr_type_syntactic(object)
+                    crate::types::checker::infer_expr_type_syntactic(object, self.semantic_profile)
                 });
                 if let Some(class_name) = self.invokable_class_for_type(&receiver_ty) {
                     self.promote_descriptor_variadic_container_for_method(

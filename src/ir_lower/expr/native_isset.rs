@@ -200,14 +200,14 @@ pub(super) fn array_access_expr_supports_native_isset_probe(
             .local_types
             .get(name)
             .cloned()
-            .unwrap_or_else(|| infer_expr_type_syntactic(array)),
+            .unwrap_or_else(|| infer_expr_type_syntactic(array, ctx.semantic_profile)),
         ExprKind::PropertyAccess { object, property } => {
             property_access_expr_type_for_ir(ctx, object, property)
-                .unwrap_or_else(|| infer_expr_type_syntactic(array))
+                .unwrap_or_else(|| infer_expr_type_syntactic(array, ctx.semantic_profile))
         }
         ExprKind::ArrayLiteral(items) => array_literal_type_for_ir(ctx, items, array),
         ExprKind::ArrayLiteralAssoc(pairs) => assoc_array_literal_type_for_ir(ctx, pairs, array),
-        _ => infer_expr_type_syntactic(array),
+        _ => infer_expr_type_syntactic(array, ctx.semantic_profile),
     }
     .codegen_repr();
     matches!(ty, PhpType::Array(_) | PhpType::AssocArray { .. } | PhpType::Int
@@ -326,8 +326,8 @@ fn isset_object_expr_type(ctx: &LoweringContext<'_, '_>, object: &Expr) -> Optio
             .functions
             .get(name.as_str())
             .map(|sig| sig.return_type.clone())
-            .unwrap_or_else(|| infer_expr_type_syntactic(object)),
-        _ => infer_expr_type_syntactic(object),
+            .unwrap_or_else(|| infer_expr_type_syntactic(object, ctx.semantic_profile)),
+        _ => infer_expr_type_syntactic(object, ctx.semantic_profile),
     })
 }
 

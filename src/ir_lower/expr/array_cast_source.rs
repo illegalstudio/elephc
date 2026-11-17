@@ -273,7 +273,7 @@ fn numeric_binary_php_type(
         op,
         lhs,
         rhs,
-        &fallback_expr_type(expr),
+        &fallback_expr_type(expr, ctx.semantic_profile),
         numeric_binary_identity(op, left, right),
         crate::semantics::numeric::operation_policy(ctx.semantic_profile, ctx.source_mode),
     )

@@ -341,11 +341,11 @@ fn lower_array_assign_from_value(
     // needlessly dispatching.
     let empty_sparse_key = matches!(ctx.builder.value_php_type(array_value.value).codegen_repr(),
         PhpType::Array(element) if is_empty_indexed_array_element(&element))
-        && crate::types::empty_array_key_requires_hash_storage(index)
+        && crate::types::empty_array_key_requires_hash_storage(index, ctx.semantic_profile)
         && !index_is_boxed_mixed_key(index_value.ir_type);
     let nonempty_sparse_key = matches!(ctx.builder.value_php_type(array_value.value).codegen_repr(),
         PhpType::Array(element) if !is_empty_indexed_array_element(&element))
-        && crate::types::nonempty_array_key_forces_hash_storage(index)
+        && crate::types::nonempty_array_key_forces_hash_storage(index, ctx.semantic_profile)
         && !index_is_boxed_mixed_key(index_value.ir_type);
     let mixed_elements = matches!(ctx.builder.value_php_type(array_value.value).codegen_repr(),
         PhpType::Array(element) if element.codegen_repr() == PhpType::Mixed);
@@ -395,7 +395,7 @@ fn lower_array_assign_from_value(
         && !index_is_boxed_mixed_key(index_value.ir_type)
         && !index_is_foreach_int_key(ctx, index)
         && (index_value.ir_type == IrType::Str
-            || crate::types::empty_array_key_requires_hash_storage(index)
+            || crate::types::empty_array_key_requires_hash_storage(index, ctx.semantic_profile)
             || matches!(value_value.ir_type,
                 IrType::Heap(crate::ir::IrHeapKind::Mixed | crate::ir::IrHeapKind::Union)))
     {

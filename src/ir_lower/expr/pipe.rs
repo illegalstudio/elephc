@@ -140,7 +140,7 @@ pub(super) fn pipe_runtime_result_type(
         ExprKind::Variable(name) => ctx
             .static_callable_local(name)
             .map(|target| static_callable_return_type(ctx, &target))
-            .unwrap_or_else(|| fallback_expr_type(expr)),
-        _ => fallback_expr_type(expr),
+            .unwrap_or_else(|| fallback_expr_type(expr, ctx.semantic_profile)),
+        _ => fallback_expr_type(expr, ctx.semantic_profile),
     }
 }

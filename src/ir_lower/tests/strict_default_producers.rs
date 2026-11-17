@@ -78,7 +78,7 @@ fn strict_default_producers_preserve_source_defaults_and_exact_user_arguments() 
     assert_eq!(prepared.producer_binding, Some(crate::parser::ast::ProducerBinding::IntegerToFloat));
     assert!(!default.same_value_producer(&prepared));
     let rebound = prepared.with_kind(crate::parser::ast::ExprKind::IntLiteral(1));
-    assert_eq!(crate::types::checker::infer_expr_type_syntactic(&rebound), crate::types::PhpType::Float);
+    assert_eq!(crate::types::checker::infer_expr_type_syntactic(&rebound, elephc_semantics::SemanticProfile::PERMISSIVE), crate::types::PhpType::Float);
     let folded = crate::optimize::fold_constant_expression(rebound);
     assert!(matches!(folded.kind, crate::parser::ast::ExprKind::FloatLiteral(value) if value == 1.0));
     let mut invalid = program.clone();

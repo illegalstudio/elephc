@@ -39,7 +39,7 @@ fn check(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
         }
     };
     Ok(PhpType::AssocArray {
-        key: Box::new(crate::types::array_key_type_from_value_type(key_elem)),
+        key: Box::new(crate::types::array_key_type_from_value_type(key_elem, cx.checker.semantic_profile)),
         value: Box::new(val_ty),
     })
 }

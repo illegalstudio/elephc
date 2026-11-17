@@ -166,7 +166,7 @@ pub(super) fn check_static_property_array_assign(
 ) -> Result<(), CompileError> {
     let idx_ty = checker.infer_type_with_assignment_effects(index, env)?;
     let normalized_idx_ty =
-        super::properties::property_write_key_type(normalized_array_key_type(index, idx_ty.clone()));
+        super::properties::property_write_key_type(normalized_array_key_type(index, idx_ty.clone(), checker.semantic_profile));
     let val_ty = checker.infer_type_with_assignment_effects(value, env)?;
     let target = resolve_static_property_assignment_target(checker, receiver, property, span)?;
     let mixed_elements = match target.prop_ty.codegen_repr() {

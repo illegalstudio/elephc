@@ -144,7 +144,7 @@ pub(crate) fn lower_array_fill_keys(
     require_array_fill_keys_result_type(
         &key_elem_ty,
         &value_ty,
-        &inst.result_php_type.codegen_repr(),
+        &inst.result_php_type.codegen_repr(), ctx.emitter.semantic_profile,
     )?;
     lower_array_fill_keys_call(ctx, keys, value, &value_ty)?;
     store_if_result(ctx, inst)
@@ -201,7 +201,7 @@ pub(crate) fn lower_array_flip(ctx: &mut FunctionContext<'_>, inst: &Instruction
         return lower_hash_flip(ctx, inst, array);
     }
     let value_elem_ty = array_flip_source_element_type(ctx.value_php_type(array)?)?;
-    require_array_flip_result_type(&value_elem_ty, &inst.result_php_type.codegen_repr())?;
+    require_array_flip_result_type(&value_elem_ty, &inst.result_php_type.codegen_repr(), ctx.emitter.semantic_profile)?;
     ctx.load_value_to_result(array)?;
     if ctx.emitter.target.arch == Arch::X86_64 {
         ctx.emitter.instruction("mov rdi, rax");                                // pass the source indexed-array pointer as the flip helper argument

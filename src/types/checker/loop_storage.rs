@@ -78,7 +78,7 @@ fn loop_carried_storage_types(
     infer_value: &mut dyn FnMut(&Expr, &TypeEnv) -> Option<PhpType>,
 ) -> Vec<(String, PhpType)> {
     analyze_loop_storage(body, update, None, entry, packed_counter,
-        tagged_integer_locals, &Default::default(), infer_value, &|_, _| false).contracts
+        tagged_integer_locals, &Default::default(), infer_value, &|_, _| false, elephc_semantics::SemanticProfile::PERMISSIVE).contracts
 }
 
 /// Assignment values and executable calls collected without entering nested function bodies.
@@ -114,7 +114,7 @@ pub(super) fn analyze_loop_storage<'a>(
     entry: &TypeEnv, packed_counter: Option<&str>, tagged_integer_locals: &HashSet<String>,
     promotable_candidates: &super::promotable_arrays::PromotableCandidates,
     infer_value: &mut dyn FnMut(&Expr, &TypeEnv) -> Option<PhpType>,
-    object_is_a: &dyn Fn(&str, &str) -> bool,
+    object_is_a: &dyn Fn(&str, &str) -> bool, profile: elephc_semantics::SemanticProfile,
 ) -> LoopStorageAnalysis {
     let mut assignments = LoopWrites::default();
     collect_value_assignments(body, &mut assignments);
@@ -139,7 +139,7 @@ pub(super) fn analyze_loop_storage<'a>(
             &mut fixed,
             infer_value,
             &mut whole_mixed_sources,
-            tagged_integer_locals,
+            tagged_integer_locals, profile,
         );
         apply_array_write_evidence(
             &writes,
@@ -149,7 +149,7 @@ pub(super) fn analyze_loop_storage<'a>(
             &foreach_values,
             promotable_candidates,
             infer_value,
-            object_is_a,
+            object_is_a, profile,
         );
         if fixed == previous {
             break;
@@ -187,13 +187,13 @@ fn apply_assignment_evidence(
     env: &mut TypeEnv,
     infer_value: &mut dyn FnMut(&Expr, &TypeEnv) -> Option<PhpType>,
     whole_mixed_sources: &mut HashSet<String>,
-    tagged_integer_locals: &HashSet<String>,
+    tagged_integer_locals: &HashSet<String>, profile: elephc_semantics::SemanticProfile,
 ) {
     for (name, source) in assignments {
         let incoming = match source {
             AssignedValue::Expr(expr) if tagged_integer_locals.contains(*name) => infer_value(expr, env)
                 .or_else(|| precise_scalar_expr_type(expr)).unwrap_or(PhpType::Mixed),
-            AssignedValue::Expr(expr) => infer_storage_value_type(expr, env, infer_value)
+            AssignedValue::Expr(expr) => infer_storage_value_type(expr, env, infer_value, profile)
                 .or_else(|| precise_scalar_expr_type(expr))
                 .unwrap_or(PhpType::Mixed),
             AssignedValue::Known(ty) => ty.clone(),
@@ -259,20 +259,20 @@ fn apply_array_write_evidence(
     foreach_values: &HashSet<&str>,
     promotable_candidates: &super::promotable_arrays::PromotableCandidates,
     infer_value: &mut dyn FnMut(&Expr, &TypeEnv) -> Option<PhpType>,
-    object_is_a: &dyn Fn(&str, &str) -> bool,
+    object_is_a: &dyn Fn(&str, &str) -> bool, profile: elephc_semantics::SemanticProfile,
 ) {
     for write in writes {
-        let incoming = infer_storage_value_type(write.value, env, infer_value)
+        let incoming = infer_storage_value_type(write.value, env, infer_value, profile)
             .or_else(|| precise_scalar_expr_type(write.value))
             .unwrap_or(PhpType::Mixed);
         let Some(current) = env.get(write.name).cloned() else {
             continue;
         };
         let key_type = write.index.map(|index| {
-            let inferred = infer_storage_value_type(index, env, infer_value)
+            let inferred = infer_storage_value_type(index, env, infer_value, profile)
                 .or_else(|| precise_scalar_expr_type(index))
                 .unwrap_or(PhpType::Mixed);
-            normalized_array_key_type(index, inferred)
+            normalized_array_key_type(index, inferred, profile)
         });
         let array_is_still_empty =
             matches!(&current, PhpType::Array(element) if matches!(element.as_ref(), PhpType::Never));
@@ -310,7 +310,7 @@ fn apply_array_write_evidence(
             && matches!(incoming.codegen_repr(), PhpType::Int | PhpType::TaggedScalar)
             && write.index.is_some_and(|index| {
                 !matches!(&index.kind, ExprKind::Variable(name) if foreach_keys.contains(name.as_str()))
-                    && !crate::types::nonempty_array_key_stays_in_range(index)
+                    && !crate::types::nonempty_array_key_stays_in_range(index, profile)
                     && infer_value(index, env).is_some_and(|key| {
                         matches!(key, PhpType::Mixed | PhpType::Int) || key.is_int_float_union()
                     })
@@ -362,14 +362,14 @@ fn apply_array_write_evidence(
 fn infer_storage_value_type(
     expr: &Expr,
     env: &TypeEnv,
-    infer_value: &mut dyn FnMut(&Expr, &TypeEnv) -> Option<PhpType>,
+    infer_value: &mut dyn FnMut(&Expr, &TypeEnv) -> Option<PhpType>, profile: elephc_semantics::SemanticProfile,
 ) -> Option<PhpType> {
     match &expr.kind {
         ExprKind::Variable(name) => env.get(name).cloned().or_else(|| infer_value(expr, env)),
         ExprKind::ArrayLiteral(items) => {
             let mut element = PhpType::Never;
             for item in items {
-                let next = infer_array_literal_element_storage(item, env, infer_value);
+                let next = infer_array_literal_element_storage(item, env, infer_value, profile);
                 element = merge_materialized_array_element(element, next);
             }
             Some(PhpType::Array(Box::new(element)))
@@ -380,11 +380,11 @@ fn infer_storage_value_type(
             for (key_expr, value_expr) in entries {
                 let next_key = infer_value(key_expr, env)
                     .unwrap_or_else(|| {
-                        crate::types::checker::infer_expr_type_syntactic(key_expr)
+                        crate::types::checker::infer_expr_type_syntactic(key_expr, profile)
                     })
                     .codegen_repr();
                 let next_value =
-                    infer_array_literal_element_storage(value_expr, env, infer_value);
+                    infer_array_literal_element_storage(value_expr, env, infer_value, profile);
                 key = merge_materialized_array_element(key, next_key);
                 value = merge_materialized_array_element(value, next_value);
             }
@@ -393,14 +393,14 @@ fn infer_storage_value_type(
                 value: Box::new(value),
             })
         }
-        ExprKind::ErrorSuppress(inner) => infer_storage_value_type(inner, env, infer_value),
+        ExprKind::ErrorSuppress(inner) => infer_storage_value_type(inner, env, infer_value, profile),
         ExprKind::Ternary {
             then_expr,
             else_expr,
             ..
         } => {
-            let then_ty = infer_storage_value_type(then_expr, env, infer_value)?;
-            let else_ty = infer_storage_value_type(else_expr, env, infer_value)?;
+            let then_ty = infer_storage_value_type(then_expr, env, infer_value, profile)?;
+            let else_ty = infer_storage_value_type(else_expr, env, infer_value, profile)?;
             Some(join_loop_flow_type(then_ty, else_ty))
         }
         _ => infer_value(expr, env),
@@ -415,7 +415,7 @@ fn infer_storage_value_type(
 fn infer_array_literal_element_storage(
     item: &Expr,
     env: &TypeEnv,
-    infer_value: &mut dyn FnMut(&Expr, &TypeEnv) -> Option<PhpType>,
+    infer_value: &mut dyn FnMut(&Expr, &TypeEnv) -> Option<PhpType>, profile: elephc_semantics::SemanticProfile,
 ) -> PhpType {
     match &item.kind {
         ExprKind::Variable(name) => env
@@ -425,7 +425,7 @@ fn infer_array_literal_element_storage(
             .unwrap_or(PhpType::Mixed)
             .codegen_repr(),
         ExprKind::ArrayAccess { array, .. } => {
-            let source = infer_storage_value_type(array, env, infer_value)
+            let source = infer_storage_value_type(array, env, infer_value, profile)
                 .or_else(|| infer_value(array, env))
                 .unwrap_or(PhpType::Mixed)
                 .codegen_repr();
@@ -437,11 +437,11 @@ fn infer_array_literal_element_storage(
             }
         }
         ExprKind::ArrayLiteral(_) | ExprKind::ArrayLiteralAssoc(_) => {
-            infer_storage_value_type(item, env, infer_value)
+            infer_storage_value_type(item, env, infer_value, profile)
                 .unwrap_or(PhpType::Mixed)
                 .codegen_repr()
         }
-        ExprKind::Spread(inner) => match infer_storage_value_type(inner, env, infer_value)
+        ExprKind::Spread(inner) => match infer_storage_value_type(inner, env, infer_value, profile)
             .unwrap_or(PhpType::Mixed)
             .codegen_repr()
         {
@@ -453,7 +453,7 @@ fn infer_array_literal_element_storage(
             target: CastType::Array,
             expr: inner,
         } => crate::types::array_cast_result_type(&array_cast_source_type_for_storage(
-            inner, env, infer_value,
+            inner, env, infer_value, profile,
         ))
         .codegen_repr(),
         ExprKind::FunctionCall { .. }
@@ -461,9 +461,9 @@ fn infer_array_literal_element_storage(
         | ExprKind::StaticMethodCall { .. }
         | ExprKind::PropertyAccess { .. }
         | ExprKind::ConstRef(_) => infer_value(item, env)
-            .unwrap_or_else(|| crate::types::checker::infer_expr_type_syntactic(item))
+            .unwrap_or_else(|| crate::types::checker::infer_expr_type_syntactic(item, profile))
             .codegen_repr(),
-        _ => crate::types::checker::infer_expr_type_syntactic(item).codegen_repr(),
+        _ => crate::types::checker::infer_expr_type_syntactic(item, profile).codegen_repr(),
     }
 }
 
@@ -478,7 +478,7 @@ fn infer_array_literal_element_storage(
 fn array_cast_source_type_for_storage(
     expr: &Expr,
     env: &TypeEnv,
-    infer_value: &mut dyn FnMut(&Expr, &TypeEnv) -> Option<PhpType>,
+    infer_value: &mut dyn FnMut(&Expr, &TypeEnv) -> Option<PhpType>, profile: elephc_semantics::SemanticProfile,
 ) -> PhpType {
     match &expr.kind {
         ExprKind::Null => PhpType::Void,
@@ -489,7 +489,7 @@ fn array_cast_source_type_for_storage(
             .unwrap_or(PhpType::Mixed),
         ExprKind::Cast { target, expr: inner } => crate::types::php_cast_result_type(
             target,
-            &array_cast_source_type_for_storage(inner, env, infer_value),
+            &array_cast_source_type_for_storage(inner, env, infer_value, profile),
         ),
         _ => infer_value(expr, env).unwrap_or(PhpType::Mixed),
     }
@@ -1528,9 +1528,9 @@ mod tests {
     /// Infers storage with the syntactic type standing in for the checker on literal sources.
     fn storage_type(expr: &Expr, env: &TypeEnv) -> PhpType {
         let mut infer = |expr: &Expr, _env: &TypeEnv| {
-            Some(crate::types::checker::infer_expr_type_syntactic(expr))
+            Some(crate::types::checker::infer_expr_type_syntactic(expr, elephc_semantics::SemanticProfile::PERMISSIVE))
         };
-        infer_storage_value_type(expr, env, &mut infer).expect("literal storage")
+        infer_storage_value_type(expr, env, &mut infer, elephc_semantics::SemanticProfile::PERMISSIVE).expect("literal storage")
     }
 
     /// An `(array)` cast used as a literal element keeps the cast's array, for both indexed
@@ -1759,7 +1759,7 @@ mod tests {
             class == ancestor || (class == "Player" && ancestor == "Actor")
         };
         super::analyze_loop_storage(&body, None, None, &entry, None,
-            &std::collections::HashSet::new(), &Default::default(), &mut infer, &object_is_a)
+            &std::collections::HashSet::new(), &Default::default(), &mut infer, &object_is_a, elephc_semantics::SemanticProfile::PERMISSIVE)
             .contracts
     }
 

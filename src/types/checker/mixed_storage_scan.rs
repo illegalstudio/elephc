@@ -100,6 +100,8 @@ struct NameFacts {
 /// Everything one scan of one body collects.
 #[derive(Default)]
 struct Facts {
+    /// Immutable semantics used by every syntactic assignment fact.
+    semantic_profile: elephc_semantics::SemanticProfile,
     /// Per-name evidence for the body being scanned, ordered so warnings are deterministic.
     names: BTreeMap<String, NameFacts>,
     /// Whether an `eval()` call appears ANYWHERE in this body, above or below any other
@@ -160,7 +162,7 @@ impl Checker {
         // set, but clear it here too so the scan owns the whole decision for this body.
         self.mixed_storage_locals.clear();
 
-        let mut facts = Facts::default();
+        let mut facts = Facts { semantic_profile: self.semantic_profile, ..Facts::default() };
         collect_block(self, body, 0, &mut facts);
 
         // Recorded for EVERY body and in BOTH modes, because it does not gate marking: it gates
@@ -640,7 +642,7 @@ fn record_assign(facts: &mut Facts, name: &str, value: &Expr, depth: u32, span: 
     }
     let site = entry.assigns.len();
     entry.assigns.push(AssignSite {
-        ty: infer_expr_type_syntactic(value),
+        ty: infer_expr_type_syntactic(value, facts.semantic_profile),
         depth,
         span,
         guard_region,

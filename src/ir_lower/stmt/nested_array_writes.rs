@@ -360,7 +360,7 @@ fn snapshot_nested_update_keys(
     let key_type = match &index.kind {
         ExprKind::Variable(name) if ctx.is_ref_bound_local(name) => PhpType::Mixed,
         ExprKind::Variable(name) => ctx.local_type(name),
-        _ => crate::types::checker::infer_expr_type_syntactic(index),
+        _ => crate::types::checker::infer_expr_type_syntactic(index, ctx.semantic_profile),
     };
     let name = ctx.declare_synthetic_php_local(key_type);
     snapshots.push(name.clone());

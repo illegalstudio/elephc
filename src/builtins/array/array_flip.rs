@@ -48,11 +48,11 @@ fn check(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
     }
     match ty {
         PhpType::Array(elem_ty) => Ok(PhpType::AssocArray {
-            key: Box::new(array_key_type_from_value_type(*elem_ty)),
+            key: Box::new(array_key_type_from_value_type(*elem_ty, cx.checker.semantic_profile)),
             value: Box::new(PhpType::Int),
         }),
         PhpType::AssocArray { key, value } => Ok(PhpType::AssocArray {
-            key: Box::new(array_key_type_from_value_type(*value)),
+            key: Box::new(array_key_type_from_value_type(*value, cx.checker.semantic_profile)),
             value: key,
         }),
         _ => Err(CompileError::new(

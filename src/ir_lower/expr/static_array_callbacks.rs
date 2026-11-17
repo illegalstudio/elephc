@@ -241,7 +241,7 @@ pub(super) fn lower_static_callable_value_call(
             let result_type = sig
                 .as_ref()
                 .map(|signature| normalize_value_php_type(crate::types::eir_value_php_type(&signature.return_type)))
-                .unwrap_or_else(|| fallback_expr_type(expr));
+                .unwrap_or_else(|| fallback_expr_type(expr, ctx.semantic_profile));
             let name = format!("{}::{}", receiver_name(&receiver), method);
             let data = ctx.intern_string(&name);
             let call = ctx.emit_value(
