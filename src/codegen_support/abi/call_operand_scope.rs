@@ -277,3 +277,6 @@ mod tests {
         }
     }
 }
+
+#[cfg(test)]
+mod memoir_tests;
