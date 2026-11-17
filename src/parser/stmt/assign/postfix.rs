@@ -346,7 +346,7 @@ fn element_to_element_reference(
     source: Expr,
     span: Span,
 ) -> Result<Stmt, CompileError> {
-    let temp = format!("__elephc_ref_elem_{}_{}", span.line, span.col);
+    let temp = crate::names::generated_local_name(&format!("__elephc_ref_elem_{}_{}", span.line, span.col));
     bound_through_hidden_local(temp, source, span, |temp_expr| {
         complex_ref_store(target, is_append, temp_expr, span)
     })
@@ -410,9 +410,9 @@ fn dynamic_property_append(object: Expr, property: Expr, value: Expr, span: Span
                 return None;
             };
             // The value is evaluated once, after the condition, as php does.
-            let temp = format!("__elephc_dynprop_value_{}_{}", span.line, span.col);
+            let temp = crate::names::generated_local_name(&format!("__elephc_dynprop_value_{}_{}", span.line, span.col));
             let temp_var = Expr::new(ExprKind::Variable(temp.clone()), span);
-            let cond_temp = format!("__elephc_dynprop_cond_{}_{}", span.line, span.col);
+            let cond_temp = crate::names::generated_local_name(&format!("__elephc_dynprop_cond_{}_{}", span.line, span.col));
             let cond_var = Expr::new(ExprKind::Variable(cond_temp.clone()), span);
             Some(Stmt::new(
                 StmtKind::Synthetic(vec![
@@ -457,7 +457,7 @@ fn complex_ref_store(
         } else {
             "__elephc_ref_elem_"
         };
-        let temp = format!("{}{}_{}", prefix, span.line, span.col);
+        let temp = crate::names::generated_local_name(&format!("{}{}_{}", prefix, span.line, span.col));
         return bound_through_hidden_local(temp, source, span, |temp_expr| {
             complex_ref_store(target, is_append, temp_expr, span)
         });
@@ -470,7 +470,7 @@ fn complex_ref_store(
         (&target.kind, &source.kind)
     {
         if can_replay_assignment_target(&source) {
-            let temp = format!("__elephc_ref_elem_{}_{}", span.line, span.col);
+            let temp = crate::names::generated_local_name(&format!("__elephc_ref_elem_{}_{}", span.line, span.col));
             let (object, property) = (object.clone(), property.clone());
             return bound_through_hidden_local(temp, source.clone(), span, |temp_expr| {
                 let copy = Stmt::new(
@@ -512,7 +512,10 @@ fn complex_ref_store(
             // the array reference marker only wraps a variable. Bind a hidden local to the
             // property's cell first (the `$tmp = &$obj->prop` form the backend already lowers),
             // then store that local's reference into the element.
-            let temp = format!("{}{}_{}", ARRAY_PROPERTY_REF_TEMP_PREFIX, span.line, span.col);
+            let temp = crate::names::generated_local_name(&format!(
+                "{}{}_{}",
+                ARRAY_PROPERTY_REF_TEMP_PREFIX, span.line, span.col
+            ));
             let bind = Stmt::new(
                 StmtKind::RefAssign {
                     target: temp.clone(),
