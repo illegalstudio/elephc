@@ -139,6 +139,11 @@ fn validate_class_requirement(
     let mut required = required.clone();
     required.substitute_relative_class_types(&class.name, class.extends.as_deref());
     let required_sig = build_method_sig(checker, &required, &class.name)?;
+    // A method a trait satisfied a requirement with is still the trait's raw declaration, whose
+    // `self`/`parent` types name the consuming class once flattened.
+    let mut actual = actual.clone();
+    actual.substitute_relative_class_types(&class.name, class.extends.as_deref());
+    let actual = &actual;
     let actual_sig = build_method_sig(checker, actual, &class.name)?;
     validate_abstract_trait_signature(
         checker, actual.span, &class.name, &actual.name, &actual_sig, &required_sig,
@@ -316,39 +321,42 @@ impl<'t, 'a> RequirementWalk<'t, 'a> {
                 provided.extend(used.provided.into_iter().map(|method| (key.clone(), method)));
                 contract.satisfied.extend(used.satisfied);
             }
+            // Aliases are taken from every candidate before `insteadof` exclusions apply, as
+            // flattening does: `use P, Q { P::foo insteadof Q; Q::foo as bar; }` keeps `bar`.
+            let mut aliases: [Vec<(String, DeclaredMethod)>; 2] = [Vec::new(), Vec::new()];
             for adaptation in &usage.adaptations {
-                match adaptation {
-                    // Selecting a concrete body does not discard another trait's abstract
-                    // contract, but the excluded traits' bodies are not received.
-                    TraitAdaptation::InsteadOf { method, instead_of, .. } => {
-                        let excluded: HashSet<String> =
-                            instead_of.iter().map(|name| php_symbol_key(name.as_str())).collect();
-                        provided.retain(|(via, declared): &(String, DeclaredMethod)| {
-                            !excluded.contains(via)
-                                || php_symbol_key(&declared.method.name) != php_symbol_key(method)
-                        });
-                    }
-                    TraitAdaptation::Alias { trait_name, method, alias, visibility, .. } => {
-                        for methods in [&mut required, &mut provided] {
-                            let mut aliases = Vec::new();
-                            for (via, declared) in methods.iter_mut() {
-                                if php_symbol_key(&declared.method.name) != php_symbol_key(method)
-                                    || trait_name.as_ref().is_some_and(|name| php_symbol_key(name.as_str()) != *via)
-                                { continue; }
-                                if let Some(alias) = alias {
-                                    let mut adapted = declared.clone();
-                                    adapted.method.name = alias.clone();
-                                    if let Some(visibility) = visibility { adapted.method.visibility = visibility.clone(); }
-                                    aliases.push((via.clone(), adapted));
-                                } else if let Some(visibility) = visibility {
-                                    declared.method.visibility = visibility.clone();
-                                }
-                            }
-                            methods.extend(aliases);
+                let TraitAdaptation::Alias { trait_name, method, alias, visibility, .. } = adaptation else {
+                    continue;
+                };
+                for (methods, aliases) in [&mut required, &mut provided].into_iter().zip(aliases.iter_mut()) {
+                    for (via, declared) in methods.iter_mut() {
+                        if php_symbol_key(&declared.method.name) != php_symbol_key(method)
+                            || trait_name.as_ref().is_some_and(|name| php_symbol_key(name.as_str()) != *via)
+                        { continue; }
+                        if let Some(alias) = alias {
+                            let mut adapted = declared.clone();
+                            adapted.method.name = alias.clone();
+                            if let Some(visibility) = visibility { adapted.method.visibility = visibility.clone(); }
+                            aliases.push((via.clone(), adapted));
+                        } else if let Some(visibility) = visibility {
+                            declared.method.visibility = visibility.clone();
                         }
                     }
                 }
             }
+            for adaptation in &usage.adaptations {
+                // Selecting a concrete body does not discard another trait's abstract contract,
+                // but the excluded traits' bodies are not received under their own name.
+                let TraitAdaptation::InsteadOf { method, instead_of, .. } = adaptation else { continue };
+                let excluded: HashSet<String> =
+                    instead_of.iter().map(|name| php_symbol_key(name.as_str())).collect();
+                provided.retain(|(via, declared): &(String, DeclaredMethod)| {
+                    !excluded.contains(via) || php_symbol_key(&declared.method.name) != php_symbol_key(method)
+                });
+            }
+            let [required_aliases, provided_aliases] = aliases;
+            required.extend(required_aliases);
+            provided.extend(provided_aliases);
             contract.required.extend(required.into_iter().map(|(_, method)| method));
             contract.provided.extend(provided.into_iter().map(|(_, method)| method));
         }
@@ -380,6 +388,10 @@ fn validate_requirement(
     let mut required = required.clone();
     required.substitute_relative_class_types(&enum_unit.name, None);
     let required_sig = build_method_sig(checker, &required, &enum_unit.name)?;
+    // A method a trait satisfied a requirement with is still the trait's raw declaration.
+    let mut actual = actual.clone();
+    actual.substitute_relative_class_types(&enum_unit.name, None);
+    let actual = &actual;
     let actual_sig = build_method_sig(checker, actual, &enum_unit.name)?;
     validate_abstract_trait_signature(
         checker, actual.span, &enum_unit.name, &actual.name, &actual_sig, &required_sig,
