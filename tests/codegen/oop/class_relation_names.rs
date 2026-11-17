@@ -378,6 +378,34 @@ echo is_a('Dyn', $n, true) ? "y" : "n", is_subclass_of('Dyn', $n) ? "y" : "n", i
     assert_eq!(out, ["yyyyyyyy\n", "nnnynyyn\n", "yynyyyyy\n"]);
 }
 
+/// An eval-declared class that extends or implements a compiled class-like inherits that
+/// class-like's own ancestors: `Dyn extends Bar` is an `I` through compiled `Foo implements J`.
+/// The eval bridge only walks eval classes, so it needs the compiled class-likes related to a
+/// runtime target, as the literal-target probe passes them; with the target alone it answered
+/// `false`. A Mixed subject with a literal target takes the same path. Expected output measured
+/// with php 8.5.12.
+#[test]
+fn test_is_a_runtime_target_eval_class_inherits_compiled_ancestors() {
+    let out = compile_and_run_per_argv(
+        r#"<?php
+interface I {}
+interface J extends I {}
+class Foo implements J {}
+class Bar extends Foo {}
+eval('class Dyn extends Bar {} class Dj implements J {}');
+function m(mixed $s): string { return (is_a($s, 'I', true) ? "y" : "n") . (is_subclass_of($s, 'Foo') ? "y" : "n"); }
+$t = $argv[1] ?? 'I';
+$d = $argv[2] ?? 'Dyn';
+echo is_a($d, $t, true) ? "y" : "n", is_subclass_of($d, $t) ? "y" : "n", is_a($d, strtoupper($t), true) ? "y" : "n", is_a($d, "\\$t", true) ? "y" : "n", " ", m($d), "\n";
+"#,
+        &[&[], &["J", "Dj"], &["Foo"], &["Bar"], &["I", "Dj"], &["Foo", "Dj"], &["Ghost"], &["Dyn"]],
+    );
+    assert_eq!(out, [
+        "yyyy yy\n", "yyyy yn\n", "yyyy yy\n", "yyyy yy\n",
+        "yyyy yn\n", "nnnn yn\n", "nnnn yy\n", "ynyy yy\n",
+    ]);
+}
+
 /// A closure is an instance of `Closure`, whether held as a callable or boxed in a Mixed, so a
 /// runtime `Closure` target (any case, backslash-rooted or not) matches it. `Closure` is final
 /// and implements nothing, so `is_subclass_of()` and every other target answer `false`.
