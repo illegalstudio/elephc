@@ -208,3 +208,31 @@ for ($i = 0; $i < 3; $i++) {
     assert_eq!(output.stdout, "gs(): Return value must be of type string, array returned\ngf(): Return value must be of type float, array returned\ngb(): Return value must be of type bool, array returned\n".repeat(3));
     assert!(output.stderr.contains("leak summary: clean"), "{}", output.stderr);
 }
+
+/// A refused return value whose destructor throws: the `TypeError` is thrown first and the
+/// value released while it unwinds, so the destructor's exception carries the `TypeError` as
+/// its previous one (and the message no longer leaks), and a `catch` for the destructor's
+/// exception class around the call is kept.
+#[test]
+fn test_refused_return_with_throwing_destructor_chains_the_type_error() {
+    let output = compile_and_run_with_heap_debug(
+        r#"<?php
+class D { public function __destruct() { throw new LogicException("d"); } }
+function mk(): mixed { return new D(); }
+function gs(): string { return mk(); }
+function gf(): float { return mk(); }
+function gb(): bool { return mk(); }
+foreach (['gs', 'gf', 'gb'] as $f) {
+    try { $f(); echo "no throw\n"; } catch (LogicException $e) {
+        $p = $e->getPrevious();
+        echo get_class($e), ":", $e->getMessage(), " previous ", get_class($p), ": ", $p->getMessage(), "\n";
+    }
+}
+try { gs(); echo "no throw\n"; } catch (LogicException $e) { echo "logic ", $e->getMessage(), "\n"; }
+echo "end\n";
+"#,
+    );
+    assert!(output.success, "{}", output.stderr);
+    assert_eq!(output.stdout, "LogicException:d previous TypeError: gs(): Return value must be of type string, D returned\nLogicException:d previous TypeError: gf(): Return value must be of type float, D returned\nLogicException:d previous TypeError: gb(): Return value must be of type bool, D returned\nlogic d\nend\n");
+    assert!(output.stderr.contains("leak summary: clean"), "{}", output.stderr);
+}

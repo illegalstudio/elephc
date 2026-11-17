@@ -142,12 +142,17 @@ fn guard_declared_scalar_return(
         crate::types::diagnostic_names::php_type_name(&declared),
     );
     let span = span.unwrap_or_else(Span::dummy);
-    // A returned owned temporary (`return mk();`) is rooted nowhere, so the refusal releases
-    // it before throwing; a borrowed local is acquired only after this check.
-    match crate::ir_lower::expr::emit_scalar_guard(
+    // A returned owned temporary (`return mk();`) is rooted nowhere, so it is pinned over the
+    // check: a refusal throws the `TypeError` first and the unwinder then releases the value,
+    // so a destructor that throws chains the `TypeError` as its previous exception, as in PHP.
+    // A borrowed local is acquired only after this check and is not pinned.
+    let pins = crate::ir_lower::expr::pin_in_flight_owners(ctx, &[value.value], span);
+    let guarded = crate::ir_lower::expr::emit_scalar_guard(
         ctx, value, &declared, &prefix, " returned", span,
-        crate::ir_lower::expr::ScalarGuardEmit { release_on_refusal: true, also_release: Vec::new(), diagnostic_span: span },
-    ) {
+        crate::ir_lower::expr::ScalarGuardEmit { release_on_refusal: false, also_release: Vec::new(), diagnostic_span: span },
+    );
+    crate::ir_lower::expr::unpin_in_flight_owners(ctx, pins, span);
+    match guarded {
         Some(converted) => ScalarReturnGuard::Converted(converted),
         // A checked scalar bound to `bool` converts by PHP truthiness (`"abc"` is true); the
         // generic integer return coercion would read it as `(int)"abc"`, which is false.
