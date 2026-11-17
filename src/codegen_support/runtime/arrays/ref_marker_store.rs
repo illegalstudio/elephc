@@ -58,10 +58,16 @@ pub fn emit_ref_marker_store(emitter: &mut Emitter) {
     emitter.instruction("cmp x9, #4");                                          // arrays, hashes and objects occupy tags 4 through 6
     emitter.instruction("b.lo __rt_ref_marker_store_boxed");                    // scalars own nothing
     emitter.instruction("cmp x9, #6");                                          // is the payload a heap container or object?
-    emitter.instruction("b.hi __rt_ref_marker_store_boxed");                    // other tags keep their payload with the box
+    emitter.instruction("b.hi __rt_ref_marker_store_other");                    // tags above 6 are checked for a callable descriptor
     emitter.label("__rt_ref_marker_store_drop");
     emitter.instruction("ldr x0, [sp, #8]");                                    // the consumed payload the box now retains
     emitter.instruction("bl __rt_decref_any");                                  // drop the reference the caller handed over
+    emitter.instruction("b __rt_ref_marker_store_boxed");                       // the payload reference is dropped
+    emitter.label("__rt_ref_marker_store_other");
+    emitter.instruction("cmp x9, #10");                                         // a callable descriptor is retained by the box like a container
+    emitter.instruction("b.ne __rt_ref_marker_store_boxed");                    // other tags keep their payload with the box
+    emitter.instruction("ldr x0, [sp, #8]");                                    // the consumed descriptor the box now retains
+    emitter.instruction("bl __rt_callable_descriptor_release");                 // drop the share the caller handed over
     emitter.label("__rt_ref_marker_store_boxed");
     emitter.instruction("ldr x1, [sp, #24]");                                   // the box to install
     emitter.label("__rt_ref_marker_store_have_box");
@@ -111,10 +117,16 @@ fn emit_ref_marker_store_x86_64(emitter: &mut Emitter) {
     emitter.instruction("cmp r10, 4");                                          // arrays, hashes and objects occupy tags 4 through 6
     emitter.instruction("jb __rt_ref_marker_store_boxed");                      // scalars own nothing
     emitter.instruction("cmp r10, 6");                                          // is the payload a heap container or object?
-    emitter.instruction("ja __rt_ref_marker_store_boxed");                      // other tags keep their payload with the box
+    emitter.instruction("ja __rt_ref_marker_store_other");                      // tags above 6 are checked for a callable descriptor
     emitter.label("__rt_ref_marker_store_drop");
     emitter.instruction("mov rax, QWORD PTR [rbp - 16]");                       // the consumed payload the box now retains
     emitter.instruction("call __rt_decref_any");                                // drop the reference the caller handed over
+    emitter.instruction("jmp __rt_ref_marker_store_boxed");                     // the payload reference is dropped
+    emitter.label("__rt_ref_marker_store_other");
+    emitter.instruction("cmp r10, 10");                                         // a callable descriptor is retained by the box like a container
+    emitter.instruction("jne __rt_ref_marker_store_boxed");                     // other tags keep their payload with the box
+    emitter.instruction("mov rax, QWORD PTR [rbp - 16]");                       // the consumed descriptor the box now retains
+    emitter.instruction("call __rt_callable_descriptor_release");               // drop the share the caller handed over
     emitter.label("__rt_ref_marker_store_boxed");
     emitter.instruction("mov r11, QWORD PTR [rbp - 32]");                       // the box to install
     emitter.label("__rt_ref_marker_store_have_box");

@@ -687,3 +687,28 @@ g();
     assert!(out.success, "program failed: {}", out.stderr);
     assert_eq!(out.stdout, "2\n2\n");
 }
+
+/// Storing a closure or a first-class callable into a reference-bound array element releases the
+/// share the caller handed over: the marker store dropped it for strings and containers only, so
+/// every such write kept one callable descriptor alive.
+#[test]
+fn test_reference_bound_element_store_of_callables_does_not_leak() {
+    let out = compile_and_run(
+        r#"<?php
+function mk($i) { return strlen(...); }
+function flat(int $before): string { return memory_get_usage() - $before < 400000 ? "flat" : "leak"; }
+$a = [0, 1];
+$r = &$a[0];
+$before = memory_get_usage();
+for ($i = 0; $i < 50000; $i++) { $a[0] = mk($i); }
+echo "fcc ", flat($before), "\n";
+$o = [0];
+$p = &$o[0];
+$before = memory_get_usage();
+for ($i = 0; $i < 50000; $i++) { $o[0] = function () use ($i) { return $i; }; }
+echo "closure ", flat($before), "\n";
+echo $o[0](), ' ', $a[0]('abc'), "\n";
+"#,
+    );
+    assert_eq!(out, "fcc flat\nclosure flat\n49999 3\n");
+}
