@@ -599,8 +599,18 @@ fn lower_array_slice_preserve_keys(
     };
     let offset = expect_operand(inst, 1)?;
     let length = slice_like_length_operand(inst)?;
-    lower_slice_like_args(ctx, array, offset, length, "array_slice")?;
-    abi::emit_call_label(ctx.emitter, "__rt_array_slice_to_hash");
+    // A sparse integer write may have promoted the source to hash storage at run time; the hash
+    // arm keeps the original integer keys through `__rt_hash_slice`'s preserve mode.
+    lower_by_runtime_storage_kind(
+        ctx,
+        array,
+        |ctx| {
+            lower_slice_like_args(ctx, array, offset, length, "array_slice")?;
+            abi::emit_call_label(ctx.emitter, "__rt_array_slice_to_hash");
+            Ok(())
+        },
+        |ctx| reduce_sets::emit_hash_slice_window(ctx, inst, array, true),
+    )?;
     store_if_result(ctx, inst)
 }
 

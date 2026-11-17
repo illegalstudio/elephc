@@ -105,3 +105,26 @@ f_7(['a' => 1, 'b' => 2, 'c' => 3]);
         "1{\"b\":2,\"c\":3}\n10[20,30]\n3{\"a\":1,\"b\":2}\n30[10,20]\n{\"0\":\"u\",\"a\":1,\"b\":2,\"c\":3}\n[\"u\",10,20,30]\n[1,2,3]\n[10,20,30]\n[3,2,1]\n[30,20,10]\n[3,2,1]\n[30,20,10]\n1{\"b\":2,\"c\":3}\n1{\"b\":2,\"c\":3}\n"
     );
 }
+
+/// Verifies `array_pop()`, `array_shift()`, `array_unshift()` and `array_slice()` over an
+/// `array<int>` that a sparse integer write promoted to hash storage at run time. The static type
+/// stays a packed list while the value is a hash, so each lowering must dispatch on the real heap
+/// kind: `array_pop` and `array_shift` returned garbage and `array_unshift` segfaulted when they
+/// read the hash as packed slots. Expected output is php 8.5's.
+#[test]
+fn test_positional_builtins_on_sparse_promoted_list_match_php() {
+    let out = compile_and_run(
+        r#"<?php
+$a = [1, 2]; $a[7] = 3; echo array_pop($a), ' ', json_encode($a), "\n";
+$b = [1, 2]; $b[7] = 3; echo array_shift($b), ' ', json_encode($b), "\n";
+$c = [1, 2]; $c[7] = 3; echo array_unshift($c, 9), ' ', json_encode($c), "\n";
+$d = [1, 2]; $d[7] = 3; echo array_unshift($d, 8, 9), ' ', json_encode($d), "\n";
+$e = [1, 2]; $e[7] = 3; echo json_encode(array_slice($e, 1)), json_encode(array_slice($e, 1, 1, true)), "\n";
+$f = ['x', 'y']; $f[7] = 'z'; echo array_pop($f), array_shift($f), json_encode($f), "\n";
+"#,
+    );
+    assert_eq!(
+        out,
+        "3 [1,2]\n1 [2,3]\n4 [9,1,2,3]\n5 [8,9,1,2,3]\n[2,3]{\"1\":2}\nzx[\"y\"]\n"
+    );
+}

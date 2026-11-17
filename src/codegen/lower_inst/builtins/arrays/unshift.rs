@@ -65,6 +65,29 @@ pub(super) fn lower_array_unshift(ctx: &mut FunctionContext<'_>, inst: &Instruct
         }
         return super::boxed_unshift::lower_assoc_array_unshift(ctx, inst, array);
     }
+    // A sparse integer write can have promoted this `array<T>` to hash storage at runtime; the
+    // packed prepend below would then shift slots of a table that has none (a segfault).
+    super::misc_dispatch::lower_by_runtime_storage_kind(
+        ctx,
+        array,
+        |ctx| lower_indexed_array_unshift(ctx, inst, array),
+        |ctx| {
+            require_array_unshift_result_type(&inst.result_php_type.codegen_repr())?;
+            if inst.operands.len() == 1 {
+                super::boxed_unshift::lower_assoc_array_unshift_without_values(ctx, inst, array)
+            } else {
+                super::boxed_unshift::lower_assoc_array_unshift(ctx, inst, array)
+            }
+        },
+    )
+}
+
+/// Prepends to a packed indexed array (the indexed arm of `array_unshift()`).
+fn lower_indexed_array_unshift(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+    array: ValueId,
+) -> Result<()> {
     if is_string_array(&ctx.value_php_type(array)?) {
         return lower_string_array_unshift(ctx, inst, array);
     }

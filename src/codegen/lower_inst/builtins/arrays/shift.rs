@@ -37,6 +37,21 @@ pub(super) fn lower_array_shift(ctx: &mut FunctionContext<'_>, inst: &Instructio
     }
     let elem_ty = array_shift_element_type(ctx.value_php_type(array)?)?;
     require_array_shift_result_type(&inst.result_php_type.codegen_repr())?;
+    super::misc_dispatch::lower_by_runtime_storage_kind(
+        ctx,
+        array,
+        |ctx| lower_indexed_array_shift(ctx, inst, array, &elem_ty),
+        |ctx| super::boxed_mutation::lower_assoc_array_shift(ctx, inst, array),
+    )
+}
+
+/// Shifts the first slot of a packed indexed array (the indexed arm of `array_shift()`).
+fn lower_indexed_array_shift(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+    array: ValueId,
+    elem_ty: &PhpType,
+) -> Result<()> {
     let receiver = ReceiverPlace::resolve(ctx, array)?;
     // Same as `array_pop()`: retire the Mixed box a widened local still holds before the split.
     if matches!(receiver, ReceiverPlace::Local(_)) {
@@ -45,8 +60,8 @@ pub(super) fn lower_array_shift(ctx: &mut FunctionContext<'_>, inst: &Instructio
     ensure_unique_array_shift_source(ctx, array)?;
     receiver.store_back_after_consuming_split(ctx, array)?;
     match ctx.emitter.target.arch {
-        Arch::AArch64 => lower_array_shift_aarch64(ctx, array, &elem_ty)?,
-        Arch::X86_64 => lower_array_shift_x86_64(ctx, array, &elem_ty)?,
+        Arch::AArch64 => lower_array_shift_aarch64(ctx, array, elem_ty)?,
+        Arch::X86_64 => lower_array_shift_x86_64(ctx, array, elem_ty)?,
     }
     store_if_result(ctx, inst)
 }

@@ -161,6 +161,21 @@ pub(crate) fn lower_array_pop(ctx: &mut FunctionContext<'_>, inst: &Instruction)
     }
     let elem_ty = array_pop_element_type(ctx.value_php_type(array)?)?;
     require_array_pop_result_type(&inst.result_php_type.codegen_repr())?;
+    lower_by_runtime_storage_kind(
+        ctx,
+        array,
+        |ctx| lower_indexed_array_pop(ctx, inst, array, &elem_ty),
+        |ctx| boxed_mutation::lower_assoc_array_pop(ctx, inst, array),
+    )
+}
+
+/// Pops the last slot of a packed indexed array (the indexed arm of `array_pop()`).
+fn lower_indexed_array_pop(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+    array: ValueId,
+    elem_ty: &PhpType,
+) -> Result<()> {
     let receiver = ReceiverPlace::resolve(ctx, array)?;
     // A load out of a Mixed-widened local carries a detached owner of its own, so the slot's box
     // still owns the array the split below consumes from. Retiring that box first lets the
@@ -172,8 +187,8 @@ pub(crate) fn lower_array_pop(ctx: &mut FunctionContext<'_>, inst: &Instruction)
     ensure_unique_array_pop_source(ctx, array)?;
     receiver.store_back_after_consuming_split(ctx, array)?;
     match ctx.emitter.target.arch {
-        Arch::AArch64 => lower_array_pop_aarch64(ctx, array, &elem_ty)?,
-        Arch::X86_64 => lower_array_pop_x86_64(ctx, array, &elem_ty)?,
+        Arch::AArch64 => lower_array_pop_aarch64(ctx, array, elem_ty)?,
+        Arch::X86_64 => lower_array_pop_x86_64(ctx, array, elem_ty)?,
     }
     store_if_result(ctx, inst)
 }
@@ -828,4 +843,39 @@ pub(crate) fn lower_array_merge_recursive(
         None,
         true,
     )
+}
+
+/// Emits `indexed` and `hash` as the two arms of a runtime storage-kind dispatch on `array`.
+///
+/// A static `array<T>` can carry associative storage after a sparse integer write promoted it at
+/// runtime (`$a = [1, 2]; $a[7] = 3;`). The packed-slot emitters read the length at offset 0 and
+/// the slots from offset 24, so running one over a hash header reads garbage or corrupts the
+/// table. The arm selected here is the one whose helpers match the real heap kind (kind 3 = hash).
+pub(super) fn lower_by_runtime_storage_kind(
+    ctx: &mut FunctionContext<'_>,
+    array: ValueId,
+    indexed: impl FnOnce(&mut FunctionContext<'_>) -> Result<()>,
+    hash: impl FnOnce(&mut FunctionContext<'_>) -> Result<()>,
+) -> Result<()> {
+    let hash_label = ctx.next_label("array_storage_hash");
+    let done_label = ctx.next_label("array_storage_done");
+    let result = abi::int_result_reg(ctx.emitter);
+    ctx.load_value_to_reg(array, result)?;
+    abi::emit_call_label(ctx.emitter, "__rt_heap_kind");
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction("cmp x0, #3");                              // runtime kind 3 is promoted hash storage
+            ctx.emitter.instruction(&format!("b.eq {}", hash_label));
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("cmp rax, 3");                              // runtime kind 3 is promoted hash storage
+            ctx.emitter.instruction(&format!("je {}", hash_label));
+        }
+    }
+    indexed(ctx)?;
+    abi::emit_jump(ctx.emitter, &done_label);
+    ctx.emitter.label(&hash_label);
+    hash(ctx)?;
+    ctx.emitter.label(&done_label);
+    Ok(())
 }

@@ -535,8 +535,22 @@ pub(crate) fn lower_array_slice(ctx: &mut FunctionContext<'_>, inst: &Instructio
     let result_elem_ty =
         result_array_element_type("array_slice", &inst.result_php_type.codegen_repr())?;
     require_array_slice_result_type(&source_elem_ty, &result_elem_ty)?;
-    lower_array_slice_call(ctx, array, offset, length, &source_elem_ty)?;
-    normalize_indexed_array_result(ctx, "array_slice", &source_elem_ty, &result_elem_ty)?;
+    if source_elem_ty != result_elem_ty {
+        lower_array_slice_call(ctx, array, offset, length, &source_elem_ty)?;
+        normalize_indexed_array_result(ctx, "array_slice", &source_elem_ty, &result_elem_ty)?;
+        return store_if_result(ctx, inst);
+    }
+    // A sparse integer write may have promoted the source to hash storage at run time; the hash
+    // arm renumbers the window like the packed one and keeps the entries' own value tags.
+    lower_by_runtime_storage_kind(
+        ctx,
+        array,
+        |ctx| {
+            lower_array_slice_call(ctx, array, offset, length, &source_elem_ty)?;
+            normalize_indexed_array_result(ctx, "array_slice", &source_elem_ty, &result_elem_ty)
+        },
+        |ctx| emit_hash_slice_window(ctx, inst, array, false),
+    )?;
     store_if_result(ctx, inst)
 }
 
@@ -608,6 +622,19 @@ fn lower_hash_slice(
             inst.result_php_type
         )));
     };
+    emit_hash_slice_window(ctx, inst, array, preserve_keys)?;
+    store_if_result(ctx, inst)
+}
+
+/// Calls `__rt_hash_slice` over the `array_slice()` window of `inst`, leaving the new hash in the
+/// result register. Also serves a static `array<T>` whose storage was promoted to a hash at run
+/// time, so it must not look at the instruction's result type.
+pub(super) fn emit_hash_slice_window(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+    array: ValueId,
+    preserve_keys: bool,
+) -> Result<()> {
     let offset = expect_operand(inst, 1)?;
     let length = slice_like_length_operand(inst)?;
     lower_slice_like_args(ctx, array, offset, length, "array_slice")?;
@@ -625,7 +652,7 @@ fn lower_hash_slice(
         ),
     }
     abi::emit_call_label(ctx.emitter, "__rt_hash_slice");
-    store_if_result(ctx, inst)
+    Ok(())
 }
 
 /// Lowers `array_slice()` for an indexed or hash array stored inside a boxed Mixed cell.
