@@ -44,7 +44,11 @@ impl Parser {
             let EvalDeclareValue::Int(value) = value else {
                 return Err(EvalParseError::UnexpectedToken);
             };
-            return Ok(vec![EvalStmt::DeclareStrictTypes(value != 0)]);
+            // php: `Fatal error: strict_types declaration must have 0 or 1 as its value`.
+            if !matches!(value, 0 | 1) {
+                return Err(EvalParseError::UnsupportedConstruct);
+            }
+            return Ok(vec![EvalStmt::DeclareStrictTypes(value == 1)]);
         }
         if ident_eq(&directive, "ticks") {
             let EvalDeclareValue::Int(value) = value else {

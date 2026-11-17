@@ -368,11 +368,8 @@ fn parse_fragment_accepts_comma_separated_for_clauses() {
 /// It is no longer discarded: strict mode is ENFORCED, so the directive has to arrive as
 /// `EvalStmt::DeclareStrictTypes` for the coercion gate to read.
 ///
-/// STILL OPEN, and named here rather than asserted away: php accepts `declare(ticks=1)` and the
-/// block and alternative-syntax bodies -- `declare(...) { ... }` and `declare(...): ... enddeclare;`
-/// -- and this parser now refuses all three, because the gate that enforces `strict_types` also
-/// decided an unmodelled directive is better refused than silently ignored. Both halves came from
-/// the same lane and it owns the reconciliation.
+/// `ticks`, the block form and the alternative-syntax form are accepted too (see
+/// `parse_declare_stmt`); `strict_types` takes only 0 or 1, as in php.
 #[test]
 fn parse_fragment_accepts_declare_directives() {
     let program =
@@ -388,4 +385,6 @@ fn parse_fragment_accepts_declare_directives() {
         ]
     );
     assert!(parse_fragment(br#"declare(1); $x = 1;"#).is_err());
+    assert!(parse_fragment(br#"declare(strict_types=0); $x = 1;"#).is_ok());
+    assert!(parse_fragment(br#"declare(strict_types=2); $x = 1;"#).is_err());
 }
