@@ -811,13 +811,15 @@ fn lower_gradual_object_nominal_guard(
     if matches!(inst.result_php_type.codegen_repr(), PhpType::Object(_)) {
         abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
         let payload_reg = mixed_unbox_low_payload_reg(ctx);
-        let object_arg = abi::int_arg_reg_name(ctx.emitter.target, 0);
-        if payload_reg != object_arg {
-            abi::emit_reg_move(ctx.emitter, object_arg, payload_reg);
+        let result_reg = abi::int_result_reg(ctx.emitter);
+        // The retain helper consumes the value register, not the first C argument register.
+        // Retaining the tag instead frees the object when the source Mixed box is released.
+        if payload_reg != result_reg {
+            abi::emit_reg_move(ctx.emitter, result_reg, payload_reg);
         }
-        abi::emit_push_reg(ctx.emitter, payload_reg);
+        abi::emit_push_reg(ctx.emitter, result_reg);
         abi::emit_call_label(ctx.emitter, "__rt_incref");
-        abi::emit_pop_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
+        abi::emit_pop_reg(ctx.emitter, result_reg);
     }
     store_if_result(ctx, inst)
 }
