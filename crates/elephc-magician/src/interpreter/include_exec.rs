@@ -339,7 +339,7 @@ fn eval_resolved_include_body(
     }
     let segments = match load_script(resolved_path) {
         Ok(segments) => segments,
-        Err(_) => return eval_include_missing_file(path, required, values),
+        Err(_) => return eval_include_missing_file(path, required, context, values),
     };
     context.mark_included_file(include_key);
     eval_replay_include_segments(&segments, resolved_path, context, scope, values)
@@ -408,7 +408,7 @@ fn eval_include_through_user_wrapper(
     }
     let Some(bytes) = eval_user_wrapper_include_bytes(path, &class_name, context, scope, values)?
     else {
-        return eval_include_missing_file(path, required, values).map(Some);
+        return eval_include_missing_file(path, required, context, values).map(Some);
     };
     context.mark_included_file(include_key);
     eval_execute_include_bytes(&bytes, include_path, context, scope, values).map(Some)
@@ -490,6 +490,7 @@ fn eval_user_wrapper_include_has_method(
 fn eval_include_missing_file(
     path: &str,
     required: bool,
+    context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     let construct = if required { "require" } else { "include" };
@@ -500,7 +501,14 @@ fn eval_include_missing_file(
         "Warning: {construct}(): Failed opening '{path}' for inclusion\n"
     ))?;
     if required {
-        Err(EvalStatus::RuntimeFatal)
+        // php raises a catchable `Error` after the two warnings (`catch`, `finally` and the
+        // uncaught report all see it); the message stops after the path as the compiled
+        // closed-world `require` does, elephc having no `include_path`.
+        throwables::eval_throw_error(
+            &format!("Failed opening required '{path}'"),
+            context,
+            values,
+        )
     } else {
         values.bool_value(false)
     }

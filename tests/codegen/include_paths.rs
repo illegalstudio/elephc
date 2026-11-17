@@ -1147,3 +1147,25 @@ fn test_runtime_interface_redeclaration_is_an_uncatchable_fatal() {
         "php's redeclaration fatal names the declaration: {out}"
     );
 }
+
+/// A `require` of a path only the runtime knows, which names no file, throws php's catchable
+/// `Error` (after its two warnings) instead of ending the process with "eval() runtime failed".
+/// The warnings go to stderr; the catch and the code after it run, as in php 8.5.
+#[test]
+fn test_runtime_require_of_a_missing_file_throws_a_catchable_error() {
+    let out = compile_and_run(
+        r#"<?php
+$p = '/nonexistent/elephc-missing.php';
+try {
+    require $p;
+    echo "not reached\n";
+} catch (Error $e) {
+    echo get_class($e), ": ", str_starts_with($e->getMessage(), "Failed opening required '/nonexistent/elephc-missing.php'") ? "ok" : "bad", "\n";
+} finally {
+    echo "finally\n";
+}
+echo "after\n";
+"#,
+    );
+    assert_eq!(out, "Error: ok\nfinally\nafter\n");
+}
