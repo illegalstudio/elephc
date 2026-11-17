@@ -490,6 +490,7 @@ mod tests {
         // ext/posix bridge builtins served by the PCNTL adapter.
         // interpreter adapters, plus the GMP, SimpleXML, and tidy forwarding homes, and the
         // seven ext/posix bridge builtins served by the PCNTL adapter.
+        // The seven ext/posix bridge builtins are served by the PCNTL adapter.
         assert_eq!(interpreter_adapter, 700 + curl_surface);
         // Includes the eleven `__elephc_opcache_rt_*` helpers: they lower to an eval-bridge
         // call from AOT code and have no eval execution route of their own. So do the four
