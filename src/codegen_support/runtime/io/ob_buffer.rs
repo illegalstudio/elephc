@@ -43,8 +43,9 @@ use crate::codegen_support::runtime::data::{
 };
 use crate::codegen_support::{emit::Emitter, platform::Arch};
 
-/// Maximum output-buffer nesting depth (slots in the `_ob_*` parallel arrays).
-pub(crate) const OB_MAX_LEVELS: i64 = 64;
+use elephc_memoir::buffers::output;
+
+pub(crate) use elephc_memoir::buffers::output::MAX_LEVELS as OB_MAX_LEVELS;
 
 /// Default capacity of a chunk-less output buffer (PHP reports 16384).
 const OB_DEFAULT_CAPACITY: i64 = 16384;
@@ -130,19 +131,7 @@ pub fn emit_ob_start(emitter: &mut Emitter) {
     emitter.instruction("lsr x10, x9, #12");                                    // whole 4 KiB pages in the chunk size
     emitter.instruction("add x10, x10, #1");                                    // round up to the next page
     emitter.instruction("lsl x0, x10, #12");                                    // capacity = ((chunk >> 12) + 1) << 12
-    emitter.label("__rt_ob_start_alloc");
-    emitter.instruction("str x0, [sp, #48]");                                   // save the chosen capacity
-    emitter.instruction("bl __rt_heap_alloc");                                  // allocate the capture buffer (raw kind)
-    // -- record every per-slot field --
-    abi::emit_symbol_address(emitter, "x9", "_ob_level");                       // materialize the address of the buffer-stack depth
-    emitter.instruction("ldr x10, [x9]");                                       // reload the depth (the new slot index)
-    abi::emit_symbol_address(emitter, "x11", "_ob_ptrs");                       // materialize the buffer-pointer slot array
-    emitter.instruction("str x0, [x11, x10, lsl #3]");                          // record the new buffer base pointer
-    abi::emit_symbol_address(emitter, "x11", "_ob_lens");                       // materialize the used-bytes slot array
-    emitter.instruction("str xzr, [x11, x10, lsl #3]");                         // the new buffer starts empty
-    abi::emit_symbol_address(emitter, "x11", "_ob_caps");                       // materialize the capacity slot array
-    emitter.instruction("ldr x12, [sp, #48]");                                  // reload the chosen capacity
-    emitter.instruction("str x12, [x11, x10, lsl #3]");                         // record the capacity
+    output::emit_allocate_slot(emitter);
     abi::emit_symbol_address(emitter, "x11", "_ob_handler_stubs");              // materialize the handler-stub slot array
     emitter.instruction("ldr x12, [sp, #0]");                                   // reload the handler stub
     emitter.instruction("str x12, [x11, x10, lsl #3]");                         // record the handler stub
@@ -243,19 +232,7 @@ fn emit_ob_start_x86_64(emitter: &mut Emitter) {
     emitter.instruction("add r10, 1");                                          // round up to the next page
     emitter.instruction("shl r10, 12");                                         // capacity = ((chunk >> 12) + 1) << 12
     emitter.instruction("mov rax, r10");                                        // pass the capacity to the allocator
-    emitter.label("__rt_ob_start_alloc_x86");
-    emitter.instruction("mov QWORD PTR [rbp - 56], rax");                       // save the chosen capacity
-    emitter.instruction("call __rt_heap_alloc");                                // allocate the capture buffer (raw kind)
-    // -- record every per-slot field --
-    abi::emit_symbol_address(emitter, "r9", "_ob_level");                       // materialize the address of the buffer-stack depth
-    emitter.instruction("mov r10, QWORD PTR [r9]");                             // reload the depth (the new slot index)
-    abi::emit_symbol_address(emitter, "r11", "_ob_ptrs");                       // materialize the buffer-pointer slot array
-    emitter.instruction("mov QWORD PTR [r11 + r10*8], rax");                    // record the new buffer base pointer
-    abi::emit_symbol_address(emitter, "r11", "_ob_lens");                       // materialize the used-bytes slot array
-    emitter.instruction("mov QWORD PTR [r11 + r10*8], 0");                      // the new buffer starts empty
-    abi::emit_symbol_address(emitter, "r11", "_ob_caps");                       // materialize the capacity slot array
-    emitter.instruction("mov rcx, QWORD PTR [rbp - 56]");                       // reload the chosen capacity
-    emitter.instruction("mov QWORD PTR [r11 + r10*8], rcx");                    // record the capacity
+    output::emit_allocate_slot(emitter);
     abi::emit_symbol_address(emitter, "r11", "_ob_handler_stubs");              // materialize the handler-stub slot array
     emitter.instruction("mov rcx, QWORD PTR [rbp - 8]");                        // reload the handler stub
     emitter.instruction("mov QWORD PTR [r11 + r10*8], rcx");                    // record the handler stub
@@ -331,72 +308,7 @@ pub fn emit_ob_append(emitter: &mut Emitter) {
     emitter.instruction("add x29, sp, #48");                                    // establish the ob_append frame pointer
     emitter.instruction("str x0, [sp, #0]");                                    // save the source byte pointer
     emitter.instruction("str x1, [sp, #8]");                                    // save the source byte length
-    abi::emit_symbol_address(emitter, "x9", "_ob_level");                       // materialize the address of the buffer-stack depth
-    emitter.instruction("ldr x10, [x9]");                                       // load the current buffer-stack depth
-    emitter.instruction("cbz x10, __rt_ob_append_done");                        // no active buffer — defensive no-op
-    emitter.instruction("sub x10, x10, #1");                                    // top slot index = depth - 1
-    emitter.instruction("str x10, [sp, #16]");                                  // save the top slot index
-    abi::emit_symbol_address(emitter, "x11", "_ob_lens");                       // materialize the used-bytes slot array
-    emitter.instruction("ldr x12, [x11, x10, lsl #3]");                         // load the top buffer's used byte count
-    emitter.instruction("str x12, [sp, #24]");                                  // save the used byte count
-    abi::emit_symbol_address(emitter, "x13", "_ob_caps");                       // materialize the capacity slot array
-    emitter.instruction("ldr x14, [x13, x10, lsl #3]");                         // load the top buffer's capacity
-    emitter.instruction("ldr x15, [sp, #8]");                                   // reload the incoming byte length
-    emitter.instruction("add x15, x12, x15");                                   // needed bytes = used + incoming length
-    emitter.instruction("cmp x15, x14");                                        // does the payload fit the current capacity?
-    emitter.instruction("b.ls __rt_ob_append_copy");                            // fits — skip the growth path
-    // -- grow: double the capacity until the payload fits --
-    emitter.label("__rt_ob_append_grow_size");
-    emitter.instruction("lsl x14, x14, #1");                                    // double the candidate capacity
-    emitter.instruction("cmp x14, x15");                                        // does the doubled capacity fit the payload?
-    emitter.instruction("b.lo __rt_ob_append_grow_size");                       // keep doubling until it fits
-    emitter.instruction("str x14, [sp, #32]");                                  // save the new capacity
-    emitter.instruction("mov x0, x14");                                         // request the new capacity from the allocator
-    emitter.instruction("bl __rt_heap_alloc");                                  // allocate the replacement buffer (raw kind)
-    // -- copy the used prefix from the old buffer into the replacement --
-    emitter.instruction("ldr x10, [sp, #16]");                                  // reload the top slot index
-    abi::emit_symbol_address(emitter, "x11", "_ob_ptrs");                       // materialize the buffer-pointer slot array
-    emitter.instruction("ldr x12, [x11, x10, lsl #3]");                         // load the old buffer base pointer
-    emitter.instruction("ldr x13, [sp, #24]");                                  // reload the used byte count
-    emitter.instruction("mov x14, #0");                                         // start the copy at offset zero
-    emitter.label("__rt_ob_append_grow_copy");
-    emitter.instruction("cmp x14, x13");                                        // copied all used bytes?
-    emitter.instruction("b.ge __rt_ob_append_grow_swap");                       // yes — publish the replacement buffer
-    emitter.instruction("ldrb w15, [x12, x14]");                                // load the next byte from the old buffer
-    emitter.instruction("strb w15, [x0, x14]");                                 // store the byte into the replacement buffer
-    emitter.instruction("add x14, x14, #1");                                    // advance the copy cursor
-    emitter.instruction("b __rt_ob_append_grow_copy");                          // continue copying the used prefix
-    emitter.label("__rt_ob_append_grow_swap");
-    emitter.instruction("str x0, [x11, x10, lsl #3]");                          // publish the replacement buffer base pointer
-    abi::emit_symbol_address(emitter, "x13", "_ob_caps");                       // materialize the capacity slot array
-    emitter.instruction("ldr x14, [sp, #32]");                                  // reload the new capacity
-    emitter.instruction("str x14, [x13, x10, lsl #3]");                         // publish the new capacity
-    emitter.instruction("mov x0, x12");                                         // pass the old buffer to the deallocator
-    emitter.instruction("bl __rt_heap_free");                                   // release the old buffer block
-    // -- copy the incoming bytes to buffer base + used --
-    emitter.label("__rt_ob_append_copy");
-    emitter.instruction("ldr x10, [sp, #16]");                                  // reload the top slot index
-    abi::emit_symbol_address(emitter, "x11", "_ob_ptrs");                       // materialize the buffer-pointer slot array
-    emitter.instruction("ldr x12, [x11, x10, lsl #3]");                         // load the (possibly replaced) buffer base pointer
-    emitter.instruction("ldr x13, [sp, #24]");                                  // reload the used byte count
-    emitter.instruction("add x12, x12, x13");                                   // destination cursor = base + used
-    emitter.instruction("ldr x14, [sp, #0]");                                   // reload the source byte pointer
-    emitter.instruction("ldr x15, [sp, #8]");                                   // reload the source byte length
-    emitter.label("__rt_ob_append_copy_loop");
-    emitter.instruction("cbz x15, __rt_ob_append_publish");                     // no bytes left — publish the new length
-    emitter.instruction("ldrb w9, [x14]");                                      // load the next source byte
-    emitter.instruction("strb w9, [x12]");                                      // store the byte at the destination cursor
-    emitter.instruction("add x14, x14, #1");                                    // advance the source cursor
-    emitter.instruction("add x12, x12, #1");                                    // advance the destination cursor
-    emitter.instruction("sub x15, x15, #1");                                    // one byte fewer to copy
-    emitter.instruction("b __rt_ob_append_copy_loop");                          // continue copying the incoming bytes
-    emitter.label("__rt_ob_append_publish");
-    emitter.instruction("ldr x13, [sp, #24]");                                  // reload the used byte count
-    emitter.instruction("ldr x14, [sp, #8]");                                   // reload the incoming byte length
-    emitter.instruction("add x13, x13, x14");                                   // new used count = used + incoming length
-    emitter.instruction("ldr x10, [sp, #16]");                                  // reload the top slot index
-    abi::emit_symbol_address(emitter, "x11", "_ob_lens");                       // materialize the used-bytes slot array
-    emitter.instruction("str x13, [x11, x10, lsl #3]");                         // publish the new used byte count
+    output::emit_append_bytes(emitter);
     // -- PHP chunk-size auto-flush: reaching the threshold flushes the buffer --
     abi::emit_symbol_address(emitter, "x11", "_ob_chunk_sizes");                // materialize the chunk-size slot array
     emitter.instruction("ldr x12, [x11, x10, lsl #3]");                         // load the slot's chunk size
@@ -424,72 +336,7 @@ fn emit_ob_append_x86_64(emitter: &mut Emitter) {
     emitter.instruction("sub rsp, 48");                                         // reserve the ob_append local slots (16-aligned)
     emitter.instruction("mov QWORD PTR [rbp - 8], rdi");                        // save the source byte pointer
     emitter.instruction("mov QWORD PTR [rbp - 16], rsi");                       // save the source byte length
-    abi::emit_symbol_address(emitter, "r9", "_ob_level");                       // materialize the address of the buffer-stack depth
-    emitter.instruction("mov r10, QWORD PTR [r9]");                             // load the current buffer-stack depth
-    emitter.instruction("test r10, r10");                                       // is any buffer active?
-    emitter.instruction("jz __rt_ob_append_done_x86");                          // no active buffer — defensive no-op
-    emitter.instruction("sub r10, 1");                                          // top slot index = depth - 1
-    emitter.instruction("mov QWORD PTR [rbp - 24], r10");                       // save the top slot index
-    abi::emit_symbol_address(emitter, "r11", "_ob_lens");                       // materialize the used-bytes slot array
-    emitter.instruction("mov rcx, QWORD PTR [r11 + r10*8]");                    // load the top buffer's used byte count
-    emitter.instruction("mov QWORD PTR [rbp - 32], rcx");                       // save the used byte count
-    abi::emit_symbol_address(emitter, "r11", "_ob_caps");                       // materialize the capacity slot array
-    emitter.instruction("mov rdx, QWORD PTR [r11 + r10*8]");                    // load the top buffer's capacity
-    emitter.instruction("mov r8, QWORD PTR [rbp - 16]");                        // reload the incoming byte length
-    emitter.instruction("add r8, rcx");                                         // needed bytes = used + incoming length
-    emitter.instruction("cmp r8, rdx");                                         // does the payload fit the current capacity?
-    emitter.instruction("jbe __rt_ob_append_copy_x86");                         // fits — skip the growth path
-    // -- grow: double the capacity until the payload fits --
-    emitter.label("__rt_ob_append_grow_size_x86");
-    emitter.instruction("shl rdx, 1");                                          // double the candidate capacity
-    emitter.instruction("cmp rdx, r8");                                         // does the doubled capacity fit the payload?
-    emitter.instruction("jb __rt_ob_append_grow_size_x86");                     // keep doubling until it fits
-    emitter.instruction("mov QWORD PTR [rbp - 40], rdx");                       // save the new capacity
-    emitter.instruction("mov rax, rdx");                                        // request the new capacity from the allocator
-    emitter.instruction("call __rt_heap_alloc");                                // allocate the replacement buffer (raw kind)
-    // -- copy the used prefix from the old buffer into the replacement --
-    emitter.instruction("mov r10, QWORD PTR [rbp - 24]");                       // reload the top slot index
-    abi::emit_symbol_address(emitter, "r11", "_ob_ptrs");                       // materialize the buffer-pointer slot array
-    emitter.instruction("mov rcx, QWORD PTR [r11 + r10*8]");                    // load the old buffer base pointer
-    emitter.instruction("mov rdx, QWORD PTR [rbp - 32]");                       // reload the used byte count
-    emitter.instruction("xor r8d, r8d");                                        // start the copy at offset zero
-    emitter.label("__rt_ob_append_grow_copy_x86");
-    emitter.instruction("cmp r8, rdx");                                         // copied all used bytes?
-    emitter.instruction("jge __rt_ob_append_grow_swap_x86");                    // yes — publish the replacement buffer
-    emitter.instruction("mov r9b, BYTE PTR [rcx + r8]");                        // load the next byte from the old buffer
-    emitter.instruction("mov BYTE PTR [rax + r8], r9b");                        // store the byte into the replacement buffer
-    emitter.instruction("add r8, 1");                                           // advance the copy cursor
-    emitter.instruction("jmp __rt_ob_append_grow_copy_x86");                    // continue copying the used prefix
-    emitter.label("__rt_ob_append_grow_swap_x86");
-    emitter.instruction("mov QWORD PTR [r11 + r10*8], rax");                    // publish the replacement buffer base pointer
-    abi::emit_symbol_address(emitter, "r9", "_ob_caps");                        // materialize the capacity slot array
-    emitter.instruction("mov rdx, QWORD PTR [rbp - 40]");                       // reload the new capacity
-    emitter.instruction("mov QWORD PTR [r9 + r10*8], rdx");                     // publish the new capacity
-    emitter.instruction("mov rax, rcx");                                        // pass the old buffer to the deallocator
-    emitter.instruction("call __rt_heap_free");                                 // release the old buffer block
-    // -- copy the incoming bytes to buffer base + used --
-    emitter.label("__rt_ob_append_copy_x86");
-    emitter.instruction("mov r10, QWORD PTR [rbp - 24]");                       // reload the top slot index
-    abi::emit_symbol_address(emitter, "r11", "_ob_ptrs");                       // materialize the buffer-pointer slot array
-    emitter.instruction("mov rcx, QWORD PTR [r11 + r10*8]");                    // load the (possibly replaced) buffer base pointer
-    emitter.instruction("add rcx, QWORD PTR [rbp - 32]");                       // destination cursor = base + used
-    emitter.instruction("mov rdx, QWORD PTR [rbp - 8]");                        // reload the source byte pointer
-    emitter.instruction("mov r8, QWORD PTR [rbp - 16]");                        // reload the source byte length
-    emitter.label("__rt_ob_append_copy_loop_x86");
-    emitter.instruction("test r8, r8");                                         // any bytes left to copy?
-    emitter.instruction("jz __rt_ob_append_publish_x86");                       // no bytes left — publish the new length
-    emitter.instruction("mov r9b, BYTE PTR [rdx]");                             // load the next source byte
-    emitter.instruction("mov BYTE PTR [rcx], r9b");                             // store the byte at the destination cursor
-    emitter.instruction("add rdx, 1");                                          // advance the source cursor
-    emitter.instruction("add rcx, 1");                                          // advance the destination cursor
-    emitter.instruction("sub r8, 1");                                           // one byte fewer to copy
-    emitter.instruction("jmp __rt_ob_append_copy_loop_x86");                    // continue copying the incoming bytes
-    emitter.label("__rt_ob_append_publish_x86");
-    emitter.instruction("mov rcx, QWORD PTR [rbp - 32]");                       // reload the used byte count
-    emitter.instruction("add rcx, QWORD PTR [rbp - 16]");                       // new used count = used + incoming length
-    emitter.instruction("mov r10, QWORD PTR [rbp - 24]");                       // reload the top slot index
-    abi::emit_symbol_address(emitter, "r11", "_ob_lens");                       // materialize the used-bytes slot array
-    emitter.instruction("mov QWORD PTR [r11 + r10*8], rcx");                    // publish the new used byte count
+    output::emit_append_bytes(emitter);
     // -- PHP chunk-size auto-flush: reaching the threshold flushes the buffer --
     abi::emit_symbol_address(emitter, "r11", "_ob_chunk_sizes");                // materialize the chunk-size slot array
     emitter.instruction("mov rdx, QWORD PTR [r11 + r10*8]");                    // load the slot's chunk size
@@ -507,65 +354,7 @@ fn emit_ob_append_x86_64(emitter: &mut Emitter) {
     emitter.instruction("ret");                                                 // return to caller
 }
 
-/// Emits `__rt_ob_contents`: return a persisted copy of the top buffer contents.
-///
-/// No inputs. Returns the platform string result pair (AArch64 `x1`=ptr, `x2`=len /
-/// x86_64 `rax`=ptr, `rdx`=len); a null pointer signals "no active buffer" so the
-/// caller can box PHP `false`.
-pub fn emit_ob_contents(emitter: &mut Emitter) {
-    if emitter.target.arch == Arch::X86_64 {
-        emit_ob_contents_x86_64(emitter);
-        return;
-    }
-
-    emitter.blank();
-    emitter.comment("--- runtime: ob_contents ---");
-    emitter.label_global("__rt_ob_contents");
-    emitter.instruction("stp x29, x30, [sp, #-16]!");                           // save frame pointer and return address
-    emitter.instruction("mov x29, sp");                                         // establish a frame pointer for the persist call
-    abi::emit_symbol_address(emitter, "x9", "_ob_level");                       // materialize the address of the buffer-stack depth
-    emitter.instruction("ldr x10, [x9]");                                       // load the current buffer-stack depth
-    emitter.instruction("cbz x10, __rt_ob_contents_none");                      // no active buffer — return the null failure pair
-    emitter.instruction("sub x10, x10, #1");                                    // top slot index = depth - 1
-    abi::emit_symbol_address(emitter, "x11", "_ob_ptrs");                       // materialize the buffer-pointer slot array
-    emitter.instruction("ldr x1, [x11, x10, lsl #3]");                          // load the top buffer base pointer
-    abi::emit_symbol_address(emitter, "x11", "_ob_lens");                       // materialize the used-bytes slot array
-    emitter.instruction("ldr x2, [x11, x10, lsl #3]");                          // load the top buffer's used byte count
-    emitter.instruction("bl __rt_str_persist");                                 // copy the contents into an owned heap string
-    emitter.instruction("b __rt_ob_contents_done");                             // return the persisted string pair
-    emitter.label("__rt_ob_contents_none");
-    emitter.instruction("mov x1, #0");                                          // null pointer signals "no active buffer"
-    emitter.instruction("mov x2, #0");                                          // zero length for the failure pair
-    emitter.label("__rt_ob_contents_done");
-    emitter.instruction("ldp x29, x30, [sp], #16");                             // restore frame pointer and return address
-    emitter.instruction("ret");                                                 // return the string result pair
-}
-
-/// Emits the Linux x86_64 variant of `__rt_ob_contents`.
-fn emit_ob_contents_x86_64(emitter: &mut Emitter) {
-    emitter.blank();
-    emitter.comment("--- runtime: ob_contents ---");
-    emitter.label_global("__rt_ob_contents");
-    emitter.instruction("push rbp");                                            // preserve the caller frame pointer across the persist call
-    emitter.instruction("mov rbp, rsp");                                        // establish a frame pointer for the persist call
-    abi::emit_symbol_address(emitter, "r9", "_ob_level");                       // materialize the address of the buffer-stack depth
-    emitter.instruction("mov r10, QWORD PTR [r9]");                             // load the current buffer-stack depth
-    emitter.instruction("test r10, r10");                                       // is any buffer active?
-    emitter.instruction("jz __rt_ob_contents_none_x86");                        // no active buffer — return the null failure pair
-    emitter.instruction("sub r10, 1");                                          // top slot index = depth - 1
-    abi::emit_symbol_address(emitter, "r11", "_ob_ptrs");                       // materialize the buffer-pointer slot array
-    emitter.instruction("mov rax, QWORD PTR [r11 + r10*8]");                    // load the top buffer base pointer
-    abi::emit_symbol_address(emitter, "r11", "_ob_lens");                       // materialize the used-bytes slot array
-    emitter.instruction("mov rdx, QWORD PTR [r11 + r10*8]");                    // load the top buffer's used byte count
-    emitter.instruction("call __rt_str_persist");                               // copy the contents into an owned heap string
-    emitter.instruction("jmp __rt_ob_contents_done_x86");                       // return the persisted string pair
-    emitter.label("__rt_ob_contents_none_x86");
-    emitter.instruction("xor eax, eax");                                        // null pointer signals "no active buffer"
-    emitter.instruction("xor edx, edx");                                        // zero length for the failure pair
-    emitter.label("__rt_ob_contents_done_x86");
-    emitter.instruction("pop rbp");                                             // restore the caller frame pointer
-    emitter.instruction("ret");                                                 // return the string result pair
-}
+pub use elephc_memoir::buffers::output::emit_ob_contents;
 
 /// Emits `__rt_ob_length` and `__rt_ob_level`: the buffer-stack integer queries.
 ///

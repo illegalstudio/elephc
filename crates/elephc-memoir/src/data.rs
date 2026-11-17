@@ -195,3 +195,12 @@ pub fn append_capture_buffer_storage(out: &mut String, target: &impl DataTarget)
     out.push_str(&target.common("_print_r_ptr", 8));
     out.push_str(&target.common("_print_r_cap", 8));
 }
+
+/// Reserves the depth and the base, used-byte and capacity arrays for output capture.
+pub fn append_output_buffer_storage(out: &mut String, target: &impl DataTarget) {
+    out.push_str(&target.common("_ob_level", 8));
+    let bytes = crate::buffers::output::MAX_LEVELS as usize * 8;
+    for symbol in ["_ob_ptrs", "_ob_lens", "_ob_caps"] {
+        out.push_str(&target.common(symbol, bytes));
+    }
+}
