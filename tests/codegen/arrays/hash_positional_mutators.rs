@@ -128,3 +128,30 @@ $f = ['x', 'y']; $f[7] = 'z'; echo array_pop($f), array_shift($f), json_encode($
         "3 [1,2]\n1 [2,3]\n4 [9,1,2,3]\n5 [8,9,1,2,3]\n[2,3]{\"1\":2}\nzx[\"y\"]\n"
     );
 }
+
+/// `array_shift()` after a by-reference `foreach` (and so after `array_walk()`, which walks by
+/// reference) returns the head value: its entry is a reference cell, not the value itself.
+#[test]
+fn test_array_shift_after_by_reference_foreach_returns_the_head() {
+    let out = compile_and_run(
+        r#"<?php
+$e = [1, 2, 3];
+foreach ($e as &$w) { }
+unset($w);
+var_dump(array_shift($e));
+echo json_encode($e), "\n";
+$f = ["a" => 1, "b" => 2];
+foreach ($f as &$x) { $x = $x * 2; }
+unset($x);
+var_dump(array_shift($f));
+$g = [1, 2, 3];
+array_walk($g, function (&$v) { $v *= 2; });
+var_dump(array_shift($g));
+echo json_encode($g), "\n";
+$h = [[1, 2], [3]];
+array_walk_recursive($h, function ($v) { });
+echo json_encode(array_shift($h)), "\n";
+"#,
+    );
+    assert_eq!(out, "int(1)\n[2,3]\nint(2)\nint(2)\n[4,6]\n[1,2]\n");
+}

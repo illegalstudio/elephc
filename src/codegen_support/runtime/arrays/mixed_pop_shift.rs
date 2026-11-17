@@ -675,6 +675,21 @@ pub fn emit_hash_shift(emitter: &mut Emitter) {
     emitter.instruction("bl __rt_heap_free");                                   // last owner: free the persisted head-key storage
     emitter.label("__rt_hash_shift_head_val");
     emitter.instruction("ldr x5, [sp, #56]");                                   // reload the head value runtime tag
+    emitter.instruction("cmp x5, #11");                                         // is the head entry a PHP reference cell (after a by-reference foreach)?
+    emitter.instruction("b.ne __rt_hash_shift_head_plain");                     // ordinary entries carry their value payload directly
+    emitter.instruction("ldr x0, [sp, #40]");                                   // the reference cell this entry owned
+    emitter.instruction("str x0, [sp, #16]");                                   // park the cell while its value is retained
+    emitter.instruction("ldr x9, [x0]");                                        // the boxed Mixed value the cell owns
+    emitter.instruction("str x9, [sp, #40]");                                   // the removed value is that boxed cell, not the reference
+    emitter.instruction("str xzr, [sp, #48]");                                  // boxed Mixed payloads carry no high word
+    emitter.instruction("mov x10, #7");                                         // report the removed payload as a boxed Mixed cell
+    emitter.instruction("str x10, [sp, #56]");                                  // publish the dereferenced tag
+    emitter.instruction("mov x0, x9");                                          // retain the value so it outlives the reference cell
+    emitter.instruction("bl __rt_incref");                                      // the removed result owns one reference of its own
+    emitter.instruction("ldr x0, [sp, #16]");                                   // reload the reference cell the entry owned
+    emitter.instruction("bl __rt_decref_any");                                  // retire the entry's ownership of the cell
+    emitter.instruction("ldr x5, [sp, #56]");                                   // reload the dereferenced runtime tag
+    emitter.label("__rt_hash_shift_head_plain");
     emitter.instruction("cmp x5, #7");                                          // is the head value already a boxed Mixed cell?
     emitter.instruction("b.eq __rt_hash_shift_head_boxed");                     // adopt the stored Mixed cell directly
     emitter.instruction("ldr x0, [sp, #56]");                                   // box_raw tag argument (the head value tag)
@@ -780,6 +795,19 @@ fn emit_hash_shift_x86_64(emitter: &mut Emitter) {
     emitter.instruction("call __rt_heap_free");                                 // last owner: free the persisted head key (rax = ptr)
     emitter.label("__rt_hash_shift_head_val");
     emitter.instruction("mov r9, QWORD PTR [rbp - 64]");                        // reload the head value runtime tag
+    emitter.instruction("cmp r9, 11");                                          // is the head entry a PHP reference cell (after a by-reference foreach)?
+    emitter.instruction("jne __rt_hash_shift_head_plain");                      // ordinary entries carry their value payload directly
+    emitter.instruction("mov rax, QWORD PTR [rbp - 48]");                       // the reference cell this entry owned
+    emitter.instruction("mov QWORD PTR [rbp - 24], rax");                       // park the cell while its value is retained
+    emitter.instruction("mov rax, QWORD PTR [rax]");                            // the boxed Mixed value the cell owns
+    emitter.instruction("mov QWORD PTR [rbp - 48], rax");                       // the removed value is that boxed cell, not the reference
+    emitter.instruction("mov QWORD PTR [rbp - 56], 0");                         // boxed Mixed payloads carry no high word
+    emitter.instruction("mov QWORD PTR [rbp - 64], 7");                         // report the removed payload as a boxed Mixed cell
+    emitter.instruction("call __rt_incref");                                    // the removed result owns one reference of its own
+    emitter.instruction("mov rax, QWORD PTR [rbp - 24]");                       // reload the reference cell the entry owned
+    emitter.instruction("call __rt_decref_any");                                // retire the entry's ownership of the cell
+    emitter.instruction("mov r9, QWORD PTR [rbp - 64]");                        // reload the dereferenced runtime tag
+    emitter.label("__rt_hash_shift_head_plain");
     emitter.instruction("cmp r9, 7");                                           // is the head value already a boxed Mixed cell?
     emitter.instruction("je __rt_hash_shift_head_boxed");                       // adopt the stored Mixed cell directly
     emitter.instruction("mov rax, QWORD PTR [rbp - 64]");                       // box_raw tag argument (the head value tag)
