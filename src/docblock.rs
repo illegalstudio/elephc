@@ -101,6 +101,122 @@ pub fn apply(program: Program, source: &str) -> Program {
         .collect()
 }
 
+/// Returns whether a written hint is one php-src treats loosely.
+///
+/// `array`, `iterable` and `callable` accept any element, iterable or callable, so a PHPDoc
+/// annotation refines them without changing what a call may pass. Every other hint is a contract
+/// php-src enforces (and coerces to), and an annotation never replaces it.
+fn is_loose_hint(native: &TypeExpr) -> bool {
+    match native {
+        TypeExpr::Array(_) | TypeExpr::AssocArray { .. } | TypeExpr::Iterable => true,
+        TypeExpr::Named(name) => is_loose_keyword(name.as_str()),
+        _ => false,
+    }
+}
+
+/// Returns whether `name` spells one of the hints php-src treats loosely.
+fn is_loose_keyword(name: &str) -> bool {
+    matches!(
+        name.trim_start_matches('\\').to_ascii_lowercase().as_str(),
+        "array" | "iterable" | "callable" | "closure"
+    )
+}
+
+/// Returns whether `expr` names the `null` type.
+fn is_null_type(expr: &TypeExpr) -> bool {
+    matches!(expr, TypeExpr::Named(name) if name.as_str().eq_ignore_ascii_case("null"))
+}
+
+/// Returns the declared type parameter `annotated` names on its own, if any.
+fn direct_template<'a>(annotated: &TypeExpr, own: &'a [TypeParam]) -> Option<&'a TypeParam> {
+    match annotated {
+        TypeExpr::Named(name) => own.iter().find(|param| param.name == name.as_str()),
+        TypeExpr::Nullable(inner) => direct_template(inner, own),
+        TypeExpr::Union(members) => {
+            let mut rest = members.iter().filter(|member| !is_null_type(member));
+            let template = direct_template(rest.next()?, own)?;
+            rest.next().is_none().then_some(template)
+        }
+        _ => None,
+    }
+}
+
+/// Returns whether `annotated` may replace the written `native` hint.
+///
+/// A bare `@param T` states no contract of its own, so it only refines a loose hint: documenting
+/// `function keep(object $v)` with `@template T` / `@param T $v` must not let `keep(1)` through.
+/// A concrete annotation replaces a loose hint only when it refines it.
+fn adopts_annotation(native: Option<&TypeExpr>, annotated: &TypeExpr, own: &[TypeParam]) -> bool {
+    let Some(native) = native else {
+        return true;
+    };
+    // Nullability belongs to the written hint and is restored on the adopted type, so the
+    // loose/refinement tests look at the hint itself.
+    let hinted = strip_nullable(native);
+    if direct_template(annotated, own).is_some() {
+        return is_loose_hint(hinted);
+    }
+    is_loose_hint(hinted) && refines_loose_hint(hinted, strip_nullable(annotated))
+}
+
+/// Returns `expr` without its `?` wrapper.
+fn strip_nullable(expr: &TypeExpr) -> &TypeExpr {
+    match expr {
+        TypeExpr::Nullable(inner) => strip_nullable(inner),
+        other => other,
+    }
+}
+
+/// Returns whether a concrete annotation refines a loose written hint.
+fn refines_loose_hint(native: &TypeExpr, annotated: &TypeExpr) -> bool {
+    let array_shaped = matches!(annotated, TypeExpr::Array(_) | TypeExpr::AssocArray { .. });
+    let class_shaped = match annotated {
+        TypeExpr::GenericClass { .. } => true,
+        TypeExpr::Named(name) => {
+            !is_loose_keyword(name.as_str())
+                && !name.as_str().eq_ignore_ascii_case("mixed")
+                && !is_null_type(annotated)
+        }
+        _ => false,
+    };
+    let iterable_shaped = array_shaped || class_shaped || matches!(annotated, TypeExpr::Iterable);
+    match native {
+        TypeExpr::Array(_) | TypeExpr::AssocArray { .. } => array_shaped,
+        TypeExpr::Iterable => iterable_shaped,
+        TypeExpr::Named(name) => match name
+            .as_str()
+            .trim_start_matches('\\')
+            .to_ascii_lowercase()
+            .as_str()
+        {
+            "array" => array_shaped,
+            "iterable" => iterable_shaped,
+            "callable" | "closure" => {
+                class_shaped || matches!(annotated, TypeExpr::CallableSig { .. })
+            }
+            _ => false,
+        },
+        _ => false,
+    }
+}
+
+/// Wraps an adopted annotation in the nullability the written hint carried.
+fn with_written_nullability(native: Option<&TypeExpr>, adopted: TypeExpr) -> TypeExpr {
+    let Some(TypeExpr::Nullable(_)) = native else {
+        return adopted;
+    };
+    match adopted {
+        TypeExpr::Union(mut members) => {
+            if !members.iter().any(is_null_type) {
+                members.push(TypeExpr::Named(Name::unqualified("null")));
+            }
+            TypeExpr::Union(members)
+        }
+        bare if is_null_type(&bare) || matches!(bare, TypeExpr::Nullable(_)) => bare,
+        bare => TypeExpr::Nullable(Box::new(bare)),
+    }
+}
+
 /// Applies the doc comment that ends just above `stmt`, if any.
 fn apply_to_stmt(mut stmt: Stmt, blocks: &HashMap<(u32, u32), DocBlock>) -> Stmt {
     let block = blocks.get(&(stmt.span.line, stmt.span.col));
@@ -117,21 +233,53 @@ fn apply_to_stmt(mut stmt: Stmt, blocks: &HashMap<(u32, u32), DocBlock>) -> Stmt
             if !block.declares_generics() || !type_params.is_empty() {
                 return stmt;
             }
-            *type_params = block.type_params.clone();
+            let own = block.type_params.clone();
+            let mut adopted = false;
             for (name, declared, _, _) in params.iter_mut() {
                 if let Some(annotated) = block.params.get(name) {
-                    // The annotation REPLACES the written hint, which is the point: `array $a` with
-                    // `@param array<T> $a` is precisely the shape PHPStan-annotated code has, and
-                    // the annotation is the more precise of the two.
-                    *declared = Some(annotated.clone());
+                    // The annotation REPLACES a hint php-src treats loosely, which is the point:
+                    // `array $a` with `@param array<T> $a` is precisely the shape PHPStan-annotated
+                    // code has, and the annotation is the more precise of the two. A hint php-src
+                    // enforces stays: `@param T $m` documenting `int $m` keeps `int`.
+                    if adopts_annotation(declared.as_ref(), annotated, &own) {
+                        let written = declared.take();
+                        *declared =
+                            Some(with_written_nullability(written.as_ref(), annotated.clone()));
+                        adopted = true;
+                    }
                 }
             }
             if let Some(annotated) = variadic.as_ref().and_then(|name| block.params.get(name)) {
-                *variadic_type = Some(annotated.clone());
+                if adopts_annotation(variadic_type.as_ref(), annotated, &own) {
+                    let written = variadic_type.take();
+                    *variadic_type =
+                        Some(with_written_nullability(written.as_ref(), annotated.clone()));
+                    adopted = true;
+                }
             }
             if let Some(annotated) = &block.return_type {
-                *return_type = Some(annotated.clone());
+                if adopts_annotation(return_type.as_ref(), annotated, &own) {
+                    let written = return_type.take();
+                    *return_type = Some(with_written_nullability(written.as_ref(), annotated.clone()));
+                    adopted = true;
+                }
             }
+            // A template no position adopted and no written hint mentions changes no declared
+            // type: the function is not a template, keeps its name, and compiles exactly as
+            // php-src declares it.
+            let names: Vec<String> = own.iter().map(|param| param.name.clone()).collect();
+            let written_mentions = params.iter().any(|(_, declared, _, _)| {
+                declared.as_ref().is_some_and(|ty| ty.mentions_type_param(&names))
+            }) || variadic_type
+                .as_ref()
+                .is_some_and(|ty| ty.mentions_type_param(&names))
+                || return_type
+                    .as_ref()
+                    .is_some_and(|ty| ty.mentions_type_param(&names));
+            if !adopted && !written_mentions {
+                return stmt;
+            }
+            *type_params = own;
         }
         StmtKind::ClassDecl {
             generics,
