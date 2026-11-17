@@ -476,3 +476,23 @@ echo (new C())->put(7), "\n";
     );
     assert_eq!(out, "put 7\n");
 }
+
+/// A trait that implements a requirement of a trait it uses, by its own method or by another
+/// used trait's, absorbs it: a class may then replace that method or alias it with any
+/// signature, as php 8.5.12 accepts.
+#[test]
+fn test_trait_requirement_satisfied_inside_a_trait_does_not_reach_its_users() {
+    let out = compile_and_run(
+        r#"<?php
+trait N { abstract public function foo(): int; }
+trait A { use N; public function foo(): int { return 1; } }
+trait G { public function foo(): int { return 2; } }
+trait W { use N, G; }
+final class Aliased { use A { foo as bar; } public function bar(): string { return "b"; } }
+final class Replaced { use A; public function foo(): string { return "r"; } }
+final class Wrapped { use W; public function foo(): string { return "w"; } }
+echo (new Aliased())->bar(), (new Aliased())->foo(), (new Replaced())->foo(), (new Wrapped())->foo(), "\n";
+"#,
+    );
+    assert_eq!(out, "b1rw\n");
+}
