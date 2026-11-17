@@ -225,6 +225,28 @@ return function_exists("hex2bin");"#,
         vec![HEX2BIN_ODD_LENGTH_WARNING.to_string()]
     );
 }
+/// A descending addcslashes range keeps its literal bytes and warns once per range.
+#[test]
+fn execute_program_addcslashes_descending_range_warns_and_keeps_literals() {
+    let program = parse_fragment(br#"echo addcslashes("azAZ", "z..A y..B");"#)
+        .expect("parse eval fragment");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+
+    let _ = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+    assert_eq!(values.output, r"a\z\AZ");
+    assert_eq!(values.warnings.len(), 2, "warnings: {:?}", values.warnings);
+    assert!(
+        values
+            .warnings
+            .iter()
+            .all(|warning| warning.contains("Invalid '..'-range")),
+        "warnings: {:?}",
+        values.warnings
+    );
+}
+
 /// Verifies eval slash escaping builtins use PHP byte-string semantics.
 #[test]
 fn execute_program_dispatches_slash_escape_builtins() {

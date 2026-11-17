@@ -110,6 +110,20 @@ fn test_addcslashes_descending_range_warns_and_keeps_literals() {
     );
 }
 
+/// A discarded addcslashes result still runs: its descending-range warning is observable
+/// output, so dead-code elimination must not remove the call.
+#[test]
+fn test_addcslashes_warning_is_not_dead_code() {
+    let output = compile_and_run_capture(r#"<?php addcslashes("azAZ", "z..A"); echo "done";"#);
+    assert_eq!(output.stdout, "done");
+    assert_eq!(
+        output.stderr.matches("Invalid '..'-range").count(),
+        1,
+        "stderr: {:?}",
+        output.stderr
+    );
+}
+
 /// Reserves the four-bytes-per-byte worst case, including the heap fallback above scratch.
 #[test]
 fn test_addcslashes_large_input_uses_the_reserved_capacity() {

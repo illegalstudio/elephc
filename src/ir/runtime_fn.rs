@@ -1373,7 +1373,11 @@ impl RuntimeFnId {
         }
         match self {
             // Invalid `..` charlists emit PHP warnings and can invoke a user error handler.
-            RuntimeFnId::Chop | RuntimeFnId::Ltrim | RuntimeFnId::Rtrim | RuntimeFnId::Trim => {
+            RuntimeFnId::Chop
+            | RuntimeFnId::Ltrim
+            | RuntimeFnId::Rtrim
+            | RuntimeFnId::Trim
+            | RuntimeFnId::Addcslashes => {
                 crate::ir::Effects::from_bits_retain(
                     crate::ir::Effects::READS_HEAP.bits()
                         | crate::ir::Effects::ALLOC_HEAP.bits()
@@ -1568,7 +1572,6 @@ impl RuntimeFnId {
             RuntimeFnId::Sin |
             RuntimeFnId::Sinh |
             RuntimeFnId::Sqrt |
-            RuntimeFnId::Addcslashes |
             RuntimeFnId::StrContains |
             RuntimeFnId::StrEndsWith |
             RuntimeFnId::StrIreplace |

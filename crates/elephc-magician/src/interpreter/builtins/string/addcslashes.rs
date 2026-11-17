@@ -17,6 +17,10 @@ eval_builtin! {
 
 use super::super::super::*;
 
+/// The warning PHP emits for a descending character-list range.
+const ADDCSLASHES_RANGE_WARNING: &str =
+    "Warning: addcslashes(): Invalid '..'-range, '..'-range needs to be incrementing\n";
+
 /// Evaluates PHP `addcslashes(...)` over one eval expression.
 pub(in crate::interpreter) fn eval_builtin_addcslashes(
     args: &[EvalExpr],
@@ -56,6 +60,13 @@ pub(in crate::interpreter) fn eval_addcslashes_result(
                 for byte in start..=end {
                     table[usize::from(byte)] = true;
                 }
+            } else {
+                // A descending range is rejected as a range but every literal byte it
+                // spells is still escaped: the start (marked above), both dots and the
+                // end. PHP reports one warning per rejected range.
+                table[usize::from(b'.')] = true;
+                table[usize::from(end)] = true;
+                values.warning(ADDCSLASHES_RANGE_WARNING)?;
             }
             index += 3;
             previous = None;
