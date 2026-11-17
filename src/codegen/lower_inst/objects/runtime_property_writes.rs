@@ -912,6 +912,20 @@ pub(super) fn mixed_property_write_candidate(
             }
             if let Some(message) = refined_untyped_mixed_write_refusal(&slot, value_ty) {
                 MixedPropertyWriteAction::RefuseUnlessTagMatches { slot, message }
+            } else if matches!(value_ty.codegen_repr(), PhpType::Mixed)
+                && matches!(slot.php_type.codegen_repr(), PhpType::Buffer(_) | PhpType::Packed(_))
+            {
+                // A `buffer<T>` / packed record slot only holds the raw handle of its own kind,
+                // which a boxed runtime value never is: the write is php's type refusal for
+                // THIS class. Failing the build instead made every program that reaches a
+                // runtime-named write (`ReflectionProperty::setValue()`) unbuildable as soon as
+                // any class declares such a property.
+                MixedPropertyWriteAction::Refuse(format!(
+                    "Cannot assign mixed to property {}::${} of type {}",
+                    slot.class_name,
+                    slot.property,
+                    crate::types::diagnostic_names::php_type_name(&slot.php_type),
+                ))
             } else {
                 ensure_property_value_supported(ctx, &slot, value, value_ty, inst)?;
                 MixedPropertyWriteAction::Slot(slot)
