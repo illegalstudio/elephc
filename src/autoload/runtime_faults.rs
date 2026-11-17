@@ -1013,6 +1013,11 @@ fn rewrite_expr(expr: &mut Expr, plan: &Plan) -> Option<String> {
             }) {
                 return None;
             }
+            // `?->` skips its arguments when the receiver is null, but the helper takes them as an
+            // already evaluated array: only arguments that run no code may travel that way.
+            if nullsafe && !args.iter().all(is_pure) {
+                return None;
+            }
             let call = Expr::new(
                 ExprKind::FunctionCall {
                     name: fq_name(METHOD_CALL_HELPER),
@@ -1284,6 +1289,27 @@ mod tests {
             &mut HashSet::default(),
         );
         assert!(demotions.is_empty());
+    }
+
+    /// `$o?->m(f())` skips `f()` when `$o` is null; the helper takes its arguments already
+    /// evaluated, so a nullsafe call whose arguments run code is not rewritten at all.
+    #[test]
+    fn a_nullsafe_call_with_a_side_effecting_argument_is_not_rewritten() {
+        let plan = Plan::MethodCall { method: "m".into() };
+        let first_expr = |source: &str| {
+            let mut ast = program(source);
+            let StmtKind::ExprStmt(expr) = &mut ast[0].kind else { panic!("expression statement") };
+            let mut expr = expr.clone();
+            let outcome = rewrite_expr(&mut expr, &plan);
+            (outcome, expr)
+        };
+        let (outcome, _) = first_expr("<?php $o?->m(f());");
+        assert!(outcome.is_none(), "{outcome:?}");
+        let (outcome, rewritten) = first_expr("<?php $o?->m(1, $x);");
+        assert!(outcome.is_some());
+        assert!(matches!(rewritten.kind, ExprKind::FunctionCall { .. }));
+        let (outcome, _) = first_expr("<?php $o->m(f());");
+        assert!(outcome.is_some(), "a plain call still evaluates its arguments first");
     }
 
     /// A class extending a builtin is not held in full: php may find the member on the builtin
