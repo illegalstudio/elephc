@@ -673,7 +673,9 @@ fn strict_branch_conflicts(
     names.sort();
     names.dedup();
     for name in names {
+        // A compiler-generated local (the web prelude's `$__elephc_opt_*`) is no user binding.
         if name.starts_with('\u{1}')
+            || name.starts_with("__elephc")
             || crate::superglobals::is_superglobal(&name)
             || checker.typed_local_names.contains_key(&name)
             || checker.mixed_storage_locals.contains(&name)
@@ -697,6 +699,9 @@ fn strict_branch_conflicts(
         }
         let mut seen = types[0].clone();
         for next in &types[1..] {
+            if **next == seen {
+                continue;
+            }
             // Either direction: a branch that stored the narrower type of a union the other
             // branch kept holds nothing incompatible with it.
             match checker
