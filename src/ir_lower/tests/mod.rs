@@ -75,6 +75,7 @@ mod strict_static_bindings;
 mod strict_array_key_shapes;
 mod strict_array_key_folding;
 mod strict_array_key_read_guards;
+mod raw_offset_keys;
 mod string_offset_lifetime;
 mod string_offset_writes;
 mod arrays;

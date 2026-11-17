@@ -14,6 +14,8 @@ mod calls;
 mod call_operand_scope;
 mod frame;
 mod floats;
+mod hash_keys;
+pub(crate) use hash_keys::{emit_boxed_hash_key, HashKeyNormalization, BOXED_ARRAY_KEY};
 pub(crate) use floats::emit_negate_float_result;
 pub(crate) use frame::emit_sp_address;
 pub(crate) mod immediate;

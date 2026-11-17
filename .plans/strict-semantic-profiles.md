@@ -1078,3 +1078,20 @@ Public ArrayKeys stays gated. Next repair raw boxed-key dispatch, then mixed/spr
 construction owners, fetch-for-write/mutation paths, builtins, default/reflection/
 spread identity and eval/reference metadata. Complete remaining binding audits,
 all six pending families and final umbrella acceptance. No full suite, push or PR.
+
+### Verified149: original boxed offset dispatch
+
+Shared ABI helpers now materialize boxed keys for both EIR and runtime code.
+Ordinary generic reads carry original boxed operands or raw string tuples until
+receiver dispatch. PHP ArrayAccess getters receive detached value snapshots;
+arrays and native SPL containers retain their own key conversion paths. Existing
+fetch-for-write callers keep their tuple protocol pending their separate audit.
+
+Native regressions cover original bool, float, null, integer, numeric string,
+array, object and resource keys, computed numeric keys, COW and throwing getters.
+Both profiles and optimizer settings pass with clean heaps. Twenty user/runtime
+assemblies pass clang across all five targets. Float warning and native SPL
+controls pass. A cache warmed with signed148 creates a different runtime object
+with149, changes the PHP getter argument from integer to boolean, and reuses the
+new object on the next compile. Default compiler/bridge builds, assembly comments
+and diff hygiene pass. Public ArrayKeys admission remains gated.

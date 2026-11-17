@@ -61,8 +61,8 @@ fn strict_array_key_read_guards_native_preserve_domains_and_owners() {
                 let stdout = String::from_utf8_lossy(&output.stdout);
                 let stderr = String::from_utf8_lossy(&output.stderr);
                 assert!(output.status.success(), "strict={strict}, opt={optimize}: {stdout} {stderr}");
-                let expected = if strict { "K,K,K,|K|20:30:40|b|object|K|DK|K|K:K|" }
-                    else { "10,11,12,|10|30:30:40|b|object|A|AD|5|Y:N|" };
+                let expected = if strict { "K,K,K,|K|20:30:40|b|boolean:object|K|DK|K|K:K|" }
+                    else { "10,11,12,|10|30:30:40|b|boolean:object|A|AD|5|Y:N|" };
                 assert_eq!(stdout, expected, "strict={strict}, opt={optimize}, mode={mode:?}: {stderr}");
                 assert!(stderr.contains("HEAP DEBUG: leak summary: clean"), "{stderr}");
             }

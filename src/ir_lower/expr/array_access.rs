@@ -578,8 +578,17 @@ fn lower_array_access_from_values_with_receiver_pins(
         // Object/container getters already preserve null and retain their typed fast paths.
         result_type = PhpType::Mixed;
     }
+    if op == Op::RuntimeCall
+        && !matches!(index_value.ir_type, IrType::Heap(IrHeapKind::Mixed | IrHeapKind::Union))
+        && (!matches!(ctx.builder.value_php_type(index_value.value), PhpType::Int | PhpType::Str)
+            || value_is_nullable(ctx, index_value.value))
+    {
+        let (source, source_owner) = root_owned_call_operand(ctx, index_value, index.span);
+        index_value = ctx.box_value_as_mixed(source, PhpType::Mixed, Some(index.span));
+        if let Some(owner) = source_owner { retire_owned_call_operand(ctx, owner, index.span); }
+    }
     let index_owner = if op == Op::RuntimeCall
-        && ctx.builder.value_php_type(index_value.value).codegen_repr() == PhpType::Callable
+        && Ownership::php_type_needs_lifetime_tracking(&ctx.builder.value_php_type(index_value.value))
     {
         let (rooted, owner) = root_owned_call_operand(ctx, index_value, index.span);
         index_value = rooted;

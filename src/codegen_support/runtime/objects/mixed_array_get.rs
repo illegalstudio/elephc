@@ -6,7 +6,7 @@
 //! - `crate::codegen_support::runtime::objects::emit_mixed_array_get()`.
 //!
 //! Key details:
-//! - The key tuple matches `emit_normalized_hash_key`: int keys use `key_hi = -1`.
+//! - Key pairs use high word -1 for integers, nonnegative lengths for strings, or -2 for an original cell.
 //! - Mode bit zero enables read warnings; bit one selects attached internal SPL storage.
 //! - Callers pass an explicit warning flag so normal reads diagnose missing/null
 //!   offsets while `isset()`/`??` keep the same helper quiet.
@@ -26,6 +26,8 @@ use crate::codegen_support::emit::Emitter;
 use crate::codegen_support::platform::Arch;
 use crate::codegen_support::sentinels::emit_branch_if_null_container;
 
+mod raw_keys;
+
 const STRING_OFFSET_TYPE_ERROR_MSG_LEN: usize =
     "Cannot access offset of type string on string".len();
 
@@ -35,12 +37,13 @@ const STRING_OFFSET_TYPE_ERROR_MSG_LEN: usize =
 /// (SysV ABI) or `emit_mixed_array_get_aarch64` (AAPCS64). The helper is emitted
 /// once into the runtime object and is called by generated code for `$mixed[$key]`
 /// access on a boxed `Mixed` value.
+/// Emits both the receiver-dispatched getter and its boxed-key normalization entry.
 pub fn emit_mixed_array_get(emitter: &mut Emitter) {
-    if emitter.target.arch == Arch::X86_64 {
-        emit_mixed_array_get_x86_64(emitter);
-        return;
+    match emitter.target.arch {
+        Arch::X86_64 => emit_mixed_array_get_x86_64(emitter),
+        Arch::AArch64 => emit_mixed_array_get_aarch64(emitter),
     }
-    emit_mixed_array_get_aarch64(emitter);
+    raw_keys::emit_normalizer(emitter);
 }
 
 /// Selects a trusted attached getter for write context, retaining the ordinary getter fallback.
@@ -116,6 +119,7 @@ fn emit_mixed_array_get_aarch64(emitter: &mut Emitter) {
     emitter.instruction("str x3, [sp, #40]");                                   // save whether this read should emit PHP offset warnings
     emitter.instruction("bl __rt_mixed_deref");                                 // read the current array held by any reference wrapper
     emitter.instruction("str x0, [sp, #0]");                                    // save the concrete receiver for later dispatch
+    raw_keys::prepare_receiver_key(emitter);
 
     emitter.instruction("cbz x0, __rt_mixed_array_get_null_container");         // null Mixed pointers behave as PHP null receivers
     emitter.instruction("ldr x9, [x0]");                                        // load tag from mixed[0]
@@ -341,6 +345,7 @@ fn emit_mixed_array_get_aarch64(emitter: &mut Emitter) {
     emitter.instruction("b __rt_mixed_array_get_php_offset_get");               // every other class goes through PHP ArrayAccess or raises
     emitter.label("__rt_mixed_array_get_spl_fixed");
     emitter.instruction("str x10, [sp, #0]");                                   // save unboxed SplFixedArray receiver while boxing the key
+    raw_keys::normalize_key(emitter, "__rt_mixed_array_get_spl_fixed_raw");
     emitter.instruction("ldr x11, [sp, #16]");                                  // reload normalized key high word
     emitter.instruction("cmn x11, #1");                                         // does key_hi carry the integer-key sentinel?
     emitter.instruction("b.eq __rt_mixed_array_get_spl_fixed_int_key");         // integer keys box as Mixed int
@@ -362,6 +367,7 @@ fn emit_mixed_array_get_aarch64(emitter: &mut Emitter) {
     emitter.instruction("ret");                                                 // return Mixed* in x0
     emitter.label("__rt_mixed_array_get_spl_dll");
     emitter.instruction("str x10, [sp, #0]");                                   // save unboxed SPL list receiver while boxing the key
+    raw_keys::normalize_key(emitter, "__rt_mixed_array_get_spl_dll_raw");
     emitter.instruction("ldr x11, [sp, #16]");                                  // reload normalized key high word
     emitter.instruction("cmn x11, #1");                                         // does key_hi carry the integer-key sentinel?
     emitter.instruction("b.eq __rt_mixed_array_get_spl_dll_int_key");           // integer keys box as Mixed int
@@ -398,6 +404,8 @@ fn emit_mixed_array_get_aarch64(emitter: &mut Emitter) {
     emit_offset_get_table(emitter, 0);
     emitter.instruction("cbz x12, __rt_mixed_array_get_not_indexable");         // 0 means the class is not ArrayAccess at all
     emitter.instruction("str x10, [sp, #0]");                                   // save unboxed receiver while boxing the key
+    raw_keys::clone_original_key(emitter);
+    emitter.label("__rt_mixed_array_get_php_legacy_key");
     emitter.instruction("ldr x11, [sp, #16]");                                  // reload normalized key high word
     emitter.instruction("cmn x11, #1");                                         // does key_hi carry the integer-key sentinel?
     emitter.instruction("b.eq __rt_mixed_array_get_php_int_key");               // integer keys box as Mixed int
@@ -411,6 +419,7 @@ fn emit_mixed_array_get_aarch64(emitter: &mut Emitter) {
     emitter.instruction("mov x2, #0");                                          // integer keys have no high payload
     emitter.label("__rt_mixed_array_get_php_box_key");
     emitter.instruction("bl __rt_mixed_from_value");                            // allocate the boxed ArrayAccess offset
+    emitter.label("__rt_mixed_array_get_php_key_ready");
     emitter.instruction("str x0, [sp, #8]");                                    // stash the box; key_lo has served its purpose
     // -- retain the boxed key across normal and exceptional getter exits --
     emitter.instruction("add x11, sp, #8");                                     // address the owning key slot before reserving its cleanup record
@@ -483,6 +492,7 @@ fn emit_mixed_array_get_x86_64(emitter: &mut Emitter) {
     emitter.instruction("call __rt_mixed_deref");                               // read the current array held by any reference wrapper
     emitter.instruction("mov rdi, rax");                                        // restore the concrete receiver argument
     emitter.instruction("mov QWORD PTR [rbp - 8], rdi");                        // save the concrete receiver for later dispatch
+    raw_keys::prepare_receiver_key(emitter);
 
     emitter.instruction("test rdi, rdi");                                       // null Mixed → null
     emitter.instruction("je __rt_mixed_array_get_null_container");              // null Mixed pointers behave as PHP null receivers
@@ -705,6 +715,7 @@ fn emit_mixed_array_get_x86_64(emitter: &mut Emitter) {
     emitter.instruction("jmp __rt_mixed_array_get_php_offset_get");             // every other class goes through PHP ArrayAccess or raises
     emitter.label("__rt_mixed_array_get_spl_fixed");
     emitter.instruction("mov QWORD PTR [rbp - 8], r10");                        // save unboxed SplFixedArray receiver while boxing the key
+    raw_keys::normalize_key(emitter, "__rt_mixed_array_get_spl_fixed_raw");
     emitter.instruction("mov r11, QWORD PTR [rbp - 24]");                       // reload normalized key high word
     emitter.instruction("cmp r11, -1");                                         // does key_hi carry the integer-key sentinel?
     emitter.instruction("je __rt_mixed_array_get_spl_fixed_int_key");           // integer keys box as Mixed int
@@ -726,6 +737,7 @@ fn emit_mixed_array_get_x86_64(emitter: &mut Emitter) {
     emitter.instruction("ret");                                                 // return Mixed* in rax
     emitter.label("__rt_mixed_array_get_spl_dll");
     emitter.instruction("mov QWORD PTR [rbp - 8], r10");                        // save unboxed SPL list receiver while boxing the key
+    raw_keys::normalize_key(emitter, "__rt_mixed_array_get_spl_dll_raw");
     emitter.instruction("mov r11, QWORD PTR [rbp - 24]");                       // reload normalized key high word
     emitter.instruction("cmp r11, -1");                                         // does key_hi carry the integer-key sentinel?
     emitter.instruction("je __rt_mixed_array_get_spl_dll_int_key");             // integer keys box as Mixed int
@@ -758,6 +770,8 @@ fn emit_mixed_array_get_x86_64(emitter: &mut Emitter) {
     emitter.instruction("test r12, r12");                                       // 0 means the class is not ArrayAccess
     emitter.instruction("jz __rt_mixed_array_get_not_indexable");               // 0 means the class is not ArrayAccess at all
     emitter.instruction("mov QWORD PTR [rbp - 8], r10");                        // save unboxed receiver while boxing the key
+    raw_keys::clone_original_key(emitter);
+    emitter.label("__rt_mixed_array_get_php_legacy_key");
     emitter.instruction("mov r11, QWORD PTR [rbp - 24]");                       // reload normalized key high word
     emitter.instruction("cmp r11, -1");                                         // does key_hi carry the integer-key sentinel?
     emitter.instruction("je __rt_mixed_array_get_php_int_key");                 // integer keys box as Mixed int
@@ -771,6 +785,7 @@ fn emit_mixed_array_get_x86_64(emitter: &mut Emitter) {
     emitter.instruction("xor esi, esi");                                        // integer keys have no high payload
     emitter.label("__rt_mixed_array_get_php_box_key");
     emitter.instruction("call __rt_mixed_from_value");                          // allocate the boxed ArrayAccess offset
+    emitter.label("__rt_mixed_array_get_php_key_ready");
     emitter.instruction("mov QWORD PTR [rbp - 16], rax");                       // stash the box; key_lo has served its purpose
     // -- retain the boxed key across normal and exceptional getter exits --
     emitter.instruction("lea r11, [rbp - 16]");                                 // address the owning key slot before reserving its cleanup record

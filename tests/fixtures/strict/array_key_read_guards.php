@@ -4,7 +4,7 @@ function originalKey(mixed $key): mixed { return $key; }
 function temporaryKeyArray(): array { return [5, 6]; }
 class GuardKeyAccess implements ArrayAccess {
     public function offsetExists(mixed $key): bool { return true; }
-    public function offsetGet(mixed $key): mixed { return 'object'; }
+    public function offsetGet(mixed $key): mixed { echo gettype($key), ':'; return 'object'; }
     public function offsetSet(mixed $key, mixed $value): void {}
     public function offsetUnset(mixed $key): void {}
 }
