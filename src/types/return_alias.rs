@@ -916,6 +916,13 @@ fn expr_alias(expr: &Expr, state: &AliasState<'_>) -> ReturnArgAlias {
             }
         }
         ExprKind::StaticMethodCall { receiver: crate::parser::ast::StaticReceiver::Named(class), method, args } => {
+            if class.as_str().trim_start_matches('\\').eq_ignore_ascii_case("Closure")
+                && (method == crate::parser::ast::DYNAMIC_CALLABLE_FACTORY
+                    || method.eq_ignore_ascii_case("fromCallable")) && args.len() == 1
+            {
+                // Normalization retains its own result owner even when the descriptor is shared.
+                return ReturnArgAlias::None;
+            }
             if class.as_str().trim_start_matches('\\').eq_ignore_ascii_case("Fiber")
                 && method.eq_ignore_ascii_case("getCurrent") && args.is_empty()
             {

@@ -1128,12 +1128,6 @@ fn emit_runtime_string_descriptor_value_impl(
     let candidate_names = ctx.runtime_callable_candidates(callable);
     let cases =
         runtime_string_descriptor_cases(ctx, None, candidate_names.as_deref(), strict_php)?;
-    if cases.is_empty() {
-        return Err(CodegenIrError::unsupported(format!(
-            "{} for runtime string with no descriptor targets",
-            op_name
-        )));
-    }
 
     let (ptr_reg, len_reg) = abi::string_result_regs(ctx.emitter);
     ctx.load_string_value_to_regs(callable, ptr_reg, len_reg)?;

@@ -1090,6 +1090,13 @@ impl Checker {
         // `Closure::bind($closure, $newThis [, $scope])` is the static form of
         // `$closure->bindTo(...)`: it returns a new closure with `$this` rebound.
         // `$scope` is accepted and ignored (closed-world visibility).
+        if class_name.trim_start_matches('\\') == "Closure"
+            && (method == crate::parser::ast::DYNAMIC_CALLABLE_FACTORY
+                || php_symbol_key(method) == "fromcallable") && args.len() == 1
+        {
+            self.infer_type(&args[0], env)?;
+            return Ok(PhpType::Callable);
+        }
         if class_name.trim_start_matches('\\') == "Closure" && php_symbol_key(method) == "bind" {
             for arg in args {
                 self.infer_type(arg, env)?;

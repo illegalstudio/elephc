@@ -158,7 +158,7 @@ pub(super) fn dynamic_first_class_callable(callee: Expr, span: Span) -> Expr {
                 crate::names::NameKind::FullyQualified,
                 vec!["Closure".to_string()],
             )),
-            method: "fromCallable".to_string(),
+            method: crate::parser::ast::DYNAMIC_CALLABLE_FACTORY.to_string(),
             args: vec![callee],
         },
         span,

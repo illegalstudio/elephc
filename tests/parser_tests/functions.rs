@@ -1083,7 +1083,7 @@ fn test_issue_828_dynamic_first_class_callable_parser() {
             panic!("expected callable conversion: {:?}", value.kind);
         };
         assert!(matches!(receiver, StaticReceiver::Named(name) if name.kind == elephc::names::NameKind::FullyQualified && name.as_str() == "Closure"));
-        assert_eq!(method, "fromCallable");
+        assert_eq!(method, elephc::parser::ast::DYNAMIC_CALLABLE_FACTORY);
         assert_eq!(args.len(), 1);
     }
 }

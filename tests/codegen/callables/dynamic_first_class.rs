@@ -65,3 +65,42 @@ echo $closure($value), "|", $value;
 "#);
     assert_eq!(out, "7|7");
 }
+
+/// Names discovered at runtime keep otherwise unreachable functions and methods alive.
+#[test]
+fn test_issue_828_dynamic_first_class_callable_reachability() {
+    let out = compile_and_run(r#"<?php
+function hidden828(): string { return "function|"; }
+function pick828(): string { return "hidden828"; }
+$name = $argc > 0 ? "hidden828" : "hidden828";
+$function = $name(...);
+echo $function();
+$factory = pick828()(...);
+echo $factory();
+class Hidden828 {
+    public function ping(): string { return "method"; }
+    public function pong(): string { return "other"; }
+}
+$box = new Hidden828();
+$method = $argc > 1 ? "pong" : "ping";
+$callback = [$box, $method];
+$closure = $callback(...);
+echo $closure();
+"#);
+    assert_eq!(out, "function|function|method");
+}
+
+/// Invalid targets throw Error for syntax and TypeError for the explicit PHP factory.
+#[test]
+fn test_issue_828_dynamic_first_class_callable_errors() {
+    let out = compile_and_run(r#"<?php
+$name = "missing_callable_828";
+try { $f = $name(...); } catch (Error $e) { echo get_class($e), "|"; }
+$number = 1;
+try { $f = $number(...); } catch (Error $e) { echo get_class($e), "|"; }
+$invalid = $argc > 0 ? 1 : "missing_callable_828";
+try { $f = $invalid(...); } catch (Error $e) { echo get_class($e), "|"; }
+try { $f = Closure::fromCallable($name); } catch (TypeError $e) { echo get_class($e); }
+"#);
+    assert_eq!(out, "Error|Error|Error|TypeError");
+}

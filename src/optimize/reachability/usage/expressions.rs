@@ -133,7 +133,8 @@ impl Scanner<'_> {
                 let classes: HashSet<String> = self.receiver_class(receiver).into_iter().collect();
                 // `Closure::fromCallable('f')` invokes what it names, like `call_user_func`.
                 if classes.contains(&php_symbol_key("Closure"))
-                    && php_symbol_key(method) == php_symbol_key("fromCallable")
+                    && (php_symbol_key(method) == php_symbol_key("fromCallable")
+                        || method == crate::parser::ast::DYNAMIC_CALLABLE_FACTORY)
                 {
                     self.callable_or_hazard(args.first().map(unwrap_named_arg));
                 }
@@ -320,7 +321,7 @@ impl Scanner<'_> {
             "function_exists" => self.literal_function_or_hazard(first),
             "get_defined_functions" => self.usage.hazards.enumerates_functions = true,
             "array_map" => self.scan_array_map_class_introspection(&normalized),
-            "is_callable" | "call_user_func" | "call_user_func_array" => {
+            "is_callable" | "call_user_func" | "call_user_func_array" | "__elephc_normalize_callable" => {
                 self.callable_or_hazard(first);
                 self.scan_call_user_func_class_introspection(&key, &normalized);
             }
