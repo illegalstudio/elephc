@@ -1172,3 +1172,25 @@ passes in5m09s, including compiler/bridge builds123.29s and fourteen exact gener
 named/spread and Reflection constructor controls. All19 unique gates, assembly
 comments and diff hygiene pass. Function/Method invokeArgs still require actual
 array materialization; ArrayKeys and the six pending strict families stay gated.
+
+### Verified154: evaluated Reflection invocation arrays
+
+ReflectionFunction and ReflectionMethod invokeArgs share actual source-order
+argument materialization through the call planner. Original array kinds are
+validated without converting Traversable objects; rooted parameters outlive
+callee dispatch, and independent boxed results survive source and receiver
+cleanup. Removed obsolete argument-expression snapshots from local assignment,
+speculation and control-flow joins. Added examples/reflection-invocation.
+
+Job0dac6d4d passes ten target/profile emissions23.16s and eight native
+mode/profile/optimizer variants30.23s with clean heaps. Duplicate RHS effects,
+runtime arrays, named source order, returned objects and caller/callee throws
+match PHP. Final70c5c723 passes in4m58s: compiler/bridge builds90.46s and nine exact
+legacy Reflection, constructor, Coercions and Casts controls (including opaque
+eval65.29s). All11 unique gates, assembly comments and diff hygiene pass.
+Example3ee32293 compiles/runs with php-only and Coercions in4.02s.
+
+The original full Reflection example succeeds without flags but fails under
+php-only plus Coercions with a missing ReflectionParameter default literal data
+ID, independently of invocation arrays. Investigate that strict metadata path
+next. ArrayKeys and the six pending strict families remain gated.

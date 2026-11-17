@@ -147,6 +147,7 @@ pub(crate) mod enum_argument_guards;
 mod enum_method_args;
 mod enum_static_args;
 mod enum_ref_args;
+mod reflection_array_calls;
 mod reflection_class_calls;
 mod reflection_method_calls;
 mod reflection_property_calls;
@@ -233,6 +234,7 @@ use method_calls::*;
 use closure_binding::*;
 use member_receivers::{checked_member_receiver_type, lower_member_receiver, refine_member_receiver};
 pub(crate) use member_receivers::refine_member_receiver_at_span;
+use reflection_array_calls::*;
 use reflection_class_calls::*;
 use reflection_method_calls::*;
 use reflection_property_calls::*;
@@ -267,7 +269,7 @@ pub(crate) use property_access::class_extends_class;
 pub(crate) use property_access::packed_receiver_class;
 pub(crate) use property_access::extern_receiver_class;
 pub(crate) use callable_tracking::{
-    lower_callable_array_for_assignment, reflection_arg_array_binding_for_expr,
+    lower_callable_array_for_assignment,
     reflection_class_binding_for_expr, reflection_function_binding_for_expr,
     reflection_method_binding_for_expr, reflection_property_binding_for_expr,
     static_callable_binding_for_expr,

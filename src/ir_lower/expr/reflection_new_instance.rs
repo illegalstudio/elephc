@@ -17,55 +17,6 @@ pub(super) fn reflection_class_new_instance_args(args: &[Expr], profile: elephc_
     args.to_vec()
 }
 
-/// Extracts the actual array value passed to the `newInstanceArgs()` `$args` parameter.
-pub(super) fn reflection_class_new_instance_args_value(
-    ctx: &LoweringContext<'_, '_>,
-    arg: &Expr,
-) -> Option<Vec<Expr>> {
-    let array_expr = match &arg.kind {
-        ExprKind::NamedArg { name, value } if php_symbol_key(name) == "args" => value.as_ref(),
-        ExprKind::NamedArg { .. } => return None,
-        _ => arg,
-    };
-    if let ExprKind::Variable(name) = &array_expr.kind {
-        return ctx.reflection_arg_array_local(name);
-    }
-    reflection_class_new_instance_args_value_without_locals(array_expr, ctx.semantic_profile)
-}
-
-/// Extracts an inline static array value passed to a reflection argument-array API.
-pub(super) fn reflection_class_new_instance_args_value_without_locals(arg: &Expr, profile: elephc_semantics::SemanticProfile) -> Option<Vec<Expr>> {
-    let array_expr = match &arg.kind {
-        ExprKind::NamedArg { name, value } if php_symbol_key(name) == "args" => value.as_ref(),
-        ExprKind::NamedArg { .. } => return None,
-        _ => arg,
-    };
-    match &array_expr.kind {
-        ExprKind::ArrayLiteral(items) => Some(items.clone()),
-        ExprKind::ArrayLiteralAssoc(entries) => reflection_class_new_instance_assoc_args(entries, profile),
-        _ => None,
-    }
-}
-
-/// Converts a static associative argument array into positional and named call arguments.
-pub(super) fn reflection_class_new_instance_assoc_args(entries: &[(Expr, Expr)], profile: elephc_semantics::SemanticProfile) -> Option<Vec<Expr>> {
-    entries
-        .iter()
-        .map(|(key, value)| reflection_class_new_instance_assoc_arg(key, value, profile))
-        .collect()
-}
-
-/// Converts one `newInstanceArgs()` associative-array element into a constructor argument.
-pub(super) fn reflection_class_new_instance_assoc_arg(key: &Expr, value: &Expr, profile: elephc_semantics::SemanticProfile) -> Option<Expr> {
-    let entry = Expr::new(ExprKind::Spread(Box::new(Expr::new(
-        ExprKind::ArrayLiteralAssoc(vec![(key.clone(), value.clone())]), key.span,
-    ))), key.span);
-    let mut expanded = crate::types::call_args::expand_static_assoc_spread_args(&[entry], profile);
-    if expanded.len() == 1 && !matches!(expanded[0].kind, ExprKind::Spread(_)) {
-        Some(expanded.remove(0))
-    } else { None }
-}
-
 /// Returns the reflected constructor signature when the ReflectionClass receiver
 /// is an inline `new ReflectionClass(Known::class)` expression.
 pub(super) fn reflection_class_new_instance_constructor_signature<'a>(

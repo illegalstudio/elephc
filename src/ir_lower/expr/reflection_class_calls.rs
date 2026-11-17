@@ -237,9 +237,15 @@ pub(super) fn lower_reflection_function_invoke_call(
     let method_key = php_symbol_key(method);
     let object_expr = object_expr?;
     let function_name = reflection_function_reflected_target(ctx, object_expr)?;
+    let mut array_call = None;
     let Some(forwarded_args) = (match method_key.as_str() {
         "invoke" => Some(reflection_function_invoke_args(args, ctx.semantic_profile)),
-        "invokeargs" => reflection_function_invoke_args_array(ctx, args),
+        "invokeargs" => begin_reflection_array_call(ctx, reflector, "ReflectionFunction", args, 0, expr)
+            .map(|call| {
+                let forwarded = vec![call.unpack(0, expr.span)];
+                array_call = Some(call);
+                forwarded
+            }),
         _ => return None,
     }) else {
         return Some(lower_reflection_function_invoke_unsupported(
@@ -248,7 +254,9 @@ pub(super) fn lower_reflection_function_invoke_call(
             expr,
         ));
     };
-    let (_, owner) = root_method_receiver(ctx, reflector, expr.span);
+    let owner = if array_call.is_none() {
+        root_method_receiver(ctx, reflector, expr.span).1
+    } else { None };
     let result = if let Some(signature) = first_class_builtin_signature(ctx, &function_name) {
         lower_reflection_builtin_function_call(
             ctx,
@@ -261,6 +269,9 @@ pub(super) fn lower_reflection_function_invoke_call(
         let name = Name::from(function_name);
         lower_function_call(ctx, &name, &forwarded_args, expr)
     };
+    if let Some(call) = array_call {
+        return Some(finish_reflection_array_call(ctx, call, result, expr.span));
+    }
     if let Some(owner) = owner {
         super::call_operand_owners::retire_owned_call_operand_preserving_result(ctx, owner, result, expr.span);
     }
@@ -291,47 +302,6 @@ pub(super) fn lower_reflection_builtin_function_call(
 /// Returns direct `ReflectionFunction::invoke(...$args)` arguments after static spread expansion.
 pub(super) fn reflection_function_invoke_args(args: &[Expr], profile: elephc_semantics::SemanticProfile) -> Vec<Expr> {
     reflection_class_new_instance_args(args, profile)
-}
-
-/// Extracts the argument list passed to `ReflectionFunction::invokeArgs($args)`.
-pub(super) fn reflection_function_invoke_args_array(
-    ctx: &LoweringContext<'_, '_>,
-    args: &[Expr],
-) -> Option<Vec<Expr>> {
-    let args = reflection_class_new_instance_args(args, ctx.semantic_profile);
-    if args.iter().any(is_spread_arg) {
-        return None;
-    }
-    if !crate::types::call_args::has_named_args(&args, ctx.semantic_profile) {
-        return match args.as_slice() {
-            [forwarded] => reflection_class_new_instance_args_value(ctx, forwarded),
-            _ => None,
-        };
-    }
-    let sig = ctx
-        .classes
-        .get("ReflectionFunction")
-        .and_then(|class_info| class_info.methods.get(&php_symbol_key("invokeArgs")))?;
-    let call_span = args
-        .first()
-        .map(|arg| arg.span)
-        .unwrap_or_else(crate::span::Span::dummy);
-    let plan = crate::types::call_args::plan_call_args_with_regular_param_count_and_assoc_spreads(
-        sig,
-        &args,
-        call_span,
-        crate::types::call_args::regular_param_count(sig),
-        false,
-        true,
-        &assoc_spread_sources(ctx, &args),
-        ctx.semantic_profile,
-    )
-    .ok()?;
-    if plan.has_spread_args() {
-        return None;
-    }
-    let forwarded_arg = planned_regular_arg_expr(plan.regular_args.first()?)?;
-    reflection_class_new_instance_args_value(ctx, forwarded_arg)
 }
 
 /// Emits a runtime fatal for ReflectionFunction invocation forms not yet lowered.

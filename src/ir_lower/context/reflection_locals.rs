@@ -8,7 +8,7 @@
 //! - Only identical facts present on every reachable path survive a join.
 //! - Each sibling starts with the facts after its own condition has executed.
 
-use super::{Expr, HashMap, LoweringContext};
+use super::{HashMap, LoweringContext};
 
 /// Reflection targets known for local values at one control-flow boundary.
 #[derive(Clone, Default)]
@@ -17,7 +17,6 @@ pub(crate) struct ReflectionBindings {
     functions: HashMap<String, String>,
     properties: HashMap<String, (String, String)>,
     methods: HashMap<String, (String, String)>,
-    argument_arrays: HashMap<String, Vec<Expr>>,
 }
 
 impl ReflectionBindings {
@@ -27,7 +26,6 @@ impl ReflectionBindings {
         retain_common(&mut self.functions, &other.functions);
         retain_common(&mut self.properties, &other.properties);
         retain_common(&mut self.methods, &other.methods);
-        retain_common(&mut self.argument_arrays, &other.argument_arrays);
     }
 }
 
@@ -44,7 +42,6 @@ impl LoweringContext<'_, '_> {
             functions: self.reflection_function_locals.clone(),
             properties: self.reflection_property_locals.clone(),
             methods: self.reflection_method_locals.clone(),
-            argument_arrays: self.reflection_arg_array_locals.clone(),
         }
     }
 
@@ -54,6 +51,5 @@ impl LoweringContext<'_, '_> {
         self.reflection_function_locals = facts.functions;
         self.reflection_property_locals = facts.properties;
         self.reflection_method_locals = facts.methods;
-        self.reflection_arg_array_locals = facts.argument_arrays;
     }
 }

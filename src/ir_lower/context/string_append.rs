@@ -101,7 +101,6 @@ impl LoweringContext<'_, '_> {
         self.clear_reflection_function_local(name);
         self.clear_reflection_property_local(name);
         self.clear_reflection_method_local(name);
-        self.clear_reflection_arg_array_local(name);
         self.clear_fiber_start_sig(name);
         self.store_slot_with_op(slot, value, Op::StoreLocal, Some(span));
         self.set_local_type(name, PhpType::Str);

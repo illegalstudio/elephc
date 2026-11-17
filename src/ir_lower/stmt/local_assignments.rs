@@ -41,7 +41,6 @@ pub(super) fn lower_assign(ctx: &mut LoweringContext<'_, '_>, name: &str, value:
     let reflected_function = reflection_function_binding_for_expr(ctx, value);
     let reflected_property = reflection_property_binding_for_expr(ctx, value);
     let reflected_method = reflection_method_binding_for_expr(ctx, value);
-    let reflected_args = reflection_arg_array_binding_for_expr(value, ctx.semantic_profile);
     let fiber_start_sig = crate::ir_lower::fibers::start_sig_for_expr(ctx, value);
     let callable_array = lower_callable_array_for_assignment(ctx, value, static_callable.as_ref());
     let lowered = callable_array
@@ -172,9 +171,6 @@ pub(super) fn lower_assign(ctx: &mut LoweringContext<'_, '_>, name: &str, value:
     }
     if let Some((reflected_class, reflected_method)) = reflected_method {
         ctx.bind_reflection_method_local(name, reflected_class, reflected_method);
-    }
-    if let Some(reflected_args) = reflected_args {
-        ctx.bind_reflection_arg_array_local(name, reflected_args);
     }
     if let Some(sig) = fiber_start_sig {
         ctx.bind_fiber_start_sig(name, sig);

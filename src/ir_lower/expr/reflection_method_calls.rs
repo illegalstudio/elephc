@@ -21,9 +21,16 @@ pub(super) fn lower_reflection_method_invoke_call(
     let method_key = php_symbol_key(method);
     let object_expr = object_expr?;
     let (class_name, reflected_method) = reflection_method_reflected_target(ctx, object_expr)?;
+    let mut array_call = None;
     let Some((object_arg, forwarded_args)) = (match method_key.as_str() {
         "invoke" => reflection_method_invoke_args(args, ctx.semantic_profile),
-        "invokeargs" => reflection_method_invoke_args_array(ctx, args),
+        "invokeargs" => begin_reflection_array_call(ctx, reflector, "ReflectionMethod", args, 1, expr)
+            .map(|call| {
+                let object = call.argument(0);
+                let forwarded = vec![call.unpack(1, expr.span)];
+                array_call = Some(call);
+                (object, forwarded)
+            }),
         _ => return None,
     }) else {
         return Some(lower_reflection_method_invoke_unsupported(
@@ -40,7 +47,9 @@ pub(super) fn lower_reflection_method_invoke_call(
             expr,
         ));
     };
-    let (_, owner) = root_method_receiver(ctx, reflector, expr.span);
+    let owner = if array_call.is_none() {
+        root_method_receiver(ctx, reflector, expr.span).1
+    } else { None };
     let result = match target_kind {
         ReflectionMethodTargetKind::Static => lower_reflection_static_method_invoke(
             ctx,
@@ -58,6 +67,9 @@ pub(super) fn lower_reflection_method_invoke_call(
             expr,
         ),
     };
+    if let Some(call) = array_call {
+        return Some(finish_reflection_array_call(ctx, call, result, expr.span));
+    }
     if let Some(owner) = owner {
         super::call_operand_owners::retire_owned_call_operand_preserving_result(ctx, owner, result, expr.span);
     }
@@ -153,52 +165,6 @@ pub(super) fn reflection_method_invoke_args(args: &[Expr], profile: elephc_seman
         }
     }
     object.map(|object| (object, forwarded))
-}
-
-/// Splits `ReflectionMethod::invokeArgs($object, $args)` into receiver and method args.
-pub(super) fn reflection_method_invoke_args_array(
-    ctx: &LoweringContext<'_, '_>,
-    args: &[Expr],
-) -> Option<(Expr, Vec<Expr>)> {
-    let args = reflection_class_new_instance_args(args, ctx.semantic_profile);
-    if args.iter().any(is_spread_arg) {
-        return None;
-    }
-    if !crate::types::call_args::has_named_args(&args, ctx.semantic_profile) {
-        return match args.as_slice() {
-            [object, forwarded] => {
-                let forwarded = reflection_class_new_instance_args_value(ctx, forwarded)?;
-                Some((object.clone(), forwarded))
-            }
-            _ => None,
-        };
-    }
-    let sig = ctx
-        .classes
-        .get("ReflectionMethod")
-        .and_then(|class_info| class_info.methods.get(&php_symbol_key("invokeArgs")))?;
-    let call_span = args
-        .first()
-        .map(|arg| arg.span)
-        .unwrap_or_else(crate::span::Span::dummy);
-    let plan = crate::types::call_args::plan_call_args_with_regular_param_count_and_assoc_spreads(
-        sig,
-        &args,
-        call_span,
-        crate::types::call_args::regular_param_count(sig),
-        false,
-        true,
-        &assoc_spread_sources(ctx, &args),
-        ctx.semantic_profile,
-    )
-    .ok()?;
-    if plan.has_spread_args() {
-        return None;
-    }
-    let object = planned_regular_arg_expr(plan.regular_args.first()?)?.clone();
-    let forwarded_arg = planned_regular_arg_expr(plan.regular_args.get(1)?)?;
-    let forwarded = reflection_class_new_instance_args_value(ctx, forwarded_arg)?;
-    Some((object, forwarded))
 }
 
 /// Classifies whether a known reflected method is static or instance-dispatched.
