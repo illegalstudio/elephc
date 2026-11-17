@@ -187,7 +187,7 @@ pub(super) fn lower_dynamic_call_user_func_array(
         }
         None => lower_expr(ctx, arg_array_expr),
     };
-    Some(emit_callable_descriptor_invoke(ctx, callback, arg_array, expr.span))
+    Some(emit_callable_descriptor_invoke(ctx, callback, arg_array, true, expr.span))
 }
 
 /// Returns the callable signature available to descriptor-invoker argument lowering.
@@ -490,7 +490,7 @@ pub(super) fn lower_call_user_func_descriptor_invoke_from_value(
     } else {
         lower_descriptor_invoker_arg_container_for_call_user_func(ctx, args, sig, native_references, expr.span)
     };
-    emit_callable_descriptor_invoke(ctx, callback, arg_container, expr.span)
+    emit_callable_descriptor_invoke(ctx, callback, arg_container, true, expr.span)
 }
 
 /// A descriptor callback already published in the unwind chain, before its arguments were lowered.
@@ -540,6 +540,7 @@ pub(super) fn emit_callable_descriptor_invoke(
     ctx: &mut LoweringContext<'_, '_>,
     callback: RootedDescriptorCallback,
     arg_container: LoweredValue,
+    warn_by_ref: bool,
     span: Span,
 ) -> LoweredValue {
     let RootedDescriptorCallback {
@@ -561,7 +562,7 @@ pub(super) fn emit_callable_descriptor_invoke(
         ctx,
         Op::CallableDescriptorInvoke,
         vec![callback.value, arg_container.value, strict_types],
-        callable_profile_immediate(),
+        callable_invoke_immediate(warn_by_ref),
         result_type,
         span,
     );

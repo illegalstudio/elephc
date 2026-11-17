@@ -145,23 +145,8 @@ fn emit_by_reference_warning(
         .unwrap_or_else(|| " must be passed by reference, value given".to_string());
     let suffix = data.add_string(parameter.as_bytes());
     emit_static_fragment(emitter, &suffix, false);
-    let location_prefix = data.add_string(b" in ");
-    emit_static_fragment(emitter, &location_prefix, false);
-    emit_diagnostic_file_fragment(emitter);
-    let line_prefix = data.add_string(b" on line ");
-    emit_static_fragment(emitter, &line_prefix, false);
-    abi::emit_load_symbol_to_reg(
-        emitter,
-        abi::int_result_reg(emitter),
-        "_php_diagnostic_line",
-        0,
-    );
-    abi::emit_call_label(emitter, "__rt_itoa");
-    if emitter.target.arch == Arch::X86_64 {
-        abi::emit_reg_move(emitter, "rdi", "rax");
-        abi::emit_reg_move(emitter, "rsi", "rdx");
-    }
-    abi::emit_call_label(emitter, "__rt_diag_warning_fragment");
+    // The shared dispatcher appends the call site's file and line to a completed warning,
+    // so this message stops at its own newline and lets that writer add the location once.
     let newline = data.add_string(b"\n");
     emit_static_fragment(emitter, &newline, true);
 
@@ -189,16 +174,6 @@ fn emit_descriptor_name_fragment(emitter: &mut Emitter, descriptor: &str) {
     abi::emit_call_label(emitter, "__rt_diag_warning_fragment");
 }
 
-/// Emits the current diagnostic call site's file name as a fragment.
-fn emit_diagnostic_file_fragment(emitter: &mut Emitter) {
-    let (pointer, length) = match emitter.target.arch {
-        Arch::AArch64 => ("x1", "x2"),
-        Arch::X86_64 => ("rdi", "rsi"),
-    };
-    abi::emit_symbol_address(emitter, pointer, "_script_source_file");
-    abi::emit_load_symbol_to_reg(emitter, length, "_script_source_file_len", 0);
-    abi::emit_call_label(emitter, "__rt_diag_warning_fragment");
-}
 
 /// Appends a static diagnostic fragment and optionally finishes the pending warning.
 fn emit_static_fragment(emitter: &mut Emitter, fragment: &(String, usize), complete: bool) {

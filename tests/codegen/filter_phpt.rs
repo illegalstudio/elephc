@@ -169,7 +169,9 @@ fn assert_case(case: &Case) {
     if diagnostics.is_empty() {
         assert!(output.stderr.is_empty(), "{}: unexpected stderr: {}", case.name, output.stderr);
     } else {
-        let actual_lines: Vec<&str> = output.stderr.lines().collect();
+        // php-src prefixes every displayed diagnostic with one newline, so the captured
+        // stream starts with a blank line and separates successive diagnostics with more.
+        let actual_lines: Vec<&str> = output.stderr.lines().filter(|line| !line.is_empty()).collect();
         assert_eq!(
             actual_lines.len(), diagnostics.len(),
             "{}: diagnostic count mismatch\n--- expected ---\n{}\n--- actual ---\n{}",
