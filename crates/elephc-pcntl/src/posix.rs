@@ -130,6 +130,69 @@ pub extern "C" fn elephc_posix_setsid() -> i64 {
     i64::from(session_id)
 }
 
+/// Reports whether a PHP string passes PHP's coercive `int` parameter check.
+///
+/// Mirrors `zend_parse_arg_long_weak()` for strings: the whole string must be numeric under
+/// `is_numeric_string()` (PHP whitespace on either side, no hexadecimal, `INF` or `NAN`
+/// spellings), and a value that is not an integer-form `zend_long` must be a finite double in
+/// `[-2^63, 2^63)`. `"1e999"` and `"9223372036854775808"` are refused here, so generated code
+/// throws `TypeError` instead of letting the weak cast turn them into pid 0.
+///
+/// # Safety
+///
+/// `bytes` must point to `len` readable bytes, or be any pointer when `len` is zero.
+#[no_mangle]
+pub unsafe extern "C" fn elephc_posix_int_param_accepts(bytes: *const u8, len: usize) -> i64 {
+    let source = if len == 0 { &[][..] } else { unsafe { std::slice::from_raw_parts(bytes, len) } };
+    i64::from(int_param_accepts(source))
+}
+
+/// Applies the numeric grammar and range rules behind `elephc_posix_int_param_accepts()`.
+fn int_param_accepts(source: &[u8]) -> bool {
+    let is_space = |byte: &u8| matches!(byte, b' ' | b'\t' | b'\n' | b'\r' | 0x0b | 0x0c);
+    let Some(start) = source.iter().position(|byte| !is_space(byte)) else {
+        return false;
+    };
+    let end = source.iter().rposition(|byte| !is_space(byte)).map_or(start, |end| end + 1);
+    let core = &source[start..end];
+    let mut index = usize::from(matches!(core.first(), Some(b'+' | b'-')));
+    let integer_digits = core[index..].iter().take_while(|byte| byte.is_ascii_digit()).count();
+    index += integer_digits;
+    let mut integer_form = true;
+    let mut fraction_digits = 0;
+    if core.get(index) == Some(&b'.') {
+        integer_form = false;
+        index += 1;
+        fraction_digits = core[index..].iter().take_while(|byte| byte.is_ascii_digit()).count();
+        index += fraction_digits;
+    }
+    if integer_digits + fraction_digits == 0 {
+        return false;
+    }
+    if matches!(core.get(index), Some(b'e' | b'E')) {
+        let sign = usize::from(matches!(core.get(index + 1), Some(b'+' | b'-')));
+        let exponent_digits =
+            core[index + 1 + sign..].iter().take_while(|byte| byte.is_ascii_digit()).count();
+        if exponent_digits == 0 {
+            return false;
+        }
+        integer_form = false;
+        index += 1 + sign + exponent_digits;
+    }
+    if index != core.len() {
+        return false;
+    }
+    // The core is ASCII by construction, so both parses see exactly PHP's numeric spelling.
+    let Ok(text) = std::str::from_utf8(core) else {
+        return false;
+    };
+    if integer_form && text.parse::<i64>().is_ok() {
+        return true;
+    }
+    text.parse::<f64>()
+        .is_ok_and(|value| value.is_finite() && value >= -(2f64.powi(63)) && value < 2f64.powi(63))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -186,5 +249,25 @@ mod tests {
     fn identity_queries_match_libc() {
         assert_eq!(elephc_posix_geteuid(), i64::from(unsafe { libc::geteuid() }));
         assert_eq!(elephc_posix_getpgrp(), i64::from(unsafe { libc::getpgrp() }));
+    }
+
+    /// Accepts PHP numeric strings that fit `int` and refuses overflowing or malformed ones.
+    #[test]
+    fn int_param_accepts_mirrors_php_weak_int_strings() {
+        let accepts = |text: &str| unsafe { elephc_posix_int_param_accepts(text.as_ptr(), text.len()) };
+        for text in [
+            "0", " 12 ", "+7", "-3", "1e3", "1.5", ".5", "5.", "\u{b}4\u{c}",
+            "9223372036854775807", "-9223372036854775808", "9.2e18", "-9223372036854775808.0", "-9223372036854775809",
+        ] {
+            assert_eq!(accepts(text), 1, "{text:?}");
+        }
+        for text in [
+            "", " ", "abc", "12abc", "1e", "1e+", ".", "+", "0x1A", "INF", "NAN", "1_000",
+            "1e999", "-1e999", " 1e20 ", "9223372036854775808",
+            "9223372036854775807.0", "1 2",
+        ] {
+            assert_eq!(accepts(text), 0, "{text:?}");
+        }
+        assert_eq!(unsafe { elephc_posix_int_param_accepts(std::ptr::null(), 0) }, 0);
     }
 }

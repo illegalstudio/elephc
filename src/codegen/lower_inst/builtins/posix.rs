@@ -211,7 +211,7 @@ fn emit_fd_range_warning(ctx: &mut FunctionContext<'_>) {
 /// `prefix` is the message up to the runtime type word (`"f(): Argument #1 ($x) must be of type
 /// int, "`). Ints, bools, floats, nulls and `TaggedScalar` unions pass untouched: `load_as_int()`
 /// applies their conversions and diagnostics afterwards. A string passes only when it is fully
-/// numeric; a boxed operand is unboxed and refused when it holds anything other than those
+/// numeric and fits PHP's `int` range; a boxed operand is unboxed and refused when it holds anything other than those
 /// scalars, so arrays, objects, resources, closures and non-numeric strings never reach the
 /// weak cast that would turn them into 0 or 1. Boxed resources pass only for the
 /// `int|resource` warning mode of `posix_isatty()`, which resolves them to descriptors itself.
@@ -226,7 +226,7 @@ pub(super) fn emit_int_param_guard(
             let accepted = ctx.next_label("int_param_string_ok");
             let refused = ctx.next_label("int_param_string_refused");
             ctx.load_value_to_result(operand)?;
-            abi::emit_call_label(ctx.emitter, "__rt_str_looks_like_int_for_coercion");
+            emit_string_int_param_check(ctx);
             abi::emit_branch_if_int_result_zero(ctx.emitter, &refused);
             abi::emit_jump(ctx.emitter, &accepted);
             ctx.emitter.label(&refused);
@@ -284,7 +284,7 @@ fn emit_boxed_int_param_guard(
     };
     abi::emit_reg_move(ctx.emitter, string_len, payload_len);
     abi::emit_reg_move(ctx.emitter, string_ptr, payload);
-    abi::emit_call_label(ctx.emitter, "__rt_str_looks_like_int_for_coercion");
+    emit_string_int_param_check(ctx);
     let string_refused = ctx.next_label("int_param_refuse_string");
     abi::emit_branch_if_int_result_zero(ctx.emitter, &string_refused);
     abi::emit_jump(ctx.emitter, &accepted);
@@ -292,6 +292,25 @@ fn emit_boxed_int_param_guard(
     emit_int_param_rejection(ctx, prefix, "string", rejection);
     ctx.emitter.label(&accepted);
     Ok(())
+}
+
+/// Asks the bridge whether the string in the string-result registers passes PHP's `int` check.
+///
+/// Leaves 1 in the integer result register for an accepted string and 0 for a refused one.
+/// The bridge checks the value range as well as the grammar, so `"1e999"` or
+/// `"9223372036854775808"` is refused instead of saturating or collapsing to pid 0.
+fn emit_string_int_param_check(ctx: &mut FunctionContext<'_>) {
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction("mov x0, x1");                              // C arg0 = PHP string bytes
+            ctx.emitter.instruction("mov x1, x2");                              // C arg1 = PHP string byte length
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("mov rdi, rax");                            // C arg0 = PHP string bytes
+            ctx.emitter.instruction("mov rsi, rdx");                            // C arg1 = PHP string byte length
+        }
+    }
+    ctx.emitter.bl_c("elephc_posix_int_param_accepts");
 }
 
 /// Throws or warns `<prefix><given> given` for a statically named runtime type.
