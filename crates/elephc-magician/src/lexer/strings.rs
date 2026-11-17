@@ -609,7 +609,9 @@ fn strip_heredoc_indentation(content: &str, indent: usize) -> Result<String, Eva
             .take_while(|byte| matches!(*byte, b' ' | b'\t'))
             .take(indent)
             .count();
-        if removed < indent && !body.is_empty() {
+        // A line holding only blanks, shorter than the marker's indentation, is stripped to empty
+        // (php: `    a\n  \n    b\n    EOT` reads "a\n\nb"); only text short of the indent is an error.
+        if removed < indent && removed < body.len() {
             return Err(EvalParseError::UnexpectedToken);
         }
         stripped.push_str(&body[removed..]);

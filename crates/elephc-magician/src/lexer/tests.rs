@@ -343,6 +343,19 @@ fn heredoc_legacy_dollar_brace_interpolates() {
     );
 }
 
+/// Verifies a blank line shorter than the closing marker's indentation reads as empty.
+///
+/// `    a\n  \n    b\n    EOT;` is `a\n\nb` under `php -n` 8.5.6; text that short is an error.
+#[test]
+fn heredoc_blank_line_shorter_than_the_marker_indent_is_stripped_to_empty() {
+    let tokens = kinds("$s = <<<EOT\n    a\n  \n    b\n    EOT;\n");
+    assert!(
+        tokens.iter().any(|kind| matches!(kind, TokenKind::String(value) if value == "a\n\nb")),
+        "{tokens:?}"
+    );
+    assert_eq!(error("$s = <<<EOT\n    a\n  b\n    EOT;\n"), EvalParseError::UnexpectedToken);
+}
+
 /// Verifies the closing marker may be followed by a comma inside a call argument list.
 ///
 /// `echo f(<<<EOT\n    one $a\n    EOT, 'two');` prints `one X|two` under `php -n` 8.5.6,
