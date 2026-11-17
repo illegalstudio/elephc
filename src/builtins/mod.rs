@@ -30,6 +30,10 @@ pub(crate) mod gmp;
 mod spl;
 mod pointers;
 mod system;
+pub(crate) use system::preg_match::{
+    passes_parameter_from as preg_passes_parameter_from,
+    uses_extended_capture as preg_match_uses_extended_capture,
+};
 mod types;
 pub(crate) mod xml;
 #[cfg(test)]

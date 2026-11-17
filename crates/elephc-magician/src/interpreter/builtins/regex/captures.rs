@@ -7,6 +7,7 @@
 //! Key details:
 //! - Optional offset capture uses PHP's `[string, byte_offset]` representation and
 //!   unmatched captures follow `PREG_UNMATCHED_AS_NULL`.
+//! - `$offset` resolution for `preg_match()` / `preg_match_all()` lives here too.
 
 use super::super::super::*;
 
@@ -96,4 +97,24 @@ pub(in crate::interpreter) fn eval_preg_capture_value(
     pair = values.array_set(pair, value_key, value)?;
     let offset_key = values.int(1)?;
     values.array_set(pair, offset_key, offset)
+}
+
+/// Reads an optional PHP `$offset` argument, defaulting to `0`.
+pub(in crate::interpreter) fn eval_preg_offset_value(
+    offset: Option<RuntimeCellHandle>,
+    values: &mut impl RuntimeValueOps,
+) -> Result<i64, EvalStatus> {
+    offset.map_or(Ok(0), |offset| eval_int_value(offset, values))
+}
+
+/// Resolves a PHP `$offset` to a byte position, or `None` when it is past the end.
+///
+/// A negative offset counts back from the end and clamps at the subject start.
+pub(in crate::interpreter) fn eval_preg_start_offset(offset: i64, subject_len: usize) -> Option<usize> {
+    let len = i64::try_from(subject_len).ok()?;
+    let start = if offset < 0 { (len + offset).max(0) } else { offset };
+    if start > len {
+        return None;
+    }
+    usize::try_from(start).ok()
 }
