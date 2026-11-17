@@ -2364,7 +2364,10 @@ fn terminate_open_block(ctx: &mut LoweringContext<'_, '_>, is_generator: bool) {
         ctx.builder.terminate(Terminator::Fatal { message });
         return;
     }
-    if matches!(ctx.return_php_type, PhpType::Mixed) {
+    // A by-reference function with no declared type whose return inferred `Mixed` returns a cell
+    // ADDRESS (I64), not a boxed value: it takes the fail-closed by-reference path below.
+    let undeclared_by_ref = ctx.by_ref_return && !ctx.return_type_is_declared && !is_generator;
+    if matches!(ctx.return_php_type, PhpType::Mixed) && !undeclared_by_ref {
         ctx.emit_eval_scope_finalizer(None);
         // Only a DECLARED `: mixed` refuses to fall off the end. A function with no return type
         // whose paths the checker merged into `mixed` returns null there, as php does: Laravel's
