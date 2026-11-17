@@ -17,7 +17,7 @@ identity pinning, object-handle recycling, guarded stack allocation/free, byte-s
 concatenation, C-string copies, raw capture buffers, zval storage retirement,
 Mixed-array slot conversion, reference-wrapper promotion and child-slot selection,
 scalar/empty-array cleanup eligibility checks, static binding storage, guarded
-owner slots and depth-stamped temporary owner lists.
+owner slots, depth-stamped temporary owner lists and abandoned activation cleanup.
 It also owns fixed heap/GC/buffer state, handle tables and string-scratch
 declarations. It is an ordinary compiler dependency and is never linked as a Rust
 library into compiled PHP programs. Those programs contain the same
@@ -33,6 +33,9 @@ static retirement receives its weak-source unbind callback, and guard layout and
 scoped-list symbols come from the compiler. Exception-handler installation,
 failed-constructor destructor policy, parser completion and diagnostic selection
 remain compiler-owned.
+The compiler also selects the surviving activation during unwinding. Memoir walks
+the supplied cleanup chain and detaches each abandoned record before its callback
+can release user objects or reenter the runtime.
 Memoir source changes also participate in runtime-object cache identity.
 
 The host API composes assembly output, target ABI and memory-context capabilities.

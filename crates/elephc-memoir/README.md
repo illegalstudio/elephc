@@ -19,7 +19,7 @@ parameter-owner acquisition, original-identity pins, protected cleanup, temporar
 owner retirement, validated boxed object transfers, the object-handle pool, guarded stack mapping,
 zend_string allocation, recursive zval/string/array storage retirement, and memory
 proofs for direct scalar/empty-array cleanup, static binding storage, guard
-records and depth-stamped temporary owner lists.
+records, depth-stamped temporary owner lists and abandoned activation cleanup.
 It also emits fixed heap, GC, buffer, reference-root, handle-table and string-scratch
 declarations, including raw capture-buffer storage, keeping their existing order
 and byte layout.
@@ -49,6 +49,9 @@ for cleanup without child ownership. Static retirement receives the compiler's
 weak-source unbind callback. Guard primitives receive host owner/spill offsets and
 chain storage; scoped lists receive head/depth symbols. Handler installation,
 failed-constructor destructor policy and parser completion stay in the compiler.
+`activation_cleanup` requires only assembly output and target ABI capabilities.
+The compiler supplies its chain symbol and selects the surviving activation;
+Memoir detaches every abandoned record before invoking its cleanup callback.
 
 The compiler retains EIR lifetime analysis, ownership optimization and placement,
 PHP reference/type validation, formatting, output routing, zval pack/unpack,
