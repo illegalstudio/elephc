@@ -74,6 +74,21 @@ fn test_error_widening_interface_shapes_stay_strict() {
     );
 }
 
+/// A narrow caller fills its own omitted defaults before the adapter forwards them, so a
+/// widened body using `func_num_args()` behind an optional inherited prefix would count those
+/// defaults as passed; it keeps the exact-shape `func_args` diagnostic instead.
+#[test]
+fn test_error_widening_counting_override_behind_optional_prefix() {
+    expect_error(
+        "<?php class P { public function f($a = 1) {} } class C extends P { public function f($a = 1, $b = 2) { return func_num_args(); } }",
+        "func_num_args()/func_get_args()/func_get_arg() are not supported in C::f when overriding method",
+    );
+    expect_error(
+        "<?php interface I { public function f($a = 1); } class C implements I { public function f($a = 1, $b = 2) { return func_num_args(); } }",
+        "func_num_args()/func_get_args()/func_get_arg() are not supported in C::f when implementing interface method",
+    );
+}
+
 /// Static overrides keep their exact shape: late static binding has no adapter slot yet.
 #[test]
 fn test_error_widening_static_override_is_not_supported() {

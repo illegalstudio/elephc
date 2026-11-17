@@ -406,8 +406,15 @@ pub(crate) fn validate_signature_compatibility(
     let parent = SourceVisibleShape::of(parent_sig);
     // An appended optional tail is bridged by an EIR adapter that calls the child through its
     // own signature, so the child's generated `func_args` slots never meet the parent's callers.
+    // The adapter can only forward what the parent's caller passed, though, and that caller
+    // fills the parent's omitted defaults itself: a counting child behind an optional inherited
+    // prefix would then see those defaults as passed arguments, so it keeps the exact rule
+    // unless the parent's ABI carries the actual argument count too.
     let appends_optional = widening == ParameterWidening::TrailingOptional
-        && child.appends_optional_parameters(&parent);
+        && child.appends_optional_parameters(&parent)
+        && !(crate::func_args::sig_collects_surplus_args(child_sig)
+            && !crate::func_args::sig_collects_surplus_args(parent_sig)
+            && parent.has_defaults.iter().any(|default| *default));
     // The hidden variadic that collects surplus positional arguments for
     // `func_num_args()`/`func_get_args()`/`func_get_arg()` is a real ABI parameter, so an
     // inherited signature that does not carry it cannot dispatch to a body that does.

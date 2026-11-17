@@ -106,6 +106,21 @@ echo viaA(new A()), " ", viaA(new B()), "\n";
     assert_eq!(out, "A11 A12 B1|3|1[1] B1|9|2[1,9]\n");
 }
 
+/// When the parent counts its arguments too, its ABI carries the actual count, so a widened
+/// counting override behind an optional inherited prefix still sees only what was passed.
+#[test]
+fn test_override_widening_counts_arguments_behind_a_counting_optional_parent() {
+    let out = compile_and_run(
+        r#"<?php
+class A { public function f(int $a = 1) { return "A" . func_num_args(); } }
+class B extends A { public function f(int $a = 1, int $b = 2) { return "B" . func_num_args(); } }
+function viaA(A $x) { return $x->f() . $x->f(5) . $x->f(5, 6); }
+echo viaA(new A()), " ", viaA(new B()), "\n";
+"#,
+    );
+    assert_eq!(out, "A0A1A2 B0B1B2\n");
+}
+
 /// symfony/string's shape: an abstract `static`-returning method overridden with an optional
 /// flag and called through the abstract parent type.
 #[test]
