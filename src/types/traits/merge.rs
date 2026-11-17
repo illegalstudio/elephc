@@ -120,7 +120,9 @@ pub(super) fn merge_methods(
             match resolve_duplicate_imported_method(
                 (&merged[index].origin, &merged[index].decl),
                 (&imported_method.origin, &imported_method.decl),
-            ) {
+                span,
+                owner_label,
+            )? {
                 DuplicateImport::KeepExisting => {}
                 DuplicateImport::ReplaceExisting => merged[index] = imported_method,
                 DuplicateImport::Collision => {
@@ -168,7 +170,9 @@ pub(super) fn merge_imported_method_set(
             match resolve_duplicate_imported_method(
                 (&existing[index].origin, &existing[index].decl),
                 (&method.origin, &method.decl),
-            ) {
+                span,
+                owner_label,
+            )? {
                 DuplicateImport::KeepExisting => {}
                 DuplicateImport::ReplaceExisting => existing[index] = method,
                 DuplicateImport::Collision => {
@@ -193,22 +197,67 @@ enum DuplicateImport {
 /// Resolves a second imported method with the key of `existing`, as PHP does: an abstract trait
 /// method is a requirement, not a definition, so it never conflicts. A concrete method replaces
 /// an abstract one (`use NeedsInvalidate, ProvidesInvalidate;`), and a second abstract one adds
-/// nothing. The same trait method reached along two `use` paths is kept once
-/// (`is_same_trait_method`). Only two different concrete methods collide.
+/// nothing once `check_abstract_redeclaration` accepts the pair. The same trait method reached
+/// along two `use` paths is kept once (`is_same_trait_method`). Only two different concrete
+/// methods collide.
 fn resolve_duplicate_imported_method(
     existing: (&str, &ClassMethod),
     incoming: (&str, &ClassMethod),
-) -> DuplicateImport {
+    span: Span,
+    owner_label: &str,
+) -> Result<DuplicateImport, CompileError> {
     if incoming.1.is_abstract {
-        return DuplicateImport::KeepExisting;
+        if existing.1.is_abstract {
+            check_abstract_redeclaration(existing.1, incoming.1, span, owner_label)?;
+        }
+        return Ok(DuplicateImport::KeepExisting);
     }
     if existing.1.is_abstract {
-        return DuplicateImport::ReplaceExisting;
+        return Ok(DuplicateImport::ReplaceExisting);
     }
     if is_same_trait_method(existing, incoming) {
-        return DuplicateImport::KeepExisting;
+        return Ok(DuplicateImport::KeepExisting);
     }
-    DuplicateImport::Collision
+    Ok(DuplicateImport::Collision)
+}
+
+/// Checks that `other`, a second abstract declaration of the abstract trait method `required`
+/// from another trait, matches it.
+///
+/// PHP checks that pair like an override (`Declaration of A::foo(): int must be compatible with
+/// B::foo(): string`). Until flattening runs that check, only an identical signature is
+/// accepted: the same parameter types, by-reference flags, optionality and variadic, and the
+/// same return type and by-reference return. Visibility is not compared, as PHP does not. A
+/// CONCRETE method that implements a requirement is not checked here:
+/// `validate_class_trait_requirements` and `validate_enum_trait_requirements` run PHP's
+/// compatibility rules on it once the class schema is known.
+pub(super) fn check_abstract_redeclaration(
+    required: &ClassMethod,
+    other: &ClassMethod,
+    span: Span,
+    owner_label: &str,
+) -> Result<(), CompileError> {
+    let same_params = required.params.len() == other.params.len()
+        && required.params.iter().zip(&other.params).all(|(left, right)| {
+            left.1 == right.1 && left.3 == right.3 && left.2.is_some() == right.2.is_some()
+        });
+    let same_signature = same_params
+        && required.variadic.is_some() == other.variadic.is_some()
+        && required.variadic_by_ref == other.variadic_by_ref
+        && required.variadic_type == other.variadic_type
+        && required.return_type == other.return_type
+        && required.by_ref_return == other.by_ref_return;
+    if same_signature {
+        return Ok(());
+    }
+    Err(CompileError::new(
+        span,
+        &format!(
+            "{} imports abstract trait method '{}' twice with different signatures; only an \
+             identical signature is supported",
+            owner_label, other.name
+        ),
+    ))
 }
 
 /// Whether two imported copies, each with its declaring trait, are the same trait method

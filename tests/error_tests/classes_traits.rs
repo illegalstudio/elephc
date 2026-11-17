@@ -276,17 +276,23 @@ class C { use W; #[\Override] public function foo(): string { return "C"; } }
 
 /// A trait method that satisfies another trait's abstract method, or a second abstract
 /// declaration of it, must keep its signature: php 8.5.12 reports `Declaration of ... must be
-/// compatible with A::foo(...)` for each case below, so none may merge silently. Flattening
-/// accepts only an identical signature for now.
+/// compatible with A::foo(...)` for each case below, so none may merge silently. A concrete
+/// implementation gets PHP's compatibility check; two abstract declarations must be identical.
 #[test]
 fn test_error_trait_requirement_merge_needs_a_compatible_signature() {
-    for source in [
+    expect_error(
         "<?php trait A { abstract public function foo(int $x): string; } trait B { public function foo(): array { return []; } } class C { use A; use B; }",
+        "when implementing trait method: C::foo",
+    );
+    expect_error(
         "<?php trait A { abstract public function foo(int $x): int; } trait B { public function foo(string $s): string { return $s; } } final class C { use A, B; }",
+        "when implementing trait method: C::foo",
+    );
+    for source in [
         "<?php trait A { abstract public function foo(): int; } trait B { abstract public function foo(): string; } class C { use A; use B; public function foo(): int { return 1; } }",
         "<?php trait A { abstract public function foo(): int; } trait B { abstract public function foo(): string; } abstract class C { use A, B; }",
     ] {
-        expect_error(source, "with a signature that differs from the abstract trait method it implements");
+        expect_error(source, "imports abstract trait method 'foo' twice with different signatures");
     }
 }
 
@@ -448,7 +454,9 @@ class C { use W; }
 }
 
 /// Two instantiations of one generic trait are two traits whose methods share the template's
-/// declaration: each instantiation's requirement is checked, not only the first.
+/// declaration: `Needs<int>::foo` and `Needs<string>::foo` are two different abstract
+/// declarations, not one requirement, so the program is rejected (the requirement walk also keys
+/// its copies by the instantiated trait).
 #[test]
 fn test_error_each_generic_trait_instantiation_requirement_is_checked() {
     expect_error(
@@ -456,7 +464,7 @@ fn test_error_each_generic_trait_instantiation_requirement_is_checked() {
 trait Needs<T> { abstract public function foo(): T; }
 class C { use Needs<int>, Needs<string>; public function foo(): int { return 1; } }
 "#,
-        "Cannot change return type when implementing trait method: C::foo",
+        "class C imports abstract trait method 'foo' twice with different signatures",
     );
 }
 

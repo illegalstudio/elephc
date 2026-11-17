@@ -19,7 +19,7 @@ use crate::span::Span;
 
 use super::{ExpandedTrait, ImportedMethod, TraitDeclInfo, TraitMethod};
 use super::merge::{
-    is_same_trait_method, merge_constants, merge_imported_constant_set,
+    check_abstract_redeclaration, is_same_trait_method, merge_constants, merge_imported_constant_set,
     merge_imported_method_set, merge_methods, merge_properties, merge_property_into,
     trait_method_collision,
 };
@@ -359,7 +359,7 @@ fn select_methods(
                 concrete.push(candidate);
             }
         }
-        let requirements = unsatisfied_requirements(requirements, &concrete);
+        let requirements = unsatisfied_requirements(requirements, &concrete, span, owner_label)?;
         if let [applied, rejected, ..] = concrete.as_slice() {
             return Err(trait_method_collision(span, owner_label, applied, rejected));
         }
@@ -375,24 +375,31 @@ fn select_methods(
 ///
 /// An abstract trait method is a requirement, not a definition, so it is never one of the
 /// candidates `insteadof` has to choose between: a concrete candidate of the same kind (static or
-/// instance) satisfies it, and several abstract ones of one kind are one requirement. A
-/// requirement of the other kind is kept, so the class schema reports the static/instance
-/// mismatch as it does for separate `use` statements.
+/// instance) satisfies it, and several abstract ones of one kind are one requirement once
+/// `check_abstract_redeclaration` accepts them. A requirement of the other kind is kept, so the
+/// class schema reports the static/instance mismatch as it does for separate `use` statements.
 fn unsatisfied_requirements(
     requirements: Vec<ImportedMethod>,
     concrete: &[ImportedMethod],
-) -> Vec<ImportedMethod> {
+    span: Span,
+    owner_label: &str,
+) -> Result<Vec<ImportedMethod>, CompileError> {
     let mut kept: Vec<ImportedMethod> = Vec::new();
     for requirement in requirements {
-        let satisfied = concrete
+        let same_kind = concrete
             .iter()
             .chain(kept.iter())
-            .any(|other| other.decl.is_static == requirement.decl.is_static);
-        if !satisfied {
-            kept.push(requirement);
+            .find(|other| other.decl.is_static == requirement.decl.is_static);
+        match same_kind {
+            // A concrete implementation is checked once the class schema is known.
+            Some(other) if other.decl.is_abstract => {
+                check_abstract_redeclaration(&other.decl, &requirement.decl, span, owner_label)?
+            }
+            Some(_) => {}
+            None => kept.push(requirement),
         }
     }
-    kept
+    Ok(kept)
 }
 
 /// Resolves the source trait for a trait adaptation (insteadof or alias).
