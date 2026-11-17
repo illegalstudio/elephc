@@ -346,7 +346,7 @@ fn statement_contains_dynamic_new(stmt: &Stmt) -> bool {
 /// Returns whether an expression tree contains a plain PHP `new $class` construction.
 fn expression_contains_dynamic_new(expr: &Expr) -> bool {
     match &expr.kind {
-        ExprKind::NewDynamic { .. } => true,
+        ExprKind::NewDynamic { .. } | ExprKind::NewDynamicObject { .. } => true,
         ExprKind::Assignment { value, prelude, .. } => {
             expression_contains_dynamic_new(value) || statements_contain_dynamic_new(prelude)
         }
@@ -1270,4 +1270,25 @@ mod tests {
         assert_eq!(super::literal_regex_suffix("/Foo$/"), Some("Foo"));
     }
 
+    /// The compiler's synthetic class-string factory counts as a dynamic construction, as the
+    /// written `new $class` does.
+    #[test]
+    fn the_synthetic_dynamic_object_factory_is_a_dynamic_new() {
+        use crate::names::Name;
+        use crate::span::Span;
+        let class_name = crate::parser::ast::Expr::new(
+            crate::parser::ast::ExprKind::Variable("class".into()),
+            Span::dummy(),
+        );
+        let factory = crate::parser::ast::Expr::new(
+            crate::parser::ast::ExprKind::NewDynamicObject {
+                class_name: Box::new(class_name),
+                fallback_class: Name::unqualified("Fallback"),
+                required_parent: Name::unqualified("Parent"),
+                args: Vec::new(),
+            },
+            Span::dummy(),
+        );
+        assert!(super::expression_contains_dynamic_new(&factory));
+    }
 }
