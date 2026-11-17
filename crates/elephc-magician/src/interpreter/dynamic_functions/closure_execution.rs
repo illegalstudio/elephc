@@ -832,6 +832,7 @@ fn eval_closure_with_optional_binding_inner(
                 std::mem::replace(&mut function_scope, ElephcEvalScope::new()),
                 eval_closure_activation(
                     function.name(),
+                    closure.slot_key(),
                     bound_class_scope,
                     bound_called_class,
                     closure.declaring_call_site().cloned(),

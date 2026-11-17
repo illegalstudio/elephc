@@ -151,6 +151,12 @@ pub struct EvalGeneratorActivation {
     /// the generator is created, installed on every resumption, and updated with the line the
     /// body reached when it suspends. `None` keeps the resumer's site, as before.
     pub site: Option<EvalCallSite>,
+    /// The per-object key a closure generator's `static` slots hang from.
+    ///
+    /// php gives each closure OBJECT its own statics, and the body of its generator runs on every
+    /// resumption long after the creating call popped that key. `None` (a plain function or a
+    /// method) keys the slots on the function name, as before.
+    pub static_slot_key: Option<String>,
 }
 
 /// A source position as `ElephcEvalContext::call_site()` reports it: file, directory, line and

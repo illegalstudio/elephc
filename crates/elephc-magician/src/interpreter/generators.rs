@@ -77,6 +77,7 @@ pub(in crate::interpreter) fn eval_plain_function_activation(
         called_class: None,
         magic: None,
         site: None,
+        static_slot_key: None,
     }
 }
 
@@ -86,6 +87,7 @@ pub(in crate::interpreter) fn eval_plain_function_activation(
 /// closure call path does.
 pub(in crate::interpreter) fn eval_closure_activation(
     function_name: &str,
+    static_slot_key: &str,
     class_scope: Option<String>,
     called_class: Option<String>,
     site: Option<EvalCallSite>,
@@ -96,6 +98,7 @@ pub(in crate::interpreter) fn eval_closure_activation(
         called_class,
         magic: None,
         site,
+        static_slot_key: Some(static_slot_key.to_string()),
     }
 }
 
@@ -124,6 +127,7 @@ pub(in crate::interpreter) fn eval_method_activation(
                 .map(|trait_name| trait_name.trim_start_matches('\\').to_string()),
         }),
         site,
+        static_slot_key: None,
     }
 }
 
@@ -312,6 +316,9 @@ fn eval_generator_enter_activation(
 ) -> Option<EvalCallSite> {
     let activation = &frame.activation;
     context.push_function(activation.function_name.clone());
+    if let Some(key) = &activation.static_slot_key {
+        context.push_static_slot_key(key.clone());
+    }
     if let Some(class_scope) = &activation.class_scope {
         context.push_class_scope(class_scope.clone());
     }
@@ -392,6 +399,9 @@ fn eval_generator_leave_activation(
     }
     if activation.class_scope.is_some() {
         context.pop_class_scope();
+    }
+    if activation.static_slot_key.is_some() {
+        context.pop_static_slot_key();
     }
     context.pop_function();
 }
