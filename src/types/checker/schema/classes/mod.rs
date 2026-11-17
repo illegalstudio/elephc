@@ -19,6 +19,7 @@ mod constants;
 mod enum_interfaces;
 mod interfaces;
 mod methods;
+mod narrowed_slots;
 mod properties;
 mod property_defaults;
 mod state;
