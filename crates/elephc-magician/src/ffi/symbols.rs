@@ -350,6 +350,14 @@ unsafe fn eval_dynamic_class_like_exists_inner(
     } else {
         (name_ptr, name_len)
     };
+    // The compiler's own helper classes (`__ElephcAppendIteratorArrayIterator`, ...) are not
+    // php-visible: the compiled-code answer is false for them, and so must this one be.
+    if name_len >= 8
+        && !name_ptr.is_null()
+        && std::slice::from_raw_parts(name_ptr, 8).eq_ignore_ascii_case(b"__elephc")
+    {
+        return 0;
+    }
     // Compiled code with no eval context of its own asks here for every `class_exists()` it
     // makes, and building a fallback context with a copy of the AOT metadata cost more than the
     // probe. A compiled class-like needs neither: when the generated tables hold it and it may be
