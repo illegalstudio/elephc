@@ -120,6 +120,23 @@ only at run time is not linked; pass its name as a string literal or as a first-
     );
 }
 
+/// Verifies the restricted builtin set applies only to a value typed exactly `callable`: a
+/// `?callable` union and a declared `callable` handed to `array_map()` or `call_user_func()` go
+/// through the generic dynamic call and call a runtime-selected builtin as PHP does.
+#[test]
+fn test_declared_callable_unions_and_builtin_callbacks_call_runtime_builtins() {
+    let out = compile_and_run(
+        r#"<?php
+function nullable(?callable $f, string $s): string { return $f === null ? "-" : $f($s); }
+function mapped(callable $f): string { return implode(",", array_map($f, ["a", "b"])); }
+function via(callable $f, string $s): string { return call_user_func($f, $s); }
+$builtin = strrev("reppuotrts");
+echo nullable($builtin, "a"), " ", mapped($builtin), " ", via($builtin, "c"), "\n";
+"#,
+    );
+    assert_eq!(out, "A A,B C\n");
+}
+
 /// Verifies the named `Error` for a runtime-only builtin also fires when the invoking function
 /// owns an eval context: the eval callback fallback runs first (it resolves functions declared
 /// inside `eval()`) and the error is raised only after it misses.

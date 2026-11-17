@@ -114,7 +114,11 @@ through `lower_elephc_normalize_callable` with `declared_callable_candidates` se
 dispatch only emits cases for the program's functions, its static methods and the recorded
 literal builtin names (`declared_callable_name_cases`, which skips a name whose prelude helpers
 are absent). A runtime-selected builtin outside that set misses; when `is_callable()` accepts the
-name, the miss throws a catchable `Error` naming it, after any eval callback fallback.
+name, the miss throws a catchable `Error` naming it, after any eval callback fallback. Only a
+value typed exactly `callable` carries the marker: a union such as `?callable` (stored as plain
+`Mixed`), a variadic element read through `foreach`, and a declared `callable` handed to a
+builtin callback (`__elephc_normalize_callable` for `array_map()` and `call_user_func()`, the boxed
+`usort()` path) normalize without it, through the open dynamic-call table.
 
 ## Pipeline Position
 
