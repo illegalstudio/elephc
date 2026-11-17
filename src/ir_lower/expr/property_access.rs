@@ -1962,14 +1962,19 @@ pub(super) fn lower_dynamic_static_property_get(
         static_receiver_class_name(ctx, receiver).unwrap_or_else(|| receiver_name(receiver));
     let data = ctx.intern_string(&class_name);
     let result_type = dynamic_static_property_result_type(ctx, receiver);
-    ctx.emit_value(
+    let value = ctx.emit_value(
         Op::LoadDynamicStaticProperty,
         vec![name.value],
         Some(Immediate::Data(data)),
         result_type,
         Op::LoadDynamicStaticProperty.default_effects(),
         Some(expr.span),
-    )
+    );
+    // A name computed for this read (`R::$$names[$i]`) is a temporary the lookup only reads.
+    if ctx.value_is_owning_temporary(name) {
+        crate::ir_lower::ownership::release_if_owned(ctx, name, Some(expr.span));
+    }
+    value
 }
 
 /// Returns common static-property metadata for a runtime-name read.
