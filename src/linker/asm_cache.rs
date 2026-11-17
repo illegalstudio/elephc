@@ -173,6 +173,25 @@ pub(super) fn extend_slice_key(key: u64, bytes: &[u8]) -> u64 {
     fnv1a(key, bytes)
 }
 
+/// The bytes that fold a promotion decision into a directly assembled slice's key.
+///
+/// The in-tree assembler renames every promoted temporary while it assembles, so an object
+/// depends on the promoted-symbol map as well as on its own text: a slice whose bytes did not
+/// change, but which now names a temporary some other slice newly published, assembles to a
+/// different object. Sorted so the same decision always yields the same bytes.
+pub(super) fn promotion_key_bytes<'a>(promoted: impl Iterator<Item = (&'a str, &'a str)>) -> Vec<u8> {
+    let mut pairs: Vec<(&str, &str)> = promoted.collect();
+    pairs.sort_unstable();
+    let mut bytes = b"promoted\n".to_vec();
+    for (name, renamed) in pairs {
+        bytes.extend_from_slice(name.as_bytes());
+        bytes.push(b'=');
+        bytes.extend_from_slice(renamed.as_bytes());
+        bytes.push(b'\n');
+    }
+    bytes
+}
+
 /// Canonical file name for a cached slice object.
 ///
 /// The shape deliberately shares no prefix with the runtime cache's
@@ -341,6 +360,16 @@ mod tests {
     //! Unit tests for the slice object cache.
 
     use super::*;
+
+    /// A different promotion decision keys differently; the order the map yields does not matter.
+    #[test]
+    fn the_promotion_key_follows_the_decision_not_the_map_order() {
+        let one = promotion_key_bytes([("La", "_x_La"), ("Lb", "_x_Lb")].into_iter());
+        let reordered = promotion_key_bytes([("Lb", "_x_Lb"), ("La", "_x_La")].into_iter());
+        let wider = promotion_key_bytes([("La", "_x_La"), ("Lb", "_x_Lb"), ("Lc", "_x_Lc")].into_iter());
+        assert_eq!(one, reordered);
+        assert_ne!(extend_slice_key(1, &one), extend_slice_key(1, &wider));
+    }
 
     /// The in-tree assembler lives in the elephc executable, so its identity must differ from the
     /// system assembler's and carry the executable's stamp.

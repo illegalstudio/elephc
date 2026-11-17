@@ -456,6 +456,9 @@ pub(crate) fn assemble_parallel(
             asm_cache::assembler_identity(&command)
         }
     });
+    let promotion_bytes = asm_cache::promotion_key_bytes(
+        plan.promoted().iter().map(|(name, renamed)| (*name, renamed.as_str())),
+    );
     let outcomes = run_slice_workers(slice_count, jobs, |index| -> std::io::Result<SliceOutcome> {
         let asm = slice_asm(index);
         let started = std::time::Instant::now();
@@ -472,6 +475,8 @@ pub(crate) fn assemble_parallel(
                 for part in ["inhouse-direct\n", prologue.as_str(), body, footer.as_str()] {
                     *key = asm_cache::extend_slice_key(*key, part.as_bytes());
                 }
+                // The assembler renames promoted temporaries itself, so the decision is an input.
+                *key = asm_cache::extend_slice_key(*key, &promotion_bytes);
             }
             if let Some(key) = key {
                 if asm_cache::reuse(key, &slice_obj(index)) {
