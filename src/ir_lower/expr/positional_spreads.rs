@@ -80,6 +80,15 @@ pub(super) fn lower_positional_spread_args_with_signature(
             .map(|arg| super::scalar_param_guards::GuardSource::Recorded(arg.span))
             .collect::<Vec<_>>();
         operands = coerce_operands_to_params_guarded(ctx, sig, operands, Some(&sources), true);
+        // A deferred check converts without rooting its result (a `Stringable`'s string), but
+        // the spread elements and defaults lowered next can still throw: root what it made.
+        for (index, arg) in args[..spread_idx].iter().enumerate() {
+            if sig.ref_params.get(index).copied().unwrap_or(false) {
+                continue;
+            }
+            let lowered = lowered_value_from_id(ctx, operands[index]);
+            operands[index] = root_evaluated_call_argument(ctx, lowered, arg.span).value;
+        }
     }
     if let Some(name) = builtin_name {
         emit_builtin_spread_arity_guard(

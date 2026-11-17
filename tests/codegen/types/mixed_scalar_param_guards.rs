@@ -700,6 +700,28 @@ for ($i = 0; $i < 2; $i++) {
     assert!(output.stderr.contains("leak summary: clean"), "{}", output.stderr);
 }
 
+/// The string a deferred prefix check converts (here a `Stringable`'s fresh `__toString()`
+/// result) must be rooted before the spread elements and omitted defaults are lowered: a
+/// throwing default leaked it on every caught call (review on the spread-prefix follow-up).
+#[test]
+fn test_throwing_default_after_a_spread_prefix_releases_the_converted_string() {
+    let output = compile_and_run_with_heap_debug(
+        r#"<?php
+class Name { public function __toString(): string { return str_repeat("n", 30); } }
+function box(mixed $v): mixed { return $v; }
+function f(string $s, int $a, int $b, int $c = 1 % 0): string { return $s . $a . $b . $c; }
+$rows = [[1, 2], [3, 4]];
+for ($i = 0; $i < 3; $i++) {
+    try { echo f(box(new Name()), ...$rows[$i & 1]), "\n"; } catch (Error $e) { echo "caught: ", $e->getMessage(), "\n"; }
+}
+echo f(box("ok"), 1, 2, 3), "\n";
+"#,
+    );
+    assert!(output.success, "{}", output.stderr);
+    assert_eq!(output.stdout, "caught: Modulo by zero\ncaught: Modulo by zero\ncaught: Modulo by zero\nok123\n");
+    assert!(output.stderr.contains("leak summary: clean"), "{}", output.stderr);
+}
+
 /// The `int` precision deprecation can reach a user error handler that throws. The exception
 /// must reach the `catch` (the call's catch flow was narrowed to `TypeError`, so a
 /// `catch (ErrorException)` was dropped) and must not leak the owned arguments: the converted
