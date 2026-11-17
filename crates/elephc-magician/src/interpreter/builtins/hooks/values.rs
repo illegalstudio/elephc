@@ -599,7 +599,7 @@ impl EvalValuesHook {
                     values,
                 )
             }
-            Self::PregGrep => eval_preg_grep_values_result(evaluated_args, values),
+            Self::PregGrep => eval_preg_grep_values_result(evaluated_args, context, values),
             Self::PregLastError => {
                 if !evaluated_args.is_empty() {
                     return Err(EvalStatus::RuntimeFatal);

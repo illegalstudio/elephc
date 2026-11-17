@@ -211,3 +211,37 @@ echo preg_last_error(), "\n";
     let eval = compile_and_run_with_regex(&format!("<?php\neval('{quoted}' . ' // ' . $argc);\n"));
     assert_eq!(eval, expected);
 }
+
+/// `preg_grep()` matches each entry as PHP's string conversion, in compiled code and in eval:
+/// an object runs its `__toString()` and keeps its object value, an object without one throws
+/// PHP's conversion `Error`, an array warns and matches as `"Array"`, and scalars use their
+/// string casts, with `PREG_GREP_INVERT` and keys preserved.
+#[test]
+fn test_preg_grep_matches_php_string_conversions() {
+    let source = r#"class S { public $v; public function __construct($v) { $this->v = $v; } public function __toString(): string { echo "toString({$this->v})|"; return $this->v; } }
+class P {}
+function keys($found) { foreach ($found as $key => $value) { echo $key, ','; } echo "\n"; }
+$in = ['k' => new S('a'), 3 => new S('b'), 'arr' => [1], 'i' => 1, 'f' => 1.5, 't' => true, 'n' => null, 'fa' => false, 's' => 'cat'];
+keys(preg_grep('/a|1/', $in));
+keys(preg_grep('/a|1/', $in, PREG_GREP_INVERT));
+$r = preg_grep('/a/', [5 => new S('a')]);
+echo get_class($r[5]), "\n";
+try { preg_grep('/a/', ['x', new P()]); } catch (Error $e) { echo get_class($e), ': ', $e->getMessage(), "\n"; }
+echo json_encode(preg_grep('/^Array$/', [[1], 'Array', 'b'])), "\n";
+"#;
+    let expected = "toString(a)|toString(b)|k,arr,i,f,t,s,\n\
+toString(a)|toString(b)|3,n,fa,\n\
+toString(a)|S\n\
+Error: Object of class P could not be converted to string\n\
+[[1],\"Array\"]\n";
+    let quoted = source.replace('\\', "\\\\").replace('\'', "\\'");
+    for program in [
+        format!("<?php\n{source}"),
+        format!("<?php\neval('{quoted}' . ' // ' . $argc);\n"),
+    ] {
+        let out = compile_and_run_capture_with_regex(&program);
+        assert!(out.success, "{}", out.stderr);
+        assert_eq!(out.stdout, expected, "{program}");
+        assert_eq!(out.stderr.matches("Array to string conversion").count(), 3, "{}", out.stderr);
+    }
+}

@@ -8,6 +8,8 @@
 //! - Mirrors the AOT prelude (`crate::pcre_prelude` in the compiler): the pattern is
 //!   compiled once, each entry is matched as its string value and keeps its key, and a
 //!   match error stops the scan with the entries collected so far.
+//! - An entry's string value is PHP's string conversion: an object runs `__toString()` (or
+//!   throws PHP's conversion `Error`), and an array warns and matches as `"Array"`.
 //! - Unlike the other eval `preg_*` builtins, which treat a malformed pattern as a runtime
 //!   fatal, an invalid pattern returns `false` with `PREG_INTERNAL_ERROR`, like the AOT
 //!   prelude and PHP.
@@ -36,12 +38,13 @@ pub(in crate::interpreter) fn eval_builtin_preg_grep(
         .iter()
         .map(|arg| eval_expr(arg, context, scope, values))
         .collect::<Result<Vec<_>, _>>()?;
-    eval_preg_grep_values_result(&evaluated, values)
+    eval_preg_grep_values_result(&evaluated, context, values)
 }
 
 /// Dispatches by-value `preg_grep()` calls after argument binding.
 pub(in crate::interpreter) fn eval_preg_grep_values_result(
     evaluated_args: &[RuntimeCellHandle],
+    context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     let (pattern, array, flags) = match evaluated_args {
@@ -50,7 +53,7 @@ pub(in crate::interpreter) fn eval_preg_grep_values_result(
         _ => return Err(EvalStatus::RuntimeFatal),
     };
     let flags = flags.map_or(Ok(0), |flags| eval_int_value(flags, values))?;
-    eval_preg_grep_result(pattern, array, flags & EVAL_PREG_GREP_INVERT != 0, values)
+    eval_preg_grep_result(pattern, array, flags & EVAL_PREG_GREP_INVERT != 0, context, values)
 }
 
 /// Returns the entries of `array` whose string value matches (or, inverted, does not).
@@ -58,6 +61,7 @@ pub(in crate::interpreter) fn eval_preg_grep_result(
     pattern: RuntimeCellHandle,
     array: RuntimeCellHandle,
     invert: bool,
+    context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     let regex = match eval_preg_regex(pattern, values) {
@@ -73,8 +77,7 @@ pub(in crate::interpreter) fn eval_preg_grep_result(
     for position in 0..len {
         let key = values.array_iter_key(array, position)?;
         let value = values.array_get(array, key)?;
-        let subject = values.cast_string(value)?;
-        let subject = values.string_bytes(subject)?;
+        let subject = eval_preg_grep_subject(value, context, values)?;
         let matched = regex.is_match(&subject);
         if eval_preg_failed() {
             break;
@@ -84,4 +87,37 @@ pub(in crate::interpreter) fn eval_preg_grep_result(
         }
     }
     Ok(result)
+}
+
+/// Converts one entry to the bytes PHP matches: `__toString()` for objects (PHP's `Error`
+/// without one), `"Array"` with PHP's warning for arrays, the scalar string otherwise.
+fn eval_preg_grep_subject(
+    value: RuntimeCellHandle,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<Vec<u8>, EvalStatus> {
+    let tag = values.type_tag(value)?;
+    if matches!(tag, EVAL_TAG_ARRAY | EVAL_TAG_ASSOC) {
+        values.warning("Warning: Array to string conversion\n")?;
+        return Ok(b"Array".to_vec());
+    }
+    if tag == EVAL_TAG_CALLABLE {
+        return eval_throw_error(
+            "Object of class Closure could not be converted to string",
+            context,
+            values,
+        );
+    }
+    if tag == EVAL_TAG_STRING {
+        return values.string_bytes(value);
+    }
+    // Both the `__toString()` result and the scalar cast are temporaries this call owns.
+    let converted = if tag == EVAL_TAG_OBJECT {
+        eval_string_context_value(value, context, values)?
+    } else {
+        values.cast_string(value)?
+    };
+    let bytes = values.string_bytes(converted);
+    values.release(converted)?;
+    bytes
 }
