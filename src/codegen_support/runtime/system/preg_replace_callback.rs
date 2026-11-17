@@ -216,41 +216,17 @@ pub(crate) fn emit_preg_replace_callback(emitter: &mut Emitter) {
     emitter.label("__rt_preg_replace_callback_scan_found");
     emitter.instruction(&format!("str x12, [sp, #{}]", max_group_off));         // save highest capture index to materialize
 
-    // -- build callback matches array from capture slots --
+    // -- build the callback's $matches through the shared row builder --
+    // php hands the callback the same row preg_match() builds: a dense list, or an ordered hash
+    // with each group name before its number (and a trailing `MARK`) when the pattern names a
+    // group or passes a `(*MARK)` verb. The offsets index the bytes at the search cursor.
     emitter.label("__rt_preg_replace_callback_matches");
-    emitter.instruction(&format!("ldr x0, [sp, #{}]", nmatch_off));             // allocate enough slots for every compiled capture
-    emitter.instruction("mov x1, #16");                                         // string array slots store pointer and length pairs
-    emitter.instruction("bl __rt_array_new");                                   // allocate indexed string matches array
-    emitter.instruction(&format!("str x0, [sp, #{}]", matches_array_off));      // save matches array pointer across pushes
-    emitter.instruction("mov x12, #0");                                         // start with $matches[0]
-    emitter.instruction(&format!("str x12, [sp, #{}]", group_idx_off));         // save current capture index
-    emitter.label("__rt_preg_replace_callback_group_loop");
-    emitter.instruction(&format!("ldr x12, [sp, #{}]", group_idx_off));         // reload current capture index
-    emitter.instruction(&format!("ldr x13, [sp, #{}]", max_group_off));         // reload highest capture index
-    emitter.instruction("cmp x12, x13");                                        // have all required captures been materialized?
-    emitter.instruction("b.gt __rt_preg_replace_callback_call");                // invoke callback after the highest populated capture
-    emitter.instruction("lsl x14, x12, #4");                                    // scale capture index by the fixed 16-byte pair stride
-    emitter.instruction(&format!("ldr x17, [sp, #{}]", regmatches_ptr_off));    // load dynamic offset-pair buffer base
-    emitter.instruction("add x14, x17, x14");                                   // compute address of this offset pair
-    emitter.instruction("ldr x15, [x14]");                                      // load signed-64-bit capture start
-    emitter.instruction("ldr x16, [x14, #8]");                                  // load signed-64-bit capture end
-    emitter.instruction("cmp x15, #0");                                         // check whether this capture was populated
-    emitter.instruction("b.lt __rt_preg_replace_callback_empty_capture");       // emit an empty string for interior unmatched captures
-    emitter.instruction("sub x2, x16, x15");                                    // compute capture byte length
-    emitter.instruction(&format!("ldr x1, [sp, #{}]", current_pos_off));        // reload current subject cursor
-    emitter.instruction("add x1, x1, x15");                                     // compute capture byte pointer
-    emitter.instruction("b __rt_preg_replace_callback_push_capture");           // append matched capture text
-    emitter.label("__rt_preg_replace_callback_empty_capture");
-    emitter.instruction("mov x1, #0");                                          // empty unmatched capture has a null pointer
-    emitter.instruction("mov x2, #0");                                          // empty unmatched capture has zero length
-    emitter.label("__rt_preg_replace_callback_push_capture");
-    emitter.instruction(&format!("ldr x0, [sp, #{}]", matches_array_off));      // reload matches array pointer
-    emitter.instruction("bl __rt_array_push_str");                              // append owned capture string to matches array
-    emitter.instruction(&format!("str x0, [sp, #{}]", matches_array_off));      // save possibly grown matches array pointer
-    emitter.instruction(&format!("ldr x12, [sp, #{}]", group_idx_off));         // reload current capture index after helper call
-    emitter.instruction("add x12, x12, #1");                                    // advance to next capture slot
-    emitter.instruction(&format!("str x12, [sp, #{}]", group_idx_off));         // save next capture index
-    emitter.instruction("b __rt_preg_replace_callback_group_loop");             // continue materializing capture strings
+    emitter.instruction(&format!("ldr x0, [sp, #{}]", handle_off));             // the compiled pattern owns the name table and the mark
+    emitter.instruction(&format!("ldr x1, [sp, #{}]", regmatches_ptr_off));     // the offset-pair vector of this match
+    emitter.instruction(&format!("ldr x2, [sp, #{}]", max_group_off));          // the highest populated capture index
+    emitter.instruction(&format!("ldr x3, [sp, #{}]", current_pos_off));        // the bytes those offsets index into
+    emitter.instruction("bl __rt_preg_match_row");                              // build the list or hash row (x0 = storage, x1 = tag)
+    emitter.instruction(&format!("str x0, [sp, #{}]", matches_array_off));      // keep the owned row for the callback and its release
 
     // -- invoke callback and append its string result --
     emitter.label("__rt_preg_replace_callback_call");
@@ -265,7 +241,7 @@ pub(crate) fn emit_preg_replace_callback(emitter: &mut Emitter) {
     emitter.instruction(&format!("str x2, [sp, #{}]", callback_result_len_off)); // save persisted callback result length across prefix copying
     emitter.instruction(&format!("ldr x0, [sp, #{}]", matches_array_off));      // reload the matches array now that the callback has returned
     emitter.instruction(&format!("str xzr, [sp, #{}]", matches_array_off));     // drop the slot before releasing the helper's reference
-    emitter.instruction("bl __rt_decref_array");                                // release the matches array unless the callback retained it
+    emitter.instruction("bl __rt_decref_any");                                // release the matches array unless the callback retained it
 
     // -- copy unmatched prefix into the dedicated output buffer --
     emitter.instruction(&format!("ldr x9, [sp, #{}]", prefix_len_off));         // reload unmatched prefix byte count
@@ -627,41 +603,16 @@ fn emit_preg_replace_callback_linux_x86_64(emitter: &mut Emitter) {
     emitter.label("__rt_preg_replace_callback_scan_found_linux_x86_64");
     emitter.instruction(&format!("mov QWORD PTR [rsp + {}], r9", max_group_off)); // save highest capture index to materialize
 
-    // -- build callback matches array from capture slots --
-    emitter.instruction(&format!("mov rdi, QWORD PTR [rsp + {}]", nmatch_off)); // allocate enough slots for every compiled capture
-    emitter.instruction("mov rsi, 16");                                         // string array slots store pointer and length pairs
-    emitter.instruction("call __rt_array_new");                                 // allocate indexed string matches array
-    emitter.instruction(&format!("mov QWORD PTR [rsp + {}], rax", matches_array_off)); // save matches array pointer across pushes
-    emitter.instruction(&format!("mov QWORD PTR [rsp + {}], 0", group_idx_off)); // start with $matches[0]
-    emitter.label("__rt_preg_replace_callback_group_loop_linux_x86_64");
-    emitter.instruction(&format!("mov r10, QWORD PTR [rsp + {}]", group_idx_off)); // reload current capture index
-    emitter.instruction(&format!("mov r9, QWORD PTR [rsp + {}]", max_group_off)); // reload highest capture index
-    emitter.instruction("cmp r10, r9");                                         // have all required captures been materialized?
-    emitter.instruction("jg __rt_preg_replace_callback_call_linux_x86_64");     // invoke callback after highest populated capture
-    emitter.instruction("shl r10, 4");                                          // scale capture index by the fixed 16-byte pair stride
-    emitter.instruction(&format!("mov r12, QWORD PTR [rsp + {}]", regmatches_ptr_off)); // load dynamic offset-pair buffer base
-    emitter.instruction("add r10, r12");                                        // compute address of this offset pair
-    emitter.instruction("mov r11, QWORD PTR [r10]");                            // load signed-64-bit capture start
-    emitter.instruction("mov rcx, QWORD PTR [r10 + 8]");                        // load signed-64-bit capture end
-    emitter.instruction("cmp r11, 0");                                          // check whether this capture was populated
-    emitter.instruction("jl __rt_preg_replace_callback_empty_capture_linux_x86_64"); // emit an empty string for interior unmatched captures
-    emitter.instruction("sub rcx, r11");                                        // compute capture byte length
-    emitter.instruction(&format!("mov rsi, QWORD PTR [rsp + {}]", current_pos_off)); // reload current subject cursor
-    emitter.instruction("add rsi, r11");                                        // compute capture byte pointer
-    emitter.instruction("jmp __rt_preg_replace_callback_push_capture_linux_x86_64"); // append matched capture text
-    emitter.label("__rt_preg_replace_callback_empty_capture_linux_x86_64");
-    emitter.instruction("xor esi, esi");                                        // empty unmatched capture has a null pointer
-    emitter.instruction("xor edx, edx");                                        // empty unmatched capture has zero length
-    emitter.label("__rt_preg_replace_callback_push_capture_linux_x86_64");
-    emitter.instruction(&format!("mov rdi, QWORD PTR [rsp + {}]", matches_array_off)); // reload matches array pointer
-    emitter.instruction("test r11, r11");                                       // was the current capture matched?
-    emitter.instruction("cmovge rdx, rcx");                                     // pass capture byte length for matched captures
-    emitter.instruction("call __rt_array_push_str");                            // append owned capture string to matches array
-    emitter.instruction(&format!("mov QWORD PTR [rsp + {}], rax", matches_array_off)); // save possibly grown matches array pointer
-    emitter.instruction(&format!("mov r10, QWORD PTR [rsp + {}]", group_idx_off)); // reload current capture index after helper call
-    emitter.instruction("add r10, 1");                                          // advance to next capture slot
-    emitter.instruction(&format!("mov QWORD PTR [rsp + {}], r10", group_idx_off)); // save next capture index
-    emitter.instruction("jmp __rt_preg_replace_callback_group_loop_linux_x86_64"); // continue materializing capture strings
+    // -- build the callback's $matches through the shared row builder --
+    // php hands the callback the same row preg_match() builds: a dense list, or an ordered hash
+    // with each group name before its number (and a trailing `MARK`) when the pattern names a
+    // group or passes a `(*MARK)` verb. The offsets index the bytes at the search cursor.
+    emitter.instruction(&format!("mov rdi, QWORD PTR [rsp + {}]", handle_off)); // the compiled pattern owns the name table and the mark
+    emitter.instruction(&format!("mov rsi, QWORD PTR [rsp + {}]", regmatches_ptr_off)); // the offset-pair vector of this match
+    emitter.instruction(&format!("mov rdx, QWORD PTR [rsp + {}]", max_group_off)); // the highest populated capture index
+    emitter.instruction(&format!("mov rcx, QWORD PTR [rsp + {}]", current_pos_off)); // the bytes those offsets index into
+    emitter.instruction("call __rt_preg_match_row");                            // build the list or hash row (rax = storage, rdx = tag)
+    emitter.instruction(&format!("mov QWORD PTR [rsp + {}], rax", matches_array_off)); // keep the owned row for the callback and its release
 
     // -- invoke callback and append its string result --
     emitter.label("__rt_preg_replace_callback_call_linux_x86_64");
@@ -676,7 +627,7 @@ fn emit_preg_replace_callback_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction(&format!("mov QWORD PTR [rsp + {}], rdx", callback_result_len_off)); // save persisted callback result length across prefix copying
     emitter.instruction(&format!("mov rax, QWORD PTR [rsp + {}]", matches_array_off)); // reload the matches array now that the callback has returned
     emitter.instruction(&format!("mov QWORD PTR [rsp + {}], 0", matches_array_off)); // drop the slot before releasing the helper's reference
-    emitter.instruction("call __rt_decref_array");                              // release the matches array unless the callback retained it
+    emitter.instruction("call __rt_decref_any");                              // release the matches array unless the callback retained it
 
     // -- copy unmatched prefix into the dedicated output buffer --
     emitter.instruction(&format!("mov r9, QWORD PTR [rsp + {}]", prefix_len_off)); // reload unmatched prefix byte count
@@ -978,7 +929,7 @@ fn emit_preg_replace_callback_unlink_boundary(emitter: &mut Emitter, handler_off
 ///
 /// The output pointer is the stack slot growth updates, not a callee-saved
 /// register `setjmp` restored to its pre-growth value. The matches array is
-/// released with `__rt_decref_array` so a callback that stored it keeps the
+/// released with `__rt_decref_any` so a callback that stored it keeps the
 /// surviving reference. `_exc_value` stays set so `__rt_throw_current`
 /// rethrows the original exception.
 fn emit_preg_replace_callback_rethrow(
@@ -998,7 +949,7 @@ fn emit_preg_replace_callback_rethrow(
         Arch::AArch64 => {
             emitter.instruction(&format!("ldr x0, [sp, #{}]", matches_off));    // reload the matches array the callback may have retained
             emitter.instruction(&format!("str xzr, [sp, #{}]", matches_off));   // drop the slot before releasing the helper's reference
-            emitter.instruction("bl __rt_decref_array");                        // release the matches array unless the callback retained it
+            emitter.instruction("bl __rt_decref_any");                        // release the matches array unless the callback retained it
             for off in [subject_off, output_off, result_off] {
                 emitter.instruction(&format!("ldr x0, [sp, #{}]", off));        // load one helper-owned heap pointer
                 emitter.instruction(&format!("str xzr, [sp, #{}]", off));       // drop the slot before the free
@@ -1015,7 +966,7 @@ fn emit_preg_replace_callback_rethrow(
         Arch::X86_64 => {
             emitter.instruction(&format!("mov rax, QWORD PTR [rsp + {}]", matches_off)); // reload the matches array the callback may have retained
             emitter.instruction(&format!("mov QWORD PTR [rsp + {}], 0", matches_off)); // drop the slot before releasing the helper's reference
-            emitter.instruction("call __rt_decref_array");                      // release the matches array unless the callback retained it
+            emitter.instruction("call __rt_decref_any");                      // release the matches array unless the callback retained it
             for off in [subject_off, output_off, result_off] {
                 emitter.instruction(&format!("mov rax, QWORD PTR [rsp + {}]", off)); // load one helper-owned heap pointer
                 emitter.instruction(&format!("mov QWORD PTR [rsp + {}], 0", off)); // drop the slot before the free
@@ -1093,7 +1044,7 @@ mod tests {
             .find("__rt_throw_current")
             .expect("throw path rethrows");
         let body = &region[..rethrow_at];
-        let matches = released_slots(body, arch, "__rt_decref_array");
+        let matches = released_slots(body, arch, "__rt_decref_any");
         let buffers = released_slots(body, arch, "__rt_heap_free_safe");
         assert_eq!(
             matches.len(),

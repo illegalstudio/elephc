@@ -2986,6 +2986,41 @@ echo $result;
     assert_eq!(out, "price: [123] and [456]");
 }
 
+/// Verifies the callback's `$matches` is php's row: named groups before their numbers, the
+/// interior unmatched group as "", a trailing `MARK`, and a retained row keeps its keys.
+#[test]
+fn test_preg_replace_callback_named_groups_and_mark_row() {
+    let out = compile_and_run(
+        r#"<?php
+echo preg_replace_callback('~(?<word>[a-z]+)(*:77)~', function (array $row): string {
+    return json_encode($row);
+}, 'one'), "\n";
+echo preg_replace_callback('~(?<w>[a-z])(\d)?(x)~', fn(array $m): string => json_encode($m), 'ax b1x'), "\n";
+echo preg_replace_callback('~([a-z])(\d)?~', fn(array $m): string => json_encode($m), 'a b1'), "\n";
+$kept = [];
+echo preg_replace_callback('~(?<k>\w)=(?<v>\d+)~', function (array $m) use (&$kept): string {
+    $kept[] = $m;
+    return $m['k'] . ':' . $m['v'] . '/' . $m[2];
+}, 'a=1,b=22', -1, $count), "|$count\n";
+echo json_encode($kept), "\n";
+try {
+    preg_replace_callback('~(?<n>x)~', function (array $m): string { throw new Exception($m['n']); }, 'xx');
+} catch (Exception $e) { echo get_class($e), ":", $e->getMessage(), "\n"; }
+"#,
+    );
+    assert_eq!(
+        out,
+        concat!(
+            "{\"0\":\"one\",\"word\":\"one\",\"1\":\"one\",\"MARK\":\"77\"}\n",
+            "{\"0\":\"ax\",\"w\":\"a\",\"1\":\"a\",\"2\":\"\",\"3\":\"x\"} {\"0\":\"b1x\",\"w\":\"b\",\"1\":\"b\",\"2\":\"1\",\"3\":\"x\"}\n",
+            "[\"a\",\"a\"] [\"b1\",\"b\",\"1\"]\n",
+            "a:1/1,b:22/22|2\n",
+            "[{\"0\":\"a=1\",\"k\":\"a\",\"1\":\"a\",\"v\":\"1\",\"2\":\"1\"},{\"0\":\"b=22\",\"k\":\"b\",\"1\":\"b\",\"v\":\"22\",\"2\":\"22\"}]\n",
+            "Exception:x\n",
+        )
+    );
+}
+
 /// Verifies a nested regex in the callback cannot free the outer replacement subject.
 ///
 /// Heap debugging poisons released blocks, so the output assertion also catches a
