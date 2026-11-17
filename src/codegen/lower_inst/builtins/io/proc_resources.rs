@@ -184,14 +184,15 @@ pub(crate) fn lower_elephc_proc_resource(
 fn publish_proc_release(ctx: &mut FunctionContext<'_>) {
     let entry = ctx.emitter.target.extern_symbol("elephc_proc_release");
     let slot = crate::codegen_support::runtime::data::PROC_RELEASE_SLOT;
+    // -- publish elephc_proc_release into the runtime's kind-11 destructor slot --
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
-            abi::emit_extern_symbol_address(ctx.emitter, "x9", &entry);
-            abi::emit_symbol_address(ctx.emitter, "x10", slot);
+            abi::emit_extern_symbol_address(ctx.emitter, "x9", &entry);         // load the bridge release entry address through the GOT
+            abi::emit_symbol_address(ctx.emitter, "x10", slot);                 // load the address of the runtime release slot
             ctx.emitter.instruction("str x9, [x10]");                           // publish the elephc-proc release entry into its runtime slot
         }
         Arch::X86_64 => {
-            abi::emit_extern_symbol_address(ctx.emitter, "r9", &entry);
+            abi::emit_extern_symbol_address(ctx.emitter, "r9", &entry);         // load the bridge release entry address through the GOT
             abi::emit_store_reg_to_symbol(ctx.emitter, "r9", slot, 0);          // publish the elephc-proc release entry into its runtime slot
         }
     }

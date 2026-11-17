@@ -150,6 +150,7 @@ pub fn emit_mixed_free_deep(emitter: &mut Emitter, features: RuntimeFeatures) {
 
     emitter.instruction("b.eq __rt_mixed_free_deep_resource_curl_share");       // CurlShareHandle needs curl_share_cleanup via the elephc_curl bridge (a no-op if persistent)
 
+    // -- kind 11: a proc_open() process resource --
     emitter.instruction("cmp x9, #11");                                         // is the resource a proc_open() process?
 
     emitter.instruction("b.eq __rt_mixed_free_deep_resource_proc");             // processes are reaped through the published elephc_proc slot
@@ -246,11 +247,13 @@ pub fn emit_mixed_free_deep(emitter: &mut Emitter, features: RuntimeFeatures) {
     emitter.instruction("b __rt_mixed_free_deep_box");                          // free the mixed box after releasing the handle
 
 
+    // -- kind 11: release a proc_open() process dropped without proc_close() --
     emitter.label("__rt_mixed_free_deep_resource_proc");
     emitter.instruction("ldr x0, [x0, #8]");                                    // load the bridge process id (>= 1 << 40) from the low payload word
 
     emitter.instruction("tbnz x0, #63, __rt_mixed_free_deep_box");              // proc_close() leaves a negative closed sentinel: nothing left to release
-    crate::codegen_support::abi::emit_load_symbol_to_reg(emitter, "x9", crate::codegen_support::runtime::data::PROC_RELEASE_SLOT, 0);
+    // -- call the bridge release entry the proc_open() lowering published --
+    crate::codegen_support::abi::emit_load_symbol_to_reg(emitter, "x9", crate::codegen_support::runtime::data::PROC_RELEASE_SLOT, 0); // load the published elephc_proc_release entry
     emitter.instruction("cbz x9, __rt_mixed_free_deep_box");                    // no proc_open() call published the bridge release entry
 
     emitter.instruction("blr x9");                                              // release the pipes and reap the child without blocking
@@ -377,6 +380,7 @@ fn emit_mixed_free_deep_linux_x86_64(emitter: &mut Emitter, features: RuntimeFea
 
     emitter.instruction("je __rt_mixed_free_deep_resource_curl_share");         // CurlShareHandle needs curl_share_cleanup via the elephc_curl bridge (a no-op if persistent)
 
+    // -- kind 11: a proc_open() process resource --
     emitter.instruction("cmp r9, 11");                                          // is the resource a proc_open() process?
 
     emitter.instruction("je __rt_mixed_free_deep_resource_proc");               // processes are reaped through the published elephc_proc slot
@@ -469,13 +473,15 @@ fn emit_mixed_free_deep_linux_x86_64(emitter: &mut Emitter, features: RuntimeFea
     emitter.instruction("jmp __rt_mixed_free_deep_box");                        // free the mixed box after releasing the handle
 
 
+    // -- kind 11: release a proc_open() process dropped without proc_close() --
     emitter.label("__rt_mixed_free_deep_resource_proc");
     emitter.instruction("mov rdi, QWORD PTR [rax + 8]");                        // load the bridge process id (>= 1 << 40) from the low payload word
 
     emitter.instruction("test rdi, rdi");                                       // proc_close() leaves a negative closed sentinel
 
     emitter.instruction("js __rt_mixed_free_deep_box");                         // an already closed process has nothing left to release
-    crate::codegen_support::abi::emit_load_symbol_to_reg(emitter, "r9", crate::codegen_support::runtime::data::PROC_RELEASE_SLOT, 0);
+    // -- call the bridge release entry the proc_open() lowering published --
+    crate::codegen_support::abi::emit_load_symbol_to_reg(emitter, "r9", crate::codegen_support::runtime::data::PROC_RELEASE_SLOT, 0); // load the published elephc_proc_release entry
     emitter.instruction("test r9, r9");                                         // did a proc_open() call publish the bridge release entry?
 
     emitter.instruction("jz __rt_mixed_free_deep_box");                         // no published entry: nothing to release
