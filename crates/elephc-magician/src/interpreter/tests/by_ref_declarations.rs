@@ -10,8 +10,9 @@
 //! - Every expected string is `php -n` 8.5.6's output on the same fragment.
 //! - SCOPE: this is the DECLARATION, not the binding. Called by value -- which is how almost all
 //!   PHP code calls them -- a by-reference function is indistinguishable from a by-value one, and
-//!   that is what these tests assert. `$r = &f();` is a different construct and is still refused;
-//!   the refusal is pinned in the parser tests so a later fix has to change it deliberately.
+//!   that is what these tests assert. `$r = &f();` is a different construct: the parser accepts
+//!   the bind (`parse_fragment_accepts_a_by_ref_declaration_and_a_bind_to_its_result`), and what
+//!   it does is measured against `php -n` in `by_ref_return`.
 //! - The marker is RECORDED rather than skipped, because PHP's rule is one-directional: an
 //!   implementation may ADD `&` where its interface does not ask for it, but dropping one the
 //!   interface requires is a fatal.

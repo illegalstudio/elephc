@@ -193,7 +193,8 @@ impl FakeOps {
 /// string is 0.
 fn fake_leading_numeric_value(bytes: &[u8]) -> f64 {
     let text = String::from_utf8_lossy(bytes);
-    let trimmed = text.trim_start();
+    // php's numeric grammar skips only these six ASCII bytes, not every Unicode space.
+    let trimmed = text.trim_start_matches([' ', '\t', '\n', '\r', '\x0b', '\x0c']);
     let raw = trimmed.as_bytes();
     let mut end = 0;
     if end < raw.len() && matches!(raw[end], b'+' | b'-') {

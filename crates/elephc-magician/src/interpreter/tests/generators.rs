@@ -382,9 +382,9 @@ foreach (t10() as $v) { echo $v; }"#
 /// `php -n` 8.5.6 prints `1fin3;|after` for this shape: dropping the last reference to a
 /// suspended generator runs the `finally` of the `try` its yield was inside.
 ///
-/// The reference is dropped with `unset` rather than by abandoning a `foreach`, because a
-/// `foreach` subject that is a temporary is never released by the loop at all — a pre-existing
-/// ownership gap that predates generators and would make this test measure that instead.
+/// The reference is dropped with `unset` rather than by abandoning a `foreach`, so the test
+/// names the one release it is about: the generator's, not the loop's (a `foreach` subject the
+/// loop allocated is covered on its own in `foreach_object`).
 #[test]
 fn abandoning_a_generator_runs_the_finally_it_was_suspended_in() {
     assert_eq!(
