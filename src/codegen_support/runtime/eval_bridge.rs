@@ -745,3 +745,6 @@ mod tests {
         body
     }
 }
+
+#[cfg(test)]
+mod memoir_ownership_tests;
