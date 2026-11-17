@@ -154,7 +154,11 @@ fn trace_string_fn() -> Stmt {
                     ),
                     append(e_concat(frame("function"), e_str("("))),
                     if_(
-                        has("args"),
+                        e_binop(
+                            has("args"),
+                            BinOp::And,
+                            e_call("is_array", vec![frame("args")]),
+                        ),
                         vec![
                             s_assign("sep", e_str("")),
                             s_foreach(
@@ -215,4 +219,20 @@ fn to_string_fn() -> Stmt {
             ])),
         ])
         .build()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A frame whose `args` key exists but is not an array (php skips it) must not reach the
+    /// argument `foreach`: the rendered function has to test `is_array` on the entry.
+    #[test]
+    fn trace_string_guards_the_args_foreach_with_is_array() {
+        let dump = format!("{:?}", trace_string_fn());
+        assert!(
+            dump.contains("is_array"),
+            "getTraceAsString() must only walk an array `args` entry: {dump}"
+        );
+    }
 }
