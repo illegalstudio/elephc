@@ -166,7 +166,8 @@ fn test_counter_fast_paths_emit_for_every_supported_target() {
     let path = fixture.0.join("main.php");
     fs::write(&path, r#"<?php
 function targetCounter(int $n): int {
-    $sum = 0;
+    // A non-zero seed keeps the counted-loop reduction out and exercises the raw counter path.
+    $sum = 1;
     for ($i = 0; $i <= $n; $i++) { $sum += 1; }
     return $sum;
 }

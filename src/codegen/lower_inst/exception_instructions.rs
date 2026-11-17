@@ -77,10 +77,17 @@ pub(super) fn lower_try_push_handler(ctx: &mut FunctionContext<'_>, inst: &Instr
 }
 
 /// Pops an EIR exception handler and restores the saved diagnostic-suppression depth.
+///
+/// A longjmp out of an `@` expression skips `ErrorSuppressEnd`, so when the restored depth is
+/// lower than the live one this also reloads the reporting mask saved for that depth. The mask
+/// stays untouched when no suppressed scope was unwound, which preserves an explicit
+/// `error_reporting()` call made inside the `try` body.
 pub(super) fn lower_try_pop_handler(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     let token = expect_i64(inst)?;
     let handler_offset = ctx.try_handler_offset(token)?;
     let scratch = abi::temp_int_reg(ctx.emitter.target);
+    let current = abi::int_result_reg(ctx.emitter);
+    let mask_base = abi::tertiary_scratch_reg(ctx.emitter);
     ctx.emitter.comment("pop EIR exception handler");
     abi::load_at_offset(ctx.emitter, scratch, handler_offset);
     abi::emit_store_reg_to_symbol(ctx.emitter, scratch, "_exc_handler_top", 0);
@@ -89,7 +96,36 @@ pub(super) fn lower_try_pop_handler(ctx: &mut FunctionContext<'_>, inst: &Instru
         scratch,
         handler_offset - TRY_HANDLER_DIAG_DEPTH_OFFSET,
     );
+    abi::emit_load_symbol_to_reg(ctx.emitter, current, "_rt_diag_suppression", 0);
     abi::emit_store_reg_to_symbol(ctx.emitter, scratch, "_rt_diag_suppression", 0);
+    let restored = ctx.next_label("try_pop_mask_restored");
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction(&format!("cmp {current}, {scratch}"));      // did the handler unwind any @ scope?
+            ctx.emitter.instruction(&format!("b.le {restored}"));               // no suppression scope ended: keep error_reporting()
+            ctx.emitter.instruction(&format!("cmp {scratch}, #256"));           // is the restored depth addressable in the mask stack?
+            ctx.emitter.instruction(&format!("b.hs {restored}"));               // an impossible depth has no saved mask
+            abi::emit_symbol_address(ctx.emitter, mask_base, "_rt_diag_mask_stack");
+            ctx.emitter.instruction(&format!(
+                "ldr {current}, [{mask_base}, {scratch}, lsl #3]"
+            ));                                                                 // reload the mask active before the unwound @
+            abi::emit_symbol_address(ctx.emitter, mask_base, "_php_error_reporting");
+            ctx.emitter.instruction(&format!("str {current}, [{mask_base}]"));  // restore the caller-visible reporting level
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction(&format!("cmp {current}, {scratch}"));      // did the handler unwind any @ scope?
+            ctx.emitter.instruction(&format!("jle {restored}"));                // no suppression scope ended: keep error_reporting()
+            ctx.emitter.instruction(&format!("cmp {scratch}, 256"));            // is the restored depth addressable in the mask stack?
+            ctx.emitter.instruction(&format!("jae {restored}"));                // an impossible depth has no saved mask
+            abi::emit_symbol_address(ctx.emitter, mask_base, "_rt_diag_mask_stack");
+            ctx.emitter.instruction(&format!(
+                "mov {current}, QWORD PTR [{mask_base} + {scratch} * 8]"
+            ));                                                                 // reload the mask active before the unwound @
+            abi::emit_symbol_address(ctx.emitter, mask_base, "_php_error_reporting");
+            ctx.emitter.instruction(&format!("mov QWORD PTR [{mask_base}], {current}")); // restore the caller-visible reporting level
+        }
+    }
+    ctx.emitter.label(&restored);
     Ok(())
 }
 

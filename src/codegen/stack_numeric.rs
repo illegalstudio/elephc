@@ -26,7 +26,7 @@
 
 use crate::ir::{
     Function, Immediate, InstId, IrHeapKind, IrType, LocalKind, LocalSlotId, Op, Ownership,
-    ValueDef, ValueId,
+    RuntimeCallTarget, RuntimeFnId, ValueDef, ValueId,
 };
 use crate::types::PhpType;
 use std::cell::RefCell;
@@ -416,6 +416,7 @@ impl Proof<'_> {
                     _ if (domain::comparison(user) || domain::identity(user))
                         && self.numeric_inputs(&user.operands) => true,
                     _ if tagged_producer(user) && self.numeric_inputs(&user.operands) => true,
+                    _ if numeric_cell_observation(user) => true,
                     Op::StoreLocal => match user.immediate {
                         Some(Immediate::LocalSlot(slot)) => {
                             stores.insert(slot);
@@ -585,6 +586,11 @@ impl Proof<'_> {
                 if inst.op == Op::Release {
                     return true;
                 }
+                // Output consumes the scalar payload by value: it formats the current numeric
+                // tag into scratch without retaining or freeing the frame cell.
+                if matches!(inst.op, Op::EchoValue | Op::PrintValue) {
+                    return self.stable_read(load, user);
+                }
                 // Strict identity copies the tag and payload like an ordered comparison.
                 if domain::identity(inst) && self.numeric_inputs(&inst.operands) {
                     return self.stable_read(load, user);
@@ -598,6 +604,7 @@ impl Proof<'_> {
                 if !scalar_observation(inst)
                     && !output_observation(inst)
                     && !tag_or_payload_copy(inst)
+                    && !numeric_cell_observation(inst)
                     && !arithmetic
                     && !comparison
                     && !key_observation(inst, value)
@@ -704,6 +711,25 @@ pub(super) fn numeric_identity(function: &Function, proven: &HashSet<ValueId>, i
 /// Shares the complete scalar-origin proof with retirement, without admitting any pointer escape.
 pub(super) fn numeric_value(function: &Function, proven: &HashSet<ValueId>, value: ValueId) -> bool {
     proven.contains(&value) || domain::inputs(function, &[value])
+}
+
+/// Returns whether a runtime call only observes a proven numeric cell's tag or payload.
+///
+/// `is_finite()` reads the scalar tag and payload, and `floor()` converts the payload to a
+/// double. Neither retains the cell or publishes it to another owner, so a frame cell may feed
+/// them across the guarded exactness checks of a reduced accumulator loop.
+fn numeric_cell_observation(inst: &crate::ir::Instruction) -> bool {
+    matches!(
+        inst.immediate,
+        Some(Immediate::RuntimeCall(RuntimeCallTarget::Function(
+            RuntimeFnId::IsFinite | RuntimeFnId::Floor
+        ))) | Some(Immediate::RuntimeCall(
+            RuntimeCallTarget::ProfiledFunction {
+                target: RuntimeFnId::IsFinite | RuntimeFnId::Floor,
+                ..
+            }
+        ))
+    )
 }
 
 /// Reads a numeric tag or copies an integer payload, as a guarded counter entry does.

@@ -336,6 +336,33 @@ const DIVISION_BY_ZERO_MESSAGE: &str = "Division by zero";
 /// The php-src wording for `<<` / `>>` with a negative shift count.
 const NEGATIVE_SHIFT_MESSAGE: &str = "Bit shift by negative number";
 
+/// Lowers the fill-loop remainder rotation: `a + 1`, or zero when that reaches `b`.
+pub(super) fn lower_int_wrap_increment(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+) -> Result<()> {
+    let value = expect_operand(inst, 0)?;
+    let divisor = expect_operand(inst, 1)?;
+    let result_reg = abi::int_result_reg(ctx.emitter);
+    let divisor_reg = abi::secondary_scratch_reg(ctx.emitter);
+    load_integer_operand(ctx, value, result_reg, inst)?;
+    load_integer_operand(ctx, divisor, divisor_reg, inst)?;
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction(&format!("add {result_reg}, {result_reg}, #1")); // increment the rotating remainder
+            ctx.emitter.instruction(&format!("cmp {result_reg}, {divisor_reg}")); // did it reach the divisor?
+            ctx.emitter.instruction(&format!("csel {result_reg}, {result_reg}, xzr, ne")); // wrap to zero when it did
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction(&format!("add {result_reg}, 1"));           // increment the rotating remainder
+            ctx.emitter.instruction("xor ecx, ecx");                            // zero the wrap source before the compare
+            ctx.emitter.instruction(&format!("cmp {result_reg}, {divisor_reg}")); // did it reach the divisor?
+            ctx.emitter.instruction(&format!("cmove {result_reg}, rcx"));       // wrap to zero when it did
+        }
+    }
+    store_if_result(ctx, inst)
+}
+
 /// Lowers a signed integer modulo operation with PHP's zero-divisor and overflow guards.
 ///
 /// Reference PHP 8.4 raises a catchable `DivisionByZeroError("Modulo by zero")` for `$x % 0`
@@ -350,39 +377,143 @@ pub(super) fn lower_int_mod(ctx: &mut FunctionContext<'_>, inst: &Instruction) -
     let rhs_reg = abi::secondary_scratch_reg(ctx.emitter);
     load_integer_operand(ctx, lhs, result_reg, inst)?;
     load_integer_operand(ctx, rhs, rhs_reg, inst)?;
+    let constant = integer_rhs_constant(ctx.function, rhs);
+    if matches!(constant, Some(1) | Some(-1)) {
+        abi::emit_load_int_immediate(ctx.emitter, result_reg, 0);
+        return store_if_result(ctx, inst);
+    }
     let zero_label = ctx.next_label("mod_zero");
     let done_label = ctx.next_label("mod_done");
+    let guarded = !matches!(constant, Some(value) if value != 0);
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
             let quotient_reg = abi::tertiary_scratch_reg(ctx.emitter);
-            ctx.emitter.instruction(
-                &format!("cbz {}, {}", rhs_reg, zero_label)
-            );                                                                  // branch to the zero-divisor throw when the modulo divisor is zero
+            if guarded {
+                ctx.emitter.instruction(
+                    &format!("cbz {}, {}", rhs_reg, zero_label)
+                );                                                              // branch to the zero-divisor throw when the modulo divisor is zero
+            }
             ctx.emitter.instruction(
                 &format!("sdiv {}, {}, {}", quotient_reg, result_reg, rhs_reg)
             );                                                                  // compute signed quotient for the modulo operation
             ctx.emitter.instruction(
                 &format!("msub {}, {}, {}, {}", result_reg, quotient_reg, rhs_reg, result_reg)
             );                                                                  // compute left - quotient * right as the remainder
-            ctx.emitter.instruction(&format!("b {}", done_label));              // skip the zero-divisor throw after a normal remainder
+            if guarded {
+                ctx.emitter.instruction(&format!("b {}", done_label));          // skip the zero-divisor throw after a normal remainder
+            }
         }
         Arch::X86_64 => {
             let neg_one_label = ctx.next_label("mod_neg_one");
-            ctx.emitter.instruction(&format!("test {}, {}", rhs_reg, rhs_reg)); // test whether the modulo divisor is zero
-            ctx.emitter.instruction(&format!("je {}", zero_label));             // branch to the zero-divisor throw when the modulo divisor is zero
-            ctx.emitter.instruction(&format!("cmp {}, -1", rhs_reg));           // test whether the modulo divisor is -1
-            ctx.emitter.instruction(&format!("je {}", neg_one_label));          // PHP_INT_MIN % -1 would raise #DE, and every x % -1 is zero anyway
+            if guarded {
+                ctx.emitter.instruction(&format!("test {}, {}", rhs_reg, rhs_reg)); // test whether the modulo divisor is zero
+                ctx.emitter.instruction(&format!("je {}", zero_label));         // branch to the zero-divisor throw when the modulo divisor is zero
+                ctx.emitter.instruction(&format!("cmp {}, -1", rhs_reg));       // test whether the modulo divisor is -1
+                ctx.emitter.instruction(&format!("je {}", neg_one_label));      // PHP_INT_MIN % -1 would raise #DE, and every x % -1 is zero anyway
+            }
             ctx.emitter.instruction("cqo");                                     // sign-extend the dividend before signed division
             ctx.emitter.instruction(&format!("idiv {}", rhs_reg));              // divide signed integers with quotient in rax and remainder in rdx
             ctx.emitter.instruction(&format!("mov {}, rdx", result_reg));       // move the signed remainder into the integer result register
-            ctx.emitter.instruction(&format!("jmp {}", done_label));            // skip the guard blocks after a normal remainder
-            ctx.emitter.label(&neg_one_label);
-            ctx.emitter.instruction(&format!("mov {}, 0", result_reg));         // every integer modulo -1 is zero, exactly like PHP
-            ctx.emitter.instruction(&format!("jmp {}", done_label));            // skip the zero-divisor throw after the -1 shortcut
+            if guarded {
+                ctx.emitter.instruction(&format!("jmp {}", done_label));        // skip the guard blocks after a normal remainder
+                ctx.emitter.label(&neg_one_label);
+                ctx.emitter.instruction(&format!("mov {}, 0", result_reg));     // every integer modulo -1 is zero, exactly like PHP
+                ctx.emitter.instruction(&format!("jmp {}", done_label));        // skip the zero-divisor throw after the -1 shortcut
+            }
+        }
+    }
+    if guarded {
+        ctx.emitter.label(&zero_label);
+        super::exceptions::emit_division_by_zero_error(ctx, MODULO_BY_ZERO_MESSAGE);
+        ctx.emitter.label(&done_label);
+    }
+    store_if_result(ctx, inst)
+}
+
+/// Lowers PHP `/` for two integer operands with the exact-result rule.
+///
+/// PHP keeps an integer when the division is exact and the quotient fits; otherwise it
+/// returns a double. A zero divisor raises a catchable `DivisionByZeroError`, and
+/// `PHP_INT_MIN / -1` overflows the integer domain, so both cases are guarded before the
+/// hardware divide. The result is a fresh boxed Mixed cell (int or float), matching the
+/// representation of the other checked integer operations.
+pub(super) fn lower_int_checked_div(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+) -> Result<()> {
+    let lhs = expect_operand(inst, 0)?;
+    let rhs = expect_operand(inst, 1)?;
+    let lhs_reg = abi::int_result_reg(ctx.emitter);
+    let scratch_reg = abi::secondary_scratch_reg(ctx.emitter);
+    load_integer_operand(ctx, lhs, lhs_reg, inst)?;
+    load_integer_operand(ctx, rhs, scratch_reg, inst)?;
+    let zero_label = ctx.next_label("checked_div_zero");
+    let float_label = ctx.next_label("checked_div_float");
+    let int_label = ctx.next_label("checked_div_int");
+    let done_label = ctx.next_label("checked_div_done");
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction(&format!("cbz {scratch_reg}, {zero_label}")); // a zero divisor raises DivisionByZeroError
+            abi::emit_load_int_immediate(ctx.emitter, "x9", i64::MIN);
+            ctx.emitter.instruction(&format!("cmp {lhs_reg}, x9"));             // is the dividend PHP_INT_MIN?
+            ctx.emitter.instruction(&format!("b.ne {int_label}"));              // every other dividend is safe to divide
+            ctx.emitter.instruction(&format!("cmp {scratch_reg}, #-1"));        // does INT_MIN divide by -1?
+            ctx.emitter.instruction(&format!("b.eq {float_label}"));            // that quotient overflows the integer domain
+            ctx.emitter.label(&int_label);
+            ctx.emitter.instruction(&format!("mov x1, {scratch_reg}"));         // place the divisor in the ABI argument register
+            ctx.emitter.instruction(&format!("sdiv x9, {lhs_reg}, x1"));        // truncate toward zero like PHP integer division
+            ctx.emitter.instruction(&format!("msub x11, x9, x1, {lhs_reg}"));   // remainder = dividend - quotient * divisor
+            ctx.emitter.instruction(&format!("cbnz x11, {float_label}"));       // a non-zero remainder yields a double
+            ctx.emitter.instruction("mov x1, x9");                              // integer payload for the boxed quotient
+            ctx.emitter.instruction("mov x2, xzr");                             // integer payloads do not use a high word
+            ctx.emitter.instruction("mov x0, #0");                              // runtime tag 0 = integer
+            abi::emit_call_label(ctx.emitter, "__rt_mixed_from_value");
+            abi::emit_jump(ctx.emitter, &done_label);
+            ctx.emitter.label(&float_label);
+            ctx.emitter.instruction(&format!("mov x1, {scratch_reg}"));         // reload the divisor for the double conversion
+            ctx.emitter.instruction(&format!("scvtf d0, {lhs_reg}"));           // convert the dividend to double
+            ctx.emitter.instruction("scvtf d1, x1");                            // convert the divisor to double
+            ctx.emitter.instruction("fdiv d0, d0, d1");                         // build PHP's promoted float quotient
+            ctx.emitter.instruction("fmov x1, d0");                             // float payload for the boxed quotient
+            ctx.emitter.instruction("mov x2, xzr");                             // float payloads do not use a high word
+            ctx.emitter.instruction("mov x0, #2");                              // runtime tag 2 = double
+            abi::emit_call_label(ctx.emitter, "__rt_mixed_from_value");
+            abi::emit_jump(ctx.emitter, &done_label);
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction(&format!("mov r8, {lhs_reg}"));             // preserve the dividend for the promoted float path
+            ctx.emitter.instruction(&format!("test {scratch_reg}, {scratch_reg}")); // a zero divisor raises DivisionByZeroError
+            ctx.emitter.instruction(&format!("jz {zero_label}"));               // a zero divisor raises DivisionByZeroError
+            abi::emit_load_int_immediate(ctx.emitter, "r11", i64::MIN);
+            ctx.emitter.instruction(&format!("cmp {lhs_reg}, r11"));            // is the dividend INT64_MIN?
+            ctx.emitter.instruction(&format!("jne {int_label}"));               // every other dividend is safe to divide
+            ctx.emitter.instruction(&format!("cmp {scratch_reg}, -1"));         // does INT64_MIN divide by -1?
+            ctx.emitter.instruction(&format!("je {float_label}"));              // that quotient would trap the hardware divide
+            ctx.emitter.label(&int_label);
+            ctx.emitter.instruction(&format!("mov rsi, {scratch_reg}"));        // place the divisor in the second SysV argument register
+            ctx.emitter.instruction("cqo");                                     // sign-extend the dividend before signed division
+            ctx.emitter.instruction("idiv rsi");                                // quotient in rax, remainder in rdx
+            ctx.emitter.instruction("test rdx, rdx");                           // is the division exact?
+            ctx.emitter.instruction(&format!("jnz {float_label}"));             // a non-zero remainder yields a double
+            ctx.emitter.instruction("mov rdi, rax");                            // integer payload for the boxed quotient
+            ctx.emitter.instruction("xor esi, esi");                            // integer payloads do not use a high word
+            ctx.emitter.instruction("xor eax, eax");                            // runtime tag 0 = integer
+            abi::emit_call_label(ctx.emitter, "__rt_mixed_from_value");
+            abi::emit_jump(ctx.emitter, &done_label);
+            ctx.emitter.label(&float_label);
+            ctx.emitter.instruction(&format!("mov rsi, {scratch_reg}"));        // reload the divisor for the double conversion
+            ctx.emitter.instruction("cvtsi2sd xmm0, r8");                       // convert the original dividend to double
+            ctx.emitter.instruction("cvtsi2sd xmm1, rsi");                      // convert the divisor to double
+            ctx.emitter.instruction("divsd xmm0, xmm1");                        // build PHP's promoted float quotient
+            ctx.emitter.instruction("movq rdi, xmm0");                          // float payload for the boxed quotient
+            ctx.emitter.instruction("xor esi, esi");                            // float payloads do not use a high word
+            ctx.emitter.instruction("mov eax, 2");                              // runtime tag 2 = double
+            abi::emit_call_label(ctx.emitter, "__rt_mixed_from_value");
+            abi::emit_jump(ctx.emitter, &done_label);
         }
     }
     ctx.emitter.label(&zero_label);
-    super::exceptions::emit_division_by_zero_error(ctx, MODULO_BY_ZERO_MESSAGE);
+    super::exceptions::emit_division_by_zero_error(ctx, DIVISION_BY_ZERO_MESSAGE);
     ctx.emitter.label(&done_label);
     store_if_result(ctx, inst)
 }
@@ -641,6 +772,27 @@ pub(super) fn lower_mixed_numeric_binop(
         }
     }
     abi::emit_call_label(ctx.emitter, mixed_numeric_helper(op));
+    if op == MixedNumericOp::Div {
+        let nonzero = ctx.next_label("mixed_div_nonzero");
+        match ctx.emitter.target.arch {
+            Arch::AArch64 => {
+                ctx.emitter.instruction(&format!("cbnz x0, {nonzero}"));        // a null result is the zero-divisor sentinel
+            }
+            Arch::X86_64 => {
+                ctx.emitter.instruction("test rax, rax");                       // did the helper return the null error sentinel?
+                ctx.emitter.instruction(&format!("jnz {nonzero}"));             // a real boxed result continues normally
+            }
+        }
+        if left_box_temp {
+            decref_mixed_temp_at(ctx, 16);                                     // release the boxed left operand before throwing
+        }
+        if right_box_temp {
+            decref_mixed_temp_at(ctx, 0);                                      // release the boxed right operand before throwing
+        }
+        abi::emit_release_temporary_stack(ctx.emitter, 32);
+        super::exceptions::emit_division_by_zero_error(ctx, DIVISION_BY_ZERO_MESSAGE);
+        ctx.emitter.label(&nonzero);
+    }
     abi::emit_push_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
     if left_box_temp {
         decref_mixed_temp_at(ctx, 32);
@@ -725,6 +877,7 @@ fn mixed_numeric_helper(op: MixedNumericOp) -> &'static str {
         MixedNumericOp::Add => "__rt_mixed_numeric_add",
         MixedNumericOp::Sub => "__rt_mixed_numeric_sub",
         MixedNumericOp::Mul => "__rt_mixed_numeric_mul",
+        MixedNumericOp::Div => "__rt_mixed_numeric_div",
         MixedNumericOp::Pow => "__rt_mixed_numeric_pow",
     }
 }

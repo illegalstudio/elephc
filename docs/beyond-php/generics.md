@@ -1068,8 +1068,7 @@ PHPStan reads that annotation and **checks** it. elephc reads the same annotatio
 **compiles** it.
 
 `@template T of Foo` is the bound (`T : Foo` in native syntax) and `@template T = string` the
-default; both reach the same declaration. A PHPDoc bound is reported as a warning rather than an
-error, see [Annotations never reject valid PHP](#annotations-never-reject-valid-php).
+default; both reach the same declaration.
 
 ### A class
 
@@ -1178,19 +1177,6 @@ In a generic class, a method can refer to the class's `T` and declare a separate
 If a method already declares native type parameters, its written signature takes precedence
 over the docblock.
 
-A PHPDoc method template is erased, not monomorphized, when the method is dispatched
-dynamically: an interface method, a method that implements or overrides another one
-(including built-in interfaces such as `ArrayAccess`, `Countable` or `IteratorAggregate`),
-or any method of a class with an undeclared ancestor. An instantiated method never takes a
-vtable slot (see above), so specializing it would break interface conformance and override
-dispatch; the method keeps its native signature and runs as php-src runs it. A method template
-that no parameter or return position adopts is dropped the same way.
-
-`instanceof` on a generic class or interface template (`$x instanceof Coll`) holds for every
-instantiation and subclass, as in php-src, where the template is an ordinary class. The marker
-a class template leaves behind is hidden from `interface_exists()`,
-`get_declared_interfaces()` and `class_implements()`.
-
 A constructor can also declare `@template`. Its arguments specialize the constructed class,
 so promoted properties use the same concrete types as the constructor parameters:
 
@@ -1215,75 +1201,11 @@ has its own type parameters, they bind first, followed by the constructor's para
 For example, `new Pair<int>(7, 'seven')` with a constructor-local `U` creates
 `Pair<int><string>`. The constructor retains the name `__construct` in each concrete class.
 
-### Annotations never reject valid PHP
-
-php-src ignores a doc comment, so a call it runs must not be refused because of what an
-annotation claims. Native syntax keeps every check strict; a PHPDoc declaration gives way
-instead:
-
-- **A bound a call breaks is a warning.** `@template E of Entity` with `accept(new Other())`
-  compiles at `E = Other`, exactly as php-src executes the call, and reports the violation as a
-  warning. The same holds for a function, a method and a class template. The native
-  `<E : Entity>` stays an error.
-- **A parameter the call cannot determine is `mixed`.** That covers a template only the
-  `@return` mentions, an annotation elephc has no type for (`@param class-string<T> $class`),
-  two arguments that bind one parameter to two types, and a `null` argument. A parameter that
-  took over a native hint (below) is read as that hint instead. The native form reports each of
-  these and asks for the type argument.
-- **A native hint wins over the annotation that documents it.** php-src enforces `int $m` and
-  coerces to it, so `@param T $m` does not replace it. A hint php-src enforces loosely
-  (`array`, `iterable`, `callable`, `object`, or none) gives way to an annotation of its own
-  shape (`array $a` to `array<T>`, `object $o` to `Collection<T>`, `callable $f` to
-  `callable(T): U`), as does a class hint to its own generic form (`Box $b` documented
-  `@param Box<T> $b`). A union does so only when every member has that shape:
-  `@return T|false` on `: object` keeps `object`.
-- **A hint a type parameter takes over stays binding.** `@param T $m` replaces a native
-  `object $m`, or a native `Model $m` when the template is `T of Model`, and `@return T`
-  replaces a native return type the same way. php-src still enforces those hints, so the type
-  argument has to be one the hint accepts: `keep(new User())` is `T = User`. Any other call is
-  compiled at the hint itself and checked exactly as it is without the annotation:
-  `keep(new Other())` is the ordinary argument error, and `pair(new User(), new Admin())` is
-  `T = Model`. The hint also decides whether the position accepts `null`, whatever a `?T`
-  says. Hinted positions that disagree (`object $a` and `callable $b`, both `@param T`) keep
-  their native hints; `object` beside the class that bounds the template is not a
-  disagreement, the class speaks for both. A class template follows the same rule across
-  all its members: `@var T` on a `public object $value` property keeps every `Box<...>` an
-  object holder, and a written `Box<string>` is an error. A method of such a class that is
-  called through dynamic dispatch (it implements an interface method, or is overridden) keeps
-  its php-src signature instead of the type argument: an argument its native hint rejects
-  throws the `TypeError` php-src throws.
-- **A template no position adopts is not a template.** When every annotation naming `T` lost
-  to a native hint, the function or method keeps its own name and its native signature.
-
-```php
-<?php
-class Entity {}
-class Other {}
-
-class Repo
-{
-    /**
-     * @template E of Entity
-     * @param E $entity
-     */
-    public function accept($entity): int { return 1; }
-}
-
-echo (new Repo())->accept(new Other());   // 1, with a warning about the bound
-```
-
-Two limits remain. A class or constructor template still names its instantiations, so
-`get_class(new Value(7))` answers `Value<int>` (see [A class](#a-class)). And the checks that
-give way are the ones made at a call: the body of a template is still compiled once per type
-argument, so a body that contradicts its own annotations (`@return T` on a function that
-returns a fresh `Model` whatever `T` is) is an error in the instantiation that exposes it.
-
 ## Limitations
 
-- **A native type parameter nothing mentions must be written.** Inference works from the
-  argument types, so a parameter no signature position names cannot be inferred —
-  [write it at the call](#writing-the-type-arguments-at-the-call). A PHPDoc parameter in the
-  same position is [read as `mixed`](#annotations-never-reject-valid-php). A bare `callable` names
+- **A type parameter nothing mentions must be written.** Inference works from the argument
+  types, so a parameter no signature position names cannot be inferred —
+  [write it at the call](#writing-the-type-arguments-at-the-call). A bare `callable` names
   nothing either; [typed callables](#typed-callables) are the way to reach through a callback.
 - **Only a closure literal drives callback inference.** A callable held in a variable or named
   by a string carries no declared types at the call site.

@@ -31,6 +31,30 @@ pub(super) fn already_prepared(
     Ok(true)
 }
 
+/// Returns whether one `mb_chr()` observation can use the allocation-free encoder.
+///
+/// The codepoint operand may be a tagged scalar: a packed `array<int>` read narrows to
+/// `TaggedScalar` (int or missing null), and `load_as_int` converts it without allocating.
+/// The encoding must still be an exact `string` so the explicit-UTF-8 check can see it.
+pub(super) fn chr_operands_prepared(ctx: &FunctionContext<'_>, inst: &Instruction) -> Result<bool> {
+    if inst.operands.len() != 2 {
+        return Ok(false);
+    }
+    let codepoint = &ctx.function.value(inst.operands[0])
+        .ok_or_else(|| CodegenIrError::missing_entry("value", inst.operands[0].as_raw()))?
+        .php_type;
+    if !matches!(
+        codepoint.codegen_repr(),
+        PhpType::Int | PhpType::Bool | PhpType::TaggedScalar
+    ) {
+        return Ok(false);
+    }
+    let encoding = &ctx.function.value(inst.operands[1])
+        .ok_or_else(|| CodegenIrError::missing_entry("value", inst.operands[1].as_raw()))?
+        .php_type;
+    Ok(*encoding == PhpType::Str)
+}
+
 /// Checks type identity only; the invoker remains authoritative for all PHP conversions.
 fn matches_without_coercion(actual: &PhpType, expected: TypeSpec) -> bool {
     if let PhpType::Union(alternatives) = actual {

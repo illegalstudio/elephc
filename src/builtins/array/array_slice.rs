@@ -56,6 +56,31 @@ fn literal_preserve_keys(flag: Option<&Expr>) -> Option<bool> {
     }
 }
 
+/// Reports whether a literal integer offset is exactly zero.
+fn literal_zero_offset(offset: &Expr) -> bool {
+    matches!(offset.kind, ExprKind::IntLiteral(0))
+}
+
+/// Reports whether a variable source may load through boxed or aliased storage.
+///
+/// A call-site-specialized untyped parameter is checked as `array<never>` even though its
+/// boxed ABI can hold a hash at run time. The same applies to globals, `static` locals and
+/// reference aliases. Their key-preserving slice must keep the hash result type so the
+/// enclosing return conversion cannot mistake a hash payload for a packed list.
+fn source_may_be_boxed(cx: &BuiltinCheckCtx, expr: &Expr) -> bool {
+    let ExprKind::Variable(name) = &expr.kind else {
+        return false;
+    };
+    let name = name.as_str();
+    cx.checker.local_parameter_names.contains(name)
+        || cx.checker.active_globals.contains(name)
+        || cx.checker.static_local_names.contains(name)
+        || cx.checker.ref_aliased_locals.contains(name)
+        || cx.checker.by_ref_captured_locals.contains(name)
+        || cx.checker.boxed_ref_aliased_locals.contains(name)
+        || cx.checker.top_level_binding_is_program_global(name)
+}
+
 /// Returns the slice's array type for an `array_slice` call.
 ///
 /// Without `preserve_keys` a slice preserves the input array shape, so the (array-or-assoc)
@@ -95,6 +120,17 @@ fn check(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
         return Ok(ty);
     }
     match ty {
+        // A generic untyped parameter is an `array<never>` here even though its call-site
+        // specialization may hold a list: its boxed lowering builds a hash under
+        // `preserve_keys`, so it must keep the hash result type. Only a concrete indexed
+        // element type can stay a list at offset 0.
+        PhpType::Array(elem)
+            if literal_zero_offset(&cx.args[1])
+                && !matches!(elem.as_ref(), PhpType::Never)
+                && !source_may_be_boxed(cx, &cx.args[0]) =>
+        {
+            Ok(PhpType::Array(elem))
+        }
         PhpType::Array(elem) => Ok(PhpType::AssocArray {
             key: Box::new(PhpType::Int),
             value: elem,

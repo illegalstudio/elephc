@@ -85,7 +85,7 @@ impl Checker {
         let Some((key, template)) = self.generic_method_template_for(class_name, base) else {
             return Ok(None);
         };
-        let mut bindings = match &written {
+        let bindings = match &written {
             Some((_, arguments)) => generics::bindings_from_written_arguments(
                 &template.type_params,
                 arguments,
@@ -139,7 +139,6 @@ impl Checker {
                 })?
             }
         };
-        self.settle_native_hints(&template.type_params, &mut bindings, expr.span)?;
         for param in &template.type_params {
             let Some(bound) = param.bound.as_ref() else {
                 continue;
@@ -147,18 +146,14 @@ impl Checker {
             let Some((_, argument)) = bindings.iter().find(|(name, _)| name == &param.name) else {
                 continue;
             };
-            if Self::skips_docblock_bound(param, argument) {
-                continue;
-            }
             // Substituted first, as for a generic function: `<U : Cmp<U>>` names `U` itself.
             let bound_ty =
                 self.resolve_type_expr(&generics::substitute_value_type(bound, &bindings), expr.span)?;
             let argument_ty = self.resolve_generic_bound_argument(argument, expr.span)?;
             if !self.type_accepts(&bound_ty, &argument_ty) {
-                self.report_bound_violation(
-                    param.from_docblock,
+                return Err(CompileError::new(
                     expr.span,
-                    format!(
+                    &format!(
                         "Call to generic method '{}::{}' binds type parameter <{}> to {}, which \
                          does not satisfy its bound {}",
                         template.declared_class,
@@ -167,7 +162,7 @@ impl Checker {
                         argument_ty,
                         bound_ty
                     ),
-                )?;
+                ));
             }
         }
         let instantiated =
@@ -187,9 +182,7 @@ impl Checker {
         // the next round sees an ordinary method and checks the call properly.
         match &template.return_type {
             Some(ty) => {
-                let erased =
-                    generics::docblock_params_read_as_mixed(&template.type_params, &bindings);
-                let substituted = generics::substitute_signature_type(ty, &bindings, &erased);
+                let substituted = generics::substitute_value_type(ty, &bindings);
                 Ok(Some(self.resolve_type_expr(&substituted, expr.span)?))
             }
             None => Ok(Some(PhpType::Mixed)),

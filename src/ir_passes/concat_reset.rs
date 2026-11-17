@@ -978,6 +978,7 @@ impl<'a> ConcatInertAnalysis<'a> {
             | Op::IAdd
             | Op::ISub
             | Op::IMul
+            | Op::IWrapIncrement
             | Op::ICheckedAdd
             | Op::ICheckedSub
             | Op::ICheckedMul

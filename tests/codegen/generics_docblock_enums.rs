@@ -70,10 +70,9 @@ namespace App {
     }
 }
 
-/// An enum template's bound warns about the same argument a class method template warns about,
-/// and the call still compiles: php-src does not enforce a PHPDoc bound.
+/// An enum template's bound rejects the same invalid argument as a class method template.
 #[test]
-fn test_docblock_enum_template_bound_violation_warns() {
+fn test_docblock_enum_templates_enforce_bounds() {
     let source = r#"<?php
 enum Id {
     case A;
@@ -87,8 +86,8 @@ enum Id {
 Id::A->id("seven");
 "#;
     for flags in [&[][..], &["--strict-php"][..]] {
-        let warnings = compile_cli_file_with_flags_capturing_stderr(source, flags);
-        assert!(warnings.contains("does not satisfy its bound int"), "{warnings}");
+        let error = compile_cli_file_with_flags_expect_failure(source, flags);
+        assert!(error.contains("does not satisfy its bound int"), "{error}");
     }
 }
 

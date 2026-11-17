@@ -1285,3 +1285,25 @@ echo "n=$n\n";
          n=3\n"
     );
 }
+
+/// Verifies `@` exposes PHP 8's reduced reporting mask to a user handler, restores the caller's
+/// level after a normal suppressed expression, and keeps an explicit change made inside it.
+#[test]
+fn test_error_control_exposes_php_suppression_mask_to_handlers() {
+    let out = compile_and_run(
+        r#"<?php
+error_reporting(E_ALL);
+$levels = [];
+set_error_handler(function (int $no, string $message) use (&$levels): bool {
+    $levels[] = error_reporting();
+    return true;
+});
+$values = [];
+$value = @$values["missing"];
+echo error_reporting(), "|", implode(",", $levels), "\n";
+$changed = @(function () { error_reporting(E_ALL & ~E_WARNING); return error_reporting(); })();
+echo $changed, "|", error_reporting(), "\n";
+"#,
+    );
+    assert_eq!(out, "30719|4437\n30717|30717\n");
+}

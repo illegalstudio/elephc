@@ -771,7 +771,7 @@ fn validate_instruction_immediate(
             require_immediate(inst_id, inst, "checked numeric chain", |imm| {
                 matches!(imm, Imm::CheckedNumericChain(chain) if !chain.operations().is_empty()
                     && chain.operations().iter()
-                        .all(|op| !matches!(op, crate::ir::MixedNumericOp::Pow)))
+                        .all(|op| !matches!(op, crate::ir::MixedNumericOp::Pow | crate::ir::MixedNumericOp::Div)))
             })
         }
         // A pair rule selects between exactly two operands, a fold rule among three or more.
@@ -943,7 +943,9 @@ fn validate_opcode_rules(
         ObjectNew => Ok(()),
         EvalStaticMethodCall => Ok(()),
         IAdd | ISub | IMul | IDiv | ISDiv | ISMod | IPow | IBitAnd | IBitOr | IBitXor
-        | IShl | IShrA => check_binary(function, inst_id, inst, IrType::I64, "I64"),
+        | IShl | IShrA | IWrapIncrement => {
+            check_binary(function, inst_id, inst, IrType::I64, "I64")
+        }
         IOverflows => {
             check_binary(function, inst_id, inst, IrType::I64, "I64")?;
             match inst.immediate {
@@ -955,7 +957,7 @@ fn validate_opcode_rules(
                 _ => Err(ValidationError::UnexpectedImmediate(inst_id)),
             }
         }
-        ICheckedAdd | ICheckedSub | ICheckedMul | ICheckedAddToInt | ICheckedSubToInt
+        ICheckedAdd | ICheckedSub | ICheckedMul | ICheckedDiv | ICheckedAddToInt | ICheckedSubToInt
         | ICheckedMulToInt | ICheckedPow => {
             check_binary(function, inst_id, inst, IrType::I64, "I64")
         }
@@ -1126,6 +1128,13 @@ fn validate_opcode_rules(
         }
         // The producer proved the receiver is a private, int-shaped array with reserved capacity.
         ArrayPushReserved => {
+            check_count(inst_id, inst, 3, "3")?;
+            check_operand_type(function, inst_id, inst, 0, IrType::Heap(IrHeapKind::Array), "Heap(Array)")?;
+            check_operand_type(function, inst_id, inst, 1, IrType::I64, "I64")?;
+            check_operand_type(function, inst_id, inst, 2, IrType::I64, "I64")?;
+            Ok(())
+        }
+        ArraySetLength => {
             check_count(inst_id, inst, 2, "2")?;
             check_operand_type(function, inst_id, inst, 0, IrType::Heap(IrHeapKind::Array), "Heap(Array)")?;
             check_operand_type(function, inst_id, inst, 1, IrType::I64, "I64")?;

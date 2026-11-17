@@ -389,23 +389,42 @@ pub(super) fn lower_array_push_reserved(
 ) -> Result<()> {
     let array = expect_operand(inst, 0)?;
     let value = expect_operand(inst, 1)?;
+    let index = expect_operand(inst, 2)?;
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
             ctx.load_value_to_reg(value, "x1")?;
             ctx.load_value_to_reg(array, "x9")?;
-            ctx.emitter.instruction("ldr x10, [x9]");                           // load the current logical length
+            ctx.load_value_to_reg(index, "x10")?;
             ctx.emitter.instruction("add x11, x9, #24");                        // skip the indexed-array header to the payload base
-            ctx.emitter.instruction("str x1, [x11, x10, lsl #3]");              // store the appended int in the reserved slot
-            ctx.emitter.instruction("add x10, x10, #1");                        // advance the logical length
-            ctx.emitter.instruction("str x10, [x9]");                           // publish the updated length
+            ctx.emitter.instruction("str x1, [x11, x10, lsl #3]");              // store the appended int at the proven index
         }
         Arch::X86_64 => {
             ctx.load_value_to_reg(value, "rsi")?;
             ctx.load_value_to_reg(array, "rdi")?;
-            ctx.emitter.instruction("mov r10, QWORD PTR [rdi]");                // load the current logical length
-            ctx.emitter.instruction("mov QWORD PTR [rdi + 24 + r10 * 8], rsi"); // store the appended int in the reserved slot
-            ctx.emitter.instruction("add r10, 1");                              // advance the logical length
-            ctx.emitter.instruction("mov QWORD PTR [rdi], r10");                // publish the updated length
+            ctx.load_value_to_reg(index, "r10")?;
+            ctx.emitter.instruction("mov QWORD PTR [rdi + 24 + r10 * 8], rsi"); // store the appended int at the proven index
+        }
+    }
+    Ok(())
+}
+
+/// Publishes the final logical length of a private reserved array once after its fill loop.
+pub(super) fn lower_array_set_length(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+) -> Result<()> {
+    let array = expect_operand(inst, 0)?;
+    let length = expect_operand(inst, 1)?;
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.load_value_to_reg(length, "x10")?;
+            ctx.load_value_to_reg(array, "x9")?;
+            ctx.emitter.instruction("str x10, [x9]");                           // publish the final element count
+        }
+        Arch::X86_64 => {
+            ctx.load_value_to_reg(length, "r10")?;
+            ctx.load_value_to_reg(array, "rdi")?;
+            ctx.emitter.instruction("mov QWORD PTR [rdi], r10");                // publish the final element count
         }
     }
     Ok(())

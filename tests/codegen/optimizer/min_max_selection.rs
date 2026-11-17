@@ -530,6 +530,9 @@ echo fmax2(1.5 * $argc, 2.5);
 /// leaves no cell behind when the error is caught.
 #[test]
 fn test_min_max_selection_with_gmp_declared_follows_php_and_unwinds_cleanly() {
+    if skip_without_gmp_native("gmp min/max matrix") {
+        return;
+    }
     let source = r#"<?php
 function mx(mixed $a, mixed $b): mixed { return max($a, $b); }
 function mn(mixed $a, mixed $b): mixed { return min($a, $b); }

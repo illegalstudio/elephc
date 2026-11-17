@@ -86,8 +86,6 @@ pub fn splice_instantiations(
 /// as an unknown type.
 struct TypeParamSubstitution<'b> {
     bindings: &'b Bindings,
-    /// PHPDoc parameters read as `mixed`: see `super::substitute_signature_type`.
-    erased: &'b [String],
 }
 
 impl crate::magic_constants::walker::Pass for TypeParamSubstitution<'_> {
@@ -107,12 +105,7 @@ impl crate::magic_constants::walker::Pass for TypeParamSubstitution<'_> {
         ty: crate::parser::ast::TypeExpr,
         _span: crate::span::Span,
     ) -> crate::parser::ast::TypeExpr {
-        let substituted = ty.substitute_type_params(self.bindings);
-        if self.erased.is_empty() || !ty.mentions_type_param(self.erased) {
-            substituted
-        } else {
-            super::erasure::collapse_mixed(substituted)
-        }
+        ty.substitute_type_params(self.bindings)
     }
 
     /// Materializes scalar carriers in PHP annotations while retaining nested storage widths.
@@ -121,7 +114,7 @@ impl crate::magic_constants::walker::Pass for TypeParamSubstitution<'_> {
         ty: crate::parser::ast::TypeExpr,
         _span: crate::span::Span,
     ) -> crate::parser::ast::TypeExpr {
-        super::substitute_signature_type(&ty, self.bindings, self.erased)
+        super::substitute_value_type(&ty, self.bindings)
     }
 }
 
@@ -131,27 +124,15 @@ impl crate::magic_constants::walker::Pass for TypeParamSubstitution<'_> {
 /// body, or the signature the checker resolved would describe a function the backend does not
 /// emit. One helper, used by both, is what keeps them in step.
 pub fn substitute_in_body(body: Vec<Stmt>, bindings: &Bindings) -> Vec<Stmt> {
-    substitute_in_declarations(body, bindings, &[])
-}
-
-/// Substitutes type parameters at every type position of whole declarations, reading the
-/// positions that mention an `erased` PHPDoc parameter as php-src declares them
-/// (`super::substitute_signature_type`).
-pub(crate) fn substitute_in_declarations(
-    body: Vec<Stmt>,
-    bindings: &Bindings,
-    erased: &[String],
-) -> Vec<Stmt> {
     crate::magic_constants::walker::walk_program(
         body,
-        &mut TypeParamSubstitution { bindings, erased },
+        &mut TypeParamSubstitution { bindings },
     )
 }
 
 /// Clones a template declaration under `target`, substituting its type parameters everywhere.
 fn instantiate_declaration(template: &Stmt, target: &str, bindings: &Bindings) -> Option<Stmt> {
     let StmtKind::FunctionDecl {
-        type_params,
         params,
         param_attributes,
         variadic,
@@ -164,8 +145,6 @@ fn instantiate_declaration(template: &Stmt, target: &str, bindings: &Bindings) -
     else {
         return None;
     };
-    let erased = super::docblock_params_read_as_mixed(type_params, bindings);
-    let erased = erased.as_slice();
     let mut instance = template.clone();
     // Reuse the body the clone already carries instead of cloning it a second time from the
     // template: each instantiation copied the same statement list twice before the substitution
@@ -184,7 +163,7 @@ fn instantiate_declaration(template: &Stmt, target: &str, bindings: &Bindings) -
                     name.clone(),
                     declared
                         .as_ref()
-                        .map(|ty| super::substitute_signature_type(ty, bindings, erased)),
+                        .map(|ty| super::substitute_value_type(ty, bindings)),
                     default.clone(),
                     *by_ref,
                 )
@@ -195,10 +174,10 @@ fn instantiate_declaration(template: &Stmt, target: &str, bindings: &Bindings) -
         variadic_by_ref: *variadic_by_ref,
         variadic_type: variadic_type
             .as_ref()
-            .map(|ty| super::substitute_signature_type(ty, bindings, erased)),
+            .map(|ty| super::substitute_value_type(ty, bindings)),
         return_type: return_type
             .as_ref()
-            .map(|ty| super::substitute_signature_type(ty, bindings, erased)),
+            .map(|ty| super::substitute_value_type(ty, bindings)),
         by_ref_return: *by_ref_return,
         // The body goes through the exhaustive walker, so a type parameter named in a typed
         // local, a `buffer<T>`, or a nested closure's signature is substituted too — not only

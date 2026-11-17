@@ -28,85 +28,6 @@ impl Checker {
         self.resolve_type_expr(&crate::generics::value_carrier_type(argument), span)
     }
 
-    /// Reports a violated type-parameter bound: an error for native syntax, a warning for PHPDoc.
-    ///
-    /// php-src never reads `@template T of Foo`, so a call that breaks the annotation still runs
-    /// there, and rejecting it would refuse a valid PHP program. The instantiation is compiled at
-    /// the type the code supplies, exactly as php-src executes it. A native bound (`<T : Foo>`)
-    /// is compiler syntax its author opted into, and stays an error.
-    pub(crate) fn report_bound_violation(
-        &mut self,
-        from_docblock: bool,
-        span: crate::span::Span,
-        message: String,
-    ) -> Result<(), CompileError> {
-        if !from_docblock {
-            return Err(CompileError::new(span, &message));
-        }
-        let message = format!(
-            "{}; the bound is a PHPDoc annotation php-src does not enforce, so the code is \
-             compiled as written",
-            message
-        );
-        // A body is re-checked once per call-site specialization, which reaches the same site again.
-        if !self.warnings.iter().any(|seen| seen.span == span && seen.message == message) {
-            self.warnings.push(crate::errors::CompileWarning::new(span, &message));
-        }
-        Ok(())
-    }
-
-    /// Returns whether a bound is left unchecked: a PHPDoc parameter bound to `mixed`, or to the
-    /// native hint it took over.
-    ///
-    /// Those are what a PHPDoc parameter is read as when its annotation cannot be honoured, and
-    /// `mixed` is also what an untyped argument infers. Neither says the annotation was broken
-    /// beyond what `settle_native_hints` already reports, so neither is worth a diagnostic.
-    pub(crate) fn skips_docblock_bound(
-        param: &crate::parser::ast::TypeParam,
-        argument: &crate::parser::ast::TypeExpr,
-    ) -> bool {
-        param.from_docblock
-            && (crate::generics::is_mixed_type(argument)
-                || param.native_hint.as_ref().is_some_and(|hint| &hint.ty == argument))
-    }
-
-    /// Keeps the native hint a PHPDoc parameter took over binding on its type argument.
-    ///
-    /// `@param T $m` on a native `Model $m` replaces a hint php-src enforces at every call, and
-    /// `@return T` on a native `: Model` one it enforces at every return. A type argument the
-    /// hint accepts refines it, which is the annotation's whole purpose. One it does not accept
-    /// (or `mixed`, which says nothing) is replaced by the hint itself: the instantiation then
-    /// has the signature php-src runs, and the ordinary argument and return checks report the
-    /// program exactly as they would without the annotation.
-    pub(crate) fn settle_native_hints(
-        &self,
-        type_params: &[crate::parser::ast::TypeParam],
-        bindings: &mut crate::generics::Bindings,
-        span: crate::span::Span,
-    ) -> Result<(), CompileError> {
-        for param in type_params {
-            let Some(hint) = param.native_hint.as_ref().map(|hint| &hint.ty) else {
-                continue;
-            };
-            let Some((_, argument)) = bindings.iter_mut().find(|(name, _)| name == &param.name)
-            else {
-                continue;
-            };
-            if argument == hint {
-                continue;
-            }
-            let refines = !crate::generics::is_mixed_type(argument) && {
-                let hint_ty = self.resolve_type_expr(hint, span)?;
-                let argument_ty = self.resolve_generic_bound_argument(argument, span)?;
-                self.type_accepts(&hint_ty, &argument_ty)
-            };
-            if !refines {
-                *argument = hint.clone();
-            }
-        }
-        Ok(())
-    }
-
     /// Rejects any type argument that does not satisfy its parameter's declared bound.
     ///
     /// Reports the FIRST violation rather than collecting them: an instantiation that violates
@@ -147,31 +68,18 @@ impl Checker {
             // bound admits exactly what a parameter of that type would: subclasses, implemented
             // interfaces, and interface inheritance. Comparing spellings instead would let an
             // unrelated class with the same name through and reject a legitimate subclass.
-            if obligation.from_docblock && crate::generics::is_mixed_type(&obligation.argument) {
-                continue;
-            }
             if !self.type_accepts(&bound, &argument) {
                 if defer_implicit_stringable && self.declares_public_tostring(&argument) {
                     continue;
                 }
-                let reason = if obligation.native_hint {
-                    "is not accepted by the native type"
-                } else {
-                    "does not satisfy its bound"
-                };
-                self.report_bound_violation(
-                    obligation.from_docblock,
+                return Err(CompileError::new(
                     obligation.span,
-                    format!(
-                        "Generic {} '{}' binds type parameter <{}> to {}, which {} {}",
-                        obligation.kind,
-                        obligation.template,
-                        obligation.parameter,
-                        argument,
-                        reason,
-                        bound
+                    &format!(
+                        "Generic {} '{}' binds type parameter <{}> to {}, which does not \
+                         satisfy its bound {}",
+                        obligation.kind, obligation.template, obligation.parameter, argument, bound
                     ),
-                )?;
+                ));
             }
         }
         Ok(())

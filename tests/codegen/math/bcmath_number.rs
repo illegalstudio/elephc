@@ -9,7 +9,8 @@
 
 use crate::support::*;
 
-/// Preserves main's float division and integer modulo for nullable and scalar Number unions.
+/// Preserves PHP's exact int-or-float division and integer modulo for nullable and scalar
+/// Number unions.
 #[test]
 fn test_bcmath_number_union_division_modulo() {
     let out = compile_and_run(r#"<?php
@@ -24,8 +25,9 @@ showUnionNumber(divideUnionNumber(null));
 showUnionNumber(moduloUnionNumber(new BcMath\Number('7')));
 showUnionNumber(moduloUnionNumber(9));
 "#);
-    // Main represents scalar division as float, including the nullable fallback.
-    assert_eq!(out, "1.5|float(0)\n3|int(1)\n");
+    // PHP keeps an int when both operands are integers and divide evenly, including the
+    // nullable fallback (`null` coerces to `0`).
+    assert_eq!(out, "1.5|int(0)\n3|int(1)\n");
 }
 
 /// Constructs a namespaced Number and checks its exact decimal methods and scale.
@@ -150,7 +152,7 @@ echo decimal_add($number, 2)->value, '|', decimal_div($number, 8)->value, '|';
 echo decimal_compare($number, '1.200'), '|';
 var_dump(decimal_add(2, 3), decimal_div(8, 2));
 "#);
-    assert_eq!(out, "3.20|0.15|0|int(5)\nfloat(4)\n");
+    assert_eq!(out, "3.20|0.15|0|int(5)\nint(4)\n");
 }
 
 /// Unordered values never satisfy relational operators, while booleans use Number truthiness.

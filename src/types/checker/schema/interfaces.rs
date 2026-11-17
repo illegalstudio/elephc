@@ -567,7 +567,6 @@ fn build_listed_interface_info(
             constant_types,
             constant_declaring_interfaces,
             final_constants,
-            reflection_hidden: checker.names_generic_class_template(&interface.name),
         },
     );
     *next_interface_id += 1;

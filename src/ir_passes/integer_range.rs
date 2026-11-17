@@ -452,6 +452,10 @@ fn literal_range(function: &Function, value: ValueId) -> Option<IntRange> {
 /// the Unicode scalar ceiling, so a loop counter added to them stays in i64.
 fn runtime_string_metric_range(id: RuntimeFnId) -> Option<IntRange> {
     match id {
+        // The first-byte observation is one UTF-8 lead byte; the packed form also carries a
+        // 1..4 byte length above it.
+        RuntimeFnId::MbChrFirst => Some(IntRange { lo: 0, hi: 255 }),
+        RuntimeFnId::MbChrPacked => Some(IntRange { lo: 0, hi: 0x4FF }),
         RuntimeFnId::MbStrlen
         | RuntimeFnId::MbStrwidth
         | RuntimeFnId::MbSubstrCount
@@ -497,25 +501,43 @@ fn runtime_string_metric_range(id: RuntimeFnId) -> Option<IntRange> {
     }
 }
 
-/// Computes one instruction's integer interval from the current operand facts.
 /// Returns whether `slot` is the runtime-seeded `$argc` of the main function and is never
-/// assigned by user code. The process argument count is a non-negative C `int`.
+/// assigned by user code or rebound through a reference cell. The process argument count is a
+/// non-negative C `int`.
 pub(super) fn main_argc_slot(function: &Function, slot: crate::ir::LocalSlotId) -> bool {
     if !function.flags.is_main {
         return false;
     }
-    let Some(local) = function.locals.get(slot.as_raw() as usize) else {
-        return false;
-    };
-    if local.name.as_deref() != Some("argc") {
+    let local_name = function
+        .locals
+        .get(slot.as_raw() as usize)
+        .and_then(|local| local.name.as_deref());
+    if local_name != Some("argc") {
         return false;
     }
     !function.instructions.iter().any(|inst| {
+        if inst.op == Op::StoreRefCell {
+            let alias = matches!(inst.immediate, Some(Immediate::LocalSlot(found)) if found == slot);
+            // The owner slot reaches a reference cell through an operand load, not the immediate.
+            let owner = inst.operands.iter().any(|value| {
+                function.value(*value).is_some_and(|value| match value.def {
+                    ValueDef::Instruction { inst, .. } => function.instruction(inst).is_some_and(
+                        |definition| matches!(
+                            definition.immediate,
+                            Some(Immediate::LocalSlot(found)) if found == slot
+                        ),
+                    ),
+                    _ => false,
+                })
+            });
+            return alias || owner;
+        }
         inst.op == Op::StoreLocal
             && matches!(inst.immediate, Some(Immediate::LocalSlot(found)) if found == slot)
     })
 }
 
+/// Computes one instruction's integer interval from the current operand facts.
 fn instruction_range(
     function: &Function,
     inst: &crate::ir::Instruction,

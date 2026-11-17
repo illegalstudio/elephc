@@ -788,3 +788,30 @@ echo sprintf("%d", $a), "|", sprintf("%d", $b), "|", sprintf("%d", $c), "|",
     );
     assert_eq!(out, "3|42|1|0|0|7\n");
 }
+
+/// The bounded exact fixed-point `%f`/`%F` path formats exact short decimals and falls back to
+/// libc for fractional scalings, wide precisions, and values beyond the exact-integer range.
+#[test]
+fn test_sprintf_fixed_float_fast_path_boundaries() {
+    let out = compile_and_run(
+        r#"<?php
+function fixed_sprintf(float $value, string $format): string {
+    return sprintf($format, $value);
+}
+$values = [1.5, -1.5, 0.05, -0.05, 2.675, 1.005, 0.1, 1e9, 1e18, -0.0];
+foreach ($values as $value) {
+    echo fixed_sprintf($value, "%.2f"), "|";
+}
+echo fixed_sprintf(2.0, "%.0f"), "|", fixed_sprintf(2.6, "%.0f"), "|";
+echo fixed_sprintf(1.5, "%F"), "|", fixed_sprintf(1.5, "%f"), "|";
+echo fixed_sprintf(1.5, "%010.2f"), "|", fixed_sprintf(1.5, "%-10.2f"), "|";
+echo fixed_sprintf(1.5, "%.9f"), "|", fixed_sprintf(1e6, "%.9f"), "|";
+echo fixed_sprintf(1e7, "%.9f"), "|", fixed_sprintf(1.5, "%.10f"), "|";
+echo fixed_sprintf(1.5, "%.30f");
+"#,
+    );
+    assert_eq!(
+        out,
+        "1.50|-1.50|0.05|-0.05|2.67|1.00|0.10|1000000000.00|1000000000000000000.00|0.00|2|3|1.500000|1.500000|0000001.50|1.50      |1.500000000|1000000.000000000|10000000.000000000|1.5000000000|1.500000000000000000000000000000"
+    );
+}

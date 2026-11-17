@@ -227,3 +227,33 @@ fn test_argv_first_entry_exists() {
     assert!(out.ends_with("/test"), "unexpected argv[0]: {out}");
 }
 
+
+/// Verifies the runtime decimal fast path for whitespace, signs, leading zeros, saturation,
+/// digit-run terminators, and the fallback to PHP's float-form numeric-string rules.
+#[test]
+fn test_intval_runtime_decimal_fast_path_boundaries() {
+    let out = compile_and_run(
+        r#"<?php
+function runtime_string(string $value): string { return $value; }
+$cases = ["123", "  -00042xyz", "+7", "1_000", "0x1A", "007", "  99  ",
+    "999999999999999999999", "-999999999999999999999", "12\0" . "34", "-0",
+    "  + 5", ".5"];
+foreach ($cases as $case) {
+    echo intval(runtime_string($case)), "|";
+}
+echo "\n";
+echo intval(runtime_string("1e3")), "|";
+echo intval(runtime_string("1.5e2")), "|";
+echo intval(runtime_string("9.9999999999999999e18")), "|";
+echo intval(runtime_string("999999999999999999999e-999")), "|";
+echo intval(runtime_string("1e3"), 10), "|";
+echo intval(runtime_string("9.9999999999999999e18"), 10), "|";
+echo intval(runtime_string("1e3"), 16), "\n";
+"#,
+    );
+    assert_eq!(
+        out,
+        "123|-42|7|1|0|7|99|9223372036854775807|-9223372036854775808|12|0|0|0|\n\
+         1000|150|9223372036854775807|0|1000|9223372036854775807|483\n"
+    );
+}

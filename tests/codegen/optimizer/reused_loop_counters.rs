@@ -18,8 +18,10 @@ use super::*;
 const REUSED_COUNTERS: &str = r#"<?php
 function reusedCounter(int $n): int {
     $sum = 0;
-    for ($i = 0; $i < $n; $i++) { $sum += 1; }
-    for ($i = $n - 1; $i >= 0; $i--) { $sum += 1; }
+    $step = 1;
+    // The two-statement body keeps the closed-form accumulator reduction out of this fixture.
+    for ($i = 0; $i < $n; $i++) { $step = 1; $sum += $step; }
+    for ($i = $n - 1; $i >= 0; $i--) { $step = 1; $sum += $step; }
     return $sum;
 }
 function reversedCounter(int $n): int {

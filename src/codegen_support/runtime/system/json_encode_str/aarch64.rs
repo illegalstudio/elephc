@@ -83,54 +83,51 @@ pub(super) fn emit(emitter: &mut Emitter) {
     emitter.label("__rt_json_str_quoted");
 
     // -- short plain-ASCII fast path --
-    // With no active flags, a short string made only of printable ASCII (excluding quote and
-    // backslash) has an exact output length of len + 2. Writing it directly skips the sizing
-    // pass and the per-byte escape dispatch, which is what JSON object keys and short scalar
-    // values pay on every encode.
+    // With no active flags, a short string made only of printable ASCII (excluding quote,
+    // slash, and backslash) has an exact output length of len + 2. Reserve that body and
+    // classify each source byte through a 256-byte table while copying it in one pass; a
+    // byte that needs escaping abandons the reservation and runs the general encoder.
     emitter.instruction("cbnz x19, __rt_json_str_size_slow");                   // any active flag needs the escaping pass
     emitter.instruction("ldr x2, [sp, #8]");                                    // reload the source length for the fast-path bound
     emitter.instruction("cmp x2, #16");                                         // only short strings use the direct copy
     emitter.instruction("b.hi __rt_json_str_size_slow");                        // longer strings keep the general encoder
-    emitter.instruction("ldr x1, [sp, #0]");                                    // reload the source pointer for the plain-ASCII scan
-    emitter.instruction("mov x12, #0");                                         // initialize the fast-path scan index
-    emitter.label("__rt_json_str_fast_scan");
+    // Classify every source byte before reserving: a byte that needs escaping must not
+    // abandon a transient heap reservation, which nothing would release.
+    emitter.instruction("ldr x1, [sp, #0]");                                    // reload the source pointer for the classification pass
+    crate::codegen_support::abi::emit_symbol_address(emitter, "x15", "_json_plain_ascii");
+    emitter.instruction("mov x12, #0");                                         // initialize the classification index
+    emitter.label("__rt_json_str_scan_loop");
     emitter.instruction("cmp x12, x2");                                         // has every source byte been classified?
-    emitter.instruction("b.ge __rt_json_str_fast_write");                       // yes: the whole slice is plain ASCII
+    emitter.instruction("b.ge __rt_json_str_scan_done");                        // yes: the reservation cannot be abandoned
     emitter.instruction("ldrb w13, [x1, x12]");                                 // load the next source byte
-    emitter.instruction("sub w14, w13, #32");                                   // rebase printable ASCII 0x20..0x7E onto 0..94
-    emitter.instruction("cmp w14, #95");                                        // control bytes, DEL and UTF-8 bytes need the general path
-    emitter.instruction("b.hs __rt_json_str_size_slow");                        // escape or validate with the full encoder
-    emitter.instruction("cmp w13, #34");                                        // double quotes need escaping
-    emitter.instruction("b.eq __rt_json_str_size_slow");                        // fall back for the quote byte
-    emitter.instruction("cmp w13, #92");                                        // backslashes need escaping
-    emitter.instruction("b.eq __rt_json_str_size_slow");                        // fall back for the backslash byte
-    emitter.instruction("cmp w13, #47");                                        // PHP escapes slashes by default
-    emitter.instruction("b.eq __rt_json_str_size_slow");                        // fall back for the slash byte
-    emitter.instruction("add x12, x12, #1");                                    // advance the plain-ASCII scan
-    emitter.instruction("b __rt_json_str_fast_scan");                           // inspect the next source byte
-
-    emitter.label("__rt_json_str_fast_write");
+    emitter.instruction("ldrb w14, [x15, x13]");                                // classify it as verbatim or escapable
+    emitter.instruction("cbz w14, __rt_json_str_size_slow");                    // escaping needs the general encoder before reserving
+    emitter.instruction("add x12, x12, #1");                                    // advance the classification index
+    emitter.instruction("b __rt_json_str_scan_loop");                           // classify the remaining bytes
+    emitter.label("__rt_json_str_scan_done");
     emitter.instruction("add x0, x2, #2");                                      // reserve the two quotes and the copied bytes
     emitter.instruction("bl __rt_strbuf_reserve_temp");                         // scratch when it fits, a transient heap block otherwise
-    emitter.instruction("mov x11, x0");                                         // output position = the reservation
-    emitter.instruction("str x11, [sp, #16]");                                  // save output start
+    emitter.instruction("str x0, [sp, #16]");                                   // save the output start across the copy
+    emitter.instruction("mov x11, x0");                                         // output body cursor
     emitter.instruction("mov w12, #34");                                        // ASCII double quote
-    emitter.instruction("strb w12, [x11]");                                     // write opening "
-    emitter.instruction("add x11, x11, #1");                                    // advance past the opening quote
+    emitter.instruction("strb w12, [x11], #1");                                 // write the opening quote and advance
     emitter.instruction("ldr x1, [sp, #0]");                                    // reload the source pointer after the reservation
     emitter.instruction("ldr x2, [sp, #8]");                                    // reload the source length after the reservation
-    emitter.instruction("mov x12, #0");                                         // initialize the copy index
-    emitter.label("__rt_json_str_fast_copy");
-    emitter.instruction("cmp x12, x2");                                         // have we copied every source byte?
-    emitter.instruction("b.ge __rt_json_str_fast_close");                       // finish with the closing quote
+    crate::codegen_support::abi::emit_symbol_address(emitter, "x15", "_json_plain_ascii");
+    emitter.instruction("mov x12, #0");                                         // initialize the source index
+    emitter.label("__rt_json_str_fast_loop");
+    emitter.instruction("cmp x12, x2");                                         // has every source byte been copied?
+    emitter.instruction("b.ge __rt_json_str_fast_close");                       // yes: append the closing quote
     emitter.instruction("ldrb w13, [x1, x12]");                                 // load the next source byte
-    emitter.instruction("strb w13, [x11, x12]");                                // copy it directly to the reserved slice
+    emitter.instruction("ldrb w14, [x15, x13]");                                // classify it as verbatim or escapable
+    emitter.instruction("cbz w14, __rt_json_str_size_slow");                    // escaping or validation needs the general encoder
+    emitter.instruction("strb w13, [x11, x12]");                                // copy the plain byte into the reserved slice
     emitter.instruction("add x12, x12, #1");                                    // advance the copy index
-    emitter.instruction("b __rt_json_str_fast_copy");                           // copy the remaining bytes
+    emitter.instruction("b __rt_json_str_fast_loop");                           // copy the remaining bytes
     emitter.label("__rt_json_str_fast_close");
     emitter.instruction("add x11, x11, x2");                                    // address the byte after the copied slice
     emitter.instruction("mov w12, #34");                                        // ASCII double quote
-    emitter.instruction("strb w12, [x11]");                                     // write closing "
+    emitter.instruction("strb w12, [x11]");                                     // write the closing quote
     emitter.instruction("ldr x1, [sp, #16]");                                   // x1 = output start (the copied slice)
     emitter.instruction("add x2, x2, #2");                                      // result length includes both quotes
     emitter.instruction("bl __rt_concat_publish");                              // advance _concat_off past a scratch-backed slice (x1/x2 preserved)

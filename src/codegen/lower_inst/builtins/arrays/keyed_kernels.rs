@@ -16,6 +16,187 @@ use crate::ir::Instruction;
 
 use super::{expect_operand, store_if_result};
 
+/// Lowers the stored `$x + C`, `$x - C`, or `$x * C` map over a packed int array.
+///
+/// The runtime kernel builds a raw int array until an element overflows; it then rebuilds an
+/// ordinary boxed Mixed array so PHP's per-element int/float result is preserved.
+pub(crate) fn lower_array_map_numeric(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+) -> Result<()> {
+    let array = expect_operand(inst, 0)?;
+    let constant = expect_operand(inst, 1)?;
+    let op = expect_operand(inst, 2)?;
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.load_value_to_reg(array, "x0")?;
+            ctx.load_value_to_reg(constant, "x1")?;
+            ctx.load_value_to_reg(op, "x2")?;
+        }
+        Arch::X86_64 => {
+            ctx.load_value_to_reg(array, "rdi")?;
+            ctx.load_value_to_reg(constant, "rsi")?;
+            ctx.load_value_to_reg(op, "rdx")?;
+        }
+    }
+    abi::emit_call_label(ctx.emitter, "__rt_array_map_numeric");
+    store_if_result(ctx, inst)
+}
+
+/// Lowers the stored `$x * A + B` affine map over a packed int array.
+pub(crate) fn lower_array_map_affine(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+) -> Result<()> {
+    let array = expect_operand(inst, 0)?;
+    let scale = expect_operand(inst, 1)?;
+    let offset = expect_operand(inst, 2)?;
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.load_value_to_reg(array, "x0")?;
+            ctx.load_value_to_reg(scale, "x1")?;
+            ctx.load_value_to_reg(offset, "x2")?;
+        }
+        Arch::X86_64 => {
+            ctx.load_value_to_reg(array, "rdi")?;
+            ctx.load_value_to_reg(scale, "rsi")?;
+            ctx.load_value_to_reg(offset, "rdx")?;
+        }
+    }
+    abi::emit_call_label(ctx.emitter, "__rt_array_map_affine");
+    store_if_result(ctx, inst)
+}
+
+/// Lowers the stored `$x * $x` square map over a packed int array.
+pub(crate) fn lower_array_map_square(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+) -> Result<()> {
+    let array = expect_operand(inst, 0)?;
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => ctx.load_value_to_reg(array, "x0")?,
+        Arch::X86_64 => ctx.load_value_to_reg(array, "rdi")?,
+    };
+    abi::emit_call_label(ctx.emitter, "__rt_array_map_square");
+    store_if_result(ctx, inst)
+}
+
+/// Lowers the stored `$x * $x + C` square-then-offset map over a packed int array.
+pub(crate) fn lower_array_map_square_affine(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+) -> Result<()> {
+    let array = expect_operand(inst, 0)?;
+    let offset = expect_operand(inst, 1)?;
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.load_value_to_reg(array, "x0")?;
+            ctx.load_value_to_reg(offset, "x1")?;
+        }
+        Arch::X86_64 => {
+            ctx.load_value_to_reg(array, "rdi")?;
+            ctx.load_value_to_reg(offset, "rsi")?;
+        }
+    }
+    abi::emit_call_label(ctx.emitter, "__rt_array_map_square_affine");
+    store_if_result(ctx, inst)
+}
+
+/// Lowers the stored `$x * F` float-scale map over a packed int array.
+pub(crate) fn lower_array_map_float_scale(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+) -> Result<()> {
+    let array = expect_operand(inst, 0)?;
+    let scale = expect_operand(inst, 1)?;
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.load_value_to_reg(array, "x0")?;
+            ctx.load_value_to_reg(scale, "d0")?;
+        }
+        Arch::X86_64 => {
+            ctx.load_value_to_reg(array, "rdi")?;
+            ctx.load_value_to_reg(scale, "xmm0")?;
+        }
+    }
+    abi::emit_call_label(ctx.emitter, "__rt_array_map_float_scale");
+    store_if_result(ctx, inst)
+}
+
+/// Lowers the stored `$x * F + G` float-affine map over a packed int array.
+pub(crate) fn lower_array_map_float_affine(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+) -> Result<()> {
+    let array = expect_operand(inst, 0)?;
+    let scale = expect_operand(inst, 1)?;
+    let offset = expect_operand(inst, 2)?;
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.load_value_to_reg(array, "x0")?;
+            ctx.load_value_to_reg(scale, "d0")?;
+            ctx.load_value_to_reg(offset, "d1")?;
+        }
+        Arch::X86_64 => {
+            ctx.load_value_to_reg(array, "rdi")?;
+            ctx.load_value_to_reg(scale, "xmm0")?;
+            ctx.load_value_to_reg(offset, "xmm1")?;
+        }
+    }
+    abi::emit_call_label(ctx.emitter, "__rt_array_map_float_affine");
+    store_if_result(ctx, inst)
+}
+
+/// Lowers the stored `$x / F` float-division map over a packed int array.
+pub(crate) fn lower_array_map_float_div(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+) -> Result<()> {
+    let array = expect_operand(inst, 0)?;
+    let divisor = expect_operand(inst, 1)?;
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.load_value_to_reg(array, "x0")?;
+            ctx.load_value_to_reg(divisor, "d0")?;
+        }
+        Arch::X86_64 => {
+            ctx.load_value_to_reg(array, "rdi")?;
+            ctx.load_value_to_reg(divisor, "xmm0")?;
+        }
+    }
+    abi::emit_call_label(ctx.emitter, "__rt_array_map_float_div");
+    store_if_result(ctx, inst)
+}
+
+/// Lowers the stored `$x / C` integer-division map over a packed int array.
+pub(crate) fn lower_array_map_int_div(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+) -> Result<()> {
+    let array = expect_operand(inst, 0)?;
+    let divisor = expect_operand(inst, 1)?;
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.load_value_to_reg(array, "x0")?;
+            ctx.load_value_to_reg(divisor, "x1")?;
+        }
+        Arch::X86_64 => {
+            ctx.load_value_to_reg(array, "rdi")?;
+            ctx.load_value_to_reg(divisor, "rsi")?;
+        }
+    }
+    abi::emit_call_label(ctx.emitter, "__rt_array_map_int_div");
+    store_if_result(ctx, inst)
+}
+
+/// Lowers the fused stored `$x / C` map+sum kernel over a packed int array.
+pub(crate) fn lower_array_map_sum_int_div(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+) -> Result<()> {
+    lower_two_operand_kernel(ctx, inst, "__rt_array_map_sum_int_div")
+}
+
 /// Lowers `array_map_sum_add(array, offset)` into the fused runtime kernel.
 pub(crate) fn lower_array_map_sum_add(
     ctx: &mut FunctionContext<'_>,

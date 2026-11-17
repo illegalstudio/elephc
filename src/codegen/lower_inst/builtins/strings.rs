@@ -71,7 +71,7 @@ pub(crate) use hash::{
     lower_hash_final, lower_hash_hmac, lower_hash_init, lower_hash_update,
     lower_md5, lower_sha1,
 };
-pub(crate) use mbstring::{lower_mb_chr_len, lower_mb_convert_encoding_len, lower_mb_decode_numericentity_len, lower_mb_encode_numericentity_len, lower_mb_encoding_aliases_count, lower_mb_ereg_replace_len, lower_mb_get_info_len, lower_mb_http_input_len, lower_mb_list_encodings_count, lower_mb_regex_set_options_len, lower_mb_preferred_mime_name_len, lower_mb_split_count, lower_mb_detect_encoding_len, lower_mb_detect_order_single, lower_mb_ord_int, lower_mb_position_int, lower_mb_setting_int, lower_mb_str_split_count, lower_mb_strimwidth_len, lower_mb_strstr_len, lower_mb_strlen, lower_mbstring};
+pub(crate) use mbstring::{lower_mb_chr_first, lower_mb_chr_len, lower_mb_chr_packed, lower_mb_convert_encoding_len, lower_mb_decode_numericentity_len, lower_mb_encode_numericentity_len, lower_mb_encoding_aliases_count, lower_mb_ereg_replace_len, lower_mb_get_info_len, lower_mb_http_input_len, lower_mb_list_encodings_count, lower_mb_regex_set_options_len, lower_mb_preferred_mime_name_len, lower_mb_split_count, lower_mb_detect_encoding_len, lower_mb_detect_order_single, lower_mb_ord_int, lower_mb_position_int, lower_mb_setting_int, lower_mb_str_split_count, lower_mb_strimwidth_len, lower_mb_strstr_len, lower_mb_strlen, lower_mbstring};
 pub(crate) use network::{lower_inet, lower_inet_pton_len, lower_ip2long, lower_ip2long_int, lower_long2ip};
 pub(crate) use parse_url::{lower_parse_url, lower_parse_url_count};
 pub(crate) use printf::{lower_printf, lower_sprintf, lower_vprintf, lower_vsprintf};
