@@ -117,3 +117,5 @@ mod strict_conversion_properties;
 mod strict_conversion_returns;
 
 mod strict_string_conversions;
+
+mod strict_static_locals;

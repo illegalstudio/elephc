@@ -151,6 +151,7 @@ pub struct ElephcEvalScope {
     aot_visible_names: HashSet<String>,
     global_aliases: HashMap<String, String>,
     reference_targets: HashMap<String, EvalReferenceTarget>,
+    static_bindings: HashSet<String>,
     generation: u64,
 }
 
@@ -167,6 +168,7 @@ impl ElephcEvalScope {
             aot_visible_names: HashSet::new(),
             global_aliases: HashMap::new(),
             reference_targets: HashMap::new(),
+            static_bindings: HashSet::new(),
             generation: 0,
         }
     }
@@ -369,6 +371,7 @@ impl ElephcEvalScope {
             return owned_cell_except(previous, cell).into_iter().collect();
         }
 
+        self.static_bindings.remove(&target);
         let previous_source = self.entries.insert(
             source,
             ScopeEntry::reference(cell, source_ownership, self.generation),
@@ -382,7 +385,9 @@ impl ElephcEvalScope {
 
     /// Records the caller-side storage target for one by-reference local variable.
     pub fn set_reference_target(&mut self, name: impl Into<String>, target: EvalReferenceTarget) {
-        self.reference_targets.insert(name.into(), target);
+        let name = name.into();
+        self.static_bindings.remove(&name);
+        self.reference_targets.insert(name, target);
     }
 
     /// Returns the caller-side storage target associated with one by-reference local.
@@ -394,6 +399,7 @@ impl ElephcEvalScope {
     pub fn unset(&mut self, name: impl Into<String>) -> Option<RuntimeCellHandle> {
         self.bump_generation();
         let name = name.into();
+        self.static_bindings.remove(&name);
         self.native_storage_types.remove(&name);
         self.inferred_local_types.remove(&name);
         self.native_binding_types.remove(&name);
@@ -411,6 +417,7 @@ impl ElephcEvalScope {
         name: impl Into<String>,
     ) -> Option<RuntimeCellHandle> {
         let name = name.into();
+        self.static_bindings.remove(&name);
         self.native_storage_types.remove(&name);
         self.inferred_local_types.remove(&name);
         self.native_binding_types.remove(&name);
@@ -515,6 +522,12 @@ impl ElephcEvalScope {
         entries
     }
 
+    /// Records a static declaration actually reached by this activation.
+    pub(crate) fn mark_static_binding(&mut self, name: &str) { self.static_bindings.insert(name.to_string()); }
+
+    /// Reports whether a name still refers to its reached static declaration.
+    pub(crate) fn is_static_binding(&self, name: &str) -> bool { self.static_bindings.contains(name) }
+
     /// Marks a variable name as an alias to the eval context's global scope.
     pub fn mark_global_alias(&mut self, name: impl Into<String>) {
         let name = name.into();
@@ -527,7 +540,9 @@ impl ElephcEvalScope {
         name: impl Into<String>,
         global_name: impl Into<String>,
     ) {
-        self.global_aliases.insert(name.into(), global_name.into());
+        let name = name.into();
+        self.static_bindings.remove(&name);
+        self.global_aliases.insert(name, global_name.into());
     }
 
     /// Removes a variable's global alias marker after local `unset()`.
@@ -577,6 +592,7 @@ impl ElephcEvalScope {
 
     /// Removes every entry and returns runtime cells owned by the scope.
     pub fn drain_owned_cells(&mut self) -> Vec<RuntimeCellHandle> {
+        self.static_bindings.clear();
         self.inferred_local_types.clear();
         self.native_binding_types.clear();
         self.aot_visible_names.clear();

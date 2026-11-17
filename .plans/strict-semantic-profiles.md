@@ -371,7 +371,7 @@ evidence and outstanding guarantees are recorded below.
 
 ## Implementation progress
 
-Verified through step137 (this commit). Remaining feature integration is active. Issue:
+Verified through step138 (this commit). Remaining feature integration is active. Issue:
 https://github.com/illegalstudio/elephc/issues/2347.
 
 The full task remains active. The user requested complete implementation, with a
@@ -635,7 +635,8 @@ paths. Keep this plan, agent documentation and the current journal log synchroni
 | 134 | `ac5e3f53aa` | feat(strict): preserve resource local binding contracts |
 | 135 | `f3f1a66f47` | feat(strict): retain interpreted parameter binding origins |
 | 136 | `1ce7e03b84` | feat(strict): preserve closure capture binding origins |
-| 137 | this commit | fix(eval): retire reflection snapshot temporaries |
+| 137 | `f59ccee500` | fix(eval): retire reflection snapshot temporaries |
+| 138 | this commit | feat(strict): preserve interpreted static binding origins |
 
 
 ### Latest verified admission checkpoint
@@ -821,3 +822,39 @@ zero. The earlier UnsupportedConstruct was isolated to getClosureUsedVariables
 under Locals, then traced to the mock wrapper identity. No target emitter or ABI
 changed. Diff hygiene passes; inherited warnings remain. Static origins and the
 six pending families continue next; no full suite, push or PR was run.
+
+### Verified138: interpreted static binding lifetime
+
+The shared static coordinator retains producer origins with persistent context
+cells, lends owned activation leases, and tracks only reached, still-attached static
+bindings. Initialization succeeds before detaching an older local. Recursive first
+successful initialization wins, and the new binding is published before retiring a
+displaced value whose destructor can throw. Unset/reference/global rebindings leave
+the persistent value intact. Reflection shares already-escaped references and copies
+ordinary unescaped snapshots through the existing array metadata and owner helpers.
+
+Firstc8f9fab3 passes build10.86s, existing snapshot owners0.05s and both-IR/default-
+Locals native lifetime bundle132.63s with clean heaps. An array-identity assertion
+is corrected to compare copied contents. Final58d40c31 passes the default build10.39s
+and five exact gates in4m03s: declared initializer alternatives/owners0.08s,
+snapshot owners0.07s, recursive/detached/displaced-destructor owners0.08s,
+extended both-IR/default-Locals native lifetime bundle143.40s and plugin example48.20s.
+Every native heap is clean and all fake cell owners reach zero. PHP validates the
+extended default output. Hygiene and PHP syntax checks pass; only inherited Rust
+warnings remain. No target emitter or external ABI changed.
+
+Native baseline confirms late declarations still reuse the wrong frame slot,
+conditional declarations retain a prior local, unset mutates persistent storage and
+throwing initializers lose the old value. Native dynamic and union static stores
+already pass; mixed-reference static arguments are explicitly rejected in both
+profiles. A bounded EIR draft separates persistent metadata from activation aliases
+using existing raw payload layouts and reference binding helpers. No native draft
+has been applied. Validate heterogeneous reference payloads and old-origin retirement
+before accepting that integration; managed storage is a separate design option.
+
+Reflection also needs dynamic-initializer placeholders: reference PHP reports null
+without running a function/parameter initializer before its first call, then exposes
+the initialized value. Current reflection evaluates missing initializers. Factb876b275
+records this open gap; do not cache its placeholder as a successful binding.
+Continue native/static and foreach flow, all six pending families, and full host/
+umbrella acceptance. No full suite, push or PR was run.

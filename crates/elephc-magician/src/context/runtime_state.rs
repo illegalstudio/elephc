@@ -107,7 +107,7 @@ impl ElephcEvalContext {
 
     /// Detaches persistent value owners before native releases can reenter the context.
     pub(crate) fn take_persistent_cell_owners(&mut self) -> Vec<RuntimeCellHandle> {
-        self.static_locals.drain().map(|(_, cell)| cell)
+        self.static_locals.drain().map(|(_, entry)| entry.value)
             .chain(self.static_properties.drain().map(|(_, cell)| cell))
             .chain(self.class_constants.drain().map(|(_, cell)| cell))
             .collect()
@@ -130,8 +130,20 @@ impl ElephcEvalContext {
     pub fn static_local(&self, function_name: &str, name: &str) -> Option<RuntimeCellHandle> {
         self.static_locals
             .get(&(function_name.to_string(), name.to_string()))
-            .copied()
-            .map(RuntimeCellHandle::borrowed)
+            .map(|entry| entry.value.borrowed())
+    }
+
+    /// Returns the immutable contract established by successful static initialization.
+    pub(crate) fn static_local_origin(&self, function_name: &str, name: &str) -> Option<&EvalParameterType> {
+        self.static_locals.get(&(function_name.to_string(), name.to_string())).and_then(|entry| entry.origin.as_ref())
+    }
+
+    /// Stores a newly initialized static cell and its producer contract.
+    pub(crate) fn initialize_static_local(&mut self, function_name: &str, name: &str,
+        value: RuntimeCellHandle, origin: Option<EvalParameterType>,
+    ) -> Option<RuntimeCellHandle> {
+        self.static_locals.insert((function_name.to_string(), name.to_string()), EvalStaticLocal { value, origin })
+            .map(|entry| entry.value).filter(|previous| *previous != value)
     }
 
     /// Stores one static local cell and returns any replaced distinct cell.
@@ -141,10 +153,10 @@ impl ElephcEvalContext {
         name: impl Into<String>,
         cell: RuntimeCellHandle,
     ) -> Option<RuntimeCellHandle> {
-        let previous = self
-            .static_locals
-            .insert((function_name.into(), name.into()), cell);
-        previous.filter(|previous| *previous != cell)
+        let key = (function_name.into(), name.into());
+        let origin = self.static_locals.get(&key).and_then(|entry| entry.origin.clone());
+        self.static_locals.insert(key, EvalStaticLocal { value: cell, origin })
+            .map(|entry| entry.value).filter(|previous| *previous != cell)
     }
 
     /// Returns a stored static property cell for an eval-declared class.

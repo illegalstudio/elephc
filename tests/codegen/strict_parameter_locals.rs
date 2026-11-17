@@ -42,7 +42,8 @@ fn test_strict_parameter_locals_runtime_plugin_example() {
     let output = StrictFixture::new(include_str!("../../examples/strict-eval-locals/main.php"))
         .capture(&["--strict-locals", "--heap-debug"]);
     assert_eq!(String::from_utf8_lossy(&output.stdout), concat!(
-        "The plugin quantity kept its integer value\nPlugin quantity: 2\nQuantity: 3\nThe captured quantity kept its integer value\n"));
+        "The plugin quantity kept its integer value\nPlugin quantity: 2\nQuantity: 3\nThe captured quantity kept its integer value\n",
+        "Plugin total: 3\nThe static total kept its integer value\nPlugin total: 3\n"));
     assert!(String::from_utf8_lossy(&output.stderr).contains("HEAP DEBUG: leak summary: clean"),
         "{}", String::from_utf8_lossy(&output.stderr));
 }

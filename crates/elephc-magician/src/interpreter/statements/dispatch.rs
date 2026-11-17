@@ -196,7 +196,7 @@ pub(in crate::interpreter) fn execute_stmt(
             Ok(EvalControl::None)
         }
         EvalStmt::Global { vars } => {
-            execute_global_stmt(vars, context, scope)?;
+            execute_global_stmt(vars, context, scope, values)?;
             Ok(EvalControl::None)
         }
         EvalStmt::If {

@@ -616,6 +616,7 @@ pub(in crate::interpreter) fn persist_static_locals(
     values: &mut impl RuntimeValueOps,
 ) -> Result<(), EvalStatus> {
     for name in names {
+        if !scope.is_static_binding(name) { continue; }
         if let Some(cell) = scope.visible_cell(name) {
             if context.static_local(function_name, name) == Some(cell) { continue; }
             let cell = values.retain(cell)?;

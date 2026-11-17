@@ -230,6 +230,9 @@ pub(in crate::interpreter) fn set_reference_alias(
         if current.is_none() { let released = eval_release_value(context, values, value); checked.and(released)?; }
         else { checked?; }
     }
+    if target != source && scope.is_static_binding(target) {
+        if let Some(old) = unset_scope_cell(context, scope, target)? { eval_release_value(context, values, old)?; }
+    }
     let mut types = generic_local_contracts(scope, source, context);
     if let Some(declared) = scope.local_type(target).filter(|ty| !types.contains(ty)) { types.push(declared.clone()); }
     if !types.is_empty() {
@@ -298,13 +301,17 @@ fn retire_scope_origin(scope: &mut ElephcEvalScope, name: &str,
 /// Marks variables as aliases to the context global scope for later reads/writes.
 pub(in crate::interpreter) fn execute_global_stmt(
     vars: &[String],
-    context: &ElephcEvalContext,
+    context: &mut ElephcEvalContext,
     scope: &mut ElephcEvalScope,
+    values: &mut impl RuntimeValueOps,
 ) -> Result<(), EvalStatus> {
     if context.global_scope_ptr().is_none() {
         return Err(EvalStatus::RuntimeFatal);
     }
     for name in vars {
+        if scope.is_static_binding(name) {
+            if let Some(old) = unset_scope_cell(context, scope, name.clone())? { eval_release_value(context, values, old)?; }
+        }
         scope.mark_global_alias(name.clone());
     }
     Ok(())

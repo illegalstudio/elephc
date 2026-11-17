@@ -117,7 +117,7 @@ pub(in crate::interpreter) fn bind_parameter_origin(scope: &mut ElephcEvalScope,
 }
 
 /// Infers a PHP value kind without accidentally enabling inferred array element constraints.
-fn value_contract(value: RuntimeCellHandle, context: &ElephcEvalContext,
+pub(in crate::interpreter) fn value_contract(value: RuntimeCellHandle, context: &ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<EvalParameterType, EvalStatus> {
     let variant = match values.type_tag(value)? {

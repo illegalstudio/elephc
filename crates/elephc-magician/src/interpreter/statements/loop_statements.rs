@@ -18,27 +18,7 @@ pub(in crate::interpreter) fn execute_static_var_stmt(
     scope: &mut ElephcEvalScope,
     values: &mut impl RuntimeValueOps,
 ) -> Result<(), EvalStatus> {
-    let Some(function_name) = context.current_function().map(str::to_string) else {
-        let value = eval_expr(init, context, scope, values)?;
-        if let Some(replaced) = scope.set(name.to_string(), value, ScopeCellOwnership::Owned) {
-            values.release(replaced)?;
-        }
-        return Ok(());
-    };
-    if scope.contains_visible(name) {
-        return Ok(());
-    }
-    let value = if let Some(value) = context.static_local(&function_name, name) {
-        value
-    } else {
-        let value = eval_expr(init, context, scope, values)?;
-        let _ = context.set_static_local(function_name.clone(), name.to_string(), value);
-        value
-    };
-    if let Some(replaced) = scope.set(name.to_string(), value, ScopeCellOwnership::Borrowed) {
-        values.release(replaced)?;
-    }
-    Ok(())
+    super::super::static_locals::bind(name, init, context, scope, values)
 }
 
 /// Executes a PHP switch with loose case matching, default fallback, and fallthrough.

@@ -26,6 +26,12 @@ pub enum EvalPcntlSignalHandler {
     Callable(RuntimeCellHandle),
 }
 
+/// A persistent static cell and its immutable successful initializer contract.
+pub(super) struct EvalStaticLocal {
+    pub(super) value: RuntimeCellHandle,
+    pub(super) origin: Option<EvalParameterType>,
+}
+
 /// Process-level eval context passed opaquely across the C ABI.
 ///
 /// Generated code never inspects this layout directly; it only passes pointers
@@ -82,7 +88,7 @@ pub struct ElephcEvalContext {
     pub(super) native_property_default_errors: SharedNative<HashMap<(String, String), String>>,
     pub(super) native_class_default_errors: SharedNative<HashMap<String, String>>,
     pub(super) native_property_attributes: SharedNative<HashMap<(String, String), Vec<EvalAttribute>>>,
-    pub(super) static_locals: HashMap<(String, String), RuntimeCellHandle>,
+    pub(super) static_locals: HashMap<(String, String), EvalStaticLocal>,
     pub(super) static_properties: HashMap<(String, String), RuntimeCellHandle>,
     pub(super) static_property_aliases: HashMap<(String, String), EvalReferenceTarget>,
     pub(super) class_constants: HashMap<(String, String), RuntimeCellHandle>,

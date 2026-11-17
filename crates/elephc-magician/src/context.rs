@@ -52,6 +52,7 @@ use crate::value::{RuntimeCell, RuntimeCellHandle};
 pub use alias_metadata::*;
 pub use closure_metadata::*;
 pub use core::*;
+use core::EvalStaticLocal;
 pub use functions::{EvalNativeGlobalConstant, EvalNativeUserConstant};
 pub(crate) use global_registry::*;
 pub(crate) use reflection_registry::{

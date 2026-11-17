@@ -203,3 +203,5 @@ mod strict_cast_argument_aliases;
 mod strict_static_rebind_candidates;
 
 mod strict_conversion_returns;
+
+mod strict_static_locals;
