@@ -395,6 +395,25 @@ foreach (relay(new YieldFromAggregate()) as $key => $value) {
     assert_eq!(out, "array=2;null|object=3;null");
 }
 
+/// Verifies `yield from` over a value typed `iterable` or `mixed` keeps a Generator's return
+/// value, and still yields an array's or iterator's pairs with a null result.
+#[test]
+fn test_generator_yield_from_runtime_generator_keeps_return_value() {
+    let out = compile_and_run(
+        r#"<?php
+function g() { yield 1; yield 2; return 42; }
+function outer($x) { $r = yield from $x; echo "ret="; var_dump($r); return $r; }
+function run(iterable $it) { foreach (outer($it) as $v) echo $v, "\n"; }
+function runm(mixed $m) { foreach (outer($m) as $v) echo $v, "\n"; }
+run(g());
+run([5, 6]);
+runm(g());
+runm(new ArrayIterator([7]));
+"#,
+    );
+    assert_eq!(out, "1\n2\nret=int(42)\n5\n6\nret=NULL\n1\n2\nret=int(42)\n7\nret=NULL\n");
+}
+
 /// Verifies a source crossing a `mixed` boundary uses dynamic iterable dispatch.
 #[test]
 fn test_generator_yield_from_mixed_array_source() {

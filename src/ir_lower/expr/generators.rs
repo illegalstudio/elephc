@@ -63,18 +63,132 @@ pub(super) fn lower_yield(ctx: &mut LoweringContext<'_, '_>, key: Option<&Expr>,
 pub(super) fn lower_yield_from(ctx: &mut LoweringContext<'_, '_>, inner: &Expr, expr: &Expr) -> LoweredValue {
     let value = lower_expr(ctx, inner);
     let source_ty = ctx.builder.value_php_type(value.value).codegen_repr();
-    if matches!(
-        source_ty,
-        PhpType::Array(_)
-            | PhpType::AssocArray { .. }
-            | PhpType::Iterable
-            | PhpType::Mixed
-            | PhpType::Union(_)
-    )
+    let runtime_class = matches!(source_ty, PhpType::Iterable | PhpType::Mixed | PhpType::Union(_))
+        || matches!(&source_ty, PhpType::Object(name)
+            if name.trim_start_matches('\\') != "Generator"
+                && ctx.interfaces.contains_key(name.trim_start_matches('\\')));
+    if runtime_class {
+        return lower_yield_from_runtime_class(ctx, value, expr);
+    }
+    if matches!(source_ty, PhpType::Array(_) | PhpType::AssocArray { .. })
         || matches!(&source_ty, PhpType::Object(name) if name.trim_start_matches('\\') != "Generator")
     {
         return lower_yield_from_array(ctx, value, expr);
     }
+    lower_yield_from_generator(ctx, value, expr)
+}
+
+/// Lowers `yield from` over a value whose class is known only at run time (`mixed`, `iterable`,
+/// a union, an interface): a `Generator` is delegated to, so its return value comes back as the
+/// expression's result; anything else is iterated and re-yielded, giving null.
+fn lower_yield_from_runtime_class(
+    ctx: &mut LoweringContext<'_, '_>,
+    source: LoweredValue,
+    expr: &Expr,
+) -> LoweredValue {
+    let span = expr.span;
+    let temp = ctx.declare_owned_hidden_temp(PhpType::Mixed);
+    let mut source = source;
+    if ctx.builder.value_php_type(source.value).codegen_repr() == PhpType::Iterable {
+        // An `iterable` holds a bare heap pointer whose array or object nature is known only
+        // to the boxer: box it so the tag test below can tell an array from a Generator.
+        let original = source;
+        let held = crate::ir_lower::ownership::acquire_if_refcounted(ctx, source, Some(span));
+        source = ctx.box_value_as_mixed(held, PhpType::Mixed, Some(span));
+        if ctx.value_is_owning_temporary(original) {
+            crate::ir_lower::ownership::release_if_owned(ctx, original, Some(span));
+        }
+    }
+    let source_ty = ctx.builder.value_php_type(source.value).codegen_repr();
+    let boxed_source = matches!(source_ty, PhpType::Mixed | PhpType::Union(_));
+    let check_class = ctx.builder.create_named_block("yieldfrom.check", Vec::new());
+    let delegate = ctx.builder.create_named_block("yieldfrom.delegate", Vec::new());
+    let iterate = ctx.builder.create_named_block("yieldfrom.iterate", Vec::new());
+    let merge = ctx.builder.create_named_block("yieldfrom.result", Vec::new());
+    if boxed_source {
+        // The tag test first, so an array never reaches the class test.
+        let is_object = ctx.emit_value(
+            Op::TypePredicate,
+            vec![source.value],
+            Some(Immediate::TypePredicate(crate::ir::PhpTypePredicate::Object)),
+            PhpType::Bool,
+            Op::TypePredicate.default_effects(),
+            Some(span),
+        );
+        ctx.builder.terminate(Terminator::CondBr {
+            cond: is_object.value,
+            then_target: check_class,
+            then_args: Vec::new(),
+            else_target: iterate,
+            else_args: Vec::new(),
+        });
+    } else {
+        ctx.builder.terminate(Terminator::Br { target: check_class, args: Vec::new() });
+    }
+    let split = ctx.initialized_slots_snapshot();
+
+    ctx.builder.position_at_end(check_class);
+    let generator = ctx.intern_class_name("Generator");
+    let is_generator = ctx.emit_value(
+        Op::InstanceOf,
+        vec![source.value],
+        Some(Immediate::Data(generator)),
+        PhpType::Bool,
+        Op::InstanceOf.default_effects(),
+        Some(span),
+    );
+    ctx.builder.terminate(Terminator::CondBr {
+        cond: is_generator.value,
+        then_target: delegate,
+        then_args: Vec::new(),
+        else_target: iterate,
+        else_args: Vec::new(),
+    });
+
+    ctx.builder.position_at_end(delegate);
+    ctx.restore_initialized_slots(split.clone());
+    let target = PhpType::Object("Generator".to_string());
+    let inner = if boxed_source {
+        ctx.emit_owned_value(
+            Op::MixedUnbox,
+            vec![source.value],
+            None,
+            target.clone(),
+            Op::mixed_unbox_effects(&target),
+            Some(span),
+        )
+    } else if source_ty == PhpType::Iterable {
+        // An `iterable` slot already holds the unboxed object pointer.
+        source
+    } else {
+        crate::ir_lower::stmt::borrow_receiver_as_runtime_class(ctx, source, "Generator", span)
+    };
+    let passthrough = inner.value == source.value;
+    let result = lower_yield_from_generator(ctx, inner, expr);
+    if !passthrough && ctx.value_is_owning_temporary(source) {
+        crate::ir_lower::ownership::release_if_owned(ctx, source, Some(span));
+    }
+    store_value_into_temp(ctx, &temp, PhpType::Mixed, result, span);
+    let merged = ctx.initialized_slots_snapshot();
+    ctx.builder.terminate(Terminator::Br { target: merge, args: Vec::new() });
+
+    ctx.builder.position_at_end(iterate);
+    ctx.restore_initialized_slots(split);
+    let result = lower_yield_from_array(ctx, source, expr);
+    store_value_into_temp(ctx, &temp, PhpType::Mixed, result, span);
+    ctx.builder.terminate(Terminator::Br { target: merge, args: Vec::new() });
+
+    ctx.builder.position_at_end(merge);
+    ctx.restore_initialized_slots(merged);
+    take_owned_temp(ctx, &temp, span)
+}
+
+/// Delegates `yield from` to a value known to be a `Generator`, returning its return value.
+fn lower_yield_from_generator(
+    ctx: &mut LoweringContext<'_, '_>,
+    value: LoweredValue,
+    expr: &Expr,
+) -> LoweredValue {
     let staging = prepublish_user_call_result(
         ctx, None, &ReturnArgAlias::None, &PhpType::Mixed, expr.span,
     );
