@@ -850,6 +850,12 @@ numeric unions retain every declared alternative, and an explicit `mixed`
 binding remains open. Detaching a binding with `unset()` or leaving its frame
 retires its reference contract.
 
+An opaque `eval()` also retains an already initialized native numeric binding's
+contract. Incompatible interpreted writes raise `TypeError` before changing the
+native value. Future frame slots do not establish an earlier binding contract;
+explicit null alternatives, numeric unions, `mixed`, and `unset()` retain their
+respective behavior.
+
 Beyond those shared exclusions the shapes are gated differently:
 
 - The **`unset()` kill** and the **straight-line retype** additionally require

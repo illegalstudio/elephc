@@ -206,6 +206,7 @@ impl Checker {
             // type expression remains authoritative for per-element coercion and Reflection.
             self.promote_eval_native_variadic_containers()?;
             self.infer_type(&args[0], env)?;
+            self.record_numeric_eval_contracts(env, span);
             return Ok(Some(PhpType::Mixed));
         }
 

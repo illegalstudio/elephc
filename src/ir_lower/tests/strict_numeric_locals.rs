@@ -10,6 +10,24 @@
 use crate::{codegen_support::platform::Target, source::SourceMode};
 use elephc_semantics::{SemanticProfile, StrictFeature};
 
+/// Numeric eval plans preserve existing binding origins without using future scalar frame slots.
+#[test]
+fn strict_numeric_eval_contracts_use_existing_binding_origins_on_every_target() {
+    let source = include_str!("../../../tests/fixtures/strict/native_eval_local_contract.php")
+        .replace("echo gettype($owner)", "$future = 0; echo gettype($owner)");
+    let program = crate::parser::parse_with_mode(&crate::lexer::tokenize(&source).unwrap(), SourceMode::Php).unwrap();
+    let profile = SemanticProfile::PERMISSIVE.with(StrictFeature::Locals, true);
+    for name in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+        let target = Target::parse(name).unwrap();
+        let checked = crate::types::checker::check_staged_semantics(&program, target, profile).unwrap();
+        assert!(checked.local_store_contracts.iter().any(|((_, _, local), contract)|
+            local == "owner" && contract.ty == crate::types::PhpType::Int
+                && contract.feature == StrictFeature::Locals), "{name}: source-point integer origin");
+        assert!(!checked.local_store_contracts.keys().any(|(_, _, local)| local == "future"),
+            "{name}: a later zero-valued integer slot does not constrain earlier eval");
+    }
+}
+
 /// All supported targets transport numeric contracts through the protected native reference ABI.
 #[test]
 fn strict_numeric_reference_callers_generate_exact_native_validators_on_every_target() {

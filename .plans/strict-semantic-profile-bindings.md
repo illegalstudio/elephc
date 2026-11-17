@@ -1,9 +1,9 @@
 # Strict local binding implementation history
 
-This record preserves steps116-118 candidate investigations and verification. The
+This record preserves steps116-119 candidate investigations and verification. The
 current approved contract and authoritative checkpoint remain in
 [strict-semantic-profiles.md](strict-semantic-profiles.md). Candidate failures
-below are chronological and are superseded by the verified118 checkpoint.
+below are chronological and are superseded by the verified119 checkpoint.
 
 ### Step116 candidate: stable numeric local stores
 
@@ -207,3 +207,30 @@ metadata. The extended example and prior ordinary/nullable numeric tests pass.
 The task-owned target/strict-reference-contract-bghxkxqg directory is removed
 after evidence capture. Native/eval scalar contract transport and broader
 Locals remain active, alongside the other six unintegrated families.
+
+
+## Verified119: native numeric eval contracts
+
+Source-point numeric contracts now select eligible owned bindings for canonical
+reference snapshots before an interpreter barrier. Existing native validation
+callbacks protect the shared child during an eval assignment. Eval detachment
+unregisters weak stack sources before clearing native owner storage. The initial
+bare EIR test lacked the opaque catalog object-cast prelude (job5f0ff86c); real
+CLI probe310ef94b instead confirmed TypeError before mutation and a clean heap
+in35s. The focused checker test verifies source origins on all five targets.
+
+Jobf0dec17e passed build, five exact gates and architecture audit in6m04s.
+Final job2861d910 passed build, refreshed source-origin checks and the renamed
+opaque eval bundle in2m30s. The bundle takes114.74s and uses the established
+360s nextest budget in both profiles. A future numeric slot is declared only on
+a nonexecuting later branch, so the absence regression does not encode a later
+incompatible write as permitted strict behavior. Native both-mode/default/Locals
+heaps are clean for numeric rejection, null, large integers, unions, mixed and
+unset; existing native reference lifetimes and future catch-name behavior pass.
+
+Non-obvious follow-up: runtime-established binding contracts must flow back from
+eval before later native assignments; do not mistake a new eval-created float
+followed by a native int write for an absence control. Probec045a07a also shows
+Locals still accepts dynamic Mixed replacements of inferred nonnumeric bindings.
+These are ongoing work in the approved stronger Locals phase, not completed
+guarantees. The complete umbrella remains gated.

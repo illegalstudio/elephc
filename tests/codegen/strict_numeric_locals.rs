@@ -10,6 +10,26 @@
 
 use crate::support::*;
 
+/// Opaque eval validates an original native numeric binding before replacing its shared child.
+#[test]
+fn test_strict_numeric_locals_native_contract_opaque_eval_bundle() {
+    let source = include_str!("../fixtures/strict/native_eval_local_contract.php");
+    for mode in ["--ir-opt=off", "--ir-opt=on"] {
+        for (strict, expected) in [
+            (false, "Wdouble|2.5|NNULL||Iinteger|9007199254740993|Rdouble|2.5|Fdouble|2.5|UWstring|bad|Odouble|2.5|"),
+            (true, "Tinteger|1|NNULL||Iinteger|9007199254740993|Rdouble|2.5|Fdouble|2.5|UTdouble|2.5|Odouble|2.5|"),
+        ] {
+            let mut flags = vec![mode, "--heap-debug"];
+            if strict { flags.push("--strict-locals"); }
+            let output = StrictFixture::new(source).capture(&flags);
+            assert_eq!(String::from_utf8_lossy(&output.stdout), expected, "{flags:?}: {}",
+                String::from_utf8_lossy(&output.stderr));
+            assert!(String::from_utf8_lossy(&output.stderr).contains("HEAP DEBUG: leak summary: clean"),
+                "{flags:?}: {}", String::from_utf8_lossy(&output.stderr));
+        }
+    }
+}
+
 /// Reference contracts survive calls and unwind while ending at unset and preserving explicit kinds.
 #[test]
 fn test_strict_numeric_reference_contract_lifetimes_and_explicit_types() {

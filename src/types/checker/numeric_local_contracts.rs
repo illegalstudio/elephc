@@ -13,6 +13,15 @@ use crate::{errors::CompileError, span::Span, types::{LocalStoreContract, PhpTyp
 use elephc_semantics::{conversions::ConversionPlan, StrictFeature};
 
 impl Checker {
+    /// Captures current initialized numeric bindings before an opaque eval can widen their views.
+    pub(crate) fn record_numeric_eval_contracts(&mut self, env: &TypeEnv, span: Span) {
+        for (name, actual) in env {
+            if self.definitely_bound_locals.contains(name) || self.local_parameter_names.contains(name) {
+                self.record_numeric_reference_contract(name, actual, span);
+            }
+        }
+    }
+
     /// Carries the binding contract across a call-site promotion to boxed reference storage.
     pub(crate) fn record_numeric_reference_contract(&mut self, name: &str, actual: &PhpType, span: Span) -> bool {
         if self.semantic_source_mode == crate::source::SourceMode::Internal

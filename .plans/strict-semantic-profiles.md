@@ -371,18 +371,18 @@ evidence and outstanding guarantees are recorded below.
 
 ## Implementation progress
 
-Verified through step118 (this commit), with remaining feature integration in progress. Issue:
+Verified through step119 (this commit), with remaining feature integration in progress. Issue:
 https://github.com/illegalstudio/elephc/issues/2347.
 
 The full task remains active. The user requested complete implementation, with a
 commit for every verified step and no partial delivery. Do not expose unfinished
 flags as successful no-ops. The public integrated mask contains Locals, Bools, DynamicCode, Opcache, Arithmetic,
-Overflow, Strings, Coercions, Casts and Comparisons. Locals includes the verified116-118 ordinary/nullable numeric binding and caller-reference extensions;
+Overflow, Strings, Coercions, Casts and Comparisons. Locals includes the verified116-118 ordinary/nullable numeric binding, caller-reference and native/eval extensions;
 its complete reference/global/eval and broader binding-flow contract remains outstanding. All
 other guarantees and the complete umbrella remain explicitly gated until their
 whole contract is enforced.
 
-This progress ledger condenses verified implementation through step118.
+This progress ledger condenses verified implementation through step119.
 Detailed evidence remains in Git history, historical Code Journal plan revisions,
 the linked work logs, and the current agent-facing architecture document
 3739892b. The approved behavior and delivery requirements above are unchanged.
@@ -615,7 +615,8 @@ paths. Keep this plan, agent documentation and the current journal log synchroni
 | 115 | `6daf631e8b` | fix(eval): publish only live native object binding contracts |
 | 116 | `1cb2b34778` | feat(strict): enforce stable numeric local bindings |
 | 117 | `f1b64aa4cd` | feat(strict): guard nullable numeric binding updates |
-| 118 | this commit | feat(strict): preserve numeric caller reference contracts |
+| 118 | `bfab7777ec` | feat(strict): preserve numeric caller reference contracts |
+| 119 | this commit | feat(strict): preserve native numeric contracts during eval |
 
 
 ### Latest verified admission checkpoint
@@ -771,3 +772,43 @@ owned verification directory is removed after evidence capture.
 Continue native/eval source-point contracts (a6343333), broader stable bindings,
 the remaining six feature families and complete umbrella/host acceptance. The
 saved native_eval_local_contract.php fixture remains untracked for that work.
+
+
+### Verified119: native numeric bindings during opaque eval
+
+The checker records initialized source-point numeric origins at each eval site.
+Before an interpreter barrier, EIR promotes only eligible current owned bindings
+through the existing canonical reference snapshot protocol. The shared protected
+reference publisher therefore validates an interpreted replacement before the
+native child changes. This reuses118 callbacks, source registry and snapshot
+ownership without adding an eval ABI or reconstructing a contract from a future
+frame slot. Eval unset/rebind detachment unregisters the weak source before
+retiring its native owner. Existing raw reference layout eligibility is retained.
+
+Jobf0dec17e passed the build, five exact gates and the architecture audit in6m04s.
+The two target gates check existing binding origins and native validator/emitter
+contracts on all five targets. Both optimizer modes and default/Locals profiles
+run with clean heaps, covering rejected float writes, null, exact large integers,
+explicit numeric unions, explicit mixed, unset, and future scalar slots. Existing
+reference lifetimes and the future-catch-scope regression pass. Probe310ef94b
+independently showed the original native/eval baseline now retains integer1 with
+a catchable TypeError. An earlier bare-library eval test lacked the production
+object-cast prelude for the full opaque catalog; it was replaced by focused
+source-origin checks paired with real CLI/native execution.
+
+Final job2861d910 passed the build and two exact gates in2m30s after naming the
+long native test as a bundle and tightening the future-slot fixture: its later
+integer assignment is on a nonexecuting branch, so the fixture tests absence of
+an earlier contract without requiring an incompatible later binding write. The
+opaque eval bundle took114.74s and has the established360s CI budget. Both
+nextest profile overrides and assembly-comment alignment were checked.
+
+This resolves the original numeric native/eval baselinea6343333. Remaining
+Locals work includes nonnumeric and runtime-established binding origins, reverse
+eval-to-native transport, globals/captures/foreach and array-kind independence.
+Probec045a07a confirms dynamic Mixed replacements still bypass nonnumeric
+inferred string, boolean, null, object and array-kind contracts; explicit mixed
+and replacing array elements remain passing openness controls. Complete those
+boundaries, six unintegrated feature families and full umbrella/host acceptance.
+The owned target/strict-native-eval-8r76iwqo directory is removed after baseline
+evidence capture; follow-up fixture sources are preserved when needed.

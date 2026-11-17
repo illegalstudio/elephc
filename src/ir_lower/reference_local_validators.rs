@@ -11,6 +11,19 @@
 use crate::{ir::{Builder, Function, Immediate, IrHeapKind, IrType, LocalSlotId, Module,
     Op, Ownership, PhpTypePredicate, Terminator}, types::PhpType};
 
+/// Exposes current owned numeric bindings through the canonical reference snapshot protocol.
+pub(super) fn prepare_eval_bindings(ctx: &mut super::context::LoweringContext<'_, '_>, span: crate::span::Span) {
+    let mut names = ctx.local_slots.keys().filter(|name| {
+        ctx.local_store_contracts.get(&(ctx.loop_storage_scope.clone(), span, (*name).clone()))
+            .is_some_and(|contract| contract.feature == elephc_semantics::StrictFeature::Locals)
+            && ctx.local_is_promotable_to_ref_cell(name)
+            && (!ctx.is_ref_bound_local(name) || (ctx.local_type(name).codegen_repr() == PhpType::Mixed
+                && ctx.ref_cell_owner_slot(name).is_some_and(|owner| ctx.slot_is_initialized(owner))))
+    }).cloned().collect::<Vec<_>>();
+    names.sort();
+    for name in names { ctx.promote_local_mixed_ref_cell(&name, Some(span)); }
+}
+
 /// Generates one typed callback per selected numeric binding contract, without PHP entry metadata.
 pub(super) fn lower_requested(module: &mut Module) -> Result<(), super::LoweringError> {
     let mut contracts = Vec::new();
