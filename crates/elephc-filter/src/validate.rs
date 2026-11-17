@@ -280,25 +280,32 @@ fn ipv4(value: &[u8]) -> Option<[i32; 4]> {
 /// Ports `_php_filter_validate_ipv6`, including embedded IPv4 and `::` expansion.
 pub(crate) fn ipv6(value: &[u8], mut ip: Option<&mut [i32; 8]>) -> bool {
     if !value.contains(&b':') { return false; }
-    let mut end = value.len();
+    // An embedded IPv4 tail occupies the final two 16-bit words. Expand it into two
+    // hexadecimal groups before parsing: replacing the whole address with an IPv4-mapped
+    // value (`::ffff:a.b.c.d`) discards the IPv6 prefix, so `fc00::192.0.2.1` would stop
+    // looking private. The suffix `ipv4()` validator still enforces PHP's octet rules.
+    let mut expanded = Vec::new();
+    let value = if let Some(dot) = value.iter().position(|byte| *byte == b'.') {
+        let Some(colon) = value[..dot].iter().rposition(|byte| *byte == b':') else {
+            return false;
+        };
+        let start = colon + 1;
+        let Some(parsed) = ipv4(&value[start..]) else { return false; };
+        expanded.extend_from_slice(&value[..start]);
+        let high = 256 * parsed[0] + parsed[1];
+        let low = 256 * parsed[2] + parsed[3];
+        expanded.extend_from_slice(format!("{high:x}:{low:x}").as_bytes());
+        expanded.as_slice()
+    } else {
+        value
+    };
     let mut blocks = 0usize;
     let mut compressed = None;
-    let mut embedded_ipv4 = None;
-    if let Some(dot) = value.iter().position(|byte| *byte == b'.') {
-        let mut start = dot;
-        while start > 0 && value[start - 1] != b':' { start -= 1; }
-        let parsed = match ipv4(&value[start..]) { Some(parsed) => parsed, None => return false };
-        end = start;
-        if end < 2 { return false; }
-        if value[end - 2] != b':' { end -= 1; }
-        blocks = 2;
-        embedded_ipv4 = Some(parsed);
-    }
     let mut index = 0usize;
-    while index < end {
+    while index < value.len() {
         if value[index] == b':' {
             index += 1;
-            if index >= end { return false; }
+            if index >= value.len() { return false; }
             if value[index] == b':' {
                 if compressed.is_some() { return false; }
                 if let Some(ip) = ip.as_deref_mut() {
@@ -307,7 +314,7 @@ pub(crate) fn ipv6(value: &[u8], mut ip: Option<&mut [i32; 8]>) -> bool {
                 compressed = Some(blocks);
                 blocks += 1;
                 index += 1;
-                if index == end {
+                if index == value.len() {
                     if blocks > 8 { return false; }
                     break;
                 }
@@ -317,7 +324,7 @@ pub(crate) fn ipv6(value: &[u8], mut ip: Option<&mut [i32; 8]>) -> bool {
         }
         let mut number = 0u32;
         let mut digits = 0usize;
-        while index < end {
+        while index < value.len() {
             let digit = match value[index] {
                 b'0'..=b'9' => u32::from(value[index] - b'0'),
                 b'a'..=b'f' => u32::from(value[index] - b'a') + 10,
@@ -336,12 +343,7 @@ pub(crate) fn ipv6(value: &[u8], mut ip: Option<&mut [i32; 8]>) -> bool {
         if blocks > 8 { return false; }
     }
     if let Some(ip) = ip.as_deref_mut() {
-        if let Some(ip4) = embedded_ipv4 {
-            for slot in ip.iter_mut() { *slot = 0; }
-            ip[5] = 0xffff;
-            ip[6] = 256 * ip4[0] + ip4[1];
-            ip[7] = 256 * ip4[2] + ip4[3];
-        } else if let Some(position) = compressed {
+        if let Some(position) = compressed {
             if blocks <= 8 {
                 let offset = 8 - blocks;
                 for cursor in (position + offset + 1..8).rev() {

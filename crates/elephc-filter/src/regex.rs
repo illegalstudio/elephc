@@ -108,7 +108,7 @@ fn rewrite_dollar_anchors(body: &str, dollar_end_only: bool, multiline: bool) ->
                 } else if dollar_end_only {
                     out.push_str("\\z");
                 } else {
-                    out.push_str("(?:\\n?\\z)");
+                    out.push_str("(?=\\n?\\z)");
                 }
             }
             _ => out.push(ch),
@@ -119,6 +119,15 @@ fn rewrite_dollar_anchors(body: &str, dollar_end_only: bool, multiline: bool) ->
 
 /// Builds one fancy-regex from a PHP pattern body and its modifiers.
 fn build_fancy(body: &str, modifiers: &str) -> Option<Regex> {
+    let source = build_source(body, modifiers);
+    RegexBuilder::new(&source).build().ok()
+}
+
+/// Builds one fancy-regex for byte-mode patterns that need lookarounds.
+///
+/// The caller maps every input byte to one Latin-1 scalar before matching, so `.`,
+/// character classes and byte escapes keep their per-byte width.
+fn build_mapped_fancy(body: &str, modifiers: &str) -> Option<Regex> {
     let source = build_source(body, modifiers);
     RegexBuilder::new(&source).build().ok()
 }
@@ -141,7 +150,9 @@ fn build_source(body: &str, modifiers: &str) -> String {
     let multiline = modifiers.contains('m');
     let mut source = rewrite_dollar_anchors(body, dollar_end_only, multiline);
     if modifiers.contains('A') {
-        source.insert_str(0, "\\A");
+        // `A` anchors the WHOLE pattern. Prepending `\A` bare would bind only the first
+        // alternative (`\Afoo|bar`), letting `/foo|bar/A` match `evilbar`.
+        source = format!("\\A(?:{source})");
     }
     if !inline.is_empty() {
         source = format!("(?{inline}){source}");
@@ -252,8 +263,13 @@ pub(crate) fn php_pattern_with_error(
     if let Some(regex) = build_bytes(body, modifiers) {
         return (regex.is_match(value), None);
     }
-    // Lookarounds and backreferences need fancy-regex. Its `str` input cannot preserve raw
-    // byte semantics, but it is still better than rejecting a PCRE pattern outright.
+    // Lookarounds and backreferences need fancy-regex. Map each byte to one Latin-1 scalar
+    // so its string engine still applies PHP's non-`u` byte semantics (`..` matches two
+    // bytes of a UTF-8 sequence instead of one replacement character).
+    if let Some(regex) = build_mapped_fancy(body, modifiers) {
+        let text: String = value.iter().map(|byte| char::from(*byte)).collect();
+        return (regex.is_match(&text).unwrap_or(false), None);
+    }
     let value = String::from_utf8_lossy(value);
     match build_fancy(body, modifiers) {
         Some(regex) => (regex.is_match(&value).unwrap_or(false), None),
@@ -340,5 +356,14 @@ mod tests {
         // Non-`u` patterns run in byte mode: two bytes match `.` twice.
         assert!(php_pattern(b"\xc3\xa9", b"/^..$/"));
         assert!(php_pattern(b"12", b"/^\\d+$/"));
+    }
+
+    /// `A` anchors every alternative, and `$` stays zero-width before a following atom.
+    #[test]
+    fn regexp_anchors_cover_alternatives_and_trailing_newlines() {
+        assert!(!php_pattern(b"evilbar", b"/foo|bar/A"));
+        assert!(php_pattern(b"bar", b"/foo|bar/A"));
+        assert!(php_pattern(b"foo\n", b"/foo$\n/"));
+        assert!(!php_pattern(b"foo\nbar", b"/foo$\n/"));
     }
 }

@@ -1158,7 +1158,11 @@ fn userinfo_decl() -> Stmt {
                                     ),
                                     BinOp::And,
                                     e_binop(
-                                        e_call("ctype_digit", vec![e_index(e_var("value"), e_binop(e_var("i"), BinOp::Add, e_int(1)))]),
+                                        e_binop(
+                                            e_call("strpos", vec![e_str("0123456789abcdefABCDEF"), e_index(e_var("value"), e_binop(e_var("i"), BinOp::Add, e_int(1)))]),
+                                            BinOp::StrictNotEq,
+                                            e_bool(false),
+                                        ),
                                         BinOp::And,
                                         e_binop(
                                             e_call("strpos", vec![e_str("0123456789abcdefABCDEF"), e_index(e_var("value"), e_binop(e_var("i"), BinOp::Add, e_int(2)))]),

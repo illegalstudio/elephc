@@ -154,6 +154,17 @@ fn ipv6_matches_php() {
     assert!(ip(b"::ffff:1.2.3.4", 0));
 }
 
+/// Verifies a dotted IPv4 tail keeps the IPv6 prefix instead of collapsing to an
+/// IPv4-mapped address, which would hide a private prefix from `FILTER_FLAG_NO_PRIV_RANGE`.
+#[test]
+fn ipv6_embedded_ipv4_preserves_the_prefix() {
+    assert!(!ip(b"fc00::192.0.2.1", NO_PRIV));
+    assert!(!ip(b"fd00::192.0.2.1", IPV6 | NO_PRIV));
+    assert!(ip(b"2001:db8::192.0.2.1", IPV6));
+    assert!(!ip(b"::ffff:192.0.2.1", NO_RES));
+    assert!(ip(b"::ffff:8.8.8.8", IPV6));
+}
+
 /// Verifies all three MAC address layouts and the separator option.
 #[test]
 fn mac_matches_php() {
