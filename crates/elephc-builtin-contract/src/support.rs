@@ -426,6 +426,7 @@ mod tests {
         // `__elephc_set_memory_limit` setter.
         // compiled and eval `ReflectionClass` builder calls two more. The seven ext/posix
         // bridge builtins are ordinary PCNTL registry operations.
+        // The seven ext/posix bridge builtins are ordinary PCNTL registry operations.
         assert_eq!(aot_registry, 842);
         // Compiler transforms, constructs, dedicated syntax, preludes (now including
         // `preg_grep`), and name-resolver rewrites remain outside the ordinary AOT registry.
@@ -487,6 +488,7 @@ mod tests {
         // ext/posix bridge builtins served by the PCNTL adapter.
         // interpreter adapters, plus the GMP, SimpleXML, and tidy forwarding homes, and the
         // seven ext/posix bridge builtins served by the PCNTL adapter.
+        // The seven ext/posix bridge builtins are served by the PCNTL adapter.
         assert_eq!(interpreter_adapter, 700 + curl_surface);
         // Includes the eleven `__elephc_opcache_rt_*` helpers: they lower to an eval-bridge
         // call from AOT code and have no eval execution route of their own. So do the four
