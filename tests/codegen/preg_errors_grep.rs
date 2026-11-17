@@ -340,3 +340,18 @@ fn test_preg_grep_eval_unsupported_modifier_is_a_runtime_error() {
     assert!(out.stderr.contains("Fatal error: eval() runtime failed"), "{}", out.stderr);
 }
 
+/// From PHP 8.6 (php-src GH-11936) a match error makes `preg_grep()` return `false` instead of
+/// the entries collected so far, in compiled code and in eval; 8.5 keeps the partial result.
+#[test]
+fn test_preg_grep_match_error_is_false_from_php_8_6() {
+    use elephc::php_version::PhpVersion;
+    let source = r#"echo json_encode(preg_grep('/a/u', ['x' => 'a', 5 => "\xff", 7 => 'a'])), preg_last_error(), "\n";
+echo json_encode(preg_grep('/a/', ['a', 'b'])), preg_last_error(), "\n";
+"#;
+    for (version, first) in [(PhpVersion::Php85, "{\"x\":\"a\"}4"), (PhpVersion::Php86, "false4")] {
+        let expected = format!("{first}\n[\"a\"]0\n");
+        for program in [format!("<?php\n{source}"), opaque_eval(source)] {
+            assert_eq!(compile_and_run_with_regex_and_php_version(&program, version), expected, "{version:?} {program}");
+        }
+    }
+}

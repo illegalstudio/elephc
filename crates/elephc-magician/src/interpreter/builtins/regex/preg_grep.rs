@@ -7,7 +7,8 @@
 //! Key details:
 //! - Mirrors the AOT prelude (`crate::pcre_prelude` in the compiler): the pattern is
 //!   compiled once, each entry is matched as its string value and keeps its key, and a
-//!   match error stops the scan with the entries collected so far.
+//!   match error stops the scan. Before PHP 8.6 the call returns the entries collected so
+//!   far; from 8.6 (php-src GH-11936) any error left in `preg_last_error()` makes it `false`.
 //! - Each match runs against a cleared error slot, so a nested `preg_*` error raised by an
 //!   entry's `__toString()` neither stops the scan nor counts as this call's own error; it
 //!   is put back afterwards and stays visible through `preg_last_error()`, like php-src.
@@ -79,6 +80,14 @@ pub(in crate::interpreter) fn eval_preg_grep_result(
     let len = values.array_len(array)?;
     let mut result = values.assoc_new(len)?;
     match eval_preg_grep_fill(&regex, array, len, invert, &mut result, context, values) {
+        // PHP 8.6 (php-src GH-11936) returns `false`, not the partial result, whenever the
+        // scan leaves an error in `preg_last_error()`.
+        Ok(()) if eval_preg_last_error_code() != 0
+            && crate::eval_php_profile::eval_php_version_id() >= 80600 =>
+        {
+            eval_release_value(context, values, result)?;
+            values.bool_value(false)
+        }
         Ok(()) => Ok(result),
         // A throwing `__toString()` (or a failed runtime op) abandons the partial result; the
         // release keeps the original status, so the pending exception stays the one thrown.

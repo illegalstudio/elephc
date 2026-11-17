@@ -13,12 +13,15 @@
 //!   `preg_grep` keeps it. A namespaced `App\preg_grep` does not suppress the injection.
 //! - The body is PHP's algorithm over the shared regex builtins, so every target and the
 //!   regex runtime detection see ordinary `preg_split()` / `preg_match()` calls. The
-//!   pattern is compiled once up front without matching anything: `preg_split()` with a
-//!   limit of 1 compiles it and stops before its first match, so an invalid pattern is
-//!   `false` even for an empty array, while a valid pattern that would fail on some
-//!   subject (`/a|(?R)/` on `""`) never fails the call before an entry runs. Each entry is
-//!   matched as its string value and keeps its key; a match error stops the scan and
-//!   returns the entries collected so far with `preg_last_error()` still set, like php-src.
+//!   pattern is validated up front without matching anything: `preg_split()` with a limit
+//!   of 1 compiles it and stops before its first match, so an invalid pattern is `false`
+//!   even for an empty array, while a valid pattern that would fail on some subject
+//!   (`/a|(?R)/` on `""`) never fails the call before an entry runs. Each entry is then
+//!   matched by its own `preg_match()` call, which compiles the pattern again (no compiled
+//!   pattern is cached across calls). Each entry is matched as its string value and keeps
+//!   its key; a match error stops the scan and returns the entries collected so far with
+//!   `preg_last_error()` still set, like php-src before 8.6. From PHP 8.6 (php-src
+//!   GH-11936) an error left in `preg_last_error()` makes the call return `false`.
 
 use crate::parser::ast::{BinOp, CastType, Program, Stmt, TypeExpr};
 use crate::synthetic_class::{
@@ -86,6 +89,21 @@ fn preg_grep_decl() -> Stmt {
                         None,
                     ),
                 ],
+            ),
+            // PHP 8.6 (php-src GH-11936) returns false instead of the partial result.
+            s_if(
+                e_binop(
+                    e_binop(e_const("PHP_VERSION_ID"), BinOp::GtEq, e_int(80600)),
+                    BinOp::And,
+                    e_binop(
+                        e_call("preg_last_error", vec![]),
+                        BinOp::StrictNotEq,
+                        e_const("PREG_NO_ERROR"),
+                    ),
+                ),
+                vec![s_return(e_bool(false))],
+                vec![],
+                None,
             ),
             s_return(e_var("result")),
         ])

@@ -192,7 +192,8 @@ Every `preg_*` call resets the state `preg_last_error()` reports. An invalid
 pattern (or the removed `/e` modifier) sets `PREG_INTERNAL_ERROR`. A match
 error makes the call fail like PHP: `preg_match()`, `preg_match_all()` and
 `preg_split()` return `false`, `preg_replace()` and `preg_replace_callback()`
-return `null`, and `preg_grep()` returns the entries collected so far. A subject
+return `null`, and `preg_grep()` returns the entries collected so far (from PHP 8.6,
+`--php-version 8.6`, it returns `false` instead, like php-src GH-11936). A subject
 PCRE2 rejects as malformed UTF-8 under `/u` sets `PREG_BAD_UTF8_ERROR`; an
 exhausted PCRE2 match or heap limit sets `PREG_BACKTRACK_LIMIT_ERROR`. As in
 PHP, an error recorded by a `preg_*` call inside a `preg_replace_callback()`
