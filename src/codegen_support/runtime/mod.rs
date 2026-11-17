@@ -138,3 +138,6 @@ mod memoir_owner_records_tests;
 
 #[cfg(test)]
 mod memoir_storage_followup_tests;
+
+#[cfg(test)]
+mod memoir_remaining_ownership_tests;
