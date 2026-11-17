@@ -17,3 +17,5 @@ pub mod concat;
 pub mod capture_buffer;
 
 pub mod strcopy;
+
+pub mod guarded_snapshot;

@@ -9,7 +9,7 @@
 //! - Taking an owner clears its slot before any release can invoke user code.
 //! - Constructor policy and exception-handler installation stay in the compiler.
 
-use crate::{abi, Arch, Emitter, GuardLayout};
+use crate::{abi, Arch, Emitter, GuardLayout, RecordOffset, TargetAbi};
 
 /// Emits guard insertion/removal for the host activation-chain ABI.
 pub fn emit_guard_chain(emitter: &mut impl Emitter, layout: GuardLayout, head_symbol: &str) {
@@ -97,4 +97,27 @@ pub fn emit_take_guard_owner(emitter: &mut impl Emitter, layout: GuardLayout) {
 pub fn emit_release_body(emitter: &mut impl Emitter, symbol: &str, layout: GuardLayout) {
     emit_take_guard_owner(emitter, layout);
     abi::emit_call_label(emitter, symbol);
+}
+
+/// Publishes a preallocated stack guard with the caller's owner and cleanup entry.
+pub fn emit_publish_at_stack(
+    emitter: &mut impl TargetAbi,
+    owner: &str,
+    cleanup: &str,
+    scratch: &str,
+    record: RecordOffset,
+    owner_field: RecordOffset,
+) {
+    emitter.emit_store_to_sp(owner, record.bytes() + owner_field.bytes());
+    emitter.emit_symbol_address(scratch, cleanup);
+    emitter.emit_store_to_sp(scratch, record.bytes() + 8);
+    emitter.emit_temporary_stack_address(emitter.int_arg_reg_name(0), record.bytes());
+    emitter.emit_load_int_immediate(emitter.int_arg_reg_name(1), 0);
+    emitter.emit_call_label("__rt_exception_guard_owned");
+}
+
+/// Detaches a preallocated guard and leaves its storage to the caller.
+pub fn emit_detach_at_stack(emitter: &mut impl TargetAbi, record: RecordOffset) {
+    emitter.emit_temporary_stack_address(emitter.int_arg_reg_name(0), record.bytes());
+    emitter.emit_call_label("__rt_exception_unguard_owned");
 }
