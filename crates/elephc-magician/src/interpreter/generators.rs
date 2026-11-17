@@ -425,15 +425,41 @@ fn eval_generator_run(
         };
     }
     if let Some(thrown) = thrown {
-        // The suspended `yield` receives no value; a `yield from` in progress is abandoned, and
-        // the throw surfaces at the delegating statement.
+        // The suspended `yield` receives no value. A `yield from` over another generator throws
+        // INTO that generator, as php does: it may catch the exception and keep yielding, in
+        // which case the delegation goes on; only an exception it leaves uncaught surfaces at
+        // the delegating statement. Any other delegate is abandoned and the throw surfaces there.
         frame.pending_send_slot = None;
-        if frame.delegate.is_some() {
-            eval_generator_end_delegation(frame, context, values)?;
+        let mut thrown = Some(thrown);
+        if let Some(EvalGeneratorDelegate::Generator { identity, .. }) = frame.delegate {
+            let inner = thrown.take().map_or(Ok(()), |cell| {
+                eval_generator_step_throwing(identity, None, Some(cell), true, context, values)
+            });
+            match inner {
+                Ok(()) => {
+                    frame.state = EvalGeneratorState::Suspended;
+                    if eval_generator_produce_from_delegate(frame, context, values)? {
+                        return Ok(());
+                    }
+                    eval_generator_end_delegation(frame, context, values)?;
+                }
+                Err(EvalStatus::UncaughtThrowable) => {
+                    eval_generator_end_delegation(frame, context, values)?;
+                    frame.state = EvalGeneratorState::Suspended;
+                    eval_generator_absorb_throw(frame, context, values)?;
+                }
+                Err(status) => return Err(status),
+            }
+        } else {
+            if frame.delegate.is_some() {
+                eval_generator_end_delegation(frame, context, values)?;
+            }
+            if let Some(cell) = thrown.take() {
+                context.set_pending_throw(cell);
+            }
+            frame.state = EvalGeneratorState::Suspended;
+            eval_generator_absorb_throw(frame, context, values)?;
         }
-        context.set_pending_throw(thrown);
-        frame.state = EvalGeneratorState::Suspended;
-        eval_generator_absorb_throw(frame, context, values)?;
     } else if resuming {
         eval_generator_deliver_sent(frame, sent, values)?;
         if frame.delegate.is_some() {
