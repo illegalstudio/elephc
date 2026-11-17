@@ -240,13 +240,15 @@ fn lower_non_native_isset_offset_probe(
 /// Emitting it unconditionally put the interpreter into EVERY program, because the always-present
 /// session prelude probes `isset($options[$key])` on a mixed array: a two-line script grew from
 /// 5.8 MB to 28 MB of assembly, and its runtime errors went through the bridge's throw path. The
-/// built-in SPL containers (and the compiler's own `__Elephc*` subclasses of them) are always
-/// declared and answer the quiet read the way `offsetExists()` does, so they do not count.
+/// built-in SPL containers (and the compiler's own `__Elephc*` subclasses of them) answer the
+/// quiet read the way `offsetExists()` does, so they do not count. WeakMap does count: its
+/// `offsetGet()` throws for a missing key, while the existence probe must remain silent.
 pub(super) fn program_may_hold_array_access_objects(ctx: &LoweringContext<'_, '_>) -> bool {
     ctx.has_eval_barrier()
         || ctx.eval_executed()
         || ctx.can_resolve_runtime_dynamic_functions()
         || ctx.program_loads_code_at_run_time()
+        || ctx.classes.contains_key("WeakMap")
         || super::array_access_types::program_declares_array_access(ctx)
 }
 
