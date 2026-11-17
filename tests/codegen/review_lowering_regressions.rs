@@ -184,3 +184,18 @@ $g = g3(); $g->current(); $g->send("abcd");
 "#);
     assert_eq!(out, "5\ngot 3\n4\n");
 }
+
+/// `RecursiveIteratorIterator::setMaxDepth()` defaults to -1 (unlimited) and `getMaxDepth()`
+/// answers `false` while the depth is unlimited.
+#[test]
+fn test_recursive_iterator_iterator_max_depth_default_and_false() {
+    let out = compile_and_run(r#"<?php
+$it = new RecursiveIteratorIterator(new RecursiveArrayIterator([1, [2, [3]]]));
+var_dump($it->getMaxDepth());
+$it->setMaxDepth(1);
+var_dump($it->getMaxDepth());
+$it->setMaxDepth();
+var_dump($it->getMaxDepth());
+"#);
+    assert_eq!(out, "bool(false)\nint(1)\nbool(false)\n");
+}

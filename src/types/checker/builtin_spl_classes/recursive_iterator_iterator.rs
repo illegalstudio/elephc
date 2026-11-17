@@ -106,7 +106,7 @@ fn spl_recursive_iterator_iterator_methods() -> Vec<ClassMethod> {
         ),
         method_with_body(
             "setMaxDepth",
-            vec![param("maxDepth", TypeExpr::Int)],
+            vec![param_default("maxDepth", TypeExpr::Int, int_expr(-1))],
             Some(TypeExpr::Void),
             vec![property_assign_stmt(
                 this_expr(),
@@ -117,8 +117,15 @@ fn spl_recursive_iterator_iterator_methods() -> Vec<ClassMethod> {
         method_with_body(
             "getMaxDepth",
             Vec::new(),
-            Some(TypeExpr::Int),
-            return_body(property_access(this_expr(), "maxDepth")),
+            Some(TypeExpr::Union(vec![TypeExpr::Int, TypeExpr::False])),
+            vec![
+                if_stmt(
+                    binary_expr(property_access(this_expr(), "maxDepth"), BinOp::StrictEq, int_expr(-1)),
+                    vec![return_stmt(bool_expr(false))],
+                    None,
+                ),
+                return_stmt(property_access(this_expr(), "maxDepth")),
+            ],
         ),
         method_with_body(
             "getInnerIterator",
