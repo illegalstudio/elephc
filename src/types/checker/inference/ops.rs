@@ -1844,6 +1844,7 @@ fn is_numeric_operand_type(checker: &Checker, ty: &PhpType) -> bool {
             | PhpType::Bool
             | PhpType::False
             | PhpType::Void
+            | PhpType::Never
             | PhpType::Mixed
     ) || checker.is_union_with_mixed_numeric_dispatch(ty)
         // A gradual union whose members are themselves numeric operands (a `Mixed` member, a

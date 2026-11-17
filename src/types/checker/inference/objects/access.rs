@@ -371,7 +371,14 @@ impl Checker {
             // declares `__get` itself, which answers even when no implementation is compiled
             // (Carbon's class file can be deferred to the autoloader).
             let interface_declares_get = interface_info.methods.contains_key("__get");
+            // An implementation with native dimensions (a SimpleXMLElement subclass) answers
+            // child-element reads by name, so the read is the run-time object's to resolve.
+            let implementor_has_native_dimensions = self.classes.iter().any(|(implementor, _)| {
+                self.class_implements_interface(implementor, class_name)
+                    && crate::types::builtin_classes::has_native_dimensions(implementor, &self.classes)
+            });
             if interface_declares_get
+                || implementor_has_native_dimensions
                 || self.descendant_answers_undeclared_reads(class_name)
                 || self.null_probe_depth > 0
             {

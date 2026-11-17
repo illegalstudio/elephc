@@ -390,7 +390,7 @@ fn emit_prop_value(emitter: &mut Emitter, p: &str, table: &str, row_bytes: u64, 
     emitter.instruction("ldr x14, [x13, #16]");                                 // load the property's byte offset within the object
     emitter.instruction("add x14, x0, x14");                                    // resolve the absolute property slot address
     emitter.instruction("ldr x0, [x13, #24]");                                  // load the logical tag and native storage flags
-    crate::codegen_support::runtime::reference_cells::resolve_property_payload(emitter, "x14", "x0", "x2", "__rt_obj_prop_value_slot");
+    crate::codegen_support::runtime::reference_cells::resolve_property_payload(emitter, "x14", "x0", "x2", &format!("{p}_slot"));
     emit_uninit_sentinel_aarch64(emitter, "x16");                               // materialize the uninitialized-property marker
     emitter.instruction("cmp x2, x16");                                         // is this property still uninitialized?
     emitter.instruction(&format!("b.eq {p}_null"));                       // PHP omits it, so report PHP null
@@ -465,7 +465,7 @@ fn emit_obj_prop_value_linux_x86_64(emitter: &mut Emitter, p: &str, table: &str,
     emitter.instruction("mov r10, QWORD PTR [rax + 16]");                       // load the property's byte offset within the object
     emitter.instruction("add r10, rdi");                                        // resolve the absolute property slot address
     emitter.instruction("mov r9, QWORD PTR [rax + 24]");                        // load the logical tag and native storage flags
-    crate::codegen_support::runtime::reference_cells::resolve_property_payload(emitter, "r10", "r9", "rsi", "__rt_obj_prop_value_slot");
+    crate::codegen_support::runtime::reference_cells::resolve_property_payload(emitter, "r10", "r9", "rsi", &format!("{p}_slot"));
     emitter.instruction("movabs r8, 0x7ffffffffffffffd");                       // materialize the uninitialized-property marker
     emitter.instruction("cmp rsi, r8");                                         // is this property still uninitialized?
     emitter.instruction(&format!("je {p}_null_x86"));                     // PHP omits it, so report PHP null
