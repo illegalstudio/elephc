@@ -162,6 +162,38 @@ echo nullable("ucfirst"), " ", orFalse("strrev"), " ", many("lcfirst", null), " 
     assert_eq!(out, "Word drow wORD- Word\n");
 }
 
+/// Verifies a literal builtin name reaching a declared callable through a named variadic entry
+/// or a static spread is recorded like a positional literal, so it still invokes.
+///
+/// The call planner wraps a keyed variadic entry as a named argument, keeps a spread that only
+/// fills the variadic whole, and rewrites one into a regular parameter as an access into the
+/// literal; none of those nodes was a bare string literal, so the name was never linked.
+#[test]
+fn test_declared_callable_named_and_spread_literal_builtin_names_invoke() {
+    let out = compile_and_run(
+        r#"<?php
+function every(callable ...$fs): string { $out = ""; foreach ($fs as $f) { $out .= $f("word"); } return $out; }
+function apply(callable $f): string { return $f("word"); }
+function many(?callable ...$fs): string { $out = ""; foreach ($fs as $f) { $out .= $f === null ? "-" : $f("WORD"); } return $out; }
+echo every(foo: "ucwords"), " ", apply(...["ucfirst"]), " ", many(...["lcfirst", null]), "\n";
+"#,
+    );
+    assert_eq!(out, "Word Word wORD-\n");
+}
+
+/// Verifies a literal builtin name passed as a named entry of a callable union variadic links the
+/// libraries its wrapper needs.
+#[test]
+fn test_declared_callable_named_variadic_literal_links_its_library() {
+    let out = compile_and_run(
+        r#"<?php
+function many(?callable ...$fs): string { $out = ""; foreach ($fs as $f) { $out .= $f("word"); } return $out; }
+echo many(foo: "iconv_strlen"), "\n";
+"#,
+    );
+    assert_eq!(out, "4\n");
+}
+
 /// Verifies a literal builtin name kept by a callable union parameter or a `callable` return
 /// links the libraries its wrapper needs, as `iconv_strlen(...)` does.
 ///
@@ -404,9 +436,10 @@ $b = "nope";
 foreach ($gen2 as $_) {}
 echo "done\n";
 function v(callable ...$xs): string { return "ran"; }
-try { v(foo: "nope"); } catch (TypeError $e) { echo $e->getMessage(), "\n"; }
-try { v(foo: "strlen", bar: "nope"); } catch (TypeError $e) { echo $e->getMessage(), "\n"; }
-try { v("strlen", "strrev", z: "nope"); } catch (TypeError $e) { echo $e->getMessage(), "\n"; }
+$nope = $argc > 0 ? "nope" : "strlen";
+try { v(foo: $nope); } catch (TypeError $e) { echo $e->getMessage(), "\n"; }
+try { v(foo: "strlen", bar: $nope); } catch (TypeError $e) { echo $e->getMessage(), "\n"; }
+try { v("strlen", "strrev", z: $nope); } catch (TypeError $e) { echo $e->getMessage(), "\n"; }
 "#,
     );
     assert_eq!(

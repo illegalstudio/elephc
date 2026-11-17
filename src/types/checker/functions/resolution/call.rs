@@ -386,6 +386,26 @@ impl Checker {
         for arg in args {
             let ty = self.infer_type(arg, caller_env)?;
             if let ExprKind::Spread(_) = &arg.kind {
+                let context = format!("Function '{}' spread argument", name);
+                let mut regular = Vec::new();
+                for i in arg_idx..decl.params.len() {
+                    let ty = match decl.param_types.get(i).and_then(|t| t.as_ref()) {
+                        Some(type_ann) => self.resolve_declared_param_type_hint(type_ann, decl.span, &context)?,
+                        None => PhpType::Mixed,
+                    };
+                    regular.push((ty, decl.ref_params.get(i).copied().unwrap_or(false)));
+                }
+                let variadic_ty = match &decl.variadic_type {
+                    Some(declared) => Some(self.resolve_declared_param_type_hint(declared, decl.span, &context)?),
+                    None => None,
+                };
+                self.require_declared_callable_spread(
+                    arg,
+                    &regular,
+                    variadic_ty.as_ref().map(|ty| (ty, decl.variadic_by_ref)),
+                    caller_env,
+                    &context,
+                )?;
                 for i in arg_idx..decl.params.len() {
                     if let Some(type_ann) = decl.param_types.get(i).and_then(|t| t.as_ref()) {
                         let declared_ty = self.resolve_declared_param_type_hint(

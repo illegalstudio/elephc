@@ -332,7 +332,7 @@ impl Checker {
         context: &str,
         owner: Option<(&str, &str)>,
     ) -> Result<(), CompileError> {
-        let target = match (actual.codegen_repr(), &arg.kind) {
+        let target = match (actual.codegen_repr(), &static_callable_argument(arg).kind) {
             (PhpType::Str, crate::parser::ast::ExprKind::StringLiteral(name)) => {
                 match crate::types::param_binding::callable_target_from_name(name) {
                     Some(target) => Some(target),
@@ -378,7 +378,8 @@ impl Checker {
     /// callable keeps the string. An unknown name is left to the runtime `TypeError`, as PHP
     /// raises it.
     pub(crate) fn record_declared_callable_literal_name(&mut self, value: &Expr) {
-        let crate::parser::ast::ExprKind::StringLiteral(name) = &value.kind else {
+        let crate::parser::ast::ExprKind::StringLiteral(name) = &static_callable_argument(value).kind
+        else {
             return;
         };
         if let Some(crate::parser::ast::CallableTarget::Function(function)) =
@@ -393,7 +394,8 @@ impl Checker {
     }
 
     /// Validates one argument collected by a declared `callable ...$fs` variadic (or a callable
-    /// union element such as `?callable ...$fs`), as a regular parameter of that type binds it.
+    /// union element such as `?callable ...$fs`), or one literal element of a static spread, as
+    /// a regular parameter of that type binds it.
     ///
     /// An exact `callable` element resolves a literal name or callable array like a regular
     /// `callable` parameter (an unknown literal name is a compile error); a callable union
@@ -420,6 +422,65 @@ impl Checker {
         Ok(())
     }
 
+    /// Lists the still open regular parameters a spread fills, from `start`, as (declared type,
+    /// by-reference). An undeclared parameter reports `Mixed`, which binds no callable literal.
+    pub(crate) fn declared_spread_targets(
+        sig: &FunctionSig,
+        start: usize,
+        regular_param_count: usize,
+    ) -> Vec<(PhpType, bool)> {
+        (start..regular_param_count)
+            .map(|index| {
+                let declared = sig.declared_params.get(index).copied().unwrap_or(false);
+                let ty = sig
+                    .params
+                    .get(index)
+                    .filter(|_| declared)
+                    .map_or(PhpType::Mixed, |(_, ty)| ty.clone());
+                (ty, sig.ref_params.get(index).copied().unwrap_or(false))
+            })
+            .collect()
+    }
+
+    /// Validates the literal names a static spread (`f(...["ucfirst", "strlen"])`) hands to
+    /// declared callable parameters, as a positional literal argument binds them.
+    ///
+    /// `regular` lists the still open regular parameters in order (type, by-reference) and
+    /// `variadic` the variadic element, which takes every remaining element. Only an indexed
+    /// array literal without nested spreads is static; a dynamic `...$arr` stays a runtime check.
+    pub(crate) fn require_declared_callable_spread(
+        &mut self,
+        spread: &Expr,
+        regular: &[(PhpType, bool)],
+        variadic: Option<(&PhpType, bool)>,
+        env: &TypeEnv,
+        context: &str,
+    ) -> Result<(), CompileError> {
+        use crate::parser::ast::ExprKind;
+        let ExprKind::Spread(inner) = &spread.kind else {
+            return Ok(());
+        };
+        let ExprKind::ArrayLiteral(items) = &inner.kind else {
+            return Ok(());
+        };
+        if items.iter().any(|item| matches!(item.kind, ExprKind::Spread(_))) {
+            return Ok(());
+        }
+        for (offset, item) in items.iter().enumerate() {
+            let (expected, by_ref) = match (regular.get(offset), variadic) {
+                (Some((expected, by_ref)), _) => (expected, *by_ref),
+                (None, Some((expected, by_ref))) => (expected, by_ref),
+                (None, None) => break,
+            };
+            if matches!(item.kind, ExprKind::StringLiteral(_)) {
+                self.require_declared_callable_variadic_arg(
+                    expected, &PhpType::Str, item, env, context, by_ref,
+                )?;
+            }
+        }
+        Ok(())
+    }
+
     fn register_bound_callable_param_sig(
         &mut self,
         owner: Option<(&str, &str)>,
@@ -432,5 +493,36 @@ impl Checker {
         if self.callable_param_sigs.get(&key) != Some(&sig) {
             self.callable_param_sigs.insert(key, sig);
         }
+    }
+}
+
+/// Returns the expression a statically known argument carries for its parameter.
+///
+/// Call planning wraps a keyed variadic entry as a named argument and rewrites a static spread
+/// into a regular parameter as an access into the spread literal, so a literal callable name
+/// can sit behind either node. Anything not statically known is returned unchanged.
+fn static_callable_argument(arg: &Expr) -> &Expr {
+    use crate::parser::ast::ExprKind;
+    match &arg.kind {
+        ExprKind::NamedArg { value, .. } => static_callable_argument(value),
+        ExprKind::ArrayAccess { array, index } => match (&array.kind, &index.kind) {
+            (ExprKind::ArrayLiteral(items), ExprKind::IntLiteral(position))
+                if !items.iter().any(|item| matches!(item.kind, ExprKind::Spread(_))) =>
+            {
+                usize::try_from(*position)
+                    .ok()
+                    .and_then(|position| items.get(position))
+                    .map_or(arg, static_callable_argument)
+            }
+            (ExprKind::ArrayLiteralAssoc(entries), ExprKind::StringLiteral(key)) => entries
+                .iter()
+                .rev()
+                .find(|(entry_key, _)| {
+                    matches!(&entry_key.kind, ExprKind::StringLiteral(name) if name == key)
+                })
+                .map_or(arg, |(_, value)| static_callable_argument(value)),
+            _ => arg,
+        },
+        _ => arg,
     }
 }

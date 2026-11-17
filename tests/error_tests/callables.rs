@@ -1195,4 +1195,18 @@ echo every("no_such_function");
 "#,
         "Undefined function for first-class callable: no_such_function",
     );
+    expect_error(
+        r#"<?php
+function every(callable ...$fs): int { return 1; }
+echo every(foo: "no_such_function");
+"#,
+        "Undefined function for first-class callable: no_such_function",
+    );
+    expect_error(
+        r#"<?php
+function every(callable ...$fs): int { return count($fs); }
+echo every(...["strlen", "no_such_function"]);
+"#,
+        "Undefined function for first-class callable: no_such_function",
+    );
 }
