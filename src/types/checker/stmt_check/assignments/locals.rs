@@ -286,7 +286,7 @@ fn check_assign_value_type(
             });
         }
     }
-    ty = checker.check_numeric_local_store(name, &ty, span, env)?;
+    ty = checker.check_numeric_local_store(name, &ty, span, env, Some(value))?;
     let stored_non_null = checker.stored_value_is_non_null(value, &ty, env);
     // An array element or other unproved read can carry null even when its checker
     // type omits it. A nullable destination must not turn that store into a proof.

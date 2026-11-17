@@ -32,3 +32,29 @@ fn strict_numeric_locals_guard_writes_and_updates_on_every_target() {
         crate::codegen::generate_user_asm_from_ir(&module, false, false).unwrap();
     }
 }
+
+
+/// Nullable candidate guards preserve raw reference storage and avoid narrowed-sink fatal updates.
+#[test]
+fn strict_nullable_numeric_locals_guard_before_reference_storage_on_every_target() {
+    let source = include_str!("../../../tests/fixtures/strict/nullable_numeric_local_contracts.php");
+    let program = crate::parser::parse_with_mode(&crate::lexer::tokenize(source).unwrap(), SourceMode::Php).unwrap();
+    for overflow in [false, true] {
+        let profile = SemanticProfile::PERMISSIVE.with(StrictFeature::Locals, true)
+            .with(StrictFeature::Overflow, overflow);
+        for name in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+            let target = Target::parse(name).unwrap();
+            let checked = crate::types::checker::check_staged_semantics(&program, target, profile).unwrap();
+            let module = crate::ir_lower::lower_program(&program, &checked, target, false).unwrap();
+            let function = module.functions.iter().find(|function| function.name == "updateNullableReference").unwrap();
+            if !overflow {
+                assert!(function.instructions.iter().any(|instruction| instruction.op == crate::ir::Op::ThrowTypeError),
+                    "{name}: nullable reference update lacks its local membership guard");
+            }
+            assert!(!function.instructions.iter().any(|instruction| matches!(instruction.op,
+                crate::ir::Op::ICheckedAddToInt | crate::ir::Op::ICheckedSubToInt)), "{name}");
+            crate::ir::validate_module(&module).unwrap();
+            crate::codegen::generate_user_asm_from_ir(&module, false, false).unwrap();
+        }
+    }
+}

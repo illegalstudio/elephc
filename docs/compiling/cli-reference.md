@@ -916,7 +916,11 @@ and preserves the previous value. A standalone overflowing expression retains
 PHP promotion unless `--strict-overflow` is separately enabled.
 
 Explicit `int|float` declarations accept both numeric kinds, and explicit `mixed`
-declarations remain open. A legitimate `unset` ends the old binding and permits a
+declarations remain open. Nullable numeric bindings keep their declared null
+alternative: an `int|null` binding accepts null and integers, and rejects float.
+Prefix/postfix updates validate before changing even a shared nullable reference;
+`--strict-locals` reports a promoted result as `TypeError`, while separately enabled
+`--strict-overflow` reports arithmetic overflow as `ArithmeticError`. A legitimate `unset` ends the old binding and permits a
 new kind. These checks do not enable `--strict-coercions`, `--strict-arithmetic`,
 `--strict-casts` or `--strict-comparisons`. See
 [`examples/strict-locals/main.php`](https://github.com/illegalstudio/elephc/blob/main/examples/strict-locals/main.php).

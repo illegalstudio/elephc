@@ -15,7 +15,7 @@ use elephc_semantics::{conversions::ConversionPlan, StrictFeature};
 impl Checker {
     /// Retains a numeric binding's original kinds and records an independently owned store guard.
     pub(crate) fn check_numeric_local_store(&mut self, name: &str, incoming: &PhpType,
-        span: Span, env: &TypeEnv) -> Result<PhpType, CompileError> {
+        span: Span, env: &TypeEnv, source: Option<&crate::parser::ast::Expr>) -> Result<PhpType, CompileError> {
         if self.semantic_source_mode == crate::source::SourceMode::Internal
             || !self.semantic_profile.contains(StrictFeature::Locals) { return Ok(incoming.clone()); }
         let key = (self.current_loop_storage_scope.clone(), span, name.to_string());
@@ -40,7 +40,10 @@ impl Checker {
                 self.local_store_contracts.insert(key, LocalStoreContract {
                     ty: expected.clone(), feature: StrictFeature::Locals,
                 });
-                Ok(expected)
+                let view = guarded_numeric_view(self, &expected, incoming);
+                let non_null = self.strip_void_from_union(&view);
+                Ok(if non_null != view && source.is_some_and(|source|
+                    self.stored_value_is_non_null(source, &non_null, env)) { non_null } else { view })
             }
             _ => Ok(incoming.clone()),
         }
@@ -51,7 +54,23 @@ impl Checker {
 fn numeric_contract(ty: &PhpType) -> bool {
     match ty {
         PhpType::Int | PhpType::Float => true,
-        PhpType::Union(members) => !members.is_empty() && members.iter().all(numeric_contract),
+        PhpType::Union(members) => members.iter().any(numeric_contract)
+            && members.iter().all(|member| *member == PhpType::Void || numeric_contract(member)),
         _ => false,
     }
+}
+
+/// Preserves a successful numeric source view without treating permitted null as a produced value.
+fn guarded_numeric_view(checker: &Checker, expected: &PhpType, incoming: &PhpType) -> PhpType {
+    let PhpType::Union(members) = incoming else { return expected.clone(); };
+    let mut accepted = Vec::new();
+    for member in members {
+        match crate::semantics::conversions::membership(checker.semantic_profile,
+            checker.semantic_source_mode, StrictFeature::Locals, expected, member) {
+            ConversionPlan::Identity => accepted.push(member.clone()),
+            ConversionPlan::Reject(_) => {},
+            _ => return expected.clone(),
+        }
+    }
+    if accepted.is_empty() { expected.clone() } else { checker.normalize_union_type(accepted) }
 }

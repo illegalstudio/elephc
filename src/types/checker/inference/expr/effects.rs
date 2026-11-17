@@ -47,7 +47,9 @@ fn incremented_local_type(checker: &Checker, current: Option<&PhpType>, fixed_ta
         }
     }
     match current {
-        Some(PhpType::Int) if fixed_tagged_reference => Some(PhpType::Int),
+        Some(PhpType::Int) if fixed_tagged_reference
+            && (checker.semantic_source_mode == crate::source::SourceMode::Internal
+                || !checker.semantic_profile.contains(elephc_semantics::StrictFeature::Locals)) => Some(PhpType::Int),
         Some(PhpType::Int) => Some(PhpType::Union(vec![PhpType::Int, PhpType::Float])),
         Some(PhpType::Str) => Some(PhpType::Mixed),
         _ => None,
@@ -140,7 +142,7 @@ impl Checker {
                 let fixed_tagged_reference = self.has_fixed_tagged_reference_storage(name, env);
                 let result_ty = self.infer_type(expr, env)?;
                 if let Some(updated) = incremented_local_type(self, old_ty.as_ref(), fixed_tagged_reference) {
-                    let stored = self.check_numeric_local_store(name, &updated, expr.span, env)?;
+                    let stored = self.check_numeric_local_store(name, &updated, expr.span, env, None)?;
                     self.record_local_storage_effect(name, &stored);
                     env.insert(name.clone(), stored);
                 }
@@ -153,7 +155,7 @@ impl Checker {
                 // Same retype as the pre-form: only the RESULT differs, and it was already
                 // computed above against the type the local held before the update.
                 if let Some(updated) = incremented_local_type(self, old_ty.as_ref(), fixed_tagged_reference) {
-                    let stored = self.check_numeric_local_store(name, &updated, expr.span, env)?;
+                    let stored = self.check_numeric_local_store(name, &updated, expr.span, env, None)?;
                     self.record_local_storage_effect(name, &stored);
                     env.insert(name.clone(), stored);
                 }

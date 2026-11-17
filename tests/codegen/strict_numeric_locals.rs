@@ -80,7 +80,7 @@ numericScope($argc);
 fn test_strict_numeric_locals_example() {
     let source = include_str!("../../examples/strict-locals/main.php");
     assert_eq!(StrictFixture::new(source).run(&["--strict-locals"]),
-        "Quantity requires an integer\nQuantity: 2\nQuantity: 3\nThe integer binding kept its value\nArithmetic result: double\nFresh measurement: 2.5\n");
+        "Quantity requires an integer or null\nQuantity: 2\nQuantity: 3\nQuantity: not tracked\nThe integer binding kept its value\nArithmetic result: double\nFresh measurement: 2.5\n");
 }
 
 
@@ -97,4 +97,36 @@ fn test_strict_numeric_locals_rebind_and_nonexecuting_store_contracts() {
                 "{flags:?}: {}", String::from_utf8_lossy(&output.stderr));
         }
     }
+}
+
+
+/// Nullable numeric writes retain null while updates reject promotion before touching shared cells.
+#[test]
+fn test_strict_nullable_numeric_locals_preserve_contracts_and_reference_storage() {
+    let source = include_str!("../fixtures/strict/nullable_numeric_local_contracts.php");
+    for mode in ["--ir-opt=off", "--ir-opt=on"] {
+        for overflow in [false, true] {
+            let mut flags = vec!["--strict-locals", "--heap-debug", mode];
+            if overflow { flags.push("--strict-overflow"); }
+            let failure = if overflow { "A" } else { "T" };
+            let expected = format!("Tinteger:1|WN|Winteger:9007199254740993|{failure}integer:9223372036854775807|{failure}integer:-9223372036854775808|N|Sinteger:2|{failure}integer:9223372036854775807|{failure}integer:-9223372036854775808|N|Sinteger:2|2:2:3|2|0|");
+            let output = StrictFixture::new(source).capture(&flags);
+            assert_eq!(String::from_utf8_lossy(&output.stdout), expected, "{flags:?}: {}",
+                String::from_utf8_lossy(&output.stderr));
+            assert!(String::from_utf8_lossy(&output.stderr).contains("HEAP DEBUG: leak summary: clean"),
+                "{flags:?}: {}", String::from_utf8_lossy(&output.stderr));
+        }
+    }
+}
+
+/// Known nullable numeric stores reject float without forbidding null or integer alternatives.
+#[test]
+fn test_strict_nullable_numeric_locals_known_kinds_and_explicit_null() {
+    for source in ["<?php function nullableStore(?int $value): void { $value = 2.5; } nullableStore($argc);",
+        "<?php function nullableFloat(?float $value): void { $value = 2; } nullableFloat(2.5);"] {
+        StrictFixture::new(source).assert_error(&["--strict-locals"], "--strict-locals");
+        StrictFixture::new(source).assert_compiles(&[]);
+    }
+    let source = "<?php function nullableMember(?int $value): void { $value = null; echo $value === null ? 'N' : 'X'; $value = 9007199254740993; echo $value; } nullableMember($argc);";
+    assert_eq!(StrictFixture::new(source).run(&["--strict-locals"]), "N9007199254740993");
 }

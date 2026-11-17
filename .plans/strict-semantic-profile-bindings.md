@@ -1,9 +1,9 @@
 # Strict local binding implementation history
 
-This record preserves step116 candidate investigations and verification. The
+This record preserves steps116-117 candidate investigations and verification. The
 current approved contract and authoritative checkpoint remain in
 [strict-semantic-profiles.md](strict-semantic-profiles.md). Candidate failures
-below are chronological and are superseded by the verified116 checkpoint.
+below are chronological and are superseded by the verified117 checkpoint.
 
 ### Step116 candidate: stable numeric local stores
 
@@ -117,3 +117,64 @@ also passed. The expanded EIR/library emitter gate covers all five targets.
 The owned verification directory is removed after evidence capture. Stronger
 Locals and six other strict families remain active work; no full local suite,
 push or PR has been requested or performed.
+
+
+## Step117 investigation history
+
+### Step117 candidate: nullable numeric bindings and shared updates
+
+Baseline882e459f on signed116 compared PHP, default native and Locals native in
+both IR modes with heap debugging. Direct aliases already reject a Mixed float
+under Locals and retain integer1; direct global writes do too. A fresh integer
+closure local shadowing an outer float is a passing control. Untyped reference
+parameters still replace the caller's inferred Int with float (knowledgea7dce035),
+and opaque eval still does the same (knowledgea6343333), all with clean heaps.
+The default direct-alias control narrows2.5 to integer2 through the inherited
+scalar-reference backend coercion; preserve existing default behavior while adding
+strict checks. These two missing contract transports remain completion work.
+
+The first nullable-reference fixture was refused in both profiles by the existing
+concrete-versus-nullable reference storage guard. Supported baselinesf49cbc10 use
+actual nullable parameter storage instead, and also test nullable by-value writes/
+updates and a compound assignment followed by a typed return. They run the exact
+prebuilt116 compiler before any new compiler build.
+
+The117 candidate admits null as an explicit alternative of an otherwise numeric
+binding. Successful guards project concrete source alternatives so an accepted
+integer update remains an integer read view, without removing null from the
+binding's contract. For a guarded Locals update, raw nullable reference storage
+receives the accepted result after ordinary PHP promotion and a TypeError guard,
+rather than taking the legacy narrowed-sink fatal path. Existing reference-layout
+eligibility is unchanged. Numeric overflow remains independently ArithmeticError
+when Overflow is enabled. The example now uses an optional quantity parameter and
+shows a legal null replacement.
+
+Queued job2916a299 follows baselinef49cbc10 and builds the candidate, then runs
+nine exact gates: nullable and ordinary five-target emitters, nullable native
+values/references with both IR modes and Overflow settings, source kinds/null,
+ordinary numeric/native/union/rebind controls, example, and an existing nullable
+reference regression. The architecture audit follows. Candidate production files
+are frozen for this Rust verification. No117 commit exists yet. The possible
+compound-return read-view case is being baselined before further changes.
+Owned temporary artifacts are target/strict-local-references-xu51mw4b and must
+be removed after evidence capture. The complete task remains active.
+
+
+### Verified117 acceptance
+
+Baselinef49cbc10 confirmed that signed116 allowed nullable value writes/updates
+to float and hit the legacy fatal narrowed sink for supported nullable reference
+updates. Candidate diagnosisd356faea proved correct TypeError versus
+ArithmeticError behavior with clean heaps. The first matrix assertion was too
+strict when Overflow had already proved an integer result; that redundant guard
+can be absent. Diagnosisf6523b3c found a compound-return read-view regression:
+acceptance kept int|null after an operation that cannot produce null. The shared
+completed-store proof now preserves its non-null view after guarding.
+
+Job8d7c8fcc passed a build without new warnings, ten exact gates and architecture
+audit in2m39s. Both IR modes, both Overflow settings, MIN/MAX, ordinary/reference
+updates, repeated prefix/postfix results, null/large-int writes, typed compound
+returns, examples and existing nullable reference/coalesce controls pass with
+clean heaps. Both five-target gates pass. Untyped reference parameter transport
+and opaque eval contract transport remain unfinished, as recorded in facts
+a7dce035 and a6343333.

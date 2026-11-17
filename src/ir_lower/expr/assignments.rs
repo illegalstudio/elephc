@@ -870,7 +870,10 @@ pub(super) fn lower_inc_dec(
     let checked_int_local = matches!(existing_type.codegen_repr(), PhpType::Int) || nullable_int;
     // An incoming typed reference addresses the caller's tagged cell, which cannot hold a
     // float. Use the existing checked scalar-storage diagnostic instead of writing float bits.
-    let fixed_tagged_reference = nullable_int && ctx.is_ref_bound_local(name);
+    let checked_local_binding = ctx.local_store_contracts.get(
+        &(ctx.loop_storage_scope.clone(), expr.span, name.to_string()))
+        .is_some_and(|contract| contract.feature == elephc_semantics::StrictFeature::Locals);
+    let fixed_tagged_reference = nullable_int && ctx.is_ref_bound_local(name) && !checked_local_binding;
     let iop = match (increment, checked_int_local, fixed_tagged_reference) {
         (true, _, true) => Op::ICheckedAddToInt,
         (false, _, true) => Op::ICheckedSubToInt,

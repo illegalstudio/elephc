@@ -1,18 +1,18 @@
 <?php
 // Compile with: elephc --strict-locals examples/strict-locals/main.php
 
-function updateQuantity(mixed $replacement): void {
-    $quantity = 2;
+function updateQuantity(mixed $replacement, ?int $quantity = 2): void {
     try {
         $quantity = $replacement;
     } catch (TypeError $error) {
-        echo "Quantity requires an integer", PHP_EOL;
+        echo "Quantity requires an integer or null", PHP_EOL;
     }
-    echo "Quantity: ", $quantity, PHP_EOL;
+    echo "Quantity: ", $quantity === null ? "not tracked" : $quantity, PHP_EOL;
 }
 
 updateQuantity(2.5);
 updateQuantity(3);
+updateQuantity(null);
 
 $limit = $argc > 0 ? PHP_INT_MAX : 1;
 try {

@@ -371,18 +371,18 @@ evidence and outstanding guarantees are recorded below.
 
 ## Implementation progress
 
-Verified through step116 (this commit), with remaining feature integration in progress. Issue:
+Verified through step117 (this commit), with remaining feature integration in progress. Issue:
 https://github.com/illegalstudio/elephc/issues/2347.
 
 The full task remains active. The user requested complete implementation, with a
 commit for every verified step and no partial delivery. Do not expose unfinished
 flags as successful no-ops. The public integrated mask contains Locals, Bools, DynamicCode, Opcache, Arithmetic,
-Overflow, Strings, Coercions, Casts and Comparisons. Locals includes the verified116 ordinary numeric binding extension;
+Overflow, Strings, Coercions, Casts and Comparisons. Locals includes the verified116-117 ordinary/nullable numeric binding extension;
 its complete reference/global/eval and broader binding-flow contract remains outstanding. All
 other guarantees and the complete umbrella remain explicitly gated until their
 whole contract is enforced.
 
-This progress ledger condenses verified implementation through step116.
+This progress ledger condenses verified implementation through step117.
 Detailed evidence remains in Git history, historical Code Journal plan revisions,
 the linked work logs, and the current agent-facing architecture document
 3739892b. The approved behavior and delivery requirements above are unchanged.
@@ -613,7 +613,8 @@ paths. Keep this plan, agent documentation and the current journal log synchroni
 | 113 | `7a97ec5e68` | feat(strict): validate native comparator result kinds |
 | 114 | `82300f746f` | feat(strict): enable noncoercive comparisons across hosts |
 | 115 | `6daf631e8b` | fix(eval): publish only live native object binding contracts |
-| 116 | this commit | feat(strict): enforce stable numeric local bindings |
+| 116 | `1cb2b34778` | feat(strict): enforce stable numeric local bindings |
+| 117 | this commit | feat(strict): guard nullable numeric binding updates |
 
 
 ### Latest verified admission checkpoint
@@ -708,3 +709,32 @@ intermediate failures, controls and the remaining source-point design notes.
 The owned verification directory is removed after evidence capture. Continue the
 full task: this is a numeric binding step, not completed stronger Locals or the
 full umbrella.
+
+
+### Verified117: nullable numeric bindings and shared updates
+
+Numeric contracts retain explicit null alternatives, and successful guards keep
+the narrower kinds actually produced by an expression. The existing completed-
+store proof preserves a non-null read after an accepted compound arithmetic
+result, so a valid int return is not weakened to int|null. Nullable reference
+updates validate an ordinary PHP-promoting candidate before the raw tagged
+storage changes. With Locals alone a float result raises TypeError; independently
+enabled Overflow raises ArithmeticError first. Reference layout eligibility and
+permissive storage behavior are unchanged.
+
+Job8d7c8fcc passed the compiler build without new warnings, ten exact gates and
+the builtin architecture audit in2m39s. Both IR modes and Overflow settings have
+clean heaps; MIN/MAX, shared updates, repeated prefix/postfix results, explicit
+null, exact large integers, typed compound returns, the example and existing
+nullable reference/coalesce regressions pass. Both nullable and ordinary EIR/
+library emitter gates cover all five targets. The
+[binding history](strict-semantic-profile-bindings.md) retains baseline and
+intermediate diagnosis.
+
+Continue contract transport across untyped reference parameters (a7dce035) and
+opaque eval (a6343333). Direct local aliases/global writes and fresh integer
+closure shadowing are passing signed116 controls. Exact future regressions are
+preserved, not yet registered, in tests/fixtures/strict/native_untyped_local_contract.php
+and native_eval_local_contract.php, excluded from117 staging. The owned baseline/
+verification directory is removed after evidence capture. Complete broader Locals,
+the other six families and full umbrella/host acceptance before ending the task.
