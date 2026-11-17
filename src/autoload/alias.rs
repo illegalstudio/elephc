@@ -381,13 +381,8 @@ fn namespace_text(name: &Option<Name>) -> String {
 /// are compile-time constants.
 fn extract_class_alias(stmt: &Stmt, scope: &AliasScope) -> Option<(String, String)> {
     let args = positional_class_alias_args(stmt)?;
-    if let Some(autoload_arg) = args.get(2) {
-        match &autoload_arg.kind {
-            ExprKind::BoolLiteral(true) => {}
-            ExprKind::IntLiteral(n) if *n != 0 => {}
-            _ => return None,
-        }
-    }
+    // The `$autoload` flag (any literal, see `class_alias_arity_is_supported`) only says whether
+    // php would autoload the original: it does not change which two names the call binds.
     let orig = constant_class_name(args.first()?, scope)?;
     let alias = constant_class_name(args.get(1)?, scope)?;
     Some((orig, alias))
@@ -439,8 +434,13 @@ fn class_alias_arity_is_supported(args: &[Expr]) -> bool {
     }
     match args.get(2).map(|arg| &arg.kind) {
         None => true,
-        Some(ExprKind::BoolLiteral(_)) => true,
-        Some(ExprKind::IntLiteral(_)) => true,
+        Some(
+            ExprKind::BoolLiteral(_)
+            | ExprKind::IntLiteral(_)
+            | ExprKind::FloatLiteral(_)
+            | ExprKind::StringLiteral(_)
+            | ExprKind::Null,
+        ) => true,
         Some(_) => false,
     }
 }
