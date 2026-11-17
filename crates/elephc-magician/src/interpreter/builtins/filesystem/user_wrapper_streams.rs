@@ -449,25 +449,25 @@ pub(in crate::interpreter) fn eval_user_wrapper_stream_open_args(
         EvaluatedCallArg {
             evaluation_owner: None,
             name: None,
-            value: path.borrowed(),
+            value: path,
             ref_target: None,
         },
         EvaluatedCallArg {
             evaluation_owner: None,
             name: None,
-            value: mode.borrowed(),
+            value: mode,
             ref_target: None,
         },
         EvaluatedCallArg {
             evaluation_owner: None,
             name: None,
-            value: options.borrowed(),
+            value: options,
             ref_target: None,
         },
         EvaluatedCallArg {
             evaluation_owner: None,
             name: None,
-            value: opened_path.borrowed(),
+            value: opened_path,
             ref_target: Some(EvalReferenceTarget::Cell { cell: opened_path }),
         },
     ])
