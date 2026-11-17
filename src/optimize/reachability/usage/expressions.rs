@@ -575,6 +575,7 @@ impl Scanner<'_> {
             call_span,
             false,
             false,
+            self.semantic_profile(),
         ) else {
             self.unresolved_callable_hazard();
             return;
@@ -1154,7 +1155,7 @@ impl Scanner<'_> {
             .first()
             .map(|argument| argument.span)
             .unwrap_or_else(crate::span::Span::dummy);
-        crate::types::call_args::plan_call_args(signature, args, call_span, false, true)
+        crate::types::call_args::plan_call_args(signature, args, call_span, false, true, self.semantic_profile())
             .map(|plan| plan.normalized_args())
             .unwrap_or_default()
     }
@@ -1181,6 +1182,7 @@ impl Scanner<'_> {
             call_span,
             true,
             false,
+            self.semantic_profile(),
         )
         .ok()
         .map(|plan| plan.normalized_args())
@@ -1203,6 +1205,7 @@ impl Scanner<'_> {
                 call_span,
                 false,
                 true,
+                self.semantic_profile(),
             ) else {
                 self.usage.hazards.dynamic_method = true;
                 continue;

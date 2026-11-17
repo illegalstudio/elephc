@@ -57,11 +57,11 @@ fn strict_trusted_defaults_planner_preserves_source_and_explicit_argument_kinds(
             crate::parser::ast::ExprKind::StringLiteral("named".into()), crate::span::Span::dummy(),
         )),
     }, crate::span::Span::dummy());
-    let plan = crate::types::call_args::plan_call_args(sig, &[named], crate::span::Span::dummy(), false, false).unwrap();
+    let plan = crate::types::call_args::plan_call_args(sig, &[named], crate::span::Span::dummy(), false, false, profile).unwrap();
     assert!(matches!(plan.regular_args.first(), Some(crate::types::call_args::PlannedRegularArg::Default(value))
         if matches!(value.kind, crate::parser::ast::ExprKind::FloatLiteral(value) if value == 1.0)));
     let explicit = [crate::parser::ast::Expr::int_lit(1)];
-    let plan = crate::types::call_args::plan_call_args(sig, &explicit, crate::span::Span::dummy(), false, false).unwrap();
+    let plan = crate::types::call_args::plan_call_args(sig, &explicit, crate::span::Span::dummy(), false, false, profile).unwrap();
     assert!(matches!(plan.normalized_args()[0].kind, crate::parser::ast::ExprKind::IntLiteral(1)));
 }
 

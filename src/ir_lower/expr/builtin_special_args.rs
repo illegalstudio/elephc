@@ -140,7 +140,7 @@ pub(super) fn static_settype_arg_exprs(
     if args.len() != 2 || args.iter().any(is_spread_arg) {
         return None;
     }
-    if !crate::types::call_args::has_named_args(args) {
+    if !crate::types::call_args::has_named_args(args, ctx.semantic_profile) {
         return Some((args[0].clone(), args[1].clone()));
     }
     let sig = call_signature(ctx, name, source_prefers_extension_builtin(name))?;
@@ -157,6 +157,7 @@ pub(super) fn static_settype_arg_exprs(
         false,
         true,
         &assoc_spread_sources(ctx, args),
+        ctx.semantic_profile,
     )
     .ok()?;
     if plan.has_spread_args() || plan.regular_args.len() != 2 {
@@ -270,12 +271,12 @@ pub(super) fn lower_xml_handler_setter_call(
     args: &[Expr],
 ) -> Vec<crate::ir::ValueId> {
     let expanded = if has_static_call_spread_args(args) {
-        Some(expand_static_call_spread_args(args))
+        Some(expand_static_call_spread_args(args, ctx.semantic_profile))
     } else {
         None
     };
     let args = expanded.as_deref().unwrap_or(args);
-    let has_named = crate::types::call_args::has_named_args(args);
+    let has_named = crate::types::call_args::has_named_args(args, ctx.semantic_profile);
     let has_spread = args.iter().any(is_spread_arg);
     if !has_named && !has_spread {
         lower_xml_handler_setter_args(ctx, name, sig, args)
@@ -343,6 +344,7 @@ pub(super) fn lower_xml_handler_setter_named_args(
         false,
         true,
         &assoc_spread_sources(ctx, args),
+        ctx.semantic_profile,
     ) else {
         return lower_args_with_signature(ctx, Some(sig), args);
     };
@@ -511,7 +513,7 @@ pub(super) fn lower_date_args(
     args: &[Expr],
 ) -> Vec<crate::ir::ValueId> {
     if args.len() != 2
-        || crate::types::call_args::has_named_args(args)
+        || crate::types::call_args::has_named_args(args, ctx.semantic_profile)
         || args.iter().any(is_spread_arg)
     {
         return lower_args_with_signature(ctx, sig, args);
@@ -528,7 +530,7 @@ pub(super) fn lower_json_source_args(
     args: &[Expr],
 ) -> Vec<crate::ir::ValueId> {
     if args.is_empty()
-        || crate::types::call_args::has_named_args(args)
+        || crate::types::call_args::has_named_args(args, ctx.semantic_profile)
         || args.iter().any(is_spread_arg)
     {
         let mut operands = lower_args_with_signature(ctx, sig, args);

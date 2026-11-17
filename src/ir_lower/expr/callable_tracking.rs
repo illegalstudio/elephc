@@ -65,8 +65,8 @@ pub(crate) fn reflection_method_binding_for_expr(
 }
 
 /// Returns a safe static argument array that can be replayed for reflection forwarding.
-pub(crate) fn reflection_arg_array_binding_for_expr(expr: &Expr) -> Option<Vec<Expr>> {
-    let args = reflection_class_new_instance_args_value_without_locals(expr)?;
+pub(crate) fn reflection_arg_array_binding_for_expr(expr: &Expr, profile: elephc_semantics::SemanticProfile) -> Option<Vec<Expr>> {
+    let args = reflection_class_new_instance_args_value_without_locals(expr, profile)?;
     if args.iter().all(reflection_arg_expr_can_track) {
         Some(args)
     } else {

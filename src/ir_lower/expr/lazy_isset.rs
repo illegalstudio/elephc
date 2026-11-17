@@ -19,7 +19,7 @@ pub(super) fn lower_lazy_isset(
     if php_symbol_key(name.trim_start_matches('\\')) != "isset" {
         return None;
     }
-    if crate::types::call_args::has_named_args(args) || args.iter().any(is_spread_arg) {
+    if crate::types::call_args::has_named_args(args, ctx.semantic_profile) || args.iter().any(is_spread_arg) {
         return None;
     }
     if args.is_empty() {
@@ -175,7 +175,7 @@ pub(super) fn lower_lazy_empty(
         return None;
     }
     if args.len() != 1
-        || crate::types::call_args::has_named_args(args)
+        || crate::types::call_args::has_named_args(args, ctx.semantic_profile)
         || args.iter().any(is_spread_arg)
     {
         return None;

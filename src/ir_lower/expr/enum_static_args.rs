@@ -24,8 +24,8 @@ pub(super) fn lower_arguments(
     ctx: &mut LoweringContext<'_, '_>, signature: &FunctionSig, args: &[Expr],
     class: &str, method: &str, span: Span,
 ) -> Option<Vec<ValueId>> {
-    let expanded = crate::types::call_args::expand_static_assoc_spread_args(args);
-    let flat = crate::types::call_args::expand_planned_positional_spreads(&expanded)
+    let expanded = crate::types::call_args::expand_static_assoc_spread_args(args, ctx.semantic_profile);
+    let flat = crate::types::call_args::expand_planned_positional_spreads(&expanded, ctx.semantic_profile)
         .unwrap_or(expanded);
     if flat.iter().any(is_spread_arg) { return None; }
     let regular = crate::types::call_args::regular_param_count(signature);
@@ -33,6 +33,7 @@ pub(super) fn lower_arguments(
         signature, &flat, span, regular, false,
         signature.variadic.is_some() && !crate::func_args::sig_collects_surplus_args(signature),
         &assoc_spread_sources(ctx, &flat),
+        ctx.semantic_profile,
     ).ok()?;
     let named = plan.first_named_pos.is_some();
     let sources = if named { plan.source_values.clone() } else {

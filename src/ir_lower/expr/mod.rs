@@ -1072,7 +1072,7 @@ fn lower_array_internal_pointer(
         _ => return None,
     };
     if args.len() != 1
-        || crate::types::call_args::has_named_args(args)
+        || crate::types::call_args::has_named_args(args, ctx.semantic_profile)
         || args.iter().any(is_spread_arg)
     {
         return None;

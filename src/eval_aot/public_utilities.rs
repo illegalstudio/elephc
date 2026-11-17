@@ -39,7 +39,7 @@ pub(super) fn const_finite_numeric_expr(expr: &Expr) -> Option<f64> {
 }
 
 /// Checks a user-function signature against the native-only eval call subset.
-pub(crate) fn static_function_signature_supported(signature: &FunctionSig, args: &[Expr]) -> bool {
+pub(crate) fn static_function_signature_supported(signature: &FunctionSig, args: &[Expr], profile: elephc_semantics::SemanticProfile) -> bool {
     let visible_regular = crate::types::call_args::regular_param_count(signature);
     let source_variadic = signature
         .variadic
@@ -57,7 +57,7 @@ pub(crate) fn static_function_signature_supported(signature: &FunctionSig, args:
     {
         return false;
     }
-    let Some(args) = normalize_static_function_args(signature, args) else {
+    let Some(args) = normalize_static_function_args(signature, args, profile) else {
         return false;
     };
     visible_regular == args.len()
@@ -74,8 +74,8 @@ pub(crate) fn static_function_signature_supported(signature: &FunctionSig, args:
 ///
 /// Static spread arrays are expanded through the shared call planner; dynamic
 /// spreads that remain after planning stay on the eval bridge fallback.
-pub(super) fn normalize_static_function_args(signature: &FunctionSig, args: &[Expr]) -> Option<Vec<Expr>> {
-    if !crate::types::call_args::has_named_args(args)
+pub(super) fn normalize_static_function_args(signature: &FunctionSig, args: &[Expr], profile: elephc_semantics::SemanticProfile) -> Option<Vec<Expr>> {
+    if !crate::types::call_args::has_named_args(args, profile)
         && !args
             .iter()
             .any(|arg| matches!(arg.kind, ExprKind::Spread(_)))
@@ -83,7 +83,7 @@ pub(super) fn normalize_static_function_args(signature: &FunctionSig, args: &[Ex
         return normalize_positional_static_function_args(signature, args);
     }
     let call_span = args.first().map(|arg| arg.span).unwrap_or_else(Span::dummy);
-    let plan = plan_call_args(signature, args, call_span, false, false).ok()?;
+    let plan = plan_call_args(signature, args, call_span, false, false, profile).ok()?;
     if plan.has_spread_args() {
         return None;
     }
@@ -168,10 +168,10 @@ mod tests {
         assert!(static_function_signature_supported(
             &scalar_signature(false),
             &args
-        ));
+        , elephc_semantics::SemanticProfile::PERMISSIVE));
         assert!(static_function_signature_supported(
             &scalar_signature(true),
             &args
-        ));
+        , elephc_semantics::SemanticProfile::PERMISSIVE));
     }
 }

@@ -91,7 +91,7 @@ fn lower_untyped_descriptor_invoker_arg_container_with_selections(
     ctx: &mut LoweringContext<'_, '_>, args: &[Expr],
     selections: &[Option<descriptor_argument_contexts::ReferenceArgument>], span: Span,
 ) -> LoweredValue {
-    if crate::types::call_args::has_named_args(args)
+    if crate::types::call_args::has_named_args(args, ctx.semantic_profile)
         || descriptor_args_need_runtime_unpack_keys(args)
     {
         return lower_untyped_descriptor_invoker_hash_container(ctx, args, selections, span);

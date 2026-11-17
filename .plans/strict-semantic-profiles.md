@@ -1127,3 +1127,29 @@ history. PHP output matches the permissive control. Final269bebca passes in3m26s
 default compiler/bridge builds77.44s, shared default/enum/literal-planner ownership
 controls and four exact legacy Reflection/default integration tests. Assembly
 comments and diff hygiene pass. ArrayKeys remains gated pending its other paths.
+
+### Verified152: profiled call planning and unpack ownership
+
+Static spread/call planners, CallArgPlan projections and generic inference carry
+explicit key policy. Checker/EIR, numeric source proofs, Reflection argument
+adapters, literal-eval folding/safety and typed reachability use the same profile.
+Parser syntax validation is separate from profile-dependent static unpack order.
+Raw-source validation no longer mistakes values expanded from a second unpack
+for written positional arguments after an unpack.
+
+Reflection construction reuses the dynamic constructor helper with original
+arguments, avoiding a second variadic collection. A raw iterable returned as Mixed
+has a separate boxed payload retain, so caller cleanup now releases its source
+owner; direct iterable returns keep their pass-through alias behavior.
+
+Jobae5b4cd3 passes conversion independence12.07s, twenty mode/profile/target
+emissions37.40s and eight native variants25.55s, all heap clean. Cases cover numeric
+string names, duplicate integer/string identity, runtime sources, callbacks,
+constructors, Reflection, separate-spread append order and NUL bytes. Regular float
+constructor binding and independent Coercions checks pass. Reference elements in
+AOT array literals remain an explicitly diagnosed unsupported source construct.
+Finald952d76c passes in3m03s: compiler/bridge builds68.91s, isolated owner probes,
+new eval/generic/origin gates, default provenance controls and six exact legacy
+named/spread/raw-iterable regressions. All20 unique gates, assembly comments and
+diff hygiene pass. Pre-check dependency policies and duplicate named-key RHS
+effects remain to audit; ArrayKeys and the six pending families stay gated.

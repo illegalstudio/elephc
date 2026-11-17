@@ -19,7 +19,7 @@ pub(super) fn lower_static_is_callable(
     if php_symbol_key(name.trim_start_matches('\\')) != "is_callable" || args.len() != 1 {
         return None;
     }
-    if crate::types::call_args::has_named_args(args) || args.iter().any(is_spread_arg) {
+    if crate::types::call_args::has_named_args(args, ctx.semantic_profile) || args.iter().any(is_spread_arg) {
         return None;
     }
     // Eval can declare callable targets after static metadata has been built.

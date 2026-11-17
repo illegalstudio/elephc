@@ -1356,7 +1356,7 @@ pub(super) fn lower_args_with_signature_options_for_capture(
             return operands;
         }
     }
-    if crate::types::call_args::has_named_args(args) {
+    if crate::types::call_args::has_named_args(args, ctx.semantic_profile) {
         let operands = lower_named_args_with_signature_options(
             ctx, sig, args, trim_trailing_defaults, capture_values, capture_output_index,
         );
@@ -1368,7 +1368,7 @@ pub(super) fn lower_args_with_signature_options_for_capture(
         return operands;
     }
     let static_spread_args = if has_static_call_spread_args(args) {
-        Some(expand_static_call_spread_args(args))
+        Some(expand_static_call_spread_args(args, ctx.semantic_profile))
     } else {
         None
     };

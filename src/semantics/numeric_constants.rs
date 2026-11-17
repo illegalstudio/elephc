@@ -357,7 +357,7 @@ fn builtin_number(
     }
     if !matches!(operation, RuntimeFnId::Abs | RuntimeFnId::Pow | RuntimeFnId::Intdiv
         | RuntimeFnId::ArraySum | RuntimeFnId::ArrayProduct) { return Ok(None); }
-    let Some(normalized) = planned_builtin_arguments(def.name, args, expr.span) else { return Ok(None); };
+    let Some(normalized) = planned_builtin_arguments(def.name, args, expr.span, evidence.profile) else { return Ok(None); };
     // The planner owns cloned AST nodes. Do not retain their addresses in the source-tree memo.
     // Carry the active declaration guard so a constant cycle through a builtin stays unknown.
     let mut call_evidence = Evidence { profile: evidence.profile, active: evidence.active.clone(), strict_types: evidence.strict_types, ..Default::default() };
@@ -417,11 +417,11 @@ fn builtin_number(
 }
 
 /// Reuses the shared named/spread planner without consuming profile-dependent result inference.
-fn planned_builtin_arguments(name: &str, args: &[Expr], span: crate::span::Span) -> Option<Vec<Expr>> {
+fn planned_builtin_arguments(name: &str, args: &[Expr], span: crate::span::Span, profile: elephc_semantics::SemanticProfile) -> Option<Vec<Expr>> {
     let signature = crate::builtins::registry::function_sig(name)?;
-    let plan = crate::types::call_args::plan_call_args(&signature, args, span, true, false).ok()?;
-    if let Some(expanded) = crate::types::call_args::expand_planned_positional_spreads(args) {
-        Some(crate::types::call_args::plan_call_args(&signature, &expanded, span, true, false).ok()?.normalized_args())
+    let plan = crate::types::call_args::plan_call_args(&signature, args, span, true, false, profile).ok()?;
+    if let Some(expanded) = crate::types::call_args::expand_planned_positional_spreads(args, profile) {
+        Some(crate::types::call_args::plan_call_args(&signature, &expanded, span, true, false, profile).ok()?.normalized_args())
     } else { Some(plan.normalized_args()) }
 }
 

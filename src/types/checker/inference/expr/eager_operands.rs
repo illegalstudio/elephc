@@ -90,7 +90,7 @@ impl Checker {
 
     /// Preserves named/spread source order for every constructor form.
     fn infer_constructor_operand_effects(&mut self, args: &[Expr], env: &mut TypeEnv) -> Result<(), CompileError> {
-        for arg in &crate::types::call_args::expand_static_assoc_spread_args(args) {
+        for arg in &crate::types::call_args::expand_static_assoc_spread_args(args, self.semantic_profile) {
             self.infer_type_with_assignment_effects(arg, env)?;
         }
         Ok(())

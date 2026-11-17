@@ -83,7 +83,7 @@ pub(super) fn can_throw(signature: &FunctionSig, args: &[Expr], span: crate::spa
 pub(super) fn selected_default_throws(
     signature: &FunctionSig, args: &[Expr], span: crate::span::Span,
 ) -> ThrownTypes {
-    let Ok(plan) = plan_call_args(signature, args, span, false, true) else {
+    let Ok(plan) = plan_call_args(signature, args, span, false, true, crate::optimize::semantic_context::active_profile()) else {
         return ThrownTypes::unknown();
     };
     plan.possible_default_argument_mask(signature).into_iter()

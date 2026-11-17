@@ -325,7 +325,7 @@ impl Checker {
             .collect();
         implementations.sort_by(|left, right| left.0.cmp(&right.0));
         if args.iter().any(|arg| matches!(arg.kind, ExprKind::Spread(_)))
-            && crate::types::call_args::expand_planned_positional_spreads(args).is_none()
+            && crate::types::call_args::expand_planned_positional_spreads(args, self.semantic_profile).is_none()
         {
             // Runtime enum unpacks can retain named tail keys, even when the
             // interface also has ordinary class implementations. Recheck enum
@@ -360,6 +360,7 @@ impl Checker {
                     let binding = crate::types::call_args::required_argument_binding_signature(&implementation);
                     let (shortage, satisfiable) = match crate::types::call_args::plan_call_args(
                         &binding, args, expr.span, false, true,
+                        self.semantic_profile,
                     ) {
                         Ok(plan) => {
                             let shortage = plan.statically_missing_positionals(&implementation).is_some();
@@ -475,7 +476,7 @@ impl Checker {
         let method_key = php_symbol_key(method);
         if self.enums.contains_key(class_name)
             && args.iter().any(|arg| matches!(arg.kind, ExprKind::Spread(_)))
-            && crate::types::call_args::expand_planned_positional_spreads(args).is_none()
+            && crate::types::call_args::expand_planned_positional_spreads(args, self.semantic_profile).is_none()
         {
             // Concrete and nullsafe enum calls share the selected runtime binder.
             // Its boxed collector must also be the layout the method body reads.

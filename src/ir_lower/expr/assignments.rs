@@ -179,7 +179,7 @@ fn lower_ordinary_assignment_expr(
         assigned_name.and_then(|_| reflection_property_binding_for_expr(ctx, value));
     let reflected_method =
         assigned_name.and_then(|_| reflection_method_binding_for_expr(ctx, value));
-    let reflected_args = assigned_name.and_then(|_| reflection_arg_array_binding_for_expr(value));
+    let reflected_args = assigned_name.and_then(|_| reflection_arg_array_binding_for_expr(value, ctx.semantic_profile));
     let fiber_start_sig =
         assigned_name.and_then(|_| crate::ir_lower::fibers::start_sig_for_expr(ctx, value));
     let callable_array = assigned_name

@@ -164,9 +164,9 @@ pub(super) fn check(expr: &Expr, class: Option<&str>, definitions: &Definitions,
         }
         _ => return Ok(()),
     };
-    let Ok(mut plan) = plan_call_args(sig, args, expr.span, true, true) else { return Ok(()); };
-    if let Some(expanded) = expand_planned_positional_spreads(args) {
-        let Ok(expanded) = plan_call_args(sig, &expanded, expr.span, true, true) else { return Ok(()); };
+    let Ok(mut plan) = plan_call_args(sig, args, expr.span, true, true, evidence.profile) else { return Ok(()); };
+    if let Some(expanded) = expand_planned_positional_spreads(args, evidence.profile) {
+        let Ok(expanded) = plan_call_args(sig, &expanded, expr.span, true, true, evidence.profile) else { return Ok(()); };
         plan = expanded;
     }
     // Planner expressions have their own lifetime, so never reuse address memo entries from source.

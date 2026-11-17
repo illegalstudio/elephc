@@ -76,7 +76,7 @@ pub(super) fn lower_dynamic_place_call(ctx: &mut LoweringContext<'_, '_>, name: 
         if matches!(php_symbol_key(name.as_str().trim_start_matches('\\')).as_str(),
             "call_user_func" | "call_user_func_array")) { return None; }
     let signature = signature?;
-    let plan = crate::types::call_args::plan_call_args(signature, args, expr.span, true, false).ok()?;
+    let plan = crate::types::call_args::plan_call_args(signature, args, expr.span, true, false, ctx.semantic_profile).ok()?;
     // Positional plans intentionally omit source_values. The binder selects the actual
     // passing mode, so choosing this route needs only an original dynamic place.
     if !plan.source_args.iter().any(dynamic_place) { return None; }

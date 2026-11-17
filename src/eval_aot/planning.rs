@@ -181,7 +181,7 @@ where
         .difference(&scope_access.warning_reads)
         .cloned()
         .collect();
-    let folded_program = fold_static_builtin_calls_in_program(program.clone(), profile.php_only());
+    let folded_program = fold_static_builtin_calls_in_program(program.clone(), profile);
     let support = EirStaticCallPredicates {
         function: &static_call_supported,
         static_method: &static_method_supported,
@@ -215,7 +215,7 @@ where
         BTreeSet::new()
     };
     let array_read_constraint_sets =
-        collect_array_scope_read_constraint_sets(&folded_program, &scope_access.reads);
+        collect_array_scope_read_constraint_sets(&folded_program, &scope_access.reads, profile.semantics());
     let array_read_constraints = array_read_constraint_sets.array_like;
     let assoc_array_read_constraints = array_read_constraint_sets.assoc;
     let float_predicate_read_constraints =

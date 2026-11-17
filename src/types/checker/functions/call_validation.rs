@@ -100,7 +100,7 @@ fn spread_after_named_error(span: crate::span::Span, callee_desc: &str) -> Compi
 /// Returns a boolean vector indicating which argument positions contain assoc-spread sources
 /// (arrays with string keys that map to named arguments after spread expansion).
 fn assoc_spread_sources(args: &[Expr], env: &TypeEnv, profile: elephc_semantics::SemanticProfile) -> Vec<bool> {
-    call_args::expand_static_assoc_spread_args(args)
+    call_args::expand_static_assoc_spread_args(args, profile)
         .iter()
         .map(|arg| match &arg.kind {
             ExprKind::Spread(inner) => is_assoc_spread_source(inner, env, profile),
@@ -115,8 +115,8 @@ fn assoc_spread_sources(args: &[Expr], env: &TypeEnv, profile: elephc_semantics:
 /// and decides positional versus named binding while iterating. A statically indexed source can
 /// still provide only positional keys, but treating an unresolved spread as positional during
 /// checking would incorrectly report missing or duplicate parameters before that runtime walk.
-fn descriptor_spread_sources(args: &[Expr]) -> Vec<bool> {
-    call_args::expand_static_assoc_spread_args(args)
+fn descriptor_spread_sources(args: &[Expr], profile: elephc_semantics::SemanticProfile) -> Vec<bool> {
+    call_args::expand_static_assoc_spread_args(args, profile)
         .iter()
         .map(|arg| matches!(arg.kind, ExprKind::Spread(_)))
         .collect()
@@ -136,8 +136,21 @@ fn is_assoc_spread_source(expr: &Expr, env: &TypeEnv, profile: elephc_semantics:
 }
 
 /// Maps shared signature-independent ordering rules for checker and parser call surfaces.
-pub(crate) fn validate_unresolved_call_argument_order(args: &[Expr], callee_desc: &str) -> Result<(), CompileError> {
-    call_args::validate_unresolved_call_argument_order(args).map_err(|err| match err {
+pub(crate) fn validate_unresolved_call_argument_order(args: &[Expr], callee_desc: &str,
+    profile: elephc_semantics::SemanticProfile) -> Result<(), CompileError> {
+    call_args::validate_unresolved_call_argument_order(args, profile)
+        .map_err(|err| unresolved_call_order_error(err, callee_desc))
+}
+
+/// Maps parser-only ordering without selecting semantic array-key rules.
+pub(crate) fn validate_unresolved_call_syntax(args: &[Expr], callee_desc: &str) -> Result<(), CompileError> {
+    call_args::validate_syntactic_call_argument_order(args)
+        .map_err(|err| unresolved_call_order_error(err, callee_desc))
+}
+
+/// Keeps parser and checker diagnostics identical for their shared syntax rules.
+fn unresolved_call_order_error(err: CallArgPlanError, callee_desc: &str) -> CompileError {
+    match err {
         CallArgPlanError::SpreadAfterNamed { span } => {
             spread_after_named_error(span, callee_desc)
         }
@@ -154,7 +167,7 @@ pub(crate) fn validate_unresolved_call_argument_order(args: &[Expr], callee_desc
         | CallArgPlanError::MissingRequired { span, .. } => {
             CompileError::new(span, &format!("{} has invalid arguments", callee_desc))
         }
-    })
+    }
 }
 
 impl Checker {
@@ -169,7 +182,7 @@ impl Checker {
         args: &[Expr],
         callee_desc: &str,
     ) -> Result<(), CompileError> {
-        validate_unresolved_call_argument_order(args, callee_desc)
+        validate_unresolved_call_argument_order(args, callee_desc, self.semantic_profile)
     }
 
     /// Returns true when a by-reference argument is an object-property place whose declared
@@ -567,7 +580,7 @@ impl Checker {
     ) -> Result<call_args::CallArgPlan, CompileError> {
         let allow_unknown_named_variadic =
             sig.variadic.is_some() && !crate::func_args::sig_collects_surplus_args(sig);
-        let descriptor_spread_sources = descriptor_spread_sources(args);
+        let descriptor_spread_sources = descriptor_spread_sources(args, self.semantic_profile);
         call_args::plan_call_args_with_regular_param_count_and_assoc_spreads(
             sig,
             args,
@@ -576,6 +589,7 @@ impl Checker {
             false,
             allow_unknown_named_variadic,
             &descriptor_spread_sources,
+            self.semantic_profile,
         )
         .map_err(|err| call_arg_plan_error(sig, callee_desc, err))
     }
@@ -612,6 +626,7 @@ impl Checker {
             trim_trailing_defaults,
             allow_unknown_named_variadic,
             &assoc_spread_sources,
+            self.semantic_profile,
         )
         .map_err(|err| call_arg_plan_error(sig, callee_desc, err))
     }
@@ -858,7 +873,7 @@ impl Checker {
         self.validate_callable_spread_elements(sig, args, &plan, caller_env, callee_desc)?;
         let source_has_spread = plan.has_spread_args();
         let supports_literal_search_rewrite = !source_has_spread
-            && !call_args::has_named_args(args);
+            && !call_args::has_named_args(args, self.semantic_profile);
         let defaults = plan.default_argument_mask();
         let descriptor_projections = plan.descriptor_projection_mask();
         let normalized_args = plan.normalized_args();

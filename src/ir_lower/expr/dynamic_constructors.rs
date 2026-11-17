@@ -223,7 +223,7 @@ fn dynamic_new_class_is_planning_candidate(
             && args.iter().any(is_spread_arg)
             && !sig.ref_params.iter().any(|by_ref| *by_ref)
             && !crate::func_args::sig_has_hidden_argc_param(sig)
-            && crate::types::call_args::plan_call_args(sig, args, args[0].span, false, false).is_ok()
+            && crate::types::call_args::plan_call_args(sig, args, args[0].span, false, false, ctx.semantic_profile).is_ok()
     }) {
         return true;
     }
@@ -257,8 +257,8 @@ fn dynamic_new_class_is_planning_candidate(
     if owns_promoted_references && crate::func_args::sig_collects_surplus_args(sig)
         && !args.iter().any(is_spread_arg)
     {
-        if crate::types::call_args::has_named_args(args) {
-            return crate::types::call_args::plan_call_args(sig, args, args[0].span, false, false).is_ok();
+        if args.iter().any(|arg| matches!(arg.kind, ExprKind::NamedArg { .. })) {
+            return crate::types::call_args::plan_call_args(sig, args, args[0].span, false, false, ctx.semantic_profile).is_ok();
         }
         let regular = crate::types::call_args::regular_param_count(sig);
         return args.len() >= regular || sig.defaults[args.len()..regular].iter().all(Option::is_some);
@@ -278,7 +278,7 @@ fn dynamic_new_class_is_planning_candidate(
 /// candidate whose constructor arity matches the operand count exactly, so any named
 /// argument, spread, or omitted optional parameter needs the planned path.
 fn dynamic_new_args_need_planning(sig: &FunctionSig, args: &[Expr]) -> bool {
-    crate::types::call_args::has_named_args(args)
+    args.iter().any(|arg| matches!(arg.kind, ExprKind::NamedArg { .. }))
         || args.iter().any(is_spread_arg)
         || sig.params.len() != args.len()
 }
@@ -296,7 +296,7 @@ fn dynamic_new_args_lower_to_exact_arity(
     args: &[Expr],
 ) -> bool {
     let regular_param_count = crate::types::call_args::regular_param_count(sig);
-    if crate::types::call_args::has_named_args(args) {
+    if args.iter().any(|arg| matches!(arg.kind, ExprKind::NamedArg { .. })) {
         let Ok(plan) =
             crate::types::call_args::plan_call_args_with_regular_param_count_and_assoc_spreads(
                 sig,
@@ -306,6 +306,7 @@ fn dynamic_new_args_lower_to_exact_arity(
                 false,
                 true,
                 &assoc_spread_sources(ctx, args),
+                ctx.semantic_profile,
             )
         else {
             return false;

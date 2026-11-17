@@ -76,6 +76,7 @@ fn reflection_object_parameter_default_args(
     }
     let Ok(plan) = crate::types::call_args::plan_call_args(
         constructor, args, crate::span::Span::synthetic(), false, false,
+        ctx.module.semantic_profile,
     ) else { return Ok(None); };
     if plan.has_spread_args() {
         return Ok(None);

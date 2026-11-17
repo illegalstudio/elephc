@@ -119,7 +119,7 @@ impl FunctionSig {
 
     /// Returns whether forwarding this parameter by value produces an independent result owner.
     /// Reference parameters keep caller storage, but value returns acquire or clone its payload.
-    /// A callable or object returned as Mixed is boxed with its own payload retain, not transferred raw.
+    /// A callable, object or iterable returned as Mixed is boxed with its own payload retain.
     /// A raw callable descriptor can flow through only a Callable, Mixed or Union result; every
     /// other return representation is independent from that argument owner.
     pub(crate) fn returned_parameter_has_independent_owner(&self, index: usize) -> bool {
@@ -137,7 +137,7 @@ impl FunctionSig {
                 && self.params.get(index).is_some_and(|(_, php_type)| {
                     matches!(
                         php_type.codegen_repr(),
-                        PhpType::Callable | PhpType::Object(_)
+                        PhpType::Callable | PhpType::Object(_) | PhpType::Iterable
                     )
                 }))
             || (!self.by_ref_return

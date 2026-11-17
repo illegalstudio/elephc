@@ -171,10 +171,11 @@ impl Checker {
         // Builtin signatures count literal unpacked values instead of containers,
         // but only after the planner has validated ordering and named arguments.
         let static_positional_args = (!is_lazy_construct)
-            .then(|| crate::types::call_args::expand_planned_positional_spreads(args))
+            .then(|| crate::types::call_args::expand_planned_positional_spreads(args, self.semantic_profile))
             .flatten();
         let args = static_positional_args.as_deref().unwrap_or(args);
         let mut spread_type_error = None;
+        let profile = self.semantic_profile;
         let indexed_spread_args = (!is_lazy_construct && !forwards_callback_names
             && crate::types::builtin_call_sig_with_semantics(name, self.semantic_profile, source_mode)
                 .is_some_and(|sig| !sig.ref_params.iter().any(|by_ref| *by_ref)))
@@ -183,7 +184,7 @@ impl Checker {
                     Ok(ty) => matches!(ty.codegen_repr(), PhpType::Array(_)),
                     Err(error) => { spread_type_error = Some(error); false }
                 }
-            }))
+            }, profile))
             .flatten();
         if let Some(error) = spread_type_error {
             return Err(error);

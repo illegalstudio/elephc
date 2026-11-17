@@ -20,14 +20,14 @@ pub(super) fn lower_packed_builtin_call(
 ) -> Option<LoweredValue> {
     let def = crate::builtins::registry::lookup(name)?;
     if def.spec.semantics.argument_lowering != BuiltinArgumentLowering::PreserveValues
-        || !args.iter().any(is_spread_arg) || crate::types::call_args::has_named_args(args) {
+        || !args.iter().any(is_spread_arg) || crate::types::call_args::has_named_args(args, ctx.semantic_profile) {
         return None;
     }
     let BuiltinLowering::Runtime(RuntimeCallTarget::Function(target)) = def.spec.semantics.lowering else { return None; };
     if !target.uses_mbstring_runtime() { return None; }
     let sig = sig?;
     if sig.ref_params.iter().any(|by_ref| *by_ref) { return None; }
-    let plan = crate::types::call_args::plan_call_args(sig, args, expr.span, true, false).ok()?;
+    let plan = crate::types::call_args::plan_call_args(sig, args, expr.span, true, false, ctx.semantic_profile).ok()?;
     for arg in &plan.source_args {
         match &arg.kind {
             ExprKind::Spread(inner) => { indexed_spread_source_type(ctx, inner)?; }

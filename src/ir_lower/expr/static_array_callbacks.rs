@@ -19,7 +19,7 @@ pub(super) fn lower_static_array_map(
     if php_symbol_key(name.trim_start_matches('\\')) != "array_map" || args.len() != 2 {
         return None;
     }
-    if crate::types::call_args::has_named_args(args) || args.iter().any(is_spread_arg) {
+    if crate::types::call_args::has_named_args(args, ctx.semantic_profile) || args.iter().any(is_spread_arg) {
         return None;
     }
     if matches!(args[0].kind, ExprKind::Variable(_)) {
@@ -92,7 +92,7 @@ pub(super) fn lower_static_array_walk(
     if php_symbol_key(name.trim_start_matches('\\')) != "array_walk" || args.len() != 2 {
         return None;
     }
-    if crate::types::call_args::has_named_args(args) || args.iter().any(is_spread_arg) {
+    if crate::types::call_args::has_named_args(args, ctx.semantic_profile) || args.iter().any(is_spread_arg) {
         return None;
     }
     if matches!(args[1].kind, ExprKind::Variable(_)) {
@@ -333,7 +333,7 @@ pub(super) fn lower_reduce_sum(
         return None;
     }
     if ctx.functions.contains_key(name.trim_start_matches('\\'))
-        || crate::types::call_args::has_named_args(args)
+        || crate::types::call_args::has_named_args(args, ctx.semantic_profile)
         || args.iter().any(is_spread_arg)
     {
         return None;
@@ -412,7 +412,7 @@ pub(super) fn lower_count_explode(
         return None;
     }
     if ctx.functions.contains_key(name.trim_start_matches('\\'))
-        || crate::types::call_args::has_named_args(args)
+        || crate::types::call_args::has_named_args(args, ctx.semantic_profile)
         || args.iter().any(is_spread_arg)
     {
         return None;
@@ -427,7 +427,7 @@ pub(super) fn lower_count_explode(
     if php_symbol_key(explode_name.as_str().trim_start_matches('\\')) != "explode"
         || ctx.functions.contains_key(explode_name.as_str().trim_start_matches('\\'))
         || explode_args.len() != 2
-        || crate::types::call_args::has_named_args(explode_args)
+        || crate::types::call_args::has_named_args(explode_args, ctx.semantic_profile)
         || explode_args.iter().any(is_spread_arg)
     {
         return None;
@@ -502,7 +502,7 @@ pub(super) fn lower_map_sum_add(
         return None;
     }
     if ctx.functions.contains_key(name.trim_start_matches('\\'))
-        || crate::types::call_args::has_named_args(args)
+        || crate::types::call_args::has_named_args(args, ctx.semantic_profile)
         || args.iter().any(is_spread_arg)
     {
         return None;
@@ -517,7 +517,7 @@ pub(super) fn lower_map_sum_add(
     if php_symbol_key(map_name.as_str().trim_start_matches('\\')) != "array_map"
         || ctx.functions.contains_key(map_name.as_str().trim_start_matches('\\'))
         || map_args.len() != 2
-        || crate::types::call_args::has_named_args(map_args)
+        || crate::types::call_args::has_named_args(map_args, ctx.semantic_profile)
         || map_args.iter().any(is_spread_arg)
     {
         return None;
@@ -573,7 +573,7 @@ pub(super) fn lower_filter_count_mod(
         return None;
     }
     if ctx.functions.contains_key(name.trim_start_matches('\\'))
-        || crate::types::call_args::has_named_args(args)
+        || crate::types::call_args::has_named_args(args, ctx.semantic_profile)
         || args.iter().any(is_spread_arg)
     {
         return None;
@@ -588,7 +588,7 @@ pub(super) fn lower_filter_count_mod(
     if php_symbol_key(filter_name.as_str().trim_start_matches('\\')) != "array_filter"
         || ctx.functions.contains_key(filter_name.as_str().trim_start_matches('\\'))
         || filter_args.len() != 2
-        || crate::types::call_args::has_named_args(filter_args)
+        || crate::types::call_args::has_named_args(filter_args, ctx.semantic_profile)
         || filter_args.iter().any(is_spread_arg)
     {
         return None;
@@ -710,7 +710,7 @@ pub(super) fn lower_array_element_type_check(
     let mask = element_type_predicate_mask(&canonical)?;
     if ctx.functions.contains_key(name.trim_start_matches('\\'))
         || args.len() != 1
-        || crate::types::call_args::has_named_args(args)
+        || crate::types::call_args::has_named_args(args, ctx.semantic_profile)
         || args.iter().any(is_spread_arg)
     {
         return None;
@@ -806,7 +806,7 @@ pub(super) fn lower_map_sum_add_declared_int(
         return None;
     }
     if ctx.functions.contains_key(name.trim_start_matches('\\'))
-        || crate::types::call_args::has_named_args(args)
+        || crate::types::call_args::has_named_args(args, ctx.semantic_profile)
         || args.iter().any(is_spread_arg)
     {
         return None;
@@ -821,7 +821,7 @@ pub(super) fn lower_map_sum_add_declared_int(
     if php_symbol_key(map_name.as_str().trim_start_matches('\\')) != "array_map"
         || ctx.functions.contains_key(map_name.as_str().trim_start_matches('\\'))
         || map_args.len() != 2
-        || crate::types::call_args::has_named_args(map_args)
+        || crate::types::call_args::has_named_args(map_args, ctx.semantic_profile)
         || map_args.iter().any(is_spread_arg)
     {
         return None;

@@ -58,7 +58,7 @@ pub(super) fn promote_pdo_binding_ref_argument(
         "bindcolumn" => "var",
         _ => return,
     };
-    let expanded_args = crate::types::call_args::expand_static_assoc_spread_args(args);
+    let expanded_args = crate::types::call_args::expand_static_assoc_spread_args(args, ctx.semantic_profile);
     let argument = expanded_args
         .iter()
         .enumerate()

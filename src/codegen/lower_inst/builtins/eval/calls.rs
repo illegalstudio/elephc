@@ -361,7 +361,7 @@ pub(super) fn eval_literal_static_function_supported_by_codegen(
         return false;
     };
     let signature = function_signature_from_eir(function);
-    crate::eval_aot::static_function_signature_supported(&signature, args)
+    crate::eval_aot::static_function_signature_supported(&signature, args, ctx.module.semantic_profile)
 }
 
 /// Returns true when a static method call matches the EIR eval AOT codegen subset.
@@ -403,5 +403,5 @@ pub(super) fn eval_literal_static_method_supported_by_codegen(
     else {
         return false;
     };
-    crate::eval_aot::static_function_signature_supported(signature, args)
+    crate::eval_aot::static_function_signature_supported(signature, args, ctx.module.semantic_profile)
 }

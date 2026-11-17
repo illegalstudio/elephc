@@ -382,11 +382,12 @@ pub fn infer_bindings_with_args(
 pub fn arguments_in_declaration_order(
     param_names: &[String],
     args: &[crate::parser::ast::Expr],
+    profile: elephc_semantics::SemanticProfile,
 ) -> Vec<Option<crate::parser::ast::Expr>> {
     let mut slots: Vec<Option<crate::parser::ast::Expr>> = vec![None; param_names.len()];
     let mut positional_surplus: Vec<crate::parser::ast::Expr> = Vec::new();
     let mut named_surplus: Vec<crate::parser::ast::Expr> = Vec::new();
-    let expanded = expand_static_spreads(args);
+    let expanded = expand_static_spreads(args, profile);
     // Source order, with the call planner's cursor: a positional argument takes the cursor's slot,
     // and a named one moves the cursor past the parameter it binds (`StaticNamedCursor`). So
     // `show(...["b" => 8], ...["Q"])` puts "Q" in `$c` and leaves `$a` to its default, as the
@@ -419,14 +420,14 @@ pub fn arguments_in_declaration_order(
 /// Expands the spreads whose keys are known at compile time, exactly as the call planner does.
 ///
 /// The planner (`call_args::expand_static_assoc_spread_args`) turns an associative literal into
-/// arguments by `static_assoc_spread_key`: an integer-like key, `"0"` included, stays positional
-/// and any other string key becomes named. A list literal is flattened to positional arguments.
+/// arguments by the selected key policy: integers stay positional and exact strings stay named.
+/// Permissive mode additionally normalizes PHP numeric strings before choosing argument kind. A list literal is flattened to positional arguments.
 /// Inference has to read the same arguments the call will bind, or it infers `<T>` from a slot
 /// the call never fills. Any other spread is kept as written: its keys are not known here.
-fn expand_static_spreads(args: &[crate::parser::ast::Expr]) -> Vec<crate::parser::ast::Expr> {
+fn expand_static_spreads(args: &[crate::parser::ast::Expr], profile: elephc_semantics::SemanticProfile) -> Vec<crate::parser::ast::Expr> {
     use crate::parser::ast::ExprKind;
     let mut out = Vec::with_capacity(args.len());
-    for arg in crate::types::call_args::expand_static_assoc_spread_args(args) {
+    for arg in crate::types::call_args::expand_static_assoc_spread_args(args, profile) {
         match &arg.kind {
             ExprKind::Spread(source) => match &source.kind {
                 ExprKind::ArrayLiteral(values)
@@ -825,9 +826,29 @@ mod tests {
         let crate::parser::ast::ExprKind::FunctionCall { args, .. } = &expr.kind else {
             panic!("expected a function call");
         };
-        let ordered = arguments_in_declaration_order(&["n".into(), "v".into()], args);
+        let ordered = arguments_in_declaration_order(&["n".into(), "v".into()], args, elephc_semantics::SemanticProfile::PERMISSIVE);
         assert!(matches!(ordered[0].as_ref().map(|expr| &expr.kind), Some(crate::parser::ast::ExprKind::IntLiteral(1))));
         assert!(matches!(ordered[1].as_ref().map(|expr| &expr.kind), Some(crate::parser::ast::ExprKind::StringLiteral(value)) if value == "abc"));
+    }
+
+    /// Exact numeric strings cannot supply a positional generic inference slot.
+    #[test]
+    fn numeric_unpack_names_follow_the_generic_inference_profile() {
+        use elephc_semantics::{SemanticProfile, StrictFeature};
+        let span = crate::span::Span::dummy();
+        let arg = crate::parser::ast::Expr::new(crate::parser::ast::ExprKind::Spread(Box::new(
+            crate::parser::ast::Expr::new(crate::parser::ast::ExprKind::ArrayLiteralAssoc(vec![(
+                crate::parser::ast::Expr::string_lit("0"), crate::parser::ast::Expr::int_lit(10),
+            )]), span),
+        )), span);
+        for exact in [false, true] {
+            let profile = SemanticProfile::PERMISSIVE.with(StrictFeature::ArrayKeys, exact);
+            let ordered = arguments_in_declaration_order(&["value".into()], &[arg.clone()], profile);
+            if exact { assert!(ordered[0].is_none()); assert_eq!(ordered.len(), 2); }
+            else { assert_eq!(ordered.len(), 1); }
+            assert!(matches!(ordered.last().unwrap().as_ref().unwrap().kind,
+                crate::parser::ast::ExprKind::IntLiteral(10)));
+        }
     }
 
     /// Wraps a declared parameter type for inference fixtures.

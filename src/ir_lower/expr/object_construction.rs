@@ -287,11 +287,11 @@ pub(super) fn reflection_parameter_constructor_arg_exprs(
     ctx: &LoweringContext<'_, '_>,
     args: &[Expr],
 ) -> Option<Vec<ReflectionParameterConstructorOperand>> {
-    let args = expand_static_call_spread_args(args);
+    let args = expand_static_call_spread_args(args, ctx.semantic_profile);
     if args.iter().any(is_spread_arg) {
         return None;
     }
-    let (target, parameter) = if crate::types::call_args::has_named_args(&args) {
+    let (target, parameter) = if crate::types::call_args::has_named_args(&args, ctx.semantic_profile) {
         let sig = ctx
             .classes
             .get("ReflectionParameter")
@@ -309,6 +309,7 @@ pub(super) fn reflection_parameter_constructor_arg_exprs(
                 false,
                 true,
                 &assoc_spread_sources(ctx, &args),
+                ctx.semantic_profile,
             )
             .ok()?;
         if plan.has_spread_args() {
@@ -413,7 +414,7 @@ pub(super) fn lower_new_dynamic(
     args: &[Expr],
     expr: &Expr,
 ) -> LoweredValue {
-    let args = expand_static_call_spread_args(args);
+    let args = expand_static_call_spread_args(args, ctx.semantic_profile);
     let name_value = lower_expr(ctx, name_expr);
     // Constructor arguments can replace the original class-name binding. Retain its
     // evaluated value, including provisional string projections from Mixed locals.
@@ -457,7 +458,7 @@ pub(super) fn lower_new_dynamic_generic(
 ) -> LoweredValue {
     let mut operands = vec![name_value.value];
     let uses_runtime_arg_container =
-        args.iter().any(is_spread_arg) || crate::types::call_args::has_named_args(args);
+        args.iter().any(is_spread_arg) || crate::types::call_args::has_named_args(args, ctx.semantic_profile);
     let result_staging = if uses_runtime_arg_container { None } else {
         prepublish_call_result(ctx, &PhpType::Mixed, expr.span)
     };

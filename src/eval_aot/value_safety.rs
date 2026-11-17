@@ -79,7 +79,7 @@ where
             fold_static_builtin_int_call(
                 name.as_str().trim_start_matches('\\'),
                 args,
-                support.php_only(),
+                EvalSourceProfile::new(support.php_only(), support.semantic_profile()),
             )
             .is_some()
         }

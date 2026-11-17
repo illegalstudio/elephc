@@ -352,7 +352,7 @@ pub(super) fn spread_len_gt_expr_for_ir(
 
 /// Marks spread arguments whose source is known to be an associative array.
 pub(super) fn assoc_spread_sources(ctx: &LoweringContext<'_, '_>, args: &[Expr]) -> Vec<bool> {
-    crate::types::call_args::expand_static_assoc_spread_args(args)
+    crate::types::call_args::expand_static_assoc_spread_args(args, ctx.semantic_profile)
         .iter()
         .map(|arg| match &arg.kind {
             ExprKind::Spread(inner) => is_assoc_spread_source(ctx, inner),

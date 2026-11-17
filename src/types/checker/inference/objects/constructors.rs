@@ -275,7 +275,7 @@ impl Checker {
         expr: &Expr,
         env: &TypeEnv,
     ) -> Result<(), CompileError> {
-        if crate::types::call_args::has_named_args(args)
+        if crate::types::call_args::has_named_args(args, self.semantic_profile)
             || args.iter().any(|arg| matches!(arg.kind, ExprKind::Spread(_)))
         {
             return Err(CompileError::new(

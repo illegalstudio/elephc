@@ -47,7 +47,7 @@ pub(super) fn lower_descriptor_invoker_arg_container_for_call_user_func(
     native_references: bool,
     span: Span,
 ) -> LoweredValue {
-    if crate::types::call_args::has_named_args(args)
+    if crate::types::call_args::has_named_args(args, ctx.semantic_profile)
         || descriptor_args_need_runtime_unpack_keys(args)
     {
         return lower_named_descriptor_invoker_arg_container(ctx, args, sig, native_references, span);

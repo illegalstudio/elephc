@@ -36,8 +36,8 @@ impl Checker {
         args: &[Expr], env: &TypeEnv, context: &str) -> Result<(), CompileError> {
         if self.semantic_source_mode == crate::source::SourceMode::Internal
             || !self.semantic_profile.contains(elephc_semantics::StrictFeature::Coercions) { return Ok(()); }
-        let expanded = crate::types::call_args::expand_static_assoc_spread_args(args);
-        let Some(expanded) = crate::types::call_args::expand_planned_positional_spreads(&expanded) else { return Ok(()); };
+        let expanded = crate::types::call_args::expand_static_assoc_spread_args(args, self.semantic_profile);
+        let Some(expanded) = crate::types::call_args::expand_planned_positional_spreads(&expanded, self.semantic_profile) else { return Ok(()); };
         if expanded.iter().any(|arg| matches!(arg.kind, crate::parser::ast::ExprKind::Spread(_))) { return Ok(()); }
         let span = args.first().map(|arg| arg.span).unwrap_or_else(Span::dummy);
         let plan = self.plan_named_call_args(sig, &expanded, span, context, env)?;

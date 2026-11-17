@@ -42,7 +42,7 @@ fn number(value: NumericValue) -> Number {
 pub(super) fn gmp_builtin(expr: &crate::parser::ast::Expr, name: &str,
     args: &[crate::parser::ast::Expr], class: Option<&str>, definitions: &Definitions, evidence: &Evidence)
     -> Result<Option<Number>, crate::errors::CompileError> {
-    let Some(normalized) = planned_builtin_arguments(name, args, expr.span) else { return Ok(None); };
+    let Some(normalized) = planned_builtin_arguments(name, args, expr.span, evidence.profile) else { return Ok(None); };
     let mut call = Evidence { profile: evidence.profile, active: evidence.active.clone(), strict_types: evidence.strict_types, ..Default::default() };
     let Some(value) = normalized.first() else { return Ok(None); };
     let Some(value) = evaluate(value, true, class, definitions, &mut call)? else { return Ok(None); };
@@ -54,7 +54,7 @@ pub(super) fn gmp_builtin(expr: &crate::parser::ast::Expr, name: &str,
 pub(super) fn settype_builtin(expr: &crate::parser::ast::Expr, name: &str,
     args: &[crate::parser::ast::Expr], class: Option<&str>, definitions: &Definitions, evidence: &Evidence)
     -> Result<(), crate::errors::CompileError> {
-    let Some(normalized) = planned_builtin_arguments(name, args, expr.span) else { return Ok(()); };
+    let Some(normalized) = planned_builtin_arguments(name, args, expr.span, evidence.profile) else { return Ok(()); };
     let [value, target] = normalized.as_slice() else { return Ok(()); };
     let mut call = Evidence { profile: evidence.profile, active: evidence.active.clone(), strict_types: evidence.strict_types, ..Default::default() };
     let Some(target) = evaluate(target, true, class, definitions, &mut call)? else { return Ok(()); };
@@ -72,7 +72,7 @@ pub(super) fn settype_builtin(expr: &crate::parser::ast::Expr, name: &str,
 pub(super) fn builtin(expr: &crate::parser::ast::Expr, name: &str, target: NumericCastTarget,
     args: &[crate::parser::ast::Expr], class: Option<&str>, definitions: &Definitions, evidence: &Evidence)
     -> Result<Option<Number>, crate::errors::CompileError> {
-    let Some(normalized) = planned_builtin_arguments(name, args, expr.span) else { return Ok(None); };
+    let Some(normalized) = planned_builtin_arguments(name, args, expr.span, evidence.profile) else { return Ok(None); };
     let mut call = Evidence { profile: evidence.profile, active: evidence.active.clone(), strict_types: evidence.strict_types, ..Default::default() };
     let Some(value) = normalized.first() else { return Ok(None); };
     let value = evaluate(value, true, class, definitions, &mut call)?;

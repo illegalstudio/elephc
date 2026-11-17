@@ -33,7 +33,7 @@ pub(super) fn try_lower(
     if args.iter().any(is_spread_arg) { return None; }
     let sig = signature?;
     let span = args.first()?.span;
-    let plan = crate::types::call_args::plan_call_args(sig, args, span, true, false).ok()?;
+    let plan = crate::types::call_args::plan_call_args(sig, args, span, true, false, ctx.semantic_profile).ok()?;
     if plan.has_spread_args() || !plan.variadic_args.is_empty() { return None; }
     // The planner keeps a plain positional call as a passthrough. Named calls carry
     // the separate source-to-parameter mapping, including any omitted defaults.

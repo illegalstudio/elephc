@@ -264,7 +264,7 @@ pub(super) fn lower_static_callable_call(
 pub(super) fn builtin_callable_needs_runtime_arity(name: &str, args: &[Expr]) -> bool {
     use crate::builtins::semantics::BuiltinLowering;
     use crate::ir::RuntimeCallTarget;
-    if args.iter().any(is_spread_arg) || crate::types::call_args::has_named_args(args) { return false; }
+    if args.iter().any(is_spread_arg) || args.iter().any(|arg| matches!(arg.kind, ExprKind::NamedArg { .. })) { return false; }
     let Some(definition) = crate::builtins::registry::lookup(name) else { return false; };
     let BuiltinLowering::Runtime(RuntimeCallTarget::Function(target)) = definition.spec.semantics.lowering else { return false; };
     target.mbstring_operation().is_some_and(|operation| !operation.supports_arity(args.len()))

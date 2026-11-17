@@ -284,6 +284,7 @@ struct Scanner<'a> {
 /// Checker-validated signatures used to recognize callable and by-reference arguments.
 #[derive(Debug, Default)]
 pub(super) struct CallSignatureIndex {
+    semantic_profile: elephc_semantics::SemanticProfile,
     functions: HashMap<String, FunctionSig>,
     methods: HashMap<(String, String, bool), FunctionSig>,
     class_parents: HashMap<String, Option<String>>,
@@ -351,6 +352,7 @@ impl CallSignatureIndex {
             })
             .collect();
         Self {
+            semantic_profile: check_result.semantic_profile,
             functions,
             methods,
             class_parents,
@@ -412,6 +414,12 @@ impl CallSignatureIndex {
 }
 
 impl Scanner<'_> {
+    /// Uses checker policy for typed reachability and permissive parsing before typed signatures exist.
+    fn semantic_profile(&self) -> elephc_semantics::SemanticProfile {
+        self.call_signatures.map(|index| index.semantic_profile)
+            .unwrap_or(elephc_semantics::SemanticProfile::PERMISSIVE)
+    }
+
     /// Scans a statement list, optionally descending into declaration bodies.
     fn scan_program(mut self, program: &[Stmt], declarations: bool) -> Usage {
         for stmt in program {

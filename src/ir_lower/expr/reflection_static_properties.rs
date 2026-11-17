@@ -72,7 +72,7 @@ pub(super) fn lower_reflection_class_get_static_property_value(
     args: &[Expr],
     expr: &Expr,
 ) -> Option<LoweredValue> {
-    let (property, default) = reflection_class_get_static_property_value_args(args)?;
+    let (property, default) = reflection_class_get_static_property_value_args(args, ctx.semantic_profile)?;
     if let Some((declaring_class, property_ty)) =
         reflection_class_static_property_target(ctx, class_name, &property)
     {
@@ -100,7 +100,7 @@ pub(super) fn lower_reflection_class_set_static_property_value(
     args: &[Expr],
     expr: &Expr,
 ) -> Option<LoweredValue> {
-    let (property, value) = reflection_class_set_static_property_value_args(args)?;
+    let (property, value) = reflection_class_set_static_property_value_args(args, ctx.semantic_profile)?;
     let (declaring_class, property_ty) =
         reflection_class_static_property_target(ctx, class_name, &property)?;
     let value = lower_expr(ctx, &value);
@@ -190,25 +190,26 @@ pub(super) fn box_value_as_mixed(
 /// Returns the literal property name and optional explicit default argument for a get call.
 pub(super) fn reflection_class_get_static_property_value_args(
     args: &[Expr],
+    profile: elephc_semantics::SemanticProfile,
 ) -> Option<(String, Option<Expr>)> {
-    let args = reflection_class_new_instance_args(args);
+    let args = reflection_class_new_instance_args(args, profile);
     if args.iter().any(is_spread_arg) {
         return None;
     }
     let (name, default) =
-        reflection_class_static_property_regular_args(&args, "name", Some("default"))?;
+        reflection_class_static_property_regular_args(&args, "name", Some("default"), profile)?;
     let property = reflection_class_static_property_name_arg(name.as_ref()?)?;
     Some((property, default))
 }
 
 /// Returns the literal property name and value expression for a set call.
-pub(super) fn reflection_class_set_static_property_value_args(args: &[Expr]) -> Option<(String, Expr)> {
-    let args = reflection_class_new_instance_args(args);
+pub(super) fn reflection_class_set_static_property_value_args(args: &[Expr], profile: elephc_semantics::SemanticProfile) -> Option<(String, Expr)> {
+    let args = reflection_class_new_instance_args(args, profile);
     if args.iter().any(is_spread_arg) {
         return None;
     }
     let (name, value) =
-        reflection_class_static_property_regular_args(&args, "name", Some("value"))?;
+        reflection_class_static_property_regular_args(&args, "name", Some("value"), profile)?;
     let property = reflection_class_static_property_name_arg(name.as_ref()?)?;
     let value = value?;
     Some((property, value))
@@ -219,8 +220,9 @@ pub(super) fn reflection_class_static_property_regular_args(
     args: &[Expr],
     first_name: &str,
     second_name: Option<&str>,
+    profile: elephc_semantics::SemanticProfile,
 ) -> Option<(Option<Expr>, Option<Expr>)> {
-    if !crate::types::call_args::has_named_args(args) {
+    if !crate::types::call_args::has_named_args(args, profile) {
         return match args {
             [first] => Some((Some(first.clone()), None)),
             [first, second] => Some((Some(first.clone()), Some(second.clone()))),

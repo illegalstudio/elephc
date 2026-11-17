@@ -49,7 +49,7 @@ pub(super) fn lower_static_array_push(
     if php_symbol_key(name.trim_start_matches('\\')) != "array_push" || args.is_empty() {
         return None;
     }
-    if crate::types::call_args::has_named_args(args) || args.iter().any(is_spread_arg) {
+    if crate::types::call_args::has_named_args(args, ctx.semantic_profile) || args.iter().any(is_spread_arg) {
         return None;
     }
     let ExprKind::Variable(array_name) = &args[0].kind else {
@@ -373,7 +373,7 @@ fn lower_planned_builtin_call_args(
 ) -> Vec<crate::ir::ValueId> {
     // The checker uses this shared projection for literal positional unpacks. Builtins consume
     // individual values, so a projected tail must not be packed as a user-function variadic array.
-    let expanded = crate::types::call_args::expand_planned_positional_spreads(args);
+    let expanded = crate::types::call_args::expand_planned_positional_spreads(args, ctx.semantic_profile);
     let args = expanded.as_deref().unwrap_or(args);
     if is_empty_static_indexed_spread_arg(args) && zero_arity_call_signature(name, sig) {
         return Vec::new();
@@ -404,7 +404,7 @@ fn lower_planned_builtin_call_args(
             }
         }
     }
-    if !crate::types::call_args::has_named_args(args)
+    if !crate::types::call_args::has_named_args(args, ctx.semantic_profile)
         && !capture_regex_output
         && !matches!(argument_lowering,
             crate::builtins::semantics::BuiltinArgumentLowering::PcntlPreserveOmitted
@@ -459,7 +459,7 @@ fn lower_planned_builtin_call_args(
             )
         }
         crate::builtins::semantics::BuiltinArgumentLowering::PregReplaceCallback
-            if !crate::types::call_args::has_named_args(args)
+            if !crate::types::call_args::has_named_args(args, ctx.semantic_profile)
                 && !args.iter().any(is_spread_arg) =>
         {
             lower_preg_replace_callback_args(ctx, sig, args)
@@ -476,7 +476,7 @@ fn lower_planned_builtin_call_args(
             )
         }
         crate::builtins::semantics::BuiltinArgumentLowering::PositionalRegex
-            if !crate::types::call_args::has_named_args(args)
+            if !crate::types::call_args::has_named_args(args, ctx.semantic_profile)
                 && !args.iter().any(is_spread_arg) =>
         {
             args.iter()
@@ -496,7 +496,7 @@ fn lower_planned_builtin_call_args(
                 .collect()
         }
         crate::builtins::semantics::BuiltinArgumentLowering::UserValueSort
-            if !crate::types::call_args::has_named_args(args)
+            if !crate::types::call_args::has_named_args(args, ctx.semantic_profile)
                 && !args.iter().any(is_spread_arg) =>
         {
             lower_user_value_sort_args(ctx, sig, args)
@@ -506,7 +506,7 @@ fn lower_planned_builtin_call_args(
         }
         crate::builtins::semantics::BuiltinArgumentLowering::OpensslEncrypt => {
             prepare_openssl_encrypt_tag_local(ctx, args);
-            if !crate::types::call_args::has_named_args(args)
+            if !crate::types::call_args::has_named_args(args, ctx.semantic_profile)
                 && !args.iter().any(is_spread_arg)
             {
                 lower_positional_builtin_args_with_signature(ctx, sig, args)
@@ -522,7 +522,7 @@ fn lower_planned_builtin_call_args(
         crate::builtins::semantics::BuiltinArgumentLowering::XmlHandlerSetter => {
             lower_xml_handler_setter_call(ctx, &canonical, sig, args)
         }
-        _ if !crate::types::call_args::has_named_args(args)
+        _ if !crate::types::call_args::has_named_args(args, ctx.semantic_profile)
             && !args.iter().any(is_spread_arg) =>
         {
             lower_positional_builtin_args_with_signature(ctx, sig, args)
@@ -551,7 +551,7 @@ fn prepare_write_only_output_locals(
     args: &[Expr],
 ) -> Vec<(String, PhpType)> {
     let mut outputs = Vec::new();
-    if !crate::types::call_args::has_named_args(args) && !args.iter().any(is_spread_arg) {
+    if !crate::types::call_args::has_named_args(args, ctx.semantic_profile) && !args.iter().any(is_spread_arg) {
         for (index, arg) in args.iter().enumerate() {
             if let Some(output) = prepare_write_only_output_local(ctx, canonical, index, arg) {
                 outputs.push(output);
@@ -575,6 +575,7 @@ fn prepare_write_only_output_locals(
         false,
         true,
         &assoc_spread_sources(ctx, args),
+        ctx.semantic_profile,
     ) else {
         return outputs;
     };
@@ -688,7 +689,7 @@ fn pcntl_output_type(canonical: &str, parameter_index: usize) -> Option<PhpType>
 
 /// Promotes the OpenSSL encrypt tag target to string-capable storage before lowering its load.
 fn prepare_openssl_encrypt_tag_local(ctx: &mut LoweringContext<'_, '_>, args: &[Expr]) {
-    let expanded = crate::types::call_args::expand_static_assoc_spread_args(args);
+    let expanded = crate::types::call_args::expand_static_assoc_spread_args(args, ctx.semantic_profile);
     let tag = expanded
         .iter()
         .find_map(|arg| match &arg.kind {
@@ -763,7 +764,7 @@ fn lower_builtin_args_preserving_values(
         return lower_args(ctx, args);
     };
     if name.eq_ignore_ascii_case("mb_convert_variables")
-        && !crate::types::call_args::has_named_args(args)
+        && !crate::types::call_args::has_named_args(args, ctx.semantic_profile)
         && !args.iter().any(is_spread_arg)
     {
         return lower_live_mb_convert_variables_args(ctx, args);
@@ -848,7 +849,7 @@ fn lower_getenv_args(
     if let Some(sig) = sig.as_mut() {
         crate::ir::RuntimeFnId::Getenv.refine_first_class_callable_sig(sig);
     }
-    if !crate::types::call_args::has_named_args(args) && !args.iter().any(is_spread_arg) {
+    if !crate::types::call_args::has_named_args(args, ctx.semantic_profile) && !args.iter().any(is_spread_arg) {
         lower_positional_builtin_args_with_signature(ctx, sig.as_ref(), args)
     } else {
         lower_args_with_signature(ctx, sig.as_ref(), args)
@@ -868,7 +869,7 @@ fn lower_reverse_key_sort_args(
     let Some(sig) = sig else {
         return lower_args(ctx, args);
     };
-    let Some(plan) = plan_key_sort_args(sig, args) else {
+    let Some(plan) = plan_key_sort_args(sig, args, ctx.semantic_profile) else {
         return lower_args_with_signature(ctx, Some(sig), args);
     };
     let receiver = plan
@@ -913,9 +914,9 @@ fn lower_reverse_key_sort_args(
 /// Anything the plan does not resolve to written arguments -- a spread that lands on the
 /// receiver slot, or a call the planner rejects outright -- returns `None` and falls back to
 /// the shared argument path, which owns those shapes and their diagnostics.
-pub(super) fn plan_key_sort_args(sig: &FunctionSig, args: &[Expr]) -> Option<Vec<(usize, Expr)>> {
+pub(super) fn plan_key_sort_args(sig: &FunctionSig, args: &[Expr], profile: elephc_semantics::SemanticProfile) -> Option<Vec<(usize, Expr)>> {
     let span = args.first()?.span;
-    let plan = crate::types::call_args::plan_call_args(sig, args, span, false, false).ok()?;
+    let plan = crate::types::call_args::plan_call_args(sig, args, span, false, false, profile).ok()?;
     // A spread has to be evaluated before anything can be said about which element lands on
     // the receiver slot, so it goes to the shared argument path whole.
     if plan.has_spread_args() {

@@ -31,7 +31,7 @@ impl Checker {
             || matches!(&object.kind, ExprKind::Variable(name) if !self.local_flow_read_is_stable(name));
         let evaluate = |checker: &mut Self, env: &mut TypeEnv| {
             if let Some(name) = name { checker.infer_type_with_assignment_effects(name, env)?; }
-            let expanded = crate::types::call_args::expand_static_assoc_spread_args(args);
+            let expanded = crate::types::call_args::expand_static_assoc_spread_args(args, checker.semantic_profile);
             if let ExprKind::NullsafeMethodCall { method, .. } = &expr.kind {
                 checker.promote_pdo_binding_ref_storage(object, method, &expanded, env)?;
             }

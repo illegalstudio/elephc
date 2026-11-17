@@ -31,6 +31,9 @@ trait EirStaticCallSupport {
     /// Returns whether the literal fragment uses the PHP-only builtin surface.
     fn php_only(&self) -> bool;
 
+    /// Returns the immutable semantic policy used by every static argument plan.
+    fn semantic_profile(&self) -> elephc_semantics::SemanticProfile;
+
     /// Returns true when a function call can be lowered inside an EIR AOT fragment.
     fn function_supported(&self, name: &str, args: &[Expr]) -> bool;
 
@@ -59,6 +62,9 @@ where
     fn php_only(&self) -> bool {
         self.profile.php_only()
     }
+
+    /// Shares semantic guarantees independently from PHP-only visibility.
+    fn semantic_profile(&self) -> elephc_semantics::SemanticProfile { self.profile.semantics() }
 
     /// Delegates function-call eligibility to the caller-provided predicate.
     fn function_supported(&self, name: &str, args: &[Expr]) -> bool {

@@ -27,6 +27,7 @@ pub(super) fn lower_positional_spread_args_with_signature(
                 crate::types::call_args::regular_param_count(sig)
             } else { usize::MAX },
             |source| indexed_spread_source_type(ctx, source).is_some(),
+            ctx.semantic_profile,
         ))
         .flatten();
     let args = projected.as_deref().unwrap_or(args);

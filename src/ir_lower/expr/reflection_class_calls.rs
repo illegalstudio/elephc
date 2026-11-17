@@ -17,61 +17,23 @@ pub(super) fn lower_reflection_class_new_instance(
     args: &[Expr],
     expr: &Expr,
 ) -> LoweredValue {
-    let args = reflection_class_new_instance_args(args);
+    let args = reflection_class_new_instance_args(args, ctx.semantic_profile);
     let constructor_sig =
         reflection_class_new_instance_constructor_signature(ctx, object_expr, &args).cloned();
     if args.iter().any(is_spread_arg)
-        || (crate::types::call_args::has_named_args(&args) && constructor_sig.is_none())
+        || (crate::types::call_args::has_named_args(&args, ctx.semantic_profile) && constructor_sig.is_none())
     {
         return lower_reflection_class_new_instance_unsupported(ctx, expr);
     }
     let class_name = lower_property_get_from_value(ctx, object, "__name", Op::PropGet, expr);
-    let result_type = PhpType::Mixed;
-    let result_staging = prepublish_user_call_result(
-        ctx,
-        constructor_sig.as_ref(),
-        &ReturnArgAlias::None,
-        &result_type,
-        expr.span,
-    );
-    let class_name_pins = pin_in_flight_owners(ctx, &[class_name.value], expr.span);
-    begin_call_argument_evaluation(ctx);
-    let mut arg_values = lower_args_with_signature(ctx, constructor_sig.as_ref(), &args);
-    let evaluation_intermediates = finish_call_argument_evaluation(ctx, &mut arg_values);
-    let roots = root_user_call_operands(
-        ctx,
-        &mut arg_values,
-        constructor_sig.as_ref(),
-        &ReturnArgAlias::None,
-        &result_type,
-        expr.span,
-    );
-    let mut operands = vec![class_name.value];
-    operands.extend(arg_values.iter().copied());
-    let object = ctx.emit_value(
-        Op::DynamicObjectNewMixed,
-        operands,
-        None,
-        result_type,
-        Op::DynamicObjectNewMixed.default_effects(),
-        Some(expr.span),
-    );
-    stage_call_result(ctx, result_staging.as_ref(), object, expr.span);
-    release_owned_call_arg_temporaries_with_roots(
-        ctx,
-        &arg_values,
-        None,
-        &ReturnArgAlias::None,
-        constructor_sig.as_ref(),
-        &roots,
-        expr.span,
-    );
-    retire_call_argument_intermediates(ctx, &evaluation_intermediates);
-    unpin_in_flight_owners(ctx, class_name_pins, expr.span);
+    let pins = pin_in_flight_owners(ctx, &[class_name.value], expr.span);
+    // Dynamic construction owns signature binding, including one variadic collection.
+    let result = lower_new_dynamic_generic(ctx, class_name, &args, expr);
+    unpin_in_flight_owners(ctx, pins, expr.span);
     if ctx.value_is_owning_temporary(class_name) {
         crate::ir_lower::ownership::release_if_owned(ctx, class_name, Some(expr.span));
     }
-    take_prepublished_call_result(ctx, result_staging, object, expr.span)
+    result
 }
 
 /// Lowers `ReflectionClass::newInstanceArgs()` by unpacking one static argument array.
@@ -255,7 +217,7 @@ pub(super) fn lower_reflection_function_invoke_call(
     let object_expr = object_expr?;
     let function_name = reflection_function_reflected_target(ctx, object_expr)?;
     let Some(forwarded_args) = (match method_key.as_str() {
-        "invoke" => Some(reflection_function_invoke_args(args)),
+        "invoke" => Some(reflection_function_invoke_args(args, ctx.semantic_profile)),
         "invokeargs" => reflection_function_invoke_args_array(ctx, args),
         _ => return None,
     }) else {
@@ -306,8 +268,8 @@ pub(super) fn lower_reflection_builtin_function_call(
 }
 
 /// Returns direct `ReflectionFunction::invoke(...$args)` arguments after static spread expansion.
-pub(super) fn reflection_function_invoke_args(args: &[Expr]) -> Vec<Expr> {
-    reflection_class_new_instance_args(args)
+pub(super) fn reflection_function_invoke_args(args: &[Expr], profile: elephc_semantics::SemanticProfile) -> Vec<Expr> {
+    reflection_class_new_instance_args(args, profile)
 }
 
 /// Extracts the argument list passed to `ReflectionFunction::invokeArgs($args)`.
@@ -315,11 +277,11 @@ pub(super) fn reflection_function_invoke_args_array(
     ctx: &LoweringContext<'_, '_>,
     args: &[Expr],
 ) -> Option<Vec<Expr>> {
-    let args = reflection_class_new_instance_args(args);
+    let args = reflection_class_new_instance_args(args, ctx.semantic_profile);
     if args.iter().any(is_spread_arg) {
         return None;
     }
-    if !crate::types::call_args::has_named_args(&args) {
+    if !crate::types::call_args::has_named_args(&args, ctx.semantic_profile) {
         return match args.as_slice() {
             [forwarded] => reflection_class_new_instance_args_value(ctx, forwarded),
             _ => None,
@@ -341,6 +303,7 @@ pub(super) fn reflection_function_invoke_args_array(
         false,
         true,
         &assoc_spread_sources(ctx, &args),
+        ctx.semantic_profile,
     )
     .ok()?;
     if plan.has_spread_args() {

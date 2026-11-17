@@ -481,7 +481,7 @@ pub(super) fn eval_literal_static_function_supported_by_module(
     let Some(signature) = &function.signature else {
         return false;
     };
-    crate::eval_aot::static_function_signature_supported(signature, args)
+    crate::eval_aot::static_function_signature_supported(signature, args, module.semantic_profile)
 }
 
 /// Returns true when a static method call matches the codegen-supported subset.
@@ -522,7 +522,7 @@ pub(super) fn eval_literal_static_method_supported_by_module(
     else {
         return false;
     };
-    crate::eval_aot::static_function_signature_supported(signature, args)
+    crate::eval_aot::static_function_signature_supported(signature, args, module.semantic_profile)
 }
 
 /// Finds a semantic runtime family in callable instructions without enabling unrelated callbacks.

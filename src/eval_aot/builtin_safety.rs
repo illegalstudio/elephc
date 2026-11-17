@@ -20,7 +20,7 @@ pub(super) fn eir_construct_call_is_safe<S>(
 where
     S: EirStaticCallSupport,
 {
-    if has_named_args(args)
+    if has_named_args(args, support.semantic_profile())
         || args
             .iter()
             .any(|arg| matches!(arg.kind, ExprKind::Spread(_)))
@@ -88,7 +88,7 @@ where
     ) {
         return false;
     }
-    let Some(args) = normalize_eir_runtime_builtin_args(&short_name, args) else {
+    let Some(args) = normalize_eir_runtime_builtin_args(&short_name, args, support.semantic_profile()) else {
         return false;
     };
     match short_name.as_str() {
@@ -146,16 +146,16 @@ where
 ///
 /// Static spread arrays are expanded through the shared call planner; dynamic
 /// spreads that remain after planning stay on the eval bridge fallback.
-pub(super) fn normalize_eir_runtime_builtin_args(short_name: &str, args: &[Expr]) -> Option<Vec<Expr>> {
+pub(super) fn normalize_eir_runtime_builtin_args(short_name: &str, args: &[Expr], profile: elephc_semantics::SemanticProfile) -> Option<Vec<Expr>> {
     let has_spread = args
         .iter()
         .any(|arg| matches!(arg.kind, ExprKind::Spread(_)));
-    if !has_named_args(args) && !has_spread {
+    if !has_named_args(args, profile) && !has_spread {
         return Some(args.to_vec());
     }
     let sig = builtin_call_sig(short_name)?;
     let call_span = args.first().map(|arg| arg.span).unwrap_or_else(Span::dummy);
-    let plan = plan_call_args(&sig, args, call_span, false, false).ok()?;
+    let plan = plan_call_args(&sig, args, call_span, false, false, profile).ok()?;
     if plan.has_spread_args() {
         return None;
     }
@@ -421,7 +421,7 @@ where
                     facts,
                     scope_reads,
                 )
-                || fold_static_builtin_int_call(name.as_str().trim_start_matches('\\'), args, support.php_only())
+                || fold_static_builtin_int_call(name.as_str().trim_start_matches('\\'), args, EvalSourceProfile::new(support.php_only(), support.semantic_profile()))
                     .is_some()
                 || support.function_supported(name.as_str(), args)
         }

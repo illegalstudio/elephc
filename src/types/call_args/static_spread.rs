@@ -6,7 +6,8 @@
 //! - `crate::types::call_args::planner`
 //!
 //! Key details:
-//! - String keys become named arguments, numeric keys remain positional, and duplicate static keys follow PHP last-wins behavior.
+//! - The selected key policy keeps exact strings named and integer keys positional.
+//! - Duplicate keys retain the existing static expansion and runtime fallback rules.
 
 use std::collections::HashSet;
 
@@ -35,10 +36,10 @@ pub(crate) struct ExpandedStaticSpreadArgs {
 
 /// Returns `true` if `args` contains any `NamedArg` expressions or spread
 /// expressions that expand to a static associative array with named keys.
-pub(crate) fn has_named_args(args: &[Expr]) -> bool {
+pub(crate) fn has_named_args(args: &[Expr], profile: elephc_semantics::SemanticProfile) -> bool {
     args.iter().any(|arg| match &arg.kind {
         ExprKind::NamedArg { .. } => true,
-        ExprKind::Spread(inner) => static_assoc_spread_has_named_args(inner),
+        ExprKind::Spread(inner) => static_assoc_spread_has_named_args(inner, profile),
         _ => false,
     })
 }
@@ -47,21 +48,22 @@ pub(crate) fn has_named_args(args: &[Expr]) -> bool {
 /// array literal into separate `NamedArg` or positional expressions; returns the
 /// flattened list. Indexed and non-static spreads are left as-is so runtime
 /// arity guards and named-unpack tail planning still see their source nodes.
-pub(crate) fn expand_static_assoc_spread_args(args: &[Expr]) -> Vec<Expr> {
-    expand_static_assoc_spread_args_with_origins(args).args
+pub(crate) fn expand_static_assoc_spread_args(args: &[Expr], profile: elephc_semantics::SemanticProfile) -> Vec<Expr> {
+    expand_static_assoc_spread_args_with_origins(args, profile).args
 }
 
 /// Like `expand_static_assoc_spread_args` but also returns an `origins` vector
 /// parallel to the expanded arguments, marking where each element originated.
 pub(crate) fn expand_static_assoc_spread_args_with_origins(
     args: &[Expr],
+    profile: elephc_semantics::SemanticProfile,
 ) -> ExpandedStaticSpreadArgs {
     let mut expanded_args = Vec::with_capacity(args.len());
     let mut origins = Vec::with_capacity(args.len());
 
     for arg in args {
         if let ExprKind::Spread(inner) = &arg.kind {
-            if let Some(mut spread_args) = expand_static_spread(inner, arg.span) {
+            if let Some(mut spread_args) = expand_static_spread(inner, arg.span, profile) {
                 for (arg, origin) in spread_args.drain(..) {
                     expanded_args.push(arg);
                     origins.push(origin);
@@ -89,6 +91,7 @@ pub(crate) fn expand_static_assoc_spread_args_with_origins(
 /// it the call bound `$a` by name and `2` to the next free slot. Only literal keys are judged.
 pub(crate) fn validate_static_unpack_order(
     args: &[Expr],
+    profile: elephc_semantics::SemanticProfile,
 ) -> Result<(), super::plan::CallArgPlanError> {
     for arg in args {
         let ExprKind::Spread(inner) = &arg.kind else {
@@ -99,7 +102,7 @@ pub(crate) fn validate_static_unpack_order(
         };
         let mut seen_named = false;
         for (key, _) in pairs {
-            match static_assoc_spread_key(key) {
+            match static_assoc_spread_key(key, profile) {
                 Some(StaticAssocSpreadKey::Named(_)) => seen_named = true,
                 Some(StaticAssocSpreadKey::Positional(_)) if seen_named => {
                     return Err(super::plan::CallArgPlanError::PositionalAfterNamedUnpack {
@@ -118,8 +121,8 @@ pub(crate) fn validate_static_unpack_order(
 /// Projects a planned positional call into values for builtin signature checking.
 /// Only fully static indexed unpacks are flattened; callers must validate source
 /// ordering first. General planning retains spread nodes for runtime arity guards.
-pub(crate) fn expand_planned_positional_spreads(args: &[Expr]) -> Option<Vec<Expr>> {
-    if has_named_args(args) || !args.iter().any(|arg| matches!(arg.kind, ExprKind::Spread(_))) {
+pub(crate) fn expand_planned_positional_spreads(args: &[Expr], profile: elephc_semantics::SemanticProfile) -> Option<Vec<Expr>> {
+    if has_named_args(args, profile) || !args.iter().any(|arg| matches!(arg.kind, ExprKind::Spread(_))) {
         return None;
     }
     let mut expanded = Vec::new();
@@ -145,8 +148,9 @@ pub(crate) fn expand_planned_positional_spreads(args: &[Expr]) -> Option<Vec<Exp
 pub(crate) fn coalesce_planned_indexed_spreads(
     args: &[Expr],
     is_indexed: impl FnMut(&Expr) -> bool,
+    profile: elephc_semantics::SemanticProfile,
 ) -> Option<Vec<Expr>> {
-    coalesce_planned_indexed_spreads_with_prefix(args, usize::MAX, is_indexed)
+    coalesce_planned_indexed_spreads_with_prefix(args, usize::MAX, is_indexed, profile)
 }
 
 /// Includes surplus fixed arguments in a by-value variadic unpack without changing source order.
@@ -154,8 +158,9 @@ pub(crate) fn coalesce_planned_indexed_spreads_with_prefix(
     args: &[Expr],
     regular_param_count: usize,
     mut is_indexed: impl FnMut(&Expr) -> bool,
+    profile: elephc_semantics::SemanticProfile,
 ) -> Option<Vec<Expr>> {
-    if has_named_args(args) {
+    if has_named_args(args, profile) {
         return None;
     }
     let first = args.iter().position(|arg| matches!(arg.kind, ExprKind::Spread(_)))?;
@@ -195,11 +200,11 @@ pub(crate) fn coalesce_planned_indexed_spreads_with_prefix(
 /// its nested source's keys, which are unknowable here. Answering "yes, this may carry named
 /// arguments" is the safe direction: every caller treats `true` as "decline the static shortcut
 /// and keep the call dynamic".
-fn static_assoc_spread_has_named_args(expr: &Expr) -> bool {
+fn static_assoc_spread_has_named_args(expr: &Expr, profile: elephc_semantics::SemanticProfile) -> bool {
     match &expr.kind {
         ExprKind::ArrayLiteralMixed(_) => true,
         ExprKind::ArrayLiteralAssoc(pairs) => pairs.iter().any(|(key, _)| {
-            matches!(static_assoc_spread_key(key), Some(StaticAssocSpreadKey::Named(_)))
+            matches!(static_assoc_spread_key(key, profile), Some(StaticAssocSpreadKey::Named(_)))
         }),
         _ => false,
     }
@@ -210,9 +215,10 @@ fn static_assoc_spread_has_named_args(expr: &Expr) -> bool {
 fn expand_static_spread(
     expr: &Expr,
     spread_span: Span,
+    profile: elephc_semantics::SemanticProfile,
 ) -> Option<Vec<(Expr, ExpandedArgOrigin)>> {
     match &expr.kind {
-        ExprKind::ArrayLiteralAssoc(pairs) => expand_static_assoc_spread(pairs, spread_span),
+        ExprKind::ArrayLiteralAssoc(pairs) => expand_static_assoc_spread(pairs, spread_span, profile),
         _ => None,
     }
 }
@@ -226,12 +232,13 @@ fn expand_static_spread(
 fn expand_static_assoc_spread(
     pairs: &[(Expr, Expr)],
     spread_span: Span,
+    profile: elephc_semantics::SemanticProfile,
 ) -> Option<Vec<(Expr, ExpandedArgOrigin)>> {
     let mut positional_args = Vec::new();
     let mut positional_keys = HashSet::new();
     let mut named_args: Vec<(String, Expr)> = Vec::new();
     for (key, value) in pairs {
-        match static_assoc_spread_key(key)? {
+        match static_assoc_spread_key(key, profile)? {
             StaticAssocSpreadKey::Positional(key) => {
                 if !positional_keys.insert(key) {
                     return None;
@@ -279,19 +286,23 @@ enum StaticAssocSpreadKey {
 /// Returns `Some(StaticAssocSpreadKey::Positional)` for integer-like literal keys,
 /// `Some(StaticAssocSpreadKey::Named(name))` for non-integer string literals,
 /// or `None` if the key is not a statically resolvable literal.
-fn static_assoc_spread_key(key: &Expr) -> Option<StaticAssocSpreadKey> {
+fn static_assoc_spread_key(key: &Expr, profile: elephc_semantics::SemanticProfile) -> Option<StaticAssocSpreadKey> {
     match &key.kind {
         ExprKind::IntLiteral(value) => Some(StaticAssocSpreadKey::Positional(*value)),
-        ExprKind::BoolLiteral(value) => {
+        ExprKind::BoolLiteral(value) if !profile.contains(elephc_semantics::StrictFeature::ArrayKeys) => {
             Some(StaticAssocSpreadKey::Positional(i64::from(*value)))
         }
-        ExprKind::FloatLiteral(value) => {
+        ExprKind::FloatLiteral(value) if !profile.contains(elephc_semantics::StrictFeature::ArrayKeys) => {
             Some(StaticAssocSpreadKey::Positional(*value as i64))
         }
-        ExprKind::StringLiteral(value) if crate::types::is_php_integer_array_key(value) => {
-            Some(StaticAssocSpreadKey::Positional(value.parse().ok()?))
+        ExprKind::StringLiteral(value) => {
+            let bytes = elephc_builtin_contract::string_literal::literal_bytes(value);
+            match elephc_semantics::array_keys::classify_string_key(profile, &bytes) {
+                elephc_semantics::array_keys::StringKey::Integer(value) => Some(StaticAssocSpreadKey::Positional(value)),
+                elephc_semantics::array_keys::StringKey::String(_) =>
+                    String::from_utf8(bytes).ok().map(StaticAssocSpreadKey::Named),
+            }
         }
-        ExprKind::StringLiteral(value) => Some(StaticAssocSpreadKey::Named(value.clone())),
         _ => None,
     }
 }
@@ -316,19 +327,19 @@ mod tests {
     fn coalesced_indexed_spreads_include_variadic_positionals() {
         let tail = Expr::new(ExprKind::Spread(Box::new(Expr::var("rest"))), Span::dummy());
         let args = vec![Expr::var("x"), Expr::var("y"), tail.clone()];
-        let projected = coalesce_planned_indexed_spreads_with_prefix(&args, 1, |_| true).unwrap();
+        let projected = coalesce_planned_indexed_spreads_with_prefix(&args, 1, |_| true, elephc_semantics::SemanticProfile::PERMISSIVE).unwrap();
         assert_eq!(projected[0], args[0]);
         assert_eq!(projected[1], indexed_spread(vec![args[1].clone(), tail]));
         assert_eq!(args.len(), 3);
-        assert!(coalesce_planned_indexed_spreads_with_prefix(&args, 1, |_| false).is_none());
-        assert!(coalesce_planned_indexed_spreads_with_prefix(&args, 2, |_| true).is_none());
+        assert!(coalesce_planned_indexed_spreads_with_prefix(&args, 1, |_| false, elephc_semantics::SemanticProfile::PERMISSIVE).is_none());
+        assert!(coalesce_planned_indexed_spreads_with_prefix(&args, 2, |_| true, elephc_semantics::SemanticProfile::PERMISSIVE).is_none());
     }
 
     /// Literal unpacks remain visible to the runtime required-argument guard.
     #[test]
     fn indexed_spread_preserves_runtime_arity_shape() {
         let arg = indexed_spread(vec![Expr::int_lit(10)]);
-        let expanded = expand_static_assoc_spread_args_with_origins(&[arg.clone()]);
+        let expanded = expand_static_assoc_spread_args_with_origins(&[arg.clone()], elephc_semantics::SemanticProfile::PERMISSIVE);
         assert_eq!(expanded.args, vec![arg]);
         assert!(expanded.origins == vec![ExpandedArgOrigin::Source]);
     }
@@ -338,7 +349,7 @@ mod tests {
     fn coalesced_indexed_spreads_preserve_dynamic_source() {
         let dynamic = Expr::new(ExprKind::Spread(Box::new(Expr::var("names"))), Span::dummy());
         let args = [indexed_spread(Vec::new()), dynamic.clone(), indexed_spread(Vec::new())];
-        assert_eq!(coalesce_planned_indexed_spreads(&args, |_| true), Some(vec![dynamic]));
+        assert_eq!(coalesce_planned_indexed_spreads(&args, |_| true, elephc_semantics::SemanticProfile::PERMISSIVE), Some(vec![dynamic]));
         assert_eq!(args.len(), 3, "the source planner input is unchanged");
     }
 
@@ -348,8 +359,9 @@ mod tests {
         let dynamic = Expr::new(ExprKind::Spread(Box::new(Expr::var("names"))), Span::dummy());
         assert!(coalesce_planned_indexed_spreads(
             &[indexed_spread(Vec::new()), dynamic.clone()], |_| false,
+            elephc_semantics::SemanticProfile::PERMISSIVE,
         ).is_none());
-        assert!(coalesce_planned_indexed_spreads(&[dynamic, Expr::int_lit(1)], |_| true).is_none());
+        assert!(coalesce_planned_indexed_spreads(&[dynamic, Expr::int_lit(1)], |_| true, elephc_semantics::SemanticProfile::PERMISSIVE).is_none());
     }
 
     /// Builtin signature projection counts unpacked values instead of containers.
@@ -359,7 +371,7 @@ mod tests {
             indexed_spread(Vec::new()),
             indexed_spread(vec![Expr::int_lit(10)]),
             indexed_spread(vec![Expr::int_lit(20)]),
-        ]).expect("all indexed unpacks are static");
+        ], elephc_semantics::SemanticProfile::PERMISSIVE).expect("all indexed unpacks are static");
         assert_eq!(
             expanded,
             vec![Expr::int_lit(10), Expr::int_lit(20)],
@@ -376,7 +388,7 @@ mod tests {
         assert!(expand_planned_positional_spreads(&[
             indexed_spread(vec![Expr::int_lit(10)]),
             dynamic,
-        ]).is_none());
+        ], elephc_semantics::SemanticProfile::PERMISSIVE).is_none());
     }
 
     /// A positional unpack after named unpacking must reach the planner's tail path.
@@ -390,14 +402,14 @@ mod tests {
             Span::dummy(),
         );
         let tail = indexed_spread(vec![Expr::int_lit(20)]);
-        let expanded = expand_static_assoc_spread_args_with_origins(&[named, tail.clone()]);
+        let expanded = expand_static_assoc_spread_args_with_origins(&[named, tail.clone()], elephc_semantics::SemanticProfile::PERMISSIVE);
         assert!(matches!(expanded.args[0].kind, ExprKind::NamedArg { .. }));
         assert_eq!(expanded.args[1], tail);
         assert!(expanded.origins == vec![
             ExpandedArgOrigin::StaticAssocNamed,
             ExpandedArgOrigin::Source,
         ]);
-        assert!(expand_planned_positional_spreads(&expanded.args).is_none());
+        assert!(expand_planned_positional_spreads(&expanded.args, elephc_semantics::SemanticProfile::PERMISSIVE).is_none());
     }
 
     /// An unpacked literal that itself contains a spread stays one dynamic argument.
@@ -420,13 +432,13 @@ mod tests {
             ))),
             Span::dummy(),
         );
-        let expanded = expand_static_assoc_spread_args_with_origins(&[arg.clone()]);
+        let expanded = expand_static_assoc_spread_args_with_origins(&[arg.clone()], elephc_semantics::SemanticProfile::PERMISSIVE);
         assert_eq!(expanded.args, vec![arg.clone()]);
         assert!(expanded.origins == vec![ExpandedArgOrigin::Source]);
         // The nested source can supply named keys, so the static named-argument shortcut declines.
-        assert!(has_named_args(&[arg.clone()]));
-        assert!(expand_planned_positional_spreads(&[arg.clone()]).is_none());
-        assert!(coalesce_planned_indexed_spreads(&[arg.clone(), arg], |_| true).is_none());
+        assert!(has_named_args(&[arg.clone()], elephc_semantics::SemanticProfile::PERMISSIVE));
+        assert!(expand_planned_positional_spreads(&[arg.clone()], elephc_semantics::SemanticProfile::PERMISSIVE).is_none());
+        assert!(coalesce_planned_indexed_spreads(&[arg.clone(), arg], |_| true, elephc_semantics::SemanticProfile::PERMISSIVE).is_none());
     }
 
     /// Duplicate PHP-normalized positional keys retain the original spread for runtime collapse.
@@ -446,8 +458,51 @@ mod tests {
             ))),
             Span::dummy(),
         );
-        let expanded = expand_static_assoc_spread_args_with_origins(&[arg.clone()]);
+        let expanded = expand_static_assoc_spread_args_with_origins(&[arg.clone()], elephc_semantics::SemanticProfile::PERMISSIVE);
         assert_eq!(expanded.args, vec![arg]);
         assert!(expanded.origins == vec![ExpandedArgOrigin::Source]);
     }
+
+    /// Numeric string names remain distinct from integers under the independently selected policy.
+    #[test]
+    fn exact_static_unpack_preserves_numeric_names_and_source_bytes() {
+        use elephc_semantics::{SemanticProfile, StrictFeature};
+        let dynamic = "<?php $object->{$method}(...['name' => 1, '0' => 2]);";
+        assert!(crate::parser::parse(&crate::lexer::tokenize(dynamic).unwrap()).is_ok());
+        let unpack = |pairs| Expr::new(ExprKind::Spread(Box::new(Expr::new(
+            ExprKind::ArrayLiteralAssoc(pairs), Span::dummy(),
+        ))), Span::dummy());
+        for exact in [false, true] {
+            let profile = SemanticProfile::PERMISSIVE.with(StrictFeature::ArrayKeys, exact);
+            for name in ["0", "1", "-1", "01", "a\0b"] {
+                let input = unpack(vec![(Expr::string_lit(name), Expr::int_lit(7))]);
+                let expanded = expand_static_assoc_spread_args(&[input], profile);
+                let named = exact || matches!(name, "01" | "a\0b");
+                assert_eq!(has_named_args(&expanded, profile), named, "{name:?} exact={exact}");
+                if named {
+                    assert!(matches!(&expanded[0].kind, ExprKind::NamedArg { name: actual, value }
+                        if actual == name && value.kind == ExprKind::IntLiteral(7)));
+                } else { assert_eq!(expanded[0].kind, ExprKind::IntLiteral(7)); }
+            }
+            let input = unpack(vec![(Expr::int_lit(0), Expr::int_lit(10)),
+                (Expr::string_lit("0"), Expr::int_lit(20))]);
+            let expanded = expand_static_assoc_spread_args(&[input.clone()], profile);
+            if exact { assert_eq!(expanded.len(), 2); }
+            else { assert_eq!(expanded, vec![input]); }
+            let input = unpack(vec![(Expr::string_lit("name"), Expr::int_lit(1)),
+                (Expr::string_lit("0"), Expr::int_lit(2))]);
+            assert!(validate_syntax_only(&[input.clone()]).is_ok());
+            assert_eq!(validate_static_unpack_order(&[input], profile).is_err(), !exact);
+            let input = unpack(vec![(Expr::new(ExprKind::BoolLiteral(false), Span::dummy()), Expr::int_lit(3))]);
+            let expanded = expand_static_assoc_spread_args(&[input.clone()], profile);
+            if exact { assert_eq!(expanded, vec![input]); }
+            else { assert_eq!(expanded[0].kind, ExprKind::IntLiteral(3)); }
+        }
+    }
+
+    /// Checks the same parser-only ordering used before semantic profiles are selected.
+    fn validate_syntax_only(args: &[Expr]) -> Result<(), super::super::plan::CallArgPlanError> {
+        super::super::planner::validate_syntactic_call_argument_order(args)
+    }
+
 }

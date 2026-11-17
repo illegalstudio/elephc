@@ -40,7 +40,7 @@ pub(super) fn lower_boxed_usort(
         return None;
     }
     let sig = call_signature(ctx, name, false)?;
-    let plan = plan_call_args(&sig, args, expr.span, false, false).ok()?;
+    let plan = plan_call_args(&sig, args, expr.span, false, false, ctx.semantic_profile).ok()?;
     let (array, callback, array_first) = match plan.regular_args.as_slice() {
         [PlannedRegularArg::Source { source_index: array_index, expr: array },
             PlannedRegularArg::Source { source_index: callback_index, expr: callback }] =>

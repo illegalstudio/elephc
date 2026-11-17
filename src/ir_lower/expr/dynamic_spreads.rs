@@ -53,7 +53,7 @@ pub(super) fn lower_boxed_spread_args(
         return None;
     }
     let span = args.first()?.span;
-    let plan = crate::types::call_args::plan_call_args(sig, args, span, false, false).ok()?;
+    let plan = crate::types::call_args::plan_call_args(sig, args, span, false, false, ctx.semantic_profile).ok()?;
     let mut staged = Vec::with_capacity(plan.source_args.len());
     for arg in &plan.source_args {
         staged.push(match &arg.kind {

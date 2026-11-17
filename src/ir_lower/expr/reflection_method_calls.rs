@@ -22,7 +22,7 @@ pub(super) fn lower_reflection_method_invoke_call(
     let object_expr = object_expr?;
     let (class_name, reflected_method) = reflection_method_reflected_target(ctx, object_expr)?;
     let Some((object_arg, forwarded_args)) = (match method_key.as_str() {
-        "invoke" => reflection_method_invoke_args(args),
+        "invoke" => reflection_method_invoke_args(args, ctx.semantic_profile),
         "invokeargs" => reflection_method_invoke_args_array(ctx, args),
         _ => return None,
     }) else {
@@ -116,9 +116,9 @@ pub(super) fn lower_reflection_instance_method_invoke(
 }
 
 /// Splits `ReflectionMethod::invoke($object, ...$args)` into receiver and method args.
-pub(super) fn reflection_method_invoke_args(args: &[Expr]) -> Option<(Expr, Vec<Expr>)> {
-    let args = reflection_class_new_instance_args(args);
-    if !crate::types::call_args::has_named_args(&args) {
+pub(super) fn reflection_method_invoke_args(args: &[Expr], profile: elephc_semantics::SemanticProfile) -> Option<(Expr, Vec<Expr>)> {
+    let args = reflection_class_new_instance_args(args, profile);
+    if !crate::types::call_args::has_named_args(&args, profile) {
         return match args.as_slice() {
             [object, forwarded @ ..] => Some((object.clone(), forwarded.to_vec())),
             _ => None,
@@ -160,11 +160,11 @@ pub(super) fn reflection_method_invoke_args_array(
     ctx: &LoweringContext<'_, '_>,
     args: &[Expr],
 ) -> Option<(Expr, Vec<Expr>)> {
-    let args = reflection_class_new_instance_args(args);
+    let args = reflection_class_new_instance_args(args, ctx.semantic_profile);
     if args.iter().any(is_spread_arg) {
         return None;
     }
-    if !crate::types::call_args::has_named_args(&args) {
+    if !crate::types::call_args::has_named_args(&args, ctx.semantic_profile) {
         return match args.as_slice() {
             [object, forwarded] => {
                 let forwarded = reflection_class_new_instance_args_value(ctx, forwarded)?;
@@ -189,6 +189,7 @@ pub(super) fn reflection_method_invoke_args_array(
         false,
         true,
         &assoc_spread_sources(ctx, &args),
+        ctx.semantic_profile,
     )
     .ok()?;
     if plan.has_spread_args() {

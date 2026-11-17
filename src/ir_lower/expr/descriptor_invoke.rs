@@ -138,7 +138,7 @@ pub(super) fn lower_call_user_func_from_lowered_callback(
     ) {
         return lower_call_user_func_descriptor_invoke_from_value(ctx, callback, args, sig, expr);
     }
-    if !crate::types::call_args::has_named_args(args) && !args.iter().any(is_spread_arg) {
+    if !crate::types::call_args::has_named_args(args, ctx.semantic_profile) && !args.iter().any(is_spread_arg) {
         return emit_rooted_expr_call(ctx, callback, None, args, PhpType::Mixed, expr.span);
     }
     let callback = coerce_descriptor_invoker_mixed_value(ctx, callback, expr.span);
@@ -158,7 +158,7 @@ pub(super) fn lower_dynamic_call_user_func_array(
     let [callback_expr, arg_array_expr] = args else {
         return None;
     };
-    if crate::types::call_args::has_named_args(args) || args.iter().any(is_spread_arg) {
+    if crate::types::call_args::has_named_args(args, ctx.semantic_profile) || args.iter().any(is_spread_arg) {
         return None;
     }
     let signature = callable_descriptor_signature_for_expr(ctx, callback_expr);
@@ -392,7 +392,7 @@ pub(super) fn call_user_func_should_use_descriptor(
     sig: Option<&FunctionSig>,
 ) -> bool {
     let has_named_or_spread =
-        crate::types::call_args::has_named_args(args) || args.iter().any(is_spread_arg);
+        crate::types::call_args::has_named_args(args, ctx.semantic_profile) || args.iter().any(is_spread_arg);
     if has_named_or_spread {
         return true;
     }
