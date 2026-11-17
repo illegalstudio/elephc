@@ -477,7 +477,10 @@ fn test_comment_scan_follows_the_php_lexer() {
 #[test]
 fn test_one_line_block_reads_its_opening_tag() {
     let bound = "/** @template T of int @param T $v @return T */\n";
-    let cases = [
+    // `docblock.rs` and `docblock/members.rs`: a template that no parameter or return position
+    // adopts binds nothing at a call, so it is dropped and the declaration compiles untyped, as
+    // php-src runs it, instead of failing as an undetermined call.
+    let unadopted_cases = [
         format!("<?php\n{bound}function id($v) {{ return $v; }}\necho id(\"seven\");\n"),
         format!(
             "<?php\nclass R {{\n{bound}public static function id($v) {{ return $v; }}\n}}\n\
@@ -492,12 +495,10 @@ fn test_one_line_block_reads_its_opening_tag() {
              echo Id::A->id(\"seven\");\n"
         ),
     ];
-    for source in &cases {
-        let error = compile_cli_file_with_flags_expect_failure(source, &[]);
-        assert!(
-            error.contains("does not determine type parameter <T>"),
-            "{source}: {error}"
-        );
+    for source in &unadopted_cases {
+        let warnings = compile_cli_file_with_flags_capturing_stderr(source, &[]);
+        assert!(!warnings.contains("its bound"), "{source}: {warnings}");
+        assert_eq!(compile_cli_file_and_run_with_flags(source, &[]), "seven", "{source}");
     }
     let multiline = "<?php\n/** @template T of int\n * @param T $v\n * @return T\n */\n\
                      function id($v) { return $v; }\necho id(\"seven\");\n";
@@ -509,4 +510,38 @@ fn test_one_line_block_reads_its_opening_tag() {
     let ok = "<?php\n/** @template T of int\n * @param T $v\n * @return T\n */\n\
               function id($v) { return $v; }\necho id(7);\n";
     assert_eq!(compile_cli_file_and_run_with_flags(ok, &[]), "7");
+}
+
+/// A PHPDoc template never loosens a hint php-src enforces.
+///
+/// `@template T` / `@param T` / `@return T` over `function keep(object $v): object` leaves the
+/// written hints binding: PHP rejects `keep(1)` with a TypeError, and a real object runs. The
+/// same rule applies to a method whose block declares its own template.
+#[test]
+fn test_docblock_template_keeps_a_native_object_hint() {
+    let template = "/**\n * @template T\n * @param T $v\n * @return T\n */\n";
+    let function = format!(
+        "<?php\n{template}function keep(object $v): object {{ return $v; }}\necho keep(1);\n"
+    );
+    let error = compile_cli_file_with_flags_expect_failure(&function, &[]);
+    assert!(error.contains("expects object"), "{function}: {error}");
+
+    let accepted = format!(
+        "<?php\n{template}function keep(object $v): object {{ return $v; }}\n\
+         echo keep(new stdClass) instanceof stdClass ? \"obj\" : \"no\", \"\\n\";\n"
+    );
+    assert_eq!(compile_cli_file_and_run_with_flags(&accepted, &[]), "obj\n");
+
+    let method = format!(
+        "<?php\nclass Holder {{\n{template}public function keep(object $v): object {{ return $v; }}\n}}\n\
+         echo (new Holder)->keep(1);\n"
+    );
+    let error = compile_cli_file_with_flags_expect_failure(&method, &[]);
+    assert!(error.contains("expects object"), "{method}: {error}");
+
+    let method_accepted = format!(
+        "<?php\nclass Holder {{\n{template}public function keep(object $v): object {{ return $v; }}\n}}\n\
+         echo (new Holder)->keep(new stdClass) ? \"obj\" : \"no\", \"\\n\";\n"
+    );
+    assert_eq!(compile_cli_file_and_run_with_flags(&method_accepted, &[]), "obj\n");
 }
