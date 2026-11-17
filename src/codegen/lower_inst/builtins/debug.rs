@@ -235,9 +235,12 @@ pub(crate) fn lower_var_dump(ctx: &mut FunctionContext<'_>, inst: &Instruction) 
                 emit_var_dump_null(ctx);
                 Ok(())
             }
-            PhpType::Array(_) | PhpType::AssocArray { .. } | PhpType::Iterable => {
-                emit_var_dump_array(ctx, &ty)
-            }
+            PhpType::Array(_) | PhpType::AssocArray { .. } => emit_var_dump_array(ctx, &ty),
+            PhpType::Iterable => emit_iterable_dispatch(
+                ctx,
+                emit_var_dump_dynamic_object,
+                |ctx| emit_var_dump_array(ctx, &PhpType::Array(Box::new(PhpType::Mixed))),
+            ),
             PhpType::Object(_) => emit_var_dump_dynamic_object(ctx),
             PhpType::Callable => emit_var_dump_callable(ctx),
             PhpType::Mixed | PhpType::Union(_) => emit_var_dump_mixed(ctx),
@@ -285,13 +288,23 @@ fn emit_print_r_loaded_value(ctx: &mut FunctionContext<'_>, ty: &PhpType) -> Res
             },
         ),
         PhpType::AssocArray { .. } => emit_print_r_array(ctx, PrintRWalker::Fixed("__rt_print_r_hash")),
-        PhpType::Iterable => {
-            // Iterable's runtime representation is ambiguous (a direct indexed
-            // array or a hash), so render only the `Array\n` header rather than
-            // risk walking the wrong layout.
-            emit_write_literal(ctx, b"Array\n");
-            Ok(())
-        }
+        // An `iterable` slot holds an array, a hash or a Traversable object.
+        PhpType::Iterable => emit_iterable_dispatch(
+            ctx,
+            |ctx| {
+                emit_print_r_object(ctx);
+                Ok(())
+            },
+            |ctx| {
+                emit_print_r_array(
+                    ctx,
+                    PrintRWalker::ByRuntimeKind {
+                        indexed: "__rt_print_r_indexed",
+                        hash: "__rt_print_r_hash",
+                    },
+                )
+            },
+        ),
         PhpType::Object(_) => {
             emit_print_r_object(ctx);
             Ok(())
@@ -350,6 +363,12 @@ fn emit_print_r_tagged_scalar(ctx: &mut FunctionContext<'_>) -> Result<()> {
 /// moved into a scratch before the pointer is restored — comparing after the restore would
 /// otherwise read the pointer back as the kind.
 fn emit_branch_if_hash_storage(ctx: &mut FunctionContext<'_>, label: &str) {
+    emit_branch_if_heap_kind(ctx, 3, label);
+}
+
+/// Branches to `label` when the heap block in the integer result register has `kind`
+/// (`__rt_heap_kind`: 2 indexed array, 3 hash, 4 object); the register is preserved.
+fn emit_branch_if_heap_kind(ctx: &mut FunctionContext<'_>, kind: u8, label: &str) {
     let result_reg = abi::int_result_reg(ctx.emitter);
     abi::emit_push_reg(ctx.emitter, result_reg);
     match ctx.emitter.target.arch {
@@ -357,18 +376,36 @@ fn emit_branch_if_hash_storage(ctx: &mut FunctionContext<'_>, label: &str) {
             abi::emit_call_label(ctx.emitter, "__rt_heap_kind");
             ctx.emitter.instruction("mov x9, x0");                              // stash the kind before the pointer comes back
             abi::emit_pop_reg(ctx.emitter, result_reg);
-            ctx.emitter.instruction("cmp x9, #3");                              // 3 = hash storage
-            ctx.emitter.instruction(&format!("b.eq {}", label));                // walk a promoted hash as a hash
+            ctx.emitter.instruction(&format!("cmp x9, #{kind}"));               // compare against the wanted heap kind
+            ctx.emitter.instruction(&format!("b.eq {}", label));                // take the branch for that storage kind
         }
         Arch::X86_64 => {
             ctx.emitter.instruction("mov rdi, rax");                            // container pointer → SysV first argument register
             abi::emit_call_label(ctx.emitter, "__rt_heap_kind");
             ctx.emitter.instruction("mov r10, rax");                            // stash the kind before the pointer comes back
             abi::emit_pop_reg(ctx.emitter, result_reg);
-            ctx.emitter.instruction("cmp r10, 3");                              // 3 = hash storage
-            ctx.emitter.instruction(&format!("je {}", label));                  // walk a promoted hash as a hash
+            ctx.emitter.instruction(&format!("cmp r10, {kind}"));               // compare against the wanted heap kind
+            ctx.emitter.instruction(&format!("je {}", label));                  // take the branch for that storage kind
         }
     }
+}
+
+/// Emits `object_case` when the `iterable` in the result register is an object and `array_case`
+/// otherwise (an indexed array or a hash): an `iterable` slot holds either at run time.
+fn emit_iterable_dispatch(
+    ctx: &mut FunctionContext<'_>,
+    object_case: impl FnOnce(&mut FunctionContext<'_>) -> Result<()>,
+    array_case: impl FnOnce(&mut FunctionContext<'_>) -> Result<()>,
+) -> Result<()> {
+    let object_label = ctx.next_label("debug_iterable_object");
+    let done_label = ctx.next_label("debug_iterable_done");
+    emit_branch_if_heap_kind(ctx, 4, &object_label);
+    array_case(ctx)?;
+    ctx.emit_branch(&done_label);
+    ctx.emitter.label(&object_label);
+    object_case(ctx)?;
+    ctx.emitter.label(&done_label);
+    Ok(())
 }
 
 fn emit_print_r_array(ctx: &mut FunctionContext<'_>, walker: PrintRWalker) -> Result<()> {
@@ -847,9 +884,8 @@ fn emit_var_dump_array(ctx: &mut FunctionContext<'_>, ty: &PhpType) -> Result<()
 /// arrays (hashes) use `__rt_var_dump_hash`, which iterates entries, formats
 /// string/integer keys and delegates each value to the same recursive renderer.
 ///
-/// `Iterable` is deliberately absent: its runtime representation is ambiguous
-/// (a direct indexed array or a hash), so the body is left empty rather than
-/// risking a walk of the wrong layout — the same choice `print_r` makes.
+/// `Iterable` is absent: `var_dump` of an `iterable` slot dispatches on the heap kind first
+/// (`emit_iterable_dispatch`) and walks an array or hash as a bare `array`.
 fn var_dump_array_walker(ty: &PhpType) -> Option<&'static str> {
     match ty {
         PhpType::Array(elem_ty) => match elem_ty.as_ref() {

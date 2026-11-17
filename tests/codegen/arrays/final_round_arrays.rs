@@ -95,3 +95,22 @@ echo json_encode(array_merge_recursive(['a' => 1], ['a' => 2], ['b' => 'x'])), "
     assert!(out.success, "program failed: {}", out.stderr);
     assert_eq!(out.stdout, "[1,2,3]\n{\"a\":[1,2,3]}\n{\"a\":[1,2],\"b\":\"x\"}\n");
 }
+
+/// `print_r()` and `var_dump()` over a variadic slot that collected string-keyed named
+/// arguments walk the hash (the slot is typed `iterable`; they used to print an empty body).
+#[test]
+fn test_print_r_and_var_dump_of_named_variadic_tail() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+function f(...$rest) { print_r($rest); var_dump($rest); }
+f(1, x: "s");
+f(y: 2);
+function g(iterable $it) { print_r($it); var_dump($it); }
+g([1, 2]);
+g(new ArrayIterator([5]));
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert!(out.stdout.starts_with("Array\n(\n    [0] => 1\n    [x] => s\n)\narray(2) {\n  [0]=>\n  int(1)\n  [\"x\"]=>\n  string(1) \"s\"\n}\n"), "{}", out.stdout);
+    assert!(out.stdout.contains("ArrayIterator Object"), "{}", out.stdout);
+}

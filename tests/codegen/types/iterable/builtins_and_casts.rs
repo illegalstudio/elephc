@@ -184,9 +184,9 @@ echo name(new Bag([1]));
     assert_eq!(out, "array/array array/array object/Bag");
 }
 
-/// Verifies `var_dump` on a hash (associative) `iterable` prints the array shell with correct count.
+/// Verifies `var_dump` on a hash (associative) `iterable` walks every entry like php.
 #[test]
-fn test_var_dump_iterable_hash_prints_array_shell() {
+fn test_var_dump_iterable_hash_prints_entries() {
     let out = compile_and_run(
         "<?php
         function dump(iterable $items): void {
@@ -195,12 +195,12 @@ fn test_var_dump_iterable_hash_prints_array_shell() {
         dump(['a' => 1, 'b' => 2]);
         ",
     );
-    assert_eq!(out, "array(2) {\n}\n");
+    assert_eq!(out, "array(2) {\n  [\"a\"]=>\n  int(1)\n  [\"b\"]=>\n  int(2)\n}\n");
 }
 
-/// Verifies `var_dump` on an indexed `iterable` prints the array shell with the correct element count.
+/// Verifies `var_dump` on an indexed `iterable` walks every element like php.
 #[test]
-fn test_var_dump_iterable_indexed_array_prints_array_shell() {
+fn test_var_dump_iterable_indexed_array_prints_entries() {
     let out = compile_and_run(
         "<?php
         function dump(iterable $items): void {
@@ -209,7 +209,7 @@ fn test_var_dump_iterable_indexed_array_prints_array_shell() {
         dump([10, 20, 30]);
         ",
     );
-    assert_eq!(out, "array(3) {\n}\n");
+    assert_eq!(out, "array(3) {\n  [0]=>\n  int(10)\n  [1]=>\n  int(20)\n  [2]=>\n  int(30)\n}\n");
 }
 
 /// Verifies `echo` on an `iterable` parameter prints "Array" for both hash and indexed variants.
