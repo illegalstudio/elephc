@@ -61,7 +61,7 @@ pub(in crate::interpreter) fn eval_invokable_callable_expr(
     scope: &mut ElephcEvalScope,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
-    with_eval_operands(&[object], context, scope, values, |args, context, _, values| {
+    with_eval_operands(&[object], context, scope, values, |args, context, scope, values| {
         let object = args[0].borrowed();
         if values.type_tag(object)? == EVAL_TAG_CALLABLE {
             if let Some(signature) = values.native_callable_signature(object)? {
@@ -75,10 +75,7 @@ pub(in crate::interpreter) fn eval_invokable_callable_expr(
                 );
             }
         }
-        eval_invokable_object_precheck(object, context, values)?;
-        eval_closure_object_expr(
-            EvalClosureObjectTarget::InvokableObject { object }, context, values,
-        )
+        eval_first_class_callable_from_value(object, context, scope, values)
     })
 }
 

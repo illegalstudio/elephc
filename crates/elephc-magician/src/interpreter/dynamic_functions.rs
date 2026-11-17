@@ -475,6 +475,15 @@ fn eval_property_call_arg_value(
         return argument_owners::finish_argument_reference_owners(result, vec![object], context, values);
     }
     if let Err(status) = validate_property_ref_target(object, &property, context, values) {
+        // An argument is prepared as a potential by-reference target before the callee is
+        // known, and most callees take it by value. A readonly property (or an enum case's
+        // `name`/`value`) cannot be bound by reference, but reading it for a by-value parameter
+        // is ordinary php (Symfony's `CompiledAssetMapperConfigReader` passes `$this->directory`,
+        // a promoted readonly property, to `Path::join()`): no target, not a refusal.
+        if selection.is_none() {
+            let _ = release_expr_result(object, context, values);
+            return Ok((value, None));
+        }
         let _ = release_expr_result(value, context, values);
         let _ = release_expr_result(object, context, values);
         return Err(status);
