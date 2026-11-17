@@ -206,3 +206,10 @@ for ($index = 0; $index < 4; $index++) {
     $counterTotal += $incrementCounter($index);
 }
 echo "Counter total: ", (int) $counterTotal, "\n";
+
+// Normalize a callback to a Closure before saving it for later invocation.
+function wrapCallback(callable $method): Closure {
+    return $method(...);
+}
+$wrappedDouble = wrapCallback($double);
+echo "Wrapped double(21): ", $wrappedDouble(21), "\n";

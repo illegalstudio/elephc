@@ -314,6 +314,22 @@ $squared = array_map(fn(int $n): int => $n * $n, $nums);
 
 ## First-class callable syntax
 
+A callable value can be converted to a `Closure` with `$callback(...)`, including
+callable parameters, array elements such as `$callbacks[0](...)`, and returned
+callables such as `factory()(...)`. The expression is evaluated once when the
+closure is created; invocation happens later. Existing captures and bound
+receivers remain available through the returned closure.
+
+```php
+function wrap(callable $method): Closure {
+    return $method(...);
+}
+
+$callback = fn(int $value): int => $value * 2;
+$wrapped = wrap($callback);
+echo $wrapped(21); // 42
+```
+
 ```php
 <?php
 $triple = triple(...);

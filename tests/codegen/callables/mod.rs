@@ -15,6 +15,7 @@ mod closure_array_returns;
 mod closure_call_returns;
 mod closure_binding_scopes;
 mod closures;
+mod dynamic_first_class;
 mod property_callable_metadata;
 mod expr_calls;
 mod func_args;

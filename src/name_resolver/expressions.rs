@@ -527,19 +527,23 @@ pub(super) fn resolve_expr(
                         if name.last_segment().is_some_and(|segment| segment.eq_ignore_ascii_case("Closure"))
                             && !symbols.declares_class_like(&name.as_canonical())
                 )
-                && matches!(&resolved_args[0].kind, ExprKind::StringLiteral(_))
             {
-                let ExprKind::StringLiteral(candidate) = &resolved_args[0].kind else {
-                    unreachable!("Closure::fromCallable literal guard must hold")
-                };
-                ExprKind::FirstClassCallable(CallableTarget::Function(resolved_name(
-                    resolve_function_name(
-                        &parse_callback_name(candidate),
-                        current_namespace,
-                        imports,
-                        symbols,
-                    ),
-                )))
+                if let ExprKind::StringLiteral(candidate) = &resolved_args[0].kind {
+                    ExprKind::FirstClassCallable(CallableTarget::Function(resolved_name(
+                        resolve_function_name(
+                            &parse_callback_name(candidate),
+                            current_namespace,
+                            imports,
+                            symbols,
+                        ),
+                    )))
+                } else {
+                    // Dynamic values use the same owned descriptor conversion as callback bridges.
+                    ExprKind::FunctionCall {
+                        name: resolved_name("__elephc_normalize_callable".to_string()),
+                        args: resolved_args,
+                    }
+                }
             } else {
                 ExprKind::StaticMethodCall {
                     receiver: resolved_receiver,

@@ -291,6 +291,13 @@ references by specialization before EIR lowering. See
 | `UseItem` / `UseKind` | `kind`, `name`, `alias` | Namespace import entries for `use`, `use function`, `use const`, and group-use declarations |
 | `CallableTarget` | `Function(Name)`, `StaticMethod { receiver, method }`, `Method { object, method }` | Structured target of first-class callable syntax such as `foo(...)` or `Cls::bar(...)` |
 
+Dynamic first-class callable forms (`$callback(...)`, `($expression)(...)`, and
+`factory()(...)`) become a fully qualified `Closure::fromCallable` static call
+with the source expression as its sole argument. This preserves one evaluation
+and lets existing AST walkers visit it. Name resolution routes nonliteral values
+to the internal callable normalizer, whose EIR `NormalizeCallable` result owns a
+descriptor reference and participates in temporary cleanup.
+
 Every AST node carries a `Span` from the source, so error messages in later phases can point to the right location. A `Span` stores the start position (`line`, `col`) plus an exclusive end position (`end_line`, `end_col`); the expression parser widens the end through the last consumed token (e.g. through a call's closing `)` or a binary expression's right operand) while keeping the start anchored, so diagnostics can underline the full expression extent.
 
 ## The Pratt parser
