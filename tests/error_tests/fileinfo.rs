@@ -10,11 +10,13 @@
 use super::*;
 
 /// Invalid calls must fail at their PHP signatures rather than from missing declarations.
+///
+/// A wrong argument TYPE (`finfo_buffer(1, 'hello')`) is a `TypeError` at run time in php 8.5.10,
+/// never a compile error, so only the arity failures are compile-time here.
 #[test]
 fn test_fileinfo_signature_errors() {
     for source in [
         "<?php finfo_buffer();",
-        "<?php finfo_buffer(1, 'hello');",
         "<?php finfo_file(new finfo());",
         "<?php finfo_set_flags(new finfo());",
         "<?php finfo_close();",

@@ -41,7 +41,7 @@ fn test_error_buffer_new_rejects_union_element_type() {
 #[test]
 fn test_error_buffer_new_rejects_static_float_length() {
     expect_error(
-        "<?php function half(int $n): void { $values = buffer_new<int>($n / 2); } half(4);",
+        "<?php $values = buffer_new<int>(1.5);",
         "buffer_new<T>() length must be integer",
     );
 }
@@ -85,15 +85,12 @@ fn test_error_packed_class_reusing_enum_name_is_duplicate() {
     );
 }
 
-/// Verifies a packed class reusing a builtin enum name keeps the builtin redeclaration
-/// diagnostic: the packed prescan sees builtin enum names as pointer targets only, not as
-/// pre-declared classes that would report a packed duplicate instead.
+/// Verifies a packed class may reuse the name of an elephc-internal enum that php does not have.
 #[test]
-fn test_error_packed_class_reusing_builtin_enum_name_reports_builtin_redeclaration() {
-    expect_error(
-        "<?php packed class SortDirection { public int $x; }",
-        "Cannot redeclare built-in type: SortDirection",
-    );
+fn test_packed_class_reusing_a_non_php_enum_name_is_a_user_class() {
+    // `SortDirection` is not a php class (`class_exists` is false under `php -n`), so a program
+    // declaring it owns the name.
+    expect_no_error("<?php packed class SortDirection { public int $x; }");
 }
 
 /// Verifies that a packed class with a nullable field (?int) is rejected.
@@ -597,13 +594,13 @@ fn test_error_extern_nullable_string_param_rejects_int() {
     );
 }
 
-/// Verifies a `?string` extern return must be checked for null before it reaches a plain
-/// `string` extern parameter, which cannot pass NULL.
+/// Verifies a `?string` extern return reaching a plain `string` extern parameter compiles: php
+/// checks a nullable argument when the call runs, and the weak-mode coercion of null to `""` makes
+/// the unset `getenv()` case print `0` (measured with the compiled program).
 #[test]
-fn test_error_extern_nullable_string_return_needs_null_check_for_string_param() {
-    expect_error(
+fn test_extern_nullable_string_return_reaches_string_param_as_empty_string() {
+    expect_no_error(
         "<?php extern function getenv(string $name): ?string; extern function strlen(string $s): u64; strlen(getenv(\"HOME\"));",
-        "Extern function 'strlen' parameter $s expects string, got string|null",
     );
 }
 

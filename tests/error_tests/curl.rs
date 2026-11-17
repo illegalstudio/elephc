@@ -77,10 +77,11 @@ fn curl_exec_with_a_non_handle_compiles() {
     expect_curl_compiles(r#"<?php curl_exec("not a handle");"#);
 }
 
-/// `curl_init()` accepts an optional URL string; passing an int is a type error.
+/// `curl_init()` accepts an optional URL string; an int is coerced to `"42"` in weak mode, so php
+/// (8.5.10, `php -n`) returns a `CurlHandle` and the program compiles.
 #[test]
-fn curl_init_rejects_a_non_string_url() {
-    expect_curl_error("<?php $ch = curl_init(42);", "curl_init");
+fn curl_init_coerces_a_non_string_url_in_weak_mode() {
+    expect_curl_compiles("<?php $ch = curl_init(42);");
 }
 
 /// `curl_setopt()`'s first parameter is typed `CurlHandle`, so passing an int is a `TypeError`
@@ -145,15 +146,12 @@ fn curl_multi_add_handle_requires_both_arguments() {
 /// error — exactly what that runtime reports — while 8.5 accepts it.
 #[test]
 fn curl_multi_get_handles_is_undefined_before_php_85() {
-    let source = "<?php $mh = curl_multi_init(); $h = curl_multi_get_handles($mh);";
-    let error = check_source_for_php_version(source, elephc::php_version::PhpVersion::Php84)
-        .expect_err("8.4 must not declare curl_multi_get_handles");
     assert!(
-        error.contains("Undefined function") && error.contains("curl_multi_get_handles"),
-        "8.4 must report an undefined function, got: {error}"
+        !prelude_declares(elephc::php_version::PhpVersion::Php84, "curl_multi_get_handles"),
+        "8.4 must not declare curl_multi_get_handles"
     );
     assert!(
-        check_source_for_php_version(source, elephc::php_version::PhpVersion::Php85).is_ok(),
+        prelude_declares(elephc::php_version::PhpVersion::Php85, "curl_multi_get_handles"),
         "8.5 must declare curl_multi_get_handles"
     );
 }
@@ -256,31 +254,16 @@ fn curl_multi_exec_accepts_an_int_seeded_still_running() {
 /// function"/"undefined class" error, while 8.5 accepts both.
 #[test]
 fn curl_share_init_persistent_is_undefined_before_php_85() {
-    let function_source = "<?php $sh = curl_share_init_persistent([CURL_LOCK_DATA_DNS]);";
-    let error =
-        check_source_for_php_version(function_source, elephc::php_version::PhpVersion::Php84)
-            .expect_err("8.4 must not declare curl_share_init_persistent");
-    assert!(
-        error.contains("Undefined function") && error.contains("curl_share_init_persistent"),
-        "8.4 must report an undefined function, got: {error}"
-    );
-    assert!(
-        check_source_for_php_version(function_source, elephc::php_version::PhpVersion::Php85)
-            .is_ok(),
-        "8.5 must declare curl_share_init_persistent"
-    );
-
-    let class_source = "<?php function f(CurlSharePersistentHandle $h): bool { return true; }";
-    assert!(
-        check_source_for_php_version(class_source, elephc::php_version::PhpVersion::Php84)
-            .is_err(),
-        "8.4 must not declare CurlSharePersistentHandle"
-    );
-    assert!(
-        check_source_for_php_version(class_source, elephc::php_version::PhpVersion::Php85)
-            .is_ok(),
-        "8.5 must declare CurlSharePersistentHandle"
-    );
+    for name in ["curl_share_init_persistent", "CurlSharePersistentHandle"] {
+        assert!(
+            !prelude_declares(elephc::php_version::PhpVersion::Php84, name),
+            "8.4 must not declare {name}"
+        );
+        assert!(
+            prelude_declares(elephc::php_version::PhpVersion::Php85, name),
+            "8.5 must declare {name}"
+        );
+    }
 }
 
 /// `CURLFile`'s `$filename` is required, so a bare `new CURLFile()` is an arity
@@ -349,6 +332,28 @@ fn remaining_curl_wrappers_reject_wrong_arity() {
     for (source, function_name) in cases {
         expect_curl_error(source, function_name);
     }
+}
+
+/// Reports whether the curl prelude injected for `php_version` declares the function or class
+/// `name`. An undefined function is a run-time fatal in php, not a compile error, so the gate is
+/// observed on the declarations themselves.
+fn prelude_declares(php_version: elephc::php_version::PhpVersion, name: &str) -> bool {
+    let tokens = tokenize("<?php curl_init();").expect("tokenize");
+    let ast = parse(&tokens).expect("parse");
+    let mut prelude_inventory = elephc::optimize::reachability::PreludeInventory::new();
+    let ast = elephc::curl_prelude::inject_if_used_for_version(
+        ast,
+        true,
+        php_version,
+        &mut prelude_inventory,
+    );
+    ast.iter().any(|stmt| match &stmt.kind {
+        elephc::parser::ast::StmtKind::FunctionDecl { name: declared, .. }
+        | elephc::parser::ast::StmtKind::ClassDecl { name: declared, .. } => {
+            declared.eq_ignore_ascii_case(name)
+        }
+        _ => false,
+    })
 }
 
 /// Runs the frontend with an explicit PHP compatibility version, so the version-gated
