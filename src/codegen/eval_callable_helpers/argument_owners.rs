@@ -182,6 +182,30 @@ mod tests {
     use super::*;
     use crate::codegen_support::platform::Target;
 
+    /// Preserves assembly and internal labels captured from the original compiler at efc6f031c5.
+    #[test]
+    fn memoir_remaining_ownership_preserves_eval_assembly() {
+        use crate::codegen_support::{emit::Emitter, platform::Target};
+        use sha2::{Digest, Sha256};
+
+        let mut fingerprints = Vec::new();
+        for name in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+            for mode in 0..6 {
+                let mut emitter = Emitter::new(Target::parse(name).unwrap());
+                emitter.pic_data_refs = mode == 1 || mode == 2;
+                emitter.cdylib_boundary = mode == 2 || mode == 3;
+                emitter.phpext_output = mode == 4;
+                emitter.dead_strip = mode == 5;
+                super::emit(&mut emitter);
+                let mut labels = emitter.take_internal_labels().into_iter().collect::<Vec<_>>();
+                labels.sort();
+                let hash = Sha256::digest(format!("{}\n{labels:?}", emitter.output()));
+                fingerprints.push(format!("{name} {mode} {hash:x}"));
+            }
+        }
+        assert_eq!(fingerprints.join("\n"), include_str!("memoir_argument_owners_baseline.txt").trim());
+    }
+
     /// All bridges publish a complete fixed cleanup record and detach it before normal draining.
     #[test]
     fn eval_callable_argument_owners_cover_all_bridge_layouts_on_every_target() {
