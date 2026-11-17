@@ -197,6 +197,17 @@ pub fn inject_if_used(
     program: Program,
     inventory: &mut crate::optimize::reachability::PreludeInventory,
 ) -> Program {
+    // The usage scan recurses through the whole program, so it runs on the compiler's own
+    // stack: an embedder thread's small stack overflowed on a deeply nested program
+    // (`tests/embedder_stack_tests.rs`), as `dom_html_prelude::inject_if_used` already guards.
+    crate::compiler_stack::with_compiler_stack(|| inject_if_used_on_compiler_stack(program, inventory))
+}
+
+/// The body of [`inject_if_used`], run on the stack `with_compiler_stack` sized.
+fn inject_if_used_on_compiler_stack(
+    program: Program,
+    inventory: &mut crate::optimize::reachability::PreludeInventory,
+) -> Program {
     if inventory.groups.contains_key(GROUP) {
         return program;
     }
