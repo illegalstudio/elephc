@@ -142,6 +142,8 @@ fn numeric_fragment(
         }
         EvalStmt::Expr(value) | EvalStmt::Return(Some(value)) => proof.expression(value, 0),
         EvalStmt::Return(None) => true,
+        // The execution parse marks each statement's line; a marker runs no PHP code.
+        EvalStmt::SourceLine(_) => true,
         _ => false,
     })
 }
@@ -196,7 +198,7 @@ mod tests {
 
     /// Parses each candidate exactly as the production parse-cache entry would.
     fn accepts(code: &str, scope: &ElephcEvalScope, tag: Option<u64>) -> bool {
-        let Ok(program) = crate::parser::parse_fragment(code.as_bytes()) else { return false; };
+        let Ok(program) = crate::parser::parse_eval_fragment(code.as_bytes()) else { return false; };
         numeric_fragment(&program, scope, |_| tag)
     }
 
