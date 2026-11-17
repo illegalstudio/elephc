@@ -30,16 +30,18 @@ use super::map_sum_cache::stmt_writes_local;
 /// Rewrites every reducible counted accumulator loop in one function body.
 pub(crate) fn reduce_loop_accumulators(
     body: &mut Vec<Stmt>,
+    env: &crate::types::TypeEnv,
     aliased: &std::collections::HashSet<String>,
     entry_defined: &std::collections::HashSet<String>,
 ) {
     let mut counter = 0usize;
-    reduce_block(body, aliased, entry_defined, &mut counter);
+    reduce_block(body, env, aliased, entry_defined, &mut counter);
 }
 
 /// Recurse into nested blocks and reduce each counted accumulator loop.
 fn reduce_block(
     body: &mut Vec<Stmt>,
+    env: &crate::types::TypeEnv,
     aliased: &std::collections::HashSet<String>,
     entry_defined: &std::collections::HashSet<String>,
     counter: &mut usize,
@@ -48,6 +50,7 @@ fn reduce_block(
     while index < body.len() {
         if let Some(replacement) = try_reduce(
             &body[index],
+            env,
             &body[..index],
             &body[index + 1..],
             aliased,
@@ -59,7 +62,7 @@ fn reduce_block(
             *counter += 1;
             index += inserted;
         } else {
-            recurse_blocks(&mut body[index], aliased, entry_defined, counter);
+            recurse_blocks(&mut body[index], env, aliased, entry_defined, counter);
         }
         index += 1;
     }
@@ -68,6 +71,7 @@ fn reduce_block(
 /// Recurses into blocks without reducing the statement itself.
 fn recurse_blocks(
     stmt: &mut Stmt,
+    env: &crate::types::TypeEnv,
     aliased: &std::collections::HashSet<String>,
     entry_defined: &std::collections::HashSet<String>,
     counter: &mut usize,
@@ -79,12 +83,12 @@ fn recurse_blocks(
             else_body,
             ..
         } => {
-            reduce_block(then_body, aliased, entry_defined, counter);
+            reduce_block(then_body, env, aliased, entry_defined, counter);
             for (_, body) in elseif_clauses {
-                reduce_block(body, aliased, entry_defined, counter);
+                reduce_block(body, env, aliased, entry_defined, counter);
             }
             if let Some(body) = else_body {
-                reduce_block(body, aliased, entry_defined, counter);
+                reduce_block(body, env, aliased, entry_defined, counter);
             }
         }
         StmtKind::IfDef {
@@ -92,9 +96,9 @@ fn recurse_blocks(
             else_body,
             ..
         } => {
-            reduce_block(then_body, aliased, entry_defined, counter);
+            reduce_block(then_body, env, aliased, entry_defined, counter);
             if let Some(body) = else_body {
-                reduce_block(body, aliased, entry_defined, counter);
+                reduce_block(body, env, aliased, entry_defined, counter);
             }
         }
         StmtKind::While { body, .. }
@@ -102,13 +106,13 @@ fn recurse_blocks(
         | StmtKind::For { body, .. }
         | StmtKind::IncludeOnceGuard { body, .. }
         | StmtKind::NamespaceBlock { body, .. }
-        | StmtKind::Synthetic(body) => reduce_block(body, aliased, entry_defined, counter),
+        | StmtKind::Synthetic(body) => reduce_block(body, env, aliased, entry_defined, counter),
         StmtKind::Switch { cases, default, .. } => {
             for (_, body) in cases {
-                reduce_block(body, aliased, entry_defined, counter);
+                reduce_block(body, env, aliased, entry_defined, counter);
             }
             if let Some(body) = default {
-                reduce_block(body, aliased, entry_defined, counter);
+                reduce_block(body, env, aliased, entry_defined, counter);
             }
         }
         StmtKind::Try {
@@ -116,12 +120,12 @@ fn recurse_blocks(
             catches,
             finally_body,
         } => {
-            reduce_block(try_body, aliased, entry_defined, counter);
+            reduce_block(try_body, env, aliased, entry_defined, counter);
             for catch in catches {
-                reduce_block(&mut catch.body, aliased, entry_defined, counter);
+                reduce_block(&mut catch.body, env, aliased, entry_defined, counter);
             }
             if let Some(body) = finally_body {
-                reduce_block(body, aliased, entry_defined, counter);
+                reduce_block(body, env, aliased, entry_defined, counter);
             }
         }
         _ => {}
@@ -131,13 +135,14 @@ fn recurse_blocks(
 /// Returns the replacement statements for one reducible loop, or `None`.
 fn try_reduce(
     stmt: &Stmt,
+    env: &crate::types::TypeEnv,
     previous: &[Stmt],
     following: &[Stmt],
     aliased: &std::collections::HashSet<String>,
     entry_defined: &std::collections::HashSet<String>,
     counter: usize,
 ) -> Option<Vec<Stmt>> {
-    if let Some(replacement) = try_periodic_reduce(stmt, previous, following, aliased, counter) {
+    if let Some(replacement) = try_periodic_reduce(stmt, env, previous, following, aliased, counter) {
         return Some(replacement);
     }
     let StmtKind::For {
@@ -204,9 +209,10 @@ fn try_reduce(
                     accumulator.as_str(),
                     produced.as_str(),
                 ],
+                env,
             )
     });
-    if !pure_expr(bound, &forbidden) || !pure_expr(addend, &forbidden) || !producer_ok {
+    if !pure_expr(bound, &forbidden, env) || !pure_expr(addend, &forbidden, env) || !producer_ok {
         return None;
     }
     let span = stmt.span;
@@ -593,7 +599,19 @@ fn contains_division(expr: &Expr) -> bool {
 }
 
 /// Returns whether `expr` is pure and does not name a forbidden local.
-pub(super) fn pure_expr(expr: &Expr, forbidden: &[&str]) -> bool {
+/// Returns whether an index receiver is statically an object rather than an array or string.
+fn receiver_may_be_object(expr: &Expr, env: &crate::types::TypeEnv) -> bool {
+    match &expr.kind {
+        ExprKind::Variable(name) => matches!(
+            env.get(name).map(crate::types::PhpType::codegen_repr),
+            Some(crate::types::PhpType::Object(_))
+        ),
+        ExprKind::ArrayAccess { array, .. } => receiver_may_be_object(array, env),
+        _ => false,
+    }
+}
+
+pub(super) fn pure_expr(expr: &Expr, forbidden: &[&str], env: &crate::types::TypeEnv) -> bool {
     match &expr.kind {
         ExprKind::IntLiteral(_)
         | ExprKind::FloatLiteral(_)
@@ -602,38 +620,42 @@ pub(super) fn pure_expr(expr: &Expr, forbidden: &[&str]) -> bool {
         | ExprKind::Null => true,
         ExprKind::Variable(name) => !forbidden.contains(&name.as_str()),
         ExprKind::BinaryOp { left, right, .. } => {
-            pure_expr(left, forbidden) && pure_expr(right, forbidden)
+            pure_expr(left, forbidden, env) && pure_expr(right, forbidden, env)
         }
         ExprKind::Negate(inner)
         | ExprKind::Not(inner)
         | ExprKind::BitNot(inner)
         | ExprKind::ErrorSuppress(inner)
-        | ExprKind::Cast { expr: inner, .. } => pure_expr(inner, forbidden),
+        | ExprKind::Cast { expr: inner, .. } => pure_expr(inner, forbidden, env),
         ExprKind::NullCoalesce { value, default } | ExprKind::ShortTernary { value, default } => {
-            pure_expr(value, forbidden) && pure_expr(default, forbidden)
+            pure_expr(value, forbidden, env) && pure_expr(default, forbidden, env)
         }
         ExprKind::Ternary {
             condition,
             then_expr,
             else_expr,
         } => {
-            pure_expr(condition, forbidden)
-                && pure_expr(then_expr, forbidden)
-                && pure_expr(else_expr, forbidden)
+            pure_expr(condition, forbidden, env)
+                && pure_expr(then_expr, forbidden, env)
+                && pure_expr(else_expr, forbidden, env)
         }
         ExprKind::ArrayAccess { array, index } => {
-            pure_expr(array, forbidden) && pure_expr(index, forbidden)
+            // An object receiver runs `offsetGet`, which may change state or return a new
+            // value on every read, so a loop accumulating `$object[0]` is not reducible.
+            !receiver_may_be_object(array, env)
+                && pure_expr(array, forbidden, env)
+                && pure_expr(index, forbidden, env)
         }
-        ExprKind::ArrayLiteral(items) => items.iter().all(|item| pure_expr(item, forbidden)),
+        ExprKind::ArrayLiteral(items) => items.iter().all(|item| pure_expr(item, forbidden, env)),
         ExprKind::ArrayLiteralAssoc(items) => items
             .iter()
-            .all(|(key, value)| pure_expr(key, forbidden) && pure_expr(value, forbidden)),
+            .all(|(key, value)| pure_expr(key, forbidden, env) && pure_expr(value, forbidden, env)),
         ExprKind::ArrayLiteralMixed(items) => items
             .iter()
             .flat_map(|entry| entry.exprs())
-            .all(|item| pure_expr(item, forbidden)),
+            .all(|item| pure_expr(item, forbidden, env)),
         ExprKind::FunctionCall { name, args } => {
-            is_pure_call(name.as_str()) && args.iter().all(|arg| pure_expr(arg, forbidden))
+            is_pure_call(name.as_str()) && args.iter().all(|arg| pure_expr(arg, forbidden, env))
         }
         _ => false,
     }
@@ -648,14 +670,14 @@ fn is_pure_call(name: &str) -> bool {
 }
 
 /// Returns whether a call is a pure, total producer of a loop-invariant string.
-fn pure_producer(expr: &Expr, forbidden: &[&str]) -> bool {
+fn pure_producer(expr: &Expr, forbidden: &[&str], env: &crate::types::TypeEnv) -> bool {
     let ExprKind::FunctionCall { name, args } = &expr.kind else {
         return false;
     };
     matches!(
         name.as_str().trim_start_matches('\\'),
         "mb_convert_kana" | "mb_convert_encoding" | "str_repeat"
-    ) && args.iter().all(|arg| pure_expr(arg, forbidden))
+    ) && args.iter().all(|arg| pure_expr(arg, forbidden, env))
 }
 
 /// One observation of an encoded codepoint over a literal table.
@@ -668,6 +690,7 @@ enum PeriodicObservation {
 /// Rewrites `$x = mb_chr($table[$i & mask], "UTF-8"); $n += <observation>` over a literal table.
 fn try_periodic_reduce(
     stmt: &Stmt,
+    env: &crate::types::TypeEnv,
     previous: &[Stmt],
     following: &[Stmt],
     aliased: &std::collections::HashSet<String>,
@@ -812,7 +835,7 @@ fn try_periodic_reduce(
         return None;
     }
     let forbidden = [loop_counter.as_str(), accumulator.as_str()];
-    if !pure_expr(bound, &forbidden) {
+    if !pure_expr(bound, &forbidden, env) {
         return None;
     }
     let mut values = Vec::with_capacity(codepoints.len());
