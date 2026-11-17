@@ -3967,19 +3967,15 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         let fallback_ty = self.builder.local_php_type(slot);
         let owner_slot = self.declare_ref_cell_owner(name, fallback_ty.clone());
         let suffix = self.intern_string(suffix);
+        let immediate = Immediate::property_ref_cell(slot, owner_slot, suffix, type_code);
         self.builder.emit_with_effects(
-            Op::PromotePropertyRefCell,
+            Op::PromoteLocalRefCell,
             Vec::new(),
-            Some(Immediate::PropertyRefCell {
-                first: slot,
-                second: owner_slot,
-                suffix,
-                type_code,
-            }),
+            Some(immediate),
             IrType::Void,
             fallback_ty,
             Ownership::NonHeap,
-            Op::PromotePropertyRefCell.default_effects(),
+            Op::PromoteLocalRefCell.default_effects(),
             span,
         );
         self.mark_ref_bound_local(name);

@@ -70,7 +70,7 @@ fn live_local(ctx: &FunctionContext<'_>, slot: LocalSlotId, visiting: &mut HashS
         };
         if first != slot { continue; }
         match inst.op {
-            Op::PromoteLocalRefCell | Op::PromotePropertyRefCell => {
+            Op::PromoteLocalRefCell => {
                 if !ctx.function.locals.get(second.as_raw() as usize)
                     .is_some_and(|owner| owner.kind == crate::ir::LocalKind::RefCell) { return false; }
                 backed = true;
@@ -123,7 +123,7 @@ fn managed_local(ctx: &FunctionContext<'_>, slot: LocalSlotId, visiting: &mut Ha
         };
         if first != slot { continue; }
         match inst.op {
-            Op::PromoteLocalRefCell | Op::PromotePropertyRefCell => {
+            Op::PromoteLocalRefCell => {
                 if !ctx.function.locals.get(second.as_raw() as usize)
                     .is_some_and(|owner| owner.kind == crate::ir::LocalKind::RefCell && owner.php_type.codegen_repr() == PhpType::Mixed) {
                     return false;

@@ -201,16 +201,15 @@ fn print_immediate(out: &mut String, data: &DataPool, immediate: &Immediate) {
         Immediate::PropertyRefCell {
             first,
             second,
-            suffix,
-            type_code,
+            suffix_and_type,
         } => {
             let _ = write!(
                 out,
                 " property_ref[{},{}] data[{}] type_code={}",
                 first.as_raw(),
                 second.as_raw(),
-                suffix.as_raw(),
-                type_code
+                *suffix_and_type & ((1 << 28) - 1),
+                *suffix_and_type >> 28
             );
         }
         Immediate::GlobalName(id) => {

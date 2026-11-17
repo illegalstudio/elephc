@@ -111,7 +111,6 @@ fn escaping_slots(function: &Function) -> HashSet<LocalSlotId> {
         if matches!(
             inst.op,
             Op::PromoteLocalRefCell
-                | Op::PromotePropertyRefCell
                 | Op::AliasLocalRefCell
                 | Op::RetainLocalRefCell
                 | Op::BindRefCellPtr

@@ -262,36 +262,26 @@ pub(super) fn store_value_through_ref_cell_slot(
     Ok(())
 }
 
-/// Promotes a typed property's temporary into a managed cell carrying its write guard.
-pub(super) fn lower_promote_property_ref_cell(
-    ctx: &mut FunctionContext<'_>,
-    inst: &Instruction,
-) -> Result<()> {
-    let Some(Immediate::PropertyRefCell {
-        first,
-        second,
-        suffix,
-        type_code,
-    }) = inst.immediate
-    else {
-        return Err(CodegenIrError::invalid_module(
-            "promote_property_ref_cell requires its slot pair and diagnostic metadata",
-        ));
-    };
-    let (suffix_label, suffix_len) = ctx.intern_string_data(suffix)?;
-    promote_local_slot_for_property_ref(
-        ctx,
-        first,
-        second,
-        &inst.result_php_type,
-        &suffix_label,
-        suffix_len,
-        type_code,
-    )
-}
-
 /// Promotes an existing raw local slot into a heap ref-cell pointer.
+///
+/// A typed-property promotion carries the extra diagnostic metadata in its immediate and uses
+/// the allocator that installs the reference-assignment guard; every other promotion keeps the
+/// ordinary two-word cell.
 pub(super) fn lower_promote_local_ref_cell(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+    if let Some((first, second, suffix, type_code)) =
+        inst.immediate.as_ref().and_then(Immediate::property_ref_cell_parts)
+    {
+        let (suffix_label, suffix_len) = ctx.intern_string_data(suffix)?;
+        return promote_local_slot_for_property_ref(
+            ctx,
+            first,
+            second,
+            &inst.result_php_type,
+            &suffix_label,
+            suffix_len,
+            type_code,
+        );
+    }
     let (slot, owner_slot) = expect_local_slot_pair(inst)?;
     promote_local_slot_for_ref_capture(ctx, slot, Some(owner_slot), &inst.result_php_type, true)
 }
@@ -863,6 +853,7 @@ fn value_is_in_place_increment(ctx: &FunctionContext<'_>, value: ValueId) -> Res
         }
     }
     Ok(false)
+}
 
 /// Rejects a wider callee write before it is coerced into a typed-property reference cell.
 ///
