@@ -262,6 +262,14 @@ fn lower_source(ctx: &mut LoweringContext<'_, '_>, sig: &FunctionSig, state: &Sp
         crate::ir::RuntimeFnId::MixedSpreadArray.effects(),
         Some(state.span),
     );
+    // The callable-array rebuild answers an OWNED cell, so a throw raised while the arguments are
+    // bound (an overwritten named parameter, a positional after a named one) would abandon it.
+    // A published slot takes the lease over: its own cleanup releases the cell on the throw path,
+    // and the loop exit retires it.
+    let lease_slot = initialize_owned_slot(ctx, PhpType::Mixed, &Expr::new(ExprKind::Null, state.span));
+    ctx.store_local(&lease_slot, source, PhpType::Mixed, Some(state.span));
+    crate::ir_lower::ownership::release_if_owned(ctx, source, Some(state.span));
+    let source = ctx.load_local(&lease_slot, Some(state.span));
     let (iterator, iterator_owner, _) = ctx.emit_iter_start(source, false, state.span);
     let key_slot = initialize_owned_slot(
         ctx,
@@ -333,9 +341,8 @@ fn lower_source(ctx: &mut LoweringContext<'_, '_>, sig: &FunctionSig, state: &Sp
     if let Some(slot) = iterator_owner {
         ctx.retire_iter_start_owner(slot, state.span);
     }
-    // `__rt_mixed_spread_array` answers an owned cell (a retained input, or the array it built for
-    // a callable descriptor); the iterator walked it, so the lease ends with the loop.
-    crate::ir_lower::ownership::release_if_owned(ctx, source, Some(state.span));
+    // The iterator walked the source, so the lease ends with the loop.
+    retire_slot(ctx, &lease_slot, state.span);
 }
 
 /// Binds a string-keyed value after checking that the parameter has not already been populated.
