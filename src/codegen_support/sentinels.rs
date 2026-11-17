@@ -80,8 +80,7 @@ pub(crate) const TAGGED_SCALAR_TAG_INT: i64 = 0;
 pub(crate) const TAGGED_SCALAR_TAG_NULL: i64 = 8;
 
 /// Indexed-array header value_type for inline `{payload, tag}` tagged-scalar slots.
-/// This is an internal array-storage tag, not a boxed Mixed runtime value tag.
-pub(crate) const TAGGED_SCALAR_ARRAY_VALUE_TYPE: i64 = 11;
+pub(crate) use elephc_memoir::layout::TAGGED_SCALAR_ARRAY_VALUE_TYPE;
 
 /// Runtime value tag of a raw `?ptr<T>` word stored in an array or hash.
 ///
@@ -374,15 +373,6 @@ pub(crate) fn emit_float_result_bits_to_int_result(emitter: &mut Emitter) {
         }
     }
 }
-
-/// High 32 bits of the x86_64 uniform heap-header kind word (`"ELPH"` in ASCII bytes
-/// `0x45 0x4C 0x50 0x48`). Every x86_64 allocation is stamped with this marker; the
-/// refcount and free helpers ignore pointers whose header does not carry it, so an
-/// emitter that stamps a different value silently opts its objects out of refcounting.
-///
-/// Checkers must compare against this constant. Stampers must build the full kind word
-/// through [`x86_64_heap_kind_word`] instead of hand-typing the concatenated immediate.
-pub(crate) use elephc_memoir::layout::X86_64_HEAP_MAGIC_HI32;
 
 /// Builds the full x86_64 heap-header kind word: magic in the high 32 bits and `low_bits`
 /// in the low 32 bits. `low_bits` is the packed kind/COW/value_type field (plain kinds such
