@@ -55,15 +55,14 @@ return $r->seen[0];"#,
     .expect("parse eval fragment");
     let mut scope = ElephcEvalScope::new();
     let mut values = FakeOps::default();
+    values.retain_on_array_set();
 
     let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
 
     assert_eq!(values.get(result), FakeValue::String("a".to_string()));
-    // No reference count is asserted. The fake's `array_set` stores the caller's handle as is,
-    // while the runtime's `__elephc_eval_value_array_set` retains it first, and the merged
-    // interpreter appends an owned value and releases it afterwards -- balanced against the
-    // runtime, short by one against the fake. The runtime contract is pinned instead by
-    // `codegen::runtime_gc::eval_native_calls::test_eval_stored_argument_shared_with_constructed_object_stays_live`.
+    // `array_set` takes its own reference like the runtime wrapper, so the stored element is
+    // held 4 times; one fewer means the array holds a reference nobody minted for it.
+    assert_eq!(values.refcount(result), 4);
     assert!(values.over_releases().is_empty());
 }
 
@@ -94,15 +93,14 @@ return $r->seen[0];"#,
     .expect("parse eval fragment");
     let mut scope = ElephcEvalScope::new();
     let mut values = FakeOps::default();
+    values.retain_on_array_set();
 
     let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
 
     assert!(matches!(values.get(result), FakeValue::Array(elements) if elements.len() == 1));
-    // No reference count is asserted. The fake's `array_set` stores the caller's handle as is,
-    // while the runtime's `__elephc_eval_value_array_set` retains it first, and the merged
-    // interpreter appends an owned value and releases it afterwards -- balanced against the
-    // runtime, short by one against the fake. The runtime contract is pinned instead by
-    // `codegen::runtime_gc::eval_native_calls::test_eval_stored_argument_shared_with_constructed_object_stays_live`.
+    // `array_set` takes its own reference like the runtime wrapper, so the stored element is
+    // held 3 times; one fewer means the array holds a reference nobody minted for it.
+    assert_eq!(values.refcount(result), 3);
     assert!(values.over_releases().is_empty());
 }
 
@@ -132,6 +130,7 @@ return $r->last;"#,
     .expect("parse eval fragment");
     let mut scope = ElephcEvalScope::new();
     let mut values = FakeOps::default();
+    values.retain_on_array_set();
 
     let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
 
@@ -168,15 +167,14 @@ return $result[0];"#,
     .expect("parse eval fragment");
     let mut scope = ElephcEvalScope::new();
     let mut values = FakeOps::default();
+    values.retain_on_array_set();
 
     let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
 
     assert_eq!(values.get(result), FakeValue::String("a".to_string()));
-    // No reference count is asserted. The fake's `array_set` stores the caller's handle as is,
-    // while the runtime's `__elephc_eval_value_array_set` retains it first, and the merged
-    // interpreter appends an owned value and releases it afterwards -- balanced against the
-    // runtime, short by one against the fake. The runtime contract is pinned instead by
-    // `codegen::runtime_gc::eval_native_calls::test_eval_stored_argument_shared_with_constructed_object_stays_live`.
+    // `array_set` takes its own reference like the runtime wrapper, so the stored element is
+    // held 4 times; one fewer means the array holds a reference nobody minted for it.
+    assert_eq!(values.refcount(result), 4);
     assert!(values.over_releases().is_empty());
 }
 
@@ -204,6 +202,7 @@ return true;"#,
     .expect("parse eval fragment");
     let mut scope = ElephcEvalScope::new();
     let mut values = FakeOps::default();
+    values.retain_on_array_set();
 
     let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
 

@@ -134,6 +134,8 @@ pub(super) struct FakeOps {
     pub(super) pending_runtime_throwable: Option<RuntimeCellHandle>,
     pub(super) fail_array_set_call: Option<usize>,
     pub(super) array_set_calls: usize,
+    /// Makes the trait-level `array_set` retain the stored value like the generated runtime wrapper.
+    pub(super) array_set_retains: bool,
     pub(super) ob_stack: Vec<FakeObLevel>,
     pub(super) ob_implicit_flush: bool,
     pub(super) gc_disabled: bool,
@@ -357,6 +359,11 @@ impl FakeOps {
             Some(FakeValue::Object(properties))
                 if properties.iter().any(|(_, value)| *value == candidate)
         )
+    }
+
+    /// Gives `array_set` the real runtime's contract: storage takes its own reference to the value.
+    pub(super) fn retain_on_array_set(&mut self) {
+        self.array_set_retains = true;
     }
 
     /// Configures one fake array-set call to fail for cleanup-path tests.

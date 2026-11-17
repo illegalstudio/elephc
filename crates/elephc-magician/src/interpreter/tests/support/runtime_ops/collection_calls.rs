@@ -69,7 +69,11 @@ macro_rules! impl_fake_collection_call_ops {
         index: RuntimeCellHandle,
         value: RuntimeCellHandle,
     ) -> Result<RuntimeCellHandle, EvalStatus> {
-        self.runtime_array_set(array, index, value)
+        let stored = self.runtime_array_set(array, index, value)?;
+        if self.array_set_retains {
+            self.runtime_retain(value)?;
+        }
+        Ok(stored)
     }
     /// Reads one fake object property by name.
     fn property_get(
