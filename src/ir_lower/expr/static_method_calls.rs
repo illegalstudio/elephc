@@ -47,6 +47,11 @@ fn lower_static_method_call_impl(
     // `Closure::bind($closure, $newThis [, $scope])` is the static form of bindTo.
     if let StaticReceiver::Named(name) = receiver {
         if name.trim_start_matches('\\') == "Closure"
+            && (method == crate::parser::ast::DYNAMIC_CALLABLE_FACTORY || php_symbol_key(method) == "fromcallable")
+        {
+            return super::dynamic_callable_factory::lower(ctx, args, method, expr);
+        }
+        if name.trim_start_matches('\\') == "Closure"
             && php_symbol_key(method) == "bind"
             && !args.is_empty()
         {
