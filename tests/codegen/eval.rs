@@ -15,6 +15,7 @@ use crate::support::*;
 
 mod buffers;
 mod declaring_class_reflectors;
+mod early_binding;
 mod invoker_sharing;
 mod json_enums;
 mod literal_catalog;

@@ -64,11 +64,9 @@ pub(in crate::interpreter) fn execute_class_decl_stmt(
             }
         }
         initialize_eval_static_properties(class, context, scope, values)?;
-        // A class php-src binds while compiling the program took its snapshot when the
-        // program started.
-        if !context.take_early_bound_class(class.name()) {
-            eval_record_declaration_snapshot(class.name(), context, values)?;
-        }
+        // Taken when the class is bound: at program entry for a class php-src binds while
+        // compiling the program (see `early_binding`), at its statement otherwise.
+        eval_record_declaration_snapshot(class.name(), context, values)?;
         eval_raise_trait_collision_deprecations(&declared, context, values)
     } else {
         Err(EvalStatus::RuntimeFatal)

@@ -49,6 +49,58 @@ fn execute_program_goto_backward_jump_across_function_declaration() {
     assert_eq!(output, "ff|done");
 }
 
+/// Verifies the top-level class, interface and trait declarations PHP binds when it compiles
+/// the fragment stay declared when a forward jump skips them.
+#[test]
+fn execute_program_goto_forward_jump_keeps_early_bound_types_declared() {
+    let output = run(
+        br#"goto L; class C { public function m() { return "ok"; } } L: echo (new C())->m();"#,
+    );
+    assert_eq!(output, "ok");
+    let output = run(
+        br#"goto L; interface I {} trait T {} L: echo interface_exists("I") ? "yes" : "no", trait_exists("T") ? "yes" : "no";"#,
+    );
+    assert_eq!(output, "yesyes");
+    let output = run(
+        br#"goto L; class A {} class B extends A {} L: echo class_exists("B") ? "yes" : "no";"#,
+    );
+    assert_eq!(output, "yes");
+}
+
+/// Verifies a backward jump across early-bound class, interface and trait declarations does
+/// not declare them twice.
+#[test]
+fn execute_program_goto_backward_jump_across_early_bound_types() {
+    let output = run(
+        br#"$i = 0; again: class C {} interface I {} trait T {} $i = $i + 1; if ($i < 2) { goto again; } echo "ok ", $i;"#,
+    );
+    assert_eq!(output, "ok 2");
+}
+
+/// Verifies the declarations PHP binds only when their statement runs (a class that implements
+/// an interface, an enum) stay undeclared when a forward jump skips them.
+#[test]
+fn execute_program_goto_forward_jump_leaves_late_bound_types_undeclared() {
+    let output = run(
+        br#"goto L; interface I {} class C implements I {} enum E {} L: echo class_exists("C") ? "yes" : "no", enum_exists("E") ? "yes" : "no";"#,
+    );
+    assert_eq!(output, "nono");
+}
+
+/// Verifies a backward jump across a late-bound declaration is a redeclaration, as in PHP.
+#[test]
+fn execute_program_goto_backward_jump_across_late_bound_types_fails() {
+    for source in [
+        &br#"$i = 0; again: interface I {} class C implements I {} $i = $i + 1; if ($i < 2) { goto again; } echo "ok";"#[..],
+        &br#"$i = 0; again: enum E {} $i = $i + 1; if ($i < 2) { goto again; } echo "ok";"#[..],
+    ] {
+        let program = parse_fragment(source).expect("parse eval fragment");
+        let mut scope = ElephcEvalScope::new();
+        let mut values = FakeOps::default();
+        assert!(execute_program(&program, &mut scope, &mut values).is_err());
+    }
+}
+
 /// Verifies a label may be named like a type: `int` is reserved as a class name, not as a
 /// keyword.
 #[test]

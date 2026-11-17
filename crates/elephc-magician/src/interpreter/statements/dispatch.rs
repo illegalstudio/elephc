@@ -9,11 +9,14 @@
 //! Key details:
 //! - The exhaustive match remains centralized so every new `EvalStmt` variant
 //!   must explicitly define its runtime control-flow behavior.
-//! - Only program-level generic templates are hoisted; nested declarations execute in source order.
+//! - A program's own statement list binds its generic templates and the declarations PHP binds
+//!   at compile time before its first statement (see `early_binding`); nested declarations
+//!   execute in source order.
 
 use super::*;
 
-/// Checks program provenance, seeds CLI globals, and hoists templates before eval/include execution.
+/// Checks program provenance, seeds CLI globals, and binds templates and early declarations
+/// before eval/include execution.
 pub(in crate::interpreter) fn execute_program_statements(
     program: &EvalProgram,
     context: &mut ElephcEvalContext,
@@ -43,12 +46,8 @@ pub(in crate::interpreter) fn execute_program_statements(
             }
         }
     }
-    let early_bound = eval_record_early_binding_snapshots(statements, context, values)?;
-    let result = execute_statement_sequence(statements, true, context, scope, values);
-    for name in early_bound {
-        context.take_early_bound_class(&name);
-    }
-    result
+    let bound = bind_program_declarations(statements, context, scope, values)?;
+    execute_statement_sequence(statements, &bound, context, scope, values)
 }
 
 /// Executes nested statements in source order without registering unreachable declarations.
@@ -58,42 +57,30 @@ pub(in crate::interpreter) fn execute_statements(
     scope: &mut ElephcEvalScope,
     values: &mut impl RuntimeValueOps,
 ) -> Result<EvalControl, EvalStatus> {
-    execute_statement_sequence(statements, false, context, scope, values)
+    execute_statement_sequence(statements, &[], context, scope, values)
 }
 
-/// Propagates control flow while skipping only templates already hoisted at program entry.
+/// Propagates control flow while skipping the statements already declared at program entry.
 ///
-/// PHP binds the functions declared at the top level of a file when it compiles the file, so a
-/// jump can neither skip such a declaration nor run it twice. This interpreter declares a
-/// function when its statement executes. The first jump of the program's own statement list
-/// therefore declares the functions that have not been reached yet, and the resumed execution
-/// treats every top-level function declaration as already done. Declarations inside a block
-/// stay tied to that block, as in PHP.
-///
-/// Class-like declarations are not bound this way. PHP binds some of them early too, but
-/// registering one here evaluates its constants and static property defaults, which PHP defers
-/// to the first fetch; binding them correctly needs that deferral first (issue #2374).
+/// `bound` marks those statements by position: the generic templates and the declarations
+/// `bind_program_declarations` bound before the first statement of a program's own list. PHP
+/// binds them when it compiles the file, so a statement that reaches one does nothing, and a
+/// jump can neither skip such a declaration nor run it twice. `bound` is empty for a nested
+/// list: declarations inside a block stay tied to that block, as in PHP.
 fn execute_statement_sequence(
     statements: &[EvalStmt],
-    templates_registered: bool,
+    bound: &[bool],
     context: &mut ElephcEvalContext,
     scope: &mut ElephcEvalScope,
     values: &mut impl RuntimeValueOps,
 ) -> Result<EvalControl, EvalStatus> {
     for (index, stmt) in statements.iter().enumerate() {
         eval_pcntl_maybe_dispatch(context, values)?;
-        if templates_registered && matches!(stmt, EvalStmt::GenericDecl(_)) { continue; }
+        if bound.get(index).copied().unwrap_or(false) { continue; }
         match execute_stmt(stmt, context, scope, values)? {
             EvalControl::None => {}
             EvalControl::Goto(label) => {
-                if templates_registered {
-                    for later in &statements[index + 1..] {
-                        declare_function(later, context)?;
-                    }
-                }
-                return resume_statement_sequence(
-                    statements, templates_registered, label, context, scope, values,
-                );
+                return resume_statement_sequence(statements, bound, label, context, scope, values);
             }
             control => return Ok(control),
         }
@@ -103,9 +90,9 @@ fn execute_statement_sequence(
 
 /// Registers the function a `FunctionDecl` statement declares. Any other statement is ignored.
 ///
-/// Runs when the statement executes, and ahead of time for the top-level declarations a jump
-/// would otherwise skip or repeat (see `execute_statement_sequence`).
-fn declare_function(stmt: &EvalStmt, context: &mut ElephcEvalContext) -> Result<(), EvalStatus> {
+/// Runs when a nested declaration executes, and at program entry for the top-level ones (see
+/// `bind_program_declarations`).
+pub(super) fn declare_function(stmt: &EvalStmt, context: &mut ElephcEvalContext) -> Result<(), EvalStatus> {
     let EvalStmt::FunctionDecl {
         name,
         source_location,
@@ -154,7 +141,7 @@ pub(in crate::interpreter) fn execute_statements_from_label(
     scope: &mut ElephcEvalScope,
     values: &mut impl RuntimeValueOps,
 ) -> Result<EvalControl, EvalStatus> {
-    resume_statement_sequence(statements, false, label, context, scope, values)
+    resume_statement_sequence(statements, &[], label, context, scope, values)
 }
 
 /// Completes a jump raised inside `statements`, or passes it up when the label is elsewhere.
@@ -164,9 +151,10 @@ pub(in crate::interpreter) fn execute_statements_from_label(
 /// resolved the same way, so a backward jump loops here without growing the native stack. A
 /// list that does not hold the label ends, like a `break`, and the jump keeps travelling out:
 /// through loops, which stop iterating, and through `try` statements, which run `finally`.
+/// `bound` marks the statements declared at program entry, which must not run again.
 fn resume_statement_sequence(
     statements: &[EvalStmt],
-    templates_registered: bool,
+    bound: &[bool],
     label: String,
     context: &mut ElephcEvalContext,
     scope: &mut ElephcEvalScope,
@@ -187,12 +175,7 @@ fn resume_statement_sequence(
         eval_pcntl_maybe_dispatch(context, values)?;
         let control = match pending.take() {
             Some(label) => execute_stmt_from_label(stmt, label, context, scope, values)?,
-            // Hoisted at program entry, or declared when the first jump was raised.
-            None if templates_registered
-                && matches!(stmt, EvalStmt::GenericDecl(_) | EvalStmt::FunctionDecl { .. }) =>
-            {
-                EvalControl::None
-            }
+            None if bound.get(index).copied().unwrap_or(false) => EvalControl::None,
             None => execute_stmt(stmt, context, scope, values)?,
         };
         match control {

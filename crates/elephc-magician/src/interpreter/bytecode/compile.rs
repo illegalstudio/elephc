@@ -9,8 +9,9 @@
 //! Key details:
 //! - Calls compile only for exact positional arity against functions admitted in this
 //!   compilation. A builtin, a sibling outside that set, or a wrong arity is a gap.
-//! - Function declarations become `DefineFn`. The body runs only after that instruction,
-//!   matching Magician's rule that a declaration takes effect when it is reached.
+//! - Function declarations become `DefineFn`. A program defines its top-level functions
+//!   before its first statement, as PHP binds them when it compiles the fragment. A function
+//!   declared inside a block or another function is defined when that instruction is reached.
 
 use crate::eval_ir::{
     CompiledBody, CompiledCall, CompiledModule, EvalBinOp, EvalCastType, EvalConst, EvalExpr, EvalFunction,
@@ -75,6 +76,8 @@ struct Compiler<'a> {
     shapes: &'a HashMap<String, usize>,
     defined_names: Vec<String>,
     next_defined: usize,
+    /// Per entry of `defined_names`, whether `define_program_functions` already defined it.
+    hoisted: Vec<bool>,
 }
 
 impl<'a> Compiler<'a> {
@@ -105,7 +108,33 @@ impl<'a> Compiler<'a> {
             shapes,
             defined_names: defined.iter().map(|body| body.name.clone()).collect(),
             next_defined: 0,
+            hoisted: vec![false; defined.len()],
         })
+    }
+
+    /// Defines the functions declared directly in a program's statement list before its first
+    /// statement, and marks them so their declaration statement emits nothing.
+    ///
+    /// PHP binds those functions when it compiles the fragment, so a call may precede the
+    /// declaration and a taken name fails before anything runs. Names are unique across one
+    /// compilation (`collect` rejects a duplicate), so a name identifies its `defined` entry.
+    fn define_program_functions(&mut self, statements: &[EvalStmt]) -> Result<(), CompileGap> {
+        let index_of: HashMap<String, usize> = self
+            .defined_names
+            .iter()
+            .enumerate()
+            .map(|(index, name)| (name.to_ascii_lowercase(), index))
+            .collect();
+        for stmt in statements {
+            let EvalStmt::FunctionDecl { name, .. } = stmt else { continue };
+            let Some(&position) = index_of.get(&name.to_ascii_lowercase()) else {
+                return Err(CompileGap::new("FunctionDecl"));
+            };
+            let index = u16::try_from(position).map_err(|_| CompileGap::new("TooManyFunctions"))?;
+            self.hoisted[position] = true;
+            self.emit(Op::DefineFn(index))?;
+        }
+        Ok(())
     }
 
     /// Appends one instruction, rejecting a body that cannot address its own jumps.
@@ -266,7 +295,9 @@ impl<'a> Compiler<'a> {
                     return Err(CompileGap::new("FunctionDecl"));
                 }
                 let index = u16::try_from(self.next_defined).map_err(|_| CompileGap::new("TooManyFunctions"))?;
+                let hoisted = self.hoisted[self.next_defined];
                 self.next_defined += 1;
+                if hoisted { return Ok(()); }
                 self.emit(Op::DefineFn(index))
             }
             EvalStmt::If { condition, then_branch, else_branch } => {
@@ -749,7 +780,10 @@ pub(in crate::interpreter) fn compile_program(program: &EvalProgram) -> Result<A
     for key in &top {
         defined.push(compile_key(key, &decls, &shapes, &mut memo)?);
     }
-    let main = compile_body("", &[], program.statements(), &defined, &shapes, false, None, Vec::new())?;
+    let mut compiler = Compiler::new(&[], &defined, &shapes)?;
+    compiler.define_program_functions(program.statements())?;
+    compiler.compile_stmts(program.statements())?;
+    let main = compiler.finish("", &[], false, defined, Vec::new(), None)?;
     Ok(Arc::new(CompiledModule { main }))
 }
 
