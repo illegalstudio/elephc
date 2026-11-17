@@ -1278,7 +1278,7 @@ pub(crate) fn emit_runtime_data_user(
                                 arg_rows.push((8u64, "0".to_string(), 0u64));
                             }
                             crate::types::AttrArgValue::Array(_)
-                            | crate::types::AttrArgValue::ConstRef(_)
+                            | crate::types::AttrArgValue::ConstRef(..)
                             | crate::types::AttrArgValue::ScopedConst(..) => {
                                 // This legacy flat (tag, lo, hi) table cannot
                                 // represent a nested array or a deferred symbolic
@@ -4833,6 +4833,8 @@ mod tests {
             constants: HashMap::new(),
             constant_order: Vec::new(),
     constant_deprecations: HashMap::new(),
+    property_initialization_order: Vec::new(),
+    trait_collision_defaults: Vec::new(),
     constant_types: HashMap::new(),
     constant_visibilities: HashMap::new(),
     final_constants: HashSet::new(),

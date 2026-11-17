@@ -133,6 +133,14 @@ fn lower_static_method_call_impl(
     ctx.call_description = previous_description;
     let mut operands =
         coerce_int_backed_enum_string_argument(ctx, receiver, dispatch_method, operands, expr);
+    // `from()`/`tryFrom()` initialize a backed enum: the constants php-src has not evaluated
+    // yet are evaluated, after the argument.
+    // `self::`/`static::` name the enum whose method is being lowered.
+    if matches!(php_symbol_key(dispatch_method).as_str(), "from" | "tryfrom") {
+        if let Some(enum_name) = static_receiver_class_name(ctx, receiver) {
+            emit_backed_enum_initialization(ctx, &enum_name, expr.span);
+        }
+    }
     emit_deprecated_enum_case_notice(ctx, receiver, dispatch_method);
     let name = match object_receiver {
         Some(_) => format!("@object@{}::{}", receiver_name(receiver), dispatch_method),
@@ -581,5 +589,16 @@ pub(crate) fn static_receiver_class_name(
             let current = ctx.current_class.as_deref()?;
             ctx.classes.get(current).and_then(|class_info| class_info.parent.clone())
         }
+    }
+}
+
+/// Raises the deprecations of initializing backed enum `enum_name`, which php-src does on
+/// `from()`/`tryFrom()` and on the first fetch of any of its constants or cases: every constant
+/// of the enum it has not evaluated yet is evaluated.
+pub(super) fn emit_backed_enum_initialization(ctx: &mut LoweringContext<'_, '_>, enum_name: &str, span: crate::span::Span) {
+    let enum_name = enum_name.trim_start_matches('\\');
+    let backed = ctx.enums.get(enum_name).is_some_and(|info| info.backing_type.is_some());
+    if backed && crate::ir_lower::property_default_errors::class_initialization_reports(ctx, enum_name) {
+        crate::ir_lower::property_default_errors::emit_initialization_deprecations(ctx, enum_name, span);
     }
 }

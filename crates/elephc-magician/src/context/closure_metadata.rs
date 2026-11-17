@@ -110,6 +110,9 @@ pub struct EvalClosure {
     pub(super) function: EvalFunction,
     pub(super) captures: Vec<EvalClosureCaptureBinding>,
     pub(super) is_static: bool,
+    /// The class whose code created the closure (lowercased), keying its parameter-default
+    /// cache: each copy of a trait method creates its own closure op_array in php-src.
+    pub(super) creating_class: Option<String>,
 }
 
 impl EvalClosure {
@@ -123,6 +126,22 @@ impl EvalClosure {
             function,
             captures,
             is_static,
+            creating_class: None,
+        }
+    }
+
+    /// Records the class whose code created the closure.
+    pub fn with_creating_class(mut self, class: Option<&str>) -> Self {
+        self.creating_class = class.filter(|class| !class.is_empty()).map(str::to_ascii_lowercase);
+        self
+    }
+
+    /// Returns the key of this closure's parameter-default cache: its declaration, and the
+    /// class whose code created it.
+    pub fn default_site(&self) -> String {
+        match &self.creating_class {
+            Some(class) => format!("{}@{class}", self.function.name()),
+            None => self.function.name().to_string(),
         }
     }
 

@@ -38,7 +38,7 @@ pub(in crate::interpreter) fn eval_builtin_constant(
 /// Evaluates `constant(...)` from already materialized call arguments.
 pub(in crate::interpreter) fn eval_constant_result(
     evaluated_args: &[RuntimeCellHandle],
-    context: &ElephcEvalContext,
+    context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     let [name] = evaluated_args else {
@@ -50,7 +50,7 @@ pub(in crate::interpreter) fn eval_constant_result(
 /// Normalizes one dynamic constant name and returns its retained value.
 fn eval_constant_lookup(
     name: RuntimeCellHandle,
-    context: &ElephcEvalContext,
+    context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     let name = eval_constant_name(name, values)?;

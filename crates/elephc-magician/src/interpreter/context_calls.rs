@@ -371,6 +371,28 @@ pub fn execute_context_class_relation(
     eval_class_relation_result(name, &[target], context, values)
 }
 
+/// Returns PHP's `Error: Undefined constant "NAME"` for a global constant generated code read
+/// after `eval()` and found nowhere.
+pub fn execute_context_undefined_constant(
+    context: &mut ElephcEvalContext,
+    name: &str,
+    values: &mut impl RuntimeValueOps,
+) -> Result<EvalOutcome, EvalStatus> {
+    let status = eval_throw_error::<()>(
+        &format!("Undefined constant \"{}\"", name.trim_start_matches('\\')),
+        context,
+        values,
+    )
+    .expect_err("throwing always returns an error status");
+    match status {
+        EvalStatus::UncaughtThrowable => context
+            .take_pending_throw()
+            .map(EvalOutcome::Throwable)
+            .ok_or(EvalStatus::UncaughtThrowable),
+        status => Err(status),
+    }
+}
+
 /// Fetches a class-like constant through eval dynamic metadata and runtime fallback hooks.
 pub fn execute_context_class_constant_fetch(
     context: &mut ElephcEvalContext,

@@ -198,6 +198,11 @@ use weak_string_unions::*;
 use builtin_special_args::*;
 use call_arg_coercion::*;
 pub(crate) use call_arg_coercion::coerce_scalar_arg_to_param_storage;
+pub(crate) use constants::{
+    constant_deprecations_suppressed, emit_constant_deprecation,
+    emit_constant_deprecation_with_line, emit_mt_rand_php_deprecation,
+    with_constant_deprecations_suppressed,
+};
 use positional_spreads::*;
 use packed_builtin_args::*;
 use named_args::*;

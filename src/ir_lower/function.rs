@@ -1364,13 +1364,17 @@ pub(crate) fn eval_native_default_helper_name(
     )
 }
 
-/// Lowers native deferred defaults and eval-safe deep literals into zero-argument EIR helpers.
+/// Lowers native deferred defaults, eval-safe deep literals, and defaults that read a
+/// deprecated constant into zero-argument EIR helpers.
 ///
 /// Compact eval metadata deliberately has a recursion bound. A finite source literal beyond that
 /// bound is still safe for the compiler to lower normally, so the binder calls one of these
 /// helpers when no compact value was registered. Deferred-error helpers run only on native
 /// callable and reflection paths. Eval receives those trees as owned data, never as callbacks
-/// that could unwind through interpreter-owned Rust frames.
+/// that could unwind through interpreter-owned Rust frames. A default that reads a deprecated
+/// constant (`DATE_RFC7231`, an `RFC7231` class constant) gets a helper too, for functions,
+/// methods, and closures alike, so a dynamic call raises the notice on first use instead of
+/// materializing a value folded at compile time.
 pub(crate) fn lower_eval_native_default_helpers(
     module: &mut Module,
     check_result: &CheckResult,
@@ -1388,6 +1392,10 @@ pub(crate) fn lower_eval_native_default_helpers(
         })
     });
     let mut specs = Vec::new();
+    let tables = super::initializer_reads::ConstantTables {
+        classes: &module.class_infos,
+        interfaces: &check_result.interfaces,
+    };
     let mut classes = module.class_infos.iter().collect::<Vec<_>>();
     classes.sort_by_key(|(_, info)| info.class_id);
     for (class_name, class_info) in classes {
@@ -1404,6 +1412,9 @@ pub(crate) fn lower_eval_native_default_helpers(
                         && !matches!(default.kind, ExprKind::Throw(_))
                         || (uses_eval && eval_native_default_helper_literal(&default.kind)
                             && crate::types::signatures::literal_default_exceeds_compact_depth(default))
+                        || super::initializer_reads::default_reaches_deprecated_read(
+                            &tables, Some(class_name.as_str()), default,
+                        )
                     {
                         let scope = if is_static {
                             class_info.static_method_impl_classes.get(method_name)
@@ -1422,13 +1433,50 @@ pub(crate) fn lower_eval_native_default_helpers(
     for (name, signature) in functions {
         for (index, default) in signature.defaults.iter().enumerate() {
             let Some(default) = default else { continue; };
-            if contains_deferred_error(default) && !matches!(default.kind, ExprKind::Throw(_)) {
+            if contains_deferred_error(default) && !matches!(default.kind, ExprKind::Throw(_))
+                || super::initializer_reads::default_reaches_deprecated_read(
+                    &tables, None, default,
+                )
+            {
                 specs.push((format!("__elephc_eval_default\\function\\{name}\\{index}"),
                     None, default.clone()));
             }
         }
     }
-    for (function_name, default_scope, default) in specs {
+    // A closure's descriptor invoker fills an omitted default from a value folded at compile
+    // time. A default that reads a deprecated constant must raise its notice on first use
+    // instead, so it is evaluated through a helper like a deferred-error default.
+    for closure in &module.closures {
+        let Some(signature) = &closure.signature else { continue };
+        for (index, default) in signature.defaults.iter().enumerate() {
+            let Some(default) = default else { continue };
+            if super::initializer_reads::default_reaches_deprecated_read(
+                &tables, closure.lexical_class.as_deref(), default,
+            ) {
+                specs.push((
+                    format!("__elephc_eval_default\\closure\\{}\\{index}", closure.name),
+                    closure.lexical_class.clone(),
+                    default.clone(),
+                ));
+            }
+        }
+    }
+    // `ReflectionParameter::getDefaultValue()` evaluates a fresh copy of the default on every
+    // call, at the caller's line, and leaves the parameter's own once flags alone. It gets a
+    // twin of each helper whose default reads a deprecated constant.
+    let reflection_specs: Vec<_> = specs
+        .iter()
+        .filter(|(_, scope, default)| {
+            super::initializer_reads::default_reaches_deprecated_read(&tables, scope.as_deref(), default)
+        })
+        .map(|(name, scope, default)| (reflection_default_helper_name(name), scope.clone(), default.clone()))
+        .collect();
+    let specs: Vec<_> = specs
+        .into_iter()
+        .map(|(name, scope, default)| (name, scope, default, false))
+        .chain(reflection_specs.into_iter().map(|(name, scope, default)| (name, scope, default, true)))
+        .collect();
+    for (function_name, default_scope, default, for_reflection) in specs {
         if module.functions.iter().any(|function| function.name == function_name) {
             continue;
         }
@@ -1456,10 +1504,18 @@ pub(crate) fn lower_eval_native_default_helpers(
         };
         function.source_signature = Some(source_signature(&function_name, &signature));
         function.signature = Some(eir_runtime_metadata_signature(&signature));
+        let frame = for_reflection.then(|| {
+            super::initializer_evaluation::InitializerFrame::top_unfolded(
+                default_scope.is_some(),
+                super::initializer_evaluation::LineSource::Caller,
+                &default,
+                None,
+            )
+        });
         let body = [Stmt::new(StmtKind::Return(Some(default)), Span::dummy())];
         // The helper inherits class scope through `current_class` below. It must not enter the
         // separate property-initializer path, which skips `body` and expects an object receiver.
-        let closures = lower_body_into_function(
+        let lower = || lower_body_into_function(
             &mut function,
             None,
             &mut module.data,
@@ -1512,9 +1568,23 @@ pub(crate) fn lower_eval_native_default_helpers(
             None,
             module.web,
         );
+        let closures = match frame {
+            Some(frame) => super::initializer_evaluation::with_frame(frame, lower),
+            None => lower(),
+        };
         add_closures(module, closures);
         module.add_function(function);
     }
+}
+
+/// Returns the name of the reflection twin of default helper `helper`.
+fn reflection_default_helper_name(helper: &str) -> String {
+    format!("__elephc_reflection_default\\{helper}")
+}
+
+/// Reports whether `name` is a reflection twin made by [`reflection_default_helper_name`].
+pub(crate) fn is_reflection_default_helper(name: &str) -> bool {
+    name.starts_with("__elephc_reflection_default\\")
 }
 
 /// Returns whether a default is a finite, side-effect-free literal tree.
@@ -2041,6 +2111,7 @@ fn lower_body_into_function(
                     crate::ir_lower::expr::guard_reference_parameter_entry(ctx, display, *position, name, php_type);
                 }
             }
+            crate::ir_lower::reflection_deprecations::emit_pending_prologue(ctx);
             crate::ir_lower::numeric_storage::lower_body(ctx, body);
         }
     });

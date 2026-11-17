@@ -14,7 +14,7 @@ use super::*;
 /// Formats one reflected class-like symbol similarly to PHP's `__toString()` output.
 pub(super) fn eval_reflection_class_to_string(
     reflected_name: &str,
-    context: &ElephcEvalContext,
+    context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<String, EvalStatus> {
     let metadata = eval_reflection_class_to_string_metadata(reflected_name, context, values)?
@@ -140,7 +140,7 @@ pub(super) fn eval_reflection_class_to_string_kind(flags: u64) -> &'static str {
 /// Formats all constants visible to `ReflectionClass::__toString()`.
 pub(super) fn eval_reflection_class_constant_string_lines(
     reflected_name: &str,
-    context: &ElephcEvalContext,
+    context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<Vec<String>, EvalStatus> {
     let constant_names = eval_reflection_constant_names(reflected_name, context, values)?;
@@ -417,7 +417,7 @@ pub(super) fn eval_reflection_class_constant_to_string(
     declaring_class: &str,
     constant_name: &str,
     owner_kind: u64,
-    context: &ElephcEvalContext,
+    context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<String, EvalStatus> {
     let (_, _, visibility, is_final, is_enum_case) =
@@ -441,8 +441,11 @@ pub(super) fn eval_reflection_class_constant_to_string(
         values,
     )?);
     parts.push(constant_name.to_string());
-    let value = eval_reflection_class_constant_display_value(value, values)?;
-    Ok(format!("Constant [ {} ] {{ {} }}\n", parts.join(" "), value))
+    let display = eval_reflection_class_constant_display_value(value, values);
+    if !value.is_borrowed() {
+        values.release(value)?;
+    }
+    Ok(format!("Constant [ {} ] {{ {} }}\n", parts.join(" "), display?))
 }
 
 /// Returns the type label PHP prints for a reflected class constant value.

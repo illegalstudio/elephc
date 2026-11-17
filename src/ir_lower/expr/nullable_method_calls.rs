@@ -287,13 +287,6 @@ fn lower_method_call_with_binding(
         enum_args.unwrap_or_else(|| lower_args_with_signature(ctx, sig.as_ref(), call_args));
     ctx.call_description = previous_description;
     let mut arg_values = arg_values;
-    // The notice can enter user code (a throwing error handler), so the argument evaluation
-    // owners must still protect the lowered argument values while it runs.
-    super::reflection_new_instance::emit_reflection_constant_notice(
-        ctx,
-        dispatch_method,
-        expr,
-    );
     let evaluation_intermediates = finish_call_argument_evaluation(ctx, &mut arg_values);
     let roots = root_user_call_operands(
         ctx,

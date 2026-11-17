@@ -105,7 +105,7 @@ fn arg_list_has_unresolvable_ref(
 /// `ScopedConstantGet` would.
 fn value_has_unresolvable_ref(checker: &Checker, value: &AttrArgValue) -> bool {
     match value {
-        AttrArgValue::ScopedConst(type_name, member) => {
+        AttrArgValue::ScopedConst(type_name, member, _) => {
             !scoped_const_materializable(checker, type_name, member)
         }
         AttrArgValue::Array(entries) => entries

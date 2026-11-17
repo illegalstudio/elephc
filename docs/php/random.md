@@ -124,12 +124,13 @@ active error handler, with the level, message, file and line php-src uses. The v
 notices inside `mt_srand()` and `Mt19937::__construct()` report the user's call site, even
 when that call is in an included file.
 
-Reads inside constant expressions follow php-src's lazy evaluation: a top-level `const`
-deprecates while its declaration runs, a class constant when it is first fetched (reporting
-the fetch site), an enum case when it is first fetched or when `cases()`/`from()`/`tryFrom()`
-materializes the case table, a default parameter on the first call, and an attribute
-argument on every `newInstance()` — with `getArguments()` reporting at its own call site.
-Ordinary reads, including `switch` cases and `match` arms, deprecate where they are written.
+Reads inside constant expressions follow php-src's lazy evaluation, as for every deprecated
+constant (see [Format constants](datetime.md#format-constants) for the full rules, which
+`DATE_RFC7231` shares): a top-level `const` or `define()` deprecates while its statement
+runs, a class constant or enum case when it is first evaluated, property defaults when their
+class initializes, a default parameter on the first call that omits it, and an attribute
+argument each time it is evaluated. Ordinary reads, including `switch` cases and `match`
+arms, deprecate where they are written.
 
 ## Known differences
 
@@ -139,6 +140,3 @@ Ordinary reads, including `switch` cases and `match` arms, deprecate where they 
   Literal names, variables holding a literal, folded literal concatenations, first-class
   callables and runtime-selected values whose name appears as a literal in the program all
   work.
-- A deprecated constant read in a property default is raised once at the first object
-  construction, like php-src, but reports the property declaration line instead of the
-  construction site.

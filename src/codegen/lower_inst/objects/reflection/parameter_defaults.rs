@@ -19,14 +19,19 @@ pub(super) fn reflection_parameter_default_value(
     if let Some(value) = reflection_deferred_default_value(default) {
         return Ok(Some(value));
     }
-    if let Some(helper) = ctx.module.functions.iter().chain(ctx.module.closures.iter())
-        .find(|function| (function.lexical_class.is_none() && current_class.is_empty()
+    let helper_for_default = |function: &&crate::ir::Function| (function.lexical_class.is_none() && current_class.is_empty()
             || function.lexical_class.as_deref().is_some_and(|scope|
             scope == current_class || current_info.is_some_and(|info|
                 info.method_impl_classes.values().chain(info.static_method_impl_classes.values())
                     .any(|owner| owner == scope))))
             && function.callable_default.as_ref()
-                .is_some_and(|value| value == default && value.span == default.span))
+                .is_some_and(|value| value == default && value.span == default.span);
+    // A default that reads a deprecated constant has a reflection twin, which reports on every
+    // call at the caller's line instead of consuming the parameter's own once flags.
+    let helpers = || ctx.module.functions.iter().chain(ctx.module.closures.iter()).filter(helper_for_default);
+    if let Some(helper) = helpers()
+        .find(|function| crate::ir_lower::is_reflection_default_helper(&function.name))
+        .or_else(|| helpers().next())
     {
         return Ok(Some(ReflectionParameterDefaultValue::EirHelper(helper.name.clone())));
     }

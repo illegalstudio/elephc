@@ -194,7 +194,7 @@ pub(super) fn eval_native_member_attribute_args_supported(args: &[AttrArgEntry])
 /// Returns true when one attribute argument value can be encoded for eval registration.
 pub(super) fn eval_native_member_attribute_value_supported(value: &AttrArgValue) -> bool {
     match value {
-        AttrArgValue::ConstRef(_) | AttrArgValue::ScopedConst(_, _) => false,
+        AttrArgValue::ConstRef(..) | AttrArgValue::ScopedConst(..) => false,
         AttrArgValue::Array(elements) => eval_native_member_attribute_args_supported(elements),
         AttrArgValue::Null
         | AttrArgValue::Bool(_)
@@ -243,7 +243,7 @@ pub(super) fn eval_native_member_attribute_push_arg(record: &mut Vec<u8>, arg: &
                 eval_native_member_attribute_push_entry(record, element);
             }
         }
-        AttrArgValue::ConstRef(_) | AttrArgValue::ScopedConst(_, _) => {
+        AttrArgValue::ConstRef(..) | AttrArgValue::ScopedConst(..) => {
             record.push(NATIVE_ATTRIBUTE_ARGS_UNSUPPORTED);
         }
     }
