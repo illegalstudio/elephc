@@ -289,7 +289,18 @@ echo get_class($object), ":", get_parent_class($object);
     }
     assert_eq!(lookups, 2, "{target}");
     let asm = crate::codegen::generate_user_asm_from_ir(&module, false, false).unwrap();
-    let calls: Vec<_> = asm.match_indices("__elephc_eval_object_class_name").collect();
+    // Only `main` is under test: the preludes the program pulls in (WeakMap, session, the
+    // str_replace counters) call get_class on Mixed values themselves and own bridge calls.
+    let calls: Vec<_> = asm
+        .match_indices("__elephc_eval_object_class_name")
+        .filter(|(offset, _)| {
+            asm[..*offset]
+                .lines()
+                .rev()
+                .find(|line| !line.starts_with([' ', '\t']) && line.ends_with(':'))
+                .is_some_and(|label| label.contains("eir_main"))
+        })
+        .collect();
     assert_eq!(calls.len(), 2, "{target}: both Mixed operands must use the eval bridge");
     for (offset, _) in calls {
         let path = asm[offset..].split("eval_object_class_non_object").next().unwrap();
