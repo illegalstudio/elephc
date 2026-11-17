@@ -363,6 +363,9 @@ fn discover_stmt(
             discover_expr(target, base_dir, loaded_paths, include_chain, state, output)?;
             discover_expr(value, base_dir, loaded_paths, include_chain, state, output)?;
         }
+        StmtKind::RefAssign { source, .. } => {
+            discover_expr(source, base_dir, loaded_paths, include_chain, state, output)?;
+        }
         StmtKind::PropertyAssign { object, value, .. }
         | StmtKind::PropertyRefAssign { object, source: value, .. }
         | StmtKind::PropertyArrayPush { object, value, .. } => {
@@ -373,7 +376,6 @@ fn discover_stmt(
         | StmtKind::IncludeOnceMark { .. }
         | StmtKind::FunctionVariantGroup { .. }
         | StmtKind::FunctionVariantMark { .. }
-        | StmtKind::RefAssign { .. }
         | StmtKind::IfDef { .. }
         | StmtKind::Break(_)
         | StmtKind::Continue(_)

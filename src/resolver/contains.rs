@@ -58,6 +58,7 @@ fn stmt_has_includes(stmt: &Stmt) -> bool {
                 || index.as_ref().is_some_and(expr_has_includes)
                 || expr_has_includes(value)
         }
+        StmtKind::RefAssign { source, .. } => expr_has_includes(source),
         StmtKind::PropertyAssign { object, value, .. }
         | StmtKind::PropertyRefAssign { object, source: value, .. }
         | StmtKind::PropertyArrayPush { object, value, .. } => {
@@ -118,7 +119,6 @@ fn stmt_has_includes(stmt: &Stmt) -> bool {
         StmtKind::IncludeOnceMark { .. }
         | StmtKind::FunctionVariantGroup { .. }
         | StmtKind::FunctionVariantMark { .. }
-        | StmtKind::RefAssign { .. }
         | StmtKind::IfDef { .. }
         | StmtKind::Break(_)
         | StmtKind::Continue(_)

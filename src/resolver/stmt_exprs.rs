@@ -127,7 +127,10 @@ pub(super) fn resolve_stmt_exprs(
             name,
             value: resolve_expr(value, base_dir, declared_once, include_chain, state, function_variants)?,
         },
-        StmtKind::RefAssign { target, source } => StmtKind::RefAssign { target, source },
+        StmtKind::RefAssign { target, source } => StmtKind::RefAssign {
+            target,
+            source: resolve_expr(source, base_dir, declared_once, include_chain, state, function_variants)?,
+        },
         StmtKind::TypedAssign {
             type_expr,
             name,
