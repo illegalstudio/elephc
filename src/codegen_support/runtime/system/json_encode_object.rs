@@ -250,6 +250,18 @@ pub(crate) fn emit_json_encode_object(emitter: &mut Emitter, eval_bridge: bool) 
         emitter.instruction("stp x29, x30, [sp, #-16]!");                       // preserve the encoder's frame across the bridge call
         let serialize = emitter.target.extern_symbol("__elephc_eval_json_serialize");
         abi::emit_call_label(emitter, &serialize);
+        emitter.instruction("cbnz x0, __rt_json_eval_serialize_done");          // a boxed answer needs no unwinding
+        // A null answer is either "cannot answer" or a jsonSerialize() that threw: the bridge
+        // keeps the Throwable, and php propagates it out of json_encode().
+        let thrown = emitter.target.extern_symbol("__elephc_eval_json_serialize_thrown");
+        abi::emit_call_label(emitter, &thrown);
+        emitter.instruction("cbz x0, __rt_json_eval_serialize_done");           // nothing was thrown: encode the null
+        emitter.instruction("bl __rt_throwable_take_boxed");                    // turn the interpreter's Throwable cell into a native one
+        abi::emit_symbol_address(emitter, "x9", "_exc_value");
+        emitter.instruction("str x0, [x9]");                                    // publish the Throwable as the active exception
+        emitter.instruction("ldp x29, x30, [sp], #16");                         // restore the encoder's frame before unwinding
+        emitter.instruction("b __rt_throw_current");                            // unwind to the nearest native handler
+        emitter.label("__rt_json_eval_serialize_done");
         emitter.instruction("ldp x29, x30, [sp], #16");                         // restore the encoder's frame
         emitter.instruction("ret");                                             // return the boxed value like a compiled jsonSerialize()
     }
@@ -708,6 +720,19 @@ fn emit_json_encode_object_linux_x86_64(emitter: &mut Emitter, eval_bridge: bool
         emitter.instruction("mov rbp, rsp");                                    // align the stack for the bridge call
         let serialize = emitter.target.extern_symbol("__elephc_eval_json_serialize");
         abi::emit_call_label(emitter, &serialize);
+        emitter.instruction("test rax, rax");                                   // a boxed answer needs no unwinding
+        emitter.instruction("jne __rt_json_eval_serialize_done");               // return it like a compiled jsonSerialize()
+        // A null answer is either "cannot answer" or a jsonSerialize() that threw: the bridge
+        // keeps the Throwable, and php propagates it out of json_encode().
+        let thrown = emitter.target.extern_symbol("__elephc_eval_json_serialize_thrown");
+        abi::emit_call_label(emitter, &thrown);
+        emitter.instruction("test rax, rax");                                   // did the interpreter's jsonSerialize() throw?
+        emitter.instruction("je __rt_json_eval_serialize_done");                // nothing was thrown: encode the null
+        emitter.instruction("call __rt_throwable_take_boxed");                  // turn the interpreter's Throwable cell into a native one
+        abi::emit_store_reg_to_symbol(emitter, "rax", "_exc_value", 0);         // publish the Throwable as the active exception
+        emitter.instruction("pop rbp");                                         // restore the encoder's frame pointer before unwinding
+        emitter.instruction("jmp __rt_throw_current");                          // unwind to the nearest native handler
+        emitter.label("__rt_json_eval_serialize_done");
         emitter.instruction("pop rbp");                                         // restore the encoder's frame pointer
         emitter.instruction("ret");                                             // return the boxed value like a compiled jsonSerialize()
     }

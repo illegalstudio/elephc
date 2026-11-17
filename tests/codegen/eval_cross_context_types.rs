@@ -1189,3 +1189,18 @@ echo $g(), "\n";
     );
     assert_eq!(out, "LateSub\nLateSub\nLateBase\n");
 }
+
+/// A `jsonSerialize()` that an eval-declared class throws propagates out of the compiled
+/// `json_encode()` that asked for it; the encoder answered `null` and dropped the Throwable.
+#[test]
+fn test_compiled_json_encode_propagates_an_eval_json_serialize_throw() {
+    let out = compile_and_run(
+        r#"<?php
+eval('class EJ implements JsonSerializable { function jsonSerialize(): mixed { throw new RuntimeException("boom"); } }');
+try { echo json_encode(new EJ), "\n"; } catch (Throwable $e) { echo "caught ", $e->getMessage(), "\n"; }
+try { echo json_encode(["a" => [new EJ]]), "\n"; } catch (Throwable $e) { echo "caught ", $e->getMessage(), "\n"; }
+echo json_encode([1, 2]), "\n";
+"#,
+    );
+    assert_eq!(out, "caught boom\ncaught boom\n[1,2]\n");
+}

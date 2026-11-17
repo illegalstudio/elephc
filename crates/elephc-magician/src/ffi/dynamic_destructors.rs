@@ -268,8 +268,32 @@ unsafe fn json_serialize_inner(object: *mut RuntimeCell) -> *mut RuntimeCell {
     let _ = values.release(object_cell);
     match result {
         Ok(handle) => handle.as_ptr(),
-        Err(_) => std::ptr::null_mut(),
+        Err(_) => {
+            // A `jsonSerialize()` that threw leaves its Throwable on the context; the compiled
+            // encoder asks for it right after the null answer and unwinds with it.
+            if let Some(thrown) = context.take_pending_throw() {
+                JSON_SERIALIZE_THROWN.with(|slot| slot.set(thrown.as_ptr()));
+            }
+            std::ptr::null_mut()
+        }
     }
+}
+
+#[cfg(not(test))]
+thread_local! {
+    /// The Throwable a failed `__elephc_eval_json_serialize` hands to its native caller.
+    static JSON_SERIALIZE_THROWN: std::cell::Cell<*mut RuntimeCell> =
+        const { std::cell::Cell::new(std::ptr::null_mut()) };
+}
+
+/// Hands back, once, the Throwable the last `__elephc_eval_json_serialize` call left behind.
+///
+/// Returns null when that call failed without a throw. The compiled JSON encoder calls it after
+/// a null answer and publishes the cell as the active exception.
+#[cfg(not(test))]
+#[no_mangle]
+pub extern "C" fn __elephc_eval_json_serialize_thrown() -> *mut RuntimeCell {
+    JSON_SERIALIZE_THROWN.with(|slot| slot.replace(std::ptr::null_mut()))
 }
 
 /// Drops final object metadata after receiver release, preserving it during collector destructors.
