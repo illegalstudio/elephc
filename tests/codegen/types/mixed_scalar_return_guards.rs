@@ -186,3 +186,25 @@ try { $e->b(box(null)); } catch (TypeError $x) { echo $x->getMessage(), "\n"; }
     );
     assert_eq!(out, "class@anonymous::s(): Return value must be of type string, null returned\nclass@anonymous::i(): Return value must be of type int, null returned\nBase@anonymous::f(): Return value must be of type float, null returned\nI@anonymous::b(): Return value must be of type bool, null returned\n");
 }
+
+/// A refused return releases the owned temporary being returned (`return mk();`), which no
+/// cleanup root covers; it used to leak on every `TypeError`.
+#[test]
+fn test_refused_return_releases_the_returned_temporary() {
+    let output = compile_and_run_with_heap_debug(
+        r#"<?php
+function mk(int $i): mixed { return [str_repeat("x", 100), $i]; }
+function gs(int $i): string { return mk($i); }
+function gf(int $i): float { return mk($i); }
+function gb(int $i): bool { return mk($i); }
+for ($i = 0; $i < 3; $i++) {
+    foreach (['gs', 'gf', 'gb'] as $f) {
+        try { $f($i); } catch (TypeError $e) { echo $e->getMessage(), "\n"; }
+    }
+}
+"#,
+    );
+    assert!(output.success, "{}", output.stderr);
+    assert_eq!(output.stdout, "gs(): Return value must be of type string, array returned\ngf(): Return value must be of type float, array returned\ngb(): Return value must be of type bool, array returned\n".repeat(3));
+    assert!(output.stderr.contains("leak summary: clean"), "{}", output.stderr);
+}

@@ -142,9 +142,11 @@ fn guard_declared_scalar_return(
         crate::types::diagnostic_names::php_type_name(&declared),
     );
     let span = span.unwrap_or_else(Span::dummy);
+    // A returned owned temporary (`return mk();`) is rooted nowhere, so the refusal releases
+    // it before throwing; a borrowed local is acquired only after this check.
     match crate::ir_lower::expr::emit_scalar_guard(
         ctx, value, &declared, &prefix, " returned", span,
-        crate::ir_lower::expr::ScalarGuardEmit { release_on_refusal: false, also_release: Vec::new(), diagnostic_span: span },
+        crate::ir_lower::expr::ScalarGuardEmit { release_on_refusal: true, also_release: Vec::new(), diagnostic_span: span },
     ) {
         Some(converted) => ScalarReturnGuard::Converted(converted),
         // A checked scalar bound to `bool` converts by PHP truthiness (`"abc"` is true); the
