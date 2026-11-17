@@ -1025,7 +1025,8 @@ fn dynamic_callable_binding_failure_releases_prepared_defaults() {
         vec![EvaluatedCallArg { evaluation_owner: None, name: Some("target".into()), value: caller.borrowed(), ref_target: None }],
         EvalByRefBindingMode::RequireTarget, &mut context, &mut values,
     );
-    assert!(matches!(result, Err(EvalStatus::RuntimeFatal)));
+    // php: an int for a `?MissingTarget` parameter is a catchable TypeError, not a refusal.
+    assert!(matches!(result, Err(EvalStatus::UncaughtThrowable)));
     assert_eq!(values.cell_owners.get(&(caller.as_ptr() as usize)), Some(&1));
     let defaults = values.values.iter().filter(|(_, value)| **value == FakeValue::Bool(false))
         .map(|(cell, _)| *cell).collect::<Vec<_>>();
