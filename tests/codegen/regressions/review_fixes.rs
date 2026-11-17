@@ -461,3 +461,31 @@ eval($code);
     assert_eq!(coalesce.stdout, "d0 d1 d2 {\"u\":null}");
     assert!(live_blocks(&coalesce.stderr) <= 3, "{}", coalesce.stderr);
 }
+
+/// A null reaching a non-nullable `int` parameter (a literal, a nullable local or a `mixed`
+/// value) is php's `TypeError` naming the function, the parameter and the call site. A literal
+/// answered garbage, a `mixed` null answered 0, and the nullable-int guard dropped the prefix.
+#[test]
+fn test_null_to_an_int_parameter_throws_the_full_type_error() {
+    let out = compile_and_run(
+        r#"<?php
+function f(int $x) { return $x; }
+function h(mixed $m) { return f($m); }
+function show(callable $c, mixed $v) {
+    try { var_dump($c($v)); } catch (TypeError $e) {
+        $m = $e->getMessage();
+        echo substr($m, 0, strpos($m, ', called in')), " | ", str_contains($m, ' on line ') ? "site" : "no site", "\n";
+    }
+}
+try { f(null); } catch (TypeError $e) { echo substr($e->getMessage(), 0, 61), "\n"; }
+show('h', null);
+show('h', "5");
+$n = $argc > 5 ? 1 : null;
+try { f($n); } catch (TypeError $e) { echo substr($e->getMessage(), 0, 61), "\n"; }
+"#,
+    );
+    assert_eq!(
+        out,
+        "f(): Argument #1 ($x) must be of type int, null given, called\nf(): Argument #1 ($x) must be of type int, null given | site\nint(5)\nf(): Argument #1 ($x) must be of type int, null given, called\n"
+    );
+}

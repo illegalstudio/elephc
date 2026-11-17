@@ -693,6 +693,17 @@ pub(super) fn coerce_scalar_arg_to_param_storage(
             Some(arg.span),
         );
     }
+    // A null reaching a non-nullable `int` parameter is php's `TypeError` in weak mode too.
+    if bindable
+        && *declared_param_ty == PhpType::Int
+        && !sig.ref_params.get(index).copied().unwrap_or(false)
+        && matches!(
+            source_ty,
+            PhpType::TaggedScalar | PhpType::Mixed | PhpType::Union(_) | PhpType::Void
+        )
+    {
+        guard_null_for_int_param(ctx, value, sig, index, arg);
+    }
     // An object that only the weak `string` arm of the declaration accepts (`Stringable` passed
     // to `string|iterable`) must convert before boxing; boxing it first hands the callee the
     // object under a union whose string member PHP would have selected.
@@ -972,6 +983,60 @@ fn guard_nullable_int_param(
         effects_lookup::runtime_effects(),
         span,
     )
+}
+
+/// Throws php's `TypeError` for a null reaching a non-nullable `int` parameter, naming the
+/// function, the parameter and the call site (`f(): Argument #1 ($x) must be of type int, null
+/// given, called in /app.php on line 4`), and continues in the block where the value is not null.
+fn guard_null_for_int_param(
+    ctx: &mut LoweringContext<'_, '_>,
+    value: LoweredValue,
+    sig: &FunctionSig,
+    index: usize,
+    arg: &Expr,
+) {
+    let span = Some(arg.span);
+    let is_null = ctx.emit_value(
+        Op::IsNull,
+        vec![value.value],
+        None,
+        PhpType::Bool,
+        Op::IsNull.default_effects(),
+        span,
+    );
+    let rejected = ctx.builder.create_named_block("int.arg.null", Vec::new());
+    let accepted = ctx.builder.create_named_block("int.arg.accepted", Vec::new());
+    ctx.builder.terminate(Terminator::CondBr {
+        cond: is_null.value,
+        then_target: rejected,
+        then_args: Vec::new(),
+        else_target: accepted,
+        else_args: Vec::new(),
+    });
+    ctx.builder.position_at_end(rejected);
+    let param_name = sig.params.get(index).map(|(name, _)| name.as_str()).unwrap_or("arg");
+    let callable = ctx.call_description.as_deref().unwrap_or("call");
+    let source = ctx.source_path().unwrap_or("unknown");
+    let message = format!(
+        "{}(): Argument #{} (${}) must be of type int, null given, called in {} on line {}",
+        callable,
+        index + 1,
+        param_name,
+        source,
+        arg.span.line
+    );
+    let exception = lower_expr(
+        ctx,
+        &Expr::new(
+            ExprKind::NewObject {
+                class_name: Name::unqualified("TypeError"),
+                args: vec![Expr::new(ExprKind::StringLiteral(message), arg.span)],
+            },
+            arg.span,
+        ),
+    );
+    ctx.builder.terminate(Terminator::Throw { value: exception.value });
+    ctx.builder.position_at_end(accepted);
 }
 
 /// Whether `value` is a Mixed cell that boxes a literal `null` (a defaulted `= null` argument).
