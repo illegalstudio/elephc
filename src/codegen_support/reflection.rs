@@ -78,6 +78,9 @@ pub(crate) struct ReflectionAttributeFactory {
     /// emits a construction branch for resolvable factories; `getArguments()`
     /// uses every factory (including non-class attributes) to return arguments.
     pub(crate) resolvable: bool,
+    /// Declaration site `(source id, line)` of a factory whose arguments read a constant
+    /// (see [`attr_arg_deprecation_site`]).
+    pub(crate) deprecation_site: Option<(u32, u32)>,
 }
 
 /// Looks up `class_name` in `classes` using PHPsymbol-key normalization
@@ -154,11 +157,12 @@ pub(crate) fn collect_attribute_factories_with_extra(
         .into_iter()
         .enumerate()
         .map(
-            |(idx, ((class_name, args, _deprecation_site), resolvable))| ReflectionAttributeFactory {
+            |(idx, ((class_name, args, deprecation_site), resolvable))| ReflectionAttributeFactory {
                 id: (idx as i64) + 1,
                 class_name,
                 args,
                 resolvable,
+                deprecation_site,
             },
         )
         .collect()
@@ -248,8 +252,10 @@ pub(crate) fn build_attribute_new_instance_body_with_extra(
 ) -> Vec<Stmt> {
     let span = crate::span::Span::dummy();
     let factories = collect_attribute_factories_with_extra(classes, extra_attrs);
+    let function_sites = function_attribute_sites(extra_attrs);
     let mut body = Vec::new();
     for factory in factories {
+        let reads = AttrReads::new(AttrReadSite::Attribute, &factory, &function_sites);
         // Only resolvable attribute classes can be instantiated. Non-class
         // attributes are registered (so `getArguments()` can find them) but
         // have no construction branch here; they fall through to `return null`.
@@ -280,11 +286,11 @@ pub(crate) fn build_attribute_new_instance_body_with_extra(
                             Some(crate::types::AttrKey::Str(name)) => Expr::new(
                                 ExprKind::NamedArg {
                                     name: name.clone(),
-                                    value: Box::new(attr_arg_expr_at(&entry.value, entry.span)),
+                                    value: Box::new(attr_arg_expr(entry, reads, true)),
                                 },
                                 span,
                             ),
-                            _ => attr_arg_expr_at(&entry.value, entry.span),
+                            _ => attr_arg_expr(entry, reads, true),
                         })
                         .collect(),
                 },
@@ -328,70 +334,102 @@ fn factory_condition(factory_id: i64) -> Expr {
     )
 }
 
+/// The site whose file and line an attribute argument's constant read reports.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum AttrReadSite {
+    /// `getArguments()`: the caller of the reflection method.
+    Caller,
+    /// `newInstance()`: the attribute's declaration (php-src's `EG(lineno_override)`).
+    Attribute,
+}
+
+/// How one factory's constant reads report, per php-src: a global constant read in a
+/// function's (or a function parameter's) attribute always reports the [`AttrReadSite`]; in a
+/// class or class member's attribute, a top-level global constant reports the site while a
+/// nested one reports its own line. A class constant read reports its own line (php-src
+/// reports the site for one in a function's attribute).
+#[derive(Clone, Copy)]
+struct AttrReads {
+    site: AttrReadSite,
+    function_scope: bool,
+}
+
+impl AttrReads {
+    /// Reads of `factory`, which belongs to a function when its declaration site is one of
+    /// `function_sites`.
+    fn new(site: AttrReadSite, factory: &ReflectionAttributeFactory, function_sites: &std::collections::HashSet<(u32, u32)>) -> Self {
+        let function_scope = factory.deprecation_site.is_some_and(|declared| function_sites.contains(&declared));
+        Self { site, function_scope }
+    }
+
+    /// Span of a constant read written at `line` in `entry`, `top` when it is a top-level
+    /// argument and `global` for a global constant. A dummy span asks for the caller's file and
+    /// line.
+    fn read_span(self, entry: &AttrArgEntry, line: u32, top: bool, global: bool) -> crate::span::Span {
+        // A class constant read keeps its own line even in a function's attribute, where php-src
+        // reports the override: lowering resolves a class constant only from a source span.
+        let overridden = global && (self.function_scope || top);
+        if overridden || line == 0 {
+            return match self.site {
+                AttrReadSite::Attribute if entry.span.line != 0 => entry.span,
+                _ => crate::span::Span::dummy(),
+            };
+        }
+        crate::span::Span::new_in_source(line, 1, entry.span.source_id())
+    }
+}
+
+/// Declaration sites of the function attributes in `extra_attrs` that read a constant.
+fn function_attribute_sites(extra_attrs: &[AttributeMetadataSource<'_>]) -> std::collections::HashSet<(u32, u32)> {
+    extra_attrs
+        .iter()
+        .flat_map(|(_, args)| args.iter().flatten())
+        .filter_map(|args| attr_arg_deprecation_site(args))
+        .collect()
+}
+
 /// Converts one captured attribute argument into a synthetic AST expression.
 /// Nested arrays (positional or associative) become the corresponding
 /// array-literal expression, and symbolic references (global constant, class
-/// constant, enum case) become the corresponding reference expression — all so
+/// constant, enum case) become the corresponding reference expression, all so
 /// they lower through the normal, architecture-independent paths. Reference
 /// names were canonicalised by name resolution at capture time, so the
 /// re-emitted nodes resolve directly during lowering (the global/class constant
 /// folds to its value; an enum case materializes the case object, matching
-/// PHP's `ReflectionAttribute::getArguments()`).
-fn attr_arg_expr(arg: &AttrArgValue, caller_line: bool) -> Expr {
-    attr_arg_expr_with(arg, caller_line, None)
-}
-
-/// [`attr_arg_expr`] for a top-level `newInstance()` argument: php-src evaluates it with the
-/// attribute's line as the reported line (`EG(lineno_override)`), so a constant read in it
-/// reports `attribute` (the declaration span), while a read nested in an array reports its own
-/// line.
-fn attr_arg_expr_at(arg: &AttrArgValue, attribute: crate::span::Span) -> Expr {
-    attr_arg_expr_with(arg, false, (attribute.line != 0).then_some(attribute))
-}
-
-/// Builds one argument expression; `top_read` overrides the span of a top-level constant read.
-fn attr_arg_expr_with(arg: &AttrArgValue, caller_line: bool, top_read: Option<crate::span::Span>) -> Expr {
+/// PHP's `ReflectionAttribute::getArguments()`). A constant read carries the span
+/// it reports at (see [`AttrReads`]); `top` marks a top-level argument.
+fn attr_arg_expr(entry: &AttrArgEntry, reads: AttrReads, top: bool) -> Expr {
     let span = crate::span::Span::dummy();
-    // A constant read keeps its source line, which a deprecated constant reports at. A bare
-    // top-level `getArguments()` argument takes php-src's fast path and reports at the
-    // caller's line instead; its dummy span asks for that.
-    let read_span = |line: u32| match top_read {
-        Some(attribute) => attribute,
-        None if caller_line || line == 0 => span,
-        None => crate::span::Span::new(line, 1),
-    };
-    match arg {
+    match &entry.value {
         AttrArgValue::Null => Expr::new(ExprKind::Null, span),
         AttrArgValue::Int(value) => Expr::new(ExprKind::IntLiteral(*value), span),
         AttrArgValue::Float(bits) => Expr::new(ExprKind::FloatLiteral(f64::from_bits(*bits)), span),
         AttrArgValue::Bool(value) => Expr::new(ExprKind::BoolLiteral(*value), span),
         AttrArgValue::Str(value) => Expr::new(ExprKind::StringLiteral(value.clone()), span),
-        AttrArgValue::Array(entries) => entries_to_array_expr(entries, false, false),
-        AttrArgValue::ConstRef(name, line) => {
-            Expr::new(ExprKind::ConstRef(name_from_canonical(name)), read_span(*line))
-        }
+        AttrArgValue::Array(entries) => entries_to_array_expr(entries, false, reads, false),
+        AttrArgValue::ConstRef(name, line) => Expr::new(
+            ExprKind::ConstRef(name_from_canonical(name)),
+            reads.read_span(entry, *line, top, true),
+        ),
         AttrArgValue::ScopedConst(type_name, member, line) => Expr::new(
             ExprKind::ScopedConstantAccess {
                 receiver: StaticReceiver::Named(name_from_canonical(type_name)),
                 name: member.clone(),
             },
-            match top_read {
-                Some(attribute) => attribute,
-                None if *line == 0 => span,
-                None => crate::span::Span::new(*line, 1),
-            },
+            reads.read_span(entry, *line, top, false),
         ),
     }
 }
 
 /// Builds an array-literal AST expression from captured attribute-arg entries.
-/// When `force_assoc` is set (or any entry carries a key — a named argument or
+/// When `force_assoc` is set (or any entry carries a key, a named argument or
 /// explicit array key) it produces an associative `ArrayLiteralAssoc` with
 /// positional entries taking their sequential integer key, matching PHP's
 /// `getArguments()` ordering; otherwise it produces a positional `ArrayLiteral`.
 /// `force_assoc` keeps the top-level `getArguments()` result a single array kind
-/// (a hash) so its declared associative type matches the runtime value.
-fn entries_to_array_expr(entries: &[AttrArgEntry], force_assoc: bool, caller_line: bool) -> Expr {
+/// (a hash) so its declared associative type matches the runtime value. `top` marks the
+/// top-level argument list.
+fn entries_to_array_expr(entries: &[AttrArgEntry], force_assoc: bool, reads: AttrReads, top: bool) -> Expr {
     let span = crate::span::Span::dummy();
     if force_assoc || entries.iter().any(|entry| entry.key.is_some()) {
         let mut next_index = 0i64;
@@ -406,18 +444,13 @@ fn entries_to_array_expr(entries: &[AttrArgEntry], force_assoc: bool, caller_lin
                         Expr::new(ExprKind::IntLiteral(index), span)
                     }
                 };
-                (key, attr_arg_expr(&entry.value, caller_line))
+                (key, attr_arg_expr(entry, reads, top))
             })
             .collect();
         Expr::new(ExprKind::ArrayLiteralAssoc(pairs), span)
     } else {
         Expr::new(
-            ExprKind::ArrayLiteral(
-                entries
-                    .iter()
-                    .map(|entry| attr_arg_expr(&entry.value, caller_line))
-                    .collect(),
-            ),
+            ExprKind::ArrayLiteral(entries.iter().map(|entry| attr_arg_expr(entry, reads, top)).collect()),
             span,
         )
     }
@@ -442,11 +475,13 @@ pub(crate) fn build_attribute_get_arguments_body_with_extra(
 ) -> Vec<Stmt> {
     let span = crate::span::Span::dummy();
     let factories = collect_attribute_factories_with_extra(classes, extra_attrs);
+    let function_sites = function_attribute_sites(extra_attrs);
     let mut body = Vec::new();
     for factory in factories {
         let condition = factory_condition(factory.id);
+        let reads = AttrReads::new(AttrReadSite::Caller, &factory, &function_sites);
         let then_body = vec![Stmt::new(
-            StmtKind::Return(Some(entries_to_array_expr(&factory.args, true, true))),
+            StmtKind::Return(Some(entries_to_array_expr(&factory.args, true, reads, true))),
             span,
         )];
         body.push(Stmt::new(

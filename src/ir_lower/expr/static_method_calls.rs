@@ -601,15 +601,4 @@ pub(super) fn emit_backed_enum_initialization(ctx: &mut LoweringContext<'_, '_>,
     if backed && crate::ir_lower::property_default_errors::class_initialization_reports(ctx, enum_name) {
         crate::ir_lower::property_default_errors::emit_initialization_deprecations(ctx, enum_name, span);
     }
-    // The checker folds an int case written `MT_RAND_PHP` to `1` and flags it; initialization
-    // evaluates that case value too. Its notice is guarded per declaration, so a later fetch
-    // of the case itself stays silent.
-    let flagged: Vec<crate::span::Span> = if backed {
-        ctx.enums[enum_name].cases.iter().filter(|case| case.deprecated_mt_rand_php).filter_map(|case| case.span).collect()
-    } else {
-        Vec::new()
-    };
-    for case_span in flagged {
-        super::constants::emit_mt_rand_php_deprecation(ctx, case_span, case_span);
-    }
 }

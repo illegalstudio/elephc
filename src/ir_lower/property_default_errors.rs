@@ -51,12 +51,9 @@ pub(crate) fn emit_initialization_deprecations(
             continue;
         }
         let Some(label) = initialization_label(ctx, &owner) else { continue };
-        let constants = reads::class_constant_table(ctx, &owner);
         let defaults = reads::class_own_initialization_defaults(ctx, &owner);
-        super::expr::emit_once_guarded(ctx, &label, trigger, |ctx| {
-            for (constant_owner, name) in &constants {
-                reads::emit_class_constant_evaluation(ctx, constant_owner, name, LineSource::Static(trigger));
-            }
+        super::initializer_evaluation::emit_until_success(ctx, &label, trigger, |ctx| {
+            reads::emit_constant_table_evaluation(ctx, &owner, LineSource::Static(trigger));
             for slot in &defaults {
                 let lone = reads::lone_global_read(ctx, Some(&slot.declaring), &slot.default);
                 let frame = InitializerFrame::top(true, LineSource::Static(trigger), lone, None);
@@ -82,10 +79,7 @@ pub(crate) fn initialization_label(ctx: &LoweringContext<'_, '_>, class_name: &s
 /// constant, directly or through user class constants.
 pub(crate) fn class_initialization_reports(ctx: &LoweringContext<'_, '_>, class_name: &str) -> bool {
     use super::initializer_reads as reads;
-    reads::class_constant_table(ctx, class_name).iter().any(|(owner, name)| {
-        ctx.scoped_constant_value(owner, name)
-            .is_some_and(|value| reads::reaches_deprecated_read_in(ctx, Some(owner), &value))
-    }) || reads::class_own_initialization_defaults(ctx, class_name)
+    reads::constant_table_reports(ctx, class_name) || reads::class_own_initialization_defaults(ctx, class_name)
         .iter()
         .any(|slot| reads::reaches_deprecated_read_in(ctx, Some(&slot.declaring), &slot.default))
 }

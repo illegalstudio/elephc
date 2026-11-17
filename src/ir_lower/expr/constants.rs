@@ -25,7 +25,7 @@ use crate::types::PhpType;
 /// `report_span` supplies the file and line (a class-constant access reports the access
 /// site); `declaration_span` identifies the declaration whose value is evaluated, so a
 /// lazily-evaluated class constant notices only once no matter how many sites read it.
-pub(super) fn emit_mt_rand_php_deprecation(
+pub(crate) fn emit_mt_rand_php_deprecation(
     ctx: &mut LoweringContext<'_, '_>,
     report_span: Span,
     declaration_span: Span,
@@ -344,46 +344,9 @@ pub(crate) fn emit_read_deprecation(
         span.col
     );
     let message = message.to_string();
-    emit_once_guarded(ctx, &label, span, |ctx| emit_constant_deprecation(ctx, &message, line_span));
-}
-
-/// Runs `body` on the first execution only of a program-wide flag named `label`.
-///
-/// The flag is `Op::IncludeOnceGuard`, a target-independent test-and-set on a `.comm` symbol
-/// named by the label, so every lowering that uses the same label shares one flag.
-pub(crate) fn emit_once_guarded(
-    ctx: &mut LoweringContext<'_, '_>,
-    label: &str,
-    span: Span,
-    body: impl FnOnce(&mut LoweringContext<'_, '_>),
-) {
-    let data = ctx.intern_string(label);
-    let first_use = ctx
-        .builder
-        .emit_with_effects(
-            Op::IncludeOnceGuard,
-            Vec::new(),
-            Some(Immediate::Data(data)),
-            crate::ir::IrType::I64,
-            PhpType::Bool,
-            Ownership::NonHeap,
-            Op::IncludeOnceGuard.default_effects(),
-            Some(span),
-        )
-        .expect("a once guard produces a branch condition");
-    let first = ctx.builder.create_named_block("once.first", Vec::new());
-    let after = ctx.builder.create_named_block("once.after", Vec::new());
-    ctx.builder.terminate(crate::ir::Terminator::CondBr {
-        cond: first_use,
-        then_target: first,
-        then_args: Vec::new(),
-        else_target: after,
-        else_args: Vec::new(),
+    crate::ir_lower::initializer_evaluation::emit_until_success(ctx, &label, span, |ctx| {
+        emit_constant_deprecation(ctx, &message, line_span)
     });
-    ctx.builder.position_at_end(first);
-    body(ctx);
-    super::branch_to(ctx, after);
-    ctx.builder.position_at_end(after);
 }
 
 /// Emits PHP's `E_DEPRECATED` for a deprecated constant read at `span`.
@@ -406,15 +369,18 @@ pub(crate) fn emit_constant_deprecation(
         Op::ConstI64.default_effects(),
         Some(span),
     );
-    emit_constant_deprecation_with_line(ctx, message, span, line);
+    emit_constant_deprecation_with_line(ctx, message, span, line, false);
 }
 
 /// [`emit_constant_deprecation`] with the reported line already lowered as an `int` value.
+/// `caller_file` reports the file the current call was made from, for a line that is the
+/// caller's (`DiagnosticCallerLine`).
 pub(crate) fn emit_constant_deprecation_with_line(
     ctx: &mut LoweringContext<'_, '_>,
     message: &str,
     span: crate::span::Span,
     line: LoweredValue,
+    caller_file: bool,
 ) {
     let message_data = ctx.intern_string(message);
     let message = ctx.emit_value(
@@ -433,20 +399,25 @@ pub(crate) fn emit_constant_deprecation_with_line(
         Op::ConstI64.default_effects(),
         Some(span),
     );
-    // The reporting site's own file: a class constant evaluated through an included file's
-    // fetch reports that file, not the one whose code is being lowered.
-    let file = crate::source::canonical_span_source_path(span)
-        .or_else(|| ctx.source_path().map(str::to_string))
-        .unwrap_or_else(|| "unknown".to_string());
-    let file_data = ctx.intern_string(&file);
-    let file = ctx.emit_value(
-        Op::ConstStr,
-        Vec::new(),
-        Some(Immediate::Data(file_data)),
-        PhpType::Str,
-        Op::ConstStr.default_effects(),
-        Some(span),
-    );
+    let file = if caller_file {
+        let operation = crate::ir::CoreBuiltinOp::DiagnosticCallerFile;
+        ctx.emit_value(Op::CoreBuiltin, Vec::new(), Some(Immediate::I64(operation.as_i64())), PhpType::Str, operation.effects(), Some(span))
+    } else {
+        // The reporting site's own file: a class constant evaluated through an included
+        // file's fetch reports that file, not the one whose code is being lowered.
+        let file = crate::source::canonical_span_source_path(span)
+            .or_else(|| ctx.source_path().map(str::to_string))
+            .unwrap_or_else(|| "unknown".to_string());
+        let file_data = ctx.intern_string(&file);
+        ctx.emit_value(
+            Op::ConstStr,
+            Vec::new(),
+            Some(Immediate::Data(file_data)),
+            PhpType::Str,
+            Op::ConstStr.default_effects(),
+            Some(span),
+        )
+    };
     let operation = crate::ir::CoreBuiltinOp::BuiltinDeprecated;
     ctx.emit_value(
         Op::CoreBuiltin,

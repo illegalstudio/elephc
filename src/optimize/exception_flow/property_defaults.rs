@@ -47,3 +47,43 @@ fn collect(program: &[Stmt], errors: &mut HashSet<String>, parents: &mut Vec<(St
         }
     }
 }
+
+/// Classes whose initialization may raise a deprecation, found from the AST when no checked
+/// class metadata exists: a property default or constant reads a deprecated global constant or
+/// any class constant, in the class or an ancestor (see `initialization_may_report`).
+pub(super) fn imported_initialization_reports(program: &[Stmt]) -> HashSet<String> {
+    /// Collects reporting classes and parent links, entering namespace blocks.
+    fn collect(program: &[Stmt], reports: &mut HashSet<String>, parents: &mut Vec<(String, String)>) {
+        for statement in program {
+            match &statement.kind {
+                StmtKind::ClassDecl { name, extends, properties, constants, .. } => {
+                    if properties.iter().filter_map(|property| property.default.as_ref()).any(super::reads_reporting_constant)
+                        || constants.iter().any(|constant| super::reads_reporting_constant(&constant.value))
+                    {
+                        reports.insert(php_symbol_key(name));
+                    }
+                    if let Some(parent) = extends {
+                        parents.push((php_symbol_key(name), php_symbol_key(parent.as_str())));
+                    }
+                }
+                StmtKind::NamespaceBlock { body, .. } => collect(body, reports, parents),
+                _ => {}
+            }
+        }
+    }
+    let mut reports = HashSet::new();
+    let mut parents = Vec::new();
+    collect(program, &mut reports, &mut parents);
+    loop {
+        let mut changed = false;
+        for (child, parent) in &parents {
+            if reports.contains(parent) {
+                changed |= reports.insert(child.clone());
+            }
+        }
+        if !changed {
+            break;
+        }
+    }
+    reports
+}

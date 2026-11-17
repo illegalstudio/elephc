@@ -940,9 +940,20 @@ pub(super) fn eval_reflection_parameter_object_result(
     };
     let class_value = eval_reflection_parameter_class_value(parameter, context, values)?;
     // Materializing the reflector is not a PHP evaluation; `getDefaultValue()` raises the
-    // default's notices on each call (`eval_reflection_evaluating_getter_result`).
+    // default's notices on each call (`eval_reflection_evaluating_getter_result`). A default
+    // that constructs an object is not previewed at all: that would run its constructor, and
+    // both getters evaluate it themselves (eval directly, compiled code through
+    // `__default_factory`).
+    let constructs = parameter
+        .default_value
+        .as_ref()
+        .is_some_and(crate::interpreter::statements::eval_expr_constructs_object);
     context.begin_deprecation_silence();
-    let default_value = eval_reflection_parameter_default_value(parameter, context, values);
+    let default_value = if constructs {
+        values.null()
+    } else {
+        eval_reflection_parameter_default_value(parameter, context, values)
+    };
     context.end_deprecation_silence();
     // A default that needs a value php-src has not evaluated yet (or throws) is stored as null;
     // eval's `getDefaultValue()` evaluates it on the call.

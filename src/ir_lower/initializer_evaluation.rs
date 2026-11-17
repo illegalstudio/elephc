@@ -190,7 +190,7 @@ fn emit_framed(
     };
     let label = once_label(key, span);
     let message = message.to_string();
-    crate::ir_lower::expr::emit_once_guarded(ctx, &label, span, |ctx| {
+    emit_until_success(ctx, &label, span, |ctx| {
         emit_deprecation_at(ctx, &message, span, line);
     });
 }
@@ -226,6 +226,22 @@ fn emit_flag_test(ctx: &mut LoweringContext<'_, '_>, label: &str, span: Span) ->
             Some(span),
         )
         .expect("a flag test produces a branch condition")
+}
+
+/// Runs `body` while program-wide flag `label` is clear, and sets the flag once `body` completes.
+/// php-src marks a class initialized, a constant evaluated, or a default cached only after the
+/// evaluation succeeds: when an error handler throws from one of its notices, the next attempt
+/// evaluates again and reports again.
+pub(crate) fn emit_until_success(
+    ctx: &mut LoweringContext<'_, '_>,
+    label: &str,
+    span: Span,
+    body: impl FnOnce(&mut LoweringContext<'_, '_>),
+) {
+    emit_unless_any_flag_set(ctx, &[label.to_string()], span, |ctx| {
+        body(ctx);
+        emit_flag_mark(ctx, label, span);
+    });
 }
 
 /// Sets program-wide flag `label`.
@@ -307,5 +323,5 @@ pub(crate) fn emit_deprecation_at(
             Some(span),
         ),
     };
-    crate::ir_lower::expr::emit_constant_deprecation_with_line(ctx, message, span, line_value);
+    crate::ir_lower::expr::emit_constant_deprecation_with_line(ctx, message, span, line_value, true);
 }

@@ -2112,3 +2112,181 @@ end
 "#
     );
 }
+
+/// A deprecated constant read in an attribute argument reports where php-src reports it: in a
+/// function's attribute, `getArguments()` reports the caller's file and line and
+/// `newInstance()` the attribute's, for top-level and nested reads alike; in a class's
+/// attribute only a top-level global constant does, while nested global constants report their
+/// own line, in the declaring file.
+#[test]
+fn test_attribute_argument_reads_report_php_file_and_line() {
+    let out = compile_and_run_files(
+        &[
+            (
+                "main.php",
+                r#"<?php
+set_error_handler(function (int $level, string $message, string $file, int $line): bool {
+    echo "  ", basename($file), ":", $line, " ", substr($message, 0, strpos($message, " is deprecated")), "\n";
+    return true;
+});
+require __DIR__ . '/lib/attrs.php';
+#[At(
+    DATE_RFC7231,
+    [
+        DATE_RFC7231,
+    ]
+)]
+function deep() {}
+foreach ([new ReflectionFunction('deep'), new ReflectionClass('Deep')] as $r) {
+    $a = $r->getAttributes()[0];
+    echo get_class($r), " args\n";
+    $a->getArguments();
+    echo "new\n";
+    $a->newInstance();
+}
+reflect_here();
+"#,
+            ),
+            (
+                "lib/attrs.php",
+                r#"<?php
+#[Attribute(Attribute::TARGET_ALL)] class At { public function __construct(public mixed $v = 0, public mixed $w = 0) {} }
+#[At(
+    DATE_RFC7231,
+    [
+        DATE_RFC7231,
+    ]
+)]
+class Deep {}
+function reflect_here(): void {
+    $a = (new ReflectionClass('Deep'))->getAttributes()[0];
+    echo "inc args\n";
+    $a->getArguments();
+}
+"#,
+            ),
+        ],
+        "main.php",
+    );
+    assert_eq!(
+        out,
+        r#"ReflectionFunction args
+  main.php:17 Constant DATE_RFC7231
+  main.php:17 Constant DATE_RFC7231
+new
+  main.php:7 Constant DATE_RFC7231
+  main.php:7 Constant DATE_RFC7231
+ReflectionClass args
+  main.php:17 Constant DATE_RFC7231
+  attrs.php:6 Constant DATE_RFC7231
+new
+  attrs.php:3 Constant DATE_RFC7231
+  attrs.php:6 Constant DATE_RFC7231
+inc args
+  attrs.php:13 Constant DATE_RFC7231
+  attrs.php:6 Constant DATE_RFC7231
+"#
+    );
+}
+
+/// A backed enum's initialization and a reflection constant-table fetch report an int case written `MT_RAND_PHP` and a deprecated constant in declaration order, each once.
+#[test]
+fn test_enum_case_and_constant_notices_follow_declaration_order() {
+    let out = compile_and_run(
+        r#"<?php
+set_error_handler(function (int $level, string $message, string $file, int $line): bool {
+    echo "  ", $line, " ", substr($message, 0, strpos($message, " is deprecated")), "\n";
+    return true;
+});
+enum F: int {
+    case A = MT_RAND_PHP;
+    const K = DATE_RFC7231;
+}
+enum E: int {
+    const K = DATE_RFC7231;
+    case A = MT_RAND_PHP;
+}
+echo "from\n";
+F::from(1);
+echo "reflect\n";
+(new ReflectionEnum('E'))->getConstant('K');
+echo "again\n";
+F::from(1);
+E::A;
+echo "end\n";
+"#,
+    );
+    assert_eq!(
+        out,
+        r#"from
+  7 Constant MT_RAND_PHP
+  15 Constant DATE_RFC7231
+reflect
+  17 Constant DATE_RFC7231
+  12 Constant MT_RAND_PHP
+again
+end
+"#
+    );
+}
+
+/// A class initialization or constant evaluation whose error handler throws is not marked done: the next attempt evaluates, and reports, again.
+#[test]
+fn test_initialization_retries_after_a_throwing_handler() {
+    let out = compile_and_run(
+        r#"<?php
+$throws = true;
+set_error_handler(function (int $l, string $m) use (&$throws): bool {
+    echo "  ", substr($m, 0, strpos($m, " is deprecated")), "\n";
+    if ($throws) { $throws = false; throw new Exception("handler"); }
+    return true;
+});
+class C { public $p = DATE_RFC7231; const K = E_STRICT; }
+try { new C; } catch (Exception $e) { echo "caught ", $e->getMessage(), "\n"; }
+$c = new C;
+echo strlen($c->p), "\n";
+$throws = true;
+try { echo C::K, "\n"; } catch (Exception $e) { echo "caught ", $e->getMessage(), "\n"; }
+echo C::K, "\n";
+echo C::K, "\n";
+"#,
+    );
+    assert_eq!(
+        out,
+        r#"  Constant E_STRICT
+caught handler
+  Constant E_STRICT
+  Constant DATE_RFC7231
+21
+2048
+2048
+2048
+"#
+    );
+}
+
+/// An eval-built `ReflectionParameter` handed to compiled code evaluates a default that constructs an object once per `getDefaultValue()` call, and not when the reflector is built.
+#[test]
+fn test_eval_parameter_reflector_runs_a_new_default_once_per_getter_call() {
+    let out = compile_and_run(
+        r#"<?php
+set_error_handler(function (int $l, string $m): bool { echo "  ", substr($m, 0, strpos($m, " is deprecated")), "\n"; return true; });
+class A { public function __construct($v) { echo "ctor\n"; } }
+$p = eval('function f($x = new A(DATE_RFC7231)) {} return new ReflectionParameter("f", 0);');
+echo "built\n";
+$p->getDefaultValue();
+$p->getDefaultValue();
+echo "end\n";
+"#,
+    );
+    assert_eq!(
+        out,
+        r#"built
+  Constant DATE_RFC7231
+ctor
+  Constant DATE_RFC7231
+ctor
+end
+"#
+    );
+}

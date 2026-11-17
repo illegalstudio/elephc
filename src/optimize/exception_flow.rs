@@ -83,6 +83,9 @@ pub(super) struct ExceptionFlowAnalysis {
     instance_method_object_ref_checks: HashMap<String, bool>,
     /// Class property initialization can raise Error independently of constructor argument omission.
     constructor_default_errors: HashSet<String>,
+    /// Classes whose first `new` may raise a deprecation from their initialization, which a
+    /// throwing error handler turns into any exception.
+    initialization_reports: HashSet<String>,
     function_error_defaults: HashMap<String, FunctionSig>,
     function_unresolved_defaults: HashSet<String>,
     static_method_error_defaults: HashMap<String, FunctionSig>,
@@ -468,6 +471,9 @@ impl ExceptionFlowAnalysis {
                             .any(crate::types::deferred_defaults::contains_deferred_error)
                 }).map(|(name, _)| php_symbol_key(name)).collect()
             }).unwrap_or_else(|| property_defaults::imported_default_errors(program)),
+            initialization_reports: type_metadata.map(|(_, classes, _)| {
+                classes.keys().filter(|name| initialization_may_report(classes, name)).map(|name| php_symbol_key(name)).collect()
+            }).unwrap_or_else(|| property_defaults::imported_initialization_reports(program)),
             function_returns,
             static_method_returns,
             instance_method_returns,
@@ -1260,7 +1266,9 @@ impl ExceptionFlowAnalysis {
         } else {
             entry_check
         };
-        if self.resolve_method_value(class_name, "__construct", &self.instance_method_unresolved_defaults) == Some(true) {
+        if self.resolve_method_value(class_name, "__construct", &self.instance_method_unresolved_defaults) == Some(true)
+            || self.initialization_reports.contains(&php_symbol_key(class_name))
+        {
             entry_check = entry_check.combined(ThrownTypes::unknown());
         }
         if let Some(signature) = self.resolve_method_value(
@@ -1550,4 +1558,41 @@ fn exact_receiver_class(
 /// Chunked native ob_start callbacks still need callback-aware exception analysis.
 fn host_output_throws() -> ThrownTypes {
     if output::output_may_throw() { ThrownTypes::unknown() } else { ThrownTypes::default() }
+}
+
+/// Reports whether the first `new` of `class_name` may raise a deprecation from its class
+/// initialization: its own or an ancestor's defaults or constants read a deprecated global
+/// constant, or any class constant (which may itself read one). An error handler can throw
+/// from that notice, so the `new` may throw. Conservative: it only keeps a `catch` alive.
+fn initialization_may_report(classes: &HashMap<String, crate::types::ClassInfo>, class_name: &str) -> bool {
+    let reads = reads_reporting_constant;
+    let mut current = Some(class_name.to_string());
+    let mut depth = 0;
+    while let Some(name) = current {
+        let Some(class) = classes.get(&name) else { return false };
+        if class.defaults.iter().chain(class.static_defaults.iter()).flatten().any(|expr| reads(expr))
+            || class.constants.values().any(|expr| reads(expr))
+        {
+            return true;
+        }
+        depth += 1;
+        if depth > classes.len() {
+            return false;
+        }
+        current = class.parent.clone();
+    }
+    false
+}
+
+/// Reports whether `expr` reads a deprecated global constant or any class constant.
+fn reads_reporting_constant(expr: &Expr) -> bool {
+    let mut found = false;
+    crate::ir_lower::visit_constant_reads(expr, &mut |read| {
+        found = found
+            || match &read.kind {
+                ExprKind::ConstRef(name) => elephc_builtin_contract::global_constant_deprecation(name.as_str()).is_some(),
+                _ => true,
+            };
+    });
+    found
 }

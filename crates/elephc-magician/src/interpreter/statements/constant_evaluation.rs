@@ -770,7 +770,7 @@ fn eval_default_condition<V: RuntimeValueOps>(
 }
 
 /// Reports whether evaluating constant expression `expr` constructs an object (`new`).
-fn eval_expr_constructs_object(expr: &EvalExpr) -> bool {
+pub(in crate::interpreter) fn eval_expr_constructs_object(expr: &EvalExpr) -> bool {
     use crate::eval_ir::EvalArrayElement;
     match expr {
         EvalExpr::NewObject { .. } | EvalExpr::NewAnonymousClass { .. } => true,

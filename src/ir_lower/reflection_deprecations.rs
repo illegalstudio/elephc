@@ -153,12 +153,7 @@ fn emit_class_constants(ctx: &mut LoweringContext<'_, '_>, span: Span) {
         .classes
         .keys()
         .chain(ctx.interfaces.keys())
-        .filter(|class_like| {
-            reads::class_constant_table(ctx, class_like).iter().any(|(owner, name)| {
-                ctx.scoped_constant_value(owner, name)
-                    .is_some_and(|value| reads::reaches_deprecated_read_in(ctx, Some(owner), &value))
-            })
-        })
+        .filter(|class_like| reads::constant_table_reports(ctx, class_like))
         .cloned()
         .collect();
     if options.is_empty() {
@@ -167,9 +162,7 @@ fn emit_class_constants(ctx: &mut LoweringContext<'_, '_>, span: Span) {
     options.sort();
     let class_value = this_property(ctx, "__name", span);
     crate::ir_lower::property_default_errors::dispatch_string(ctx, class_value, span, &options, true, &|ctx, class_like| {
-        for (owner, name) in reads::class_constant_table(ctx, class_like) {
-            reads::emit_class_constant_evaluation(ctx, &owner, &name, LineSource::Caller);
-        }
+        reads::emit_constant_table_evaluation(ctx, class_like, LineSource::Caller);
     });
     release(ctx, class_value, span);
 }

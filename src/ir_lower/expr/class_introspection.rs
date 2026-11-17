@@ -352,7 +352,7 @@ fn emit_class_vars_deprecations(
     } else if !trait_constants.is_empty() || entries.iter().any(|entry| reaching(ctx, &entry)) {
         let label = crate::ir_lower::property_default_errors::trait_initialization_label(class_name);
         let defaults: Vec<&ClassDefaultEntry> = entries.iter().filter(|entry| reaching(ctx, entry)).collect();
-        super::emit_once_guarded(ctx, &label, span, |ctx| {
+        crate::ir_lower::initializer_evaluation::emit_until_success(ctx, &label, span, |ctx| {
             // The trait's own constants first, held by the trait itself.
             for (name, value) in &trait_constants {
                 let lone = crate::ir_lower::initializer_reads::lone_global_read(ctx, Some(class_name), value);
