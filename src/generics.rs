@@ -21,6 +21,7 @@
 
 pub mod classes;
 mod constructors;
+mod erasure;
 mod function_variants;
 pub(crate) use constructors::parameter_name;
 pub mod methods;
@@ -98,6 +99,9 @@ where
     // in the pipeline is what keeps the two in step — an instantiated FUNCTION body can name
     // `Box<T>`, which only becomes the concrete `Box<int>` once the checker has bound `T`.
     let program = constructors::lift(program);
+    // A generic method reached through dynamic dispatch cannot be monomorphized (instantiations
+    // are called statically), so it is erased before any template is collected or copied.
+    let program = erasure::erase_dispatched(program);
     let mut class_templates = classes::collect(&program);
     // A variance marker is a promise about the DECLARATION, so it is checked once, here, before
     // anything is spliced. Checking it per instantiation would name a class the programmer never
@@ -804,6 +808,16 @@ pub fn instantiated_name(base: &str, bindings: &[(String, TypeExpr)]) -> String 
     format!("{}<{}>", base, args)
 }
 
+/// The `mixed` type expression an erased PHPDoc type parameter is bound to.
+pub(crate) fn mixed_type() -> TypeExpr {
+    TypeExpr::Named(Name::unqualified("mixed"))
+}
+
+/// Returns whether `ty` is the `mixed` type expression.
+pub(crate) fn is_mixed_type(ty: &TypeExpr) -> bool {
+    matches!(ty, TypeExpr::Named(name) if name.as_str().eq_ignore_ascii_case("mixed"))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -837,6 +851,7 @@ mod tests {
             bound: None,
             default: None,
             variance: Variance::Invariant,
+            from_docblock: false,
         }
     }
 
@@ -957,6 +972,7 @@ mod tests {
             bound: None,
             default: Some(TypeExpr::Str),
             variance: Variance::Invariant,
+            from_docblock: false,
         };
         let bindings = infer_bindings(&[declared], &[param(TypeExpr::Int)], &[PhpType::Int])
             .expect("the default determines K");
@@ -971,6 +987,7 @@ mod tests {
             bound: None,
             default: Some(TypeExpr::Str),
             variance: Variance::Invariant,
+            from_docblock: false,
         };
         let bindings = infer_bindings(&[declared], &[param(t("T"))], &[PhpType::Int])
             .expect("T is constrained by the argument");

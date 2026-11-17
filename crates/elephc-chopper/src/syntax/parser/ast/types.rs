@@ -10,7 +10,7 @@
 
 use crate::syntax::names::Name;
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone)]
 /// One declared type parameter (`T`, `T : Entity`, `K = string`).
 ///
 /// The name is a plain `String` rather than a `Name`: a type parameter resolves against its own

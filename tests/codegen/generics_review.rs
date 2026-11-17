@@ -566,3 +566,29 @@ function run(mixed $c): void {
 $c = new C(null); run($c);
 "#), "C::__construct(): Argument #1 ($v) must be of type null, int given\n1\nNULL\n");
 }
+
+/// A PHPDoc template's method that implements an interface keeps its dispatch slot.
+///
+/// The annotation makes `contains` a template, and an instantiated template method cannot be
+/// called through the interface: the erasure drops the type parameter, so `Collection<int>`
+/// still implements `Enumerable` instead of narrowing it.
+#[test]
+fn test_phpdoc_template_method_keeps_its_dispatch() {
+    let source = r#"<?php
+interface Enumerable {
+    public function contains($value): bool;
+}
+/**
+ * @template TValue
+ */
+class Collection implements Enumerable {
+    /** @param TValue $value */
+    public function contains($value): bool { return $value === 1; }
+}
+$collection = new Collection<int>();
+echo $collection instanceof Enumerable ? "impl" : "no", "|";
+$enumerable = $collection;
+echo $enumerable->contains(1) ? "yes" : "no", "\n";
+"#;
+    assert_clean(compile_and_run_with_heap_debug(source), "impl|yes\n");
+}
