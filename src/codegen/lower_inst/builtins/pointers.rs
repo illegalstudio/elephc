@@ -189,18 +189,50 @@ pub(crate) fn lower_elephc_normalize_callable(
             // PHP hands it over untouched; normalizing it fataled "mixed value is not callable".
             let null_label = ctx.next_label("normalize_callable_null");
             let done_label = ctx.next_label("normalize_callable_done");
+            let wrong_label = ctx.next_label("normalize_callable_wrong_type");
+            // A declared `callable` parameter carries php's whole TypeError text around the
+            // runtime type word (`prefix\0suffix`): null and every scalar is refused with it, and
+            // an unresolvable string or array throws it too. An inferred one (no diagnostic)
+            // keeps the null pass-through above.
+            let diagnostic = normalize_callable_diagnostic(ctx, inst);
             ctx.load_value_to_result(value)?;
             abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
-            match ctx.emitter.target.arch {
-                Arch::AArch64 => {
-                    ctx.emitter.instruction("cmp x0, #8");                      // is the boxed value php null?
-                    abi::emit_branch_if_equal_wide(ctx.emitter, &null_label);   // null stays the callable null sentinel
+            if diagnostic.is_some() {
+                // string (1), indexed (4) and associative (5) arrays, objects (6) and compiled
+                // descriptors (10) may name a callable; every other tag never can. One bit test
+                // over the tag: 1 | 4 | 5 | 6 | 10 = 0x472.
+                match ctx.emitter.target.arch {
+                    Arch::AArch64 => {
+                        ctx.emitter.instruction("cmp x0, #10");                 // tags above 10 never name a callable
+                        ctx.emitter.instruction(&format!("b.hi {}", wrong_label)); // null and scalars are php's TypeError
+                        ctx.emitter.instruction("mov x2, #0x472");              // bit set of the tags that may name a callable
+                        ctx.emitter.instruction("lsr x2, x2, x0");              // move this tag's bit to bit zero
+                        ctx.emitter.instruction("and x2, x2, #1");              // isolate it
+                        ctx.emitter.instruction(&format!("cbz x2, {}", wrong_label)); // not a candidate tag: TypeError
+                    }
+                    Arch::X86_64 => {
+                        ctx.emitter.instruction("cmp rax, 10");                 // tags above 10 never name a callable
+                        ctx.emitter.instruction(&format!("ja {}", wrong_label)); // null and scalars are php's TypeError
+                        ctx.emitter.instruction("mov rcx, 0x472");              // bit set of the tags that may name a callable
+                        ctx.emitter.instruction("bt rcx, rax");                 // is this tag's bit set?
+                        ctx.emitter.instruction(&format!("jnc {}", wrong_label)); // not a candidate tag: TypeError
+                    }
                 }
-                Arch::X86_64 => {
-                    ctx.emitter.instruction("cmp rax, 8");                      // is the boxed value php null?
-                    ctx.emitter.instruction(&format!("je {}", null_label));     // null stays the callable null sentinel
+            } else {
+                match ctx.emitter.target.arch {
+                    Arch::AArch64 => {
+                        ctx.emitter.instruction("cmp x0, #8");                  // is the boxed value php null?
+                        abi::emit_branch_if_equal_wide(ctx.emitter, &null_label); // null stays the callable null sentinel
+                    }
+                    Arch::X86_64 => {
+                        ctx.emitter.instruction("cmp rax, 8");                  // is the boxed value php null?
+                        ctx.emitter.instruction(&format!("je {}", null_label)); // null stays the callable null sentinel
+                    }
                 }
             }
+            // The resolver stays the SHARED one (its refusal text cannot carry a per-site
+            // message without giving up the sharing): a string or array no callable answers
+            // still ends in its fatal, while null and every scalar already threw above.
             super::super::callables::emit_runtime_mixed_callable_descriptor_value(
                 ctx,
                 value,
@@ -209,6 +241,13 @@ pub(crate) fn lower_elephc_normalize_callable(
                 crate::strict_php::is_enabled(),
             )?;
             abi::emit_jump(ctx.emitter, &done_label);
+            if let Some((prefix, suffix)) = &diagnostic {
+                super::arrays::union_type_guard::emit_mixed_wrong_tag_type_error_dispatch(
+                    ctx,
+                    &wrong_label,
+                    &|given| format!("{prefix}{given}{suffix}"),
+                );
+            }
             ctx.emitter.label(&null_label);
             abi::emit_load_int_immediate(
                 ctx.emitter,
@@ -252,6 +291,23 @@ pub(crate) fn lower_elephc_normalize_callable(
         }
     }
     store_if_result(ctx, inst)
+}
+
+/// Splits the `prefix\0suffix` TypeError text a declared `callable` parameter's normalization
+/// carries around the runtime type word, or `None` when the callable is only inferred.
+fn normalize_callable_diagnostic(
+    ctx: &FunctionContext<'_>,
+    inst: &Instruction,
+) -> Option<(String, String)> {
+    let Some(Immediate::Data(data)) = inst.immediate.as_ref() else {
+        return None;
+    };
+    ctx.module
+        .data
+        .strings
+        .get(data.as_raw() as usize)
+        .and_then(|template| template.split_once('\0'))
+        .map(|(prefix, suffix)| (prefix.to_string(), suffix.to_string()))
 }
 
 /// Lowers `__elephc_pdo_adapter_addr($kind)` — materializes the GOT address of the

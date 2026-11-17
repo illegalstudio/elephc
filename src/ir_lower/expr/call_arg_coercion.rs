@@ -648,7 +648,14 @@ pub(super) fn coerce_scalar_arg_to_param_storage(
         && !sig.ref_params.get(index).copied().unwrap_or(false)
         && matches!(source_ty, PhpType::Mixed | PhpType::Union(_))
     {
-        return unbox_callable_param_storage(ctx, value, Some(arg.span));
+        // Only a parameter written `callable` refuses null: an untyped one the checker merely
+        // specialized to `callable` from another call site keeps php's untouched null.
+        let diagnostic = matches!(
+            sig.param_type_exprs.get(index).and_then(Option::as_ref),
+            Some(TypeExpr::Named(name)) if name.as_str().eq_ignore_ascii_case("callable")
+        )
+        .then(|| callable_param_type_error(ctx, sig, index, arg));
+        return unbox_callable_param_storage_with(ctx, value, Some(arg.span), diagnostic);
     }
     if param_ty == PhpType::Iterable
         && !sig.ref_params.get(index).copied().unwrap_or(false)
@@ -1297,14 +1304,27 @@ pub(super) fn unbox_callable_param_storage(
     value: LoweredValue,
     span: Option<crate::span::Span>,
 ) -> LoweredValue {
+    unbox_callable_param_storage_with(ctx, value, span, None)
+}
+
+/// [`unbox_callable_param_storage`] for a parameter DECLARED `callable`: `diagnostic` is php's
+/// whole `TypeError` text around the runtime type word (`prefix\0suffix`), so null, a scalar or
+/// an unresolvable name or pair throws it instead of passing through or faulting.
+pub(super) fn unbox_callable_param_storage_with(
+    ctx: &mut LoweringContext<'_, '_>,
+    value: LoweredValue,
+    span: Option<crate::span::Span>,
+    diagnostic: Option<String>,
+) -> LoweredValue {
     // NORMALIZED, not merely unboxed: a boxed value may hold any callable spelling (`"strlen"`,
     // `[$o, 'm']`, a closure) or no callable at all. A bare unbox read `null` or `42` as a
     // descriptor pointer and the callee's first call through it segfaulted;
     // `NormalizeCallable` resolves the spellings and refuses the rest.
+    let immediate = diagnostic.map(|text| Immediate::Data(ctx.intern_string(&text)));
     let result = ctx.emit_owned_value(
         Op::NormalizeCallable,
         vec![value.value],
-        None,
+        immediate,
         PhpType::Callable,
         Op::NormalizeCallable.default_effects(),
         span,
@@ -1362,6 +1382,32 @@ fn iterable_param_type_error(
     let source = ctx.source_path().unwrap_or("unknown");
     format!(
         "{}(): Argument #{} (${}) must be of type Traversable|array, \0 given, called in {} on line {}",
+        callable,
+        index + 1,
+        param_name,
+        source,
+        arg.span.line
+    )
+}
+
+/// Builds php's `TypeError` text for a value no `callable` parameter accepts, as
+/// `prefix\0suffix` around the runtime type word (`apply(): Argument #1 ($f) must be of type
+/// callable, null given, called in /app.php on line 9`).
+fn callable_param_type_error(
+    ctx: &LoweringContext<'_, '_>,
+    sig: &FunctionSig,
+    index: usize,
+    arg: &Expr,
+) -> String {
+    let param_name = sig
+        .params
+        .get(index)
+        .map(|(name, _)| name.as_str())
+        .unwrap_or("arg");
+    let callable = ctx.call_description.as_deref().unwrap_or("call");
+    let source = ctx.source_path().unwrap_or("unknown");
+    format!(
+        "{}(): Argument #{} (${}) must be of type callable, \0 given, called in {} on line {}",
         callable,
         index + 1,
         param_name,

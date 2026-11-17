@@ -593,3 +593,35 @@ var_dump($r, $count);
     assert!(out.stderr.contains("preg_replace(): Argument #5 ($count) must be passed by reference, value given"), "{}", out.stderr);
     assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
 }
+
+/// A declared `callable` parameter handed a boxed null or scalar throws php's `TypeError` naming
+/// the runtime type: those used to fault or hand the callee a bogus descriptor. A string or array
+/// no callable answers keeps the shared resolver's fatal (its text cannot carry a per-site message).
+#[test]
+fn test_declared_callable_parameter_refuses_a_boxed_non_callable_with_type_error() {
+    let out = compile_and_run(
+        r#"<?php
+function apply(callable $f): mixed { return $f(); }
+function forward(mixed $x): void {
+    try {
+        echo apply($x), "\n";
+    } catch (TypeError $e) {
+        echo explode(", called in", $e->getMessage())[0], "\n";
+    }
+}
+forward(null);
+forward(5);
+forward(1.5);
+forward(true);
+forward(fn() => "fine");
+"#,
+    );
+    assert_eq!(
+        out,
+        "apply(): Argument #1 ($f) must be of type callable, null given\n\
+         apply(): Argument #1 ($f) must be of type callable, int given\n\
+         apply(): Argument #1 ($f) must be of type callable, float given\n\
+         apply(): Argument #1 ($f) must be of type callable, true given\n\
+         fine\n"
+    );
+}
