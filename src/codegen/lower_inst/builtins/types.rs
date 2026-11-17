@@ -544,7 +544,43 @@ pub(crate) fn lower_class_name_lookup(
             ctx.emitter.label(&done);
         }
         PhpType::Mixed | PhpType::Union(_) if super::has_eval_context(ctx) => {
-            return super::lower_eval_object_class_name(ctx, inst, value, name);
+            // The eval bridge names an object (tag 6, which an eval-declared class or closure is)
+            // and answers "" for anything else. A callable descriptor (tag 10) is a native
+            // Closure, invokable object or implicit callable, and `::class` rejects every
+            // non-object with its own TypeError, so those take the native lookup.
+            let eval_object = ctx.next_label("get_class_mixed_eval_object");
+            let done = ctx.next_label("get_class_mixed_eval_done");
+            ctx.load_value_to_result(value)?;
+            abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
+            match ctx.emitter.target.arch {
+                Arch::AArch64 => {
+                    ctx.emitter.instruction("cmp x0, #6");                      // runtime tag 6 is an object, native or eval-declared
+                    ctx.emitter.instruction(&format!("b.eq {eval_object}"));    // the eval bridge knows every object's class
+                    if !class_constant {
+                        ctx.emitter.instruction("cmp x0, #10");                 // runtime tag 10 is a callable descriptor
+                        ctx.emitter.instruction(&format!("b.ne {eval_object}")); // other values keep the eval bridge's answer
+                    }
+                }
+                Arch::X86_64 => {
+                    ctx.emitter.instruction("cmp rax, 6");                      // runtime tag 6 is an object, native or eval-declared
+                    ctx.emitter.instruction(&format!("je {eval_object}"));      // the eval bridge knows every object's class
+                    if !class_constant {
+                        ctx.emitter.instruction("cmp rax, 10");                 // runtime tag 10 is a callable descriptor
+                        ctx.emitter.instruction(&format!("jne {eval_object}")); // other values keep the eval bridge's answer
+                    }
+                }
+            }
+            ctx.load_value_to_result(value)?;
+            emit_mixed_object_class_name(ctx, name, class_constant);
+            if inst.result_php_type.codegen_repr() == PhpType::Mixed {
+                emit_box_current_value_as_mixed(ctx.emitter, &PhpType::Str);
+            }
+            store_if_result(ctx, inst)?;
+            abi::emit_jump(ctx.emitter, &done);
+            ctx.emitter.label(&eval_object);
+            super::lower_eval_object_class_name(ctx, inst, value, name)?;
+            ctx.emitter.label(&done);
+            return Ok(());
         }
         PhpType::Mixed | PhpType::Union(_) => {
             ctx.load_value_to_result(value)?;
