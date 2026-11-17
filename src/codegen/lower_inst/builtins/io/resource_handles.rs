@@ -149,6 +149,7 @@ pub(super) fn emit_unbox_stream_or_type_error(ctx: &mut FunctionContext<'_>, fun
     }
     emit_stream_type_error(ctx, function_name);
     ctx.emitter.label(&resource_label);
+    // -- refuse a proc_open() process resource: its payload is a bridge id, not a descriptor --
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
             ctx.emitter.instruction(&format!("cmp x2, #{PROCESS_RESOURCE_KIND}")); // does the high payload word mark a proc_open() process?
@@ -159,6 +160,7 @@ pub(super) fn emit_unbox_stream_or_type_error(ctx: &mut FunctionContext<'_>, fun
             ctx.emitter.instruction(&format!("jne {}", ok_label));              // any other resource kind is a stream
         }
     }
+    // -- report php-src's "must be an open stream resource" TypeError and exit --
     let parameter = if function_name == "pclose" { "handle" } else { "stream" };
     let message = format!(
         "Fatal error: Uncaught TypeError: {function_name}(): Argument #1 (${parameter}) must be an open stream resource\n"
