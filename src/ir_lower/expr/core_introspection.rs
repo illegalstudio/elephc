@@ -59,7 +59,7 @@ pub(super) fn lower_visible_defined_vars(
     // compiled local stay in its kept source array. They are still variables of the frame for
     // php, so they join the list after the locals (`+` keeps a local over its source key, which
     // is right for EXTR_SKIP and EXTR_OVERWRITE alike: the local already holds the winner).
-    let source = extract_source_local();
+    let source = extract_seen_local();
     if crate::closed_world::is_enabled() && ctx.has_local_slot(&source) {
         use crate::synthetic_class::{e_array, e_binop, e_call, e_ternary, e_var};
         let listed = crate::names::generated_local_name("__elephc_defined_vars");
@@ -82,6 +82,12 @@ pub(super) fn lower_visible_defined_vars(
 /// `get_defined_vars()` nor a later `extract()` sees it as a variable of the frame.
 fn extract_source_local() -> String {
     crate::names::generated_local_name("__elephc_extract_source")
+}
+
+/// The local accumulating every key any closed-world `extract()` of the frame imported: each call
+/// keeps its own array in [`extract_source_local`], and `get_defined_vars()` must list them all.
+fn extract_seen_local() -> String {
+    crate::names::generated_local_name("__elephc_extract_seen")
 }
 
 /// Lowers `extract($array [, EXTR_OVERWRITE | EXTR_SKIP])` onto the frame's compiled locals.
@@ -162,6 +168,32 @@ pub(super) fn lower_closed_world_extract(
         super::super::stmt::lower_stmt(ctx, &import);
     }
     let _ = e_bool;
+    // Fold this call's array into the frame's record of extracted keys: a later EXTR_OVERWRITE
+    // call wins a shared key, an EXTR_SKIP one does not.
+    {
+        use crate::synthetic_class::{e_array, e_ternary};
+        let seen_local = extract_seen_local();
+        let previous = if ctx.has_local_slot(&seen_local) {
+            e_ternary(
+                e_call("is_array", vec![e_var(&seen_local)]),
+                e_var(&seen_local),
+                e_array(Vec::new()),
+            )
+        } else {
+            e_array(Vec::new())
+        };
+        let current = e_ternary(
+            e_call("is_array", vec![e_var(&source_local)]),
+            e_var(&source_local),
+            e_array(Vec::new()),
+        );
+        let merged = if skip {
+            e_binop(previous, BinOp::Add, current)
+        } else {
+            e_call("array_replace", vec![previous, current])
+        };
+        super::super::stmt::lower_stmt(ctx, &s_assign(&seen_local, merged));
+    }
     Some(lower_expr(ctx, &e_var(&count_local)))
 }
 

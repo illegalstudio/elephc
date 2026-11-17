@@ -638,6 +638,21 @@ fn closed_world_extract_writes_through_a_reference_bound_local() {
     assert_eq!(heap, "HEAP DEBUG: leak summary: clean");
 }
 
+const GET_DEFINED_VARS_AFTER_EXTRACTS: &str = r#"<?php
+function f() { extract(['a' => 1]); extract(['b' => 2]); echo json_encode(array_keys(get_defined_vars())), "\n"; }
+f();
+function h() { extract(['a' => 1]); extract(['a' => 5, 'b' => 2], EXTR_SKIP); echo json_encode(get_defined_vars()), "\n"; }
+h();
+"#;
+
+/// `get_defined_vars()` lists the keys of every earlier `extract()` of the frame, not only the last.
+#[test]
+fn closed_world_get_defined_vars_lists_every_extract_call() {
+    let (stdout, heap, dir) = closed_run("cw_extract_seen", GET_DEFINED_VARS_AFTER_EXTRACTS);
+    assert_eq!(stdout, php_stdout(&dir), "get_defined_vars after extract differs from php");
+    assert_eq!(heap, "HEAP DEBUG: leak summary: clean");
+}
+
 /// `Closure::fromCallable([$context, $name])` with a method name known only at run time -- Carbon's
 /// mixins and Laravel's `Component::createVariableFromMethod()` -- is an ARRAY literal, so it took
 /// the eval bridge and refused the closed world. It converts like a gradual value now, keeping the
