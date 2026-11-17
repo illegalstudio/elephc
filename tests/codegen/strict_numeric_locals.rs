@@ -19,6 +19,8 @@ fn test_strict_runtime_eval_binding_origins_bundle() {
         .strip_prefix("<?php").unwrap());
     let source = format!("{source}\n{}", include_str!("../fixtures/strict/eval_native_rebinding_stores.php")
         .strip_prefix("<?php").unwrap());
+    let source = format!("{source}\n{}", include_str!("../fixtures/strict/eval_native_copy_origins.php")
+        .strip_prefix("<?php").unwrap());
     for mode in ["--ir-opt=off", "--ir-opt=on"] {
         for strict in [false, true] {
             let mut flags = vec![mode, "--heap-debug"];
@@ -38,7 +40,11 @@ fn test_strict_runtime_eval_binding_origins_bundle() {
                 "Warray|Tarray|WNULL:|TNULL:|integer:1|Kdouble:4.5|Tinteger:1|") }
                 else { concat!("Wdouble:3.5|Winteger:1|Wdouble:3.5:double:3.5|Winteger:1:integer:1|",
                     "OWstring:after!|OWstring:after!|Warray|Winteger|WNULL:|Winteger:1|integer:1|Kdouble:4.5|Kdouble:4.5|") };
-            assert_eq!(String::from_utf8_lossy(&output.stdout), format!("{expected}{conditional}{current}"), "{flags:?}: {}",
+            let copies = if strict { concat!("Wdouble:3.5|Tdouble:2.5|Tdouble:2.5|",
+                "Tinteger:1|Tdouble:3.5|integer:1|Tdouble:3.5|integer:1|Tdouble:3.5:double:3.5|T2.5:2.5|Tarray|") }
+                else { concat!("Wdouble:3.5|Winteger:1|Winteger:1|",
+                    "Wdouble:3.5|Wstring:bad|integer:1|Wstring:bad|integer:1|Wdouble:3.5:integer:1|W2.5:1|Winteger|") };
+            assert_eq!(String::from_utf8_lossy(&output.stdout), format!("{expected}{conditional}{current}{copies}"), "{flags:?}: {}",
                 String::from_utf8_lossy(&output.stderr));
             assert!(String::from_utf8_lossy(&output.stderr).contains("HEAP DEBUG: leak summary: clean"),
                 "{flags:?}: {}", String::from_utf8_lossy(&output.stderr));
@@ -426,7 +432,7 @@ numericScope($argc);
 fn test_strict_numeric_locals_example() {
     let source = include_str!("../../examples/strict-locals/main.php");
     assert_eq!(StrictFixture::new(source).run(&["--strict-locals"]),
-        "Quantity requires an integer or null\nQuantity: 2\nQuantity: 3\nQuantity: not tracked\nThe integer binding kept its value\nArithmetic result: double\nFresh measurement: 2.5\nThe referenced quantity kept its integer value\nThe label kept its string value\nThe conversion kept the label value\nThe literal eval kept the label value\nThe eval-created quantity kept its integer type\nThe runtime-created quantity kept its integer type\nRuntime measurement: 2.5\nThe conditional quantity kept its integer type\nFresh conditional quantity: 2.5\nRuntime quantity: 3.5\nThe runtime quantity kept its float value\nRuntime quantity: 2.5\n");
+        "Quantity requires an integer or null\nQuantity: 2\nQuantity: 3\nQuantity: not tracked\nThe integer binding kept its value\nArithmetic result: double\nFresh measurement: 2.5\nThe referenced quantity kept its integer value\nThe label kept its string value\nThe conversion kept the label value\nThe literal eval kept the label value\nThe eval-created quantity kept its integer type\nThe runtime-created quantity kept its integer type\nRuntime measurement: 2.5\nThe conditional quantity kept its integer type\nFresh conditional quantity: 2.5\nRuntime quantity: 3.5\nThe runtime quantity kept its float value\nRuntime quantity: 2.5\nThe copied quantity kept its float value\nCopied quantity: 2.5\n");
 }
 
 

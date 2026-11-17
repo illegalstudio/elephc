@@ -59,8 +59,31 @@ pub struct LocalStoreContract {
     pub feature: elephc_semantics::StrictFeature,
 }
 
-/// Local write contracts keyed by body, original source span and local name.
-pub(crate) type LocalStoreContracts = HashMap<(String, Span, String), LocalStoreContract>;
+/// Original producer facts retained even when optimization replaces a variable read with a constant.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct LocalCopyContract {
+    pub source: String,
+    pub contract: PhpType,
+}
+
+/// Source-local contracts and copy producers transported together through the checked pipeline.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct LocalStoreContracts {
+    stores: HashMap<(String, Span, String), LocalStoreContract>,
+    pub(crate) copies: HashMap<(String, Span, String), LocalCopyContract>,
+}
+
+impl std::ops::Deref for LocalStoreContracts {
+    type Target = HashMap<(String, Span, String), LocalStoreContract>;
+
+    /// Keeps existing store consumers focused on their authoritative membership map.
+    fn deref(&self) -> &Self::Target { &self.stores }
+}
+
+impl std::ops::DerefMut for LocalStoreContracts {
+    /// Allows checker store updates without separating immutable producer transport.
+    fn deref_mut(&mut self) -> &mut Self::Target { &mut self.stores }
+}
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 /// Describes a statically-known access violation that PHP raises as a catchable

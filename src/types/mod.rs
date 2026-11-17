@@ -8,6 +8,8 @@
 //! Key details:
 //! - `check()` runs after name resolution and before optimization/codegen so later passes receive canonical type metadata.
 
+/// Native callable and value-contract metadata spelling.
+pub(crate) mod native_type_spec;
 /// Type checking module.
 pub mod checker;
 /// Trait flattening and resolution.
@@ -102,8 +104,8 @@ pub(crate) use return_alias::{
     collect_return_alias_summaries, summarize_callable_return_alias, ReturnAliasSummaries,
     ReturnArgAlias,
 };
-pub use result::LocalStoreContract;
-pub(crate) use result::{LocalStoreContracts, LocalValueReadTypes, LoopStorageTypes, PromotableArrays};
+pub use result::{LocalStoreContract, LocalStoreContracts};
+pub(crate) use result::{LocalCopyContract, LocalValueReadTypes, LoopStorageTypes, PromotableArrays};
 pub use checker::CheckOptions;
 // `check_with_target` is superseded by `check_with_target_and_options` on the
 // production compile path; it stays public for tests that don't need `CheckOptions`.

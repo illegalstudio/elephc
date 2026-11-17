@@ -35,6 +35,7 @@ mod repl;
 mod php_only;
 mod strict_semantics;
 mod strict_numeric_locals;
+mod strict_copy_origins;
 mod strict_numeric_aggregates;
 mod strict_numeric_eval;
 mod strict_eval_diagnostics;

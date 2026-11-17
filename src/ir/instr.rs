@@ -276,6 +276,8 @@ pub enum Immediate {
     /// Static scope name plus the first producer's inferred binding contract.
     /// Runtime scope identity decides whether this name is fresh or already imported.
     EvalScopeStore(Box<EvalScopeStoreImmediate>),
+    /// Copies a scope producer onto an independent native local reference owner.
+    EvalBindingCopy { source: DataId, destination: LocalSlotId, owner: LocalSlotId },
     FunctionRef(FunctionId),
     BuiltinRef(BuiltinId),
     RuntimeRef(RuntimeId),
@@ -923,7 +925,7 @@ pub enum Op {
     SetLocalBindingState,
     /// Reads whether the live binding retains its native source origin, excluding eval-created bindings.
     GetNativeBindingState,
-    /// Reads whether eval established the current binding after native origin retirement.
+    /// Reads whether the current contract is established or transported through an eval scope.
     GetEvalBindingState,
     UnsetLocal,
     ZeroLocalSlot,
@@ -1341,6 +1343,8 @@ pub enum Op {
     EvalScopeSet,
     /// Publishes a checked native binding type independently from its snapshot storage shape.
     EvalScopeBindLocalType,
+    /// Copies immutable producer metadata while retaining independent value/reference ownership.
+    EvalScopeCopyBindingType,
     EvalFunctionCall,
     EvalFunctionCallArray,
     EvalFunctionExists,
@@ -1741,6 +1745,7 @@ impl Op {
             EvalFunctionExists | EvalClassExists | EvalConstantExists => E::READS_GLOBAL,
             GetNativeBindingState | GetEvalBindingState => E::READS_LOCAL,
             EvalScopeBindLocalType => E::READS_LOCAL | E::READS_HEAP | E::WRITES_HEAP | E::ALLOC_HEAP | E::MAY_FATAL,
+            EvalScopeCopyBindingType => E::READS_LOCAL | E::WRITES_LOCAL | E::READS_HEAP | E::WRITES_HEAP | E::ALLOC_HEAP | E::MAY_FATAL,
             EvalScopeGet => E::READS_HEAP | E::MAY_FATAL,
             EvalScopeSet => E::READS_HEAP | E::WRITES_HEAP | E::REFCOUNT_OP | E::MAY_THROW | E::MAY_FATAL,
             EvalConstantFetch => {
@@ -2098,6 +2103,7 @@ impl Op {
             LanguageConstructCall => "language_construct_call",
             EvalLiteralCall => "eval_literal_call",
             EvalScopeBindLocalType => "eval_scope_bind_local_type",
+            EvalScopeCopyBindingType => "eval_scope_copy_binding_type",
             EvalScopeGet => "eval_scope_get",
             EvalScopeSet => "eval_scope_set",
             EvalFunctionCall => "eval_function_call",

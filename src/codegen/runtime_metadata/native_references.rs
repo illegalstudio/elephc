@@ -58,8 +58,10 @@ pub(in crate::codegen) fn emit_native_reference_metadata(module: &Module) -> Res
             return Err(CodegenIrError::invalid_module("native reference callback has a PHP calling convention"));
         }
         if let Some(contract) = &function.native_local_reference_contract {
+            let ty = crate::types::native_type_spec::php_type_spec(contract, false)
+                .ok_or_else(|| CodegenIrError::invalid_module("local origin has no native type spelling"))?;
             local_descriptors.push((local_descriptor(module, contract)?,
-                crate::names::function_symbol(&function.name)));
+                crate::names::function_symbol(&function.name), ty));
             continue;
         }
         let declarations = function.instructions.iter().filter_map(|inst| match &inst.immediate {
@@ -91,8 +93,12 @@ pub(in crate::codegen) fn emit_native_reference_metadata(module: &Module) -> Res
         .map_or(Some(0), |id| id.checked_add(1))
         .ok_or_else(|| CodegenIrError::invalid_module("native reference class table overflow"))?;
     let mut output = String::from(".data\n");
-    for (symbol, entry) in local_descriptors {
-        emit_words(&mut output, &symbol, &[entry, "0".into(), "0".into(), "0".into()]);
+    for (symbol, entry, ty) in local_descriptors {
+        let type_symbol = format!("{symbol}_type");
+        emit_words(&mut output, &symbol, &[entry, "0".into(), "0".into(), "0".into(),
+            elephc_semantics::native_local_contract::ABI_VERSION.to_string(), type_symbol.clone(), ty.len().to_string()]);
+        output.push_str(&format!("{type_symbol}:\n    .byte {}\n",
+            ty.bytes().map(|byte| byte.to_string()).collect::<Vec<_>>().join(", ")));
     }
     emit_words(&mut output, "_native_reference_source_class_count", &[class_count.to_string()]);
     let pointers = (0..class_count).map(|id| if rows.contains_key(&id) {

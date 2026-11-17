@@ -42,9 +42,30 @@ fn with_origin_condition(ctx: &mut LoweringContext<'_, '_>, slot: LocalSlotId,
     span: crate::span::Span, predicate: Op, take_when_true: bool,
     body: impl FnOnce(&mut LoweringContext<'_, '_>),
 ) {
-    let initialized = ctx.initialized_slots_snapshot();
     let present = ctx.emit_value(predicate, Vec::new(),
         Some(Immediate::LocalSlot(slot)), PhpType::Bool, predicate.default_effects(), Some(span));
+    with_condition(ctx, present, take_when_true, body);
+}
+
+/// Establishes an independent producer only on paths without an existing native or eval binding.
+pub(super) fn when_unbound(ctx: &mut LoweringContext<'_, '_>, slot: LocalSlotId,
+    span: crate::span::Span, body: impl FnOnce(&mut LoweringContext<'_, '_>),
+) {
+    let native = ctx.emit_value(Op::GetNativeBindingState, Vec::new(),
+        Some(Immediate::LocalSlot(slot)), PhpType::Bool, Op::GetNativeBindingState.default_effects(), Some(span));
+    let eval = ctx.emit_value(Op::GetEvalBindingState, Vec::new(),
+        Some(Immediate::LocalSlot(slot)), PhpType::Bool, Op::GetEvalBindingState.default_effects(), Some(span));
+    let present = ctx.emit_value(Op::IBitOr, vec![native.value, eval.value], None,
+        PhpType::Bool, Op::IBitOr.default_effects(), Some(span));
+    with_condition(ctx, present, false, body);
+}
+
+/// Shares the guarded CFG and initialization join for single-bit and combined presence tests.
+fn with_condition(ctx: &mut LoweringContext<'_, '_>, present: super::context::LoweredValue,
+    take_when_true: bool,
+    body: impl FnOnce(&mut LoweringContext<'_, '_>),
+) {
+    let initialized = ctx.initialized_slots_snapshot();
     let bound = ctx.builder.create_named_block("eval.binding.selected", Vec::new());
     let done = ctx.builder.create_named_block("eval.binding.join", Vec::new());
     let (yes, no) = if take_when_true { (bound, done) } else { (done, bound) };

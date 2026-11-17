@@ -61,6 +61,68 @@ pub unsafe extern "C" fn __elephc_eval_scope_binding_type_v1(
     }).unwrap_or_else(|_| EvalStatus::RuntimeFatal.code())
 }
 
+/// Copies a producer contract onto independent canonical storage without running PHP.
+///
+/// # Safety
+/// Scope and name ranges are live; reference is the fresh destination's canonical PHPRef.
+/// The caller keeps that allocation alive until its weak contract registration completes.
+#[no_mangle]
+pub unsafe extern "C" fn __elephc_eval_scope_copy_binding_type_v1(
+    scope: *mut ElephcEvalScope,
+    metadata: *const elephc_semantics::native_local_contract::BindingCopyV1,
+    reference: *mut RuntimeCell,
+) -> i32 {
+    std::panic::catch_unwind(|| unsafe {
+        let Some(scope) = scope.as_mut() else { return EvalStatus::RuntimeFatal.code(); };
+        let Some(metadata) = metadata.as_ref() else { return EvalStatus::RuntimeFatal.code(); };
+        if metadata.version != elephc_semantics::native_local_contract::ABI_VERSION { return EvalStatus::RuntimeFatal.code(); }
+        if reference.is_null() { return EvalStatus::RuntimeFatal.code(); }
+        let Ok(source) = abi_name_to_string(metadata.source_ptr, metadata.source_len as u64) else { return EvalStatus::RuntimeFatal.code(); };
+        let Ok(target) = abi_name_to_string(metadata.target_ptr, metadata.target_len as u64) else { return EvalStatus::RuntimeFatal.code(); };
+        let declared = match copied_local_type(scope, &source, &target, metadata.descriptor.as_ref()) {
+            Ok(declared) => declared,
+            Err(status) => return status.code(),
+        };
+        scope.infer_local_type(target, declared.clone());
+        if !declared.variants().contains(&crate::eval_ir::EvalParameterTypeVariant::Mixed) {
+            let reference = RuntimeCellHandle::from_raw(reference);
+            for pointer in crate::context::live_native_reference_contexts() {
+                if let Some(context) = pointer.as_mut() {
+                    if context.semantic_profile().contains(elephc_semantics::StrictFeature::Locals) {
+                        context.bind_local_reference_types(reference, &[declared.clone()]);
+                    }
+                }
+            }
+        }
+        EvalStatus::Ok.code()
+    }).unwrap_or_else(|_| EvalStatus::RuntimeFatal.code())
+}
+
+/// Selects one original producer independently from mutable cell representation.
+///
+/// # Safety
+/// A supplied descriptor is immutable and its type byte range remains readable for this call.
+unsafe fn copied_local_type(scope: &ElephcEvalScope, source: &str, target: &str,
+    descriptor: Option<&elephc_semantics::native_local_contract::LocalTypeDescriptorV1>,
+) -> Result<crate::eval_ir::EvalParameterType, EvalStatus> {
+    if descriptor.is_some_and(|descriptor|
+        descriptor.version != elephc_semantics::native_local_contract::ABI_VERSION) {
+        return Err(EvalStatus::RuntimeFatal);
+    }
+    if let Some(declared) = scope.local_type(source).or_else(|| scope.inferred_local_type(source))
+        .or_else(|| scope.native_binding_type(source)).or_else(|| scope.native_binding_type(target)) {
+        return Ok(declared.clone());
+    }
+    match descriptor {
+        Some(descriptor) => super::native_methods::native_callable_type_from_abi(
+            descriptor.type_ptr, descriptor.type_len as u64,
+            super::native_methods::NativeCallableTypePosition::Parameter,
+        ).ok_or(EvalStatus::RuntimeFatal),
+        None => Ok(crate::eval_ir::EvalParameterType::new(
+            vec![crate::eval_ir::EvalParameterTypeVariant::Mixed], false)),
+    }
+}
+
 /// Allocates a materialized activation scope handle for generated code.
 #[no_mangle]
 pub extern "C" fn __elephc_eval_scope_new() -> *mut ElephcEvalScope {
@@ -239,4 +301,42 @@ pub unsafe extern "C" fn __elephc_eval_scope_clear_dirty(scope: *mut ElephcEvalS
     };
     scope.mark_all_clean();
     EvalStatus::Ok.code()
+}
+
+#[cfg(test)]
+mod copy_origin_tests {
+    use super::*;
+    use crate::eval_ir::{EvalParameterType, EvalParameterTypeVariant};
+    use elephc_semantics::native_local_contract::{LocalTypeDescriptorV1, ABI_VERSION};
+
+    /// Pure native descriptors retain null/union contracts while explicit Mixed sources stay open.
+    #[test]
+    fn copied_scope_producer_types_preserve_null_unions_and_open_origins() {
+        let mut scope = ElephcEvalScope::new();
+        for spelling in ["null", "int|float", "string"] {
+            let descriptor = LocalTypeDescriptorV1 { callback: 0, class_id: 0, property_slot: 0,
+                is_static: 0, version: ABI_VERSION, type_ptr: spelling.as_ptr(), type_len: spelling.len() };
+            let copied = unsafe { copied_local_type(&scope, "source", "copy", Some(&descriptor)) }.unwrap();
+            let expected = super::super::native_methods::native_callable_type_from_abi(
+                spelling.as_ptr(), spelling.len() as u64,
+                super::super::native_methods::NativeCallableTypePosition::Parameter,
+            ).unwrap();
+            assert_eq!(copied, expected);
+        }
+        let closed = EvalParameterType::new(vec![EvalParameterTypeVariant::Float], false);
+        scope.infer_local_type("source".into(), closed.clone());
+        let copied = unsafe { copied_local_type(&scope, "source", "copy", None) }.unwrap();
+        scope.infer_local_type("copy".into(), copied);
+        scope.unset("source");
+        scope.infer_local_type("source".into(), EvalParameterType::new(vec![EvalParameterTypeVariant::Int], false));
+        assert_eq!(unsafe { copied_local_type(&scope, "copy", "second", None) }.unwrap(), closed);
+        let open = EvalParameterType::new(vec![EvalParameterTypeVariant::Mixed], false);
+        scope.infer_local_type("open".into(), open.clone());
+        let text = "float";
+        let mut descriptor = LocalTypeDescriptorV1 { callback: 0, class_id: 0, property_slot: 0,
+            is_static: 0, version: ABI_VERSION, type_ptr: text.as_ptr(), type_len: text.len() };
+        assert_eq!(unsafe { copied_local_type(&scope, "open", "new", Some(&descriptor)) }.unwrap(), open);
+        descriptor.version = 0;
+        assert_eq!(unsafe { copied_local_type(&scope, "open", "new", Some(&descriptor)) }, Err(EvalStatus::RuntimeFatal));
+    }
 }

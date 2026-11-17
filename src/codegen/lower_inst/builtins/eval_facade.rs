@@ -9,6 +9,13 @@
 
 use super::*;
 
+/// Copies an eval producer contract onto fresh independent native reference storage.
+pub(in crate::codegen::lower_inst) fn lower_eval_scope_copy_binding_type(
+    ctx: &mut FunctionContext<'_>, inst: &Instruction,
+) -> Result<()> {
+    eval::lower_eval_scope_copy_binding_type(ctx, inst)
+}
+
 /// Appends live eval declarations to the current owned native inventory container.
 pub(in crate::codegen::lower_inst) fn append_eval_inventory(
     ctx: &mut FunctionContext<'_>,

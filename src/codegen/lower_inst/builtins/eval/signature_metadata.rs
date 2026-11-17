@@ -221,45 +221,7 @@ pub(super) fn eval_native_type_expr_member_specs(members: &[TypeExpr], separator
         .map(|members| members.join(separator))
 }
 
-/// Formats one checked PHP type for eval native metadata registration.
-pub(super) fn eval_native_php_type_spec(php_type: &PhpType, allow_return_atoms: bool) -> Option<String> {
-    if php_type.is_php_array() {
-        return Some("array".to_string());
-    }
-    match php_type {
-        PhpType::Int => Some("int".to_string()),
-        PhpType::Float => Some("float".to_string()),
-        PhpType::Str => Some("string".to_string()),
-        PhpType::Bool => Some("bool".to_string()),
-        PhpType::False => Some("false".to_string()),
-        PhpType::Void if allow_return_atoms => Some("void".to_string()),
-        PhpType::Void => Some("null".to_string()),
-        PhpType::Never if allow_return_atoms => Some("never".to_string()),
-        PhpType::Never => None,
-        PhpType::Iterable => Some("iterable".to_string()),
-        PhpType::Mixed => Some("mixed".to_string()),
-        PhpType::Array(_) | PhpType::AssocArray { .. } => Some("array".to_string()),
-        PhpType::Callable => Some("callable".to_string()),
-        PhpType::Object(name) if name.is_empty() => Some("object".to_string()),
-        PhpType::Object(name) => Some(name.clone()),
-        PhpType::Union(members) => eval_native_php_type_member_specs(members),
-        PhpType::Buffer(_)
-        | PhpType::Packed(_)
-        | PhpType::Pointer(_)
-        | PhpType::Resource(_)
-        | PhpType::Narrow(_)
-        | PhpType::TaggedScalar => None,
-    }
-}
-
-/// Formats union members from checked PHP types for eval native metadata registration.
-pub(super) fn eval_native_php_type_member_specs(members: &[PhpType]) -> Option<String> {
-    members
-        .iter()
-        .map(|member| eval_native_php_type_spec(member, false))
-        .collect::<Option<Vec<_>>>()
-        .map(|members| members.join("|"))
-}
+pub(super) use crate::types::native_type_spec::php_type_spec as eval_native_php_type_spec;
 
 /// The explicit PHP signature shape a generated bridge registers alongside its parameter slots.
 ///

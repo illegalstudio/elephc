@@ -981,6 +981,9 @@ initialized them. A binding first created by eval keeps its own origin on later
 calls, including repeated loop iterations and names recreated after eval `unset`.
 After eval recreates an inferred native name, later native writes validate the
 original candidate against its replacement contract before changing the value.
+An independent native copy retains the producer's contract through constant
+propagation, later eval calls and source rebinding. The value and binding remain
+independent; a producer declared `mixed` keeps the copied binding open.
 
 A body that **calls** `eval()` anywhere is the other side of that coin: the
 eval scope reaches the surrounding function's locals BY NAME, while the kill

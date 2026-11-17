@@ -127,3 +127,15 @@ function replaceRuntimeQuantity(mixed $replacement, int $requestCount): void {
 }
 replaceRuntimeQuantity(3.5, $argc);
 replaceRuntimeQuantity(1, $argc);
+
+function copyEvalQuantity(int $requestCount): void {
+    eval('$quantity = 2.5;');
+    $copy = $quantity;
+    try {
+        $copy = $requestCount;
+    } catch (TypeError $error) {
+        echo "The copied quantity kept its float value", PHP_EOL;
+    }
+    echo "Copied quantity: ", $copy, PHP_EOL;
+}
+copyEvalQuantity($argc);

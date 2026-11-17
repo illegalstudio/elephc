@@ -33,6 +33,12 @@ impl ScopeBindings {
         entry.as_mut().map_or(0, |binding| &mut **binding as *mut Binding as usize)
     }
 
+    /// Copies immutable origin metadata without sharing its binding or cell ownership.
+    fn validator(&self, scope: usize, name: &[u8]) -> usize {
+        self.scopes.get(&scope).and_then(|bindings| bindings.get(name))
+            .and_then(Option::as_ref).map_or(0, |binding| binding.validator)
+    }
+
     /// Detaches one physical source before its stable slot or native cell can be retired.
     fn take(&mut self, scope: usize, name: Option<&[u8]>) -> usize {
         let Some(bindings) = self.scopes.get_mut(&scope) else { return 0; };
@@ -85,6 +91,20 @@ pub unsafe extern "C" fn __elephc_reference_scope_binding_v1(
     BINDINGS.with(|bindings| bindings.borrow_mut().binding(scope, name, validator))
 }
 
+/// Copies the immutable validator descriptor for an independent value binding, or returns zero.
+///
+/// # Safety
+/// Scope identity remains live and name bytes are readable for the supplied length.
+/// A returned descriptor is immutable generated program metadata, independent of the scope slot.
+#[no_mangle]
+pub unsafe extern "C" fn __elephc_reference_scope_type_v1(
+    scope: usize, name: *const u8, len: usize,
+) -> usize {
+    if scope == 0 || (name.is_null() && len != 0) { return 0; }
+    let name = if len == 0 { &[] } else { unsafe { std::slice::from_raw_parts(name, len) } };
+    BINDINGS.with(|bindings| bindings.borrow().validator(scope, name))
+}
+
 /// Detaches one source and transfers its native cell owner to the caller, or returns zero.
 ///
 /// # Safety
@@ -122,6 +142,24 @@ pub unsafe extern "C" fn __elephc_reference_scope_visit_v1(scope: usize,
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Descriptor copies survive source retirement while open and absent origins stay open.
+    #[test]
+    fn scope_binding_descriptor_copies_have_independent_lifetimes() {
+        let mut scopes = ScopeBindings::default();
+        scopes.binding(5, b"source", 123);
+        let copied = scopes.validator(5, b"source");
+        scopes.binding(5, b"copy", copied);
+        assert_eq!(scopes.take(5, Some(b"source")), 0);
+        assert_eq!(scopes.validator(5, b"copy"), 123);
+        scopes.binding(5, b"source", 456);
+        scopes.binding(5, b"open", 0);
+        assert_eq!(scopes.validator(5, b"source"), 456);
+        assert_eq!(scopes.validator(5, b"copy"), 123);
+        assert_eq!(scopes.validator(5, b"open"), 0);
+        assert_eq!(scopes.validator(5, b"absent"), 0);
+        assert_eq!(scopes.validator(6, b"copy"), 0);
+    }
 
     /// Identical fragments keep activation origins separate and map growth preserves native slots.
     #[test]

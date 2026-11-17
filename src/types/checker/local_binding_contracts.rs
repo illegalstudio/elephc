@@ -16,7 +16,12 @@ impl Checker {
     /// Captures initialized binding origins before an opaque eval can widen their views.
     pub(crate) fn record_eval_binding_contracts(&mut self, env: &TypeEnv, span: Span) {
         for (name, actual) in env {
-            self.record_local_reference_contract(name, actual, span);
+            if self.record_local_reference_contract(name, actual, span) {
+                let key = (self.current_loop_storage_scope.clone(), span, name.clone());
+                if let Some(contract) = self.local_store_contracts.get(&key) {
+                    self.inferred_local_contracts.entry(name.clone()).or_insert_with(|| contract.ty.clone());
+                }
+            }
         }
     }
 
@@ -54,6 +59,19 @@ impl Checker {
         if self.semantic_source_mode == crate::source::SourceMode::Internal
             || !self.semantic_profile.contains(StrictFeature::Locals) { return Ok(incoming.clone()); }
         let key = (self.current_loop_storage_scope.clone(), span, name.to_string());
+        self.local_store_contracts.copies.remove(&key);
+        if self.eval_barrier_active {
+            if let Some(source) = source.and_then(copy_producer_local) {
+                let ty = self.typed_local_names.get(source).or_else(|| self.inferred_local_contracts.get(source))
+                    .or_else(|| self.narrowed_local_origins.get(source).map(|origin| &origin.origin))
+                    .or_else(|| self.guarded_union_types.get(source).map(|origin| &origin.ty))
+                    .or_else(|| env.get(source)).unwrap_or(incoming);
+                let contract = crate::semantics::conversions::inferred_binding_contract(ty).unwrap_or(PhpType::Mixed);
+                self.local_store_contracts.copies.insert(key.clone(), crate::types::LocalCopyContract {
+                    source: source.into(), contract,
+                });
+            }
+        }
         if self.local_store_contracts.get(&key).is_some_and(|contract| contract.feature == StrictFeature::Locals) {
             self.local_store_contracts.remove(&key);
         }
@@ -96,6 +114,17 @@ impl Checker {
             }
             _ => Ok(incoming.clone()),
         }
+    }
+}
+
+/// Finds the binding that produces a copied value before optimizer propagation can erase its read.
+fn copy_producer_local(expr: &crate::parser::ast::Expr) -> Option<&str> {
+    use crate::parser::ast::ExprKind;
+    match &expr.kind {
+        ExprKind::Variable(name) => Some(name),
+        ExprKind::ErrorSuppress(value) | ExprKind::NamedArg { value, .. } => copy_producer_local(value),
+        ExprKind::Assignment { target, result_target, .. } => copy_producer_local(result_target.as_deref().unwrap_or(target)),
+        _ => None,
     }
 }
 

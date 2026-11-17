@@ -256,10 +256,12 @@ fn emit_aarch64_eval_scope_get(emitter: &mut Emitter) {
 /// local's declared object type. The shared barrier still calls the bridge ABI, and this stub
 /// keeps that surface link-complete while reporting success.
 fn emit_aarch64_eval_scope_native_type(emitter: &mut Emitter) {
-    label_c_global(emitter, "__elephc_eval_scope_binding_type_v1");
-    label_c_global(emitter, "__elephc_eval_scope_native_type_v1");
-    emitter.instruction(&format!("mov x0, #{}", EVAL_STATUS_OK));               // scope-only barriers have no interpreter write to validate
-    emitter.instruction("ret");                                                 // return the successful eval status
+    for name in ["__elephc_eval_scope_copy_binding_type_v1", "__elephc_eval_scope_binding_type_v1",
+        "__elephc_eval_scope_native_type_v1"] {
+        label_c_global(emitter, name);
+        emitter.instruction(&format!("mov x0, #{}", EVAL_STATUS_OK));           // each C entry owns its return across runtime function pruning
+        emitter.instruction("ret");                                             // return success without requiring an interpreter context
+    }
 }
 
 /// Emits x86_64 eval-scope helpers. `__elephc_eval_value_null` comes from the
@@ -489,10 +491,12 @@ fn emit_x86_64_eval_scope_get(emitter: &mut Emitter) {
 
 /// Emits the x86_64 scope-only native-type validator stub.
 fn emit_x86_64_eval_scope_native_type(emitter: &mut Emitter) {
-    label_c_global(emitter, "__elephc_eval_scope_binding_type_v1");
-    label_c_global(emitter, "__elephc_eval_scope_native_type_v1");
-    emitter.instruction(&format!("mov eax, {}", EVAL_STATUS_OK));               // scope-only barriers have no interpreter write to validate
-    emitter.instruction("ret");                                                 // return the successful eval status
+    for name in ["__elephc_eval_scope_copy_binding_type_v1", "__elephc_eval_scope_binding_type_v1",
+        "__elephc_eval_scope_native_type_v1"] {
+        label_c_global(emitter, name);
+        emitter.instruction(&format!("mov eax, {}", EVAL_STATUS_OK));           // each C entry owns its return across runtime function pruning
+        emitter.instruction("ret");                                             // return success without requiring an interpreter context
+    }
 }
 
 /// Emits a global label with platform C-symbol mangling.

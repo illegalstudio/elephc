@@ -120,6 +120,15 @@ pub fn validate_module(module: &Module) -> Result<(), ValidationError> {
     {
         validate_function(function)?;
         for (index, inst) in function.instructions.iter().enumerate() {
+            if let Some(Immediate::EvalBindingCopy { source, .. }) = inst.immediate {
+                let canonical = inst.result_php_type == PhpType::Mixed
+                    || crate::semantics::conversions::inferred_binding_contract(&inst.result_php_type).as_ref()
+                        == Some(&inst.result_php_type);
+                if !canonical || module.data.global_names.get(source.as_raw() as usize)
+                    .is_none_or(|name| crate::names::is_generated_local_name(name)) {
+                    return Err(ValidationError::InvalidLocalReferenceContract(InstId::from_raw(index as u32)));
+                }
+            }
             if let Some(Immediate::EvalScopeStore(metadata)) = &inst.immediate {
                 if metadata.contract.as_ref().is_some_and(|contract|
                     crate::semantics::conversions::inferred_binding_contract(contract).as_ref() != Some(contract)) {
@@ -127,7 +136,7 @@ pub fn validate_module(module: &Module) -> Result<(), ValidationError> {
                 }
             }
             let mut required = inst.arithmetic_policy().requirements().bits();
-            if matches!(inst.op, Op::BindLocalRefContract | Op::SetLocalBindingState | Op::GetNativeBindingState | Op::GetEvalBindingState | Op::EvalScopeBindLocalType) || matches!(&inst.immediate,
+            if matches!(inst.op, Op::BindLocalRefContract | Op::SetLocalBindingState | Op::GetNativeBindingState | Op::GetEvalBindingState | Op::EvalScopeBindLocalType | Op::EvalScopeCopyBindingType) || matches!(&inst.immediate,
                 Some(Immediate::EvalScopeStore(metadata)) if metadata.contract.is_some()) {
                 required |= elephc_semantics::StrictFeature::Locals.bit();
             }
@@ -820,6 +829,9 @@ fn validate_instruction_immediate(
         EvalScopeBindLocalType => require_immediate(inst_id, inst, "checked scope binding type", |imm| {
             matches!(imm, Imm::EvalScopeStore(metadata) if metadata.contract.is_some())
         }),
+        EvalScopeCopyBindingType => require_immediate(inst_id, inst, "independent scope binding copy", |imm| {
+            matches!(imm, Imm::EvalBindingCopy { .. })
+        }),
         EvalScopeSet => require_immediate(inst_id, inst, "scope store or global name", |imm| {
             matches!(imm, Imm::GlobalName(_) | Imm::EvalScopeStore(_))
         }),
@@ -992,6 +1004,21 @@ fn validate_opcode_rules(
         EvalLiteralCall | EvalFunctionCallArray | EvalScopeGet => {
             check_count(inst_id, inst, 1, "1")
         }
+        EvalScopeCopyBindingType => {
+            check_count(inst_id, inst, 1, "1")?;
+            let Some(Immediate::EvalBindingCopy { destination, owner, .. }) = inst.immediate else { unreachable!() };
+            let valid = function.locals.get(destination.as_raw() as usize).is_some_and(|local|
+                local.kind == LocalKind::PhpLocal && local.name.as_deref().is_some_and(|name|
+                    !crate::names::is_generated_local_name(name)))
+                && function.locals.get(owner.as_raw() as usize).is_some_and(|local|
+                    local.kind == LocalKind::RefCell && local.php_type == crate::types::PhpType::Mixed);
+            if !valid || !function.flags.tracks_local_binding_state || inst.result.is_some()
+                || !function.locals.iter().any(|local| local.kind == LocalKind::EvalScope)
+                || !function.value(inst.operands[0]).is_some_and(|value| value.php_type == PhpType::Bool) {
+                return Err(ValidationError::InvalidLocalReferenceContract(inst_id));
+            }
+            Ok(())
+        },
         EvalScopeBindLocalType => {
             check_count(inst_id, inst, 0, "0")?;
             if !function.locals.iter().any(|local| local.kind == LocalKind::EvalScope) {

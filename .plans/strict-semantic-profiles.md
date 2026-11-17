@@ -1241,3 +1241,50 @@ including runtime-created and pure literal-created origins. Preserve the saved
 copy fixtures for that next portion, then finish remaining binding flow, six
 pending semantic families and full umbrella/host acceptance. No full suite,
 push or PR was run.
+
+
+### Verified132: independent native copy origins
+
+Native value copies now transport the original producer contract into independent
+canonical reference storage. A single statement/expression helper emits explicit
+EvalScopeCopyBindingType EIR only for a fresh destination. The existing private
+provenance word preserves a transported runtime origin on later native writes.
+Checked native-origin alternatives select their immutable callback descriptor;
+eval-origin copies consult live scope descriptors and interpreter producer types.
+Declared array sources copy bare PHP array kind independently of ArrayTypes.
+Explicit mixed producers and preexisting explicit mixed destinations remain open.
+
+LocalStoreContracts now transports checked copy facts alongside membership stores.
+This matters after AST propagation replaces `$second=$copy` with a float constant:
+the original source contract remains authoritative. No new compiler type universe
+or duplicate runtime reference registry was introduced. Dependency-neutral versioned
+C metadata records live in elephc-semantics. Native local descriptors preserve the
+four-word callback prefix and append version/type spelling. The formatter moved
+to types/native_type_spec and is shared with native callable registration. The
+neutral scope registry exposes immutable descriptor lookup; the Rust scope copy
+ABI binds weak allocation-token types without running PHP or consuming values.
+
+37500970 passed original runtime/pure copies with102/18 allocations and frees.
+Expanded05ef2a4c exposed lost copy-of-copy provenance;7330b46e repaired it with235
+allocations/frees and native Int/union/open/expression controls. Initial complete
+cf58141a passed ten gates in7m39s. A skipped-eval control then exposed missing
+persistent-scope preparation and lost original parameter facts. The copy operation
+now uses the existing lazy scope helper and checker eval capture retains original
+native contracts before widening. Debug303ca7d9 also found aliased C metadata stubs
+falling through into resource_id code after runtime pruning, returning status5.
+Each C entry now owns a separate success/return body.8e069c67 passes executed and
+skipped branches in pure/bridge modes, with43/56 allocations and frees.
+
+Final632cd6ca passes build/default archives and ten exact gates in5m18s: shared ABI,
+neutral descriptor lifetime and interpreter type tests, five-target EIR with AST
+propagation and real clang assembly, pure/bridge copied scalar/null/array kinds,
+aliases, copied chains and skipped eval, combined native origins120.25s bundle,
+existing native-store/scalar-alias controls and example36.09s. Both IR modes and
+permissive/Locals execution remain heap clean. New Rust warnings are removed;
+only inherited warnings remain. Assembly comments and diff hygiene pass. The pure
+copy codegen test has its own module to keep the numeric/local test file compact.
+
+Continue broader local binding flow and Callable/Resource/Iterable coverage, then
+Nullability, Mixed, Initialization, ArrayTypes, ArrayKeys and Indexing, complete
+host/eval parity and full umbrella acceptance. The whole approved implementation
+remains active. No full suite, push or PR was run.

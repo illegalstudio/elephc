@@ -204,6 +204,10 @@ fn print_immediate(out: &mut String, data: &DataPool, immediate: &Immediate) {
                 .map(String::as_str).unwrap_or("<unknown>");
             let _ = write!(out, " scope[{}:{:?}] origin={contract:?}", name.as_raw(), value);
         }
+        Immediate::EvalBindingCopy { source, destination, owner } => {
+            let _ = write!(out, " source[{}] destination[{}] owner[{}]",
+                source.as_raw(), destination.as_raw(), owner.as_raw());
+        }
         Immediate::GlobalName(id) => {
             let value = data
                 .global_names
