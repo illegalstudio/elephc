@@ -914,6 +914,15 @@ pub(super) fn narrow_gradual_indexed_spread_source(
         {
             Some(element.as_ref().clone())
         }
+        // A static `array<T>` can hold hash storage a sparse integer write promoted at run time
+        // (`$a = [1, 2]; $a[7] = 3;`); the array-literal spread reads slots by index, so it takes
+        // the values list, which `array_values` builds from either storage.
+        PhpType::Array(element)
+            if renumber.is_some()
+                && !matches!(element.codegen_repr(), PhpType::Void | PhpType::Never) =>
+        {
+            Some(element.as_ref().clone())
+        }
         _ => None,
     };
     if let Some(value) = hash_value {

@@ -213,6 +213,7 @@ pub(super) fn lower_iter_start(ctx: &mut FunctionContext<'_>, inst: &Instruction
     }
     if !by_ref && matches!(source_kind, IteratorSourceKind::Indexed { .. }) {
         snapshot_indexed_array_length(ctx, offset);
+        park_promoted_indexed_source(ctx, offset);
     }
     match source_kind {
         IteratorSourceKind::Object { class_name, .. } => {
@@ -256,10 +257,24 @@ pub(super) fn lower_iter_next(ctx: &mut FunctionContext<'_>, inst: &Instruction)
             Arch::AArch64 => lower_hash_iter_next_aarch64(ctx, offset, has_origin),
             Arch::X86_64 => lower_hash_iter_next_x86_64(ctx, offset, has_origin),
         },
-        IteratorSourceKind::Indexed { .. } => match ctx.emitter.target.arch {
-            Arch::AArch64 => lower_indexed_iter_next_aarch64(ctx, offset, false),
-            Arch::X86_64 => lower_indexed_iter_next_x86_64(ctx, offset, false),
-        },
+        IteratorSourceKind::Indexed { .. } => {
+            // A runtime-promoted source (`$a = [1, 2]; $a[7] = 3;`) was parked in hash mode by
+            // `IterStart`: its snapshot length word holds the marker.
+            let promoted = ctx.next_label("iter_next_promoted");
+            let done = ctx.next_label("iter_next_indexed_done");
+            emit_branch_if_promoted_iterator(ctx, offset, &promoted);
+            match ctx.emitter.target.arch {
+                Arch::AArch64 => lower_indexed_iter_next_aarch64(ctx, offset, false),
+                Arch::X86_64 => lower_indexed_iter_next_x86_64(ctx, offset, false),
+            }
+            abi::emit_jump(ctx.emitter, &done);
+            ctx.emitter.label(&promoted);
+            match ctx.emitter.target.arch {
+                Arch::AArch64 => lower_hash_iter_next_aarch64(ctx, offset, has_origin),
+                Arch::X86_64 => lower_hash_iter_next_x86_64(ctx, offset, has_origin),
+            }
+            ctx.emitter.label(&done);
+        }
         IteratorSourceKind::Hash => match ctx.emitter.target.arch {
             Arch::AArch64 => lower_hash_iter_next_aarch64(ctx, offset, has_origin),
             Arch::X86_64 => lower_hash_iter_next_x86_64(ctx, offset, has_origin),
@@ -297,9 +312,19 @@ pub(super) fn lower_iter_current_key(
             }
         }
         IteratorSourceKind::Indexed { .. } => {
+            let promoted = ctx.next_label("iter_key_promoted");
+            let done = ctx.next_label("iter_key_indexed_done");
+            emit_branch_if_promoted_iterator(ctx, offset, &promoted);
             let result_reg = abi::int_result_reg(ctx.emitter);
             abi::load_at_offset(ctx.emitter, result_reg, offset - ITER_CURSOR_OFFSET_DELTA);
             emit_box_current_value_as_mixed(ctx.emitter, &PhpType::Int);
+            abi::emit_jump(ctx.emitter, &done);
+            ctx.emitter.label(&promoted);
+            match ctx.emitter.target.arch {
+                Arch::AArch64 => load_current_hash_key_as_mixed_aarch64(ctx, offset),
+                Arch::X86_64 => load_current_hash_key_as_mixed_x86_64(ctx, offset),
+            }
+            ctx.emitter.label(&done);
         }
         IteratorSourceKind::Hash => match ctx.emitter.target.arch {
             Arch::AArch64 => load_current_hash_key_as_mixed_aarch64(ctx, offset),
@@ -338,9 +363,22 @@ pub(super) fn lower_iter_current_value(
     let promote_reference = inst.immediate == Some(Immediate::I64(1));
     match iterator_source_kind(ctx, iterator, inst)? {
         IteratorSourceKind::Indexed { elem } => {
+            // Only a by-value walk snapshots a length word the promoted marker can live in.
+            let dispatch = !iterator_is_by_ref(ctx, iterator, inst)?;
+            let promoted = ctx.next_label("iter_value_promoted");
+            let loaded = ctx.next_label("iter_value_loaded");
+            if dispatch {
+                emit_branch_if_promoted_iterator(ctx, offset, &promoted);
+            }
             match ctx.emitter.target.arch {
                 Arch::AArch64 => load_current_array_value_aarch64(ctx, offset, &elem)?,
                 Arch::X86_64 => load_current_array_value_x86_64(ctx, offset, &elem)?,
+            }
+            if dispatch {
+                abi::emit_jump(ctx.emitter, &loaded);
+                ctx.emitter.label(&promoted);
+                load_current_promoted_value(ctx, offset, &elem)?;
+                ctx.emitter.label(&loaded);
             }
             if indexed_iter_value_needs_detached_cell(&elem, &result_ty) {
                 let result_reg = abi::int_result_reg(ctx.emitter).to_string();
@@ -1870,6 +1908,102 @@ fn snapshot_indexed_array_length(ctx: &mut FunctionContext<'_>, offset: usize) {
     abi::emit_load_int_immediate(ctx.emitter, len_reg, 0);
     ctx.emitter.label(&done_label);
     abi::store_at_offset(ctx.emitter, len_reg, offset - ITER_SNAPSHOT_LEN_OFFSET_DELTA);
+}
+
+/// Snapshot-length value marking a by-value indexed iterator whose source was promoted to hash
+/// storage at run time. Lengths are never negative, so it cannot collide with a real snapshot.
+const PROMOTED_SOURCE_MARKER: i64 = -1;
+
+/// Parks a by-value indexed iterator in hash mode when its source is runtime-promoted storage.
+///
+/// A sparse integer write (`$a = [1, 2]; $a[7] = 3;`) turns an `array<T>` into a hash while its
+/// static type stays a list. The loop's `IterNext`/`IterCurrent*` branch on the marker written
+/// here and walk the hash with the associative cursor, so keys and order match php. The packed
+/// path pays one heap-kind call per loop start and one compare per operation.
+fn park_promoted_indexed_source(ctx: &mut FunctionContext<'_>, offset: usize) {
+    let skip = ctx.next_label("iter_start_packed");
+    let array_reg = abi::int_result_reg(ctx.emitter);
+    let scratch = abi::secondary_scratch_reg(ctx.emitter);
+    abi::load_at_offset(ctx.emitter, array_reg, offset - ITER_SOURCE_OFFSET_DELTA);
+    crate::codegen::sentinels::emit_branch_if_null_container(ctx.emitter, array_reg, scratch, &skip);
+    abi::emit_call_label(ctx.emitter, "__rt_heap_kind");
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction("cmp x0, #3");                              // runtime kind 3 is promoted hash storage
+            ctx.emitter.instruction(&format!("b.ne {}", skip));
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("cmp rax, 3");                              // runtime kind 3 is promoted hash storage
+            ctx.emitter.instruction(&format!("jne {}", skip));
+        }
+    }
+    store_iterator_cursor(ctx, offset, 0);
+    let marker = abi::int_result_reg(ctx.emitter);
+    abi::emit_load_int_immediate(ctx.emitter, marker, PROMOTED_SOURCE_MARKER);
+    abi::store_at_offset(ctx.emitter, marker, offset - ITER_SNAPSHOT_LEN_OFFSET_DELTA);
+    ctx.emitter.label(&skip);
+}
+
+/// Branches to `promoted` when the by-value indexed iterator at `offset` is in hash mode.
+fn emit_branch_if_promoted_iterator(ctx: &mut FunctionContext<'_>, offset: usize, promoted: &str) {
+    let scratch = abi::secondary_scratch_reg(ctx.emitter);
+    abi::load_at_offset(ctx.emitter, scratch, offset - ITER_SNAPSHOT_LEN_OFFSET_DELTA);
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction(&format!("cmn {}, #1", scratch));           // snapshot length -1 marks a promoted hash source
+            ctx.emitter.instruction(&format!("b.eq {}", promoted));
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction(&format!("cmp {}, -1", scratch));           // snapshot length -1 marks a promoted hash source
+            ctx.emitter.instruction(&format!("je {}", promoted));
+        }
+    }
+}
+
+/// Loads the current element of a promoted-hash walk, typed as the static list element.
+///
+/// `IterNext`'s hash arm saved the entry's payload words in the iterator state; this reads them
+/// back in the register shape `load_current_array_value_*` produces for the same element type.
+fn load_current_promoted_value(
+    ctx: &mut FunctionContext<'_>,
+    offset: usize,
+    elem_ty: &PhpType,
+) -> Result<()> {
+    let result_reg = abi::int_result_reg(ctx.emitter);
+    match elem_ty {
+        PhpType::Void | PhpType::Never => abi::emit_load_int_immediate(ctx.emitter, result_reg, 0),
+        PhpType::Float => {
+            let scratch = abi::secondary_scratch_reg(ctx.emitter);
+            abi::load_at_offset(ctx.emitter, scratch, offset - ITER_VALUE_LO_OFFSET_DELTA);
+            match ctx.emitter.target.arch {
+                Arch::AArch64 => ctx.emitter.instruction(&format!("fmov d0, {}", scratch)), // reinterpret the saved float bits
+                Arch::X86_64 => ctx.emitter.instruction(&format!("movq xmm0, {}", scratch)), // reinterpret the saved float bits
+            }
+        }
+        PhpType::Str => {
+            let (ptr_reg, len_reg) = abi::string_result_regs(ctx.emitter);
+            abi::load_at_offset(ctx.emitter, ptr_reg, offset - ITER_VALUE_LO_OFFSET_DELTA);
+            abi::load_at_offset(ctx.emitter, len_reg, offset - ITER_VALUE_HI_OFFSET_DELTA);
+        }
+        PhpType::Int
+        | PhpType::Bool
+        | PhpType::Callable
+        | PhpType::Mixed
+        | PhpType::Pointer(_)
+        | PhpType::Buffer(_) => {
+            abi::load_at_offset(ctx.emitter, result_reg, offset - ITER_VALUE_LO_OFFSET_DELTA);
+        }
+        other if other.is_refcounted() => {
+            abi::load_at_offset(ctx.emitter, result_reg, offset - ITER_VALUE_LO_OFFSET_DELTA);
+        }
+        other => {
+            return Err(CodegenIrError::unsupported(format!(
+                "promoted indexed iterator value PHP type {:?}",
+                other
+            )));
+        }
+    }
+    Ok(())
 }
 
 /// Loads the live entry count from the indexed-array header in `array_reg` into `len_reg`,
