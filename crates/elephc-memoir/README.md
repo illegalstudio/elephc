@@ -13,10 +13,12 @@ container allocation and growth, copy-on-write and cloning, deep release, owned
 strings and scratch allocation, byte concatenation, owned C-string copies,
 growable output/capture buffers, consuming string append,
 callable-descriptor retirement, hash-entry ownership guards, generation-safe
-buffers, Mixed boxing and unboxing, persistent references, reference-cell lifetime,
+buffers, Mixed boxing and unboxing, raw-slot array conversion, persistent references,
+reference-cell lifetime, wrapper promotion and writable child-slot selection,
 parameter-owner acquisition, original-identity pins, protected cleanup, temporary
 owner retirement, validated boxed object transfers, the object-handle pool, guarded stack mapping,
-zend_string allocation and recursive zval/string/array storage retirement.
+zend_string allocation, recursive zval/string/array storage retirement, and memory
+proofs for direct scalar/empty-array cleanup.
 It also emits fixed heap, GC, buffer, reference-root, handle-table and string-scratch
 declarations, including raw capture-buffer storage, keeping their existing order
 and byte layout.
@@ -30,7 +32,10 @@ policy and inventory publication in the compiler adapter. Shared payload sizes
 and pointer-container tags live in `layout`. Capture finalization receives a compiler
 callback that resets output mode after storage retirement. Storage emission does
 not select an output destination. Zval storage owns copied strings and arrays;
-object and resource payloads remain borrowed native pointers.
+object and resource payloads remain borrowed native pointers. Mixed wrapper
+promotion receives an optional compiler callback for native type-source association.
+The host also supplies the uninitialized-property sentinel and scalar tags eligible
+for cleanup without child ownership; handler installation stays in the compiler.
 
 The compiler retains EIR lifetime analysis, ownership optimization and placement,
 PHP reference/type validation, formatting, output routing, zval pack/unpack,
@@ -53,7 +58,9 @@ owners, reference acquisition, borrowed identity pins, handle recycling and stac
 mapping, together with complete fixed data. The identity test also cross-assembles
 every target and emission mode. String/interoperability fingerprints additionally
 cover two scratch capacities, C-string storage, recursive zval release, capture
-storage and the compiler routing adapter.
+storage and the compiler routing adapter. Mixed-storage fingerprints cover both
+native reference-validation settings, raw-slot conversion, writable wrapper slots
+and scalar/empty-array release gates through the full compiler cleanup boundary.
 
 `build.rs` includes this crate's Rust sources in the runtime-cache identity.
 Changes to these emitters therefore invalidate cached runtime objects even when

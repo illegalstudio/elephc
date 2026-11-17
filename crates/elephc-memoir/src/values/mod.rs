@@ -29,3 +29,5 @@ pub mod mixed_from_value;
 pub mod mixed_reference;
 
 pub mod mixed_unbox;
+
+pub mod array_unbox_slots;
