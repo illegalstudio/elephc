@@ -269,3 +269,71 @@ function mk() { $a = [1, 2]; $a[7] = 3; return $a; }
 [1,2]{"0":1,"1":2,"7":3}
 "####);
 }
+
+/// Whole-array consumers (json, serialize, var_export, destructuring, comparison, typed parameters) over a promoted list.
+#[test]
+fn test_promoted_operands_whole_array_consumers() {
+    let out = compile_and_run(
+        r####"<?php
+function mk() { $a = [1, 2]; $a[7] = 3; return $a; }
+function f(array $x) { return $x; }
+function g(iterable $x) { foreach ($x as $k => $v) echo "$k=$v,"; echo "\n"; return $x; }
+/** @param array<int> $x @return array<int> */
+function h($x) { return $x; }
+$a = mk();
+echo json_encode(["n" => $a, "m" => [$a]]), "\n";
+echo serialize($a), "\n";
+var_export($a); echo "\n";
+array_walk($a, function (&$v, $k) { $v = $v * 10; });
+echo json_encode($a), "\n";
+$a = mk();
+[$x, $y] = $a; var_dump($x, $y);
+[0 => $p, 7 => $q] = $a; var_dump($p, $q);
+list($m, $n) = $a; var_dump($m, $n);
+var_dump(array_key_exists(5, $a), isset($a[5]), array_key_exists(7, $a), isset($a[7]), isset($a[2]));
+var_dump($a == [0 => 1, 1 => 2, 7 => 3]);
+var_dump($a === [0 => 1, 1 => 2, 7 => 3]);
+var_dump($a === [1 => 2, 0 => 1, 7 => 3]);
+var_dump($a == [1, 2, 3]);
+var_dump(f($a)); echo json_encode(g($a)), "\n"; echo json_encode(h($a)), "\n";
+var_dump(count(f($a)), f($a)[7]);
+"####,
+    );
+    assert_eq!(out, r####"{"n":{"0":1,"1":2,"7":3},"m":[{"0":1,"1":2,"7":3}]}
+a:3:{i:0;i:1;i:1;i:2;i:7;i:3;}
+array (
+  0 => 1,
+  1 => 2,
+  7 => 3,
+)
+{"0":10,"1":20,"7":30}
+int(1)
+int(2)
+int(1)
+int(3)
+int(1)
+int(2)
+bool(false)
+bool(false)
+bool(true)
+bool(true)
+bool(false)
+bool(true)
+bool(true)
+bool(false)
+bool(false)
+array(3) {
+  [0]=>
+  int(1)
+  [1]=>
+  int(2)
+  [7]=>
+  int(3)
+}
+0=1,1=2,7=3,
+{"0":1,"1":2,"7":3}
+{"0":1,"1":2,"7":3}
+int(3)
+int(3)
+"####);
+}
