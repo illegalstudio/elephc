@@ -27,6 +27,7 @@ pub(crate) fn inject_cli_session_surface(
     ini_overrides: &[(String, String)],
     entry_path: &Path,
     inventory: &mut PreludeInventory,
+    autoloaded_save_handler: bool,
 ) -> Program {
     if web {
         return program;
@@ -40,7 +41,8 @@ pub(crate) fn inject_cli_session_surface(
     // alive (`<?php echo 'ok';` lowered 183 functions). Source the compiler cannot see -- eval,
     // a runtime include, a dynamic call -- may still register a handler, so those keep it.
     let user_usage = user_source_usage(&program, inventory);
-    let needs_callable_session_handler = user_usage.references("session_set_save_handler")
+    let needs_callable_session_handler = autoloaded_save_handler
+        || user_usage.references("session_set_save_handler")
         || unseen_source_may_call(&user_usage);
     if !needs_callable_session_handler {
         declarations.retain(|stmt| !crate::web_prelude::is_callable_session_handler_decl(&stmt.kind));
@@ -82,6 +84,12 @@ fn user_source_usage(
         .cloned()
         .collect();
     crate::prelude_prune::usage::collect(&user)
+}
+
+/// Returns whether `program` (the autoload closure) names `session_set_save_handler`, so the
+/// callable save-handler adapter must survive even though the entry file never references it.
+pub(crate) fn program_registers_save_handler(program: &[crate::parser::ast::Stmt]) -> bool {
+    crate::prelude_prune::usage::collect(program).references("session_set_save_handler")
 }
 
 /// The shared test behind [`unseen_source_may_call_sessions`].

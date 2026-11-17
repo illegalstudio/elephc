@@ -145,6 +145,21 @@ fn probe_detects_gmp_in_autoloaded_classes() {
     }
 }
 
+/// A `session_set_save_handler()` call only an autoloaded class makes keeps the callable
+/// save-handler adapter (the CLI session gate runs before the autoload pass).
+#[test]
+fn probe_detects_session_save_handler_in_autoloaded_classes() {
+    let project = ProbeProject::new();
+    let defines = crate::fast_hash::FastSet::default();
+    fs::write(project.0.join("src/Probe.php"), concat!(
+        "<?php namespace App; class Probe { public function boot(object $h): bool { ",
+        "return \\session_set_save_handler($h); } }",
+    )).unwrap();
+    let (registry, program) = Registry::build(&project.0, parse("<?php new App\\Probe();"));
+    let groups = autoloaded_prelude_groups(&program, &project.0, &registry, &defines);
+    assert!(groups.contains("session_handler"));
+}
+
 /// Fileinfo classes and procedural calls hidden in Composer files both activate the prelude.
 #[test]
 fn probe_detects_fileinfo_in_autoloaded_classes() {

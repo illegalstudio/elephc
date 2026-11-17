@@ -45,6 +45,8 @@ const PROBED_GROUPS: &[(&str, fn(&[Stmt]) -> bool)] = &[
     ("xml", crate::xml_prelude::program_uses_surface),
     ("fileinfo", crate::fileinfo_prelude::program_uses_surface),
     ("var_export", crate::var_export_prelude::program_uses_surface),
+    // Autoloaded vendor code may register a session save handler the entry file never names.
+    ("session_handler", crate::session_prelude::program_registers_save_handler),
 ];
 
 /// Returns the prelude groups some file of the autoload closure uses.

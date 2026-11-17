@@ -791,6 +791,7 @@ fn compile_config(config: CliConfig, entry: EntryKind<'_>) {
         &ini_overrides,
         Path::new(filename),
         &mut prelude_inventory,
+        autoloaded("session_handler"),
     );
     if !web {
         // Session APIs are callable from source loaded dynamically as well as statically visible
