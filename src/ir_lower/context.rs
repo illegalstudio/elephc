@@ -2137,17 +2137,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
             }
             let scope = self.load_local(&scope_param, span);
             let value = self.load_local(&name, span);
-            let name_data = self.intern_global_name(&name);
-            let at = span.unwrap_or_else(Span::dummy);
-            let owners = crate::ir_lower::expr::pin_in_flight_owners(self, &[value.value], at);
-            self.emit_void(
-                Op::EvalScopeSet,
-                vec![scope.value, value.value],
-                Some(Immediate::GlobalName(name_data)),
-                Op::EvalScopeSet.default_effects(),
-                span,
-            );
-            crate::ir_lower::expr::unpin_in_flight_owners(self, owners, at);
+            self.publish_eval_scope_value(scope, &name, value, span);
             crate::ir_lower::ownership::release_if_owned(self, value, span);
         }
     }
@@ -2566,6 +2556,17 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         name != scope_param && self.eval_scope_write_names.contains(name)
     }
 
+    /// Roots a scope assignment's value until its retaining publication completes or unwinds.
+    fn publish_eval_scope_value(&mut self, scope: LoweredValue, name: &str,
+        value: LoweredValue, span: Option<Span>) {
+        let name_data = self.intern_global_name(name);
+        let at = span.unwrap_or_else(Span::dummy);
+        let owners = crate::ir_lower::expr::pin_in_flight_owners(self, &[value.value], at);
+        self.emit_void(Op::EvalScopeSet, vec![scope.value, value.value],
+            Some(Immediate::GlobalName(name_data)), Op::EvalScopeSet.default_effects(), span);
+        crate::ir_lower::expr::unpin_in_flight_owners(self, owners, at);
+    }
+
     /// Emits an `EvalScopeSet` for a selected eval-scope variable write.
     fn store_eval_scope_name(
         &mut self,
@@ -2585,14 +2586,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
             .clone()
             .expect("eval scope write mode has a scope parameter");
         let scope = self.load_local(&scope_param, span);
-        let name_data = self.intern_global_name(name);
-        self.emit_void(
-            Op::EvalScopeSet,
-            vec![scope.value, value.value],
-            Some(Immediate::GlobalName(name_data)),
-            Op::EvalScopeSet.default_effects(),
-            span,
-        );
+        self.publish_eval_scope_value(scope, name, value, span);
         let slot = self.declare_local(name, php_type.clone());
         self.builder
             .widen_local_storage_type(slot, php_type.clone());

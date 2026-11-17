@@ -198,9 +198,12 @@ where
         && !scope_names.is_empty()
         && !scope_access.creates_unknown_vars
         && program_is_eir_scope_function_safe(&folded_program, &support, &scope_names);
-    let scope_flush_local =
-        scope_eir_safe && scope_access.reads.is_empty() && !scope_access.writes.is_empty();
-    let scope_direct = scope_eir_safe && !scope_access.reads.is_empty();
+    // A caller contract can reject any write, including one overwritten before return.
+    let checked_writes = profile.semantics().contains(elephc_semantics::StrictFeature::Locals)
+        && !scope_access.writes.is_empty();
+    let scope_flush_local = scope_eir_safe && !checked_writes
+        && scope_access.reads.is_empty() && !scope_access.writes.is_empty();
+    let scope_direct = scope_eir_safe && (!scope_access.reads.is_empty() || checked_writes);
     let scope_direct_writes = if scope_direct {
         scope_access.writes.clone()
     } else {

@@ -178,3 +178,30 @@ fn strict_literal_eval_binding_contracts_emit_on_every_target() {
         crate::codegen::generate_user_asm_from_ir(&module, false, false).unwrap();
     }
 }
+
+/// All target backends preserve each source-order publication before the fragment's observable output.
+#[test]
+fn strict_literal_eval_eager_publication_emits_on_every_target() {
+    let source = include_str!("../../../tests/fixtures/strict/literal_eval_eager_publication.php");
+    let program = crate::parser::parse_with_mode(&crate::lexer::tokenize(source).unwrap(), SourceMode::Php).unwrap();
+    let profile = SemanticProfile::PERMISSIVE.with(StrictFeature::Locals, true)
+        .with(StrictFeature::DynamicCode, true);
+    for name in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+        let target = Target::parse(name).unwrap();
+        let checked = crate::types::checker::check_staged_semantics(&program, target, profile).unwrap();
+        let module = crate::ir_lower::lower_program(&program, &checked, target, false).unwrap();
+        assert!(!module.required_runtime_features.eval_bridge, "{name}: source remains compiled");
+        let fragments = module.functions.iter().filter(|function| function.instructions.iter()
+            .any(|instruction| instruction.op == crate::ir::Op::EvalScopeSet)).collect::<Vec<_>>();
+        assert_eq!(fragments.len(), 4, "{name}: identical fragments share their body across callers");
+        for fragment in fragments {
+            let writes = fragment.instructions.iter().enumerate().filter(|(_, instruction)|
+                instruction.op == crate::ir::Op::EvalScopeSet).map(|(index, _)| index).collect::<Vec<_>>();
+            assert_eq!(writes.len(), 2, "{name}: {}", fragment.name);
+            let output = fragment.instructions.iter().position(|instruction| instruction.op == crate::ir::Op::EchoValue).unwrap();
+            assert!(writes[0] < output, "{name}: the first assignment must precede following output");
+        }
+        crate::ir::validate_module(&module).unwrap();
+        crate::codegen::generate_user_asm_from_ir(&module, false, false).unwrap();
+    }
+}

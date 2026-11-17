@@ -955,7 +955,9 @@ new kind. These checks do not enable `--strict-coercions`, `--strict-arithmetic`
 
 Native bindings retain their contracts when literal AOT eval or the optional
 Magician interpreter writes through their imported scope entries. Rejected writes
-throw `TypeError` before changing the original value or its aliases. Scope-only
+throw `TypeError` before changing the original value or its aliases. Each assignment
+is validated in source order: a later compatible assignment cannot cancel an earlier
+rejection, and earlier accepted writes remain visible if a later write fails. Scope-only
 literal fragments remain compiled code and can compose with `--strict-dynamic-code`.
 Analysis of bindings first created within an eval fragment is still being integrated.
 

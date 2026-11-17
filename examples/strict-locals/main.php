@@ -56,11 +56,11 @@ try {
     echo "The conversion kept the label value", PHP_EOL;
 }
 
-// Literal eval retains the contract of a binding imported from native code.
+// A later valid assignment cannot cancel an earlier rejected write inside literal eval.
 function checkLiteralLabel(): void {
     $label = 'Quantity';
     try {
-        eval('$label = 1;');
+        eval('$label = 1; $label = "Quantity";');
     } catch (TypeError $error) {
         echo "The literal eval kept the label value", PHP_EOL;
     }

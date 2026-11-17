@@ -960,3 +960,22 @@ currently print changedW|changedO|. Only the fresh activation should reject.
 Reverse opaque-eval origin still prints Winteger|1 in both profiles. Continue the
 full approved implementation with source-origin transport and all remaining
 profile families, preserving legitimate mixed/union producer openness.
+
+
+### Verified124: source-ordered literal eval publication
+
+With Locals enabled, literal fragments with writes select the existing direct
+scope publication mode. Every assignment reaches the protected source contract
+before later PHP effects, even when a subsequent assignment would overwrite it.
+A shared rooted publisher protects in-flight values for both direct stores and
+finalizers. Finalizers retain their explicit loaded-value release. Explicit mixed
+imports stay open and inferred PHP arrays retain their kind without silently
+enabling ArrayTypes. Earlier accepted writes survive a later rejection.
+
+Job6e007a99 passed the build and five exact gates in39s: all-five-target EIR
+emission, new source-order regression, finalizer ownership, imported native
+contracts and the updated example. Native regression covers pure and bridge
+scopes, both IR modes, owned producer effects and rejected array-kind changes,
+with clean heaps. Diff hygiene passes. Full implementation remains active: fresh
+and runtime-established eval origins, remaining binding flow, six pending feature
+families and complete umbrella/host acceptance still need implementation.

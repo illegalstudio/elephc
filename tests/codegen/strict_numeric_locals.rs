@@ -10,6 +10,31 @@
 
 use crate::support::*;
 
+/// Every literal assignment validates before later effects while earlier accepted writes remain visible.
+#[test]
+fn test_strict_literal_eval_checks_each_write_before_later_effects() {
+    let source = include_str!("../fixtures/strict/literal_eval_eager_publication.php");
+    for mode in ["--ir-opt=off", "--ir-opt=on"] {
+        for strict in [false, true] {
+            for bridge in [false, true] {
+                let source = if bridge { format!("{source}\n$other = 1; eval('unset($other);');") }
+                    else { source.to_string() };
+                let mut flags = vec![mode, "--heap-debug"];
+                if strict { flags.push("--strict-locals"); }
+                if !bridge { flags.push("--strict-dynamic-code"); }
+                let output = StrictFixture::new(&source).capture(&flags);
+                assert!(output.status.success(), "{flags:?}: {}", String::from_utf8_lossy(&output.stderr));
+                let expected = if strict { "Tinteger:1|SWinteger:2|ATinteger:2|OTinteger:1|ATarray:next|" }
+                    else { "SWinteger:2|SWinteger:2|ASWstring:bad|OSWinteger:2|ASWinteger:3|" };
+                assert_eq!(String::from_utf8_lossy(&output.stdout), expected, "{flags:?}: {}",
+                    String::from_utf8_lossy(&output.stderr));
+                assert!(String::from_utf8_lossy(&output.stderr).contains("HEAP DEBUG: leak summary: clean"),
+                    "{flags:?}: {}", String::from_utf8_lossy(&output.stderr));
+            }
+        }
+    }
+}
+
 /// Scope finalization consumes its loaded string copy after normal and rejected publication.
 #[test]
 fn test_eval_scope_finalizer_balances_loaded_string_owners() {
