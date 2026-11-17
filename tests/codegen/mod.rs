@@ -32,7 +32,6 @@ mod null_sentinel;
 mod case_insensitive_symbols;
 mod cli;
 mod repl;
-mod ini_autoload;
 mod strict_php;
 mod testing;
 mod testing_command;
