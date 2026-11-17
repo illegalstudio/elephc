@@ -652,3 +652,6 @@ mod memoir_extraction_tests;
 
 #[cfg(test)]
 mod memoir_reference_tests;
+
+#[cfg(test)]
+mod memoir_conditional_owner_tests;
