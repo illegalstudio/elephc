@@ -775,13 +775,18 @@ fn visible_static_slots<'a>(ctx: &'a LoweringContext<'_, '_>, class_name: &str) 
     slots
 }
 
-/// Declaration spans of `class_name`'s int enum cases written `MT_RAND_PHP`, which the checker
-/// folds to `1` and flags, in declaration order.
-pub(crate) fn flagged_enum_case_spans(ctx: &LoweringContext<'_, '_>, class_name: &str) -> Vec<Span> {
+/// Names and declaration spans of `class_name`'s int enum cases written `MT_RAND_PHP`, which the
+/// checker folds to `1` and flags, in declaration order.
+pub(crate) fn flagged_enum_cases(ctx: &LoweringContext<'_, '_>, class_name: &str) -> Vec<(String, Span)> {
     let Some(info) = ctx.enums.get(class_name.trim_start_matches('\\')) else { return Vec::new() };
-    let mut spans: Vec<Span> = info.cases.iter().filter(|case| case.deprecated_mt_rand_php).filter_map(|case| case.span).collect();
-    spans.sort_by_key(|span| (span.line, span.col));
-    spans
+    let mut cases: Vec<(String, Span)> = info
+        .cases
+        .iter()
+        .filter(|case| case.deprecated_mt_rand_php)
+        .filter_map(|case| Some((case.name.clone(), case.span?)))
+        .collect();
+    cases.sort_by_key(|(_, span)| (span.line, span.col));
+    cases
 }
 
 /// Evaluates `class_name`'s constant table the way php-src does on a class initialization or a
@@ -795,29 +800,32 @@ pub(crate) fn emit_constant_table_evaluation(
     line: crate::ir_lower::initializer_evaluation::LineSource,
 ) {
     let class_name = class_name.trim_start_matches('\\');
-    let mut cases = flagged_enum_case_spans(ctx, class_name).into_iter().peekable();
+    let mut cases = flagged_enum_cases(ctx, class_name);
     for (owner, name) in class_constant_table(ctx, class_name) {
-        let at = if owner.eq_ignore_ascii_case(class_name) {
-            ctx.scoped_constant_value(&owner, &name).map(|value| (value.span.line, value.span.col))
+        let own = owner.eq_ignore_ascii_case(class_name);
+        // A case's own slot in the table (the enum's declarations, before imported trait
+        // constants) evaluates it; the first inherited constant follows every case.
+        if own {
+            if let Some(position) = cases.iter().position(|(case, _)| *case == name) {
+                let (_, span) = cases.remove(position);
+                crate::ir_lower::expr::emit_mt_rand_php_deprecation(ctx, span, span);
+                continue;
+            }
         } else {
-            None
-        };
-        // Cases declared before this own constant come first; the first inherited constant
-        // follows every case.
-        let inherited = !owner.eq_ignore_ascii_case(class_name);
-        while let Some(case) = cases.next_if(|case| inherited || at.is_some_and(|at| (case.line, case.col) < at)) {
-            crate::ir_lower::expr::emit_mt_rand_php_deprecation(ctx, case, case);
+            for (_, span) in std::mem::take(&mut cases) {
+                crate::ir_lower::expr::emit_mt_rand_php_deprecation(ctx, span, span);
+            }
         }
         emit_class_constant_evaluation(ctx, &owner, &name, line);
     }
-    for case in cases {
-        crate::ir_lower::expr::emit_mt_rand_php_deprecation(ctx, case, case);
+    for (_, span) in cases {
+        crate::ir_lower::expr::emit_mt_rand_php_deprecation(ctx, span, span);
     }
 }
 
 /// Reports whether evaluating `class_name`'s constant table can raise a deprecation.
 pub(crate) fn constant_table_reports(ctx: &LoweringContext<'_, '_>, class_name: &str) -> bool {
-    !flagged_enum_case_spans(ctx, class_name).is_empty()
+    !flagged_enum_cases(ctx, class_name).is_empty()
         || class_constant_table(ctx, class_name).iter().any(|(owner, name)| {
             ctx.scoped_constant_value(owner, name).is_some_and(|value| reaches_deprecated_read_in(ctx, Some(owner), &value))
         })

@@ -2350,3 +2350,31 @@ end
 "#
     );
 }
+
+/// A backed enum reports its `MT_RAND_PHP` case before a constant imported from a trait declared earlier, then the constants it inherits from an interface.
+#[test]
+fn test_enum_cases_report_before_trait_constants() {
+    let out = compile_and_run(
+        r#"<?php
+set_error_handler(function (int $l, string $m, string $f, int $line): bool {
+    echo "  ", $line, " ", substr($m, 0, strpos($m, " is deprecated")), "\n";
+    return true;
+});
+trait T { const K = E_STRICT; }
+interface I { const J = DATE_RFC7231; }
+enum E: int implements I { use T; case A = MT_RAND_PHP; }
+echo "from\n";
+E::from(1);
+echo "end\n";
+"#,
+    );
+    assert_eq!(
+        out,
+        r#"from
+  8 Constant MT_RAND_PHP
+  10 Constant E_STRICT
+  10 Constant DATE_RFC7231
+end
+"#
+    );
+}
