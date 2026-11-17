@@ -105,10 +105,15 @@ fn membership(ctx: &mut LoweringContext<'_, '_>, value: LoweredValue,
 pub(super) fn local_store(ctx: &mut LoweringContext<'_, '_>, name: &str, value: LoweredValue,
     span: Span) -> Option<(LoweredValue, PhpType)> {
     let contract = ctx.local_store_contracts.get(
-        &(ctx.loop_storage_scope.clone(), span, name.to_string()))?.clone();
+        &(ctx.loop_storage_scope.clone(), span, name.to_string())).cloned();
+    let Some(contract) = contract else {
+        ctx.prepare_eval_native_binding_store(name, span);
+        return None;
+    };
     if ctx.source_mode == crate::source::SourceMode::Internal
         || !ctx.semantic_profile.contains(contract.feature) { return None; }
     let value = membership(ctx, value, &contract.ty, contract.feature, span);
+    ctx.prepare_eval_native_binding_store(name, span);
     Some((value_storage(ctx, value, &contract.ty, span), contract.ty))
 }
 

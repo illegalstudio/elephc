@@ -10,6 +10,31 @@
 
 use crate::support::*;
 
+/// Native stores and typed reference calls preserve eval-created origins and the original owned RHS.
+#[test]
+fn test_strict_literal_eval_preserves_origins_during_native_stores() {
+    let source = include_str!("../fixtures/strict/literal_eval_native_store_origin.php");
+    for mode in ["--ir-opt=off", "--ir-opt=on"] {
+        for bridge in [false, true] {
+            let source = if bridge { format!("{source}\n$other = 1; eval('unset($other);');") }
+                else { source.to_string() };
+            let mut flags = vec![mode, "--heap-debug", "--strict-locals"];
+            if !bridge { flags.push("--strict-dynamic-code"); }
+            let output = StrictFixture::new(&source).capture(&flags);
+            assert_eq!(String::from_utf8_lossy(&output.stdout), concat!(
+                "Tdouble:2.5|Tdouble:3.5|OTdouble:2.5|Tarray|",
+                "integer:1|2.5:3.5|Tdouble:4.5|Tarray:ok|"), "{flags:?}: {}",
+                String::from_utf8_lossy(&output.stderr));
+            assert!(String::from_utf8_lossy(&output.stderr).contains("HEAP DEBUG: leak summary: clean"),
+                "{flags:?}: {}", String::from_utf8_lossy(&output.stderr));
+        }
+        let permissive = StrictFixture::new("<?php eval('$created=2.5;'); $created=$argc; echo gettype($created), ':', $created;")
+            .capture(&[mode, "--heap-debug"]);
+        assert_eq!(String::from_utf8_lossy(&permissive.stdout), "integer:1");
+        assert!(String::from_utf8_lossy(&permissive.stderr).contains("HEAP DEBUG: leak summary: clean"));
+    }
+}
+
 /// Suspended pure and bridge scopes enumerate exact owners and preserve their origins across GC.
 #[test]
 fn test_strict_literal_eval_origins_survive_generator_suspension_and_gc() {

@@ -260,3 +260,31 @@ fn strict_eval_binding_presence_emits_on_every_target() {
         assert!(assembly.contains("eval_scope_flush_uninitialized_or_unaccessed"), "{name}");
     }
 }
+
+/// Native re-entry shares canonical scope references before physical scalar storage or call binding.
+#[test]
+fn strict_eval_native_stores_share_scope_reference_storage_on_every_target() {
+    let source = include_str!("../../../tests/fixtures/strict/literal_eval_native_store_origin.php");
+    let program = crate::parser::parse_with_mode(&crate::lexer::tokenize(source).unwrap(), SourceMode::Php).unwrap();
+    let profile = SemanticProfile::PERMISSIVE.with(StrictFeature::Locals, true)
+        .with(StrictFeature::DynamicCode, true);
+    for name in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+        let target = Target::parse(name).unwrap();
+        let checked = crate::types::checker::check_staged_semantics(&program, target, profile).unwrap();
+        let module = crate::ir_lower::lower_program(&program, &checked, target, false).unwrap();
+        let function = module.functions.iter().find(|function| function.name == "reverseLiteralOrigin").unwrap();
+        let slot = function.locals.iter().find(|local| local.name.as_deref() == Some("created")).unwrap();
+        assert_eq!(slot.php_type, crate::types::PhpType::Mixed, "{name}: preserve the eval value's original kind");
+        let owner = slot.ref_cell_owner.expect("native re-entry owns its shared canonical storage");
+        assert!(function.instructions.iter().any(|inst| inst.op == crate::ir::Op::PromoteLocalRefCell
+            && matches!(inst.immediate, Some(crate::ir::Immediate::LocalSlotPair { first, second })
+                if first == slot.id && second == owner)), "{name}");
+        assert!(function.instructions.iter().any(|inst| inst.op == crate::ir::Op::StoreRefCell
+            && inst.immediate == Some(crate::ir::Immediate::LocalSlot(slot.id))), "{name}");
+        assert!(!function.instructions.iter().any(|inst| inst.op == crate::ir::Op::BindLocalRefContract
+            && inst.immediate == Some(crate::ir::Immediate::LocalSlot(owner))
+            && inst.result_php_type == crate::types::PhpType::Int), "{name}: no invented integer origin");
+        crate::ir::validate_module(&module).unwrap();
+        crate::codegen::generate_user_asm_from_ir(&module, false, false).unwrap();
+    }
+}

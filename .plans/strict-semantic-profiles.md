@@ -1062,3 +1062,29 @@ Opaque runtime origins b99d1b21 also remain open. Next validate original native
 store candidates against surviving scope origins and preserve their physical
 representation, then complete remaining binding flow, six feature families and
 umbrella/host acceptance.
+
+
+### Verified127: native stores preserve literal eval origins
+
+Native assignments and typed reference arguments prepare canonical managed-cell
+storage before replacing an eval-visible value. The shared preparation keeps the
+scope's surviving semantic source without inventing an incoming native contract.
+Static membership guards run first when present. Whole-frame Mixed storage keeps
+a float value intact while the existing protected reference coordinator validates
+the original candidate. Valid stores remain visible to later fragments; explicit
+mixed stays open, value copies stay independent and array-kind rules remain
+independent from element contracts.
+
+Probe739e7b89 exposed a raw float-reference ABI mismatch after eval reload. GDB
+confirmed float4.5 bits reached reference inspection. Preparing the source before
+typed reference argument lowering fixes that boundary. Jobead4260c passed build
+and complete pure/bridge probes with clean heaps. Final captured job843e0e5c
+passed build and seven exact gates in1m10s: all-five-target EIR/emission, native
+stores, native observation, imported native contracts, settype mutation, suspended
+generator ownership and example. Native cases cover both IR modes, owned rejected
+string candidates, accepted floats, typed float references, array replacement and
+permissive controls. Diff hygiene passes. No full suite, push or PR was run.
+
+Continue the complete approved implementation. Opaque runtime-origin transport
+b99d1b21 remains open; then complete remaining binding flow, six pending feature
+families and complete umbrella/host acceptance.

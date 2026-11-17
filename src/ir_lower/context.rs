@@ -3923,6 +3923,16 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         self.mark_slot_initialized(owner_slot);
     }
 
+    /// Shares an eval-created persistent PHP reference before native assignment can replace its box.
+    pub(super) fn prepare_eval_native_binding_store(&mut self, name: &str, span: Span) {
+        if !self.builder.function().flags.tracks_local_binding_state || !self.eval_barrier_active
+            || crate::names::is_generated_local_name(name) || self.is_ref_bound_local(name)
+            || self.local_kinds.get(name).is_some_and(|kind| *kind != LocalKind::PhpLocal)
+            || !eval_barrier_can_widen(&self.local_type(name)) { return; }
+        // This is storage preparation only. The surviving scope origin owns its semantic source.
+        self.promote_local_mixed_ref_cell_storage(name, Some(span));
+    }
+
     /// Widens a concrete local to boxed `Mixed` storage, then promotes that storage to a
     /// durable heap reference cell suitable for an escaping by-reference parameter.
     pub(crate) fn promote_local_mixed_ref_cell(&mut self, name: &str, span: Option<Span>) {

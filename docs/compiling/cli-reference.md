@@ -967,8 +967,10 @@ one. Identical fragment bodies retain separate contracts for each activation.
 Native reads preserve a literal-created binding's contract across subsequent
 literal eval calls. Snapshots follow actual initialization paths: reserved frame
 storage and an unexecuted conditional declaration do not establish a binding.
-Enforcing newly established origins on subsequent native writes is still being
-integrated.
+Literal-created bindings retain their contracts in later native assignments and
+by-reference calls. Rejected candidates preserve the current value, and valid
+writes remain visible to subsequent eval calls. Origins first established by
+opaque runtime source are still being integrated.
 
 A body that **calls** `eval()` anywhere is the other side of that coin: the
 eval scope reaches the surrounding function's locals BY NAME, while the kill

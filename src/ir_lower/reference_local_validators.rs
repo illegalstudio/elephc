@@ -35,6 +35,7 @@ pub(super) fn prepare_argument_binding(ctx: &mut super::context::LoweringContext
     while let crate::parser::ast::ExprKind::NamedArg { value, .. }
         | crate::parser::ast::ExprKind::ErrorSuppress(value) = &source.kind { source = value; }
     let crate::parser::ast::ExprKind::Variable(name) = &source.kind else { return; };
+    ctx.prepare_eval_native_binding_store(name, source.span);
     if ctx.local_store_contracts.get(&(ctx.loop_storage_scope.clone(), source.span, name.clone()))
         .is_some_and(|contract| contract.feature == elephc_semantics::StrictFeature::Locals)
         && ctx.local_is_promotable_to_ref_cell(name)
