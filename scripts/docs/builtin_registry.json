@@ -59472,7 +59472,7 @@
       ],
       "runtime_helpers": [],
       "sig_arm": null,
-      "sig_file": "src/builtins/system/gc.rs",
+      "sig_file": "src/builtins/system/gc_mem_caches.rs",
       "sig_line": null
     },
     "module": "core",

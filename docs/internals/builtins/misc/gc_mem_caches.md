@@ -9,7 +9,7 @@ sidebar:
 
 ## Where it lives
 
-- **Signature**: [`src/builtins/system/gc.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/system/gc.rs)
+- **Signature**: [`src/builtins/system/gc_mem_caches.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/system/gc.rs)
 - **Lowering**: [`src/builtins/semantics.rs`:752](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L752) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
