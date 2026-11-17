@@ -972,3 +972,22 @@ target emitter or builtin contract changed.
 Structural foreach producer alternatives remain open alongside ArrayTypes.
 Continue source-point binding-flow/global audits, six pending semantic families
 and final host/umbrella acceptance. No full suite, push or PR was run.
+
+### Verified144: exact runtime key identity
+
+The immutable ArrayKeys bit now selects identity at `__rt_hash_normalize_key`:
+strings keep their original byte pointer and length on every supported target.
+PHP mode keeps its canonical integer-string conversion. Hashing and equality
+retain integer/string kind and original values independently of hash identity.
+
+Final60ac5427 passes in1m40s: archives68.07s, real native helper probe0.67s and
+all-five-target/two-profile clang assembly0.68s. Fifteen canonical/binary key
+spellings per profile, embedded NUL, integer endpoints and an engineered full
+integer/string hash collision preserve the expected key identity. Assembly
+comment alignment and diff hygiene pass; the probe scratch directory is removed.
+
+This is a runtime component, not public ArrayKeys admission. Continue exact key
+shape inference, pre-fold validation, EIR/eval key guards, constructors/builtins
+and cache/combination coverage before enabling it. Foreach producer alternatives,
+remaining local-flow audits, all six pending families and final umbrella acceptance
+stay active. No full suite, push or PR was run.
