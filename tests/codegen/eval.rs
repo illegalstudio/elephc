@@ -31161,19 +31161,23 @@ eval($code);
 "#,
     );
     assert_eq!(weak, "42\n");
-    let err = compile_and_run_expect_failure(
+    let strict = compile_and_run(
         r#"<?php
 $code = $argc > 0 ? <<<'__ELEPHC_EVAL__'
 declare(strict_types=1);
 function f(int $x) { echo $x, "\n"; }
-f("42");
+try {
+    f("42");
+} catch (TypeError $error) {
+    echo "caught:", $error->getMessage(), "\n";
+}
 __ELEPHC_EVAL__ : '';
 eval($code);
 "#,
     );
-    assert!(
-        err.contains("Fatal error: eval() runtime failed"),
-        "strict runtime eval call did not reject a numeric string: {err}"
+    assert_eq!(
+        strict,
+        "caught:f(): Argument #1 ($x) must be of type int, string given\n"
     );
 }
 
@@ -31216,7 +31220,7 @@ eval($coercive);
 /// fragment that declared the callee.
 #[test]
 fn test_eval_runtime_function_arguments_follow_the_caller_strict_mode() {
-    let err = compile_and_run_expect_failure(
+    let out = compile_and_run(
         r#"<?php
 $weak = $argc > 0 ? <<<'__ELEPHC_EVAL__'
 function inner(int $x) { echo $x, "\n"; }
@@ -31224,15 +31228,16 @@ __ELEPHC_EVAL__ : '';
 eval($weak);
 $strict = $argc > 0 ? <<<'__ELEPHC_EVAL__'
 declare(strict_types=1);
-inner("42");
+try {
+    inner("42");
+} catch (TypeError $error) {
+    echo "caught\n";
+}
 __ELEPHC_EVAL__ : '';
 eval($strict);
 "#,
     );
-    assert!(
-        err.contains("Fatal error: eval() runtime failed"),
-        "a strict caller bound a weak-defined function in weak mode: {err}"
-    );
+    assert_eq!(out, "caught\n");
 }
 
 /// Verifies `declare(strict_types=...)` accepts exactly `0` or `1` in a bridge-run fragment,

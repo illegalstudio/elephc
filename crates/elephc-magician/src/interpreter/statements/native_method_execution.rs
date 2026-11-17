@@ -233,6 +233,8 @@ pub(super) fn eval_native_method_with_evaluated_args_unchecked_bridge_scope_with
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     let signature_owner = bridge_scope.unwrap_or(class_name);
+    // PHP names the declaring class in a return-type diagnostic, not the called subclass.
+    let callee = format!("{}::{}", signature_owner.trim_start_matches('\\'), method_name);
     let signature = number_scalar_binding_signature(signature_owner,
         context.native_method_signature(signature_owner, method_name));
     let return_type = signature.as_ref().and_then(|signature| signature.return_type().cloned());
@@ -260,6 +262,7 @@ pub(super) fn eval_native_method_with_evaluated_args_unchecked_bridge_scope_with
             }
             (Err(status), _) => Err(status),
             (Ok(result), Ok(())) => eval_declared_native_return_value(
+                Some(&callee),
                 return_type.as_ref(),
                 Some(signature_owner),
                 called_class_scope.or(Some(class_name)),
@@ -429,6 +432,8 @@ pub(super) fn eval_native_static_method_with_evaluated_args_unchecked_bridge_sco
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     let signature_owner = bridge_scope.unwrap_or(class_name);
+    // PHP names the declaring class in a return-type diagnostic, not the called subclass.
+    let callee = format!("{}::{}", signature_owner.trim_start_matches('\\'), method_name);
     let signature = tokenizer_native_binding_signature(signature_owner, method_name,
         context.native_static_method_signature(signature_owner, method_name));
     let return_type = signature.as_ref().and_then(|signature| signature.return_type().cloned());
@@ -466,6 +471,7 @@ pub(super) fn eval_native_static_method_with_evaluated_args_unchecked_bridge_sco
             }
             (Err(status), _) => Err(status),
             (Ok(result), Ok(())) => eval_declared_native_return_value(
+                Some(&callee),
                 return_type.as_ref(),
                 Some(signature_owner),
                 called_class_scope.or(Some(class_name)),

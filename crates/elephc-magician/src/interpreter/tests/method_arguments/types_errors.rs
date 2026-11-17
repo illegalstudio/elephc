@@ -191,14 +191,23 @@ class StrictTypedScalarBox {
         return $id;
     }
 }
-return (new StrictTypedScalarBox())->read("7");"#,
+try {
+    (new StrictTypedScalarBox())->read("7");
+} catch (TypeError $error) {
+    return $error->getMessage();
+}
+return "missed";"#,
     )
     .expect("parse eval fragment");
     let mut scope = ElephcEvalScope::new();
     let mut values = FakeOps::default();
+    let result = execute_program(&method, &mut scope, &mut values).expect("catch strict method use");
     assert_eq!(
-        execute_program(&method, &mut scope, &mut values),
-        Err(EvalStatus::RuntimeFatal)
+        values.get(result),
+        FakeValue::String(
+            "StrictTypedScalarBox::read(): Argument #1 ($id) must be of type int, string given"
+                .to_string()
+        )
     );
 
     let function = parse_fragment(
@@ -206,12 +215,44 @@ return (new StrictTypedScalarBox())->read("7");"#,
 function strictScalarReader(int $id) {
     return $id;
 }
-return strictScalarReader("7");"#,
+try {
+    strictScalarReader("7");
+} catch (TypeError $error) {
+    return $error->getMessage();
+}
+return "missed";"#,
     )
     .expect("parse eval fragment");
+    let result = execute_program(&function, &mut scope, &mut values)
+        .expect("catch strict function use");
     assert_eq!(
-        execute_program(&function, &mut scope, &mut values),
-        Err(EvalStatus::RuntimeFatal)
+        values.get(result),
+        FakeValue::String(
+            "strictScalarReader(): Argument #1 ($id) must be of type int, string given"
+                .to_string()
+        )
+    );
+
+    let variadic = parse_fragment(
+        br#"declare(strict_types=1);
+function strictVariadicReader(int ...$items) {
+    return $items[0];
+}
+try {
+    strictVariadicReader(1, "2");
+} catch (TypeError $error) {
+    return $error->getMessage();
+}
+return "missed";"#,
+    )
+    .expect("parse eval fragment");
+    let result = execute_program(&variadic, &mut scope, &mut values)
+        .expect("catch strict variadic use");
+    assert_eq!(
+        values.get(result),
+        FakeValue::String(
+            "strictVariadicReader(): Argument #2 must be of type int, string given".to_string()
+        )
     );
 }
 
@@ -244,15 +285,25 @@ fn execute_program_strict_eval_rejects_weak_returned_scalars() {
 function strictIntReturnReader(): int {
     return "7";
 }
-return strictIntReturnReader();"#,
+try {
+    strictIntReturnReader();
+} catch (TypeError $error) {
+    return $error->getMessage();
+}
+return "missed";"#,
     )
     .expect("parse eval fragment");
     let mut scope = ElephcEvalScope::new();
     let mut values = FakeOps::default();
 
+    let result = execute_program(&program, &mut scope, &mut values).expect("catch strict return");
+
     assert_eq!(
-        execute_program(&program, &mut scope, &mut values),
-        Err(EvalStatus::RuntimeFatal)
+        values.get(result),
+        FakeValue::String(
+            "strictIntReturnReader(): Return value must be of type int, string returned"
+                .to_string()
+        )
     );
 }
 
@@ -311,10 +362,23 @@ function strictOuter() {
     .expect("install strict eval declarations");
     values.release(result).expect("release installed value");
 
-    let coercive = parse_fragment(b"return strictOuter();").expect("parse coercive eval fragment");
+    let coercive = parse_fragment(
+        br#"try {
+    strictOuter();
+} catch (TypeError $error) {
+    return $error->getMessage();
+}
+return "missed";"#,
+    )
+    .expect("parse coercive eval fragment");
+    let result = execute_program_with_context(&mut context, &coercive, &mut scope, &mut values)
+        .expect("a strict-defined body keeps its mode under a coercive caller");
     assert_eq!(
-        execute_program_with_context(&mut context, &coercive, &mut scope, &mut values),
-        Err(EvalStatus::RuntimeFatal)
+        values.get(result),
+        FakeValue::String(
+            "strictScalarReader(): Argument #1 ($id) must be of type int, string given"
+                .to_string()
+        )
     );
 }
 

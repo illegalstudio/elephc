@@ -56,6 +56,7 @@ pub(in crate::interpreter) fn eval_declared_return_control_value(
 
 /// Applies a registered native/AOT return type to an already materialized result.
 pub(in crate::interpreter) fn eval_declared_native_return_value(
+    callee: Option<&str>,
     return_type: Option<&EvalParameterType>,
     return_owner: Option<&str>,
     called_class_name: Option<&str>,
@@ -78,7 +79,7 @@ pub(in crate::interpreter) fn eval_declared_native_return_value(
             return Err(EvalStatus::RuntimeFatal);
         }
         eval_declared_return_value(
-            return_type, return_owner, called_class_name, value, context, values,
+            callee, return_type, return_owner, called_class_name, value, context, values,
         )
     })();
     finish_declared_return_value(value, result, context, values)
@@ -154,6 +155,7 @@ fn eval_declared_explicit_return_value(
         return eval_throw_type_error(&format!("{callee}(): Return value must be of type {expected}, null returned"), context, values);
     }
     eval_declared_return_value(
+        Some(callee),
         return_type,
         return_owner,
         called_class_name,
@@ -165,6 +167,7 @@ fn eval_declared_explicit_return_value(
 
 /// Applies a non-void declared return type to one returned runtime value.
 fn eval_declared_return_value(
+    callee: Option<&str>,
     return_type: &EvalParameterType,
     return_owner: Option<&str>,
     called_class_name: Option<&str>,
@@ -197,6 +200,17 @@ fn eval_declared_return_value(
                 .any(|variant| matches!(variant, EvalParameterTypeVariant::Float))
         {
             return values.cast_float(value);
+        }
+        if let Some(callee) = callee {
+            return eval_throw_return_type_error(
+                callee,
+                return_owner,
+                called_class_name,
+                return_type,
+                value,
+                context,
+                values,
+            );
         }
     } else {
         for variant in return_type.variants() {
