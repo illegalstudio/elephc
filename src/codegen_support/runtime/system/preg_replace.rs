@@ -267,6 +267,7 @@ pub(crate) fn emit_preg_replace(emitter: &mut Emitter) {
     emitter.instruction("cmp x11, x13");                                        // is there room for one tail byte?
     emitter.instruction("b.hs __rt_preg_replace_overflow");                     // fail closed instead of writing past the arena
     emitter.instruction("ldrb w9, [x10]");                                      // load byte
+    emitter.instruction("cbz w9, __rt_preg_replace_done");                      // null terminator = done
     emitter.instruction("strb w9, [x11]");                                      // write byte
     emitter.instruction("add x10, x10, #1");                                    // advance source
     emitter.instruction("add x11, x11, #1");                                    // advance output
