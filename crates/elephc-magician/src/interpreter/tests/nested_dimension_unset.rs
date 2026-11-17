@@ -22,6 +22,8 @@ UnsetStaticLease::$items = [4, 5];
 unset({target}[0]);
 echo UnsetStaticLease::$items[1];
 "#);
+        // Static properties are request-scoped, not context-scoped: each pass is a new request.
+        crate::context::reset_request_statics();
         let program = parse_fragment(source.as_bytes()).unwrap();
         let mut values = FakeOps::default();
         let mut context = ElephcEvalContext::new();
