@@ -50061,7 +50061,9 @@
       "effects": {
         "kind": "static",
         "names": [
-          "writes_process"
+          "writes_fs",
+          "writes_process",
+          "may_warn"
         ]
       },
       "lowering": {

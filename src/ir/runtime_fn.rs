@@ -1749,9 +1749,14 @@ impl RuntimeFnId {
                         | crate::ir::Effects::MAY_THROW.bits(),
                 )
             }
-            RuntimeFnId::ErrorLog | RuntimeFnId::Sleep | RuntimeFnId::Usleep => {
-                crate::ir::Effects::WRITES_PROCESS
-            }
+            // `error_log($message, 3, $destination)` appends to a file and a failing destination
+            // raises php's `E_WARNING`, so the call writes the file system and may warn.
+            RuntimeFnId::ErrorLog => crate::ir::Effects::from_bits_retain(
+                crate::ir::Effects::WRITES_PROCESS.bits()
+                    | crate::ir::Effects::WRITES_FS.bits()
+                    | crate::ir::Effects::MAY_WARN.bits(),
+            ),
+            RuntimeFnId::Sleep | RuntimeFnId::Usleep => crate::ir::Effects::WRITES_PROCESS,
             // `intval($value, $base)` only inspects the subject's bytes: the string parser
             // allocates nothing, and the boxed-`Mixed` entry point reads the cell before
             // handing a non-string payload to the ordinary integer cast.
