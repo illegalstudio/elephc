@@ -639,7 +639,7 @@ fn test_error_json_last_error_msg_with_args() {
 fn test_error_preg_match_no_args() {
     expect_error(
         "<?php preg_match();",
-        "preg_match() takes 2 or 3 arguments",
+        "preg_match() takes 2 to 5 arguments",
     );
 }
 
@@ -648,7 +648,7 @@ fn test_error_preg_match_no_args() {
 fn test_error_preg_match_one_arg() {
     expect_error(
         r#"<?php preg_match("/test/");"#,
-        "preg_match() takes 2 or 3 arguments",
+        "preg_match() takes 2 to 5 arguments",
     );
 }
 
@@ -661,12 +661,12 @@ fn test_error_preg_match_matches_must_be_variable() {
     );
 }
 
-/// Verifies that `preg_match()` rejects arguments beyond the supported `$matches` parameter.
+/// Verifies that `preg_match()` rejects arguments beyond the `$offset` parameter.
 #[test]
-fn test_error_preg_match_four_args() {
+fn test_error_preg_match_six_args() {
     expect_error(
-        r#"<?php preg_match("/test/", "test", $matches, 0);"#,
-        "preg_match() takes 2 or 3 arguments",
+        r#"<?php preg_match("/test/", "test", $matches, 0, 0, 0);"#,
+        "preg_match() takes 2 to 5 arguments",
     );
 }
 
@@ -675,7 +675,16 @@ fn test_error_preg_match_four_args() {
 fn test_error_preg_match_all_no_args() {
     expect_error(
         "<?php preg_match_all();",
-        "preg_match_all() takes 2 to 4 arguments",
+        "preg_match_all() takes 2 to 5 arguments",
+    );
+}
+
+/// Verifies that `preg_match_all()` rejects arguments beyond the `$offset` parameter.
+#[test]
+fn test_error_preg_match_all_six_args() {
+    expect_error(
+        r#"<?php preg_match_all("/test/", "test", $matches, 0, 0, 0);"#,
+        "preg_match_all() takes 2 to 5 arguments",
     );
 }
 
