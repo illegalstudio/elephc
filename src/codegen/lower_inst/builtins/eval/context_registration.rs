@@ -161,7 +161,7 @@ pub(super) fn register_eval_native_user_constants(
         } else { None };
         let value = normalized.map(|kind| value.with_kind(kind)).unwrap_or_else(||
             crate::codegen::const_default_values::materialized_global_constant(ctx.module, &value));
-        let Some(encoded) = eval_native_user_constant_value(&value.kind, &ty) else {
+        let Some(encoded) = eval_native_user_constant_value(&value.kind, &ty, ctx.module.semantic_profile) else {
             continue;
         };
         register_eval_native_user_constant(ctx, context_source, &name, &encoded);

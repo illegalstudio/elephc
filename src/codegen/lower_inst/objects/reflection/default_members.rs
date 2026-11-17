@@ -258,6 +258,7 @@ pub(super) fn reflection_parameter_members_with_declaring_function(
             reflection_parameter_default_export(
                 display_class, display_info, default,
                 matches!(default_value, None | Some(ReflectionParameterDefaultValue::EirHelper(_))),
+                ctx.module.semantic_profile,
             )
         });
         let is_array_type = reflection_parameter_has_named_type(type_metadata.as_ref(), "array");

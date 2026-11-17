@@ -1230,11 +1230,11 @@ fn emit_static_property_default(
         super::const_default_values::resolve_enum_read_scalar_default(&default, &context)
     {
         enum_reads = reads;
-        literal_default_value(&description, php_type, &literal, "static property initializer")?
+        literal_default_value(&description, php_type, &literal, "static property initializer", ctx.module.semantic_profile)?
     } else {
         let resolved = super::const_default_values::resolve_const_default(&default, &context)
             .and_then(super::const_default_values::resolved_literal_default);
-        literal_default_value(&description, php_type, resolved.as_ref().unwrap_or(expr), "static property initializer")?
+        literal_default_value(&description, php_type, resolved.as_ref().unwrap_or(expr), "static property initializer", ctx.module.semantic_profile)?
     };
     ctx.emitter.comment(&format!(
         "initialize static property {}::${}",

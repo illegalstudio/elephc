@@ -800,3 +800,5 @@ mod strict_settype_collections;
 mod strict_string_conversions;
 
 mod mixed_literal_key_guards;
+
+mod array_default_keys;

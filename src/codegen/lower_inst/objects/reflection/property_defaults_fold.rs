@@ -22,13 +22,13 @@ pub(super) fn reflection_folded_property_default(
     if let Some((literal, enum_cases)) =
         const_default_values::resolve_enum_read_scalar_default(default, &context)
     {
-        let value = reflection_literal_parameter_default_value(&Expr::new(literal, default.span))?;
+        let value = reflection_literal_parameter_default_value(&Expr::new(literal, default.span), ctx.module.semantic_profile)?;
         return Some(ReflectionParameterDefaultValue::Evaluated { value: Box::new(value), enum_cases });
     }
     if let Some(literal) = const_default_values::resolve_const_default(default, &context)
         .and_then(const_default_values::resolved_literal_default)
     {
-        if let Some(value) = reflection_literal_parameter_default_value(&default.with_kind(literal)) {
+        if let Some(value) = reflection_literal_parameter_default_value(&default.with_kind(literal), ctx.module.semantic_profile) {
             return Some(value);
         }
     }
@@ -37,7 +37,7 @@ pub(super) fn reflection_folded_property_default(
     crate::types::deferred_defaults::prune_literal_branches(&mut default);
     crate::types::deferred_defaults::unconditional_error_message(&default)
         .map(|message| ReflectionParameterDefaultValue::DeferredError(message.to_string()))
-        .or_else(|| reflection_literal_parameter_default_value(&default))
+        .or_else(|| reflection_literal_parameter_default_value(&default, ctx.module.semantic_profile))
 }
 
 /// Recurses over constant-expression operands without evaluating a deferred Error.

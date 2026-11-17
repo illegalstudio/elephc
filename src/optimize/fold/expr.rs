@@ -305,7 +305,7 @@ pub(in crate::optimize) fn fold_expr(expr: Expr) -> Expr {
                 .map(|entry| entry.map_exprs(fold_expr)).collect());
             crate::types::fold_spreadless_mixed_array_literal(
                 &literal, crate::codegen_support::compile_php_version(),
-            ).unwrap_or(literal)
+             crate::optimize::semantic_context::active_profile()).unwrap_or(literal)
         }
         ExprKind::Match {
             subject,

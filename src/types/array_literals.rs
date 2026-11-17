@@ -63,9 +63,10 @@ pub(crate) fn plan_literal_array_entries(
 /// Normalizes spread-free mixed syntax while retaining every explicit key/value evaluation.
 pub(crate) fn fold_spreadless_mixed_array_literal(
     expr: &ExprKind, php_version: crate::php_version::PhpVersion,
+    profile: elephc_semantics::SemanticProfile,
 ) -> Option<ExprKind> {
     if !matches!(expr, ExprKind::ArrayLiteralMixed(_)) { return None; }
-    let entries = plan_literal_array_entries(expr, php_version, SemanticProfile::PERMISSIVE)?;
+    let entries = plan_literal_array_entries(expr, php_version, profile)?;
     let pairs = entries.into_iter().map(|entry| {
         let key = match entry.key_expr {
             Some(key) => key.clone(),
@@ -119,7 +120,7 @@ mod tests {
             assert_eq!(plan_literal_array_entries(&negative, version, php).unwrap()[1].key, StringKey::Integer(last));
         }
         let floating = literal("<?php $items = [1.5 => 1, 2];");
-        let Some(ExprKind::ArrayLiteralAssoc(folded)) = fold_spreadless_mixed_array_literal(&floating, PhpVersion::Php85)
+        let Some(ExprKind::ArrayLiteralAssoc(folded)) = fold_spreadless_mixed_array_literal(&floating, PhpVersion::Php85, elephc_semantics::SemanticProfile::PERMISSIVE)
             else { panic!("expected a mixed literal normalization"); };
         assert!(matches!(folded[0].0.kind, ExprKind::FloatLiteral(1.5)), "key conversion warnings must survive folding");
         assert_eq!(folded[1].0.kind, ExprKind::IntLiteral(2));

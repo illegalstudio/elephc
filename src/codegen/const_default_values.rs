@@ -22,10 +22,10 @@
 use crate::names::php_symbol_key;
 use crate::ir::Module;
 use crate::parser::ast::{BinOp, Expr, ExprKind, StaticReceiver};
-use crate::types::{is_php_integer_array_key, ClassInfo, InterfaceInfo};
+use crate::types::{ClassInfo, InterfaceInfo};
 
 mod arrays;
-pub(in crate::codegen) use arrays::resolve_array_const_default;
+pub(in crate::codegen) use arrays::{resolve_array_const_default, resolve_literal_array_const_default_key};
 
 #[cfg(test)]
 mod tests;
@@ -630,15 +630,15 @@ fn resolve_object_const_default_arg(
     }
 }
 
-/// Normalizes one string array key to PHP's integer-key rules.
+/// Classifies one string array key under the selected immutable profile.
 pub(in crate::codegen) fn const_default_string_array_key(
     value: &str,
+    profile: elephc_semantics::SemanticProfile,
 ) -> Option<ConstDefaultArrayKey> {
     let bytes = elephc_builtin_contract::string_literal::literal_bytes(value);
-    if let Ok(decoded) = std::str::from_utf8(&bytes) {
-        if is_php_integer_array_key(decoded) {
-            return decoded.parse::<i64>().ok().map(ConstDefaultArrayKey::Int);
-        }
+    if let elephc_semantics::array_keys::StringKey::Integer(value) =
+        elephc_semantics::array_keys::classify_string_key(profile, &bytes) {
+        return Some(ConstDefaultArrayKey::Int(value));
     }
     Some(ConstDefaultArrayKey::String(value.to_string()))
 }

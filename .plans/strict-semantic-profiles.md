@@ -1109,3 +1109,21 @@ variants (2.03s/2.91s), with clean heaps. PHP cross-check confirms default sprea
 renumbering and Error classification. Finalb3d8cb95 passes in1m42s: default compiler
 and bridge builds49.52s plus five exact legacy spread-owner and pointer-storage
 controls. All seven unique gates and diff hygiene pass. ArrayKeys remains gated.
+
+### Verified151: profile-aware constant and default keys
+
+Constant default keys share the neutral byte classifier with native hash semantics.
+Spread-free mixed planning receives an explicit profile, so a numeric string no
+longer advances the exact integer append cursor. Literal storage copies, Reflection
+defaults/constants/source exports and eval user-constant metadata retain the same
+profile. Reflection and direct storage reuse the shared literal-key adapter.
+Proven bool/float/null exact keys decline metadata folding without PHP conversion.
+
+Job696d6fd6 passes metadata, twenty mode/profile/target generations42.12s and eight
+native mode/profile/optimizer variants27.39s with clean heaps. Direct calls,
+first-class callables, Reflection invocation/default lookup, instance/static
+properties and global/class constants preserve distinct numeric strings and append
+history. PHP output matches the permissive control. Final269bebca passes in3m26s:
+default compiler/bridge builds77.44s, shared default/enum/literal-planner ownership
+controls and four exact legacy Reflection/default integration tests. Assembly
+comments and diff hygiene pass. ArrayKeys remains gated pending its other paths.

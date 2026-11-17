@@ -51,7 +51,7 @@ pub(super) fn collect_property_initialization(
         let value = if let Some(value) = resolved {
             crate::codegen::literal_defaults::enum_case_default_value(&context, php_type, value, inst.op.name())
         } else {
-            literal_default_value(&context, php_type, &default_expr.kind, inst.op.name())
+            literal_default_value(&context, php_type, &default_expr.kind, inst.op.name(), module.semantic_profile)
         };
         let Ok(value) = value else {
             // The class initializer is ordinary EIR and can preserve lazy branches in constant

@@ -217,3 +217,47 @@ fn enum_dependent_keys_and_offsets_retain_ordered_reads_on_all_targets() {
         assert!(elements[1].key == Some(ConstDefaultArrayKey::String("z".into())), "{target}");
     }
 }
+
+/// Exact default keys and append cursors share the runtime policy on every target.
+#[test]
+fn exact_array_default_keys_preserve_kinds_bytes_and_append_history() {
+    use elephc_semantics::{SemanticProfile, StrictFeature};
+    let parse_value = |source: &str| {
+        let program = crate::parser::parse(&crate::lexer::tokenize(source).unwrap()).unwrap();
+        let crate::parser::ast::StmtKind::Assign { value, .. } = program.into_iter().next().unwrap().kind
+            else { panic!("expected array expression"); };
+        value
+    };
+    for target in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+        for exact in [false, true] {
+            let profile = SemanticProfile::PERMISSIVE.with(StrictFeature::ArrayKeys, exact);
+            let mut module = Module::new(Target::parse(target).unwrap());
+            module.semantic_profile = profile;
+            let context = ConstDefaultContext { module: &module, current_class: None };
+            for (source, expected) in [
+                ("<?php $v = [1 => 10, '1' => 20, '01' => 30][1];", if exact { 10 } else { 20 }),
+                ("<?php $v = [1 => 10, '1' => 20, '01' => 30]['1'];", 20),
+                ("<?php $v = [1 => 10, '1' => 20, '01' => 30]['01'];", 30),
+                ("<?php $v = ['2' => 20, 30][0];", if exact { 30 } else { -1 }),
+                ("<?php $v = ['2' => 20, 30][3];", if exact { -1 } else { 30 }),
+                ("<?php $v = [...['2' => 20], 30][0];", if exact { 30 } else { 20 }),
+            ] {
+                let result = resolve_const_default(&parse_value(source), &context);
+                let expected = (expected != -1).then(|| const_default_int_value(expected));
+                assert!(result == expected, "{target} exact={exact}: {source}");
+            }
+            for spelling in ["1", "01", "-0", "9223372036854775807", "a\0b"] {
+                let key = const_default_string_array_key(spelling, profile).unwrap();
+                let expected = match elephc_semantics::array_keys::classify_string_key(profile, spelling.as_bytes()) {
+                    elephc_semantics::array_keys::StringKey::Integer(value) => ConstDefaultArrayKey::Int(value),
+                    elephc_semantics::array_keys::StringKey::String(_) => ConstDefaultArrayKey::String(spelling.into()),
+                };
+                assert!(key == expected, "{target} exact={exact}: {spelling:?}");
+            }
+            for source in ["<?php $v = [false => 1];", "<?php $v = [1.5 => 1];", "<?php $v = [null => 1];"] {
+                assert_eq!(resolve_const_default(&parse_value(source), &context).is_none(), exact,
+                    "{target} exact={exact}: {source}");
+            }
+        }
+    }
+}

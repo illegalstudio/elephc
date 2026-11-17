@@ -31,7 +31,7 @@ fn nested_mixed_literal_defaults_preserve_container_shapes() {
         )])),
         expression(ExprKind::ArrayLiteral(Vec::new())),
     ]);
-    let default = literal_default_value("test", &PhpType::Mixed, &nested, "test").unwrap();
+    let default = literal_default_value("test", &PhpType::Mixed, &nested, "test", elephc_semantics::SemanticProfile::PERMISSIVE).unwrap();
     let LiteralDefaultValue::BoxedArray { elem_type, elements } = default else {
         panic!("Mixed indexed defaults must own a boxed array");
     };
@@ -51,6 +51,7 @@ fn nested_literal_defaults_reject_incompatible_scalar_storage() {
     let nested = ExprKind::ArrayLiteral(vec![expression(ExprKind::ArrayLiteral(Vec::new()))]);
     assert!(literal_default_value(
         "test", &PhpType::Array(Box::new(PhpType::Int)), &nested, "test",
+        elephc_semantics::SemanticProfile::PERMISSIVE,
     ).is_err());
 }
 
@@ -60,12 +61,12 @@ fn numeric_property_literal_defaults_respect_declared_union_members() {
     for ty in [PhpType::Float, PhpType::Union(vec![PhpType::Float, PhpType::Void]),
         PhpType::Union(vec![PhpType::Str, PhpType::Float])]
     {
-        let result = literal_default_value("test", &ty, &ExprKind::IntLiteral(6), "test").unwrap();
+        let result = literal_default_value("test", &ty, &ExprKind::IntLiteral(6), "test", elephc_semantics::SemanticProfile::PERMISSIVE).unwrap();
         assert!(matches!(result, LiteralDefaultValue::Float(value) | LiteralDefaultValue::BoxedFloat(value)
             if value == 6.0));
     }
     for ty in [PhpType::Mixed, PhpType::Union(vec![PhpType::Float, PhpType::Int])] {
-        let result = literal_default_value("test", &ty, &ExprKind::IntLiteral(6), "test").unwrap();
+        let result = literal_default_value("test", &ty, &ExprKind::IntLiteral(6), "test", elephc_semantics::SemanticProfile::PERMISSIVE).unwrap();
         assert!(matches!(result, LiteralDefaultValue::BoxedInt(6)));
     }
 }
