@@ -164,3 +164,31 @@ echo get_class($o), ":", $o[0], $o[1];
     );
     assert_eq!(out, "SplFixedArray:79");
 }
+
+/// Verifies the helper `ArrayObject::getIterator()` uses to make its iterator follow the object
+/// (`__elephcFollow` and the protected `source` it fills) is invisible to PHP introspection:
+/// `print_r`, `var_dump`, `var_export`, `(array)`, `get_object_vars()`, `get_class_methods()`,
+/// reflection and `method_exists()`/`property_exists()` never name it, while the iterator still
+/// follows an element added before iteration.
+#[test]
+fn test_array_iterator_follow_helper_is_hidden() {
+    let out = compile_and_run(
+        r#"<?php
+$ao = new ArrayObject([1, 2]);
+$it = $ao->getIterator();
+$ao[] = 3;
+ob_start();
+print_r($it); var_dump($it); var_export($it); var_dump((array) $it, get_object_vars($it), get_class_methods($it));
+$r = new ReflectionClass($it);
+foreach ($r->getMethods() as $m) { echo $m->name, ","; }
+foreach ($r->getProperties() as $p) { echo $p->name, ","; }
+$dump = ob_get_clean();
+echo stripos($dump, 'elephc') === false ? 'no-helper' : 'LEAK', ' ';
+echo stripos($dump, 'source') === false ? 'no-source' : 'LEAK', ' ';
+echo method_exists($it, '__elephcFollow') ? 'LEAK' : 'ok', ' ';
+echo property_exists($it, 'source') ? 'LEAK' : 'ok', ' ';
+foreach ($it as $v) { echo $v; }
+"#,
+    );
+    assert_eq!(out, "no-helper no-source ok ok 123");
+}

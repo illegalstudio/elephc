@@ -78,7 +78,7 @@ pub(crate) static CLASSES: &[ClassContract] = &[
     class!("ArgumentCountError", "argumentcounterror", Class, Core, CheckerInjected),
     class!("ArithmeticError", "arithmeticerror", Class, Core, CheckerInjected),
     class!("ArrayAccess", "arrayaccess", Interface, Core, CheckerInjected),
-    class!("ArrayIterator", "arrayiterator", Class, Spl, CheckerInjected),
+    class!("ArrayIterator", "arrayiterator", Class, Spl, CheckerInjected, hidden_properties: &["source"], visible_methods: &["__construct", "offsetExists", "offsetGet", "offsetSet", "offsetUnset", "append", "getArrayCopy", "count", "getFlags", "setFlags", "asort", "ksort", "uasort", "uksort", "natsort", "natcasesort", "unserialize", "serialize", "__serialize", "__unserialize", "rewind", "current", "key", "next", "valid", "seek", "__debugInfo"]),
     class!("ArrayObject", "arrayobject", Class, Spl, CheckerInjected),
     class!("AssertionError", "assertionerror", Class, Standard, CheckerInjected),
     class!("Attribute", "attribute", Class, Core, Prelude),
