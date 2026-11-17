@@ -11,9 +11,9 @@
 //! - Subject and pattern bytes are passed through the registered provider as C strings.
 //! - Match offsets are byte offsets into the original subject, matching PHP capture arrays.
 //! - A global iterator keeps its C-string allocation alive across native continuation calls.
-//! - The eval `preg_last_error()` code lives in a thread-local slot: compiling a pattern
-//!   (the first step of every eval `preg_*` call) clears it, and a match status other
-//!   than "no match" records PHP's code for it.
+//! - The eval `preg_last_error()` code lives in a thread-local slot: the pattern entry
+//!   points in `pattern` (the first step of every eval `preg_*` call) clear it, and a
+//!   match status other than "no match" records PHP's code for it.
 
 use std::cell::Cell;
 use std::ffi::{c_int, c_void, CStr, CString};
@@ -94,7 +94,6 @@ impl Regex {
         body: &[u8],
         modifiers: EvalPregModifiers,
     ) -> Result<Self, EvalStatus> {
-        eval_preg_set_last_error(0);
         let provider = regex_provider().ok_or(EvalStatus::RuntimeFatal)?;
         let pattern = CString::new(body).map_err(|_| EvalStatus::RuntimeFatal)?;
         let mut handle = std::ptr::null_mut();

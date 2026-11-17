@@ -311,3 +311,32 @@ fn test_preg_errors_compiled_and_eval_bundle() {
         compile_and_run_with_regex,
     );
 }
+
+/// Fixture: a nested `preg_*` error raised by an entry's `__toString()` does not stop
+/// `preg_grep()`: both matching entries come back, like php-src.
+const GREP_NESTED_TO_STRING_ERROR: &str = r#"class GrepNestedToString { public function __toString(): string { preg_match('/./u', "\xff"); return 'x'; } }
+echo json_encode(preg_grep('/x/', [new GrepNestedToString(), 'x', 'y'])), "\n";
+echo preg_last_error(), "\n";
+"#;
+
+/// A nested error from an entry's `__toString()` is not `preg_grep()`'s own error: the scan
+/// keeps going in compiled code and in eval. Eval also keeps that nested error visible through
+/// `preg_last_error()` like php-src (4); the compiled prelude's next `preg_match()` resets it.
+#[test]
+fn test_preg_grep_nested_to_string_error_keeps_scanning() {
+    let compiled = compile_and_run_with_regex(&format!("<?php\n{GREP_NESTED_TO_STRING_ERROR}"));
+    assert!(compiled.starts_with("[{},\"x\"]\n"), "{compiled}");
+    let eval = compile_and_run_with_regex(&opaque_eval(GREP_NESTED_TO_STRING_ERROR));
+    assert_eq!(eval, "[{},\"x\"]\n4\n");
+}
+
+/// A valid modifier eval does not implement stays eval's explicit runtime error for
+/// `preg_grep()`, like the other eval `preg_*` builtins, instead of PHP `false`.
+#[test]
+fn test_preg_grep_eval_unsupported_modifier_is_a_runtime_error() {
+    let out = compile_and_run_capture_with_regex(&opaque_eval("echo 'before|'; preg_grep('/^a$/D', ['a']); echo 'after';"));
+    assert!(!out.success, "{}", out.stdout);
+    assert_eq!(out.stdout, "before|");
+    assert!(out.stderr.contains("Fatal error: eval() runtime failed"), "{}", out.stderr);
+}
+

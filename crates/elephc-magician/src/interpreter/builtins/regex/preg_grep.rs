@@ -8,13 +8,17 @@
 //! - Mirrors the AOT prelude (`crate::pcre_prelude` in the compiler): the pattern is
 //!   compiled once, each entry is matched as its string value and keeps its key, and a
 //!   match error stops the scan with the entries collected so far.
+//! - Each match runs against a cleared error slot, so a nested `preg_*` error raised by an
+//!   entry's `__toString()` neither stops the scan nor counts as this call's own error; it
+//!   is put back afterwards and stays visible through `preg_last_error()`, like php-src.
 //! - An entry's string value is PHP's string conversion: an object runs `__toString()` (or
 //!   throws PHP's conversion `Error`), and an array warns and matches as `"Array"`.
 //! - Entry keys and values are leased temporaries, and a throwing `__toString()` releases
 //!   the partial result before the exception propagates.
 //! - Unlike the other eval `preg_*` builtins, which treat a malformed pattern as a runtime
 //!   fatal, an invalid pattern returns `false` with `PREG_INTERNAL_ERROR`, like the AOT
-//!   prelude and PHP.
+//!   prelude and PHP. A valid modifier eval does not implement (`A`, `D`, `S`, `X`, `J`,
+//!   `n`) stays the explicit runtime error the other eval `preg_*` builtins raise.
 
 use super::super::super::*;
 use super::*;
@@ -66,13 +70,11 @@ pub(in crate::interpreter) fn eval_preg_grep_result(
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
-    let regex = match eval_preg_regex(pattern, values) {
-        Ok(regex) => regex,
+    let regex = match eval_preg_callback_pattern(pattern, values)? {
+        EvalPregCallbackPattern::Compiled(regex) => regex,
         // An invalid pattern is PHP `false` with `PREG_INTERNAL_ERROR`, not a fatal.
-        Err(_) if eval_preg_last_error_code() == EVAL_PREG_INTERNAL_ERROR => {
-            return values.bool_value(false);
-        }
-        Err(status) => return Err(status),
+        EvalPregCallbackPattern::Invalid => return values.bool_value(false),
+        EvalPregCallbackPattern::UnsupportedModifier => return Err(EvalStatus::RuntimeFatal),
     };
     let len = values.array_len(array)?;
     let mut result = values.assoc_new(len)?;
@@ -107,8 +109,15 @@ fn eval_preg_grep_fill(
             let value = values.array_get(array, key)?;
             with_eval_value_lease(value, context, values, |value, context, values| {
                 let subject = eval_preg_grep_subject(value.borrowed(), context, values)?;
+                // `__toString()` may have run a failing `preg_*` call: match against a
+                // cleared slot and put that nested error back unless this match fails.
+                let nested_error = eval_preg_last_error_code();
+                eval_preg_set_last_error(0);
                 let matched = regex.is_match(&subject);
                 failed = eval_preg_failed();
+                if !failed {
+                    eval_preg_set_last_error(nested_error);
+                }
                 if !failed && matched != invert {
                     *result = values.array_set(*result, key, value)?;
                 }
