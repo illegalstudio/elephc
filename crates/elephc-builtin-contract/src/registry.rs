@@ -189,7 +189,7 @@ mod tests {
         // +1: the internal `__elephc_set_memory_limit` runtime setter.
         // +10: the five `proc_*` functions and the five internal resource helpers their
         // prelude composes.
-        assert_eq!(contracts().len(), 1319 + curl_surface);
+        assert_eq!(contracts().len(), 1329 + curl_surface);
         assert_eq!(lookup("STRLEN").map(|contract| contract.name), Some("strlen"));
         assert_eq!(lookup("\\parse_url").map(|contract| contract.name), Some("parse_url"));
     }
