@@ -14,13 +14,19 @@ use crate::codegen_support::abi;
 use crate::codegen_support::{emit::Emitter, platform::Target};
 use sha2::{Digest, Sha256};
 
-/// Emits the original publication protocol inside a frame containing all selected owner slots.
-fn emit_mixed_symbol(target: Target, mode: u8, release_previous: bool, transfer_owner: Option<usize>) -> Emitter {
+/// Configures one independent compiler emitter without sharing mutable label or output state.
+fn configured_emitter(target: Target, mode: u8) -> Emitter {
     let mut emitter = Emitter::new(target);
     emitter.pic_data_refs = mode == 1 || mode == 2;
     emitter.cdylib_boundary = mode == 2 || mode == 3;
     emitter.phpext_output = mode == 4;
     emitter.dead_strip = mode == 5;
+    emitter
+}
+
+/// Emits the original publication protocol inside a frame containing all selected owner slots.
+fn emit_mixed_symbol(target: Target, mode: u8, release_previous: bool, transfer_owner: Option<usize>) -> Emitter {
+    let mut emitter = configured_emitter(target, mode);
     emitter.label_global("__memoir_mixed_symbol_probe");
     abi::emit_frame_prologue(&mut emitter, 8192);
     publish_mixed_symbol(&mut emitter, "_memoir_mixed_symbol_fixture",
@@ -54,6 +60,49 @@ fn mixed_symbol_fingerprints() -> String {
 fn memoir_mixed_symbol_preserves_assembly() {
     assert_eq!(mixed_symbol_fingerprints(), include_str!("memoir_mixed_symbol_baseline.txt").trim(),
         "Mixed symbol publication changed during extraction");
+}
+
+/// Uses host layout and owner policy while retiring transferred storage before reentrant release.
+#[test]
+fn memoir_mixed_symbol_uses_host_layout_and_owner_policy() {
+    use elephc_memoir::{reference_cells::mixed_symbol::{self, Context}, FrameOffset, RecordOffset};
+
+    for name in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+        for mode in 0..6 {
+            for release_previous in [false, true] {
+                for transfer_owner in [None, Some(32), Some(4096)] {
+                    let target = Target::parse(name).unwrap();
+                    let mut emitter = configured_emitter(target, mode);
+                    let mut marker = configured_emitter(target, mode);
+                    let mut transfer = configured_emitter(target, mode);
+                    let context = Context {
+                        symbol: "_memoir_host_mixed_symbol",
+                        initialization_offset: RecordOffset::new(24),
+                        release_previous,
+                        transfer_owner: transfer_owner.map(FrameOffset::new),
+                        prefix: "__memoir_host_mixed_prefix",
+                    };
+                    mixed_symbol::publish(&mut emitter, context);
+                    let output = emitter.output();
+                    assert!(output.contains("__memoir_host_mixed_prefix_payload:"), "{name}, mode={mode}");
+                    assert!(output.contains(context.symbol), "{name}, mode={mode}");
+                    abi::emit_store_zero_to_symbol(&mut marker, context.symbol, context.initialization_offset.bytes());
+                    let initialized = output.find(&marker.output()).expect("host marker store missing");
+                    if let Some(offset) = transfer_owner {
+                        abi::emit_store_zero_to_local_slot(&mut transfer, offset);
+                        let transferred = output.find(&transfer.output()).expect("transferred owner clear missing");
+                        assert!(transferred < initialized, "{name}, mode={mode}: parking owner survived publication");
+                    }
+                    if release_previous {
+                        let release = output.find("__rt_decref_any").unwrap();
+                        assert!(initialized < release, "{name}, mode={mode}: destructor preceded initialization");
+                    } else {
+                        assert!(!output.contains("__rt_decref_any"), "{name}, mode={mode}: implicit previous-owner release");
+                    }
+                }
+            }
+        }
+    }
 }
 
 /// Cross-assembles every publication variant on all supported targets and output modes.
