@@ -94,9 +94,17 @@ pub(crate) fn validate_class_trait_requirements(
         let Some(uses) = class_uses.get(class.name.as_str()) else { continue };
         let contract = walk.uses_contract(uses);
         let satisfied = contract.satisfied.iter().filter(|(required, actual)| {
-            mentions_relative_class_types(&required.method)
-                || mentions_relative_class_types(&actual.method)
-                || checked_pairs.insert((required.identity(), actual.identity()))
+            let key = (required.identity(), actual.identity());
+            // Only pairs free of relative types are recorded, so a recorded pair is skipped.
+            if checked_pairs.contains(&key) {
+                return false;
+            }
+            if !mentions_relative_class_types(&required.method)
+                && !mentions_relative_class_types(&actual.method)
+            {
+                checked_pairs.insert(key);
+            }
+            true
         });
         let mut pairs: Vec<(&ClassMethod, &ClassMethod)> =
             satisfied.map(|(required, actual)| (&required.method, &actual.method)).collect();
@@ -121,11 +129,34 @@ pub(crate) fn validate_class_trait_requirements(
 /// Whether `method`'s parameter, variadic or return types name `self`, `parent` or `static`,
 /// which resolve against the class that consumes the trait.
 fn mentions_relative_class_types(method: &ClassMethod) -> bool {
-    let mut probe = method.clone();
-    probe.substitute_relative_class_types("\0self", Some("\0parent"));
-    probe.return_type != method.return_type
-        || probe.variadic_type != method.variadic_type
-        || probe.params.iter().zip(&method.params).any(|(probed, declared)| probed.1 != declared.1)
+    method
+        .params
+        .iter()
+        .filter_map(|(_, type_ann, _, _)| type_ann.as_ref())
+        .chain(method.variadic_type.as_ref())
+        .chain(method.return_type.as_ref())
+        .any(type_mentions_relative_class)
+}
+
+/// Whether `hint` names `self`, `parent` or `static` anywhere, walking the same variants
+/// `TypeExpr::substitute_relative_class_types` rewrites, by reference.
+fn type_mentions_relative_class(hint: &TypeExpr) -> bool {
+    match hint {
+        TypeExpr::Named(name) => ["self", "static", "parent"]
+            .iter()
+            .any(|relative| name.as_str().eq_ignore_ascii_case(relative)),
+        TypeExpr::Nullable(inner) | TypeExpr::Array(inner) | TypeExpr::Buffer(inner) => {
+            type_mentions_relative_class(inner)
+        }
+        TypeExpr::Union(members) | TypeExpr::Intersection(members) => {
+            members.iter().any(type_mentions_relative_class)
+        }
+        TypeExpr::GenericClass { args, .. } => args.iter().any(type_mentions_relative_class),
+        TypeExpr::CallableSig { params, ret } => {
+            params.iter().any(type_mentions_relative_class) || type_mentions_relative_class(ret)
+        }
+        _ => false,
+    }
 }
 
 /// Indexes each class declaration's trait uses by class name, through namespace blocks.
