@@ -91,6 +91,24 @@ impl EvaluatedLocation {
     }
 }
 
+/// Marks the `ArrayAccess` container of an element write as borrowed when its parent location
+/// is a storage slot that still holds it.
+///
+/// `$obj[$k] = $v` reads `$obj` straight out of its scope cell (or a static property slot):
+/// that cell is the variable's own, so the write must not release it. Only a container the
+/// parent read produced as an owned temporary (`$holder->bag[$k] = $v`) is the write's to give
+/// back.
+fn array_access_object(
+    container: RuntimeCellHandle,
+    parent: &EvaluatedLocation,
+) -> RuntimeCellHandle {
+    if parent.current_is_held_by_storage() {
+        container.borrowed()
+    } else {
+        container
+    }
+}
+
 /// Evaluates `target ??= default`, preserving PHP's lazy RHS and single target evaluation.
 pub(super) fn eval_null_coalesce_assign(
     target: &EvalExpr,
@@ -929,7 +947,7 @@ fn evaluate_plain_assignment_location(
                 && eval_array_access_object_matches(container, context, values)?
             {
                 return Ok(EvaluatedLocation::ArrayAccessElement {
-                    object: container,
+                    object: array_access_object(container, &parent),
                     index,
                     current: None,
                 });
@@ -1089,7 +1107,7 @@ fn evaluate_location_with_fetch(
                 && eval_array_access_object_matches(container, context, values)?
             {
                 return Ok(EvaluatedLocation::ArrayAccessElement {
-                    object: container,
+                    object: array_access_object(container, &parent),
                     index,
                     current: Some(current),
                 });

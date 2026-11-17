@@ -364,6 +364,36 @@ $f = function ($o) { return 1; };"#,
     assert_eq!(values.cell_owners[&(callback.as_ptr() as usize)], 1);
 }
 
+/// An `offsetSet()` write through a plain variable leaves the variable's own reference alone.
+///
+/// `$bag[$k] = $v` reads `$bag` out of its scope cell, which the variable still holds: the
+/// write used to hand that cell back as if it were a temporary, so the first write freed the
+/// object under the variable (a later write never reached `offsetSet()`).
+#[test]
+fn array_access_variable_writes_keep_the_variables_reference() {
+    let mut values = FakeOps::default();
+    let mut context = ElephcEvalContext::new();
+    let mut scope = ElephcEvalScope::new();
+    let declare = parse_fragment(
+        br#"class VariableBag implements ArrayAccess {
+    function offsetExists($o): bool { return true; }
+    function offsetGet($o): mixed { return 1; }
+    function offsetSet($o, $v): void {}
+    function offsetUnset($o): void {}
+}
+$bag = new VariableBag();"#,
+    )
+    .unwrap();
+    execute_program_with_context(&mut context, &declare, &mut scope, &mut values).unwrap();
+    let bag = scope.visible_cell("bag").unwrap();
+    let owners_before = values.cell_owners[&(bag.as_ptr() as usize)];
+    for write in ["$bag['k'] = 5;", "$bag['k'] = 6;", "$bag['j'] ??= 7;"] {
+        let writes = parse_fragment(write.as_bytes()).unwrap();
+        execute_program_with_context(&mut context, &writes, &mut scope, &mut values).unwrap();
+        assert_eq!(values.cell_owners[&(bag.as_ptr() as usize)], owners_before, "{write}");
+    }
+}
+
 /// `==` over two arrays and `+` over an array release every key and element read they make.
 ///
 /// Every `array_iter_key`/`array_get`/`array_key_exists`/`compare` result is an owned cell, so
