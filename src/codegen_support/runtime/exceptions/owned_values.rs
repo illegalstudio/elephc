@@ -12,10 +12,15 @@
 
 use crate::codegen_support::{abi, emit::Emitter, platform::Arch};
 use crate::codegen_support::try_handlers::{EXCEPTION_GUARD_OWNER_OFFSET, TRY_HANDLER_SLOT_SIZE};
+use elephc_memoir::{FrameOffset, GuardLayout, RecordOffset};
+
+/// Pairs the guard owner with the protected callback's retained first argument.
+const GUARD_LAYOUT: GuardLayout = GuardLayout::new(
+    RecordOffset::new(EXCEPTION_GUARD_OWNER_OFFSET), FrameOffset::new(TRY_HANDLER_SLOT_SIZE));
 
 /// Emits target-aware removal and cleanup entries for stack-local ownership guards.
 pub(super) fn emit(emitter: &mut Emitter) {
-    elephc_memoir::guarded_owners::emit_guard_chain(emitter, EXCEPTION_GUARD_OWNER_OFFSET, "_exc_call_frame_top");
+    elephc_memoir::guarded_owners::emit_guard_chain(emitter, GUARD_LAYOUT, "_exc_call_frame_top");
     super::emit_protected(emitter, "__rt_exception_release_owned", release_body);
     super::emit_protected(emitter, "__rt_exception_release_callable", release_callable_body);
     super::emit_protected(
@@ -67,7 +72,7 @@ fn release_callable_body(emitter: &mut Emitter) {
 
 /// Suppresses `__destruct` before releasing a raw object whose constructor did not complete.
 fn release_unconstructed_object_body(emitter: &mut Emitter) {
-    elephc_memoir::guarded_owners::emit_take_guard_owner(emitter, EXCEPTION_GUARD_OWNER_OFFSET, TRY_HANDLER_SLOT_SIZE);
+    elephc_memoir::guarded_owners::emit_take_guard_owner(emitter, GUARD_LAYOUT);
     if emitter.target.arch == Arch::AArch64 {
         emitter.instruction("cbz x0, __rt_exception_release_unconstructed_object_drop"); // skip header access for an already-cleared guard
         emitter.instruction("ldr x10, [x0, #-8]");                              // load the persistent object kind and destructor state
@@ -85,7 +90,7 @@ fn release_unconstructed_object_body(emitter: &mut Emitter) {
 
 /// Adapts protected callback layout facts to the shared take-before-release primitive.
 fn emit_release_body(emitter: &mut Emitter, symbol: &str) {
-    elephc_memoir::guarded_owners::emit_release_body(emitter, symbol, EXCEPTION_GUARD_OWNER_OFFSET, TRY_HANDLER_SLOT_SIZE);
+    elephc_memoir::guarded_owners::emit_release_body(emitter, symbol, GUARD_LAYOUT);
 }
 
 #[cfg(test)]

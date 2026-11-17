@@ -46,7 +46,7 @@ fn emit_aarch64(emitter: &mut impl Emitter, protected: &str, direct: &str) {
     emitter.instruction(&format!("b.lo {protected}"));                          // short storage cannot qualify as an array
     emitter.instruction("ldr x10, [x1, #-8]");                                  // retain all storage and collector flags in the actual header
     emitter.instruction("and x10, x10, #0xff");                                 // isolate the concrete storage kind
-    emitter.instruction("cmp x10, #2");                                         // only indexed arrays use this length layout
+    emitter.instruction(&format!("cmp x10, #{}", crate::layout::ARRAY_KIND));   // only indexed arrays use this length layout
     emitter.instruction(&format!("b.ne {protected}"));                          // promoted hashes and all other kinds remain protected
     emitter.instruction("ldr x10, [x1]");                                       // length counts owned children; capacity may already reserve four slots
     emitter.instruction(&format!("cbnz x10, {protected}"));                     // any logical element may execute PHP cleanup
@@ -77,7 +77,7 @@ fn emit_x86(emitter: &mut impl Emitter, protected: &str, direct: &str) {
     emitter.instruction(&format!("cmp r11, {}", crate::layout::X86_64_HEAP_MAGIC_HI32)); // reject unstamped headers
     emitter.instruction(&format!("jne {protected}"));                           // only managed indexed arrays can qualify
     emitter.instruction("and r10d, 0xff");                                      // ignore transient flags and cached incoming counts
-    emitter.instruction("cmp r10d, 2");                                         // require actual indexed storage rather than a promoted hash
+    emitter.instruction(&format!("cmp r10d, {}", crate::layout::ARRAY_KIND));   // require actual indexed storage rather than a promoted hash
     emitter.instruction(&format!("jne {protected}"));                           // other kinds retain the existing cleanup boundary
     emitter.instruction("cmp QWORD PTR [rsi], 0");                              // only logical length matters, not reserved capacity
     emitter.instruction(&format!("jne {protected}"));                           // nonempty arrays may own throwing child destructors

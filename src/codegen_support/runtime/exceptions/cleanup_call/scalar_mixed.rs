@@ -14,6 +14,6 @@ pub(super) use elephc_memoir::cleanup_fast_paths::scalar_mixed::{PROTECTED, DIRE
 /// Supplies the four non-owning PHP scalar tags to the memory proof emitter.
 pub(super) fn emit_fast_path(emitter: &mut Emitter) {
     let tags = [PhpType::Int, PhpType::Float, PhpType::Bool, PhpType::Void]
-        .map(|ty| runtime_value_tag(&ty));
+        .map(|ty| elephc_memoir::ValueTag::new(runtime_value_tag(&ty)));
     elephc_memoir::cleanup_fast_paths::scalar_mixed::emit_fast_path(emitter, &tags);
 }

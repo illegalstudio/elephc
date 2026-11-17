@@ -9,13 +9,15 @@
 //! - The host supplies state symbols; legacy entry labels preserve the existing runtime ABI.
 //! - Detachment invokes no PHP cleanup; completion and exception propagation stay in the host.
 
-use crate::{abi, Arch, Emitter};
+use crate::{abi, Arch, Emitter, ScopedOwnerState};
 
 /// Consumes one data owner into a depth-stamped context node without changing its payload.
 ///
 /// A direct hydration-hook call has no active decoder boundary to drain the
 /// list, so depth zero retires the value immediately instead of publishing it.
-pub fn emit_defer_data(emitter: &mut impl Emitter, head_symbol: &str, depth_symbol: &str) {
+pub fn emit_defer_data(emitter: &mut impl Emitter, state: ScopedOwnerState<'_>) {
+    let head_symbol = state.head;
+    let depth_symbol = state.depth;
     let result = abi::int_result_reg(emitter);
     let scratch = abi::secondary_scratch_reg(emitter);
     emitter.blank();
@@ -43,7 +45,9 @@ pub fn emit_defer_data(emitter: &mut impl Emitter, head_symbol: &str, depth_symb
 }
 
 /// Removes the current parser's list prefix, preserving every still-active outer context node.
-pub fn emit_detach_data(emitter: &mut impl Emitter, head_symbol: &str, depth_symbol: &str) {
+pub fn emit_detach_data(emitter: &mut impl Emitter, state: ScopedOwnerState<'_>) {
+    let head_symbol = state.head;
+    let depth_symbol = state.depth;
     let result = abi::int_result_reg(emitter);
     let scratch = abi::secondary_scratch_reg(emitter);
     let depth = abi::tertiary_scratch_reg(emitter);

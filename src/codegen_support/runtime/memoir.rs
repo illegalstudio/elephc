@@ -13,56 +13,9 @@ mod stack_mapping;
 use crate::codegen_support::{abi, emit::Emitter};
 use elephc_memoir::{Arch, GraphLayout, GcStatusSelectors};
 
-impl elephc_memoir::Emitter for Emitter {
-    /// Supplies platform mapping policy without exposing compiler platform types to Memoir.
-    fn anonymous_private_map_flags(&self) -> i32 {
-        stack_mapping::map_anon_private_flags(self.target.platform)
-    }
-    /// Keeps the PHP uninitialized-property marker authoritative in the compiler.
-    fn uninitialized_property_sentinel(&self) -> i64 {
-        crate::codegen_support::sentinels::UNINITIALIZED_TYPED_PROPERTY_SENTINEL
-    }
-    /// Supplies the compiler arch contract.
-    fn arch(&self) -> Arch { self.target.arch }
-    /// Supplies the compiler extern symbol contract.
-    fn extern_symbol(&self, name: &str) -> String { self.target.extern_symbol(name) }
+impl elephc_memoir::AssemblyEmitter for Emitter {
     /// Supplies the compiler line comment prefix contract.
     fn line_comment_prefix(&self) -> &'static str { self.target.line_comment_prefix() }
-    /// Supplies the compiler cdylib boundary contract.
-    fn cdylib_boundary(&self) -> bool { self.cdylib_boundary }
-    /// Supplies the compiler phpext output contract.
-    fn phpext_output(&self) -> bool { self.phpext_output }
-    /// Supplies the compiler graph layout contract.
-    fn graph_layout(&self) -> GraphLayout { GraphLayout {
-            fiber_stack_size_offset: super::fibers::FIBER_STACK_SIZE_OFFSET,
-            spl_fixed_storage_offset: super::spl::SPL_FIXED_STORAGE_OFFSET as i32,
-            fiber_callable_offset: super::fibers::FIBER_CALLABLE_OFFSET,
-            fiber_object_size: super::fibers::FIBER_OBJECT_SIZE,
-            fiber_own_call_frame_offset: super::fibers::FIBER_OWN_CALL_FRAME_OFFSET,
-            fiber_pending_throw_offset: super::fibers::FIBER_PENDING_THROW_OFFSET,
-            fiber_stack_base_offset: super::fibers::FIBER_STACK_BASE_OFFSET,
-            fiber_stack_top_offset: super::fibers::FIBER_STACK_TOP_OFFSET,
-            fiber_start_args_max: super::fibers::FIBER_START_ARGS_MAX,
-            fiber_start_args_offset: super::fibers::FIBER_START_ARGS_OFFSET,
-            fiber_transfer_value_offset: super::fibers::FIBER_TRANSFER_VALUE_OFFSET,
-            fiber_user_arg_max_offset: super::fibers::FIBER_USER_ARG_MAX_OFFSET,
-            gen_last_key_offset: super::generators::coro::GEN_LAST_KEY_OFFSET,
-            gen_last_value_offset: super::generators::coro::GEN_LAST_VALUE_OFFSET,
-            gen_return_value_offset: super::generators::coro::GEN_RETURN_VALUE_OFFSET,
-            spl_dll_storage_offset: super::spl::SPL_DLL_STORAGE_OFFSET as i32,
-        } }
-    /// Supplies the compiler gc status selectors contract.
-    fn gc_status_selectors(&self) -> GcStatusSelectors { GcStatusSelectors {
-            application_time: crate::ir::GcControlOp::ApplicationTime.as_i64(),
-            collected: crate::ir::GcControlOp::Collected.as_i64(),
-            collector_time: crate::ir::GcControlOp::CollectorTime.as_i64(),
-            destructor_time: crate::ir::GcControlOp::DestructorTime.as_i64(),
-            free_time: crate::ir::GcControlOp::FreeTime.as_i64(),
-            protected: crate::ir::GcControlOp::Protected.as_i64(),
-            roots: crate::ir::GcControlOp::Roots.as_i64(),
-            running: crate::ir::GcControlOp::Running.as_i64(),
-            runs: crate::ir::GcControlOp::Runs.as_i64(),
-        } }
     /// Preserves the existing compiler instruction behavior.
     fn instruction(&mut self, text: &str) { Emitter::instruction(self, text); }
     /// Preserves the existing compiler label behavior.
@@ -75,6 +28,23 @@ impl elephc_memoir::Emitter for Emitter {
     fn blank(&mut self) { Emitter::blank(self); }
     /// Preserves the existing compiler comment behavior.
     fn comment(&mut self, text: &str) { Emitter::comment(self, text); }
+    /// Preserves raw assembly directives.
+    fn raw(&mut self, text: &str) { Emitter::raw(self, text); }
+}
+
+impl elephc_memoir::TargetAbi for Emitter {
+    /// Supplies platform mapping policy without exposing compiler platform types to Memoir.
+    fn anonymous_private_map_flags(&self) -> i32 {
+        stack_mapping::map_anon_private_flags(self.target.platform)
+    }
+    /// Supplies the compiler arch contract.
+    fn arch(&self) -> Arch { self.target.arch }
+    /// Supplies the compiler extern symbol contract.
+    fn extern_symbol(&self, name: &str) -> String { self.target.extern_symbol(name) }
+    /// Supplies the compiler cdylib boundary contract.
+    fn cdylib_boundary(&self) -> bool { self.cdylib_boundary }
+    /// Supplies the compiler phpext output contract.
+    fn phpext_output(&self) -> bool { self.phpext_output }
     /// Preserves the existing compiler bl c behavior.
     fn bl_c(&mut self, name: &str) { Emitter::bl_c(self, name); }
     /// Preserves the existing compiler syscall behavior.
@@ -135,17 +105,6 @@ impl elephc_memoir::Emitter for Emitter {
     fn store_at_offset(&mut self, reg: &str, offset: usize) { abi::store_at_offset(self, reg, offset) }
     /// Uses the existing target ABI for string result regs.
     fn string_result_regs(&self) -> (&'static str, &'static str) { abi::string_result_regs(self) }
-    /// Retains the existing protected weak-observer cleanup ABI.
-    fn emit_guarded_cleanup_call(&mut self, entry: &str, payload: &str, pending_offset: usize) {
-        super::exceptions::emit_guarded_cleanup_call(self, entry, payload, pending_offset);
-    }
-    /// Supplies the existing scratch capacity selected for this compilation.
-    fn concat_capacity(&self) -> usize { self.concat_capacity }
-    /// Preserves raw assembly directives.
-    fn raw(&mut self, text: &str) { Emitter::raw(self, text); }
-    /// Preserves compiler translation of native reference-source failures.
-    fn emit_reference_source_success(&mut self) { super::reference_cells::require_source_success(self); }
-
     /// Delegates emit cdylib exit escape to the established compiler ABI.
     fn emit_cdylib_exit_escape(&mut self) { abi::emit_cdylib_exit_escape(self) }
     /// Delegates emit store to address to the established compiler ABI.
@@ -156,18 +115,62 @@ impl elephc_memoir::Emitter for Emitter {
     fn tertiary_scratch_reg(&self) -> &'static str { abi::tertiary_scratch_reg(self) }
     /// Delegates emit cmp reg to symbol to the established compiler ABI.
     fn emit_cmp_reg_to_symbol(&mut self, reg: &str, symbol: &str) { abi::emit_cmp_reg_to_symbol(self, reg, symbol) }
-    /// Delegates emit unary cleanup preserving exception to the established compiler ABI.
-    fn emit_unary_cleanup_preserving_exception(&mut self, entry: &str, payload: &str) { abi::emit_unary_cleanup_preserving_exception(self, entry, payload) }
-
     /// Computes a local slot's address through the existing target ABI.
     fn emit_frame_slot_address(&mut self, dest: &str, offset: usize) {
         abi::emit_frame_slot_address(self, dest, offset);
     }
+}
+
+impl elephc_memoir::MemoryContext for Emitter {
+    /// Keeps the PHP uninitialized-property marker authoritative in the compiler.
+    fn uninitialized_property_sentinel(&self) -> i64 {
+        crate::codegen_support::sentinels::UNINITIALIZED_TYPED_PROPERTY_SENTINEL
+    }
+    /// Supplies the compiler graph layout contract.
+    fn graph_layout(&self) -> GraphLayout { GraphLayout {
+            fiber_stack_size_offset: super::fibers::FIBER_STACK_SIZE_OFFSET,
+            spl_fixed_storage_offset: super::spl::SPL_FIXED_STORAGE_OFFSET as i32,
+            fiber_callable_offset: super::fibers::FIBER_CALLABLE_OFFSET,
+            fiber_object_size: super::fibers::FIBER_OBJECT_SIZE,
+            fiber_own_call_frame_offset: super::fibers::FIBER_OWN_CALL_FRAME_OFFSET,
+            fiber_pending_throw_offset: super::fibers::FIBER_PENDING_THROW_OFFSET,
+            fiber_stack_base_offset: super::fibers::FIBER_STACK_BASE_OFFSET,
+            fiber_stack_top_offset: super::fibers::FIBER_STACK_TOP_OFFSET,
+            fiber_start_args_max: super::fibers::FIBER_START_ARGS_MAX,
+            fiber_start_args_offset: super::fibers::FIBER_START_ARGS_OFFSET,
+            fiber_transfer_value_offset: super::fibers::FIBER_TRANSFER_VALUE_OFFSET,
+            fiber_user_arg_max_offset: super::fibers::FIBER_USER_ARG_MAX_OFFSET,
+            gen_last_key_offset: super::generators::coro::GEN_LAST_KEY_OFFSET,
+            gen_last_value_offset: super::generators::coro::GEN_LAST_VALUE_OFFSET,
+            gen_return_value_offset: super::generators::coro::GEN_RETURN_VALUE_OFFSET,
+            spl_dll_storage_offset: super::spl::SPL_DLL_STORAGE_OFFSET as i32,
+        } }
+    /// Supplies the compiler gc status selectors contract.
+    fn gc_status_selectors(&self) -> GcStatusSelectors { GcStatusSelectors {
+            application_time: crate::ir::GcControlOp::ApplicationTime.as_i64(),
+            collected: crate::ir::GcControlOp::Collected.as_i64(),
+            collector_time: crate::ir::GcControlOp::CollectorTime.as_i64(),
+            destructor_time: crate::ir::GcControlOp::DestructorTime.as_i64(),
+            free_time: crate::ir::GcControlOp::FreeTime.as_i64(),
+            protected: crate::ir::GcControlOp::Protected.as_i64(),
+            roots: crate::ir::GcControlOp::Roots.as_i64(),
+            running: crate::ir::GcControlOp::Running.as_i64(),
+            runs: crate::ir::GcControlOp::Runs.as_i64(),
+        } }
+    /// Retains the existing protected weak-observer cleanup ABI.
+    fn emit_guarded_cleanup_call(&mut self, entry: &str, payload: &str, pending_offset: usize) {
+        super::exceptions::emit_guarded_cleanup_call(self, entry, payload, pending_offset);
+    }
+    /// Supplies the existing scratch capacity selected for this compilation.
+    fn concat_capacity(&self) -> usize { self.concat_capacity }
+    /// Preserves compiler translation of native reference-source failures.
+    fn emit_reference_source_success(&mut self) { super::reference_cells::require_source_success(self); }
+    /// Delegates emit unary cleanup preserving exception to the established compiler ABI.
+    fn emit_unary_cleanup_preserving_exception(&mut self, entry: &str, payload: &str) { abi::emit_unary_cleanup_preserving_exception(self, entry, payload) }
     /// Keeps PHP resource identity and subtype decisions in the compiler adapter.
     fn emit_mixed_resource_identity(&mut self) { resources::emit_identity(self); }
     /// Keeps the resource inventory's weak-pointer layout authoritative in the compiler.
     fn emit_mixed_resource_publication(&mut self) { resources::emit_publication(self); }
-
 }
 
 impl From<crate::codegen_support::RuntimeFeatures> for elephc_memoir::ValueFeatures {

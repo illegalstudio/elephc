@@ -8,7 +8,7 @@
 //! - The host supplies only tags whose values own no children.
 //! - Rejected callbacks or storage keep the host protected path; GC dispatch remains unchanged.
 
-use crate::{abi, Arch, Emitter};
+use crate::{abi, Arch, Emitter, ValueTag};
 
 /// Label where the host installs its protected cleanup boundary.
 pub const PROTECTED: &str = "__rt_cleanup_invoke_protected";
@@ -16,7 +16,7 @@ pub const PROTECTED: &str = "__rt_cleanup_invoke_protected";
 pub const DIRECT: &str = "__rt_cleanup_invoke_direct";
 
 /// Emits a conservative scalar gate, then resumes the existing protected path on rejection.
-pub fn emit_fast_path(emitter: &mut impl Emitter, scalar_tags: &[u8]) {
+pub fn emit_fast_path(emitter: &mut impl Emitter, scalar_tags: &[ValueTag]) {
     match emitter.arch() {
         Arch::AArch64 => emit_aarch64_gate(emitter, scalar_tags),
         Arch::X86_64 => emit_x86_gate(emitter, scalar_tags),
@@ -41,7 +41,7 @@ pub fn emit_fast_path(emitter: &mut impl Emitter, scalar_tags: &[u8]) {
 }
 
 /// Validates the AAPCS64 callback and payload without changing any incoming argument.
-fn emit_aarch64_gate(emitter: &mut impl Emitter, scalar_tags: &[u8]) {
+fn emit_aarch64_gate(emitter: &mut impl Emitter, scalar_tags: &[ValueTag]) {
     // -- authenticate the only release entry with a proven scalar path --
     abi::emit_symbol_address(emitter, "x9", "__rt_decref_any");
     emitter.instruction("cmp x0, x9");                                          // arbitrary cleanup callbacks retain their exception boundary
@@ -64,7 +64,7 @@ fn emit_aarch64_gate(emitter: &mut impl Emitter, scalar_tags: &[u8]) {
     emitter.instruction(&format!("b.lo {PROTECTED}"));                          // malformed or older short cells do not use this optimization
     emitter.instruction("ldr x10, [x1, #-8]");                                  // load storage kind while retaining all collector flags
     emitter.instruction("and x10, x10, #0xff");                                 // collector metadata cannot change the underlying heap kind
-    emitter.instruction("cmp x10, #5");                                         // only a Mixed cell has the runtime tag inspected below
+    emitter.instruction(&format!("cmp x10, #{}", crate::layout::MIXED_KIND));   // only a Mixed cell has the runtime tag inspected below
     emitter.instruction(&format!("b.ne {PROTECTED}"));                          // containers, objects, strings and reference cells stay protected
     emitter.instruction("ldr x10, [x1]");                                       // borrow the canonical runtime value tag
     for &tag in scalar_tags {
@@ -75,7 +75,7 @@ fn emit_aarch64_gate(emitter: &mut impl Emitter, scalar_tags: &[u8]) {
 }
 
 /// Validates System V inputs while preserving the callback, payload and pending-owner address.
-fn emit_x86_gate(emitter: &mut impl Emitter, scalar_tags: &[u8]) {
+fn emit_x86_gate(emitter: &mut impl Emitter, scalar_tags: &[ValueTag]) {
     // -- authenticate the exact native release callback --
     abi::emit_symbol_address(emitter, "r9", "__rt_decref_any");
     emitter.instruction("cmp rdi, r9");                                         // arbitrary callbacks cannot inherit the scalar release proof
@@ -100,7 +100,7 @@ fn emit_x86_gate(emitter: &mut impl Emitter, scalar_tags: &[u8]) {
     emitter.instruction(&format!("cmp r11, {}", crate::layout::X86_64_HEAP_MAGIC_HI32)); // reject foreign headers inside the managed address range
     emitter.instruction(&format!("jne {PROTECTED}"));                           // only stamped native allocations can qualify
     emitter.instruction("and r10d, 0xff");                                      // ignore transient marks and cached incoming counts
-    emitter.instruction("cmp r10d, 5");                                         // only Mixed storage begins with this value-tag layout
+    emitter.instruction(&format!("cmp r10d, {}", crate::layout::MIXED_KIND));   // only Mixed storage begins with this value-tag layout
     emitter.instruction(&format!("jne {PROTECTED}"));                           // all other heap kinds remain protected
     emitter.instruction("mov r10, QWORD PTR [rsi]");                            // borrow the current runtime tag before releasing the cell
     for &tag in scalar_tags {

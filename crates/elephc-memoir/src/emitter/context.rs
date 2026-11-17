@@ -1,0 +1,32 @@
+//! Purpose:
+//! Supplies memory facts and explicit compiler-owned semantic hooks.
+//!
+//! Called from:
+//! - Compiler memory emission and its host adapters.
+//!
+//! Key details:
+//! - This capability runs only while the compiler emits assembly.
+
+use crate::{GraphLayout, GcStatusSelectors};
+
+/// Supplies memory facts and explicit compiler-owned semantic hooks.
+pub trait MemoryContext {
+    /// Provides the compiler graph layout contract.
+    fn graph_layout(&self) -> GraphLayout;
+    /// Provides the compiler gc status selectors contract.
+    fn gc_status_selectors(&self) -> GcStatusSelectors;
+    /// Contains throws while releasing a weak observer through the compiler boundary.
+    fn emit_guarded_cleanup_call(&mut self, entry: &str, payload: &str, pending_offset: usize);
+    /// Returns the configured string scratch capacity.
+    fn concat_capacity(&self) -> usize;
+    /// Keeps reference-registry status translation in the compiler.
+    fn emit_reference_source_success(&mut self);
+    /// Supplies the compiler's marker for an uninitialized PHP property payload.
+    fn uninitialized_property_sentinel(&self) -> i64;
+    /// Delegates emit unary cleanup preserving exception to the established compiler ABI.
+    fn emit_unary_cleanup_preserving_exception(&mut self, entry: &str, payload: &str);
+    /// Emits PHP resource policy inside the Mixed boxing frame, including its resource entry label.
+    fn emit_mixed_resource_identity(&mut self);
+    /// Publishes the boxed result through the compiler's weak resource inventory layout.
+    fn emit_mixed_resource_publication(&mut self);
+}

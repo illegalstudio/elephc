@@ -35,6 +35,14 @@ failed-constructor destructor policy, parser completion and diagnostic selection
 remain compiler-owned.
 Memoir source changes also participate in runtime-object cache identity.
 
+The host API composes assembly output, target ABI and memory-context capabilities.
+Heap storage kinds and runtime value tags have distinct types. Owner-record and
+frame offsets are separate aligned contracts, paired in validated guard layouts;
+scoped owner-list symbols are named fields. These checks run in the compiler and
+preserve emitted instructions. Host CI audits the Cargo production-consumer graph
+and source boundary, runs the crate's layout contracts and compile-fail examples,
+and retains the compiler's bridge-catalog guard against target-program linkage.
+
 This page explains where every value lives in memory at runtime.
 
 For `--emit phpext`, each PHP request owns a snapshot of these native writable
