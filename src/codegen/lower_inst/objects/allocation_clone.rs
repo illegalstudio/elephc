@@ -8,6 +8,7 @@
 //! - Heap layout, refcount retention, and dynamic hash cloning remain ABI-stable.
 
 use super::*;
+use elephc_memoir::values::object_clone_slots::{emit_direct_slot, SlotOwner};
 
 /// Emits allocation, class-id stamping, and declared-property slot initialization.
 pub(in crate::codegen::lower_inst) fn emit_object_allocation(
@@ -170,54 +171,18 @@ pub(super) fn emit_clone_declared_property_slots(
 ) {
     for index in 0..property_count {
         let offset = 8 + index * 16;
-        emit_copy_property_slot(ctx, source_reg, dest_reg, offset);
-        if owned_references
+        let owner = if owned_references
             .iter()
             .any(|(owned_offset, _, _)| *owned_offset == offset)
         {
-            let result = abi::int_result_reg(ctx.emitter);
-            abi::emit_push_reg(ctx.emitter, source_reg);
-            abi::emit_push_reg(ctx.emitter, dest_reg);
-            abi::emit_load_from_address(ctx.emitter, result, dest_reg, offset);
-            abi::emit_call_label(ctx.emitter, "__rt_reference_cell_clone");
-            abi::emit_pop_reg(ctx.emitter, dest_reg);
-            abi::emit_pop_reg(ctx.emitter, source_reg);
-            abi::emit_store_to_address(ctx.emitter, result, dest_reg, offset);
+            SlotOwner::Reference
         } else if retained_offsets.contains(&offset) {
-            emit_retain_cloned_property_pointer(ctx, source_reg, dest_reg, offset);
-        }
+            SlotOwner::Retain
+        } else {
+            SlotOwner::Plain
+        };
+        emit_direct_slot(ctx.emitter, source_reg, dest_reg, offset, owner);
     }
-}
-
-/// Copies one 16-byte declared-property slot from the source object to the clone.
-pub(super) fn emit_copy_property_slot(
-    ctx: &mut FunctionContext<'_>,
-    source_reg: &str,
-    dest_reg: &str,
-    offset: usize,
-) {
-    let low_reg = abi::int_result_reg(ctx.emitter);
-    let high_reg = abi::tertiary_scratch_reg(ctx.emitter);
-    abi::emit_load_from_address(ctx.emitter, low_reg, source_reg, offset);
-    abi::emit_load_from_address(ctx.emitter, high_reg, source_reg, offset + 8);
-    abi::emit_store_to_address(ctx.emitter, low_reg, dest_reg, offset);
-    abi::emit_store_to_address(ctx.emitter, high_reg, dest_reg, offset + 8);
-}
-
-/// Retains the copied low-word pointer for string, array, hash, object, or Mixed slots.
-pub(super) fn emit_retain_cloned_property_pointer(
-    ctx: &mut FunctionContext<'_>,
-    source_reg: &str,
-    dest_reg: &str,
-    offset: usize,
-) {
-    let result_reg = abi::int_result_reg(ctx.emitter);
-    abi::emit_push_reg(ctx.emitter, source_reg);
-    abi::emit_push_reg(ctx.emitter, dest_reg);
-    abi::emit_load_from_address(ctx.emitter, result_reg, dest_reg, offset);
-    abi::emit_call_label(ctx.emitter, "__rt_incref");
-    abi::emit_pop_reg(ctx.emitter, dest_reg);
-    abi::emit_pop_reg(ctx.emitter, source_reg);
 }
 
 /// Replaces the constructor-seeded dynamic-property hash with a shallow clone of the source hash.

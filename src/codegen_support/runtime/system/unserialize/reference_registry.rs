@@ -8,47 +8,23 @@
 //! - A context-owned retain keeps registry boxes valid even if hydration discards their data.
 //! - Only in-bounds slots publish owners; parser completion retires them after restoring context.
 
-use crate::codegen_support::{abi, emit::Emitter, platform::Arch};
+use crate::codegen_support::emit::Emitter;
 
-/// Registers a boxed array from C argument zero at the zero-based index in C argument one.
-/// Returns the original caller-owned box, with a separate lease held until context completion.
+/// Registers a boxed array at the caller-reserved decode ordinal.
 pub(super) fn emit_register_array(emitter: &mut Emitter) {
-    let result = abi::int_result_reg(emitter);
-    emitter.blank();
-    emitter.label_global("__rt_unserialize_register_array");
-    abi::emit_frame_prologue(emitter, 32);
-    abi::store_at_offset(emitter, abi::int_arg_reg_name(emitter.target, 0), 8);
-    abi::store_at_offset(emitter, abi::int_arg_reg_name(emitter.target, 1), 16);
-    abi::load_at_offset(emitter, abi::secondary_scratch_reg(emitter), 16);
-    match emitter.target.arch {
-        Arch::AArch64 => {
-            emitter.instruction("mov x11, #65536");                             // bound publication to the physical registry capacity
-            emitter.instruction("cmp x10, x11");                                // test the reserved index before computing an address
-            emitter.instruction("b.hs __rt_unserialize_register_array_done");   // overflow values have no registry lease
-            abi::emit_symbol_address(emitter, "x11", "_unser_values");
-            abi::load_at_offset(emitter, result, 8);
-            emitter.instruction("str x0, [x11, x10, lsl #3]");                  // publish the stable Mixed box for subsequent references
-        }
-        Arch::X86_64 => {
-            emitter.instruction("cmp r10, 65536");                              // test the reserved index before computing an address
-            emitter.instruction("jae __rt_unserialize_register_array_done");    // overflow values have no registry lease
-            abi::emit_symbol_address(emitter, "r11", "_unser_values");
-            abi::load_at_offset(emitter, result, 8);
-            emitter.instruction("mov QWORD PTR [r11 + r10*8], rax");            // publish the stable Mixed box for subsequent references
-        }
-    }
-    abi::emit_call_label(emitter, "__rt_incref");
-    abi::load_at_offset(emitter, result, 8);
-    abi::emit_call_label(emitter, "__rt_unserialize_defer_data");
-    emitter.label("__rt_unserialize_register_array_done");
-    abi::load_at_offset(emitter, result, 8);
-    abi::emit_frame_restore(emitter, 32);
-    abi::emit_return(emitter);
+    elephc_memoir::values::reference_registry::emit_register_cell(
+        emitter,
+        "__rt_unserialize_register_array",
+        "_unser_values",
+        65_536,
+        "__rt_unserialize_defer_data",
+    );
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::codegen_support::platform::Arch;
     use crate::codegen_support::platform::Target;
 
     /// Recursive decoders publish completed arrays and use the shared payload-owning clone path.

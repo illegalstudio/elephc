@@ -76,61 +76,7 @@ pub(super) fn emit_x86_64_object_clone_shallow_wrapper(emitter: &mut Emitter, na
     emitter.instruction("mov QWORD PTR [rbp - 32], r10");                       // save property count for the copy loop
     emitter.instruction("mov QWORD PTR [rbp - 40], 0");                         // initialize property-copy index to zero
 
-    emitter.label("__rt_object_clone_shallow_boxed_prop_loop_x86");
-    emitter.instruction("mov r10, QWORD PTR [rbp - 40]");                       // reload the current property index
-    emitter.instruction("cmp r10, QWORD PTR [rbp - 32]");                       // has every declared property slot been copied?
-    emitter.instruction("jae __rt_object_clone_shallow_boxed_dyn_x86");         // move on to the optional dynamic-property hash
-    emitter.instruction("mov rcx, r10");                                        // copy property index before scaling it into a byte offset
-    emitter.instruction("shl rcx, 4");                                          // each declared-property slot is two 8-byte words
-    emitter.instruction("add rcx, 8");                                          // skip the leading class id to reach this slot
-    emitter.instruction("mov r11, QWORD PTR [rbp - 8]");                        // reload the source object pointer
-    emitter.instruction("mov r8, QWORD PTR [rbp - 16]");                        // reload the clone object pointer
-    emitter.instruction("mov rax, QWORD PTR [r11 + rcx]");                      // copy the source property low word
-    emitter.instruction("mov rdx, QWORD PTR [r11 + rcx + 8]");                  // copy the source property high word
-    emitter.instruction("mov QWORD PTR [r8 + rcx], rax");                       // store the property low word on the clone
-    emitter.instruction("mov QWORD PTR [r8 + rcx + 8], rdx");                   // store the property high word on the clone
-    emitter.instruction("mov r9, QWORD PTR [rbp - 24]");                        // reload the property-tag descriptor pointer
-    emitter.instruction("movzx r11, BYTE PTR [r9 + r10]");                      // load the compile-time ownership tag for this slot
-    emitter.instruction("cmp r11, 11");                                         // owned property references require PHP reference-aware cloning
-    emitter.instruction("je __rt_object_clone_shallow_boxed_reference_x86");    // share live aliases and separate singleton cells
-    emitter.instruction("cmp r11, 1");                                          // does the slot hold an owned string payload?
-    emitter.instruction("je __rt_object_clone_shallow_boxed_string_x86");       // string slots need an independent payload copy
-    emitter.instruction("cmp r11, 4");                                          // does the slot hold a retained indexed-array payload?
-    emitter.instruction("je __rt_object_clone_shallow_boxed_retain_x86");       // retained array slots need an extra owner reference
-    emitter.instruction("cmp r11, 5");                                          // does the slot hold a retained associative-array payload?
-    emitter.instruction("je __rt_object_clone_shallow_boxed_retain_x86");       // retained hash slots need an extra owner reference
-    emitter.instruction("cmp r11, 6");                                          // does the slot hold a retained object payload?
-    emitter.instruction("je __rt_object_clone_shallow_boxed_retain_x86");       // retained object slots need an extra owner reference
-    emitter.instruction("cmp r11, 7");                                          // does the slot hold a retained boxed Mixed payload?
-    emitter.instruction("je __rt_object_clone_shallow_boxed_retain_x86");       // retained Mixed slots need an extra owner reference
-    emitter.instruction("jmp __rt_object_clone_shallow_boxed_next_x86");        // scalar slots are copied without ownership changes
-    emitter.label("__rt_object_clone_shallow_boxed_reference_x86");
-    emitter.instruction("mov QWORD PTR [rbp - 40], r10");                       // preserve the property index across reference-cell cloning
-    emitter.instruction("mov QWORD PTR [rbp - 64], rcx");                       // preserve the property pointer offset
-    emitter.instruction("call __rt_reference_cell_clone");                      // retain shared aliases or copy singleton cell storage
-    emitter.instruction("mov rcx, QWORD PTR [rbp - 64]");                       // restore the property pointer offset
-    emitter.instruction("mov r8, QWORD PTR [rbp - 16]");                        // restore the cloned object pointer
-    emitter.instruction("mov QWORD PTR [r8 + rcx], rax");                       // replace the copied slot with its correctly owned cell
-    emitter.instruction("jmp __rt_object_clone_shallow_boxed_next_x86");        // continue after reference-aware slot cloning
-
-    emitter.label("__rt_object_clone_shallow_boxed_string_x86");
-    emitter.instruction("mov QWORD PTR [rbp - 40], r10");                       // preserve property index across string persistence
-    emitter.instruction("mov QWORD PTR [rbp - 64], rcx");                       // preserve the low-word slot offset across the helper
-    emitter.instruction("call __rt_str_persist");                               // duplicate the string payload for clone ownership
-    emitter.instruction("mov rcx, QWORD PTR [rbp - 64]");                       // restore the low-word slot offset after persistence
-    emitter.instruction("mov r8, QWORD PTR [rbp - 16]");                        // reload the clone object pointer after persistence
-    emitter.instruction("mov QWORD PTR [r8 + rcx], rax");                       // install the persisted string pointer on the clone
-    emitter.instruction("mov QWORD PTR [r8 + rcx + 8], rdx");                   // install the persisted string length on the clone
-    emitter.instruction("jmp __rt_object_clone_shallow_boxed_next_x86");        // continue with the next declared property
-
-    emitter.label("__rt_object_clone_shallow_boxed_retain_x86");
-    emitter.instruction("mov QWORD PTR [rbp - 40], r10");                       // preserve property index across the retain helper
-    emitter.instruction("mov rdi, rax");                                        // pass the copied heap payload to the retain helper
-    emitter.instruction("call __rt_incref");                                    // retain the shared property payload for the cloned object
-
-    emitter.label("__rt_object_clone_shallow_boxed_next_x86");
-    emitter.instruction("add QWORD PTR [rbp - 40], 1");                         // advance to the next declared-property slot
-    emitter.instruction("jmp __rt_object_clone_shallow_boxed_prop_loop_x86");   // continue copying declared properties
+    elephc_memoir::values::object_clone_slots::emit_tagged_slots(emitter);
 
     emitter.label("__rt_object_clone_shallow_boxed_dyn_x86");
     emitter.instruction("mov rax, QWORD PTR [rbp - 56]");                       // reload the source class id for dynamic-property metadata

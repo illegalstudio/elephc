@@ -126,33 +126,14 @@ pub(super) fn stage_string_byte_view(
         return false;
     }
     let ready = ctx.next_label("str_byte_persist_ready");
-    abi::emit_reserve_temporary_stack(ctx.emitter, 16);
-    match ctx.emitter.target.arch {
-        Arch::AArch64 => {
-            // -- stage a present offset byte before string persistence --
-            ctx.emitter.instruction(&format!("cmp {length_reg}, #1"));          // only a present offset has one byte to stage
-            ctx.emitter.instruction(&format!("b.ne {ready}"));                  // preserve the original empty or missing string pair
-            ctx.emitter.instruction(&format!("ldrb w9, [{pointer_reg}]"));      // read the selected byte before its receiver can be retired
-            ctx.emitter.instruction("strb w9, [sp]");                           // stage the byte outside the managed heap
-            ctx.emitter.instruction(&format!("mov {pointer_reg}, sp"));         // persistence must duplicate stack storage instead of taking over a heap view
-        }
-        Arch::X86_64 => {
-            // -- stage a present offset byte before string persistence --
-            ctx.emitter.instruction(&format!("cmp {length_reg}, 1"));           // only a present offset has one byte to stage
-            ctx.emitter.instruction(&format!("jne {ready}"));                   // preserve the original empty or missing string pair
-            ctx.emitter.instruction(&format!("movzx r10d, BYTE PTR [{pointer_reg}]")); // read the selected byte before its receiver can be retired
-            ctx.emitter.instruction("mov BYTE PTR [rsp], r10b");                // stage the byte outside the managed heap
-            ctx.emitter.instruction(&format!("mov {pointer_reg}, rsp"));        // persistence must duplicate stack storage instead of taking over a heap view
-        }
-    }
-    ctx.emitter.label(&ready);
+    elephc_memoir::strings::byte_view::emit_stage(ctx.emitter, pointer_reg, length_reg, &ready);
     true
 }
 
 /// Releases stack storage reserved by [`stage_string_byte_view`] after its consumer returns.
 pub(super) fn release_string_byte_stage(ctx: &mut FunctionContext<'_>, staged: bool) {
     if staged {
-        abi::emit_release_temporary_stack(ctx.emitter, 16);
+        elephc_memoir::strings::byte_view::emit_retire(ctx.emitter);
     }
 }
 

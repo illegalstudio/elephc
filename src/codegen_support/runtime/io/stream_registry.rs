@@ -50,18 +50,7 @@ fn emit_retire(emitter: &mut Emitter) {
     emitter.label_global("__rt_stream_registry_retire");
     // -- retain both string owners before clearing the complete registration row --
     prologue(emitter);
-    for (source, destination) in [(0, 0), (16, 8)] {
-        abi::emit_load_from_address(emitter, scratch, result, source);
-        abi::emit_store_to_address(emitter, scratch, frame, destination);
-    }
-    for offset in [0, 8, 16, 24] {
-        abi::emit_store_zero_to_address(emitter, result, offset);
-    }
-    // -- release each transferred owner after the row no longer publishes it --
-    for offset in [0, 8] {
-        abi::emit_load_from_address(emitter, result, frame, offset);
-        abi::emit_call_label(emitter, "__rt_heap_free_safe");
-    }
+    elephc_memoir::strings::owner_pair::emit_retire_row(emitter, result, frame, scratch);
     abi::emit_load_int_immediate(emitter, result, 1);
     epilogue(emitter);
 }
