@@ -10,6 +10,18 @@
 use std::sync::Arc;
 use super::*;
 
+/// Returns whether a class constant initializer names the late static class (`static::X`).
+///
+/// A literal initializer cannot, so only a computed one is inspected, through its derived
+/// `Debug` spelling: the IR has no generic expression walker, and a constant initializer is
+/// small.
+fn constant_initializer_uses_static(value: &EvalExpr) -> bool {
+    if matches!(value, EvalExpr::Const(_)) {
+        return false;
+    }
+    format!("{value:?}").to_ascii_lowercase().contains("class_name: \"static\"")
+}
+
 /// Registers an eval-declared class in the dynamic class table.
 pub(in crate::interpreter) fn execute_class_decl_stmt(
     class: &Arc<EvalClass>,
@@ -17,6 +29,13 @@ pub(in crate::interpreter) fn execute_class_decl_stmt(
     scope: &mut ElephcEvalScope,
     values: &mut impl RuntimeValueOps,
 ) -> Result<(), EvalStatus> {
+    // php refuses `static::` in a class constant initializer when it COMPILES the class, before
+    // any constant is read. Constants are evaluated lazily here, so the refusal has to be made
+    // at the declaration or it would never come.
+    if class.constants().iter().any(|constant| constant_initializer_uses_static(constant.value())) {
+        note_eval_runtime_failure("\"static::\" is not allowed in compile-time constants", context);
+        return Err(EvalStatus::RuntimeFatal);
+    }
     let parent = class.parent().map(|parent| ensure_generic_class(parent, None, "", context, scope, values)).transpose()?;
     let interfaces: Vec<String> = class.interfaces().iter().map(|name| ensure_generic_class(name, None, "", context, scope, values)).collect::<Result<_, _>>()?;
     let traits: Vec<String> = class.traits().iter().map(|name| ensure_generic_class(name, None, "", context, scope, values)).collect::<Result<_, _>>()?;

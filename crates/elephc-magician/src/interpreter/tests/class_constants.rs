@@ -551,12 +551,9 @@ new EvalPropStaticBase();"#,
 /// cache-on-miss in `eval_class_like_constant_cell` would otherwise recurse forever between
 /// `A`'s and `B`'s uncached cells.
 ///
-/// php evaluates class constants LAZILY on first read, so its own version of this reducer
-/// (`p_cyclic_catch.php` in the campaign scratchpad) wraps the *usage* in try/catch. Elephc's
-/// `initialize_eval_declared_constants` evaluates every constant EAGERLY at the class-declaration
-/// statement instead (a pre-existing divergence, unrelated to this fix, documented below rather
-/// than fixed here), so the throw surfaces at the `class` statement -- this test wraps the
-/// declaration to catch it where it actually happens.
+/// php evaluates class constants LAZILY on first read: `php -n` 8.5 prints `bad|Error:1` for this
+/// fragment, the declaration succeeds and the first read of the cycle throws. Eval binds the
+/// class when its program starts and evaluates constants at their first use, the same way.
 #[test]
 fn execute_program_rejects_cyclic_eval_class_constant_initializers_as_catchable_error() {
     let program = parse_fragment(
@@ -565,8 +562,11 @@ fn execute_program_rejects_cyclic_eval_class_constant_initializers_as_catchable_
         public const A = self::B;
         public const B = self::A;
     }
-    echo "bad";
+    echo "bad|";
 } catch (Error $e) {
+    echo get_class($e) . ":" . (str_contains($e->getMessage(), "self-referencing constant") ? "1" : "0");
+}
+try { echo EvalConstCyclic::A; } catch (Error $e) {
     echo get_class($e) . ":" . (str_contains($e->getMessage(), "self-referencing constant") ? "1" : "0");
 }
 return true;"#,
@@ -577,7 +577,7 @@ return true;"#,
 
     let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
 
-    assert_eq!(values.output, "Error:1");
+    assert_eq!(values.output, "bad|Error:1");
     assert_eq!(values.get(result), FakeValue::Bool(true));
 }
 
