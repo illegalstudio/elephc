@@ -198,6 +198,7 @@ fn invoker_scalar_guards(
     }
     Some(crate::codegen::runtime_callable_invoker::InvokerScalarGuards {
         stringable: super::objects::classify_named_target(ctx, "Stringable"),
+        eval_bridge: ctx.module.required_runtime_features.eval_bridge,
         callee: callee.map(str::to_string),
     })
 }

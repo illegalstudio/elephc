@@ -33,6 +33,9 @@ use crate::codegen::lower_inst::{
 pub(in crate::codegen) struct InvokerScalarGuards {
     /// `Stringable`'s metadata id and kind for `__rt_mixed_instanceof`, when the program has it.
     pub(in crate::codegen) stringable: Option<(u64, i64)>,
+    /// Whether the program links the eval bridge: an `eval()`-declared class backs its objects
+    /// with a native `stdClass`, so only the bridge knows it implements `Stringable`.
+    pub(in crate::codegen) eval_bridge: bool,
     /// The callee name for the message when the descriptor's own name is not PHP's (a
     /// closure's `{closure:file:line}`); `None` reads the descriptor name at run time.
     pub(in crate::codegen) callee: Option<String>,
@@ -87,7 +90,7 @@ pub(super) fn emit_guard(
             Some(parameter.declared.clone())
         }
         _ => {
-            emit_string_or_bool(emitter, guards, parameter, &strict, &accept, &refuse);
+            emit_string_or_bool(emitter, data, guards, parameter, &strict, &accept, &refuse);
             None
         }
     };
@@ -172,6 +175,7 @@ fn emit_numeric(
 /// coercive, exactly the declared tag when strict.
 fn emit_string_or_bool(
     emitter: &mut Emitter,
+    data: &mut DataSection,
     guards: &InvokerScalarGuards,
     parameter: &ScalarParameter,
     strict: &str,
@@ -193,7 +197,7 @@ fn emit_string_or_bool(
             emitter.instruction(&format!("jbe {accept}"));                      // every scalar binds coercively
         }
     }
-    if let (true, Some((id, kind))) = (string, guards.stringable) {
+    if string && (guards.stringable.is_some() || guards.eval_bridge) {
         // -- coercive string: a Stringable object binds too --
         match emitter.target.arch {
             Arch::AArch64 => {
@@ -205,18 +209,24 @@ fn emit_string_or_bool(
                 emitter.instruction(&format!("jne {refuse}"));                  // every other non-scalar is refused
             }
         }
-        abi::emit_load_temporary_stack_slot(emitter, abi::int_arg_reg_name(emitter.target, 0), 0);
-        abi::emit_load_int_immediate(emitter, abi::int_arg_reg_name(emitter.target, 1), id as i64);
-        abi::emit_load_int_immediate(emitter, abi::int_arg_reg_name(emitter.target, 2), kind);
-        abi::emit_call_label(emitter, "__rt_mixed_instanceof");
-        match emitter.target.arch {
-            Arch::AArch64 => {
-                emitter.instruction(&format!("cbnz x0, {accept}"));             // a Stringable object binds to string
-            }
-            Arch::X86_64 => {
-                emitter.instruction("test rax, rax");                           // did the Stringable match succeed?
-                emitter.instruction(&format!("jnz {accept}"));                  // a Stringable object binds to string
-            }
+        if let Some((id, kind)) = guards.stringable {
+            abi::emit_load_temporary_stack_slot(emitter, abi::int_arg_reg_name(emitter.target, 0), 0);
+            abi::emit_load_int_immediate(emitter, abi::int_arg_reg_name(emitter.target, 1), id as i64);
+            abi::emit_load_int_immediate(emitter, abi::int_arg_reg_name(emitter.target, 2), kind);
+            abi::emit_call_label(emitter, "__rt_mixed_instanceof");
+            emit_branch_if_result_nonzero(emitter, accept);
+        }
+        if guards.eval_bridge {
+            // -- an eval()-declared class: ask the bridge, as the direct-call guard does --
+            let (target, target_len) = data.add_string(b"Stringable");
+            abi::emit_load_int_immediate(emitter, abi::int_arg_reg_name(emitter.target, 0), 0);
+            abi::emit_load_temporary_stack_slot(emitter, abi::int_arg_reg_name(emitter.target, 1), 0);
+            abi::emit_symbol_address(emitter, abi::int_arg_reg_name(emitter.target, 2), &target);
+            abi::emit_load_int_immediate(emitter, abi::int_arg_reg_name(emitter.target, 3), target_len as i64);
+            abi::emit_load_int_immediate(emitter, abi::int_arg_reg_name(emitter.target, 4), 0);
+            let symbol = emitter.target.extern_symbol("__elephc_eval_object_is_a");
+            abi::emit_call_label(emitter, &symbol);
+            emit_branch_if_result_nonzero(emitter, accept);
         }
     }
     abi::emit_jump(emitter, refuse);
@@ -307,6 +317,19 @@ fn branch_tag(emitter: &mut Emitter, tag: i64, label: &str) {
         Arch::X86_64 => {
             emitter.instruction(&format!("cmp rax, {tag}"));                    // compare the refused value's tag
             emitter.instruction(&format!("je {label}"));                        // name this value category
+        }
+    }
+}
+
+/// Branches to `accept` when the integer result register holds a non-zero match.
+fn emit_branch_if_result_nonzero(emitter: &mut Emitter, accept: &str) {
+    match emitter.target.arch {
+        Arch::AArch64 => {
+            emitter.instruction(&format!("cbnz x0, {accept}"));                 // a Stringable object binds to string
+        }
+        Arch::X86_64 => {
+            emitter.instruction("test rax, rax");                               // did the Stringable match succeed?
+            emitter.instruction(&format!("jnz {accept}"));                      // a Stringable object binds to string
         }
     }
 }
