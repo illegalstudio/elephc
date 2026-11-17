@@ -54,6 +54,13 @@ pub(in crate::codegen::lower_inst) fn lower_eval_scope_set(
     eval::lower_eval_scope_set(ctx, inst)
 }
 
+/// Publishes the checked source contract before native scope snapshots enter the interpreter.
+pub(in crate::codegen::lower_inst) fn lower_eval_scope_bind_local_type(
+    ctx: &mut FunctionContext<'_>, inst: &Instruction,
+) -> Result<()> {
+    eval::lower_eval_scope_bind_local_type(ctx, inst)
+}
+
 /// Lowers a native call to a zero-argument function declared through `eval()`.
 pub(in crate::codegen::lower_inst) fn lower_eval_function_call(
     ctx: &mut FunctionContext<'_>,

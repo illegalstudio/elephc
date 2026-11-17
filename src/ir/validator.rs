@@ -127,7 +127,7 @@ pub fn validate_module(module: &Module) -> Result<(), ValidationError> {
                 }
             }
             let mut required = inst.arithmetic_policy().requirements().bits();
-            if matches!(inst.op, Op::BindLocalRefContract | Op::SetLocalBindingState) || matches!(&inst.immediate,
+            if matches!(inst.op, Op::BindLocalRefContract | Op::SetLocalBindingState | Op::EvalScopeBindLocalType) || matches!(&inst.immediate,
                 Some(Immediate::EvalScopeStore(metadata)) if metadata.contract.is_some()) {
                 required |= elephc_semantics::StrictFeature::Locals.bit();
             }
@@ -817,6 +817,9 @@ fn validate_instruction_immediate(
         EvalScopeGet => require_immediate(inst_id, inst, "global name", |imm| {
             matches!(imm, Imm::GlobalName(_))
         }),
+        EvalScopeBindLocalType => require_immediate(inst_id, inst, "checked scope binding type", |imm| {
+            matches!(imm, Imm::EvalScopeStore(metadata) if metadata.contract.is_some())
+        }),
         EvalScopeSet => require_immediate(inst_id, inst, "scope store or global name", |imm| {
             matches!(imm, Imm::GlobalName(_) | Imm::EvalScopeStore(_))
         }),
@@ -989,6 +992,13 @@ fn validate_opcode_rules(
         EvalLiteralCall | EvalFunctionCallArray | EvalScopeGet => {
             check_count(inst_id, inst, 1, "1")
         }
+        EvalScopeBindLocalType => {
+            check_count(inst_id, inst, 0, "0")?;
+            if !function.locals.iter().any(|local| local.kind == LocalKind::EvalScope) {
+                return Err(ValidationError::InvalidLocalReferenceContract(inst_id));
+            }
+            Ok(())
+        },
         EvalScopeSet => check_count(inst_id, inst, 2, "2"),
         ClosureNew => Ok(()),
         ClosureBind => {

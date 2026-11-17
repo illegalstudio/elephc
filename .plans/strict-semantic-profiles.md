@@ -1127,3 +1127,42 @@ The current helper still needs complete alternative propagation and native logic
 producer metadata, separate from physical storage. Continue this and the complete
 approved task, including remaining binding flow, six pending families and umbrella
 plus host acceptance.
+
+
+### Verified129: checked native producer metadata and alternatives
+
+EvalScopeBindLocalType carries a checked source-point name/type contract separately
+from scope snapshot layout. Existing LocalStoreContracts drive lowering after
+canonical native source preparation. Validation requires Locals, canonical metadata
+and a persistent scope slot. Shared target ABI lowering reuses native signature
+type spellings; pure scope helpers expose a link-complete no-op ABI because those
+fragments do not enter the interpreter. Native binding types have their own scope
+map and retire with unset, scope drain and native snapshot retirement, so old
+native sources cannot constrain later bindings. This producer map does not replace
+canonical reference validation or infer contracts from physical frame types.
+
+The shared producer helper preserves known conditional alternatives and declared
+function/builtin return contracts. Builtin TypeSpec adapts directly into the existing
+generic vocabulary, without parsing rendered documentation. Void producer results
+mean null, pointer-only contracts stay open, and array producer kinds do not enable
+ArrayTypes. Literal and cast producers provide explicit kinds. Mixed imports and
+explicit mixed producers retain their prior openness.
+
+First builde7d25aea found only a new helper re-export visibility error, corrected
+before acceptance. Probed5ae727a passed build and the four-case native proof in
+1m56s: U|T|R|B|,130 allocations and130 frees. Final9f76629a passed compiler/default
+archives and ten exact gates in6m45s: both-engine first values/openness/precise
+producer ownership, snapshot lifetime, all-five-target EIR metadata/emission, real
+five-target core scope assembly, the combined native runtime-origin bundle, literal
+native stores, fresh literal origins and updated example. Native bundle116.00s
+covers both IR modes/default/Locals with clean heaps; example35.81s. Assembly
+comments, builtin EIR target-architecture audit and diff hygiene pass. No full
+suite, push or PR was run.
+
+Next130 has a verified baseline rather than an inferred requirement: conditional
+native bindings bypass Locals when they are initialized on only one predecessor.
+Probe28dfcc3a prints Wdouble:2.5| four times, for bound/unbound runtime and literal
+eval activations, with a clean heap. The bound activation must reject and retain
+integer1; the unbound activation may establish a fresh float. Preserve real binding
+presence while adding conditional origin transport. Then continue remaining
+binding flow, six pending semantic families and complete umbrella/host acceptance.

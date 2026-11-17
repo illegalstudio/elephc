@@ -288,3 +288,28 @@ fn strict_eval_native_stores_share_scope_reference_storage_on_every_target() {
         crate::codegen::generate_user_asm_from_ir(&module, false, false).unwrap();
     }
 }
+
+/// Checked native source types reach every eval backend without treating mixed frame slots as origins.
+#[test]
+fn strict_eval_native_producer_metadata_emits_on_every_target() {
+    let source = "<?php function publishOrigin(int $input, mixed $open): void { eval('$copy=$input;'); } publishOrigin($argc, 1);";
+    let program = crate::parser::parse_with_mode(&crate::lexer::tokenize(source).unwrap(), SourceMode::Php).unwrap();
+    let profile = SemanticProfile::PERMISSIVE.with(StrictFeature::Locals, true);
+    for name in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+        let target = Target::parse(name).unwrap();
+        let checked = crate::types::checker::check_staged_semantics(&program, target, profile).unwrap();
+        let module = crate::ir_lower::lower_program(&program, &checked, target, false).unwrap();
+        let function = module.functions.iter().find(|function| function.name == "publishOrigin").unwrap();
+        let contracts = function.instructions.iter().filter(|inst| inst.op == crate::ir::Op::EvalScopeBindLocalType)
+            .map(|inst| match inst.immediate.as_ref() {
+                Some(crate::ir::Immediate::EvalScopeStore(metadata)) =>
+                    (module.data.global_names[metadata.name.as_raw() as usize].as_str(), metadata.contract.as_ref()),
+                _ => panic!("checked source contract requires explicit metadata"),
+            }).collect::<Vec<_>>();
+        assert!(contracts.contains(&("input", Some(&crate::types::PhpType::Int))), "{name}: {contracts:?}");
+        assert!(!contracts.iter().any(|(name, _)| *name == "open"), "mixed has no invented exact origin");
+        crate::ir::validate_module(&module).unwrap();
+        let assembly = crate::codegen::generate_user_asm_from_ir(&module, false, false).unwrap();
+        assert!(assembly.contains("__elephc_eval_scope_binding_type_v1"), "{name}");
+    }
+}

@@ -41,6 +41,26 @@ pub unsafe extern "C" fn __elephc_eval_scope_native_type_v1(
     }).unwrap_or_else(|_| EvalStatus::RuntimeFatal.code())
 }
 
+/// Publishes a checked native producer type separately from physical snapshot constraints.
+///
+/// # Safety
+/// The scope is live and the name and type are readable UTF-8 ranges for their supplied lengths.
+#[no_mangle]
+pub unsafe extern "C" fn __elephc_eval_scope_binding_type_v1(
+    scope: *mut ElephcEvalScope, name_ptr: *const u8, name_len: u64,
+    type_ptr: *const u8, type_len: u64,
+) -> i32 {
+    std::panic::catch_unwind(|| unsafe {
+        let Some(scope) = scope.as_mut() else { return EvalStatus::RuntimeFatal.code(); };
+        let Ok(name) = abi_name_to_string(name_ptr, name_len) else { return EvalStatus::RuntimeFatal.code(); };
+        let Some(ty) = super::native_methods::native_callable_type_from_abi(
+            type_ptr, type_len, super::native_methods::NativeCallableTypePosition::Parameter,
+        ) else { return EvalStatus::RuntimeFatal.code(); };
+        scope.set_native_binding_type(name, ty);
+        EvalStatus::Ok.code()
+    }).unwrap_or_else(|_| EvalStatus::RuntimeFatal.code())
+}
+
 /// Allocates a materialized activation scope handle for generated code.
 #[no_mangle]
 pub extern "C" fn __elephc_eval_scope_new() -> *mut ElephcEvalScope {

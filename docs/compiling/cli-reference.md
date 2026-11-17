@@ -973,7 +973,10 @@ writes remain visible to subsequent eval calls. Bindings first established by
 runtime-provided source also retain their successful producer contracts across
 native re-entry. Interpreter assignments copy producer facts before evaluating
 the right-hand side, keep explicit `mixed` producers open, and validate aliases
-before mutation. `unset` retires the inferred origin before rebinding.
+before mutation. Native copies use the checker-provided binding contract, separately
+from the frame representation. Conditional producers and declared function/builtin
+returns retain their permitted alternatives. `unset` retires the inferred origin
+before rebinding.
 
 A body that **calls** `eval()` anywhere is the other side of that coin: the
 eval scope reaches the surrounding function's locals BY NAME, while the kill

@@ -1335,6 +1335,8 @@ pub enum Op {
     EvalLiteralCall,
     EvalScopeGet,
     EvalScopeSet,
+    /// Publishes a checked native binding type independently from its snapshot storage shape.
+    EvalScopeBindLocalType,
     EvalFunctionCall,
     EvalFunctionCallArray,
     EvalFunctionExists,
@@ -1733,6 +1735,7 @@ impl Op {
                 E::READS_HEAP | E::ALLOC_HEAP | E::MAY_THROW
             }
             EvalFunctionExists | EvalClassExists | EvalConstantExists => E::READS_GLOBAL,
+            EvalScopeBindLocalType => E::READS_LOCAL | E::READS_HEAP | E::WRITES_HEAP | E::ALLOC_HEAP | E::MAY_FATAL,
             EvalScopeGet => E::READS_HEAP | E::MAY_FATAL,
             EvalScopeSet => E::READS_HEAP | E::WRITES_HEAP | E::REFCOUNT_OP | E::MAY_THROW | E::MAY_FATAL,
             EvalConstantFetch => {
@@ -2087,6 +2090,7 @@ impl Op {
             ClosureBind => "closure_bind",
             LanguageConstructCall => "language_construct_call",
             EvalLiteralCall => "eval_literal_call",
+            EvalScopeBindLocalType => "eval_scope_bind_local_type",
             EvalScopeGet => "eval_scope_get",
             EvalScopeSet => "eval_scope_set",
             EvalFunctionCall => "eval_function_call",

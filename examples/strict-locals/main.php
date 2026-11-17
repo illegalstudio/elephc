@@ -89,3 +89,13 @@ function checkRuntimeCreatedQuantity(int $requestCount): void {
     }
 }
 checkRuntimeCreatedQuantity($argc);
+
+// Both alternatives of a producer stay valid when the runtime selects the first value.
+function checkRuntimeProducerAlternatives(int $requestCount): void {
+    $source = $requestCount > 0
+        ? '$measurement = $requestCount > 0 ? 1 : 2.5; $measurement = 2.5;'
+        : '$measurement = 2.5;';
+    eval($source);
+    echo "Runtime measurement: ", $measurement, PHP_EOL;
+}
+checkRuntimeProducerAlternatives($argc);

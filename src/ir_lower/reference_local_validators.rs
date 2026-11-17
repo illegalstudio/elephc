@@ -25,6 +25,14 @@ pub(super) fn prepare_eval_bindings(ctx: &mut super::context::LoweringContext<'_
     for name in names {
         if ctx.is_ref_bound_local(&name) { ctx.bind_local_reference_contract(&name, Some(span)); }
         else { ctx.promote_local_mixed_ref_cell(&name, Some(span)); }
+        let Some(contract) = ctx.local_store_contracts.get(
+            &(ctx.loop_storage_scope.clone(), span, name.clone())).cloned() else { continue; };
+        ctx.declare_eval_scope_local();
+        let name = ctx.intern_global_name(&name);
+        ctx.emit_void(Op::EvalScopeBindLocalType, Vec::new(),
+            Some(Immediate::EvalScopeStore(Box::new(crate::ir::EvalScopeStoreImmediate {
+                name, contract: Some(contract.ty),
+            }))), Op::EvalScopeBindLocalType.default_effects(), Some(span));
     }
 }
 

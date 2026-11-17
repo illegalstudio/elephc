@@ -146,6 +146,7 @@ pub struct ElephcEvalScope {
     local_types: HashMap<String, crate::eval_ir::EvalParameterType>,
     inferred_local_types: HashMap<String, crate::eval_ir::EvalParameterType>,
     native_storage_types: HashMap<String, crate::eval_ir::EvalParameterType>,
+    native_binding_types: HashMap<String, crate::eval_ir::EvalParameterType>,
     native_detached_names: HashSet<String>,
     aot_visible_names: HashSet<String>,
     global_aliases: HashMap<String, String>,
@@ -161,6 +162,7 @@ impl ElephcEvalScope {
             local_types: HashMap::new(),
             inferred_local_types: HashMap::new(),
             native_storage_types: HashMap::new(),
+            native_binding_types: HashMap::new(),
             native_detached_names: HashSet::new(),
             aot_visible_names: HashSet::new(),
             global_aliases: HashMap::new(),
@@ -192,6 +194,16 @@ impl ElephcEvalScope {
     /// Returns a successful producer's contract, including explicitly open mixed origins.
     pub(crate) fn inferred_local_type(&self, name: &str) -> Option<&crate::eval_ir::EvalParameterType> {
         self.inferred_local_types.get(name)
+    }
+
+    /// Refreshes a native semantic source independently of its current snapshot representation.
+    pub(crate) fn set_native_binding_type(&mut self, name: String, ty: crate::eval_ir::EvalParameterType) {
+        self.native_binding_types.insert(name, ty);
+    }
+
+    /// Reads a native source contract without treating an object-layout guard as a producer type.
+    pub(crate) fn native_binding_type(&self, name: &str) -> Option<&crate::eval_ir::EvalParameterType> {
+        self.native_binding_types.get(name)
     }
 
     /// Refreshes a native reference contract, which ends when eval unsets the imported name.
@@ -384,6 +396,7 @@ impl ElephcEvalScope {
         let name = name.into();
         self.native_storage_types.remove(&name);
         self.inferred_local_types.remove(&name);
+        self.native_binding_types.remove(&name);
         if self.aot_visible_names.contains(&name) { self.native_detached_names.insert(name.clone()); }
         self.reference_targets.remove(&name);
         let previous = self
@@ -400,6 +413,7 @@ impl ElephcEvalScope {
         let name = name.into();
         self.native_storage_types.remove(&name);
         self.inferred_local_types.remove(&name);
+        self.native_binding_types.remove(&name);
         if self.aot_visible_names.contains(&name) { self.native_detached_names.insert(name.clone()); }
         let Some(entry) = self.entries.get(&name).copied() else {
             return self.unset(name);
@@ -564,6 +578,7 @@ impl ElephcEvalScope {
     /// Removes every entry and returns runtime cells owned by the scope.
     pub fn drain_owned_cells(&mut self) -> Vec<RuntimeCellHandle> {
         self.inferred_local_types.clear();
+        self.native_binding_types.clear();
         self.aot_visible_names.clear();
         self.reference_targets.clear();
         self.entries

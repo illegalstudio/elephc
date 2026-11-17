@@ -9,6 +9,8 @@
 //! - Imported bindings stay open unless their existing source already supplies a constraint.
 
 use super::*;
+use crate::eval_ir::{generic_type, parameter_type};
+use elephc_generics::Type;
 
 /// Captures a producer's declared alternatives without executing PHP or borrowing live maps.
 pub(in crate::interpreter) fn local_producer_contract(expr: &EvalExpr,
@@ -18,17 +20,74 @@ pub(in crate::interpreter) fn local_producer_contract(expr: &EvalExpr,
     let mixed = || EvalParameterType::new(vec![EvalParameterTypeVariant::Mixed], false);
     match expr {
         EvalExpr::LoadVar(name) => Some(scope.local_type(name).or_else(|| scope.inferred_local_type(name))
+            .or_else(|| scope.native_binding_type(name))
             .cloned().unwrap_or_else(mixed)),
         EvalExpr::Assign { value, .. } => local_producer_contract(value, context, scope),
+        EvalExpr::Const(value) => Some(match value {
+            EvalConst::Null => EvalParameterType::new(Vec::new(), true),
+            EvalConst::Int(_) => EvalParameterType::new(vec![EvalParameterTypeVariant::Int], false),
+            EvalConst::Float(_) => EvalParameterType::new(vec![EvalParameterTypeVariant::Float], false),
+            EvalConst::Bool(_) => EvalParameterType::new(vec![EvalParameterTypeVariant::Bool], false),
+            EvalConst::String(_) | EvalConst::Bytes(_) => EvalParameterType::new(vec![EvalParameterTypeVariant::String], false),
+        }),
+        EvalExpr::Array(_) => Some(EvalParameterType::new(vec![EvalParameterTypeVariant::Array], false)),
+        EvalExpr::Cast { target, .. } => Some(EvalParameterType::new(vec![match target {
+            EvalCastType::Array => EvalParameterTypeVariant::Array,
+            EvalCastType::Int => EvalParameterTypeVariant::Int,
+            EvalCastType::Float => EvalParameterTypeVariant::Float,
+            EvalCastType::String | EvalCastType::StringFormat => EvalParameterTypeVariant::String,
+            EvalCastType::Bool => EvalParameterTypeVariant::Bool,
+        }], false)),
+        EvalExpr::Ternary { condition, then_branch, else_branch } => {
+            let first = local_producer_contract(then_branch.as_deref().unwrap_or(condition), context, scope);
+            let second = local_producer_contract(else_branch, context, scope);
+            Some(match (first, second) {
+                (Some(first), Some(second)) => {
+                    let nullable = first.allows_null() || second.allows_null();
+                    let mut variants = first.variants().to_vec();
+                    for variant in second.variants() { if !variants.contains(variant) { variants.push(variant.clone()); } }
+                    EvalParameterType::new(variants, nullable)
+                }
+                _ => mixed(),
+            })
+        }
         EvalExpr::Call { name, .. } => {
             let name = name.trim_start_matches('\\').to_ascii_lowercase();
-            Some(context.function(&name).and_then(|function| function.return_type()).cloned()
+            let builtin = elephc_builtin_contract::lookup(&name)
+                .map(|contract| parameter_type(&builtin_producer_type(contract.returns)));
+            builtin.or_else(|| context.function(&name).and_then(|function| function.return_type()).cloned())
                 .or_else(|| context.native_function(&name).and_then(|function| function.return_type().cloned()))
-                .unwrap_or_else(mixed))
+                .map(|ty| parameter_type(&binding_kind_type(generic_type(&ty))))
+                .or_else(|| Some(mixed()))
         }
         EvalExpr::DynamicCall { .. } | EvalExpr::DynamicMethodCall { .. }
             | EvalExpr::DynamicStaticMethodCall { .. } => Some(mixed()),
         _ => None,
+    }
+}
+
+/// Adapts the neutral builtin return contract without parsing rendered documentation as semantics.
+fn builtin_producer_type(ty: elephc_builtin_contract::TypeSpec) -> Type {
+    use elephc_builtin_contract::TypeSpec;
+    let name = match ty {
+        TypeSpec::Int => "int", TypeSpec::Float => "float", TypeSpec::Str => "string",
+        TypeSpec::Bool => "bool", TypeSpec::Object => "object", TypeSpec::False => "false",
+        TypeSpec::Null | TypeSpec::Void => "null", TypeSpec::Mixed | TypeSpec::Ptr => "mixed",
+        TypeSpec::Array => "array", TypeSpec::Callable => "callable",
+        TypeSpec::Nullable(inner) => return Type::Nullable(Box::new(builtin_producer_type(*inner))),
+        TypeSpec::Union(members) => return Type::Union(members.iter().copied().map(builtin_producer_type).collect()),
+    };
+    Type::atom(name)
+}
+
+/// Keeps declared producer alternatives while leaving array element inference to ArrayTypes.
+fn binding_kind_type(ty: Type) -> Type {
+    match ty {
+        Type::Atom(name) if name == "void" => Type::atom("null"),
+        Type::Apply(name, _) if name == "array" => Type::atom("array"),
+        Type::Nullable(inner) => Type::Nullable(Box::new(binding_kind_type(*inner))),
+        Type::Union(members) => Type::Union(members.into_iter().map(binding_kind_type).collect()),
+        ty => ty,
     }
 }
 

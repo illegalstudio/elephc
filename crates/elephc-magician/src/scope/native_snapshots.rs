@@ -18,6 +18,7 @@ impl ElephcEvalScope {
         let mut removed = Vec::new();
         for name in names {
             self.native_storage_types.remove(&name);
+            self.native_binding_types.remove(&name);
             self.native_detached_names.remove(&name);
             self.reference_targets.remove(&name);
             if let Some(entry) = self.entries.remove(&name) { removed.push(entry); }
@@ -46,6 +47,8 @@ mod tests {
         let one = RuntimeCellHandle::from_raw(8usize as *mut crate::value::RuntimeCell);
         let two = RuntimeCellHandle::from_raw(16usize as *mut crate::value::RuntimeCell);
         let mut scope = ElephcEvalScope::new();
+        scope.set_native_binding_type("first".into(), crate::eval_ir::EvalParameterType::new(
+            vec![crate::eval_ir::EvalParameterTypeVariant::Int], false));
         scope.set_from_aot("first", one, ScopeCellOwnership::Owned);
         scope.set_from_aot("second", one, ScopeCellOwnership::Owned);
         scope.set_reference("dynamic_alias", "first", one, ScopeCellOwnership::Borrowed);
@@ -56,6 +59,7 @@ mod tests {
         assert_eq!(scope.entry("dynamic_alias").unwrap().flags.ownership, ScopeCellOwnership::Owned);
         assert_eq!(scope.visible_cell("dynamic"), Some(two));
         assert!(scope.aot_visible_cells().is_empty());
+        assert!(scope.native_binding_type("first").is_none(), "retired native producers cannot constrain a later binding");
         assert!(scope.retire_native_snapshots().is_empty());
         let mut remaining = scope.drain_owned_cells();
         remaining.sort_by_key(|cell| cell.as_ptr() as usize);

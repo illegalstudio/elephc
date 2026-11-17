@@ -256,6 +256,7 @@ fn emit_aarch64_eval_scope_get(emitter: &mut Emitter) {
 /// local's declared object type. The shared barrier still calls the bridge ABI, and this stub
 /// keeps that surface link-complete while reporting success.
 fn emit_aarch64_eval_scope_native_type(emitter: &mut Emitter) {
+    label_c_global(emitter, "__elephc_eval_scope_binding_type_v1");
     label_c_global(emitter, "__elephc_eval_scope_native_type_v1");
     emitter.instruction(&format!("mov x0, #{}", EVAL_STATUS_OK));               // scope-only barriers have no interpreter write to validate
     emitter.instruction("ret");                                                 // return the successful eval status
@@ -488,6 +489,7 @@ fn emit_x86_64_eval_scope_get(emitter: &mut Emitter) {
 
 /// Emits the x86_64 scope-only native-type validator stub.
 fn emit_x86_64_eval_scope_native_type(emitter: &mut Emitter) {
+    label_c_global(emitter, "__elephc_eval_scope_binding_type_v1");
     label_c_global(emitter, "__elephc_eval_scope_native_type_v1");
     emitter.instruction(&format!("mov eax, {}", EVAL_STATUS_OK));               // scope-only barriers have no interpreter write to validate
     emitter.instruction("ret");                                                 // return the successful eval status
