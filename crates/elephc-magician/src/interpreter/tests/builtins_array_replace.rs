@@ -236,3 +236,24 @@ fn array_replace_is_visible_to_function_exists() {
     let result = execute_program(&program, &mut scope, &mut values).expect("execute fragment");
     assert_eq!(values.get(result), FakeValue::Bool(true));
 }
+
+/// A non-array operand of the `array_u*` set family is a catchable `TypeError` (it was an
+/// uncatchable fatal), with the first parameter named and later variadic slots anonymous.
+///
+/// `php -n` 8.5.6: `TypeError: array_udiff(): Argument #2 must be of type array, int given`,
+/// `TypeError: array_uintersect(): Argument #1 ($array) must be of type array, string given`,
+/// `TypeError: array_udiff(): Argument #3 must be of type array, string given`.
+#[test]
+fn array_ucompare_family_rejects_non_array_operands_with_a_type_error() {
+    let fragment = br#"function probe($fn) {
+    try { $fn(); } catch (\Throwable $e) { return get_class($e) . ": " . $e->getMessage(); }
+    return "no-throw";
+}
+echo probe(fn() => array_udiff([1], 5, fn($a, $b) => $a <=> $b)), ":";
+echo probe(fn() => array_uintersect("x", [1], fn($a, $b) => $a <=> $b));"#;
+    assert_eq!(
+        out(fragment),
+        "TypeError: array_udiff(): Argument #2 must be of type array, int given:\
+TypeError: array_uintersect(): Argument #1 ($array) must be of type array, string given",
+    );
+}

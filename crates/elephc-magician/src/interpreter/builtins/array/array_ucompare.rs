@@ -185,6 +185,19 @@ pub(in crate::interpreter) fn eval_array_ucompare_declared_values_result(
         return Err(EvalStatus::RuntimeFatal);
     }
     let (arrays, comparators) = evaluated_args.split_at(evaluated_args.len() - callbacks);
+    // php reports a non-array operand as a catchable `TypeError`; the first parameter is named,
+    // every variadic slot after it is anonymous.
+    for (position, &array) in arrays.iter().enumerate() {
+        if !matches!(values.type_tag(array)?, EVAL_TAG_ARRAY | EVAL_TAG_ASSOC) {
+            let given = eval_given_type_spelling(array, values)?;
+            let message = if position == 0 {
+                format!("{name}(): Argument #1 ($array) must be of type array, {given} given")
+            } else {
+                format!("{name}(): Argument #{} must be of type array, {given} given", position + 1)
+            };
+            return eval_throw_type_error(&message, context, values);
+        }
+    }
     let mut comparators = comparators.iter();
     let value_callback = match operation.value {
         Compare::User => Some(eval_callable(
