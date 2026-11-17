@@ -418,8 +418,8 @@ fn return_hint_type(ctx: &LoweringContext<'_, '_>, ty: PhpType) -> PhpType {
     }
 }
 
-/// Gives property accessors the PHP label rather than their synthetic method symbol.
-fn callable_label(ctx: &LoweringContext<'_, '_>) -> String {
+/// Gives closures and property accessors the PHP label rather than their synthetic symbol.
+pub(super) fn callable_label(ctx: &LoweringContext<'_, '_>) -> String {
     if let Some(label) = &ctx.builder.function().display_name { return label.clone(); }
     if let Some((class, method)) = ctx.owner_name().split_once("::") {
         if let Some(info) = ctx.classes.get(class) {
