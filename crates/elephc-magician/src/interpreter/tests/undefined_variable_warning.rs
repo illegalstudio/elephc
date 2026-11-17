@@ -72,3 +72,18 @@ echo $here;"#,
     assert_eq!(output, "set:");
     assert_eq!(warnings, vec!["Undefined variable $here".to_string()]);
 }
+
+/// Verifies `??` keeps only the FETCH quiet: an undefined variable used as the offset still warns.
+///
+/// `php -n` 8.5.6 prints `de` and raises `Undefined variable $k` for `$a[$k] ?? "d"`, while the
+/// missing key itself stays silent.
+#[test]
+fn coalesce_still_warns_about_an_undefined_offset_variable() {
+    let (output, warnings) = out_with_warnings(
+        br#"$a = [1];
+echo $a[$k] ?? "d";
+echo $a["x"] ?? "e";"#,
+    );
+    assert_eq!(output, "de");
+    assert_eq!(warnings, vec!["Undefined variable $k".to_string()]);
+}

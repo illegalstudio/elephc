@@ -318,7 +318,7 @@ fn eval_expr_with_result_ownership(
                 let name = eval_global_name(index, context, scope, values)?;
                 return read_global_value(&name, context.quiet_property_fetch(), context, scope, values);
             }
-            with_eval_operands(&[array, index], context, scope, values, |args, context, _, values| {
+            with_eval_array_get_operands(array, index, context, scope, values, |args, context, _, values| {
                 let result = eval_array_get_result(args[0], args[1], context, values)?;
                 warn_missing_array_key(args[0], args[1], result, context, values)?;
                 if result.is_borrowed() { values.retain(result) } else { Ok(result) }

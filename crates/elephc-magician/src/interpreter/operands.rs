@@ -230,6 +230,46 @@ pub(in crate::interpreter) fn with_eval_operands<V: RuntimeValueOps>(
     }
 }
 
+/// Like [`with_eval_operands`] for `$array[$index]`, with the quiet-fetch mode of `??`/`isset()`
+/// lifted while the INDEX is evaluated.
+///
+/// php keeps only the fetch itself quiet: `$a[$undefined] ?? 'd'` still raises `Undefined
+/// variable $undefined` (and a null-offset deprecation) from the offset expression, so the
+/// mode must not reach into it.
+pub(in crate::interpreter) fn with_eval_array_get_operands<V: RuntimeValueOps>(
+    array: &EvalExpr,
+    index: &EvalExpr,
+    context: &mut ElephcEvalContext,
+    scope: &mut ElephcEvalScope,
+    values: &mut V,
+    consume: impl FnOnce(
+        &[RuntimeCellHandle], &mut ElephcEvalContext, &mut ElephcEvalScope, &mut V,
+    ) -> Result<RuntimeCellHandle, EvalStatus>,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let mut operands = Vec::with_capacity(2);
+    let result = (|| {
+        operands.push(eval_owned_expr(array, context, scope, values)?);
+        let saved = context.enter_call_barrier();
+        let offset = eval_owned_expr(index, context, scope, values);
+        context.leave_call_barrier(saved);
+        operands.push(offset?);
+        consume(&operands, context, scope, values)
+    })();
+    let mut cleanup = Ok(());
+    for operand in operands {
+        let released = eval_release_value(context, values, operand);
+        if cleanup.is_ok() { cleanup = released; }
+    }
+    match (result, cleanup) {
+        (Err(status), _) => Err(status),
+        (Ok(value), Err(status)) => {
+            let _ = release_expr_result(value, context, values);
+            Err(status)
+        }
+        (Ok(value), Ok(())) => Ok(value),
+    }
+}
+
 /// Keeps operands alive through a statement and releases every lease on success or failure.
 pub(in crate::interpreter) fn with_eval_void_operands<V: RuntimeValueOps>(
     args: &[&EvalExpr],
