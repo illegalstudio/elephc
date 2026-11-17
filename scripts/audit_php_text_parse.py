@@ -59,7 +59,11 @@ CFG_TEST_MOD = re.compile(r"^\s*(?:pub(?:\([^)]*\))?\s+)?mod\s+([A-Za-z_][A-Za-z
 # The lexer and the parser mention PHP syntax because parsing PHP is their job; they
 # provide no PHP surface. Excluded by path so the allowlist keeps naming only real
 # surfaces -- if a prelude ever hides here, it belongs somewhere else anyway.
-EXEMPT_DIR_PARTS = frozenset({"lexer", "parser"})
+# The tokenizer crates and the token_get_all builtin are the lexer exposed to user code
+# (PhpToken, token_get_all): they tokenize the user's PHP by contract, never a surface of ours.
+EXEMPT_DIR_PARTS = frozenset(
+    {"lexer", "parser", "tokenizer", "elephc-tokenizer", "elephc-tokenizer-engine"}
+)
 
 
 @dataclass(frozen=True, order=True)
@@ -113,6 +117,67 @@ def test_only_modules() -> set[Path]:
     return gated
 
 
+def brace_deltas(text: str) -> list[int]:
+    """Net `{`/`}` count of every line, ignoring braces inside strings, chars and comments.
+
+    A test module full of PHP probes carries unbalanced braces in its string literals
+    (`"{$a[...]}"`); counting them would end the gated range early and report the rest
+    of the test module as production code.
+    """
+    deltas = [0] * (text.count("\n") + 1)
+    line = 0
+    i = 0
+    n = len(text)
+    while i < n:
+        c = text[i]
+        if c == "\n":
+            line += 1
+            i += 1
+        elif text.startswith("//", i):
+            while i < n and text[i] != "\n":
+                i += 1
+        elif text.startswith("/*", i):
+            depth = 0
+            while i < n:
+                if text.startswith("/*", i):
+                    depth += 1
+                    i += 2
+                elif text.startswith("*/", i):
+                    depth -= 1
+                    i += 2
+                    if depth == 0:
+                        break
+                else:
+                    if text[i] == "\n":
+                        line += 1
+                    i += 1
+        elif c == "r" and re.match(r'r#*"', text[i : i + 40]) and (i == 0 or not (text[i - 1].isalnum() or text[i - 1] == "_") or text[i - 1] == "b"):
+            hashes = len(re.match(r"r(#*)", text[i:]).group(1))
+            close = '"' + "#" * hashes
+            end = text.find(close, i + 2 + hashes)
+            end = n if end < 0 else end + len(close)
+            line += text.count("\n", i, end)
+            i = end
+        elif c == '"':
+            i += 1
+            while i < n and text[i] != '"':
+                if text[i] == "\\":
+                    i += 1
+                if i < n and text[i] == "\n":
+                    line += 1
+                i += 1
+            i += 1
+        elif c == "'" and re.match(r"'(\\.[^']*|[^\\'])'", text[i : i + 12]):
+            i += len(re.match(r"'(\\.[^']*|[^\\'])'", text[i : i + 12]).group(0))
+        else:
+            if c == "{":
+                deltas[line] += 1
+            elif c == "}":
+                deltas[line] -= 1
+            i += 1
+    return deltas
+
+
 def test_gated_lines(text: str) -> set[int]:
     """Line numbers that sit inside a `#[cfg(test)]` item.
 
@@ -123,6 +188,7 @@ def test_gated_lines(text: str) -> set[int]:
     """
     gated: set[int] = set()
     lines = text.splitlines()
+    deltas = brace_deltas(text)
     index = 0
     while index < len(lines):
         if not CFG_TEST.search(lines[index]):
@@ -142,7 +208,7 @@ def test_gated_lines(text: str) -> set[int]:
         depth = 0
         end = cursor
         for scan in range(cursor, len(lines)):
-            depth += lines[scan].count("{") - lines[scan].count("}")
+            depth += deltas[scan]
             end = scan
             if depth <= 0:
                 break
