@@ -107,3 +107,29 @@ var_dump(gb(box("abc")), gb(box("0")), gb(box(0.5)), gb(box("")));
     );
     assert_eq!(out, "bool(true)\nbool(false)\nbool(true)\nbool(false)\n");
 }
+
+/// A closure's return `TypeError` names it by its PHP label, `{closure:file:line}` (or the
+/// enclosing function's name inside a function), not its generated `__eir_closure_*` symbol.
+#[test]
+fn test_closure_return_type_error_names_the_closure_label() {
+    let out = compile_and_run(
+        r#"<?php
+function box(mixed $v): mixed { return $v; }
+function show(Throwable $e): void { echo str_replace(__FILE__, "F", $e->getMessage()), "\n"; }
+$s = function (mixed $v): string { return box($v); };
+$f = fn(mixed $v): float => box($v);
+$b = static function (mixed $v): bool { return box($v); };
+$i = function (mixed $v): int { return box($v); };
+function outer(): void {
+    $inner = function (): string { return box(null); };
+    try { $inner(); } catch (TypeError $e) { show($e); }
+}
+try { $s(null); } catch (TypeError $e) { show($e); }
+try { $f("x"); } catch (TypeError $e) { show($e); }
+try { $b([]); } catch (TypeError $e) { show($e); }
+try { $i(null); } catch (TypeError $e) { show($e); }
+outer();
+"#,
+    );
+    assert_eq!(out, "{closure:F:4}(): Return value must be of type string, null returned\n{closure:F:5}(): Return value must be of type float, string returned\n{closure:F:6}(): Return value must be of type bool, array returned\n{closure:F:7}(): Return value must be of type int, null returned\n{closure:outer():9}(): Return value must be of type string, null returned\n");
+}

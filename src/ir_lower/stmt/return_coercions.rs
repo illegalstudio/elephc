@@ -134,9 +134,10 @@ fn guard_declared_scalar_return(
         }
         return ScalarReturnGuard::Checked(value);
     }
+    // A closure is named by its PHP label (`{closure:file:line}`), not its generated symbol.
     let prefix = format!(
         "{}(): Return value must be of type {}, ",
-        ctx.owner_name(),
+        crate::ir_lower::object_boundaries::callable_label(ctx),
         crate::types::diagnostic_names::php_type_name(&declared),
     );
     let span = span.unwrap_or_else(Span::dummy);
@@ -233,7 +234,10 @@ fn declared_int_return_boundary(
     ) {
         return None;
     }
-    let prefix = format!("{}(): Return value must be of type int, ", ctx.owner_name());
+    let prefix = format!(
+        "{}(): Return value must be of type int, ",
+        crate::ir_lower::object_boundaries::callable_label(ctx),
+    );
     let data = ctx.intern_string(&prefix);
     let verified = ctx.emit_value(
         Op::ReturnBoundaryMixedToInt,
