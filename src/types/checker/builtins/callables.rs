@@ -1167,12 +1167,16 @@ fn check_callback_builtin_call_in_engine_frame(
     }
 
     if let ExprKind::FirstClassCallable(target) = &callback.kind {
+        let declared = checker.resolve_first_class_callable_sig(target, span, env)?;
+        let callback_args = walk_surplus_trimmed(label, callback_args, &declared);
         let sig = checker.specialize_first_class_callable_target(target, callback_args, span, env)?;
         return checker.check_engine_invoked_callback_call(&sig, callback_args, span, env, label);
     }
 
     if let ExprKind::Variable(var_name) = &callback.kind {
         if let Some(target) = checker.first_class_callable_targets.get(var_name).cloned() {
+            let declared = checker.resolve_first_class_callable_sig(&target, span, env)?;
+            let callback_args = walk_surplus_trimmed(label, callback_args, &declared);
             let sig =
                 checker.specialize_first_class_callable_target(&target, callback_args, span, env)?;
             checker.callable_sigs.insert(var_name.clone(), sig.clone());
@@ -1189,9 +1193,15 @@ fn check_callback_builtin_call_in_engine_frame(
         // container before its signature is read here.
         checker.promote_descriptor_variadic_container(cb_name.as_str())?;
         if let Some(sig) = checker.functions.get(cb_name.as_str()).cloned() {
+            let callback_args = walk_surplus_trimmed(label, callback_args, &sig);
             return checker.check_engine_invoked_callback_call(&sig, callback_args, span, env, label);
         }
         if let Some(decl) = checker.fn_decls.get(cb_name.as_str()).cloned() {
+            let callback_args = if is_array_walk_label(label) && decl.variadic.is_none() && callback_args.len() > decl.params.len() {
+                &callback_args[..decl.params.len()]
+            } else {
+                callback_args
+            };
             let effective_arg_count = callback_args.len();
             let required = decl.defaults.iter().filter(|default| default.is_none()).count();
             if decl.variadic.is_some() {
@@ -1302,6 +1312,7 @@ fn check_callback_builtin_call_in_engine_frame(
                 label,
             );
         }
+        let callback_args = walk_surplus_trimmed(label, callback_args, &sig);
         return checker.check_engine_invoked_callback_call(&sig, callback_args, span, env, label);
     }
 
@@ -2183,4 +2194,23 @@ fn function_exists_argument_reaches_lookup_as_string(ty: &PhpType) -> bool {
         ty.codegen_repr(),
         PhpType::Str | PhpType::Mixed | PhpType::TaggedScalar | PhpType::Union(_)
     )
+}
+
+/// Whether `label` names the callback of `array_walk()` or `array_walk_recursive()`.
+fn is_array_walk_label(label: &str) -> bool {
+    label.starts_with("array_walk")
+}
+
+/// Drops the walk's synthesized userdata argument when the callback declares fewer parameters,
+/// as php does: a userland callee silently ignores surplus arguments.
+fn walk_surplus_trimmed<'a>(
+    label: &str,
+    callback_args: &'a [Expr],
+    sig: &crate::types::FunctionSig,
+) -> &'a [Expr] {
+    if is_array_walk_label(label) && sig.variadic.is_none() && callback_args.len() > sig.params.len() {
+        &callback_args[..sig.params.len()]
+    } else {
+        callback_args
+    }
 }

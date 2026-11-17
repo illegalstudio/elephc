@@ -2806,3 +2806,25 @@ echo $f('A'), "|", implode('', array_map('chr', json_decode('[65, 66]'))), "\n";
     );
     assert_eq!(out, "[104,195,169,108,108,111]|héllo|65|AB\n");
 }
+
+/// A walk callback that declares fewer parameters than the synthesized three ignores the
+/// surplus userdata argument, as php does, whatever the callback's shape (name, first-class
+/// callable, variable).
+#[test]
+fn test_array_walk_extra_argument_ignored_by_short_named_callbacks() {
+    let out = compile_and_run(
+        r#"<?php
+function two($v, $k) { echo $k, '=', $v, ' '; }
+function one($v) { echo $v, ' '; }
+$e = ['x' => 1, 'y' => 2];
+array_walk($e, 'two', '>');
+array_walk($e, 'one', '>');
+array_walk($e, two(...), '>');
+$cb = 'one';
+array_walk($e, $cb, '>');
+$n = ['g' => ['a' => 1]];
+array_walk_recursive($n, 'two', '#');
+"#,
+    );
+    assert_eq!(out, "x=1 y=2 1 2 x=1 y=2 1 2 a=1 ");
+}
