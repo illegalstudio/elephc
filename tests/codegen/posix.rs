@@ -259,3 +259,123 @@ fn test_posix_isatty_eval_probes_socket_listener() {
     );
     assert_eq!(out, "notty:probed");
 }
+
+/// Throws PHP's `TypeError` for refused `posix_kill()` operands before any signal is sent.
+///
+/// Every refused operand would otherwise coerce to pid 0 (the caller's process group), so the
+/// probes use signal 0 and a `posix_get_last_error()` sentinel shows the bridge never ran.
+#[test]
+fn test_posix_kill_rejects_non_integer_operands_before_signalling() {
+    let out = compile_and_run_capture(
+        r#"<?php
+        function kill(mixed $pid, mixed $signal): string {
+            try {
+                return var_export(posix_kill($pid, $signal), true);
+            } catch (TypeError $error) {
+                return $error->getMessage();
+            }
+        }
+        posix_kill(2147483647, 0);
+        echo kill([], 0), "\n";
+        echo kill('abc', 0), "\n";
+        echo kill('12abc', 0), "\n";
+        echo kill(new stdClass(), 0), "\n";
+        echo kill(getmypid(), []), "\n";
+        echo kill(getmypid(), 'abc'), "\n";
+        echo posix_get_last_error(), "\n";
+        try { posix_kill('abc', 0); } catch (TypeError $error) { echo $error->getMessage(), "\n"; }
+        echo kill(' ' . getmypid() . ' ', '0'), '|', kill((string) getmypid(), 0.0), "\n";
+        echo eval('
+            $parts = [];
+            foreach ([[], "abc", new stdClass()] as $pid) {
+                try { $parts[] = var_export(posix_kill($pid, 0), true); }
+                catch (TypeError $error) { $parts[] = $error->getMessage(); }
+            }
+            foreach ([[], "abc"] as $signal) {
+                try { $parts[] = var_export(posix_kill(getmypid(), $signal), true); }
+                catch (TypeError $error) { $parts[] = $error->getMessage(); }
+            }
+            $parts[] = posix_get_last_error();
+            $parts[] = var_export(posix_kill(" " . getmypid() . " ", "0"), true);
+            return implode("\n", $parts);
+        ');"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(
+        out.stdout,
+        "posix_kill(): Argument #1 ($process_id) must be of type int, array given\n\
+         posix_kill(): Argument #1 ($process_id) must be of type int, string given\n\
+         posix_kill(): Argument #1 ($process_id) must be of type int, string given\n\
+         posix_kill(): Argument #1 ($process_id) must be of type int, stdClass given\n\
+         posix_kill(): Argument #2 ($signal) must be of type int, array given\n\
+         posix_kill(): Argument #2 ($signal) must be of type int, string given\n\
+         3\n\
+         posix_kill(): Argument #1 ($process_id) must be of type int, string given\n\
+         true|true\n\
+         posix_kill(): Argument #1 ($process_id) must be of type int, array given\n\
+         posix_kill(): Argument #1 ($process_id) must be of type int, string given\n\
+         posix_kill(): Argument #1 ($process_id) must be of type int, stdClass given\n\
+         posix_kill(): Argument #2 ($signal) must be of type int, array given\n\
+         posix_kill(): Argument #2 ($signal) must be of type int, string given\n\
+         3\n\
+         true"
+    );
+}
+
+/// Applies PHP's `int` parameter check to `posix_strerror()`, natively and inside `eval()`.
+#[test]
+fn test_posix_strerror_rejects_non_integer_operands() {
+    let out = compile_and_run_capture(
+        r#"<?php
+        function message(mixed $code): string {
+            try {
+                return posix_strerror($code);
+            } catch (TypeError $error) {
+                return $error->getMessage();
+            }
+        }
+        echo message([]), '|', message('abc'), '|', message(new stdClass()), '|', message(' 3 '), '|';
+        try { echo posix_strerror('abc'); } catch (TypeError $error) { echo $error->getMessage(); }
+        echo '|', eval('
+            $parts = [];
+            foreach ([[], "abc", new stdClass(), " 3 "] as $code) {
+                try { $parts[] = posix_strerror($code); }
+                catch (TypeError $error) { $parts[] = $error->getMessage(); }
+            }
+            return implode("|", $parts);
+        ');"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    let refused = "posix_strerror(): Argument #1 ($error_code) must be of type int";
+    assert_eq!(
+        out.stdout,
+        format!(
+            "{refused}, array given|{refused}, string given|{refused}, stdClass given|No such process|\
+             {refused}, string given|\
+             {refused}, array given|{refused}, string given|{refused}, stdClass given|No such process"
+        )
+    );
+}
+
+/// Warns and returns false for `posix_isatty()` operands outside `int|resource`, as PHP does.
+#[test]
+fn test_posix_isatty_warns_for_non_integer_operands() {
+    let out = compile_and_run_capture(
+        r#"<?php
+        function probe(mixed $fd): string {
+            return var_export(posix_isatty($fd), true);
+        }
+        echo probe([]), '|', probe('abc'), '|', probe(new stdClass()), '|', var_export(posix_isatty('abc'), true), '|';
+        echo eval('return var_export(posix_isatty([]), true) . "|" . var_export(posix_isatty(new stdClass()), true);');"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "false|false|false|false|false|false");
+    let warning = "posix_isatty(): Argument #1 ($file_descriptor) must be of type int|resource";
+    for given in ["array given", "string given", "stdClass given"] {
+        assert!(
+            out.stderr.contains(&format!("{warning}, {given}")),
+            "missing {given} warning, stderr: {}",
+            out.stderr
+        );
+    }
+}

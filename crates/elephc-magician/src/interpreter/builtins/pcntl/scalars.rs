@@ -76,7 +76,7 @@ pub(super) fn eval_pcntl_scalar_result(
             values.int(elephc_pcntl::elephc_posix_setsid())?
         }
         "pcntl_setpriority" => eval_pcntl_setpriority(args, context, values)?,
-        "pcntl_strerror" => eval_pcntl_strerror(args, values)?,
+        "pcntl_strerror" => eval_pcntl_strerror(name, args, context, values)?,
         "pcntl_wifcontinued" | "pcntl_wifexited" | "pcntl_wifsignaled"
         | "pcntl_wifstopped" | "pcntl_wexitstatus" | "pcntl_wstopsig"
         | "pcntl_wtermsig" => eval_pcntl_wait_status_result(name, args, values)?,
@@ -238,11 +238,13 @@ fn eval_validate_priority_mode(
 
 /// Copies libc's borrowed `strerror` bytes into a PHP string cell.
 pub(super) fn eval_pcntl_strerror(
+    name: &str,
     args: &[Option<EvaluatedCallArg>],
+    context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     let error = eval_pcntl_required_arg(args, 0)?;
-    let error = eval_int_value(error.value, values)?;
+    let error = eval_int_param(error.value, name, 1, "error_code", context, values)?;
     let mut len = 0usize;
     let pointer = unsafe {
         elephc_pcntl::elephc_pcntl_strerror(error as libc::c_int, &mut len)
