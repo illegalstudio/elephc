@@ -202,7 +202,10 @@ impl Parser {
     ) -> Result<Vec<EvalStmt>, EvalParseError> {
         let mut expression = self.clone();
         if let Ok(target) = expression.parse_expr() {
-            if needs_dimension_tail(&target, expression.current()) {
+            if !expression.at_reference_append()
+                && !matches!(target, EvalExpr::ReferenceBind { .. })
+                && needs_dimension_tail(&target, expression.current())
+            {
                 let statements = expression.parse_property_like_stmt_tail(target, false)?;
                 *self = expression;
                 return Ok(statements);

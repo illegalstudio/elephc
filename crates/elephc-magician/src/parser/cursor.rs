@@ -57,6 +57,17 @@ impl Parser {
         self.token_lines.get(self.pos).copied().unwrap_or(1)
     }
 
+    /// Reports whether the cursor sits on the `[] = &` of a reference append (`$a[k][] = &$b;`).
+    ///
+    /// The expression parser deliberately stops there: an append that binds is a statement
+    /// (`EvalStmt::ArrayAppendReferenceBind`), not an assignment expression.
+    pub(super) fn at_reference_append(&self) -> bool {
+        matches!(self.current(), TokenKind::LBracket)
+            && matches!(self.tokens.get(self.pos + 1), Some(TokenKind::RBracket))
+            && matches!(self.tokens.get(self.pos + 2), Some(TokenKind::Equal))
+            && matches!(self.tokens.get(self.pos + 3), Some(TokenKind::Ampersand))
+    }
+
     /// Returns the next token without advancing.
     pub(super) fn peek(&self) -> &TokenKind {
         self.tokens.get(self.pos + 1).unwrap_or(&TokenKind::Eof)

@@ -24,13 +24,6 @@ eval_builtin! {
     values: StringSplitJoin,
 }
 
-eval_builtin! {
-    contract: "join",
-    area: String,
-    direct: StringSplitJoin,
-    values: StringSplitJoin,
-}
-
 use super::super::super::*;
 
 /// PHP's overload error when the optional array was not supplied or is null, completed by the
