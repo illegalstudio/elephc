@@ -45,7 +45,8 @@ thread_local! {
     static ACTIVE_MIXED_STORAGE_LOCALS: RefCell<HashSet<String>> = RefCell::new(HashSet::new());
     /// Indexed reads the checker proved cannot dispatch PHP warning handlers.
     static ACTIVE_BUFFER_READ_SITES: RefCell<HashSet<Span>> = RefCell::new(HashSet::new());
-    /// Arguments whose parameter binding runs a runtime scalar-parameter `TypeError` check.
+    /// Arguments whose parameter binding runs a runtime scalar-parameter `TypeError` check, and
+    /// returned expressions a declared `string`/`float`/`bool` return checks the same way.
     static ACTIVE_SCALAR_GUARD_ARG_SITES: RefCell<HashSet<Span>> = RefCell::new(HashSet::new());
 }
 
@@ -76,6 +77,13 @@ pub fn install_scalar_guard_arg_sites(sites: HashSet<Span>) -> ScalarGuardArgSit
 pub(crate) fn with_scalar_guard_arg_sites<R>(sites: Option<&HashSet<Span>>, f: impl FnOnce() -> R) -> R {
     let _scope = sites.map(|sites| install_scalar_guard_arg_sites(sites.clone()));
     f()
+}
+
+/// Returns whether the checker recorded `span` as a runtime-checked site: an argument bound to
+/// a declared scalar parameter, or a returned expression a declared `string`/`float`/`bool`
+/// return checks.
+pub(crate) fn is_scalar_guard_site(span: Span) -> bool {
+    ACTIVE_SCALAR_GUARD_ARG_SITES.with(|slot| slot.borrow().contains(&span))
 }
 
 /// Returns whether a call with these arguments binds a `mixed`/union value to a declared
