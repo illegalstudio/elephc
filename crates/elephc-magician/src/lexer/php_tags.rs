@@ -278,13 +278,12 @@ fn heredoc_terminator_end(bytes: &[u8], start: usize, label: &[u8]) -> Option<us
         return None;
     }
     cursor += label.len();
-    if bytes.get(cursor) == Some(&b';') {
-        cursor += 1;
-    }
+    // PHP 7.3+ closes the body at the label whatever follows it, unless the label goes on as an
+    // identifier (`EOT, 1);` and `EOT)` close it; `EOTX` does not). The lexer's `lex_heredoc`
+    // applies the same rule, so both agree where the heredoc ends.
     match bytes.get(cursor) {
-        None | Some(b'\n' | b'\r') => Some(cursor),
-        Some(b'?') if bytes.get(cursor + 1) == Some(&b'>') => Some(cursor),
-        _ => None,
+        Some(byte) if is_heredoc_label_continue(*byte) => None,
+        _ => Some(cursor),
     }
 }
 
@@ -376,5 +375,18 @@ echo "done";"#;
         assert!(!contains_php_open_tag(b"// c ?>h<?php echo 4;"));
         assert!(contains_php_open_tag(b"?>a<?php echo 5; <?php echo 6;"));
         assert!(!contains_php_open_tag(b"?>a <? short is html"));
+    }
+
+    /// A heredoc closed by its label followed by `,` or `)` hides a later `?>` no more than one
+    /// closed by `;`, so the close tag after it is found where the lexer also sees it.
+    #[test]
+    fn close_tag_after_a_heredoc_closed_without_a_semicolon() {
+        let source = b"<?php echo f(<<<EOT\nv=$a\nEOT, 1);\n?>done";
+        let expected = source.windows(2).rposition(|pair| pair == b"?>");
+        assert_eq!(find_php_close_tag(source, 0), expected);
+        let source = b"<?php echo f(<<<EOT\nv\nEOT);\n?>done";
+        assert_eq!(find_php_close_tag(source, 0), source.windows(2).rposition(|pair| pair == b"?>"));
+        let source = b"<?php echo <<<EOT\nEOTX ?> not code\nEOT;\n?>done";
+        assert_eq!(find_php_close_tag(source, 0), source.windows(2).rposition(|pair| pair == b"?>"));
     }
 }
