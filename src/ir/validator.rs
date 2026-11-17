@@ -374,6 +374,8 @@ fn validate_instruction_effects(
 ) -> Result<(), ValidationError> {
     let expected = if inst.op == Op::MixedUnbox {
         Op::mixed_unbox_effects(&inst.result_php_type)
+    } else if inst.op == Op::FToI && matches!(inst.immediate, Some(Immediate::WeakFloatToInt)) {
+        Op::FToI.default_effects() | Effects::MAY_WARN | Effects::MAY_THROW
     } else if inst.op == Op::FToI
         && matches!(
             inst.immediate,
@@ -740,7 +742,7 @@ fn validate_instruction_immediate(
             }
         }
         FToI => {
-            if matches!(inst.immediate, None | Some(Imm::Bool(true) | Imm::FloatKeyDiagnostic)) {
+            if matches!(inst.immediate, None | Some(Imm::Bool(true) | Imm::FloatKeyDiagnostic | Imm::WeakFloatToInt)) {
                 Ok(())
             } else {
                 Err(ValidationError::UnexpectedImmediate(inst_id))

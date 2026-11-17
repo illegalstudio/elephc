@@ -234,9 +234,11 @@ pub(in crate::ir_lower) fn coerce_typed_assign_value(
         PhpType::Int if source_ty == PhpType::Float => ctx.emit_value(
             Op::FToI,
             vec![value.value],
-            Some(Immediate::Bool(true)),
+            Some(Immediate::WeakFloatToInt),
             PhpType::Int,
-            Op::FToI.default_effects() | crate::ir::Effects::MAY_WARN,
+            Op::FToI.default_effects()
+                | crate::ir::Effects::MAY_WARN
+                | crate::ir::Effects::MAY_THROW,
             Some(span),
         ),
         PhpType::Str if matches!(source_ty, PhpType::Object(_)) => {

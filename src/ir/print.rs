@@ -190,6 +190,9 @@ fn print_immediate(out: &mut String, data: &DataPool, immediate: &Immediate) {
         Immediate::ImplicitIntCast => {
             let _ = write!(out, " implicit_int_cast");
         }
+        Immediate::WeakFloatToInt => {
+            let _ = write!(out, " weak_float_to_int");
+        }
         Immediate::InPlacePropertyWrite => {
             let _ = write!(out, " in_place_property_write");
         }

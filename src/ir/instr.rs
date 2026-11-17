@@ -269,6 +269,10 @@ pub enum Immediate {
     StringOffsetCast,
     /// Binds an already validated float-shaped runtime argument to int with precision diagnostics.
     ImplicitIntCast,
+    /// Converts a float to int the way php's weak mode does at a declared `int` slot: an integral
+    /// value silently, a fractional one with the "loses precision" deprecation, and NaN, the
+    /// infinities or an out-of-range value with a `TypeError`.
+    WeakFloatToInt,
     /// A `HashSet` whose receiver is a declared property read borrowed: the property's own
     /// reference is the one the write consumes, and codegen publishes into the slot.
     InPlacePropertyWrite,

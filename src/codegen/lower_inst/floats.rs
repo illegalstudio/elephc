@@ -264,6 +264,21 @@ pub(super) fn lower_float_to_int(
         abi::emit_call_label(ctx.emitter, "__rt_float_key_to_int");
         return store_if_result(ctx, inst);
     }
+    if matches!(inst.immediate, Some(Immediate::WeakFloatToInt)) {
+        // php's weak-mode coercion at a declared `int` slot, with the diagnostics it owes.
+        let invalid = ctx.next_label("weak_float_slot_invalid");
+        let done = ctx.next_label("weak_float_slot_done");
+        require_float(ctx.load_value_to_result(value)?, inst)?;
+        super::builtins::strings::emit_float_result_int_coercion_diagnostics(ctx, &invalid);
+        abi::emit_jump(ctx.emitter, &done);
+        ctx.emitter.label(&invalid);
+        super::exceptions::emit_type_error(
+            ctx,
+            "Cannot assign float to a property of type int",
+        );
+        ctx.emitter.label(&done);
+        return store_if_result(ctx, inst);
+    }
     if matches!(inst.immediate, Some(Immediate::Bool(true))) {
         emit_string_offset_cast_warning(ctx);
     }
