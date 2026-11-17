@@ -43,6 +43,7 @@ pub(in crate::interpreter) fn execute_interface_decl_stmt(
         }
     }
     validate_eval_interface_attribute_targets(interface)?;
+    validate_eval_interface_to_string(interface)?;
     validate_eval_interface_override_attributes(interface, context, values)?;
     validate_eval_declared_constants(interface.constants())?;
     validate_eval_interface_constants(interface.constants())?;

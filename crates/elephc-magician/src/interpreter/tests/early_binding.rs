@@ -111,6 +111,53 @@ fn early_binding_binds_child_class_only_after_its_parent() {
     assert_eq!(output, "noyesyes");
 }
 
+/// Verifies a child whose overrides name a class that does not exist yet is left to its
+/// statement, where the check can be decided, instead of failing while the fragment is bound.
+#[test]
+fn early_binding_leaves_child_with_undecidable_overrides_to_its_statement() {
+    let output = run(
+        br#"echo class_exists("P") ? "y" : "n", class_exists("C") ? "y" : "n"; if (true) { class A {} class B extends A {} } class P { function f(): A {} } class C extends P { function f(): B {} } echo class_exists("C") ? "y" : "n";"#,
+    );
+    assert_eq!(output, "yny");
+    let output = run(
+        br#"echo class_exists("C") ? "y" : "n"; class P { function f(): A {} } class C extends P { function f(): B {} } class A {} class B extends A {} echo class_exists("C") ? "y" : "n";"#,
+    );
+    assert_eq!(output, "ny");
+    let output = run(
+        br#"echo class_exists("C") ? "y" : "n"; class P { function make(): object {} function take(Later $a) {} } class C extends P { function make(): Later {} function take(object $a) {} } class Later {} echo class_exists("C") ? "y" : "n";"#,
+    );
+    assert_eq!(output, "ny");
+    assert_eq!(
+        run_failing(br#"echo class_exists("C") ? "y" : "n"; class P { public A $p; } class C extends P { public B $p; } echo "ok";"#),
+        "n"
+    );
+}
+
+/// Verifies an override that names a missing class still binds early when PHP needs no lookup
+/// to accept it: the same name on both sides, an untyped, `mixed` or private inherited member,
+/// or a union that already holds the name.
+#[test]
+fn early_binding_binds_child_whose_overrides_need_no_lookup() {
+    let output = run(
+        br#"echo class_exists("C") ? "y" : "n", class_exists("D") ? "y" : "n", class_exists("E") ? "y" : "n"; class P { function same(): Z {} function open() {} function any(): mixed {} private function own(): int {} function wide(Z $a) {} function narrow(): Z|Y {} } class C extends P { function same(): Z {} function open(): Z {} function any(): Z {} function own(): Z {} } class D extends P { function wide(Z|Y $a) {} function narrow(): Z {} } class E extends P { function fresh(): Z {} }"#,
+    );
+    assert_eq!(output, "yyy");
+}
+
+/// Verifies an override PHP rejects without a lookup still stops the fragment before any
+/// statement runs, even when it names a class that does not exist.
+#[test]
+fn early_binding_reports_incompatible_override_before_the_first_statement() {
+    assert_eq!(
+        run_failing(br#"echo "a"; class P { function f(): int {} } class C extends P { function f(): string {} }"#),
+        ""
+    );
+    assert_eq!(
+        run_failing(br#"echo "a"; class P { function f(): int {} } class C extends P { function f(): Zed {} }"#),
+        ""
+    );
+}
+
 /// Verifies the shapes PHP links only at run time are declared by their statement: an enum, a
 /// class that implements an interface or uses a trait, an interface with a parent, a trait
 /// that uses a trait, and a class or interface with `__toString`.
@@ -182,6 +229,51 @@ fn early_binding_leaves_taken_names_to_their_statement() {
 fn early_binding_reports_invalid_early_class_before_the_first_statement() {
     assert_eq!(run_failing(br#"echo "a"; final class P {} class C extends P {}"#), "");
     assert_eq!(run_failing(br#"echo "a"; interface P {} class C extends P {}"#), "");
+}
+
+/// Verifies a `__toString` PHP refuses to compile stops the fragment before any statement
+/// runs and declares nothing, whatever else its class or interface is.
+#[test]
+fn early_binding_reports_invalid_to_string_before_the_first_statement() {
+    for source in [
+        &br#"echo "a"; class C { public static function __toString() { return ""; } }"#[..],
+        &br#"echo "a"; class C { function __toString($x) { return ""; } }"#[..],
+        &br#"echo "a"; class C { function __toString(): int { return 1; } }"#[..],
+        &br#"echo "a"; class C { abstract function __toString(): string; }"#[..],
+        &br#"interface J {} echo "a"; class C implements J { public static function __toString() { return ""; } }"#[..],
+        &br#"echo "a"; interface I { function __toString($x); }"#[..],
+        &br#"echo "a"; interface I { public static function __toString(); }"#[..],
+        &br#"interface P {} echo "a"; interface I extends P { public static function __toString(); }"#[..],
+    ] {
+        let mut context = ElephcEvalContext::new();
+        let mut scope = ElephcEvalScope::new();
+        let mut values = FakeOps::default();
+        let program = parse_fragment(source).expect("parse");
+        assert!(execute_program_with_context(&mut context, &program, &mut scope, &mut values).is_err());
+        assert_eq!(values.output, "");
+        let probe = parse_fragment(br#"echo class_exists("C") ? "y" : "n", interface_exists("I") ? "y" : "n";"#)
+            .expect("parse probe");
+        let result = execute_program_with_context(&mut context, &probe, &mut scope, &mut values).unwrap();
+        eval_release_value(&mut context, &mut values, result).unwrap();
+        assert_eq!(values.output, "nn");
+    }
+}
+
+/// Verifies a `__toString` PHP accepts keeps its class or interface with its statement, an
+/// abstract one in an abstract class and a variadic one included.
+#[test]
+fn early_binding_leaves_valid_to_string_shapes_to_their_statement() {
+    let output = run(
+        br#"echo class_exists("A") ? "y" : "n", class_exists("S") ? "y" : "n", interface_exists("I") ? "y" : "n"; abstract class A { abstract function __toString(): string; } class S { function __toString(): string { return ""; } } interface I { function __toString(): string; } echo class_exists("A") ? "y" : "n", class_exists("S") ? "y" : "n", interface_exists("I") ? "y" : "n";"#,
+    );
+    assert_eq!(output, "nnnyyy");
+}
+
+/// Verifies an interface declared inside a block is rejected for a `__toString` PHP refuses
+/// to compile, instead of being declared.
+#[test]
+fn early_binding_rejects_invalid_interface_to_string_inside_a_block() {
+    let _ = run_failing(br#"if (true) { interface I { function __toString($x); } }"#);
 }
 
 /// Verifies a declaration after a top-level `return` is still bound.
