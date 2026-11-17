@@ -218,7 +218,7 @@ pub(super) fn eval_magic_call_args(
         Ok(args) => args,
         Err(status) => { let _ = values.release(method); return Err(status); }
     };
-    Ok(positional_args(vec![method, args]))
+    Ok(positional_owned_args(vec![method, args]))
 }
 
 /// Materializes PHP's `$args` array for a magic method fallback.

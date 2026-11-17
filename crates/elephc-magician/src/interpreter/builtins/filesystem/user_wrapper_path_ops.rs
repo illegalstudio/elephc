@@ -124,7 +124,7 @@ where
         class.name(),
         &method,
         object,
-        positional_args(args),
+        positional_owned_args(args),
         context,
         values,
     );

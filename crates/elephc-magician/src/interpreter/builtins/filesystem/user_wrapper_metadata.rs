@@ -50,7 +50,7 @@ pub(in crate::interpreter) fn eval_user_wrapper_stream_metadata_result(
         class.name(),
         &stream_metadata,
         object,
-        positional_args(vec![path, option, value.borrowed()]),
+        positional_owned_args(vec![path, option, value.borrowed()]),
         context,
         values,
     );

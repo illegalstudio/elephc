@@ -34,7 +34,7 @@ pub(in crate::interpreter) fn eval_user_wrapper_stream_cast_result(
         &info.class_name,
         &stream_cast,
         info.object,
-        positional_args(vec![cast_as]),
+        positional_owned_args(vec![cast_as]),
         context,
         values,
     )?;

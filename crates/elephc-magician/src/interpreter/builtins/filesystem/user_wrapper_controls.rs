@@ -73,7 +73,7 @@ pub(in crate::interpreter) fn eval_user_wrapper_ftruncate_result(
         &info.class_name,
         &stream_truncate,
         info.object,
-        positional_args(vec![size]),
+        positional_owned_args(vec![size]),
         context,
         values,
     )?;
@@ -103,7 +103,7 @@ pub(in crate::interpreter) fn eval_user_wrapper_flock_result(
         &info.class_name,
         &stream_lock,
         info.object,
-        positional_args(vec![operation]),
+        positional_owned_args(vec![operation]),
         context,
         values,
     )?;

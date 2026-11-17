@@ -90,6 +90,9 @@ fn fake_reference_sharing_tracks_live_container_edges() {
     assert!(values.reference_is_shared(reference).unwrap());
     values.release(array).unwrap();
     assert!(!values.reference_is_shared(reference).unwrap());
+    // The fake object slot owns what `property_set` stores and gives back what it displaces; the
+    // directly allocated slot above never took that reference, so it takes it before replacing.
+    values.retain(reference).unwrap();
     values.property_set(object, "value", original).unwrap();
     assert_eq!(values.reference_owner_count(reference), 0);
 }

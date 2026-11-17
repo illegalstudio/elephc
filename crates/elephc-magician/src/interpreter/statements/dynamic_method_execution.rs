@@ -641,6 +641,21 @@ pub(in crate::interpreter) fn positional_args(
         .collect()
 }
 
+/// Wraps freshly created operands the callee's caller will retire, so they stay OWNED (a borrowed
+/// flag would make the cleanup skip them). Used by synthesized magic and stream-hook arguments.
+pub(in crate::interpreter) fn positional_owned_args(
+    args: Vec<RuntimeCellHandle>,
+) -> Vec<EvaluatedCallArg> {
+    args.into_iter()
+        .map(|value| EvaluatedCallArg {
+            evaluation_owner: None,
+            name: None,
+            value,
+            ref_target: None,
+        })
+        .collect()
+}
+
 /// Extracts positional runtime values and rejects named args before runtime method dispatch.
 pub(in crate::interpreter) fn positional_evaluated_arg_values(
     args: Vec<EvaluatedCallArg>,

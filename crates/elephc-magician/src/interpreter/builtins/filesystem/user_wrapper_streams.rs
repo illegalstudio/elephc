@@ -259,7 +259,7 @@ pub(in crate::interpreter) fn eval_user_wrapper_url_stat_result(
         class.name(),
         &url_stat,
         object,
-        positional_args(vec![path, flags]),
+        positional_owned_args(vec![path, flags]),
         context,
         values,
     );
@@ -288,7 +288,7 @@ pub(in crate::interpreter) fn eval_user_wrapper_read_bytes(
         &info.class_name,
         &stream_read,
         info.object,
-        positional_args(vec![length]),
+        positional_owned_args(vec![length]),
         context,
         values,
     )?;
@@ -321,7 +321,7 @@ fn eval_user_wrapper_write_bytes(
         &info.class_name,
         &stream_write,
         info.object,
-        positional_args(vec![data]),
+        positional_owned_args(vec![data]),
         context,
         values,
     )?;
@@ -423,7 +423,7 @@ fn eval_user_wrapper_seek_bool(
         &info.class_name,
         &stream_seek,
         info.object,
-        positional_args(vec![offset, whence]),
+        positional_owned_args(vec![offset, whence]),
         context,
         values,
     )?;

@@ -41,7 +41,7 @@ pub(in crate::interpreter) fn eval_user_wrapper_opendir_result(
         class.name(),
         &dir_opendir,
         object,
-        positional_args(vec![path_arg, options]),
+        positional_owned_args(vec![path_arg, options]),
         context,
         values,
     );

@@ -40,7 +40,7 @@ pub(in crate::interpreter) fn eval_user_wrapper_stream_set_option_result(
         &info.class_name,
         &stream_set_option,
         info.object,
-        positional_args(vec![option, arg1, arg2]),
+        positional_owned_args(vec![option, arg1, arg2]),
         context,
         values,
     )?;
