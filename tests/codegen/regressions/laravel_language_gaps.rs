@@ -617,6 +617,29 @@ fn test_filter_var_url_email_domain_callback_match_php() {
     assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
 }
 
+/// A filter id held in a variable can name URL, EMAIL, MAC or DOMAIN: the dispatcher reaches the
+/// extended helpers (it refused them with "filter with ID 274 is not supported" before).
+#[test]
+fn test_filter_var_extended_filter_held_in_a_variable_matches_php() {
+    let out = compile_and_run(
+        r#"<?php
+function chk(string $v, int $f) { return filter_var($v, $f); }
+var_dump(chk("a@b.com", FILTER_VALIDATE_EMAIL));
+var_dump(chk("http://x.org/p?q=1", FILTER_VALIDATE_URL));
+var_dump(chk("example.com", FILTER_VALIDATE_DOMAIN));
+var_dump(chk("00:11:22:33:44:55", FILTER_VALIDATE_MAC));
+var_dump(chk("12", FILTER_VALIDATE_INT));
+$f = FILTER_VALIDATE_EMAIL;
+var_dump(filter_var("a@b.com", $f));
+var_dump(filter_var("not", $f));
+"#,
+    );
+    assert_eq!(
+        out,
+        "string(7) \"a@b.com\"\nstring(18) \"http://x.org/p?q=1\"\nstring(11) \"example.com\"\nstring(17) \"00:11:22:33:44:55\"\nint(12)\nstring(7) \"a@b.com\"\nbool(false)\n"
+    );
+}
+
 /// `filter_var()` converts an object with `__toString` to its string before validating it, and
 /// fails only for an object without one (php-src `php_zval_filter`); Symfony's validators pass
 /// `Stringable` values.

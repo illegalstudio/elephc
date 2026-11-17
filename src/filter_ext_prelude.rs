@@ -35,6 +35,24 @@ pub(crate) const EXTENDED_FILTER_IDS: &[i64] = &[273, 274, 276, 277, 1024];
 /// FILTER_VALIDATE_EMAIL, the one helper that needs the regex runtime.
 const FILTER_VALIDATE_EMAIL: i64 = 274;
 
+/// Whether `program` calls `filter_var()` with a filter id that is not a literal constant.
+pub(crate) fn dynamic_filter_used(program: &Program) -> bool {
+    use crate::parser::ast::visit::{walk_nodes, Node};
+    use crate::parser::ast::ExprKind;
+    let mut dynamic = false;
+    walk_nodes(program, &mut |node| {
+        let Node::Expr(expr) = node else { return };
+        let ExprKind::FunctionCall { name, args } = &expr.kind else { return };
+        if !name.as_str().trim_start_matches('\\').eq_ignore_ascii_case("filter_var") {
+            return;
+        }
+        if let Some(filter) = args.get(1) {
+            dynamic |= crate::types::filter_constants::static_filter_int(filter).is_none();
+        }
+    });
+    dynamic
+}
+
 /// Which extended filters `program` names as a literal `filter_var()` filter: `(any, email)`.
 ///
 /// Only those calls are lowered to the helpers (a run-time filter id goes to the dynamic helper,

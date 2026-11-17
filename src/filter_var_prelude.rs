@@ -62,7 +62,14 @@ pub(crate) const DYN_FILTER_VAR_ARR_NAME: &str = "__elephc_filter_var_dyn_arr";
 /// The helpers are typed like user code (`php_semantics_declarations`), which is how the PHP form
 /// they replace was parsed: `array $options` keeps the user-array ABI the caller passes.
 pub(crate) fn declarations() -> Program {
-    php_semantics_declarations(|| vec![decl_fn_filter_var_dyn_arr(), decl_fn_filter_var_dyn()])
+    php_semantics_declarations(|| vec![decl_fn_filter_var_dyn_arr(), decl_fn_filter_var_dyn(false)])
+}
+
+/// The dynamic-`filter_var` prelude whose dispatcher also reaches `__elephc_filter_var_ext`, for
+/// a program that calls `filter_var()` with a run-time filter id: the id may be URL, EMAIL, MAC,
+/// DOMAIN or CALLBACK, which only the extended helpers implement.
+pub(crate) fn declarations_with_extended() -> Program {
+    php_semantics_declarations(|| vec![decl_fn_filter_var_dyn_arr(), decl_fn_filter_var_dyn(true)])
 }
 
 /// `$nof ? <nof_value> : <plain_value>`.
@@ -164,19 +171,22 @@ fn decl_fn_filter_var_dyn_arr() -> Stmt {
 }
 
 /// `__elephc_filter_var_dyn(mixed $value, int $filter, mixed $flags = 0): mixed`.
-fn decl_fn_filter_var_dyn() -> Stmt {
-    function(DYN_FILTER_VAR_NAME)
-        .param("value", t_mixed())
-        .param("filter", TypeExpr::Int)
-        .param_default("flags", t_mixed(), e_int(0))
-        .returns(t_mixed())
-        .body(vec![
+///
+/// With `extended`, the URL/EMAIL/MAC/DOMAIN/CALLBACK ids go to `__elephc_filter_var_ext` with the
+/// options exactly as the caller passed them.
+fn decl_fn_filter_var_dyn(extended: bool) -> Stmt {
+    let mut body = Vec::new();
+    if extended {
+        body.push(s_assign("options", e_var("flags")));
+    }
+    body.push(
             s_if(
                 e_call("is_array", vec![e_var("flags")]),
                 vec![warn_unsupported_options("flags"), flags_from_array("flags")],
                 vec![],
                 Some(vec![s_assign("flags", e_cast(CastType::Int, e_var("flags")))]),
-            ),
+            ));
+    body.extend(vec![
             s_assign("nof", flag_set("FILTER_NULL_ON_FAILURE")),
             dispatch_simple("FILTER_VALIDATE_INT"),
             dispatch_simple("FILTER_VALIDATE_FLOAT"),
@@ -194,6 +204,24 @@ fn decl_fn_filter_var_dyn() -> Stmt {
                 None,
             ),
             dispatch_simple("FILTER_DEFAULT"),
+    ]);
+    if extended {
+        let is_extended = crate::filter_ext_prelude::EXTENDED_FILTER_IDS
+            .iter()
+            .map(|id| e_binop(e_var("filter"), BinOp::StrictEq, e_int(*id)))
+            .reduce(|left, right| e_binop(left, BinOp::Or, right))
+            .expect("the extended filter list is not empty");
+        body.push(s_if(
+            is_extended,
+            vec![s_return(e_call(
+                crate::filter_ext_prelude::FILTER_VAR_EXT_NAME,
+                vec![e_var("value"), e_var("filter"), e_var("options")],
+            ))],
+            vec![],
+            None,
+        ));
+    }
+    body.extend(vec![
             s_expr(e_call(
                 "error_log",
                 vec![e_concat_all(vec![
@@ -203,7 +231,13 @@ fn decl_fn_filter_var_dyn() -> Stmt {
                 ])],
             )),
             s_return(nof_ternary(e_null(), e_bool(false))),
-        ])
+    ]);
+    function(DYN_FILTER_VAR_NAME)
+        .param("value", t_mixed())
+        .param("filter", TypeExpr::Int)
+        .param_default("flags", t_mixed(), e_int(0))
+        .returns(t_mixed())
+        .body(body)
         .build()
 }
 
@@ -216,10 +250,17 @@ pub fn inject_if_used(program: Program, inventory: &mut PreludeInventory) -> Pro
     if !crate::ast_usage::collect(&program).references("filter_var") {
         return program;
     }
-    let mut combined = declarations();
     // The URL/EMAIL/DOMAIN/CALLBACK helpers, named only by the literal lowering as well, and only
-    // when a literal call uses one of those filters.
-    let (extended, email) = crate::filter_ext_prelude::extended_filters_used(&program);
+    // when a literal call uses one of those filters. A call whose filter id is not a literal at
+    // this stage (`$f = FILTER_VALIDATE_EMAIL; filter_var($v, $f)` is only folded by a later
+    // pass) may name any of them, so it brings the helpers and a dispatcher that reaches them.
+    let (mut extended, mut email) = crate::filter_ext_prelude::extended_filters_used(&program);
+    let dynamic = crate::filter_ext_prelude::dynamic_filter_used(&program);
+    if dynamic {
+        extended = true;
+        email = true;
+    }
+    let mut combined = if dynamic { declarations_with_extended() } else { declarations() };
     if extended {
         let declarations = crate::filter_ext_prelude::declarations(email);
         inventory.record_program(FILTER_VAR_GROUP, &declarations);
