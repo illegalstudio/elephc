@@ -2780,6 +2780,59 @@ fn the_web_preload_runs_once_at_startup_not_in_the_first_request() {
     );
 }
 
+/// Startup supplies an empty hidden collector when a preload captures or catches a trace.
+#[test]
+fn web_preload_initializes_hidden_trace_arguments() {
+    let dir = make_test_dir("web_preload_trace_arguments");
+    std::fs::write(dir.join("preload.php"), r#"<?php
+class PreloadTraceState { public static ?string $value = null; }
+echo 'TRACE:', count(debug_backtrace()), "\n";
+try { throw new RuntimeException('preload caught'); }
+catch (Throwable $error) { echo $error->getMessage(), "\n"; }
+"#).unwrap();
+    let bin = compile_web_with_flags(
+        &dir, "<?php echo 'request survived';", "app",
+        &["--ini", &format!("opcache.preload={}", dir.join("preload.php").display())],
+    );
+    let addr = format!("127.0.0.1:{}", free_port());
+    let stdout_path = dir.join("server.out");
+    let mut server = spawn_server_with_stdout(&bin, &addr, &stdout_path);
+    let response = http_get(&addr, "/");
+    let _ = server.kill();
+    let _ = server.wait();
+    let captured = std::fs::read_to_string(stdout_path).unwrap();
+    assert!(response.ends_with("request survived"), "{response:?}");
+    assert_eq!(captured.matches("TRACE:").count(), 1, "{captured:?}");
+    assert_eq!(captured.matches("preload caught").count(), 1, "{captured:?}");
+}
+
+/// A zero-argument preload owns an empty hidden collector before a caught exception captures it.
+#[test]
+fn the_web_preload_initializes_hidden_collector_before_caught_trace() {
+    let dir = make_test_dir("opcache_web_hidden_collector");
+    std::fs::write(dir.join("preload.php"), r#"<?php
+class PreloadTraceDefaults { public static ?string $value = null; }
+try { throw new RuntimeException('caught-preload'); }
+catch (Throwable $error) { echo $error->getMessage(), "\n"; }
+echo 'TRACE:', count(debug_backtrace()), "\n";
+"#).unwrap();
+    let bin = compile_web_with_flags(
+        &dir, "<?php echo 'ready';", "app",
+        &["--ini", &format!("opcache.preload={}", dir.join("preload.php").display())],
+    );
+    let addr = format!("127.0.0.1:{}", free_port());
+    let stdout_path = dir.join("server.out");
+    let mut server = spawn_server_with_stdout(&bin, &addr, &stdout_path);
+    let response = http_get(&addr, "/");
+    let _ = server.kill();
+    let _ = server.wait();
+    let captured = std::fs::read_to_string(&stdout_path).unwrap();
+    assert!(response.ends_with("ready"), "{response:?}");
+    assert_eq!(captured.matches("caught-preload").count(), 1, "{captured:?}");
+    assert!(captured.contains("TRACE:"), "{captured:?}");
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
 /// Verifies `scripts[…]['revalidate']` is the entry's OWN deadline, not `last_used + freq`.
 ///
 /// The two agree until the first warm hit and then part company: a hit moves `last_used`

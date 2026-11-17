@@ -1345,9 +1345,9 @@ fn emit_web_preload_startup(ctx: &mut FunctionContext<'_>) -> crate::codegen::Re
     super::block_emit::emit_static_property_initializers(ctx)?;
     ctx.emitter
         .comment("run opcache.preload once, before serving (php-src does this at startup)");
-    let symbol = crate::names::function_symbol(crate::web_prelude::PRELOAD_STARTUP_FN);
-    abi::emit_call_label(ctx.emitter, &symbol);
-    Ok(())
+    // The func_args pass can add a hidden collector even though the source wrapper has no
+    // parameters. Stage it through the normal PHP call ABI, including owner cleanup.
+    super::lower_inst::emit_synthetic_zero_arg_call(ctx, crate::web_prelude::PRELOAD_STARTUP_FN)
 }
 
 /// Emits the request-boundary call that performs a deferred `opcache_reset()`.

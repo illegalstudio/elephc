@@ -198,6 +198,7 @@ pub(super) use descriptor_metadata::{
 pub(super) use floats::{emit_fused_float_compare, float_branch_condition_suffix};
 pub(super) use direct_calls::{
     coerce_loaded_value_to_tagged_scalar, materialize_direct_call_args,
+    emit_synthetic_zero_arg_call,
 };
 pub(super) use instruction_helpers::instruction_strict_php_profile;
 pub(super) use iterators::{

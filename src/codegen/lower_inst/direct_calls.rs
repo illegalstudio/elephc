@@ -9,6 +9,36 @@
 
 use super::*;
 
+/// Calls a compiler-created zero-argument function with its physical hidden collector.
+pub(in crate::codegen) fn emit_synthetic_zero_arg_call(
+    ctx: &mut FunctionContext<'_>,
+    name: &str,
+) -> Result<()> {
+    let params = ctx.callable_function_by_name(name)
+        .ok_or_else(|| CodegenIrError::unsupported(format!("unknown synthetic function {name}")))?
+        .params.clone();
+    if !params.is_empty() && !(params.len() == 1
+        && params[0].name == crate::func_args::HIDDEN_ARGS_PARAM
+        && !params[0].by_ref
+        && params[0].php_type.codegen_repr() == PhpType::Array(Box::new(PhpType::Mixed)))
+    {
+        return Err(CodegenIrError::unsupported(format!(
+            "synthetic zero-argument call to {name} with unexpected physical parameters"
+        )));
+    }
+    let types = params.iter().map(|param| param.php_type.codegen_repr()).collect::<Vec<_>>();
+    let refs = vec![false; types.len()];
+    let call_args = materialize_direct_call_args_with_refs_and_borrowed_options_inner(
+        ctx, &[], &types, &refs, true, &[], RefArgCellLifetime::CallOnly, true,
+    )?;
+    let pad = direct_call_stack_pad_bytes(ctx, call_args.overflow_bytes);
+    abi::emit_reserve_temporary_stack(ctx.emitter, pad);
+    abi::emit_call_label(ctx.emitter, &function_symbol(name));
+    abi::emit_release_temporary_stack(ctx.emitter, pad + call_args.overflow_bytes);
+    emit_call_arg_temp_cleanups(ctx, &call_args, None)?;
+    emit_ref_arg_writebacks(ctx, &call_args)
+}
+
 /// Lowers a direct call to a module-local user function.
 pub(super) fn lower_direct_call(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     let function_name = ctx.function_name_data(expect_data(inst)?)?.to_string();
@@ -155,10 +185,28 @@ pub(super) fn materialize_direct_call_args_with_refs_and_borrowed_options(
     borrowed_stack_mixed_args: &[BorrowedStackMixedArg],
     ref_cell_lifetime: RefArgCellLifetime,
 ) -> Result<CallArgMaterialization> {
+    materialize_direct_call_args_with_refs_and_borrowed_options_inner(
+        ctx, args, param_types, ref_params, track_mixed_temp_cleanups,
+        borrowed_stack_mixed_args, ref_cell_lifetime, false,
+    )
+}
+
+/// Stages ordinary calls, allowing an empty collector only for a validated synthetic entry.
+fn materialize_direct_call_args_with_refs_and_borrowed_options_inner(
+    ctx: &mut FunctionContext<'_>,
+    args: &[ValueId],
+    param_types: &[PhpType],
+    ref_params: &[bool],
+    track_mixed_temp_cleanups: bool,
+    borrowed_stack_mixed_args: &[BorrowedStackMixedArg],
+    ref_cell_lifetime: RefArgCellLifetime,
+    allow_zero_collector: bool,
+) -> Result<CallArgMaterialization> {
     // See `reference_arguments::omits_only_hidden_collector`: an internal dispatcher may leave
     // out the trailing hidden collector, which is staged empty below.
     let omitted_collector = args.len() != param_types.len()
-        && super::reference_arguments::omits_only_hidden_collector(args.len(), param_types)
+        && (super::reference_arguments::omits_only_hidden_collector(args.len(), param_types)
+            || (allow_zero_collector && args.is_empty() && param_types.len() == 1))
         && !ref_params.last().copied().unwrap_or(false);
     if args.len() != param_types.len() && !omitted_collector {
         return Err(CodegenIrError::invalid_module(format!(
