@@ -624,6 +624,20 @@ fn closed_world_extract_and_closure_from_callable_run_natively_like_php() {
     assert_eq!(heap, "HEAP DEBUG: leak summary: clean");
 }
 
+const EXTRACT_INTO_REFERENCE: &str = r#"<?php
+$a = 1; $b = &$a; extract(['a' => 5]); echo $a, $b, "\n";
+function f() { $a = 1; $b = &$a; extract(['a' => 7]); echo $a, $b, "\n"; }
+f();
+"#;
+
+/// `extract()` writes through a local that is bound by reference: both names read the new value.
+#[test]
+fn closed_world_extract_writes_through_a_reference_bound_local() {
+    let (stdout, heap, dir) = closed_run("cw_extract_ref", EXTRACT_INTO_REFERENCE);
+    assert_eq!(stdout, php_stdout(&dir), "extract into a reference differs from php");
+    assert_eq!(heap, "HEAP DEBUG: leak summary: clean");
+}
+
 /// `Closure::fromCallable([$context, $name])` with a method name known only at run time -- Carbon's
 /// mixins and Laravel's `Component::createVariableFromMethod()` -- is an ARRAY literal, so it took
 /// the eval bridge and refused the closed world. It converts like a gradual value now, keeping the

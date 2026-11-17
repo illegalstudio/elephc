@@ -2023,7 +2023,8 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         std::mem::replace(&mut self.autoload_hook_active, active)
     }
 
-    /// Names of the frame's PHP locals, initialized or not, in slot order (reference-bound ones excluded).
+    /// Names of the frame's PHP locals, initialized or not, in slot order (reference-bound ones
+    /// included: assigning one writes through its reference, as php's `extract()` does).
     ///
     /// These are the variables a native `extract()` can create or overwrite: the frame's locals
     /// are all compiled, so the symbol table `extract()` writes into is known.
@@ -2036,7 +2037,6 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
                     && name.as_str() != "this"
                     && self.local_kinds.get(*name).copied().unwrap_or(LocalKind::PhpLocal)
                         == LocalKind::PhpLocal
-                    && !self.is_ref_bound_local(name.as_str())
             })
             .map(|(name, slot)| (slot.as_raw(), name.clone()))
             .collect::<Vec<_>>();
@@ -4626,6 +4626,14 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
     ) -> LocalSlotId {
         let slot = self.declare_local(name, self.local_type(name));
         let fallback_ty = self.builder.local_php_type(slot);
+        // A slot pre-declared as boxed Mixed (a closed-world `extract()` target) holds a box
+        // whatever the flow type last stored: the cell is created from that box, so every
+        // later read must unbox it instead of taking the cell's payload for the narrow type.
+        if fallback_ty.codegen_repr() == PhpType::Mixed
+            && self.local_type(name).codegen_repr() != PhpType::Mixed
+        {
+            self.set_local_type(name, PhpType::Mixed);
+        }
         let owner_slot = self.declare_ref_cell_owner(name, fallback_ty.clone());
         self.builder.emit_with_effects(
             Op::PromoteLocalRefCell,
@@ -4897,12 +4905,13 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         {
             self.promote_local_mixed_ref_cell(source, span);
         }
-        let source_ty = self.local_type(source);
         // `is_ref_bound_local` is intentionally conservative across lowered
         // branches, so a source marked by a conditional predecessor may still
         // be raw on another runtime path. An idempotent promotion here gives
         // every alias operation a cell on all incoming paths.
         self.promote_local_ref_cell(source, span);
+        // Read after the promotion: it fixes the type a boxed-Mixed slot's cell is read under.
+        let source_ty = self.local_type(source);
         self.clear_static_callable_local(target);
         self.forget_static_closures_capturing(target);
         self.clear_reflection_class_local(target);
