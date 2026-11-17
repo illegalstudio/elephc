@@ -195,3 +195,19 @@ var_dump(is_callable($a), is_callable($s), is_callable($v), is_callable(['V', 'z
         "bool(true)\nbool(true)\nbool(true)\nbool(true)\nbool(true)\nbool(false)\nbool(false)\nbool(true)\n"
     );
 }
+
+/// `var_dump()` hides only properties whose name STARTS with the compiler's cursor marker: a user
+/// property that merely contains it is an ordinary property and is printed.
+#[test]
+fn test_var_dump_keeps_user_properties_containing_the_cursor_marker() {
+    let out = compile_and_run(
+        r#"<?php
+class P { public $my__elephc_cursor_cache = 5; public $b = 1; }
+var_dump(new P);
+"#,
+    );
+    assert_eq!(
+        out,
+        "object(P)#1 (2) {\n  [\"my__elephc_cursor_cache\"]=>\n  int(5)\n  [\"b\"]=>\n  int(1)\n}\n"
+    );
+}

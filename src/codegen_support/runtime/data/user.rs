@@ -1733,7 +1733,7 @@ pub(crate) fn emit_runtime_data_user(
         // renderer that consults `__debugInfo` AND the only elephc renderer that
         // enumerates object properties at all.
         let mut vd_rows = var_dump_descriptor_rows(classes, class_info, class_name);
-        vd_rows.retain(|row| !row.plain_key.contains("__elephc_cursor_"));
+        vd_rows.retain(|row| !row.plain_key.starts_with("__elephc_cursor_"));
         if enums.contains_key(class_name.as_str()) {
             hoist_enum_name_row(&mut vd_rows);
         }
