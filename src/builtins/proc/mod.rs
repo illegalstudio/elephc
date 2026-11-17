@@ -15,8 +15,12 @@
 //!   iOS sandbox refusal must point at the user's call, not into the prelude.
 //! - Operands are boxed to `Mixed` before the helper call so php-src's TypeErrors and
 //!   ValueErrors live in one PHP implementation, exactly like GMP.
-//! - `proc_terminate()`/`proc_nice()` append the calling file's `strict_types` flag, which
-//!   their helpers' shared int coercion needs to throw php-src's strict-mode TypeError.
+//! - `proc_open()`/`proc_terminate()`/`proc_nice()` append the calling file's `strict_types`
+//!   flag, which their helpers need to throw php-src's strict-mode TypeErrors instead of
+//!   converting a scalar command, cwd, signal or priority.
+//! - The `Mixed` boxes the lowering creates are its own temporaries: the helper call parks
+//!   them in the unwind chain (`emit_user_call_owning`), so a caught helper exception
+//!   releases each once, while borrowed caller operands are never handed over.
 //! - `proc_open()` then calls `__elephc_proc_open_pipes($process, $previous)` and stores
 //!   its answer into the caller's `$pipes` with `store_operand_local`: the new pipes
 //!   array, or — when the spawn failed — the variable's previous value, so a failed call
@@ -174,9 +178,9 @@ fn lower(
         )
         .value
     });
-    // The int-coercing helpers take the calling file's `strict_types` (the GMP model), since
+    // The coercing helpers take the calling file's `strict_types` (the GMP model), since
     // `PreserveUncoerced` hands them the raw operand in either mode.
-    let strict = matches!(call.name, "proc_terminate" | "proc_nice").then(|| {
+    let strict = matches!(call.name, "proc_open" | "proc_terminate" | "proc_nice").then(|| {
         ctx.emit_value(
             Op::ConstBool,
             Vec::new(),
@@ -195,13 +199,13 @@ fn lower(
         .chain(strict)
         .collect();
     let helper = format!("__elephc_{}", call.name);
-    let result = ctx.emit_user_call(&helper, operands, call.result_type.clone(), Some(call.span));
+    let result = ctx.emit_user_call_owning(
+        &helper, operands, &boxes, call.result_type.clone(), Some(call.span),
+    );
     if let Some(target) = pipes_target {
-        let previous = boxed_operand(ctx, target, &mut boxes, call);
-        store_pipes(ctx, target, result.value, previous, call)?;
-    }
-    for boxed in boxes {
-        ctx.emit_void(Op::Release, vec![boxed], None, Op::Release.default_effects(), Some(call.span));
+        let mut previous_box = Vec::new();
+        let previous = boxed_operand(ctx, target, &mut previous_box, call);
+        store_pipes(ctx, target, result.value, previous, &previous_box, call)?;
     }
     Ok(result)
 }
@@ -242,17 +246,19 @@ fn boxed_operand(
 }
 
 /// Assigns `proc_open()`'s pipes array (or `$previous` after a failed spawn) to the
-/// caller's `$pipes`.
+/// caller's `$pipes`; `previous_box` is `$previous`'s lowering-owned box, if any.
 fn store_pipes(
     ctx: &mut dyn BuiltinLoweringContext,
     target: ValueId,
     process: ValueId,
     previous: ValueId,
+    previous_box: &[ValueId],
     call: &NormalizedBuiltinCall<'_>,
 ) -> Result<(), BuiltinLoweringError> {
-    let pipes = ctx.emit_user_call(
+    let pipes = ctx.emit_user_call_owning(
         OPEN_PIPES_HELPER,
         vec![process, previous],
+        previous_box,
         PhpType::Mixed,
         Some(call.span),
     );

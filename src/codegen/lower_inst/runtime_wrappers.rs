@@ -720,6 +720,59 @@ impl crate::builtins::semantics::BuiltinLoweringContext
         result
     }
 
+    /// Guards each lowering-owned box with the exception chain for the call (the surplus
+    /// collector's model), so a caught helper failure releases it; the normal path unguards
+    /// and releases it.
+    fn emit_user_call_owning(
+        &mut self,
+        name: &str,
+        operands: Vec<ValueId>,
+        owned: &[ValueId],
+        php_type: PhpType,
+        span: Option<crate::span::Span>,
+    ) -> crate::builtins::semantics::LoweredBuiltinValue {
+        let mut guards = Vec::new();
+        for value in owned {
+            let anchor = self.emit_value(
+                Op::ConstI64,
+                Vec::new(),
+                Some(Immediate::I64(0)),
+                PhpType::Int,
+                Op::ConstI64.default_effects(),
+                span,
+            );
+            let guard = self.emit_value(
+                Op::RuntimeCall,
+                vec![*value, anchor.value],
+                Some(Immediate::RuntimeCall(
+                    crate::ir::RuntimeCallTarget::ExceptionGuardOwned,
+                )),
+                PhpType::Int,
+                crate::ir::Effects::WRITES_GLOBAL,
+                span,
+            );
+            guards.push(guard.value);
+        }
+        let result = crate::builtins::semantics::BuiltinLoweringContext::emit_user_call(
+            self, name, operands, php_type, span,
+        );
+        for guard in guards.into_iter().rev() {
+            self.emit_void(
+                Op::RuntimeCall,
+                vec![guard],
+                Some(Immediate::RuntimeCall(
+                    crate::ir::RuntimeCallTarget::ExceptionUnguardOwned,
+                )),
+                crate::ir::Effects::WRITES_GLOBAL,
+                span,
+            );
+        }
+        for value in owned {
+            self.emit_void(Op::Release, vec![*value], None, Op::Release.default_effects(), span);
+        }
+        result
+    }
+
     /// A wrapper's operands are its own parameters, never a caller's locals, so there is
     /// no by-reference output to write; the composing builtin reports the failure.
     fn store_operand_local(

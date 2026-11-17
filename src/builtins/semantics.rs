@@ -380,6 +380,19 @@ pub trait BuiltinLoweringContext {
         span: Option<Span>,
     ) -> LoweredBuiltinValue;
 
+    /// Emits [`Self::emit_user_call`] for a lowering that created and owns `owned` (a subset
+    /// of `operands`, such as `Mixed` boxes): they are parked in the unwind chain for the
+    /// call, so a caught helper exception releases each exactly once, and released after
+    /// the call returns. Operands not listed stay borrowed from the caller.
+    fn emit_user_call_owning(
+        &mut self,
+        name: &str,
+        operands: Vec<ValueId>,
+        owned: &[ValueId],
+        php_type: PhpType,
+        span: Option<Span>,
+    ) -> LoweredBuiltinValue;
+
     /// Assigns `value` (typed `php_type`) to the PHP variable that `operand` was loaded
     /// from, with ordinary assignment ownership — PHP's write-only by-reference output
     /// semantics. Every variable storage kind is recognized (frame local, `static`,

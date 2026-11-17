@@ -11,6 +11,9 @@
 //!   staging answer of 1 is success, 0 a bridge failure whose php-src warning text(s)
 //!   `elephc_proc_last_error()` returns (joined by U+001F), 2 a staged file spec that
 //!   still warns (an unregistered wrapper), and -1 a failure already warned about here.
+//! - `__elephc_proc_open` converts an int/float/bool `$command` or `$cwd` to a string only
+//!   when its trailing `$strict` (the calling file's `strict_types`) is false; strict mode
+//!   throws php-src's TypeError before anything is spawned.
 //! - A stream spec must be a kind 0/1/3 resource with a real descriptor payload
 //!   (below the synthetic-wrapper base `0x40000000`).
 
@@ -174,6 +177,7 @@ pub(super) fn decl_fn_elephc_proc_open() -> Stmt {
         .param("env_vars", t_mixed())
         .param("options", t_mixed())
         .param("raw_streams", TypeExpr::Bool)
+        .param("strict", TypeExpr::Bool)
         .returns(t_mixed())
         .body(vec![
             s_if(
@@ -189,7 +193,7 @@ pub(super) fn decl_fn_elephc_proc_open() -> Stmt {
                     ),
                 ],
                 vec![
-                (e_binop(e_binop(e_call("is_int", vec![e_var("command")]), BinOp::Or, e_call("is_float", vec![e_var("command")])), BinOp::Or, e_call("is_bool", vec![e_var("command")])), vec![
+                (e_binop(e_not(e_var("strict")), BinOp::And, e_binop(e_binop(e_call("is_int", vec![e_var("command")]), BinOp::Or, e_call("is_float", vec![e_var("command")])), BinOp::Or, e_call("is_bool", vec![e_var("command")]))), vec![
                     s_assign("command", e_cast(CastType::String, e_var("command"))),
                 ]),
                 (e_not(e_call("is_string", vec![e_var("command")])), vec![
@@ -207,7 +211,7 @@ pub(super) fn decl_fn_elephc_proc_open() -> Stmt {
                 None,
             ),
             s_if(
-                e_binop(e_binop(e_call("is_int", vec![e_var("cwd")]), BinOp::Or, e_call("is_float", vec![e_var("cwd")])), BinOp::Or, e_call("is_bool", vec![e_var("cwd")])),
+                e_binop(e_not(e_var("strict")), BinOp::And, e_binop(e_binop(e_call("is_int", vec![e_var("cwd")]), BinOp::Or, e_call("is_float", vec![e_var("cwd")])), BinOp::Or, e_call("is_bool", vec![e_var("cwd")]))),
                 vec![
                     s_assign("cwd", e_cast(CastType::String, e_var("cwd"))),
                 ],
