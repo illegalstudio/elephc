@@ -17,8 +17,15 @@
 //! - The ring holds the most recent `RING_SLOTS` samples (~1 sample/ms of CPU
 //!   time); long runs keep the tail, which is what a probe window serves.
 
+pub mod apm;
 pub mod endpoint;
 pub mod handshake;
+pub mod push;
+pub mod resources;
+
+mod apm_runtime;
+pub use apm_runtime::{apm_snapshot_text, reset_routes};
+use apm_runtime::*;
 
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 
@@ -134,12 +141,53 @@ const SPEND_ATTEMPTS: usize = 3;
 /// than the one that served the original would otherwise meet a process that had
 /// never seen it.
 const REPLAY_TABLE_BYTES: usize = REPLAY_SLOTS * REPLAY_SLOT_BYTES;
-/// Shared-region byte size: the ring, then the route table, then the per-route
-/// event counters, then the control word, then the replay table. All offsets are
-/// derived from the sizes above, and the whole internal layout is inherited
-/// across a `--web` fork so route ids, counters, and replay state stay shared.
-const REGION_BYTES: usize =
+/// Transaction-table bytes: one row of `apm::ROUTE_WORDS` counters per route
+/// id, id 0 (untagged) included, filled only by a service started with `--apm`.
+///
+/// Appended after everything else so no existing offset moves. About half a
+/// megabyte of address space; an anonymous shared mapping only becomes resident
+/// where it is written, so a service that never counts pays nothing for it.
+const TXN_TABLE_BYTES: usize = EVENT_BUCKETS * apm::ROUTE_WORDS * 8;
+/// Byte offset of the transaction table inside the region.
+const TXN_TABLE_OFFSET: usize =
     RING_BYTES + ROUTE_TABLE_BYTES + EVENT_TABLE_BYTES + CONTROL_BYTES + REPLAY_TABLE_BYTES;
+/// Processes whose in-flight request the in-flight table can hold.
+///
+/// One row per serving process (prefork workers and isolated handler
+/// children); far above any worker count, small next to the region.
+const INFLIGHT_SLOTS: usize = 1024;
+/// Words per in-flight row: `[pid, state, start_ns, route_id]`, then the
+/// pending route label as `[len, bytes...]` in `ROUTE_SLOT_BYTES`, then the
+/// request's I/O while its route is pending (`INFLIGHT_IO_WORD`).
+const INFLIGHT_WORDS: usize = INFLIGHT_IO_WORD + apm::IO_KINDS;
+/// The in-flight row's first I/O word: work a request of a route the table
+/// has not seen yet did, kept where the master finds it should the process
+/// die before the route is known (review: it lived in the process alone).
+const INFLIGHT_IO_WORD: usize = 4 + ROUTE_SLOT_BYTES / 8;
+/// In-flight table bytes.
+const INFLIGHT_TABLE_BYTES: usize = INFLIGHT_SLOTS * INFLIGHT_WORDS * 8;
+/// Byte offset of the in-flight table inside the region.
+const INFLIGHT_TABLE_OFFSET: usize = TXN_TABLE_OFFSET + TXN_TABLE_BYTES;
+/// Byte offset of the new-route budget word (see `take_new_route_token`).
+const ROUTE_BUDGET_OFFSET: usize = INFLIGHT_TABLE_OFFSET + INFLIGHT_TABLE_BYTES;
+/// Byte offset of the route-table generation, bumped by every reset (see
+/// `apm_runtime::reset_routes`): a process whose route id predates it names
+/// its request again.
+const ROUTES_GENERATION_OFFSET: usize = ROUTE_BUDGET_OFFSET + 8;
+/// Byte offset of the ring ticket at the last route-table reset: samples taken
+/// before it carry ids of the old table, and are read without a route.
+const ROUTES_RESET_TICKET_OFFSET: usize = ROUTES_GENERATION_OFFSET + 8;
+/// Byte offset of the route-table gate (`apm_runtime::TableGate`): the
+/// processes using the table and whether a reset is emptying it.
+const ROUTES_GATE_OFFSET: usize = ROUTES_RESET_TICKET_OFFSET + 8;
+/// Shared-region byte size: the ring, then the route table, then the per-route
+/// event counters, then the control word, then the replay table, then the
+/// transaction table, then the in-flight table, then the new-route budget, the
+/// route-table generation, the reset ticket and the table gate. All offsets
+/// are derived from the sizes above, and the whole internal layout is
+/// inherited across a `--web` fork so route ids, counters, and replay state
+/// stay shared.
+const REGION_BYTES: usize = ROUTES_GATE_OFFSET + 8;
 
 /// The shared "someone asked" word, or `None` before the region is mapped.
 ///
@@ -273,10 +321,38 @@ fn event_window_active(base: usize) -> bool {
 ///
 /// Reached through a runtime slot because a remote ask is shared across worker
 /// processes and is therefore not represented by each worker's exact-capture word.
+///
+/// Under `--apm` it is always active: a request's queries and network calls are
+/// counted per route from boot, so the bridges have to time them from boot.
+///
+/// In a combined `--with-monitoring` build the exact profiler owns the event
+/// slots and drops every event outside its own capture, so a sampled window
+/// asking the bridges to time their calls would pay two clock reads per
+/// statement for nothing: there, only `--apm` says yes.
 #[no_mangle]
 pub extern "C" fn elephc_probe_event_active() -> u32 {
     let base = REGION.load(Ordering::Relaxed);
-    u32::from(base != 0 && event_window_active(base))
+    if base == 0 {
+        return 0;
+    }
+    if APM_ON.load(Ordering::Relaxed) {
+        return 1;
+    }
+    u32::from(!exact_runtime_owns_events() && event_window_active(base))
+}
+
+#[cfg(not(test))]
+extern "C" {
+    /// Runtime `.comm` slot the database bridges report statements through:
+    /// the probe's own `elephc_probe_note_io` in a probe-only build, the exact
+    /// profiler's in a combined one.
+    static elephc_instr_io_fn: usize;
+}
+
+/// Whether the exact profiler, not this probe, receives the bridges' events.
+fn exact_runtime_owns_events() -> bool {
+    let slot = unsafe { std::ptr::addr_of!(elephc_instr_io_fn).read() };
+    slot != 0 && slot != elephc_probe_note_io as extern "C" fn() as usize
 }
 
 /// I/O events are **not sampled**. A driver call fires exactly one, so these
@@ -301,10 +377,23 @@ fn note_event(word: usize, amount: u64) {
     if base == 0 || !event_window_active(base) {
         return;
     }
-    let route_id = CURRENT_ROUTE.load(Ordering::Relaxed) as usize;
+    let _gate = TableGate::enter(base);
+    let route_id = route_of_this_generation(base);
     if route_id < EVENT_BUCKETS {
         unsafe { event_word(base, route_id, word) }.fetch_add(amount, Ordering::Relaxed);
     }
+}
+
+/// The current request's route id, or 0 when it belongs to a route table the
+/// service has since reset: the id may name another route by now, and a
+/// sample or an event charged to it would be (review). Two loads, so the
+/// SIGPROF handler can call it.
+fn route_of_this_generation(base: usize) -> usize {
+    let generation = shared_word(base, ROUTES_GENERATION_OFFSET).load(Ordering::Acquire);
+    if generation != GENERATION_SEEN.load(Ordering::Relaxed) {
+        return 0;
+    }
+    CURRENT_ROUTE.load(Ordering::Relaxed)
 }
 
 /// Records one database operation against the request currently being served.
@@ -317,24 +406,28 @@ fn note_event(word: usize, amount: u64) {
 #[no_mangle]
 pub extern "C" fn elephc_probe_note_io() {
     note_event(0, 1);
+    note_apm_io(apm::IO_DB_OPS, 1);
 }
 
 /// Records nanoseconds blocked inside a driver call, against the current request.
 #[no_mangle]
 pub extern "C" fn elephc_probe_note_wait(ns: u64) {
     note_event(1, ns);
+    note_apm_io(apm::IO_DB_WAIT, ns);
 }
 
 /// Records one outgoing network operation against the current request.
 #[no_mangle]
 pub extern "C" fn elephc_probe_note_network() {
     note_event(2, 1);
+    note_apm_io(apm::IO_NET_OPS, 1);
 }
 
 /// Records nanoseconds blocked in an outgoing network operation.
 #[no_mangle]
 pub extern "C" fn elephc_probe_note_network_wait(ns: u64) {
     note_event(3, ns);
+    note_apm_io(apm::IO_NET_WAIT, ns);
 }
 
 /// Renders database and network event counters for every route that saw activity.
@@ -374,6 +467,7 @@ pub fn event_report(base: usize) -> String {
     }
     out
 }
+
 /// Sampling period, microseconds of CPU time between SIGPROF deliveries.
 const PERIOD_MICROS: i64 = 1000;
 
@@ -523,30 +617,17 @@ unsafe fn intern_route(route: &str) -> usize {
     // The route comes from an untrusted HTTP path. Neutralize the folded-format
     // metacharacters — `;` (frame separator), newlines (line separator) — and any
     // other control byte, so a crafted path cannot forge frames or profile lines.
-    let sanitized: String = route
-        .chars()
-        .map(|c| {
-            if c == ';' || c.is_control() {
-                '?'
-            } else {
-                c
-            }
-        })
-        .collect();
-    let mut name = sanitized.as_str();
-    if name.len() > ROUTE_NAME_MAX {
-        // Truncate on a char boundary so the stored name stays valid UTF-8.
-        let mut end = ROUTE_NAME_MAX;
-        while end > 0 && !name.is_char_boundary(end) {
-            end -= 1;
-        }
-        name = &name[..end];
-    }
+    //
+    // Borrowed when there is nothing to neutralize, which is every route a real
+    // application serves: under `--apm` this runs on every request, and copying
+    // a clean label just to compare it was the only allocation on that path.
+    let mut buffer = [0u8; ROUTE_NAME_MAX];
+    let name = route_key(route, &mut buffer);
     let count_ptr = (base + RING_BYTES) as *const std::sync::atomic::AtomicU64;
     let count = &*count_ptr;
     let existing = count.load(Ordering::Acquire) as usize;
     for index in 0..existing.min(OTHER_ROUTE_INDEX) {
-        if read_route_slot(base, index) == name {
+        if route_slot_holds(base, index, name.as_bytes()) {
             return index + 1;
         }
     }
@@ -566,6 +647,68 @@ unsafe fn intern_route(route: &str) -> usize {
     index + 1
 }
 
+/// The name a route is stored under: control bytes and `;` neutralized, and
+/// a name longer than a slot cut with a hash of the whole name appended.
+///
+/// Cut plainly, two endpoints sharing their first 63 bytes became one row,
+/// their counts and latencies merged. The hash keeps them apart and the
+/// prefix keeps them readable. Built in `out`, without allocating: under
+/// `--apm` this runs on every request.
+fn route_key<'a>(route: &str, out: &'a mut [u8; ROUTE_NAME_MAX]) -> &'a str {
+    let mut len = 0;
+    let mut hash: u32 = 0x811c_9dc5;
+    let mut truncated_at = None;
+    for c in route.chars() {
+        let c = if c == ';' || c.is_control() { '?' } else { c };
+        let mut utf8 = [0u8; 4];
+        let encoded = c.encode_utf8(&mut utf8).as_bytes();
+        for byte in encoded {
+            hash = (hash ^ u32::from(*byte)).wrapping_mul(0x0100_0193);
+        }
+        if truncated_at.is_none() {
+            if len + encoded.len() <= ROUTE_NAME_MAX {
+                out[len..len + encoded.len()].copy_from_slice(encoded);
+                len += encoded.len();
+            } else {
+                truncated_at = Some(len);
+            }
+        }
+    }
+    if truncated_at.is_some() {
+        // Room for `~` and eight hex digits, on a character boundary.
+        let mut keep = ROUTE_NAME_MAX - 9;
+        while keep > 0 && (out[keep] & 0xC0) == 0x80 {
+            keep -= 1;
+        }
+        out[keep] = b'~';
+        for (index, shift) in (0..8).rev().enumerate() {
+            let digit = ((hash >> (shift * 4)) & 0xF) as u8;
+            out[keep + 1 + index] = if digit < 10 { b'0' + digit } else { b'a' + digit - 10 };
+        }
+        len = keep + 9;
+    }
+    // Only whole characters and ASCII were written.
+    std::str::from_utf8(&out[..len]).unwrap_or("")
+}
+
+/// The id of a route already in the table, without interning it.
+///
+/// # Safety
+/// Valid only after the region is mapped.
+unsafe fn find_route(route: &str) -> Option<usize> {
+    let base = REGION.load(Ordering::Relaxed);
+    if base == 0 {
+        return None;
+    }
+    let mut buffer = [0u8; ROUTE_NAME_MAX];
+    let name = route_key(route, &mut buffer);
+    let count = &*((base + RING_BYTES) as *const AtomicU64);
+    let existing = (count.load(Ordering::Acquire) as usize).min(OTHER_ROUTE_INDEX);
+    (0..existing)
+        .find(|index| route_slot_holds(base, *index, name.as_bytes()))
+        .map(|index| index + 1)
+}
+
 /// Publishes the overflow bucket if it is not there yet and returns its id.
 ///
 /// Written lazily so a service whose routes fit the table never carries a row
@@ -575,7 +718,10 @@ unsafe fn intern_route(route: &str) -> usize {
 /// # Safety
 /// Valid only after the region is mapped.
 unsafe fn other_route_id(base: usize) -> usize {
-    if read_route_slot(base, OTHER_ROUTE_INDEX).is_empty() {
+    // The length byte alone says whether it is published; reading the name
+    // would allocate on every request once the table is full.
+    let slot = (base + RING_BYTES + 8 + OTHER_ROUTE_INDEX * ROUTE_SLOT_BYTES) as *const std::sync::atomic::AtomicU8;
+    if (*slot).load(Ordering::Acquire) == 0 {
         write_route_slot(base, OTHER_ROUTE_INDEX, OTHER_ROUTE_NAME.as_bytes());
     }
     OTHER_ROUTE_INDEX + 1
@@ -591,6 +737,19 @@ unsafe fn write_route_slot(base: usize, index: usize, name: &[u8]) {
     let len = name.len().min(ROUTE_NAME_MAX) as u8;
     std::ptr::copy_nonoverlapping(name.as_ptr(), slot.add(1), len as usize);
     (*(slot as *const std::sync::atomic::AtomicU8)).store(len, Ordering::Release);
+}
+
+/// Whether shared slot `index` holds exactly `name`, compared in place.
+///
+/// The lookup every tagged request makes. `read_route_slot` builds a `String`
+/// per slot it reads, which put up to 255 allocations on the request path of a
+/// service with a full table; this reads the length first and compares bytes
+/// only when it matches.
+unsafe fn route_slot_holds(base: usize, index: usize, name: &[u8]) -> bool {
+    let slot = (base + RING_BYTES + 8 + index * ROUTE_SLOT_BYTES) as *const u8;
+    let len = ((*(slot as *const std::sync::atomic::AtomicU8)).load(Ordering::Acquire) as usize)
+        .min(ROUTE_NAME_MAX);
+    len == name.len() && std::slice::from_raw_parts(slot.add(1), len) == name
 }
 
 /// Reads the route name from shared slot `index`. An empty (unpublished) slot
@@ -615,8 +774,20 @@ pub unsafe extern "C" fn elephc_probe_set_route(route: *const u8, len: usize) {
     // web bridges make on each request in the process that actually runs PHP, so
     // it is where a worker learns it was asked to sample after it forked.
     observe_shared_ask();
+    // Looks the route up and may intern it: not while a reset empties the table.
+    let _gate = TableGate::enter(REGION.load(Ordering::Relaxed));
     // Defensive: a bridge bug passing a wild length must not read out of bounds.
     if route.is_null() || len == 0 || len > 4096 {
+        // A request ending here was not recorded by this process (an isolated
+        // handler child: its web worker records it by name). The child settles
+        // its pending work first (`elephc_probe_settle_request`); whatever is
+        // still pending — a bridge without that slot — goes to the untagged
+        // row rather than nowhere.
+        let base = REGION.load(Ordering::Relaxed);
+        if base != 0 {
+            flush_pending_io(base, 0);
+            end_in_flight(base);
+        }
         CURRENT_ROUTE.store(0, Ordering::Relaxed);
         return;
     }
@@ -626,7 +797,15 @@ pub unsafe extern "C" fn elephc_probe_set_route(route: *const u8, len: usize) {
     // watching ends up unnamed. `observe_shared_ask` above is what makes this
     // flag true for a `--web` worker that forked before the ask arrived, so the
     // very first request after an operator connects is already tagged.
-    if !ASKED.load(Ordering::Relaxed) {
+    //
+    // A service started with `--apm` is the exception, by the operator's own
+    // choice: it counts every request from boot, and a count needs its route.
+    // Shaping keeps identifiers out of the table, and what still overflows is
+    // counted under `<other>` rather than lost.
+    let asked = ASKED.load(Ordering::Relaxed);
+    let apm = APM_ON.load(Ordering::Relaxed);
+    PENDING_LEN.store(0, Ordering::Relaxed);
+    if !asked && !apm {
         CURRENT_ROUTE.store(0, Ordering::Relaxed);
         return;
     }
@@ -635,8 +814,40 @@ pub unsafe extern "C" fn elephc_probe_set_route(route: *const u8, len: usize) {
         CURRENT_ROUTE.store(0, Ordering::Relaxed);
         return;
     };
-    let id = intern_route(text);
+    let id = if !apm {
+        // The table this id is looked up in, which samples check against.
+        let base = REGION.load(Ordering::Relaxed);
+        if base != 0 {
+            GENERATION_SEEN.store(shared_word(base, ROUTES_GENERATION_OFFSET).load(Ordering::Acquire), Ordering::Relaxed);
+        }
+        intern_route(text)
+    } else {
+        // Under `--apm`, asked or not: a known route is used at once; an
+        // unknown one waits for the request's outcome (see `PENDING_ROUTE`).
+        // Interning at the start whenever a profile had been asked turned the
+        // `<not found>` rule off for the rest of the service's life, since an
+        // ask is never withdrawn (review). The samples of an unseen route's
+        // first request are untagged; its row exists from its answer on.
+        //
+        // The label is remembered either way: should the route table be reset
+        // while the request runs, its id names nothing, and the request is
+        // named again from it (`rebase_after_reset`).
+        remember_route(text);
+        match find_route(text) {
+            Some(id) => id,
+            None => {
+                make_current_route_pending();
+                0
+            }
+        }
+    };
     CURRENT_ROUTE.store(id, Ordering::Relaxed);
+    if apm {
+        let base = REGION.load(Ordering::Relaxed);
+        if base != 0 {
+            begin_in_flight(base, id);
+        }
+    }
 }
 
 /// Resolves a route id to its interned name from the shared table.
@@ -670,13 +881,13 @@ unsafe fn route_name(id: usize) -> Option<String> {
 /// # Safety
 /// `context` must be the `ucontext_t` pointer SIGPROF delivered.
 unsafe fn interrupted_pc_fp(context: *mut libc::c_void) -> (u64, u64, u64) {
-    #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+    #[cfg(all(target_vendor = "apple", target_arch = "aarch64"))]
     {
         let context = context as *mut libc::ucontext_t;
         let state = &(*(*context).uc_mcontext).__ss;
         (state.__pc, state.__fp, state.__sp)
     }
-    #[cfg(all(target_os = "macos", target_arch = "x86_64"))]
+    #[cfg(all(target_vendor = "apple", target_arch = "x86_64"))]
     {
         let context = context as *mut libc::ucontext_t;
         let state = &(*(*context).uc_mcontext).__ss;
@@ -963,7 +1174,7 @@ extern "C" fn on_sigprof(
         std::sync::atomic::fence(Ordering::Release);
         // Slot layout: [depth, route_id, pc0, pc1, ...]. Stamp the active request
         // route so the dump can group samples by endpoint.
-        route_word.store(CURRENT_ROUTE.load(Ordering::Relaxed) as u64, Ordering::Relaxed);
+        route_word.store(route_of_this_generation(base) as u64, Ordering::Relaxed);
         // Allocations since the previous sample, charged to the stack this one
         // captures — sampled attribution, exactly like Go's heap profile. The
         // counter only grows, so a wrapped or reset read yields 0 rather than a
@@ -1002,6 +1213,88 @@ extern "C" fn on_sigprof(
     }
 }
 
+/// Maps the shared region, once: false when it could not be mapped, and the
+/// probe stays inert (REGION 0) rather than crash the process.
+///
+/// MAP_SHARED and before any --web fork: the mapping is inherited by every
+/// worker, so all workers' SIGPROF handlers fill one ring through the shared
+/// atomic head, and all of them count into one transaction table.
+/// Zero-filled by the kernel.
+unsafe fn map_region() -> bool {
+    if REGION.load(Ordering::Relaxed) != 0 {
+        return true;
+    }
+    #[cfg(target_os = "linux")]
+    let anon = libc::MAP_ANONYMOUS;
+    #[cfg(not(target_os = "linux"))]
+    let anon = libc::MAP_ANON;
+    let region = libc::mmap(
+        std::ptr::null_mut(),
+        REGION_BYTES,
+        libc::PROT_READ | libc::PROT_WRITE,
+        libc::MAP_SHARED | anon,
+        -1,
+        0,
+    );
+    if region == libc::MAP_FAILED {
+        return false;
+    }
+    REGION.store(region as usize, Ordering::Relaxed);
+    true
+}
+
+/// Starts transaction monitoring in a binary built with `--with-apm`: the
+/// shared region and the transaction table, without the sampler — no SIGPROF
+/// handler, no profiling timer, nothing a host application would not expect
+/// a library to do.
+///
+/// Called from main's prologue in an executable, and from `elephc_init` in a
+/// library. `collector` is the address `--apm-collector` baked into the
+/// build, or null: with one, counting starts at once and the counts are sent
+/// there (`push`); without one, a `--web` service still turns counting on
+/// with its own `--apm`. `enable` nonzero starts counting at once whatever
+/// the collector: a library's build option is its only switch, since nothing
+/// passes a library arguments (review). `ELEPHC_PROBE_ADDR` opens the
+/// endpoint a collector reads, exactly as in a `--with-monitoring` build.
+///
+/// # Safety
+/// `key` is null or the 32-byte build key; `collector` is null or a
+/// NUL-terminated string. Both live for the whole process.
+#[no_mangle]
+pub unsafe extern "C" fn elephc_probe_apm_init(key: *const u8, collector: *const libc::c_char, enable: u32) {
+    // A library's `elephc_init` may run more than once, and again after an
+    // `elephc_shutdown` stopped the sending thread: counting starts once,
+    // the sending thread whenever it is not running.
+    static STARTED: AtomicBool = AtomicBool::new(false);
+    let first = !STARTED.swap(true, Ordering::AcqRel);
+    if first {
+        KEY_PTR.store(key as usize, Ordering::Relaxed);
+    }
+    if !map_region() {
+        return;
+    }
+    if first && enable != 0 {
+        elephc_probe_apm_enable(0);
+    }
+    if !collector.is_null() && !key.is_null() {
+        if let Ok(address) = std::ffi::CStr::from_ptr(collector).to_str() {
+            if !address.is_empty() && (APM_ON.load(Ordering::Relaxed) || elephc_probe_apm_enable(0) == 1) {
+                push::spawn(address.to_string());
+            }
+        }
+    }
+    // The endpoint is a program's, never a library's: its listening thread
+    // could not be stopped before the host unloads the library (review). A
+    // library is followed through its collector.
+    if first && enable == 0 && !key.is_null() {
+        if let Ok(path) = std::env::var("ELEPHC_PROBE_ADDR") {
+            if !path.is_empty() {
+                endpoint::spawn(path);
+            }
+        }
+    }
+}
+
 /// Installs the SIGPROF handler and arms the profiling timer.
 ///
 /// `table`/`len` describe the compiler-embedded symbol table; the final entry
@@ -1020,26 +1313,9 @@ pub unsafe extern "C" fn elephc_probe_init(table: *const SymtabEntry, len: usize
     // a thousand times a second.
     record_program_text(table, len);
 
-    // Map the sample region MAP_SHARED before any --web fork: the mapping is
-    // inherited by every worker, so all workers' SIGPROF handlers fill one ring
-    // through the shared atomic head. Zero-filled by the kernel. If the map
-    // fails the probe stays inert (REGION 0) rather than crash the process.
-    #[cfg(target_os = "linux")]
-    let anon = libc::MAP_ANONYMOUS;
-    #[cfg(not(target_os = "linux"))]
-    let anon = libc::MAP_ANON;
-    let region = libc::mmap(
-        std::ptr::null_mut(),
-        REGION_BYTES,
-        libc::PROT_READ | libc::PROT_WRITE,
-        libc::MAP_SHARED | anon,
-        -1,
-        0,
-    );
-    if region == libc::MAP_FAILED {
+    if !map_region() {
         return;
     }
-    REGION.store(region as usize, Ordering::Relaxed);
 
     let mut action: libc::sigaction = std::mem::zeroed();
     // Cast through the fn-pointer type before usize, not the fn item directly.
@@ -1088,6 +1364,7 @@ pub unsafe extern "C" fn elephc_probe_init(table: *const SymtabEntry, len: usize
     if libc::sigaction(libc::SIGPROF, &action, std::ptr::null_mut()) != 0 {
         return;
     }
+    SAMPLER_INSTALLED.store(true, Ordering::Relaxed);
 
     // Embedded but dormant. `--with-monitoring` makes a binary CAPABLE of being
     // profiled; it must otherwise run — and cost — like any other binary, or the
@@ -1338,6 +1615,11 @@ pub(crate) fn begin_sampled() {
 /// Arms the CPU-time profiling timer at the sampling period. Idempotent and
 /// async-signal-safe (one `setitimer` syscall) — safe from a fork child.
 unsafe fn arm_timer() {
+    // A `--with-apm` binary installs no SIGPROF handler: arming the timer
+    // there would end the process at the first tick (the default action).
+    if !SAMPLER_INSTALLED.load(Ordering::Relaxed) {
+        return;
+    }
     let interval = libc::timeval {
         tv_sec: 0,
         tv_usec: PERIOD_MICROS as libc::suseconds_t,
@@ -1498,6 +1780,11 @@ fn should_arm(asked: bool, region: usize) -> bool {
 /// hook every fork in the tree.
 static ARMED_PID: std::sync::atomic::AtomicI32 = std::sync::atomic::AtomicI32::new(0);
 
+/// Whether `elephc_probe_init` installed the SIGPROF handler. False in a
+/// binary built with `--with-apm` alone, which counts transactions and never
+/// samples: nothing may arm the profiling timer there.
+static SAMPLER_INSTALLED: AtomicBool = AtomicBool::new(false);
+
 /// Set by `elephc_probe_disarm`: refuse to arm until someone asks again.
 ///
 /// Disarming exists for the moment before an `execve` that does not fork, where
@@ -1524,6 +1811,13 @@ fn allocs_charged(previous: u64, now: u64) -> u64 {
         return 0;
     }
     now.saturating_sub(previous)
+}
+
+/// Whether the sample of ring ticket `ticket` keeps its route, the route table
+/// having last been reset at ticket `reset_at`: an earlier sample's route id
+/// belongs to the old table.
+fn sample_keeps_route(ticket: u64, reset_at: u64) -> bool {
+    ticket >= reset_at
 }
 
 /// Whether a ring slot held still for the whole of a reader's pass over it.
@@ -2263,8 +2557,11 @@ unsafe fn folded_profile_with(cumulative: bool) -> Option<String> {
         // Prefix the request route as the outermost frame, so every consumer —
         // the table, the flamegraph, pprof — groups samples by endpoint for
         // free. Samples outside a request keep their plain stack.
+        // A sample taken before the route table was last reset carries an id
+        // of the old table, which may name another route now: no route.
         let route_id = region_word(base, index, 1).load(Ordering::Relaxed) as usize;
-        if let Some(route) = route_name(route_id) {
+        let reset_at = apm_runtime::shared_word(base, ROUTES_RESET_TICKET_OFFSET).load(Ordering::Acquire);
+        if let Some(route) = route_name(route_id).filter(|_| sample_keeps_route(ticket, reset_at)) {
             stack.insert(0, route);
         }
         let allocs = region_word(base, index, 2).load(Ordering::Relaxed);
@@ -2611,7 +2908,7 @@ mod tests {
     /// The route tests mutate the process-global `REGION`/`CURRENT_ROUTE`, so
     /// they must not run concurrently. A poisoned lock is recovered, not
     /// propagated, so one test's panic does not cascade.
-    static ROUTE_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    pub(crate) static ROUTE_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
     #[test]
     /// An address resolves to the symbol whose range contains it, and one past
@@ -3147,6 +3444,15 @@ mod tests {
             super::slot_seq_settled(first),
             super::slot_seq_settled(first)
         ));
+    }
+
+    /// A sample taken before the route table was reset is folded without a
+    /// route: its id belongs to the old table, and may name another route now.
+    #[test]
+    fn a_sample_from_before_a_route_reset_has_no_route() {
+        assert!(!super::sample_keeps_route(76, 77), "taken before the reset: its id is the old table's");
+        assert!(super::sample_keeps_route(77, 77), "the first ticket after it");
+        assert!(super::sample_keeps_route(5, 0), "no reset yet");
     }
 
     /// A slot is folded only when it held still for the whole read.
@@ -4163,3 +4469,11 @@ mod tests {
 
 #[cfg(test)]
 mod process_tests;
+
+#[cfg(test)]
+mod apm_runtime_tests;
+
+// The test binary has no compiled program to define the runtime slot.
+#[cfg(test)]
+#[no_mangle]
+static mut elephc_instr_io_fn: usize = 0;

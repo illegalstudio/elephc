@@ -77,6 +77,9 @@ pub fn emit_exit(emitter: &mut Emitter, code: u32) {
         (super::super::platform::Platform::MacOS, Arch::AArch64)
         | (super::super::platform::Platform::Linux, Arch::AArch64) => {
             emitter.instruction("bl __rt_ob_flush_all");                        // drain still-active output buffers to stdout before terminating
+            if emitter.exit_hook.is_some() {
+                emitter.instruction(&format!("mov x0, #{}", code));             // the exit hook is told the exit status
+            }
             emit_exit_hook(emitter);
             emitter.instruction(&format!("mov x0, #{}", code));                 // load the requested process exit code into the ABI return register
             emitter.syscall(1);
@@ -84,6 +87,9 @@ pub fn emit_exit(emitter: &mut Emitter, code: u32) {
         (super::super::platform::Platform::Linux, Arch::X86_64) => {
             emitter.instruction("and rsp, -16");                                // realign the stack for the flush call (this path never returns)
             emitter.instruction("call __rt_ob_flush_all");                      // drain still-active output buffers to stdout before terminating
+            if emitter.exit_hook.is_some() {
+                emitter.instruction(&format!("mov edi, {}", code));             // the exit hook is told the exit status
+            }
             emit_exit_hook(emitter);
             emitter.instruction(&format!("mov edi, {}", code));                 // load the requested process exit code into the SysV first-argument register
             emitter.instruction("mov eax, 231");                                // Linux x86_64 syscall 231 = exit_group
@@ -185,6 +191,9 @@ pub fn emit_exit_with_result_reg(emitter: &mut Emitter) {
         | (super::super::platform::Platform::Linux, Arch::AArch64) => {
             emitter.instruction("mov x19, x0");                                 // stash the exit code in a callee-saved register (this path never returns)
             emitter.instruction("bl __rt_ob_flush_all");                        // drain still-active output buffers to stdout before terminating
+            if emitter.exit_hook.is_some() {
+                emitter.instruction("mov x0, x19");                             // the exit hook is told the exit status (review: it was told whatever the flush left)
+            }
             emit_exit_hook(emitter);
             emitter.instruction("mov x0, x19");                                 // restore the exit code into the syscall argument register
             emitter.syscall(1);
@@ -193,6 +202,9 @@ pub fn emit_exit_with_result_reg(emitter: &mut Emitter) {
             emitter.instruction("mov rbx, rax");                                // stash the exit code in a callee-saved register (this path never returns)
             emitter.instruction("and rsp, -16");                                // realign the stack for the flush call (this path never returns)
             emitter.instruction("call __rt_ob_flush_all");                      // drain still-active output buffers to stdout before terminating
+            if emitter.exit_hook.is_some() {
+                emitter.instruction("mov edi, ebx");                            // the exit hook is told the exit status (review: it was told whatever the flush left)
+            }
             emit_exit_hook(emitter);
             emitter.instruction("mov edi, ebx");                                // move the stashed return value into the SysV exit argument register
             emitter.instruction("mov eax, 231");                                // Linux x86_64 syscall 231 = exit_group

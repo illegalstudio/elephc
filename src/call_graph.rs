@@ -22,7 +22,7 @@
 use std::fmt::Write as _;
 
 /// One function node of the call graph.
-#[derive(serde::Serialize, serde::Deserialize)]
+#[derive(serde::Serialize, serde::Deserialize, Clone)]
 pub(crate) struct GraphNode {
     /// PHP-level name (`{main}`, `Class::method`, `name (inlined)`).
     pub name: String,
@@ -68,7 +68,7 @@ pub(crate) struct GraphNode {
 }
 
 /// A caller → callee relation, weighted by samples that took it.
-#[derive(serde::Serialize, serde::Deserialize)]
+#[derive(serde::Serialize, serde::Deserialize, Clone)]
 pub(crate) struct GraphEdge {
     pub from: usize,
     pub to: usize,
@@ -92,6 +92,9 @@ pub(crate) struct TraceContext {
     /// the view falls back to comparing durations.
     #[serde(default)]
     pub start_us: Option<u64>,
+    /// The request's HTTP status, when the slice recorded one.
+    #[serde(default)]
+    pub status: Option<u16>,
     /// `METHOD /path` the request was routed to. Empty outside `--web`, where
     /// there is no route, and for captures taken before slices recorded one.
     #[serde(default)]
@@ -100,7 +103,7 @@ pub(crate) struct TraceContext {
 
 /// Per-line self cost over one PHP source file, recovered from sampled
 /// addresses via the dSYM. Sampled, not exact — see `monitor::line_profile`.
-#[derive(serde::Serialize, serde::Deserialize)]
+#[derive(serde::Serialize, serde::Deserialize, Clone)]
 pub(crate) struct SourceLines {
     pub file: String,
     pub source: Vec<String>,
@@ -127,7 +130,7 @@ pub(crate) struct SourceFunc {
 }
 
 /// An aggregated call graph ready to render.
-#[derive(serde::Serialize, serde::Deserialize)]
+#[derive(serde::Serialize, serde::Deserialize, Clone)]
 pub(crate) struct CallGraph {
     pub nodes: Vec<GraphNode>,
     pub edges: Vec<GraphEdge>,
@@ -433,16 +436,6 @@ pub(crate) fn render_html(graph: &CallGraph, title: &str) -> String {
     render_html_frames(&[(0, graph)], title, false, 0, false, &[])
 }
 
-/// Renders a single **exact** (`--instrument`) capture: same page, relabeled so
-/// the cost reads as measured time rather than a sample share.
-pub(crate) fn render_html_exact(
-    graph: &CallGraph,
-    title: &str,
-    asserts: &[AssertOutcome],
-) -> String {
-    render_html_frames(&[(0, graph)], title, false, 0, true, asserts)
-}
-
 /// Renders one or more capture frames as a self-contained interactive page.
 /// With ≥2 frames (or `live`), a bottom timeline navigator scrubs the frames and
 /// a diff mode highlights functions that grew hotter since the previous frame.
@@ -454,6 +447,38 @@ pub(crate) fn render_html_frames(
     window_secs: u32,
     exact: bool,
     asserts: &[AssertOutcome],
+) -> String {
+    render_html_page(frames, title, live, window_secs, exact, asserts, None)
+}
+
+/// The transactions view `monitor --apm` adds to the page: its styles, its
+/// panel and its script, with the data (`DATA.apm`) it draws from.
+pub(crate) struct ApmView {
+    /// `{ "mode": "live", ... }` for a page a collector serves, or
+    /// `{ "mode": "static", "all": ..., "routes": ... }` for an export.
+    pub data: serde_json::Value,
+}
+
+/// Styles of the transactions view.
+const APM_STYLE: &str = include_str!("monitor/apm/view/style.css");
+/// Markup of the transactions view and of the profile-capture prompt.
+const APM_PANEL: &str = include_str!("monitor/apm/view/panel.html");
+/// Script of the transactions view; it runs after the call-graph script.
+const APM_SCRIPT: &str = include_str!("monitor/apm/view/script.js");
+
+/// Renders the page, with the transactions view when `apm` is given.
+///
+/// One page for both, so profiling and monitoring share an entry point:
+/// without `--apm` the placeholders are removed and the page is the call graph
+/// it always was; with it, a Transactions/Profile switch joins the header.
+pub(crate) fn render_html_page(
+    frames: &[(u128, &CallGraph)],
+    title: &str,
+    live: bool,
+    window_secs: u32,
+    exact: bool,
+    asserts: &[AssertOutcome],
+    apm: Option<&ApmView>,
 ) -> String {
     let frames_json: Vec<serde_json::Value> = frames
         .iter()
@@ -563,7 +588,7 @@ pub(crate) fn render_html_frames(
             })
         })
         .collect();
-    let data = serde_json::json!({
+    let mut data = serde_json::json!({
         "title": title,
         "live": live,
         "exact": exact,
@@ -572,6 +597,9 @@ pub(crate) fn render_html_frames(
         "lines": lines_json,
         "asserts": asserts_json,
     });
+    if let Some(view) = apm {
+        data["apm"] = view.data.clone();
+    }
     // Neutralize `</script>` (and any `</…`) in embedded names: `\/` is a valid
     // JSON escape for `/`, so this stays parseable while it cannot close the tag.
     let data_json = serde_json::to_string(&data)
@@ -580,7 +608,14 @@ pub(crate) fn render_html_frames(
     // Title is developer-supplied (the target path); insert it first. The frame
     // data — which carries attacker-influenceable PHP names — is inserted last so
     // no later replace can touch it.
+    let (style, panel, script) = match apm {
+        Some(_) => (APM_STYLE, APM_PANEL, format!("<script>\n{APM_SCRIPT}</script>\n")),
+        None => ("", "", String::new()),
+    };
     TEMPLATE_HTML
+        .replace("__APM_STYLE__", style)
+        .replace("__APM_PANEL__", panel)
+        .replace("__APM_SCRIPT__", &script)
         .replace("__LOGO__", crate::brand::mark_data_uri())
         .replace("__TITLE__", &html_escape(title))
         .replace("__DATA_JSON__", &data_json)
@@ -942,20 +977,37 @@ body.resizing #stage, body.resizing #fnlist { pointer-events: none; }
   margin-left: .35rem; background: rgba(255,0,112,.13); color: var(--accent); font-variant-numeric: tabular-nums;
   vertical-align: middle; }
 #empty { color: var(--muted); font-size: .78rem; padding: 1rem .85rem; }
-/* Bottom-up detail: callers/callees of the selected function. */
-#detail { display: none; border-top: 1px solid var(--border); background: var(--panel);
-  max-height: 45%; overflow-y: auto; padding: .5rem .3rem .3rem; }
-#detail.show { display: block; }
-#detail .dh { font-size: .72rem; color: var(--muted); text-transform: uppercase; letter-spacing: .04em;
-  padding: .2rem .55rem; margin-top: .3rem; }
-#detail .dsel { font-size: .82rem; font-weight: 650; color: var(--ink); padding: 0 .55rem .1rem;
-  white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-#detail .drow { display: flex; justify-content: space-between; gap: .5rem; align-items: baseline;
-  padding: .28rem .55rem; border-radius: 6px; cursor: pointer; font-size: .8rem; }
-#detail .drow:hover { background: var(--hover); }
-#detail .drow .dn { min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: var(--ink); }
-#detail .drow .dc { color: var(--muted); font-variant-numeric: tabular-nums; flex: none; }
-#detail .dnone { color: var(--muted); font-size: .74rem; padding: .1rem .55rem; }
+/* The selected function opens in place, as in Blackfire: its row and a card
+   attached under it with its figures and its callers / callees. */
+.fnrow.sel.open { border-bottom-left-radius: 0; border-bottom-right-radius: 0; }
+.fndetail { list-style: none; margin: -1px 0 .35rem; padding: .55rem .55rem .45rem; background: var(--panel);
+  border: 1px solid var(--accent); border-top: 0; border-radius: 0 0 8px 8px; cursor: default; }
+.fndetail.hide { display: none; }
+.fndetail .fig { display: grid; grid-template-columns: 1fr auto auto; gap: .18rem .8rem; align-items: baseline;
+  font-size: .76rem; font-variant-numeric: tabular-nums; margin-bottom: .55rem; }
+.fndetail .fig .fh { font-size: .62rem; font-weight: 600; color: var(--muted); text-transform: uppercase;
+  letter-spacing: .05em; text-align: right; }
+.fndetail .fig .fh:first-child { text-align: left; }
+.fndetail .fig .fl { color: var(--muted); white-space: nowrap; }
+.fndetail .fig .fv { color: var(--ink); text-align: right; white-space: nowrap; }
+.fndetail .fig .fv.x { font-weight: 650; }
+.fndetail .dtabs { display: flex; align-items: center; gap: .4rem; margin-bottom: .35rem; }
+.fndetail .dseg { display: inline-flex; gap: 2px; padding: 2px; background: var(--bg); border: 1px solid var(--border);
+  border-radius: 7px; }
+.fndetail .dseg button { border: 0; background: transparent; color: var(--muted); cursor: pointer; border-radius: 5px;
+  padding: .18rem .5rem; font-size: .74rem; white-space: nowrap; font-variant-numeric: tabular-nums; }
+.fndetail .dseg button:hover:not(.on):not(:disabled) { background: var(--hover); color: var(--ink); }
+.fndetail .dseg button.on { background: var(--accent); color: #fff8f4; font-weight: 640; }
+.fndetail .dseg button:disabled { opacity: .45; cursor: default; }
+.fndetail .dgo { margin-left: auto; border: 1px solid var(--border); background: var(--bg); color: var(--ink);
+  border-radius: 6px; cursor: pointer; padding: .16rem .45rem; font-size: .72rem; white-space: nowrap; }
+.fndetail .dgo:hover { border-color: var(--accent); }
+.fndetail .drow { display: grid; grid-template-columns: 1fr auto; gap: .5rem; align-items: baseline;
+  padding: .26rem .4rem; border-radius: 6px; cursor: pointer; font-size: .78rem; }
+.fndetail .drow:hover { background: var(--hover); }
+.fndetail .drow .dn { min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: var(--ink); }
+.fndetail .drow .dc { color: var(--muted); font-variant-numeric: tabular-nums; }
+.fndetail .dnone { color: var(--muted); font-size: .74rem; padding: .2rem .4rem; }
 svg { width: 100%; height: 100%; display: block; }
 .edge { fill: none; stroke: var(--edge); stroke-width: 1; opacity: .5; }
 .edge.hi { stroke: var(--accent); stroke-width: 2; opacity: 1; }
@@ -1077,7 +1129,7 @@ select.htool { padding: .2rem .35rem; }
   .node.hotter rect { animation: hotpulse 1.2s ease-in-out infinite; }
 }
 @keyframes hotpulse { 0%, 100% { stroke-opacity: 1; } 50% { stroke-opacity: .4; } }
-</style>
+__APM_STYLE__</style>
 </head>
 <body>
 <header>
@@ -1097,13 +1149,12 @@ select.htool { padding: .2rem .35rem; }
 <aside id="sidebar">
   <div class="side-head"><span class="t">Functions</span><button id="groupbtn" data-tip="Group the list under its classes and namespaces">⊞</button><span class="sort" id="sortlabel"></span></div>
   <ul id="fnlist"></ul>
-  <div id="detail"></div>
 </aside>
 <div id="dragger" title="Drag to resize the list"></div>
 <div id="stage"><svg id="svg"><g id="viewport"></g></svg><div id="flame"></div><div id="sqlpanel"></div><div id="srcpanel"></div><div id="chkpanel"></div></div>
 <div id="tip"></div>
 <div id="htip" hidden></div>
-<div id="menu" hidden>
+__APM_PANEL__<div id="menu" hidden>
   <button id="resetbtn" class="mrow mfirst"><span class="mi">↺</span><span class="ml">Start over<em>Call graph, time, nothing selected or filtered</em></span><kbd>r</kbd></button>
   <div class="mh" id="mh-graph">Graph</div>
   <button id="fitbtn" class="mrow"><span class="mi">⤢</span><span class="ml">Fit in view<em>Frame it again if zoom or pan lost it</em></span><kbd>0</kbd></button>
@@ -1120,7 +1171,7 @@ select.htool { padding: .2rem .35rem; }
   <div class="mrow mstatic"><span class="mi">◐</span><span class="ml">Theme</span>
     <span class="mseg" id="themeseg"></span>
   </div>
-  <div class="mh">Help</div>
+  <div class="mh" id="mh-help">Help</div>
   <button id="helpbtn" class="mrow"><span class="mi">?</span><span class="ml">Keyboard shortcuts</span><kbd>?</kbd></button>
 </div>
 <div id="help" hidden><div class="card">
@@ -1139,10 +1190,136 @@ select.htool { padding: .2rem .35rem; }
 </div>
 <script>
 const DATA = __DATA_JSON__;
+// The page's chrome — theme, header hints, the ☰ menu — set up apart from the
+// call graph and before it. The graph script stops early on a page with no
+// profile yet (a monitor page before its first capture), and the menu and the
+// theme have to work there too.
+const PAGE = (function() {
+  // Theme is a reader preference, not a property of one capture, so it is
+  // stored per site rather than per page like the rest of the view state.
+  const THEME_KEY = 'elephc-callgraph:theme';
+  const hooks = { theme: [], menu: [] };
+  let graph = false;
+
+  // --- theme: follow the system, or force light / dark ---
+  // The palette already answers to `prefers-color-scheme`; this is the missing
+  // half, an explicit choice. `data-theme` on the root is what the token blocks
+  // key off, and it beats the media query in both directions.
+  const THEMES = [
+    { key: 'system', label: 'Auto',  tip: 'Follow the system setting' },
+    { key: 'light',  label: 'Light', tip: 'Always light' },
+    { key: 'dark',   label: 'Dark',  tip: 'Always dark' },
+  ];
+  const themeseg = document.getElementById('themeseg');
+  let themeIdx = 0;
+  const themeEls = THEMES.map((t, i) => {
+    const b = document.createElement('button');
+    b.textContent = t.label;
+    b.title = t.tip;
+    b.addEventListener('click', () => { themeIdx = i; applyTheme(); });
+    themeseg.appendChild(b);
+    return b;
+  });
+  function applyTheme() {
+    const t = THEMES[themeIdx];
+    if (t.key === 'system') document.documentElement.removeAttribute('data-theme');
+    else document.documentElement.setAttribute('data-theme', t.key);
+    themeEls.forEach((b, i) => b.classList.toggle('on', i === themeIdx));
+    // The ramp's cold end moved, so everything painted from it is restated.
+    hooks.theme.forEach(fn => fn());
+    try { localStorage.setItem(THEME_KEY, t.key); } catch (e) {}
+  }
+
+  // --- hover explanations for the header controls ---
+  const htip = document.getElementById('htip');
+  let htipFor = null;
+  // Named apart from the graph's own node tooltip (showTip/hideTip): two
+  // functions of the same name in one scope means the later one silently wins,
+  // which is how the node tooltips stopped working.
+  function showHint(el) {
+    const text = el.dataset.tip;
+    if (!text) return;
+    htipFor = el;
+    htip.textContent = text;
+    htip.hidden = false;
+    const r = el.getBoundingClientRect(), t = htip.getBoundingClientRect();
+    // Keep the bubble on screen, and point the arrow at the control even when
+    // the bubble had to slide sideways to fit.
+    let left = r.left + r.width / 2 - t.width / 2;
+    left = Math.max(6, Math.min(left, window.innerWidth - t.width - 6));
+    htip.style.left = left + 'px';
+    htip.style.top = (r.bottom + 7) + 'px';
+    htip.style.setProperty('--ax', (r.left + r.width / 2 - left) + 'px');
+  }
+  function hideHint() { htip.hidden = true; htipFor = null; }
+  // Delegated, so controls built later (the two segmented bars) are covered.
+  document.querySelector('header').addEventListener('mouseover', ev => {
+    const el = ev.target.closest('[data-tip]');
+    if (el) showHint(el); else hideHint();
+  });
+  document.querySelector('header').addEventListener('mouseleave', hideHint);
+  window.addEventListener('blur', hideHint);
+
+  // --- the overflow menu ---
+  const menu = document.getElementById('menu'), menubtn = document.getElementById('menubtn');
+  function menuOpen() { return !menu.hasAttribute('hidden'); }
+  function setMenu(on) {
+    menu.toggleAttribute('hidden', !on);
+    menubtn.classList.toggle('on', on);
+    if (!on) return;
+    hideHint();
+    // Anchored under the button, pulled left to stay on screen.
+    const r = menubtn.getBoundingClientRect(), m = menu.getBoundingClientRect();
+    menu.style.left = Math.max(6, Math.min(r.right - m.width, window.innerWidth - m.width - 6)) + 'px';
+    menu.style.top = (r.bottom + 6) + 'px';
+    hooks.menu.forEach(fn => fn());
+  }
+  menubtn.addEventListener('click', ev => { ev.stopPropagation(); setMenu(!menuOpen()); });
+  // A click inside acts and keeps the menu up, except for the one-shot actions.
+  menu.addEventListener('click', ev => {
+    if (ev.target.closest('#fitbtn, #helpbtn, #resetbtn')) setMenu(false);
+  });
+  document.addEventListener('click', ev => {
+    if (menuOpen() && !menu.contains(ev.target) && ev.target !== menubtn) setMenu(false);
+  });
+  // Following the system means following it as it changes, not only at load.
+  if (window.matchMedia) {
+    const mq = window.matchMedia('(prefers-color-scheme: dark)');
+    const onSystemTheme = () => { if (THEMES[themeIdx].key === 'system') applyTheme(); };
+    if (mq.addEventListener) mq.addEventListener('change', onSystemTheme);
+  }
+
+  // applyTheme reads THEMES and htip, so its first call sits after BOTH blocks
+  // have declared them — a `const` is unreachable before its declaration runs,
+  // and one such call throwing here would take the whole page's init with it.
+  try {
+    const savedTheme = localStorage.getItem(THEME_KEY);
+    const found = THEMES.findIndex(t => t.key === savedTheme);
+    if (found >= 0) themeIdx = found;
+  } catch (e) {}
+  applyTheme();
+
+  // Esc closes the menu; the graph's own key handler does it when it runs.
+  window.addEventListener('keydown', ev => {
+    if (!graph && ev.key === 'Escape' && menuOpen()) setMenu(false);
+  });
+  return {
+    menuOpen, setMenu,
+    graphReady() { graph = true; },
+    onTheme(fn) { hooks.theme.push(fn); },
+    onMenuOpen(fn) { hooks.menu.push(fn); },
+  };
+})();
 (function() {
   const FRAMES = DATA.frames || [];
   const metaEl = document.getElementById('meta');
-  if (!FRAMES.length || !FRAMES.some(f => f.nodes.length)) { metaEl.textContent = 'no samples'; return; }
+  if (!FRAMES.length || !FRAMES.some(f => f.nodes.length)) {
+    metaEl.textContent = 'no samples';
+    // Nothing to start over, frame or explain yet: the menu keeps the theme.
+    document.querySelectorAll('#resetbtn, #mh-graph, #fitbtn, #critbtn, #prunerow, #mh-help, #helpbtn')
+      .forEach(el => el.classList.add('off'));
+    return;
+  }
   if (DATA.exact) {
     const legend = document.getElementById('legend');
     if (legend) legend.textContent = 'Exact (--instrument) — pick a dimension above (or press m to cycle). Hotter = more of it.';
@@ -1158,7 +1335,6 @@ const DATA = __DATA_JSON__;
   const fnlist = document.getElementById('fnlist'), sortlabel = document.getElementById('sortlabel');
   const searchInput = document.getElementById('search'), dragger = document.getElementById('dragger');
   const critbtn = document.getElementById('critbtn'), pruneSel = document.getElementById('prune');
-  const detail = document.getElementById('detail');
   const flame = document.getElementById('flame'), flamebtn = document.getElementById('flamebtn');
   const sqlpanel = document.getElementById('sqlpanel'), sqlbtn = document.getElementById('sqlbtn');
   const groupbtn = document.getElementById('groupbtn');
@@ -1169,6 +1345,8 @@ const DATA = __DATA_JSON__;
   let NAMES, nameId, uEdge, EDGES, xy, nodeEls, edgeEls, frameNode, frameEdge;
   let cur = FRAMES.length - 1, diffOn = false, follow = DATA.live, reloadTimer = null, curNodes = null;
   let selected = -1, sbw = 0, critOn = false, pruneT = 0;
+  // Which list the open function shows, kept from one function to the next.
+  let detailTab = 'callees';
   let flameOn = false, flameRoot = -1, sqlOn = false, grouped = false, srcOn = false, chkOn = false;
   const collapsed = new Set();
   const LINES = DATA.lines || null;
@@ -1540,7 +1718,7 @@ const DATA = __DATA_JSON__;
     NAMES.forEach((name, v) => { const n = fN.get(name); if (n) rows.push({ name, v, n }); });
     rows.sort((a, b) => nodeShare(b.n) - nodeShare(a.n));
     fnlist.textContent = '';
-    if (!rows.length) { const d = document.createElement('li'); d.id = 'empty'; d.textContent = 'no functions'; fnlist.appendChild(d); buildDetail(); return; }
+    if (!rows.length) { const d = document.createElement('li'); d.id = 'empty'; d.textContent = 'no functions'; fnlist.appendChild(d); return; }
     const makeRow = r => {
       const n = r.n, share = nodeShare(n);
       const li = document.createElement('li');
@@ -1553,7 +1731,9 @@ const DATA = __DATA_JSON__;
         '<span class="sw" style="background:' + heat(share) + '"></span>' +
         '<span class="nm"><span class="n">' + esc(r.name) + qb + '</span><span class="m2">' + sub + '</span></span>' +
         '<span class="val"><span class="pv">' + val + '</span><span class="mini"><i style="width:' + Math.min(100, share * 3) + '%"></i></span></span>';
-      li.addEventListener('click', () => selectNode(r.v, true));
+      if (r.v === selected) li.classList.add('open');
+      // A second click on the open function folds it.
+      li.addEventListener('click', () => { if (r.v === selected) clearSelection(); else selectNode(r.v, true); });
       return li;
     };
     if (grouped) {
@@ -1572,12 +1752,15 @@ const DATA = __DATA_JSON__;
           '</span><span class="gcount">' + g.rows.length + '</span>';
         h.addEventListener('click', () => { if (collapsed.has(g.key)) collapsed.delete(g.key); else collapsed.add(g.key); buildList(); });
         fnlist.appendChild(h);
-        if (!isColl) g.rows.forEach(r => { const li = makeRow(r); li.classList.add('ingroup'); fnlist.appendChild(li); });
+        if (!isColl) g.rows.forEach(r => { const li = makeRow(r); li.classList.add('ingroup'); fnlist.appendChild(li);
+          if (r.v === selected) fnlist.appendChild(detailItem(li)); });
       });
     } else {
-      rows.forEach(r => fnlist.appendChild(makeRow(r)));
+      rows.forEach(r => { const li = makeRow(r); fnlist.appendChild(li); if (r.v === selected) fnlist.appendChild(detailItem(li)); });
     }
-    buildDetail();
+    // A function picked in the graph opens where it sits in the list.
+    const open = fnlist.querySelector('.fnrow.open');
+    if (open) open.scrollIntoView({ block: 'nearest' });
   }
   // Class/namespace a function belongs to, for grouping ('' = global scope).
   function groupKey(name) {
@@ -1588,12 +1771,17 @@ const DATA = __DATA_JSON__;
     return '';
   }
 
-  // --- bottom-up detail: exact callers/callees of the selected function ---
-  // `pct` on each edge is the callee's inclusive time under that caller (as a
-  // % of the whole run) — a genuine per-edge attribution, shown beside the
-  // exact call count. Clicking a row walks the graph to that neighbour.
-  function buildDetail() {
-    if (selected < 0) { detail.className = ''; detail.textContent = ''; return; }
+  // --- the open function: its figures and its callers / callees ---
+  // As in Blackfire, the selected row opens in place: inclusive and exclusive
+  // cost in every dimension the capture has, then the callers or the callees,
+  // one button each. `pct` on an edge is the callee's inclusive time under that
+  // caller (a % of the whole run), shown beside the exact call count; clicking
+  // a neighbour opens it in turn.
+  function detailItem(row) {
+    const li = document.createElement('li');
+    li.className = 'fndetail' + (row.classList.contains('hide') ? ' hide' : '');
+    const n = frameNode[cur].get(NAMES[selected]);
+    if (!n) return li;
     const fE = frameEdge[cur];
     const callers = [], callees = [];
     EDGES.forEach(e => {
@@ -1604,24 +1792,54 @@ const DATA = __DATA_JSON__;
     });
     callers.sort((a, b) => (b.p || 0) - (a.p || 0));
     callees.sort((a, b) => (b.p || 0) - (a.p || 0));
-    const rowHtml = r => {
+    const total = (FRAMES[cur] && FRAMES[cur].total) || 0;
+    const timeOf = pct => DATA.exact && total ? fmtNs(Math.round(pct / 100 * total)) + ' · ' + pct.toFixed(1) + '%' : pct.toFixed(1) + '%';
+    const figures = [['Time', timeOf(n.incl), timeOf(n.excl)]];
+    if (hasMem) figures.push(['Allocations', fmtK(n.allocInclN || 0), fmtK(n.allocExclN || 0)]);
+    if (hasRet) figures.push(['Retained', fmtSigned(n.retInclN || 0), fmtSigned(n.retExclN || 0)]);
+    if (hasWait) figures.push(['Wait', fmtNs(n.waitInclN || 0), fmtNs(n.waitExclN || 0)]);
+    if (hasIo) figures.push(['SQL queries', '' + (n.ioInclN || 0), '' + (n.ioExclN || 0)]);
+    if (hasNetwork) figures.push(['Network ops', '' + (n.networkInclN || 0), '' + (n.networkExclN || 0)]);
+    if (hasNetworkWait) figures.push(['Network wait', fmtNs(n.networkWaitInclN || 0), fmtNs(n.networkWaitExclN || 0)]);
+    if (n.calls != null) figures.push(['Calls', fmtK(n.calls), '']);
+    let html = '<div class="fig"><span class="fh"></span><span class="fh">Incl.</span><span class="fh">Excl.</span>' +
+      figures.map(([label, incl, excl]) => '<span class="fl">' + label + '</span><span class="fv">' + incl +
+        '</span><span class="fv x">' + excl + '</span>').join('') + '</div>';
+    // Callees first when there are any: the usual question is "where does it go".
+    const tab = detailTab === 'callers' ? (callers.length || !callees.length ? 'callers' : 'callees')
+      : (callees.length || !callers.length ? 'callees' : 'callers');
+    html += '<div class="dtabs"><span class="dseg">' +
+      '<button type="button" data-tab="callers" class="' + (tab === 'callers' ? 'on' : '') + '"' + (callers.length ? '' : ' disabled') +
+      '>Callers · ' + callers.length + '</button>' +
+      '<button type="button" data-tab="callees" class="' + (tab === 'callees' ? 'on' : '') + '"' + (callees.length ? '' : ' disabled') +
+      '>Callees · ' + callees.length + '</button></span>' +
+      '<button type="button" class="dgo" title="Center the graph on this function">⌖ In the graph</button></div>';
+    const list = tab === 'callers' ? callers : callees;
+    html += list.length ? list.map(r => {
       const bits = [];
       if (r.c != null) bits.push('×' + fmtK(r.c));
       if (DATA.exact && r.p != null) bits.push(r.p.toFixed(1) + '%');
-      return '<div class="drow" data-v="' + r.v + '"><span class="dn">' + esc(NAMES[r.v]) +
+      return '<div class="drow" data-v="' + r.v + '" title="' + escAttr(NAMES[r.v]) + '"><span class="dn">' + esc(NAMES[r.v]) +
         '</span><span class="dc">' + bits.join(' · ') + '</span></div>';
-    };
-    let html = '<div class="dsel" title="' + esc(NAMES[selected]) + '">' + esc(NAMES[selected]) + '</div>';
-    const section = (title, list) => {
-      html += '<div class="dh">' + title + '</div>';
-      html += list.length ? list.map(rowHtml).join('') : '<div class="dnone">— none —</div>';
-    };
-    section('Callers · ' + callers.length, callers);
-    section('Callees · ' + callees.length, callees);
-    detail.innerHTML = html;
-    detail.className = 'show';
-    detail.querySelectorAll('.drow').forEach(row =>
-      row.addEventListener('click', () => selectNode(+row.dataset.v, true)));
+    }).join('') : '<div class="dnone">' + (tab === 'callers' ? 'Called by nothing: an entry point.' : 'Calls nothing.') + '</div>';
+    li.innerHTML = html;
+    // Inside the card, clicks act on the card, not on the list behind it.
+    li.addEventListener('click', ev => ev.stopPropagation());
+    li.querySelectorAll('.dseg button').forEach(b => b.addEventListener('click', () => { detailTab = b.dataset.tab; buildList(); }));
+    li.querySelector('.dgo').addEventListener('click', () => {
+      // Back to the graph from whichever view is up, centred on the function.
+      if (flameOn) setFlame(false);
+      if (sqlOn) setSql(false);
+      if (srcOn) setSrc(false);
+      if (chkOn) setChk(false);
+      // Close enough to read it: a whole wide graph fitted on screen leaves
+      // every box a few pixels across. A view chosen by hand stays chosen.
+      if (scale < 1) scale = 1;
+      viewIsAuto = false;
+      selectNode(selected, true);
+    });
+    li.querySelectorAll('.drow').forEach(r => r.addEventListener('click', () => selectNode(+r.dataset.v, true)));
+    return li;
   }
 
   // --- flame graph (icicle) built from the exact inclusive-time tree ---
@@ -1671,7 +1889,7 @@ const DATA = __DATA_JSON__;
     cells.forEach(c => {
       const label = c.w * W > 34 ? esc(c.name) + '  ' + c.incl.toFixed(1) + '%' : '';
       html += '<div class="fcell' + (c.v === selected ? ' sel' : '') + '" data-v="' + c.v +
-        '" title="' + esc(c.name) + ' — incl ' + c.incl.toFixed(1) + '% · self ' + c.excl.toFixed(1) + '%"' +
+        '" title="' + escAttr(c.name) + ' — incl ' + c.incl.toFixed(1) + '% · self ' + c.excl.toFixed(1) + '%"' +
         ' style="left:' + (c.x * 100).toFixed(4) + '%;width:' + (c.w * 100).toFixed(4) + '%;top:' +
         (c.depth * ROWH) + 'px;background:' + heat(c.excl) + ';color:' + ink(c.excl) + '">' + label + '</div>';
     });
@@ -2042,107 +2260,17 @@ const DATA = __DATA_JSON__;
   buildMetricBar();
   buildViewBar();
 
-  // --- theme: follow the system, or force light / dark ---
-  // The palette already answers to `prefers-color-scheme`; this is the missing
-  // half, an explicit choice. `data-theme` on the root is what the token blocks
-  // key off, and it beats the media query in both directions.
-  const THEMES = [
-    { key: 'system', label: 'Auto',  tip: 'Follow the system setting' },
-    { key: 'light',  label: 'Light', tip: 'Always light' },
-    { key: 'dark',   label: 'Dark',  tip: 'Always dark' },
-  ];
-  const themeseg = document.getElementById('themeseg');
-  let themeIdx = 0;
-  const themeEls = THEMES.map((t, i) => {
-    const b = document.createElement('button');
-    b.textContent = t.label;
-    b.title = t.tip;
-    b.addEventListener('click', () => { themeIdx = i; applyTheme(); });
-    themeseg.appendChild(b);
-    return b;
-  });
-  function applyTheme() {
-    const t = THEMES[themeIdx];
-    if (t.key === 'system') document.documentElement.removeAttribute('data-theme');
-    else document.documentElement.setAttribute('data-theme', t.key);
-    themeEls.forEach((b, i) => b.classList.toggle('on', i === themeIdx));
-    // The ramp's cold end moved, so everything painted from it is restated.
-    if (typeof cur === 'number' && frameNode && frameNode[cur]) paint(cur);
-    try { localStorage.setItem(THEME_KEY, t.key); } catch (e) {}
-  }
-
-  // --- hover explanations for the header controls ---
-  const htip = document.getElementById('htip');
-  let htipFor = null;
-  // Named apart from the graph's own node tooltip (showTip/hideTip): two
-  // functions of the same name in one scope means the later one silently wins,
-  // which is how the node tooltips stopped working.
-  function showHint(el) {
-    const text = el.dataset.tip;
-    if (!text) return;
-    htipFor = el;
-    htip.textContent = text;
-    htip.hidden = false;
-    const r = el.getBoundingClientRect(), t = htip.getBoundingClientRect();
-    // Keep the bubble on screen, and point the arrow at the control even when
-    // the bubble had to slide sideways to fit.
-    let left = r.left + r.width / 2 - t.width / 2;
-    left = Math.max(6, Math.min(left, window.innerWidth - t.width - 6));
-    htip.style.left = left + 'px';
-    htip.style.top = (r.bottom + 7) + 'px';
-    htip.style.setProperty('--ax', (r.left + r.width / 2 - left) + 'px');
-  }
-  function hideHint() { htip.hidden = true; htipFor = null; }
-  // Delegated, so controls built later (the two segmented bars) are covered.
-  document.querySelector('header').addEventListener('mouseover', ev => {
-    const el = ev.target.closest('[data-tip]');
-    if (el) showHint(el); else hideHint();
-  });
-  document.querySelector('header').addEventListener('mouseleave', hideHint);
-  window.addEventListener('blur', hideHint);
-
-  // --- the overflow menu ---
-  const menu = document.getElementById('menu'), menubtn = document.getElementById('menubtn');
-  function menuOpen() { return !menu.hasAttribute('hidden'); }
-  function setMenu(on) {
-    menu.toggleAttribute('hidden', !on);
-    menubtn.classList.toggle('on', on);
-    if (!on) return;
-    hideHint();
-    // Anchored under the button, pulled left to stay on screen.
-    const r = menubtn.getBoundingClientRect(), m = menu.getBoundingClientRect();
-    menu.style.left = Math.max(6, Math.min(r.right - m.width, window.innerWidth - m.width - 6)) + 'px';
-    menu.style.top = (r.bottom + 6) + 'px';
-    syncMenu();
-  }
-  // Toggles keep their state visible here, since the header no longer shows it.
+  // --- the page's chrome (theme, header hints, the menu) is PAGE's, set up
+  // before this script so it works on a page with no profile. The graph hooks
+  // in: a theme change repaints it, and the menu shows its toggles' state.
+  PAGE.graphReady();
+  PAGE.onTheme(() => { if (typeof cur === 'number' && frameNode && frameNode[cur]) paint(cur); });
+  // Toggles keep their state visible in the menu, since the header no longer shows it.
   function syncMenu() {
     document.getElementById('critbtn').classList.toggle('on', critOn);
   }
-  menubtn.addEventListener('click', ev => { ev.stopPropagation(); setMenu(!menuOpen()); });
-  // A click inside acts and keeps the menu up, except for the one-shot actions.
-  menu.addEventListener('click', ev => {
-    if (ev.target.closest('#fitbtn, #helpbtn, #resetbtn')) setMenu(false);
-  });
-  document.addEventListener('click', ev => {
-    if (menuOpen() && !menu.contains(ev.target) && ev.target !== menubtn) setMenu(false);
-  });
-  // Following the system means following it as it changes, not only at load.
-  if (window.matchMedia) {
-    const mq = window.matchMedia('(prefers-color-scheme: dark)');
-    const onSystemTheme = () => { if (THEMES[themeIdx].key === 'system') applyTheme(); };
-    if (mq.addEventListener) mq.addEventListener('change', onSystemTheme);
-  }
-
-  // applyTheme reads THEMES and htip, so its first call sits after BOTH blocks
-  // have declared them — a `const` is unreachable before its declaration runs,
-  // and one such call throwing here would take the whole page's init with it.
-  try {
-    const savedTheme = localStorage.getItem(THEME_KEY);
-    const found = THEMES.findIndex(t => t.key === savedTheme);
-    if (found >= 0) themeIdx = found;
-  } catch (e) {}
-  applyTheme();
+  PAGE.onMenuOpen(syncMenu);
+  const setMenu = PAGE.setMenu, menuOpen = PAGE.menuOpen;
 
   // --- keyboard help ---
   // Listed only when the capture actually supports the shortcut, so the sheet
@@ -2329,10 +2457,14 @@ const DATA = __DATA_JSON__;
   });
 
   // --- persistence: survive a live reload/update without losing place ---
-  const STORE_KEY = 'elephc-callgraph:' + (DATA.title || '');
-  // Theme is a reader preference, not a property of one capture, so it is
-  // stored per site rather than per page like the rest of the view state.
-  const THEME_KEY = 'elephc-callgraph:theme';
+  // A captured request's profile (`monitor --apm --serve`, `/?trace=<id>`)
+  // carries the service's title too, but it is another graph: its pan and
+  // zoom restored onto the service's page — or the reverse — opened on a view
+  // that half-missed the graph. It gets a key of its own, the capture's id
+  // and time, since ids start over with a new collector.
+  const CAPTURE = DATA.apm && DATA.apm.trace;
+  const STORE_KEY = 'elephc-callgraph:' + (DATA.title || '') +
+    (CAPTURE ? ':trace:' + CAPTURE.id + ':' + CAPTURE.t : '');
   function save() { try { localStorage.setItem(STORE_KEY, JSON.stringify({follow: follow, diff: diffOn, metric: metric, sbw: sbw, crit: critOn, prune: pruneT, grouped: grouped, selTs: FRAMES[cur] ? FRAMES[cur].ts : 0, tx: tx, ty: ty, scale: scale})); } catch (e) {} writeHash(); }
   function load() { try { return JSON.parse(localStorage.getItem(STORE_KEY)) || {}; } catch (e) { return {}; } }
 
@@ -2350,15 +2482,22 @@ const DATA = __DATA_JSON__;
       else if (chkOn) p.push('v=chk');
       if (pruneT) p.push('pr=' + pruneT);
       if (critOn) p.push('c=1');
+      // The transactions view (monitor --apm) owns `a`, `ar` and `at`; keep them.
+      (location.hash || '').replace(/^#/, '').split('&').forEach(kv => { if (/^(a|ar|at)=/.test(kv)) p.push(kv); });
       const h = p.length ? '#' + p.join('&') : location.pathname + location.search;
       if (('#' + p.join('&')) !== location.hash) history.replaceState(null, '', h);
     } catch (e) {}
+  }
+  // A hand-edited link can carry a lone '%', which decodeURIComponent throws
+  // on; uncaught, it stopped the page's script before the graph was drawn.
+  function safeDecode(text) {
+    try { return decodeURIComponent(text); } catch (_) { return text; }
   }
   function readHash() {
     const out = {};
     (location.hash || '').replace(/^#/, '').split('&').forEach(kv => {
       if (!kv) return; const i = kv.indexOf('='); const k = i < 0 ? kv : kv.slice(0, i);
-      out[k] = i < 0 ? '' : decodeURIComponent(kv.slice(i + 1));
+      out[k] = i < 0 ? '' : safeDecode(kv.slice(i + 1));
     });
     return out;
   }
@@ -2408,7 +2547,7 @@ const DATA = __DATA_JSON__;
   if (hash.s && nameId.has(hash.s)) selectNode(nameId.get(hash.s), true);
 })();
 </script>
-</body>
+__APM_SCRIPT__</body>
 </html>
 "##;
 
@@ -2631,6 +2770,70 @@ mod tests {
         // Text stays readable at both ends of the ramp.
         assert_eq!(ink_for(0.0), "#201a17"); // dark ink over pale
         assert_eq!(ink_for(1.0), "#fff8f4"); // light ink over magenta
+    }
+
+    #[test]
+    /// A page with no profile yet — a monitor page before its first capture —
+    /// keeps its ☰ menu and its theme: they are wired in the `PAGE` block,
+    /// which runs before the graph script and the early return it takes when
+    /// there is nothing to draw, and that return hides only the menu rows a
+    /// profile is needed for.
+    fn the_page_chrome_is_wired_before_the_graph_script() {
+        let html = render_html(&sample_graph(), "demo");
+        let at = |needle: &str| html.find(needle).unwrap_or_else(|| panic!("missing `{needle}`"));
+        let page = at("const PAGE = (function()");
+        let graph = at("const FRAMES = DATA.frames || [];");
+        let empty = at("metaEl.textContent = 'no samples';");
+        for chrome in ["function applyTheme()", "menubtn.addEventListener('click'", "function setMenu(on)"] {
+            let found = at(chrome);
+            assert!(page < found && found < graph, "`{chrome}` must be wired before the graph script");
+        }
+        assert!(graph < empty, "the early return belongs to the graph script");
+        assert!(html.contains("'#resetbtn, #mh-graph, #fitbtn, #critbtn, #prunerow, #mh-help, #helpbtn'"));
+        assert!(html.contains("PAGE.graphReady();"), "the graph tells the page it runs");
+    }
+
+    #[test]
+    /// Selecting a function opens it in place in the list, Blackfire-style:
+    /// its figures, then Callers / Callees buttons; the bottom panel it
+    /// replaces is gone from the page.
+    fn a_selected_function_opens_in_place() {
+        let html = render_html(&sample_graph(), "demo");
+        assert!(html.contains("function detailItem(row)"));
+        assert!(html.contains(".fndetail {"), "the card is styled");
+        assert!(html.contains("'>Callers · '") && html.contains("'>Callees · '"));
+        assert!(html.contains("class=\"dgo\""), "the button that centres the graph");
+        assert!(!html.contains("id=\"detail\""), "the bottom panel is gone");
+        assert!(!html.contains("buildDetail"));
+    }
+
+    #[test]
+    /// A name in an attribute goes through `escAttr`, which escapes quotes:
+    /// `esc` leaves them, and a capture shared with `--baseline` could carry a
+    /// function named `x" onmouseover="…` that breaks out of a `title` built
+    /// with it (review G13). No attribute of the page is built with `esc`.
+    fn names_in_attributes_escape_their_quotes() {
+        let html = render_html(&sample_graph(), "demo");
+        for attribute in ["title", "data-v", "href", "alt", "value"] {
+            let needle = format!("{attribute}=\"' + esc(");
+            assert!(!html.contains(&needle), "`{attribute}` built with esc(), not escAttr()");
+        }
+        assert!(html.contains("title=\"' + escAttr(NAMES[r.v])"), "the neighbour rows of an open function");
+        assert!(html.contains("title=\"' + escAttr(c.name)"), "the flame cells");
+    }
+
+    #[test]
+    /// A lone `%` in a hand-edited link's fragment cannot stop a page's
+    /// script: `decodeURIComponent` throws on it, so every decode of the page
+    /// and of its Transactions view goes through `safeDecode` (review).
+    fn a_malformed_fragment_cannot_stop_the_page() {
+        let guarded = "try { return decodeURIComponent(text); }";
+        let page = render_html(&sample_graph(), "demo");
+        let view = include_str!("monitor/apm/view/script.js");
+        for (name, source) in [("page", page.as_str()), ("Transactions view", view)] {
+            assert_eq!(source.matches("decodeURIComponent(").count(), 1, "{name}: one decode, the guarded one");
+            assert!(source.contains(guarded) && source.contains(": safeDecode(kv.slice(i + 1))"), "{name}");
+        }
     }
 
     #[test]

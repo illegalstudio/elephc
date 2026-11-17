@@ -50,6 +50,7 @@ mod name_resolver;
 mod native_deps;
 mod names;
 mod numeric_string;
+mod apm_prelude;
 mod object_cast_prelude;
 mod opcache;
 mod opcache_prelude;

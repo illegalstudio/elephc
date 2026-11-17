@@ -34,6 +34,24 @@ extern "C" {
     /// Runtime `.comm` slot holding `elephc_probe_verify_query`, else zero —
     /// checks that a profiling request is signed by the build key.
     static elephc_probe_verify_fn: usize;
+    /// Runtime `.comm` slot holding `elephc_probe_apm_enable` under `--probe`,
+    /// else zero — turns transaction counting on for `--apm`.
+    static elephc_probe_apm_fn: usize;
+    /// Runtime `.comm` slot holding `elephc_probe_note_transaction` under
+    /// `--probe`, else zero — records one completed request.
+    static elephc_probe_txn_fn: usize;
+    /// Runtime `.comm` slot holding `elephc_probe_reap` under `--probe`, else
+    /// zero — counts the request a reaped worker died serving.
+    static elephc_probe_reap_fn: usize;
+    /// Runtime `.comm` slot holding `elephc_probe_settle_request` under
+    /// `--probe`, else zero — settles an isolated handler's pending work.
+    static elephc_probe_settle_fn: usize;
+    /// Runtime `.comm` slot holding `elephc_probe_request_begin` under
+    /// `--probe`, else zero — marks an isolated web worker's request in flight.
+    static elephc_probe_begin_fn: usize;
+    /// Runtime `.comm` slot holding `elephc_probe_request_end` under `--probe`,
+    /// else zero — ends that mark.
+    static elephc_probe_end_fn: usize;
 }
 
 type SetRouteFn = unsafe extern "C" fn(*const u8, usize);
@@ -41,6 +59,203 @@ type RearmFn = unsafe extern "C" fn();
 type TraceFn = unsafe extern "C" fn(*const u8, usize, *const u8, usize);
 type RequestFn = unsafe extern "C" fn(u32);
 type VerifyFn = unsafe extern "C" fn(*const u8, usize) -> u32;
+type ApmEnableFn = unsafe extern "C" fn(u32) -> u32;
+type TransactionFn = unsafe extern "C" fn(*const u8, usize, u32, u64);
+
+/// Whether this server counts its transactions (`--apm`).
+///
+/// Set once by the master before it forks, so every worker and handler child
+/// inherits it; read on every request to decide whether to take a clock reading
+/// at all. A service started without `--apm` therefore pays one relaxed load.
+static APM: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// Turns transaction counting on, for a server started with `--apm`.
+///
+/// Returns false when the binary cannot count — it was built without
+/// `--with-monitoring`, or its shared region failed to map — so the caller can
+/// refuse to start rather than serve as if monitored while recording nothing.
+///
+/// `workers_run_php` is true for `--web-isolation=worker`, where the master
+/// reaps the very processes that run requests and can count one that died
+/// mid-request.
+pub fn apm_enable(workers_run_php: bool) -> bool {
+    let addr = unsafe { std::ptr::addr_of!(elephc_probe_apm_fn).read() };
+    if addr == 0 {
+        return false;
+    }
+    let enable = unsafe { std::mem::transmute::<usize, ApmEnableFn>(addr) };
+    let on = unsafe { enable(u32::from(workers_run_php)) } != 0;
+    APM.store(on, std::sync::atomic::Ordering::Relaxed);
+    on
+}
+
+/// Records requests when the probe counts already: a binary built with
+/// `--apm-collector` counts from its first instruction and sends the counts,
+/// so a service started without `--apm` records too, rather than sending
+/// snapshots without a single request (review). False, and nothing turned
+/// on, otherwise.
+pub fn apm_follow(workers_run_php: bool) -> bool {
+    /// The probe's `APM_FOLLOW` flag.
+    const APM_FOLLOW: u32 = 2;
+    let addr = unsafe { std::ptr::addr_of!(elephc_probe_apm_fn).read() };
+    if addr == 0 {
+        return false;
+    }
+    let enable = unsafe { std::mem::transmute::<usize, ApmEnableFn>(addr) };
+    let on = unsafe { enable(u32::from(workers_run_php) | APM_FOLLOW) } != 0;
+    APM.store(on, std::sync::atomic::Ordering::Relaxed);
+    on
+}
+
+/// Whether requests should be timed and recorded.
+#[inline]
+pub fn apm_active() -> bool {
+    APM.load(std::sync::atomic::Ordering::Relaxed)
+}
+
+/// Tells the probe a worker process ended, so a request it was serving when
+/// it died is counted as a server error. A no-op without `--apm`.
+pub fn note_dead_worker(pid: i32) {
+    if !apm_active() {
+        return;
+    }
+    let addr = unsafe { std::ptr::addr_of!(elephc_probe_reap_fn).read() };
+    if addr == 0 {
+        return;
+    }
+    let reap = unsafe { std::mem::transmute::<usize, unsafe extern "C" fn(i32)>(addr) };
+    unsafe { reap(pid) };
+}
+
+/// A request an isolated web worker waits on, marked in flight in the probe so
+/// the master counts it as a server error should this web worker die before
+/// answering. Given back when dropped — answered, or abandoned because the
+/// client went away — so it never outlives its request.
+///
+/// A request the client abandons is counted as it goes, with
+/// `CLIENT_CLOSED_REQUEST`: hyper drops the request's future when the client
+/// closes the connection, so neither its answer nor its rejection was ever
+/// recorded, and it vanished from the counts while a prefork worker counts the
+/// same request (review).
+pub struct InFlight {
+    token: u64,
+    /// The route the request is counted under; empty for an inert mark.
+    route: String,
+    started: std::time::Instant,
+    answered: std::sync::atomic::AtomicBool,
+}
+
+/// The status a request the client abandoned is counted with, as nginx logs
+/// it: a 4xx, the client's doing.
+pub const CLIENT_CLOSED_REQUEST: u16 = 499;
+
+impl InFlight {
+    /// Marks the request as in flight under `route`; an inert mark without
+    /// `--apm` or without room in the probe's in-flight table.
+    pub fn begin(route: &str, started: std::time::Instant) -> Self {
+        let mut mark = Self { token: 0, route: String::new(), started, answered: std::sync::atomic::AtomicBool::new(false) };
+        if !apm_active() {
+            return mark;
+        }
+        mark.route = route.to_string();
+        let addr = unsafe { std::ptr::addr_of!(elephc_probe_begin_fn).read() };
+        if addr != 0 {
+            let begin = unsafe { std::mem::transmute::<usize, unsafe extern "C" fn(*const u8, usize) -> u64>(addr) };
+            mark.token = unsafe { begin(route.as_ptr(), route.len()) };
+        }
+        mark
+    }
+
+    /// Says the request is being counted, right before its answer is
+    /// recorded: a death from then on must not count it a second time.
+    pub fn answering(&self) {
+        self.answered.store(true, std::sync::atomic::Ordering::Relaxed);
+        self.end(1);
+    }
+
+    /// Calls the probe's `elephc_probe_request_end` with this mark's token.
+    fn end(&self, answering: u32) {
+        if self.token == 0 {
+            return;
+        }
+        let addr = unsafe { std::ptr::addr_of!(elephc_probe_end_fn).read() };
+        if addr != 0 {
+            let end = unsafe { std::mem::transmute::<usize, unsafe extern "C" fn(u64, u32)>(addr) };
+            unsafe { end(self.token, answering) };
+        }
+    }
+}
+
+impl Drop for InFlight {
+    /// Counts the request when nothing did — the client went away — and gives
+    /// the mark back.
+    fn drop(&mut self) {
+        if !self.route.is_empty() && !self.answered.load(std::sync::atomic::Ordering::Relaxed) {
+            self.answering();
+            note_transaction(Some(&self.route), CLIENT_CLOSED_REQUEST, self.started);
+        }
+        self.end(0);
+    }
+}
+
+/// Settles the work of a request this process ran but does not record — an
+/// isolated handler child, whose web worker records it by name — on the row
+/// that answer will be counted under. Call it before `clear`. A no-op without
+/// `--apm`.
+pub fn settle_request(status: u16) {
+    if !apm_active() {
+        return;
+    }
+    let addr = unsafe { std::ptr::addr_of!(elephc_probe_settle_fn).read() };
+    if addr == 0 {
+        return;
+    }
+    let settle = unsafe { std::mem::transmute::<usize, unsafe extern "C" fn(u32)>(addr) };
+    unsafe { settle(u32::from(status)) };
+}
+
+/// Records one completed request's status and wall time.
+///
+/// `route` is `None` for a request whose route `set` already stamped in this
+/// process — the common case, and a lookup-free one — and the shaped label for
+/// a request recorded elsewhere: one answered before PHP ran, or one whose PHP
+/// ran in an isolated handler child that stamped its own copy.
+pub fn note_transaction(route: Option<&str>, status: u16, started: std::time::Instant) {
+    if !apm_active() {
+        return;
+    }
+    let addr = unsafe { std::ptr::addr_of!(elephc_probe_txn_fn).read() };
+    if addr == 0 {
+        return;
+    }
+    let record = unsafe { std::mem::transmute::<usize, TransactionFn>(addr) };
+    let elapsed = u64::try_from(started.elapsed().as_nanos()).unwrap_or(u64::MAX);
+    let (ptr, len) = route.map_or((std::ptr::null(), 0), |route| (route.as_ptr(), route.len()));
+    unsafe { record(ptr, len, u32::from(status), elapsed) };
+}
+
+/// Flag on the status `elephc_probe_note_transaction` receives: the server
+/// answered before any PHP ran (a body too large or too slow), so the path
+/// says nothing about a route. Mirrors `ANSWERED_BEFORE_PHP` in the probe.
+const ANSWERED_BEFORE_PHP: u32 = 1 << 31;
+
+/// Records a request the server answered itself, before PHP ran: a 408 or a
+/// 413. Any client can send one for any path, so it keeps the row of a route
+/// the table already has and otherwise goes to one `<rejected>` row — it never
+/// adds a route (review: 255 oversized POSTs to made-up paths filled the
+/// table).
+pub fn note_rejected(route: &str, status: u16, started: std::time::Instant) {
+    if !apm_active() {
+        return;
+    }
+    let addr = unsafe { std::ptr::addr_of!(elephc_probe_txn_fn).read() };
+    if addr == 0 {
+        return;
+    }
+    let record = unsafe { std::mem::transmute::<usize, TransactionFn>(addr) };
+    let elapsed = u64::try_from(started.elapsed().as_nanos()).unwrap_or(u64::MAX);
+    unsafe { record(route.as_ptr(), route.len(), u32::from(status) | ANSWERED_BEFORE_PHP, elapsed) };
+}
 
 /// Whether the sampling probe is linked into this binary.
 ///
@@ -83,6 +298,11 @@ const SHAPE_HASH: &str = "{hash}";
 /// only of `a`–`f` letters would be collapsed.
 const HASH_MIN_LEN: usize = 12;
 
+/// The methods HTTP defines (RFC 9110, and PATCH from RFC 5789), kept as sent.
+const STANDARD_METHODS: [&str; 9] = ["GET", "HEAD", "POST", "PUT", "DELETE", "CONNECT", "OPTIONS", "TRACE", "PATCH"];
+/// What any other method token reads as in a label.
+const OTHER_METHOD: &str = "OTHER";
+
 /// Builds the label this request is profiled under: the method, then the path
 /// with its variable parts replaced by their shape.
 ///
@@ -106,7 +326,11 @@ const HASH_MIN_LEN: usize = 12;
 /// a table entry that merges two real endpoints reports a number that is true
 /// of neither, while one that fails to merge two ids costs a slot and is
 /// visible as such.
+///
+/// The method is the client's token, so one outside HTTP's standard set reads
+/// `OTHER`: every made-up token was otherwise a row of its own (review).
 pub fn route_label(method: &str, path: &str) -> String {
+    let method = if STANDARD_METHODS.contains(&method) { method } else { OTHER_METHOD };
     let mut label = String::with_capacity(method.len() + path.len() + 1);
     label.push_str(method);
     label.push(' ');
@@ -228,6 +452,12 @@ pub fn profile_request_kind(kind: u32) {
     unsafe { bracket(kind) };
 }
 
+/// Ends this request's profile, handing over its HTTP status so a captured
+/// slice says whether its request failed (`0` ends without one).
+pub fn profile_request_end(status: u16) {
+    profile_request_kind(u32::from(status) << 8);
+}
+
 /// Opens the exact profiler's trace context for this request from the
 /// inbound W3C `traceparent` (absent → a new trace is started). Pass the
 /// header value, or `None`. No-op unless `--instrument` filled the slot.
@@ -296,6 +526,18 @@ mod tests {
             "300 distinct URLs must not be 300 distinct routes"
         );
         assert_eq!(labels.iter().next().unwrap(), "GET /users/{id}");
+    }
+
+    /// The method is the client's token: one outside HTTP's set reads `OTHER`,
+    /// so made-up methods cannot each take a row (review); the standard ones
+    /// are kept as sent.
+    #[test]
+    fn made_up_methods_share_one_label() {
+        let labels: std::collections::BTreeSet<String> = (0..300).map(|n| route_label(&format!("M{n}X"), "/")).collect();
+        assert_eq!(labels.into_iter().collect::<Vec<_>>(), vec!["OTHER /".to_string()]);
+        for method in STANDARD_METHODS {
+            assert_eq!(route_label(method, "/a"), format!("{method} /a"));
+        }
     }
 
     /// Both web models build their label with this function.

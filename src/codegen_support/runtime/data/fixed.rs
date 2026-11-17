@@ -491,6 +491,33 @@ pub(crate) fn emit_runtime_data_fixed(
     // elephc_probe_verify_fn: verifies a signed X-Elephc-Query header against the
     // embedded build key, so turning profiling on stays a privileged act.
     out.push_str(&comm_directive(&target.extern_symbol("elephc_probe_verify_fn"), 8, target));
+    // elephc_probe_apm_fn / elephc_probe_txn_fn: filled with elephc_probe_apm_enable
+    // and elephc_probe_note_transaction under --probe. The --web master calls the
+    // first when started with --apm; every request then records its status and
+    // wall time through the second. Zero without the probe, so a server asked for
+    // --apm by a binary that cannot count refuses to start instead of reporting
+    // nothing.
+    out.push_str(&comm_directive(&target.extern_symbol("elephc_probe_apm_fn"), 8, target));
+    out.push_str(&comm_directive(&target.extern_symbol("elephc_probe_txn_fn"), 8, target));
+    // elephc_probe_apm_event_fn: filled with elephc_probe_apm_event under
+    // --probe; the exact runtime forwards database and network events through
+    // it, so --apm counts them per route in a combined build.
+    out.push_str(&comm_directive(&target.extern_symbol("elephc_probe_apm_event_fn"), 8, target));
+    // elephc_probe_reap_fn: filled with elephc_probe_reap under --probe; the
+    // --web master calls it for every worker it reaps, so a request that died
+    // with its worker is counted as a server error under --apm.
+    out.push_str(&comm_directive(&target.extern_symbol("elephc_probe_reap_fn"), 8, target));
+    // elephc_probe_settle_fn: filled with elephc_probe_settle_request under
+    // --probe; an isolated handler child calls it before clearing its route, so
+    // a new route's pending database and network work lands on the row its web
+    // worker counts the request under.
+    out.push_str(&comm_directive(&target.extern_symbol("elephc_probe_settle_fn"), 8, target));
+    // elephc_probe_begin_fn / elephc_probe_end_fn: filled with
+    // elephc_probe_request_begin / elephc_probe_request_end under --probe; an
+    // isolated web worker marks each request it waits on as in flight, so the
+    // master counts them as server errors should the web worker itself die.
+    out.push_str(&comm_directive(&target.extern_symbol("elephc_probe_begin_fn"), 8, target));
+    out.push_str(&comm_directive(&target.extern_symbol("elephc_probe_end_fn"), 8, target));
     // elephc_instr_throw_fn: filled with elephc_instr_throw under monitoring; the
     // single throw helper calls it so the profiler learns that an exception
     // unwound, and when. Without it the frames an exception passed through could

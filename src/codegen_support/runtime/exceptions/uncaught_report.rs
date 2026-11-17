@@ -197,6 +197,7 @@ pub fn emit_report_uncaught_exception(emitter: &mut Emitter) {
     emitter.instruction("cbz x10, __rt_uncaught_exit");                         // ordinary uncaught exception: the report is complete
     emitter.instruction("bl __rt_debuginfo_fatal_text");                        // PHP follows the warning with the `__debuginfo() must return an array` fatal
     emitter.label("__rt_uncaught_exit");
+    emitter.instruction(&format!("mov x0, #{}", UNCAUGHT_EXIT_STATUS));         // the exit hooks are told the exit status (transaction monitoring counts the run failed)
     emitter.instruction("bl __rt_run_exit_hook");                               // shut hosted PHP extensions down (RSHUTDOWN, MSHUTDOWN)
     emitter.instruction(&format!("mov x0, #{}", UNCAUGHT_EXIT_STATUS));         // PHP exits 255 for an uncaught exception
     emitter.syscall(1);
@@ -206,6 +207,7 @@ pub fn emit_report_uncaught_exception(emitter: &mut Emitter) {
     emitter.instruction(&format!("mov x2, #{}", UNCAUGHT_FALLBACK_LEN));        // the pre-existing constant message
     emitter.instruction("mov x0, #1");                                          // fd = stdout
     emitter.syscall(4);
+    emitter.instruction(&format!("mov x0, #{}", UNCAUGHT_EXIT_STATUS));         // the exit hooks are told the exit status (transaction monitoring counts the run failed)
     emitter.instruction("bl __rt_run_exit_hook");                               // shut hosted PHP extensions down (RSHUTDOWN, MSHUTDOWN)
     emitter.instruction(&format!("mov x0, #{}", UNCAUGHT_EXIT_STATUS));         // same status as the reporting path
     emitter.syscall(1);
@@ -442,6 +444,7 @@ pub fn emit_report_uncaught_exception(emitter: &mut Emitter) {
     emitter.instruction("mov x29, sp");                                         // establish the frame pointer
     emitter.instruction("bl __rt_ob_flush_all");                                // drain every open output buffer before the fatal is written
     emitter.instruction("bl __rt_debuginfo_fatal_text");                        // the fatal line with its location
+    emitter.instruction(&format!("mov x0, #{}", UNCAUGHT_EXIT_STATUS));         // the exit hooks are told the exit status (transaction monitoring counts the run failed)
     emitter.instruction("bl __rt_run_exit_hook");                               // shut hosted PHP extensions down (RSHUTDOWN, MSHUTDOWN)
     emitter.instruction(&format!("mov x0, #{}", UNCAUGHT_EXIT_STATUS));         // PHP exits 255 on a fatal error
     emitter.syscall(1);
@@ -573,6 +576,7 @@ fn emit_report_uncaught_exception_x86_64(emitter: &mut Emitter) {
     emitter.instruction("jz __rt_uncaught_exit");                               // ordinary uncaught exception: the report is complete
     emitter.instruction("call __rt_debuginfo_fatal_text");                      // PHP follows the warning with the `__debuginfo() must return an array` fatal
     emitter.label("__rt_uncaught_exit");
+    emitter.instruction(&format!("mov edi, {}", UNCAUGHT_EXIT_STATUS));         // the exit hooks are told the exit status (transaction monitoring counts the run failed)
     emitter.instruction("call __rt_run_exit_hook");                             // shut hosted PHP extensions down (RSHUTDOWN, MSHUTDOWN)
     emitter.instruction(&format!("mov edi, {}", UNCAUGHT_EXIT_STATUS));         // PHP exits 255 for an uncaught exception
     emitter.instruction("mov eax, 60");                                         // Linux x86_64 syscall 60 = exit
@@ -586,6 +590,7 @@ fn emit_report_uncaught_exception_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov eax, 1");                                          // syscall 1 = write
     emitter.instruction("syscall");                                             // write the constant fallback diagnostic to stdout
     emitter.instruction("and rsp, -16");                                        // align the stack for the exit hook (this path never returns)
+    emitter.instruction(&format!("mov edi, {}", UNCAUGHT_EXIT_STATUS));         // the exit hooks are told the exit status (transaction monitoring counts the run failed)
     emitter.instruction("call __rt_run_exit_hook");                             // shut hosted PHP extensions down (RSHUTDOWN, MSHUTDOWN)
     emitter.instruction(&format!("mov edi, {}", UNCAUGHT_EXIT_STATUS));         // same status as the reporting path
     emitter.instruction("mov eax, 60");                                         // syscall 60 = exit
@@ -829,6 +834,7 @@ fn emit_report_uncaught_exception_x86_64(emitter: &mut Emitter) {
     abi::emit_store_reg_to_symbol(emitter, "r10", "_ob_in_handler", 0);         // and output produced inside an ob_start() handler is no longer discarded
     emitter.instruction("call __rt_ob_flush_all");                              // drain every open output buffer before the fatal is written
     emitter.instruction("call __rt_debuginfo_fatal_text");                      // the fatal line with its location
+    emitter.instruction(&format!("mov edi, {}", UNCAUGHT_EXIT_STATUS));         // the exit hooks are told the exit status (transaction monitoring counts the run failed)
     emitter.instruction("call __rt_run_exit_hook");                             // shut hosted PHP extensions down (RSHUTDOWN, MSHUTDOWN)
     emitter.instruction(&format!("mov edi, {}", UNCAUGHT_EXIT_STATUS));         // PHP exits 255 on a fatal error
     emitter.instruction("mov eax, 60");                                         // Linux x86_64 syscall 60 = exit
@@ -951,7 +957,10 @@ mod tests {
         assert!(asm.contains("add x11, x11, x10, lsl #4"));
         assert!(asm.contains("ldr x1, [x19, #16]"));
         assert!(asm.contains("ldr x0, [x19, #8]"));
-        assert_eq!(asm.matches("mov x0, #255").count(), 3);
+        // Each exit loads the status twice: for the exit hook (transaction
+        // monitoring counts the run failed), then for the exit itself.
+        assert_eq!(asm.matches("mov x0, #255").count(), 6);
+        assert_hook_told_the_status(&asm, "bl __rt_run_exit_hook", "mov x0, #255");
         assert_eq!(asm.matches("mov x0, #2\n").count(), 0, "the report must not write to stderr");
     }
 
@@ -1014,8 +1023,24 @@ mod tests {
         assert!(asm.contains("shl r9, 4"));
         assert!(asm.contains("mov rdx, QWORD PTR [r12 + 16]"));
         assert!(asm.contains("mov rdi, QWORD PTR [r12 + 8]"));
-        assert_eq!(asm.matches("mov edi, 255").count(), 3);
+        // Each exit loads the status twice: for the exit hook (transaction
+        // monitoring counts the run failed), then for the exit itself.
+        assert_eq!(asm.matches("mov edi, 255").count(), 6);
+        assert_hook_told_the_status(&asm, "call __rt_run_exit_hook", "mov edi, 255");
         assert_eq!(asm.matches("mov edi, 2\n").count(), 0, "the report must not write to stderr");
+    }
+
+    /// Asserts every call of the exit hook comes right after the line loading
+    /// the exit status into its first argument.
+    fn assert_hook_told_the_status(asm: &str, call: &str, status: &str) {
+        let lines: Vec<&str> = asm.lines().collect();
+        // An instruction, not the `.globl` line (whose `bl` would match too).
+        let calls: Vec<usize> =
+            lines.iter().enumerate().filter(|(_, line)| line.trim_start().starts_with(call)).map(|(i, _)| i).collect();
+        assert_eq!(calls.len(), 3, "three exits call the hook:\n{asm}");
+        for index in calls {
+            assert!(index > 0 && lines[index - 1].contains(status), "the hook is told the status before line {index}:\n{asm}");
+        }
     }
 
     /// Verifies the x86_64 location suffix makes the same decisions, in SysV registers.

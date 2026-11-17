@@ -167,7 +167,13 @@ program you launch, a mutual handshake for one you connect to, a signed
 `X-Elephc-Query` header for a single production request. A project's performance
 budget lives in a `.elephc` file and fails the build when it is exceeded, and
 every profile carries a W3C Trace Context identity, so it joins whatever
-distributed trace its caller already belongs to. See
+distributed trace its caller already belongs to. A service started with `--apm`
+also counts every request per route, and `elephc monitor <addr> --apm` turns
+those counters into rates, latency percentiles, error shares and queries per
+request, with the service's CPU and memory, live, stored and charted; a consumer's
+messages, a library's export calls and any method named with `--apm-transaction`
+are transactions too, sent to a collector by builds made with `--with-apm`
+([Transaction monitoring](docs/beyond-php/apm.md)). See
 [Profiling](docs/beyond-php/profiling.md).
 
 The compiler is experimental and evolving. Not everything PHP supports is implemented, and you will find bugs. But as the DOOM showcase demonstrates, you can build real, non-trivial programs with it today.
@@ -328,6 +334,27 @@ elephc monitor --attach <pid> --live
 # Embed the profiling capability (dormant until asked); the .key sidecar it
 # writes lets `elephc monitor <host:port>` profile the service in production
 elephc --with-monitoring app.php
+
+# Transaction monitoring: a service started with --apm counts every request
+# per route; monitor --apm reads the table, keeps a history and serves the
+# monitor page with its Transactions view
+elephc --web --with-monitoring shop.php
+ELEPHC_PROBE_ADDR=127.0.0.1:9411 ./shop --listen 0.0.0.0:8080 --apm
+elephc monitor 127.0.0.1:9411 --apm --key shop.key --store /var/lib/shop-apm --serve 127.0.0.1:9000
+
+# Record each run of a script as a transaction in the same history
+elephc monitor bin/console --apm --store /var/lib/shop-apm -- app:import --force
+
+# Empty a running service's route table (the monitor page has the same action)
+elephc monitor 127.0.0.1:9411 --apm --reset-routes --key shop.key
+
+# Beyond HTTP: a consumer counts each Messenger message, a named method counts
+# each call, a library counts each call its host makes into an export; built
+# with --with-apm, they send their counters to a listening collector
+elephc --with-apm --apm-collector 10.0.0.5:9412 \
+    --apm-transaction 'App\Jobs\Importer::importBatch' bin/console.php
+elephc --emit staticlib --target ios-arm64 --with-apm --apm-collector 192.168.1.20:9412 Renderer.php
+elephc monitor --apm --listen 0.0.0.0:9412 --key console.key --store /var/lib/shop-apm
 
 # Embed exact per-function call counters (printed to stderr at exit)
 elephc --counters app.php

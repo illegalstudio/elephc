@@ -32,6 +32,7 @@ use crate::forwarded::{self, TrustedProxies};
 use crate::handler_broker::{BrokerMode, HandlerBroker, HandlerResponse, PrestartedBroker};
 use crate::handler_ipc::{HandlerRequest, ResponseFrame, MAX_REQUEST_BODY_BYTES};
 use crate::listener::{ListenSource, Listener};
+use crate::probe_route;
 use crate::session::upload_progress;
 
 /// Number of requests this worker has served, used by `--max-requests` recycling.
@@ -287,7 +288,9 @@ pub fn serve(source: ListenSource, handler: extern "C" fn(), cfg: WorkerConfig) 
                         let trusted = trusted.clone();
                         async move {
                     served_request.store(true, Ordering::Relaxed);
-                    let started = Instant::now();
+                    // Only the access log and `--apm` need the request clock,
+                    // as in the prefork worker (review).
+                    let started = (access_log || probe_route::apm_active()).then(Instant::now);
                     let method = req.method().as_str().to_string();
                     let uri = req.uri().to_string();
                     let path = req.uri().path().to_string();
@@ -295,6 +298,33 @@ pub fn serve(source: ListenSource, handler: extern "C" fn(), cfg: WorkerConfig) 
                     let protocol = format!("{:?}", req.version());
                     // Captured for the optional access log (method/path are moved into set_request).
                     let log_method_path = if access_log { Some((method.clone(), path.clone())) } else { None };
+                    // PHP runs in a handler child that stamps its own copy of the
+                    // route, so this process records the outcome by name.
+                    let apm_route = probe_route::apm_active()
+                        .then(|| probe_route::route_label(&method, &path));
+                    // In flight until answered, so the master counts it should
+                    // this web worker die first; given back however the future ends.
+                    let in_flight = apm_route
+                        .as_deref()
+                        .map(|route| probe_route::InFlight::begin(route, started.unwrap_or_else(Instant::now)));
+                    let record = |status: u16| {
+                        if let Some(route) = &apm_route {
+                            if let Some(mark) = &in_flight {
+                                mark.answering();
+                            }
+                            probe_route::note_transaction(Some(route), status, started.unwrap_or_else(Instant::now));
+                        }
+                    };
+                    // Answered by this server before any PHP ran: the path names
+                    // no route, so it must not add one.
+                    let reject = |status: u16| {
+                        if let Some(route) = &apm_route {
+                            if let Some(mark) = &in_flight {
+                                mark.answering();
+                            }
+                            probe_route::note_rejected(route, status, started.unwrap_or_else(Instant::now));
+                        }
+                    };
                     let accepts_gzip = gzip
                         && req.headers().get(hyper::header::ACCEPT_ENCODING).is_some_and(|v| {
                             v.to_str().map(|s| s.to_ascii_lowercase().contains("gzip")).unwrap_or(false)
@@ -345,10 +375,12 @@ pub fn serve(source: ListenSource, handler: extern "C" fn(), cfg: WorkerConfig) 
                         };
                         match collected {
                             Err(()) => {
+                                reject(408);
                                 return Ok::<_, Infallible>(fixed_response(408, b"Request Timeout"));
                             }
                             Ok(Ok(body)) => body,
                             Ok(Err(_)) => {
+                                reject(413);
                                 return Ok::<_, Infallible>(fixed_response(413, b"Payload Too Large"));
                             }
                         }
@@ -356,6 +388,7 @@ pub fn serve(source: ListenSource, handler: extern "C" fn(), cfg: WorkerConfig) 
                         Vec::new()
                     };
                     if body.len() > MAX_REQUEST_BODY_BYTES {
+                        reject(413);
                         return Ok::<_, Infallible>(fixed_response(413, b"Payload Too Large"));
                     }
                     let facts = forwarded::apply(&peer, &headers, &trusted);
@@ -385,6 +418,7 @@ pub fn serve(source: ListenSource, handler: extern "C" fn(), cfg: WorkerConfig) 
                         )
                         .await;
                     let status = handler_result.status;
+                    record(status);
                     let mut builder = Response::builder().status(status);
                     for (name, value) in handler_result.headers {
                         builder = builder.header(name, value);
@@ -406,7 +440,7 @@ pub fn serve(source: ListenSource, handler: extern "C" fn(), cfg: WorkerConfig) 
                             m,
                             p,
                             status,
-                            started.elapsed().as_millis()
+                            started.map_or(0, |started| started.elapsed().as_millis())
                         );
                     }
                     Ok::<_, Infallible>(response)

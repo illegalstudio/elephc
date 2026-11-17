@@ -1,0 +1,99 @@
+<section id="apm" aria-label="Transactions">
+  <aside class="apm-side" aria-label="Sections">
+    <div class="side-head"><span class="t">Sections</span><span class="sort" id="apm-side-span"></span></div>
+    <nav id="apm-nav">
+      <button type="button" class="navrow" data-section="apm-s-overview">
+        <span class="nm"><span class="n">Overview</span><span class="m2" id="apm-n-overview">Throughput, latency, errors</span></span>
+        <span class="val"><span class="pv" id="apm-v-overview">–</span></span>
+      </button>
+      <button type="button" class="navrow" data-section="apm-s-resources" id="apm-nav-resources" hidden>
+        <span class="nm"><span class="n">Resources</span><span class="m2" id="apm-n-resources">CPU and memory</span></span>
+        <span class="val"><span class="pv" id="apm-v-resources">–</span></span>
+      </button>
+      <button type="button" class="navrow" data-section="apm-s-transactions">
+        <span class="nm"><span class="n">Transactions</span><span class="m2" id="apm-n-transactions">Per route or script</span></span>
+        <span class="val"><span class="pv" id="apm-v-transactions">–</span></span>
+      </button>
+      <button type="button" class="navrow" data-section="apm-s-traces" id="apm-nav-traces" hidden>
+        <span class="nm"><span class="n">Slow and failed</span><span class="m2" id="apm-n-traces">Exact profiles kept</span></span>
+        <span class="val"><span class="pv" id="apm-v-traces">–</span></span>
+      </button>
+      <button type="button" class="navrow" data-section="apm-s-budgets" id="apm-nav-budgets" hidden>
+        <span class="nm"><span class="n">Budgets</span><span class="m2" id="apm-n-budgets">Alerts on the routes</span></span>
+        <span class="val"><span class="pv" id="apm-v-budgets">–</span></span>
+      </button>
+    </nav>
+  </aside>
+  <div class="apm-main" id="apm-main">
+  <div class="wrap">
+    <div class="bar">
+      <span class="status" id="apm-status"><i></i><b>connecting</b></span>
+      <div class="filter" id="apm-filter" hidden>
+        Route <code id="apm-filter-name"></code><button id="apm-clear" type="button">Show all routes</button>
+      </div>
+      <span class="grow"></span>
+      <div class="ranges" role="group" aria-label="Time range" id="apm-ranges">
+        <button data-range="300">5m</button>
+        <button data-range="900">15m</button>
+        <button data-range="3600">1h</button>
+        <button data-range="21600">6h</button>
+        <button data-range="86400">24h</button>
+        <button data-range="604800">7d</button>
+      </div>
+    </div>
+    <div class="banner" id="apm-banner"></div>
+    <section class="sec" id="apm-s-overview">
+      <section class="tiles">
+        <div class="tile"><div class="label" id="apm-k-rps-label">Throughput</div><div class="value" id="apm-k-rps">–</div><div class="sub" id="apm-k-rps-sub">&nbsp;</div></div>
+        <div class="tile"><div class="label">p95 latency</div><div class="value" id="apm-k-p95">–</div><div class="sub" id="apm-k-p95-sub">&nbsp;</div></div>
+        <div class="tile"><div class="label">Errors (5xx, failed runs)</div><div class="value" id="apm-k-5xx">–</div><div class="sub" id="apm-k-5xx-sub">&nbsp;</div></div>
+        <div class="tile"><div class="label">Mean latency</div><div class="value" id="apm-k-mean">–</div><div class="sub" id="apm-k-mean-sub">&nbsp;</div></div>
+      </section>
+      <section class="charts">
+        <div class="card"><h2>Throughput<span class="unit">per second</span></h2><div class="key"></div><div class="plot" id="apm-c-rps"></div></div>
+        <div class="card"><h2>Latency<span class="unit">percentiles</span></h2><div class="key" id="apm-l-lat"></div><div class="plot" id="apm-c-lat"></div></div>
+        <div class="card"><h2>Error rate<span class="unit">% of transactions</span></h2><div class="key" id="apm-l-err"></div><div class="plot" id="apm-c-err"></div></div>
+      </section>
+    </section>
+    <section class="sec" id="apm-s-resources">
+      <h3 class="sec-title">Resources<span class="sec-note" id="apm-res-note">the whole service: master, workers, handlers</span></h3>
+      <section class="charts two">
+        <div class="card"><h2>CPU<span class="unit" id="apm-u-cpu">% of all cores</span></h2><div class="key" id="apm-l-cpu"></div><div class="plot" id="apm-c-cpu"></div></div>
+        <div class="card"><h2>Memory<span class="unit">all processes</span></h2><div class="key" id="apm-l-mem"></div><div class="plot" id="apm-c-mem"></div></div>
+      </section>
+    </section>
+    <section class="sec card table-card" id="apm-s-transactions">
+      <h2>Transactions<span class="unit" id="apm-routes-unit">click a row to chart it alone</span>
+        <button id="apm-reset" type="button" class="reset" hidden title="Empty the service's route table: it fills again from the next requests">Reset the route table</button></h2>
+      <div class="kinds" id="apm-kinds" role="group" aria-label="Kinds of transaction" hidden></div>
+      <div class="table-wrap">
+        <table id="apm-routes">
+          <thead><tr>
+            <th data-key="route">Transaction</th><th data-key="n">Count</th><th data-key="rps">Rate</th>
+            <th data-key="mean_ns">Mean</th><th data-key="p50_ns">p50</th><th data-key="p95_ns">p95</th><th data-key="p99_ns">p99</th>
+            <th data-key="client_error_pct">4xx</th><th data-key="server_error_pct">5xx / failed</th>
+            <th data-key="queries_per_txn">Queries</th><th data-key="time_pct">Time share</th>
+          </tr></thead>
+          <tbody></tbody>
+          <tfoot></tfoot>
+        </table>
+      </div>
+    </section>
+    <section class="sec card table-card" id="apm-s-traces" hidden>
+      <h2>Slow and failed requests<span class="unit" id="apm-traces-unit"></span></h2>
+      <div class="table-wrap">
+        <table id="apm-traces">
+          <thead><tr><th>Route</th><th>Time</th><th>Status</th><th>Captured</th><th>Functions</th><th>Queries</th><th></th></tr></thead>
+          <tbody></tbody>
+        </table>
+      </div>
+    </section>
+    <section class="sec card" id="apm-s-budgets" hidden>
+      <h2>Budgets<span class="unit" id="apm-budgets-unit"></span></h2>
+      <div class="budgets" id="apm-budgets"></div>
+    </section>
+    <div class="note">Wall time from request head to handler return (scripts: the whole run). A script run that does not exit 0 counts as failed, with the 5xx. Percentiles are the upper edge of a latency bucket at most 12.5% wide. CPU is user plus system time of every process of the service; memory counts each page once, however many of its workers share it.</div>
+  </div>
+  </div>
+</section>
+<div id="apm-capture"><span id="apm-capture-text">Profile the service: sample its CPU for a few seconds.</span><button id="apm-capture-btn" type="button">Capture a profile</button></div>

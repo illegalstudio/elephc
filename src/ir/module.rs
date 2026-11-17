@@ -110,6 +110,9 @@ pub struct Module {
     /// can prove the binary's identity through the HMAC handshake. `None` unless
     /// `--probe` is set.
     pub probe_key: Option<[u8; 32]>,
+    /// `--apm-collector host:port`: where a `--with-apm` build sends its
+    /// transaction counters, embedded for `elephc_probe_apm_init`.
+    pub apm_collector: Option<String>,
     pub functions: Vec<Function>,
     pub class_methods: Vec<Function>,
     pub closures: Vec<Function>,
@@ -178,6 +181,7 @@ impl Module {
             mbstring_startup: None,
             included_files: Vec::new(),
             probe_key: None,
+            apm_collector: None,
             functions: Vec::new(),
             class_methods: Vec::new(),
             closures: Vec::new(),

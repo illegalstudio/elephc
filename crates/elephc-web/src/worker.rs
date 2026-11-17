@@ -314,10 +314,11 @@ fn serve_inner<const APPLICATION: bool>(source: ListenSource, handler: extern "C
                     // before the handler, so both phases see identical values and
                     // no request can inherit the prior request's session settings.
                     unsafe { crate::session::elephc_web_session_reset() };
-                    // Only the access log needs the request clock. Reading it on
-                    // every request costs a `mach_absolute_time`/vDSO call even
-                    // when no log line will be written.
-                    let started = access_log.then(Instant::now);
+                    // Only the access log and `--apm` need the request clock.
+                    // Reading it on every request costs a
+                    // `mach_absolute_time`/vDSO call even when nothing will
+                    // consume it.
+                    let started = (access_log || probe_route::apm_active()).then(Instant::now);
                     // Capture the request head once, as NUL-terminated strings the
                     // prelude getters can hand to PHP. `cstring` allocates once per
                     // value; the old `String` + `replace` + `CString` chain allocated
@@ -471,6 +472,13 @@ fn serve_inner<const APPLICATION: bool>(source: ListenSource, handler: extern "C
                         match collected {
                             Ok(Ok(b)) => b,
                             Err(()) => {
+                                // Answered before PHP ran, so no route was
+                                // stamped: name it here or the request is lost
+                                // from the route that timed out. A route the
+                                // table lacks is not added for it.
+                                if let Some(start) = started {
+                                    probe_route::note_rejected(&probe_route, 408, start);
+                                }
                                 let resp = Response::builder()
                                     .status(408)
                                     .header(hyper::header::CONNECTION, "close")
@@ -481,6 +489,9 @@ fn serve_inner<const APPLICATION: bool>(source: ListenSource, handler: extern "C
                                 return Ok::<_, Infallible>(resp);
                             }
                             Ok(Err(_)) => {
+                                if let Some(start) = started {
+                                    probe_route::note_rejected(&probe_route, 413, start);
+                                }
                                 let resp = Response::builder()
                                     .status(413)
                                     .body(Full::new(Bytes::from_static(b"Payload Too Large")))
@@ -541,9 +552,16 @@ fn serve_inner<const APPLICATION: bool>(source: ListenSource, handler: extern "C
                     // Unconditional and idempotent: a request that started no
                     // slice ends none, and consecutive profiled requests stay
                     // separate captures.
-                    probe_route::profile_request_kind(0);
-                    probe_route::clear();
                     let status = request_state::take_status();
+                    probe_route::profile_request_end(status);
+                    // Recorded while the route is still stamped, so the probe
+                    // charges it without a lookup. The wall time runs from the
+                    // request head to the handler's return: what this server
+                    // spent, before encoding the body for the client.
+                    if let Some(start) = started {
+                        probe_route::note_transaction(None, status, start);
+                    }
+                    probe_route::clear();
                     let mut resp_headers = request_state::take_headers();
                     // Propagate the session id through same-origin URLs / forms when
                     // `session.use_trans_sid` is active (no-op otherwise). Runs on the

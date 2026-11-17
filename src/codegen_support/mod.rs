@@ -8,6 +8,7 @@
 //! - Keeps this module as a narrow API surface; state and class-inventory logic live in dedicated modules.
 
 pub(crate) mod abi;
+pub(crate) mod apm_init;
 pub(crate) mod arrays;
 pub(crate) mod bcmath;
 pub(crate) mod callable_descriptor;
