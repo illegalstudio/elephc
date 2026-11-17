@@ -88,49 +88,6 @@ echo preg_last_error(), "\n";
     );
 }
 
-/// Eval keeps its own error state with the same codes, messages and `preg_grep()` result,
-/// including `false` (not a fatal) for an invalid `preg_grep()` pattern.
-#[test]
-fn test_preg_errors_grep_eval_parity() {
-    let out = compile_and_run_with_regex(r#"<?php
-$source = 'var_dump(preg_match("/./u", "\xff"));
-echo preg_last_error(), ":", preg_last_error_msg(), "|";
-preg_match("/a/", "a");
-echo preg_last_error(), ":", preg_last_error_msg(), "|";
-echo json_encode(preg_grep("/a/", ["k" => "a", "b", "ca"])), json_encode(preg_grep("/a/", ["a", "b"], PREG_GREP_INVERT)), "|";
-var_dump(preg_grep("/(/", []));
-echo preg_last_error(), "after|";
-echo PREG_BAD_UTF8_ERROR, PCRE_VERSION_MAJOR;' . ' // ' . $argc;
-eval($source);
-"#);
-    assert_eq!(
-        out,
-        "bool(false)\n4:Malformed UTF-8 characters, possibly incorrectly encoded|0:No error|{\"k\":\"a\",\"1\":\"ca\"}{\"1\":\"b\"}|bool(false)\n1after|410"
-    );
-}
-
-/// A nested `preg_*` error inside a `preg_replace_callback()` callback stays visible through
-/// `preg_last_error()` but does not fail the outer call, also when the last match ends at the
-/// subject's end, while the outer call's own match error still returns `null`; the same
-/// holds in eval.
-#[test]
-fn test_preg_replace_callback_keeps_nested_errors() {
-    let source = r#"var_dump(preg_replace_callback('/a/', function ($m) { preg_match('/./u', "\xff"); return 'B'; }, 'xax'));
-echo preg_last_error(), "\n";
-var_dump(preg_replace_callback('/a/', function ($m) { return preg_replace('/x/u', 'y', "\xff") === null ? 'N' : 'S'; }, 'zaz'));
-echo preg_last_error(), "\n";
-var_dump(preg_replace_callback('/a/u', function ($m) { preg_match('/a/', 'a'); return 'B'; }, "a\xff"));
-echo preg_last_error(), "\n";
-var_dump(preg_replace_callback('/a$/', function ($m) { preg_match('/./u', "\xff"); return 'B'; }, 'ba'));
-echo preg_last_error(), "\n";
-"#;
-    let expected = "string(3) \"xBx\"\n4\nstring(3) \"zNz\"\n4\nNULL\n4\nstring(2) \"bB\"\n4\n";
-    assert_eq!(compile_and_run(&format!("<?php\n{source}")), expected);
-    let quoted = source.replace('\\', "\\\\").replace('\'', "\\'");
-    let eval = compile_and_run_with_regex(&format!("<?php\neval('{quoted}' . ' // ' . $argc);\n"));
-    assert_eq!(eval, expected);
-}
-
 /// A backtrack-limit error after earlier matches releases the partial `preg_split()` pieces,
 /// the partial replacement strings, the capture arrays and the partial `preg_grep()` result.
 #[test]
@@ -193,25 +150,6 @@ var_dump(preg_match('/b/', 'a', $none), $none, preg_last_error());
     );
 }
 
-/// A positive `preg_split()` `$limit` stops matching once enough pieces are collected, so a
-/// match error past the limit neither fails the call nor sets `preg_last_error()`, in compiled
-/// code and in eval; the same split without room for the remainder still fails.
-#[test]
-fn test_preg_split_limit_skips_errors_past_the_limit() {
-    let source = r#"$s = 'x,' . str_repeat('a', 24) . 'b';
-echo json_encode(preg_split('/,|(a+)+$/', $s, 2)), preg_last_error(), "\n";
-echo json_encode(preg_split('/,|(a+)+$/', $s, 2, PREG_SPLIT_DELIM_CAPTURE)), preg_last_error(), "\n";
-var_dump(preg_split('/,|(a+)+$/', $s, 3));
-echo preg_last_error(), "\n";
-"#;
-    let rest = format!("\"{}b\"", "a".repeat(24));
-    let expected = format!("[\"x\",{rest}]0\n[\"x\",{rest}]0\nbool(false)\n2\n");
-    assert_eq!(compile_and_run(&format!("<?php\n{source}")), expected);
-    let quoted = source.replace('\\', "\\\\").replace('\'', "\\'");
-    let eval = compile_and_run_with_regex(&format!("<?php\neval('{quoted}' . ' // ' . $argc);\n"));
-    assert_eq!(eval, expected);
-}
-
 /// `preg_grep()` matches each entry as PHP's string conversion, in compiled code and in eval:
 /// an object runs its `__toString()` and keeps its object value, an object without one throws
 /// PHP's conversion `Error`, an array warns and matches as `"Array"`, and scalars use their
@@ -272,46 +210,104 @@ echo $caught, ':', count($kept), "\n";
     }
 }
 
-/// `preg_grep()` checks that the pattern compiles without matching it against a probe subject:
-/// a valid pattern that fails on `""` (`/a|(?R)/` loops on an empty subject) still filters its
-/// entries, a match error stops at the failing entry, an empty array runs no match and leaves
-/// no error, and only an invalid pattern returns `false`; the same holds in eval.
-#[test]
-fn test_preg_grep_compiles_the_pattern_without_a_probe_match() {
-    let source = r#"echo json_encode(preg_grep('/a|(?R)/', ['a'])), preg_last_error(), "\n";
+/// Wraps a fixture body in an `eval()` whose source is only known at runtime, so it runs
+/// through Magician rather than being compiled inline.
+fn opaque_eval(body: &str) -> String {
+    let quoted = body.replace('\\', "\\\\").replace('\'', "\\'");
+    format!("<?php\neval('{quoted}' . ' // ' . $argc);\n")
+}
+
+/// Fixture: a nested `preg_*` error inside a `preg_replace_callback()` callback stays visible
+/// through `preg_last_error()` but does not fail the outer call, also when the last match ends
+/// at the subject's end, while the outer call's own match error still returns `null`.
+const NESTED_CALLBACK_ERRORS: &str = r#"var_dump(preg_replace_callback('/a/', function ($m) { preg_match('/./u', "\xff"); return 'B'; }, 'xax'));
+echo preg_last_error(), "\n";
+var_dump(preg_replace_callback('/a/', function ($m) { return preg_replace('/x/u', 'y', "\xff") === null ? 'N' : 'S'; }, 'zaz'));
+echo preg_last_error(), "\n";
+var_dump(preg_replace_callback('/a/u', function ($m) { preg_match('/a/', 'a'); return 'B'; }, "a\xff"));
+echo preg_last_error(), "\n";
+var_dump(preg_replace_callback('/a$/', function ($m) { preg_match('/./u', "\xff"); return 'B'; }, 'ba'));
+echo preg_last_error(), "\n";
+"#;
+
+/// Fixture: a positive `preg_split()` `$limit` stops matching once enough pieces are collected,
+/// so a match error past the limit neither fails the call nor sets `preg_last_error()`; the
+/// same split without room for the remainder still fails.
+const SPLIT_LIMIT_ERRORS: &str = r#"$s = 'x,' . str_repeat('a', 24) . 'b';
+echo json_encode(preg_split('/,|(a+)+$/', $s, 2)), preg_last_error(), "\n";
+echo json_encode(preg_split('/,|(a+)+$/', $s, 2, PREG_SPLIT_DELIM_CAPTURE)), preg_last_error(), "\n";
+var_dump(preg_split('/,|(a+)+$/', $s, 3));
+echo preg_last_error(), "\n";
+"#;
+
+/// Fixture: `preg_grep()` checks that the pattern compiles without matching it against a probe
+/// subject: a valid pattern that fails on `""` (`/a|(?R)/` loops on an empty subject) still
+/// filters its entries, a match error stops at the failing entry, an empty array runs no match
+/// and leaves no error, and only an invalid pattern returns `false`.
+const GREP_PATTERN_CHECK: &str = r#"echo json_encode(preg_grep('/a|(?R)/', ['a'])), preg_last_error(), "\n";
 echo json_encode(preg_grep('/a|(?R)/', ['x' => 'a', 'k' => 'ba', 'y' => 'a'])), preg_last_error() === PREG_NO_ERROR ? 'ok' : 'error', "\n";
 echo json_encode(preg_grep('/a|(?R)/', [])), preg_last_error(), "\n";
 echo json_encode(preg_grep('/a/', [])), preg_last_error(), "\n";
 var_dump(preg_grep('/(/', []));
 echo preg_last_error(), "\n";
 "#;
-    let expected = "[\"a\"]0\n{\"x\":\"a\"}error\n[]0\n[]0\nbool(false)\n1\n";
-    let quoted = source.replace('\\', "\\\\").replace('\'', "\\'");
-    for program in [
-        format!("<?php\n{source}"),
-        format!("<?php\neval('{quoted}' . ' // ' . $argc);\n"),
-    ] {
-        let out = compile_and_run_capture_with_regex(&program);
-        assert!(out.success, "{}", out.stderr);
-        assert_eq!(out.stdout, expected, "{program}");
-    }
-}
 
-/// `preg_replace_callback()` interleaves its matches with the callbacks: a callback sees the
-/// error state of the matches before it, not a later match's backtrack-limit error, and a
-/// nested error a callback recorded stays visible to the next callback; in compiled code and
-/// in eval.
-#[test]
-fn test_preg_replace_callback_does_not_show_later_match_errors() {
-    let source = r#"$s = 'x,' . str_repeat('a', 24) . 'b';
+/// Fixture: `preg_replace_callback()` interleaves its matches with the callbacks: a callback
+/// sees the error state of the matches before it, not a later match's backtrack-limit error,
+/// and a nested error a callback recorded stays visible to the next callback.
+const CALLBACK_LATER_ERRORS: &str = r#"$s = 'x,' . str_repeat('a', 24) . 'b';
 var_dump(preg_replace_callback('/,|(a+)+$/', function ($m) { echo 'cb:', preg_last_error(), '|'; return '-'; }, $s));
 echo preg_last_error(), "\n";
 var_dump(preg_replace_callback('/,/', function ($m) { echo 'cb:', preg_last_error(), '|'; preg_match('/./u', "\xff"); return '-'; }, 'a,b,c'));
 echo preg_last_error(), "\n";
 "#;
-    let expected = "cb:0|NULL\n2\ncb:0|cb:4|string(5) \"a-b-c\"\n4\n";
-    assert_eq!(compile_and_run(&format!("<?php\n{source}")), expected);
-    let quoted = source.replace('\\', "\\\\").replace('\'', "\\'");
-    let eval = compile_and_run_with_regex(&format!("<?php\neval('{quoted}' . ' // ' . $argc);\n"));
-    assert_eq!(eval, expected);
+
+/// Fixture: eval's own error state reports the same codes, messages and `preg_grep()` results
+/// as compiled code, including `false` (not a fatal) for an invalid `preg_grep()` pattern.
+const EVAL_PARITY: &str = r#"<?php
+$source = 'var_dump(preg_match("/./u", "\xff"));
+echo preg_last_error(), ":", preg_last_error_msg(), "|";
+preg_match("/a/", "a");
+echo preg_last_error(), ":", preg_last_error_msg(), "|";
+echo json_encode(preg_grep("/a/", ["k" => "a", "b", "ca"])), json_encode(preg_grep("/a/", ["a", "b"], PREG_GREP_INVERT)), "|";
+var_dump(preg_grep("/(/", []));
+echo preg_last_error(), "after|";
+echo PREG_BAD_UTF8_ERROR, PCRE_VERSION_MAJOR;' . ' // ' . $argc;
+eval($source);
+"#;
+
+/// The stdout-only regex error fixtures, each in compiled code and through a runtime-built
+/// `eval()`, share one compile: every opaque eval lowers the whole builtin catalog.
+#[test]
+fn test_preg_errors_compiled_and_eval_bundle() {
+    let split_rest = r#""aaaaaaaaaaaaaaaaaaaaaaaab""#;
+    let split_expected = format!("[\"x\",{split_rest}]0\n[\"x\",{split_rest}]0\nbool(false)\n2\n");
+    let nested_expected = "string(3) \"xBx\"\n4\nstring(3) \"zNz\"\n4\nNULL\n4\nstring(2) \"bB\"\n4\n";
+    let grep_expected = "[\"a\"]0\n{\"x\":\"a\"}error\n[]0\n[]0\nbool(false)\n1\n";
+    let later_expected = "cb:0|NULL\n2\ncb:0|cb:4|string(5) \"a-b-c\"\n4\n";
+    let aot = |body: &str| format!("<?php\n{body}");
+    let sources = [
+        aot(NESTED_CALLBACK_ERRORS), opaque_eval(NESTED_CALLBACK_ERRORS),
+        aot(SPLIT_LIMIT_ERRORS), opaque_eval(SPLIT_LIMIT_ERRORS),
+        aot(GREP_PATTERN_CHECK), opaque_eval(GREP_PATTERN_CHECK),
+        aot(CALLBACK_LATER_ERRORS), opaque_eval(CALLBACK_LATER_ERRORS),
+    ];
+    assert_bundle_with(
+        &[
+            BundleCase {
+                name: "preg_errors_grep_eval_parity",
+                source: EVAL_PARITY,
+                expected: "bool(false)\n4:Malformed UTF-8 characters, possibly incorrectly encoded|0:No error|{\"k\":\"a\",\"1\":\"ca\"}{\"1\":\"b\"}|bool(false)\n1after|410",
+            },
+            BundleCase { name: "nested_callback_errors_aot", source: &sources[0], expected: nested_expected },
+            BundleCase { name: "nested_callback_errors_eval", source: &sources[1], expected: nested_expected },
+            BundleCase { name: "split_limit_errors_aot", source: &sources[2], expected: &split_expected },
+            BundleCase { name: "split_limit_errors_eval", source: &sources[3], expected: &split_expected },
+            BundleCase { name: "grep_pattern_check_aot", source: &sources[4], expected: grep_expected },
+            BundleCase { name: "grep_pattern_check_eval", source: &sources[5], expected: grep_expected },
+            BundleCase { name: "callback_later_errors_aot", source: &sources[6], expected: later_expected },
+            BundleCase { name: "callback_later_errors_eval", source: &sources[7], expected: later_expected },
+        ],
+        compile_and_run_with_regex,
+    );
 }
