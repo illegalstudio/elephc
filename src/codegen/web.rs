@@ -456,6 +456,34 @@ mod handler_reset_tests {
     use super::*;
     use crate::codegen::platform::{AppleVariant, Platform, Target};
 
+    /// Preserves both web reset paths captured before extraction at 8730c1a837.
+    #[test]
+    fn memoir_storage_followup_preserves_web_assembly() {
+        use sha2::{Digest, Sha256};
+
+        let mut fingerprints = Vec::new();
+        for name in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+            let target = Target::parse(name).unwrap();
+            for mode in 0..6 {
+                for application in [false, true] {
+                    let mut module = Module::new(target);
+                    module.web_application = application;
+                    let mut emitter = Emitter::new(target);
+                    emitter.pic_data_refs = mode == 1 || mode == 2;
+                    emitter.cdylib_boundary = mode == 2 || mode == 3;
+                    emitter.phpext_output = mode == 4;
+                    emitter.dead_strip = mode == 5;
+                    emit_web_reset(&mut emitter, &module, &DataSection::new());
+                    let mut labels = emitter.take_internal_labels().into_iter().collect::<Vec<_>>();
+                    labels.sort();
+                    let hash = Sha256::digest(format!("{}\n{labels:?}", emitter.output()));
+                    fingerprints.push(format!("{name} {mode} {application} {hash:x}"));
+                }
+            }
+        }
+        assert_eq!(fingerprints.join("\n"), include_str!("web/memoir_cstr_reset_baseline.txt").trim());
+    }
+
     /// Weak type sources expire only after PHP shutdown callbacks and before arena addresses recycle.
     #[test]
     fn web_native_reference_sources_reset_after_callbacks_before_arena() {
