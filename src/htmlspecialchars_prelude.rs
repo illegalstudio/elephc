@@ -28,7 +28,7 @@ use crate::synthetic_class::{
 pub(crate) const HTMLSPECIALCHARS_DOUBLE_ENCODE_NAME: &str = "__elephc_htmlspecialchars_double_encode";
 
 /// Reserved predicate deciding whether one `&...;` reference is kept.
-const HTML_ENTITY_IS_KEPT_NAME: &str = "__elephc_html_entity_is_kept";
+pub(crate) const HTML_ENTITY_IS_KEPT_NAME: &str = "__elephc_html_entity_is_kept";
 
 /// Returns the `htmlspecialchars()` double-encode declarations for injection.
 pub(crate) fn declarations() -> Program {

@@ -205,6 +205,24 @@ fn test_html_entity_decode() {
     assert_eq!(out, "<b>hi</b>");
 }
 
+/// Verifies `html_entity_decode()` honours `$flags` (quote handling, doctype) and `$encoding`
+/// and decodes numeric and named references past the five the native helper knew.
+#[test]
+fn test_html_entity_decode_honours_flags_and_encoding() {
+    let out = compile_and_run(
+        r#"<?php
+$s = "&quot;a&quot; &#039;b&#39; &#x27; &apos; &amp;quot; &euro; &eacute; &hellip; & &&amp; &#34;";
+foreach ([ENT_NOQUOTES, ENT_COMPAT, ENT_QUOTES, ENT_QUOTES | ENT_HTML5, ENT_QUOTES | ENT_XML1, ENT_QUOTES | ENT_XHTML] as $f) {
+    echo $f, ": ", html_entity_decode($s, $f), "\n";
+}
+echo bin2hex(html_entity_decode("&euro;&eacute;&#8364;&amp;", ENT_QUOTES, "ISO-8859-1")), "\n";
+echo html_entity_decode("&eacute;", ENT_QUOTES, "UTF-8"), "\n";
+"#,
+    );
+    let expected = "0: &quot;a&quot; &#039;b&#39; &#x27; &apos; &quot; € é … & && &#34;\n2: \"a\" &#039;b&#39; &#x27; &apos; &quot; € é … & && \"\n3: \"a\" 'b' ' &apos; &quot; € é … & && \"\n51: \"a\" 'b' ' ' &quot; € é … & && \"\n19: \"a\" 'b' ' ' &quot; &euro; &eacute; &hellip; & && \"\n35: \"a\" 'b' ' ' &quot; € é … & && \"\n266575726f3be92623383336343b26\né\n";
+    assert_eq!(out, expected);
+}
+
 /// Verifies a roundtrip: `html_entity_decode(htmlspecialchars(...))` recovers the original string.
 #[test]
 fn test_htmlspecialchars_roundtrip() {

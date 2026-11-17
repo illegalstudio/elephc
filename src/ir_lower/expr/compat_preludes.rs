@@ -937,6 +937,20 @@ pub(super) fn lower_backend_gap_builtin_shape(
             expr,
         ));
     }
+    // `html_entity_decode()`: the native helper knows five references and no `$flags` or
+    // `$encoding`, so the prelude walks the references and applies php's table and the caller's.
+    if builtin == "html_entity_decode"
+        && !args.is_empty()
+        && !crate::types::call_args::has_named_args(args)
+        && !args.iter().any(is_spread_arg)
+    {
+        return Some(lower_function_call(
+            ctx,
+            &crate::names::Name::unqualified(crate::html_entity_decode_prelude::HTML_ENTITY_DECODE_NAME),
+            args,
+            expr,
+        ));
+    }
     // `str_replace()` over a gradual search or replace: see `crate::str_replace_count_prelude`.
     if matches!(builtin.as_str(), "str_replace" | "str_ireplace")
         && args.len() == 3

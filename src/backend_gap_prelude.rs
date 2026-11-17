@@ -1044,6 +1044,8 @@ pub fn inject_if_used(
     // And so is `htmlspecialchars()`'s fourth parameter: the backend helper always
     // double-encodes, so `$double_encode = false` is answered by a prelude loop.
     let needs_htmlspecialchars = usage.references("htmlspecialchars");
+    // And so is `html_entity_decode()`'s `$flags`/`$encoding`, which the native helper ignores.
+    let needs_html_entity_decode = usage.references("html_entity_decode");
     // And so are `array_any()` / `array_all()` / `array_find()`, whose native runtime walks only a
     // dense list and passes the predicate no key.
     let needs_array_find = usage.references("array_any")
@@ -1078,6 +1080,7 @@ pub fn inject_if_used(
         && !needs_array_fill_keys_mixed
         && !needs_str_replace_count
         && !needs_htmlspecialchars
+        && !needs_html_entity_decode
         && !needs_http_build_query
         && !needs_version_compare
         && !needs_hash_pbkdf2
@@ -1145,8 +1148,13 @@ pub fn inject_if_used(
         inventory.record_program(BACKEND_GAP_GROUP, &declarations);
         combined.extend(declarations);
     }
-    if needs_htmlspecialchars {
+    if needs_htmlspecialchars || needs_html_entity_decode {
         let declarations = crate::htmlspecialchars_prelude::declarations();
+        inventory.record_program(BACKEND_GAP_GROUP, &declarations);
+        combined.extend(declarations);
+    }
+    if needs_html_entity_decode {
+        let declarations = crate::html_entity_decode_prelude::declarations();
         inventory.record_program(BACKEND_GAP_GROUP, &declarations);
         combined.extend(declarations);
     }

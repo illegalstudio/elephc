@@ -46,6 +46,8 @@ mod str_replace_count_prelude;
 mod natsort_gradual_prelude;
 /// `htmlspecialchars()`'s `$double_encode` parameter as AST-built prelude declarations.
 mod htmlspecialchars_prelude;
+/// `html_entity_decode()`'s `$flags` and `$encoding` parameters as AST-built prelude declarations.
+mod html_entity_decode_prelude;
 mod hash_pbkdf2_prelude;
 mod http_build_query_prelude;
 mod version_compare_prelude;
