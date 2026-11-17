@@ -129,11 +129,17 @@ fn configured_eval_injects_all_opcache_targets() {
     }
 }
 
-/// What the autoload closure references or declares drives injection as the entry program's
-/// own code does: a reference injects, and a declaration there wins.
+/// What the autoload closure references, declares, or evals drives injection as the entry
+/// program's own code does: a reference injects, a declaration there wins, and an
+/// interpreter-backed eval there supplies every OPcache target in a configured binary.
 #[test]
 fn autoload_closure_facts_drive_injection() {
     use crate::opcache_prelude::AutoloadedFunctions;
+    let all = [
+        "opcache_get_configuration", "opcache_get_status", "opcache_reset",
+        "opcache_invalidate", "opcache_compile_file", "opcache_is_script_cached",
+        "opcache_is_script_cached_in_file_cache", "opcache_jit_blacklist",
+    ];
     let inject = |autoloaded: &AutoloadedFunctions, overrides: &[(String, String)]| {
         let mut inventory = crate::optimize::reachability::PreludeInventory::new();
         inject_if_used(
@@ -141,9 +147,16 @@ fn autoload_closure_facts_drive_injection() {
             false, autoloaded, &mut inventory,
         ).0
     };
+    let configured = [("opcache.enable_cli".to_string(), "1".to_string())];
+    let eval = AutoloadedFunctions::for_test(&[], &[], true);
+    for name in all {
+        assert!(detect::program_declares(&inject(&eval, &configured), name), "{name}");
+        assert!(!detect::program_declares(&inject(&eval, &[]), name), "{name}, CLI default");
+    }
     let facts = AutoloadedFunctions::for_test(
         &["opcache_reset", "opcache_get_status", "ini_get"],
         &["opcache_get_status", "ini_get"],
+        false,
     );
     let injected = inject(&facts, &[]);
     assert!(detect::program_declares(&injected, "opcache_reset"));

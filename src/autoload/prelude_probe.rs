@@ -25,7 +25,7 @@
 //! - The OPcache and version preludes decide per FUNCTION (`ini_get`, `ini_set`, `opcache_reset`,
 //!   `ini_restore`, ...), so [`AutoloadedFunctions`] reports, apart from the groups, which of
 //!   their names the closure references, which it declares itself (a user declaration wins, as
-//!   in the entry program).
+//!   in the entry program), and whether it carries an interpreter-backed `eval`.
 //!   The closure is name-resolved, so a call matches on its resolved name: a vendor's own
 //!   `Vendor\Util\ini_get()` is not the global `ini_get`.
 
@@ -90,6 +90,7 @@ pub struct AutoloadedPreludes {
 pub struct AutoloadedFunctions {
     referenced: HashSet<&'static str>,
     declared: HashSet<&'static str>,
+    bridge_eval: bool,
 }
 
 impl AutoloadedFunctions {
@@ -104,15 +105,23 @@ impl AutoloadedFunctions {
         self.declared.contains(name)
     }
 
+    /// Whether a file of the closure has an `eval` the interpreter may have to run, which can
+    /// select any OPcache callable at runtime.
+    pub fn has_bridge_eval(&self) -> bool {
+        self.bridge_eval
+    }
+
     /// Builds the facts directly, for the preludes' own unit tests.
     #[cfg(test)]
     pub(crate) fn for_test(
         referenced: &[&'static str],
         declared: &[&'static str],
+        bridge_eval: bool,
     ) -> Self {
         Self {
             referenced: referenced.iter().copied().collect(),
             declared: declared.iter().copied().collect(),
+            bridge_eval,
         }
     }
 
@@ -128,6 +137,7 @@ impl AutoloadedFunctions {
                 .copied()
                 .filter(|name| declares_global_function(closure, false, name))
                 .collect(),
+            bridge_eval: crate::opcache_prelude::detect::program_has_bridge_eval(closure),
         }
     }
 }

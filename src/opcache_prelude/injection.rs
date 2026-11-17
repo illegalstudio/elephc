@@ -70,8 +70,9 @@ pub(crate) const PROBED_FUNCTIONS: &[&str] = &[
 ///
 /// `autoloaded` describes the autoload closure (`crate::autoload::prelude_probe`): a name one of
 /// its files references is injected exactly as if the entry program referenced it, a name one of
-/// its files declares is left to that declaration as one in the entry program is. Callers without
-/// an autoload closure pass `&AutoloadedFunctions::default()`.
+/// its files declares is left to that declaration as one in the entry program is, and an
+/// interpreter-backed `eval` there counts like one in the entry program. Callers without an
+/// autoload closure pass `&AutoloadedFunctions::default()`.
 ///
 /// Runs under `crate::compiler_stack::with_compiler_stack` (issue #1149): its usage scan walks the
 /// whole program, so an embedder calling it without the CLI driver's wrapper gets the same stack
@@ -181,7 +182,7 @@ fn inject_if_used_on_compiler_stack(
         // while native and scope-only literals keep their no-interpreter startup behavior.
         let eval_reads_opcache =
             !opcache_configuration_is_cli_default(web, overrides)
-                && detect::program_has_bridge_eval(&program);
+                && (autoloaded.has_bridge_eval() || detect::program_has_bridge_eval(&program));
         let wanted = |name: &str| {
             (references(name) || eval_reads_opcache)
                 && !declares(name)
