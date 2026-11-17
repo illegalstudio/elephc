@@ -519,6 +519,7 @@ pub(crate) fn build_interface_info_recursive(
         InterfaceInfo {
             interface_id: *next_interface_id,
             declaration_span: interface.span,
+            reflection_hidden: checker.names_generic_class_template(&interface.name),
             parents: interface.extends.clone(),
             properties,
             property_order,
