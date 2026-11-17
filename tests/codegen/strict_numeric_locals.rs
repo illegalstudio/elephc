@@ -10,6 +10,52 @@
 
 use crate::support::*;
 
+/// Suspended pure and bridge scopes enumerate exact owners and preserve their origins across GC.
+#[test]
+fn test_strict_literal_eval_origins_survive_generator_suspension_and_gc() {
+    let source = include_str!("../fixtures/strict/literal_eval_suspended_scope.php");
+    for mode in ["--ir-opt=off", "--ir-opt=on"] {
+        for strict in [false, true] {
+            for bridge in [false, true] {
+                let source = if bridge { format!("{source}\n$other = 1; eval('unset($other);');") }
+                    else { source.to_string() };
+                let mut flags = vec![mode, "--heap-debug"];
+                if strict { flags.push("--strict-locals"); }
+                if !bridge { flags.push("--strict-dynamic-code"); }
+                let output = StrictFixture::new(&source).capture(&flags);
+                assert_eq!(String::from_utf8_lossy(&output.stdout), if strict { "1T" } else { "1W" },
+                    "{flags:?}: {}", String::from_utf8_lossy(&output.stderr));
+                assert!(String::from_utf8_lossy(&output.stderr).contains("HEAP DEBUG: leak summary: clean"),
+                    "{flags:?}: {}", String::from_utf8_lossy(&output.stderr));
+            }
+        }
+    }
+}
+
+/// A reserved native slot is not an imported binding until its source path actually initializes it.
+#[test]
+fn test_strict_literal_eval_preserves_origins_across_native_observation() {
+    let source = include_str!("../fixtures/strict/literal_eval_native_origin.php");
+    for mode in ["--ir-opt=off", "--ir-opt=on"] {
+        for strict in [false, true] {
+            for bridge in [false, true] {
+                let source = if bridge { format!("{source}\n$other = 1; eval('unset($other);');") }
+                    else { source.to_string() };
+                let mut flags = vec![mode, "--heap-debug"];
+                if strict { flags.push("--strict-locals"); }
+                if !bridge { flags.push("--strict-dynamic-code"); }
+                let output = StrictFixture::new(&source).capture(&flags);
+                let expected = if strict { "integer:Tinteger:1|changedW|T|" }
+                    else { "integer:Wstring:bad|changedW|changedW|" };
+                assert_eq!(String::from_utf8_lossy(&output.stdout), expected, "{flags:?}: {}",
+                    String::from_utf8_lossy(&output.stderr));
+                assert!(String::from_utf8_lossy(&output.stderr).contains("HEAP DEBUG: leak summary: clean"),
+                    "{flags:?}: {}", String::from_utf8_lossy(&output.stderr));
+            }
+        }
+    }
+}
+
 /// Shared fragment bodies retain fresh, imported and explicit mixed producer origins per activation.
 #[test]
 fn test_strict_literal_eval_establishes_fresh_binding_origins() {

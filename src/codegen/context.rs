@@ -72,6 +72,7 @@ pub(crate) struct FunctionContext<'a> {
     pub(super) numeric_frame_only_slots: HashSet<LocalSlotId>,
     pub(super) numeric_values: HashSet<ValueId>,
     ref_cell_state_offsets: HashMap<LocalSlotId, usize>,
+    pub(super) binding_state_offsets: HashMap<LocalSlotId, usize>,
     local_analysis: LocalSlotAnalysis,
     callable_reachability: CallableReachabilityAnalysis,
     /// Typed EIR adopters identify calls whose result remains a transferred reference cell.
@@ -209,6 +210,7 @@ impl<'a> FunctionContext<'a> {
             numeric_frame_only_slots: layout.numeric_frame_only_slots,
             numeric_values: layout.numeric_values,
             ref_cell_state_offsets: layout.ref_cell_state_offsets,
+            binding_state_offsets: layout.binding_state_offsets,
             local_analysis: layout.local_analysis,
             callable_reachability,
             raw_reference_call_results: function.instructions.iter()

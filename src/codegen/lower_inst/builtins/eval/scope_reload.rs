@@ -107,6 +107,7 @@ fn store_mixed_scope_cell_to_logical_local(
             )))
         }
     }
+    crate::codegen::local_binding_state::mark(ctx, local.slot, true);
     ctx.emitter.label(&rejected);
     Ok(())
 }
@@ -197,9 +198,11 @@ fn store_mixed_scope_cell_to_ref_cell(
             )))
         }
     }
+    crate::codegen::local_binding_state::mark(ctx, local.slot, true);
     abi::emit_jump(ctx.emitter, &rejected);
     ctx.emitter.label(&converted);
     abi::emit_release_temporary_stack(ctx.emitter, 16);
+    crate::codegen::local_binding_state::mark(ctx, local.slot, true);
     ctx.emitter.label(&rejected);
     Ok(())
 }
@@ -412,6 +415,7 @@ pub(super) fn store_missing_scope_entry_to_local(
     local: &EvalSyncLocal,
     pending_throw: Option<usize>,
 ) -> Result<()> {
+    crate::codegen::local_binding_state::mark(ctx, local.slot, false);
     scope_reload_checks::detach_missing_local(ctx, local, pending_throw)?;
     match local.ty.codegen_repr() {
         PhpType::Void => {},

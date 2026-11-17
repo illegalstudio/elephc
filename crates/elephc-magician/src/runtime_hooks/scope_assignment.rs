@@ -40,3 +40,14 @@ pub(crate) fn release_origins(scope: &mut ElephcEvalScope, name: Option<&str>) -
     } };
     (!thrown.is_null()).then(|| RuntimeCellHandle::from_raw(thrown))
 }
+
+/// Visits native source owners through the same immutable collector protocol as scope entries.
+///
+/// # Safety
+/// The scope and callback context remain live, and the callback cannot execute PHP or mutate owners.
+pub(crate) unsafe fn visit_origins(scope: *const std::ffi::c_void,
+    visitor: Option<unsafe extern "C" fn(*const *mut crate::value::RuntimeCell, u64, *mut std::ffi::c_void)>,
+    context: *mut std::ffi::c_void,
+) {
+    unsafe { super::externs::__elephc_eval_scope_visit_origins_v1(scope, visitor, context); }
+}

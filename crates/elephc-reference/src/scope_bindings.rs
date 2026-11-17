@@ -46,6 +46,15 @@ impl ScopeBindings {
         binding.cell
     }
 
+    /// Borrows exact native cell owner slots while collector callbacks remain pure and nonmutating.
+    fn visit(&self, scope: usize, mut visitor: impl FnMut(*const usize)) {
+        if let Some(bindings) = self.scopes.get(&scope) {
+            for binding in bindings.values().flatten().filter(|binding| binding.cell != 0) {
+                visitor(&binding.cell);
+            }
+        }
+    }
+
     /// Removes open origins while finding the next live native owner for a scope destructor.
     fn pop(&mut self, scope: usize) -> usize {
         while self.scopes.contains_key(&scope) {
@@ -96,6 +105,20 @@ pub extern "C" fn __elephc_reference_scope_pop_v1(scope: usize) -> usize {
     BINDINGS.with(|bindings| bindings.borrow_mut().pop(scope))
 }
 
+/// Visits native scope cell owners without retaining values or lending mutable registry state.
+///
+/// # Safety
+/// The scope and its slots remain live and immobile for this call. The callback performs only
+/// collector bookkeeping: it cannot invoke PHP, unwind, mutate the registry or retain addresses.
+#[no_mangle]
+pub unsafe extern "C" fn __elephc_reference_scope_visit_v1(scope: usize,
+    visitor: Option<unsafe extern "C" fn(*const usize, u64, *mut std::ffi::c_void)>,
+    context: *mut std::ffi::c_void,
+) {
+    let Some(visitor) = visitor else { return; };
+    BINDINGS.with(|bindings| bindings.borrow().visit(scope, |slot| unsafe { visitor(slot, 0, context) }));
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -113,6 +136,27 @@ mod tests {
         assert_eq!(scopes.binding(2, b"value", 10), 0);
         assert_eq!(scopes.pop(1), 0);
         assert_eq!(scopes.pop(2), 0);
+        assert!(scopes.scopes.is_empty());
+    }
+
+    /// Independent owning slots remain independent even when their borrowed cell pointers agree.
+    #[test]
+    fn scope_binding_visitors_preserve_exact_owner_slot_identity() {
+        let mut scopes = ScopeBindings::default();
+        for name in [b"first".as_slice(), b"second"] {
+            let slot = scopes.binding(4, name, 123);
+            unsafe { (*(slot as *mut Binding)).cell = 456; }
+        }
+        scopes.binding(4, b"open", 0);
+        scopes.binding(4, b"pending", 123);
+        let mut seen = Vec::new();
+        scopes.visit(4, |slot| seen.push((slot as usize, unsafe { *slot })));
+        assert_eq!(seen.len(), 2);
+        assert_ne!(seen[0].0, seen[1].0);
+        assert!(seen.iter().all(|(_, cell)| *cell == 456));
+        assert_eq!(scopes.pop(4), 456);
+        assert_eq!(scopes.pop(4), 456);
+        assert_eq!(scopes.pop(4), 0);
         assert!(scopes.scopes.is_empty());
     }
 

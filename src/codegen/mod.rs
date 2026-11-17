@@ -40,6 +40,7 @@ mod function_variants;
 mod literal_defaults;
 mod literal_method_index;
 mod local_analysis;
+mod local_binding_state;
 mod mbstring_configuration;
 mod null_local_proof;
 pub(crate) mod lower_inst;

@@ -236,3 +236,27 @@ fn strict_literal_eval_fresh_origins_emit_on_every_target() {
             Err(crate::ir::ValidationError::SemanticProfileMismatch { .. })), "{name}");
     }
 }
+
+/// EIR binding state protects future and conditionally initialized native slots on every target.
+#[test]
+fn strict_eval_binding_presence_emits_on_every_target() {
+    let source = format!("{}\n{}", include_str!("../../../tests/fixtures/strict/literal_eval_native_origin.php"),
+        include_str!("../../../tests/fixtures/strict/literal_eval_suspended_scope.php").strip_prefix("<?php").unwrap());
+    let program = crate::parser::parse_with_mode(&crate::lexer::tokenize(&source).unwrap(), SourceMode::Php).unwrap();
+    let profile = SemanticProfile::PERMISSIVE.with(StrictFeature::Locals, true)
+        .with(StrictFeature::DynamicCode, true);
+    for name in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+        let target = Target::parse(name).unwrap();
+        let checked = crate::types::checker::check_staged_semantics(&program, target, profile).unwrap();
+        let module = crate::ir_lower::lower_program(&program, &checked, target, false).unwrap();
+        let function = module.functions.iter().find(|function| function.name == "conditionalOpenOrigin").unwrap();
+        assert!(function.flags.tracks_local_binding_state, "{name}");
+        assert!(function.instructions.iter().any(|inst| inst.op == crate::ir::Op::SetLocalBindingState
+            && matches!(inst.immediate, Some(crate::ir::Immediate::LocalSlot(slot))
+                if function.locals[slot.as_raw() as usize].name.as_deref() == Some("value"))), "{name}");
+        assert!(!module.required_runtime_features.eval_bridge, "{name}");
+        crate::ir::validate_module(&module).unwrap();
+        let assembly = crate::codegen::generate_user_asm_from_ir(&module, false, false).unwrap();
+        assert!(assembly.contains("eval_scope_flush_uninitialized_or_unaccessed"), "{name}");
+    }
+}

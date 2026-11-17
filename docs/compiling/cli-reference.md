@@ -964,7 +964,10 @@ contract across later literal fragments in that activation. An imported `mixed`
 binding or a new binding from an explicitly `mixed` producer remains open. `unset`
 ends the inferred binding before a subsequent literal fragment establishes a new
 one. Identical fragment bodies retain separate contracts for each activation.
-Transporting newly established origins to later native accesses is still being
+Native reads preserve a literal-created binding's contract across subsequent
+literal eval calls. Snapshots follow actual initialization paths: reserved frame
+storage and an unexecuted conditional declaration do not establish a binding.
+Enforcing newly established origins on subsequent native writes is still being
 integrated.
 
 A body that **calls** `eval()` anywhere is the other side of that coin: the

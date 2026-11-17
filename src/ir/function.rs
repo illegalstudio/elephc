@@ -332,4 +332,6 @@ pub struct FunctionFlags {
     pub is_native_reference_validator: bool,
     /// Eager generator guard borrows arguments before the constructor captures their bindings.
     pub is_eager_parameter_validator: bool,
+    /// Runtime binding presence is distinct from zero-filled frame storage at eval boundaries.
+    pub tracks_local_binding_state: bool,
 }

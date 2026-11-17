@@ -127,7 +127,7 @@ pub fn validate_module(module: &Module) -> Result<(), ValidationError> {
                 }
             }
             let mut required = inst.arithmetic_policy().requirements().bits();
-            if inst.op == Op::BindLocalRefContract || matches!(&inst.immediate,
+            if matches!(inst.op, Op::BindLocalRefContract | Op::SetLocalBindingState) || matches!(&inst.immediate,
                 Some(Immediate::EvalScopeStore(metadata)) if metadata.contract.is_some()) {
                 required |= elephc_semantics::StrictFeature::Locals.bit();
             }
@@ -801,7 +801,7 @@ fn validate_instruction_immediate(
         PropUnset => require_immediate(inst_id, inst, "property name or initializer physical slot", |imm| {
             matches!(imm, Imm::Data(_) | Imm::PropertyRef { .. })
         }),
-        StrAppend | LocalPlace | LoadLocal | StoreLocal | UnsetLocal | ZeroLocalSlot | LoadRefCell | LoadRefCellValue | StoreRefCell
+        StrAppend | LocalPlace | LoadLocal | StoreLocal | SetLocalBindingState | UnsetLocal | ZeroLocalSlot | LoadRefCell | LoadRefCellValue | StoreRefCell
         | ReleaseLocalRefCell | AcquireRefCell | BindLocalRefContract
         | ReleaseLocalSlot | ReleaseRawLocalSlot | PushCallOperandOwner | PopCallOperandOwner
         | LoadStaticLocal | StoreStaticLocal | InitStaticLocal | StaticLocalUninitialized
@@ -1099,6 +1099,17 @@ fn validate_opcode_rules(
                 || !matches!(inst.result_php_type, PhpType::Pointer(_))
             {
                 return Err(ValidationError::ResultTypeMismatch(result));
+            }
+            Ok(())
+        }
+        SetLocalBindingState => {
+            check_count(inst_id, inst, 1, "1")?;
+            let Some(Immediate::LocalSlot(slot)) = inst.immediate else { unreachable!() };
+            let local = function.locals.get(slot.as_raw() as usize);
+            if !function.flags.tracks_local_binding_state
+                || !local.is_some_and(|local| local.kind == LocalKind::PhpLocal)
+                || !function.value(inst.operands[0]).is_some_and(|value| value.php_type == PhpType::Bool) {
+                return Err(ValidationError::InvalidLocalReferenceContract(inst_id));
             }
             Ok(())
         }

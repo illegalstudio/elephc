@@ -26,6 +26,8 @@ type OwnerVisitor = unsafe extern "C" fn(*const *mut RuntimeCell, u64, *mut c_vo
 pub unsafe extern "C" fn __elephc_eval_scope_visit_owners_v1(
     scope: *const ElephcEvalScope, visitor: Option<OwnerVisitor>, context: *mut c_void,
 ) {
+    #[cfg(not(test))]
+    unsafe { crate::runtime_hooks::scope_assignment::visit_origins(scope.cast(), visitor, context); }
     let (Some(scope), Some(visitor)) = (unsafe { scope.as_ref() }, visitor) else { return; };
     scope.visit_owned_cell_slots(|slot| unsafe { visitor(slot, 0, context) });
 }

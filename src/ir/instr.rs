@@ -918,6 +918,9 @@ pub enum Op {
     LocalPlace,
     LoadLocal,
     StoreLocal,
+    /// Writes a PHP local's initialized/unbound state without changing its physical value.
+    /// Operand is Bool; the immediate identifies the source binding's local slot.
+    SetLocalBindingState,
     UnsetLocal,
     ZeroLocalSlot,
     LoadRefCell,
@@ -1497,7 +1500,7 @@ impl Op {
             LoadLocal | LoadStaticLocal | ClosureCapture => E::READS_LOCAL,
             LoadRefCell => E::READS_LOCAL | E::READS_HEAP,
             LoadRefCellValue => E::READS_LOCAL | E::READS_HEAP | E::ALLOC_HEAP | E::REFCOUNT_OP,
-            StoreLocal | UnsetLocal | ZeroLocalSlot | ListUnpack | FinallyEnter | FinallyExit => {
+            StoreLocal | SetLocalBindingState | UnsetLocal | ZeroLocalSlot | ListUnpack | FinallyEnter | FinallyExit => {
                 E::WRITES_LOCAL
             }
             // A refcounted cell publishes replacement storage and can run the previous payload's
@@ -1872,6 +1875,7 @@ impl Op {
             LocalPlace => "local_place",
             LoadLocal => "load_local",
             StoreLocal => "store_local",
+            SetLocalBindingState => "set_local_binding_state",
             UnsetLocal => "unset_local",
             ZeroLocalSlot => "zero_local_slot",
             LoadRefCell => "load_ref_cell",

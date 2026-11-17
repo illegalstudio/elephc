@@ -17,6 +17,9 @@ use crate::value::RuntimeCell;
 
 #[cfg(not(test))]
 unsafe extern "C" {
+    /// Borrows native inferred scope owners for a pure suspended-frame collector callback.
+    pub(super) fn __elephc_eval_scope_visit_origins_v1(scope: *const c_void,
+        visitor: Option<unsafe extern "C" fn(*const *mut RuntimeCell, u64, *mut c_void)>, context: *mut c_void);
     /// Detaches all native inferred scope sources and returns an owned contained Throwable.
     pub(super) fn __elephc_eval_scope_origins_release_v1(scope: *mut c_void) -> *mut RuntimeCell;
     /// Detaches a single inferred scope source before unset and returns an owned contained Throwable.

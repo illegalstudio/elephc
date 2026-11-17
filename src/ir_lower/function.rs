@@ -1928,6 +1928,9 @@ fn lower_body_into_function(
         let index = signature.params.iter().position(|(candidate, _)| candidate == name)?;
         signature.ref_params.get(index).copied().unwrap_or(false).then(|| name.clone())
     });
+    function.flags.tracks_local_binding_state = semantic_profile.contains(
+        elephc_semantics::StrictFeature::Locals) && !function.flags.is_internal
+        && crate::ir_lower::body_contains_eval_call(body);
     let mut builder = Builder::new(function);
     let entry = builder.create_named_block("entry", Vec::new());
     builder.set_entry(entry);

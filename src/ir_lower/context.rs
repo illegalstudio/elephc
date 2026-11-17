@@ -322,6 +322,8 @@ const EVAL_ARGV_LOCAL_NAME: &str = "argv";
 pub(crate) struct LoweringContext<'m, 'f> {
     /// Immutable semantic policy inherited by ordinary and synthetic functions.
     pub(crate) semantic_profile: elephc_semantics::SemanticProfile,
+    /// Representation-only stores preserve the source binding's existing presence state.
+    pub(super) binding_state_suppressed: bool,
     /// Physical source of the operation; internal implementation control flow is explicit.
     pub(crate) source_mode: crate::source::SourceMode,
     /// A statically resolved callable invocation retains the prepared builtin body contract.
@@ -677,6 +679,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         let return_type = return_ir_type(&return_php_type);
         Self {
             semantic_profile,
+            binding_state_suppressed: false,
             source_mode: crate::source::SourceMode::Internal,
             prepared_builtin_invocation: false,
             builder,
@@ -1493,9 +1496,15 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
 
     /// Marks a local slot as initialized by caller or synthetic setup.
     pub(crate) fn mark_local_initialized(&mut self, name: &str) {
-        if let Some(slot) = self.local_slots.get(name) {
-            self.initialized_slots.insert(*slot);
+        if let Some(slot) = self.local_slots.get(name).copied() {
+            self.mark_slot_initialized(slot);
         }
+    }
+
+    /// Records actual initialization separately from the slot's zero-filled storage.
+    fn mark_slot_initialized(&mut self, slot: LocalSlotId) {
+        self.initialized_slots.insert(slot);
+        super::local_binding_state::emit(self, slot, true);
     }
 
     /// Captures the definitely-initialized local slots at a control-flow split.
@@ -1756,7 +1765,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         }
         let slot = self.declare_local_with_kind(&name, PhpType::Int, LocalKind::HiddenTemp);
         self.builder.seed_entry_int_local(slot, 0);
-        self.initialized_slots.insert(slot);
+        self.mark_slot_initialized(slot);
         slot
     }
 
@@ -2237,7 +2246,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
             Some(Immediate::LocalSlotPair { first: source, second: owner }),
             Op::RetainLocalRefCell.default_effects(), None,
         );
-        self.initialized_slots.insert(owner);
+        self.mark_slot_initialized(owner);
     }
 
     /// Returns the physical payload type a store through `variable`'s ref-cell must publish.
@@ -2768,7 +2777,11 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         php_type: PhpType,
         span: Option<Span>,
     ) -> LoweredValue {
-        self.store_local_impl(name, value, php_type, span, false)
+        let previous = self.binding_state_suppressed;
+        self.binding_state_suppressed = true;
+        let stored = self.store_local_impl(name, value, php_type, span, false);
+        self.binding_state_suppressed = previous;
+        stored
     }
 
     /// Re-stores a local's CURRENT value in a new representation without rebinding it.
@@ -2784,7 +2797,11 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         php_type: PhpType,
         span: Option<Span>,
     ) -> LoweredValue {
-        self.store_local_impl(name, value, php_type, span, false)
+        let previous = self.binding_state_suppressed;
+        self.binding_state_suppressed = true;
+        let stored = self.store_local_impl(name, value, php_type, span, false);
+        self.binding_state_suppressed = previous;
+        stored
     }
 
     /// Stores a new local owner, optionally resetting the cursor for a PHP-visible assignment.
@@ -3508,7 +3525,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
             );
             self.reset_array_pointer_cursor(name);
             self.ref_cell_owner_locals.remove(name);
-            self.initialized_slots.insert(slot);
+            self.mark_slot_initialized(slot);
             self.abandon_local_binding(name);
             return null;
         }
@@ -3521,7 +3538,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         } else {
             self.set_local_type(name, PhpType::Void);
         }
-        self.initialized_slots.insert(slot);
+        self.mark_slot_initialized(slot);
         null
     }
 
@@ -3577,6 +3594,9 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
     /// `load_local` emits `ConstNull` for an absent `Void` binding without creating storage.
     /// The probe therefore answers false, and a later store creates a fresh slot at its own type.
     fn abandon_local_binding(&mut self, name: &str) {
+        if let Some(slot) = self.local_slots.get(name).copied() {
+            super::local_binding_state::emit(self, slot, false);
+        }
         self.local_slots.remove(name);
         self.local_kinds.remove(name);
         self.local_types.insert(name.to_string(), PhpType::Void);
@@ -3670,7 +3690,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
                 span,
             );
         }
-        self.initialized_slots.insert(slot);
+        self.mark_slot_initialized(slot);
         self.abandon_local_binding(name);
     }
 
@@ -3899,8 +3919,8 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
             span,
         );
         self.mark_ref_bound_local(name);
-        self.initialized_slots.insert(slot);
-        self.initialized_slots.insert(owner_slot);
+        self.mark_slot_initialized(slot);
+        self.mark_slot_initialized(owner_slot);
     }
 
     /// Widens a concrete local to boxed `Mixed` storage, then promotes that storage to a
@@ -4027,14 +4047,14 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         } else {
             self.borrowed_element_ref_locals.remove(target);
         }
-        self.initialized_slots.insert(target_slot);
+        self.mark_slot_initialized(target_slot);
         if let Some((source_owner, target_owner)) = owner_pair {
             self.emit_void(
                 Op::RetainLocalRefCell, Vec::new(),
                 Some(Immediate::LocalSlotPair { first: source_owner, second: target_owner }),
                 Op::RetainLocalRefCell.default_effects(), span,
             );
-            self.initialized_slots.insert(target_owner);
+            self.mark_slot_initialized(target_owner);
         }
     }
 
@@ -4108,7 +4128,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         self.set_local_type(target, value_type.clone());
         let immediate = if owns_cell {
             let owner = self.declare_ref_cell_owner(target, value_type.clone());
-            self.initialized_slots.insert(owner);
+            self.mark_slot_initialized(owner);
             Immediate::LocalSlotPair { first: target_slot, second: owner }
         } else {
             Immediate::LocalSlot(target_slot)
@@ -4128,7 +4148,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         // The caller marks an interior binding explicitly; a plain rebinding clears the marker
         // so a name reused for a managed cell is not treated as borrowed storage.
         self.borrowed_element_ref_locals.remove(target);
-        self.initialized_slots.insert(target_slot);
+        self.mark_slot_initialized(target_slot);
     }
 
     /// Releases storage currently owned by a local before rebinding it as a ref alias.
@@ -5353,7 +5373,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
             Op::StoreGlobal.default_effects(),
             span,
         );
-        self.initialized_slots.insert(slot);
+        self.mark_slot_initialized(slot);
     }
 
     /// Emits a store opcode to an already declared local or static-local slot.
@@ -5383,7 +5403,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         if op == Op::StoreLocal && self.builder.local_kind(slot) == LocalKind::PhpLocal {
             self.assigned_php_local_slots.insert(slot);
         }
-        self.initialized_slots.insert(slot);
+        self.mark_slot_initialized(slot);
     }
 
     /// Keeps the original RHS and assignment-site mode beside the alias's physical target type.
@@ -5422,7 +5442,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
             Op::StoreRefCell.default_effects(),
             span,
         );
-        self.initialized_slots.insert(slot);
+        self.mark_slot_initialized(slot);
     }
 
     /// Starts a call-local capture group without disturbing a surrounding argument evaluation.

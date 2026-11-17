@@ -24,6 +24,10 @@ const THROWN: usize = 72;
 
 /// Emits profile-selected publication and contained lifetime adapters for both scope runtimes.
 pub(super) fn emit(emitter: &mut Emitter, enabled: bool) {
+    emitter.label_global(&emitter.target.extern_symbol("__elephc_eval_scope_visit_origins_v1"));
+    if enabled {
+        abi::emit_jump(emitter, &emitter.target.extern_symbol("__elephc_reference_scope_visit_v1"));
+    } else { abi::emit_return(emitter); }
     emit_set(emitter, enabled);
     emit_retire(emitter, enabled, false);
     emit_retire(emitter, enabled, true);

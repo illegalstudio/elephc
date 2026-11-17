@@ -80,6 +80,7 @@ pub(super) struct FrameLayout {
     pub(super) numeric_frame_only_slots: HashSet<LocalSlotId>,
     pub(super) numeric_values: HashSet<ValueId>,
     pub(super) ref_cell_state_offsets: HashMap<LocalSlotId, usize>,
+    pub(super) binding_state_offsets: HashMap<LocalSlotId, usize>,
     pub(super) try_handler_offsets: HashMap<i64, usize>,
     pub(super) exception_guard_offsets: HashMap<ValueId, usize>,
     pub(super) return_owner_guard_offsets: HashMap<LocalSlotId, usize>,
@@ -158,6 +159,16 @@ pub(super) fn layout_for_function(
     let numeric_frame_only_slots = super::stack_numeric::frame_only_locals(
         function, &numeric.locals, &numeric_cell_offsets, &numeric_seed_offsets,
     );
+    let mut binding_state_offsets = HashMap::new();
+    if function.flags.tracks_local_binding_state {
+        for local in &function.locals {
+            if local.kind == LocalKind::PhpLocal && local.name.as_deref()
+                .is_some_and(|name| !crate::names::is_generated_local_name(name)) {
+                offset += 8;
+                binding_state_offsets.insert(local.id, offset);
+            }
+        }
+    }
     let mut ref_cell_state_offsets = HashMap::new();
     let mut ref_cell_slots = local_analysis.ref_cell_slots().collect::<Vec<_>>();
     ref_cell_slots.sort_by_key(|slot| slot.as_raw());
@@ -229,6 +240,7 @@ pub(super) fn layout_for_function(
         numeric_frame_only_slots,
         numeric_values: numeric.proven_values,
         ref_cell_state_offsets,
+        binding_state_offsets,
         try_handler_offsets,
         exception_guard_offsets,
         return_owner_guard_offsets,
@@ -482,6 +494,7 @@ pub(super) fn emit_main_prologue(ctx: &mut FunctionContext<'_>) {
     zero_initialize_main_cleanup_locals(ctx);
     initialize_nullable_scalar_locals(ctx);
     initialize_ref_cell_state_slots(ctx);
+    super::local_binding_state::initialize(ctx);
     zero_initialize_ref_cell_owner_locals(ctx);
     zero_initialize_eval_context_locals(ctx);
     zero_initialize_eval_scope_locals(ctx);
@@ -570,6 +583,7 @@ pub(super) fn emit_function_prologue_with_label(
     zero_initialize_function_cleanup_locals(ctx);
     initialize_nullable_scalar_locals(ctx);
     initialize_ref_cell_state_slots(ctx);
+    super::local_binding_state::initialize(ctx);
     zero_initialize_ref_cell_owner_locals(ctx);
     zero_initialize_eval_context_locals(ctx);
     zero_initialize_eval_scope_locals(ctx);
@@ -1079,6 +1093,7 @@ pub(super) fn emit_web_handler_prologue(ctx: &mut FunctionContext<'_>) {
     zero_initialize_main_cleanup_locals(ctx);
     initialize_nullable_scalar_locals(ctx);
     initialize_ref_cell_state_slots(ctx);
+    super::local_binding_state::initialize(ctx);
     zero_initialize_ref_cell_owner_locals(ctx);
     zero_initialize_eval_context_locals(ctx);
     zero_initialize_eval_scope_locals(ctx);

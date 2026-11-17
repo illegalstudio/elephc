@@ -17,6 +17,7 @@ use crate::codegen::platform::Arch;
 
 mod reference_assignment;
 mod origin_bindings;
+mod owner_visitor;
 
 /// Shares checked origin publication and retirement with native and Magician scope implementations.
 pub(crate) fn emit_scope_origin_bindings(emitter: &mut Emitter, enabled: bool) {
@@ -34,6 +35,7 @@ pub(crate) fn emit_eval_scope_runtime(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: eval scope core helpers ---");
     reference_assignment::emit(emitter);
+    owner_visitor::emit(emitter);
     match emitter.target.arch {
         Arch::AArch64 => emit_aarch64_eval_scope_runtime(emitter),
         Arch::X86_64 => emit_x86_64_eval_scope_runtime(emitter),

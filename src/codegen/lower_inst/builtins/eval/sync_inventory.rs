@@ -265,19 +265,20 @@ fn flush_eval_scope_locals_with_mask(
     access_mask_offset: Option<usize>,
 ) -> Result<()> {
     for local in locals {
-        let skip = access_mask_offset.map(|offset| {
-            let skip = ctx.next_label("eval_scope_flush_unaccessed");
-            (offset, skip)
-        });
-        if let Some((offset, skip)) = &skip {
-            emit_branch_if_eval_name_unaccessed(ctx.emitter, &local.name, *offset, skip);
+        let skip = (access_mask_offset.is_some() || ctx.binding_state_offsets.contains_key(&local.slot))
+            .then(|| ctx.next_label("eval_scope_flush_uninitialized_or_unaccessed"));
+        if let Some(skip) = &skip {
+            if let Some(offset) = access_mask_offset {
+                emit_branch_if_eval_name_unaccessed(ctx.emitter, &local.name, offset, skip);
+            }
+            crate::codegen::local_binding_state::branch_if_uninitialized(ctx, local.slot, skip);
         }
         ctx.load_eval_local_snapshot_to_mixed(local.slot)?;
         let result_reg = abi::int_result_reg(ctx.emitter);
         abi::emit_store_to_sp(ctx.emitter, result_reg, EVAL_TEMP_CELL_OFFSET);
         emit_eval_scope_set(ctx, local, EVAL_SCOPE_FLAG_OWNED | EVAL_SCOPE_FLAG_NATIVE_SNAPSHOT);
         super::native_local_contracts::emit_eval_native_local_type(ctx, local)?;
-        if let Some((_, skip)) = skip {
+        if let Some(skip) = skip {
             ctx.emitter.label(&skip);
         }
     }

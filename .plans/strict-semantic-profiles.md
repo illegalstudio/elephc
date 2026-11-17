@@ -1020,3 +1020,45 @@ currently publishes every matching frame slot without an initialized-binding
 guard. Next complete initialized origin transport and native-store enforcement,
 then opaque-eval origins b99d1b21, remaining binding flow and the six pending
 feature families plus umbrella and host acceptance.
+
+
+### Verified126: initialized native bindings and suspended scope ownership
+
+Source initialization and binding retirement now emit SetLocalBindingState EIR
+events in user frames with eval under Locals. Representation-only stores suppress
+these events. Independent frame presence words start unbound, including for null
+slots with no payload bytes. Eval snapshotting skips unbound slots; successful
+reloads and missing entries update presence independently from projected values.
+A native observation no longer imports a future zero-filled slot before a literal
+fragment creates its binding. Conditional mixed declarations preserve openness
+only on the branch that actually executes the declaration. This does not admit
+the still-pending Initialization feature.
+
+Build493a0401 passed in1m36s. Probe86613921 passed both IR modes with clean heaps:
+integer:Tinteger:1|Winteger:1|, resolving the native-observer part of eb10dc54 while
+leaving the native-writer part explicit. Job1a91d15a passed build and six exact
+frame/five-target/native gates in4m11s, including conditional declarations, existing
+fresh origins, native imports and example.
+
+An additional generator/GC probe1de64a1e found the inherited missing native-core
+__elephc_eval_scope_visit_owners_v1 symbol even in permissive mode. The compact
+linked-list scope now implements that pure slot visitor through shared target ABI
+helpers. Both scope implementations also enumerate the independent managed cell
+owners held by the native scope-origin registry. Enumeration preserves exact
+owner-slot identity and borrows immutable registry state only across pure collector
+callbacks, with no PHP execution, ownership changes or scope mutation.
+Job403cd725 passed compiler/default native archives and pure suspended scope
+acceptance in1m43s: default1W and Locals1T, both clean heaps. Final job03999afe
+passed build and seven exact registry/EIR/real-assembler/native gates in3m55s.
+All five supported targets emit and assemble the new visitor; pure and bridge
+scopes, both IR modes, generator suspension plus cycle collection, native
+observations and imported scalar aliases pass with clean heaps. Assembly comments
+and diff hygiene pass. No builtin home/signature changed; prior generated docs
+remain unchanged. No full suite, push or PR was run.
+
+Continue the full approved task. Native stores after a literal-created float still
+print Winteger:1 (tests/fixtures/strict/literal_eval_native_store_origin.php).
+Opaque runtime origins b99d1b21 also remain open. Next validate original native
+store candidates against surviving scope origins and preserve their physical
+representation, then complete remaining binding flow, six feature families and
+umbrella/host acceptance.
