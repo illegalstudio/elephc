@@ -95,107 +95,21 @@ fn try_fold_concat(left: &Expr, right: &Expr) -> Option<ExprKind> {
     Some(ExprKind::StringLiteral(format!("{left}{right}")))
 }
 
-/// Evaluates a numeric binary operator when at least one operand is a float or when integer overflow occurs.
-/// Falls back to float result for overflow cases (add, sub, mul) to match PHP behavior.
-/// Returns `None` for division by zero or non-finite results.
+/// Adapts numeric literals to the shared side-effect-free fold without changing source eligibility.
 fn try_fold_numeric_binop(op: &BinOp, left: &Expr, right: &Expr) -> Option<ExprKind> {
-    if let (Some(left), Some(right)) = (int_literal(left), int_literal(right)) {
-        return try_fold_int_numeric_binop(op, left, right);
-    }
-
-    let (left, right) = (numeric_literal(left)?, numeric_literal(right)?);
-    if matches!(op, BinOp::Div) && right == 0.0 {
-        return None;
-    }
-    let result = match op {
-        BinOp::Add => left + right,
-        BinOp::Sub => left - right,
-        BinOp::Mul => left * right,
-        BinOp::Div => left / right,
-        BinOp::Pow => left.powf(right),
-        _ => return None,
+    use elephc_semantics::{numeric::IntegerOp, numeric_unary::NumericValue};
+    let operation = match op {
+        BinOp::Add => IntegerOp::Add, BinOp::Sub => IntegerOp::Sub,
+        BinOp::Mul => IntegerOp::Mul, BinOp::Div => IntegerOp::Div,
+        BinOp::Pow => IntegerOp::Pow, _ => return None,
     };
-    if result.is_finite() {
-        Some(ExprKind::FloatLiteral(result))
-    } else {
-        None
-    }
-}
-
-/// Evaluates a numeric binary operator with two integer operands using checked arithmetic.
-/// On overflow for add/sub/mul, delegates to `fold_int_overflow_to_float` to produce a float result.
-/// Division and power follow PHP's int-preserving rules (see the dedicated helpers).
-fn try_fold_int_numeric_binop(op: &BinOp, left: i64, right: i64) -> Option<ExprKind> {
-    match op {
-        BinOp::Add => left
-            .checked_add(right)
-            .map(ExprKind::IntLiteral)
-            .or_else(|| fold_int_overflow_to_float(op, left, right)),
-        BinOp::Sub => left
-            .checked_sub(right)
-            .map(ExprKind::IntLiteral)
-            .or_else(|| fold_int_overflow_to_float(op, left, right)),
-        BinOp::Mul => left
-            .checked_mul(right)
-            .map(ExprKind::IntLiteral)
-            .or_else(|| fold_int_overflow_to_float(op, left, right)),
-        BinOp::Div => try_fold_int_div(left, right),
-        BinOp::Pow => try_fold_int_pow(left, right),
-        _ => None,
-    }
-}
-
-/// Folds integer `/` the way PHP's `div_function` does.
-///
-/// An exact division stays an integer (`6 / 3` is `int(2)`, not `float(2)`); anything else
-/// becomes a float. `PHP_INT_MIN / -1` has no `i64` result, so it also becomes a float
-/// instead of overflowing. Division by zero declines so the runtime raises
-/// `DivisionByZeroError`.
-fn try_fold_int_div(left: i64, right: i64) -> Option<ExprKind> {
-    if right == 0 {
-        return None;
-    }
-    if super::super::semantic_context::enabled(elephc_semantics::StrictFeature::Arithmetic) {
-        return Some(ExprKind::FloatLiteral(left as f64 / right as f64));
-    }
-    match (left.checked_rem(right), left.checked_div(right)) {
-        (Some(0), Some(quotient)) => Some(ExprKind::IntLiteral(quotient)),
-        _ => Some(ExprKind::FloatLiteral(left as f64 / right as f64)),
-    }
-}
-
-/// Folds integer `**` the way PHP's `pow_function_base` does.
-///
-/// A non-negative exponent keeps an integer result when it fits (`2 ** 3` is `int(8)`, not
-/// `float(8)`). On overflow PHP does *not* fall back to a single `pow()` call — it multiplies
-/// the exact integer accumulated so far by `pow()` of the remaining factor, and the two differ
-/// in the last ULP for most inputs, so the square-and-multiply loop is reproduced verbatim.
-/// A negative exponent is plain `pow((double) base, (double) exp)` in PHP. A non-finite result
-/// declines, leaving the operation on the runtime path.
-fn try_fold_int_pow(left: i64, right: i64) -> Option<ExprKind> {
-    if right < 0 && super::super::semantic_context::enabled(elephc_semantics::StrictFeature::Arithmetic) { return None; }
-    if right >= 0 && super::super::semantic_context::enabled(elephc_semantics::StrictFeature::Overflow) {
-        return elephc_semantics::numeric::checked_integer(elephc_semantics::numeric::IntegerOp::Pow, left, right)
-            .ok().map(ExprKind::IntLiteral);
-    }
-    match elephc_semantics::integer_power::php_integer_power(left, right) {
-        elephc_semantics::integer_power::PowerResult::Int(value) => Some(ExprKind::IntLiteral(value)),
-        elephc_semantics::integer_power::PowerResult::Float(value) if value.is_finite() => Some(ExprKind::FloatLiteral(value)),
-        _ => None,
-    }
-}
-
-/// Converts overflowed integer add/sub/mul operations to float to match PHP's numeric coercion.
-/// Returns `None` if the resulting float is non-finite.
-fn fold_int_overflow_to_float(op: &BinOp, left: i64, right: i64) -> Option<ExprKind> {
-    if super::super::semantic_context::enabled(elephc_semantics::StrictFeature::Overflow) { return None; }
-    let result = match op {
-        BinOp::Add => left as f64 + right as f64,
-        BinOp::Sub => left as f64 - right as f64,
-        BinOp::Mul => left as f64 * right as f64,
-        _ => return None,
-    };
-    result.is_finite().then_some(ExprKind::FloatLiteral(result))
+    let literal = |value: &Expr| int_literal(value).map(NumericValue::Int)
+        .or_else(|| numeric_literal(value).map(NumericValue::Float));
+    elephc_semantics::constant_numeric::fold(super::super::semantic_context::active_profile(),
+        operation, literal(left)?, literal(right)?).map(|value| match value {
+            NumericValue::Int(value) => ExprKind::IntLiteral(value),
+            NumericValue::Float(value) => ExprKind::FloatLiteral(value),
+        })
 }
 
 /// Returns the integer modulus of two integer literals, or `None` if either operand is not an
@@ -204,12 +118,11 @@ fn fold_int_overflow_to_float(op: &BinOp, left: i64, right: i64) -> Option<ExprK
 /// `PHP_INT_MIN % -1` has no `i64` quotient and traps a native remainder, but PHP defines it
 /// as `0`, so the `-1` divisor is answered directly.
 fn try_fold_int_mod(left: &Expr, right: &Expr) -> Option<ExprKind> {
-    let (left, right) = (int_literal(left)?, int_literal(right)?);
-    match right {
-        0 => None,
-        -1 => Some(ExprKind::IntLiteral(0)),
-        _ => Some(ExprKind::IntLiteral(left % right)),
-    }
+    use elephc_semantics::{numeric::IntegerOp, numeric_unary::NumericValue};
+    let value = elephc_semantics::constant_numeric::fold(super::super::semantic_context::active_profile(),
+        IntegerOp::Mod, NumericValue::Int(int_literal(left)?), NumericValue::Int(int_literal(right)?))?;
+    let NumericValue::Int(value) = value else { return None; };
+    Some(ExprKind::IntLiteral(value))
 }
 
 /// Evaluates bitwise AND, OR, XOR, and shift operations on two integer literals.

@@ -912,3 +912,21 @@ These straight-line source-point mechanisms preserve conservative conditional/
 eval detachment gates. Continue remaining control-flow/global/foreach audits,
 dynamic Reflection placeholders, all six pending families and final host/umbrella
 acceptance. No full local suite, push or PR was run.
+
+### Verified141: shared pure scalar folding
+
+Scalar facts, PHP numeric-string comparison and finite numeric folding now live
+in `elephc-semantics`. Compiler adapters retain AST reconstruction, source literal
+eligibility and explicit profile selection. Existing algorithms preserve bit-exact
+propagation identity, integer-exact/string ordering, PHP promotion, exact division
+and declined warning/error cases. Reflection itself is unchanged in this step.
+
+Default archives build in2m11s and three neutral tests pass in ef9f0c60. After the
+session became unavailable, only the remaining gates resumed in2607b1c5 (3m50s):
+nine exact compiler edge/profile matrices and two native controls pass, including
+integer powers/division, comparisons, numeric strings, NaN, casts, signed zero,
+strict source evidence and independent numeric domains. No unrelated suite ran.
+
+Continue safe Reflection initializer reduction using these shared primitives.
+Dynamic placeholders, remaining binding-flow/foreach audits, all six pending
+semantic families and final host/umbrella acceptance remain active.

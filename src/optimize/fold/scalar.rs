@@ -164,56 +164,17 @@ pub(in crate::optimize) fn spaceship_scalar(left: &Expr, right: &Expr) -> Option
     })
 }
 
-/// Represents a scalar value extracted from a literal expression.
-/// Used during constant folding to compare, coerce, and reconstruct literal expressions.
-#[derive(Debug, Clone, PartialEq)]
-pub(in crate::optimize) enum ScalarValue {
-    Null,
-    Bool(bool),
-    Int(i64),
-    Float(f64),
-    String(String),
+pub(in crate::optimize) use elephc_semantics::scalar_value::ScalarValue;
+
+/// Reconstructs compiler literal syntax from a dependency-neutral scalar fact.
+pub(in crate::optimize) trait ScalarValueExpr {
+    /// Preserves the scalar kind and floating bits while rebuilding its AST literal.
+    fn into_expr_kind(self) -> ExprKind;
 }
 
-impl ScalarValue {
-    /// Returns whether this scalar value is truthy per PHP rules.
-    pub(in crate::optimize) fn truthy(&self) -> bool {
-        match self {
-            ScalarValue::Null => false,
-            ScalarValue::Bool(value) => *value,
-            ScalarValue::Int(value) => *value != 0,
-            ScalarValue::Float(value) => *value != 0.0,
-            ScalarValue::String(value) => !value.is_empty() && value != "0",
-        }
-    }
-
-    /// Returns whether two scalar values denote the *same constant*, i.e. whether one can be
-    /// substituted for the other without changing any observable byte of the program.
-    ///
-    /// This is deliberately stricter than `PartialEq`: floats are compared by bit pattern, so
-    /// `0.0` and `-0.0` stay distinct (`echo -0.0` prints `-0`) and two NANs with the same
-    /// payload merge. Use it for constant identity — merging ternary/match arms into one
-    /// propagated fact — never for PHP's `==` or `===`, which are value comparisons.
-    pub(in crate::optimize) fn same_constant(&self, other: &Self) -> bool {
-        match (self, other) {
-            (ScalarValue::Float(left), ScalarValue::Float(right)) => {
-                left.to_bits() == right.to_bits()
-            }
-            (left, right) => left == right,
-        }
-    }
-
-    /// Returns whether this scalar value is a floating-point NAN.
-    ///
-    /// Folding a NAN to bool is value-correct (`truthy()` already answers `true`, since
-    /// `NAN != 0.0`) but WARNING-incorrect under PHP 8.5, which reports every NAN-to-bool
-    /// coercion. `try_fold_cast` uses this to keep such a cast on the runtime path.
-    pub(in crate::optimize) fn is_nan_float(&self) -> bool {
-        matches!(self, ScalarValue::Float(value) if value.is_nan())
-    }
-
+impl ScalarValueExpr for ScalarValue {
     /// Converts this scalar value back into the equivalent `ExprKind` literal node.
-    pub(in crate::optimize) fn into_expr_kind(self) -> ExprKind {
+    fn into_expr_kind(self) -> ExprKind {
         match self {
             ScalarValue::Null => ExprKind::Null,
             ScalarValue::Bool(value) => ExprKind::BoolLiteral(value),
