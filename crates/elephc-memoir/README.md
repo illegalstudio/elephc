@@ -19,7 +19,8 @@ parameter-owner acquisition, original-identity pins, protected cleanup, temporar
 owner retirement, validated boxed object transfers, the object-handle pool, guarded stack mapping,
 zend_string allocation, recursive zval/string/array storage retirement, and memory
 proofs for direct scalar/empty-array cleanup, static binding storage, guard
-records, depth-stamped temporary owner lists and abandoned activation cleanup.
+records, depth-stamped temporary owner lists, abandoned activation cleanup,
+stored-property ownership completion, previous-slot release and box reuse during hydration.
 It also emits fixed heap, GC, buffer, reference-root, handle-table and string-scratch
 declarations, including raw capture-buffer storage, keeping their existing order
 and byte layout.
@@ -52,6 +53,10 @@ failed-constructor destructor policy and parser completion stay in the compiler.
 `activation_cleanup` requires only assembly output and target ABI capabilities.
 The compiler supplies its chain symbol and selects the surviving activation;
 Memoir detaches every abandoned record before invoking its cleanup callback.
+`hydration_owners` likewise uses only assembly and target ABI capabilities. Its
+context names the host uninitialized marker, box deferral entry and saved-payload
+release entry. Wire parsing, property validation, duplicate-key selection and
+parser completion stay in the compiler.
 
 The compiler retains EIR lifetime analysis, ownership optimization and placement,
 PHP reference/type validation, formatting, output routing, zval pack/unpack,
