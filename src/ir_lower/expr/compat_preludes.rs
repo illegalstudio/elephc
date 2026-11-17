@@ -394,6 +394,21 @@ pub(super) fn lower_backend_gap_builtin_shape(
             expr,
         ));
     }
+    // `var_dump(...$list)`: the native lowering dumps one operand per source argument, so the
+    // unpacked list would be dumped as one array. The helper dumps every packed argument.
+    if builtin == "var_dump"
+        && args.iter().any(is_spread_arg)
+        && !crate::types::call_args::has_named_args(args)
+        && !ctx.functions.contains_key(name)
+    {
+        let packed = Expr::new(ExprKind::ArrayLiteral(args.to_vec()), expr.span);
+        return Some(lower_function_call(
+            ctx,
+            &crate::names::Name::unqualified(crate::array_walk_prelude::VAR_DUMP_VALUES_NAME),
+            &[packed],
+            expr,
+        ));
+    }
     if crate::types::call_args::has_named_args(args)
         || (builtin != "array_unshift" && args.iter().any(is_spread_arg))
     {
@@ -770,7 +785,7 @@ pub(super) fn lower_backend_gap_builtin_shape(
         }
     }
     if builtin == "array_unshift" {
-        let receiver = args.iter().enumerate().find_map(|(index, arg)| match &arg.kind {
+        let receiver =args.iter().enumerate().find_map(|(index, arg)| match &arg.kind {
             ExprKind::NamedArg { name, value } if php_symbol_key(name) == "array" => {
                 Some(value.as_ref())
             }

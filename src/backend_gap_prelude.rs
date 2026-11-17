@@ -956,6 +956,9 @@ pub fn inject_if_used(
     // callback `array_walk()` is FOR nor a nested array in `array_walk_recursive()`.
     let needs_array_walk =
         usage.references("array_walk") || usage.references("array_walk_recursive");
+    // `var_dump(...$list)` dumps every element; the native lowering takes one operand per
+    // source argument.
+    let needs_var_dump_values = usage.references("var_dump");
     // And so is `preg_match_all()` with `$flags`, which the native helper ignores.
     // And so are the array and flag forms of the `preg_replace*()` family, `preg_filter()` and
     // `preg_replace_callback_array()`. The callback `$flags` form finds its matches through the
@@ -1096,6 +1099,7 @@ pub fn inject_if_used(
         && !needs_array_keys_search
         && !needs_array_map_gradual
         && !needs_array_walk
+        && !needs_var_dump_values
         && !needs_preg_array
         && !needs_is_callable_ext
         && !needs_closure_from_callable
@@ -1283,6 +1287,11 @@ pub fn inject_if_used(
     }
     if needs_array_walk {
         let declarations = crate::array_walk_prelude::declarations();
+        inventory.record_program(BACKEND_GAP_GROUP, &declarations);
+        combined.extend(declarations);
+    }
+    if needs_var_dump_values {
+        let declarations = crate::array_walk_prelude::var_dump_declarations();
         inventory.record_program(BACKEND_GAP_GROUP, &declarations);
         combined.extend(declarations);
     }

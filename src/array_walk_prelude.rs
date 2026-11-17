@@ -44,6 +44,29 @@ pub(crate) const ARRAY_WALK_NAME: &str = "__elephc_array_walk";
 /// Reserved helper for `array_walk_recursive()`.
 pub(crate) const ARRAY_WALK_RECURSIVE_NAME: &str = "__elephc_array_walk_recursive";
 
+/// Reserved helper for `var_dump()` calls that unpack a list (`var_dump(...$values)`).
+pub(crate) const VAR_DUMP_VALUES_NAME: &str = "__elephc_var_dump_values";
+
+/// Returns the declaration of the `var_dump(...$values)` helper.
+///
+/// The native `var_dump` lowering dumps one operand per source argument, so an unpacked list
+/// reached it as a single array operand (`var_dump(...[1, "a"])` printed `int(1)` then
+/// `array(1)`); php dumps every element. The helper walks the packed arguments in order.
+pub(crate) fn var_dump_declarations() -> Program {
+    php_semantics_declarations(|| {
+        vec![function(VAR_DUMP_VALUES_NAME)
+            .param("values", t_array())
+            .returns(crate::parser::ast::TypeExpr::Void)
+            .body(vec![crate::synthetic_class::s_foreach(
+                e_var("values"),
+                None,
+                "value",
+                vec![crate::synthetic_class::s_expr(e_call("var_dump", vec![e_var("value")]))],
+            )])
+            .build()]
+    })
+}
+
 /// Returns the `array_walk()` family declarations for injection.
 pub(crate) fn declarations() -> Program {
     php_semantics_declarations(|| vec![array_walk(), array_walk_recursive()])

@@ -73,3 +73,19 @@ var_dump(call_user_func_array("label", ["name" => "items", ...$rest]));
     );
     assert_eq!(out, "string(7) \"items:7\"\n");
 }
+
+/// `var_dump(...$list)` dumps every unpacked element, not the list as one array operand.
+#[test]
+fn test_var_dump_spread_dumps_each_element() {
+    let out = compile_and_run(
+        r#"<?php
+$c = [1, "a", 2.5];
+var_dump(...$c);
+var_dump(7, ...$c, ...[null]);
+"#,
+    );
+    assert_eq!(
+        out,
+        "int(1)\nstring(1) \"a\"\nfloat(2.5)\nint(7)\nint(1)\nstring(1) \"a\"\nfloat(2.5)\nNULL\n"
+    );
+}
