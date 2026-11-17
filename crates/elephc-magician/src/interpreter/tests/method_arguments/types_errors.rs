@@ -179,3 +179,159 @@ return $box->read(missing: "bad");"#,
 
     assert_eq!(err, EvalStatus::RuntimeFatal);
 }
+
+/// Verifies a fragment's `declare(strict_types=1)` rejects weak scalar coercion for ordinary
+/// method and function calls instead of silently applying the coercive path.
+#[test]
+fn execute_program_strict_eval_rejects_weak_scalar_arguments() {
+    let method = parse_fragment(
+        br#"declare(strict_types=1);
+class StrictTypedScalarBox {
+    public function read(int $id) {
+        return $id;
+    }
+}
+return (new StrictTypedScalarBox())->read("7");"#,
+    )
+    .expect("parse eval fragment");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+    assert_eq!(
+        execute_program(&method, &mut scope, &mut values),
+        Err(EvalStatus::RuntimeFatal)
+    );
+
+    let function = parse_fragment(
+        br#"declare(strict_types=1);
+function strictScalarReader(int $id) {
+    return $id;
+}
+return strictScalarReader("7");"#,
+    )
+    .expect("parse eval fragment");
+    assert_eq!(
+        execute_program(&function, &mut scope, &mut values),
+        Err(EvalStatus::RuntimeFatal)
+    );
+}
+
+/// Verifies strict eval keeps PHP's single weak conversion: an `int` argument widens into a
+/// declared `float` parameter.
+#[test]
+fn execute_program_strict_eval_allows_int_to_float_widening() {
+    let program = parse_fragment(
+        br#"declare(strict_types=1);
+function strictFloatReader(float $value) {
+    return $value;
+}
+return strictFloatReader(7);"#,
+    )
+    .expect("parse eval fragment");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+
+    let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+    assert_eq!(values.get(result), FakeValue::Float(7.0));
+}
+
+/// Verifies a strict fragment rejects weak coercion of a returned value into the declared
+/// return type.
+#[test]
+fn execute_program_strict_eval_rejects_weak_returned_scalars() {
+    let program = parse_fragment(
+        br#"declare(strict_types=1);
+function strictIntReturnReader(): int {
+    return "7";
+}
+return strictIntReturnReader();"#,
+    )
+    .expect("parse eval fragment");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+
+    assert_eq!(
+        execute_program(&program, &mut scope, &mut values),
+        Err(EvalStatus::RuntimeFatal)
+    );
+}
+
+/// Verifies a saved eval function and closure keep the strict mode of the fragment that
+/// declared them when a strict or coercive fragment calls them.
+#[test]
+fn execute_program_saved_functions_keep_their_defining_strict_mode() {
+    let mut context = ElephcEvalContext::new();
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+
+    let weak = parse_fragment(
+        br#"function weakScalarReader(int $id) {
+    return $id;
+}
+function weakOuter() {
+    return weakScalarReader("7");
+}
+$weakClosure = function () {
+    $nested = function (int $id) { return $id; };
+    return $nested("8");
+};"#,
+    )
+    .expect("parse weak eval fragment");
+    let result = execute_program_with_context(&mut context, &weak, &mut scope, &mut values)
+        .expect("install weak eval declarations");
+    values.release(result).expect("release installed value");
+
+    let strict = parse_fragment(
+        br#"declare(strict_types=1);
+$outer = weakOuter();
+$inner = $weakClosure();
+return $outer + $inner;"#,
+    )
+    .expect("parse strict eval fragment");
+    let result = execute_program_with_context(&mut context, &strict, &mut scope, &mut values)
+        .expect("weak bodies must remain coercive under a strict caller");
+    assert_eq!(values.get(result), FakeValue::Int(15));
+
+    let strict_declaration = parse_fragment(
+        br#"declare(strict_types=1);
+function strictScalarReader(int $id) {
+    return $id;
+}
+function strictOuter() {
+    return strictScalarReader("9");
+}"#,
+    )
+    .expect("parse strict eval declaration");
+    let result = execute_program_with_context(
+        &mut context,
+        &strict_declaration,
+        &mut scope,
+        &mut values,
+    )
+    .expect("install strict eval declarations");
+    values.release(result).expect("release installed value");
+
+    let coercive = parse_fragment(b"return strictOuter();").expect("parse coercive eval fragment");
+    assert_eq!(
+        execute_program_with_context(&mut context, &coercive, &mut scope, &mut values),
+        Err(EvalStatus::RuntimeFatal)
+    );
+}
+
+/// Verifies the eval parser accepts exactly `0` or `1` as the `strict_types` value.
+#[test]
+fn parse_fragment_rejects_invalid_strict_types_values() {
+    for accepted in ["declare(strict_types=0);", "declare(strict_types=1);"] {
+        parse_fragment(accepted.as_bytes()).expect("valid strict_types value");
+    }
+    for rejected in [
+        "declare(strict_types=2);",
+        "declare(strict_types=-1);",
+        "declare(strict_types=1.0);",
+    ] {
+        assert!(
+            parse_fragment(rejected.as_bytes()).is_err(),
+            "invalid strict_types fragment parsed: {rejected}"
+        );
+    }
+}

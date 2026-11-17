@@ -179,13 +179,18 @@ fn emit_property_store_guard_aarch64(emitter: &mut Emitter) {
     emitter.label("__rt_property_reference_guard_int_string");
     emitter.instruction("ldr x1, [sp, #32]");                                   // load the string pointer
     emitter.instruction("ldr x2, [sp, #40]");                                   // load the string length
-    abi::emit_call_label(emitter, "__rt_property_reference_numeric");         // numeric strings weakly convert to int
-    emitter.instruction("cbnz x0, __rt_property_reference_store_guard_done");   // accept a fully numeric spelling
-    emitter.instruction("b __rt_property_reference_guard_reject");              // non-numeric strings are rejected
+    abi::emit_call_label(emitter, "__rt_property_reference_numeric");         // classify the numeric spelling
+    emitter.instruction("cmp x0, #1");                                          // does the spelling name an i64 integer?
+    emitter.instruction("b.eq __rt_property_reference_store_guard_done");       // exact integers are accepted
+    emitter.instruction("cbz x0, __rt_property_reference_guard_reject");        // non-numeric strings are rejected
+    emitter.instruction("ldr x0, [sp, #8]");                                    // load the boxed string source
+    abi::emit_call_label(emitter, "__rt_mixed_cast_float");                   // convert the numeric spelling through the float path
+    emitter.instruction("b __rt_property_reference_guard_int_float_check");     // apply the shared finite-range acceptance
 
     emitter.label("__rt_property_reference_guard_int_float");
     emitter.instruction("ldr x9, [sp, #32]");                                   // load the float bit pattern
     emitter.instruction("fmov d0, x9");                                         // move it into the FPU
+    emitter.label("__rt_property_reference_guard_int_float_check");
     emitter.instruction("fcmp d0, d0");                                         // is the float NaN?
     emitter.instruction("b.vs __rt_property_reference_guard_reject");           // NaN never fits an int
     abi::emit_load_int_immediate(emitter, "x9", 0x43e0000000000000_u64 as i64); // materialize 2^63 as a float bit pattern
@@ -214,8 +219,15 @@ fn emit_property_store_guard_aarch64(emitter: &mut Emitter) {
     emitter.instruction("cmp x9, #3");                                          // is the source a bool?
     emitter.instruction("b.eq __rt_property_reference_store_guard_done");       // bools weakly convert to float
     emitter.instruction("cmp x9, #1");                                          // is the source a string?
-    emitter.instruction("b.eq __rt_property_reference_guard_int_string");       // numeric strings weakly convert to float
+    emitter.instruction("b.eq __rt_property_reference_guard_float_string");     // numeric strings weakly convert to float
     emitter.instruction("b __rt_property_reference_guard_reject");              // every other payload is a property TypeError
+
+    emitter.label("__rt_property_reference_guard_float_string");
+    emitter.instruction("ldr x1, [sp, #32]");                                   // load the string pointer
+    emitter.instruction("ldr x2, [sp, #40]");                                   // load the string length
+    abi::emit_call_label(emitter, "__rt_property_reference_numeric");         // classify the numeric spelling
+    emitter.instruction("cbnz x0, __rt_property_reference_store_guard_done");   // every numeric spelling widens to float
+    emitter.instruction("b __rt_property_reference_guard_reject");              // non-numeric strings are rejected
 
     emitter.label("__rt_property_reference_guard_bool");
     emitter.instruction("ldr x9, [sp, #24]");                                   // reload the source tag
@@ -365,15 +377,19 @@ fn emit_property_store_guard_x86_64(emitter: &mut Emitter) {
 
     emitter.label("__rt_property_reference_guard_int_string_x");
     emitter.instruction("mov rax, QWORD PTR [rbp - 40]");                       // load the string pointer
-    emitter.instruction("mov rdi, QWORD PTR [rbp - 40]");                       // preserve the string pointer for the name row
     emitter.instruction("mov rdx, QWORD PTR [rbp - 48]");                       // load the string length from the unbox high word
-    abi::emit_call_label(emitter, "__rt_property_reference_numeric_x");       // numeric strings weakly convert to int
-    emitter.instruction("test rax, rax");                                       // did the whole spelling parse as numeric?
-    emitter.instruction("jnz __rt_property_reference_store_guard_done_x");      // accept a fully numeric spelling
-    emitter.instruction("jmp __rt_property_reference_guard_reject_x");          // non-numeric strings are rejected
+    abi::emit_call_label(emitter, "__rt_property_reference_numeric_x");       // classify the numeric spelling
+    emitter.instruction("cmp rax, 1");                                          // does the spelling name an i64 integer?
+    emitter.instruction("je __rt_property_reference_store_guard_done_x");       // exact integers are accepted
+    emitter.instruction("test rax, rax");                                       // is the spelling non-numeric?
+    emitter.instruction("je __rt_property_reference_guard_reject_x");           // non-numeric strings are rejected
+    emitter.instruction("mov rax, QWORD PTR [rbp - 16]");                       // load the boxed string source
+    abi::emit_call_label(emitter, "__rt_mixed_cast_float");                   // convert the numeric spelling through the float path
+    emitter.instruction("jmp __rt_property_reference_guard_int_float_check_x"); // apply the shared finite-range acceptance
 
     emitter.label("__rt_property_reference_guard_int_float_x");
     emitter.instruction("movq xmm0, QWORD PTR [rbp - 40]");                     // load the float bit pattern
+    emitter.label("__rt_property_reference_guard_int_float_check_x");
     emitter.instruction("ucomisd xmm0, xmm0");                                  // is the float NaN?
     emitter.instruction("jp __rt_property_reference_guard_reject_x");           // NaN never fits an int
     abi::emit_load_int_immediate(emitter, "r10", 0x43e0000000000000_u64 as i64); // materialize 2^63 as a float bit pattern
@@ -403,8 +419,16 @@ fn emit_property_store_guard_x86_64(emitter: &mut Emitter) {
     emitter.instruction("cmp r9, 3");                                           // is the source a bool?
     emitter.instruction("je __rt_property_reference_store_guard_done_x");       // bools weakly convert to float
     emitter.instruction("cmp r9, 1");                                           // is the source a string?
-    emitter.instruction("je __rt_property_reference_guard_int_string_x");       // numeric strings weakly convert to float
+    emitter.instruction("je __rt_property_reference_guard_float_string_x");     // numeric strings weakly convert to float
     emitter.instruction("jmp __rt_property_reference_guard_reject_x");          // every other payload is a property TypeError
+
+    emitter.label("__rt_property_reference_guard_float_string_x");
+    emitter.instruction("mov rax, QWORD PTR [rbp - 40]");                       // load the string pointer
+    emitter.instruction("mov rdx, QWORD PTR [rbp - 48]");                       // load the string length from the unbox high word
+    abi::emit_call_label(emitter, "__rt_property_reference_numeric_x");       // classify the numeric spelling
+    emitter.instruction("test rax, rax");                                       // is the whole spelling numeric?
+    emitter.instruction("jnz __rt_property_reference_store_guard_done_x");      // every numeric spelling widens to float
+    emitter.instruction("jmp __rt_property_reference_guard_reject_x");          // non-numeric strings are rejected
 
     emitter.label("__rt_property_reference_guard_bool_x");
     emitter.instruction("mov r9, QWORD PTR [rbp - 32]");                        // reload the source tag
@@ -500,6 +524,11 @@ fn emit_name_row_x86_64(emitter: &mut Emitter, label: &str, symbol: &str, len: u
 /// program shape. This leaf follows PHP's `is_numeric()` spelling: optional surrounding
 /// whitespace, an optional sign, an integer and/or fractional part, and an optional exponent
 /// with at least one digit.
+///
+/// Returns in `x0` / `rax`: 0 for a non-numeric spelling, 1 for an integer-form spelling whose
+/// value fits `i64`, and 2 for every other numeric spelling (fraction, exponent, or an integer
+/// magnitude outside `i64`). An exact-integer caller range-checks classification 2 through its
+/// float path; a float target accepts every nonzero classification.
 fn emit_property_numeric(emitter: &mut Emitter) {
     emitter.blank();
     match emitter.target.arch {
@@ -511,22 +540,37 @@ fn emit_property_numeric(emitter: &mut Emitter) {
 /// Emits the AArch64 numeric-string scanner.
 fn emit_property_numeric_aarch64(emitter: &mut Emitter) {
     emitter.label_global("__rt_property_reference_numeric");
-    emitter.instruction("mov x0, #0");                                          // default to a non-numeric spelling
+    emitter.instruction("mov x0, #0");                                          // 0 = non-numeric
     emitter.instruction("cbz x2, __rt_property_reference_numeric_done");        // an empty string is not numeric
     emitter.instruction("mov x9, #0");                                          // start at the first byte
+    emitter.instruction("mov x13, #0");                                         // accumulated integer magnitude
+    emitter.instruction("mov x14, #0");                                         // 0 = exact integer form, 1 = float form, 2 = integer overflow
+    emitter.instruction("mov x15, #0");                                         // negative sign flag
     emitter.label("__rt_property_reference_numeric_leading");
     emitter.instruction("ldrb w10, [x1, x9]");                                  // inspect the current byte
-    emitter.instruction("cmp w10, #0x20");                                      // ASCII space?
-    emitter.instruction("b.ne __rt_property_reference_numeric_sign");           // stop skipping leading whitespace
-    emitter.instruction("add x9, x9, #1");                                      // consume the space
+    emitter.instruction("cmp w10, #0x20");                                      // space?
+    emitter.instruction("b.eq __rt_property_reference_numeric_leading_space");  // consume PHP whitespace
+    emitter.instruction("cmp w10, #0x09");                                      // tab?
+    emitter.instruction("b.eq __rt_property_reference_numeric_leading_space");  // consume PHP whitespace
+    emitter.instruction("cmp w10, #0x0a");                                      // newline?
+    emitter.instruction("b.eq __rt_property_reference_numeric_leading_space");  // consume PHP whitespace
+    emitter.instruction("cmp w10, #0x0d");                                      // carriage return?
+    emitter.instruction("b.eq __rt_property_reference_numeric_leading_space");  // consume PHP whitespace
+    emitter.instruction("cmp w10, #0x0b");                                      // vertical tab?
+    emitter.instruction("b.eq __rt_property_reference_numeric_leading_space");  // consume PHP whitespace
+    emitter.instruction("cmp w10, #0x0c");                                      // form feed?
+    emitter.instruction("b.ne __rt_property_reference_numeric_sign");           // start the sign scan
+    emitter.label("__rt_property_reference_numeric_leading_space");
+    emitter.instruction("add x9, x9, #1");                                      // consume the whitespace byte
     emitter.instruction("cmp x9, x2");                                          // reached the end?
-    emitter.instruction("b.lo __rt_property_reference_numeric_leading");        // keep skipping leading whitespace
-    emitter.instruction("b __rt_property_reference_numeric_done");              // a whitespace-only spelling is not numeric
+    emitter.instruction("b.lo __rt_property_reference_numeric_leading");        // keep skipping
+    emitter.instruction("b __rt_property_reference_numeric_done");              // whitespace-only is not numeric
     emitter.label("__rt_property_reference_numeric_sign");
     emitter.instruction("cmp w10, #0x2b");                                      // leading plus?
     emitter.instruction("b.eq __rt_property_reference_numeric_sign_done");      // consume it
     emitter.instruction("cmp w10, #0x2d");                                      // leading minus?
-    emitter.instruction("b.ne __rt_property_reference_numeric_int");            // otherwise start with the integer digits
+    emitter.instruction("b.ne __rt_property_reference_numeric_int");            // start with the integer digits
+    emitter.instruction("mov x15, #1");                                         // remember the negative sign
     emitter.label("__rt_property_reference_numeric_sign_done");
     emitter.instruction("add x9, x9, #1");                                      // consume the sign
     emitter.instruction("cmp x9, x2");                                          // is anything left?
@@ -540,13 +584,36 @@ fn emit_property_numeric_aarch64(emitter: &mut Emitter) {
     emitter.instruction("cmp w10, #0x39");                                      // above ASCII '9'?
     emitter.instruction("b.hi __rt_property_reference_numeric_int_done");       // leave the integer part
     emitter.instruction("add x11, x11, #1");                                    // count one digit
+    emitter.instruction("sub w16, w10, #0x30");                                 // convert the byte to its digit value
+    emitter.instruction("mov x17, #10");                                        // multiply the accumulator by ten
+    emitter.instruction("umulh x10, x13, x17");                                 // detect multiplication overflow
+    emitter.instruction("cbnz x10, __rt_property_reference_numeric_int_overflow"); // the magnitude no longer fits unsigned 64 bits
+    emitter.instruction("mul x13, x13, x17");                                   // apply the decimal shift
+    emitter.instruction("add x16, x13, x16");                                   // add the current digit
+    emitter.instruction("cmp x16, x13");                                        // detect addition overflow
+    emitter.instruction("b.lo __rt_property_reference_numeric_int_overflow");   // the magnitude no longer fits unsigned 64 bits
+    emitter.instruction("mov x13, x16");                                        // publish the accumulated magnitude
     emitter.instruction("add x9, x9, #1");                                      // advance
     emitter.instruction("cmp x9, x2");                                          // reached the end?
     emitter.instruction("b.lo __rt_property_reference_numeric_int_loop");       // keep reading digits
     emitter.instruction("b __rt_property_reference_numeric_after");             // no fraction or exponent remains
+    emitter.label("__rt_property_reference_numeric_int_overflow");
+    emitter.instruction("mov x14, #2");                                         // remember that the integer exceeded i64
+    emitter.instruction("add x9, x9, #1");                                      // consume the overflowing digit
+    emitter.label("__rt_property_reference_numeric_int_skip");
+    emitter.instruction("cmp x9, x2");                                          // reached the end?
+    emitter.instruction("b.hs __rt_property_reference_numeric_after");          // the spelling is still numeric
+    emitter.instruction("ldrb w10, [x1, x9]");                                  // inspect the current byte
+    emitter.instruction("cmp w10, #0x30");                                      // below ASCII '0'?
+    emitter.instruction("b.lo __rt_property_reference_numeric_int_done");       // leave the integer part
+    emitter.instruction("cmp w10, #0x39");                                      // above ASCII '9'?
+    emitter.instruction("b.hi __rt_property_reference_numeric_int_done");       // leave the integer part
+    emitter.instruction("add x9, x9, #1");                                      // consume the digit without accumulating
+    emitter.instruction("b __rt_property_reference_numeric_int_skip");          // keep consuming digits
     emitter.label("__rt_property_reference_numeric_int_done");
     emitter.instruction("cmp w10, #0x2e");                                      // decimal point?
     emitter.instruction("b.ne __rt_property_reference_numeric_exponent");       // no fractional part
+    emitter.instruction("mov x14, #1");                                         // mark a float-form spelling
     emitter.instruction("add x9, x9, #1");                                      // consume the decimal point
     emitter.label("__rt_property_reference_numeric_frac");
     emitter.instruction("cmp x9, x2");                                          // reached the end?
@@ -566,6 +633,7 @@ fn emit_property_numeric_aarch64(emitter: &mut Emitter) {
     emitter.instruction("cmp w10, #0x45");                                      // uppercase exponent marker?
     emitter.instruction("b.ne __rt_property_reference_numeric_trailing");       // no exponent
     emitter.label("__rt_property_reference_numeric_exponent_digits");
+    emitter.instruction("mov x14, #1");                                         // mark a float-form spelling
     emitter.instruction("add x9, x9, #1");                                      // consume the exponent marker
     emitter.instruction("cmp x9, x2");                                          // is anything left?
     emitter.instruction("b.hs __rt_property_reference_numeric_done");           // a bare exponent is not numeric
@@ -600,7 +668,7 @@ fn emit_property_numeric_aarch64(emitter: &mut Emitter) {
     emitter.instruction("cmp x9, x2");                                          // reached the end?
     emitter.instruction("b.hs __rt_property_reference_numeric_accept");         // the whole spelling is numeric
     emitter.instruction("ldrb w10, [x1, x9]");                                  // inspect the current byte
-    emitter.instruction("cmp w10, #0x20");                                      // ASCII space?
+    emitter.instruction("cmp w10, #0x20");                                      // space?
     emitter.instruction("b.eq __rt_property_reference_numeric_trailing_space"); // consume trailing whitespace
     emitter.instruction("cmp w10, #0x09");                                      // tab?
     emitter.instruction("b.eq __rt_property_reference_numeric_trailing_space"); // consume trailing whitespace
@@ -616,7 +684,22 @@ fn emit_property_numeric_aarch64(emitter: &mut Emitter) {
     emitter.instruction("add x9, x9, #1");                                      // consume the whitespace byte
     emitter.instruction("b __rt_property_reference_numeric_trailing");          // continue scanning
     emitter.label("__rt_property_reference_numeric_accept");
-    emitter.instruction("mov x0, #1");                                          // report a fully numeric spelling
+    emitter.instruction("cbnz x14, __rt_property_reference_numeric_float");     // fraction and exponent forms need a float check
+    emitter.instruction("mov x16, #1");                                         // materialize 2^63
+    emitter.instruction("lsl x16, x16, #63");                                   // the exclusive upper bound for both signs
+    emitter.instruction("cbnz x15, __rt_property_reference_numeric_negative");  // select the negative limit
+    emitter.instruction("sub x17, x16, #1");                                    // positive integers stop at 2^63-1
+    emitter.instruction("cmp x13, x17");                                        // does the magnitude fit?
+    emitter.instruction("b.hi __rt_property_reference_numeric_float");          // report a numeric spelling that is not an i64 integer
+    emitter.instruction("b __rt_property_reference_numeric_integer");           // accept the integer form
+    emitter.label("__rt_property_reference_numeric_negative");
+    emitter.instruction("cmp x13, x16");                                        // negative integers may reach 2^63
+    emitter.instruction("b.hi __rt_property_reference_numeric_float");          // report a numeric spelling that is not an i64 integer
+    emitter.label("__rt_property_reference_numeric_integer");
+    emitter.instruction("mov x0, #1");                                          // report an integer that fits
+    emitter.instruction("b __rt_property_reference_numeric_done");              // return the classification
+    emitter.label("__rt_property_reference_numeric_float");
+    emitter.instruction("mov x0, #2");                                          // ask the caller to check the numeric value
     emitter.label("__rt_property_reference_numeric_done");
     abi::emit_return(emitter);
 }
@@ -624,48 +707,88 @@ fn emit_property_numeric_aarch64(emitter: &mut Emitter) {
 /// Emits the x86_64 numeric-string scanner.
 fn emit_property_numeric_x86_64(emitter: &mut Emitter) {
     emitter.label_global("__rt_property_reference_numeric_x");
-    emitter.instruction("xor eax, eax");                                        // default to a non-numeric spelling
+    emitter.instruction("sub rsp, 32");                                         // reserve length, sign and float-form slots
+    emitter.instruction("mov r11, rax");                                        // preserve the string pointer before returning the classification in rax
+    emitter.instruction("mov QWORD PTR [rsp], rdx");                            // keep the string length across the `mul` instruction
+    emitter.instruction("mov QWORD PTR [rsp + 8], 0");                          // clear the negative sign flag
+    emitter.instruction("mov QWORD PTR [rsp + 16], 0");                         // 0 = exact integer form
+    emitter.instruction("xor rsi, rsi");                                        // accumulated integer magnitude
     emitter.instruction("test rdx, rdx");                                       // an empty string is not numeric
-    emitter.instruction("je __rt_property_reference_numeric_done_x");           // return false
+    emitter.instruction("je __rt_property_reference_numeric_fail_x");           // return 0
     emitter.instruction("xor r8, r8");                                          // start at the first byte
     emitter.label("__rt_property_reference_numeric_leading_x");
-    emitter.instruction("movzx r9d, BYTE PTR [rax + r8]");                      // inspect the current byte
-    emitter.instruction("cmp r9d, 0x20");                                       // ASCII space?
-    emitter.instruction("jne __rt_property_reference_numeric_sign_x");          // stop skipping leading whitespace
-    emitter.instruction("add r8, 1");                                           // consume the space
-    emitter.instruction("cmp r8, rdx");                                         // reached the end?
-    emitter.instruction("jb __rt_property_reference_numeric_leading_x");        // keep skipping leading whitespace
-    emitter.instruction("jmp __rt_property_reference_numeric_done_x");          // a whitespace-only spelling is not numeric
+    emitter.instruction("movzx r9d, BYTE PTR [r11 + r8]");                      // inspect the current byte
+    emitter.instruction("cmp r9d, 0x20");                                       // space?
+    emitter.instruction("je __rt_property_reference_numeric_leading_space_x");  // consume PHP whitespace
+    emitter.instruction("cmp r9d, 0x09");                                       // tab?
+    emitter.instruction("je __rt_property_reference_numeric_leading_space_x");  // consume PHP whitespace
+    emitter.instruction("cmp r9d, 0x0a");                                       // newline?
+    emitter.instruction("je __rt_property_reference_numeric_leading_space_x");  // consume PHP whitespace
+    emitter.instruction("cmp r9d, 0x0d");                                       // carriage return?
+    emitter.instruction("je __rt_property_reference_numeric_leading_space_x");  // consume PHP whitespace
+    emitter.instruction("cmp r9d, 0x0b");                                       // vertical tab?
+    emitter.instruction("je __rt_property_reference_numeric_leading_space_x");  // consume PHP whitespace
+    emitter.instruction("cmp r9d, 0x0c");                                       // form feed?
+    emitter.instruction("jne __rt_property_reference_numeric_sign_x");          // start the sign scan
+    emitter.label("__rt_property_reference_numeric_leading_space_x");
+    emitter.instruction("add r8, 1");                                           // consume the whitespace byte
+    emitter.instruction("cmp r8, QWORD PTR [rsp]");                             // reached the end?
+    emitter.instruction("jb __rt_property_reference_numeric_leading_x");        // keep skipping
+    emitter.instruction("jmp __rt_property_reference_numeric_fail_x");          // whitespace-only is not numeric
     emitter.label("__rt_property_reference_numeric_sign_x");
     emitter.instruction("cmp r9d, 0x2b");                                       // leading plus?
     emitter.instruction("je __rt_property_reference_numeric_sign_done_x");      // consume it
     emitter.instruction("cmp r9d, 0x2d");                                       // leading minus?
-    emitter.instruction("jne __rt_property_reference_numeric_int_x");           // otherwise start with the integer digits
+    emitter.instruction("jne __rt_property_reference_numeric_int_x");           // start with the integer digits
+    emitter.instruction("mov QWORD PTR [rsp + 8], 1");                          // remember the negative sign
     emitter.label("__rt_property_reference_numeric_sign_done_x");
     emitter.instruction("add r8, 1");                                           // consume the sign
-    emitter.instruction("cmp r8, rdx");                                         // is anything left?
-    emitter.instruction("jae __rt_property_reference_numeric_done_x");          // a bare sign is not numeric
+    emitter.instruction("cmp r8, QWORD PTR [rsp]");                             // is anything left?
+    emitter.instruction("jae __rt_property_reference_numeric_fail_x");          // a bare sign is not numeric
     emitter.label("__rt_property_reference_numeric_int_x");
     emitter.instruction("xor ecx, ecx");                                        // count integer and fractional digits
     emitter.label("__rt_property_reference_numeric_int_loop_x");
-    emitter.instruction("movzx r9d, BYTE PTR [rax + r8]");                      // inspect the current byte
+    emitter.instruction("movzx r9d, BYTE PTR [r11 + r8]");                      // inspect the current byte
     emitter.instruction("cmp r9d, 0x30");                                       // below ASCII '0'?
     emitter.instruction("jb __rt_property_reference_numeric_int_done_x");       // leave the integer part
     emitter.instruction("cmp r9d, 0x39");                                       // above ASCII '9'?
     emitter.instruction("ja __rt_property_reference_numeric_int_done_x");       // leave the integer part
     emitter.instruction("add rcx, 1");                                          // count one digit
+    emitter.instruction("sub r9d, 0x30");                                       // convert the byte to its digit value
+    emitter.instruction("mov rax, rsi");                                        // seed the 128-bit multiply with the accumulator
+    emitter.instruction("mov rdx, 10");                                         // multiply by ten
+    emitter.instruction("mul rdx");                                             // rdx:rax = accumulator * 10
+    emitter.instruction("test rdx, rdx");                                       // did the multiplication overflow?
+    emitter.instruction("jnz __rt_property_reference_numeric_int_overflow_x");  // the magnitude no longer fits unsigned 64 bits
+    emitter.instruction("add rax, r9");                                         // add the current digit
+    emitter.instruction("jc __rt_property_reference_numeric_int_overflow_x");   // the magnitude no longer fits unsigned 64 bits
+    emitter.instruction("mov rsi, rax");                                        // publish the accumulated magnitude
     emitter.instruction("add r8, 1");                                           // advance
-    emitter.instruction("cmp r8, rdx");                                         // reached the end?
+    emitter.instruction("cmp r8, QWORD PTR [rsp]");                             // reached the end?
     emitter.instruction("jb __rt_property_reference_numeric_int_loop_x");       // keep reading digits
     emitter.instruction("jmp __rt_property_reference_numeric_after_x");         // no fraction or exponent remains
+    emitter.label("__rt_property_reference_numeric_int_overflow_x");
+    emitter.instruction("mov QWORD PTR [rsp + 16], 2");                         // remember that the integer exceeded i64
+    emitter.instruction("add r8, 1");                                           // consume the overflowing digit
+    emitter.label("__rt_property_reference_numeric_int_skip_x");
+    emitter.instruction("cmp r8, QWORD PTR [rsp]");                             // reached the end?
+    emitter.instruction("jae __rt_property_reference_numeric_after_x");         // the spelling is still numeric
+    emitter.instruction("movzx r9d, BYTE PTR [r11 + r8]");                      // inspect the current byte
+    emitter.instruction("cmp r9d, 0x30");                                       // below ASCII '0'?
+    emitter.instruction("jb __rt_property_reference_numeric_int_done_x");       // leave the integer part
+    emitter.instruction("cmp r9d, 0x39");                                       // above ASCII '9'?
+    emitter.instruction("ja __rt_property_reference_numeric_int_done_x");       // leave the integer part
+    emitter.instruction("add r8, 1");                                           // consume the digit without accumulating
+    emitter.instruction("jmp __rt_property_reference_numeric_int_skip_x");      // keep consuming digits
     emitter.label("__rt_property_reference_numeric_int_done_x");
     emitter.instruction("cmp r9d, 0x2e");                                       // decimal point?
     emitter.instruction("jne __rt_property_reference_numeric_exponent_x");      // no fractional part
+    emitter.instruction("mov QWORD PTR [rsp + 16], 1");                         // mark a float-form spelling
     emitter.instruction("add r8, 1");                                           // consume the decimal point
     emitter.label("__rt_property_reference_numeric_frac_x");
-    emitter.instruction("cmp r8, rdx");                                         // reached the end?
+    emitter.instruction("cmp r8, QWORD PTR [rsp]");                             // reached the end?
     emitter.instruction("jae __rt_property_reference_numeric_after_x");         // a trailing point is numeric
-    emitter.instruction("movzx r9d, BYTE PTR [rax + r8]");                      // inspect the current byte
+    emitter.instruction("movzx r9d, BYTE PTR [r11 + r8]");                      // inspect the current byte
     emitter.instruction("cmp r9d, 0x30");                                       // below ASCII '0'?
     emitter.instruction("jb __rt_property_reference_numeric_exponent_x");       // leave the fractional part
     emitter.instruction("cmp r9d, 0x39");                                       // above ASCII '9'?
@@ -675,30 +798,31 @@ fn emit_property_numeric_x86_64(emitter: &mut Emitter) {
     emitter.instruction("jmp __rt_property_reference_numeric_frac_x");          // keep reading fractional digits
     emitter.label("__rt_property_reference_numeric_exponent_x");
     emitter.instruction("test rcx, rcx");                                       // a point alone is not numeric
-    emitter.instruction("je __rt_property_reference_numeric_done_x");           // return false
+    emitter.instruction("je __rt_property_reference_numeric_fail_x");           // return 0
     emitter.instruction("cmp r9d, 0x65");                                       // lowercase exponent marker?
     emitter.instruction("je __rt_property_reference_numeric_exponent_digits_x"); // parse its digits
     emitter.instruction("cmp r9d, 0x45");                                       // uppercase exponent marker?
     emitter.instruction("jne __rt_property_reference_numeric_trailing_x");      // no exponent
     emitter.label("__rt_property_reference_numeric_exponent_digits_x");
+    emitter.instruction("mov QWORD PTR [rsp + 16], 1");                         // mark a float-form spelling
     emitter.instruction("add r8, 1");                                           // consume the exponent marker
-    emitter.instruction("cmp r8, rdx");                                         // is anything left?
-    emitter.instruction("jae __rt_property_reference_numeric_done_x");          // a bare exponent is not numeric
-    emitter.instruction("movzx r9d, BYTE PTR [rax + r8]");                      // inspect the exponent sign
+    emitter.instruction("cmp r8, QWORD PTR [rsp]");                             // is anything left?
+    emitter.instruction("jae __rt_property_reference_numeric_fail_x");          // a bare exponent is not numeric
+    emitter.instruction("movzx r9d, BYTE PTR [r11 + r8]");                      // inspect the exponent sign
     emitter.instruction("cmp r9d, 0x2b");                                       // positive exponent?
     emitter.instruction("je __rt_property_reference_numeric_exponent_sign_x");  // consume it
     emitter.instruction("cmp r9d, 0x2d");                                       // negative exponent?
     emitter.instruction("jne __rt_property_reference_numeric_exponent_first_x"); // parse digits directly
     emitter.label("__rt_property_reference_numeric_exponent_sign_x");
     emitter.instruction("add r8, 1");                                           // consume the sign
-    emitter.instruction("cmp r8, rdx");                                         // is anything left?
-    emitter.instruction("jae __rt_property_reference_numeric_done_x");          // a bare exponent sign is not numeric
+    emitter.instruction("cmp r8, QWORD PTR [rsp]");                             // is anything left?
+    emitter.instruction("jae __rt_property_reference_numeric_fail_x");          // a bare exponent sign is not numeric
     emitter.label("__rt_property_reference_numeric_exponent_first_x");
     emitter.instruction("xor r10d, r10d");                                      // count exponent digits
     emitter.label("__rt_property_reference_numeric_exponent_loop_x");
-    emitter.instruction("cmp r8, rdx");                                         // reached the end?
+    emitter.instruction("cmp r8, QWORD PTR [rsp]");                             // reached the end?
     emitter.instruction("jae __rt_property_reference_numeric_exponent_done_x"); // finish the exponent
-    emitter.instruction("movzx r9d, BYTE PTR [rax + r8]");                      // inspect the current byte
+    emitter.instruction("movzx r9d, BYTE PTR [r11 + r8]");                      // inspect the current byte
     emitter.instruction("cmp r9d, 0x30");                                       // below ASCII '0'?
     emitter.instruction("jb __rt_property_reference_numeric_exponent_done_x");  // leave the exponent
     emitter.instruction("cmp r9d, 0x39");                                       // above ASCII '9'?
@@ -708,16 +832,16 @@ fn emit_property_numeric_x86_64(emitter: &mut Emitter) {
     emitter.instruction("jmp __rt_property_reference_numeric_exponent_loop_x"); // keep reading exponent digits
     emitter.label("__rt_property_reference_numeric_exponent_done_x");
     emitter.instruction("test r10, r10");                                       // an exponent needs at least one digit
-    emitter.instruction("je __rt_property_reference_numeric_done_x");           // return false
+    emitter.instruction("je __rt_property_reference_numeric_fail_x");           // return 0
     emitter.instruction("jmp __rt_property_reference_numeric_trailing_x");      // validate the trailing bytes
     emitter.label("__rt_property_reference_numeric_after_x");
     emitter.instruction("test rcx, rcx");                                       // a sign with no digits is not numeric
-    emitter.instruction("je __rt_property_reference_numeric_done_x");           // return false
+    emitter.instruction("je __rt_property_reference_numeric_fail_x");           // return 0
     emitter.label("__rt_property_reference_numeric_trailing_x");
-    emitter.instruction("cmp r8, rdx");                                         // reached the end?
+    emitter.instruction("cmp r8, QWORD PTR [rsp]");                             // reached the end?
     emitter.instruction("jae __rt_property_reference_numeric_accept_x");        // the whole spelling is numeric
-    emitter.instruction("movzx r9d, BYTE PTR [rax + r8]");                      // inspect the current byte
-    emitter.instruction("cmp r9d, 0x20");                                       // ASCII space?
+    emitter.instruction("movzx r9d, BYTE PTR [r11 + r8]");                      // inspect the current byte
+    emitter.instruction("cmp r9d, 0x20");                                       // space?
     emitter.instruction("je __rt_property_reference_numeric_trailing_space_x"); // consume trailing whitespace
     emitter.instruction("cmp r9d, 0x09");                                       // tab?
     emitter.instruction("je __rt_property_reference_numeric_trailing_space_x"); // consume trailing whitespace
@@ -728,14 +852,29 @@ fn emit_property_numeric_x86_64(emitter: &mut Emitter) {
     emitter.instruction("cmp r9d, 0x0b");                                       // vertical tab?
     emitter.instruction("je __rt_property_reference_numeric_trailing_space_x"); // consume trailing whitespace
     emitter.instruction("cmp r9d, 0x0c");                                       // form feed?
-    emitter.instruction("jne __rt_property_reference_numeric_done_x");          // trailing garbage makes it non-numeric
+    emitter.instruction("jne __rt_property_reference_numeric_fail_x");          // trailing garbage makes it non-numeric
     emitter.label("__rt_property_reference_numeric_trailing_space_x");
     emitter.instruction("add r8, 1");                                           // consume the whitespace byte
     emitter.instruction("jmp __rt_property_reference_numeric_trailing_x");      // continue scanning
     emitter.label("__rt_property_reference_numeric_accept_x");
-    emitter.instruction("mov rax, 1");                                          // report a fully numeric spelling
-    abi::emit_return(emitter);
+    emitter.instruction("cmp QWORD PTR [rsp + 16], 0");                         // fraction and exponent forms need a float check
+    emitter.instruction("jne __rt_property_reference_numeric_float_x");         // report a numeric spelling that is not an i64 integer
+    abi::emit_load_int_immediate(emitter, "rdx", i64::MIN);                     // materialize 2^63 as the negative limit
+    emitter.instruction("cmp QWORD PTR [rsp + 8], 0");                          // is the integer negative?
+    emitter.instruction("jne __rt_property_reference_numeric_limit_x");         // keep the negative limit
+    abi::emit_load_int_immediate(emitter, "rdx", i64::MAX);                     // positive integers stop at 2^63-1
+    emitter.label("__rt_property_reference_numeric_limit_x");
+    emitter.instruction("cmp rsi, rdx");                                        // does the magnitude fit?
+    emitter.instruction("ja __rt_property_reference_numeric_float_x");          // report a numeric spelling that is not an i64 integer
+    emitter.instruction("mov rax, 1");                                          // report an integer that fits
+    emitter.instruction("jmp __rt_property_reference_numeric_done_x");          // return the classification
+    emitter.label("__rt_property_reference_numeric_float_x");
+    emitter.instruction("mov rax, 2");                                          // ask the caller to check the numeric value
+    emitter.instruction("jmp __rt_property_reference_numeric_done_x");          // return the classification
+    emitter.label("__rt_property_reference_numeric_fail_x");
+    emitter.instruction("xor eax, eax");                                        // 0 = non-numeric
     emitter.label("__rt_property_reference_numeric_done_x");
+    emitter.instruction("add rsp, 32");                                         // release the scanner frame
     abi::emit_return(emitter);
 }
 

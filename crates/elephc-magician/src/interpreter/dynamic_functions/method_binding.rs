@@ -605,11 +605,24 @@ pub(in crate::interpreter) fn eval_method_parameter_value(
         }
         return Err(EvalStatus::RuntimeFatal);
     }
-    for variant in param_type.variants() {
-        if let Some(coerced) =
-            eval_method_parameter_scalar_coercion(variant, value, context, values)?
+    if context.strict_types() {
+        // PHP's strict mode accepts only exact types plus the int-to-float widening. Every
+        // other scalar conversion (`"42"` to `int`, `true` to `int`, ...) is a type error.
+        if values.type_tag(value)? == EVAL_TAG_INT
+            && param_type
+                .variants()
+                .iter()
+                .any(|variant| matches!(variant, EvalParameterTypeVariant::Float))
         {
-            return Ok(coerced);
+            return values.cast_float(value);
+        }
+    } else {
+        for variant in param_type.variants() {
+            if let Some(coerced) =
+                eval_method_parameter_scalar_coercion(variant, value, context, values)?
+            {
+                return Ok(coerced);
+            }
         }
     }
     if param_type.variants().iter().any(|ty| matches!(ty, EvalParameterTypeVariant::Generic(_)))

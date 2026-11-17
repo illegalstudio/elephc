@@ -128,7 +128,7 @@ impl Parser {
         EvalGenericTemplate { name, parameters, substitutions, prototype: Box::new(prototype), tokens,
             header_range: (header_start, header_end), constructor_parameters,
             namespace: self.namespace.clone(), imports: self.imports.clone(), name_index: name_index - start,
-            native_syntax }
+            native_syntax, strict_types: self.strict_types }
 
     }
 }
@@ -196,6 +196,7 @@ fn specialization_parser(template: &EvalGenericTemplate, bindings: &Bindings, na
     let mut parser = Parser::new(tokens, 0);
     parser.namespace = template.namespace.clone();
     parser.imports = template.imports.clone();
+    parser.strict_types = template.strict_types;
     Ok(parser)
 }
 

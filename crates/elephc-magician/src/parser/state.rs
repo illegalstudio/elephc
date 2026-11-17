@@ -167,6 +167,7 @@ impl Parser {
 
     /// Consumes a top-level `declare(strict_types=0|1);` and records its mode.
     ///
+    /// A value other than exactly `0` or `1` is a parse error, matching PHP's main parser.
     /// Only the strict-types directive changes eval semantics here. Any other `declare`
     /// form is left to the ordinary statement parser, which continues to reject unsupported
     /// directives rather than silently ignoring them.
@@ -197,7 +198,13 @@ impl Parser {
             self.pos = start;
             return Ok(false);
         };
-        let strict = *value != 0;
+        let strict = match *value {
+            0 => false,
+            1 => true,
+            // PHP requires exactly `0` or `1`; any other literal is a parse error rather than
+            // a truthy strict mode switch.
+            _ => return Err(EvalParseError::UnexpectedToken),
+        };
         self.advance();
         if !self.consume(TokenKind::RParen) || !self.consume(TokenKind::Semicolon) {
             self.pos = start;

@@ -102,7 +102,9 @@ use std::sync::atomic::{AtomicU64, Ordering};
 /// Format 28 records bytecode-backed function metadata in the conservative source guard,
 /// even though serde omits the executable cache from the stored payload.
 /// Format 29 adds `goto` and label statements, and the parse failure for an invalid jump.
-pub(crate) const FORMAT_VERSION: u32 = 30;
+/// Format 31 records each eval function, method, and generic template's defining
+/// `strict_types` mode, which changes the serialized callable layout.
+pub(crate) const FORMAT_VERSION: u32 = 31;
 
 /// Identifies the writer, so one build never reads another's entries.
 ///

@@ -118,6 +118,10 @@ pub(in crate::interpreter) fn eval_dynamic_function_with_evaluated_args_and_ref_
     frame.bind_scope(&function_scope);
     frame.set_sensitive_parameters(function.parameter_attributes(), function.parameter_is_variadic());
     context.push_function_args(frame);
+    // Argument binding above used the caller's mode, which is what PHP keys call-site coercion
+    // on. The body and its return coercion run under the declaring fragment's mode.
+    let caller_strict_types = context.strict_types();
+    context.set_strict_types(function.strict_types());
     let result = binding_result.and_then(|()| {
         if let Some(body) = function.bytecode().cloned() {
             super::super::bytecode::execute_bound_body(body, context, &mut function_scope, values)
@@ -151,6 +155,7 @@ pub(in crate::interpreter) fn eval_dynamic_function_with_evaluated_args_and_ref_
             values,
         ),
     };
+    context.set_strict_types(caller_strict_types);
     let return_result = retain_static_local_return(
         return_result,
         &static_names,
@@ -482,6 +487,10 @@ fn eval_closure_with_optional_binding(
         backtrace_object,
         backtrace_object.is_none(),
     );
+    // Argument binding above used the caller's mode; the body and its return coercion run under
+    // the mode of the fragment that declared this closure.
+    let caller_strict_types = context.strict_types();
+    context.set_strict_types(function.strict_types());
     let result = binding_result.and_then(|()| {
         if let Some(body) = function.bytecode().cloned() {
             super::super::bytecode::execute_bound_body(body, context, &mut function_scope, values)
@@ -525,6 +534,7 @@ fn eval_closure_with_optional_binding(
             values,
         ),
     };
+    context.set_strict_types(caller_strict_types);
     let return_result = retain_static_local_return(
         return_result,
         &static_names,

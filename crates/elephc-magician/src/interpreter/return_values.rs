@@ -188,11 +188,23 @@ fn eval_declared_return_value(
         }
         return Err(EvalStatus::RuntimeFatal);
     }
-    for variant in return_type.variants() {
-        if let Some(coerced) =
-            eval_method_parameter_scalar_coercion(variant, value, context, values)?
+    if context.strict_types() {
+        // A strict fragment allows only exact return types plus int-to-float widening.
+        if values.type_tag(value)? == EVAL_TAG_INT
+            && return_type
+                .variants()
+                .iter()
+                .any(|variant| matches!(variant, EvalParameterTypeVariant::Float))
         {
-            return Ok(coerced);
+            return values.cast_float(value);
+        }
+    } else {
+        for variant in return_type.variants() {
+            if let Some(coerced) =
+                eval_method_parameter_scalar_coercion(variant, value, context, values)?
+            {
+                return Ok(coerced);
+            }
         }
     }
     if return_type.variants().iter().any(|ty| matches!(ty, EvalParameterTypeVariant::Generic(_)))

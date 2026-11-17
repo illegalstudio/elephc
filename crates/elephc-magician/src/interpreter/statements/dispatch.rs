@@ -133,7 +133,8 @@ fn declare_function(stmt: &EvalStmt, context: &mut ElephcEvalContext) -> Result<
         .with_parameter_defaults(parameter_defaults.clone())
         .with_parameter_by_ref_flags(parameter_is_by_ref.clone())
         .with_parameter_variadic_flags(parameter_is_variadic.clone())
-        .with_return_type(return_type.clone());
+        .with_return_type(return_type.clone())
+        .with_strict_types(context.strict_types());
     if let Some(source_location) = source_location {
         function = function.with_source_location(*source_location);
     }

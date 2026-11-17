@@ -33,6 +33,8 @@ pub struct EvalClassMethod {
     /// Whether a method declaration or an `&get` property hook returns by reference.
     returns_by_ref: bool,
     body: Vec<EvalStmt>,
+    /// `declare(strict_types=...)` mode of the fragment that declared this method.
+    strict_types: bool,
 }
 
 impl PartialEq for EvalClassMethod {
@@ -57,6 +59,7 @@ impl PartialEq for EvalClassMethod {
             && self.return_type == other.return_type
             && self.returns_by_ref == other.returns_by_ref
             && self.body == other.body
+            && self.strict_types == other.strict_types
     }
 }
 
@@ -122,7 +125,19 @@ impl EvalClassMethod {
             return_type: None,
             returns_by_ref: false,
             body,
+            strict_types: false,
         }
+    }
+
+    /// Returns this method with the declaring fragment's `declare(strict_types=...)` mode.
+    pub const fn with_strict_types(mut self, strict_types: bool) -> Self {
+        self.strict_types = strict_types;
+        self
+    }
+
+    /// Returns the `declare(strict_types=...)` mode of the fragment that declared this method.
+    pub const fn strict_types(&self) -> bool {
+        self.strict_types
     }
 
     /// Returns a copy of this method with source-location metadata attached.

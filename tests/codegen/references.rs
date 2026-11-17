@@ -890,3 +890,48 @@ var_dump($d->n);
         "TypeError: Cannot assign string to reference held by property C::$n of type int\nint(0)\nint(42)\n"
     );
 }
+
+/// Verifies the typed-property reference guard classifies numeric strings by value: PHP's six
+/// leading-whitespace bytes, float forms, and the asymmetric `i64` overflow boundary where
+/// `-9223372036854775809` rounds to `-2^63` but positive `2^63` is rejected.
+#[test]
+fn test_by_reference_typed_property_numeric_string_range_and_whitespace() {
+    let out = compile_and_run(
+        r#"<?php
+class C { public int $n = 0; }
+class F { public float $f = 0.0; }
+function w(int &$x, mixed $v): void { $x = $v; }
+function wf(float &$x, mixed $v): void { $x = $v; }
+$cases = [
+    "999999999999999999999999",
+    "9223372036854775808",
+    "9223372036854775807",
+    "-9223372036854775808",
+    "-9223372036854775809",
+    "1e2",
+    "1e18",
+    "1e19",
+    "\t42",
+    "\n42\t",
+];
+foreach ($cases as $i => $text) {
+    $c = new C();
+    try {
+        w($c->n, $text);
+        echo $i, "=", $c->n, "\n";
+    } catch (TypeError $e) {
+        echo $i, "=TypeError\n";
+    }
+}
+$f = new F();
+wf($f->f, "1e30");
+echo $f->f > 1e29 ? "float-big\n" : "float-small\n";
+"#,
+    );
+    assert_eq!(
+        out,
+        "0=TypeError\n1=TypeError\n2=9223372036854775807\n3=-9223372036854775808\n\
+         4=-9223372036854775808\n5=100\n6=1000000000000000000\n7=TypeError\n\
+         8=42\n9=42\nfloat-big\n"
+    );
+}
