@@ -505,6 +505,16 @@ fn test_error_constructor_promotion_null_default_on_non_nullable_type() {
     );
 }
 
+/// Verifies a promoted intersection-typed parameter with a `null` default is refused with
+/// php-src's message, like any other promoted type that rejects null.
+#[test]
+fn test_error_constructor_promotion_null_default_on_intersection_type() {
+    expect_error(
+        "<?php interface A {} interface B {} class P { public function __construct(public A&B $x = null) {} }",
+        "Cannot use null as default value for parameter $x of type A&B",
+    );
+}
+
 /// Verifies the error diagnostic for readonly class constructor promotion by reference.
 #[test]
 fn test_error_readonly_class_constructor_promotion_by_reference() {

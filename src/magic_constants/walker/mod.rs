@@ -316,6 +316,9 @@ pub(crate) trait Pass {
     fn leave_function(&mut self) {}
     /// Called when entering a class or interface declaration.
     fn enter_class(&mut self, _name: &str) {}
+    /// Called after [`Pass::enter_class`] for a class declaration, with its parent and
+    /// interfaces as written, before the walker transforms them.
+    fn observe_class_heritage(&mut self, _extends: Option<&Name>, _implements: &[Name]) {}
     /// Called when leaving a class or interface declaration.
     fn leave_class(&mut self) {}
     /// Called around the inheritance clauses (`extends`/`implements`) of the class or

@@ -160,7 +160,10 @@ pub(super) fn parse_method_params(
                     if let (Some(declared), Some(ExprKind::Null)) =
                         (type_ann.as_ref(), default.as_ref().map(|default| &default.kind))
                     {
-                        if declared.implicitly_nullable().is_some() {
+                        // An intersection rejects null too; it is only never widened.
+                        if declared.implicitly_nullable().is_some()
+                            || matches!(declared, TypeExpr::Intersection(_))
+                        {
                             return Err(CompileError::new(
                                 param_span,
                                 &format!(

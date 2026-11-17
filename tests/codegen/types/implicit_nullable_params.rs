@@ -134,7 +134,7 @@ var_dump(f(), (new C())->m());
         "{}",
         stderr
     );
-    assert!(stderr.contains("main.php:3:1]: App\\f()"), "{}", stderr);
+    assert!(stderr.contains("main.php:3:24]: App\\f()"), "{}", stderr);
 }
 
 /// Verifies the deprecation follows the `--php-version` profile: php 8.3 accepts `T $p = null`
@@ -165,5 +165,126 @@ fn test_implicitly_nullable_param_in_included_file_reports_once() {
     let deprecations: Vec<&str> =
         stderr.lines().filter(|line| line.starts_with("deprecated[")).collect();
     assert_eq!(deprecations.len(), 1, "{}", stderr);
-    assert!(deprecations[0].contains("lib.php:2:1]: f(): Implicitly marking parameter $x"), "{}", stderr);
+    assert!(deprecations[0].contains("lib.php:2:21]: f(): Implicitly marking parameter $x"), "{}", stderr);
+}
+
+/// Verifies each deprecation is located at its parameter's `null` default, as php-src reports the
+/// parameter's line, and that the deprecations follow source order even though anonymous classes
+/// are hoisted to the end of the program.
+#[test]
+fn test_implicitly_nullable_param_deprecation_points_at_each_parameter() {
+    let stderr = compile_cli_file_with_flags_capturing_stderr(
+        r#"<?php
+function f(
+    int $a = 1,
+    string $b = null,
+    int $c = null
+) { return [$a, $b, $c]; }
+$o = new class { public function m(int $x = null) { return $x; } };
+function g(int $q = null) { return $q; }
+var_dump(f(), $o->m(), g());
+"#,
+        &[],
+    );
+    let deprecations: Vec<&str> = stderr
+        .lines()
+        .filter(|line| line.starts_with("deprecated["))
+        .map(|line| {
+            let location = line.split_once("]: ").expect("diagnostic location").0;
+            location.rsplit('/').next().expect("file name")
+        })
+        .collect();
+    assert_eq!(
+        deprecations,
+        vec!["main.php:4:17", "main.php:5:14", "main.php:7:45", "main.php:8:21"],
+        "{}",
+        stderr
+    );
+}
+
+/// Verifies an anonymous class's methods are named as php 8.5 names them in the deprecation:
+/// `class@anonymous`, or the resolved parent or first interface name followed by `@anonymous`,
+/// with no method suffix, since php-src's name stops at the NUL byte after `@anonymous`.
+#[test]
+fn test_implicitly_nullable_param_deprecation_names_anonymous_classes_like_php() {
+    let stderr = compile_cli_file_with_flags_capturing_stderr(
+        r#"<?php
+namespace N;
+use Other\Base as B;
+interface I {}
+class Base {}
+$a = new class implements I { public function m(int $x = null) { return $x; } };
+$b = new class extends Base { public function m(int $x = null) { return $x; } };
+$c = new class { public function m() { return function (int $y = null) { return $y; }; } };
+var_dump($a->m(), $b->m(), ($c->m())());
+"#,
+        &[],
+    );
+    let deprecations: Vec<&str> = stderr
+        .lines()
+        .filter(|line| line.starts_with("deprecated["))
+        .map(|line| line.split_once("]: ").expect("diagnostic location").1)
+        .collect();
+    let suffix = "as nullable is deprecated, the explicit nullable type must be used instead";
+    assert_eq!(
+        deprecations,
+        vec![
+            format!("N\\I@anonymous(): Implicitly marking parameter $x {}", suffix),
+            format!("N\\Base@anonymous(): Implicitly marking parameter $x {}", suffix),
+            format!("{{closure:class@anonymous(): Implicitly marking parameter $y {}", suffix),
+        ],
+        "{}",
+        stderr
+    );
+}
+
+/// Verifies `ptr` and `ptr<T>` parameters with a `null` default keep their pointer type, whose
+/// null pointer already is null, with no PHP deprecation.
+#[test]
+fn test_null_default_pointer_params_stay_pointers() {
+    let out = compile_and_run(
+        r#"<?php
+class C {}
+function p(ptr $q = null) { echo ptr_is_null($q) ? "null\n" : "set\n"; }
+function t(ptr<C> $q = null) { echo ptr_is_null($q) ? "null\n" : "set\n"; }
+p(); t(); p(ptr_null());
+"#,
+    );
+    assert_eq!(out, "null\nnull\nnull\n");
+    let stderr = compile_cli_file_with_flags_capturing_stderr(
+        "<?php\nfunction p(ptr $q = null) { return ptr_is_null($q); }\nvar_dump(p());\n",
+        &[],
+    );
+    assert!(!stderr.contains("deprecated["), "{}", stderr);
+}
+
+/// Verifies a deprecation from a class file autoloaded while checking is still reported when
+/// the checker then rejects the program, ahead of the error, as php prints it first.
+#[test]
+fn test_implicitly_nullable_param_deprecation_from_autoload_precedes_check_error() {
+    let dir = make_cli_test_dir("elephc_cli_test_implicit_nullable_autoload");
+    fs::create_dir_all(dir.join("src")).unwrap();
+    fs::write(dir.join("composer.json"), r#"{"autoload": {"psr-4": {"App\\": "src/"}}}"#).unwrap();
+    fs::write(
+        dir.join("src/K.php"),
+        "<?php\nnamespace App;\nclass K { public function m(int $x = null) { return $x; } }\n",
+    )
+    .unwrap();
+    let main = dir.join("main.php");
+    fs::write(
+        &main,
+        "<?php\n(new App\\K())->m();\nfunction f(int $i): int { return $i; }\necho f([1]);\n",
+    )
+    .unwrap();
+    let output = elephc_cli_command(&dir).arg("--check").arg(&main).output().unwrap();
+    let _ = fs::remove_dir_all(&dir);
+    let stderr = String::from_utf8(output.stderr).unwrap();
+    assert!(!output.status.success(), "{}", stderr);
+    let deprecation = stderr.find("App\\K::m(): Implicitly marking parameter $x");
+    let error = stderr.find("error[");
+    assert!(
+        matches!((deprecation, error), (Some(d), Some(e)) if d < e),
+        "{}",
+        stderr
+    );
 }

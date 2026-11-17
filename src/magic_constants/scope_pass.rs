@@ -36,8 +36,16 @@ fn substitute_scope_constants_with_file(program: Program, file: Option<String>) 
     let mut pass = ScopePass {
         scope: Scope::default(),
         file,
+        deprecations: Vec::new(),
     };
-    walk_program(program, &mut pass)
+    let program = walk_program(program, &mut pass);
+    // php-src raises these while compiling the file top to bottom. The walk visits hoisted
+    // anonymous classes after everything else, so restore source order before queueing.
+    pass.deprecations.sort_by_key(|warning| (warning.span.line, warning.span.col));
+    for warning in pass.deprecations {
+        crate::errors::defer_warning(warning);
+    }
+    program
 }
 
 /// Tracks the current lexical scope while walking a PHP file's AST.
@@ -57,12 +65,17 @@ struct Scope {
     /// Class `use` imports in effect, keyed by lowercased alias, as the name resolver keys them.
     class_imports: HashMap<String, Name>,
     class_imports_stack: Vec<HashMap<String, Name>>,
+    /// php-src's display name for each anonymous class being walked (`class@anonymous`,
+    /// `Parent@anonymous`), keyed by its synthetic name.
+    anonymous_class_labels: HashMap<String, String>,
 }
 
 /// Holds the current scope state and the canonical file path being processed.
 struct ScopePass {
     scope: Scope,
     file: Option<String>,
+    /// Implicit nullable deprecations raised in this file, queued in source order at the end.
+    deprecations: Vec<crate::errors::CompileWarning>,
 }
 
 impl ScopePass {
@@ -127,6 +140,43 @@ impl ScopePass {
             _ => String::new(),
         }
     }
+
+    /// Returns the function name php-src prints in a compile-time deprecation.
+    ///
+    /// That is `__METHOD__`, except inside an anonymous class: php-src's runtime name for one is
+    /// `class@anonymous` followed by a NUL byte and the declaring file and position, and the
+    /// message is formatted with `%s`, so it stops at the NUL. `m` in `new class { ... }` is
+    /// therefore `class@anonymous`, and a closure inside it `{closure:class@anonymous`.
+    fn deprecation_owner_name(&self) -> String {
+        let name = self.method_name();
+        let Some(label) = self.scope.class.as_ref().and_then(|class| {
+            let label = self.scope.anonymous_class_labels.get(class)?;
+            Some((qualify(self.scope.namespace.as_deref(), class), label))
+        }) else {
+            return name;
+        };
+        let (synthetic, label) = label;
+        match name.find(&synthetic) {
+            Some(at) => format!("{}{}", &name[..at], label),
+            None => name,
+        }
+    }
+
+    /// Resolves a class name written in this file the way php-src names it at compile time:
+    /// a fully qualified name as written, otherwise through the class imports and then the
+    /// current namespace.
+    fn resolve_class_name(&self, name: &Name) -> String {
+        if name.is_fully_qualified() {
+            return name.parts.join("\\");
+        }
+        let Some((first, rest)) = name.parts.split_first() else {
+            return name.as_canonical();
+        };
+        match self.scope.class_imports.get(&php_symbol_key(first)) {
+            Some(import) => import.parts.iter().chain(rest).cloned().collect::<Vec<_>>().join("\\"),
+            None => qualify(self.scope.namespace.as_deref(), name.as_str()),
+        }
+    }
 }
 
 impl Pass for ScopePass {
@@ -160,12 +210,14 @@ impl Pass for ScopePass {
         };
         // PHP 8.4 deprecated the implicit form; older `--php-version` profiles accept it silently.
         if crate::codegen_support::compile_php_version().version_id() >= 80400 {
-            crate::errors::defer_warning(crate::errors::CompileWarning::deprecation(
+            // Reported at the parameter, as php-src does, not at its function.
+            let span = default.map_or(span, |default| default.span);
+            self.deprecations.push(crate::errors::CompileWarning::deprecation(
                 span,
                 &format!(
                     "{}(): Implicitly marking parameter ${} as nullable is deprecated, the \
                      explicit nullable type must be used instead",
-                    self.method_name(),
+                    self.deprecation_owner_name(),
                     name
                 ),
             ));
@@ -284,6 +336,21 @@ impl Pass for ScopePass {
     fn enter_class(&mut self, name: &str) {
         self.scope.class_stack.push(self.scope.class.clone());
         self.scope.class = Some(name.to_string());
+    }
+
+    /// Records php-src's display name for an anonymous class: its parent's name, else its first
+    /// interface's, else `class`, followed by `@anonymous`.
+    fn observe_class_heritage(&mut self, extends: Option<&Name>, implements: &[Name]) {
+        let Some(class) = self.scope.class.clone() else {
+            return;
+        };
+        if !crate::parser::is_anonymous_class_name(&class) {
+            return;
+        }
+        let prefix = extends
+            .or(implements.first())
+            .map_or_else(|| "class".to_string(), |name| self.resolve_class_name(name));
+        self.scope.anonymous_class_labels.insert(class, format!("{}@anonymous", prefix));
     }
 
     /// Restores the previous class from the stack after leaving a class scope.

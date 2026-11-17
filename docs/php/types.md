@@ -584,6 +584,15 @@ Because elephc maps the `Closure` type hint onto its callable descriptor type, a
   Catch `PDOException`, or after the `instanceof` check pass the exception to a parameter
   declared `PDOException`: through that receiver both `getCode()` and `$e->errorInfo[0]` give the
   SQLSTATE. See [PDO](./pdo.md#pdoexception-shape).
+- A parameter with a type that rejects null and a literal `null` default (`string $s = null`)
+  is implicitly nullable, as in PHP, and the compiler reports PHP 8.4's `Implicitly marking
+  parameter $s as nullable is deprecated` notice at compile time. Three forms differ from PHP:
+  a **by-reference** parameter (`int &$r = null`) keeps its declared type, so calling it without
+  the argument does not give `NULL` ([#2421](https://github.com/illegalstudio/elephc/issues/2421));
+  an **intersection** type (`A&B $x = null`) is not widened and its null default is refused, where
+  PHP accepts it as `(A&B)|null`; and code compiled from `eval()` is widened, but its deprecation
+  is not reported. `#[Export]` functions are not widened either: `--emit phpext` asks for an
+  explicit `?T` there.
 
 ### Filesystem functions not implemented
 

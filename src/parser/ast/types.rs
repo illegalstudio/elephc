@@ -253,11 +253,14 @@ impl TypeExpr {
     ///
     /// `string $s = null` is implicitly `?string` (deprecated since PHP 8.4, still nullable), so
     /// the parameter accepts and holds null. A type that already admits null (`?T`, `T|null`,
-    /// `mixed`, `null`) is returned as `None`, as is an intersection, whose `(A&B)|null` form
-    /// has no representation here.
+    /// `mixed`, `null`, and elephc's `ptr`/`ptr<T>`, whose null pointer is its null) is returned
+    /// as `None`, as is an intersection, whose `(A&B)|null` form has no representation here.
     pub fn implicitly_nullable(&self) -> Option<TypeExpr> {
         match self {
-            TypeExpr::Nullable(_) | TypeExpr::Void | TypeExpr::Intersection(_) => None,
+            TypeExpr::Nullable(_)
+            | TypeExpr::Void
+            | TypeExpr::Ptr(_)
+            | TypeExpr::Intersection(_) => None,
             // Property-style annotations (promoted parameters) spell the `null` type by name.
             TypeExpr::Named(name)
                 if name.as_str().eq_ignore_ascii_case("mixed")

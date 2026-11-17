@@ -951,6 +951,10 @@ fn compile_config(config: CliConfig, entry: EntryKind<'_>) {
         Ok(pair) => pair,
         Err(e) => {
             crate::progress::clear();
+            // A file autoloaded while checking compiled before the error, as in php.
+            for warning in errors::take_deferred_warnings() {
+                errors::report_warning(&warning);
+            }
             errors::report(&e);
             process::exit(1);
         }

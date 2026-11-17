@@ -416,6 +416,7 @@ pub(super) fn walk_stmt<P: Pass>(stmt: Stmt, pass: &mut P) -> Stmt {
         constants,
         } => {
             pass.enter_class(&name);
+            pass.observe_class_heritage(extends.as_ref(), &implements);
             pass.enter_heritage();
             let (generics, extends, implements) =
                 walk_class_heritage(generics, extends, implements, pass, span);
