@@ -340,10 +340,12 @@ impl Checker {
             // resolved like a direct literal (an unknown name is a compile error and its
             // libraries are linked). No signature is registered, since the arms may differ.
             for arm in arms {
-                if matches!(arm.kind, crate::parser::ast::ExprKind::StringLiteral(_))
-                    || selected_value_arms(arm).is_some()
+                // An arm can itself be an assignment or `@` (`$c ? ($n = "ucfirst") : ...`).
+                let value = static_callable_argument(self, arm, env);
+                if matches!(value.kind, crate::parser::ast::ExprKind::StringLiteral(_))
+                    || selected_value_arms(value).is_some()
                 {
-                    let arm_ty = if matches!(arm.kind, crate::parser::ast::ExprKind::StringLiteral(_)) {
+                    let arm_ty = if matches!(value.kind, crate::parser::ast::ExprKind::StringLiteral(_)) {
                         PhpType::Str
                     } else {
                         actual.clone()
@@ -710,12 +712,13 @@ class Bag { public array $items = []; }
 function pass(array $items): string { return apply($items[0] = "strtoupper"); }
 $bag = new Bag();
 echo pass([""]), apply($bag->items[0] = "lcfirst");
+echo apply($argc > 0 ? ($m = "addslashes") : "trim"), apply($argc > 0 ? ($s[0] = "sha1") : "trim");
 "#,
         );
-        for name in ["strrev", "lcfirst", "ucwords", "nl2br", "strtolower", "strtoupper"] {
+        for name in ["strrev", "lcfirst", "ucwords", "nl2br", "strtolower", "strtoupper", "addslashes"] {
             assert!(names.contains(name), "missing {name} in {names:?}");
         }
-        for name in ["ucfirst", "bin2hex"] {
+        for name in ["ucfirst", "bin2hex", "sha1"] {
             assert!(!names.contains(name), "unexpected {name} in {names:?}");
         }
     }

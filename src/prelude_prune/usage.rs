@@ -47,7 +47,7 @@ use std::collections::{HashMap, HashSet};
 use crate::names::php_symbol_key;
 use crate::parser::ast::{
     BinOp, CallableTarget, ClassConst, ClassMethod, ClassProperty, Expr, ExprKind,
-    InstanceOfTarget, Stmt, StmtKind,
+    InstanceOfTarget, StaticReceiver, Stmt, StmtKind,
 };
 
 /// Symbol-reference summary for one AST subtree.
@@ -249,7 +249,6 @@ fn record_method(usage: &mut Usage, name: &str) {
 
 /// Records a named static receiver without rooting unrelated classes' same-named methods.
 fn record_static_method(usage: &mut Usage, receiver: &crate::parser::ast::StaticReceiver, method: &str) {
-    use crate::parser::ast::StaticReceiver;
     usage.methods.insert(php_symbol_key(method));
     if !usage.environment_mode { return; }
     let class = match receiver.written_class_receiver() {
@@ -397,11 +396,16 @@ fn record_user_callable_slots(expr: &Expr, usage: &mut Usage) {
     let out = &mut usage.callable_slot_literals;
     match &expr.kind {
         ExprKind::FunctionCall { name, args } => slots.function_call(name.as_str(), args, out),
+        ExprKind::StaticMethodCall { receiver: StaticReceiver::Named(class), method, args } => {
+            slots.class_method_call(class.as_str(), method, args, out);
+        }
         ExprKind::MethodCall { method, args, .. }
         | ExprKind::NullsafeMethodCall { method, args, .. }
         | ExprKind::StaticMethodCall { method, args, .. } => slots.method_call(method, args, out),
-        ExprKind::NewObject { args, .. }
-        | ExprKind::NewGeneric { args, .. }
+        ExprKind::NewObject { class_name, args } => {
+            slots.class_method_call(class_name.as_str(), "__construct", args, out);
+        }
+        ExprKind::NewGeneric { args, .. }
         | ExprKind::NewScopedObject { args, .. } => slots.method_call("__construct", args, out),
         ExprKind::ExprCall { callee, args } => record_named_value_call(&slots, callee, args, out),
         ExprKind::Pipe { value, callable } => {

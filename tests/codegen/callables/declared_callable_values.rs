@@ -138,22 +138,53 @@ echo nullable($builtin, "a"), " ", mapped($builtin), " ", via($builtin, "c"), "\
 }
 
 /// Verifies the named `Error` for a runtime-only builtin also fires when the invoking function
-/// owns an eval context: the eval callback fallback runs first (it resolves functions declared
-/// inside `eval()`) and the error is raised only after it misses.
+/// owns an eval context: that context resolves every builtin, so the error check runs before
+/// its fallback (a name the native table refuses, such as an eval-only function, still reaches
+/// the fallback).
+///
+/// The fixture's `eval()` declares a function, so the function keeps a live eval context slot;
+/// a fully static fragment such as `$unused = 1;` would not, and the call used to resolve
+/// `strtoupper` through the eval frame.
 #[test]
 fn test_declared_callable_runtime_only_builtin_error_with_eval_fallback() {
     let out = compile_and_run(
         r#"<?php
-function apply(callable $f, string $s): string { eval('$unused = 1;'); return $f($s); }
+function apply(callable $f, string $s): string {
+    if (!function_exists("evalOnly")) {
+        eval('function evalOnly(string $s): string { return "eval:" . $s; }');
+    }
+    return $f($s);
+}
 $builtin = strrev("reppuotrts");
 try { echo apply($builtin, "a"), "\n"; } catch (Error $e) { echo $e->getMessage(), "\n"; }
+echo apply("strlen", "abc"), "\n";
 echo "after\n";
 "#,
     );
     assert_eq!(
         out,
         "Cannot call strtoupper() through a declared callable: a builtin named only at run time \
-is not linked; pass its name as a string literal or as a first-class callable\nafter\n"
+is not linked; pass its name as a string literal or as a first-class callable\n3\nafter\n"
+    );
+}
+
+/// Verifies a declared `callable` in a program with no user function and no static method, so
+/// with no runtime candidate at all, still raises the named `Error` for a runtime-only builtin
+/// instead of linking a wrapper for every builtin.
+///
+/// The empty candidate set used to be widened to every builtin, so the call returned `AB`.
+#[test]
+fn test_declared_callable_without_candidates_keeps_the_named_error() {
+    let out = compile_and_run(
+        r#"<?php
+$apply = function (callable $f): string { return $f("ab"); };
+try { echo $apply(strrev("reppuotrts")), "\n"; } catch (Error $e) { echo get_class($e), ": ", $e->getMessage(), "\n"; }
+"#,
+    );
+    assert_eq!(
+        out,
+        "Error: Cannot call strtoupper() through a declared callable: a builtin named only at run \
+time is not linked; pass its name as a string literal or as a first-class callable\n"
     );
 }
 
@@ -271,7 +302,7 @@ echo $apply("strlen"), " ", $arrow("ucfirst"), " ", (function (callable $f) { re
 }
 
 /// Verifies a literal builtin name bound through an assignment or the `@` operator, which both
-/// evaluate to the literal, is recorded like the bare literal.
+/// evaluate to the literal, is recorded like the bare literal, also inside a ternary arm.
 ///
 /// Only a bare or named literal used to be recognized, so `apply($name = "strlen")` stopped with
 /// the runtime-only builtin error.
@@ -281,9 +312,10 @@ fn test_declared_callable_literal_behind_assignment_or_silence_invokes() {
         r#"<?php
 function app(callable $f): string { return (string) $f("abc"); }
 echo app($name = "strlen"), " ", app(@"strrev"), " ", $name, "\n";
+echo app($argc > 0 ? ($picked = "ucfirst") : "strrev"), " ", $picked, "\n";
 "#,
     );
-    assert_eq!(out, "3 cba strlen\n");
+    assert_eq!(out, "3 cba strlen\nAbc ucfirst\n");
 }
 
 /// Verifies a string-offset write passed to a `callable` parameter binds the byte it evaluates
@@ -715,5 +747,39 @@ eval('function evalShown(): int { return 1; } (new S())->show("evalShown");');
          sort\n\
          string(6) \"strlen\"\n\
          string(9) \"evalShown\"\n"
+    );
+}
+
+/// Verifies a by-reference `callable` return (`function &f(): callable`) checks the value read
+/// through the cell it hands the caller, from a local and from a property, like a by-value
+/// return: a callable passes and stays invokable, anything else throws PHP's `TypeError`.
+///
+/// The reference return path skipped the declared `callable` check, so a non-callable string
+/// reached the caller.
+#[test]
+fn test_declared_callable_reference_returns_check_the_value() {
+    let out = compile_and_run(
+        r#"<?php
+class Holder { public $cb = "backwards"; }
+function size(string $s): int { return strlen($s); }
+function backwards(string $s): string { return strrev($s); }
+function &local(mixed &$v): callable { return $v; }
+function &prop(Holder $h): callable { return $h->cb; }
+$ok = "size";
+$r = &local($ok);
+echo $r("abc"), "\n";
+$h = new Holder();
+$p = &prop($h);
+echo $p("abc"), "\n";
+$bad = "nope";
+try { local($bad); } catch (TypeError $e) { echo $e->getMessage(), "\n"; }
+$h->cb = 5;
+try { prop($h); } catch (TypeError $e) { echo $e->getMessage(), "\n"; }
+"#,
+    );
+    assert_eq!(
+        out,
+        "3\ncba\nlocal(): Return value must be of type callable, string returned\n\
+prop(): Return value must be of type callable, int returned\n"
     );
 }

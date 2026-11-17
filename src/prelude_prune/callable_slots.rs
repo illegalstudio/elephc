@@ -12,10 +12,11 @@
 //! Key details:
 //! - Builtin callback slots are recognized elsewhere from the builtin catalog; this covers the
 //!   user declarations the catalog cannot know.
-//! - Callees are keyed by their last name segment and methods by name across every class,
-//!   because this runs before name resolution. That over-approximates only for calls that pass
-//!   a builtin's exact name as a string to a parameter declared `callable` somewhere under the
-//!   same name, which is never ordinary text in practice.
+//! - Callees are keyed by their last name segment, because this runs before name resolution. A
+//!   call that names its class (`Text::take(...)`, `new Text(...)`) binds that class's own
+//!   declaration; a call on an object (`$o->take(...)`) matches methods by name across every
+//!   class. That over-approximates only for calls that pass a builtin's exact name as a string
+//!   to a parameter declared `callable` somewhere under the same name.
 //! - Only callees named before types count: a call through a variable (`$f("x")`) may pass
 //!   ordinary text, so it injects nothing; such a prelude-backed name stops with the runtime-only
 //!   builtin error and must be named directly or as `gmp_abs(...)`.
@@ -68,6 +69,10 @@ impl Slots {
 pub(crate) struct UserCallableSlots {
     functions: HashMap<String, Slots>,
     methods: HashMap<String, Slots>,
+    /// Every method a class-like declares in its own body, keyed by (class, method), with its
+    /// callable slots when it has any: a call that names its class (`Text::take(...)`,
+    /// `new Text(...)`) binds that declaration, not a same-named method of another class.
+    class_methods: HashMap<(String, String), Option<Slots>>,
 }
 
 impl UserCallableSlots {
@@ -93,15 +98,23 @@ impl UserCallableSlots {
                         self.functions.entry(key).or_default().merge(slots);
                     }
                 }
-                StmtKind::ClassDecl { methods, .. }
-                | StmtKind::EnumDecl { methods, .. }
-                | StmtKind::InterfaceDecl { methods, .. }
-                | StmtKind::TraitDecl { methods, .. } => {
+                StmtKind::ClassDecl { name, methods, .. }
+                | StmtKind::EnumDecl { name, methods, .. }
+                | StmtKind::InterfaceDecl { name, methods, .. }
+                | StmtKind::TraitDecl { name, methods, .. } => {
                     for method in methods {
-                        if let Some(slots) = slots_for(
+                        let slots = slots_for(
                             &method.params, method.variadic.is_some(), method.variadic_type.as_ref(),
-                        ) {
-                            self.methods.entry(php_symbol_key(&method.name)).or_default().merge(slots);
+                        );
+                        let key = (callee_key(name), php_symbol_key(&method.name));
+                        if let Some(slots) = &slots {
+                            self.methods.entry(key.1.clone()).or_default().merge(slots.clone());
+                        }
+                        // A redeclared class keeps the union, as the name-keyed table does.
+                        match (self.class_methods.entry(key).or_insert(None), slots) {
+                            (Some(existing), Some(slots)) => existing.merge(slots),
+                            (entry @ None, Some(slots)) => *entry = Some(slots),
+                            (_, None) => {}
                         }
                     }
                 }
@@ -126,6 +139,29 @@ impl UserCallableSlots {
         if let Some(slots) = self.methods.get(&php_symbol_key(method)) {
             record_arguments(slots, args, out);
         }
+    }
+
+    /// Records the literals one call with a named class (`Text::take(...)`, `new Text(...)`)
+    /// hands to callable parameters. When that class declares the method itself, only its own
+    /// declaration counts; an inherited or trait method, or `self`/`static`/`parent`, falls back
+    /// to every method of that name.
+    pub(crate) fn class_method_call(
+        &self,
+        class: &str,
+        method: &str,
+        args: &[Expr],
+        out: &mut HashSet<String>,
+    ) {
+        let class_key = callee_key(class);
+        if !matches!(class_key.as_str(), "self" | "static" | "parent") {
+            if let Some(slots) = self.class_methods.get(&(class_key, php_symbol_key(method))) {
+                if let Some(slots) = slots {
+                    record_arguments(slots, args, out);
+                }
+                return;
+            }
+        }
+        self.method_call(method, args, out);
     }
 }
 
@@ -310,6 +346,33 @@ apply($box->cb = "gmp_sqrt");
         assert!(found.contains("gmp_sqrt"), "{found:?}");
         assert!(!found.contains("gmp_abs"), "{found:?}");
         assert!(!found.contains("xml_parse_into_struct"), "{found:?}");
+    }
+
+    /// Verifies a call that names its class binds that class's own method, so ordinary text
+    /// passed to a same-named method of another class records nothing, while an object call
+    /// and an inherited method still match by name.
+    #[test]
+    fn named_class_calls_bind_their_own_method() {
+        let found = literals(
+            r#"<?php
+class Runner { public static function take(callable $f) {} public function __construct(callable $f) {} }
+class Text { public static function take(string $s) { return $s; } public function __construct(string $s) {} }
+class Child extends Runner {}
+Text::take("xml_parse_into_struct");
+new Text("gmp_add");
+Runner::take("gmp_abs");
+new Runner("gmp_neg");
+Child::take("gmp_sqrt");
+$o = new Text("x");
+$o->take("gmp_sub");
+"#,
+        );
+        for name in ["gmp_abs", "gmp_neg", "gmp_sqrt", "gmp_sub"] {
+            assert!(found.contains(name), "missing {name} in {found:?}");
+        }
+        for name in ["xml_parse_into_struct", "gmp_add"] {
+            assert!(!found.contains(name), "unexpected {name} in {found:?}");
+        }
     }
 
     /// Verifies a namespaced callback string keeps its namespace, so a user function named like

@@ -578,6 +578,7 @@ fn emit_runtime_mixed_callable_descriptor_value_impl(
         candidate_names.as_deref(),
         arity,
         eval_fallback_slot.map(|_| fatal_label.as_str()),
+        matches!(eval_fallback_slot, Some(EvalCallbackContext::Slot(_))),
         scoped,
     )?;
     abi::emit_jump(ctx.emitter, &done_label);
@@ -938,7 +939,9 @@ fn runtime_string_descriptor_cases_at_arity(
     );
     cases.sort_by(|left, right| left.label.cmp(&right.label));
     cases.dedup_by(|left, right| left.label == right.label);
-    if cases.is_empty() && candidate_names.is_some() {
+    // A declared `callable` never widens: its set is the program's functions, static methods and
+    // literal builtin names, and a name outside it takes the runtime miss (the named Error).
+    if cases.is_empty() && candidate_names.is_some() && ctx.declared_callable_candidates.is_none() {
         let fallback = runtime_string_descriptor_cases_at_arity(ctx, source_arg_ty, None, strict_php, arity, scoped)?;
         if arity.is_none() && !scoped {
             ctx.shared.cache_runtime_string_descriptor_cases(
@@ -1258,6 +1261,7 @@ fn emit_runtime_string_descriptor_value_from_unboxed(
     candidate_names: Option<&[String]>,
     arity: Option<usize>,
     eval_fallback: Option<&str>,
+    own_eval_context: bool,
     scoped: bool,
 ) -> Result<()> {
     let cases = runtime_string_descriptor_cases_at_arity(
@@ -1268,7 +1272,8 @@ fn emit_runtime_string_descriptor_value_from_unboxed(
         arity,
         scoped,
     )?;
-    if cases.is_empty() {
+    // A declared `callable` with no candidate still needs its runtime miss (the named Error).
+    if cases.is_empty() && ctx.declared_callable_candidates.is_none() {
         if let Some(fallback) = eval_fallback {
             abi::emit_jump(ctx.emitter, fallback);
             return Ok(());
@@ -1310,8 +1315,14 @@ fn emit_runtime_string_descriptor_value_from_unboxed(
     abi::emit_jump(ctx.emitter, &miss_label);
 
     ctx.emitter.label(&miss_label);
-    // With an eval fallback the eval frame may still resolve the builtin; its miss path checks.
-    if ctx.declared_callable_candidates.is_some() && type_error.is_none() && eval_fallback.is_none() {
+    // A function entered from `eval()` (no eval context of its own) lets the eval frame resolve
+    // any builtin, so its miss path checks after the fallback. A function that owns an eval
+    // context only because it calls `eval()` checks first: that context resolves every builtin,
+    // and only an eval-only function (which `is_callable` of the native table refuses) reaches it.
+    if ctx.declared_callable_candidates.is_some()
+        && type_error.is_none()
+        && (eval_fallback.is_none() || own_eval_context)
+    {
         emit_unlinked_declared_callable_builtin_error(ctx);
     }
     if let Some(fallback) = eval_fallback {
