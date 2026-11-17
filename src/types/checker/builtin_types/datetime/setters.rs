@@ -141,7 +141,7 @@ pub(super) fn var_property(var: &str, property: &str) -> Expr {
 ///
 /// Reads the public `DateTimeZone::$name`. `DateTime` mutates `$this`; `DateTimeImmutable`
 /// returns a fresh instance with the same timestamp and the new timezone name.
-pub(super) fn make_set_timezone(mutable: bool, class_name: &str) -> ClassMethod {
+pub(super) fn make_set_timezone(mutable: bool, _class_name: &str) -> ClassMethod {
     let tz_name = var_property("timezone", "name");
     let body = if mutable {
         vec![
@@ -154,20 +154,9 @@ pub(super) fn make_set_timezone(mutable: bool, class_name: &str) -> ClassMethod 
             Stmt::assign(
                 "__new",
                 Expr::new(
-                    ExprKind::NewObject {
-                        class_name: Name::unqualified(class_name),
-                        args: Vec::new(),
-                    },
+                    ExprKind::Clone(Box::new(Expr::new(ExprKind::This, dummy()))),
                     dummy(),
                 ),
-            ),
-            Stmt::new(
-                StmtKind::PropertyAssign {
-                    object: Box::new(new_var()),
-                    property: "timestamp".to_string(),
-                    value: this_property("timestamp"),
-                },
-                dummy(),
             ),
             Stmt::new(
                 StmtKind::PropertyAssign {

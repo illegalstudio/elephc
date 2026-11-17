@@ -2531,3 +2531,18 @@ echo ($a <=> $b);
     );
     assert_eq!(out, "101-1");
 }
+
+/// `DateTimeImmutable::setTimezone()` clones the receiver like every other immutable setter: a
+/// subclass keeps its class and the sub-second component survives.
+#[test]
+fn test_datetime_immutable_set_timezone_clones_subclass_and_microseconds() {
+    let out = compile_and_run(
+        r#"<?php
+class MyDate extends DateTimeImmutable {}
+$d = new MyDate('2020-01-01 12:00:00.123456');
+$e = $d->setTimezone(new DateTimeZone('UTC'));
+echo get_class($e), $e->format('u');
+"#,
+    );
+    assert_eq!(out, "MyDate123456");
+}
