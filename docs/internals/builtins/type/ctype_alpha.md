@@ -24,9 +24,9 @@ description: "Compiler internals for ctype_alpha(): lowering path, type checks, 
 - **Validation**: `signature`
 - **Result type source**: `declared`
 - **Result ownership**: `may_alias_arguments`
-- **Effects**: `static (0 declared effects)`
+- **Effects**: `static (1 declared effects)`
 - **Requirements**: `static (0 requirements)`
-- **Callable policy**: `static_only`
+- **Callable policy**: `dynamic_target`
 - **Target support**: `macos-aarch64`, `ios-arm64`, `ios-sim-arm64`, `linux-aarch64`, `linux-x86_64`
 
 ## EIR and runtime boundary
@@ -37,7 +37,7 @@ description: "Compiler internals for ctype_alpha(): lowering path, type checks, 
 ## Signature summary
 
 ```php
-function ctype_alpha(string $text): bool
+function ctype_alpha(mixed $text): bool
 ```
 
 ## What the type checker enforces

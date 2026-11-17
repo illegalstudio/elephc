@@ -6,13 +6,13 @@ description: "Checks if all characters in the string are digits."
 ## ctype_digit()
 
 ```php
-function ctype_digit(string $text): bool
+function ctype_digit(mixed $text): bool
 ```
 
 Checks if all characters in the string are digits.
 
 **Parameters**:
-- `$text` (`string`)
+- `$text` (`mixed`)
 
 **Returns**: `bool`
 

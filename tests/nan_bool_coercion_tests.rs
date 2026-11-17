@@ -41,9 +41,9 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-/// The exact stderr line elephc emits for one NAN-to-bool coercion.
+/// The exact stderr text elephc emits for one NAN-to-bool coercion.
 ///
-/// php-src appends ` in <file> on line <n>`; elephc deliberately does not (see the module
+/// php-src appends the location tail separately and elephc deliberately does not (see the module
 /// preamble). Keeping the text in one constant makes the message and the counts below impossible
 /// to drift apart.
 const NAN_WARNING: &str = "Warning: unexpected NAN value was coerced to bool\n";

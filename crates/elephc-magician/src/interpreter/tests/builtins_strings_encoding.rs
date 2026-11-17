@@ -815,6 +815,128 @@ return function_exists("ctype_space");"#,
     assert_eq!(values.output, "A:D:N:S:empty:not-digit:not-space:111");
     assert_eq!(values.get(result), FakeValue::Bool(true));
 }
+
+/// Verifies eval exposes every ctype class and the byte predicates php-src reports.
+#[test]
+fn execute_program_dispatches_complete_ctype_surface() {
+    let program = parse_fragment(
+        br#"echo ctype_lower("abc") ? "1" : "0";
+echo ctype_upper("ABC") ? "1" : "0";
+echo ctype_alpha("aZ") ? "1" : "0";
+echo ctype_digit("0123") ? "1" : "0";
+echo ctype_alnum("a1Z") ? "1" : "0";
+echo ctype_cntrl(chr(1) . chr(127)) ? "1" : "0";
+echo ctype_graph("a!~") ? "1" : "0";
+echo ctype_print("a b") ? "1" : "0";
+echo ctype_punct("!?@") ? "1" : "0";
+echo ctype_space(" \t\n\r" . chr(11) . chr(12)) ? "1" : "0";
+echo ctype_xdigit("09afAF") ? "1" : "0";
+echo ":";
+echo ctype_cntrl(chr(128)) ? "bad" : "0";
+echo ctype_graph(" a") ? "bad" : "0";
+echo ctype_space("") ? "bad" : "0";
+"#,
+    )
+    .expect("parse eval fragment");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+
+    execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+    assert_eq!(values.output, "11111111111:000");
+    assert!(values.warnings.is_empty(), "warnings: {:?}", values.warnings);
+}
+
+/// Serializes tests that mutate the process-wide `LC_CTYPE`.
+static LOCALE_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+/// Restores the process locale when a locale-dependent test ends, including on panic.
+struct LocaleGuard {
+    category: i32,
+    previous: std::ffi::CString,
+}
+
+impl Drop for LocaleGuard {
+    /// Restores the saved libc category after the test.
+    fn drop(&mut self) {
+        // SAFETY: `previous` is a NUL-terminated C string copied from libc and stays alive.
+        unsafe {
+            libc::setlocale(self.category, self.previous.as_ptr());
+        }
+    }
+}
+
+/// Installs the first available German Latin-1 locale and returns its restore guard.
+fn install_german_latin1_locale() -> Option<LocaleGuard> {
+    let category = if cfg!(target_os = "macos") { 2 } else { 0 };
+    // SAFETY: libc owns the returned static C string; copy it before changing the locale.
+    let previous = unsafe { libc::setlocale(category, std::ptr::null()) };
+    if previous.is_null() {
+        return None;
+    }
+    let previous = unsafe { std::ffi::CStr::from_ptr(previous) }.to_owned();
+    for name in ["de_DE.ISO8859-1", "de_DE.ISO-8859-1", "de_DE"] {
+        let Ok(candidate) = std::ffi::CString::new(name) else {
+            continue;
+        };
+        // SAFETY: `candidate` is NUL-terminated and lives for the call.
+        if !unsafe { libc::setlocale(category, candidate.as_ptr()) }.is_null() {
+            return Some(LocaleGuard { category, previous });
+        }
+    }
+    None
+}
+
+/// Verifies eval byte predicates use the active libc locale, not an ASCII table.
+#[test]
+fn eval_ctype_byte_matches_follow_the_active_libc_locale() {
+    let _lock = LOCALE_LOCK.lock().unwrap();
+    let Some(_guard) = install_german_latin1_locale() else {
+        return;
+    };
+    assert!(eval_ctype_byte_matches("ctype_lower", 0xe4).unwrap());
+    assert!(eval_ctype_byte_matches("ctype_alpha", 0xe4).unwrap());
+    assert!(!eval_ctype_byte_matches("ctype_upper", 0xe4).unwrap());
+    assert!(!eval_ctype_byte_matches("ctype_digit", 0xe4).unwrap());
+}
+
+/// Verifies compiled closures are named `Closure` in the ctype deprecation.
+#[test]
+fn eval_ctype_type_name_names_native_closures() {
+    let mut values = FakeOps::default();
+    let closure = values.new_object("Closure").unwrap();
+    values.native_callable_cells.insert(closure.as_ptr() as usize);
+    assert_eq!(
+        crate::interpreter::eval_ctype_type_name(closure, &mut values).unwrap(),
+        "Closure"
+    );
+}
+
+/// Verifies eval applies php-src's deprecated integer fallback matrix and warnings.
+#[test]
+fn execute_program_ctype_scalar_fallback_matches_php_src() {
+    let program = parse_fragment(
+        br#"echo ctype_alnum(48) ? "1" : "0";
+echo ctype_alnum(12345) ? "1" : "0";
+echo ctype_alpha(-191) ? "1" : "0";
+echo ctype_alpha(300) ? "1" : "0";
+echo ctype_graph(-300) ? "1" : "0";
+echo ctype_digit(-1) ? "1" : "0";
+"#,
+    )
+    .expect("parse eval fragment");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+
+    execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+    assert_eq!(values.output, "110010");
+    assert_eq!(values.warnings.len(), 6, "warnings: {:?}", values.warnings);
+    assert!(values
+        .warnings
+        .iter()
+        .all(|warning| warning.contains("ctype_") && warning.contains("Argument of type int")));
+}
 /// Verifies eval `crc32()` returns PHP-compatible non-negative checksums.
 #[test]
 fn execute_program_dispatches_crc32_builtin() {

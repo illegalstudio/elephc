@@ -189,6 +189,8 @@ pub(in crate::interpreter) enum EvalDirectHook {
     Xml,
     /// Forwards fileinfo to the compiled host prelude.
     Fileinfo,
+    /// Forwards locale functions to the compiled host prelude.
+    Locale,
     /// Forwards the tidy surface to the compiled host prelude.
     Tidy,
     /// Dispatches `number_format(...)`.
@@ -382,13 +384,7 @@ impl EvalDirectHook {
             Self::Cosh => eval_builtin_cosh(args, context, scope, values),
             Self::CountChars => eval_builtin_count_chars(args, context, scope, values),
             Self::Crc32 => eval_builtin_crc32(args, context, scope, values),
-            Self::Ctype => match name {
-                "ctype_alnum" => eval_builtin_ctype_alnum(args, context, scope, values),
-                "ctype_alpha" => eval_builtin_ctype_alpha(args, context, scope, values),
-                "ctype_digit" => eval_builtin_ctype_digit(args, context, scope, values),
-                "ctype_space" => eval_builtin_ctype_space(args, context, scope, values),
-                _ => Err(EvalStatus::RuntimeFatal),
-            },
+            Self::Ctype => eval_builtin_ctype_named(name, args, context, scope, values),
             Self::Deg2rad => eval_builtin_deg2rad(args, context, scope, values),
             Self::Exp => eval_builtin_exp(args, context, scope, values),
             Self::Gmp => eval_builtin_gmp_expr_call(name, args, context, scope, values),
@@ -465,6 +461,7 @@ impl EvalDirectHook {
             Self::NetworkEnv => eval_builtin_network_env_call(name, args, context, scope, values),
             Self::Pcntl => eval_builtin_pcntl_expr_call(name, args, context, scope, values),
             Self::Fileinfo => eval_builtin_fileinfo_expr_call(name, args, context, scope, values),
+            Self::Locale => eval_builtin_locale_expr_call(name, args, context, scope, values),
             Self::Tidy => eval_builtin_tidy_expr_call(name, args, context, scope, values),
             Self::Xml => eval_builtin_xml_expr_call(name, args, context, scope, values),
             Self::NumberFormat => eval_builtin_number_format(args, context, scope, values),

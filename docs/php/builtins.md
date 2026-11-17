@@ -1003,6 +1003,7 @@ Browse by category: [Array](./builtins/array.md) · [Buffer](./builtins/buffer.m
 | [`mb_ucfirst()`](./builtins/string/mb_ucfirst.md) | `(string $string, ?string $encoding = null): string` | `string` | ✓ | ✓ |
 | [`md5()`](./builtins/string/md5.md) | `(string $string, bool $binary = false): string` | `string` | ✓ | ✓ |
 | [`nl2br()`](./builtins/string/nl2br.md) | `(string $string): string` | `string` | ✓ | ✓ |
+| [`nl_langinfo()`](./builtins/string/nl_langinfo.md) | `(int $item): string|false` | `string|false` | ✓ | ✓ |
 | [`number_format()`](./builtins/string/number_format.md) | `(float $num, int $decimals = 0, string $decimal_separator = '.', string $thousands_separator = ','): string` | `string` | ✓ | ✓ |
 | [`openssl_cipher_iv_length()`](./builtins/string/openssl_cipher_iv_length.md) | `(string $cipher_algo): mixed` | `mixed` | ✓ | ✓ |
 | [`openssl_decrypt()`](./builtins/string/openssl_decrypt.md) | `(string $data, string $cipher_algo, string $passphrase, int $options = 0, string $iv = '', mixed $tag = null, string $aad = ''): mixed` | `mixed` | ✓ | ✓ |
@@ -1016,6 +1017,7 @@ Browse by category: [Array](./builtins/array.md) · [Buffer](./builtins/buffer.m
 | [`rawurldecode()`](./builtins/string/rawurldecode.md) | `(string $string): string` | `string` | ✓ | ✓ |
 | [`rawurlencode()`](./builtins/string/rawurlencode.md) | `(string $string): string` | `string` | ✓ | ✓ |
 | [`rtrim()`](./builtins/string/rtrim.md) | `(string $string, string $characters = " \n\r\t\x0B\x0C\x00"): string` | `string` | ✓ | ✓ |
+| [`setlocale()`](./builtins/string/setlocale.md) | `(int $category, mixed $locales, ...$rest): string|false` | `string|false` | ✓ | ✓ |
 | [`sha1()`](./builtins/string/sha1.md) | `(string $string, bool $binary = false): string` | `string` | ✓ | ✓ |
 | [`sprintf()`](./builtins/string/sprintf.md) | `(string $format, ...$values): string` | `string` | ✓ | ✓ |
 | [`sscanf()`](./builtins/string/sscanf.md) | `(string $string, string $format, ...$vars): array` | `array` | ✓ | ✓ |
@@ -1082,10 +1084,17 @@ Browse by category: [Array](./builtins/array.md) · [Buffer](./builtins/buffer.m
 | [`tidy_repair_string()`](./builtins/tidy/tidy_repair_string.md) | `(string $string, array|string|null $config = null, ?string $encoding = null): string|false` | `string|false` | ✓ | ✓ |
 | [`tidy_warning_count()`](./builtins/tidy/tidy_warning_count.md) | `(mixed $tidy): int` | `int` | ✓ | ✓ |
 | [`boolval()`](./builtins/type/boolval.md) | `(mixed $value): bool` | `bool` | ✓ | ✓ |
-| [`ctype_alnum()`](./builtins/type/ctype_alnum.md) | `(string $text): bool` | `bool` | ✓ | ✓ |
-| [`ctype_alpha()`](./builtins/type/ctype_alpha.md) | `(string $text): bool` | `bool` | ✓ | ✓ |
-| [`ctype_digit()`](./builtins/type/ctype_digit.md) | `(string $text): bool` | `bool` | ✓ | ✓ |
-| [`ctype_space()`](./builtins/type/ctype_space.md) | `(string $text): bool` | `bool` | ✓ | ✓ |
+| [`ctype_alnum()`](./builtins/type/ctype_alnum.md) | `(mixed $text): bool` | `bool` | ✓ | ✓ |
+| [`ctype_alpha()`](./builtins/type/ctype_alpha.md) | `(mixed $text): bool` | `bool` | ✓ | ✓ |
+| [`ctype_cntrl()`](./builtins/type/ctype_cntrl.md) | `(mixed $text): bool` | `bool` | ✓ | ✓ |
+| [`ctype_digit()`](./builtins/type/ctype_digit.md) | `(mixed $text): bool` | `bool` | ✓ | ✓ |
+| [`ctype_graph()`](./builtins/type/ctype_graph.md) | `(mixed $text): bool` | `bool` | ✓ | ✓ |
+| [`ctype_lower()`](./builtins/type/ctype_lower.md) | `(mixed $text): bool` | `bool` | ✓ | ✓ |
+| [`ctype_print()`](./builtins/type/ctype_print.md) | `(mixed $text): bool` | `bool` | ✓ | ✓ |
+| [`ctype_punct()`](./builtins/type/ctype_punct.md) | `(mixed $text): bool` | `bool` | ✓ | ✓ |
+| [`ctype_space()`](./builtins/type/ctype_space.md) | `(mixed $text): bool` | `bool` | ✓ | ✓ |
+| [`ctype_upper()`](./builtins/type/ctype_upper.md) | `(mixed $text): bool` | `bool` | ✓ | ✓ |
+| [`ctype_xdigit()`](./builtins/type/ctype_xdigit.md) | `(mixed $text): bool` | `bool` | ✓ | ✓ |
 | [`floatval()`](./builtins/type/floatval.md) | `(mixed $value): float` | `float` | ✓ | ✓ |
 | [`get_resource_id()`](./builtins/type/get_resource_id.md) | `(resource $resource): int` | `int` | ✓ | ✓ |
 | [`get_resource_type()`](./builtins/type/get_resource_type.md) | `(resource $resource): string` | `string` | ✓ | ✓ |

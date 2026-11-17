@@ -132,6 +132,7 @@ pub mod xml_prelude;
 mod simplexml_prelude;
 pub mod tidy_prelude;
 pub mod fileinfo_prelude;
+pub mod locale_prelude;
 pub mod tokenizer_prelude;
 /// Conditionally-injected `var_export` prelude (elephc-PHP rendering function).
 pub mod var_export_prelude;

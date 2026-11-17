@@ -37,6 +37,7 @@ pub fn contracts() -> &'static [BuiltinContract] {
             let mut contracts = Vec::with_capacity(
                 crate::catalog_data::CONTRACTS.len()
                     + crate::catalog_gmp::CONTRACTS.len()
+                    + crate::catalog_locale::CONTRACTS.len()
                     + crate::catalog_mbstring::CONTRACTS.len()
                     + crate::catalog_pcntl::CONTRACTS.len()
                     + crate::catalog_tidy::CONTRACTS.len()
@@ -46,6 +47,7 @@ pub fn contracts() -> &'static [BuiltinContract] {
             );
             contracts.extend_from_slice(crate::catalog_data::CONTRACTS);
             contracts.extend_from_slice(crate::catalog_gmp::CONTRACTS);
+            contracts.extend_from_slice(crate::catalog_locale::CONTRACTS);
             contracts.extend_from_slice(crate::catalog_mbstring::CONTRACTS);
             contracts.extend_from_slice(crate::catalog_pcntl::CONTRACTS);
             contracts.extend_from_slice(crate::catalog_tidy::CONTRACTS);
@@ -178,7 +180,10 @@ mod tests {
         // +24: the `tidy_*` procedures of the tidy prelude.
         // +1: `__elephc_call_strict_types`, the internal strictness reader the random
         // prelude's injected constructor calls.
-        assert_eq!(contracts().len(), 1303 + curl_surface);
+        // +7: the complete `ctype_*` surface (cntrl/graph/lower/print/punct/upper/xdigit).
+        // +2: the PHP-visible setlocale/nl_langinfo contracts declared by the locale prelude.
+        // +3: the internal libc setlocale and nl_langinfo helpers it calls.
+        assert_eq!(contracts().len(), 1315 + curl_surface);
         assert_eq!(lookup("STRLEN").map(|contract| contract.name), Some("strlen"));
         assert_eq!(lookup("\\parse_url").map(|contract| contract.name), Some("parse_url"));
     }
