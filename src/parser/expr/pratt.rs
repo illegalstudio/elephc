@@ -177,6 +177,12 @@ fn parse_expr_bp_inner(
             }
             Token::LBracket => {
                 let span = tokens[*pos].1.span;
+                // `$GLOBALS[] = v` is php's compile-time fatal: the superglobal has no append.
+                if matches!(&lhs.kind, ExprKind::Variable(name) if name == "GLOBALS")
+                    && matches!(tokens.get(*pos + 1).map(|(token, _)| token), Some(Token::RBracket))
+                {
+                    return Err(CompileError::new(span, "Cannot append to $GLOBALS"));
+                }
                 if matches!(
                     (
                         tokens.get(*pos + 1).map(|(token, _)| token),

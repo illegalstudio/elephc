@@ -84,3 +84,9 @@ fn test_core_symbols_constructor_diagnostics() {
     expect_error("<?php WeakReference::create(7);", "object");
     expect_error("<?php new Attribute([]);", "int");
 }
+
+/// php's compile-time fatal: `$GLOBALS[] = v` has no append form.
+#[test]
+fn test_globals_append_is_refused() {
+    expect_error("<?php $GLOBALS[] = 1;", "Cannot append to $GLOBALS");
+}
