@@ -1970,6 +1970,7 @@ fn lower_body_into_function(
             .collect::<std::collections::HashSet<_>>();
         crate::ir_lower::stmt::loop_accumulator_reduction::reduce_loop_accumulators(
             &mut fused_body,
+            &env,
             &aliased,
             &entry_defined,
         );

@@ -411,3 +411,28 @@ echo $sum, "\n";
         out.stderr,
     );
 }
+
+/// An object index read runs `offsetGet` on every iteration, so the loop cannot be reduced.
+///
+/// A zero-seeded four-iteration loop adding `$step[0]`, where `offsetGet` returns the next
+/// counter value, totals 10 in PHP. Treating the read as a pure array access multiplied the
+/// first value and answered 4.
+#[test]
+fn test_loop_accumulator_keeps_object_index_reads() {
+    let source = r#"<?php
+class Step implements ArrayAccess {
+    public int $n = 0;
+    public function offsetExists($o): bool { return true; }
+    public function offsetGet($o): int { return ++$this->n; }
+    public function offsetSet($o, $v): void {}
+    public function offsetUnset($o): void {}
+}
+$step = new Step();
+$sum = 0;
+for ($i = 0; $i < 3 + $argc; $i++) {
+    $sum += $step[0];
+}
+echo $sum, "\n";
+"#;
+    assert_eq!(compile_and_run(source), "10\n");
+}

@@ -785,7 +785,7 @@ fn try_hoist_invariant_reduce(
         return None;
     }
     let forbidden = [loop_counter, accumulator];
-    if !super::loop_accumulator_reduction::pure_expr(&args[2], &forbidden) {
+    if !super::loop_accumulator_reduction::pure_expr(&args[2], &forbidden, env) {
         return None;
     }
     let hidden = crate::names::generated_local_name(&format!(
