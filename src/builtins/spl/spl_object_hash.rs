@@ -36,7 +36,8 @@ fn check(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
 /// Returns whether a static type is an object or a gradual value that may contain one.
 fn object_capable_argument(ty: &PhpType) -> bool {
     match ty {
-        PhpType::Object(_) | PhpType::Mixed => true,
+        // A closure is an object in PHP; `spl_object_id` accepts it and shares this lowering.
+        PhpType::Object(_) | PhpType::Mixed | PhpType::Callable => true,
         PhpType::Union(members) => members.iter().any(object_capable_argument),
         _ => false,
     }

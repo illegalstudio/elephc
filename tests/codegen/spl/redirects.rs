@@ -115,6 +115,22 @@ echo spl_object_id($first) !== spl_object_id($second) ? "distinct" : "bad";
     assert_eq!(out, "same:distinct");
 }
 
+/// Verifies `spl_object_hash()` accepts a closure like `spl_object_id()` and php does: a stable
+/// 32-character hash per closure, distinct between closures.
+#[test]
+fn test_spl_object_hash_accepts_closure_callable() {
+    let out = compile_and_run(
+        r#"<?php
+$first = static fn (): int => 1;
+$second = static fn (): int => 1;
+echo strlen(spl_object_hash($first));
+echo spl_object_hash($first) === spl_object_hash($first) ? ":same" : ":bad";
+echo spl_object_hash($first) !== spl_object_hash($second) ? ":distinct" : ":bad";
+"#,
+    );
+    assert_eq!(out, "32:same:distinct");
+}
+
 /// Verifies `spl_object_hash()` returns a stable hash for the same object across
 /// multiple calls and a unique hash for different object instances.
 #[test]
