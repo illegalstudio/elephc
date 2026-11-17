@@ -3,7 +3,7 @@
 //!
 //! Called from:
 //! - `crate::gmp_prelude::inject_if_used`.
-//! - `crate::autoload::prelude_probe::autoloaded_prelude_groups`, through
+//! - `crate::autoload::prelude_probe::autoloaded_preludes`, through
 //!   `crate::gmp_prelude::program_uses_gmp`.
 //!
 //! Key details:

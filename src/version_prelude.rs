@@ -10,8 +10,9 @@
 //!   OPcache prelude: a program that never mentions `zend_version` carries nothing, and a
 //!   program that declares its own `ini_restore` keeps it. The reference-detection walk is
 //!   shared with the OPcache prelude (`opcache_prelude::detect`) rather than duplicated.
-//! - A name a file of the autoload closure references counts too: `crate::autoload::prelude_probe`
-//!   scans those Composer class files for [`PROBED_FUNCTIONS`] before they are loaded.
+//! - A name a file of the autoload closure references (or declares) counts too:
+//!   `crate::autoload::prelude_probe` scans those Composer files for `PROBED_FUNCTIONS`
+//!   before they are loaded.
 //! - These are declared PHP FUNCTIONS, not builtins, for the same reason `ini_get` /
 //!   `ini_set` / `ini_get_all` are (see `opcache_prelude::build::cli_ini_get_decl`): they are
 //!   wrappers around configuration, and a real declaration is what makes
@@ -21,6 +22,7 @@
 //!   by `codegen_support::prescan::collect_constants`.
 
 use crate::parser::ast::{CastType, Program, Stmt, TypeExpr};
+pub use crate::autoload::prelude_probe::AutoloadedFunctions;
 use crate::synthetic_class::{
     e_cast, e_const, e_str, e_var, function, internal_declarations, s_assign,
 };
@@ -79,8 +81,9 @@ fn ini_restore_decl() -> Stmt {
 /// Injection is hoisted function declarations only, so prepending cannot change top-level
 /// execution order.
 ///
-/// `autoloaded` answers whether a file of the autoload closure references one of
-/// [`PROBED_FUNCTIONS`]; such a name is injected as if the entry program referenced it.
+/// `autoloaded` describes the autoload closure: a name one of its files references is injected
+/// as if the entry program referenced it, and a name one of its files declares is left to that
+/// declaration. Callers without an autoload closure pass `&AutoloadedFunctions::default()`.
 ///
 /// Runs under `crate::compiler_stack::with_compiler_stack` (issue #1149): its usage scan walks the
 /// whole program, so an embedder calling it without the CLI driver's wrapper gets the same stack
@@ -88,7 +91,7 @@ fn ini_restore_decl() -> Stmt {
 pub fn inject_if_used(
     program: Program,
     php_version: PhpVersion,
-    autoloaded: &dyn Fn(&str) -> bool,
+    autoloaded: &AutoloadedFunctions,
     inventory: &mut crate::optimize::reachability::PreludeInventory,
 ) -> Program {
     crate::compiler_stack::with_compiler_stack(|| {
@@ -100,14 +103,16 @@ pub fn inject_if_used(
 fn inject_if_used_on_compiler_stack(
     program: Program,
     php_version: PhpVersion,
-    autoloaded: &dyn Fn(&str) -> bool,
+    autoloaded: &AutoloadedFunctions,
     inventory: &mut crate::optimize::reachability::PreludeInventory,
 ) -> Program {
     let selected: Vec<&str> = PROBED_FUNCTIONS
         .iter()
         .copied()
         .filter(|name| {
-            (autoloaded(name) || crate::opcache_prelude::detect::program_references(&program, name))
+            (autoloaded.references(name)
+                || crate::opcache_prelude::detect::program_references(&program, name))
+                && !autoloaded.declares(name)
                 && !crate::opcache_prelude::detect::program_declares(&program, name)
         })
         .collect();
@@ -161,7 +166,27 @@ mod tests {
     /// Injects the version prelude with a throwaway declaration inventory.
     fn inject_for_test(program: Program, php_version: PhpVersion) -> Program {
         let mut inventory = crate::optimize::reachability::PreludeInventory::new();
-        inject_if_used(program, php_version, &|_| false, &mut inventory)
+        inject_if_used(program, php_version, &AutoloadedFunctions::default(), &mut inventory)
+    }
+
+    /// A name the autoload closure references is injected, and one it declares is left to it.
+    #[test]
+    fn autoload_closure_references_inject_and_declarations_win() {
+        let mut inventory = crate::optimize::reachability::PreludeInventory::new();
+        let facts = AutoloadedFunctions::for_test(
+            &["php_sapi_name", "zend_version"],
+            &["zend_version"],
+        );
+        let injected = inject_if_used(
+            crate::parser::parse(&crate::lexer::tokenize("<?php echo 1;").unwrap()).unwrap(),
+            PhpVersion::default(),
+            &facts,
+            &mut inventory,
+        );
+        let declares = |name| crate::opcache_prelude::detect::program_declares(&injected, name);
+        assert!(declares("php_sapi_name"));
+        assert!(!declares("zend_version"));
+        assert!(!declares("ini_restore"));
     }
 
     /// Returns whether an injected program declares a free function.

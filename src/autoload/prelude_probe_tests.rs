@@ -14,7 +14,37 @@ use std::path::PathBuf;
 use crate::parser::ast::{Program, StmtKind};
 use crate::span::Span;
 
-use super::{autoloaded_prelude_groups, Registry};
+use super::{autoloaded_preludes, AutoloadedFunctions, Registry};
+
+/// Runs the probe and keeps only the prelude groups.
+fn autoloaded_prelude_groups(
+    program: &Program,
+    base_dir: &std::path::Path,
+    registry: &Registry,
+    defines: &std::collections::HashSet<String>,
+) -> std::collections::HashSet<&'static str> {
+    autoloaded_preludes(program, base_dir, registry, defines).groups
+}
+
+/// Runs the probe over `files` (path, source) added to the project, with `extra_autoload` merged
+/// into the Composer `autoload` object, and keeps the per-function facts.
+fn functions_for(
+    project: &ProbeProject,
+    extra_autoload: &str,
+    files: &[(&str, &str)],
+) -> AutoloadedFunctions {
+    fs::write(
+        project.0.join("composer.json"),
+        format!(r#"{{"autoload":{{"psr-4":{{"App\\":"src/"}}{extra_autoload}}}}}"#),
+    )
+    .unwrap();
+    for (path, source) in files {
+        fs::write(project.0.join(path), source).unwrap();
+    }
+    let defines = std::collections::HashSet::new();
+    let (registry, program) = Registry::build(&project.0, parse("<?php new App\\Probe();"));
+    autoloaded_preludes(&program, &project.0, &registry, &defines).functions
+}
 
 /// Owns the small Composer project used to exercise a real probe and autoload pass.
 struct ProbeProject(PathBuf);
@@ -266,7 +296,7 @@ fn probe_detects_weak_references_in_autoloaded_classes() {
 }
 
 /// Every per-function OPcache/INI and version prelude name an autoloaded class alone calls is
-/// reported under its own name, and only that one, so pay-for-use per function survives.
+/// reported, and only that one, so pay-for-use per function survives.
 #[test]
 fn probe_detects_per_function_ini_and_opcache_calls_in_autoloaded_classes() {
     let project = ProbeProject::new();
@@ -274,10 +304,14 @@ fn probe_detects_per_function_ini_and_opcache_calls_in_autoloaded_classes() {
     for name in &probed {
         // Fully qualified, and unqualified through PHP's global fallback in a namespace.
         for call in [format!("\\{name}"), name.to_string()] {
-            let body = format!("return {call}('x');");
-            let groups = groups_for_method_body(&project, &body);
-            let reported: Vec<&str> = probed.iter().copied().filter(|n| groups.contains(n)).collect();
+            let source = format!(
+                "<?php namespace App; class Probe {{ public function read() {{ return {call}('x'); }} }}",
+            );
+            let functions = functions_for(&project, "", &[("src/Probe.php", &source)]);
+            let reported: Vec<&str> =
+                probed.iter().copied().filter(|n| functions.references(n)).collect();
             assert_eq!(reported, [*name], "autoloaded {call}() call was not reported alone");
+            assert!(!functions.declares(name), "a call to {name}() is not a declaration");
         }
     }
     // A callable string, and a literal eval fragment, still name the function, exactly as the
@@ -286,26 +320,57 @@ fn probe_detects_per_function_ini_and_opcache_calls_in_autoloaded_classes() {
         "return \\function_exists('opcache_reset');",
         "return eval('return \\\\opcache_reset();');",
     ] {
-        let groups = groups_for_method_body(&project, body);
-        assert!(groups.contains("opcache_reset"), "{body} was missed");
+        let source = format!("<?php namespace App; class Probe {{ public function has() {{ {body} }} }}");
+        let functions = functions_for(&project, "", &[("src/Probe.php", &source)]);
+        assert!(functions.references("opcache_reset"), "{body} was missed");
     }
 }
 
 /// A vendor's own namespaced `ini_get()`, declared and called in vendor code, is a different
-/// function and does not pull in the global INI wrapper.
+/// function: it does not pull in the global INI wrapper, and it is not a declaration of it.
 #[test]
 fn probe_ignores_namespaced_functions_that_share_a_prelude_name() {
     let project = ProbeProject::new();
-    fs::write(
-        project.0.join("composer.json"),
-        r#"{"autoload":{"psr-4":{"App\\":"src/"},"files":["src/functions.php"]}}"#,
-    )
-    .unwrap();
-    fs::write(
-        project.0.join("src/functions.php"),
-        "<?php namespace Vendor\\Util; function ini_get($k) { return $k; }",
-    )
-    .unwrap();
-    let groups = groups_for_method_body(&project, "return \\Vendor\\Util\\ini_get('x');");
-    assert!(!groups.contains("ini_get"), "Vendor\\Util\\ini_get() was taken for ini_get()");
+    let functions = functions_for(
+        &project,
+        r#","files":["src/functions.php"]"#,
+        &[
+            (
+                "src/functions.php",
+                "<?php namespace Vendor\\Util; function ini_get($k) { return $k; }",
+            ),
+            (
+                "src/Probe.php",
+                "<?php namespace App; class Probe { public function read() { return \\Vendor\\Util\\ini_get('x'); } }",
+            ),
+        ],
+    );
+    assert!(!functions.references("ini_get"), "Vendor\\Util\\ini_get() was taken for ini_get()");
+    assert!(!functions.declares("ini_get"), "Vendor\\Util\\ini_get was taken for ini_get");
+}
+
+/// A global declaration in an `autoload.files` stub, plain or behind the usual
+/// `function_exists` polyfill guard, is reported so the prelude does not declare a duplicate.
+#[test]
+fn probe_reports_prelude_functions_the_autoload_closure_declares() {
+    let project = ProbeProject::new();
+    let functions = functions_for(
+        &project,
+        r#","files":["src/stubs.php"]"#,
+        &[
+            (
+                "src/stubs.php",
+                "<?php function php_sapi_name() { return 'stub'; }\n\
+                 if (!\\function_exists('opcache_get_status')) { function opcache_get_status() { return false; } }",
+            ),
+            (
+                "src/Probe.php",
+                "<?php namespace App; class Probe { public function run() { return [\\php_sapi_name(), \\opcache_get_status(), \\ini_get('x')]; } }",
+            ),
+        ],
+    );
+    assert!(functions.declares("php_sapi_name"));
+    assert!(functions.declares("opcache_get_status"));
+    assert!(!functions.declares("ini_get"));
+    assert!(functions.references("ini_get"));
 }
