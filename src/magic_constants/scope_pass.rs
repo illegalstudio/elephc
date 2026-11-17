@@ -62,6 +62,9 @@ struct Scope {
     function_stack: Vec<Option<String>>,
     closure_depth: usize,
     closure_names: Vec<String>,
+    /// The enclosing closures set aside while a named function or method declared inside one
+    /// is walked: that declaration is its own owner, not the closure.
+    closure_names_stack: Vec<Vec<String>>,
     /// Class `use` imports in effect, keyed by lowercased alias, as the name resolver keys them.
     class_imports: HashMap<String, Name>,
     class_imports_stack: Vec<HashMap<String, Name>>,
@@ -320,15 +323,23 @@ impl Pass for ScopePass {
     }
 
     /// Saves the current function on the stack and enters a new function scope.
+    ///
+    /// A function or method declared inside a closure body is named on its own (`inner`, not
+    /// `{closure:...}`), so the enclosing closures are set aside until it ends.
     fn enter_function(&mut self, name: &str) {
         self.scope.function_stack.push(self.scope.function.clone());
         self.scope.function = Some(name.to_string());
+        let closures = std::mem::take(&mut self.scope.closure_names);
+        self.scope.closure_names_stack.push(closures);
     }
 
-    /// Restores the previous function from the stack after leaving a function scope.
+    /// Restores the previous function and its enclosing closures after leaving a function scope.
     fn leave_function(&mut self) {
         if let Some(prev) = self.scope.function_stack.pop() {
             self.scope.function = prev;
+        }
+        if let Some(closures) = self.scope.closure_names_stack.pop() {
+            self.scope.closure_names = closures;
         }
     }
 
@@ -453,6 +464,29 @@ mod tests {
                 format!("f(): Implicitly marking parameter $g {suffix}"),
             ]
         );
+    }
+
+    /// Verifies a function or method declared inside a closure body names itself in the
+    /// deprecation, as php 8.5 does (`inner()`, `K::m()`), not the enclosing closure, and that
+    /// the closure's own name comes back after the declaration ends.
+    #[test]
+    fn deprecation_names_declarations_nested_in_a_closure() {
+        let _ = crate::errors::take_deferred_warnings();
+        let tokens = crate::lexer::tokenize(
+            "<?php $f = function () {\n\
+             function inner(int $x = null) {}\n\
+             class K { public function m(int $y = null) {} }\n\
+             $g = function (int $z = null) {};\n\
+             };",
+        )
+        .expect("tokenize");
+        let program = crate::parser::parse(&tokens).expect("parse");
+        let _ = substitute_scope_constants_with_file(program, Some("t.php".to_string()));
+        let owners: Vec<String> = crate::errors::take_deferred_warnings()
+            .into_iter()
+            .map(|warning| warning.message.split("(): ").next().unwrap_or_default().to_string())
+            .collect();
+        assert_eq!(owners, vec!["inner", "K::m", "{closure:{closure:t.php:1}:4}"]);
     }
 
     /// Verifies an `#[Export]` function keeps its declared type, so the PHP export validator
