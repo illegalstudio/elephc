@@ -32,6 +32,7 @@ from __future__ import annotations
 import argparse
 import ast
 import json
+import os
 import re
 import subprocess
 import sys
@@ -99,6 +100,11 @@ def run_gen_builtins(repo: Path) -> list[dict]:
 
 def _gen_builtins_command(repo: Path) -> list[str]:
     """Return the exporter command line (prebuilt binary if fresh, else ``cargo run``)."""
+    if os.environ.get("ELEPHC_DOCS_PREBUILT") == "1":
+        exe = repo / "target/debug/examples/gen_builtins"
+        if not exe.is_file() or not os.access(exe, os.X_OK):
+            raise RuntimeError("Restore the curl docs exporter artifact before generating documentation")
+        return [str(exe), "--include-internal"]
     cmd: list[str]
     source_inputs = [repo / "Cargo.toml", repo / "Cargo.lock", repo / "tools" / "gen_builtins.rs"]
     source_inputs.extend((repo / "crates").rglob("Cargo.toml"))
@@ -260,7 +266,7 @@ def resolve_lowering(
 
     Searches ``builtins.rs`` (root dispatcher) and every per-area submodule for
     ``fn <emitter_fn>(``. Returns a populated :class:`LoweringInfo` (with
-    ``codegen_file``/``codegen_line``/``notes``/``runtime_helpers``) when found, or
+    ``codegen_file``/``codegen_function``/``notes``/``runtime_helpers``) when found, or
     a bare one carrying only ``sig_file`` when not.
     """
     lowering = LoweringInfo(sig_file=sig_file)
@@ -279,7 +285,6 @@ def resolve_lowering(
         return LoweringInfo(
             sig_file=sig_file,
             codegen_file=str(candidate.relative_to(repo)),
-            codegen_line=def_line,
             codegen_function=emitter_fn,
             runtime_helpers=helpers,
             notes=notes,
@@ -293,8 +298,6 @@ def resolve_registry_lowering(repo: Path, read, entry: dict, sig_file: str) -> L
     strategy = semantics.get("target_strategy", "unknown")
     lowering_kind = semantics.get("lowering") or {}
     boundary_file = repo / "src" / "builtins" / "semantics.rs"
-    definition = find_lowering_function_def(read(boundary_file), "lower_registry_call")
-    boundary_line = definition[1] if definition else None
     notes = [
         f"Uses the `{strategy}` strategy from the single-source builtin descriptor.",
     ]
@@ -313,7 +316,6 @@ def resolve_registry_lowering(repo: Path, read, entry: dict, sig_file: str) -> L
     return LoweringInfo(
         sig_file=sig_file,
         codegen_file=str(boundary_file.relative_to(repo)),
-        codegen_line=boundary_line,
         codegen_function="lower_registry_call",
         notes=notes,
     )
@@ -678,8 +680,34 @@ PRELUDE_SOURCES: dict[str, tuple[tuple[tuple[str, ...], ...], str]] = {
     # The xml surface keeps its own catalog module; the built prelude splits the parser
     # (`xml_*`) and writer (`xmlwriter_*`) declarations across two generated files.
     "xml": (
-        (("xml_prelude/build/parser.rs", "xml"), ("xml_prelude/build/writer.rs", "xml")),
+        (
+            ("xml_prelude/build/parser.rs", "xml"),
+            ("xml_prelude/build/writer.rs", "xml"),
+            ("simplexml_prelude/generated.rs", "xml"),
+        ),
         "crates/elephc-builtin-contract/src/catalog_xml.rs",
+    ),
+    # The tidy surface is built AST; the extractor's builder pattern finds
+    # `function("tidy_*")` in the generated functions module.
+    "tidy": (
+        (("tidy_prelude/build/functions.rs", "tidy"),),
+        "crates/elephc-builtin-contract/src/catalog_tidy.rs",
+    ),
+}
+
+# PHP-visible functions whose injected prelude is not keyed by the contract ``Module`` or
+# ``Area``. Both locale functions are `Area::String` (like the hash prelude) but live in
+# their own synthetic-AST prelude, so a per-name override keeps the page link truthful.
+PRELUDE_SOURCE_BY_NAME: dict[str, tuple[str | tuple[str, ...], str, str]] = {
+    "setlocale": (
+        "locale_prelude.rs",
+        "locale",
+        "crates/elephc-builtin-contract/src/catalog_locale.rs",
+    ),
+    "nl_langinfo": (
+        "locale_prelude.rs",
+        "locale",
+        "crates/elephc-builtin-contract/src/catalog_locale.rs",
     ),
 }
 
@@ -747,7 +775,14 @@ def resolve_non_registry_lowering(
     kind = aot_support.get("kind")
     if kind == "prelude":
         try:
-            homes, sig_file = PRELUDE_SOURCES[module if module in PRELUDE_SOURCES else area]
+            source_entry = PRELUDE_SOURCE_BY_NAME.get(canonical)
+            if source_entry is None:
+                homes, sig_file = PRELUDE_SOURCES[module if module in PRELUDE_SOURCES else area]
+            else:
+                # A per-name override carries one label for one file or a tuple of files.
+                source, label, sig_file = source_entry
+                files = (source,) if isinstance(source, str) else source
+                homes = tuple((file, label) for file in files)
         except KeyError:
             raise ValueError(
                 f"prelude-provided builtin {canonical!r} is in contract area {area!r}, which "
@@ -770,19 +805,15 @@ def resolve_non_registry_lowering(
             raise ValueError(
                 f"prelude-provided builtin {canonical!r} is not declared by src/{listed}. "
                 f"Its contract area {area!r} maps there, so either the contract's area or "
-                f"PRELUDE_SOURCES is wrong; a line-1 fallback would ship a page linking to "
-                f"an unrelated place in the file."
+                f"PRELUDE_SOURCES is wrong; a fallback would ship a page linking to "
+                f"a prelude that does not implement it."
             )
         lowering.codegen_file = str(prelude.relative_to(repo))
-        lowering.codegen_line = read(prelude)[: match.start()].count("\n") + 1
         lowering.codegen_function = canonical
         lowering.notes.append(f"Implemented by the compiler-injected {label} prelude.")
     elif kind == "name-resolver-rewrite":
         rewriter = repo / "src" / "name_resolver" / "expressions.rs"
-        text = read(rewriter)
-        needle = re.search(rf'"{re.escape(canonical)}"', text)
         lowering.codegen_file = str(rewriter.relative_to(repo))
-        lowering.codegen_line = text[: needle.start()].count("\n") + 1 if needle else None
         lowering.codegen_function = "rewrite_date_procedural_call"
         lowering.notes.append(
             "Rewritten by the name resolver into a constructor or method call on the "
@@ -1002,12 +1033,9 @@ def _builtin_to_dict(b: Builtin) -> dict:
         },
         "lowering": {
             "sig_file": b.lowering.sig_file,
-            "sig_line": b.lowering.sig_line,
             "sig_arm": b.lowering.sig_arm,
             "checker_file": b.lowering.checker_file,
-            "checker_line": b.lowering.checker_line,
             "codegen_file": b.lowering.codegen_file,
-            "codegen_line": b.lowering.codegen_line,
             "codegen_function": b.lowering.codegen_function,
             "runtime_helpers": b.lowering.runtime_helpers,
             "notes": b.lowering.notes,

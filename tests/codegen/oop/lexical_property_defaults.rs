@@ -1046,3 +1046,48 @@ try { Consumer::$items[index()] = value(); } catch (Error $e) { echo 'E'; }
 "#);
     assert_eq!(out, "vE|kvE");
 }
+
+/// An untyped property slot takes the type of the class constant its default reads (`int` for
+/// `self::LIMIT = 5`), not syntactic inference's `string` guess for a `Class::CONST` read, in a
+/// bare default and inside array literals.
+#[test]
+fn test_untyped_property_slots_take_class_constant_value_types() {
+    let out = crate::support::compile_and_run(
+        r#"<?php
+class Y {
+    public $a = self::YB;
+    public $b = [self::YB, self::YB];
+    public $c = [PHP_EOL, self::YB];
+    public static $s = [self::S, parent_less::class];
+    const YB = 5;
+    const S = "s";
+}
+$y = new Y;
+var_dump($y->a, $y->b, $y->c, Y::$s);
+"#,
+    );
+    assert_eq!(
+        out,
+        r#"int(5)
+array(2) {
+  [0]=>
+  int(5)
+  [1]=>
+  int(5)
+}
+array(2) {
+  [0]=>
+  string(1) "
+"
+  [1]=>
+  int(5)
+}
+array(2) {
+  [0]=>
+  string(1) "s"
+  [1]=>
+  string(11) "parent_less"
+}
+"#
+    );
+}

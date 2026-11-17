@@ -35,6 +35,7 @@ pub(super) fn eval_reflection_method_invoke_args(
 /// Converts a variadic `invoke()` argument into a by-value forwarded method argument.
 pub(super) fn eval_reflection_method_forwarded_value_arg(arg: EvaluatedCallArg) -> EvaluatedCallArg {
     EvaluatedCallArg {
+        evaluation_owner: arg.evaluation_owner,
         name: arg.name,
         value: arg.value,
         ref_target: None,

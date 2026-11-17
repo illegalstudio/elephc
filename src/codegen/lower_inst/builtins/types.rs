@@ -22,6 +22,8 @@ use super::super::super::context::FunctionContext;
 use super::super::predicates;
 use super::{expect_operand, load_value_to_first_int_arg, store_if_result};
 
+mod class_string_relation;
+
 /// Lowers `intval($value, $base)`, PHP's two-argument integer conversion.
 ///
 /// Reference PHP honors `$base` only when `$value` is a string, so the subject's checker type
@@ -151,7 +153,7 @@ pub(crate) fn lower_class_alias(ctx: &mut FunctionContext<'_>, inst: &Instructio
 ///
 /// Fixed untyped slots selected by reachable property `unset()` operations are widened to
 /// boxed `Mixed` and lowered through `PropUnset`, so they do not reach this fallback. Packed
-/// fields, by-reference property slots, and dynamic shapes whose magic behavior depends on
+/// fields, borrowed or untyped reference-property slots, and dynamic shapes whose magic behavior depends on
 /// runtime state remain deliberately unsupported.
 ///
 /// A BY-REFERENCE INDEXED ARRAY is the shape named here. `unset()` removes a key without
@@ -180,7 +182,7 @@ pub(super) fn lower_unset_builtin(
          properties and of declared `array` static properties, ArrayAccess offsets, \
          __unset()-backed properties, declared fixed object properties, and dynamic \
          object properties). \
-         Packed fields, by-reference property slots, and runtime-dependent magic \
+         Packed fields, borrowed or untyped reference-property slots, and runtime-dependent magic \
          property shapes are not supported. An element of a by-reference INDEXED array \
          (`function f(array &$a) {{ unset($a[1]); }}`) would leave a key hole, so the \
          local must become a hash, and the caller's slot still says `array<T>`; the \
@@ -310,6 +312,7 @@ fn emit_settype_string_conversion(ctx: &mut FunctionContext<'_>, value: ValueId)
         }
         PhpType::Float => {
             ctx.load_value_to_result(value)?;
+            crate::codegen::lower_inst::predicates::emit_nan_string_coercion_probe(ctx);
             abi::emit_call_label(ctx.emitter, "__rt_ftoa");
         }
         PhpType::Int => {
@@ -761,16 +764,29 @@ pub(crate) fn lower_is_a_relation(
         Some(value) => const_bool_operand(ctx, value)?,
         None => Some(allows_string_by_default),
     };
+    if matches!(ctx.value_php_type(object)?, PhpType::Str)
+        && optional_const_string_operand(ctx, object)?.is_none()
+    {
+        if let Some(target_class) = optional_const_string_operand(ctx, target)? {
+            return class_string_relation::lower(ctx, inst, object, &target_class, exclude_self);
+        }
+    }
     // The eval bridge answers an OBJECT's relation only. With strings allowed a boxed value may
     // hold a class NAME, which that probe calls "not an object": `is_a($this->collects,
     // JsonResource::class, true)` inside any function with an eval context was false, so Laravel's
     // resource collections refused every resource class. Those calls take the name-based path.
     if matches!(ctx.value_php_type(object)?, PhpType::Mixed | PhpType::Union(_))
-        && super::has_eval_context(ctx)
         && constant_flag == Some(false)
     {
         if let Some(target_class) = optional_const_string_operand(ctx, target)? {
-            return super::lower_eval_object_is_a(ctx, inst, object, &target_class, exclude_self);
+            if ctx.module.required_runtime_features.eval_bridge {
+                return super::lower_eval_object_is_a(ctx, inst, object, &target_class, exclude_self);
+            }
+            if !exclude_self {
+                return super::super::objects::lower_mixed_is_a_literal_target(
+                    ctx, inst, object, &target_class,
+                );
+            }
         }
     }
     let object_is_object = matches!(ctx.value_php_type(object)?, PhpType::Object(_));
@@ -1735,6 +1751,16 @@ fn static_relation_holds(
     let object_class = object_class.trim_start_matches('\\');
     let target_class = target_class.trim_start_matches('\\');
     let target_key = php_symbol_key(target_class);
+    if exclude_self && super::class_relations::reflection_hidden_interface(ctx, target_class) {
+        // `Box` names a generic class template, and php-src's `Box` is the one class every
+        // instantiation stands for: `is_subclass_of` holds for a class EXTENDING an
+        // instantiation, never for the instantiation itself.
+        return Ok(lookup_class(ctx, object_class)
+            .and_then(|info| info.parent.clone())
+            .is_some_and(|parent| {
+                class_interfaces_contain(ctx, parent.trim_start_matches('\\'), &target_key)
+            }));
+    }
     if !exclude_self && php_symbol_key(object_class) == target_key {
         return Ok(true);
     }
@@ -1841,6 +1867,10 @@ fn declared_names(ctx: &FunctionContext<'_>, name: &str) -> Result<Vec<String>> 
             "get_declared_traits" => ctx.module.trait_table.names.clone(),
             _ => unreachable!(),
         };
+    }
+    if name == "get_declared_interfaces" {
+        // A class template's marker interface is not an interface php-src would declare.
+        names.retain(|interface| !super::class_relations::reflection_hidden_interface(ctx, interface));
     }
     Ok(names)
 }

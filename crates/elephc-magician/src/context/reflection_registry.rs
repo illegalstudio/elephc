@@ -6,6 +6,11 @@
 //!
 //! Key details:
 //! - Class, function, method, property, constant, and closure targets use stable runtime identities.
+//! - An identity is a native object address, which the runtime reuses once the object is freed.
+//!   Every registration records its owning context, and the runtime's object-free hook
+//!   (`crate::ffi::dynamic_destructors::forget_released_object`) clears the metadata through
+//!   `forget_released_reflection_identity`, so a later object at the same address is never
+//!   mistaken for the freed reflector.
 
 use super::*;
 
@@ -77,6 +82,61 @@ impl ElephcEvalContext {
         dropped |= self.eval_reflection_class_constants.remove(&identity).is_some();
         dropped
     }
+}
+
+thread_local! {
+    /// Owning context of each registered reflector identity on this thread's contexts.
+    static REFLECTION_IDENTITY_OWNERS: RefCell<HashMap<u64, usize>> = RefCell::new(HashMap::new());
+}
+
+/// Clears the reflection metadata a freed native object left in its owning context.
+///
+/// # Safety
+/// Owning contexts must untrack their identities (`untrack_reflection_identities_for_context`)
+/// before they are reclaimed, so every recorded owner is live.
+pub(crate) unsafe fn forget_released_reflection_identity(identity: u64) {
+    let owner = REFLECTION_IDENTITY_OWNERS
+        .try_with(|owners| owners.borrow_mut().remove(&identity))
+        .ok()
+        .flatten();
+    if let Some(context) = owner.and_then(|owner| unsafe { (owner as *mut ElephcEvalContext).as_mut() }) {
+        context.clear_eval_reflection_identity(identity);
+    }
+}
+
+/// Drops every reflector identity a context owns before the context is reclaimed.
+pub(crate) fn untrack_reflection_identities_for_context(context: *mut ElephcEvalContext) {
+    let context = context as usize;
+    let _ = REFLECTION_IDENTITY_OWNERS
+        .try_with(|owners| owners.borrow_mut().retain(|_, owner| *owner != context));
+}
+
+impl ElephcEvalContext {
+    /// Records this context as the owner of one registered reflector identity.
+    fn own_eval_reflection_identity(&mut self, identity: u64) {
+        let context = self as *mut Self as usize;
+        let _ = REFLECTION_IDENTITY_OWNERS
+            .try_with(|owners| owners.borrow_mut().insert(identity, context));
+    }
+
+    /// Removes stale metadata before a reclaimed native address identifies another object.
+    pub(crate) fn clear_eval_reflection_identity(&mut self, identity: u64) {
+        let context = self as *mut Self as usize;
+        let _ = REFLECTION_IDENTITY_OWNERS.try_with(|owners| {
+            let mut owners = owners.borrow_mut();
+            if owners.get(&identity) == Some(&context) {
+                owners.remove(&identity);
+            }
+        });
+        self.eval_reflection_attributes.remove(&identity);
+        self.eval_reflection_classes.remove(&identity);
+        self.eval_reflection_functions.remove(&identity);
+        self.eval_reflection_function_closure_targets.remove(&identity);
+        self.eval_reflection_methods.remove(&identity);
+        self.eval_reflection_properties.remove(&identity);
+        self.eval_dynamic_reflection_properties.remove(&identity);
+        self.eval_reflection_class_constants.remove(&identity);
+    }
 
     /// Records eval-declared attribute metadata for one synthetic ReflectionAttribute object.
     pub fn register_eval_reflection_attribute(
@@ -86,11 +146,12 @@ impl ElephcEvalContext {
         target: u64,
         repeated: bool,
     ) {
-        self.forget_eval_reflection_identity_except(identity, EvalReflectionKind::Attribute);
+        self.clear_eval_reflection_identity(identity);
         self.eval_reflection_attributes.insert(
             identity,
             EvalReflectionAttributeMetadata::new(attribute, target, repeated),
         );
+        self.own_eval_reflection_identity(identity);
     }
 
     /// Returns eval-declared attribute metadata attached to a synthetic ReflectionAttribute.
@@ -103,9 +164,10 @@ impl ElephcEvalContext {
 
     /// Records reflected class metadata for one synthetic ReflectionClass object.
     pub fn register_eval_reflection_class(&mut self, identity: u64, class_name: &str) {
-        self.forget_eval_reflection_identity_except(identity, EvalReflectionKind::Class);
+        self.clear_eval_reflection_identity(identity);
         self.eval_reflection_classes
             .insert(identity, class_name.trim_start_matches('\\').to_string());
+        self.own_eval_reflection_identity(identity);
     }
 
     /// Returns the reflected class name attached to a synthetic ReflectionClass.
@@ -117,12 +179,10 @@ impl ElephcEvalContext {
 
     /// Records reflected function metadata for one synthetic ReflectionFunction object.
     pub fn register_eval_reflection_function(&mut self, identity: u64, function_name: &str) {
-        self.forget_eval_reflection_identity_except(identity, EvalReflectionKind::Function);
-        // A callable target is attached AFTER the function is registered; one still filed here
-        // is a freed ReflectionFunction's.
-        self.eval_reflection_function_closure_targets.remove(&identity);
+        self.clear_eval_reflection_identity(identity);
         self.eval_reflection_functions
             .insert(identity, function_name.trim_start_matches('\\').to_string());
+        self.own_eval_reflection_identity(identity);
     }
 
     /// Returns the reflected function name attached to a synthetic ReflectionFunction.
@@ -141,6 +201,7 @@ impl ElephcEvalContext {
         self.forget_eval_reflection_identity_except(identity, EvalReflectionKind::Function);
         self.eval_reflection_function_closure_targets
             .insert(identity, target);
+        self.own_eval_reflection_identity(identity);
     }
 
     /// Returns the callable target retained for a reflected `Closure` object.
@@ -159,7 +220,7 @@ impl ElephcEvalContext {
         declaring_class: &str,
         method_name: &str,
     ) {
-        self.forget_eval_reflection_identity_except(identity, EvalReflectionKind::Method);
+        self.clear_eval_reflection_identity(identity);
         self.eval_reflection_methods.insert(
             identity,
             (
@@ -167,6 +228,7 @@ impl ElephcEvalContext {
                 method_name.to_string(),
             ),
         );
+        self.own_eval_reflection_identity(identity);
     }
 
     /// Returns the declaring class and method name attached to a synthetic ReflectionMethod.
@@ -183,7 +245,7 @@ impl ElephcEvalContext {
         declaring_class: &str,
         property_name: &str,
     ) {
-        self.forget_eval_reflection_identity_except(identity, EvalReflectionKind::Property);
+        self.clear_eval_reflection_identity(identity);
         self.eval_reflection_properties.insert(
             identity,
             (
@@ -191,6 +253,7 @@ impl ElephcEvalContext {
                 property_name.to_string(),
             ),
         );
+        self.own_eval_reflection_identity(identity);
         self.eval_dynamic_reflection_properties.remove(&identity);
     }
 
@@ -225,7 +288,7 @@ impl ElephcEvalContext {
         constant_name: &str,
         owner_kind: u64,
     ) {
-        self.forget_eval_reflection_identity_except(identity, EvalReflectionKind::ClassConstant);
+        self.clear_eval_reflection_identity(identity);
         self.eval_reflection_class_constants.insert(
             identity,
             (
@@ -234,6 +297,7 @@ impl ElephcEvalContext {
                 owner_kind,
             ),
         );
+        self.own_eval_reflection_identity(identity);
     }
 
     /// Returns the declaring class, name, and reflection owner kind for a synthetic constant.
@@ -241,5 +305,59 @@ impl ElephcEvalContext {
         self.eval_reflection_class_constants
             .get(&identity)
             .map(|(class, constant, owner_kind)| (class.as_str(), constant.as_str(), *owner_kind))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Reused native identities keep one current Reflection kind and clear auxiliary facts.
+    #[test]
+    fn reflection_registration_replaces_previous_identity_kind() {
+        let mut context = ElephcEvalContext::new();
+        let identity = 7;
+        context.register_eval_reflection_class(identity, "OldClass");
+        context.register_eval_reflection_attribute(identity, EvalAttribute::new("Marker", Some(vec![])), 1, false);
+        assert_eq!(context.eval_reflection_class_name(identity), None);
+        assert_eq!(context.eval_reflection_attribute(identity).unwrap().attribute().name(), "Marker");
+        context.register_eval_dynamic_reflection_property(identity, "Owner", "property");
+        assert!(context.eval_reflection_attribute(identity).is_none());
+        assert!(context.eval_reflection_property_is_dynamic(identity));
+        context.register_eval_reflection_function(identity, "callback");
+        assert!(context.eval_reflection_property(identity).is_none());
+        assert!(!context.eval_reflection_property_is_dynamic(identity));
+        context.register_eval_reflection_function_closure_target(identity, EvalClosureObjectTarget::Named("callback".into()));
+        assert_eq!(context.eval_reflection_function_name(identity), Some("callback"));
+        assert!(context.eval_reflection_function_closure_target(identity).is_some());
+        context.register_eval_reflection_method(identity, "Owner", "method");
+        assert_eq!(context.eval_reflection_function_name(identity), None);
+        assert!(context.eval_reflection_function_closure_target(identity).is_none());
+        context.register_eval_reflection_class_constant(identity, "Owner", "CONSTANT", 0);
+        assert!(context.eval_reflection_method(identity).is_none());
+        context.register_eval_reflection_class(identity, "NewClass");
+        assert!(context.eval_reflection_class_constant(identity).is_none());
+        assert_eq!(context.eval_reflection_class_name(identity), Some("NewClass"));
+        context.register_dynamic_object(identity, "OrdinaryObject");
+        assert_eq!(context.eval_reflection_class_name(identity), None);
+        context.forget_dynamic_object(identity);
+    }
+
+    /// Freeing a registered reflector clears its metadata in the owning context, and a context
+    /// untracked for teardown is never reached through an identity it registered.
+    #[test]
+    fn released_reflector_identity_clears_owning_context_metadata() {
+        let mut context = Box::new(ElephcEvalContext::new());
+        let identity = 0x5eed_0f_d306;
+        context.register_eval_reflection_class(identity, "ReleasedReflectorClass");
+        unsafe { forget_released_reflection_identity(identity) };
+        assert_eq!(context.eval_reflection_class_name(identity), None);
+        context.register_eval_reflection_method(identity, "ReleasedReflectorClass", "method");
+        untrack_reflection_identities_for_context(context.as_mut() as *mut ElephcEvalContext);
+        unsafe { forget_released_reflection_identity(identity) };
+        assert_eq!(
+            context.eval_reflection_method(identity),
+            Some(("ReleasedReflectorClass", "method"))
+        );
     }
 }

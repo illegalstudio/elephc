@@ -162,6 +162,18 @@ impl Checker {
         flattened_classes: &[FlattenedClass],
         errors: &mut Vec<CompileError>,
     ) -> Result<(), CompileError> {
+        let previous = self.method_property_refinements.take();
+        let result = self.type_check_methods_until_stable_inner(flattened_classes, errors);
+        self.method_property_refinements = previous;
+        result
+    }
+
+    /// Keeps precise cross-class storage across passes without replaying constructor placeholders as new writes.
+    fn type_check_methods_until_stable_inner(
+        &mut self,
+        flattened_classes: &[FlattenedClass],
+        errors: &mut Vec<CompileError>,
+    ) -> Result<(), CompileError> {
         // This loop is 32.61s of the 33.30s type-checking phase, and it is three things per
         // pass: a deep CLONE of the whole class table, the body checking, and up to five deep
         // COMPARISONS of that table (one for stability, four against the cycle window).
@@ -181,6 +193,7 @@ impl Checker {
         loop {
             passes += 1;
             let mut mark = std::time::Instant::now();
+            self.method_property_refinements = Some(crate::fast_hash::FastSet::default());
             let classes_before_pass = self.classes.clone();
             // A free function's signature is re-resolved in the middle of a pass when a later
             // call site passes another type, and a body walked before that read the old one. The
@@ -190,6 +203,9 @@ impl Checker {
                 clone_secs += mark.elapsed().as_secs_f64();
                 mark = std::time::Instant::now();
             }
+            // A pass that denies a method local the promotable `?int` read view needs another
+            // pass, whose walk then keeps that local's reads `mixed`.
+            let view_denials_before_pass = self.promotable_view_denied.len();
             let mut pass_errors = Vec::new();
             let mut pass_tolerated: Vec<CompileError> = Vec::new();
             let recursive_mixed_before = self.recursive_mixed_methods.len();
@@ -290,6 +306,13 @@ impl Checker {
                             }
                             body_ty
                         };
+                        // An unused untyped magic argument list has no element evidence yet.
+                        // Its Never seed must not turn a runtime callback into a null read.
+                        let ty = if type_ann.is_none() && i == 1
+                            && matches!(method_key.as_str(), "__call" | "__callstatic")
+                            && matches!(&ty, PhpType::Array(element)
+                                if matches!(element.as_ref(), PhpType::Never | PhpType::Void))
+                        { PhpType::Mixed } else { ty };
                         // Match build_method_sig and the runtime hydration adapter:
                         // user hooks consume boxed PHP arrays, synthetic SPL keeps
                         // the raw representation declared by its generated signature.
@@ -356,6 +379,7 @@ impl Checker {
                     self.current_by_ref_return = method.by_ref_return;
                     let loop_storage_scope = method_scope;
                     self.clear_loop_storage_scope(&loop_storage_scope);
+                    self.begin_promotable_walk(&loop_storage_scope);
                     let previous_loop_storage_scope = std::mem::replace(
                         &mut self.current_loop_storage_scope,
                         loop_storage_scope,
@@ -438,7 +462,9 @@ impl Checker {
                             )
                         })
                         .collect();
-                    let body_result = self.with_local_storage_context(
+                    let return_facts = crate::optimize::ReturnBoundaryFacts::new(method.return_type.as_ref(),
+                        method.params.iter().map(|(name, hint, ..)| (name.as_str(), hint.as_ref())), &method.body);
+                    let body_walk = crate::optimize::with_return_boundary_facts(Some(&return_facts), || self.with_local_storage_context(
                         method_ref_params,
                         method_param_names,
                         pre_bound_own_storage,
@@ -447,6 +473,7 @@ impl Checker {
                             checker.boxed_parameter_locals.extend(method.params.iter()
                                 .filter(|(_, annotation, _, _)| annotation.is_none())
                                 .map(|(name, _, _, _)| name.clone()));
+                            checker.seed_parameter_value_proofs(&method_env);
                             // A tolerated fault is one that REFUSED this body: an error a probe
                             // swallows (`defined()`, a speculative inference) is not, and the
                             // pipeline never demoted it. So the body is walked as before; a
@@ -488,7 +515,9 @@ impl Checker {
                             }
                             Ok(())
                         },
-                    );
+                    ));
+                    let method_scope = self.current_loop_storage_scope.clone();
+                    self.end_promotable_walk(&method_scope);
                     self.callable_param_names = saved_callable_param_names;
                     for (pname, sig, return_ty, first_class_target, array_target) in
                         hidden_param_callable_records
@@ -526,7 +555,7 @@ impl Checker {
                             }
                         }
                     }
-                    body_result?;
+                    body_walk?;
                     if std::env::var("ELEPHC_BACKEND_INVENTORY").as_deref() == Ok("1") {
                         for error in &mut method_errors {
                             error.message = format!(
@@ -579,6 +608,11 @@ impl Checker {
             if trace {
                 bodies_secs += mark.elapsed().as_secs_f64();
                 mark = std::time::Instant::now();
+            }
+            // A pass that denied a view is never the kept one, and it does not spend the class
+            // stability budget: denials only grow, so these extra passes are bounded.
+            if self.promotable_view_denied.len() != view_denials_before_pass {
+                continue;
             }
             self.unify_override_family_return_types();
             self.sync_inherited_method_return_types();

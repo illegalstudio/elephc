@@ -96,38 +96,18 @@ pub(crate) enum LiteralDefaultValue {
     /// singleton, read when the default is written. The slot takes its own reference; `boxed`
     /// wraps it for a `mixed`/union slot.
     ///
-    /// Recognized by `enum_case_literal_default`, which resolves the receiver against the
-    /// module (so `self::`/aliases work and a non-enum `Foo::BAR` is left to report unsupported
-    /// rather than loading a symbol that does not exist).
+    /// Not a literal in the sense the rest of this enum is — the value is a heap object the
+    /// runtime materializes lazily, so what is stored is the case's canonical singleton, which
+    /// is what makes `$config->level === Level::Low` hold (issue #566). Constructor promotion
+    /// already worked because its default is evaluated as a parameter before the assignment;
+    /// a DIRECTLY declared property had no form for it at all.
+    ///
+    /// Module-aware resolution supplies the canonical case and ordered singleton reads.
+    /// The selected case is loaded last; union and mixed slots box that borrowed object.
     EnumCase {
-        enum_name: String,
-        case_name: String,
+        value: crate::codegen::const_default_values::EnumCaseDefault,
         boxed: bool,
     },
-}
-
-/// Returns the enum-case default form for a default naming an enum case, when the slot can hold
-/// the case object: the enum's own type, or `mixed`/a union.
-pub(crate) fn enum_case_literal_default(
-    module: &crate::ir::Module,
-    class_name: &str,
-    php_type: &PhpType,
-    expr: &ExprKind,
-) -> Option<LiteralDefaultValue> {
-    let (enum_name, case_name) =
-        crate::codegen::eval_class_constant_helpers::resolve_class_like_enum_case(
-            module, class_name, expr,
-        )?;
-    let boxed = match php_type.codegen_repr() {
-        PhpType::Object(_) => false,
-        PhpType::Mixed | PhpType::Union(_) => true,
-        _ => return None,
-    };
-    Some(LiteralDefaultValue::EnumCase {
-        enum_name,
-        case_name,
-        boxed,
-    })
 }
 
 /// Literal indexed-array element that can be materialized without evaluating code.
@@ -526,6 +506,19 @@ pub(crate) fn literal_default_value(
         }
         _ => Err(unsupported_literal_default(context, php_type, op_name)),
     }
+}
+
+/// Selects raw or boxed storage for an enum default resolved against module metadata.
+pub(crate) fn enum_case_default_value(
+    context: &str, php_type: &PhpType,
+    value: crate::codegen::const_default_values::EnumCaseDefault, op_name: &str,
+) -> Result<LiteralDefaultValue> {
+    if !matches!(php_type, PhpType::Object(_) | PhpType::Mixed | PhpType::Union(_)) {
+        return Err(unsupported_literal_default(context, php_type, op_name));
+    }
+    Ok(LiteralDefaultValue::EnumCase {
+        value, boxed: matches!(php_type, PhpType::Mixed | PhpType::Union(_)),
+    })
 }
 
 /// Emits a string literal default into the canonical string result registers.

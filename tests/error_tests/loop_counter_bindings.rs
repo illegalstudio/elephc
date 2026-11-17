@@ -118,3 +118,27 @@ fn test_numeric_storage_rebind_accepts_dead_conditional_regions() {
     ).expect("dead conditional regions must type-check");
     assert_eq!(rebound_names(&result), vec!["i".to_owned()]);
 }
+
+/// A counter re-seeded from a packed field after an intervening conditional stays compatible.
+///
+/// The field read was not a non-null store proof, so the store kept the counter's missing-binding
+/// null and failed with `cannot reassign $row from int|float to int|null`. Covers buffer element,
+/// `ptr<T>` and embedded record receivers plus a narrow integer width.
+#[test]
+fn test_packed_field_counter_reinitializes_after_a_conditional() {
+    for seed in ["$cells[$box]->first", "$p->first", "$cells[$box]->span->lo", "$cells[$box]->small"] {
+        let source = format!(
+            "<?php packed class Span {{ public int $lo; }} \
+             packed class Cell {{ public int $first; public int $last; public u16 $small; public Span $span; }} \
+             function probe(int $count, bool $flag): void {{ \
+             $cells = buffer_new<Cell>(1); $p = ptr_cast<Cell>(ptr_null()); \
+             for ($box = 0; $box < $count; $box++) {{ \
+             for ($row = {seed}; $row <= $cells[$box]->last; $row++) {{}} }} \
+             if ($flag) {{ echo \"\"; }} \
+             for ($box = $count - 1; $box >= 0; $box--) {{ \
+             for ($row = {seed}; $row <= $cells[$box]->last; $row++) {{}} }} \
+             buffer_free($cells); }} probe(1, true);"
+        );
+        check_source(&source).unwrap_or_else(|error| panic!("{source}: {error}"));
+    }
+}

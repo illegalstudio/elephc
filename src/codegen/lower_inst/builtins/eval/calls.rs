@@ -623,12 +623,17 @@ pub(super) fn lower_eval_literal_scope_eir_function(
     load_eval_scope_to_arg(ctx, 0);
     abi::emit_call_label(ctx.emitter, &function_symbol(&function_name));
     let result_reg = abi::int_result_reg(ctx.emitter);
-    abi::emit_store_to_sp(ctx.emitter, result_reg, EVAL_STATUS_SAVE_OFFSET);
+    abi::emit_store_to_sp(ctx.emitter, result_reg, EVAL_TEMP_CELL_OFFSET);
+    callable_guards::guard_saved_owner(
+        ctx.emitter,
+        EVAL_RESULT_GUARD_OFFSET,
+        EVAL_TEMP_CELL_OFFSET,
+    );
     reload_eval_scope_locals(ctx, &reload_locals, None)?;
     reload_eval_globals_from_local_scope(ctx, &reload_globals)?;
     clear_native_scope_bindings(ctx, &flush_locals, &flush_globals);
     callable_guards::unguard_saved_owner(ctx.emitter, EVAL_RESULT_GUARD_OFFSET);
-    abi::emit_load_temporary_stack_slot(ctx.emitter, result_reg, EVAL_STATUS_SAVE_OFFSET);
+    abi::emit_load_temporary_stack_slot(ctx.emitter, result_reg, EVAL_TEMP_CELL_OFFSET);
     abi::emit_release_temporary_stack(ctx.emitter, EVAL_GUARDED_STACK_BYTES);
     store_if_result(ctx, inst)?;
     Ok(true)

@@ -1,8 +1,6 @@
 ---
 title: "gmp_export() - internals"
 description: "Compiler internals for gmp_export(): lowering path, type checks, and runtime helpers."
-sidebar:
-  order: 618
 ---
 
 ## `gmp_export()` - internals
@@ -10,7 +8,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/gmp/gmp_export.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/gmp/gmp_export.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:752](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L752) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 

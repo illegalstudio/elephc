@@ -67,16 +67,19 @@ const PREV_GUARD: usize = 56;
 const SAVE_MODE: usize = 64;
 /// Fetch-helper slot that keeps the caller's `_print_r_off` while `__debugInfo()` runs.
 const SAVE_LEN: usize = 72;
-/// Fetch-helper slot that keeps the heap copy of the caller's print_r capture bytes.
+/// Fetch-helper slot that temporarily owns the caller's raw print_r capture.
 const SAVE_PTR: usize = 80;
 /// Fetch-helper slot that first holds this dump's `_debuginfo_pad` flag, then the caller's value
 /// while `__debugInfo()` runs (a nested dump inside the method rewrites the global).
 const PREV_PAD: usize = 88;
 /// Fetch-helper slot that keeps the caller's `_debuginfo_call_line` while `__debugInfo()` runs.
 const PREV_LINE: usize = 96;
+/// Fetch-helper slot that keeps the capacity of the parked raw print_r capture.
+const SAVE_CAP: usize = 104;
 /// Frame size of the fetch helper: the shared slots, `ENTRY`, `PREV_GUARD`, `PREV_PAD`,
-/// `PREV_LINE` and the capture save slots.
-const FETCH_FRAME: usize = 112;
+/// `PREV_LINE` and the capture save slots, plus the 16-byte ABI footer.
+const FETCH_FRAME: usize = 128;
+const _: () = assert!(SAVE_CAP <= FETCH_FRAME - 16);
 
 /// Tag reported when the class has no run-time `__debugInfo()`.
 const TAG_NONE: usize = 0;
@@ -285,73 +288,27 @@ fn emit_guard_push(emitter: &mut Emitter) {
 
 /// Moves an in-flight print_r capture out of the way while `__debugInfo()` runs.
 ///
-/// A deferred echo `print_r` (mode 2) or a return-mode `print_r` (mode 1) that reaches this helper
-/// has its text so far in the shared capture buffer. User code run by the method must not see that
-/// capture: an `echo` goes straight to the output like in PHP, and a nested `print_r($x, true)` may
-/// reuse the buffer from offset 0. So the bytes are copied to a heap block, the capture is switched
-/// off, and `emit_print_r_capture_restore` puts everything back after the call.
+/// Moves an outer print_r capture aside so PHP hooks can echo or start nested captures.
 fn emit_print_r_capture_save(emitter: &mut Emitter) {
     let result = abi::int_result_reg(emitter);
-    let a0 = abi::int_arg_reg_name(emitter.target, 0);
-    let a1 = abi::int_arg_reg_name(emitter.target, 1);
-    let a2 = abi::int_arg_reg_name(emitter.target, 2);
-    let malloc = emitter.target.extern_symbol("malloc");
-    let memcpy = emitter.target.extern_symbol("memcpy");
-    store_imm_slot(emitter, 0, SAVE_MODE);
-    store_imm_slot(emitter, 0, SAVE_LEN);
-    store_imm_slot(emitter, 0, SAVE_PTR);
-    abi::emit_load_symbol_to_reg(emitter, result, "_print_r_mode", 0);
-    abi::store_at_offset(emitter, result, SAVE_MODE);
-    abi::emit_branch_if_int_result_zero(emitter, "__rt_obj_debuginfo_pr_saved");
-    abi::emit_load_symbol_to_reg(emitter, result, "_print_r_off", 0);
-    abi::store_at_offset(emitter, result, SAVE_LEN);
-    abi::emit_branch_if_int_result_zero(emitter, "__rt_obj_debuginfo_pr_reset");
-    abi::emit_reg_move(emitter, a0, result);
-    abi::emit_call_label(emitter, &malloc);
-    // A failed park must not memcpy through NULL: report the shared allocation fatal instead.
-    // The fatal is reached through an unconditional jump, which stays in range across atoms.
-    abi::emit_branch_if_int_result_nonzero(emitter, "__rt_obj_debuginfo_pr_alloc_ok");
-    abi::emit_jump(emitter, "__rt_alloc_overflow");
-    emitter.label("__rt_obj_debuginfo_pr_alloc_ok");
-    abi::store_at_offset(emitter, result, SAVE_PTR);
-    abi::emit_call_label(emitter, "__rt_pr_base");
-    abi::emit_reg_move(emitter, a1, result);
-    abi::load_at_offset(emitter, a0, SAVE_PTR);
-    abi::load_at_offset(emitter, a2, SAVE_LEN);
-    abi::emit_call_label(emitter, &memcpy);
-    emitter.label("__rt_obj_debuginfo_pr_reset");
-    abi::emit_store_zero_to_symbol(emitter, "_print_r_off", 0);
-    abi::emit_store_zero_to_symbol(emitter, "_print_r_mode", 0);
-    emitter.label("__rt_obj_debuginfo_pr_saved");
+    for (offset, symbol) in [(SAVE_PTR, "_print_r_ptr"), (SAVE_CAP, "_print_r_cap"),
+        (SAVE_LEN, "_print_r_off"), (SAVE_MODE, "_print_r_mode")] {
+        abi::emit_load_symbol_to_reg(emitter, result, symbol, 0);
+        abi::store_at_offset(emitter, result, offset);
+        abi::emit_store_zero_to_symbol(emitter, symbol, 0);
+    }
 }
 
 /// Puts back the print_r capture parked by `emit_print_r_capture_save` after a normal return.
 fn emit_print_r_capture_restore(emitter: &mut Emitter) {
     let result = abi::int_result_reg(emitter);
-    let a0 = abi::int_arg_reg_name(emitter.target, 0);
-    let a1 = abi::int_arg_reg_name(emitter.target, 1);
-    let a2 = abi::int_arg_reg_name(emitter.target, 2);
-    let free = emitter.target.extern_symbol("free");
-    let memcpy = emitter.target.extern_symbol("memcpy");
-    abi::load_at_offset(emitter, result, SAVE_MODE);
-    abi::emit_branch_if_int_result_zero(emitter, "__rt_obj_debuginfo_pr_done");
-    abi::load_at_offset(emitter, result, SAVE_PTR);
-    abi::emit_branch_if_int_result_zero(emitter, "__rt_obj_debuginfo_pr_nocopy");
-    abi::load_at_offset(emitter, a0, SAVE_LEN);
-    abi::emit_call_label(emitter, "__rt_pr_reserve");
-    abi::emit_call_label(emitter, "__rt_pr_base");
-    abi::emit_reg_move(emitter, a0, result);
-    abi::load_at_offset(emitter, a1, SAVE_PTR);
-    abi::load_at_offset(emitter, a2, SAVE_LEN);
-    abi::emit_call_label(emitter, &memcpy);
-    abi::load_at_offset(emitter, a0, SAVE_PTR);
-    abi::emit_call_label(emitter, &free);
-    emitter.label("__rt_obj_debuginfo_pr_nocopy");
-    abi::load_at_offset(emitter, result, SAVE_LEN);
-    abi::emit_store_reg_to_symbol(emitter, result, "_print_r_off", 0);
-    abi::load_at_offset(emitter, result, SAVE_MODE);
-    abi::emit_store_reg_to_symbol(emitter, result, "_print_r_mode", 0);
-    emitter.label("__rt_obj_debuginfo_pr_done");
+    abi::emit_call_label(emitter, "__rt_pr_abort");
+    for (offset, symbol) in [(SAVE_PTR, "_print_r_ptr"), (SAVE_CAP, "_print_r_cap"),
+        (SAVE_LEN, "_print_r_off"), (SAVE_MODE, "_print_r_mode")] {
+        abi::load_at_offset(emitter, result, offset);
+        abi::emit_store_reg_to_symbol(emitter, result, symbol, 0);
+    }
+    abi::emit_store_zero_to_local_slot(emitter, SAVE_PTR);
 }
 
 /// Restores the caller's `_debuginfo_guard`, `_debuginfo_pad` and `_debuginfo_call_line` after a
@@ -598,26 +555,26 @@ mod tests {
             assert!(fetch.contains("_debuginfo_null_prefix") && fetch.contains("_debuginfo_null_suffix"), "{name}");
             assert!(fetch.contains("_debuginfo_guard") && fetch.contains("_exc_handler_top"), "{name}");
             assert!(!fetch.contains("_exc_call_frame_top"), "{name}");
-            assert!(fetch.contains("_print_r_mode") && fetch.contains("__rt_pr_base"), "{name}");
+            assert!(fetch.contains("_print_r_mode") && fetch.contains("_print_r_ptr"), "{name}");
             assert!(renderers.contains("__rt_var_dump_open_object_n"), "{name}");
             assert!(renderers.contains("__rt_print_r_hash"), "{name}");
             assert_eq!(renderers.matches("__rt_decref_any").count(), 2, "{name}");
         }
     }
 
-    /// The print_r capture park checks malloc's result on every target: a NULL block reaches the
-    /// allocation fatal before any store or memcpy uses it.
+    /// Parking a capture transfers all four globals without allocating or copying its bytes.
     #[test]
-    fn print_r_capture_save_null_checks_malloc() {
-        for name in ["macos-aarch64", "linux-aarch64", "linux-x86_64"] {
+    fn print_r_capture_save_transfers_owner_on_all_targets() {
+        for name in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
             let mut emitter = Emitter::new(Target::parse(name).unwrap());
             emit_print_r_capture_save(&mut emitter);
+            emit_print_r_capture_restore(&mut emitter);
             let asm = emitter.output();
-            let malloc = asm.find("malloc").unwrap_or_else(|| panic!("{name}: no malloc"));
-            let fatal = asm.find("__rt_alloc_overflow").unwrap_or_else(|| panic!("{name}: no null check"));
-            let ok = asm.find("__rt_obj_debuginfo_pr_alloc_ok:").unwrap_or_else(|| panic!("{name}: no ok label"));
-            let copy = asm.find("memcpy").unwrap_or_else(|| panic!("{name}: no memcpy"));
-            assert!(malloc < fatal && fatal < ok && ok < copy, "{name}: {asm}");
+            for symbol in ["_print_r_ptr", "_print_r_cap", "_print_r_off", "_print_r_mode"] {
+                assert!(asm.matches(symbol).count() >= 3, "{name}: {symbol}");
+            }
+            assert!(asm.contains("__rt_pr_abort"), "{name}");
+            assert!(!asm.contains("malloc") && !asm.contains("memcpy"), "{name}");
         }
     }
 }

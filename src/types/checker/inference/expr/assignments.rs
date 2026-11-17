@@ -26,7 +26,7 @@ impl Checker {
     /// # Arguments
     /// * `target` - Left-hand side of the assignment (Variable, ArrayAccess, PropertyAccess, StaticPropertyAccess)
     /// * `value` - Right-hand side expression providing the assigned value
-    /// * `result_target` - For compound assignments, the expression whose type becomes the result; if None or same as target, `value`'s type is used
+    /// * `result_target` - The result expression; ordinary property prefix updates observe the stored type
     /// * `prelude` - Statements to execute before the assignment (e.g., from null coalescing `??=` initializer)
     /// * `span` - Source span for error reporting
     /// * `env` - Mutable type environment; updated with the target's new type
@@ -100,6 +100,17 @@ impl Checker {
             return self.check_local_assignment_expression(name, value, span, env);
         }
 
+        let stored_prefix_result = result_target == Some(target)
+            && prelude.iter().any(|stmt| matches!(&stmt.kind, StmtKind::Assign { name, .. }
+                if crate::names::is_generated_local_name(name) && name.contains("__elephc_incdec_new_")))
+            && match &target.kind {
+                ExprKind::PropertyAccess { object, .. } | ExprKind::DynamicPropertyAccess { object, .. } => {
+                    let receiver = self.infer_type(object, env)?;
+                    !self.classes.contains_key("SimpleXMLElement") || !property_receiver_may_be_native(self, &receiver)
+                }
+                _ => false,
+            };
+
         if let ExprKind::DynamicPropertyAccess { object, property } = &target.kind {
             self.check_dynamic_property_assignment_expression(
                 object,
@@ -109,7 +120,10 @@ impl Checker {
                 span,
                 env,
             )?;
-            let result_expr = result_target.unwrap_or(value);
+            let result_expr = match result_target {
+                Some(result_target) if result_target != target || stored_prefix_result => result_target,
+                _ => value,
+            };
             let mut result_env = env.clone();
             return self.infer_type_with_assignment_effects(result_expr, &mut result_env);
         }
@@ -163,7 +177,7 @@ impl Checker {
         } else { false };
         self.check_assignment_like_stmt_with_property_update(&stmt, env, compound_property_update)?;
         let result_expr = match result_target {
-            Some(result_target) if result_target != target => result_target,
+            Some(result_target) if result_target != target || stored_prefix_result => result_target,
             _ => value,
         };
         let mut result_env = env.clone();
@@ -201,10 +215,10 @@ impl Checker {
         }
 
         let property_ty = self.infer_type(property, env)?;
-        if !property_ty.is_dynamic_property_name() {
+        if !self.valid_dynamic_property_name_type(&property_ty) {
             return Err(CompileError::new(
                 property.span,
-                "Dynamic property name must be string or integer",
+                "Dynamic property name must be string or integer, or a Stringable object",
             ));
         }
 
@@ -217,13 +231,31 @@ impl Checker {
             self,
             &receiver_ty,
         );
-
-        self.infer_type_with_assignment_effects(value, env)?;
+        // A runtime name can also land in any UNTYPED declared slot, which php treats as
+        // `mixed`: widen the slots that cannot already hold the value, or a slot inferred as
+        // `null` (`public $id;`) rejects the write and a value lands in the property hash.
+        let value_ty = self.infer_type_with_assignment_effects(value, env)?;
+        crate::types::checker::clone_override_storage::record_dynamic_property_write_destination(
+            self,
+            &receiver_ty,
+            &value_ty,
+        );
         if let Some(result_target) = result_target {
             let mut result_env = env.clone();
             self.infer_type_with_assignment_effects(result_target, &mut result_env)?;
         }
         Ok(())
+    }
+}
+
+/// Keeps native numeric prefix results distinct from ordinary typed-property coercion results.
+fn property_receiver_may_be_native(checker: &Checker, ty: &PhpType) -> bool {
+    match ty {
+        PhpType::Mixed => true,
+        PhpType::Union(members) => members.iter().any(|member| property_receiver_may_be_native(checker, member)),
+        PhpType::Object(class) => class.is_empty() || checker.interfaces.contains_key(class)
+            || crate::types::builtin_classes::has_native_dimensions(class, &checker.classes),
+        _ => false,
     }
 }
 

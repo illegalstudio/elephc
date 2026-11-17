@@ -11,6 +11,36 @@
 use super::super::*;
 use super::support::*;
 
+/// Nested array and object delimiters sit one indentation level below their keys.
+#[test]
+fn execute_program_print_r_indents_nested_containers() {
+    let program = parse_fragment(br#"
+class EvalNestedPrintR { public array $items = ['b' => 1]; }
+return print_r(['a' => ['b' => 1], 'o' => new EvalNestedPrintR()], true);
+"#).expect("parse nested print_r fixture");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+    let result = execute_program(&program, &mut scope, &mut values).expect("render nested containers");
+    assert_eq!(values.get(result), FakeValue::String(r#"Array
+(
+    [a] => Array
+        (
+            [b] => 1
+        )
+
+    [o] => EvalNestedPrintR Object
+        (
+            [items] => Array
+                (
+                    [b] => 1
+                )
+
+        )
+
+)
+"#.into()));
+}
+
 /// Releases captured scalar arguments and the rendered output, including partial argument failure.
 #[test]
 fn var_dump_argument_and_output_ownership() {

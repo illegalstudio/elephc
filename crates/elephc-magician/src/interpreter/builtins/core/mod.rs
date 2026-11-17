@@ -72,6 +72,7 @@ mod serialize;
 mod tick_functions;
 mod trigger_error;
 mod unserialize;
+mod native_debug;
 mod restore_error_handler;
 mod restore_exception_handler;
 mod runtime_introspection;

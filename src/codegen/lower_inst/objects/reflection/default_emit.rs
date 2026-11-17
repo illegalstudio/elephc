@@ -32,7 +32,18 @@ pub(super) fn emit_reflection_constant_value_as_mixed(
         ReflectionConstantValue::EnumCase {
             enum_name,
             case_name,
-        } => emit_reflection_enum_case_as_mixed(ctx, enum_name, case_name),
+        } => {
+            // Reading a case through Reflection is an access like any other, so it
+            // materializes the case if this is its first evaluation.
+            crate::codegen::enum_singletons::emit_lazy_case_load(ctx, enum_name, case_name);
+            emit_box_current_value_as_mixed(ctx.emitter, &PhpType::Object(enum_name.clone()));
+        }
+        ReflectionConstantValue::Evaluated { value, enum_cases } => {
+            for (enum_name, case_name) in enum_cases {
+                crate::codegen::enum_singletons::emit_lazy_case_load(ctx, enum_name, case_name);
+            }
+            emit_reflection_constant_value_as_mixed(ctx, value);
+        }
         ReflectionConstantValue::Array(elements) => {
             emit_reflection_constant_array_to_result(ctx, elements);
             emit_box_current_owned_value_as_mixed(
@@ -100,6 +111,18 @@ pub(super) fn emit_reflection_default_value_as_mixed(
     value: &ReflectionParameterDefaultValue,
 ) {
     match value {
+        ReflectionParameterDefaultValue::EnumCase(value) => {
+            for (enum_name, case_name) in &value.evaluated {
+                crate::codegen::enum_singletons::emit_lazy_case_load(ctx, enum_name, case_name);
+            }
+            emit_box_current_value_as_mixed(ctx.emitter, &PhpType::Object(value.enum_name.clone()));
+        }
+        ReflectionParameterDefaultValue::Evaluated { value, enum_cases } => {
+            for (enum_name, case_name) in enum_cases {
+                crate::codegen::enum_singletons::emit_lazy_case_load(ctx, enum_name, case_name);
+            }
+            emit_reflection_default_value_as_mixed(ctx, value);
+        }
         ReflectionParameterDefaultValue::Int(value) => {
             emit_boxed_int_literal_to_result(ctx, *value)
         }
@@ -117,9 +140,6 @@ pub(super) fn emit_reflection_default_value_as_mixed(
         ReflectionParameterDefaultValue::EirHelper(_) => {
             // The complete tree belongs to the parameter's separately stored lazy factory.
             emit_boxed_null_literal_to_result(ctx)
-        }
-        ReflectionParameterDefaultValue::EnumCase { enum_name, case_name } => {
-            emit_reflection_enum_case_as_mixed(ctx, enum_name, case_name)
         }
         ReflectionParameterDefaultValue::Object { args, .. } if args.is_empty() => {
             emit_boxed_null_literal_to_result(ctx)

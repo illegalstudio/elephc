@@ -119,3 +119,51 @@ echo $meta["native_type"] . ":" . $meta["sqlsrv:decl_type"] . ":" . $meta["pdo_t
         "unexpected PDO_SQLSRV output: {out}"
     );
 }
+
+/// Verifies the x86_64 SQLSRV prepare mode keeps the bitwise-OR result.
+///
+/// The two-operand form cannot write the result into the register that holds
+/// the right operand. The allocator reuses that register for the result, so the
+/// lowering must store from the result register instead of dropping the OR.
+#[test]
+fn test_pdo_sqlsrv_prepare_mode_keeps_or_result() {
+    let dir = make_cli_test_dir("elephc_pdo_sqlsrv_prepare_mode");
+    fs::write(
+        dir.join("main.php"),
+        r#"<?php
+$options = [PDO::ATTR_CURSOR => PDO::CURSOR_SCROLL, PDO::SQLSRV_ATTR_CURSOR_SCROLL_TYPE => PDO::SQLSRV_CURSOR_BUFFERED, PDO::SQLSRV_ATTR_FETCHES_NUMERIC_TYPE => true, PDO::SQLSRV_ATTR_FETCHES_DATETIME_TYPE => true];
+$db = new PDO("sqlsrv:Server=127.0.0.1,1433;Database=master");
+$db->prepare("SELECT 1", $options);
+"#,
+    )
+    .unwrap();
+    let output = elephc_cli_command(&dir)
+        .args(["--target", "linux-x86_64", "--emit-asm"])
+        .arg("main.php")
+        .output()
+        .expect("run elephc");
+    assert!(
+        output.status.success(),
+        "compile failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let asm = fs::read_to_string(dir.join("main.s")).expect("read emitted assembly");
+    let start = asm.find("# @fn name=PDO::prepare").expect("PDO::prepare body");
+    let body = &asm[start..];
+    let end = body.find("# @endfn name=PDO::prepare").unwrap_or(body.len());
+    let lines: Vec<&str> = body[..end].lines().map(str::trim).collect();
+    let mut checked = 0;
+    for (index, line) in lines.iter().enumerate() {
+        let Some(rest) = line.strip_prefix("or rax, r") else {
+            continue;
+        };
+        let register: String = rest.chars().take_while(char::is_ascii_alphanumeric).collect();
+        let next = lines.get(index + 1).copied().unwrap_or("");
+        assert!(
+            next == format!("mov r{register}, rax") || next.starts_with("mov QWORD PTR [rbp - "),
+            "the OR result was dropped in PDO::prepare: {line}\n{next}"
+        );
+        checked += 1;
+    }
+    assert!(checked > 0, "the SQLSRV prepare mode OR was not emitted");
+}

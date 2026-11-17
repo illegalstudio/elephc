@@ -24,8 +24,9 @@ fn reference_element_type(container: &PhpType) -> PhpType {
 /// reference to a refcounted value. There are two storage disciplines, matched
 /// to what the codegen store actually does:
 ///
-/// - **Independent-value store** (the store crosses the boxed/unboxed boundary, in
-///   either direction): a Mixed/Union slot receiving a non-Mixed value, e.g.
+/// - **Independent-value store** (the store crosses the boxed/unboxed boundary):
+///   ordinary Mixed assignments normalize their RHS to a boxed owner in EIR first.
+///   Remaining container writebacks into a Mixed/Union slot, e.g.
 ///   `Class::$h = new C()`, is boxed with `__rt_mixed_from_value`, which takes its
 ///   *own* retained reference to the child; and a narrowing slot receiving a Mixed
 ///   value, e.g. `Class::$s += 1` on an `int` slot, is cast out of the box, so the
@@ -117,6 +118,14 @@ pub(super) fn lower_static_property_assign(
             }
         }
     }
+    // Canonical publication consumes one boxed owner. Retire a concrete temporary's lease
+    // before the store can invoke a displaced destructor, while its new box keeps it alive.
+    let source = if static_property_type(ctx, receiver, property)
+        .is_some_and(|ty| ty.codegen_repr() == PhpType::Mixed)
+        && ctx.builder.value_php_type(source.value).codegen_repr() != PhpType::Mixed
+    {
+        ctx.box_value_as_mixed(source, PhpType::Mixed, Some(span))
+    } else { source };
     let independent =
         static_property_store_retains_independent_value(ctx, receiver, property, source);
     finish_static_property_store(ctx, source, independent, span, &mut |ctx, stored| {
@@ -202,8 +211,8 @@ fn finish_static_property_store(
 /// into a Mixed/Union slot is boxed, and the box retains the child itself. A boxed value
 /// going into a slot codegen narrows to -- `Str`, `Int`, `Bool`, `Float`, `Object`, or the
 /// tagged-scalar pair -- is cast out of the box, and what lands in the slot owns nothing of
-/// it (`__rt_str_persist` copies, the scalar casts read a payload word, the object arm
-/// increfs the unboxed pointer on its own). Both directions leave the source's reference
+/// it (`__rt_str_persist` copies, the scalar casts read a payload word, and object/iterable
+/// arms incref the unboxed pointer on their own). Both directions leave the source's reference
 /// unrelated to the slot's, so borrowed sources need no `Acquire` and owning temporary
 /// sources must be released after the store -- without that release the box outlives its
 /// last use and leaks, one cell per compound assignment (issue #1041).
@@ -231,9 +240,8 @@ fn slot_store_retains_independent_value(slot_ty: &PhpType, value_ty: &PhpType) -
     let value_is_boxed = matches!(value_ty, PhpType::Mixed | PhpType::Union(_));
     let boxes_into_mixed = matches!(slot_ty, PhpType::Mixed | PhpType::Union(_)) && !value_is_boxed;
     // The slot types codegen actually casts a Mixed source out of. Deliberately not "any slot
-    // that is not Mixed": an array or iterable slot falls through `load_static_property_store_
-    // value_to_result`'s catch-all arm untouched, so the Mixed pointer itself is what gets
-    // stored and the store still consumes it.
+    // that is not Mixed": an array slot falls through `load_static_property_store_value_to_result`
+    // untouched, so the Mixed pointer itself is what gets stored and the store still consumes it.
     let narrows_out_of_mixed = value_is_boxed
         && matches!(
             slot_ty,
@@ -243,6 +251,7 @@ fn slot_store_retains_independent_value(slot_ty: &PhpType, value_ty: &PhpType) -
                 | PhpType::Bool
                 | PhpType::Float
                 | PhpType::Object(_)
+                | PhpType::Iterable
                 | PhpType::TaggedScalar
         );
     boxes_into_mixed || narrows_out_of_mixed || converts_into_array_slot(&value_ty, &slot_ty)
@@ -349,10 +358,27 @@ pub(super) fn lower_static_property_array_push(
         return;
     }
 
-    let property_value = load_static_property(ctx, receiver, property, span);
-    let boxed_slot = static_property_type(ctx, receiver, property)
-        .is_some_and(|ty| matches!(ty.codegen_repr(), PhpType::Mixed));
-    if boxed_slot || static_property_may_be_eval_dynamic(ctx, receiver) {
+    let boxed_property = static_property_type(ctx, receiver, property)
+        .filter(|ty| ty.codegen_repr() == PhpType::Mixed);
+    let property_value = if let Some(ty) = boxed_property.as_ref() {
+        separate_boxed_static_property(ctx, receiver, property, ty.clone(), span)
+    } else { load_static_property(ctx, receiver, property, span) };
+    if super::native_dimension_append::lower(ctx, property_value, value, span, |ctx, array, value| {
+        if boxed_property.is_some() || static_property_may_be_eval_dynamic(ctx, receiver) {
+            ctx.emit_void(Op::MixedArrayAppend, vec![array.value, value.value], None,
+                Op::MixedArrayAppend.default_effects(), Some(span));
+        } else {
+            ctx.emit_void(Op::RuntimeCall, vec![array.value, value.value], None,
+                effects_lookup::runtime_effects(), Some(span));
+        }
+    }) {
+        if static_property_may_be_eval_dynamic(ctx, receiver) {
+            store_static_property(ctx, receiver, property, property_value.value, span);
+        }
+        crate::ir_lower::ownership::release_if_owned(ctx, value, Some(span));
+        return;
+    }
+    if boxed_property.is_some() || static_property_may_be_eval_dynamic(ctx, receiver) {
         ctx.emit_void(
             Op::MixedArrayAppend,
             vec![property_value.value, value.value],
@@ -360,7 +386,12 @@ pub(super) fn lower_static_property_array_push(
             Op::MixedArrayAppend.default_effects(),
             Some(span),
         );
-        store_static_property(ctx, receiver, property, property_value.value, span);
+        if boxed_property.is_none() {
+            store_static_property(ctx, receiver, property, property_value.value, span);
+        }
+        if ctx.value_is_owning_temporary(value) {
+            crate::ir_lower::ownership::release_if_owned(ctx, value, Some(span));
+        }
         return;
     }
     ctx.emit_void(
@@ -408,6 +439,17 @@ pub(super) fn lower_static_property_array_assign(
     if let Some(ElementUpdate::NullCoalesce { read, default }) = update {
         crate::ir_lower::expr::lower_null_coalesce_update_stmt(ctx, read, default, span);
         return;
+    }
+    if let Some(ElementUpdate::IncDec { increment }) = &update {
+        if let Some(ty) = static_property_type(ctx, receiver, property)
+            .filter(|ty| super::native_dimension_incdec::may_contain_xml(ctx, ty))
+        {
+            let array = load_static_property_as(ctx, receiver, property, ty, span);
+            let handled = super::native_dimension_incdec::lower(ctx, array, index, *increment, value_incdec_locals(value), span,
+                |ctx, _| lower_static_property_array_assign_with_diagnosed_key(ctx, receiver, property, index, value, span, true));
+            assert!(handled, "native XML static type remains eligible after loading");
+            return;
+        }
     }
     if matches!(update, Some(ElementUpdate::Compound)) {
         let ExprKind::BinaryOp { left, op, right } = &value.kind else { unreachable!() };
@@ -610,11 +652,6 @@ pub(crate) fn lower_static_property_array_assign_with_diagnosed_key(
             release_persisted_string_operand(ctx, value, span);
             return;
         }
-        crate::ir_lower::expr::unpin_in_flight_owners(
-            ctx,
-            std::mem::take(&mut index_pins),
-            span,
-        );
         ctx.emit_void(
             Op::HashSet,
             vec![property_value.value, index.value, value.value],
@@ -623,7 +660,8 @@ pub(crate) fn lower_static_property_array_assign_with_diagnosed_key(
             Some(span),
         );
         store_static_property(ctx, receiver, property, property_value.value, span);
-        release_persisted_string_operand(ctx, index, span);
+        crate::ir_lower::expr::unpin_in_flight_owners(ctx, std::mem::take(&mut index_pins), span);
+        release_hash_key_operand(ctx, index, span);
         release_persisted_string_operand(ctx, value, span);
         return;
     }
@@ -637,6 +675,10 @@ pub(crate) fn lower_static_property_array_assign_with_diagnosed_key(
     // the same source line.
     let property_value = if let Some(property_ty) = array_access_ty {
         load_static_property_as(ctx, receiver, property, property_ty, span)
+    } else if let Some(property_ty) = static_property_type(ctx, receiver, property)
+        .filter(|ty| ty.codegen_repr() == PhpType::Mixed)
+    {
+        separate_boxed_static_property(ctx, receiver, property, property_ty, span)
     } else {
         load_static_property(ctx, receiver, property, span)
     };
@@ -708,25 +750,26 @@ pub(super) fn bind_mixed_static_array_write_root(
 /// static slot's boxed cell is separated first, the same way an element write separates it, so a
 /// `$copy = Class::$prop` taken earlier keeps its own storage; `OffsetUnset` then promotes the
 /// separated cell to hash storage and removes the key without renumbering the survivors.
+/// Returns the runtime removal flag (set only for a removed value that may own a graph).
 pub(crate) fn lower_static_property_array_unset(
     ctx: &mut LoweringContext<'_, '_>,
     receiver: &StaticReceiver,
     property: &str,
     index: LoweredValue,
     span: Span,
-) {
+) -> Option<LoweredValue> {
     // `unset_target_supported` only admits this shape for a declared PHP `array` static
     // property, and the separation succeeds for exactly that type.
-    let Some(array) = separate_php_array_static_property(ctx, receiver, property, span) else {
-        return;
-    };
-    ctx.emit_void(
+    let array = separate_php_array_static_property(ctx, receiver, property, span)?;
+    // The runtime flag reports a removed value that may own a cycle-capable graph.
+    Some(ctx.emit_value(
         Op::OffsetUnset,
         vec![array.value, index.value],
         None,
+        PhpType::Bool,
         Op::OffsetUnset.default_effects(),
         Some(span),
-    );
+    ))
 }
 
 /// Lowers `self::$a[$target] = &self::$a[$source]` through one shared managed cell.
@@ -968,6 +1011,14 @@ fn separate_php_array_static_property(
     if !ty.is_php_array() {
         return None;
     }
+    Some(separate_boxed_static_property(ctx, receiver, property, ty, span))
+}
+
+/// Publishes an independent Mixed cell so appends preserve aliases and array copy-on-write.
+fn separate_boxed_static_property(
+    ctx: &mut LoweringContext<'_, '_>, receiver: &StaticReceiver, property: &str,
+    ty: PhpType, span: Span,
+) -> LoweredValue {
     let previous = load_static_property_as(ctx, receiver, property, ty.clone(), span);
     let separated = ctx.emit_value(
         Op::MixedClone,
@@ -978,7 +1029,10 @@ fn separate_php_array_static_property(
         Some(span),
     );
     store_static_property(ctx, receiver, property, separated.value, span);
-    Some(separated)
+    let borrowed = ctx.emit_value(Op::Borrow, vec![separated.value], None,
+        ctx.builder.value_php_type(separated.value), Op::Borrow.default_effects(), Some(span));
+    ctx.builder.set_value_ownership(borrowed.value, Ownership::Borrowed);
+    borrowed
 }
 
 /// Returns the widened storage when a stamped static hash cannot hold the assigned value.

@@ -169,6 +169,9 @@ pub(in crate::interpreter) fn eval_method_call_result_with_evaluated_args(
             return Ok(result);
         }
     }
+    if let Some(result) = eval_reflection_evaluating_getter_result(object, identity, method_name, context, values)? {
+        return Ok(result);
+    }
     // A closure created while another eval context ran (a macro registered during provider boot,
     // then bound with `bindTo()` from the context a compiled frame opened for the request) is
     // registered in its OWNER only; wrap that target so `bindTo`/`call`/`__invoke` reach it.
@@ -755,12 +758,12 @@ pub(in crate::interpreter) fn eval_method_call_result_with_evaluated_args(
     if let Some((class_name, method)) =
         eval_dynamic_method_for_call(&called_class_name, method_name, context)
     {
-        if method.is_abstract() {
-            return Err(EvalStatus::RuntimeFatal);
-        }
         if validate_eval_method_access(&class_name, method_name, method.visibility(), context, values)
             .is_ok()
         {
+            if method.is_abstract() {
+                return eval_throw_abstract_method_call_error(&class_name, method.name(), context, values);
+            }
             if method.is_static() {
                 return eval_dynamic_static_method_with_values(
                     &class_name,
@@ -897,6 +900,7 @@ pub(super) fn eval_closure_object_method_result(
                 *target,
                 "call",
                 std::iter::once(EvaluatedCallArg {
+                    evaluation_owner: None,
                     name: None,
                     value: bound_this.borrowed(),
                     ref_target: None,
@@ -907,6 +911,11 @@ pub(super) fn eval_closure_object_method_result(
                 values,
             )
         }
+        EvalClosureObjectTarget::NativeDescriptor { .. } => eval_closure_call_warning_null(
+            "Cannot rebind scope of closure created from function",
+            values,
+        )
+        .map(Some),
         EvalClosureObjectTarget::Named(name) => {
             if context.closure(&name).is_some() {
                 let callable = EvaluatedCallable::BoundClosure {
@@ -1012,6 +1021,9 @@ pub(in crate::interpreter) fn eval_closure_object_invoke_result(
                 owner_context,
                 values,
             );
+        }
+        EvalClosureObjectTarget::NativeDescriptor { callback, display_name } => {
+            EvaluatedCallable::NativeDescriptor { callback, display_name }
         }
         EvalClosureObjectTarget::Named(name) => EvaluatedCallable::Named {
             display_name: name.clone(),
@@ -1407,7 +1419,7 @@ fn eval_reflection_member_slot_target(
             return Ok(Some((declaring_class, name)));
         }
     }
-    let declaring = eval_with_native_bridge_scope(owner_class, context, || {
+    let declaring = eval_with_native_bridge_scope(owner_class, context, values, |values| {
         values.property_get(object, "__declaring_class")
     })?;
     if values.type_tag(declaring)? != EVAL_TAG_OBJECT {
@@ -1431,7 +1443,7 @@ fn eval_reflection_slot_string(
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<Option<String>, EvalStatus> {
-    let value_result = eval_with_native_bridge_scope(owner_class, context, || {
+    let value_result = eval_with_native_bridge_scope(owner_class, context, values, |values| {
         values.property_get(object, slot)
     });
     let trace_slot = crate::eval_trace::enabled()

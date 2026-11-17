@@ -12,6 +12,7 @@ mod assign;
 mod blocks;
 mod declare;
 mod ffi;
+mod goto;
 mod names;
 mod namespace_use;
 mod oop;
@@ -37,9 +38,8 @@ pub(crate) use params::{
 };
 pub(crate) use assign::{
     assignment_target_append_stmt, assignment_target_store_stmt, lower_nested_append_assignment,
-    can_replay_assignment_target,
-    is_valid_reference_source,
-    lower_postfix_incdec_assignment,
+    can_replay_assignment_target, is_valid_reference_source, lower_postfix_incdec_assignment,
+    lower_scoped_instance_dimension_incdec,
     update_dimension_base_is_snapshotted, update_index_needs_snapshot,
 };
 pub(crate) use blocks::{expect_semicolon, expect_token};
@@ -318,9 +318,9 @@ fn parse_stmt_dispatch(
         // A bare `{ ... }` block. PHP gives it no scope of its own, so its statements simply run
         // in place.
         Token::LBrace => Ok(Stmt::new(StmtKind::Synthetic(blocks::parse_block(tokens, pos)?), span)),
-        Token::Goto => crate::parser::terminal_goto::parse_goto(tokens, pos, span),
-        Token::Identifier(_) if crate::parser::terminal_goto::starts_label(tokens, *pos) => {
-            crate::parser::terminal_goto::parse_label(tokens, pos, span)
+        Token::Goto => goto::parse_goto(tokens, pos, span),
+        Token::Identifier(label) if goto::starts_goto_label(tokens, *pos) => {
+            Ok(goto::parse_goto_label(label, pos, span))
         }
         Token::Static => {
             if *pos + 1 < tokens.len() && tokens[*pos + 1].0 == Token::DoubleColon {
@@ -341,6 +341,27 @@ fn parse_stmt_dispatch(
         }
         Token::LBracket if starts_bracket_destructuring_assignment(tokens, *pos) => {
             assign::parse_list_unpack(tokens, pos, span)
+        }
+        // PHP allows the `exit`/`die` language constructs without a call parenthesis:
+        // `exit;` terminates with status 0 exactly like `exit();`.
+        Token::Identifier(name)
+            if matches!(name.to_ascii_lowercase().as_str(), "exit" | "die")
+                && matches!(
+                    tokens.get(*pos + 1).map(|(token, _)| token),
+                    Some(Token::Semicolon)
+                ) =>
+        {
+            let name = name.clone();
+            *pos += 1;
+            expect_semicolon(tokens, pos)?;
+            let call = crate::parser::ast::Expr::new(
+                ExprKind::FunctionCall {
+                    name: crate::names::Name::unqualified(name),
+                    args: Vec::new(),
+                },
+                span,
+            );
+            Ok(Stmt::new(StmtKind::ExprStmt(call), span))
         }
         Token::Identifier(_)
         | Token::Enum
@@ -371,6 +392,7 @@ fn parse_stmt_dispatch(
         | Token::New
         | Token::LParen
         | Token::LBracket
+        | Token::Tilde
         | Token::Match => parse_expression_led_stmt(tokens, pos, span),
         // Control flow — delegated to control.rs
         Token::Switch => control::parse_switch(tokens, pos, span),
@@ -428,6 +450,9 @@ fn parse_expression_led_stmt(
         }
     }
     if let Some(stmt) = assign::try_parse_postfix_assignment(tokens, pos, span)? {
+        return Ok(stmt);
+    }
+    if let Some(stmt) = assign::try_parse_computed_property_element_postfix_incdec(tokens, pos, span)? {
         return Ok(stmt);
     }
     let expr = parse_expr(tokens, pos)?;

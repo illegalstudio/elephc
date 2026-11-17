@@ -68,3 +68,50 @@ fn exception_flow_rounds_recompute_only_the_bodies_whose_reads_changed() {
     assert!(summaries > 0, "the fixture must reach the exception-flow fixed point");
     assert!(summaries <= 200, "{summaries} body summaries for a 31-function chain");
 }
+
+/// Case-folded summaries stay scoped to their analysis, including builtin and unknown misses.
+#[test]
+fn test_callable_casefold_lookup_preserves_scoped_effects() {
+    use super::*;
+    let outer = HashMap::from_iter([("MixedCase".to_string(), Effect::PURE)]);
+    with_callable_effects(outer, HashMap::default(), HashMap::default(),
+        InstanceDispatchMetadata::default(), || {
+            assert_eq!(function_call_effect("MIXEDCASE", &[]), Effect::PURE);
+            let inner = HashMap::from_iter([("mixedCASE".to_string(), Effect::PURE.with_may_throw())]);
+            with_callable_effects(inner, HashMap::default(), HashMap::default(),
+                InstanceDispatchMetadata::default(), || {
+                    assert!(function_call_effect("MixedCase", &[]).may_throw);
+                    assert!(function_call_effect("missingFunction", &[]).writes_globals);
+                    assert!(!function_call_effect("strlen", &[Expr::string_lit("x")]).writes_globals);
+                });
+            assert_eq!(function_call_effect("mixedcase", &[]), Effect::PURE);
+        });
+}
+
+/// Different-case relay calls retain their exact exception domain through fixed-point analysis.
+#[test]
+fn test_callable_casefold_lookup_preserves_exception_domain() {
+    use super::*;
+    let tokens = crate::lexer::tokenize("<?php function CaseFoldThrow(): never { throw new RuntimeException('x'); } function CaseFoldRelay(): never { CASEFOLDTHROW(); } CASEFOLDRELAY();").unwrap();
+    let program = crate::parser::parse(&tokens).unwrap();
+    let analysis = CheckerExceptionAnalysis::new(&program, &[]);
+    let StmtKind::ExprStmt(call) = &program.last().unwrap().kind else { panic!("missing call"); };
+    let thrown = analysis.operation_throws(call, None);
+    let (caught, remaining) = analysis.split(thrown, &["RuntimeException".to_string()]);
+    assert!(!caught.is_empty());
+    assert!(remaining.is_empty());
+}
+
+/// A declared int wrapper around a never call cannot add a return verification exception.
+#[test]
+fn test_declared_int_return_does_not_add_throw_after_never_call() {
+    use super::*;
+    let tokens = crate::lexer::tokenize("<?php function StopResult(): never { throw new LogicException('x'); } function relayResult(): int { return STOPRESULT(); } relayResult();").unwrap();
+    let program = crate::parser::parse(&tokens).unwrap();
+    let analysis = CheckerExceptionAnalysis::new(&program, &[]);
+    let StmtKind::ExprStmt(call) = &program.last().unwrap().kind else { panic!("missing call"); };
+    let thrown = analysis.operation_throws(call, None);
+    let (caught, remaining) = analysis.split(thrown, &["LogicException".to_string()]);
+    assert!(!caught.is_empty());
+    assert!(remaining.is_empty());
+}

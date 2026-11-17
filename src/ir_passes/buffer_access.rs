@@ -18,7 +18,7 @@
 //!   loop that never runs its body never reports anything, exactly as before.
 //! - A loop qualifies only when every instruction in its natural body is on a default-deny
 //!   allowlist: buffer element and packed field accesses, local loads, stores of scalar
-//!   locals, concat resets, and instructions whose effects only read state or fatal. That
+//!   locals (including a packed record address kept in an element-view local), concat resets, and instructions whose effects only read state or fatal. That
 //!   includes a user function or method call whose refined effect summary is read-only. Any
 //!   other call, arbitrary allocations, warnings, output and user-code releases or throws
 //!   disqualify it. Reviewed numeric box operations also qualify when the shared numeric-domain
@@ -40,6 +40,9 @@
 //!   descriptor and index compute the same record address, so a dominated one is replaced by
 //!   its dominator. Scalar element reads are left alone: a `buffer_set_resolved` between two of
 //!   them can change the loaded value.
+//! - In a qualifying loop, a read of a packed element-view local (`$p = $points[$i]`) is
+//!   replaced by the record address stored into it in the same block (`element_views`), so the
+//!   view spelling shares the direct spelling's field accesses and its record-address reuse.
 //! - A zero-based unit-step induction guarded by strict `< buffer_len()` of the same handle marks
 //!   its exact dominated accesses with a true immediate, allowing codegen to omit their bounds
 //!   comparison without removing the zero-descriptor fatal check.
@@ -67,6 +70,7 @@ use super::dominance::{compute_dominance, DominanceInfo};
 use super::loops::{compute_loops, NaturalLoop};
 use super::rewrite::{neutralize_to_nop, replace_all_uses, resolve_chains};
 
+mod element_views;
 mod numeric;
 
 /// Rewrites buffer accesses in every function-like body and reports whether anything changed.
@@ -143,6 +147,7 @@ fn hoist_loops(function: &mut Function, property_reuse: bool) -> bool {
         if !loop_preserves_buffers(function, loop_ref, property_reuse, &numeric) {
             continue;
         }
+        changed |= element_views::forward_view_loads(function, loop_ref, &escaping);
         changed |= hoist_loop(
             function,
             loop_ref,
@@ -458,15 +463,24 @@ pub(super) fn instruction_preserves_buffers(function: &Function, inst: &Instruct
 }
 
 /// Returns whether a `store_local` writes a scalar local, which cannot release anything.
+///
+/// A packed record local (`$p = $points[$i]`) is such a scalar: it holds the raw address of
+/// a record inside a buffer, which is neither retained nor released. Only a packed address
+/// may be stored into it here, so the store is one word with no conversion.
 fn store_targets_scalar_local(function: &Function, inst: &Instruction) -> bool {
     let Some(Immediate::LocalSlot(slot)) = inst.immediate else {
         return false;
     };
     function.locals.get(slot.as_raw() as usize).is_some_and(|local| {
-        matches!(
-            local.php_type.codegen_repr(),
-            PhpType::Int | PhpType::Float | PhpType::Bool | PhpType::Pointer(_)
-        )
+        match local.php_type.codegen_repr() {
+            PhpType::Int | PhpType::Float | PhpType::Bool | PhpType::Pointer(_) => true,
+            PhpType::Packed(_) => inst
+                .operands
+                .first()
+                .and_then(|&value| function.value(value))
+                .is_some_and(|value| matches!(value.php_type.codegen_repr(), PhpType::Packed(_))),
+            _ => false,
+        }
     })
 }
 

@@ -148,11 +148,13 @@ fn eval_array_walk_recursive_ref(
         }
         let mut args = vec![
             EvaluatedCallArg {
+                evaluation_owner: None,
                 name: None,
                 value: value.borrowed(),
                 ref_target: Some(child),
             },
             EvaluatedCallArg {
+                evaluation_owner: None,
                 name: None,
                 value: key.borrowed(),
                 ref_target: None,
@@ -160,6 +162,7 @@ fn eval_array_walk_recursive_ref(
         ];
         if let Some(extra) = extra {
             args.push(EvaluatedCallArg {
+                evaluation_owner: None,
                 name: None,
                 value: extra.borrowed(),
                 ref_target: None,

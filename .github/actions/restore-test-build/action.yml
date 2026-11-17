@@ -1,0 +1,38 @@
+name: Restore test build
+description: Extract a shared nextest build once for multiple focused test invocations.
+inputs:
+  target:
+    description: Host platform that produced the tests
+    required: true
+  attempt:
+    description: Original build attempt
+    required: true
+  run-id:
+    description: Original build run
+    default: ${{ github.run_id }}
+runs:
+  using: composite
+  steps:
+    - name: Download the workspace test archive
+      uses: ./.github/actions/download-test-archive
+      with:
+        name: nextest-archive-${{ inputs.target }}
+        attempt: ${{ inputs.attempt }}
+        run-id: ${{ inputs.run-id }}
+        path: ${{ runner.temp }}/shared-tests
+    - name: Extract test binaries and metadata
+      shell: bash
+      run: |
+        sh scripts/ci/validate_archived_nextest.sh "$RUNNER_TEMP/shared-tests"
+        runner="$RUNNER_TEMP/shared-tests/cargo-nextest"
+        mkdir -p "$RUNNER_TEMP/shared-tests/extracted"
+        "$runner" nextest list --list-type binaries-only --message-format json \
+          --archive-file "$RUNNER_TEMP/shared-tests/nextest-archive.tar.zst" \
+          --extract-to "$RUNNER_TEMP/shared-tests/extracted" --workspace-remap . > /dev/null
+        echo "ELEPHC_CI_NEXTEST=$runner" >> "$GITHUB_ENV"
+        echo "ELEPHC_CI_TEST_ROOT=$RUNNER_TEMP/shared-tests/extracted" >> "$GITHUB_ENV"
+        echo 'ELEPHC_TEST_PREBUILT_BRIDGES=1' >> "$GITHUB_ENV"
+
+    - uses: ./.github/actions/pin-test-bridges
+      with:
+        root: shared-tests/extracted

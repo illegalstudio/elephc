@@ -112,6 +112,13 @@ struct SinkRewrite {
     /// cast, so wrapping there is php's own answer; at a plain store into an int slot php keeps
     /// the float, and wrapping would print a value php never produces.
     saw_cast_sink: bool,
+    /// Whether a declared-return `int` boundary is the only observation.
+    ///
+    /// The boundary throws PHP's catchable `TypeError` when the promoted value is a float, so
+    /// the specialized producer's overflow path carries that same TypeError message data.
+    saw_boundary_sink: bool,
+    /// Boundary message data installed on the specialized producer's overflow path.
+    throw_message: Option<Immediate>,
 }
 
 /// Builds the instruction-use adjacency list for every SSA value.
@@ -146,6 +153,9 @@ fn has_potential_integer_sink(function: &Function) -> bool {
                 local_store_is_integer(function, user.immediate.as_ref())
             }
             Op::StoreRefCell => matches!(user.result_php_type.codegen_repr(), PhpType::Int),
+            Op::ReturnBoundaryMixedToInt => {
+                matches!(user.immediate, Some(Immediate::Data(_)))
+            }
             _ => false,
         };
         accepts_integer
@@ -208,6 +218,9 @@ fn analyze_sink_graph(
             Op::Cast if user.result_php_type == PhpType::Int
                 && matches!(user.immediate, Some(Immediate::CastTarget(IrType::I64))) =>
             {
+                if rewrite.saw_boundary_sink {
+                    return false;
+                }
                 let Some(cast_result) = user.result else {
                     return false;
                 };
@@ -215,6 +228,32 @@ fn analyze_sink_graph(
                 rewrite.neutralize.insert(*use_id);
                 rewrite.saw_integer_sink = true;
                 rewrite.saw_cast_sink = true;
+            }
+            Op::ReturnBoundaryMixedToInt
+                if matches!(user.immediate, Some(Immediate::Data(_))) =>
+            {
+                if rewrite.saw_cast_sink || rewrite.saw_boundary_sink {
+                    return false;
+                }
+                let Some(boundary_result) = user.result else {
+                    return false;
+                };
+                if let Some(boundary_uses) = uses.get(&boundary_result) {
+                    for use_id in boundary_uses {
+                        let Some(use_inst) = function.instruction(*use_id) else {
+                            return false;
+                        };
+                        if use_inst.op != Op::Release {
+                            return false;
+                        }
+                        rewrite.neutralize.insert(*use_id);
+                    }
+                }
+                rewrite.replacements.insert(boundary_result, value);
+                rewrite.neutralize.insert(*use_id);
+                rewrite.saw_integer_sink = true;
+                rewrite.saw_boundary_sink = true;
+                rewrite.throw_message = user.immediate.clone();
             }
             Op::StoreLocal | Op::StoreStaticLocal | Op::InitStaticLocal
                 if local_store_is_integer(function, user.immediate.as_ref()) =>
@@ -296,8 +335,13 @@ fn apply_specialization(
         }
     }
 
-    specialize_checked_producer(function, candidate, rewrite.saw_cast_sink)
-        .expect("checked-int sink candidate retained its opcode until commit");
+    specialize_checked_producer(
+        function,
+        candidate,
+        rewrite.saw_cast_sink,
+        rewrite.throw_message,
+    )
+    .expect("checked-int sink candidate retained its opcode until commit");
     if let Some(value) = function.value_mut(result) {
         value.ir_type = IrType::I64;
         value.php_type = PhpType::Int;
@@ -313,17 +357,24 @@ fn specialize_checked_producer(
     function: &mut Function,
     candidate: InstId,
     cast_justified: bool,
+    throw_message: Option<Immediate>,
 ) -> Option<()> {
     let replacement_op = checked_to_int_op(function.instruction(candidate)?.op)?;
     let result = function.instruction(candidate)?.result;
     if let Some(inst) = function.instruction_mut(candidate) {
         inst.op = replacement_op;
-        // What the overflow path is allowed to do. See `SinkRewrite::saw_cast_sink`.
-        inst.immediate = Some(Immediate::Bool(cast_justified));
+        // What the overflow path is allowed to do. See `SinkRewrite::saw_cast_sink` and
+        // `SinkRewrite::saw_boundary_sink`.
+        inst.immediate = throw_message.or(Some(Immediate::Bool(cast_justified)));
         inst.result_type = IrType::I64;
         inst.result_php_type = PhpType::Int;
         inst.result_ownership = Ownership::NonHeap;
         inst.effects = replacement_op.default_effects();
+        if matches!(inst.immediate, Some(Immediate::Data(_))) {
+            // The boundary overflow throws PHP's catchable TypeError, so the specialized
+            // producer must keep throw/fatal effects visible to every optimizer.
+            inst.effects |= crate::ir::Effects::MAY_THROW | crate::ir::Effects::MAY_FATAL;
+        }
     }
     if let Some(value) = result.and_then(|result| function.value_mut(result)) {
         value.ir_type = IrType::I64;
@@ -650,7 +701,7 @@ fn apply_slot_specialization(function: &mut Function, slot: LocalSlotId, plan: S
     for producer in &plan.producers {
         // The slot path accepts loads and stores, never a cast, so an overflow here is never
         // php's own conversion — see `SinkRewrite::saw_cast_sink`.
-        specialize_checked_producer(function, *producer, false);
+        specialize_checked_producer(function, *producer, false, None);
     }
     if let Some(local) = function.locals.get_mut(slot.as_raw() as usize) {
         local.ir_type = IrType::I64;

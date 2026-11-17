@@ -294,12 +294,32 @@ impl Parser {
         self.parse_nested_block_contents()
     }
 
-    /// Parses a brace-delimited statement block and returns the closing-brace line.
+    /// Parses a brace-delimited function-like body and returns the closing-brace line.
     pub(in crate::parser) fn parse_block_with_end_line(
         &mut self,
     ) -> Result<(Vec<EvalStmt>, i64), EvalParseError> {
         self.expect(TokenKind::LBrace)?;
-        self.parse_nested_block_contents_with_end_line()
+        let (body, source_end_line) = self.parse_nested_block_contents_with_end_line()?;
+        // Every caller parses a function-like body, which is a label scope of its own.
+        if self.saw_jump {
+            crate::parser::jumps::validate_jump_scope(&body)?;
+        }
+        Ok((body, source_end_line))
+    }
+
+    /// Parses `goto name;` with the cursor on the `goto` keyword.
+    ///
+    /// PHP's grammar takes a plain label name, never an expression.
+    pub(in crate::parser) fn parse_goto_stmt(&mut self) -> Result<Vec<EvalStmt>, EvalParseError> {
+        self.advance();
+        let TokenKind::Ident(label) = self.current() else {
+            return Err(EvalParseError::UnexpectedToken);
+        };
+        let label = label.clone();
+        self.advance();
+        self.expect_semicolon()?;
+        self.saw_jump = true;
+        Ok(vec![EvalStmt::Goto(label)])
     }
 
     /// Parses one nested statement where import declarations are not legal.

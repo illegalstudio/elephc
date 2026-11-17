@@ -20,7 +20,8 @@ use crate::types::checker::builtins::array_arg_is_gradually_acceptable;
 use crate::types::checker::inference::syntactic::null_coalesce_merge_type;
 use crate::types::{normalized_array_key_type, PhpType, TypeEnv};
 
-use super::super::super::Checker;
+use super::super::super::{Checker, GuardedLocalStorage};
+use super::super::narrowing::type_is_definitely_non_null;
 
 /// Returns whether a retype crosses the scalar/heap storage boundary.
 ///
@@ -101,7 +102,9 @@ fn null_coalesce_assignment_type(
     name: &str,
     existing: &PhpType,
     default_ty: &PhpType,
+    default: &Expr,
     span: Span,
+    env: &TypeEnv,
 ) -> Result<PhpType, CompileError> {
     let default_reachable = matches!(existing, PhpType::Void | PhpType::Mixed)
         || Checker::union_contains_void(existing);
@@ -120,6 +123,15 @@ fn null_coalesce_assignment_type(
         }
     }
 
+    // A default that may itself be null (an unproved element read) keeps the null arm.
+    let default_ty = if (*existing == PhpType::Void || Checker::union_contains_void(existing))
+        && type_is_definitely_non_null(default_ty)
+        && !checker.stored_value_is_non_null(default, default_ty, env)
+    {
+        checker.normalize_union_type(vec![default_ty.clone(), PhpType::Void])
+    } else { default_ty.clone() };
+    let default_ty = &default_ty;
+
     let result = if *existing == PhpType::Void {
         default_ty.clone()
     } else if *existing == PhpType::Mixed {
@@ -137,6 +149,25 @@ fn null_coalesce_assignment_type(
     Ok(result)
 }
 
+/// Checks a statement store while leaving the assigned expression value to expression callers.
+pub(super) fn check_assign(
+    checker: &mut Checker, name: &str, value: &Expr, span: Span,
+    env: &mut TypeEnv, stmt_form: bool,
+) -> Result<(), CompileError> {
+    // A promotable `array<int>` stored into a candidate local stays raw, and the local is then
+    // promotable itself: its element ops dispatch on the heap kind the value may already have.
+    let promotes = checker.prepare_promotable_assignment(name, value, env);
+    check_assign_value_type(checker, name, value, span, env, stmt_form)?;
+    // Judged once the value is checked: a call is known to return a promotable value only now.
+    if promotes
+        && checker.is_promotable_value_expr(value, env)
+        && matches!(env.get(name), Some(PhpType::Array(elem)) if elem.codegen_repr() == PhpType::Int)
+    {
+        checker.record_promotable_array_local(name);
+    }
+    Ok(())
+}
+
 /// Type-checks a simple variable assignment (`$name = value`).
 ///
 /// Handles null-coalescing assignment by extracting the default expression and combining
@@ -152,14 +183,14 @@ fn null_coalesce_assignment_type(
 /// assigned value to its enclosing expression, so re-binding `$x` to a fresh slot of a
 /// different type there has no single well-defined result value to hand back — only the
 /// statement form is eligible for the permissive retype below.
-pub(super) fn check_assign(
+fn check_assign_value_type(
     checker: &mut Checker,
     name: &str,
     value: &Expr,
     span: Span,
     env: &mut TypeEnv,
     stmt_form: bool,
-) -> Result<(), CompileError> {
+) -> Result<PhpType, CompileError> {
     let suffix_key = (checker.current_loop_storage_scope.clone(), name.to_string());
     if let ExprKind::BinaryOp {
         op: crate::parser::ast::BinOp::Concat,
@@ -206,6 +237,7 @@ pub(super) fn check_assign(
     }
 
     let null_coalesce_default = null_coalesce_assignment_default(name, value);
+    let null_coalesce_origin = null_coalesce_default.and_then(|_| env.get(name).cloned());
     let saved_self_ref_ty = if closure_captures_name_by_ref(value, name) {
         if let Some(previous_ty) = env.insert(name.to_string(), PhpType::Callable) {
             Some(Some(previous_ty))
@@ -230,11 +262,29 @@ pub(super) fn check_assign(
             if let Some(existing) = env.get(name).cloned() {
                 let default_ty = if existing == PhpType::Void {
                     checker.infer_type_with_assignment_effects(default, env)?
-                } else {
+                } else if type_is_definitely_non_null(&existing)
+                    && checker.stored_value_is_non_null(&Expr::var(name), &existing, env)
+                {
+                    // Only a retained coalescing proof justifies skipping compatibility.
+                    // A bare non-null type can also belong to a possibly undefined local.
+                    let coalesced = checker.definitely_bound_locals.contains(name)
+                        && checker.guarded_union_types.get(name).is_some_and(|storage| storage.coalesced);
                     let mut default_env = env.clone();
-                    checker.infer_type_with_assignment_effects(default, &mut default_env)?
+                    let checked = checker.with_preserved_binding_flow(|checker|
+                        checker.infer_type_with_assignment_effects(default, &mut default_env));
+                    let ty = checked?;
+                    if coalesced { return Ok(existing); }
+                    ty
+                } else {
+                    let mut flow = checker.snapshot_conditional_flow(env);
+                    let mut default_env = env.clone();
+                    let ty = checker.with_conditional_flow_arm(&mut flow, &mut default_env,
+                        |checker, env| checker.infer_type_with_assignment_effects(default, env))?;
+                    Checker::merge_short_circuit_storage_effects(env, &default_env);
+                    checker.finish_conditional_flow(flow, env);
+                    ty
                 };
-                null_coalesce_assignment_type(checker, name, &existing, &default_ty, span)
+                null_coalesce_assignment_type(checker, name, &existing, &default_ty, default, span, env)
             } else {
                 checker.infer_type_with_assignment_effects(value, env)
             }
@@ -257,7 +307,7 @@ pub(super) fn check_assign(
             }
         }
     }
-    let ty = match ty_result {
+    let mut ty = match ty_result {
         Ok(ty) => ty,
         Err(error) => {
             // Error recovery: the initializer failed to type, but the assignment
@@ -275,9 +325,104 @@ pub(super) fn check_assign(
         poison_unbound_local(env, name);
         return Err(error);
     }
+    let stored_non_null = checker.stored_value_is_non_null(value, &ty, env);
+    // An array element or other unproved read can carry null even when its checker
+    // type omits it. A nullable destination must not turn that store into a proof.
+    if null_coalesce_default.is_none() && type_is_definitely_non_null(&ty)
+        && !stored_non_null
+        && checker.guarded_local_storage_type(&Expr::var(name), env).or_else(|| env.get(name))
+            .is_some_and(Checker::union_contains_void)
+    {
+        ty = checker.normalize_union_type(vec![ty, PhpType::Void]);
+    }
     update_reflection_class_assignment_metadata(checker, name, reflection_class_target);
+    let previous_view = env.get(name).cloned();
+    let previous_storage = checker.guarded_union_types.get(name).cloned();
+    let previously_bound = checker.definitely_bound_locals.contains(name);
+    // A new ordinary store is measured against the binding, then owns its merge result.
+    // It must not inherit a read-only flow view or have a widening overwritten afterwards.
+    // A sibling guard complement can retain nullable storage only in its narrowing origin.
+    let nullable_guard_store = !type_is_definitely_non_null(&ty)
+        && checker.guarded_local_storage_type(&Expr::var(name), env)
+            .is_some_and(Checker::union_contains_void);
+    if null_coalesce_default.is_none()
+        && (nullable_guard_store || previous_storage.as_ref().is_some_and(|origin|
+            origin.coalesced || !type_is_definitely_non_null(&ty)))
+    {
+        checker.invalidate_local_flow_narrowing(name, env);
+    }
     let merged = merge_local_assignment_type(checker, name, &ty, value, span, env, stmt_form);
     if merged.is_ok() {
+        // A completed non-null store ends the missing-binding alternative. Keep the physical
+        // contract while retracting the null that an earlier conditional binding added.
+        if !previously_bound && stored_non_null
+            && checker.local_flow_read_is_stable(name)
+        {
+            if let Some(read) = env.get(name).filter(|read| Checker::union_contains_void(read)).cloned() {
+                let storage = checker.guarded_local_storage_type(&Expr::var(name), env)
+                    .unwrap_or(&read).clone();
+                env.insert(name.to_string(), checker.strip_void_from_union(&read));
+                checker.guarded_union_types.insert(name.to_string(), GuardedLocalStorage {
+                    ty: storage, coalesced: false,
+                });
+            }
+        }
+        if null_coalesce_default.is_none() {
+            // A compatible non-null store can keep the current read view even when the
+            // coalescing contract had to be consulted to validate the write.
+            if let (Some(previous), Some(storage)) = (&previous_view, &previous_storage) {
+                if storage.coalesced && type_is_definitely_non_null(&ty)
+                    && type_is_definitely_non_null(previous)
+                    && checker.merged_assignment_type(previous, &ty).as_ref() == Some(previous)
+                    && checker.merged_assignment_type(&storage.ty, &ty).as_ref() == Some(&storage.ty)
+                    && env.get(name) == Some(&storage.ty)
+                {
+                    env.insert(name.to_string(), previous.clone());
+                    checker.guarded_union_types.insert(name.to_string(), storage.clone());
+                }
+            }
+            let retain = checker.guarded_union_types.get(name).is_some_and(|origin| {
+                env.get(name).is_some_and(|view| {
+                    checker.merged_assignment_type(&origin.ty, view).as_ref() == Some(&origin.ty)
+                })
+            });
+            if !retain {
+                checker.guarded_union_types.remove(name);
+            }
+            if checker.local_flow_read_is_stable(name) {
+                if stored_non_null && env.get(name).is_some_and(Checker::is_raw_non_null_contract) {
+                    // Keep a successful fresh-value proof available to later local copies.
+                    // A sibling complement may retain nullable storage only in its guard origin.
+                    let storage = checker.guarded_local_storage_type(&Expr::var(name), env)
+                        .or_else(|| env.get(name)).expect("successful assignment").clone();
+                    checker.guarded_union_types.entry(name.to_string())
+                        .or_insert(GuardedLocalStorage { ty: storage, coalesced: false });
+                } else if checker.guarded_union_types.get(name)
+                    .is_some_and(|storage| Checker::is_raw_non_null_contract(&storage.ty))
+                {
+                    // An unproved replacement ends a previous raw-value proof.
+                    checker.guarded_union_types.remove(name);
+                }
+            }
+        }
+        // The assignment merge protects the slot's contract. A coalescing store also proves
+        // the current value's narrower type, without changing boxed parameter storage.
+        if null_coalesce_default.is_some()
+            && !checker.mixed_storage_locals.contains(name)
+            && !checker.boxed_ref_aliased_locals.contains(name)
+            && !checker.ref_aliased_locals.contains(name)
+            && !checker.active_ref_params.contains(name)
+            && !checker.active_globals.contains(name)
+            && !checker.static_local_names.contains(name)
+            && !checker.top_level_binding_is_program_global(name)
+        {
+            if let Some(origin @ PhpType::Union(_)) = null_coalesce_origin {
+                checker.guarded_union_types.entry(name.to_string())
+                    .and_modify(|entry| entry.coalesced = true)
+                    .or_insert(GuardedLocalStorage { ty: origin, coalesced: true });
+            }
+            env.insert(name.to_string(), ty.clone());
+        }
         if checker.local_conditional_depth == 0 {
             let boxed_source = matches!(&value.kind, ExprKind::Variable(source)
                 if checker.boxed_parameter_locals.contains(source));
@@ -291,8 +436,9 @@ pub(super) fn check_assign(
         // so a guard that narrowed the name no longer speaks for it. `merge_local_assignment_type`
         // has already consulted the guard view, which is why this runs after it and not before.
         checker.record_store_over_flow_narrowing(name);
+        checker.record_finally_assignment_type(value, &ty);
     }
-    merged
+    merged.map(|()| ty)
 }
 
 /// Type-checks a reference alias assignment (`$target =& <source>`).
@@ -309,6 +455,10 @@ pub(super) fn check_ref_assign(
     span: Span,
     env: &mut TypeEnv,
 ) -> Result<(), CompileError> {
+    checker.invalidate_local_flow_narrowing(target, env);
+    if let ExprKind::Variable(source_name) = &source.kind {
+        checker.invalidate_local_flow_narrowing(source_name, env);
+    }
     if crate::names::append_update_alias_kind(target).is_some() {
         if let ExprKind::ArrayAccess { array, .. } = &source.kind {
             if let ExprKind::Variable(name) = &array.kind {
@@ -387,7 +537,7 @@ pub(super) fn check_ref_assign(
             check_ref_assign_variable(checker, target, source_name, span, env)
         }
         ExprKind::PropertyAccess { object, property } => {
-            let object_ty = checker.infer_type(object, env)?;
+            let object_ty = checker.infer_type_with_assignment_effects(object, env)?;
             // `$r = &$o->undeclared` creates the property (php 8.2+'s deprecated dynamic one), so
             // it is claimed before the read below asks whether the name exists.
             if let Some(class) = crate::types::checker::single_object_class_name(&object_ty) {
@@ -396,6 +546,7 @@ pub(super) fn check_ref_assign(
                 )?;
             }
             let target_ty = checker.infer_type(source, env)?;
+            checker.record_operation_exception_flow(source, env);
             let known_class = crate::types::checker::single_object_class_name(&object_ty)
                 .filter(|_| !receiver_is_untyped_parameter(checker, object));
             let target_ty = if let Some(class) = known_class {
@@ -421,6 +572,7 @@ pub(super) fn check_ref_assign(
         // `$n = &static::$names` (psysh's `ConsoleTput`): the local borrows the static's storage.
         ExprKind::StaticPropertyAccess { .. } => {
             let target_ty = checker.infer_type(source, env)?;
+            target_has_boxed_ref_provenance = target_ty.codegen_repr() == PhpType::Mixed;
             env.insert(target.to_string(), target_ty);
             checker.active_ref_params.insert(target.to_string());
             clear_callable_metadata(checker, target);
@@ -434,7 +586,7 @@ pub(super) fn check_ref_assign(
             for arg in args {
                 promote_ref_call_property_argument(checker, arg, env)?;
             }
-            let target_ty = checker.infer_type(source, env)?;
+            let target_ty = checker.infer_type_with_assignment_effects(source, env)?;
             env.insert(target.to_string(), target_ty);
             checker.active_ref_params.insert(target.to_string());
             clear_callable_metadata(checker, target);
@@ -482,13 +634,13 @@ pub(super) fn check_ref_assign(
                     checker, source, env,
                 )?;
             }
-            let array_ty = checker.infer_type(array, env)?;
+            let array_ty = checker.infer_type_with_assignment_effects(array, env)?;
             target_has_boxed_ref_provenance = match array_ty.codegen_repr() {
                 PhpType::AssocArray { .. } | PhpType::Mixed => true,
                 PhpType::Array(element) => element.codegen_repr() == PhpType::Mixed,
                 _ => false,
             };
-            let index_ty = checker.infer_type(index, env)?;
+            let index_ty = checker.infer_type_with_assignment_effects(index, env)?;
             // A local holding a boxed value -- an untyped by-reference parameter, typically --
             // makes the element a reference inside the array the box holds
             // (`__rt_mixed_elem_ref_cell`), vivifying a null into an empty array as PHP does.
@@ -497,6 +649,8 @@ pub(super) fn check_ref_assign(
             {
                 env.insert(target.to_string(), PhpType::Mixed);
                 checker.active_ref_params.insert(target.to_string());
+                // The element lives in a boxed array: the alias shares a managed Mixed cell.
+                checker.boxed_ref_aliased_locals.insert(target.to_string());
                 clear_callable_metadata(checker, target);
                 return Ok(());
             }
@@ -542,6 +696,7 @@ pub(super) fn check_ref_assign(
                 return Err(CompileError::new(span, "Invalid associative array key type"));
             }
             let target_ty = checker.infer_type(source, env)?;
+            checker.record_operation_exception_flow(source, env);
             env.insert(target.to_string(), target_ty);
             checker.active_ref_params.insert(target.to_string());
             clear_callable_metadata(checker, target);
@@ -832,6 +987,7 @@ fn promote_ref_call_property_argument(
     Ok(())
 }
 
+/// Rebinds a local by reference while preserving the source slot's type and alias metadata.
 fn check_ref_assign_variable(
     checker: &mut Checker,
     target: &str,
@@ -890,10 +1046,9 @@ impl Checker {
         span: Span,
         env: &mut TypeEnv,
     ) -> Result<PhpType, CompileError> {
-        check_assign(self, name, value, span, env, false)?;
-        env.get(name).cloned().ok_or_else(|| {
-            CompileError::new(span, &format!("Undefined variable: ${}", name))
-        })
+        let result = check_assign_value_type(self, name, value, span, env, false);
+        if result.is_ok() { self.definitely_bound_locals.insert(name.to_string()); }
+        result
     }
 }
 
@@ -1560,8 +1715,22 @@ fn merge_local_assignment_type(
         .remove(&(span, name.to_string()));
     if let Some(existing) = env.get(name) {
         let merged_ty = checker.merged_assignment_type(existing, ty).or_else(|| {
+            // An inferred boolean flag can widen into a scalar union that already contains
+            // every bool value. Its ordinary local slot can become boxed; declared or
+            // externally shared boolean storage must retain its existing contract.
+            let containing_scalar_union = matches!(ty, PhpType::Union(members)
+                if members.contains(&PhpType::Bool) && members.iter().all(|member|
+                    matches!(member, PhpType::Bool | PhpType::False | PhpType::Int | PhpType::Float | PhpType::Str)));
+            (matches!(existing, PhpType::Bool | PhpType::False) && containing_scalar_union
+                && checker.local_flow_read_is_stable(name)
+                && !checker.local_parameter_names.contains(name)
+                && !checker.typed_local_names.contains_key(name)).then(|| ty.clone())
+        }).or_else(|| {
             checker.guarded_union_types.get(name)
-                .and_then(|original| checker.merged_assignment_type(original, ty))
+                .filter(|storage| checker.narrowed_local_origins.get(name)
+                    .is_none_or(|origin| origin.origin == storage.ty))
+                .filter(|original| checker.merged_assignment_type(&original.ty, existing).as_ref() == Some(&original.ty))
+                .and_then(|original| checker.merged_assignment_type(&original.ty, ty))
         });
         // The same flow-fact re-measure as below, for a merge that SUCCEEDS by keeping the guard's
         // view: `instanceof \Closure` narrows the view to `Callable`, and `Callable` absorbs an
@@ -1919,7 +2088,7 @@ pub(super) fn check_typed_assign(
         span,
         &format!("Typed local ${}", name),
     )?;
-    let value_ty = match checker.infer_type(value, env) {
+    let value_ty = match checker.infer_type_with_assignment_effects(value, env) {
         Ok(value_ty) => value_ty,
         Err(error) => {
             // Error recovery: the initializer failed to type. Bind `$name` before
@@ -1933,7 +2102,14 @@ pub(super) fn check_typed_assign(
             return Err(error);
         }
     };
-    if !checker.type_accepts(&declared_ty, &value_ty) {
+    // A runtime-named constructor has no statically known class, so inference keeps its result
+    // as Mixed. The expression still either produces an object or throws before assignment, which
+    // is sufficient for the non-nominal `object` contract. Do not extend this exception to an
+    // arbitrary Mixed value or to a named class, because neither has a runtime nominal guard here.
+    let dynamic_new_satisfies_object =
+        matches!(&declared_ty, PhpType::Object(class) if class.is_empty())
+            && matches!(value.kind, ExprKind::NewDynamic { .. });
+    if !checker.type_accepts(&declared_ty, &value_ty) && !dynamic_new_satisfies_object {
         // The initializer typed successfully but violates the declared type. Poison
         // `$name` as `Mixed` for recovery so later uses do not cascade, then report
         // the initialization mismatch as the one real diagnostic.
@@ -1978,7 +2154,7 @@ pub(super) fn check_const_decl(
     value: &Expr,
     env: &mut TypeEnv,
 ) -> Result<(), CompileError> {
-    let ty = checker.infer_type(value, env)?;
+    let ty = checker.infer_type_with_assignment_effects(value, env)?;
     checker.constants.entry(name.to_string()).or_insert(ty);
     Ok(())
 }
@@ -2055,6 +2231,8 @@ pub(super) fn check_list_unpack(
         }
     };
     for var in vars {
+        checker.record_loop_binding_end(var);
+        checker.invalidate_local_flow_narrowing(var, env);
         env.insert(var.clone(), unpack_ty.clone());
         update_list_unpack_callable_metadata(checker, var, value, &unpack_ty);
         checker.reflection_class_targets.remove(var);
@@ -2153,6 +2331,9 @@ pub(super) fn check_global(
     env: &mut TypeEnv,
 ) -> Result<(), CompileError> {
     for var in vars {
+        let retired = checker.binding_retirement_type(var, env);
+        checker.record_loop_binding_end(var);
+        checker.invalidate_local_flow_narrowing(var, env);
         checker.active_globals.insert(var.clone());
         let ty = checker.extern_globals.get(var).cloned().unwrap_or_else(|| {
             if crate::superglobals::is_superglobal(var) {
@@ -2163,6 +2344,7 @@ pub(super) fn check_global(
         });
         clear_callable_metadata(checker, var);
         env.insert(var.clone(), ty);
+        checker.record_binding_retirement_exception_flow(&retired, env);
     }
     Ok(())
 }
@@ -2202,8 +2384,10 @@ pub(super) fn check_static_var(
 ) -> Result<(), CompileError> {
     // A `static` local's storage outlives the call, so its binding is never killable — record
     // it before inference so an erroring initializer still marks the name.
+    checker.record_loop_binding_end(name);
+    checker.invalidate_local_flow_narrowing(name, env);
     checker.static_local_names.insert(name.to_string());
-    let ty = match checker.infer_type(init, env) {
+    let ty = match checker.infer_type_with_assignment_effects(init, env) {
         Ok(ty) => ty,
         Err(error) => {
             poison_unbound_local(env, name);

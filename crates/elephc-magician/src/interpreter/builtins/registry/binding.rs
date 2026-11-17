@@ -18,14 +18,46 @@ pub(in crate::interpreter) fn eval_builtin_call(
     scope: &mut ElephcEvalScope,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
-    // Direct count/strlen reads need no writable array-element target. Capture the value
-    // itself so its temporary key is released with source evaluation.
-    if matches!(name, "count" | "strlen") || eval_builtin_uses_owned_arguments(name) {
-        return eval_owned_builtin_call(name, args, false, context, scope, values);
+    // Value parameters need no writable target. Evaluating their values directly also
+    // retires computed receivers and keys instead of stranding them in borrowed metadata.
+    let value_only = eval_declared_builtin_spec(name).is_some_and(|spec| !spec.source_arguments)
+        && elephc_builtin_contract::lookup(name)
+            .is_some_and(|contract| contract.params.iter().all(|parameter| !parameter.by_ref));
+    let result = if value_only || eval_builtin_uses_owned_arguments(name) {
+        eval_owned_builtin_call(name, args, false, context, scope, values)
+    } else {
+        with_eval_call_arguments(args, context, scope, values, |arguments, context, scope, values| {
+            eval_bound_builtin_call_from_scope(name, arguments, Some(scope), context, values)
+        })
+    };
+    if result.is_ok() && name.eq_ignore_ascii_case("define") {
+        eval_note_defined_built_string(args, context, values)?;
     }
-    with_eval_call_arguments(args, context, scope, values, |arguments, context, scope, values| {
-        eval_bound_builtin_call_from_scope(name, arguments, Some(scope), context, values)
-    })
+    result
+}
+
+/// Records, after `define(NAME, value)`, a string value the argument built at run time
+/// (anything but a literal or a constant read), which php-src keeps refcounted; it decides
+/// whether a parameter default reading the constant is cached
+/// (`eval_result_is_refcounted`).
+fn eval_note_defined_built_string(
+    args: &[EvalCallArg],
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<(), EvalStatus> {
+    let [name, value, ..] = args else { return Ok(()) };
+    let EvalExpr::Const(EvalConst::String(constant_name)) = name.value() else { return Ok(()) };
+    if matches!(
+        value.value(),
+        EvalExpr::Const(_) | EvalExpr::ConstFetch(_) | EvalExpr::NamespacedConstFetch { .. } | EvalExpr::ClassConstantFetch { .. }
+    ) {
+        return Ok(());
+    }
+    let Some(stored) = context.constant(constant_name) else { return Ok(()) };
+    if values.type_tag(stored)? == EVAL_TAG_STRING {
+        context.record_built_constant(constant_name);
+    }
+    Ok(())
 }
 
 /// Invokes borrowed source arguments and releases only defaults allocated during named binding.

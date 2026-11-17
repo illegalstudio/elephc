@@ -1,8 +1,6 @@
 ---
 title: "mb_convert_kana() - internals"
 description: "Compiler internals for mb_convert_kana(): lowering path, type checks, and runtime helpers."
-sidebar:
-  order: 958
 ---
 
 ## `mb_convert_kana()` - internals
@@ -10,7 +8,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/string/mb_convert_kana.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/string/mb_convert_kana.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:752](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L752) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 

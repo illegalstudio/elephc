@@ -89,15 +89,26 @@ pub(super) fn emit_x86_64_arrays(emitter: &mut Emitter) {
     emitter.instruction("pop rbp");                                             // restore the Rust caller frame pointer
     emitter.instruction("ret");                                                 // return the updated boxed string-array handle to Rust
 
+    // Reflector lists (`__methods`, `__properties`, `__parameters`, `__types`) are typed
+    // `array<Class>` in compiled code, whose readers expect one object pointer per 8-byte
+    // slot under value_type 6. A boxed Mixed array there made a compiled `foreach` read
+    // Mixed cells as objects, so eval builds those lists through these two helpers.
     label_c_global(emitter, "__elephc_eval_value_object_array_new");
     emitter.instruction("push rbp");                                            // preserve the Rust caller frame pointer across runtime calls
     emitter.instruction("mov rbp, rsp");                                        // establish a stable wrapper frame pointer
     emitter.instruction("sub rsp, 16");                                         // reserve local slots for the object-array pointer
     emitter.instruction("cmp rdi, 4");                                          // compare requested capacity with the minimum capacity
-    emitter.instruction("mov r10, 4");                                          // minimum indexed-array capacity for packed variadic tails
+    emitter.instruction("mov r10, 4");                                          // minimum indexed-array capacity for eval reflector lists
     emitter.instruction("cmovb rdi, r10");                                      // use max(requested, 4) as the runtime allocation capacity
-    emitter.instruction("mov rsi, 8");                                          // typed object arrays store raw object pointers
-    emitter.instruction("call __rt_array_new");                                 // allocate indexed-array storage for raw object slots
+    emitter.instruction("mov rsi, 8");                                          // direct object arrays store one object pointer per slot
+    emitter.instruction("call __rt_array_new");                                 // allocate indexed-array storage for direct object slots
+    emitter.instruction("mov r10, QWORD PTR [rax - 8]");                        // load the packed indexed-array heap kind word
+    emitter.instruction("mov r11, 0xffffffff000080ff");                         // preserve heap magic, indexed-array kind, and COW metadata
+    emitter.instruction("and r10, r11");                                        // clear the default scalar value_type bits
+    emitter.instruction("mov r11, 6");                                          // runtime value_type 6 = object
+    emitter.instruction("shl r11, 8");                                          // move the value_type tag into the packed kind word
+    emitter.instruction("or r10, r11");                                         // stamp the array as carrying direct object slots
+    emitter.instruction("mov QWORD PTR [rax - 8], r10");                        // persist the updated indexed-array metadata
     emitter.instruction("mov QWORD PTR [rbp - 8], rax");                        // save the owned object-array pointer while boxing it
     emitter.instruction("mov rax, 24");                                         // Mixed cells store tag plus two payload words
     emitter.instruction("call __rt_heap_alloc");                                // allocate a boxed Mixed cell without retaining the new array
@@ -105,34 +116,33 @@ pub(super) fn emit_x86_64_arrays(emitter: &mut Emitter) {
     emitter.instruction("mov QWORD PTR [rax - 8], r10");                        // install the mixed-cell heap kind in the uniform header
     emitter.instruction("mov QWORD PTR [rax], 4");                              // runtime tag 4 = indexed array
     emitter.instruction("mov r10, QWORD PTR [rbp - 8]");                        // reload the owned object-array pointer
-    emitter.instruction("mov QWORD PTR [rax + 8], r10");                        // store the array pointer as the Mixed low payload word
+    emitter.instruction("mov QWORD PTR [rax + 8], r10");                        // store the object-array pointer as the Mixed low payload word
     emitter.instruction("mov QWORD PTR [rax + 16], 0");                         // indexed arrays do not use the high payload word
     emitter.instruction("add rsp, 16");                                         // release the object-array-new wrapper slots
     emitter.instruction("pop rbp");                                             // restore the Rust caller frame pointer
-    emitter.instruction("ret");                                                 // return the boxed raw-object array Mixed cell to Rust
+    emitter.instruction("ret");                                                 // return the boxed direct-object array Mixed cell to Rust
 
     label_c_global(emitter, "__elephc_eval_value_object_array_push");
     emitter.instruction("push rbp");                                            // preserve the Rust caller frame pointer across runtime calls
     emitter.instruction("mov rbp, rsp");                                        // establish a stable wrapper frame pointer
-    emitter.instruction("sub rsp, 32");                                         // reserve local slots for owner, element, and array payload
+    emitter.instruction("sub rsp, 32");                                         // reserve local slots for the boxed owner, the boxed object, and its payload
     emitter.instruction("mov QWORD PTR [rbp - 8], rdi");                        // save the boxed object-array owner
-    emitter.instruction("mov QWORD PTR [rbp - 16], rsi");                       // save the boxed element to append
-    emitter.instruction("test rdi, rdi");                                       // check whether the boxed array handle is null
-    emitter.instruction("jz __elephc_eval_value_object_array_push_fail_x86");   // reject malformed null array handles
-    emitter.instruction("mov rax, rdi");                                        // move the boxed owner into mixed_unbox's input register
+    emitter.instruction("mov QWORD PTR [rbp - 16], rsi");                       // save the boxed object to append
+    emitter.instruction("test rdi, rdi");                                       // check whether the boxed object-array handle is null
+    emitter.instruction("jz __elephc_eval_value_object_array_push_fail_x86");   // reject malformed null object-array handles
+    emitter.instruction("test rsi, rsi");                                       // check whether the boxed object handle is null
+    emitter.instruction("jz __elephc_eval_value_object_array_push_fail_x86");   // reject malformed null object handles
+    emitter.instruction("mov rax, rsi");                                        // unbox the object first: its payload is the pushed child
+    emitter.instruction("call __rt_mixed_unbox");                               // expose the object tag and payload pointer
+    emitter.instruction("cmp rax, 6");                                          // runtime tag 6 means object
+    emitter.instruction("jne __elephc_eval_value_object_array_push_fail_x86");  // reject non-object elements for a direct object array
+    emitter.instruction("mov QWORD PTR [rbp - 24], rdi");                       // save the unboxed object pointer across the array unbox
+    emitter.instruction("mov rax, QWORD PTR [rbp - 8]");                        // move the boxed owner into mixed_unbox's input register
     emitter.instruction("call __rt_mixed_unbox");                               // expose the indexed-array tag and payload pointer
     emitter.instruction("cmp rax, 4");                                          // runtime tag 4 means indexed array
     emitter.instruction("jne __elephc_eval_value_object_array_push_fail_x86");  // reject non-array containers
-    emitter.instruction("mov QWORD PTR [rbp - 24], rdi");                       // save the unboxed array payload pointer
-    emitter.instruction("mov rax, QWORD PTR [rbp - 16]");                       // reload the boxed element into mixed_unbox's input register
-    emitter.instruction("test rax, rax");                                       // check whether the boxed element is null
-    emitter.instruction("jz __elephc_eval_value_object_array_push_fail_x86");   // reject malformed null element handles
-    emitter.instruction("call __rt_mixed_unbox");                               // expose the element tag and object payload pointer
-    emitter.instruction("cmp rax, 6");                                          // runtime tag 6 means object
-    emitter.instruction("jne __elephc_eval_value_object_array_push_fail_x86");  // only objects can fill a typed object array
-    emitter.instruction("mov rsi, rdi");                                        // pass the borrowed object payload as the push child
-    emitter.instruction("mov rdi, QWORD PTR [rbp - 24]");                       // pass the destination array to the refcounted push helper
-    emitter.instruction("call __rt_array_push_refcounted");                     // retain the object and append it, returning the updated array payload
+    emitter.instruction("mov rsi, QWORD PTR [rbp - 24]");                       // pass the borrowed object pointer as the pushed child; rdi already holds the array payload
+    emitter.instruction("call __rt_array_push_refcounted");                     // retain the object and append it, keeping the object value_type stamp
     emitter.instruction("mov r10, QWORD PTR [rbp - 8]");                        // reload the boxed object-array owner
     emitter.instruction("mov QWORD PTR [r10 + 8], rax");                        // update the boxed payload in case the array grew
     emitter.instruction("mov rax, r10");                                        // return the boxed object-array owner to Rust
@@ -487,7 +497,7 @@ pub(super) fn emit_x86_64_arrays(emitter: &mut Emitter) {
     emitter.instruction("pop rbp");                                             // restore the Rust caller frame pointer
     emitter.instruction("ret");                                                 // return the boxed property key to Rust
 
-    emitter.label("__elephc_eval_key_normalize");
+    emitter.label_global("__elephc_eval_key_normalize");
     emitter.instruction("push rbp");                                            // preserve the caller frame pointer while classifying the eval key
     emitter.instruction("mov rbp, rsp");                                        // establish a stable key-normalizer frame
     emitter.instruction("sub rsp, 16");                                         // reserve an aligned slot for the original boxed key

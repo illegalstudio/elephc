@@ -21,12 +21,11 @@ use crate::codegen::literal_defaults::{
 use crate::codegen::{
     abi, emit_array_value_type_stamp, emit_box_current_owned_value_as_mixed,
     emit_box_current_value_as_mixed, emit_release_pushed_refcounted_temp_after_array_push,
-    runtime_value_tag, CodegenIrError, Result, UNINITIALIZED_TYPED_PROPERTY_SENTINEL,
+    runtime_value_tag, CodegenIrError, Result,
 };
 use crate::ir::{Immediate, Instruction, Op, TraitMethodInfo, ValueDef, ValueId};
 use crate::names::{
     php_symbol_key, property_hook_get_method, property_hook_set_method,
-    static_property_symbol,
 };
 use crate::parser::ast::{BinOp, Expr, ExprKind, StaticReceiver, TypeExpr, Visibility};
 use crate::types::{
@@ -37,6 +36,7 @@ use crate::types::{
 use super::super::super::context::FunctionContext;
 
 mod owner_dispatch;
+mod class_builders;
 mod owner_emission;
 mod materializer;
 mod class_metadata;
@@ -56,6 +56,7 @@ mod default_export;
 mod names_constants;
 #[cfg(test)]
 pub(crate) use names_constants::CLASS_CONSTANT_EVALUATIONS;
+mod constant_resolved;
 mod constant_arithmetic;
 mod constant_operators;
 mod constant_arrays;
@@ -74,6 +75,7 @@ mod member_table;
 
 use owner_emission::*;
 use materializer::*;
+pub(in crate::codegen) use class_builders::emit_pending_reflection_class_builders;
 use class_metadata::*;
 use callable_metadata::*;
 use property_metadata::*;
@@ -297,12 +299,11 @@ enum ReflectionParameterDefaultValue {
     Float(f64),
     Str(String),
     Null,
+    EnumCase(crate::codegen::const_default_values::EnumCaseDefault),
+    /// A scalar whose constant expression first reads these enum singletons, in PHP order.
+    Evaluated { value: Box<ReflectionParameterDefaultValue>, enum_cases: Vec<(String, String)> },
     DeferredError(String),
     EirHelper(String),
-    EnumCase {
-        enum_name: String,
-        case_name: String,
-    },
     Object {
         class_name: String,
         /// Every constructor argument in parameter order, including omitted defaults.
@@ -370,6 +371,8 @@ enum ReflectionConstantValue {
         enum_name: String,
         case_name: String,
     },
+    /// A value whose constant expression first reads these enum singletons, in PHP order.
+    Evaluated { value: Box<ReflectionConstantValue>, enum_cases: Vec<(String, String)> },
     Array(Vec<ReflectionConstantValue>),
     AssocArray(Vec<ReflectionConstantAssocEntry>),
     /// A global constant this program never defines (`private const TYPE_BLOB = SQLITE3_BLOB;`

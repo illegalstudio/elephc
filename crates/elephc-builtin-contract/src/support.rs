@@ -166,13 +166,13 @@ pub fn eval_support(contract: &BuiltinContract) -> BackendSupport {
     }
     // Prelude-declared and name-resolver-rewritten functions exist in eval only where
     // Magician binds them: the whole `ext/curl` surface, the hash prelude, and the xml
-    // prelude (whose eval homes forward to the compiled declarations through the
+    // and tidy preludes (whose eval homes forward to the compiled declarations through the
     // native-function bridge). The rest (mysqli, PDO, sessions, image, date/calendar
     // procedural families) is an explicit, auditable absence rather than a missing binding.
     if matches!(
         contract.kind,
         BuiltinKind::PreludeProvided | BuiltinKind::NameResolverRewrite
-    ) && !matches!(contract.area, Area::Curl | Area::Xml)
+    ) && !matches!(contract.area, Area::Curl | Area::Xml | Area::Tidy)
         && !EVAL_IMPLEMENTED_PRELUDE_SURFACES.contains(&contract.name)
     {
         return BackendSupport::Unsupported(UnsupportedReason::EvalImplementationPending);
@@ -189,7 +189,8 @@ pub fn eval_support(contract: &BuiltinContract) -> BackendSupport {
 /// to the families below, each with its interpreter home under `interpreter::builtins`:
 /// `sodium_crypto_box_*` (Symfony's `SodiumVault` calls `elephc_crypto::sodium` directly),
 /// the `array_*` comparator and edge helpers, `password_*`, `proc_*`, `preg_filter`,
-/// `preg_replace_callback_array`, `strtok`, `parse_str`, `version_compare` and the rest.
+/// `preg_replace_callback_array`, `strtok`, `parse_str`, `version_compare` and the rest, plus the
+/// locale prelude's `setlocale` and `nl_langinfo` (forwarding eval homes).
 /// Leaving one out is not a quiet loss of coverage —
 /// `spec.rs` asserts every binding has an execution route, so the interpreter aborts at startup.
 const EVAL_IMPLEMENTED_PRELUDE_SURFACES: &[&str] = &[
@@ -218,6 +219,7 @@ const EVAL_IMPLEMENTED_PRELUDE_SURFACES: &[&str] = &[
     "hash_pbkdf2",
     "hash_update",
     "levenshtein",
+    "nl_langinfo",
     "mime_content_type",
     "parse_str",
     "password_algos",
@@ -232,6 +234,7 @@ const EVAL_IMPLEMENTED_PRELUDE_SURFACES: &[&str] = &[
     "proc_nice",
     "proc_open",
     "proc_terminate",
+    "setlocale",
     "sodium_crypto_box_keypair",
     "sodium_crypto_box_publickey",
     "sodium_crypto_box_seal",
@@ -467,16 +470,20 @@ mod tests {
         let curl_surface = if cfg!(feature = "curl") { 34 } else { 0 };
         // The shared INI helper is internal but participates in both runtime registries.
         // The sixty-four `xml_*` / `xmlwriter_*` contracts, which eval binds
-        // through forwarding homes (see `eval_support`), and the fifty-one `gmp_*`
-        // contracts, which forward to the compiled GMP prelude helpers.
+        // through forwarding homes (see `eval_support`), the twenty-four `tidy_*`
+        // contracts, which forward to the compiled tidy prelude, and the fifty-one
+        // `gmp_*` contracts, which forward to the compiled GMP prelude helpers.
         // Plus the four `ptr_read_f32`/`ptr_write_f32`/`ptr_read_f64`/`ptr_write_f64`
         // raw-memory builtins and `buffer_ptr`, bound in eval through their own registry homes.
         // The tokenizer location helper also uses the shared runtime registry.
         // Five native heap metric bindings share the boxed runtime dispatcher.
-        // Main's count plus the Symfony branch's contracts (the three response-header runtime
-        // builtins, the sodium/password/array/preg prelude surfaces, and the eleven array names no
-        // longer eval-pending), measured on the merged catalogs.
-        assert_eq!(eval_registry, 845 + curl_surface);
+        // The seven additional ctype contracts join the eval registry, and the locale
+        // prelude exposes setlocale/nl_langinfo through forwarding eval homes.
+        // Plus the Symfony branch's contracts (the three response-header runtime builtins, the
+        // sodium/password/array/preg prelude surfaces, and the eleven array names no longer
+        // eval-pending): main's 792 + the branch's +90 over the merge base. Estimated at the
+        // merge; re-measure when the merged catalogs compile.
+        assert_eq!(eval_registry, 882 + curl_surface);
         // 83 compiler-internal registry helpers plus the 17 `_`-prefixed helper functions the
         // image prelude declares for its own use, plus the ELEVEN
         // `__elephc_opcache_rt_*` runtime script-cache helpers this branch adds.
@@ -495,10 +502,17 @@ mod tests {
         //
         // None of the eleven is callable from eval'd code. Nor are the four internal aliases
         // the extension-hosting prelude calls (`__elephc_ptr_get`, `__elephc_zval_*`).
-        assert_eq!(eval_internal, 150);
-        // 30 registry builtins awaiting eval homes, plus the 325 PHP-visible prelude-provided
+        // Also includes the SimpleXML allocation and diagnostic adapters, and
+        // `__elephc_reflection_class_build` / `__elephc_eval_reflection_class_build`, which
+        // only compiled reflector getters call. The two internal libc setlocale helpers and
+        // the internal nl_langinfo helper join the internal eval inventory, as does the
+        // random prelude's `__elephc_call_strict_types` reader. Estimated at the merge
+        // (main's 142 + the branch's +16 over the merge base); re-measure when it compiles.
+        assert_eq!(eval_internal, 158);
+        // Registry builtins awaiting eval homes, plus the PHP-visible prelude-provided
         // and name-resolver-rewritten functions eval does not reach (see `eval_support`).
-        assert_eq!(eval_pending, 340);
+        // Estimated at the merge (main's 381 + the branch's -19); re-measure when it compiles.
+        assert_eq!(eval_pending, 362);
         // The shared mbstring catalog adds sixty-four registry contracts, including
         // its internal INI helper, to the prior compiler registry surface; the eleven
         // `__elephc_opcache_rt_*` runtime script-cache helpers rolled through above add the rest.
@@ -507,11 +521,17 @@ mod tests {
         // The tokenizer location helper is a typed ordinary registry operation.
         // Five native heap metric operations use the ordinary AOT registry, and so do the four
         // internal aliases the extension-hosting prelude calls.
-        // The PHP 8.5 array value-edge pair adds two AOT-only registry entries.
-        assert_eq!(aot_registry, 871);
+        // The PHP 8.5 array value-edge pair adds two AOT-only registry entries, and the
+        // compiled and eval `ReflectionClass` builder calls two more. The seven ctype
+        // contracts, two internal setlocale helpers, the internal nl_langinfo helper, and
+        // the random prelude's `__elephc_call_strict_types` reader join the AOT registry.
+        // Estimated at the merge (main's 839 + the branch's +47); re-measure when it compiles.
+        assert_eq!(aot_registry, 886);
         // Compiler transforms, constructs, dedicated syntax, preludes, and
-        // name-resolver rewrites remain outside the ordinary AOT registry.
-        assert_eq!(aot_external, 462 + curl_surface);
+        // name-resolver rewrites remain outside the ordinary AOT registry. The two
+        // PHP-visible locale functions are prelude-provided.
+        // Estimated at the merge (main's 476 + the branch's +38); re-measure when it compiles.
+        assert_eq!(aot_external, 514 + curl_surface);
         // The two tick registrars (`AOT_IMPLEMENTATION_PENDING`).
         assert_eq!(aot_unsupported, 2);
     }
@@ -566,13 +586,17 @@ mod tests {
         // one for its by-reference out-parameters.
         assert_eq!(hybrid_adapter, 5);
         // Includes the four float pointer builtins and `buffer_ptr`, which eval runs through
-        // interpreter adapters.
-        // `serialize` / `unserialize` are among them (see `eval_execution`).
-        assert_eq!(interpreter_adapter, 749 + curl_surface);
+        // interpreter adapters, plus the GMP, SimpleXML, tidy, ctype, and locale
+        // forwarding homes. `serialize` / `unserialize` are among them (see `eval_execution`).
+        // Estimated at the merge (main's 697 + the branch's +89); re-measure when it compiles.
+        assert_eq!(interpreter_adapter, 786 + curl_surface);
         // Includes the eleven `__elephc_opcache_rt_*` helpers: they lower to an eval-bridge
         // call from AOT code and have no eval execution route of their own. So do the four
-        // internal aliases the extension-hosting prelude calls.
-        assert_eq!(unsupported, 490);
+        // internal aliases the extension-hosting prelude calls, the two setlocale helpers,
+        // the internal nl_langinfo helper, and the random prelude's
+        // `__elephc_call_strict_types` reader.
+        // Estimated at the merge (main's 523 + the branch's -3); re-measure when it compiles.
+        assert_eq!(unsupported, 520);
         assert_eq!(
             eval_execution(lookup("strval").expect("strval contract")),
             Some(EvalExecution::Adapter {

@@ -28,6 +28,7 @@ pub(super) fn builtin_reflection_property_get_default_value_method() -> ClassMet
     let span = crate::span::Span::dummy();
     let mut method = builtin_reflection_class_mixed_method("getDefaultValue", "__default_value");
     method.body.insert(0, reflection_throw_if_deferred_default_error(span));
+    method.body.insert(1, reflection_lazy_return("getDefaultValue", Vec::new(), span));
     method
 }
 
@@ -35,7 +36,8 @@ pub(super) fn builtin_reflection_property_get_default_value_method() -> ClassMet
 pub(super) fn builtin_reflection_class_get_default_properties_method() -> ClassMethod {
     let span = crate::span::Span::dummy();
     let mut method = builtin_reflection_class_mixed_method("getDefaultProperties", "__default_properties");
-    method.body.insert(0, reflection_throw_if_deferred_default_error(span));
+    method.body.insert(0, reflection_lazy_return("getDefaultProperties", Vec::new(), span));
+    method.body.insert(1, reflection_throw_if_deferred_default_error(span));
     method
 }
 

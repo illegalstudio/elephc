@@ -11,6 +11,26 @@
 macro_rules! impl_fake_construction_raw_ops {
     () => {
 
+    /// Retains the opaque value in a stable foreign root without changing fake PHP identity.
+    fn pin_native_reference_argument_owner(
+        &mut self, value: RuntimeCellHandle, pin: *mut std::ffi::c_void, cell: u64, staging: *mut std::ffi::c_void,
+    ) -> Result<bool, EvalStatus> {
+        if !self.native_argument_pins { return Ok(false); }
+        let value = self.retain(value)?;
+        unsafe { *pin.cast::<[u64; 6]>() = [0, 0, value.as_ptr() as u64, 0x105, cell, staging as u64]; }
+        self.native_argument_pin_events.push((true, value));
+        Ok(true)
+    }
+
+    /// Unlinks the fake root before ordinary eval cleanup consumes its transferred owner.
+    fn take_native_reference_argument_owner(&mut self, pin: *mut std::ffi::c_void) -> Result<Option<RuntimeCellHandle>, EvalStatus> {
+        let words = unsafe { std::mem::replace(&mut *pin.cast::<[u64; 6]>(), [0; 6]) };
+        if words[2] == 0 { return Ok(None); }
+        let value = RuntimeCellHandle::from_raw(words[2] as *mut RuntimeCell);
+        self.native_argument_pin_events.push((false, value));
+        Ok(Some(value))
+    }
+
     /// Creates one fake object for eval `new` unit tests.
     fn new_object(&mut self, _class_name: &str) -> Result<RuntimeCellHandle, EvalStatus> {
         self.runtime_new_object(_class_name)
@@ -104,9 +124,11 @@ macro_rules! impl_fake_construction_raw_ops {
     fn invoker_raw_ref_cell(
         &mut self,
         slot: *mut std::ffi::c_void,
-        _source_tag: u64,
+        source_tag: u64,
     ) -> Result<RuntimeCellHandle, EvalStatus> {
-        self.runtime_invoker_marker(slot as usize)
+        let marker = self.runtime_invoker_marker(slot as usize)?;
+        self.invoker_marker_source_tags.insert(marker.as_ptr() as usize, source_tag);
+        Ok(marker)
     }
     /// Extracts one fake low payload word for raw by-reference staging.
     fn raw_value_word(&mut self, value: RuntimeCellHandle) -> Result<u64, EvalStatus> {
@@ -122,6 +144,7 @@ macro_rules! impl_fake_construction_raw_ops {
             // lookup key into `EvalStreamResources`. What a display path reports is
             // `FakeOps::fake_resource_id`, the fake mirror of the runtime registry.
             FakeValue::Resource(value) => value as u64,
+            FakeValue::InvokerRefCell(slot) => slot as u64,
             FakeValue::String(_) | FakeValue::Bytes(_) => value.as_ptr() as u64,
             FakeValue::Array(_)
             | FakeValue::Assoc(_)
@@ -135,6 +158,8 @@ macro_rules! impl_fake_construction_raw_ops {
         Ok(match self.get(value) {
             FakeValue::String(value) => value.len() as u64,
             FakeValue::Bytes(value) => value.len() as u64,
+            FakeValue::InvokerRefCell(_) => self.invoker_marker_source_tags
+                .get(&(value.as_ptr() as usize)).copied().unwrap_or(EVAL_TAG_MIXED),
             _ => 0,
         })
     }

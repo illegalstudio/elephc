@@ -29,7 +29,8 @@ use crate::codegen_support::runtime::system::{
 use super::alloc::FIBER_GUARD_PAGE_SIZE;
 use super::{
     FIBER_OWN_CALL_FRAME_OFFSET, FIBER_OWN_EXC_HEAD_OFFSET,
-    FIBER_OWN_MAGIC_SET_GUARD_OFFSET, FIBER_SAVED_SP_OFFSET, FIBER_STACK_BASE_OFFSET,
+    FIBER_OWN_MAGIC_SET_GUARD_OFFSET, FIBER_OWN_GC_RELEASE_SUPPRESSED_OFFSET,
+    FIBER_SAVED_SP_OFFSET, FIBER_STACK_BASE_OFFSET,
 };
 
 /// Call-stack floor for a coroutine stack, measured from the fiber's mmap base.
@@ -59,6 +60,8 @@ const X86_64_INITIAL_FRAME_RIP_OFFSET: i32 = X86_64_SWITCH_SAVE_BYTES;
 /// - Callee-saved registers and floating-point state of the *source* context are saved to the source's stack.
 /// - Global `_fiber_current`, `_exc_handler_top`, `_exc_call_frame_top`, and
 ///   `_magic_set_guard_head` track the active execution context across switches.
+/// - Deep-release GC suppression follows its coroutine. The collector reentry flag remains
+///   global, so switching stacks cannot start another collector inside an active collection.
 ///
 /// # Output
 /// - Control does not return from this function normally. When the current context is later switched back to,
@@ -121,6 +124,8 @@ pub fn emit_fiber_switch(emitter: &mut Emitter) {
     emitter.instruction(&format!("str x13, [x10, #{}]", FIBER_OWN_CALL_FRAME_OFFSET)); // source_fiber->own_call_frame = head
     abi::emit_load_symbol_to_reg(emitter, "x14", "_magic_set_guard_head", 0);   // x14 = current stack's magic-set guard chain head
     emitter.instruction(&format!("str x14, [x10, #{}]", FIBER_OWN_MAGIC_SET_GUARD_OFFSET)); // keep stack-backed guard nodes with their owning fiber
+    abi::emit_load_symbol_to_reg(emitter, "x14", "_gc_release_suppressed", 0);
+    emitter.instruction(&format!("str x14, [x10, #{}]", FIBER_OWN_GC_RELEASE_SUPPRESSED_OFFSET)); // park deep-release protection with the stack doing that release
     emitter.instruction("b __rt_fiber_switch_load_target");                     // skip the main-thread save path
 
     // -- source = main thread: persist its SP, exception chain head, and call-frame chain head into globals --
@@ -132,6 +137,8 @@ pub fn emit_fiber_switch(emitter: &mut Emitter) {
     abi::emit_store_reg_to_symbol(emitter, "x13", "_fiber_main_saved_call_frame", 0); // _fiber_main_saved_call_frame = main thread call-frame chain head
     abi::emit_load_symbol_to_reg(emitter, "x14", "_magic_set_guard_head", 0);   // x14 = main thread's current magic-set guard chain head
     abi::emit_store_reg_to_symbol(emitter, "x14", "_fiber_main_saved_magic_set_guard", 0); // retain only main-stack guard nodes in the main context
+    abi::emit_load_symbol_to_reg(emitter, "x14", "_gc_release_suppressed", 0);
+    abi::emit_store_reg_to_symbol(emitter, "x14", "_fiber_main_saved_gc_release_suppressed", 0);
 
     // -- swap _fiber_current to the target and load its context --
     emitter.label("__rt_fiber_switch_load_target");
@@ -145,6 +152,8 @@ pub fn emit_fiber_switch(emitter: &mut Emitter) {
     abi::emit_store_reg_to_symbol(emitter, "x13", "_exc_call_frame_top", 0);    // restore the target fiber's call-frame chain head globally
     emitter.instruction(&format!("ldr x14, [x0, #{}]", FIBER_OWN_MAGIC_SET_GUARD_OFFSET)); // x14 = target fiber's saved magic-set guard chain head
     abi::emit_store_reg_to_symbol(emitter, "x14", "_magic_set_guard_head", 0);  // expose only guard nodes that live on the target fiber stack
+    emitter.instruction(&format!("ldr x14, [x0, #{}]", FIBER_OWN_GC_RELEASE_SUPPRESSED_OFFSET)); // recover only the target coroutine's deep-release protection
+    abi::emit_store_reg_to_symbol(emitter, "x14", "_gc_release_suppressed", 0);
     emit_adopt_fiber_stack_limit_aarch64(emitter);
     emitter.instruction(&format!("ldr x11, [x0, #{}]", FIBER_SAVED_SP_OFFSET)); // x11 = target fiber's saved SP
     emitter.instruction("mov sp, x11");                                         // adopt the target fiber's stack
@@ -158,6 +167,8 @@ pub fn emit_fiber_switch(emitter: &mut Emitter) {
     abi::emit_store_reg_to_symbol(emitter, "x13", "_exc_call_frame_top", 0);    // restore the main thread call-frame chain head globally
     abi::emit_load_symbol_to_reg(emitter, "x14", "_fiber_main_saved_magic_set_guard", 0); // x14 = main thread's saved magic-set guard chain head
     abi::emit_store_reg_to_symbol(emitter, "x14", "_magic_set_guard_head", 0);  // detach any suspended fiber's stack-backed guard chain
+    abi::emit_load_symbol_to_reg(emitter, "x14", "_fiber_main_saved_gc_release_suppressed", 0);
+    abi::emit_store_reg_to_symbol(emitter, "x14", "_gc_release_suppressed", 0);
     abi::emit_load_symbol_to_reg(emitter, "x14", STACK_LIMIT_MAIN_SYMBOL, 0);   // x14 = the OS-thread call-stack floor measured at process start
     abi::emit_store_reg_to_symbol(emitter, "x14", STACK_LIMIT_SYMBOL, 0);       // restore the main-thread floor now that the main stack is current again
     abi::emit_load_symbol_to_reg(emitter, "x11", "_fiber_main_saved_sp", 0);    // x11 = main thread's saved SP
@@ -298,6 +309,8 @@ fn emit_x86_64(emitter: &mut Emitter) {
     emitter.instruction(&format!("mov QWORD PTR [r10 + {}], r11", FIBER_OWN_CALL_FRAME_OFFSET)); // source_fiber->own_call_frame = head
     abi::emit_load_symbol_to_reg(emitter, "r11", "_magic_set_guard_head", 0);   // r11 = current stack's magic-set guard chain head
     emitter.instruction(&format!("mov QWORD PTR [r10 + {}], r11", FIBER_OWN_MAGIC_SET_GUARD_OFFSET)); // keep stack-backed guard nodes with their owning fiber
+    abi::emit_load_symbol_to_reg(emitter, "r11", "_gc_release_suppressed", 0);
+    emitter.instruction(&format!("mov QWORD PTR [r10 + {}], r11", FIBER_OWN_GC_RELEASE_SUPPRESSED_OFFSET)); // park deep-release protection with the stack doing that release
     emitter.instruction("jmp __rt_fiber_switch_load_target");                   // skip the main-thread save path
 
     // -- source = main thread: persist its SP and exception/call-frame chain heads --
@@ -309,6 +322,8 @@ fn emit_x86_64(emitter: &mut Emitter) {
     abi::emit_store_reg_to_symbol(emitter, "r11", "_fiber_main_saved_call_frame", 0); // _fiber_main_saved_call_frame = main thread cleanup chain head
     abi::emit_load_symbol_to_reg(emitter, "r11", "_magic_set_guard_head", 0);   // r11 = main thread's current magic-set guard chain head
     abi::emit_store_reg_to_symbol(emitter, "r11", "_fiber_main_saved_magic_set_guard", 0); // retain only main-stack guard nodes in the main context
+    abi::emit_load_symbol_to_reg(emitter, "r11", "_gc_release_suppressed", 0);
+    abi::emit_store_reg_to_symbol(emitter, "r11", "_fiber_main_saved_gc_release_suppressed", 0);
 
     // -- swap _fiber_current to the target and load its context --
     emitter.label("__rt_fiber_switch_load_target");
@@ -323,6 +338,8 @@ fn emit_x86_64(emitter: &mut Emitter) {
     abi::emit_store_reg_to_symbol(emitter, "r11", "_exc_call_frame_top", 0);    // restore the target fiber's cleanup chain head globally
     emitter.instruction(&format!("mov r11, QWORD PTR [rdi + {}]", FIBER_OWN_MAGIC_SET_GUARD_OFFSET)); // r11 = target fiber's magic-set guard chain head
     abi::emit_store_reg_to_symbol(emitter, "r11", "_magic_set_guard_head", 0);  // expose only guard nodes that live on the target fiber stack
+    emitter.instruction(&format!("mov r11, QWORD PTR [rdi + {}]", FIBER_OWN_GC_RELEASE_SUPPRESSED_OFFSET)); // recover only the target coroutine's deep-release protection
+    abi::emit_store_reg_to_symbol(emitter, "r11", "_gc_release_suppressed", 0);
     emit_adopt_fiber_stack_limit_x86_64(emitter);
     emitter.instruction(&format!("mov rsp, QWORD PTR [rdi + {}]", FIBER_SAVED_SP_OFFSET)); // adopt the target fiber's saved stack pointer
     emitter.instruction("jmp __rt_fiber_switch_restore");                       // proceed to restore callee-saved registers
@@ -335,6 +352,8 @@ fn emit_x86_64(emitter: &mut Emitter) {
     abi::emit_store_reg_to_symbol(emitter, "r11", "_exc_call_frame_top", 0);    // restore the main thread cleanup chain head globally
     abi::emit_load_symbol_to_reg(emitter, "r11", "_fiber_main_saved_magic_set_guard", 0); // r11 = main thread's saved magic-set guard chain head
     abi::emit_store_reg_to_symbol(emitter, "r11", "_magic_set_guard_head", 0);  // detach any suspended fiber's stack-backed guard chain
+    abi::emit_load_symbol_to_reg(emitter, "r11", "_fiber_main_saved_gc_release_suppressed", 0);
+    abi::emit_store_reg_to_symbol(emitter, "r11", "_gc_release_suppressed", 0);
     abi::emit_load_symbol_to_reg(emitter, "rax", STACK_LIMIT_MAIN_SYMBOL, 0);   // rax = the OS-thread call-stack floor measured at process start
     abi::emit_store_reg_to_symbol(emitter, "rax", STACK_LIMIT_SYMBOL, 0);       // restore the main-thread floor now that the main stack is current again
     abi::emit_load_symbol_to_reg(emitter, "rsp", "_fiber_main_saved_sp", 0);    // adopt the main thread's saved stack pointer
@@ -354,6 +373,38 @@ fn emit_x86_64(emitter: &mut Emitter) {
 mod tests {
     use super::*;
     use crate::codegen_support::platform::Target;
+
+    /// Each switch preserves deep-release protection without moving the global collector lock.
+    #[test]
+    fn switches_gc_release_protection_on_every_supported_target() {
+        for name in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+            let target = Target::parse(name).unwrap();
+            let mut emitter = Emitter::new(target);
+            super::super::emit_fiber_construct(&mut emitter);
+            emit_fiber_switch(&mut emitter);
+            let asm = emitter.output();
+            let offset = FIBER_OWN_GC_RELEASE_SUPPRESSED_OFFSET;
+            assert_eq!(super::super::FIBER_OBJECT_SIZE, offset + 8);
+            let (save, load) = if target.arch == Arch::AArch64 {
+                assert!(asm.contains(&format!("str xzr, [x21, #{offset}]")), "{name}: fresh context");
+                (format!("str x14, [x10, #{offset}]"), format!("ldr x14, [x0, #{offset}]"))
+            } else {
+                assert!(asm.contains(&format!("mov r11, {}", (super::super::FIBER_OBJECT_SIZE - 8) / 8)),
+                    "{name}: initialize the entire native coroutine payload");
+                (format!("mov QWORD PTR [r10 + {offset}], r11"), format!("mov r11, QWORD PTR [rdi + {offset}]"))
+            };
+            assert!(asm.contains(&save) && asm.contains(&load), "{name}: preserve coroutine-local protection");
+            let save_main = asm.split_once("__rt_fiber_switch_save_main_sp:").unwrap().1
+                .split_once("__rt_fiber_switch_load_target:").unwrap().0;
+            let load_main = asm.split_once("__rt_fiber_switch_load_main:").unwrap().1
+                .split_once("__rt_fiber_switch_restore:").unwrap().0;
+            for body in [save_main, load_main] {
+                assert!(body.contains("_gc_release_suppressed")
+                    && body.contains("_fiber_main_saved_gc_release_suppressed"), "{name}: main context");
+            }
+            assert!(!asm.contains("_gc_collecting"), "{name}: collector reentry remains globally guarded");
+        }
+    }
 
     #[test]
     /// Verifies both architecture emitters save and restore coroutine magic-setter guard chains.

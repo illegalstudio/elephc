@@ -241,7 +241,7 @@ pub(crate) fn lower_variable_read(
     span: Span,
 ) -> LoweredValue {
     let Some(flag) = read_guard(ctx, name) else {
-        return ctx.load_local(name, Some(span));
+        return crate::ir_lower::expr::lower_local_value(ctx, name, span);
     };
     let quiet = ctx.definedness.quiet_reads.contains(&span);
     if load_holds_null(ctx, name)
@@ -253,7 +253,7 @@ pub(crate) fn lower_variable_read(
     if !quiet {
         warn_unless_defined(ctx, name, flag, span);
     }
-    ctx.load_local(name, Some(span))
+    crate::ir_lower::expr::lower_local_value(ctx, name, span)
 }
 
 /// Whether a read of `name` is a boxed `mixed`, which can carry php's NULL without changing the
@@ -284,7 +284,7 @@ pub(crate) fn lower_capture_read(
     span: Span,
 ) -> LoweredValue {
     let Some(flag) = read_guard(ctx, name) else {
-        return ctx.load_local(name, Some(span));
+        return crate::ir_lower::expr::lower_local_value(ctx, name, span);
     };
     if load_holds_null(ctx, name) {
         return lower_guarded_read(ctx, name, flag, arrow, span);
@@ -292,7 +292,7 @@ pub(crate) fn lower_capture_read(
     if !arrow {
         warn_unless_defined(ctx, name, flag, span);
     }
-    ctx.load_local(name, Some(span))
+    crate::ir_lower::expr::lower_local_value(ctx, name, span)
 }
 
 /// Prepares `++`/`--` on `$name`, which reads the variable before writing it: an undefined one
@@ -413,7 +413,7 @@ fn lower_guarded_read(
 
     ctx.builder.position_at_end(defined_block);
     ctx.restore_initialized_slots(split_initialized.clone());
-    let value = ctx.load_local(name, Some(span));
+    let value = crate::ir_lower::expr::lower_local_value(ctx, name, span);
     crate::ir_lower::expr::store_value_into_temp(ctx, &temp, PhpType::Mixed, value, span);
     branch_to(ctx, merge);
 

@@ -29,7 +29,7 @@ fn eval_scope_exports_are_unique_and_native_fragments_do_not_require_rust() {
                 assert_eq!(asm.lines().filter(|line| *line == label).count(), 1,
                     "{name}, bridge={bridge}: duplicate or missing {entry}");
             }
-            for entry in ["__elephc_eval_scope_free_v2", "__elephc_eval_scope_set_v2", "__elephc_eval_scope_unset_v2"] {
+            for entry in ["__elephc_eval_scope_free_v2", "__elephc_eval_scope_set_v2", "__elephc_eval_scope_unset_v2", "__elephc_eval_context_free_v2"] {
                 assert_eq!(asm.contains(&target.extern_symbol(entry)), bridge,
                     "{name}, bridge={bridge}: wrong dependency on {entry}");
             }

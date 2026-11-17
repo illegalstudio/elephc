@@ -103,6 +103,8 @@ fn emit_release_previous_aarch64(emitter: &mut Emitter) {
     emitter.instruction("cmp x9, x10");                                         // is this typed property still uninitialized?
     emitter.instruction("b.eq __rt_unser_release_prev_prop_done");              // no previous owner exists for an uninitialized slot
     emitter.instruction("ldr x9, [x0]");                                        // previous payload low word
+    emitter.instruction("cmp x9, x10");                                         // native reference cells put their uninitialized marker in the low word
+    emitter.instruction("b.eq __rt_unser_release_prev_prop_done");              // a fresh reference cell has no previous owner
     emitter.instruction("cmp x1, #1");                                          // is the previous value an owned string?
     emitter.instruction("b.eq __rt_unser_release_prev_prop_any");               // strings release through the uniform dispatcher
     emitter.instruction("cmp x1, #4");                                          // is the previous value below the container range?
@@ -142,6 +144,8 @@ fn emit_release_previous_x86_64(emitter: &mut Emitter) {
     emitter.instruction("cmp r10, r11");                                        // is this typed property still uninitialized?
     emitter.instruction("je __rt_unser_release_prev_prop_done_x");              // no previous owner exists for an uninitialized slot
     emitter.instruction("mov r10, QWORD PTR [rdi]");                            // previous payload low word
+    emitter.instruction("cmp r10, r11");                                        // native reference cells put their uninitialized marker in the low word
+    emitter.instruction("je __rt_unser_release_prev_prop_done_x");              // a fresh reference cell has no previous owner
     emitter.instruction("cmp rsi, 1");                                          // is the previous value an owned string?
     emitter.instruction("je __rt_unser_release_prev_prop_any_x");               // strings release through the uniform dispatcher
     emitter.instruction("cmp rsi, 4");                                          // is the previous value below the container range?

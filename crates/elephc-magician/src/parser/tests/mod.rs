@@ -26,5 +26,7 @@ mod source_files;
 mod source_tree_sweep;
 mod static_members;
 mod generics;
+mod jumps;
 mod support;
 mod trait_adaptations;
+mod small_stack;

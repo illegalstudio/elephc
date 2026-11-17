@@ -70,6 +70,10 @@ pub struct TraitMethodInfo {
     pub is_static: bool,
     pub is_final: bool,
     pub is_abstract: bool,
+    /// The declaration's source span. Trait composition copies the declaration into every
+    /// using class unchanged, so a class method with this span IS the imported trait method,
+    /// while a class's own override of the same name has its own span.
+    pub span: crate::span::Span,
 }
 
 /// One generated PHP 8.5 `clone()` property-override applicator.
@@ -154,6 +158,12 @@ pub struct Module {
     pub(crate) runtime_define_names: std::collections::BTreeSet<String>,
     /// First `define()` value expression per runtime-defined name, for static Reflection metadata.
     pub(crate) runtime_define_values: std::collections::BTreeMap<String, crate::parser::ast::ExprKind>,
+    /// Physical file of each source identity used by this module's instructions.
+    ///
+    /// Lowering copies `Span::registered_source_paths()` here because the source table is
+    /// thread-local while codegen may run on another thread. Kept per module so parallel
+    /// compilations never share identities.
+    pub source_paths: crate::fast_hash::FastMap<u32, String>,
     /// Optional mbstring startup arguments: effective core encodings followed by raw INI pairs.
     /// These belong to user assembly, never the reusable runtime object.
     pub mbstring_startup: Option<Vec<Vec<u8>>>,
@@ -398,6 +408,7 @@ impl Module {
             runtime_define_values: Default::default(),
             target,
             source_path: None,
+            source_paths: HashMap::default(),
             mbstring_startup: None,
             included_files: Vec::new(),
             probe_key: None,

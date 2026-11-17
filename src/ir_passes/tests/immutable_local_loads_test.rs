@@ -14,7 +14,7 @@
 
 use crate::ir::{
     validate_function, Builder, DataPool, Function, FunctionParam, Immediate, IrType, LocalKind,
-    Op, Ownership, Terminator,
+    Op, Ownership, RuntimeCallTarget, RuntimeFnId, Terminator,
 };
 use crate::ir_passes::driver::IrPass;
 use crate::ir_passes::immutable_local_loads::ImmutableLocalLoads;
@@ -378,4 +378,94 @@ fn rejects_a_slot_written_through_a_by_reference_argument() {
         }
     }
     assert!(validate_function(&function).is_ok());
+}
+
+/// A single entry store makes a concrete string local immutable when a whitelisted
+/// explicit-UTF-string mbstring call consumes its load.
+#[test]
+fn classifies_string_with_single_entry_store_when_mbstring_call_consumes_it() {
+    let mut data = DataPool::default();
+    let encoding = data.intern_string("UTF-8");
+    let mut function = Function::new("string_store".to_string(), IrType::I64, PhpType::Int);
+    let load;
+    {
+        let mut builder = Builder::new(&mut function);
+        let entry = builder.create_named_block("entry", vec![]);
+        builder.set_entry(entry);
+        builder.position_at_end(entry);
+        let slot = builder.add_local(
+            Some("text".to_string()),
+            IrType::Str,
+            PhpType::Str,
+            LocalKind::PhpLocal,
+        );
+        let seed = builder.emit_const_str(encoding);
+        builder.emit_store_local(slot, seed);
+        load = builder.emit_load_local(slot, IrType::Str, PhpType::Str);
+        let encoding = builder.emit_const_str(encoding);
+        let length = builder
+            .emit_with_effects(
+                Op::RuntimeCall,
+                vec![load, encoding],
+                Some(Immediate::RuntimeCall(RuntimeCallTarget::Function(
+                    RuntimeFnId::MbStrlen,
+                ))),
+                IrType::I64,
+                PhpType::Int,
+                Ownership::NonHeap,
+                RuntimeFnId::MbStrlen.effects(),
+                None,
+            )
+            .expect("mb_strlen runtime call");
+        builder.terminate(Terminator::Return { value: Some(length) });
+    }
+
+    assert!(ImmutableLocalLoads.is_applicable(&function));
+    assert!(ImmutableLocalLoads.run(&mut function, &mut data));
+    assert!(
+        function
+            .instructions
+            .iter()
+            .find(|inst| inst.result == Some(load))
+            .expect("string load")
+            .effects
+            .is_pure()
+    );
+    assert!(validate_function(&function).is_ok());
+}
+
+/// Without a whitelisted mbstring consumer, a string load keeps its effectful
+/// classification so generic string-only bodies are left untouched.
+#[test]
+fn leaves_string_load_alone_without_a_whitelisted_mbstring_call() {
+    let mut function = Function::new("string_identity".to_string(), IrType::Str, PhpType::Str);
+    let load;
+    {
+        let mut builder = Builder::new(&mut function);
+        let entry = builder.create_named_block("entry", vec![]);
+        builder.set_entry(entry);
+        builder.position_at_end(entry);
+        let slot = builder.add_local(
+            Some("text".to_string()),
+            IrType::Str,
+            PhpType::Str,
+            LocalKind::PhpLocal,
+        );
+        let seed = builder.emit_const_str(crate::ir::DataId::from_raw(0));
+        builder.emit_store_local(slot, seed);
+        load = builder.emit_load_local(slot, IrType::Str, PhpType::Str);
+        builder.terminate(Terminator::Return { value: Some(load) });
+    }
+
+    assert!(!ImmutableLocalLoads.is_applicable(&function));
+    assert!(!classify(&mut function));
+    assert_eq!(
+        function
+            .instructions
+            .iter()
+            .find(|inst| inst.result == Some(load))
+            .expect("string load")
+            .effects,
+        Op::LoadLocal.default_effects()
+    );
 }

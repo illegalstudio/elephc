@@ -10,10 +10,14 @@
 use super::*;
 
 /// Executes an eval `try` body and handles supported `catch` clauses.
+///
+/// `resume_at` is the label a jump from outside lands on inside the body; the body then starts
+/// there instead of at its first statement.
 pub(in crate::interpreter) fn execute_try_stmt(
     body: &[EvalStmt],
     catches: &[EvalCatch],
     finally_body: &[EvalStmt],
+    mut resume_at: Option<String>,
     context: &mut ElephcEvalContext,
     scope: &mut ElephcEvalScope,
     values: &mut impl RuntimeValueOps,
@@ -27,57 +31,72 @@ pub(in crate::interpreter) fn execute_try_stmt(
     // started under and restoring it for the handlers keeps the visibility check on the same
     // class PHP would use, whatever the unwinding left behind.
     let entry_class_scope = context.current_class_scope().map(str::to_string);
-    let control = match execute_statements(body, context, scope, values) {
-        Ok(EvalControl::Throw(thrown)) => {
-            let restored = restore_entry_class_scope(entry_class_scope.as_deref(), context);
-            let caught = execute_matching_catch(thrown, catches, context, scope, values);
-            if restored {
-                context.pop_class_scope();
+    let control = loop {
+        let body_result = match resume_at.take() {
+            Some(label) => execute_statements_from_label(body, label, context, scope, values),
+            None => execute_statements(body, context, scope, values),
+        };
+        let control = match body_result {
+            Ok(EvalControl::Throw(thrown)) => {
+                let restored = restore_entry_class_scope(entry_class_scope.as_deref(), context);
+                let caught = execute_matching_catch(thrown, catches, context, scope, values);
+                if restored {
+                    context.pop_class_scope();
+                }
+                caught
             }
-            caught
-        }
-        Err(EvalStatus::UncaughtThrowable) => {
-            let pending = context.take_pending_throw();
-            if crate::eval_trace::enabled() {
-                eprintln!(
-                    "[elephc-eval-trace] phase=try_uncaught pending={} catches={}",
-                    pending.is_some(),
-                    catches.len(),
-                );
+            Err(EvalStatus::UncaughtThrowable) => {
+                let pending = context.take_pending_throw();
+                if crate::eval_trace::enabled() {
+                    eprintln!(
+                        "[elephc-eval-trace] phase=try_uncaught pending={} catches={}",
+                        pending.is_some(),
+                        catches.len(),
+                    );
+                }
+                let Some(thrown) = pending else {
+                    return Err(EvalStatus::UncaughtThrowable);
+                };
+                let restored = restore_entry_class_scope(entry_class_scope.as_deref(), context);
+                let caught = execute_matching_catch(thrown, catches, context, scope, values);
+                if restored {
+                    context.pop_class_scope();
+                }
+                caught
             }
-            let Some(thrown) = pending else {
-                return Err(EvalStatus::UncaughtThrowable);
-            };
-            let restored = restore_entry_class_scope(entry_class_scope.as_deref(), context);
-            let caught = execute_matching_catch(thrown, catches, context, scope, values);
-            if restored {
-                context.pop_class_scope();
+            Ok(control) => Ok(control),
+            Err(status) => Err(status),
+        };
+        // Native calls and nested eval report throws through the context, including from a
+        // catch. Transfer that pending owner into control flow before finally runs or replaces
+        // the throw.
+        let control = match control {
+            Ok(control) => control,
+            Err(EvalStatus::UncaughtThrowable) => context
+                .take_pending_throw()
+                .map(EvalControl::Throw)
+                .ok_or(EvalStatus::UncaughtThrowable)?,
+            Err(status) => {
+                // A `try` can only consult its catches for `UncaughtThrowable`; every other
+                // status leaves here without ever looking at them. If a throwable reaches an
+                // enclosing try under some OTHER status, this is where it slipped past the one
+                // that should have caught it -- so say which status did it.
+                if crate::eval_trace::enabled() {
+                    eprintln!(
+                        "[elephc-eval-trace] phase=try_bypass status={status:?} catches={}",
+                        catches.len(),
+                    );
+                }
+                return Err(status);
             }
-            caught
-        }
-        Ok(control) => Ok(control),
-        Err(status) => Err(status),
-    };
-    // Native calls and nested eval report throws through the context, including from a catch.
-    // Transfer that pending owner into control flow before finally runs or replaces the throw.
-    let control = match control {
-        Ok(control) => control,
-        Err(EvalStatus::UncaughtThrowable) => context
-            .take_pending_throw()
-            .map(EvalControl::Throw)
-            .ok_or(EvalStatus::UncaughtThrowable)?,
-        Err(status) => {
-            // A `try` can only consult its catches for `UncaughtThrowable`; every other status
-            // leaves here without ever looking at them. If a throwable reaches an enclosing try
-            // under some OTHER status, this is where it slipped past the one that should have
-            // caught it -- so say which status did it.
-            if crate::eval_trace::enabled() {
-                eprintln!(
-                    "[elephc-eval-trace] phase=try_bypass status={status:?} catches={}",
-                    catches.len(),
-                );
+        };
+        match control {
+            // A `catch` jumping back to a label in its own `try` body stays inside the
+            // statement, so `finally` must not run yet: PHP runs it only when control leaves.
+            EvalControl::Goto(label) if crate::eval_ir::sequence_holds_jump_label(body, &label) => {
+                resume_at = Some(label);
             }
-            return Err(status);
+            control => break control,
         }
     };
     if finally_body.is_empty() {

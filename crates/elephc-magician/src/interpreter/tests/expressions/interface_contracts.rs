@@ -63,6 +63,57 @@ return $reader->read();"#,
     assert_eq!(values.get(result), FakeValue::Int(7));
 }
 
+/// Builtin interface ancestry supports direct, eval-class, eval-interface and self return types.
+#[test]
+fn execute_program_accepts_builtin_iterator_return_covariance() {
+    let program = parse_fragment(br#"
+interface CovariantIteratorLink { public function linked(): Traversable; }
+interface CovariantIteratorView extends Iterator {}
+class CovariantIterator implements CovariantIteratorView, CovariantIteratorLink {
+    public function current(): mixed { return null; }
+    public function key(): mixed { return null; }
+    public function next(): void {}
+    public function rewind(): void {}
+    public function valid(): bool { return false; }
+    public function linked(): self { return $this; }
+}
+class CovariantBuiltinAggregate implements IteratorAggregate {
+    public function getIterator(): Iterator { echo '1'; return new CovariantIterator(); }
+}
+class CovariantClassAggregate implements IteratorAggregate {
+    public function getIterator(): CovariantIterator { echo '2'; return new CovariantIterator(); }
+}
+class CovariantInterfaceAggregate implements IteratorAggregate {
+    public function getIterator(): CovariantIteratorView { echo '3'; return new CovariantIterator(); }
+}
+foreach (new CovariantBuiltinAggregate() as $value) { echo 'unexpected'; }
+foreach (new CovariantClassAggregate() as $value) { echo 'unexpected'; }
+foreach (new CovariantInterfaceAggregate() as $value) { echo 'unexpected'; }
+return true;
+"#).expect("parse covariant iterator declarations");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+    let result = execute_program(&program, &mut scope, &mut values).expect("covariant iterator returns");
+    assert_eq!(values.get(result), FakeValue::Bool(true));
+    assert_eq!(values.output, "123");
+}
+
+/// Unrelated builtin interfaces remain incompatible in user interface return contracts.
+#[test]
+fn execute_program_rejects_unrelated_builtin_interface_return() {
+    let program = parse_fragment(br#"
+interface NeedsCovariantTraversal { public function make(): Traversable; }
+class UnrelatedBuiltinReturn implements NeedsCovariantTraversal {
+    public function make(): Countable { throw new RuntimeException('unreachable'); }
+}
+"#).expect("parse incompatible builtin return");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+    let error = execute_program(&program, &mut scope, &mut values)
+        .expect_err("Countable does not inherit Traversable");
+    assert_eq!(error, EvalStatus::RuntimeFatal);
+}
+
 /// Verifies eval rejects missing or wider return types for interface method contracts.
 #[test]
 fn execute_program_rejects_incompatible_interface_method_return_type() {

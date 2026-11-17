@@ -69,11 +69,25 @@ pub fn emit_user_wrapper_fclose(emitter: &mut Emitter) {
     emit_aarch64_handle_lookup(emitter, "__rt_uwfclose_done");                  // resolve the object and leave its slot index in x9
     emitter.instruction("str x0, [sp, #0]");                                    // transfer the handle's reference into local ownership
     emitter.instruction("str xzr, [x10, x9, lsl #3]");                          // retire the old slot before PHP can open another wrapper
+    emitter.instruction("mov x11, #0x40000000");                                // reconstruct the synthetic descriptor from its slot
+    emitter.instruction("orr x9, x9, x11");                                     // compare the complete descriptor rather than a reusable slot
+    emitter.instruction("mov x0, x9");                                          // resolve the descriptor's stable PHP resource identity
+    abi::emit_call_label(emitter, "__rt_resource_id_of");
+    abi::emit_load_symbol_to_reg(emitter, "x11", "_simplexml_unwind_stream", 0);
+    emitter.instruction("cmp x0, x11");                                         // does this incarnation own the pending XML read failure?
+    emitter.instruction("cset x11, eq");                                        // remember the policy before guard publication
+    emitter.instruction("str x11, [sp, #8]");                                   // preserve this stream's close policy across the guard
+    emitter.instruction("cbz x11, __rt_uwfclose_policy_ready");                 // unrelated streams retain their close callback
+    abi::emit_store_reg_to_symbol(emitter, "xzr", "_simplexml_unwind_stream", 0);
+    emitter.label("__rt_uwfclose_policy_ready");
+    emitter.instruction("ldr x0, [sp, #0]");                                    // restore the object owner for exceptional cleanup
     guards::guard(emitter, 16, 48);
 
     // -- invoke an optional close method with exceptional object cleanup active --
     emitter.instruction("ldr x0, [sp, #0]");                                    // restore the wrapper receiver after publishing the guard
-    abi::emit_load_symbol_to_reg(emitter, "x9", "_stream_close_silent", 0);
+    abi::emit_load_symbol_to_reg(emitter, "x11", "_stream_close_silent", 0);
+    emitter.instruction("ldr x9, [sp, #8]");                                    // restore policy after the symbol helper borrows x9
+    emitter.instruction("orr x9, x9, x11");                                     // combine XML resource suppression with native fileinfo cleanup mode
     emitter.instruction("cbnz x9, __rt_uwfclose_release");                      // skip PHP callbacks while unwinding a native-extension exception
     emit_aarch64_method_lookup(emitter, "__rt_uwfclose_release", VTABLE_SLOT_CLOSE);
     emitter.instruction("blr x11");                                             // invoke stream_close on the wrapper object
@@ -103,12 +117,27 @@ fn emit_user_wrapper_fclose_linux_x86_64(emitter: &mut Emitter) {
     emit_x86_handle_lookup(emitter, "__rt_uwfclose_done_x86");                 // resolve the object and leave its slot index in r9
     emitter.instruction("mov QWORD PTR [rbp - 8], rdi");                        // transfer the handle's reference into local ownership
     emitter.instruction("mov QWORD PTR [r10 + r9 * 8], 0");                     // allow callbacks to reuse the retired slot safely
-    emitter.instruction("mov rax, rdi");                                        // provide the object through the native owner-guard convention
+    emitter.instruction("or r9, 0x40000000");                                   // reconstruct the complete synthetic descriptor
+    emitter.instruction("mov rax, r9");                                         // resolve the descriptor's stable PHP resource identity
+    abi::emit_call_label(emitter, "__rt_resource_id_of");
+    abi::emit_load_symbol_to_reg(emitter, "r11", "_simplexml_unwind_stream", 0);
+    emitter.instruction("cmp rax, r11");                                        // match only the resource incarnation whose XML read failed
+    emitter.instruction("sete cl");                                             // materialize this stream's close policy
+    emitter.instruction("movzx ecx, cl");                                       // clear the remaining policy bits
+    emitter.instruction("mov QWORD PTR [rbp - 16], rcx");                       // preserve policy across guard publication
+    emitter.instruction("test rcx, rcx");                                       // may a nested close reuse this descriptor safely?
+    emitter.instruction("jz __rt_uwfclose_policy_ready_x86");                   // unrelated streams keep their close callbacks
+    emitter.instruction("xor r11d, r11d");                                      // consume suppression before releasing or invoking PHP
+    abi::emit_store_reg_to_symbol(emitter, "r11", "_simplexml_unwind_stream", 0);
+    emitter.label("__rt_uwfclose_policy_ready_x86");
+    emitter.instruction("mov rax, QWORD PTR [rbp - 8]");                        // provide the object through the native owner-guard convention
     guards::guard(emitter, 16, 48);
 
     // -- protect the wrapper while its optional close method executes --
     emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // reload the receiver after guard publication
-    abi::emit_load_symbol_to_reg(emitter, "r9", "_stream_close_silent", 0);
+    emitter.instruction("mov r9, QWORD PTR [rbp - 16]");                        // only the detached failing stream suppresses its callback
+    abi::emit_load_symbol_to_reg(emitter, "r11", "_stream_close_silent", 0);
+    emitter.instruction("or r9, r11");                                          // combine XML resource suppression with native fileinfo cleanup mode
     emitter.instruction("test r9, r9");                                         // check the native-extension exception cleanup mode
     emitter.instruction("jnz __rt_uwfclose_release_x86");                       // release without stream_close during native-extension unwinding
     emit_x86_method_lookup(emitter, "__rt_uwfclose_release_x86", VTABLE_SLOT_CLOSE);
@@ -141,7 +170,7 @@ pub fn emit_user_wrapper_fread(emitter: &mut Emitter) {
 
     // Frame: 64 bytes. [sp, #0..16] saved x29/x30, [sp, #16..24] saved fd,
     //   [sp, #24..32] saved requested length, [sp, #32..40] the boxed result,
-    //   [sp, #40..56] the converted string pair.
+    //   [sp, #40..56] the converted string pair, [sp, #56] return ownership.
     emitter.instruction("sub sp, sp, #64");                                     // helper frame for the wrapper dispatch
     emitter.instruction("stp x29, x30, [sp, #0]");                              // save frame pointer and return address
     emitter.instruction("mov x29, sp");                                         // establish the helper frame pointer
@@ -155,19 +184,24 @@ pub fn emit_user_wrapper_fread(emitter: &mut Emitter) {
     emitter.instruction("ldr x1, [sp, #24]");                                   // reload the requested byte count
     emitter.instruction(&format!("tbnz x13, #{}, __rt_uwfread_boxed", VTABLE_SLOT_READ)); // a `string|false` return arrives boxed instead
     emitter.instruction("blr x11");                                             // invoke stream_read on the wrapper object
+    abi::emit_branch_if_php_return_owned(emitter, "__rt_uwfread_owned");
+    abi::emit_call_label(emitter, "__rt_str_persist");
+    emitter.label("__rt_uwfread_owned");
     emitter.instruction("ldp x29, x30, [sp, #0]");                              // restore frame pointer and return address
     emitter.instruction("add sp, sp, #64");                                     // release the helper frame
     emitter.instruction("ret");                                                 // return the wrapper's string result to the caller
 
     emitter.label("__rt_uwfread_boxed");
     emitter.instruction("blr x11");                                             // invoke stream_read; x0 = owned Mixed cell
+    emitter.instruction("str x15, [sp, #56]");                                  // preserve the callback's cell ownership before conversion
     emitter.instruction("str x0, [sp, #32]");                                   // keep the boxed result across the conversion
     emitter.instruction("bl __rt_mixed_cast_string");                           // x1/x2 = owned string; false unboxes to the empty-string result
     emitter.instruction("stp x1, x2, [sp, #40]");                               // save the converted pair across the box release
     emitter.instruction("ldr x0, [sp, #32]");                                   // reload the boxed result the method handed us
     emitter.instruction("cbz x0, __rt_uwfread_boxed_done");                     // a null box owns nothing to release
-    emitter.instruction("str xzr, [x0]");                                       // retag the box as an int: its payload now belongs to the pair above
-    emitter.instruction("bl __rt_mixed_free_deep");                             // release the box storage only, never the string being returned
+    emitter.instruction("ldr x15, [sp, #56]");                                  // restore the callback's cell ownership after conversion
+    emitter.instruction("cbz x15, __rt_uwfread_boxed_done");                    // a borrowed cell stays with its original owner
+    emitter.instruction("bl __rt_decref_mixed");                                // the detached cast result does not consume the cell's original payload
     emitter.label("__rt_uwfread_boxed_done");
     emitter.instruction("ldp x1, x2, [sp, #40]");                               // restore the converted read result
     emitter.instruction("ldp x29, x30, [sp, #0]");                              // restore frame pointer and return address
@@ -202,12 +236,16 @@ fn emit_user_wrapper_fread_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction(&format!("bt r8, {}", VTABLE_SLOT_READ));               // does this class return a boxed `string|false`?
     emitter.instruction("jc __rt_uwfread_boxed_x86");                           // convert the boxed result instead of reading the pair
     emitter.instruction("call r11");                                            // invoke stream_read on the wrapper object
+    abi::emit_branch_if_php_return_owned(emitter, "__rt_uwfread_owned_x86");
+    abi::emit_call_label(emitter, "__rt_str_persist");
+    emitter.label("__rt_uwfread_owned_x86");
     emitter.instruction("mov rsp, rbp");                                        // discard the helper slots
     emitter.instruction("pop rbp");                                             // restore the caller frame pointer
     emitter.instruction("ret");                                                 // return the wrapper's string result to the caller
 
     emitter.label("__rt_uwfread_boxed_x86");
     emitter.instruction("call r11");                                            // invoke stream_read; rax = owned Mixed cell
+    abi::emit_store_php_return_status(emitter, 48);
     emitter.instruction("mov QWORD PTR [rbp - 24], rax");                       // keep the boxed result across the conversion
     emitter.instruction("mov rdi, rax");                                        // pass the boxed cell to the string cast
     emitter.instruction("call __rt_mixed_cast_string");                         // rax/rdx = owned string; false unboxes to the empty-string result
@@ -216,8 +254,10 @@ fn emit_user_wrapper_fread_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rax, QWORD PTR [rbp - 24]");                       // reload the boxed result the method handed us
     emitter.instruction("test rax, rax");                                       // a null box owns nothing to release
     emitter.instruction("jz __rt_uwfread_boxed_done_x86");                      // skip the release for a null box
-    emitter.instruction("mov QWORD PTR [rax], 0");                              // retag the box as an int: its payload now belongs to the pair above
-    emitter.instruction("call __rt_mixed_free_deep");                           // release the box storage only, never the string being returned
+    abi::emit_load_php_return_status(emitter, 48);
+    emitter.instruction("test r11, r11");                                       // inspect the callback's saved cell ownership
+    emitter.instruction("jz __rt_uwfread_boxed_done_x86");                      // a borrowed cell stays with its original owner
+    emitter.instruction("call __rt_decref_mixed");                              // the detached cast result does not consume the cell's original payload
     emitter.label("__rt_uwfread_boxed_done_x86");
     emitter.instruction("mov rax, QWORD PTR [rbp - 32]");                       // restore the converted read pointer
     emitter.instruction("mov rdx, QWORD PTR [rbp - 40]");                       // restore the converted read length
@@ -690,7 +730,7 @@ pub fn emit_box_wrapper_stat_result(emitter: &mut Emitter) {
     emitter.instruction("ldr x0, [sp, #16]");                                   // restore the original array or Mixed pointer
     emitter.instruction("and x9, x9, #0xff");                                   // isolate the low heap-kind byte
     emitter.instruction("cmp x9, #5");                                          // already a boxed Mixed cell (e.g. array|false return)?
-    emitter.instruction("b.eq __rt_bwsr_ret");                                  // return it verbatim — ownership transfers to the caller
+    emitter.instruction("b.eq __rt_bwsr_ret");                                  // return it verbatim, ownership transfers to the caller
     emitter.instruction("mov x1, x0");                                          // raw array/hash pointer → mixed payload low word
     emitter.instruction("cmp x9, #3");                                          // associative hash (the usual string-keyed stat array)?
     emitter.instruction("mov x0, #5");                                          // runtime tag 5 = associative array
@@ -744,7 +784,7 @@ fn emit_box_wrapper_stat_result_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rax, QWORD PTR [rbp - 8]");                        // restore the original array or Mixed pointer
     emitter.instruction("and r9, 0xff");                                        // isolate the low heap-kind byte
     emitter.instruction("cmp r9, 5");                                           // already a boxed Mixed cell (e.g. array|false return)?
-    emitter.instruction("je __rt_bwsr_ret_x86");                                // return it verbatim — ownership transfers to the caller
+    emitter.instruction("je __rt_bwsr_ret_x86");                                // return it verbatim, ownership transfers to the caller
     emitter.instruction("mov rdi, rax");                                        // raw array/hash pointer → mixed payload low word (before rax is reused for the tag)
     emitter.instruction("cmp r9, 3");                                           // associative hash (the usual string-keyed stat array)?
     emitter.instruction("mov eax, 5");                                          // runtime tag 5 = associative array
@@ -940,63 +980,106 @@ fn emit_x86_method_lookup(emitter: &mut Emitter, missing_label: &str, vtable_slo
 #[cfg(test)]
 mod tests {
     use crate::codegen_support::emit::Emitter;
-    use crate::codegen_support::platform::{Arch, Platform, Target};
+    use crate::codegen_support::platform::{Arch, Target};
 
     use super::*;
-
-    /// Emits `__rt_user_wrapper_fread` for one target.
-    fn emit_for(platform: Platform, arch: Arch) -> String {
-        let mut emitter = Emitter::new(Target::new(platform, arch));
-        emit_user_wrapper_fread(&mut emitter);
-        emitter.output()
-    }
 
     /// The read helper dispatches both result shapes on BOTH architectures.
     ///
     /// Companion to the directory guard: the behaviour test for the manual's
     /// `stream_read(): string|false` runs only on the host architecture, and a conversion
-    /// present on one target and missing on the other reads a boxed cell as a string pointer —
+    /// present on one target and missing on the other reads a boxed cell as a string pointer,
     /// the exact silent corruption this change removes.
     #[test]
     fn the_read_helper_dispatches_both_result_shapes_on_both_architectures() {
-        for (platform, arch, boxed_label, retag) in [
-            (
-                Platform::MacOS,
-                Arch::AArch64,
-                "__rt_uwfread_boxed:\n",
-                "str xzr, [x0]\n",
-            ),
-            (
-                Platform::Linux,
-                Arch::X86_64,
-                "__rt_uwfread_boxed_x86:\n",
-                "mov QWORD PTR [rax], 0\n",
-            ),
-        ] {
-            let asm = emit_for(platform, arch);
-            assert!(
-                asm.contains(boxed_label),
-                "{arch:?}: the boxed-result path must be emitted:\n{asm}"
-            );
-            assert!(
-                asm.contains("__rt_mixed_cast_string"),
-                "{arch:?}: the boxed result must be converted, not read as a pair:\n{asm}"
-            );
-            let retag_at = asm
-                .find(retag)
-                .unwrap_or_else(|| panic!("{arch:?}: the cell must be retagged before release:\n{asm}"));
-            let free_at = asm
-                .find("__rt_mixed_free_deep")
-                .unwrap_or_else(|| panic!("{arch:?}: the boxed path releases the cell:\n{asm}"));
-            assert!(
-                retag_at < free_at,
-                "{arch:?}: the retag must precede the release, or the released string is the one \
-                 being returned:\n{asm}"
-            );
+        for name in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+            let target = Target::parse(name).unwrap();
+            let mut emitter = Emitter::new(target);
+            emit_user_wrapper_fread(&mut emitter);
+            let asm = emitter.output();
+            let boxed_label = if target.arch == Arch::X86_64 {
+                "__rt_uwfread_boxed_x86:\n"
+            } else { "__rt_uwfread_boxed:\n" };
+            assert!(asm.contains(boxed_label), "{name}: boxed dispatch: {asm}");
+            let cast = asm.find("__rt_mixed_cast_string").expect("boxed string conversion");
+            let release = asm.find("__rt_decref_mixed").expect("owned cell retirement");
+            assert!(cast < release, "{name}: detach bytes before retiring their source: {asm}");
+            assert!(!asm.contains("__rt_mixed_free_deep"), "{name}: never discard the original payload: {asm}");
+            assert!(asm.contains("__rt_uwfread_owned") && asm.contains("__rt_str_persist"),
+                "{name}: borrowed byte returns need an independent owner: {asm}");
             assert!(
                 asm.contains("__rt_uwfread_empty"),
-                "{arch:?}: the missing-method fallback must survive:\n{asm}"
+                "{name}: the missing-method fallback must survive:\n{asm}"
             );
+        }
+    }
+}
+
+/// Queries or swaps the failing XML stream descriptor through a leaf C ABI entry.
+pub(crate) fn emit_stream_close_mode(emitter: &mut Emitter) {
+    let name = emitter.target.extern_symbol("elephc_runtime_simplexml_stream_close_mode");
+    emitter.label_global(&name);
+    let done = "__rt_stream_close_mode_done";
+    match emitter.target.arch {
+        Arch::AArch64 => {
+            abi::emit_load_symbol_to_reg(emitter, "x14", "_simplexml_unwind_stream", 0);
+            emitter.instruction(&format!("tbnz x0, #63, {done}"));              // a negative mode only reads the current cleanup policy
+            abi::emit_store_reg_to_symbol(emitter, "x0", "_simplexml_unwind_stream", 0);
+            emitter.label(done);
+            emitter.instruction("mov x0, x14");                                 // return the previous mode through the C ABI
+        }
+        Arch::X86_64 => {
+            abi::emit_load_symbol_to_reg(emitter, "rax", "_simplexml_unwind_stream", 0);
+            emitter.instruction("test rdi, rdi");                               // a negative mode only reads the current cleanup policy
+            emitter.instruction(&format!("js {done}"));                         // preserve the mode for read-only queries
+            abi::emit_store_reg_to_symbol(emitter, "rdi", "_simplexml_unwind_stream", 0);
+            emitter.label(done);
+        }
+    }
+    emitter.instruction("ret");                                                 // return the mode without invoking PHP callbacks
+}
+
+/// Every target exports the C cleanup control and protects the wrapper owner around callbacks.
+#[cfg(test)]
+#[test]
+fn simplexml_stream_cleanup_exports_on_all_targets() {
+    use crate::codegen_support::platform::Target;
+    for name in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+        let target = Target::parse(name).unwrap();
+        let mut emitter = Emitter::new(target);
+        emit_stream_close_mode(&mut emitter);
+        emit_user_wrapper_fclose(&mut emitter);
+        let assembly = emitter.output();
+        assert!(assembly.contains(&target.extern_symbol("elephc_runtime_simplexml_stream_close_mode")), "{name}: C cleanup entry");
+        assert!(assembly.contains("__rt_exception_guard_owned"), "{name}: exceptional wrapper owner");
+        assert!(assembly.contains("__rt_exception_unguard_owned"), "{name}: normal owner transfer");
+        assert!(assembly.contains("__rt_decref_object"), "{name}: wrapper storage release");
+    }
+}
+
+/// Symbol-address scratch registers must not replace the resource-specific close decision.
+#[cfg(test)]
+#[test]
+fn wrapper_close_restores_policy_after_symbol_loads_on_all_targets() {
+    use crate::codegen_support::platform::Target;
+    for name in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+        for pic in [false, true] {
+            let target = Target::parse(name).unwrap();
+            let mut emitter = if pic { Emitter::new_pic(target) } else { Emitter::new(target) };
+            emit_user_wrapper_fclose(&mut emitter);
+            let assembly = emitter.output();
+            let arm = target.arch == Arch::AArch64;
+            let combine = if arm { "orr x9, x9, x11" } else { "or r9, r11" };
+            let combine = assembly.rfind(combine).expect("combined stream close policy");
+            let restore = if arm { "ldr x9, [sp, #8]" } else { "mov r9, QWORD PTR [rbp - 16]" };
+            let restore = assembly[..combine].rfind(restore).expect("saved resource policy");
+            if arm {
+                let symbol = assembly[..combine].rfind("_stream_close_silent").unwrap();
+                assert!(symbol < restore, "{name} pic={pic}: symbol addressing borrows x9");
+            }
+            let between = &assembly[restore..combine];
+            assert!(!between.contains("call ") && !between.contains("bl "),
+                "{name} pic={pic}: retain both policy inputs until the branch");
         }
     }
 }

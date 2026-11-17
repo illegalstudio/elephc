@@ -81,6 +81,12 @@ pub fn emit_invoker_ref_cell_to_mixed(emitter: &mut Emitter) {
             emitter.instruction("mov x29, sp");                                 // establish the helper frame
             emitter.instruction("mov x9, x0");                                  // keep the reference-cell pointer
             emitter.instruction("ldr x10, [x9]");                               // load the referenced low payload word
+            emitter.instruction(&format!("cmp x1, #{}", crate::codegen_support::callable_invoker_args::INVOKER_ARG_TAGGED_SCALAR_SOURCE)); // is the cell an inline nullable integer?
+            emitter.instruction("b.ne __rt_invoker_ref_cell_to_mixed_ordinary"); // other layouts keep the ordinary decoding
+            emitter.instruction("ldr x1, [x9, #8]");                            // the cell's own tag word says integer or null
+            emitter.instruction("mov x2, #0");                                  // an inline scalar carries no high word
+            emitter.instruction("b __rt_invoker_ref_cell_to_mixed_box");        // box it under its actual tag
+            emitter.label("__rt_invoker_ref_cell_to_mixed_ordinary");
             emitter.instruction("cmp x1, #7");                                  // does the cell already hold a boxed Mixed?
             emitter.instruction("b.eq __rt_invoker_ref_cell_to_mixed_retain");  // reuse it instead of nesting a box
             emitter.instruction("mov x2, #0");                                  // non-string payloads carry no high word
@@ -107,6 +113,12 @@ pub fn emit_invoker_ref_cell_to_mixed(emitter: &mut Emitter) {
             emitter.instruction("mov rbp, rsp");                                // establish the helper frame
             emitter.instruction("sub rsp, 16");                                 // keep the stack 16-byte aligned for nested calls
             emitter.instruction("mov r10, QWORD PTR [rdi]");                    // load the referenced low payload word
+            emitter.instruction(&format!("cmp rsi, {}", crate::codegen_support::callable_invoker_args::INVOKER_ARG_TAGGED_SCALAR_SOURCE)); // is the cell an inline nullable integer?
+            emitter.instruction("jne __rt_invoker_ref_cell_to_mixed_ordinary"); // other layouts keep the ordinary decoding
+            emitter.instruction("mov rsi, QWORD PTR [rdi + 8]");                // the cell's own tag word says integer or null
+            emitter.instruction("xor edx, edx");                                // an inline scalar carries no high word
+            emitter.instruction("jmp __rt_invoker_ref_cell_to_mixed_box");      // box it under its actual tag
+            emitter.label("__rt_invoker_ref_cell_to_mixed_ordinary");
             emitter.instruction("cmp rsi, 7");                                  // does the cell already hold a boxed Mixed?
             emitter.instruction("je __rt_invoker_ref_cell_to_mixed_retain");    // reuse it instead of nesting a box
             emitter.instruction("xor edx, edx");                                // non-string payloads carry no high word

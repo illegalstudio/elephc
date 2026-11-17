@@ -10,6 +10,7 @@
 //! - Property receiver owners stay published until the builtin result is stabilized.
 
 use super::*;
+use crate::ir::RuntimeFnId;
 
 /// Lowers a proved read-only string call, leaving all other argument forms to ordinary lowering.
 pub(super) fn try_lower(
@@ -19,16 +20,16 @@ pub(super) fn try_lower(
     args: &[Expr],
 ) -> Option<Vec<ValueId>> {
     use crate::builtins::semantics::BuiltinLowering;
-    use crate::ir::{RuntimeCallTarget, RuntimeFnId};
+    use crate::ir::RuntimeCallTarget;
     use crate::types::call_args::{PlannedRegularArg, PlannedSourceValue};
     if !ctx.borrowed_string_calls_enabled || ctx.has_eval_barrier() || ctx.eval_executed() { return None; }
     let def = crate::builtins::registry::lookup(name.trim_start_matches('\\'))?;
-    let target = match def.spec.semantics.lowering {
+    match def.spec.semantics.lowering {
         BuiltinLowering::Runtime(RuntimeCallTarget::Function(target)
             | RuntimeCallTarget::ProfiledFunction { target, .. })
-            if matches!(target, RuntimeFnId::Substr | RuntimeFnId::Strpos) => target,
+            if borrowable_string_read_target(target) => {}
         _ => return None,
-    };
+    }
     if args.iter().any(is_spread_arg) { return None; }
     let sig = signature?;
     let span = args.first()?.span;
@@ -48,12 +49,21 @@ pub(super) fn try_lower(
         }
     }
     for (_, param_idx, expr) in &reads {
-        let string = *param_idx == 0 || (target == RuntimeFnId::Strpos && *param_idx == 1);
+        let string = parameter_accepts_string(sig, *param_idx);
         if !safe_read(ctx, expr, string, *param_idx == 0) { return None; }
     }
     for arg in &plan.regular_args {
         if let PlannedRegularArg::Default(expr) = arg {
-            if !matches!(expr.kind, ExprKind::IntLiteral(_) | ExprKind::Null) { return None; }
+            if !matches!(
+                expr.kind,
+                ExprKind::IntLiteral(_)
+                    | ExprKind::FloatLiteral(_)
+                    | ExprKind::BoolLiteral(_)
+                    | ExprKind::StringLiteral(_)
+                    | ExprKind::Null
+            ) {
+                return None;
+            }
         }
     }
     let mut sources = vec![None; plan.source_args.len()];
@@ -89,14 +99,109 @@ pub(super) fn try_lower(
     Some(operands)
 }
 
+/// Returns whether a read-only builtin may take every string argument by borrow.
+///
+/// The list contains mbstring functions whose observable work never re-enters PHP code:
+/// length/width queries, case conversion, trimming, search, slicing, splitting, encoding
+/// conversion, and regex replacement. Callback-taking variants stay out because they can
+/// mutate or free the subject while the builtin is still reading it.
+fn borrowable_string_read_target(target: RuntimeFnId) -> bool {
+    matches!(
+        target,
+        RuntimeFnId::Substr
+            | RuntimeFnId::SubstrCount
+            | RuntimeFnId::Strpos
+            | RuntimeFnId::Stripos
+            | RuntimeFnId::Strrpos
+            | RuntimeFnId::Strripos
+            | RuntimeFnId::StrContains
+            | RuntimeFnId::StrStartsWith
+            | RuntimeFnId::StrEndsWith
+            | RuntimeFnId::MbStrlen
+            | RuntimeFnId::MbStrwidth
+            | RuntimeFnId::MbStrtoupper
+            | RuntimeFnId::MbStrtolower
+            | RuntimeFnId::MbConvertCase
+            | RuntimeFnId::MbUcfirst
+            | RuntimeFnId::MbLcfirst
+            | RuntimeFnId::MbStrimwidth
+            | RuntimeFnId::MbSubstr
+            | RuntimeFnId::MbStrcut
+            | RuntimeFnId::MbScrub
+            | RuntimeFnId::MbTrim
+            | RuntimeFnId::MbLtrim
+            | RuntimeFnId::MbRtrim
+            | RuntimeFnId::MbStrPad
+            | RuntimeFnId::MbSubstrCount
+            | RuntimeFnId::MbOrd
+            | RuntimeFnId::MbChr
+            | RuntimeFnId::MbStrpos
+            | RuntimeFnId::MbStripos
+            | RuntimeFnId::MbStrrpos
+            | RuntimeFnId::MbStrripos
+            | RuntimeFnId::MbStrstr
+            | RuntimeFnId::MbStristr
+            | RuntimeFnId::MbStrrchr
+            | RuntimeFnId::MbStrrichr
+            | RuntimeFnId::MbStrSplit
+            | RuntimeFnId::MbCheckEncoding
+            | RuntimeFnId::MbDetectEncoding
+            | RuntimeFnId::MbConvertEncoding
+            | RuntimeFnId::MbEncodeNumericentity
+            | RuntimeFnId::MbDecodeNumericentity
+            | RuntimeFnId::MbEncodeMimeheader
+            | RuntimeFnId::MbConvertKana
+            | RuntimeFnId::MbOutputHandler
+            | RuntimeFnId::MbPreferredMimeName
+            | RuntimeFnId::MbEncodingAliases
+            | RuntimeFnId::MbGetInfo
+            | RuntimeFnId::MbInternalEncoding
+            | RuntimeFnId::MbLanguage
+            | RuntimeFnId::MbHttpOutput
+            | RuntimeFnId::MbRegexEncoding
+            | RuntimeFnId::MbRegexSetOptions
+            | RuntimeFnId::MbHttpInput
+            | RuntimeFnId::MbSplit
+            | RuntimeFnId::MbEregReplace
+            | RuntimeFnId::MbEregSearchInit
+    )
+}
+
+/// Returns whether the parameter at `index` accepts a string without implicit object conversion.
+///
+/// A nullable or mixed-shape union such as `array|string|null` passes a string operand through
+/// unchanged, so borrowing stays sound. Only a parameter that cannot accept a string is excluded;
+/// [`safe_read`] still refuses any argument that would require a scalar or object coercion.
+fn parameter_accepts_string(sig: &FunctionSig, index: usize) -> bool {
+    let Some((_, ty)) = sig.params.get(index) else { return false };
+    match ty {
+        PhpType::Str => true,
+        PhpType::Union(members) => members.iter().any(|member| matches!(member, PhpType::Str)),
+        _ => false,
+    }
+}
+
 /// Proves that an argument has its exact scalar representation and cannot invalidate a string.
 fn safe_read(ctx: &LoweringContext<'_, '_>, expr: &Expr, string: bool, property_allowed: bool) -> bool {
     match &expr.kind {
-        ExprKind::StringLiteral(_) => string,
-        ExprKind::IntLiteral(_) => !string,
+        ExprKind::StringLiteral(_) => true,
+        ExprKind::IntLiteral(_) | ExprKind::FloatLiteral(_) | ExprKind::BoolLiteral(_) => !string,
+        ExprKind::Null => true,
+        ExprKind::ConstRef(name) => ctx.constant_value(name).is_some_and(|(value, _)| {
+            matches!(value, ExprKind::StringLiteral(_)) == string
+        }),
         ExprKind::Variable(name) => !ctx.local_uses_global_storage(name)
             && !ctx.extern_globals.contains_key(name)
-            && ctx.local_type(name).codegen_repr() == if string { PhpType::Str } else { PhpType::Int },
+            && {
+                let representation = ctx.local_type(name).codegen_repr();
+                if string {
+                    representation == PhpType::Str
+                } else if matches!(representation, PhpType::Int | PhpType::Bool | PhpType::Float) {
+                    true
+                } else {
+                    matches!(&representation, PhpType::Array(inner) if inner.codegen_repr() == PhpType::Int)
+                }
+            },
         ExprKind::PropertyAccess { object, property } if string && property_allowed => {
             let name = match &object.kind {
                 ExprKind::Variable(name) => name.as_str(),

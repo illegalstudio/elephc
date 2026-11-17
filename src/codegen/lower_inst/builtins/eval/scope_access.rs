@@ -51,13 +51,7 @@ pub(in crate::codegen::lower_inst::builtins) fn lower_eval_scope_set(
     load_eval_scope_operand_to_arg(ctx, scope, 0)?;
     emit_eval_scope_get_for_loaded_scope(ctx, &name, 0, 8);
     let value_ty = ctx.load_value_to_result(value)?.codegen_repr();
-    let flags = if matches!(value_ty, PhpType::Mixed | PhpType::Union(_)) {
-        abi::emit_call_label(ctx.emitter, "__rt_incref");
-        EVAL_SCOPE_FLAG_OWNED
-    } else {
-        emit_box_current_value_as_mixed(ctx.emitter, &value_ty);
-        scope_set_flags_for_type(&value_ty)
-    };
+    emit_owned_eval_scope_value(ctx.emitter, &value_ty);
     let result_reg = abi::int_result_reg(ctx.emitter);
     abi::emit_store_to_sp(ctx.emitter, result_reg, EVAL_TEMP_CELL_OFFSET);
     let native_ref = ctx.next_label("eval_scope_set_native_ref");
@@ -66,7 +60,7 @@ pub(in crate::codegen::lower_inst::builtins) fn lower_eval_scope_set(
     branch_scope_binding(ctx, NATIVE_REF, &native_ref);
     branch_scope_binding(ctx, NATIVE_GLOBAL, &native_global);
     load_eval_scope_operand_to_arg(ctx, scope, 0)?;
-    emit_eval_scope_set_for_loaded_scope(ctx, &name, flags);
+    emit_eval_scope_set_for_loaded_scope(ctx, &name, EVAL_SCOPE_FLAG_OWNED);
     abi::emit_jump(ctx.emitter, &done);
     ctx.emitter.label(&native_ref);
     store_native_scope_reference(ctx);

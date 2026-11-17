@@ -1151,6 +1151,7 @@ fn eval_unserialize_fill_object(
                 &method,
                 object,
                 vec![EvaluatedCallArg {
+                    evaluation_owner: None,
                     name: None,
                     value: payload_array,
                     ref_target: None,

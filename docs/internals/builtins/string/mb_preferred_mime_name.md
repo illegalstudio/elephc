@@ -1,8 +1,6 @@
 ---
 title: "mb_preferred_mime_name() - internals"
 description: "Compiler internals for mb_preferred_mime_name(): lowering path, type checks, and runtime helpers."
-sidebar:
-  order: 990
 ---
 
 ## `mb_preferred_mime_name()` - internals
@@ -10,7 +8,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/string/mb_preferred_mime_name.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/string/mb_preferred_mime_name.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:752](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L752) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 

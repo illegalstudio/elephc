@@ -215,7 +215,7 @@ fn emit_itoa_linux_x86_64(emitter: &mut Emitter) {
     crate::codegen_support::abi::emit_symbol_address(emitter, "r8", "_concat_off");
     emitter.instruction("mov r9, QWORD PTR [r8]");                              // load the current concat buffer offset
     emitter.instruction("lea rsi, [r9 + 21]");                                  // offset after reserving the 21-byte scratch window
-    emitter.instruction(&format!("cmp rsi, {}", emitter.concat_capacity));    // would the window cross the end of _concat_buf?
+    emitter.instruction(&format!("cmp rsi, {}", emitter.concat_capacity));      // would the window cross the end of _concat_buf?
     emitter.instruction("ja __rt_itoa_spill");                                  // a full scratch formats into the spill ring instead
     crate::codegen_support::abi::emit_symbol_address(emitter, "r10", "_concat_buf");
     emitter.instruction("add r10, r9");                                         // compute the current concat buffer write position

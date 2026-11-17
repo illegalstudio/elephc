@@ -21,6 +21,7 @@ use crate::eval_ir;
 use crate::eval_ir::EVAL_SCOPE_ACCESS_ALL;
 #[cfg(not(test))]
 use crate::interpreter;
+use crate::interpreter::with_executable_cache_key;
 #[cfg(not(test))]
 use crate::interpreter::RuntimeValueOps;
 use crate::parse_cache;
@@ -164,7 +165,9 @@ unsafe fn execute_eval_inner(
         trace_eval_parse_error(ctx, code, err, err.status().code());
     }
     clear_result(out);
-    let status = execute_parsed_eval(ctx, scope, program, out, allow_deferred_catalog);
+    let status = with_executable_cache_key(code, || {
+        execute_parsed_eval(ctx, scope, program, out, allow_deferred_catalog)
+    });
     // A parse failure is reported once, after the REPL has had its chance to recover the
     // submission: the status still being the parse error's own means nothing recovered it.
     if let Err(err) = &parsed {

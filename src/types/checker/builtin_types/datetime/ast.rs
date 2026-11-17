@@ -6,6 +6,8 @@
 //!
 //! Key details:
 //! - All generated nodes use dummy spans and public PHP-visible members.
+//! - The `DateTimeInterface` format constants read their values from the global `DATE_*`
+//!   entries of the shared constant catalog.
 
 use super::*;
 
@@ -63,27 +65,42 @@ pub(super) fn datetime_zone_group_constants() -> Vec<ClassConst> {
     ]
 }
 
+/// Suffixes of the `DateTimeInterface` format constants, in PHP's declaration order. Each
+/// one has a global `DATE_<suffix>` twin in the shared constant catalog with the same value.
+const DATETIME_FORMAT_CONSTANTS: [&str; 14] = [
+    "ATOM",
+    "COOKIE",
+    "ISO8601",
+    "ISO8601_EXPANDED",
+    "RFC822",
+    "RFC850",
+    "RFC1036",
+    "RFC1123",
+    "RFC7231",
+    "RFC2822",
+    "RFC3339",
+    "RFC3339_EXTENDED",
+    "RSS",
+    "W3C",
+];
+
 /// Builds the shared `DateTimeInterface` format constants (`ATOM`, `COOKIE`, the
 /// `RFC*` family, `RSS`, `W3C`, ...). PHP exposes them on the interface and, by
 /// inheritance, on `DateTime` and `DateTimeImmutable`; the same list is attached
-/// to all three synthetic declarations. Values match PHP 8.4 exactly.
+/// to all three synthetic declarations. Each value is read from the matching global
+/// `DATE_*` constant in the shared catalog, so the two spellings cannot drift apart.
 pub(super) fn datetime_format_constants() -> Vec<ClassConst> {
-    vec![
-        str_class_const("ATOM", "Y-m-d\\TH:i:sP"),
-        str_class_const("COOKIE", "l, d-M-Y H:i:s T"),
-        str_class_const("ISO8601", "Y-m-d\\TH:i:sO"),
-        str_class_const("ISO8601_EXPANDED", "X-m-d\\TH:i:sP"),
-        str_class_const("RFC822", "D, d M y H:i:s O"),
-        str_class_const("RFC850", "l, d-M-y H:i:s T"),
-        str_class_const("RFC1036", "D, d M y H:i:s O"),
-        str_class_const("RFC1123", "D, d M Y H:i:s O"),
-        str_class_const("RFC7231", "D, d M Y H:i:s \\G\\M\\T"),
-        str_class_const("RFC2822", "D, d M Y H:i:s O"),
-        str_class_const("RFC3339", "Y-m-d\\TH:i:sP"),
-        str_class_const("RFC3339_EXTENDED", "Y-m-d\\TH:i:s.vP"),
-        str_class_const("RSS", "D, d M Y H:i:s O"),
-        str_class_const("W3C", "Y-m-d\\TH:i:sP"),
-    ]
+    DATETIME_FORMAT_CONSTANTS
+        .iter()
+        .map(|suffix| {
+            let global = format!("DATE_{suffix}");
+            let value = match elephc_builtin_contract::lookup_constant(&global).map(|constant| constant.value) {
+                Some(elephc_builtin_contract::ConstValue::Str(value)) => value,
+                other => unreachable!("catalog constant {global} must be a fixed string, found {other:?}"),
+            };
+            str_class_const(suffix, value)
+        })
+        .collect()
 }
 
 /// Builds an `$this->property` access expression.

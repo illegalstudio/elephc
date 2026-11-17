@@ -301,6 +301,14 @@ pub(crate) struct SharedCodegenState {
     /// started from. While it is set, the block walker stops the body at the first instruction
     /// that moved the count, instead of finishing a body the worker is going to discard.
     deferral_watermark: Option<usize>,
+    /// Runtime-name Mixed property ladders shared by lexical scope and fetch mode.
+    pub(super) property_read_helpers: Option<Vec<super::shared_property_read::ReadHelper>>,
+    /// Classes whose module-level complete `ReflectionClass` builder was requested, as
+    /// `(php symbol key, class name, label)` in request order. Builders are emitted after the
+    /// module's bodies, and emitting one can request more (its members' declaring classes).
+    reflection_class_builders: Vec<(String, String, String)>,
+    /// How many of `reflection_class_builders` have been emitted.
+    reflection_class_builders_emitted: usize,
     /// `--counters`: every non-synthetic PHP function prologue increments a BSS slot.
     pub(super) counters: bool,
     /// `--instrument`: every non-synthetic PHP function calls
@@ -610,6 +618,13 @@ impl EmittedMethods {
     }
 }
 
+/// An empty state, for emitters built outside a module (unit tests of single helpers).
+impl Default for SharedCodegenState {
+    fn default() -> Self {
+        Self::empty()
+    }
+}
+
 impl SharedCodegenState {
     /// Builds module-wide caches and immutable method-membership indexes before emission starts.
     pub(super) fn for_module(module: &Module) -> Self {
@@ -838,6 +853,9 @@ impl SharedCodegenState {
             unkeyed_cache_touches: std::cell::Cell::new(0),
             count_guard_sharing: None,
             static_throw_sharing: None,
+            property_read_helpers: None,
+            reflection_class_builders: Vec::new(),
+            reflection_class_builders_emitted: 0,
             class_key_index: std::cell::RefCell::new(None),
             interface_key_index: std::cell::RefCell::new(None),
             literal_builtin_gate: std::cell::RefCell::new(None),
@@ -915,6 +933,34 @@ impl SharedCodegenState {
         sharing: super::shared_mixed_callable::MixedCallableSharing,
     ) {
         self.mixed_callable_sharing = sharing;
+    }
+
+    /// Returns the global label of `class_name`'s complete `ReflectionClass` builder,
+    /// queuing the builder for emission the first time the class is asked for.
+    pub(super) fn request_reflection_class_builder(&mut self, class_name: &str) -> String {
+        let key = crate::names::php_symbol_key(class_name);
+        if let Some((_, _, label)) =
+            self.reflection_class_builders.iter().find(|(existing, _, _)| *existing == key)
+        {
+            return label.clone();
+        }
+        let label = format!(
+            "__elephc_reflection_class_builder_{}_{}",
+            self.reflection_class_builders.len(),
+            crate::names::label_fragment(&key)
+        );
+        self.reflection_class_builders
+            .push((key, class_name.to_string(), label.clone()));
+        label
+    }
+
+    /// Takes the next requested `ReflectionClass` builder that has not been emitted yet,
+    /// as `(class name, label)`.
+    pub(super) fn next_pending_reflection_class_builder(&mut self) -> Option<(String, String)> {
+        let (_, class_name, label) =
+            self.reflection_class_builders.get(self.reflection_class_builders_emitted)?.clone();
+        self.reflection_class_builders_emitted += 1;
+        Some((class_name, label))
     }
 
     /// Records dependencies introduced by a synthetic wrapper that was not present during the

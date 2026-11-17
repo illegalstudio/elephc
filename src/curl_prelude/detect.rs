@@ -429,6 +429,8 @@ fn stmt_refs_curl(stmt: &Stmt) -> bool {
         | StmtKind::ClassLikeActivate { .. }
         | StmtKind::IncludeOnceMark { .. }
         | StmtKind::Break(_)
+        | StmtKind::Goto(_)
+        | StmtKind::GotoLabel(_)
         | StmtKind::Continue(_)
         | StmtKind::NamespaceDecl { .. }
         | StmtKind::FunctionVariantGroup { .. }

@@ -20,7 +20,6 @@ use std::cell::RefCell;
 use crate::fast_hash::FastMap as HashMap;
 
 use crate::errors::CompileError;
-use crate::generics::splice::substitute_in_body;
 use crate::generics::{instantiated_name, Bindings, MAX_INSTANTIATION_ROUNDS};
 use crate::magic_constants::walker::{walk_program, Pass};
 use crate::names::Name;
@@ -48,6 +47,13 @@ pub struct BoundObligation {
     pub argument: TypeExpr,
     /// Where the mention was written, so the error lands on it.
     pub span: Span,
+    /// Whether the bound was declared by a PHPDoc `@template T of Foo`. php-src does not enforce
+    /// one, so the checker reports its violation as a warning instead of an error.
+    pub from_docblock: bool,
+    /// Whether `bound` is the native hint a PHPDoc parameter took over
+    /// (`TypeParam::native_hint`) rather than a declared bound. php-src enforces that hint at
+    /// every member the parameter annotates, so a type argument it does not accept is an error.
+    pub native_hint: bool,
 }
 
 /// A generic class, interface or trait declaration, indexed by the name it is declared under.
@@ -124,6 +130,9 @@ pub struct TemplateSignature {
     /// factory is how a real codebase offers more than one way to build something — inference
     /// that fires only at `new` would miss where most construction happens.
     pub static_methods: Vec<StaticMethodSignature>,
+    /// Whether the template is a CLASS (rather than an interface or trait), whose marker
+    /// interface must stay invisible to reflection.
+    pub is_class: bool,
 }
 
 /// One static method of a generic class, as the checker needs it to infer at a call.
@@ -158,6 +167,7 @@ impl Templates {
                 constructor_params: constructor_param_types(&template.declaration),
                 constructor_variadic: constructor_variadic_type(&template.declaration),
                 static_methods: static_method_signatures(&template.declaration),
+                is_class: matches!(template.declaration.kind, StmtKind::ClassDecl { .. }),
             })
             .collect()
     }
@@ -176,6 +186,20 @@ impl Templates {
     /// Every collected template, for a pass that reads declarations rather than instantiating.
     pub(super) fn declarations(&self) -> impl Iterator<Item = &Template> {
         self.by_name.values()
+    }
+
+    /// Demotes one template parameter to invariant, the reading of a PHPDoc marker the
+    /// declaration does not keep. Returns whether a parameter was changed.
+    pub(super) fn demote_to_invariant(&mut self, key: &str, param: &str) -> bool {
+        let Some(template) = self.by_name.get_mut(key) else {
+            return false;
+        };
+        let mut changed = false;
+        for declared in template.type_params.iter_mut().filter(|p| p.name == param) {
+            changed |= declared.variance != crate::parser::ast::Variance::Invariant;
+            declared.variance = crate::parser::ast::Variance::Invariant;
+        }
+        changed
     }
 
     /// One template by its normalized name, for a pass that follows an inheritance clause.
@@ -413,7 +437,7 @@ struct Instantiate<'a> {
     /// The body the walk is lexically inside, spelled as the checker spells its site scope.
     ///
     /// Half the key for the construction rewrite. It has to be built exactly as the checker
-    /// builds `current_loop_storage_scope` (`main`, a function's declared name, `Class::method`,
+    /// builds `current_loop_storage_scope` (`#main`, a function's declared name, `Class::method`,
     /// or a closure's nested scope), or the lookup misses and a `new Box(5)` keeps naming the
     /// stripped template.
     site_scope: super::site_scope::SiteScope,
@@ -424,6 +448,12 @@ struct Instantiate<'a> {
     /// own `substitute_relative_class_types` runs far too late: this pass has already emitted
     /// a declaration by then.
     enclosing_classes: Vec<String>,
+    /// Whether the walk is inside the inheritance clauses of the innermost class.
+    ///
+    /// An instantiation names its template's MARKER interface there (see
+    /// [`marker_interface`]), and that bare name must stay the marker rather than be read as
+    /// one more instantiation of the template.
+    in_heritage: bool,
 }
 
 impl Instantiate<'_> {
@@ -433,6 +463,22 @@ impl Instantiate<'_> {
         !self.templates.contains_key(&key)
             && !self.conditional.contains(&key)
             && !self.declared.contains(&key)
+    }
+
+    /// Whether `key` is the template the innermost class instantiates, written in its own
+    /// inheritance clause: the marker link [`instantiate_declaration`] adds, never a mention.
+    ///
+    /// An instantiated name is the template's declared spelling followed by `<`, a character no
+    /// written name can carry, so the prefix identifies the template exactly. A template can
+    /// itself be an instantiation (`Pair<int>` once its constructor's `<U>` is lifted), so its
+    /// instantiation `Pair<int><string>` inherits both `Pair<int>` and `Pair`.
+    fn is_own_marker(&self, key: &str) -> bool {
+        self.in_heritage
+            && self.enclosing_classes.last().is_some_and(|class| {
+                template_key(class)
+                    .strip_prefix(key)
+                    .is_some_and(|rest| rest.starts_with('<'))
+            })
     }
 
     /// Rewrites one type, recursing so a generic class nested anywhere inside is reached.
@@ -465,15 +511,23 @@ impl Instantiate<'_> {
             // accepts a `Repo<User>` only where the parameter is declared covariant (`out T`);
             // on an invariant template this parameter takes exactly one type, and saying which
             // is the better program.
+            TypeExpr::Named(name) if self.is_own_marker(&template_key(name.as_str())) => {
+                TypeExpr::Named(name)
+            }
             TypeExpr::Named(name) if self.templates.contains_key(&template_key(name.as_str())) => {
                 let template = &self.templates[&template_key(name.as_str())];
                 let arguments: Vec<TypeExpr> = template
                     .type_params
                     .iter()
                     .map(|param| {
+                        // A PHPDoc parameter that took over a native hint reads as that hint:
+                        // it is what php-src enforces at the members, and the only argument the
+                        // hint's own obligation is sure to accept (`mixed` is not an `object`).
                         param
-                            .bound
-                            .clone()
+                            .native_hint
+                            .as_ref()
+                            .map(|hint| hint.ty.clone())
+                            .or_else(|| param.bound.clone())
                             .or_else(|| param.default.clone())
                             .unwrap_or_else(|| TypeExpr::Named(Name::unqualified("mixed")))
                     })
@@ -643,19 +697,29 @@ impl Instantiate<'_> {
         // may name its own parameter (`<T : Cmp<T>>`) or a later one, and substituting inside
         // the loop left those as a literal `Cmp<T>` that no class satisfies.
         for (param, (_, argument)) in template.type_params.iter().zip(&bindings) {
+            let obligation = |bound: TypeExpr, native_hint: bool| BoundObligation {
+                template: name.as_str().to_string(),
+                kind: match template.declaration.kind {
+                    StmtKind::InterfaceDecl { .. } => "interface",
+                    StmtKind::TraitDecl { .. } => "trait",
+                    _ => "class",
+                },
+                parameter: super::parameter_name(&param.name).to_string(),
+                bound,
+                argument: argument.clone(),
+                span,
+                from_docblock: param.from_docblock && !native_hint,
+                native_hint,
+            };
             if let Some(bound) = &param.bound {
-                self.obligations.borrow_mut().push(BoundObligation {
-                    template: name.as_str().to_string(),
-                    kind: match template.declaration.kind {
-                        StmtKind::InterfaceDecl { .. } => "interface",
-                        StmtKind::TraitDecl { .. } => "trait",
-                        _ => "class",
-                    },
-                    parameter: super::parameter_name(&param.name).to_string(),
-                    bound: super::substitute_value_type(bound, &bindings),
-                    argument: argument.clone(),
-                    span,
-                });
+                self.obligations
+                    .borrow_mut()
+                    .push(obligation(super::substitute_value_type(bound, &bindings), false));
+            }
+            // A written mention cannot be settled the way a call is: the instantiation it names
+            // is spliced before the checker runs. So the hint is checked like a native bound.
+            if let Some(hint) = &param.native_hint {
+                self.obligations.borrow_mut().push(obligation(hint.ty.clone(), true));
             }
         }
         let instantiated = instantiated_name(&template.declared_name, &bindings);
@@ -745,6 +809,16 @@ impl Pass for Instantiate<'_> {
         self.site_scope.leave_body();
     }
 
+    /// Marks the inheritance clauses of the innermost class.
+    fn enter_heritage(&mut self) {
+        self.in_heritage = true;
+    }
+
+    /// Leaves the inheritance clauses of the innermost class.
+    fn leave_heritage(&mut self) {
+        self.in_heritage = false;
+    }
+
     /// Restores the enclosing class and template depth.
     fn leave_class(&mut self) {
         // Only a template incremented it, and the walker pairs every enter with a leave, so a
@@ -818,6 +892,7 @@ pub fn instantiate(
             method_templates: Vec::new(),
             site_scope: Default::default(),
             enclosing_classes: Vec::new(),
+            in_heritage: false,
         };
         let walked = walk_program(program, &mut pass);
         let mut errors = pass.errors.into_inner();
@@ -1000,7 +1075,7 @@ fn forget_doc_inheritance_of_non_templates(
                 let bare_doc_parent = extends
                     .as_ref()
                     .and_then(|parent| templates.get(&template_key(parent.as_str())))
-                    .filter(|template| template.type_params.iter().all(|p| p.doc_annotated))
+                    .filter(|template| template.type_params.iter().all(|p| p.from_docblock))
                     .filter(|_| generics.as_ref().is_none_or(|decl| decl.extends_args.is_empty()));
                 if let Some(template) = bare_doc_parent {
                     let arguments: Vec<TypeExpr> = template
@@ -1120,15 +1195,19 @@ fn splice(
     (instances, added)
 }
 
-/// Collects every class, interface and trait name the program declares, namespace blocks
-/// included: the three share one namespace, so an instantiation must not reuse any of them.
+/// Collects every class, interface, trait and enum name the program declares, namespace blocks
+/// included: the four share one namespace, so an instantiation must not reuse any of them, and
+/// a type argument on any of them is a mistake to report rather than a name to erase.
 fn collect_declared_names(stmts: &[Stmt], names: &mut Vec<String>) {
     for stmt in stmts {
         match &stmt.kind {
             StmtKind::ClassDecl { name, .. }
             | StmtKind::InterfaceDecl { name, .. }
-            | StmtKind::TraitDecl { name, .. } => names.push(name.clone()),
-            StmtKind::NamespaceBlock { body, .. } => collect_declared_names(body, names),
+            | StmtKind::TraitDecl { name, .. }
+            | StmtKind::EnumDecl { name, .. } => names.push(name.clone()),
+            StmtKind::NamespaceBlock { body, .. } | StmtKind::Synthetic(body) => {
+                collect_declared_names(body, names)
+            }
             _ => {}
         }
     }
@@ -1142,9 +1221,34 @@ fn collect_declared_names(stmts: &[Stmt], names: &mut Vec<String>) {
 /// behind would make the next round treat it as a template and strip it.
 fn instantiate_declaration(template: &Stmt, target: &str, bindings: &Bindings) -> Stmt {
     let mut declaration = template.clone();
+    let erased = match &template.kind {
+        StmtKind::ClassDecl { generics, .. }
+        | StmtKind::InterfaceDecl { generics, .. }
+        | StmtKind::TraitDecl { generics, .. } => generics
+            .as_ref()
+            .map(|generics| super::docblock_params_read_as_mixed(&generics.type_params, bindings))
+            .unwrap_or_default(),
+        _ => Vec::new(),
+    };
     match &mut declaration.kind {
-        StmtKind::ClassDecl { name, generics, .. }
-        | StmtKind::InterfaceDecl { name, generics, .. } => {
+        StmtKind::ClassDecl { name, generics, implements, .. } => {
+            // Every instantiation implements the template's marker interface, so `instanceof
+            // Coll` holds for `Coll<int, string>` and for anything extending it.
+            implements.push(Name::unqualified(name.as_str()));
+            *name = target.to_string();
+            if let Some(declared) = generics.take() {
+                let GenericDecl {
+                    type_params: _,
+                    extends_args,
+                    interface_args,
+                    doc_annotated,
+                } = *declared;
+                *generics =
+                    GenericDecl::with_origin(Vec::new(), extends_args, interface_args, doc_annotated);
+            }
+        }
+        StmtKind::InterfaceDecl { name, generics, extends, .. } => {
+            extends.push(Name::unqualified(name.as_str()));
             *name = target.to_string();
             if let Some(declared) = generics.take() {
                 let GenericDecl {
@@ -1167,34 +1271,59 @@ fn instantiate_declaration(template: &Stmt, target: &str, bindings: &Bindings) -
     // One substitution helper for classes and functions alike: the walker reaches every type
     // position in the declaration, members included, so a parameter cannot survive in a corner
     // the instantiation forgot.
-    substitute_in_body(vec![declaration], bindings)
+    super::splice::substitute_in_declarations(vec![declaration], bindings, &erased)
         .pop()
         .expect("substituting one declaration yields one declaration")
 }
 
-/// Removes every generic class, interface and trait template from the program.
+/// Removes every generic class, interface and trait template from the program, leaving an
+/// empty MARKER interface under each class or interface template's name.
 ///
 /// A template is not a class: its annotations name types that have no representation, so the
 /// checker must never see it. Called once the fixpoint has produced every instantiation the
 /// program reaches.
+///
+/// The marker is what `$x instanceof Coll` tests: php-src has one class `Coll`, monomorphization
+/// has one per instantiation, and each of them implements (or, for an interface, extends) the
+/// marker, so the test holds for every instantiation and every class built on one. It declares
+/// no members, so it constrains nothing an instantiation declares. A trait is never an
+/// `instanceof` target and leaves nothing behind.
 fn strip_templates(program: Program) -> Program {
     program
         .into_iter()
         .filter_map(|stmt| {
-            let is_template = match &stmt.kind {
-                StmtKind::ClassDecl { generics, .. }
-                | StmtKind::InterfaceDecl { generics, .. }
-                | StmtKind::TraitDecl { generics, .. } => generics
+            let is_template = |generics: &Option<Box<GenericDecl>>| {
+                generics
                     .as_ref()
-                    .is_some_and(|generics| !generics.type_params.is_empty()),
-                _ => false,
+                    .is_some_and(|generics| !generics.type_params.is_empty())
             };
-            if is_template {
-                return None;
+            match &stmt.kind {
+                StmtKind::ClassDecl { name, generics, .. }
+                | StmtKind::InterfaceDecl { name, generics, .. }
+                    if is_template(generics) =>
+                {
+                    Some(marker_interface(name, &stmt))
+                }
+                StmtKind::TraitDecl { generics, .. } if is_template(generics) => None,
+                _ => Some(strip_in_namespace(stmt)),
             }
-            Some(strip_in_namespace(stmt))
         })
         .collect()
+}
+
+/// The empty interface left in a class or interface template's place (see [`strip_templates`]).
+fn marker_interface(name: &str, template: &Stmt) -> Stmt {
+    Stmt {
+        kind: StmtKind::InterfaceDecl {
+            name: name.to_string(),
+            generics: None,
+            extends: Vec::new(),
+            properties: Vec::new(),
+            methods: Vec::new(),
+            constants: Vec::new(),
+        },
+        ..template.clone()
+    }
 }
 
 /// Applies [`strip_templates`] inside a namespace block, and returns anything else unchanged.
@@ -1229,11 +1358,91 @@ mod tests {
         crate::name_resolver::resolve(program).expect("name resolution failed")
     }
 
-    /// Returns the names of every class and interface the program declares.
+    /// Returns the names of every class and interface the program declares, leaving out the
+    /// marker interfaces templates leave behind (see [`markers`]).
     fn declared(program: &Program) -> Vec<String> {
         let mut names = Vec::new();
         collect_declared_names(program, &mut names);
+        let markers = markers(program);
+        names.retain(|name| !markers.contains(name));
         names
+    }
+
+    /// Returns the marker interfaces: the empty interfaces templates leave behind. None of
+    /// these tests declares an empty interface of its own.
+    fn markers(program: &Program) -> Vec<String> {
+        /// Pushes the name of every member-less interface declared in `stmts`, descending into
+        /// namespace blocks.
+        fn walk(stmts: &[Stmt], out: &mut Vec<String>) {
+            for stmt in stmts {
+                match &stmt.kind {
+                    StmtKind::InterfaceDecl { name, extends, methods, properties, constants, .. }
+                        if extends.is_empty()
+                            && methods.is_empty()
+                            && properties.is_empty()
+                            && constants.is_empty() =>
+                    {
+                        out.push(name.clone())
+                    }
+                    StmtKind::NamespaceBlock { body, .. } => walk(body, out),
+                    _ => {}
+                }
+            }
+        }
+        let mut out = Vec::new();
+        walk(program, &mut out);
+        out
+    }
+
+    /// A class or interface template leaves an empty marker interface under its own name, and
+    /// every instantiation inherits it, so `instanceof Box` holds for each of them.
+    #[test]
+    fn test_a_template_leaves_a_marker_every_instantiation_inherits() {
+        let program = resolved_program(
+            "<?php namespace App; class Box<T> { private T $v; } interface Shape<T> { } \
+             Box<int> $a = 1; Box<string> $b = 2; Shape<int> $s = 3;",
+        );
+        let templates = collect(&program);
+        let program = instantiate(program, &templates, &InferredConstructions::default())
+            .expect("instantiation failed")
+            .program;
+        let mut found = markers(&program);
+        found.sort();
+        assert_eq!(found, vec!["App\\Box".to_string(), "App\\Shape".to_string()]);
+        let mut inherits = Vec::new();
+        let mut visit = |stmts: &[Stmt]| {
+            for stmt in stmts {
+                match &stmt.kind {
+                    StmtKind::ClassDecl { name, implements, .. } => inherits.push((
+                        name.clone(),
+                        implements.iter().map(|n| n.as_str().to_string()).collect::<Vec<_>>(),
+                    )),
+                    StmtKind::InterfaceDecl { name, extends, methods, .. } if name.contains('<') => {
+                        assert!(methods.is_empty());
+                        inherits.push((
+                            name.clone(),
+                            extends.iter().map(|n| n.as_str().to_string()).collect(),
+                        ))
+                    }
+                    _ => {}
+                }
+            }
+        };
+        visit(&program);
+        for stmt in &program {
+            if let StmtKind::NamespaceBlock { body, .. } = &stmt.kind {
+                visit(body);
+            }
+        }
+        inherits.sort();
+        assert_eq!(
+            inherits,
+            vec![
+                ("App\\Box<int>".to_string(), vec!["App\\Box".to_string()]),
+                ("App\\Box<string>".to_string(), vec!["App\\Box".to_string()]),
+                ("App\\Shape<int>".to_string(), vec!["App\\Shape".to_string()]),
+            ]
+        );
     }
 
     /// Two type arguments produce two classes, and the template is gone.
@@ -1326,6 +1535,9 @@ mod tests {
             declared(&program).is_empty(),
             "nothing mentions either template, so neither is instantiated"
         );
+        let mut found = markers(&program);
+        found.sort();
+        assert_eq!(found, vec!["Box".to_string(), "Wrapper".to_string()]);
     }
 
     /// A trailing parameter with no argument falls back to its default.

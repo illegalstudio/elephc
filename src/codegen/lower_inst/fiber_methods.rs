@@ -284,53 +284,20 @@ pub(super) fn lower_fiber_state_predicate(
     emit_fiber_state_predicate_call(ctx, inst, state)
 }
 
-/// Lowers `$mixed->isStarted()` (and the other Fiber state names) on a receiver that may be any
-/// object: a real `Fiber` takes the state predicate, everything else the ordinary dispatch.
+/// Calls a Fiber state predicate for the object already unboxed in `receiver_reg`.
 ///
-/// The names are not Fiber's alone. Symfony's `Session::isStarted()` reached through the session
-/// factory closure's `static $sess` (a `Mixed` slot) was routed to the Fiber predicate by its
-/// NAME, and the non-Fiber receiver hit that path's fatal: `Call to a member function
-/// isStarted() on null`, on every symfony/demo page that renders flash messages.
-pub(super) fn lower_mixed_maybe_fiber_state_predicate(
+/// Used by the `Fiber` branch of runtime class dispatch for untyped or union receivers. The
+/// caller has already matched the runtime class id, and stores the `bool` result into the
+/// instruction's own result type.
+pub(super) fn emit_fiber_state_predicate_from_reg(
     ctx: &mut FunctionContext<'_>,
-    inst: &Instruction,
-    object: ValueId,
-    method_name: &str,
+    receiver_reg: &str,
     state: FiberStatePredicate,
-) -> Result<()> {
-    let fiber_class_id = ctx.module.class_infos.get("Fiber").map(|class| class.class_id);
-    let Some(class_id) = fiber_class_id.filter(|_| inst.operands.len() == 1) else {
-        return super::method_dispatch::lower_mixed_method_call(ctx, inst, object, method_name);
-    };
-    let generic_label = ctx.next_label("mixed_fiber_name_generic");
-    let done_label = ctx.next_label("mixed_fiber_name_done");
+) {
     let receiver_arg = abi::int_arg_reg_name(ctx.emitter.target, 0);
-    ctx.load_value_to_reg(object, abi::int_result_reg(ctx.emitter))?;
-    abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
-    match ctx.emitter.target.arch {
-        Arch::AArch64 => {
-            ctx.emitter.instruction("cmp x0, #6");                              // only an object can be a Fiber receiver
-            ctx.emitter.instruction(&format!("b.ne {}", generic_label));        // anything else takes the ordinary method dispatch
-            ctx.emitter.instruction("ldr x9, [x1]");                            // load the receiver object's runtime class id
-            ctx.emitter.instruction(&format!("cmp x9, #{}", class_id));         // is the boxed object a Fiber?
-            ctx.emitter.instruction(&format!("b.ne {}", generic_label));        // another class with the same method name: dispatch normally
-            ctx.emitter
-                .instruction(&format!("mov {}, x1", receiver_arg));             // pass the unboxed Fiber object to the runtime predicate
-        }
-        Arch::X86_64 => {
-            ctx.emitter.instruction("cmp rax, 6");                              // only an object can be a Fiber receiver
-            ctx.emitter.instruction(&format!("jne {}", generic_label));         // anything else takes the ordinary method dispatch
-            ctx.emitter.instruction("mov r10, QWORD PTR [rdi]");                // load the receiver object's runtime class id
-            ctx.emitter.instruction(&format!("cmp r10, {}", class_id));         // is the boxed object a Fiber?
-            ctx.emitter.instruction(&format!("jne {}", generic_label));         // another class with the same method name: dispatch normally
-        }
-    }
-    emit_fiber_state_predicate_call(ctx, inst, state)?;
-    abi::emit_jump(ctx.emitter, &done_label);
-    ctx.emitter.label(&generic_label);
-    super::method_dispatch::lower_mixed_method_call(ctx, inst, object, method_name)?;
-    ctx.emitter.label(&done_label);
-    Ok(())
+    ctx.emitter
+        .instruction(&format!("mov {}, {}", receiver_arg, receiver_reg));       // pass the class-matched Fiber object to the runtime predicate
+    emit_fiber_state_predicate_value(ctx, state);
 }
 
 /// Fiber runtime methods a `mixed` receiver may name, other than the state predicates.
@@ -473,12 +440,30 @@ pub(super) fn lower_mixed_maybe_fiber_method(
     Ok(())
 }
 
-/// Calls the shared runtime state predicate helper for a receiver already in arg0.
+/// Calls the shared runtime state predicate helper for a receiver already in arg0 and stores
+/// the `bool` result.
 pub(super) fn emit_fiber_state_predicate_call(
     ctx: &mut FunctionContext<'_>,
     inst: &Instruction,
     state: FiberStatePredicate,
 ) -> Result<()> {
+    emit_fiber_state_predicate_value(ctx, state);
+    // A `mixed` receiver's call result is `mixed` too: `Fiber::getCurrent()->isRunning()`
+    // stored the raw bool where a boxed cell belongs, and the `?:` reading it dereferenced 0x1.
+    if let Some(result) = inst.result {
+        if matches!(
+            ctx.value_php_type(result)?.codegen_repr(),
+            PhpType::Mixed | PhpType::Union(_)
+        ) {
+            emit_box_current_value_as_mixed(ctx.emitter, &PhpType::Bool);
+        }
+    }
+    store_if_result(ctx, inst)
+}
+
+/// Calls the shared runtime state predicate helper for a receiver already in arg0, leaving
+/// the `bool` result in the integer result register.
+fn emit_fiber_state_predicate_value(ctx: &mut FunctionContext<'_>, state: FiberStatePredicate) {
     abi::emit_load_int_immediate(
         ctx.emitter,
         abi::int_arg_reg_name(ctx.emitter.target, 1),
@@ -495,17 +480,6 @@ pub(super) fn emit_fiber_state_predicate_call(
             }
         }
     }
-    // A `mixed` receiver's call result is `mixed` too: `Fiber::getCurrent()->isRunning()`
-    // stored the raw bool where a boxed cell belongs, and the `?:` reading it dereferenced 0x1.
-    if let Some(result) = inst.result {
-        if matches!(
-            ctx.value_php_type(result)?.codegen_repr(),
-            PhpType::Mixed | PhpType::Union(_)
-        ) {
-            emit_box_current_value_as_mixed(ctx.emitter, &PhpType::Bool);
-        }
-    }
-    store_if_result(ctx, inst)
 }
 
 /// Fiber state-query method selected by a direct method call.
@@ -561,7 +535,7 @@ pub(super) fn fiber_state_predicate(class_name: &str, method_name: &str) -> Opti
 }
 
 /// Resolves a Fiber state predicate solely from the method name.
-pub(super) fn fiber_state_predicate_method(method_name: &str) -> Option<FiberStatePredicate> {
+fn fiber_state_predicate_method(method_name: &str) -> Option<FiberStatePredicate> {
     match php_symbol_key(method_name).as_str() {
         "isstarted" => Some(FiberStatePredicate::Started),
         "isrunning" => Some(FiberStatePredicate::Running),
@@ -651,7 +625,7 @@ pub(super) fn lower_nullsafe_method_call(ctx: &mut FunctionContext<'_>, inst: &I
     // store-then-write-back-then-jump order `method_intrinsics`' nullable dispatch uses.
     store_if_result(ctx, inst)?;
     emit_call_arg_temp_cleanups(ctx, &call_args, None)?;
-    emit_ref_arg_writebacks(ctx, &call_args)?;
+    emit_ref_arg_writebacks_guarding_result(ctx, &call_args, inst.result, false)?;
     abi::emit_jump(ctx.emitter, &done_label);
     ctx.emitter.label(&null_label);
     objects::emit_boxed_null(ctx);

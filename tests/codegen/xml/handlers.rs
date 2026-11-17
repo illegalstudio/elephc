@@ -14,6 +14,54 @@
 
 use crate::support::*;
 
+/// A composed prelude call owns only its hidden tail when a parser guard throws.
+#[test]
+fn test_xml_composed_helper_throw_keeps_caller_owners() {
+    if skip_without_xml_native("test_xml_composed_helper_throw_keeps_caller_owners") { return; }
+    let out = compile_and_run_with_heap_debug(r#"<?php
+debug_backtrace();
+function invalidComposedXmlParser(): mixed { return 123; }
+$bad = invalidComposedXmlParser();
+$calls = 0;
+$callback = function (XMLParser $parser, string $name, array $attributes) use (&$calls): void { $calls++; echo 'used|'; };
+try { xml_set_element_handler($bad, $callback, null); } catch (TypeError $error) { echo 'caught|'; }
+$callback(xml_parser_create(), 'r', []);
+$parser = xml_parser_create();
+xml_set_element_handler($parser, function (XMLParser $active, string $name, array $attributes): void {
+    $values = ['before']; $before = $values;
+    set_error_handler(function(int $level, string $message): bool { throw new Error($message); });
+    try { xml_parse_into_struct($active, str_repeat('x', 64), $values); }
+    catch (Error $error) { echo 'struct-caught|', $before[0], '|'; }
+    restore_error_handler();
+}, null);
+xml_parse($parser, '<r/>', true);
+echo $calls;
+"#);
+    assert!(out.success, "stdout={} stderr={}", out.stdout, out.stderr);
+    assert_eq!(out.stdout, "caught|used|struct-caught|before|1");
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
+/// Backtrace argument capture keeps ordinary and optional handler parameters PHP-visible.
+#[test]
+fn test_xml_handler_closures_with_backtrace_capture() {
+    if skip_without_xml_native("test_xml_handler_closures_with_backtrace_capture") { return; }
+    let out = compile_and_run_with_heap_debug(r#"<?php
+debug_backtrace();
+$parser = xml_parser_create();
+xml_set_element_handler($parser,
+    function (XMLParser $parser, string $name, array $attributes): void { echo $name, ':', $attributes['ID'], '|'; },
+    function (XMLParser $parser, string $name, string $optional = 'end'): void { echo $optional, '|'; });
+xml_set_character_data_handler($parser, function (XMLParser $parser, string $data): void {
+    echo $data, ':', count(debug_backtrace(DEBUG_BACKTRACE_IGNORE_ARGS)) > 0, '|';
+});
+var_dump(xml_parse($parser, '<r id="7">text</r>', true));
+"#);
+    assert!(out.success, "stdout={} stderr={}", out.stdout, out.stderr);
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+    assert_eq!(out.stdout, "R:7|text:1|end|int(1)\n");
+}
+
 /// The default handler receives what no installed handler claims, and entity references
 /// follow php-src's `get_entity()` rules for every handler combination.
 #[test]

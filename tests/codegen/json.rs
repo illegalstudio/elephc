@@ -14,6 +14,12 @@ use crate::support::*;
 mod compatibility_constants;
 #[path = "json/constants.rs"]
 mod constants;
+#[path = "json/encode_length_sink.rs"]
+mod encode_length_sink;
+#[path = "json/decode_ownership.rs"]
+mod decode_ownership;
+#[path = "json/encode_fast_paths.rs"]
+mod encode_fast_paths;
 #[path = "json/last_error.rs"]
 mod last_error;
 #[path = "json/last_error_msg.rs"]
@@ -75,8 +81,6 @@ mod token_dispatch;
 mod packed_integer;
 #[path = "json/encode_large_string.rs"]
 mod encode_large_string;
-#[path = "json/decode_ownership.rs"]
-mod decode_ownership;
 
 /// `json_decode()` takes depth and flags forwarded from untyped parameters
 /// (`Filesystem::json($path, $flags = 0)`). Expected output verified against php 8.5.

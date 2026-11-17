@@ -310,7 +310,8 @@ pub(crate) fn parse_type_param_list(
             bound,
             default,
             variance,
-            doc_annotated: false,
+            from_docblock: false,
+            native_hint: None,
         });
         if *pos < tokens.len() && tokens[*pos].0 == Token::Comma {
             *pos += 1;

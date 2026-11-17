@@ -128,6 +128,8 @@ pub(super) fn is_supported_builtin_spl_method(class_name: &str, method_key: &str
             method_key,
             "__construct"
                 | "__elephcfollow"
+                | "__elephc_offset_index"
+                | "__elephc_fetch_for_write"
                 | "current"
                 | "key"
                 | "next"
@@ -149,6 +151,8 @@ pub(super) fn is_supported_builtin_spl_method(class_name: &str, method_key: &str
         "ArrayObject" => matches!(
             method_key,
             "__construct"
+                | "__elephc_offset_index"
+                | "__elephc_fetch_for_write"
                 | "getiterator"
                 | "count"
                 | "offsetexists"

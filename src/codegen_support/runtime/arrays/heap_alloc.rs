@@ -308,7 +308,7 @@ pub fn emit_heap_alloc(emitter: &mut Emitter) {
     //    while it still has room. At most one load per class, and only on this cold path, before
     //    the heap walk of a consolidation pass --
     emitter.label("__rt_heap_alloc_larger_bin");
-    emitter.instruction(&format!("cmp x0, #{}", HEAP_BIN_MAX));         // is there any bin above the request?
+    emitter.instruction(&format!("cmp x0, #{}", HEAP_BIN_MAX));                 // is there any bin above the request?
     emitter.instruction("b.hs __rt_heap_alloc_consolidate");                    // no — try merging the free blocks
     crate::codegen_support::abi::emit_symbol_address(emitter, "x12", "_heap_buf");
     crate::codegen_support::abi::emit_symbol_address(emitter, "x13", "_heap_off");
@@ -633,7 +633,7 @@ fn emit_heap_alloc_linux_x86_64(emitter: &mut Emitter) {
 
     // -- the bump end is full: try a free block parked in a LARGER bin (see the AArch64 path) --
     emitter.label("__rt_heap_alloc_larger_bin");
-    emitter.instruction(&format!("cmp rax, {}", HEAP_BIN_MAX));         // is there any bin above the request?
+    emitter.instruction(&format!("cmp rax, {}", HEAP_BIN_MAX));                 // is there any bin above the request?
     emitter.instruction("jae __rt_heap_alloc_consolidate");                     // no — try merging the free blocks
     crate::codegen_support::abi::emit_symbol_address(emitter, "r8", "_heap_buf");
     crate::codegen_support::abi::emit_symbol_address(emitter, "rcx", "_heap_off");

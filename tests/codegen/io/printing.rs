@@ -387,7 +387,7 @@ echo print_r([1, 2], $flag);
 /// Verifies `print_r($value, true)` returns the whole text when it outgrows the 64 KiB static
 /// capture buffer: the capture moves to a growing heap block, so all 70000 bytes come back intact.
 #[test]
-fn test_print_r_return_grows_past_buffer_capacity() {
+fn test_print_r_return_grows_beyond_initial_buffer_capacity() {
     let out = compile_and_run(
         r#"<?php
 $s = str_repeat("x", 70000);

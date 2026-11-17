@@ -84,9 +84,8 @@ fn test_emit_frame_slot_address_offset_past_the_movz_range() {
     assert_eq!(
         emitter.output(),
         concat!(
-            "    movz x9, #0x93e0\n",
-            "    movk x9, #0x4, lsl #16\n",
-            "    sub x9, x29, x9\n",
+            "    sub x0, x29, #1, lsl #12\n",
+            "    sub x0, x0, #904\n",
         )
     );
 }
@@ -196,8 +195,9 @@ fn test_emit_store_local_slot_to_symbol_handles_large_string_slot() {
 
     assert!(out.contains("    adrp x9, _static_demo_name@PAGE\n"));
     assert!(out.contains("    add x9, x9, _static_demo_name@PAGEOFF\n"));
-    assert!(out.contains("    mov x9, #5000\n"));
-    assert!(out.contains("    sub x9, x29, x9\n"));
+    assert!(out.contains("    sub x9, x29, #1, lsl #12\n"));
+    assert!(out.contains("    sub x9, x9, #904\n"));
+    assert!(out.contains("    sub x9, x9, #896\n"));
     assert!(out.contains("    ldr x10, [x9]\n"));
     assert!(out.contains("    ldr x11, [x9]\n"));
     assert!(out.contains("    str x10, [x9]\n"));
@@ -219,10 +219,10 @@ fn test_emit_load_symbol_to_local_slot_handles_large_string_slot() {
     assert!(out.contains("    add x9, x9, _static_demo_name@PAGEOFF\n"));
     assert!(out.contains("    ldr x1, [x9]\n"));
     assert!(out.contains("    ldr x2, [x9, #8]\n"));
-    assert!(out.contains("    mov x10, #5000\n"));
-    assert!(out.contains("    sub x10, x29, x10\n"));
+    assert!(out.contains("    sub x10, x29, #1, lsl #12\n"));
+    assert!(out.contains("    sub x10, x10, #904\n"));
     assert!(out.contains("    str x1, [x10]\n"));
-    assert!(out.contains("    mov x11, #4992\n"));
-    assert!(out.contains("    sub x11, x29, x11\n"));
+    assert!(out.contains("    sub x11, x29, #1, lsl #12\n"));
+    assert!(out.contains("    sub x11, x11, #896\n"));
     assert!(out.contains("    str x2, [x11]\n"));
 }

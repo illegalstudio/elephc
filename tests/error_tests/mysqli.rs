@@ -107,8 +107,9 @@ echo mysqli_connect_errno($db);
 fn bind_param_requires_the_types_argument() {
     expect_mysqli_error(
         r#"<?php
-$stmt = new mysqli_stmt();
-$stmt->bind_param();
+function bind(mysqli_stmt $stmt): void {
+    $stmt->bind_param();
+}
 "#,
         "bind_param",
     );
@@ -119,10 +120,47 @@ $stmt->bind_param();
 fn bind_param_rejects_literal_bind_arguments() {
     expect_mysqli_error(
         r#"<?php
-$stmt = new mysqli_stmt();
-$stmt->bind_param("i", 42);
+function bind(mysqli_stmt $stmt): void {
+    $stmt->bind_param("i", 42);
+}
 "#,
         "variadic parameter $vars must be passed a variable",
+    );
+}
+
+/// `mysqli_stmt::bind_result` binds BY REFERENCE too: a literal is rejected.
+#[test]
+fn bind_result_rejects_literal_arguments() {
+    expect_mysqli_error(
+        r#"<?php
+function bind(mysqli_stmt $stmt): void {
+    $stmt->bind_result(1);
+}
+"#,
+        "variadic parameter $vars must be passed a variable",
+    );
+}
+
+/// `mysqli_stmt`'s constructor requires the link, like php's.
+#[test]
+fn stmt_constructor_requires_the_link() {
+    expect_mysqli_error(
+        r#"<?php
+$stmt = new mysqli_stmt();
+"#,
+        "mysqli_stmt",
+    );
+}
+
+/// `mysqli_get_client_version()` takes no arguments in php 8 (the link form is gone).
+#[test]
+fn get_client_version_takes_no_arguments() {
+    expect_mysqli_error(
+        r#"<?php
+$db = new mysqli();
+echo mysqli_get_client_version($db);
+"#,
+        "mysqli_get_client_version",
     );
 }
 
@@ -138,16 +176,27 @@ $db->select_db();
     );
 }
 
-/// The internal static factory `mysqli_stmt::__elephcInit` is private (the
-/// checker's friend channel exposes it to `mysqli::stmt_init` only): user code
-/// calling it is rejected at compile time like any private static.
+/// The internal static factory `mysqli_result::__elephcFromDrain` is private
+/// (the checker's friend channel exposes `__elephc*` helpers to the mysqli
+/// classes and the `mysqli_*` aliases only): user code calling it is rejected at
+/// compile time like any private static.
 #[test]
-fn internal_stmt_init_factory_is_private() {
+fn internal_result_factory_is_private() {
     expect_mysqli_error(
         r#"<?php
-$db = new mysqli();
-$stmt = mysqli_stmt::__elephcInit($db, -1);
+$result = mysqli_result::__elephcFromDrain([], 0, [], [], [], [], [], []);
 "#,
-        "__elephcInit",
+        "__elephcFromDrain",
+    );
+}
+
+/// `mysqli_warning` cannot be constructed directly (php's private constructor).
+#[test]
+fn warning_constructor_is_private() {
+    expect_mysqli_error(
+        r#"<?php
+$w = new mysqli_warning();
+"#,
+        "mysqli_warning",
     );
 }

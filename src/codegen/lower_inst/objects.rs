@@ -85,6 +85,8 @@ pub(super) struct PropertySlot {
     is_reference: bool,
     /// Argument diagnostic prefix when this temporary slot models an inherited setter.
     abstract_setter_type_error_prefix: Option<String>,
+    /// Original declared type when an internal validator always materializes a boxed candidate.
+    reference_declaration: Option<PhpType>,
 }
 
 impl PropertySlot {
@@ -228,6 +230,7 @@ mod clone_and_spl;
 mod iterator_iterator;
 pub(in crate::codegen::lower_inst) mod throwable_new;
 mod fiber_dynamic_entry;
+mod constructorless_refusals;
 mod dynamic_mixed_candidates;
 mod dynamic_factory;
 mod reflection_constructor;
@@ -252,7 +255,9 @@ pub(crate) use dynamic_mixed_candidates::DYNAMIC_NEW_CANDIDATE_LISTS_BUILT;
 #[cfg(test)]
 pub(crate) use outlined_dynamic_property::NAMED_SCOPE_GROUP_BUILDS;
 pub(in crate::codegen) use outlined_dynamic_property::NamedHelperScopes;
+mod runtime_magic_reads;
 mod dynamic_property_read_entry;
+mod unset_property_reads;
 mod dynamic_property_read_resolution;
 mod runtime_property_writes;
 mod named_property_writes;
@@ -266,12 +271,15 @@ mod property_resolution;
 pub(in crate::codegen::lower_inst) mod property_compatibility;
 mod property_loads;
 mod property_fetch_for_write;
+mod property_element_writes;
+mod property_hash_fetch_for_write;
 mod property_stores;
 mod property_hook_writes;
 mod property_store_values;
 mod typed_property_guards;
 mod instanceof_helpers;
 mod mixed_property_type_guard;
+pub(super) use mixed_property_type_guard::lower_reference_property_coercion;
 mod extern_fields;
 pub(super) use mixed_property_type_guard::emit_string_into_int_diagnostics;
 mod outlined_dynamic_property;
@@ -305,6 +313,8 @@ use known_property_reads::*;
 #[allow(unused_imports)]
 use mixed_property_reads::*;
 #[allow(unused_imports)]
+use runtime_magic_reads::*;
+#[allow(unused_imports)]
 use dynamic_property_read_entry::*;
 #[allow(unused_imports)]
 use dynamic_property_read_resolution::*;
@@ -323,6 +333,7 @@ use interface_layout::*;
 use property_resolution::*;
 #[allow(unused_imports)]
 use property_compatibility::*;
+pub(super) use property_compatibility::object_type_is_a;
 #[allow(unused_imports)]
 pub(in crate::codegen::lower_inst) use instanceof_helpers::{
     class_name_immediate, classify_named_target, emit_match_call,
@@ -370,19 +381,25 @@ pub(super) use fiber_dynamic_entry::{
     lower_dynamic_object_new_without_constructor_mixed,
 };
 pub(super) use fixed_new::lower_object_new;
-pub(super) use instanceof_entry::{lower_instanceof, lower_instanceof_dynamic};
+pub(super) use instanceof_entry::{lower_instanceof, lower_instanceof_dynamic, lower_mixed_is_a_literal_target};
 pub(super) use object_class_id::lower_object_class_id;
 pub(super) use class_name_id::lower_class_name_to_id;
 pub(in crate::codegen::lower_inst) use closure_scope_gate::emit_closure_scope_gate;
 pub(in crate::codegen::lower_inst) use class_name_id::emit_class_id_of_value;
+pub(in crate::codegen) use reflection::emit_pending_reflection_class_builders;
 pub(super) use known_property_reads::{
     lower_load_prop_ref_cell, lower_load_prop_ref_cell_checked, lower_prop_get,
     lower_prop_initialized,
 };
 pub(super) use property_stores::lower_bind_prop_ref_cell;
 pub(super) use property_fetch_for_write::lower_prop_get_for_write;
+pub(super) use property_element_writes::{in_place_property_container, InPlacePropertyContainer};
+pub(super) use property_hash_fetch_for_write::{lower_property_hash_contains, lower_property_hash_fetch_for_write, lower_property_hash_read};
 pub(super) use mixed_property_type_guard::{BOOL_TAG, OBJECT_TAG, RUNTIME_TAGS};
-pub(super) use property_store_values::{lower_packed_field_mixed_to_int, release_adopted_mixed_source};
+pub(super) use property_store_values::{
+    emit_mixed_iterable_for_property_store, lower_packed_field_mixed_to_int,
+    release_adopted_mixed_source,
+};
 pub(super) use property_resolution::{
     emit_boxed_null, emit_nullable_receiver_object_payload, nullable_object_receiver_class,
     raw_value_php_type,
@@ -495,27 +512,22 @@ fn lower_dynamic_prop_unset(
 /// Names the reason a resolved fixed property slot cannot represent PHP's "removed"
 /// state, or `None` when the uninitialized marker is a faithful encoding for it.
 ///
-/// A by-reference slot is supported: the removal detaches its cell and installs a fresh
-/// uninitialized one (`detach_and_release_unset_property_value`).
-fn unset_unsupported_slot_reason(
-    ctx: &FunctionContext<'_>,
-    slot: &PropertySlot,
-) -> Option<&'static str> {
+/// A by-reference slot is supported when the object OWNS its reference cell: the removal detaches
+/// that cell and installs a fresh uninitialized one (`detach_and_release_unset_property_value`). A
+/// BORROWED one -- a promoted `&$param` -- holds the caller's cell, possibly the address of the
+/// caller's frame slot, which that release would treat as a heap cell: `unset($r->p)` decremented a
+/// "header" that was the neighbouring local and the program crashed on its next use.
+///
+/// Used only for the diagnostic text; the ordering matters because a slot can be both
+/// undeclared and by-reference, and the by-reference storage is the more specific
+/// obstacle to report.
+fn unset_unsupported_slot_reason(ctx: &FunctionContext<'_>, slot: &PropertySlot) -> Option<&'static str> {
     if slot.is_packed {
         return Some("packed class field");
     }
-    // An object-OWNED reference slot (`$x = &$obj->p` promoted it) is broken and re-armed with a
-    // fresh cell by `detach_and_release_unset_property_value`. A BORROWED one -- a promoted
-    // `&$param` -- holds the caller's cell, possibly the address of the caller's frame slot, which
-    // that release would treat as a heap cell: `unset($r->p)` decremented a "header" that was the
-    // neighbouring local and the program crashed on its next use.
-    if slot.is_reference
-        && !ctx
-            .module
-            .class_infos
-            .get(&slot.class_name)
-            .is_some_and(|info| info.owned_reference_properties.contains(&slot.property))
-    {
+    let owned_reference = slot.is_declared && ctx.module.class_infos.get(&slot.class_name)
+        .is_some_and(|class| class.property_slot_owns_reference((slot.offset - 8) / 16));
+    if slot.is_reference && !owned_reference {
         return Some("by-reference property");
     }
     if !slot.is_declared && !slot_supports_untyped_unset_marker(slot) {

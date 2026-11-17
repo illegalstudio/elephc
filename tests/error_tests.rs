@@ -62,6 +62,9 @@ fn check_source_with_defines_and_options(
     let ast = parse(&tokens).map_err(|e| e.message.clone())?;
     let define_set: HashSet<String> = defines.iter().map(|define| (*define).to_string()).collect();
     let ast = elephc::conditional::apply(ast, &define_set);
+    // Mirrors `source::finalize_physical_program`: `goto` is lowered per physical file.
+    let ast = elephc::goto_lowering::lower_program(ast, "test.php")
+        .map_err(|error| error.message.clone())?;
     let ast = elephc::autoload::collect_aliases(ast).map_err(|error| error.message)?;
     // Mirrors `pipeline::compile`: the hash prelude declares `HashContext` and the
     // `hash_*` context wrappers, and is injected between alias collection and name
@@ -70,7 +73,7 @@ fn check_source_with_defines_and_options(
     // arity diagnostics. Injection is gated on usage, so no other test is affected.
     let mut prelude_inventory = elephc::optimize::reachability::PreludeInventory::new();
     let ast = elephc::hash_prelude::inject_if_used(ast, false, &mut prelude_inventory);
-    let ast = elephc::core_prelude::inject_if_used(ast, &mut prelude_inventory);
+    let ast = elephc::core_prelude::inject_if_used(ast, false, false, &mut prelude_inventory);
     let ast = elephc::bcmath_prelude::inject_if_used(ast, false, &mut prelude_inventory);
     let ast = elephc::random_prelude::inject_if_used(ast, false, &mut prelude_inventory);
     let ast = elephc::testing_prelude::inject_if_used(ast, false, &mut prelude_inventory);
@@ -124,7 +127,7 @@ fn check_source_full_with(
     let ast = elephc::autoload::collect_aliases(ast)?;
     let mut prelude_inventory = elephc::optimize::reachability::PreludeInventory::new();
     let ast = elephc::hash_prelude::inject_if_used(ast, false, &mut prelude_inventory);
-    let ast = elephc::core_prelude::inject_if_used(ast, &mut prelude_inventory);
+    let ast = elephc::core_prelude::inject_if_used(ast, false, false, &mut prelude_inventory);
     let ast = elephc::bcmath_prelude::inject_if_used(ast, false, &mut prelude_inventory);
     let ast = elephc::random_prelude::inject_if_used(ast, false, &mut prelude_inventory);
     let ast = elephc::testing_prelude::inject_if_used(ast, false, &mut prelude_inventory);
@@ -384,6 +387,10 @@ mod classes_traits;
 mod property_default_scope;
 #[path = "error_tests/generics_review.rs"]
 mod generics_review;
+#[path = "error_tests/typed_object_arrays.rs"]
+mod typed_object_arrays;
+#[path = "error_tests/list_hash_param_binding.rs"]
+mod list_hash_param_binding;
 #[path = "error_tests/extensions.rs"]
 mod extensions;
 #[path = "error_tests/buffer_merges.rs"]
@@ -422,6 +429,8 @@ mod spl_builtins;
 mod misc;
 #[path = "error_tests/narrowing.rs"]
 mod narrowing;
+#[path = "error_tests/nullable_fallback_flow.rs"]
+mod nullable_fallback_flow;
 #[path = "error_tests/image.rs"]
 mod image;
 #[path = "error_tests/mysqli.rs"]

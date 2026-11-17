@@ -120,6 +120,8 @@ pub(crate) fn expr_invalidation(expr: &Expr) -> Invalidation {
                 Invalidation::none()
             }
         },
+        ExprKind::Cast { target: CastType::String, expr: inner } => expr_invalidation(inner)
+            .union(top_level_globals_guard(expr_effect(expr))),
         ExprKind::Negate(inner)
         | ExprKind::Not(inner)
         | ExprKind::BitNot(inner)
@@ -573,6 +575,8 @@ pub(crate) fn stmt_invalidation(stmt: &Stmt) -> Invalidation {
         | StmtKind::Return(Some(expr)) => expr_invalidation(expr),
         StmtKind::Return(None)
         | StmtKind::Break(_)
+        | StmtKind::Goto(_)
+        | StmtKind::GotoLabel(_)
         | StmtKind::Continue(_)
         | StmtKind::NamespaceDecl { .. }
         | StmtKind::UseDecl { .. }

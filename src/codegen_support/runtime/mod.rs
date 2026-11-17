@@ -10,6 +10,7 @@
 //! - Keep this surface small: runtime codegen imports these re-exports instead of reaching into leaf emitters directly.
 
 mod arrays;
+pub(crate) use arrays::emit_native_frame_owners;
 mod buffers;
 pub(crate) mod callables;
 /// PHP loose-equality (`==`) walkers for boxed Mixed values, arrays, and objects.
@@ -107,7 +108,9 @@ pub(crate) use data::{
 pub(crate) use emitters::emit_runtime;
 /// The PHP 8.5 NAN-to-bool coercion probe, reached from `src/codegen/lower_inst` float
 /// truthiness lowering as well as from the boxed-Mixed runtime helpers.
-pub(crate) use arrays::{emit_nan_bool_coercion_probe, nan_bool_coercion_warning_enabled};
+pub(crate) use arrays::{
+    emit_nan_bool_coercion_probe, emit_nan_string_coercion_probe, nan_bool_coercion_warning_enabled,
+};
 /// The `__rt_hash_map` callback result-kind selector, chosen by the `array_map()` lowering.
 pub(crate) use arrays::HashMapResultKind;
 /// Retire allocator payload-base metadata before bulk web arena reclamation.

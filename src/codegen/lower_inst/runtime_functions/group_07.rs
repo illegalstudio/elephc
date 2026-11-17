@@ -37,6 +37,9 @@ pub(super) fn lower(
         RuntimeFnId::Abs => Some({
             crate::codegen::lower_inst::builtins::math::lower_abs(ctx, inst)
         }),
+        RuntimeFnId::AbsInt => Some({
+            crate::codegen::lower_inst::builtins::math::lower_abs_int(ctx, inst)
+        }),
         RuntimeFnId::Acos => Some({
             crate::codegen::lower_inst::builtins::math::lower_unary_libm(ctx, inst, "acos")
         }),

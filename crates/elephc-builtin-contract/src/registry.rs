@@ -38,8 +38,10 @@ pub fn contracts() -> &'static [BuiltinContract] {
                 crate::catalog_data::CONTRACTS.len()
                     + crate::catalog_gmp::CONTRACTS.len()
                     + crate::catalog_data_additional::CONTRACTS.len()
+                    + crate::catalog_locale::CONTRACTS.len()
                     + crate::catalog_mbstring::CONTRACTS.len()
                     + crate::catalog_pcntl::CONTRACTS.len()
+                    + crate::catalog_tidy::CONTRACTS.len()
                     + crate::catalog_xml::CONTRACTS.len()
                     + crate::catalog_surfaces::SURFACE_CONTRACTS.len()
                     + curl_capacity,
@@ -47,8 +49,10 @@ pub fn contracts() -> &'static [BuiltinContract] {
             contracts.extend_from_slice(crate::catalog_data::CONTRACTS);
             contracts.extend_from_slice(crate::catalog_gmp::CONTRACTS);
             contracts.extend_from_slice(crate::catalog_data_additional::CONTRACTS);
+            contracts.extend_from_slice(crate::catalog_locale::CONTRACTS);
             contracts.extend_from_slice(crate::catalog_mbstring::CONTRACTS);
             contracts.extend_from_slice(crate::catalog_pcntl::CONTRACTS);
+            contracts.extend_from_slice(crate::catalog_tidy::CONTRACTS);
             contracts.extend_from_slice(crate::catalog_xml::CONTRACTS);
             contracts.extend_from_slice(crate::catalog_surfaces::SURFACE_CONTRACTS);
             #[cfg(feature = "curl")]
@@ -164,16 +168,29 @@ mod tests {
         // branch adds (see `support.rs` for the roll-call).
         // +4: the `ptr_read_f32`/`ptr_write_f32`/`ptr_read_f64`/`ptr_write_f64` pointer builtins.
         // +1: `buffer_ptr`, the payload address of a buffer.
+        // +5: SimpleXML loaders/import plus internal allocation and diagnostic helpers.
         // +5: native heap usage, peak reset, and allocation/free counters.
-        // +4: the internal `__elephc_ptr_get` and `__elephc_zval_{pack,free,unpack}` aliases
-        // the extension-hosting prelude calls.
+        // +8: FileInfo procedures and shared warning/deprecation helpers.
+        // +4: internal pointer/zval aliases used by extension hosting.
         // +2: PHP 8.5 array value-edge functions.
-        // Main's catalog (ext/gmp's fifty-one `gmp_*` contracts included) plus the contracts the
-        // Symfony branch carries that main does not (`extract`, `filter_var`, the `gc_*` family,
+        // +23: the rest of the mysqli procedural surface (bind_result/fetch, async poll,
+        // statistics, warnings, change_user, ssl_set, statement attributes, and so on).
+        // +1: `__elephc_reflection_class_build`, the internal call that runs a compiled
+        // per-class `ReflectionClass` builder for `getDeclaringClass()`.
+        // +1: `__elephc_eval_reflection_class_build`, its eval twin for the class names
+        // eval-built member reflectors store.
+        // +24: the `tidy_*` procedures of the tidy prelude.
+        // +1: `__elephc_call_strict_types`, the internal strictness reader the random
+        // prelude's injected constructor calls.
+        // +7: the complete `ctype_*` surface (cntrl/graph/lower/print/punct/upper/xdigit).
+        // +2: the PHP-visible setlocale/nl_langinfo contracts declared by the locale prelude.
+        // +3: the internal libc setlocale and nl_langinfo helpers it calls.
+        // The branch's additions on top of main's catalog (`extract`, `filter_var`, the `gc_*` family,
         // the password/array/preg/sodium/response-header surfaces, the `--web` handler prelude
-        // declarations, the two internal last-error readers `__elephc_last_error_int` / `_str`, ...),
-        // measured on the merged catalogs.
-        assert_eq!(contracts().len(), 1335 + curl_surface);
+        // declarations, the internal last-error readers `__elephc_last_error_int` / `_str`, ...) net of the
+        // contracts main now owns (`setlocale`), estimated from the per-file catalog deltas of the merge
+        // and to be re-measured when the tree compiles.
+        assert_eq!(contracts().len(), 1389 + curl_surface);
         assert_eq!(lookup("STRLEN").map(|contract| contract.name), Some("strlen"));
         assert_eq!(lookup("\\parse_url").map(|contract| contract.name), Some("parse_url"));
     }
@@ -237,7 +254,7 @@ mod tests {
             lookup("openssl_encrypt")
                 .expect("openssl_encrypt contract")
                 .requirements,
-            &[crate::BuiltinRequirement::Bridge("elephc_crypto")]
+            &[crate::BuiltinRequirement::Bridge("elephc_openssl")]
         );
         assert_eq!(
             lookup("preg_match").expect("preg_match contract").requirements,

@@ -32,7 +32,7 @@ unset($source);
     assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
 }
 
-/// Eval Reflection metadata retains exactly one owned public name per reflected owner.
+/// Eval Reflection public names retire with their metadata owners, including explicit removal.
 #[test]
 fn test_eval_reflection_parameter_public_name_releases_string_owner() {
     let runs = compile_and_run_with_heap_debug_per_argv(r#"<?php
@@ -50,17 +50,8 @@ echo 'done';
     for out in &runs {
         assert!(out.success, "stdout={:?}\nstderr={}", out.stdout, out.stderr);
         assert_eq!(out.stdout, "done");
+        assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
     }
-    // The retained public names of the parameter and its declaring function add at most two
-    // owners over the control run that removes both names. Eval's metadata blocks and boxed
-    // array owners are released by the exit sweep, so the legacy absolute count (23) is not
-    // asserted; a public-name string kept after the object is unset would exceed the bound.
-    assert!(
-        eval_operand_owner_live_blocks(&runs[0].stderr)
-            <= eval_operand_owner_live_blocks(&runs[1].stderr) + 2,
-        "only the two public metadata names may add retained owners: normal={}\ncontrol={}",
-        runs[0].stderr, runs[1].stderr,
-    );
 }
 
 /// Extracts the runtime heap's retained allocation count, accepting eval-registered class and reflection metadata in the baseline.
@@ -502,6 +493,29 @@ unset($source);
         out.stdout, "9:xxxxxxxx!|9:xxxxxxxx!|9:xxxxxxxx!|",
         "{}", out.stderr
     );
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
+/// Scalar by-reference variadics expose a full two-word marker slot to compiled element writes.
+#[test]
+fn test_core_eval_native_scalar_variadic_reference_slots_are_heap_clean() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+function nativeBinderIntVariadic(int &...$items): void { $items[0] = 7; }
+function nativeBinderFloatVariadic(float &...$items): void { $items[0] = 2.5; }
+function nativeBinderBoolVariadic(bool &...$items): void { $items[0] = false; }
+$source = '
+for ($i = 0; $i < 3; $i++) {
+    $integer = 1; $float = 1.5; $boolean = true;
+    $intFn = "nativeBinderIntVariadic"; $intFn($integer);
+    $floatFn = "nativeBinderFloatVariadic"; $floatFn($float);
+    $boolFn = "nativeBinderBoolVariadic"; $boolFn($boolean);
+    echo $integer, ":", $float, ":", (int)$boolean, "|";
+    unset($integer, $float, $boolean, $intFn, $floatFn, $boolFn);
+} // ' . $argc;
+eval($source); unset($source);
+"#);
+    assert!(out.success, "stdout={:?}\nstderr={}", out.stdout, out.stderr);
+    assert_eq!(out.stdout, "7:2.5:0|7:2.5:0|7:2.5:0|", "{}", out.stderr);
     assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
 }
 

@@ -743,6 +743,7 @@ pub(super) fn execute_foreach_iterator_stmt(
 }
 
 /// Returns whether a foreach object satisfies one iterator interface.
+/// Shares iterator-interface detection between foreach and iterator builtins.
 pub(in crate::interpreter) fn eval_foreach_object_is_a(
     object: RuntimeCellHandle,
     target: &str,

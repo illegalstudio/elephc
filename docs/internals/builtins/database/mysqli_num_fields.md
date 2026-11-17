@@ -1,8 +1,6 @@
 ---
 title: "mysqli_num_fields() - internals"
 description: "Compiler internals for mysqli_num_fields(): lowering path, type checks, and runtime helpers."
-sidebar:
-  order: 156
 ---
 
 ## `mysqli_num_fields()` - internals
@@ -10,7 +8,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`crates/elephc-builtin-contract/src/catalog_data.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-builtin-contract/src/catalog_data.rs)
-- **Lowering**: [`src/mysqli_prelude/build/procedural.rs`:1067](https://github.com/illegalstudio/elephc/blob/main/src/mysqli_prelude/build/procedural.rs#L1067) (`mysqli_num_fields`)
+- **Lowering**: [`src/mysqli_prelude/build/procedural.rs`](https://github.com/illegalstudio/elephc/blob/main/src/mysqli_prelude/build/procedural.rs) (`mysqli_num_fields`)
 - **Function symbol**: `mysqli_num_fields()`
 
 

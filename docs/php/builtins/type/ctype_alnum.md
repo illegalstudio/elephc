@@ -1,27 +1,26 @@
 ---
 title: "ctype_alnum()"
 description: "Checks if all characters in the string are alphanumeric."
-sidebar:
-  order: 1094
 ---
 
 ## ctype_alnum()
 
 ```php
-function ctype_alnum(string $text): bool
+function ctype_alnum(mixed $text): bool
 ```
 
 Checks if all characters in the string are alphanumeric.
 
 **Parameters**:
-- `$text` (`string`)
+- `$text` (`mixed`)
 
 **Returns**: `bool`
 
 ## Availability
 
-- **Compiled (AOT)**: supported by the Elephc code generator.
-- **`eval()` (magician interpreter)**: supported through a declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/string/ctype_alnum.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/string/ctype_alnum.rs)).
+| Compiled (AOT) | Magician (eval) |
+|---|---|
+| Available | Available |
 
 _No examples yet. Check `examples/` and `showcases/` for usage patterns._
 

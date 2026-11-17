@@ -411,6 +411,7 @@ pub(super) fn publish_eval_context(context: Box<ElephcEvalContext>) -> *mut Elep
     let context = Box::into_raw(context);
     #[cfg(not(test))]
     register_live_eval_context(context);
+    crate::context::register_live_native_context(context);
     context
 }
 
@@ -1036,7 +1037,11 @@ unsafe fn borrow_path(ptr: *const u8, len: u64) -> std::path::PathBuf {
     }
 }
 
-/// Frees a process-level eval context handle allocated by the eval bridge.
+/// Consumes a context owner and returns any owned persistent-value destructor exception.
+///
+/// Generated code raises the returned Throwable after this Rust call returns. The final ABI
+/// owner drains static locals, static properties and materialized class constants while the
+/// dynamic destructor registry is still live. PCNTL registrations defer final reclamation.
 ///
 /// Releases every retained `CURLOPT_PRIVATE` value in `context.stream_resources` ONE STEP
 /// before the context (and, transitively, its `EvalStreamResources`) actually drops — see
@@ -1061,21 +1066,65 @@ unsafe fn borrow_path(ptr: *const u8, len: u64) -> std::path::PathBuf {
 /// # Safety
 /// `ctx` must be null or a pointer returned by `__elephc_eval_context_new`
 /// that has not already been freed.
-#[no_mangle]
-pub unsafe extern "C" fn __elephc_eval_context_free(ctx: *mut ElephcEvalContext) {
+#[export_name = "__elephc_eval_context_free_v2"]
+pub unsafe extern "C" fn __elephc_eval_context_free(ctx: *mut ElephcEvalContext) -> *mut crate::value::RuntimeCell {
     crate::ffi::util::trace_eval_ffi_entry("__elephc_eval_context_free");
     let Some(context) = (unsafe { ctx.as_mut() }) else {
-        return;
+        return ptr::null_mut();
     };
-    // TWO independent deferrals, and the teardown runs only when NEITHER holds the context: a
-    // process-global PCNTL signal handler (or another opaque ABI owner) still referencing it,
-    // and a PHP function or closure this context declared that outlives the ABI free.
-    if !context.release_abi_owner() || crate::context::pcntl_runtime::defer_context_free(ctx) {
-        return;
+    // Independent deferrals, and the teardown runs only when NONE holds the context: another
+    // opaque ABI owner or a process-global PCNTL signal handler still referencing it, a teardown
+    // already in progress, and a PHP function or closure this context declared that outlives the
+    // ABI free.
+    if !context.release_abi_owner() || context.teardown_active()
+        || crate::context::pcntl_runtime::defer_context_free(ctx)
+        || !context.begin_teardown()
+    {
+        return ptr::null_mut();
     }
-    if unsafe { ctx.as_ref() }.is_some_and(ElephcEvalContext::request_retained_context_free) {
-        unsafe { drop_eval_context_now(ctx) };
+    // Reclaim the allocation while callback-sensitive releases run. Nested ABI teardown observes
+    // `teardown_active` and returns without taking a second Box, while this owner keeps the context
+    // live across every destructor callback.
+    let mut context = unsafe { Box::from_raw(ctx) };
+    let mut thrown = context.take_pending_throw();
+    loop {
+        let cells = context.take_persistent_cell_owners();
+        if cells.is_empty() {
+            break;
+        }
+        #[cfg(not(test))]
+        {
+            thrown = crate::runtime_hooks::release::release_native_cells(cells, thrown);
+        }
+        #[cfg(test)]
+        {
+            let _ = cells;
+        }
     }
+    // Teardown callbacks can also schedule a context-local exception.
+    if let Some(pending) = context.take_pending_throw() {
+        #[cfg(not(test))]
+        {
+            thrown = crate::runtime_hooks::release::release_native_cells(thrown, Some(pending));
+        }
+        #[cfg(test)]
+        {
+            thrown = Some(pending);
+        }
+    }
+    if context.has_abi_owners()
+        || crate::context::pcntl_runtime::defer_context_free(ctx)
+        || !context.request_retained_context_free()
+    {
+        // Still referenced (by an ABI owner, a PCNTL handler, or a function/closure this context
+        // declared that outlives the frame): hand the allocation back; the last retained owner
+        // finishes the free through `finalize_eval_context_free`.
+        context.end_teardown();
+        let _ = Box::into_raw(context);
+    } else {
+        drop_eval_context_box(context);
+    }
+    thrown.map_or(ptr::null_mut(), crate::value::RuntimeCellHandle::as_ptr)
 }
 
 /// Unregisters every process-global callback into one context, then drops it immediately.
@@ -1090,9 +1139,16 @@ pub(crate) unsafe fn drop_eval_context_now(ctx: *mut ElephcEvalContext) {
     let Some(context) = (unsafe { ctx.as_mut() }) else {
         return;
     };
-    if context.has_abi_owners() {
+    if context.has_abi_owners() || context.teardown_active() || !context.begin_teardown() {
         return;
     }
+    let context = unsafe { Box::from_raw(ctx) };
+    drop_eval_context_box(context);
+}
+
+/// Finalizes one exclusively owned context while recursive teardown remains blocked.
+fn drop_eval_context_box(mut context: Box<ElephcEvalContext>) {
+    let ctx = context.as_mut() as *mut ElephcEvalContext;
     #[cfg(not(test))]
     {
         let mut values = crate::runtime_hooks::ElephcRuntimeOps::new();
@@ -1102,7 +1158,23 @@ pub(crate) unsafe fn drop_eval_context_now(ctx: *mut ElephcEvalContext) {
             .stream_resources_mut()
             .release_curl_easy_private_values(&mut values);
     }
-    unsafe { finalize_eval_context_free(ctx) };
+    #[cfg(not(test))]
+    unregister_live_eval_context(ctx);
+    context.unregister_dynamic_object_context();
+    #[cfg(not(test))]
+    crate::context::adopt_dying_context_constants(&mut context);
+    crate::context::untrack_reflection_identities_for_context(ctx);
+    crate::context::unregister_live_native_context(ctx);
+    let owned_global_scope = context.take_owned_global_scope();
+    crate::context::unregister_global_eval_functions_for_context(ctx);
+    crate::ffi::ob_handlers::unregister_ob_handlers_for_context(ctx);
+    if let Some(scope) = owned_global_scope {
+        unsafe { crate::ffi::scope::__elephc_eval_scope_free(scope) };
+    }
+    #[cfg(not(test))]
+    recycle_eval_context(context);
+    #[cfg(test)]
+    drop(context);
 }
 
 /// Performs the final one-time destruction of a context with no retained PHP functions or closures.
@@ -1112,29 +1184,15 @@ pub(crate) unsafe fn drop_eval_context_now(ctx: *mut ElephcEvalContext) {
 /// gate this through `ElephcEvalContext::request_retained_context_free()` or the matching last
 /// retained-owner release, so no PHP callable can retain the pointer after this point.
 pub(crate) unsafe fn finalize_eval_context_free(ctx: *mut ElephcEvalContext) {
-    if ctx.is_null() {
+    let Some(context) = (unsafe { ctx.as_mut() }) else {
+        return;
+    };
+    // A frame-created context still counts its creating frame as an ABI owner, so unlike
+    // `drop_eval_context_now` this entry does not require the owner count to be zero.
+    if context.teardown_active() {
         return;
     }
-    #[cfg(not(test))]
-    unregister_live_eval_context(ctx);
-    let owned_global_scope = if let Some(context) = unsafe { ctx.as_mut() } {
-        context.unregister_dynamic_object_context();
-        #[cfg(not(test))]
-        crate::context::adopt_dying_context_constants(context);
-        context.take_owned_global_scope()
-    } else {
-        None
-    };
-    crate::context::unregister_global_eval_functions_for_context(ctx);
-    crate::ffi::ob_handlers::unregister_ob_handlers_for_context(ctx);
-    if let Some(scope) = owned_global_scope {
-        unsafe { crate::ffi::scope::__elephc_eval_scope_free(scope) };
-    }
-    let context = unsafe { Box::from_raw(ctx) };
-    #[cfg(not(test))]
-    recycle_eval_context(context);
-    #[cfg(test)]
-    drop(context);
+    drop_eval_context_box(unsafe { Box::from_raw(ctx) });
 }
 
 /// Transfers an eval global scope to a context that outlives its AOT frame.

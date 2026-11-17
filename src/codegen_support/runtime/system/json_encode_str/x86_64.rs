@@ -88,6 +88,63 @@ pub(super) fn emit(emitter: &mut Emitter) {
     emitter.instruction("ret");                                                 // return the unquoted numeric slice
 
     emitter.label("__rt_json_str_quoted_x");
+    // -- short plain-ASCII fast path --
+    // With no active flags, a short string made only of printable ASCII (excluding quote and
+    // backslash) has an exact output length of len + 2. Writing it directly skips the sizing
+    // pass and the per-byte escape dispatch, which is what JSON object keys and short scalar
+    // values pay on every encode.
+    emitter.instruction("test r15, r15");                                       // any active flag needs the escaping pass
+    emitter.instruction("jnz __rt_json_str_size_slow_x");                       // fall back when a flag is active
+    emitter.instruction("mov rdx, QWORD PTR [rbp - 16]");                       // reload the source length for the fast-path bound
+    emitter.instruction("cmp rdx, 16");                                         // only short strings use the direct copy
+    emitter.instruction("ja __rt_json_str_size_slow_x");                        // longer strings keep the general encoder
+    emitter.instruction("mov rsi, QWORD PTR [rbp - 8]");                        // reload the source pointer for the plain-ASCII scan
+    emitter.instruction("xor ecx, ecx");                                        // initialize the fast-path scan index
+    emitter.label("__rt_json_str_fast_scan_x");
+    emitter.instruction("cmp rcx, rdx");                                        // has every source byte been classified?
+    emitter.instruction("jge __rt_json_str_fast_write_x");                      // yes: the whole slice is plain ASCII
+    emitter.instruction("movzx r8d, BYTE PTR [rsi + rcx]");                     // load the next source byte
+    emitter.instruction("lea r9d, [r8 - 32]");                                  // rebase printable ASCII 0x20..0x7E onto 0..94
+    emitter.instruction("cmp r9d, 95");                                         // control bytes, DEL and UTF-8 bytes need the general path
+    emitter.instruction("jae __rt_json_str_size_slow_x");                       // escape or validate with the full encoder
+    emitter.instruction("cmp r8d, 34");                                         // double quotes need escaping
+    emitter.instruction("je __rt_json_str_size_slow_x");                        // fall back for the quote byte
+    emitter.instruction("cmp r8d, 92");                                         // backslashes need escaping
+    emitter.instruction("je __rt_json_str_size_slow_x");                        // fall back for the backslash byte
+    emitter.instruction("cmp r8d, 47");                                         // PHP escapes slashes by default
+    emitter.instruction("je __rt_json_str_size_slow_x");                        // fall back for the slash byte
+    emitter.instruction("add rcx, 1");                                          // advance the plain-ASCII scan
+    emitter.instruction("jmp __rt_json_str_fast_scan_x");                       // inspect the next source byte
+
+    emitter.label("__rt_json_str_fast_write_x");
+    emitter.instruction("lea rax, [rdx + 2]");                                  // reserve the two quotes and the copied bytes
+    emitter.instruction("call __rt_strbuf_reserve_temp");                       // scratch when it fits, a transient heap block otherwise
+    emitter.instruction("mov r11, rax");                                        // output position = the reservation
+    emitter.instruction("mov QWORD PTR [rbp - 24], r11");                       // save output start
+    emitter.instruction("mov BYTE PTR [r11], 34");                              // write opening "
+    emitter.instruction("add r11, 1");                                          // advance past the opening quote
+    emitter.instruction("mov rsi, QWORD PTR [rbp - 8]");                        // reload the source pointer after the reservation
+    emitter.instruction("mov rdx, QWORD PTR [rbp - 16]");                       // reload the source length after the reservation
+    emitter.instruction("xor ecx, ecx");                                        // initialize the copy index
+    emitter.label("__rt_json_str_fast_copy_x");
+    emitter.instruction("cmp rcx, rdx");                                        // have we copied every source byte?
+    emitter.instruction("jge __rt_json_str_fast_close_x");                      // finish with the closing quote
+    emitter.instruction("mov r9b, BYTE PTR [rsi + rcx]");                       // load the next source byte
+    emitter.instruction("mov BYTE PTR [r11 + rcx], r9b");                       // copy it directly to the reserved slice
+    emitter.instruction("add rcx, 1");                                          // advance the copy index
+    emitter.instruction("jmp __rt_json_str_fast_copy_x");                       // copy the remaining bytes
+    emitter.label("__rt_json_str_fast_close_x");
+    emitter.instruction("add r11, rdx");                                        // address the byte after the copied slice
+    emitter.instruction("mov BYTE PTR [r11], 34");                              // write closing "
+    emitter.instruction("mov rax, QWORD PTR [rbp - 24]");                       // rax = output start (the copied slice)
+    emitter.instruction("add rdx, 2");                                          // result length includes both quotes
+    emitter.instruction("call __rt_concat_publish");                            // advance _concat_off past a scratch-backed slice (rax/rdx preserved)
+    emitter.instruction("mov r15, QWORD PTR [rbp - 80]");                       // restore the callee-saved register
+    emitter.instruction("mov rsp, rbp");                                        // unwind the scratch frame
+    emitter.instruction("pop rbp");                                             // restore the caller frame pointer
+    emitter.instruction("ret");                                                 // return the quoted plain-ASCII slice
+
+    emitter.label("__rt_json_str_size_slow_x");
     // Size the output in a first pass: plain printable ASCII copies as one byte.
     // Every other byte (an escapable ASCII character, a control byte, DEL, or
     // any UTF-8 byte) is budgeted at the 6-byte worst case of a \u00XX escape,

@@ -215,6 +215,7 @@ pub struct DataSection {
     static_locals: Vec<StaticLocalRecord>,
     static_local_dedup: FastMap<String, usize>,
     extern_callback_slots: Vec<String>,
+    invoker_owner_visitors: FastMap<usize, String>,
 }
 
 impl DataSection {
@@ -237,6 +238,7 @@ impl DataSection {
             static_locals: Vec::new(),
             static_local_dedup: FastMap::default(),
             extern_callback_slots: Vec::new(),
+            invoker_owner_visitors: FastMap::default(),
         }
     }
 
@@ -416,6 +418,15 @@ impl DataSection {
                 self.extern_callback_slots.push(label);
             }
         }
+    }
+
+    /// Shares one physical-slot visitor among invokers with the same argument count.
+    pub(crate) fn invoker_owner_visitor(&mut self, count: usize, proposed: String) -> (String, bool) {
+        if let Some(label) = self.invoker_owner_visitors.get(&count) {
+            return (label.clone(), false);
+        }
+        self.invoker_owner_visitors.insert(count, proposed.clone());
+        (proposed, true)
     }
 
     /// Records one extern callback descriptor slot, so program exit and the `--web` request

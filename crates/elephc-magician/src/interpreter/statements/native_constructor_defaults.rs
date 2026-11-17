@@ -8,6 +8,7 @@
 //! - Parent metadata lookup, constructor visibility, and compound default ownership stay centralized.
 
 use super::*;
+use crate::runtime_hooks::owner_frames::with_runtime_owners;
 
 /// Finds generated/AOT method metadata on a class or its native parent chain.
 pub(in crate::interpreter) fn eval_aot_method_dispatch_metadata_in_hierarchy(
@@ -133,32 +134,35 @@ pub(super) fn eval_native_constructor_with_evaluated_args_and_ref_mode(
             bound_args.len(),
         );
     }
-    let result = context.with_eval_global_sync(|context| {
-        if let Some(scope) = bridge_scope.as_deref() {
-            eval_with_native_bridge_scope(scope, context, || {
-                if constructor_target_is_known {
-                    values.construct_object_for_class(
-                        &constructor_class,
-                        object,
-                        native_bound_arg_values(&bound_args),
-                    )
-                } else {
-                    values.construct_object(object, native_bound_arg_values(&bound_args))
-                }
-            })
-        } else if constructor_target_is_known {
-            values.construct_object_for_class(
-                &constructor_class,
-                object,
-                native_bound_arg_values(&bound_args),
-            )
-        } else {
-            values.construct_object(object, native_bound_arg_values(&bound_args))
-        }
+    let result = with_runtime_owners(&bound_args, || {
+        let result = context.with_eval_global_sync(|context| {
+            if let Some(scope) = bridge_scope.as_deref() {
+                eval_with_native_bridge_scope(scope, context, values, |values| {
+                    if constructor_target_is_known {
+                        values.construct_object_for_class(
+                            &constructor_class,
+                            object,
+                            native_bound_arg_values(&bound_args),
+                        )
+                    } else {
+                        values.construct_object(object, native_bound_arg_values(&bound_args))
+                    }
+                })
+            } else if constructor_target_is_known {
+                values.construct_object_for_class(
+                    &constructor_class,
+                    object,
+                    native_bound_arg_values(&bound_args),
+                )
+            } else {
+                values.construct_object(object, native_bound_arg_values(&bound_args))
+            }
+        });
+        let writeback = write_back_native_callable_ref_args(&bound_args, context, values);
+        result.and(writeback)
     });
-    let writeback = write_back_native_callable_ref_args(&bound_args, context, values);
     let released = release_native_bound_args(&bound_args, context, values);
-    result.and(writeback).and(released)
+    result.and(released)
 }
 
 /// Hands `IteratorIterator` / `RecursiveIteratorIterator` the iterator an `IteratorAggregate` stands for.
@@ -235,7 +239,7 @@ fn eval_reflection_owner_parent_constructor(
     // The backing fields are PRIVATE to the owner class, and the generated property bridge checks
     // visibility against the context's class scope -- so the copy runs in the owner's scope, the
     // scope php's own constructor would be running in.
-    let copied = names.and_then(|names| eval_with_native_bridge_scope(&owner, context, || {
+    let copied = names.and_then(|names| eval_with_native_bridge_scope(&owner, context, values, |values| {
         for name in names {
             // A field the owner leaves uninitialized for this reflector kind (a typed slot the
             // materializer never wrote) stays uninitialized on the copy too.
@@ -473,6 +477,7 @@ pub(super) fn materialize_native_callable_object_default(
     let constructed = (|| {
         for arg in args {
             constructor_args.push(EvaluatedCallArg {
+                evaluation_owner: None,
                 name: arg.name.clone(),
                 value: materialize_native_callable_default(&arg.value, context, values)?,
                 ref_target: None,

@@ -38,6 +38,9 @@ use crate::types::{callable_wrapper_sig, FunctionSig, PhpType};
 
 #[cfg(test)]
 mod tests;
+mod shared_cast;
+pub(super) mod argument_owners;
+pub(super) use shared_cast::{emit_aarch64_cast_eval_callable_arg, emit_x86_64_cast_eval_callable_arg};
 
 const EVAL_RECEIVER_CAPTURE_PARAM: &str = "__elephc_eval_callable_receiver";
 /// Frame slot the eval ARGUMENT bridges stage a boxed value in before a cast reads it.
@@ -201,6 +204,14 @@ impl EvalCallableEmitState {
 }
 
 impl EvalCallableDescriptorSupport {
+    /// Returns true when no callable descriptor case is available.
+    pub(super) fn is_empty(&self) -> bool {
+        self.string_cases.is_empty()
+            && self.instance_array_cases.is_empty()
+            && self.static_array_cases.is_empty()
+            && self.object_cases.is_empty()
+    }
+
     /// Returns true when eval callback fallback descriptors can be materialized.
     fn has_dynamic_descriptor(&self) -> bool {
         self.dynamic_descriptor_label.is_some()
@@ -308,6 +319,8 @@ pub(super) fn emit_eval_callable_descriptor_support(
     support.string_lookup_label = Some(string_lookup_label);
     support.array_lookup_label = Some(array_lookup_label);
     support.object_lookup_label = Some(object_lookup_label);
+    shared_cast::emit(module, emitter, data, &support);
+    argument_owners::emit(emitter);
     support
 }
 
@@ -831,7 +844,8 @@ fn eval_user_function_sigs(module: &Module) -> Vec<(String, FunctionSig, bool)> 
         .functions
         .iter()
         .filter(|function| {
-            !function.flags.is_main && !function.name.starts_with("_class_propinit_")
+            function.has_source_identity()
+                && !function.flags.is_main && !function.name.starts_with("_class_propinit_")
         })
         .map(|function| {
             (
@@ -989,7 +1003,8 @@ fn eval_static_method_callable_cases(
                 .get(&method_key)
                 .map(String::as_str)
                 .unwrap_or(class_name);
-            if emitted_methods.contains(&(impl_class.to_string(), method_key.clone(), true)) {
+            if emitted_methods.contains(&(impl_class.to_string(), method_key.clone(), true))
+                || super::intrinsic_static_descriptor_entry_supported(impl_class, &method_key) {
                 candidates.push((
                     class_name.clone(),
                     method_name.clone(),
@@ -1163,15 +1178,21 @@ fn emit_eval_runtime_callable_invoker_inline(
         php_return_status: true,
         defaults: &defaults,
     };
+    // Owner callbacks outlive this placeholder body, including when an identical body is dropped.
+    // Allocate their real label before detaching so body renaming cannot invalidate the cache.
+    let owner_label = state.next_label("callable_argument_owners");
+    let _ = super::runtime_callable_invoker::prepare_invoker_owner_visitor(
+        emitter, data, sig.params.len(), &owner_label);
     // See `Emitter::begin_out_of_line` for the branch-range failure that splicing caused.
     let scope = emitter.begin_out_of_line();
     super::runtime_callable_invoker::emit_runtime_callable_invoker(emitter, data, &invoker);
     let body = emitter.end_detached(scope);
     // Most callees share a few shapes: an `eval()` program emitted 633 of these invokers with
-    // 148 distinct bodies. The invoker emitter keeps no state outside its text, and its data
-    // entries are content-deduplicated strings and floats, so a body whose text matches an
-    // earlier one is dropped for that one's label. The signature cache above answers the
-    // same signature again without emitting at all.
+    // 148 distinct bodies. The invoker emitter keeps no state outside its text, shared owner
+    // callbacks are already filed under stable labels, and its data entries are
+    // content-deduplicated strings and floats, so a body whose text matches an earlier one is
+    // dropped for that one's label. The signature cache above answers the same signature again
+    // without emitting at all.
     let label = state.emitted_invoker(body, |body| emitter.push_out_of_line(body));
     state.cache_runtime_callable_invoker(sig, captures, owns_string_return, current_class, label.clone());
     label
@@ -1631,7 +1652,7 @@ fn align16(value: usize) -> usize {
 }
 
 /// Converts the ARM64 boxed eval argument slot into a callable descriptor pointer.
-pub(super) fn emit_aarch64_cast_eval_callable_arg(
+fn emit_aarch64_cast_eval_callable_arg_inline(
     module: &Module,
     emitter: &mut Emitter,
     data: &mut DataSection,
@@ -1721,7 +1742,7 @@ pub(super) fn emit_aarch64_cast_eval_callable_arg(
 }
 
 /// Converts the x86_64 boxed eval argument slot into a callable descriptor pointer.
-pub(super) fn emit_x86_64_cast_eval_callable_arg(
+fn emit_x86_64_cast_eval_callable_arg_inline(
     module: &Module,
     emitter: &mut Emitter,
     data: &mut DataSection,

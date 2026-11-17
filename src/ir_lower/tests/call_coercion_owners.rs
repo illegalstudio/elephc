@@ -8,6 +8,30 @@
 //! - Backend-created boxes are not EIR local owners and need their own cleanup records.
 //! - String loads from widened slots retire copies without consuming concrete local borrows.
 
+/// Bare object parameters accept Mixed instances without asking for an empty class name.
+#[test]
+fn mixed_to_bare_object_arguments_check_the_object_tag_on_every_target() {
+    let source = r#"<?php
+class BareObjectArgumentNode {}
+function acceptBareObjectArgument(object $node): string { return get_class($node); }
+function passBareObjectArgument(mixed $node): string { return acceptBareObjectArgument($node); }
+echo passBareObjectArgument(new BareObjectArgumentNode());
+"#;
+    for target in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+        let module = super::lower_source_at_for_target(source, std::path::Path::new("main.php"),
+            std::path::Path::new("."), crate::codegen::platform::Target::parse(target).unwrap());
+        let function = module.functions.iter().find(|function| function.name == "passBareObjectArgument").unwrap();
+        assert!(function.instructions.iter().any(|inst| inst.op == crate::ir::Op::TypePredicate
+            && inst.immediate == Some(crate::ir::Immediate::TypePredicate(crate::ir::PhpTypePredicate::Object))),
+            "{target}: a bare object boundary must inspect the runtime object tag");
+        assert!(!function.instructions.iter().any(|inst| inst.op == crate::ir::Op::InstanceOf
+            && matches!(inst.immediate, Some(crate::ir::Immediate::Data(id))
+                if module.data.strings[id.as_raw() as usize].is_empty())),
+            "{target}: a bare object hint must not look up an empty class");
+        crate::codegen::generate_user_asm_from_ir(&module, false, false).unwrap();
+    }
+}
+
 /// Follows ownership-only forwarding while preserving the underlying producer identity.
 fn ownership_forwarding_source(
     function: &crate::ir::Function,
@@ -246,7 +270,10 @@ echo get_class($object), ":", get_parent_class($object);
         crate::codegen::platform::Target::parse(target).unwrap(),
     );
     let mut lookups = 0;
-    for function in &module.functions {
+    // Union parameter binding now lowers the prelude's exception-class constructors too;
+    // those bodies call get_class for their diagnostics. This ownership assertion is about
+    // the two eval results consumed by the user program.
+    for function in module.functions.iter().filter(|function| function.name == "main") {
         for call in &function.instructions {
             if !matches!(call.immediate, Some(Immediate::RuntimeCall(
                 RuntimeCallTarget::Function(RuntimeFnId::GetClass | RuntimeFnId::GetParentClass)
@@ -537,7 +564,7 @@ dispatchCallableArgument(consumeCallableArgument(...), new CallableArgumentObjec
     }
 }
 
-/// Temporary callable arguments are rooted around independent calls, unlike aliasing returns.
+/// Temporary callables stay unwind-rooted while alias returns transfer their existing owner.
 #[test]
 fn user_callable_argument_owners_are_unwind_visible_on_all_targets() {
     use crate::ir::Op;
@@ -579,18 +606,25 @@ $callback();
             );
         }
         let alias = module.functions.iter().find(|f| f.name == "callbackAliasCaller").unwrap();
-        // An aliasing argument used to transfer straight to the returned value with no root. It is
-        // now rooted like any other temporary callable for the span of the call (a throw between
-        // creation and return must still release it); the probe `callbackAliasCaller` runs
-        // leak-clean under `--heap-debug`.
-        let alias_call = alias.instructions.iter().position(|inst| inst.op == Op::Call).unwrap();
-        assert_final_operand_root_spans_call(
-            alias,
-            alias_call,
-            alias.instructions[alias_call].operands[0],
-            target,
-            "aliasing callback argument",
-        );
+        let call_index = alias.instructions.iter().position(|inst| inst.op == Op::Call).unwrap();
+        let argument = alias.instructions[call_index].operands[0];
+        let roots = alias.instructions[..call_index].iter().filter_map(|inst| {
+            if inst.op != Op::StoreLocal || inst.operands != [argument] { return None; }
+            let Some(crate::ir::Immediate::LocalSlot(slot)) = inst.immediate else { return None; };
+            alias.instructions[..call_index].iter().any(|inst|
+                inst.op == Op::PushCallOperandOwner
+                    && inst.immediate == Some(crate::ir::Immediate::LocalSlot(slot))).then_some(slot)
+        }).collect::<Vec<_>>();
+        assert_eq!(roots.len(), 1, "{target}: the aliasing argument needs one unwind pin");
+        let slot = Some(crate::ir::Immediate::LocalSlot(roots[0]));
+        let after = &alias.instructions[call_index + 1..];
+        let pop = after.iter().position(|inst| inst.op == Op::PopCallOperandOwner && inst.immediate == slot).unwrap();
+        let unset = after.iter().position(|inst| inst.op == Op::UnsetLocal && inst.immediate == slot).unwrap();
+        assert!(pop < unset, "{target}: detach the pin before retiring its bookkeeping slot");
+        assert!(!after.iter().any(|inst| inst.op == Op::ReleaseLocalSlot && inst.immediate == slot),
+            "{target}: the pin must not consume the owner transferred to the alias result");
+        assert!(!after.iter().any(|inst| inst.op == Op::Release && inst.operands == [argument]),
+            "{target}: the returned argument keeps its existing owner");
         let asm = crate::codegen::generate_user_asm_from_ir(&module, false, false).unwrap();
         // The descriptor record link is the out-of-line `__rt_call_operand_link_descriptor` helper.
         assert!(asm.contains("__rt_call_operand_link_descriptor") || asm.contains("__rt_call_operand_push_descriptor"), "{target}");
@@ -805,22 +839,12 @@ echo coercionCaller($argc);
             (line.starts_with("bl ") || line.starts_with("call ")) && line.contains("coercionTarget")
         }).unwrap_or_else(|| panic!("{target}: missing native call in {body}"));
         let (before, after) = body.split_once(invoke).unwrap();
-        // The implicit Mixed boxes of the two array arguments are now made in EIR (`mixed_box`,
-        // stored in a hidden temp), so each box is rooted by an ordinary `push_call_operand_owner`
-        // rather than by a backend-inline record: one evaluation root keeps the first box alive
-        // while the second argument is evaluated, and two final roots span the native call.
-        // That is the three records below, published before the call and detached after the
-        // evaluation root's own pop. The invariant is unchanged -- every box has an unwind-visible
-        // owner for as long as the call can throw, released in LIFO order -- only the emitter of
-        // the roots moved. (The program prints the same and ends heap-clean.)
-        assert_eq!(before.matches("publish temporary call operand owner").count(), 3, "{target}: {body}");
-        assert_eq!(after.matches("detach temporary call operand owner").count(), 2, "{target}: {body}");
-        // Both final roots are retired before the function returns, innermost first.
-        let first_release = after.find("op=release_local_slot").expect("final roots release their boxes");
-        assert!(
-            after[..first_release].matches("detach temporary call operand owner").count() == 1,
-            "{target}: the innermost final root must be detached before its box is released: {after}"
-        );
+        // One evaluation root protects the earlier source argument, two final EIR roots span
+        // the call, and two backend roots protect the implicit Mixed boxes.
+        assert_eq!(before.matches("publish temporary call operand owner").count(), 5, "{target}: {body}");
+        assert_eq!(after.matches("detach temporary call operand owner").count(), 4, "{target}: {body}");
+        assert!(!after.contains("publish temporary call operand owner"),
+            "{target}: every temporary owner must already be published before the call");
     }
 }
 

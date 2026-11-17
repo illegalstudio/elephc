@@ -75,6 +75,8 @@ pub(super) fn required_builtin_spl_metadata_methods(class_name: &str) -> &'stati
         "EmptyIterator" => &["current", "key", "next", "rewind", "valid"],
         "ArrayIterator" => &[
             "__elephcFollow",
+            "__elephc_offset_index",
+            "__elephc_fetch_for_write",
             "current",
             "key",
             "next",
@@ -94,6 +96,8 @@ pub(super) fn required_builtin_spl_metadata_methods(class_name: &str) -> &'stati
         // `$o[] = $v` reaches `append()` through the vtable; it was kept only while `offsetSet()`
         // called it, and an emptied slot made the first push jump to address 0.
         "ArrayObject" => &[
+            "__elephc_offset_index",
+            "__elephc_fetch_for_write",
             "getIterator",
             "count",
             "offsetExists",

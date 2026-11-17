@@ -85,6 +85,7 @@ mod property_values;
 mod receiver_place;
 mod runtime_calls;
 mod runtime_array_liveness;
+mod spl_storage_write_fetch;
 mod string_write_offsets;
 mod runtime_class_messages;
 mod literal_parameter_guards;
@@ -121,17 +122,25 @@ pub(in crate::codegen) mod local_stores;
 pub(in crate::codegen) mod method_call_types;
 pub(in crate::codegen) mod arm_dedup;
 mod method_dispatch;
+mod method_dispatch_errors;
 mod method_intrinsics;
 mod method_resolution;
+mod method_lookup;
+mod reference_return_dispatch;
 #[cfg(test)]
 #[path = "lower_inst/null_parameter_guard_tests.rs"]
 mod null_parameter_guard_tests;
 mod outlined_dynamic_new;
 mod outlined_method_call;
+#[cfg(test)]
+#[path = "lower_inst/mixed_unbox_ownership_tests.rs"]
+mod mixed_unbox_ownership_tests;
 mod mixed_array_runtime;
 mod mixed_property_runtime;
 mod output_values;
 mod reference_arguments;
+mod reference_argument_handoff;
+mod reference_payloads;
 mod runtime_wrappers;
 pub(crate) use runtime_wrappers::builtin_wrapper_result_is_representable;
 mod static_method_calls;
@@ -191,11 +200,13 @@ pub(in crate::codegen) use conversions::{
 pub(super) use core_closures::function_signature_from_eir;
 pub(in crate::codegen) use core_builtins::emit_function_frame_reader;
 pub(in crate::codegen::lower_inst) use core_closures::closure_php_source as core_closures_php_source;
+pub(in crate::codegen) use objects::emit_pending_reflection_class_builders;
 pub(super) use descriptor_entries::emit_static_method_descriptor_entry_wrapper;
 pub(super) use descriptor_metadata::{
     class_method_body_exists, emit_runtime_descriptor_with_receiver_capture,
 };
 pub(super) use floats::{emit_fused_float_compare, float_branch_condition_suffix};
+pub(in crate::codegen) use arithmetic::{emit_fused_overflow, OverflowBranch};
 pub(super) use direct_calls::{
     coerce_loaded_value_to_tagged_scalar, materialize_direct_call_args,
     emit_synthetic_zero_arg_call,
@@ -251,8 +262,8 @@ pub(super) fn lower_instruction(ctx: &mut FunctionContext<'_>, inst_id: InstId) 
     if inst.result.is_some_and(|value| ctx.allocation.rematerialized(value).is_some()) {
         return Ok(());
     }
-    if ctx.is_fused_compare(inst_id) {
-        // The block's `cond_br` emits this compare and branches on its flags directly.
+    if ctx.is_fused_compare(inst_id) || ctx.is_fused_overflow(inst_id) {
+        // The block's `cond_br` emits this compare or overflow test and branches on its flags.
         return Ok(());
     }
     // A closure bound to a RUNTIME scope enforces it before its property accesses.
@@ -282,12 +293,14 @@ pub(super) fn lower_instruction(ctx: &mut FunctionContext<'_>, inst_id: InstId) 
         Op::UnsetLocal => lower_unset_local(ctx, &inst),
         Op::ZeroLocalSlot => lower_zero_local_slot(ctx, &inst),
         Op::LoadRefCell => lower_load_ref_cell(ctx, &inst),
+        Op::LoadRefCellValue => local_loads::lower_load_ref_cell_value(ctx, &inst),
         Op::StoreRefCell => lower_store_ref_cell(ctx, &inst),
         Op::PromoteLocalRefCell => lower_promote_local_ref_cell(ctx, &inst),
         Op::AliasLocalRefCell => lower_alias_local_ref_cell(ctx, &inst),
         Op::RetainLocalRefCell => lower_retain_local_ref_cell(ctx, &inst),
         Op::ReleaseLocalRefCell => lower_release_local_ref_cell(ctx, &inst),
         Op::ReleaseLocalSlot => lower_release_local_slot(ctx, inst_id, &inst),
+        Op::ReleaseRawLocalSlot => local_stores::lower_release_raw_local_slot(ctx, &inst),
         Op::PushCallOperandOwner => ownership::lower_push_call_operand_owner(ctx, &inst),
         Op::PopCallOperandOwner => ownership::lower_pop_call_operand_owner(ctx, &inst),
         Op::LoadGlobal => lower_load_global(ctx, &inst),
@@ -297,6 +310,7 @@ pub(super) fn lower_instruction(ctx: &mut FunctionContext<'_>, inst_id: InstId) 
         Op::IAdd => arithmetic::lower_int_binop(ctx, &inst, "add", "add"),
         Op::ISub => arithmetic::lower_int_binop(ctx, &inst, "sub", "sub"),
         Op::IMul => arithmetic::lower_int_binop(ctx, &inst, "mul", "imul"),
+        Op::IOverflows => arithmetic::lower_ioverflows(ctx, &inst),
         Op::ICheckedAdd => arithmetic::lower_int_checked_binop(ctx, &inst, "__rt_int_add_checked"),
         Op::ICheckedSub => arithmetic::lower_int_checked_binop(ctx, &inst, "__rt_int_sub_checked"),
         Op::ICheckedMul => arithmetic::lower_int_checked_binop(ctx, &inst, "__rt_int_mul_checked"),
@@ -336,6 +350,7 @@ pub(super) fn lower_instruction(ctx: &mut FunctionContext<'_>, inst_id: InstId) 
         Op::IShl => arithmetic::lower_int_shift(ctx, &inst, true),
         Op::IShrA => arithmetic::lower_int_shift(ctx, &inst, false),
         Op::MixedNumericBinop => arithmetic::lower_mixed_numeric_binop(ctx, &inst),
+        Op::MixedMinMax => arithmetic::min_max::lower_mixed_min_max(ctx, &inst),
         Op::StrIncDec => strings::lower_str_inc_dec(ctx, &inst),
         Op::FAdd => floats::lower_float_binop(ctx, &inst, "fadd", "addsd"),
         Op::FSub => floats::lower_float_binop(ctx, &inst, "fsub", "subsd"),
@@ -383,6 +398,9 @@ pub(super) fn lower_instruction(ctx: &mut FunctionContext<'_>, inst_id: InstId) 
         Op::ArrayNew => arrays::lower_array_new(ctx, &inst),
         Op::ArrayLen => arrays::lower_array_len(ctx, &inst),
         Op::ArrayGet => arrays::lower_array_get(ctx, &inst, true),
+        Op::ArrayGetUnchecked => arrays::lower_array_get_unchecked(ctx, &inst),
+        Op::ArraySumInt => arrays::lower_array_sum_int(ctx, &inst),
+        Op::ArrayPushReserved => arrays::lower_array_push_reserved(ctx, &inst),
         Op::ArrayGetSilent => arrays::lower_array_get(ctx, &inst, false),
         Op::ArrayGetForWrite => arrays::lower_array_get_for_write(ctx, &inst),
         Op::ArrayIsset => builtins::lower_array_isset(ctx, &inst),
@@ -525,6 +543,7 @@ pub(super) fn lower_instruction(ctx: &mut FunctionContext<'_>, inst_id: InstId) 
         Op::ExprCall => callables::lower_expr_call(ctx, &inst),
         Op::CallableDescriptorInvoke => callables::lower_callable_descriptor_invoke(ctx, &inst),
         Op::PipeCall => callables::lower_pipe_call(ctx, &inst),
+        Op::MethodLookup => method_lookup::lower_method_lookup(ctx, &inst),
         Op::MethodCall => lower_method_call(ctx, &inst),
         Op::NullsafeMethodCall => lower_nullsafe_method_call(ctx, &inst),
         Op::StaticMethodCall => lower_static_method_call(ctx, &inst),
@@ -546,6 +565,9 @@ pub(super) fn lower_instruction(ctx: &mut FunctionContext<'_>, inst_id: InstId) 
         Op::ReturnBoundaryMixedToInt => {
             mixed_narrowing::lower_return_boundary_mixed_to_int(ctx, &inst)
         }
+        Op::PropertyBoundaryCheckedToInt => {
+            mixed_narrowing::lower_property_boundary_checked_to_int(ctx, &inst)
+        }
         Op::ExternCall => externs::lower_extern_call(ctx, &inst),
         Op::LanguageConstructCall => builtins::lower_language_construct_call(ctx, &inst),
         Op::EvalLiteralCall => builtins::lower_eval_literal_call(ctx, &inst),
@@ -560,7 +582,7 @@ pub(super) fn lower_instruction(ctx: &mut FunctionContext<'_>, inst_id: InstId) 
         Op::EvalConstantFetch => builtins::lower_eval_constant_fetch(ctx, &inst),
         Op::ClosureCapture => lower_closure_capture(ctx, &inst),
         Op::ClosureNew => lower_closure_new(ctx, &inst),
-        Op::FirstClassCallableNew => lower_first_class_callable_new(ctx, &inst),
+        Op::FirstClassCallableNew | Op::CallableValueNew => lower_first_class_callable_new(ctx, &inst),
         Op::Acquire => ownership::lower_acquire(ctx, &inst),
         Op::Release => ownership::lower_release(ctx, &inst),
         Op::ReleaseUnlessAliases => ownership::lower_release_unless_aliases(ctx, &inst),
@@ -585,6 +607,7 @@ pub(super) fn lower_instruction(ctx: &mut FunctionContext<'_>, inst_id: InstId) 
         Op::IncludeFrameEnter => lower_include_frame_enter(ctx, &inst),
         Op::IncludeFrameExit => lower_include_frame_exit(ctx, &inst),
         Op::ClassLikeActivate => lower_classlike_activate(ctx, &inst),
+        Op::IncludeOnceTest => lower_include_once_test(ctx, &inst),
         Op::FunctionVariantDispatch => Ok(()),
         Op::FunctionVariantMark => lower_function_variant_mark(ctx, &inst),
         Op::RuntimeCall => lower_runtime_call(ctx, &inst),

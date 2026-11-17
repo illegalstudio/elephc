@@ -243,6 +243,8 @@ fn visit_stmt(stmt: &Stmt, st: &mut State) {
         // Statements that don't carry expressions or sub-bodies for yield checks.
         StmtKind::Break(_)
         | StmtKind::Continue(_)
+        | StmtKind::Goto(_)
+        | StmtKind::GotoLabel(_)
         | StmtKind::RefAssign { .. }
         | StmtKind::NamespaceDecl { .. }
         | StmtKind::UseDecl { .. }

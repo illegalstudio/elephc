@@ -11,7 +11,8 @@ records immutable catalog metadata, and `elephc native` builds verified static
 archives into a target- and toolchain-specific cache.
 
 The catalog contains PCRE2 10.47, zlib 1.3.2, OpenSSL 3.5.8, nghttp2 1.70.0,
-libssh2 1.11.1, curl 8.21.0, Oniguruma 6.9.10, libxml2 2.15.3, and GMP 6.3.0.
+libssh2 1.11.1, curl 8.21.0, Oniguruma 6.9.10, libxml2 2.15.3, libtidy 5.8.0, GMP 6.3.0,
+libmagic 5.46, and the libcrypto-only `openssl-crypto` 3.6.4 package.
 Programs using `preg_*`, `RegexIterator`, or `RecursiveRegexIterator` require
 PCRE2 at final link time. Mbstring uses the same managed package only when a
 program selects its custom output MIME-pattern provider. The contract-owned
@@ -37,6 +38,13 @@ built with the platform's iconv (built into glibc; `-liconv` on Apple targets)
 and without zlib, ICU, Python, readline, or dynamic modules, so it has no
 catalog dependencies of its own. Its complete public header set is retained
 so later XML extensions can compile against the same artifact.
+
+libtidy is the parser behind the `tidy` bridge: `--with-tidy`, or any program
+whose link plan pulls in `elephc_tidy`, requires `libtidy.a` at final link time.
+It is compiled from the pinned tidy-html5 5.8.0 sources by a reviewed recipe
+(`src/native_deps/recipes/libtidy.rs`), has no catalog dependencies, and is
+declared with `elephc native add libtidy`. There is no system `-ltidy` fallback.
+
 GMP 6.3.0 is the integer engine behind the `gmp` bridge: `--with-gmp`, or any
 program that calls a `gmp_*` function or names the `GMP` class, requires the
 managed `libgmp.a` at final link time. The recipe builds the same static
@@ -44,6 +52,13 @@ library php-src links, with no system `-lgmp` fallback and no catalog
 dependencies. The pinned tarball is verified by SHA-256 and size before it is
 built; a missing package fails closed with the `elephc native add gmp`
 recovery.
+
+libmagic 5.46 backs fileinfo and embeds its compiled magic database in the
+program. `openssl-crypto` 3.6.4 supplies the default-provider cipher engine
+used by symmetric `openssl_*` calls, with zlib as its catalog dependency.
+Declare them with `elephc native add libmagic` or
+`elephc native add openssl-crypto`; their force-enable flags are
+`--with-fileinfo` and `--with-openssl`.
 
 `elephc native add oniguruma` installs the pinned Oniguruma library and the
 versioned mbregex provider, with the provider archive before `libonig.a` in link
@@ -279,8 +294,15 @@ installation, so it does not race publication of the same cache key; the
 currently selected fingerprint is retained. Source archives remain
 content-addressed and reusable.
 
-Downloads use HTTPS and are bounded and hashed before publication. Sources are
-gzip- or xz-compressed tarballs; the container format is fixed by the catalog
+Downloads use HTTPS and are bounded and hashed before publication. After four
+failed attempts ending in HTTP 502, 503, or 504, a catalogued GitHub release
+source can be fetched through GitHub's release asset API. Elephc resolves the
+exact tag and filename, then verifies the same catalog size and SHA-256. This
+fallback uses no GitHub token and makes at most two API calls; API
+errors, including rate limits, fail the install so it can be retried later.
+Offline installs never contact either endpoint.
+
+Sources are gzip- or xz-compressed tarballs; the container format is fixed by the catalog
 URL, and xz sources (libxml2) are inflated by a pure-Rust decoder under the
 same expanded-size bound before their tar entries are checked. Extraction
 rejects path escapes, links, device entries, and oversized archives. Builds and

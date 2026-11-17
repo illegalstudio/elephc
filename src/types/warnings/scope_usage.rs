@@ -223,7 +223,11 @@ pub(super) fn collect_scope_reads(
                 collect_expr_reads(path, scope, warnings);
                 scope.read_all_declared();
             }
-            StmtKind::Return(None) | StmtKind::Break(_) | StmtKind::Continue(_) => {}
+            StmtKind::Return(None)
+            | StmtKind::Break(_)
+            | StmtKind::Continue(_)
+            | StmtKind::Goto(_)
+            | StmtKind::GotoLabel(_) => {}
             StmtKind::If {
                 condition,
                 then_body,

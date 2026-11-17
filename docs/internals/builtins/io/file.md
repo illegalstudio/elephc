@@ -1,8 +1,6 @@
 ---
 title: "file() - internals"
 description: "Compiler internals for file(): lowering path, type checks, and runtime helpers."
-sidebar:
-  order: 335
 ---
 
 ## `file()` - internals
@@ -10,7 +8,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/io/file.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/io/file.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:752](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L752) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 
@@ -39,12 +37,12 @@ sidebar:
 ## Signature summary
 
 ```php
-function file(string $filename, int $flags = 0, mixed $context = null): mixed
+function file(string $filename, int $flags = 0): mixed
 ```
 
 ## What the type checker enforces
 
-- **Arity**: takes 1–3 arguments (2 optional).
+- **Arity**: takes 1–2 arguments (1 optional).
 
 ## Eval interpreter (magician)
 

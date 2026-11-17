@@ -106,15 +106,18 @@ enum TagAction {
     NumericString,
     /// PHP resolves this string against a union declaring BOTH `int` and `float` by the
     /// string's own numeric classification, so the member is only known at run time.
-    NumericStringIntOrFloat,
+    /// A full bool member can still accept a non-numeric string.
+    NumericStringIntOrFloat { fallback_bool: bool },
+    /// An exact false member wins before a true source tries another scalar member.
+    FalseOrScalar(Option<PhpType>),
     /// PHP decides this object by its runtime class.
     ObjectClasses(ObjectPlan),
     /// PHP coerces this source to another union member; the arm produces the boxed result.
     ///
     /// `fallback` is the NEXT member PHP tries when the preferred one cannot represent the
-    /// value. Only an `int` target can fail that way, and php-src does not stop there: a float
-    /// outside the int range assigned to `int|string` becomes the STRING `"1.0E+30"`, and
-    /// assigned to `int|bool` becomes `true`.
+    /// value. An out-of-range int conversion or non-numeric string can use it: a float
+    /// outside the int range assigned to `int|string` becomes the STRING `"1.0E+30"`, while
+    /// a non-numeric string assigned to `int|bool` becomes `true`.
     CoerceScalar {
         target: PhpType,
         require_numeric_string: bool,
@@ -156,6 +159,7 @@ enum MemberKind {
     Float,
     Str,
     Bool,
+    False,
     Null,
     Array,
     /// A named class, or `AnyObject` for the bare `object` type.
@@ -256,6 +260,16 @@ pub(super) fn emit_mixed_property_type_guard(
     let Some(actions) = plan_tag_actions(ctx, slot)? else {
         return Ok(None);
     };
+    emit_guard_for_actions(ctx, value, slot, &actions)
+}
+
+/// Emits a declaration plan independently of its caller's final storage materialization.
+fn emit_guard_for_actions(
+    ctx: &mut FunctionContext<'_>,
+    value: ValueId,
+    slot: &PropertySlot,
+    actions: &[TagAction],
+) -> Result<Option<String>> {
     if actions.iter().all(|action| matches!(action, TagAction::Accept)) {
         return Ok(None);
     }
@@ -269,7 +283,9 @@ pub(super) fn emit_mixed_property_type_guard(
 /// body can know.
 fn produces_value(action: &TagAction) -> bool {
     match action {
-        TagAction::NumericStringIntOrFloat | TagAction::CoerceScalar { .. } => true,
+        TagAction::NumericStringIntOrFloat { .. }
+        | TagAction::FalseOrScalar(_)
+        | TagAction::CoerceScalar { .. } => true,
         TagAction::ObjectClasses(plan) => !plan.stringable.is_empty(),
         _ => false,
     }
@@ -313,13 +329,30 @@ fn emit_coercion_arms(
         }
         ctx.emitter.label(label);
         match action {
-            TagAction::NumericStringIntOrFloat => {
+            TagAction::FalseOrScalar(target) => {
+                // An exact false member wins; any other source tries the next scalar member.
+                let payload = crate::codegen_support::mixed_unbox_payload_reg(ctx.emitter.target);
+                abi::emit_reg_move(ctx.emitter, abi::int_result_reg(ctx.emitter), payload);
+                abi::emit_branch_if_int_result_zero(ctx.emitter, accept_label);
+                if let Some(target) = target {
+                    emit_coerced_property_value(ctx, value, slot, target)?;
+                    abi::emit_jump(ctx.emitter, done_label);
+                } else {
+                    emit_property_type_error(ctx, slot, "true");
+                }
+            }
+            TagAction::NumericStringIntOrFloat { fallback_bool } => {
                 let refuse_label =
                     ctx.next_label(&format!("typed_prop_{}_refused_{}", fragment, type_name));
                 emit_classified_numeric_string_member(ctx, value, slot, &refuse_label)?;
                 abi::emit_jump(ctx.emitter, done_label);
                 ctx.emitter.label(&refuse_label);
-                emit_property_type_error(ctx, slot, type_name);
+                if *fallback_bool {
+                    emit_coerced_property_value(ctx, value, slot, &PhpType::Bool)?;
+                    abi::emit_jump(ctx.emitter, &done_label);
+                } else {
+                    emit_property_type_error(ctx, slot, type_name);
+                }
             }
             TagAction::ObjectClasses(_) => {
                 // The helper only answers "coerce" for an object whose class publishes
@@ -355,7 +388,12 @@ fn emit_coercion_arms(
                     let coerce_label =
                         ctx.next_label(&format!("typed_prop_{}_coerce_{}", fragment, type_name));
                     emit_numeric_string_check(ctx.emitter, &coerce_label);
-                    emit_property_type_error(ctx, slot, type_name);
+                    if let Some(fallback) = fallback {
+                        emit_coerced_property_value(ctx, value, slot, fallback)?;
+                        abi::emit_jump(ctx.emitter, &done_label);
+                    } else {
+                        emit_property_type_error(ctx, slot, type_name);
+                    }
                     ctx.emitter.label(&coerce_label);
                 }
                 emit_coerced_property_value(ctx, value, slot, target)?;
@@ -781,12 +819,33 @@ fn emit_property_type_error(ctx: &mut FunctionContext<'_>, slot: &PropertySlot, 
     let message = if let Some(prefix) = &slot.abstract_setter_type_error_prefix {
         format!("{prefix}{source} given")
     } else {
-        format!(
-            "Cannot assign {} to property {}::${} of type {}",
-            source, slot.class_name, slot.property, php_type_name(&slot.php_type),
-        )
+        format!("Cannot assign {source}{}", property_diagnostic_suffix(slot))
     };
     super::super::exceptions::emit_type_error(ctx, &message);
+}
+
+/// Names a declaration without retaining or inspecting the receiver that once supplied it.
+fn property_diagnostic_suffix(slot: &PropertySlot) -> String {
+    let reference = if slot.reference_declaration.is_some() { "reference held by " } else { "" };
+    let declared = slot.reference_declaration.as_ref().unwrap_or(&slot.php_type);
+    format!(" to {reference}property {}::${} of type {}",
+        slot.class_name, slot.property, php_type_name(declared))
+}
+
+/// Throws the property `TypeError` for a bool source, naming it BY VALUE.
+///
+/// php-src prints `true` or `false` here, never `bool`, which is the same rule its `count()`
+/// refusal follows. The value is still in the unbox payload register at the arm's entry, so the
+/// two messages are chosen by a single branch on it.
+fn emit_bool_property_type_error(ctx: &mut FunctionContext<'_>, slot: &PropertySlot) {
+    let true_label = ctx.next_label("typed_prop_bool_true");
+    let payload_reg = crate::codegen_support::mixed_unbox_payload_reg(ctx.emitter.target);
+    let result_reg = abi::int_result_reg(ctx.emitter);
+    abi::emit_reg_move(ctx.emitter, result_reg, payload_reg); // read the unboxed bool payload here
+    abi::emit_branch_if_int_result_nonzero(ctx.emitter, &true_label);
+    emit_property_type_error(ctx, slot, "false");
+    ctx.emitter.label(&true_label);
+    emit_property_type_error(ctx, slot, "true");
 }
 
 /// Throws the same `TypeError` for an object, naming the class the value actually holds.
@@ -807,8 +866,7 @@ fn emit_object_property_type_error(ctx: &mut FunctionContext<'_>, slot: &Propert
         &if slot.abstract_setter_type_error_prefix.is_some() {
             String::from(" given")
         } else {
-            format!(" to property {}::${} of type {}",
-                slot.class_name, slot.property, php_type_name(&slot.php_type))
+            property_diagnostic_suffix(slot)
         },
     );
     abi::emit_call_label(ctx.emitter, "__rt_str_persist");
@@ -1188,6 +1246,14 @@ fn union_actions(
             MemberKind::Float,
             &[MemberKind::Int, MemberKind::Str, MemberKind::Bool],
         ),
+        3 if !has(&MemberKind::Bool) && has(&MemberKind::False) => {
+            TagAction::FalseOrScalar(
+                [MemberKind::Int, MemberKind::Float, MemberKind::Str]
+                    .iter()
+                    .find(|kind| has(kind))
+                    .map(&member_type),
+            )
+        }
         3 => scalar_action(
             MemberKind::Bool,
             &[MemberKind::Int, MemberKind::Float, MemberKind::Str],
@@ -1216,7 +1282,9 @@ fn union_string_action(kinds: &[MemberKind]) -> TagAction {
         return TagAction::Accept;
     }
     if has(&MemberKind::Int) && has(&MemberKind::Float) {
-        return TagAction::NumericStringIntOrFloat;
+        return TagAction::NumericStringIntOrFloat {
+            fallback_bool: has(&MemberKind::Bool),
+        };
     }
     for (kind, target) in [
         (MemberKind::Int, PhpType::Int),
@@ -1226,7 +1294,7 @@ fn union_string_action(kinds: &[MemberKind]) -> TagAction {
             return TagAction::CoerceScalar {
                 target,
                 require_numeric_string: true,
-                fallback: None,
+                fallback: has(&MemberKind::Bool).then_some(PhpType::Bool),
             };
         }
     }
@@ -1263,7 +1331,8 @@ fn classify_member(member: &PhpType) -> Option<MemberKind> {
         PhpType::Int => Some(MemberKind::Int),
         PhpType::Float => Some(MemberKind::Float),
         PhpType::Str => Some(MemberKind::Str),
-        PhpType::Bool | PhpType::False => Some(MemberKind::Bool),
+        PhpType::Bool => Some(MemberKind::Bool),
+        PhpType::False => Some(MemberKind::False),
         PhpType::Void | PhpType::Never => Some(MemberKind::Null),
         PhpType::Array(_) | PhpType::AssocArray { .. } => Some(MemberKind::Array),
         PhpType::Object(class_name) if class_name.is_empty() => Some(MemberKind::AnyObject),
@@ -1471,13 +1540,13 @@ mod tests {
     ///
     /// Every other shape keeps its static choice, so this pins the exact boundary the runtime
     /// classifier was added for and makes sure it did not swallow the single-member unions or
-    /// the `string`/`bool` fallbacks that were already right.
+    /// the declared `string`/`bool` alternatives.
     #[test]
     fn only_an_int_and_float_union_defers_the_string_member_to_run_time() {
         let deferred = |kinds: &[MemberKind]| {
             matches!(
                 union_string_action(kinds),
-                TagAction::NumericStringIntOrFloat
+                TagAction::NumericStringIntOrFloat { .. }
             )
         };
         assert!(deferred(&[MemberKind::Int, MemberKind::Float]));
@@ -1509,7 +1578,11 @@ mod tests {
                 } => {
                     assert_eq!(target, expected, "static member for {kinds:?}");
                     assert!(require_numeric_string, "numeric rule for {kinds:?}");
-                    assert!(fallback.is_none(), "no fallback for {kinds:?}");
+                    assert_eq!(
+                        fallback,
+                        kinds.contains(&MemberKind::Bool).then_some(PhpType::Bool),
+                        "only a full bool member is a fallback for {kinds:?}",
+                    );
                 }
                 other => panic!("{kinds:?} must coerce statically, got {other:?}"),
             }
@@ -1529,6 +1602,32 @@ mod tests {
         assert!(matches!(
             union_string_action(&[MemberKind::Array, MemberKind::Null]),
             TagAction::Reject
+        ));
+    }
+
+    /// Numeric unions may fall back to a full bool member, but a literal false is not a cast target.
+    #[test]
+    fn numeric_union_boolean_fallback_preserves_literal_false_contracts() {
+        for member in [MemberKind::Bool, MemberKind::False] {
+            match union_string_action(&[MemberKind::Int, MemberKind::Float, member.clone()]) {
+                TagAction::NumericStringIntOrFloat { fallback_bool } => {
+                    assert_eq!(fallback_bool, member == MemberKind::Bool);
+                }
+                other => panic!("unexpected numeric union plan: {other:?}"),
+            }
+            for numeric in [MemberKind::Int, MemberKind::Float] {
+                match union_string_action(&[numeric, member.clone()]) {
+                    TagAction::CoerceScalar { fallback, .. } => {
+                        assert_eq!(fallback, (member == MemberKind::Bool).then_some(PhpType::Bool));
+                    }
+                    other => panic!("unexpected single numeric member plan: {other:?}"),
+                }
+            }
+        }
+        assert_eq!(classify_member(&PhpType::False), Some(MemberKind::False));
+        assert!(matches!(
+            union_string_action(&[MemberKind::False, MemberKind::Null]),
+            TagAction::Reject,
         ));
     }
 
@@ -1638,3 +1737,5 @@ thread_local! {
     /// Builds of the is-a index on this test thread.
     pub(crate) static IS_A_INDEX_BUILDS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
+mod reference_coercion;
+pub(in crate::codegen::lower_inst) use reference_coercion::lower as lower_reference_property_coercion;

@@ -30,7 +30,10 @@ pub(super) fn initialize_owned_property_reference(
             ctx.module
                 .class_infos
                 .get(&slot.class_name)
-                .is_some_and(|class| class.property_slot_is_owned_reference(index))
+                .is_some_and(|class| {
+                    class.property_slot_owns_reference(index)
+                        || class.property_slot_is_owned_reference(index)
+                })
         });
     if owns_cell {
         // Fixed and known dynamic allocations already own this cell. Replacing it would
@@ -113,6 +116,7 @@ pub(super) fn resolve_physical_property_slot(
         width: None,
         is_reference: info.property_slot_is_reference(index, property),
         abstract_setter_type_error_prefix: None,
+        reference_declaration: None,
     })
 }
 
@@ -258,7 +262,7 @@ impl PropertyAccessKind {
     fn magic_method(self) -> Option<&'static str> {
         match self {
             Self::DirectRead(mode) | Self::RuntimeRead(mode) => {
-                Some(if mode.is_read() { "__get" } else { "__isset" })
+                Some(if mode.uses_magic_get() { "__get" } else { "__isset" })
             }
             Self::DirectWrite | Self::RuntimeWrite => Some("__set"),
             Self::DirectUnset | Self::RuntimeUnset => Some("__unset"),
@@ -424,7 +428,7 @@ pub(super) fn resolve_property_runtime_action(
         if let Some(magic) = kind.magic_method() {
             if class_declares_method(ctx, class_name, magic) {
                 let value_read =
-                    matches!(kind, PropertyAccessKind::DirectRead(mode) if mode.is_read());
+                    matches!(kind, PropertyAccessKind::DirectRead(mode) if mode.uses_magic_get());
                 if value_read && resolution == PropertyNameResolution::Dynamic {
                     if let Some(hash_offset) =
                         dynamic_property_hash_offset_for_class(ctx, class_name, property)?
@@ -442,6 +446,15 @@ pub(super) fn resolve_property_runtime_action(
     }
     match resolution {
         PropertyNameResolution::Visible => {
+            if matches!(kind, PropertyAccessKind::DirectUnset | PropertyAccessKind::RuntimeUnset)
+                && ctx.module.class_infos.get(class_name.trim_start_matches('\\'))
+                    .and_then(|info| info.property_hooks.get(property)).is_some_and(|hooks| hooks.any())
+            {
+                return Ok(PropertyRuntimeAction::Refuse {
+                    message: format!("Cannot unset hooked property {}::${}",
+                        class_name.trim_start_matches('\\'), property),
+                });
+            }
             resolve_property_slot_for_class(ctx, class_name, property, inst)
                 .map(PropertyRuntimeAction::Slot)
         }
@@ -489,7 +502,7 @@ pub(super) fn resolve_property_runtime_action(
             if matches!(
                 kind,
                 PropertyAccessKind::DirectRead(mode) | PropertyAccessKind::RuntimeRead(mode)
-                    if !mode.is_read()
+                    if !mode.uses_magic_get()
             ) {
                 return Ok(PropertyRuntimeAction::DynamicMissing {
                     warns_on_miss: false,
@@ -1035,7 +1048,7 @@ pub(super) fn resolve_property_read_arm(
                 .map(|slot| Some(PropertyNameArm::Slot(slot)))
         }
         PropertyNameResolution::Dynamic => Ok(Some(PropertyNameArm::ScopeDynamic)),
-        PropertyNameResolution::Inaccessible(visibility) => Ok(mode.is_read().then(|| {
+        PropertyNameResolution::Inaccessible(visibility) => Ok(mode.uses_magic_get().then(|| {
             PropertyNameArm::Refuse {
                 message: property_access_error_message(&visibility, normalized, property),
             }
@@ -1059,7 +1072,7 @@ fn class_declares_property_magic(
             .is_some_and(|class_info| class_info.methods.contains_key(&php_symbol_key(magic)))
     };
     match mode {
-        PropertyFetchMode::Read => declares("__get"),
+        PropertyFetchMode::Read | PropertyFetchMode::QuietRead => declares("__get"),
         // `isset()` asks `__isset` alone.
         PropertyFetchMode::Probe | PropertyFetchMode::Isset => declares("__isset"),
         // `??` consults `__isset` first and then `__get`, so either accessor takes the name away
@@ -1182,6 +1195,7 @@ fn resolve_scope_private_property_slot(
         width: None,
         is_reference: class_info.property_slot_is_reference(index, slot_property),
         abstract_setter_type_error_prefix: None,
+        reference_declaration: None,
     })
 }
 
@@ -1445,6 +1459,7 @@ pub(super) fn resolve_property_slot_for_class(
         width: None,
         is_reference,
         abstract_setter_type_error_prefix: None,
+        reference_declaration: None,
     })
 }
 
@@ -1689,6 +1704,7 @@ pub(super) fn resolve_packed_field_slot(
         width: field.width,
         is_reference: false,
         abstract_setter_type_error_prefix: None,
+        reference_declaration: None,
     })
 }
 

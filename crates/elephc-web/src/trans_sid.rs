@@ -62,7 +62,7 @@ unsafe fn read_cstr(p: *const c_char) -> String {
 /// the id) at the *start* of each request, so a non-empty id at this point
 /// reliably means a session was started during this request — and that retained
 /// id is what we use as the "a session was active" signal.
-fn activation(req_cookie: Option<&str>) -> Option<Activation> {
+fn activation() -> Option<Activation> {
     unsafe {
         if crate::session::elephc_web_session_get_use_trans_sid() != 1 {
             return None;
@@ -83,10 +83,12 @@ fn activation(req_cookie: Option<&str>) -> Option<Activation> {
             return None;
         }
         // If the client already sent the session cookie, URL propagation is
-        // unnecessary — the id round-trips via the cookie.
+        // unnecessary — the id round-trips via the cookie. Read it here rather
+        // than before the handler so an inactive request never materializes the
+        // Cookie header.
         if crate::session::elephc_web_session_get_use_cookies() == 1 {
-            if let Some(cookie) = req_cookie {
-                if cookie_contains_name(cookie, &name) {
+            if let Some(cookie) = crate::request_state::request_header_owned("cookie") {
+                if cookie_contains_name(&cookie, &name) {
                     return None;
                 }
             }
@@ -102,15 +104,12 @@ fn activation(req_cookie: Option<&str>) -> Option<Activation> {
 ///
 /// Inactive and non-HTML responses retain the immediate streaming path. A
 /// same-origin `Location` is still rewritten before headers are committed.
-pub(crate) fn prepare_streaming_response(
-    req_cookie: Option<&str>,
-    req_host: Option<&str>,
-    headers: &mut Vec<(String, String)>,
-) -> bool {
-    let Some(act) = activation(req_cookie) else {
+pub(crate) fn prepare_streaming_response(headers: &mut Vec<(String, String)>) -> bool {
+    let Some(act) = activation() else {
         return false;
     };
-    rewrite_location_header(headers, &act, req_host);
+    let req_host = crate::request_state::request_header_owned("host");
+    rewrite_location_header(headers, &act, req_host.as_deref());
     content_type_is_html(headers)
 }
 
@@ -123,16 +122,15 @@ pub(crate) fn prepare_streaming_response(
 /// rewrite a same-origin `Location` and to drop a now-stale explicit
 /// `Content-Length` when the body length changes (hyper recomputes it).
 pub fn maybe_rewrite_response(
-    req_cookie: Option<&str>,
-    req_host: Option<&str>,
     resp_headers: &mut Vec<(String, String)>,
     body: Vec<u8>,
 ) -> Vec<u8> {
-    let act = match activation(req_cookie) {
+    let act = match activation() {
         Some(a) => a,
         None => return body,
     };
-    rewrite_location_header(resp_headers, &act, req_host);
+    let req_host = crate::request_state::request_header_owned("host");
+    rewrite_location_header(resp_headers, &act, req_host.as_deref());
     // Only HTML bodies are rewritten; a missing Content-Type is treated as HTML.
     if !content_type_is_html(resp_headers) {
         return body;
@@ -142,7 +140,14 @@ pub fn maybe_rewrite_response(
         Ok(s) => s,
         Err(e) => return e.into_bytes(),
     };
-    match rewrite_html(&text, &act.name, &act.id, &act.tags, &act.hosts, req_host) {
+    match rewrite_html(
+        &text,
+        &act.name,
+        &act.id,
+        &act.tags,
+        &act.hosts,
+        req_host.as_deref(),
+    ) {
         Some(new_body) => {
             // The body length changed: drop any explicit Content-Length so the
             // hyper response body recomputes the correct length.

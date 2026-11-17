@@ -18,6 +18,8 @@ pub(super) fn collect_stmt_scope_access(stmt: &Stmt, access: &mut EvalScopeAcces
         | StmtKind::Return(Some(expr)) => collect_expr_scope_access(expr, access),
         StmtKind::Return(None)
         | StmtKind::Break(_)
+        | StmtKind::Goto(_)
+        | StmtKind::GotoLabel(_)
         | StmtKind::Continue(_)
         | StmtKind::NamespaceDecl { .. }
         | StmtKind::UseDecl { .. }

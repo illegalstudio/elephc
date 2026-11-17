@@ -543,22 +543,28 @@ pub(in crate::codegen) fn emit_mixed_string_dispatch_from_result(
         let return_ty = emit_mixed_tostring_candidate_call(ctx, value, receiver_reg, candidate)?;
         coerce_tostring_return_to_string_result(ctx, &return_ty)?;
         if matches!(mode, MixedStringContextMode::Stdout) {
-            // A `string`-declared `__toString()` hands back an owned result nothing else releases.
-            if return_ty.codegen_repr() == PhpType::Str {
-                super::output_values::emit_owned_string_result_to_stdout(ctx)?;
-            } else {
-                abi::emit_write_stdout(ctx.emitter, &PhpType::Str);
-            }
+            super::output_values::emit_owned_tostring_result_to_stdout(ctx, &PhpType::Str)?;
         }
         abi::emit_jump(ctx.emitter, &done_label);
     }
 
     ctx.emitter.label(&no_match_label);
-    super::output_values::emit_dynamic_object_to_string(ctx, receiver_reg);
-    if matches!(mode, MixedStringContextMode::Stdout) {
-        super::output_values::emit_owned_string_result_to_stdout(ctx)?;
-    }
+    // No compiled `__toString()` arm matched: the shared formatter resolves the object at run
+    // time (an eval-declared class, an inherited entry) or throws PHP's catchable `Error`.
+    emit_erased_object_string(ctx, receiver_reg, &mode)?;
     ctx.emitter.label(&done_label);
+    Ok(())
+}
+
+/// Converts an erased object through the shared formatter's owned, exception-safe string ABI.
+fn emit_erased_object_string(
+    ctx: &mut FunctionContext<'_>, receiver: &str, mode: &MixedStringContextMode,
+) -> Result<()> {
+    super::output_values::emit_dynamic_object_to_string(ctx, receiver);
+    crate::codegen::return_ownership::emit_status(ctx.emitter, true);
+    if matches!(mode, MixedStringContextMode::Stdout) {
+        super::output_values::emit_owned_tostring_result_to_stdout(ctx, &PhpType::Str)?;
+    }
     Ok(())
 }
 
@@ -725,6 +731,15 @@ fn lower_object_to_string(
             super::iterators::InterfaceDispatchMiss::DynamicToString(value),
         );
     }
+    if normalized.is_empty() {
+        ctx.load_value_to_result(expect_operand(inst, 0)?)?;
+        let receiver = abi::int_result_reg(ctx.emitter);
+        emit_erased_object_string(ctx, receiver, &MixedStringContextMode::Result)?;
+        if let Some(result) = inst.result {
+            ctx.store_runtime_return_ownership(result);
+        }
+        return store_if_result(ctx, inst);
+    }
     if object_class_has_tostring(ctx, normalized) {
         return lower_runtime_object_method_call(ctx, inst, normalized, "__toString");
     }
@@ -736,8 +751,12 @@ fn lower_object_to_string(
     //   - the class is named but publishes no `__toString`. A SUBCLASS of it may still publish
     //     one, and even when none does PHP throws a CATCHABLE `Error` rather than dying.
     // The runtime resolver settles both from the object itself.
-    let value = expect_operand(inst, 0)?;
-    super::output_values::emit_value_dynamic_object_to_string(ctx, value)?;
+    ctx.load_value_to_result(expect_operand(inst, 0)?)?;
+    let receiver = abi::int_result_reg(ctx.emitter);
+    emit_erased_object_string(ctx, receiver, &MixedStringContextMode::Result)?;
+    if let Some(result) = inst.result {
+        ctx.store_runtime_return_ownership(result);
+    }
     store_if_result(ctx, inst)
 }
 

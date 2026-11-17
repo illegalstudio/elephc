@@ -11,7 +11,12 @@
 
 mod assignments;
 mod control_flow;
+mod foreach_bindings;
+mod loop_entry;
+mod loop_catches;
+mod switch_storage;
 mod narrowing;
+pub(super) use narrowing::type_is_definitely_non_null;
 
 pub(super) use assignments::expr_is_string_offset_target;
 pub(super) use control_flow::widen_property_for_element_reference;
@@ -20,7 +25,7 @@ use crate::fast_hash::FastSet as HashSet;
 
 use crate::errors::CompileError;
 use crate::parser::ast::{ExprKind, Stmt, StmtKind};
-use crate::types::TypeEnv;
+use crate::types::{PhpType, TypeEnv};
 
 use super::Checker;
 
@@ -41,11 +46,29 @@ impl Checker {
         // and the checker only ever sees the merged program, so the file's answer travels on the
         // statement. Save/restore rather than assign: a strict file's `include` of a coercive one
         // must not leave the includer's setting behind, and vice versa.
+        let retirement = match &stmt.kind {
+            StmtKind::Assign { name, .. } | StmtKind::TypedAssign { name, .. }
+            | StmtKind::RefAssign { target: name, .. } if !self.finally_flow_frames.is_empty() =>
+                Some(if self.local_flow_read_is_stable(name) {
+                    env.get(name).cloned().unwrap_or(PhpType::Void)
+                } else { PhpType::Mixed }),
+            _ => None,
+        };
+        let before_write = (!self.finally_flow_frames.is_empty() && matches!(stmt.kind,
+            StmtKind::ArrayAssign { .. } | StmtKind::NestedArrayAssign { .. }
+            | StmtKind::ArrayPush { .. } | StmtKind::PropertyAssign { .. }
+            | StmtKind::PropertyArrayPush { .. } | StmtKind::PropertyArrayAssign { .. }
+            | StmtKind::StaticPropertyAssign { .. } | StmtKind::StaticPropertyArrayPush { .. }
+            | StmtKind::StaticPropertyArrayAssign { .. })).then(|| self.snapshot_flow_exit(env));
         let outer_strict_types = self.strict_types;
         self.strict_types = stmt.strict_types;
         let result = crate::strict_php::with_source_mode(stmt.source_mode, || {
             self.check_stmt_in_current_source_mode(stmt, env)
         });
+        // Global bindings record retirement separately before each source-order alias change.
+        if result.is_ok() && !matches!(stmt.kind, StmtKind::Foreach { .. } | StmtKind::Global { .. }) {
+            self.record_statement_exception_flow(stmt, env, retirement.as_ref(), before_write);
+        }
         self.strict_types = outer_strict_types;
         result
     }
@@ -72,12 +95,16 @@ impl Checker {
             StmtKind::IncludeOnceGuard { body, .. } => {
                 // The guard lowers to a real runtime branch (`Op::IncludeOnceGuard`), so its
                 // body is conditional exactly like an `if` body.
-                self.in_conditional_scope(env, |checker, env| {
-                    for stmt in body {
-                        checker.check_stmt(stmt, env)?;
-                    }
+                let entry = self.definitely_bound_locals.clone();
+                let entry_storage = self.guarded_union_types.clone();
+                let result = self.in_conditional_scope(env, |checker, env| {
+                    for stmt in body { checker.check_stmt(stmt, env)?; }
                     Ok(())
-                })
+                });
+                self.definitely_bound_locals.retain(|name| entry.contains(name));
+                self.retain_raw_entry_proofs(&entry_storage);
+                self.publish_binding_read_views(env);
+                result
             }
             StmtKind::IfDef { .. } => {
                 Err(CompileError::new(stmt.span, "Unresolved ifdef statement"))
@@ -131,26 +158,38 @@ impl Checker {
             // An included file's `return`, rewritten into a `break` to the include's wrapper,
             // may leave a `finally` as the `return` could. Its depth still has to hold.
             StmtKind::Break(levels) if stmt.is_include_return_break() => {
-                if *levels > self.break_continue_depth {
-                    self.check_loop_exit(stmt.span, "break", *levels)?;
+                if *levels <= self.break_continue_depth {
+                    self.record_loop_control_exit(*levels, false, env);
+                    Ok(())
+                } else {
+                    self.check_loop_exit(stmt.span, "break", *levels)
                 }
-                self.record_break_env(*levels, env);
-                Ok(())
             }
             StmtKind::Break(levels) => {
                 self.check_loop_exit(stmt.span, "break", *levels)?;
-                self.record_break_env(*levels, env);
+                self.record_loop_control_exit(*levels, false, env);
                 Ok(())
             }
+            // A `continue` goes back to the loop's condition, which can end the loop: what the
+            // skipped iteration left in its locals reaches the code after the loop exactly as
+            // a `break`'s does (`record_loop_control_exit` files it as a back edge the loop flow
+            // publishes). Dropping it typed Doctrine's `InsertBatch::batchByEntityType()`
+            // result as an empty array -- its only push sits in a branch that `continue`s.
             StmtKind::Continue(levels) => {
                 self.check_loop_exit(stmt.span, "continue", *levels)?;
-                // A `continue` goes back to the loop's condition, which can end the loop: what the
-                // skipped iteration left in its locals reaches the code after the loop exactly as
-                // a `break`'s does. Dropping it typed Doctrine's `InsertBatch::batchByEntityType()`
-                // result as an empty array -- its only push sits in a branch that `continue`s.
-                self.record_break_env(*levels, env);
+                self.record_loop_control_exit(*levels, true, env);
                 Ok(())
             }
+            // The checker reads control flow from the statement tree and has no way to type a
+            // jump. `crate::goto_lowering` rewrites every `goto` of a parsed file before this
+            // pass, so one that arrives here came through a path that skipped it.
+            StmtKind::Goto(_) => Err(CompileError::new(
+                stmt.span,
+                "Internal compiler error: 'goto' reached the type checker without being lowered",
+            )),
+            // A label that survives lowering belongs to a file without any `goto`: nothing can
+            // jump to it, so it is an inert statement.
+            StmtKind::GotoLabel(_) => Ok(()),
             StmtKind::ExprStmt(expr) => {
                 // The one position an `unset(...)` may end a local binding from. elephc's parser
                 // accepts `unset` as an expression (PHP's grammar does not), so the kill has to
@@ -180,7 +219,10 @@ impl Checker {
             StmtKind::FunctionDecl { .. } => Ok(()),
             StmtKind::Return(expr) => {
                 if let Some(e) = expr {
+                    self.prepare_promotable_return(e, env);
                     let returned = self.infer_type_with_assignment_effects(e, env)?;
+                    self.confirm_promotable_return(e, env);
+                    self.record_return_boundary_exception_flow(&returned, env);
                     // Record the type as observed HERE, in flow order, so the later
                     // flow-insensitive return-coverage pass does not apply a narrowing that
                     // only holds further down the body to this return. See
@@ -248,6 +290,7 @@ impl Checker {
                         }
                     }
                 }
+                self.record_finally_return(env);
                 Ok(())
             }
             StmtKind::ClassDecl { .. }
@@ -295,15 +338,6 @@ impl Checker {
         boxed_ref_aliased.retain(|name| !invalidated.contains(name));
         self.boxed_ref_aliased_locals = boxed_ref_aliased;
         result
-    }
-
-    /// Files the environment a `break` carries out of the construct it targets.
-    fn record_break_env(&mut self, levels: usize, env: &TypeEnv) {
-        let frames = self.loop_break_envs.len();
-        if levels == 0 || levels > frames {
-            return;
-        }
-        self.loop_break_envs[frames - levels].push(env.clone());
     }
 
     /// Validates a `break` or `continue` statement against the current loop depth.

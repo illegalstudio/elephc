@@ -11,11 +11,13 @@
 //! - PHP eval fragments start in PHP mode: an opening `<?php` / `<?=` tag is legal only after a
 //!   `?>` has switched to inline HTML (`eval('?>' . $template)`), never in PHP mode.
 //! - File and directory metadata are supplied by the eval context at execution time.
+//! - Parsing runs on a dedicated temporary stack before any PHP execution can suspend.
 
 pub(crate) mod generics;
 mod docblocks;
 mod cursor;
 mod expressions;
+mod jumps;
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 pub(crate) mod repl;
 pub(crate) mod state;
@@ -34,6 +36,11 @@ pub(crate) use state::{EVAL_YIELD_FROM_INTRINSIC, EVAL_YIELD_INTRINSIC};
 use state::Parser;
 
 pub(crate) use cursor::is_reserved_class_like_name as is_reserved_word;
+pub(crate) use cursor::is_reserved_keyword;
+
+/// Parser frames must fit independently of the caller's native Fiber or host-thread stack.
+const PARSER_STACK_BYTES: usize = 16 * 1024 * 1024;
+
 /// Parses a whole PHP source file, inline HTML and every `<?php … ?>` block, into one program.
 ///
 /// PHP compiles a file as a single token stream in which the text outside the tags is
@@ -43,6 +50,11 @@ pub(crate) use cursor::is_reserved_class_like_name as is_reserved_word;
 /// tokens instead reproduces PHP's own view of the file, and the token lines stay file lines so a
 /// diagnostic needs no offset.
 pub fn parse_source_file(code: &[u8]) -> Result<EvalProgram, EvalParseDiagnostic> {
+    with_parser_stack(|| parse_source_file_unstacked(code))
+}
+
+/// Body of [`parse_source_file`], run on the temporary parser stack.
+fn parse_source_file_unstacked(code: &[u8]) -> Result<EvalProgram, EvalParseDiagnostic> {
     let mut tokens: Vec<Token> = Vec::new();
     let mut cursor = leading_shebang_end(code);
     while let Some(open) = find_php_open_tag(code, cursor) {
@@ -208,6 +220,11 @@ pub fn parse_eval_fragment(code: &[u8]) -> Result<EvalProgram, EvalParseDiagnost
 
 /// Shared body of the two fragment entry points.
 fn parse_fragment_with(code: &[u8], track_lines: bool) -> Result<EvalProgram, EvalParseDiagnostic> {
+    with_parser_stack(|| parse_fragment_unstacked(code, track_lines))
+}
+
+/// Body of [`parse_fragment_with`], run on the temporary parser stack.
+fn parse_fragment_unstacked(code: &[u8], track_lines: bool) -> Result<EvalProgram, EvalParseDiagnostic> {
     if contains_php_open_tag(code) {
         return Err(EvalParseDiagnostic::at_source_end(
             EvalParseError::PhpOpenTag,
@@ -235,8 +252,16 @@ pub(crate) fn parse_tokens(
     // `parse_source_file` gives them. Without them every line inside the file reported the
     // line its function was entered on, so a Twig template's `getTrace()` frame named the
     // `block_*` method line and Symfony UX's live-component ids came out different from php's.
-    Parser::new(tokens, source_len)
-        .tracking_source_lines()
-        .parse_program()
-        .map_err(|diagnostic| diagnostic.error())
+    with_parser_stack(|| {
+        Parser::new(tokens, source_len)
+            .tracking_source_lines()
+            .parse_program()
+            .map_err(|diagnostic| diagnostic.error())
+    })
+}
+
+/// Uses an explicit stack because native coroutine switches do not update OS-thread stack bounds.
+/// Parsing invokes no PHP callbacks; the temporary stack ends before interpreter execution begins.
+fn with_parser_stack<R>(parse: impl FnOnce() -> R) -> R {
+    stacker::grow(PARSER_STACK_BYTES, parse)
 }

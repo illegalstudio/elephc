@@ -114,7 +114,7 @@ fn numeric_writer(function: &Function, writers: &HashMap<LocalSlotId, Vec<ValueI
 /// Whether an operation can leave a promoted float in its result.
 fn is_numeric_carrier(op: Op) -> bool {
     matches!(op, Op::ICheckedAdd | Op::ICheckedSub | Op::ICheckedMul | Op::ICheckedPow
-        | Op::MixedNumericBinop | Op::StrIncDec)
+        | Op::MixedNumericBinop | Op::MixedMinMax | Op::StrIncDec)
 }
 
 /// Reads explicit edges only; exceptional edges cannot invalidate a conservative storage widening.

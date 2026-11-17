@@ -20,6 +20,11 @@ use crate::span::Span;
 pub(super) use members::{walk_class_constant, walk_class_method, walk_class_property};
 pub(crate) use stmts::walk_program;
 
+/// Walks one expression outside a statement, such as a parameter default.
+pub(crate) fn walk_expression<P: Pass>(expr: crate::parser::ast::Expr, pass: &mut P) -> crate::parser::ast::Expr {
+    exprs::walk_expr(expr, pass)
+}
+
 use crate::parser::ast::TypeExpr;
 
 /// Routes one inheritance clause entry (`extends Box<int>`, `implements Repository<User>`)
@@ -182,6 +187,27 @@ pub(crate) trait Pass {
         stmt
     }
 
+    /// Transforms the walked statement list of one label and variable scope: a function,
+    /// method or closure body. A braced `namespace` block is not one: it shares the scope of
+    /// the list that holds it.
+    ///
+    /// Called after the body's own statements and nested scopes have been rebuilt, so a pass
+    /// that restructures a whole body (`crate::goto_lowering`) sees inner scopes already
+    /// processed and never has to find them inside expressions itself. The top-level program is
+    /// not routed through here: its caller owns that list. Default returns it unchanged.
+    fn transform_scope_body(
+        &self,
+        body: Vec<crate::parser::ast::Stmt>,
+    ) -> Vec<crate::parser::ast::Stmt> {
+        body
+    }
+
+    /// Transforms the span of a rebuilt expression. Default returns it unchanged; a pass that
+    /// copies a body under a new source identity retags every expression here.
+    fn transform_expr_span(&self, span: Span) -> Span {
+        span
+    }
+
     /// Transforms a magic constant node (e.g., `__FILE__`, `__LINE__`) into its
     /// substituted expression. Called for every `MagicConstant` encountered during the walk.
     fn transform_magic(&self, span: Span, mc: MagicConstant) -> ExprKind;
@@ -252,6 +278,11 @@ pub(crate) trait Pass {
     fn enter_class(&mut self, _name: &str) {}
     /// Called when leaving a class or interface declaration.
     fn leave_class(&mut self) {}
+    /// Called around the inheritance clauses (`extends`/`implements`) of the class or
+    /// interface just entered, so a pass can tell an inherited name from a member type.
+    fn enter_heritage(&mut self) {}
+    /// Called after the inheritance clauses of the class or interface just entered.
+    fn leave_heritage(&mut self) {}
     /// Called when entering a trait declaration.
     fn enter_trait(&mut self, _name: &str) {}
     /// Called when leaving a trait declaration.

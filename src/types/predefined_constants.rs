@@ -116,6 +116,19 @@ mod tests {
         assert_eq!(int_constant_value("ARRAY_FILTER_USE_KEY"), Some(2));
         assert_eq!(int_constant_value("E_ALL"), None);
         assert_eq!(int_constant_value("CURLOPT_URL"), Some(10002));
+        assert_eq!(
+            lookup_constant("DATE_ATOM").map(|constant| constant.value),
+            Some(ConstValue::Str("Y-m-d\\TH:i:sP"))
+        );
+        assert_eq!(
+            lookup_constant("DATE_RFC7231").map(|constant| constant.value),
+            Some(ConstValue::Str("D, d M Y H:i:s \\G\\M\\T"))
+        );
+        assert_eq!(
+            lookup_constant("DATE_ISO8601_EXPANDED").and_then(|constant| constant.since),
+            Some(elephc_builtin_contract::PhpVersion::Php82)
+        );
+        assert!(is_registered_constant("DATE_W3C"));
         assert!(is_registered_constant("\\PHP_EOL"));
         assert!(is_registered_constant("SID"));
         assert!(!is_registered_constant("MYSQLI_ASSOC"), "prelude constants are not predefined");

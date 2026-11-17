@@ -1,0 +1,81 @@
+name: Build specialized test tools
+
+on:
+  workflow_call:
+    inputs:
+      variant:
+        type: string
+        required: true
+    outputs:
+      artifact-attempt:
+        value: ${{ jobs.build.outputs.artifact-attempt }}
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    outputs:
+      artifact-attempt: ${{ steps.publish.outputs.attempt }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable, 2026-09-03
+        with:
+          toolchain: '1.98'
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2, 2026-08-06
+        with:
+          prefix-key: rust-deps-special-${{ inputs.variant }}
+          cache-bin: false
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+      - uses: taiki-e/install-action@e88e69ecdb9658bd172693dcdc2c84e7f0ab6a11 # nextest, 2026-09-20
+        with:
+          tool: cargo-nextest
+      - name: Build exact requested configuration
+        env:
+          VARIANT: ${{ inputs.variant }}
+        run: |
+          python3 -B scripts/ci/prepare_variant_config.py tools "$RUNNER_TEMP/variant-nextest.toml"
+          mkdir -p "target/ci-variant/$VARIANT"
+          case "$VARIANT" in
+            curl)
+              cargo build --locked --example gen_builtins --features curl
+              cargo nextest archive --config-file "$RUNNER_TEMP/variant-nextest.toml" --locked --profile ci \
+                -p elephc -p elephc-builtin-contract -p elephc-magician -p elephc-reference \
+                --lib --test builtin_parity_tests --features elephc/curl \
+                --archive-file "target/ci-variant/$VARIANT/nextest-archive.tar.zst"
+              ;;
+            release-frame)
+              cargo nextest archive --config-file "$RUNNER_TEMP/variant-nextest.toml" --locked --profile ci --release -p elephc --lib \
+                --archive-file "target/ci-variant/$VARIANT/nextest-archive.tar.zst"
+              ;;
+            *) exit 1 ;;
+          esac
+          cp "$(command -v cargo-nextest)" "target/ci-variant/$VARIANT/cargo-nextest"
+          (cd "target/ci-variant/$VARIANT" && sha256sum cargo-nextest > cargo-nextest.sha256)
+      - name: Run feature-specific doctests
+        if: inputs.variant == 'curl'
+        run: cargo test --locked -p elephc-builtin-contract -p elephc-magician -p elephc-reference --features elephc-builtin-contract/curl,elephc-magician/curl --doc
+      - name: Publish test executables
+        id: publish
+        uses: ./.github/actions/publish-build-artifact
+        with:
+          target: linux-x86_64
+          kind: tests
+          variant: ${{ inputs.variant }}
+          profile: ${{ inputs.variant == 'release-frame' && 'release' || 'debug' }}
+          features: ${{ inputs.variant == 'curl' && 'curl' || '' }}
+          files: |
+            target/ci-variant/${{ inputs.variant }}/nextest-archive.tar.zst
+            target/ci-variant/${{ inputs.variant }}/cargo-nextest
+            target/ci-variant/${{ inputs.variant }}/cargo-nextest.sha256
+      - name: Publish docs exporter
+        if: inputs.variant == 'curl'
+        uses: ./.github/actions/publish-build-artifact
+        with:
+          target: linux-x86_64
+          kind: tools
+          variant: curl
+          features: curl
+          files: target/debug/examples/gen_builtins

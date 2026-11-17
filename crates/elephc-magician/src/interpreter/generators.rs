@@ -1088,6 +1088,7 @@ pub(crate) fn eval_generator_protocol_result(
     // `owned: false`: the cell belongs to the AOT caller, which releases it after the call.
     let evaluated_args = argument
         .map(|value| EvaluatedCallArg {
+            evaluation_owner: None,
             name: None,
             value: value.borrowed(),
             ref_target: None,

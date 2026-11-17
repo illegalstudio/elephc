@@ -9409,6 +9409,10 @@
    "extension": "libxml",
    "value": 2
   },
+  "LIBXML_NO_XXE": {
+   "extension": "libxml",
+   "value": 8388608
+  },
   "LIBXML_NSCLEAN": {
    "extension": "libxml",
    "value": 8192

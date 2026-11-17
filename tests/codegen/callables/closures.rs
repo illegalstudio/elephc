@@ -3293,6 +3293,26 @@ echo $a, "|", $b, "|", strlen($a), strlen($b);
     let _ = fs::remove_dir_all(dir);
 }
 
+/// A capture-free arrow closure passed to `array_map()` uses the direct callback entry path,
+/// while a capturing closure and an explicitly typed closure keep the descriptor path. All
+/// three must produce identical elements.
+#[test]
+fn test_array_map_capture_free_and_capturing_callbacks_match() {
+    let out = compile_and_run(
+        r#"<?php
+$a = range(1, 10);
+$k = 5;
+echo implode(",", array_map(fn($x) => $x + 1, $a)), "|",
+     implode(",", array_map(fn($x) => $x + $k, $a)), "|",
+     implode(",", array_map(fn(int $x): int => $x * 2, $a)), "\n";
+"#,
+    );
+    assert_eq!(
+        out,
+        "2,3,4,5,6,7,8,9,10,11|6,7,8,9,10,11,12,13,14,15|2,4,6,8,10,12,14,16,18,20\n"
+    );
+}
+
 /// Verifies an untyped arrow fn passed to a `callable` parameter accepts a string argument and
 /// feeds it to a string builtin: an untyped parameter is `mixed`, never an `int` placeholder.
 #[test]
@@ -3743,4 +3763,28 @@ echo "stmt|";
 "#,
     );
     assert_eq!(out, "s|old|stmt|n|");
+}
+
+/// Regression test for #2284: a trailing comma in a closure's `use` list (PHP 8.0+), on one line
+/// or spread over several, keeps every capture and the by-reference flag of `&$b,`: the closure
+/// writes 10 through `$b` and returns the by-value `$a`, so the caller sees "110|7".
+#[test]
+fn test_closure_use_list_trailing_comma() {
+    let out = compile_and_run(
+        r#"<?php
+$a = 100;
+$b = 0;
+$f = function () use (
+    $a,
+    &$b,
+): int {
+    $b = 10;
+    return $a;
+};
+$c = 7;
+$g = static function () use ($c,) { return $c; };
+echo $f() + $b, "|", $g();
+"#,
+    );
+    assert_eq!(out, "110|7");
 }

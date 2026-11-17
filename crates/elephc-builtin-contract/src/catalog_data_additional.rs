@@ -10,7 +10,6 @@
 use crate::{
     PhpModule,
     Area, BuiltinContract, BuiltinId, BuiltinKind, DefaultSpec, ParamSpec, TypeSpec,
-    VariadicSpec,
 };
 
 macro_rules! param {
@@ -198,16 +197,6 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         Str,
         "Returns the error message of the last PCRE regex execution.",
         "function.preg-last-error-msg"
-    ),
-    contract!(
-        "setlocale",
-        System,
-        Standard,
-        [param!("category", Int), param!("locales", Mixed)],
-        Some(VariadicSpec::value("rest")),
-        Mixed,
-        "Sets locale information for the process.",
-        "function.setlocale"
     ),
     contract!(
         "unpack",

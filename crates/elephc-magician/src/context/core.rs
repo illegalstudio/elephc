@@ -50,6 +50,7 @@ pub struct ElephcEvalContext {
     pub(super) abi_version: u32,
     pub(crate) native_global_sync: Option<NativeGlobalSyncHooks>,
     pub(super) abi_owner_count: usize,
+    pub(super) teardown_active: bool,
     pub(super) native_catalog_generation: u64,
     pub(super) native_catalog_ready: bool,
     pub(super) native_catalog_registration_failed: bool,
@@ -140,6 +141,9 @@ pub struct ElephcEvalContext {
     pub(super) include_state: super::request_includes::SharedIncludeState,
     pub(super) claimed_aot_include_classlikes: HashSet<String>,
     pub(super) include_execution_stack: Vec<bool>,
+    /// Instance property defaults each eval class evaluated when it was initialized, by
+    /// (class, property storage name); a new object copies them.
+    pub(super) instance_defaults: HashMap<(String, String), RuntimeCellHandle>,
     pub(super) included_main_file: Option<String>,
     pub(super) error_reporting: i64,
     pub(super) error_handler: Option<EvalErrorHandlerState>,
@@ -229,6 +233,13 @@ pub struct ElephcEvalContext {
     /// reads itself, directly or through another constant, would otherwise recurse without
     /// bound instead of raising php's catchable `Cannot declare self-referencing constant`.
     pub(super) evaluating_class_constants: HashSet<(String, String)>,
+    /// Deprecation notices captured during eager constant-expression evaluation.
+    pub(super) deprecation_notices: super::deprecation_notices::EvalDeprecationNotices,
+    /// Class lookups made by the override checks of the class being bound early, if any.
+    /// The checks only hold a shared context, hence the cell. A record left open by a panic is
+    /// replaced by the next bind, so the cell is safe to carry across `catch_unwind`.
+    pub(super) override_lookups:
+        std::panic::AssertUnwindSafe<std::cell::RefCell<Option<super::override_lookups::EvalOverrideLookups>>>,
 }
 
 impl ElephcEvalContext {
@@ -238,6 +249,7 @@ impl ElephcEvalContext {
             abi_version: ABI_VERSION,
             native_global_sync: None,
             abi_owner_count: 1,
+            teardown_active: false,
             native_catalog_generation: 0,
             native_catalog_ready: false,
             native_catalog_registration_failed: false,
@@ -299,6 +311,7 @@ impl ElephcEvalContext {
             include_state: super::request_includes::current_include_state(),
             claimed_aot_include_classlikes: HashSet::new(),
             include_execution_stack: Vec::new(),
+            instance_defaults: HashMap::new(),
             included_main_file: None,
             error_reporting: crate::eval_php_profile::eval_all_error_mask(),
             error_handler: None,
@@ -361,6 +374,8 @@ impl ElephcEvalContext {
             error_suppression_depth: 0,
             compile_time_constant_depth: 0,
             evaluating_class_constants: HashSet::new(),
+            deprecation_notices: Default::default(),
+            override_lookups: Default::default(),
         }
     }
 
@@ -371,6 +386,7 @@ impl ElephcEvalContext {
             abi_version,
             native_global_sync: None,
             abi_owner_count: 1,
+            teardown_active: false,
             native_catalog_generation: 0,
             native_catalog_ready: false,
             native_catalog_registration_failed: false,
@@ -432,6 +448,7 @@ impl ElephcEvalContext {
             include_state: super::request_includes::current_include_state(),
             claimed_aot_include_classlikes: HashSet::new(),
             include_execution_stack: Vec::new(),
+            instance_defaults: HashMap::new(),
             included_main_file: None,
             error_reporting: crate::eval_php_profile::eval_all_error_mask(),
             error_handler: None,
@@ -494,6 +511,8 @@ impl ElephcEvalContext {
             error_suppression_depth: 0,
             compile_time_constant_depth: 0,
             evaluating_class_constants: HashSet::new(),
+            deprecation_notices: Default::default(),
+            override_lookups: Default::default(),
         }
     }
 

@@ -107,6 +107,20 @@ impl Checker {
         // instead of rejecting the union wrapper itself.
         if let PhpType::Union(members) = actual {
             if !actual.is_int_float_union() {
+                // A factory-style `Object|false` actual reaches an object-only parameter after
+                // an unchecked failure sentinel. PHP accepts the object branch and throws on
+                // `false`, so only the object members must satisfy the expected type.
+                if matches!(expected, PhpType::Object(_))
+                    && members.iter().all(|member| matches!(
+                        member,
+                        PhpType::Object(_) | PhpType::False | PhpType::Void
+                    ))
+                {
+                    return members
+                        .iter()
+                        .filter(|member| matches!(member, PhpType::Object(_)))
+                        .all(|member| self.type_accepts(expected, member));
+                }
                 // Inside a WIDER union the arithmetic pair is still judged as the unit it is:
                 // `$last ? null : -$i` is `int|float|null`, and splitting it asked whether `int`
                 // accepts `float`, so `?int $d` refused what it takes as `int|float` alone and as
@@ -276,6 +290,22 @@ impl Checker {
                         || self.absent_class_defers_to_runtime(actual_name)
                         || self.absent_class_defers_to_runtime(expected_name)
                 }
+                // Factory returns such as `simplexml_load_string(): SimpleXMLElement|false`
+                // reach object-only parameters after an unchecked failure sentinel. PHP's
+                // runtime parameter check accepts the object branch and throws on `false`, so
+                // the static check accepts the object members here; scalar `T|false` unions
+                // stay refused because their unchecked sentinel is a real static bug.
+                PhpType::Union(members)
+                    if members.iter().all(|member| matches!(
+                        member,
+                        PhpType::Object(_) | PhpType::False | PhpType::Void
+                    )) =>
+                {
+                    members
+                        .iter()
+                        .filter(|member| matches!(member, PhpType::Object(_)))
+                        .all(|member| self.type_accepts(expected, member))
+                }
                 _ => false,
             },
             PhpType::Iterable => match actual {
@@ -324,9 +354,13 @@ impl Checker {
         }
     }
 
-    // `is_union_with_mixed_int_dispatch` lived here until the merge: every caller now asks
-    // `is_union_with_mixed_numeric_dispatch`, which subsumes it (it falls through to
-    // `type_supports_mixed_int_dispatch` for every non-float member).
+    /// Returns true if `ty` is a union type where every member supports mixed-int dispatch.
+    ///
+    /// Narrower than [`Self::is_union_with_mixed_numeric_dispatch`] on purpose: strict integer
+    /// operands (`&`, `|`, `<<`) must not admit a float member through it.
+    pub(crate) fn is_union_with_mixed_int_dispatch(&self, ty: &PhpType) -> bool {
+        matches!(ty, PhpType::Union(_)) && self.type_supports_mixed_int_dispatch(ty)
+    }
 
     /// Returns true if every member of `ty` can take part in a numeric comparison once boxed.
     ///
@@ -347,9 +381,6 @@ impl Checker {
         matches!(ty, PhpType::Union(_)) && self.type_supports_mixed_numeric_dispatch(ty)
     }
 
-    /// Computes the merged type when assigning `new_ty` to a variable that already has
-    /// `existing` type. Returns `Some(merged)` when types are compatible for compound assignment
-    /// (e.g., `+=`), or `None` when the types cannot be merged (e.g., two incompatible scalars).
     /// Returns whether every runtime value of `actual` is representable in `expected`
     /// WITHOUT a runtime narrowing.
     ///
@@ -366,7 +397,7 @@ impl Checker {
     /// array arms, so an `array<int>` still "contains" an `array<mixed>` — the element-level
     /// instance of the same lie. That family has its own storage-contract machinery
     /// (`loop_carried_storage_types`) and is left for a separate audit.
-    fn type_contains_values(&self, expected: &PhpType, actual: &PhpType) -> bool {
+    pub(in crate::types::checker) fn type_contains_values(&self, expected: &PhpType, actual: &PhpType) -> bool {
         match actual {
             PhpType::Mixed => matches!(expected, PhpType::Mixed),
             PhpType::Union(members) => members
@@ -552,6 +583,24 @@ impl Checker {
                         | crate::parser::ast::TypeExpr::AssocArray { .. }
                 ))
             )
+    }
+
+    /// Whether parameter `index` is passed by reference and carries a WRITTEN array type
+    /// (`array<T>` or `array<K, V>`).
+    ///
+    /// Such a parameter is a storage contract in both directions: the callee reads and writes
+    /// the caller's variable with exactly that layout. Call-site specialization must leave it
+    /// alone. Sharpening `array<mixed> &$a` to the first caller's `array<int>` compiled a callee
+    /// that widened the caller's list behind its back, and joining `array<int, int> &$m` with a
+    /// list argument widened the parameter to `mixed`, which then refused the very call that
+    /// caused it. By-value parameters keep the join: it is what protects a body compiled for
+    /// raw slots from a later boxed argument.
+    pub(crate) fn is_written_reference_array_param(
+        ref_params: &[bool],
+        param_type_exprs: &[Option<crate::parser::ast::TypeExpr>],
+        index: usize,
+    ) -> bool {
+        crate::types::is_written_reference_array_param(ref_params, param_type_exprs, index)
     }
 
     /// If `declared_ty` is a generic array hint and `actual_ty` is a concrete array or

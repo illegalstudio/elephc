@@ -1,30 +1,28 @@
 ---
 title: "file_put_contents()"
 description: "Writes data to a file."
-sidebar:
-  order: 337
 ---
 
 ## file_put_contents()
 
 ```php
-function file_put_contents(string $filename, mixed $data, int $flags = 0, mixed $context = null): int
+function file_put_contents(string $filename, string $data, int $flags = 0): int
 ```
 
 Writes data to a file.
 
 **Parameters**:
 - `$filename` (`string`)
-- `$data` (`mixed`)
+- `$data` (`string`)
 - `$flags` (`int`), default `0`, optional
-- `$context` (`mixed`), default `null`, optional
 
 **Returns**: `int`
 
 ## Availability
 
-- **Compiled (AOT)**: supported by the Elephc code generator.
-- **`eval()` (magician interpreter)**: supported through a declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/filesystem/file_put_contents.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/filesystem/file_put_contents.rs)).
+| Compiled (AOT) | Magician (eval) |
+|---|---|
+| Available | Available |
 
 _No examples yet. Check `examples/` and `showcases/` for usage patterns._
 

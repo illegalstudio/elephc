@@ -97,6 +97,16 @@ pub(super) fn register_eval_native_property_default(
     );
     let default = match &registration.default {
         EvalNativePropertyDefault::Value(default) => default,
+        EvalNativePropertyDefault::EnumCase(value) => {
+            let key = value.evaluated.iter().map(|(class, case)| format!("{class}::{case}"))
+                .collect::<Vec<_>>().join("\n");
+            let (label, len) = ctx.data.add_string(key.as_bytes());
+            abi::emit_symbol_address(ctx.emitter, abi::int_arg_reg_name(ctx.emitter.target, 3), &label);
+            abi::emit_load_int_immediate(ctx.emitter, abi::int_arg_reg_name(ctx.emitter.target, 4), len as i64);
+            let symbol = ctx.emitter.target.extern_symbol("__elephc_eval_register_native_property_default_enum_case");
+            abi::emit_call_label(ctx.emitter, &symbol);
+            return;
+        }
         EvalNativePropertyDefault::DeferredError(message) => {
             let (label, len) = ctx.data.add_string(message.as_bytes());
             abi::emit_symbol_address(ctx.emitter, abi::int_arg_reg_name(ctx.emitter.target, 3), &label);
@@ -107,6 +117,9 @@ pub(super) fn register_eval_native_property_default(
         }
     };
     let symbol = match default {
+        EvalNativeCallableDefault::EnumCase { .. } | EvalNativeCallableDefault::Evaluated { .. } => {
+            unreachable!("enum singletons are excluded from compact callable default metadata")
+        }
         EvalNativeCallableDefault::Scalar { kind, payload } => {
             abi::emit_load_int_immediate(
                 ctx.emitter,
@@ -229,8 +242,8 @@ pub(super) fn eval_native_member_attribute_value_supported(value: &AttrArgValue)
         // unsupported made `new ReflectionClass()` of any class carrying
         // `#[\Attribute(\Attribute::TARGET_METHOD)]` a bare `eval() runtime failed` --
         // symfony/console's `Attribute\Interact`, which killed the Symfony --web worker at boot.
-        AttrArgValue::ConstRef(_)
-        | AttrArgValue::ScopedConst(_, _)
+        AttrArgValue::ConstRef(..)
+        | AttrArgValue::ScopedConst(..)
         | AttrArgValue::Null
         | AttrArgValue::Bool(_)
         | AttrArgValue::Int(_)
@@ -278,11 +291,11 @@ pub(super) fn eval_native_member_attribute_push_arg(record: &mut Vec<u8>, arg: &
                 eval_native_member_attribute_push_entry(record, element);
             }
         }
-        AttrArgValue::ConstRef(name) => {
+        AttrArgValue::ConstRef(name, _) => {
             record.push(NATIVE_ATTRIBUTE_ARG_CONST);
             eval_native_member_attribute_push_string(record, name);
         }
-        AttrArgValue::ScopedConst(class_name, member) => {
+        AttrArgValue::ScopedConst(class_name, member, _) => {
             record.push(NATIVE_ATTRIBUTE_ARG_CLASS_CONST);
             eval_native_member_attribute_push_string(record, class_name);
             eval_native_member_attribute_push_string(record, member);

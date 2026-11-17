@@ -561,3 +561,33 @@ echo count($copy), ':', implode('/', $copy), ':', count($other), "\n";
     );
     assert_eq!(out, "0=v0:1,1=1:2,2=v2:3,3=3:4|3:v0/1/v2:5\n");
 }
+
+/// Runtime boolean casts must re-stamp the result as an int: `echo (int)false` prints `0`
+/// while `echo false` prints nothing, even though both share one storage word.
+#[test]
+fn test_cast_int_from_runtime_false_prints_zero() {
+    let out = compile_and_run(
+        r#"<?php
+$x = 1;
+$f = $x > 2;
+$t = $x < 2;
+echo (int)$f, '|', (int)$t, '|', (int)is_string($x), '|', (int)is_int($x), "\n";
+"#,
+    );
+    assert_eq!(out, "0|1|0|1\n");
+}
+
+/// `(int)` on a resource reports its display id, not the raw resource storage word.
+#[test]
+fn test_cast_int_from_resource_uses_display_id() {
+    let out = compile_and_run(
+        r#"<?php
+echo ((int)STDOUT === get_resource_id(STDOUT)) ? 'T' : 'F', '|';
+$f = fopen('php://stdout', 'w');
+echo ((int)$f === get_resource_id($f)) ? 'T' : 'F', '|';
+echo gettype((int)STDOUT), '|';
+echo ((float)STDOUT === (float)get_resource_id(STDOUT)) ? 'T' : 'F', "\n";
+"#,
+    );
+    assert_eq!(out, "T|T|integer|T\n");
+}

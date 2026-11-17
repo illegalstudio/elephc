@@ -180,3 +180,40 @@ echo count(countArray([1, 2, 3], $argc));
         "{}", crate::ir::print_function(function));
     assert_eq!(count(function, Op::ICheckedSubToInt, None), 0);
 }
+
+/// Scoped computed receivers publish expression captures while preserving typed buffer steps.
+#[test]
+fn computed_buffer_incdec_values_keep_typed_steps_on_every_target() {
+    let source = format!("{SOURCE}\n{}", r#"
+function computedGrid(CellGrid $grid): CellGrid { return $grid; }
+function computedPostfix(CellGrid $grid, int $i): int { return computedGrid($grid)->cellStart[$i]++; }
+function computedPrefixFloat(CellGrid $grid, int $i): float { return ++computedGrid($grid)->weights[$i]; }
+function computedPrefixInt(CellGrid $grid, int $i): mixed { return ++computedGrid($grid)->cellStart[$i]; }
+echo computedPostfix($grid, $argc), computedPrefixFloat($grid, $argc), computedPrefixInt($grid, $argc);
+"#);
+    for target in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+        let mut module = super::lower_source_at_for_target(
+            &source, Path::new("main.php"), Path::new("."), Target::parse(target).unwrap(),
+        );
+        for optimized in [false, true] {
+            if optimized { crate::ir_passes::optimize_module(&mut module); }
+            crate::ir::validate_module(&module).unwrap();
+            for (name, integer) in [("computedPostfix", true), ("computedPrefixFloat", false),
+                ("computedPrefixInt", true)] {
+                let function = named(&module, name);
+                for op in [Op::StrIncDec, Op::MixedBox] {
+                    assert_eq!(count(function, op, None), 0, "{target} {name} optimized={optimized}: {op:?}\n{}",
+                        crate::ir::print_function(function));
+                }
+                assert_eq!(count(function, Op::ICheckedAddToInt, Some(Immediate::Bool(true))),
+                    usize::from(integer), "{target} {name} optimized={optimized}");
+                assert_eq!(count(function, Op::ICheckedAdd, None), usize::from(integer),
+                    "{target} {name} optimized={optimized}");
+                assert_eq!(count(function, Op::FAdd, None), usize::from(!integer),
+                    "{target} {name} optimized={optimized}");
+            }
+            crate::codegen::generate_user_asm_from_ir(&module, false, false)
+                .unwrap_or_else(|error| panic!("{target} optimized={optimized}: {error:?}"));
+        }
+    }
+}

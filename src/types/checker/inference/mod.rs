@@ -9,6 +9,7 @@
 //! - Inference may emit diagnostics and warnings, so callers must preserve source spans and environment context.
 
 pub(in crate::types::checker) mod expr;
+pub(super) use expr::{ConditionalFlow, FlowSnapshot};
 /// Inference for operators: binary ops, instanceof, closures, pipe, and expr calls.
 mod objects;
 #[cfg(test)]

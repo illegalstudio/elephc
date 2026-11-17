@@ -1,0 +1,595 @@
+//! Purpose:
+//! Native SimpleXML ownership, selection, and query regressions.
+//!
+//! Called from:
+//! - Managed-native CI with `elephc_xml_native` enabled.
+//!
+//! Key details:
+//! - Uses real managed libxml2 and checks document isolation after clone.
+
+use super::*;
+
+/// Projection string, list, and leaf predicates follow PHP's distinct XML tree checks.
+#[test]
+fn simplexml_projection_predicates_distinguish_text_cdata_and_named_lists() {
+    for (source, name, expected) in [
+        ("<r>text</r>", "", [1, 0, 1]),
+        ("<r> \t\r\n</r>", "", [0, 0, 0]),
+        ("<r><![CDATA[text]]></r>", "", [0, 0, 0]),
+        ("<r>text<b>nested</b></r>", "", [1, 0, 0]),
+        ("<r><i>a</i><i>c</i></r>", "i", [1, 1, 1]),
+        ("<r><i>a<b>z</b></i><i>c</i></r>", "i", [1, 0, 0]),
+        ("<r><i><![CDATA[a]]></i><i>c</i></r>", "i", [0, 1, 0]),
+        ("<r><i> </i><i>c</i></r>", "i", [0, 1, 0]),
+        ("<r><i/><i>c</i></r>", "i", [0, 0, 0]),
+        ("<r><i>a</i></r>", "i", [1, 0, 1]),
+    ] {
+        let source = cstring(source);
+        let empty = cstring("");
+        let root = unsafe { abi::elephc_xml_sx_load(source.as_ptr(), source.as_bytes().len() as i64,
+            0, empty.as_ptr(), 0, empty.as_ptr()) };
+        assert_ne!(root, 0);
+        let name = cstring(name);
+        let selected = if name.as_bytes().is_empty() { root } else { unsafe {
+            abi::elephc_xml_sx_select(root, 2, name.as_ptr(), empty.as_ptr(), 0, 0)
+        } };
+        let actual = [6, 10, 11].map(|op| abi::elephc_xml_sx_int(selected, op));
+        assert_eq!(actual, expected, "{}", source.to_string_lossy());
+        if selected != root { abi::elephc_xml_sx_free(selected); }
+        abi::elephc_xml_sx_free(root);
+    }
+}
+
+/// Element projections include comments and PIs without changing public children iteration.
+#[test]
+fn simplexml_projection_nodes_preserve_miscellaneous_children_and_namespace_filters() {
+    let root = parse(b"<r xmlns:p='urn:p'><!--c--><?pi x?><p:a>hidden</p:a><a>visible</a>text<![CDATA[cdata]]></r>", 0, "", false).unwrap();
+    let projection = root.select(9, "", "", false, 0);
+    let kinds: Vec<_> = projection.nodes().into_iter().map(|node| unsafe { ffi::node_type(node) }).collect();
+    assert_eq!(kinds, [8, 7, 1]);
+    assert_eq!(root.select(7, "", "", false, 0).item_count(), 1);
+}
+
+/// Children projections retain the sibling tail while entity references stop at their declaration.
+#[test]
+fn simplexml_projection_tail_and_entity_declaration_boundary() {
+    let root = parse(b"<r><!--before--><a>1</a><!--after--><?pi x?><b>2</b></r>", 0, "", false).unwrap();
+    let children = root.select(0, "", "", false, 0).select(10, "", "", false, 0);
+    let names: Vec<_> = children.nodes().into_iter().map(|node| unsafe { string(ffi::name(node)) }).collect();
+    assert_eq!(names, ["a", "comment", "pi", "b"]);
+    let root = parse(b"<!DOCTYPE r [<!ENTITY e 'x'><!ENTITY f 'y'>]><r>&e;</r>", 0, "", false).unwrap();
+    let entity = root.select(9, "", "", false, 0).item(0).unwrap();
+    let declarations = entity.select(9, "", "", false, 0).nodes();
+    assert_eq!(declarations.len(), 1);
+    assert_eq!(unsafe { string(ffi::name(declarations[0])) }, "e");
+}
+
+/// Boolean conversion observes selected attributes and child node kinds, not CDATA contents.
+#[test]
+fn simplexml_truthiness_respects_node_kinds_and_namespaces() {
+    for (source, namespace, expected) in [
+        ("<r><![CDATA[x]]></r>", "", 0),
+        ("<r><!--c--></r>", "", 1),
+        ("<r><?pi x?></r>", "", 1),
+        ("<r> </r>", "", 1),
+        ("<r/>", "", 0),
+        ("<r xmlns:p='urn:p' p:a='1'/>", "", 0),
+        ("<r xmlns:p='urn:p' p:a='1'/>", "urn:p", 1),
+        ("<r xmlns:p='urn:p'><p:c/></r>", "", 0),
+        ("<r xmlns:p='urn:p'><p:c/></r>", "urn:p", 1),
+    ] {
+        let source = cstring(source);
+        let namespace = cstring(namespace);
+        let empty = cstring("");
+        let root = unsafe { abi::elephc_xml_sx_load(source.as_ptr(), source.as_bytes().len() as i64,
+            0, namespace.as_ptr(), 0, empty.as_ptr()) };
+        assert_ne!(root, 0);
+        assert_eq!(abi::elephc_xml_sx_int(root, 3), expected, "{}", source.to_string_lossy());
+        abi::elephc_xml_sx_free(root);
+    }
+}
+
+/// Children selections include their parent's attributes in PHP boolean conversion.
+#[test]
+fn simplexml_children_truthiness_includes_selected_parent_attributes() {
+    for (source, namespace, expected) in [
+        ("<r a='1'/>", "", 1),
+        ("<r a='1'><!--c--></r>", "", 1),
+        ("<r xmlns:p='urn:p' p:a='1'/>", "urn:p", 1),
+        ("<r xmlns:p='urn:p' p:a='1'/>", "", 0),
+        ("<r/>", "", 0),
+    ] {
+        let source = cstring(source);
+        let namespace = cstring(namespace);
+        let empty = cstring("");
+        let root = unsafe { abi::elephc_xml_sx_load(source.as_ptr(), source.as_bytes().len() as i64,
+            0, empty.as_ptr(), 0, empty.as_ptr()) };
+        assert_ne!(root, 0);
+        let children = unsafe { abi::elephc_xml_sx_select(root, 0, empty.as_ptr(), namespace.as_ptr(), 0, 0) };
+        assert_eq!(abi::elephc_xml_sx_int(children, 3), expected, "{}", source.to_string_lossy());
+        abi::elephc_xml_sx_free(children);
+        abi::elephc_xml_sx_free(root);
+    }
+}
+
+/// Live iteration reads sibling links after mutations rather than taking a stale snapshot.
+#[test]
+fn simplexml_cursor_observes_live_sibling_mutation() {
+    let root = parse(b"<r><i>a</i><i>b</i><i>c</i></r>", 0, "", false).unwrap();
+    let items = root.select(2, "i", "", false, 0);
+    let mut cursor = iteration::Cursor::new(&items);
+    assert_eq!(unsafe { owned_string(ffi::text(cursor.current().unwrap())) }, "a");
+    items.remove(4, "", 1);
+    cursor.advance();
+    assert_eq!(unsafe { owned_string(ffi::text(cursor.current().unwrap())) }, "c");
+    root.add("i", Some("d"), None, false).unwrap();
+    cursor.advance();
+    assert_eq!(unsafe { owned_string(ffi::text(cursor.current().unwrap())) }, "d");
+    root.detach(cursor.current().unwrap());
+    cursor.advance();
+    assert!(cursor.current().is_none());
+}
+
+/// Explicit XPath vectors and live sibling cursors stay linear on large selections.
+#[test]
+fn simplexml_large_cursor_and_xpath_items() {
+    let source = format!("<r>{}</r>", "<i>x</i>".repeat(50_000));
+    let root = parse(source.as_bytes(), 0, "", false).unwrap();
+    let items = root.select(2, "i", "", false, 0);
+    let mut cursor = iteration::Cursor::new(&items);
+    let mut count = 0;
+    while cursor.current().is_some() { count += 1; cursor.advance(); }
+    assert_eq!(count, 50_000);
+    let xpath = root.with_scope(Scope::XPath(Rc::new(root.xpath("//i").unwrap())));
+    for index in 0..50_000 { assert!(xpath.item(index).is_some()); }
+    root.remove(2, "i", 0);
+    assert_eq!(items.item_count(), 0);
+    assert_eq!(root.doc.detached.borrow().len(), 50_000);
+}
+
+/// Nested groups keep their resolved parent while direct named groups stay live at the root.
+#[test]
+fn simplexml_nested_groups_retain_original_parent() {
+    let root = parse(b"<r><a><i>1</i><i>2</i></a><a><i>3</i></a></r>", 0, "", false).unwrap();
+    let group = root.select(2, "a", "", false, 0);
+    let nested = group.select(2, "i", "", false, 0);
+    let children = group.select(0, "", "", false, 0);
+    group.remove(4, "", 0);
+    assert_eq!(group.item_count(), 1);
+    assert_eq!(nested.item_count(), 2);
+    assert_eq!(children.item_count(), 2);
+    assert_eq!(unsafe { owned_string(ffi::text(nested.first().unwrap())) }, "1");
+    let copied = nested.deep_clone().unwrap();
+    assert_eq!(copied.item_count(), 2);
+}
+
+/// XPath element wrappers start with the default namespace filter instead of inheriting a prefix.
+#[test]
+fn simplexml_xpath_element_resets_namespace_filter() {
+    let root = parse(b"<r xmlns:p='urn:p'><p:a><b>B</b><p:c>C</p:c></p:a></r>", 0, "p", true).unwrap();
+    let results = root.with_scope(Scope::XPath(Rc::new(root.xpath("//p:a").unwrap())));
+    let result = results.item(0).unwrap();
+    let current = iteration::Cursor::new(&result).current().unwrap();
+    assert_eq!(unsafe { string(ffi::name(current)) }, "b");
+    assert_eq!(unsafe { owned_string(ffi::text(current)) }, "B");
+}
+
+/// Child selectors observe later appends and indexed writes escape raw text.
+#[test]
+fn simplexml_live_selection_and_mutation() {
+    let root = parse(b"<r><a>one</a><a>two</a></r>", 0, "", false).unwrap();
+    let items = root.select(2, "a", "", false, 0);
+    assert_eq!(items.items().len(), 2);
+    assert_eq!(items.write(4, "", 0, "A&B"), 1);
+    assert!(root.add("a", Some("three"), None, false).is_some());
+    assert_eq!(items.items().len(), 3);
+    let first = items.select(4, "", "", false, 0);
+    assert_eq!(unsafe { owned_string(ffi::text(first.first().unwrap())) }, "A&B");
+    assert_eq!(first.items().len(), 0);
+}
+
+/// Clone preserves repeated-node selection while isolating both document and attributes.
+#[test]
+fn simplexml_clone_owns_an_independent_document() {
+    let root = parse(b"<r><a>one</a><a>two</a></r>", 0, "", false).unwrap();
+    let items = root.select(2, "a", "", false, 0);
+    let clone = items.deep_clone().unwrap();
+    assert_eq!(clone.items().len(), 2);
+    assert_eq!(clone.write(4, "", 0, "changed"), 1);
+    assert_eq!(unsafe { owned_string(ffi::text(items.first().unwrap())) }, "one");
+    assert_eq!(unsafe { owned_string(ffi::text(clone.first().unwrap())) }, "changed");
+}
+
+/// A wrapper survives parent release, node removal, and replacement of its parent's text.
+#[test]
+fn simplexml_detached_selection_keeps_storage_alive() {
+    let root = parse(b"<r><a><b>kept</b></a></r>", 0, "", false).unwrap();
+    let named = root.select(2, "a", "", false, 0);
+    let selected = named.with_scope(Scope::Node(named.first().unwrap()));
+    root.remove(2, "a", 0);
+    drop(root);
+    assert_eq!(selected.select(2, "b", "", false, 0).items().len(), 1);
+    drop(named);
+    assert_eq!(unsafe { string(ffi::name(selected.first().unwrap())) }, "a");
+}
+
+/// Concrete node and attribute aliases remain clonable after their removal from the live tree.
+#[test]
+fn simplexml_clone_preserves_detached_nodes_and_attributes() {
+    let root = parse(b"<r id='old'><a>one</a></r>", 0, "", false).unwrap();
+    let selected = root.select(2, "a", "", false, 0).select(4, "", "", false, 0);
+    let attribute = root.select(3, "id", "", false, 0);
+    let attribute = attribute.with_scope(Scope::Node(attribute.first().unwrap()));
+    root.remove(2, "a", 0);
+    root.remove(3, "id", 0);
+    let copied = selected.deep_clone().unwrap();
+    let copied_attribute = attribute.deep_clone().unwrap();
+    assert_eq!(copied.write(4, "", 0, "two"), 1);
+    assert_eq!(unsafe { owned_string(ffi::text(selected.first().unwrap())) }, "one");
+    assert_eq!(unsafe { owned_string(ffi::text(copied.first().unwrap())) }, "two");
+    assert_eq!(unsafe { owned_string(ffi::text(copied_attribute.first().unwrap())) }, "old");
+}
+
+/// XPath binds in-scope namespaces and text results map to their containing element.
+#[test]
+fn simplexml_xpath_namespace_and_text_nodes() {
+    let root = parse(b"<r xmlns:p='urn:p'><p:a>one</p:a><a>two</a></r>", 0, "", false).unwrap();
+    assert_eq!(root.xpath("//p:a").unwrap().len(), 1);
+    root.xpath_ns.borrow_mut().insert(b"q".to_vec(), b"urn:p".to_vec());
+    assert_eq!(root.xpath("//q:a/text()").unwrap().len(), 1);
+    assert_eq!(root.namespaces(true, true, true), vec![(b"p".to_vec(), b"urn:p".to_vec())]);
+    assert_eq!(root.xpath("count(//a)"), Err(query::XPathError::Scalar(3)));
+}
+
+/// In-scope XPath prefixes win, and declared namespace queries use the wrapper's base node.
+#[test]
+fn simplexml_namespace_precedence_empty_declarations_and_base_nodes() {
+    let root = parse(b"<r xmlns:p='urn:a' xmlns:q='urn:b'><p:c>A</p:c><q:c>B</q:c></r>", 0, "", false).unwrap();
+    root.xpath_ns.borrow_mut().insert(b"p".to_vec(), b"urn:b".to_vec());
+    root.xpath_ns.borrow_mut().insert(b"alias".to_vec(), b"urn:b".to_vec());
+    for (expression, text) in [("//p:c", "A"), ("//alias:c", "B")] {
+        let nodes = root.xpath(expression).unwrap();
+        assert_eq!(nodes.len(), 1);
+        assert_eq!(unsafe { owned_string(ffi::text(nodes[0])) }, text);
+    }
+    let root = parse(b"<r xmlns:a='urn:a'><c xmlns:b='urn:b'/><empty xmlns=''/></r>", 0, "", false).unwrap();
+    assert_eq!(root.namespaces(true, true, true), vec![(b"a".to_vec(), b"urn:a".to_vec()), (b"b".to_vec(), b"urn:b".to_vec()), (b"".to_vec(), b"".to_vec())]);
+    for selected in [root.select(2, "c", "", false, 0), root.select(0, "", "", false, 0), root.select(2, "missing", "", false, 0)] {
+        assert_eq!(selected.namespaces(true, false, false), vec![(b"a".to_vec(), b"urn:a".to_vec())]);
+    }
+    let child = root.select(2, "c", "", false, 0).select(4, "", "", false, 0);
+    assert_eq!(child.namespaces(true, false, false), vec![(b"b".to_vec(), b"urn:b".to_vec())]);
+    assert!(root.namespaces(false, true, false).is_empty());
+}
+
+/// Non-root clones retain their document owner while copying only a detached subtree.
+#[test]
+fn simplexml_non_root_clone_is_detached_and_shares_only_document_ownership() {
+    let root = parse(b"<r><a><b>original</b></a></r>", 0, "", false).unwrap();
+    let named = root.select(2, "a", "", false, 0);
+    let selected = named.select(4, "", "", false, 0);
+    let copied = selected.deep_clone().unwrap();
+    assert!(Rc::ptr_eq(&root.doc, &copied.doc));
+    assert_ne!(selected.first(), copied.first());
+    assert!(unsafe { ffi::parent(copied.first().unwrap()).is_null() });
+    assert!(copied.xpath("..").unwrap().is_empty());
+    assert_eq!(copied.write(2, "b", 0, "copy"), 1);
+    assert_eq!(unsafe { owned_string(ffi::text(selected.select(2, "b", "", false, 0).first().unwrap())) }, "original");
+    let group_copy = named.deep_clone().unwrap();
+    assert!(!Rc::ptr_eq(&root.doc, &group_copy.doc));
+    assert_eq!(group_copy.xpath("..").unwrap().len(), 1);
+    drop(selected); drop(named); drop(root);
+    assert_eq!(unsafe { owned_string(ffi::text(copied.select(2, "b", "", false, 0).first().unwrap())) }, "copy");
+}
+
+/// Temporary clones and their derived views do not accumulate in the source document's list.
+#[test]
+fn simplexml_temporary_clone_subtrees_release_without_document_retention() {
+    let root = parse(b"<r><a><b>kept</b></a></r>", 0, "", false).unwrap();
+    let selected = root.select(2, "a", "", false, 0).select(4, "", "", false, 0);
+    let retained = root.doc.detached.borrow().len();
+    let references = Rc::strong_count(&root.doc);
+    for _ in 0..64 {
+        let copied = selected.deep_clone().unwrap();
+        let child = copied.select(2, "b", "", false, 0);
+        drop(copied);
+        assert_eq!(unsafe { owned_string(ffi::text(child.first().unwrap())) }, "kept");
+        drop(child);
+        assert_eq!(root.doc.detached.borrow().len(), retained);
+        assert_eq!(Rc::strong_count(&root.doc), references);
+    }
+}
+
+/// Removing a copied root transfers its storage to the document without a second free.
+#[test]
+fn simplexml_removed_clone_subtree_transfers_to_document_ownership() {
+    let root = parse(b"<r><a>kept</a></r>", 0, "", false).unwrap();
+    let selected = root.select(2, "a", "", false, 0).select(4, "", "", false, 0);
+    let copied = selected.deep_clone().unwrap();
+    let node = copied.first().unwrap();
+    copied.remove(4, "", 0);
+    assert!(root.doc.detached.borrow().get(&node).and_then(Weak::upgrade).is_some());
+    let document_alias = root.with_scope(Scope::Node(node));
+    drop(copied);
+    assert_eq!(unsafe { owned_string(ffi::text(document_alias.first().unwrap())) }, "kept");
+}
+
+/// Materialized wrappers and clones start empty while aliases preserve their shared prefix map.
+#[test]
+fn simplexml_derived_xpath_registrations_are_isolated() {
+    let root = parse(b"<r xmlns:p='urn:p'><p:v>one</p:v><c/></r>", 0, "", false).unwrap();
+    root.xpath_ns.borrow_mut().insert(b"q".to_vec(), b"urn:p".to_vec());
+    let alias = root.clone();
+    let copied = root.deep_clone().unwrap();
+    let results = root.with_scope(Scope::XPath(Rc::new(root.xpath("//c").unwrap())));
+    let xpath = results.item(0).unwrap();
+    let iterated = root.item(0).unwrap();
+    let added = root.with_scope(Scope::Node(root.add("d", None, None, false).unwrap()));
+    for derived in [xpath, iterated, added] {
+        assert_eq!(derived.xpath("//q:v"), Err(query::XPathError::Invalid));
+        assert!(String::from_utf8(diagnostics::take()).expect("UTF-8 namespace diagnostic")
+            .contains("Undefined namespace prefix"));
+        derived.xpath_ns.borrow_mut().insert(b"q".to_vec(), b"urn:other".to_vec());
+        assert_eq!(root.xpath("//q:v").unwrap().len(), 1);
+    }
+    alias.xpath_ns.borrow_mut().insert(b"q".to_vec(), b"urn:other".to_vec());
+    assert!(root.xpath("//q:v").unwrap().is_empty());
+    assert_eq!(copied.xpath("//q:v"), Err(query::XPathError::Invalid));
+    assert!(String::from_utf8(diagnostics::take()).expect("UTF-8 clone namespace diagnostic")
+        .contains("Undefined namespace prefix"));
+    copied.xpath_ns.borrow_mut().insert(b"q".to_vec(), b"urn:p".to_vec());
+    assert_eq!(copied.xpath("//q:v").unwrap().len(), 1);
+    assert!(root.xpath("//q:v").unwrap().is_empty());
+}
+
+/// Parser diagnostics retain source/caret lines, respect options, and clear between operations.
+#[test]
+fn simplexml_parse_diagnostics_preserve_php_lines() {
+    assert!(parse(b"<r>", 0, "", false).is_none());
+    let messages = String::from_utf8(diagnostics::take()).expect("UTF-8 parser diagnostic");
+    let lines = messages.lines().collect::<Vec<_>>();
+    assert_eq!(lines.len(), 3);
+    assert!(lines[0].contains("Premature end of data in tag r line 1"));
+    assert_eq!(lines[1], "<r>");
+    assert_eq!(lines[2], "   ^");
+    assert!(diagnostics::take().is_empty());
+    assert!(parse(b"", 0, "", false).is_none());
+    assert!(String::from_utf8(diagnostics::take()).expect("UTF-8 empty document diagnostic")
+        .contains("Document is empty"));
+    assert!(parse(b"<r>", 32, "", false).is_none());
+    assert!(diagnostics::take().is_empty());
+    assert!(parse(b"<r/>", 0, "", false).is_some());
+    assert!(diagnostics::take().is_empty());
+}
+
+/// DOM parser callbacks have one contextual line and preserve warning versus notice severity.
+#[test]
+fn simplexml_dom_parser_diagnostics_use_structured_lines() {
+    assert!(parse_with_diagnostics(b"<r>", 0, "", false, "", 2).is_none());
+    assert_eq!(diagnostics::take().as_slice(), b"Warning: Premature end of data in tag r line 1 in Entity, line: 1\n".as_slice());
+    assert!(parse_with_diagnostics(b"<?xml version='1.1'?><r/>", 0, "", false, "", 2).is_some());
+    assert_eq!(diagnostics::take().as_slice(), b"Notice: Unsupported version '1.1' in Entity, line: 1\n".as_slice());
+}
+
+/// A selected attribute reports its namespace; an empty filtered attribute list reports none.
+#[test]
+fn simplexml_attribute_used_namespace_matches_selected_node() {
+    let root = parse(b"<r xmlns:p='urn:p' p:id='8'/>", 0, "", false).unwrap();
+    let attribute = root.select(1, "", "p", true, 0).select(2, "id", "", false, 0);
+    assert_eq!(attribute.namespaces(false, false, false), vec![(b"p".to_vec(), b"urn:p".to_vec())]);
+    assert_eq!(attribute.namespaces(false, true, false), vec![(b"p".to_vec(), b"urn:p".to_vec())]);
+    assert!(root.select(1, "", "", false, 0).namespaces(false, false, false).is_empty());
+}
+
+/// Comparisons retain the receiver base even after a live selection moves to another node.
+#[test]
+fn simplexml_comparison_identity_preserves_retained_base_nodes() {
+    let root = parse(b"<r><a>1</a><a>2</a><b>1</b></r>", 0, "", false).unwrap();
+    let a = root.select(2, "a", "", false, 0);
+    let b = root.select(2, "b", "", false, 0);
+    assert_eq!(a.identity, root.identity);
+    assert_eq!(b.identity, root.identity);
+    let first = a.select(4, "", "", false, 0);
+    let saved = a.select(2, "missing", "", false, 0);
+    assert_eq!(saved.identity, first.identity);
+    root.remove(2, "a", 0);
+    assert_eq!(saved.identity, first.identity);
+    assert!(a.first().is_none());
+    let copied = first.deep_clone().unwrap();
+    assert!(!copied.identity.is_null());
+    assert_ne!(copied.identity, first.identity);
+}
+
+/// XPath attribute wrappers count and iterate only their selected expanded name.
+#[test]
+fn simplexml_xpath_attribute_wrappers_preserve_namespace_uri() {
+    let root = parse(b"<r xmlns:p='urn:p' id='7' p:id='8'/>", 0, "", false).unwrap();
+    let results = root.with_scope(Scope::XPath(Rc::new(root.xpath("//@*").unwrap())));
+    for (index, expected) in ["7", "8"].into_iter().enumerate() {
+        let attribute = results.item(index).unwrap();
+        assert!(matches!(attribute.scope, Scope::Attributes(_, Some(_))));
+        assert_eq!(attribute.items().len(), 1);
+        assert_eq!(unsafe { owned_string(ffi::text(attribute.first().unwrap())) }, expected);
+    }
+    let offset = root.select(3, "id", "", false, 0);
+    assert_eq!(offset.with_scope(Scope::Node(offset.first().unwrap())).items().len(), 0);
+}
+
+/// Comment and PI XPath nodes retain their content, while scalar types remain distinct.
+#[test]
+fn simplexml_xpath_miscellaneous_nodes_and_scalar_types() {
+    let root = parse(b"<r><!--note--><?work data?></r>", 0, "", false).unwrap();
+    let nodes = root.xpath("comment() | processing-instruction()").unwrap();
+    assert_eq!(nodes.len(), 2);
+    assert_eq!(unsafe { owned_string(ffi::text(nodes[0])) }, "note");
+    assert_eq!(unsafe { owned_string(ffi::text(nodes[1])) }, "data");
+    assert_eq!(root.xpath("true()"), Err(query::XPathError::Scalar(2)));
+    assert_eq!(root.xpath("string(.)"), Err(query::XPathError::Scalar(4)));
+}
+
+/// The native empty predicate follows the first text child's exact PHP falsiness rules.
+#[test]
+fn simplexml_container_empty_is_distinct_from_boolean() {
+    let root = parse(b"<r z='0' n='00'><blank/><zero>0</zero><number>00</number><nested><a/></nested><cdata><![CDATA[0]]></cdata></r>", 0, "", false).unwrap();
+    for (name, expected) in [("blank", 1), ("zero", 1), ("number", 0), ("nested", 0), ("cdata", 0)] {
+        let node = root.select(2, name, "", false, 0).first().unwrap();
+        assert_eq!(unsafe { ffi::empty(node) }, expected, "{name}");
+    }
+    for (name, expected) in [("z", 1), ("n", 0)] {
+        let node = root.select(3, name, "", false, 0).first().unwrap();
+        assert_eq!(unsafe { ffi::empty(node) }, expected, "{name}");
+    }
+}
+
+/// Root and indexed-node iteration retain explicit namespace filters independently of public children().
+#[test]
+fn simplexml_iteration_retains_namespace_filter() {
+    let root = parse(b"<r xmlns:p='urn:p'><p:a><p:b>value</p:b><b>plain</b></p:a><p:a/><a/></r>",
+        0, "urn:p", false).unwrap();
+    assert_eq!(root.items().len(), 2);
+    let node = root.select(2, "a", "", false, 0).select(4, "", "", false, 0);
+    let children = node.items();
+    assert_eq!(children.len(), 1);
+    assert_eq!(unsafe { owned_string(ffi::text(children[0])) }, "value");
+    assert_eq!(node.select(0, "", "", false, 0).items().len(), 1);
+}
+
+/// Missing named ancestors are materialized once for a chained assignment.
+#[test]
+fn simplexml_materializes_missing_ancestors() {
+    let root = parse(b"<r/>", 0, "", false).unwrap();
+    let missing = root.select(2, "outer", "", false, 0);
+    assert_eq!(missing.write(2, "inner", 0, "value"), 1);
+    assert_eq!(missing.nodes().len(), 1);
+    assert_eq!(unsafe { owned_string(ffi::text(missing.select(2, "inner", "", false, 0).first().unwrap())) }, "value");
+}
+
+/// Indexed aliases keep their node after sibling removal and tolerate repeated unsets.
+#[test]
+fn simplexml_indexed_alias_survives_removal() {
+    let root = parse(b"<r><a>one</a><a>two</a></r>", 0, "", false).unwrap();
+    let items = root.select(2, "a", "", false, 0);
+    let first = items.select(4, "", "", false, 0);
+    items.remove(4, "", -1);
+    assert_eq!(items.nodes().len(), 2);
+    items.remove(4, "", 0);
+    assert_eq!(unsafe { owned_string(ffi::text(first.first().unwrap())) }, "one");
+    assert_eq!(unsafe { owned_string(ffi::text(items.first().unwrap())) }, "two");
+    first.remove(4, "", 0);
+    first.remove(4, "", 0);
+    assert_eq!(first.doc.detached.borrow().len(), 1);
+}
+
+/// Rejected attribute additions preserve unique XML names and namespace prefixes.
+#[test]
+fn simplexml_attribute_addition_rejects_duplicates_and_missing_prefix() {
+    let root = parse(b"<r id='old'/>", 0, "", false).unwrap();
+    assert!(root.add("id", Some("new"), None, true).is_none());
+    assert!(root.add("other", Some("v"), Some("urn:p"), true).is_none());
+    assert!(root.add("p:other", Some("v"), Some("urn:p"), true).is_some());
+    assert_eq!(root.select(1, "", "", false, 0).nodes().len(), 1);
+    assert_eq!(root.select(1, "", "urn:p", false, 0).nodes().len(), 1);
+}
+
+/// Native mutation errors distinguish missing parents, attribute lists, and duplicate names.
+#[test]
+fn simplexml_checked_add_resolves_parent_and_reports_failures() {
+    let root = parse(b"<r xmlns:p='urn:p' id='1'/>", 0, "", false).unwrap();
+    let attribute = root.select(3, "id", "", false, 0);
+    let attribute = attribute.with_scope(Scope::Node(attribute.first().unwrap()));
+    assert!(attribute.add_checked(b"extra", Some(b"2"), None, true).is_ok());
+    let attrs = root.select(1, "", "", false, 0);
+    assert!(attrs.add_checked(b"listed", Some(b"3"), None, true).is_ok());
+    assert_eq!(attrs.add_checked(b"child", None, None, false), Err(mutation::AddError::ElementToAttributes));
+    assert_eq!(root.add_checked(b"id", Some(b"2"), None, true), Err(mutation::AddError::DuplicateAttribute));
+    assert_eq!(root.add_checked(b"bare", Some(b"2"), Some(b"urn:p"), true), Err(mutation::AddError::AttributePrefix));
+    assert!(root.add_checked(b"q:child", Some(b"v"), Some(b"urn:p"), false).is_ok());
+    let child = root.select(0, "", "urn:p", false, 0).select(2, "child", "", false, 0);
+    assert_eq!(unsafe { string(ffi::ns(child.first().unwrap(), 1)) }, "p");
+}
+
+/// Literal writes retain colons, while add methods split only a nonempty namespace prefix.
+#[test]
+fn simplexml_literal_writes_and_leading_colon_additions() {
+    let root = parse(b"<r xmlns:p='urn:p' at='base'/>", 0, "", false).unwrap();
+    assert_eq!(root.write(2, "p:q", 0, "value"), 1);
+    assert_eq!(root.write(3, "p:at", 0, "literal"), 1);
+    let child = root.select(2, "p:q", "", false, 0);
+    assert_eq!(unsafe { string(ffi::name(child.first().unwrap())) }, "p:q");
+    assert_eq!(unsafe { owned_string(ffi::text(child.first().unwrap())) }, "value");
+    assert!(root.select(0, "", "urn:p", false, 0).nodes().is_empty());
+    for (name, expected) in [("at", "base"), ("p:at", "literal")] {
+        let attribute = root.select(3, name, "", false, 0).first().unwrap();
+        assert_eq!(unsafe { owned_string(ffi::text(attribute)) }, expected);
+    }
+    let missing = root.select(2, "a:b", "", false, 0);
+    assert!(missing.ensure_first().is_some());
+    assert_eq!(missing.write(2, "c", 0, "nested"), 1);
+    let leading = root.add_checked(b":a", Some(b"method"), None, false).unwrap();
+    assert_eq!(unsafe { string(ffi::name(leading)) }, ":a");
+    assert_eq!(root.add_checked(b":b", Some(b"1"), Some(b"urn:q"), true), Err(mutation::AddError::AttributePrefix));
+    assert!(root.add_checked(b":c", Some(b"1"), None, true).is_ok());
+    assert_eq!(root.add_checked(b":c", Some(b"2"), None, true), Err(mutation::AddError::DuplicateAttribute));
+}
+
+/// Write-fetch creates a stable empty node, while ordinary absent selections stay lazy.
+#[test]
+fn simplexml_write_fetch_and_absent_read_views() {
+    let root = parse(b"<r/>", 0, "", false).unwrap();
+    let absent = root.select(2, "item", "", false, 0);
+    assert_eq!(absent.write(4, "", 0, "ignored"), 0);
+    assert_eq!(absent.write(5, "", 0, "ignored"), 0);
+    assert!(root.items().is_empty());
+    let created = absent.ensure_first().unwrap();
+    let node = absent.with_scope(Scope::Node(created));
+    assert_eq!(node.write(4, "", 1, "ignored"), 0);
+    assert_eq!(unsafe { owned_string(ffi::text(created)) }, "");
+    assert_eq!(node.write(5, "", 0, "stored"), 1);
+    assert_eq!(unsafe { owned_string(ffi::text(created)) }, "stored");
+    assert!(root.add_checked(b"1abc", Some(b"v"), None, false).is_ok());
+    assert!(root.add_checked(b"1abc", Some(b"a"), None, true).is_ok());
+}
+
+/// Stream parsing keeps source URLs and diagnostics inside one parser context.
+#[test]
+fn simplexml_stream_input_keeps_parser_url() {
+    let url = cstring("data://text/plain,source");
+    let ns = cstring("");
+    let bytes = b"<r>";
+    unsafe {
+        assert_eq!(abi::elephc_xml_sx_load_stream(url.as_ptr(), bytes.as_ptr().cast(), bytes.len() as i64, 0, ns.as_ptr(), 0), 0);
+        let diagnostics = string(abi::elephc_xml_sx_diagnostics());
+        assert!(diagnostics.contains("data://text/plain,source"), "{diagnostics}");
+        assert!(diagnostics.contains("Premature end"), "{diagnostics}");
+        let bytes = b"<r/>";
+        let handle = abi::elephc_xml_sx_load_stream(url.as_ptr(), bytes.as_ptr().cast(), bytes.len() as i64, 0, ns.as_ptr(), 0);
+        assert_ne!(handle, 0);
+        assert!(string(abi::elephc_xml_sx_diagnostics()).is_empty());
+        abi::elephc_xml_sx_free(handle);
+        assert_eq!(abi::elephc_xml_sx_load_stream(url.as_ptr(), bytes.as_ptr().cast(), -1, 0, ns.as_ptr(), 0), 0);
+        assert!(string(abi::elephc_xml_sx_diagnostics()).contains("I/O warning"));
+    }
+}
+
+/// Attached siblings retain namespaces while a detached clone cannot create another sibling.
+#[test]
+fn simplexml_writable_offset_siblings_keep_namespace_and_clone_owners() {
+    let root = parse(b"<r xmlns:p='urn:p'><p:a>one</p:a></r>", 0, "", false).unwrap();
+    let items = root.select(0, "", "urn:p", false, 0).select(2, "a", "", false, 0);
+    let added = items.append_sibling().unwrap();
+    assert_eq!(items.items().len(), 2);
+    assert_eq!(unsafe { string(ffi::name(added.first().unwrap())) }, "a");
+    assert_eq!(unsafe { string(ffi::ns(added.first().unwrap(), 0)) }, "urn:p");
+    added.assign_node(added.first().unwrap(), "two");
+    let child = items.select(4, "", "", false, 0).deep_clone().unwrap();
+    assert!(child.append_sibling().is_none());
+    let retained = child.clone();
+    assert!(unsafe { ffi::parent(retained.first().unwrap()) }.is_null());
+    drop(child);
+    drop(added);
+    drop(items);
+    drop(root);
+    assert_eq!(unsafe { string(ffi::ns(retained.first().unwrap(), 0)) }, "urn:p");
+    retained.assign_node(retained.first().unwrap(), "kept");
+    assert_eq!(unsafe { owned_string(ffi::text(retained.first().unwrap())) }, "kept");
+}

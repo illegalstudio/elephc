@@ -454,6 +454,7 @@ fn statements_after_the_loop_still_run() {
     let (bin, _) = compile(&dir, source, "sequence_probe");
     let (stdout, stderr) = run_binary(&bin);
     assert_eq!(stdout, "one\ntwo\nthree=7\nfour\n");
+    let source_path = fs::canonicalize(&dir).expect("canonical test dir").join("sequence_probe.php");
     assert_eq!(
         stderr,
         format!(

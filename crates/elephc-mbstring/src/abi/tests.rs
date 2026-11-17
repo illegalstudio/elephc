@@ -85,3 +85,35 @@ fn mbstring_abi_detect_encoding_defaults() {
     }
     elephc_mbstring_reset_v1();
 }
+
+/// Native byte-pattern guards follow encoding, syntax and configured resource limits.
+#[test]
+fn mbstring_abi_regex_ascii_defaults_follow_request_state() {
+    elephc_mbstring_reset_v1();
+    REGEX.with(|session| {
+        session.set_encoding(b"UTF-8").unwrap();
+        session.set_options(b"pr").unwrap();
+    });
+    REQUEST.with(|state| {
+        for (key, value) in [
+            (b"mbstring.regex_stack_limit".as_slice(), b"100000".as_slice()),
+            (b"mbstring.regex_retry_limit".as_slice(), b"1000000".as_slice()),
+        ] {
+            assert!(state.borrow_mut().ini_set(key, value, |_| Ok(())).accepted);
+        }
+    });
+    assert_eq!(elephc_mbstring_regex_ascii_defaults_v1(), 1);
+    REGEX.with(|session| session.set_encoding(b"UTF-16LE").unwrap());
+    assert_eq!(elephc_mbstring_regex_ascii_defaults_v1(), 0);
+    REGEX.with(|session| session.set_encoding(b"UTF8").unwrap());
+    assert_eq!(elephc_mbstring_regex_ascii_defaults_v1(), 1);
+    REGEX.with(|session| session.set_options(b"b").unwrap());
+    assert_eq!(elephc_mbstring_regex_ascii_defaults_v1(), 0);
+    REGEX.with(|session| session.set_options(b"pr").unwrap());
+    assert_eq!(elephc_mbstring_regex_ascii_defaults_v1(), 1);
+    REQUEST.with(|state| {
+        assert!(state.borrow_mut().ini_set(b"mbstring.regex_retry_limit", b"1", |_| Ok(())).accepted);
+    });
+    assert_eq!(elephc_mbstring_regex_ascii_defaults_v1(), 0);
+    elephc_mbstring_reset_v1();
+}

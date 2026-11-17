@@ -272,12 +272,35 @@ pub(in crate::interpreter) fn eval_property_get_result_with_ownership(
     values: &mut impl RuntimeValueOps,
     owned: Option<&mut Vec<RuntimeCellHandle>>,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
+    eval_property_read_result(object, property_name, context, values, owned, false)
+}
+
+/// Fetches an unset container quietly while preserving visibility and direct magic getter calls.
+pub(super) fn eval_unset_property_get_result(
+    object: RuntimeCellHandle, property_name: &str, context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    if super::property_write_receivers::is_unset_closure(object, context, values)? {
+        return eval_throw_error(&format!("Cannot create dynamic property Closure::${property_name}"), context, values);
+    }
+    eval_property_read_result(object, property_name, context, values, None, true)
+}
+
+/// Shares ordinary and quiet container reads without using an isset guard before a getter.
+pub(super) fn eval_property_read_result(
+    object: RuntimeCellHandle, property_name: &str, context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps, owned: Option<&mut Vec<RuntimeCellHandle>>, quiet: bool,
+) -> Result<RuntimeCellHandle, EvalStatus> {
     let Ok(identity) = values.object_identity(object) else {
         return values.property_get(object, property_name);
     };
     // Any property access is what php initializes a lazy ghost on.
     eval_initialize_lazy_ghost(identity, object, context, values)?;
     context.import_foreign_object_class(identity);
+    if let Some(value) = super::super::runtime_ops::simplexml_properties::invoke(
+        values, object, property_name, if quiet { elephc_builtin_contract::ObjectProperty::WriteSelect }
+            else { elephc_builtin_contract::ObjectProperty::Get }, None,
+    )? { return Ok(value); }
     let Some(class) = context.dynamic_object_class(identity) else {
         let class_name = eval_runtime_object_class_name(object, values)?;
         if let Some(storage_property_name) =
@@ -320,8 +343,8 @@ pub(in crate::interpreter) fn eval_property_get_result_with_ownership(
                 }
             }
             if !is_static {
-                return eval_native_property_get_authorized(
-                    object, &declaring_class, property_name, context, values,
+                return eval_native_property_get_for_container(
+                    object, &declaring_class, property_name, quiet, context, values,
                 );
             }
         }
@@ -343,6 +366,13 @@ pub(in crate::interpreter) fn eval_property_get_result_with_ownership(
             {
                 return Ok(null);
             }
+        }
+        // An unset container fetch of a name nothing declares or answers through `__get()`
+        // materializes php's missing null slot instead of reading the bridge.
+        if quiet && !values.object_dynamic_property_exists(object, property_name)?
+            && values.reflection_method_flags(&class_name, "__get")?.is_none()
+        {
+            return eval_missing_unset_property(object, &class_name, property_name, context, values);
         }
         // A name the compiled class neither declares nor holds as a dynamic property is what
         // `__get()` answers, before the bridge reads it as an undeclared null.
@@ -434,8 +464,9 @@ pub(in crate::interpreter) fn eval_property_get_result_with_ownership(
         {
             // `isset`/`empty`/`??`/`??=` fetch QUIETLY: PHP answers "absent" for an
             // uninitialized typed property instead of raising, and the mode reaches down a
-            // whole property/dim chain. Only the ordinary read raises.
-            if context.quiet_property_fetch() {
+            // whole property/dim chain, as does the container of an unset. Only the ordinary
+            // read raises.
+            if quiet || context.quiet_property_fetch() {
                 return values.null();
             }
             return eval_throw_uninitialized_property_error(
@@ -491,16 +522,11 @@ pub(in crate::interpreter) fn eval_property_get_result_with_ownership(
                     );
                 }
                 // Same rule for an eval class inheriting an AOT typed property: the marker is read
-                // in the declaring class's bridge scope, as `eval_property_isset` does.
-                if context.quiet_property_fetch()
-                    && !eval_with_native_bridge_scope(&declaring_class, context, || {
-                        values.property_is_initialized(object, property_name)
-                    })?
-                {
-                    return values.null();
-                }
-                return eval_native_property_get_authorized(
-                    object, &declaring_class, property_name, context, values,
+                // in the declaring class's bridge scope, as `eval_property_isset` does, and an
+                // uninitialized slot answers absent under a quiet fetch or an unset container.
+                return eval_native_property_get_for_container(
+                    object, &declaring_class, property_name,
+                    quiet || context.quiet_property_fetch(), context, values,
                 );
             }
         }
@@ -527,6 +553,9 @@ pub(in crate::interpreter) fn eval_property_get_result_with_ownership(
                 return Ok(result);
             }
         }
+    }
+    if quiet && !declared_property_found {
+        return eval_missing_unset_property(object, &object_class_name, property_name, context, values);
     }
     if let Some(target) = context
         .dynamic_property_alias(identity, &storage_property_name)
@@ -629,6 +658,17 @@ fn eval_reflection_public_property_storage_name(
     }
 }
 
+/// Rejects null write receivers before a native property bridge can report a runtime fatal.
+pub(super) fn validate_property_write_receiver(
+    object: RuntimeCellHandle, property: &str, verb: &str,
+    context: &mut ElephcEvalContext, values: &mut impl RuntimeValueOps,
+) -> Result<(), EvalStatus> {
+    if values.type_tag(object)? == EVAL_TAG_NULL {
+        return eval_throw_error(&format!("Attempt to {verb} property \"{property}\" on null"), context, values);
+    }
+    Ok(())
+}
+
 /// Writes one object property while enforcing eval-declared member visibility.
 pub(crate) fn eval_property_set_result(
     object: RuntimeCellHandle,
@@ -637,12 +677,16 @@ pub(crate) fn eval_property_set_result(
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<(), EvalStatus> {
+    validate_property_write_receiver(object, property_name, "assign", context, values)?;
     let Ok(identity) = values.object_identity(object) else {
         return values.property_set(object, property_name, value);
     };
     // Any property access is what php initializes a lazy ghost on.
     eval_initialize_lazy_ghost(identity, object, context, values)?;
     context.import_foreign_object_class(identity);
+    if let Some(result) = super::super::runtime_ops::simplexml_properties::invoke(
+        values, object, property_name, elephc_builtin_contract::ObjectProperty::Set, Some(value),
+    )? { return values.release(result); }
     let Some(class) = context.dynamic_object_class(identity) else {
         let class_name = eval_runtime_object_class_name(object, values)?;
         if eval_reflection_public_property_storage_name(&class_name, property_name).is_some() {
@@ -884,6 +928,7 @@ pub(crate) fn eval_property_set_result(
                     &hook_method,
                     object,
                     vec![EvaluatedCallArg {
+                        evaluation_owner: None,
                         name: None,
                         value: value.borrowed(),
                         ref_target: None,
@@ -902,6 +947,7 @@ pub(crate) fn eval_property_set_result(
                 values,
             );
         }
+        eval_reject_null_object_property(&declaring_class, &property, value, context, values)?;
     }
     if !declared_property_found {
         let native_property = eval_dynamic_class_native_property_metadata(
@@ -1034,7 +1080,7 @@ pub(crate) fn eval_property_set_result(
             )?
         {
             if !is_static && visibility != EvalVisibility::Private {
-                eval_with_native_bridge_scope(&declaring_class, context, || {
+                eval_with_native_bridge_scope(&declaring_class, context, values, |values| {
                     eval_native_property_store_with_array_shape_fallback(
                         object,
                         property_name,
@@ -1200,7 +1246,7 @@ fn trace_instance_property_error(
 }
 
 /// Returns whether an eval or seeded native class inherits permission for dynamic properties.
-fn eval_class_allows_dynamic_properties(class_name: &str, context: &ElephcEvalContext) -> bool {
+pub(super) fn eval_class_allows_dynamic_properties(class_name: &str, context: &ElephcEvalContext) -> bool {
     let mut current = class_name.trim_start_matches('\\').to_string();
     let mut visited = std::collections::HashSet::new();
     while visited.insert(current.to_ascii_lowercase()) {
@@ -1234,7 +1280,7 @@ fn eval_class_allows_dynamic_properties(class_name: &str, context: &ElephcEvalCo
 }
 
 /// Writes a public dynamic entry without resolving an inaccessible declared slot of the same name.
-fn eval_write_public_dynamic_property(
+pub(super) fn eval_write_public_dynamic_property(
     object: RuntimeCellHandle,
     identity: u64,
     class_name: &str,
@@ -1301,6 +1347,7 @@ pub(super) fn eval_property_reference_bind_result(
         return Err(EvalStatus::RuntimeFatal);
     }
     let storage_property_name = eval_instance_property_storage_name(&declaring_class, &property);
+    eval_preflight_property_reference_source(&declaring_class, &property, source_name, context, scope, values)?;
     let target = eval_property_reference_target(
         identity,
         &storage_property_name,
@@ -1326,6 +1373,7 @@ pub(super) fn eval_property_reference_bind_result(
         other => other,
     };
     let value = eval_reference_target_value(&target, context, values)?;
+    eval_reject_null_object_property(&declaring_class, &property, value, context, values)?;
     // A re-bound alias gives back the reference its previous target held.
     if let Some(previous) = context.bind_dynamic_property_alias(identity, &storage_property_name, target) {
         eval_release_property_alias(previous, values)?;
@@ -1364,6 +1412,12 @@ pub(super) fn eval_property_reference_target(
     values: &mut impl RuntimeValueOps,
 ) -> Result<EvalReferenceTarget, EvalStatus> {
     if let Some(target) = scope.reference_target(source_name).cloned() {
+        let resolved = persistent_reference_target(target.clone())?;
+        if reference_target_has_object_root(&resolved) {
+            if let Some(cell) = eval_persistent_variable_reference(source_name, context, scope, values)? {
+                return Ok(EvalReferenceTarget::Cell { cell });
+            }
+        }
         return Ok(target);
     }
     if context.current_function().is_some() {
@@ -1498,9 +1552,16 @@ pub(in crate::interpreter) fn eval_property_isset_result(
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<bool, EvalStatus> {
+    if let Some(result) = super::super::runtime_ops::simplexml_properties::invoke(
+        values, object, property_name, elephc_builtin_contract::ObjectProperty::Isset, None,
+    )? {
+        let truthy = values.truthy(result);
+        let released = values.release(result);
+        return truthy.and_then(|value| released.map(|()| value));
+    }
     let Ok(identity) = values.object_identity(object) else {
         let value = values.property_get(object, property_name)?;
-        return Ok(!values.is_null(value)?);
+        return eval_property_probe_value_is_set(value, context, values);
     };
     eval_initialize_lazy_ghost(identity, object, context, values)?;
     context.import_foreign_object_class(identity);
@@ -1517,7 +1578,7 @@ pub(in crate::interpreter) fn eval_property_isset_result(
             }
         }
         let value = values.property_get(object, property_name)?;
-        return Ok(!values.is_null(value)?);
+        return eval_property_probe_value_is_set(value, context, values);
     };
     let object_class_name = class.name().to_string();
     if let Some((declaring_class, property)) =
@@ -1532,7 +1593,7 @@ pub(in crate::interpreter) fn eval_property_isset_result(
                 return Ok(false);
             }
             let value = eval_property_get_result(object, property_name, context, values)?;
-            return Ok(!values.is_null(value)?);
+            return eval_property_probe_value_is_set(value, context, values);
         }
         return eval_magic_property_isset(
             object,
@@ -1551,7 +1612,7 @@ pub(in crate::interpreter) fn eval_property_isset_result(
     }
     if eval_object_public_property_exists(object, property_name, values)? {
         let value = values.property_get(object, property_name)?;
-        return Ok(!values.is_null(value)?);
+        return eval_property_probe_value_is_set(value, context, values);
     }
     if let Some((declaring_class, visibility, _, is_static)) =
         eval_dynamic_class_native_property_metadata(
@@ -1572,19 +1633,30 @@ pub(in crate::interpreter) fn eval_property_isset_result(
                 )
                 .map(|result| result.unwrap_or(false));
             }
-            if !eval_with_native_bridge_scope(&declaring_class, context, || {
+            if !eval_with_native_bridge_scope(&declaring_class, context, values, |values| {
                 values.property_is_initialized(object, property_name)
             })? {
                 return Ok(false);
             }
-            let value = eval_with_native_bridge_scope(&declaring_class, context, || {
+            let value = eval_with_native_bridge_scope(&declaring_class, context, values, |values| {
                 values.property_get(object, property_name)
             })?;
-            return Ok(!values.is_null(value)?);
+            return eval_property_probe_value_is_set(value, context, values);
         }
     }
     eval_magic_property_isset(object, &object_class_name, property_name, context, values)
         .map(|result| result.unwrap_or(false))
+}
+
+/// Retires an owned probe result while preserving borrowed property-reference cells.
+fn eval_property_probe_value_is_set(
+    value: RuntimeCellHandle,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<bool, EvalStatus> {
+    let is_null = values.is_null(value);
+    let released = release_expr_result(value, context, values);
+    is_null.and_then(|is_null| released.map(|()| !is_null))
 }
 
 /// Evaluates PHP `unset($object->property)` across eval declarations and native storage.
@@ -1594,6 +1666,9 @@ pub(in crate::interpreter) fn eval_property_unset_result(
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<(), EvalStatus> {
+    if let Some(result) = super::super::runtime_ops::simplexml_properties::invoke(
+        values, object, property_name, elephc_builtin_contract::ObjectProperty::Unset, None,
+    )? { return values.release(result); }
     let Ok(identity) = values.object_identity(object) else {
         return Ok(());
     };
@@ -1746,12 +1821,11 @@ pub(super) fn eval_magic_property_get(
         object_class_name,
         &method,
         object,
-        positional_args(vec![property]),
+        positional_args(vec![property.borrowed()]),
         context,
         values,
     );
-    values.release(property)?;
-    result.map(Some)
+    finish_magic_property_name(result, property, context, values).map(Some)
 }
 
 /// Dispatches a read of a name a COMPILED object does not declare through its class's `__get()`.
@@ -1839,12 +1913,12 @@ pub(super) fn eval_magic_property_set(
             object_class_name,
             &method,
             object,
-            positional_args(vec![property, value]),
+            positional_args(vec![property.borrowed(), value]),
             context,
             values,
         );
-        values.release(property)?;
-        values.release(result?)
+        let result = finish_magic_property_name(result, property, context, values)?;
+        release_expr_result(result, context, values)
     })();
     let popped = values.native_magic_set_guard_pop(native_node.as_mut().get_mut());
     result.and(popped).map(|()| true)
@@ -1884,15 +1958,30 @@ pub(super) fn eval_magic_property_isset(
         object_class_name,
         &method,
         object,
-        positional_args(vec![property]),
+        positional_args(vec![property.borrowed()]),
         context,
         values,
     );
-    values.release(property)?;
-    let result = result?;
-    let truthy = values.truthy(result)?;
-    values.release(result)?;
-    Ok(Some(truthy))
+    let result = finish_magic_property_name(result, property, context, values)?;
+    let truthy = values.truthy(result);
+    let released = release_expr_result(result, context, values);
+    truthy.and_then(|truthy| released.map(|()| Some(truthy)))
+}
+
+/// Retires a synthesized magic-property name while preserving an independently owned result.
+fn finish_magic_property_name(
+    result: Result<RuntimeCellHandle, EvalStatus>, property: RuntimeCellHandle,
+    context: &mut ElephcEvalContext, values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let released = release_expr_result(property, context, values);
+    match (result, released) {
+        (Err(status), _) => Err(status),
+        (Ok(value), Err(status)) => {
+            let _ = release_expr_result(value, context, values);
+            Err(status)
+        }
+        (Ok(value), Ok(())) => Ok(value),
+    }
 }
 
 /// Dispatches an undefined or inaccessible eval property unset through `__unset()`.

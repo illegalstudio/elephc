@@ -61,6 +61,34 @@ echo productCounter($argc, $argc + 4);
     }
 }
 
+/// The seed tag test and payload copy share one block, so a numeric seed can keep a frame cell.
+#[test]
+fn counter_fast_path_seed_payload_is_copied_beside_its_tag_test() {
+    let source = r#"<?php
+function seededCounter(int $n, int $last): int {
+    $count = 0;
+    for ($b = 0; $b < $n; $b++) {
+        for ($y = $last - $b; $y <= $last; $y++) { $count += 1; }
+    }
+    return $count;
+}
+echo seededCounter($argc + 3, $argc + 1);
+"#;
+    for target in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+        let function = optimized(source, "seededCounter", target);
+        let text = crate::ir::print_function(&function);
+        assert!(text.contains(".counter.fast"), "{target}: {text}");
+        let guard = function.blocks.iter().find(|block| block.instructions.iter().any(|id| {
+            function.instruction(*id).unwrap().op == Op::TypePredicate
+        })).unwrap_or_else(|| panic!("{target}: missing seed guard:\n{text}"));
+        let predicate = guard.instructions.iter().map(|id| function.instruction(*id).unwrap())
+            .find(|inst| inst.op == Op::TypePredicate).unwrap();
+        assert!(guard.instructions.iter().map(|id| function.instruction(*id).unwrap()).any(|inst| {
+            inst.op == Op::MixedUnbox && inst.operands == predicate.operands
+        }), "{target}: seed payload must be copied in its guard block:\n{text}");
+    }
+}
+
 /// A seed below PHP_INT_MIN is unobservable when a dead-at-exit descending loop never enters.
 #[test]
 fn counter_fast_path_descending_seed_skips_overflow_without_loop_copy() {
@@ -230,8 +258,10 @@ echo coercingBound($argc + 2), coercingSeed($argc + 3);
             let stores: Vec<_> = function.instructions.iter().filter(|inst| inst.op == Op::StoreStaticProperty).collect();
             assert!(!stores.is_empty(), "{target}: {text}");
             for store in stores {
-                assert!(store.operands.iter().all(|value| function.values[value.as_raw() as usize].ir_type
-                    == crate::ir::IrType::Heap(crate::ir::IrHeapKind::Mixed)), "{target}: {text}");
+                assert_eq!(function.values[store.operands[0].as_raw() as usize].ir_type,
+                    crate::ir::IrType::Heap(crate::ir::IrHeapKind::Mixed), "{target}: {text}");
+                assert_eq!(function.values[store.operands[1].as_raw() as usize].php_type,
+                    crate::types::PhpType::Bool, "{target}: source strictness is separate from the boxed RHS");
             }
         }
     }

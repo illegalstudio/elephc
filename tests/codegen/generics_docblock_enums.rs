@@ -70,11 +70,11 @@ namespace App {
     }
 }
 
-/// An enum method's PHPDoc template is not adopted: a violating argument runs as php runs it,
-/// with no fallback note, and the written `id<int>` extension is refused on the enum method.
+/// An enum template's bound warns about the same argument a class method template warns about,
+/// and the call still compiles: php-src does not enforce a PHPDoc bound.
 #[test]
-fn test_docblock_enum_templates_tolerate_bound_violations() {
-    let template = r#"<?php
+fn test_docblock_enum_template_bound_violation_warns() {
+    let source = r#"<?php
 enum Id {
     case A;
     /**
@@ -87,15 +87,8 @@ enum Id {
 echo Id::A->id(ARG);
 "#;
     for flags in [&[][..], &["--strict-php"][..]] {
-        for (arg, expected) in [("\"seven\"", "seven"), ("7", "7")] {
-            let source = template.replace("ARG", arg);
-            let notes = compile_cli_file_with_flags_capturing_stderr(&source, flags);
-            assert!(!notes.contains("is compiled with its written types"), "{flags:?}: {notes}");
-            assert_eq!(compile_cli_file_and_run_with_flags(&source, flags), expected, "{flags:?}");
-        }
-        let written = template.replace("id(ARG)", "id<int>(7)");
-        let error = compile_cli_file_with_flags_expect_failure(&written, flags);
-        assert!(error.contains("id<int>"), "{error}");
+        let warnings = compile_cli_file_with_flags_capturing_stderr(source, flags);
+        assert!(warnings.contains("does not satisfy its bound int"), "{warnings}");
     }
 }
 

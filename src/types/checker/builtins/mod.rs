@@ -11,6 +11,8 @@
 pub(crate) mod arrays;
 mod callables;
 pub(crate) use callables::callback_dummy_arg_for_type;
+pub(super) use callables::is_callback_argument_placeholder;
+pub(super) use callables::callback_args_have_opaque_placeholder;
 pub(crate) mod catalog;
 pub(crate) mod io;
 mod late_bound;
@@ -116,6 +118,7 @@ impl Checker {
         name: &str,
         args: &[Expr],
         plan: Option<&crate::types::call_args::CallArgPlan>,
+        span: crate::span::Span,
         env: &TypeEnv,
     ) -> Result<(), CompileError> {
         let regular_param_count = def
@@ -149,6 +152,8 @@ impl Checker {
             //
             // Registry builtins do not retain the cell, so this deliberately leaves the narrower
             // non-builtin alias set unchanged.
+            let can_widen_local = self.by_ref_argument_can_widen_local_to_mixed(arg)
+                || self.boxed_reference_promotion_pending(arg, span);
             self.record_builtin_reference_alias_root(arg);
             // `sort($o->inner->items)` writes the sorted array back through a receiver whose
             // class the checker cannot name, as a runtime-shaped value. Any class's untyped
@@ -169,6 +174,27 @@ impl Checker {
                 continue;
             }
             if self.is_builtin_by_ref_argument_lvalue(arg) {
+                // A mixed reference can replace a guarded value and require a wider cell.
+                // Publish the same storage transition as an ordinary mixed-reference call.
+                if def.params.get(param_index).is_some_and(|(_, ty)| *ty == PhpType::Mixed)
+                    && self.guarded_local_storage_type(arg, env)
+                        .is_some_and(|storage| !Self::is_raw_non_null_contract(storage))
+                {
+                    let actual = self.infer_type(arg, env)?;
+                    let output = if def.spec.semantics.preserves_array_reference(param_index)
+                        && (actual.is_php_array()
+                            || matches!(actual, PhpType::Array(_) | PhpType::AssocArray { .. }))
+                    {
+                        PhpType::php_array()
+                    } else {
+                        PhpType::Mixed
+                    };
+                    self.require_boxed_by_ref_storage(
+                        &output, &actual, arg, env, can_widen_local, false,
+                        &format!("Builtin '{}'", name),
+                    )?;
+                    self.record_boxed_reference_output(arg, &output, &actual, span, env, false)?;
+                }
                 continue;
             }
             let param_name = def
@@ -346,7 +372,7 @@ impl Checker {
                     ),
                 ));
             }
-            self.validate_registry_by_ref_args(def, name, args, builtin_arg_plan.as_ref(), env)?;
+            self.validate_registry_by_ref_args(def, name, args, builtin_arg_plan.as_ref(), span, env)?;
             let requirement_input = crate::builtins::semantics::BuiltinRequirementInput {
                 args,
             };

@@ -373,8 +373,12 @@ pub(in crate::interpreter) fn eval_array_get_result(
         return values.array_get(array, index);
     }
     if !eval_array_access_object_matches(array, context, values)? {
-        return Err(EvalStatus::RuntimeFatal);
+        let class_name = eval_closure_bound_object_class_name(array, context, values)?;
+        return eval_throw_error(&format!("Cannot use object of type {class_name} as array"), context, values);
     }
+    if let Some(value) = super::super::runtime_ops::simplexml_properties::dimension(
+        values, array, elephc_builtin_contract::ObjectDimension::Get, vec![index],
+    )? { return Ok(value); }
     eval_method_call_result(array, "offsetGet", vec![index], context, values)
 }
 
@@ -423,6 +427,9 @@ pub(in crate::interpreter) fn eval_array_access_object_matches(
     context: &ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<bool, EvalStatus> {
+    if dynamic_object_is_a(value, "SimpleXMLElement", false, context, values)?
+        .map_or_else(|| values.object_is_a(value, "SimpleXMLElement", false), Ok)?
+    { return Ok(true); }
     dynamic_object_is_a(value, "ArrayAccess", false, context, values)?
         .map_or_else(|| values.object_is_a(value, "ArrayAccess", false), Ok)
 }
@@ -436,46 +443,54 @@ pub(super) fn eval_cast_expr(
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     with_eval_operands(&[expr], context, scope, values, |args, context, _, values| {
-        match target {
-            EvalCastType::Int => match eval_object_scalar_adapter(
-                args[0],
-                "__elephc_to_int",
-                context,
-                values,
-            )? {
-                Some(value) => Ok(value),
-                None => values.cast_int(args[0]),
-            },
-            EvalCastType::Float => match eval_object_scalar_adapter(
-                args[0],
-                "__elephc_to_float",
-                context,
-                values,
-            )? {
-                Some(value) => Ok(value),
-                None => values.cast_float(args[0]),
-            },
-            EvalCastType::String => {
-                let value = eval_string_context_value(args[0], context, values)?;
-                let result = values.cast_string(value);
-                let released = if value != args[0] {
-                    release_expr_result(value, context, values)
-                } else { Ok(()) };
-                result.and_then(|result| released.map(|()| result))
-            }
-            EvalCastType::Bool => match eval_object_scalar_adapter(
-                args[0],
-                "__elephc_to_bool",
-                context,
-                values,
-            )? {
-                Some(value) => Ok(value),
-                None => values.cast_bool(args[0]),
-            },
-            EvalCastType::Array => eval_array_cast_value(args[0], context, values),
-            EvalCastType::Object => eval_object_cast_value(args[0], context, values),
-        }
+        eval_cast_value(target, args[0], context, values)
     })
+}
+
+/// Casts an evaluated operand through the same object adapters for both EvalIR consumers.
+pub(in crate::interpreter) fn eval_cast_value(
+    target: &EvalCastType,
+    value: RuntimeCellHandle,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    match target {
+        EvalCastType::Array => {
+            if let Some(result) = super::super::runtime_ops::object_operators::numeric_cast(values, value, elephc_builtin_contract::ObjectCast::Array)? { return Ok(result); }
+            eval_array_cast_value(value, context, values)
+        }
+        EvalCastType::Object => eval_object_cast_value(value, context, values),
+        EvalCastType::Int => {
+            if let Some(result) = super::super::runtime_ops::object_operators::numeric_cast(values, value, elephc_builtin_contract::ObjectCast::Int)? { return Ok(result); }
+            match eval_object_scalar_adapter(value, "__elephc_to_int", context, values)? {
+                Some(value) => Ok(value),
+                None => values.cast_int(value),
+            }
+        }
+        EvalCastType::Float => {
+            if let Some(result) = super::super::runtime_ops::object_operators::numeric_cast(values, value, elephc_builtin_contract::ObjectCast::Float)? { return Ok(result); }
+            match eval_object_scalar_adapter(value, "__elephc_to_float", context, values)? {
+                Some(value) => Ok(value),
+                None => values.cast_float(value),
+            }
+        }
+        EvalCastType::String => {
+            let converted = eval_string_context_value(value, context, values)?;
+            let result = values.cast_string(converted);
+            if converted != value {
+                finish_synthesized_method_arguments(result, [converted], context, values)
+            } else { result }
+        }
+        EvalCastType::Bool => match eval_object_scalar_adapter(
+            value,
+            "__elephc_to_bool",
+            context,
+            values,
+        )? {
+            Some(value) => Ok(value),
+            None => values.cast_bool(value),
+        },
+    }
 }
 
 /// Casts one dynamic eval value to a `stdClass` object with PHP's `(object)` rules.
@@ -896,32 +911,31 @@ pub(super) fn eval_instanceof_expr(
     scope: &mut ElephcEvalScope,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
-    let value = eval_expr(value, context, scope, values)?;
-    let result = match target {
+    with_eval_operands(&[value], context, scope, values, |operands, context, scope, values| match target {
         EvalInstanceOfTarget::ClassName(class_name) => {
             let target_class = eval_instanceof_static_target_name(class_name, context)?;
-            let tag = values.type_tag(value)?;
-            if tag == EVAL_TAG_CALLABLE {
-                eval_callable_descriptor_is_closure(&target_class)
-            } else if tag == EVAL_TAG_OBJECT {
-                eval_instanceof_object_result(value, &target_class, context, values)?
-            } else {
-                false
-            }
+            eval_instanceof_value_result(operands[0], &target_class, context, values)
         }
         EvalInstanceOfTarget::Expr(target) => {
-            let target = eval_expr(target, context, scope, values)?;
-            let target_class = eval_instanceof_dynamic_target_name(target, context, values)?;
-            let tag = values.type_tag(value)?;
-            if tag == EVAL_TAG_CALLABLE {
-                eval_callable_descriptor_is_closure(&target_class)
-            } else if tag == EVAL_TAG_OBJECT {
-                eval_instanceof_object_result(value, &target_class, context, values)?
-            } else {
-                false
-            }
+            with_eval_operands(&[target], context, scope, values, |targets, context, _, values| {
+                let target_class = eval_instanceof_dynamic_target_name(targets[0], context, values)?;
+                eval_instanceof_value_result(operands[0], &target_class, context, values)
+            })
         }
-    };
+    })
+}
+
+/// Tests borrowed operands after evaluation has acquired their normal and exceptional leases.
+fn eval_instanceof_value_result(
+    value: RuntimeCellHandle, target_class: &str,
+    context: &ElephcEvalContext, values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let tag = values.type_tag(value)?;
+    let result = if tag == EVAL_TAG_CALLABLE && target_class.eq_ignore_ascii_case("Closure") {
+        true
+    } else if tag == EVAL_TAG_OBJECT {
+        eval_instanceof_object_result(value, target_class, context, values)?
+    } else { false };
     values.bool_value(result)
 }
 
@@ -1003,159 +1017,6 @@ fn eval_instanceof_object_result(
 ) -> Result<bool, EvalStatus> {
     dynamic_object_is_a(value, target_class, false, context, values)?
         .map_or_else(|| values.object_is_a(value, target_class, false), Ok)
-}
-
-/// Materializes one eval closure literal as a PHP-visible `Closure` object.
-pub(super) fn eval_closure_expr(
-    function: &EvalFunction,
-    captures: &[crate::eval_ir::EvalClosureCapture],
-    is_static: bool,
-    context: &mut ElephcEvalContext,
-    scope: &mut ElephcEvalScope,
-    values: &mut impl RuntimeValueOps,
-) -> Result<RuntimeCellHandle, EvalStatus> {
-    let mut bindings = Vec::with_capacity(captures.len());
-    for capture in captures {
-        if capture.implicit() && visible_scope_cell(context, scope, capture.name()).is_none() {
-            continue;
-        }
-        bindings.push(eval_closure_capture(capture, context, scope, values)?);
-    }
-    let mut closure = EvalClosure::new(function.clone(), bindings, is_static);
-    closure.set_declaring_class_scopes(
-        context.current_class_scope().map(str::to_string),
-        context.current_called_class_scope().map(str::to_string),
-    );
-    // PHP binds `$this` into a non-static closure or arrow function automatically when one is
-    // declared inside a method body while an instance is in scope -- this is not a `use (...)`
-    // capture (and an arrow function's implicit capture list explicitly excludes `this`), so it
-    // has to be captured here, at the declaration site, the same way the class scopes above are.
-    // A `static function`/`static fn` never gets `$this`, even if one happens to be in scope
-    // (e.g. a static closure declared inside another closure that itself captured `$this`).
-    if !is_static {
-        if let Some(this_value) = visible_scope_cell(context, scope, "this") {
-            let retained = values.retain(this_value)?;
-            closure.set_declaring_this(Some(retained));
-        }
-    }
-    closure.set_declaring_call_site(context.call_site());
-    if crate::eval_trace::enabled() {
-        eprintln!(
-            "[elephc-eval-trace] phase=closure_create function={:?} lexical_class={:?} called_class={:?}",
-            function.name(),
-            closure.declaring_class_scope(),
-            closure.declaring_called_class_scope(),
-        );
-    }
-    let name = context.define_closure(closure);
-    eval_closure_object_expr(EvalClosureObjectTarget::Named(name), context, values)
-}
-
-/// Materializes one PHP-visible `Closure` object for an eval callable target.
-pub(in crate::interpreter) fn eval_closure_object_expr(
-    mut target: EvalClosureObjectTarget,
-    context: &mut ElephcEvalContext,
-    values: &mut impl RuntimeValueOps,
-) -> Result<RuntimeCellHandle, EvalStatus> {
-    let object = values.new_object("stdClass")?;
-    let attached = (|| {
-        if let Some(receiver) = target.receiver_mut() {
-            values.retain_object_children(object, &[*receiver])?;
-            // Metadata borrows the cell owned by the runtime edge, not its caller's scope.
-            *receiver = receiver.borrowed();
-        }
-        values.object_identity(object)
-    })();
-    let identity = match attached {
-        Ok(identity) => identity,
-        Err(status) => {
-            let _ = values.release(object);
-            return Err(status);
-        }
-    };
-    context.register_closure_object_target(identity, target);
-    crate::ffi::dynamic_destructors::register_dynamic_object_context(identity, context);
-    Ok(object)
-}
-
-/// Evaluates one closure capture from the defining scope.
-fn eval_closure_capture(
-    capture: &crate::eval_ir::EvalClosureCapture,
-    context: &mut ElephcEvalContext,
-    scope: &mut ElephcEvalScope,
-    values: &mut impl RuntimeValueOps,
-) -> Result<EvalClosureCaptureBinding, EvalStatus> {
-    if capture.by_ref() {
-        if let Some(reference) = eval_persistent_variable_reference(capture.name(), context, scope, values)? {
-            let reference = values.retain(reference)?;
-            return Ok(EvalClosureCaptureBinding::new(capture.name(), reference, Some(EvalReferenceTarget::Cell { cell: reference })));
-        }
-        // The closure OWNS one reference to the captured cell, as a by-value capture does. It
-        // routinely outlives the defining activation (`return function () use (&$x) {...};`),
-        // and that activation releases its own reference when it returns. An undefined
-        // variable comes back as a fresh null, which is already owned.
-        let defined = visible_scope_cell(context, scope, capture.name()).is_some();
-        let expr = EvalExpr::LoadVar(capture.name().to_string());
-        let (value, target) = eval_call_arg_value(&expr, context, scope, values).map_err(|status| {
-            if crate::eval_trace::enabled() {
-                eprintln!(
-                    "[elephc-eval-trace] phase=closure_capture_error capture={:?} by_ref=true status={status:?}",
-                    capture.name(),
-                );
-            }
-            status
-        })?;
-        let target = match target {
-            Some(mut target) => {
-                retain_capture_target_object(&mut target, values)?;
-                Some(target)
-            }
-            None => None,
-        };
-        let value = if defined { values.retain(value)? } else { value };
-        // The variable may itself be a reference (a by-reference parameter): `target` is then
-        // the variable it aliases, so keep this scope's own entry as a second holder.
-        let defining_target = (scope.reference_target(capture.name()).is_some() && defined).then(
-            || EvalReferenceTarget::Variable {
-                scope: crate::scope::EvalScopeRef::new(scope),
-                name: capture.name().to_string(),
-            },
-        );
-        return Ok(
-            EvalClosureCaptureBinding::new(capture.name(), value, target)
-                .with_defining_target(defining_target),
-        );
-    }
-    let value = if let Some(value) = visible_scope_cell(context, scope, capture.name()) {
-        if values.is_reference(value)? { values.copy_value(value)? } else { values.retain(value)? }
-    } else {
-        values.null()?
-    };
-    Ok(EvalClosureCaptureBinding::new(capture.name(), value, None))
-}
-
-/// Gives a by-reference capture rooted in an object property a reference to that object's cell.
-///
-/// The target names the receiver through the cell the method ran on, and that cell is the call's
-/// own copy of the caller's, released when the call returns. A non-static closure keeps it alive
-/// through `$this`; a `static` one holds nothing, so a capture outliving the method wrote through
-/// a freed cell -- Symfony's `EventDispatcher::optimizeListeners()` wrapper assigns its
-/// `use (&$closure)`, bound to `&$this->optimized[$event][]`, from a `static function`. The
-/// closure owns this reference the way it owns the `$this` it captures.
-fn retain_capture_target_object(
-    target: &mut EvalReferenceTarget,
-    values: &mut impl RuntimeValueOps,
-) -> Result<(), EvalStatus> {
-    match target {
-        EvalReferenceTarget::ObjectProperty { object, .. } => {
-            *object = values.retain(*object)?;
-            Ok(())
-        }
-        EvalReferenceTarget::NestedArrayElement { array_target, .. } => {
-            retain_capture_target_object(array_target, values)
-        }
-        _ => Ok(()),
-    }
 }
 
 /// Evaluates one `match` arm value as an OWNED result.

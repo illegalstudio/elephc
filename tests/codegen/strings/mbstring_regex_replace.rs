@@ -33,7 +33,11 @@ fn test_mbstring_regex_replace_runtime_errors() {
         let output = compile_and_run_capture(&program(include_str!("fixtures/mbstring_replace_errors.php"), eval));
         assert!(output.success, "eval={eval}: {}\n{}", output.stderr, output.stdout);
         assert_eq!(output.stdout, include_str!("fixtures/mbstring_replace_errors.out"), "eval={eval}");
-        assert_eq!(output.stderr, include_str!("fixtures/mbstring_replace_errors.err"), "eval={eval}");
+        assert_eq!(
+            normalize_diagnostic_text(&output.stderr),
+            include_str!("fixtures/mbstring_replace_errors.err"),
+            "eval={eval}"
+        );
     }
 }
 

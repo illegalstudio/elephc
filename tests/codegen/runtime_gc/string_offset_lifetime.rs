@@ -7,7 +7,10 @@
 //! Key details:
 //! - Heap poisoning detects reads after an owning receiver has been released (issue #1908).
 
-use crate::support::compile_and_run_with_heap_debug;
+use crate::support::{
+    compile_and_run_with_heap_debug, compile_and_run_with_heap_debug_and_asm_per_argv,
+    selected_function_assembly,
+};
 
 /// Final Mixed storage retires detached receiver copies across reads, returns and throws.
 #[test]
@@ -378,10 +381,96 @@ function storeReflectedStaticBytes(string $payload): void {
 storeReflectedStaticBytes("\x07aaaaaaaZ" . str_repeat("q", 4000));
 storeReflectedStaticBytes("\x07\x00\x00\x00HPLEZ" . str_repeat("q", 4000));
 "#);
-    assert!(out.success, "{}", out.stderr);
+    assert!(out.success, "stdout={:?}\nstderr={}", out.stdout, out.stderr);
     assert_eq!(out.stdout, "90:Z|90:Z|90:Z|90:Z|90:Z|90:Z\n".repeat(2), "{}", out.stderr);
     assert!(out.stderr.contains("HEAP DEBUG: allocs="), "{}", out.stderr);
     assert!(!out.stderr.contains("double free"), "{}", out.stderr);
+}
+
+/// Isolates each reflected byte store and early static retirement before shutdown cycle collection.
+#[test]
+fn test_reflection_static_byte_stores_and_shutdown_owners_isolated_bundle() {
+    let (runs, assembly) = compile_and_run_with_heap_debug_and_asm_per_argv(r#"<?php
+class IsolatedReflectedStaticBytes {
+    public static mixed $kept;
+    public static string $typedClass = "";
+    public static string $typedProperty = "";
+    public static $inferredClass = "";
+    public static $inferredProperty = "";
+}
+function storeIsolatedReflectedStaticBytes(string $payload, int $mode): void {
+    $class = new ReflectionClass(IsolatedReflectedStaticBytes::class);
+    if ($mode === 1 || $mode === 2 || $mode === 8) {
+        echo 'class-mixed|';
+        $local = $payload . "!";
+        $class->setStaticPropertyValue('kept', $local[8]);
+        $local = 'no';
+        echo ord(IsolatedReflectedStaticBytes::$kept), ':', IsolatedReflectedStaticBytes::$kept, '|';
+    }
+    if ($mode === 1 || $mode === 3 || $mode === 8) {
+        echo 'property-mixed|';
+        $local = $payload . "!";
+        $property = new ReflectionProperty(IsolatedReflectedStaticBytes::class, 'kept');
+        $property->setValue(null, $local[8]);
+        $local = 'no';
+        echo ord(IsolatedReflectedStaticBytes::$kept), ':', IsolatedReflectedStaticBytes::$kept, '|';
+    }
+    if ($mode === 1 || $mode === 4 || $mode === 8) {
+        echo 'class-typed|';
+        $local = $payload . "!";
+        $class->setStaticPropertyValue('typedClass', $local[8]);
+        $local = 'no';
+        echo ord(IsolatedReflectedStaticBytes::$typedClass), ':', IsolatedReflectedStaticBytes::$typedClass, '|';
+    }
+    if ($mode === 1 || $mode === 5 || $mode === 8) {
+        echo 'property-typed|';
+        $local = $payload . "!";
+        $typed = new ReflectionProperty(IsolatedReflectedStaticBytes::class, 'typedProperty');
+        $typed->setValue(null, $local[8]);
+        $local = 'no';
+        echo ord(IsolatedReflectedStaticBytes::$typedProperty), ':', IsolatedReflectedStaticBytes::$typedProperty, '|';
+    }
+    if ($mode === 1 || $mode === 6 || $mode === 8) {
+        echo 'class-inferred|';
+        $local = $payload . "!";
+        $class->setStaticPropertyValue('inferredClass', $local[8]);
+        $local = 'no';
+        echo ord(IsolatedReflectedStaticBytes::$inferredClass), ':', IsolatedReflectedStaticBytes::$inferredClass, '|';
+    }
+    if ($mode === 1 || $mode === 7 || $mode === 8) {
+        echo 'property-inferred|';
+        $local = $payload . "!";
+        $inferred = new ReflectionProperty(IsolatedReflectedStaticBytes::class, 'inferredProperty');
+        $inferred->setValue(null, $local[8]);
+        $local = 'no';
+        echo ord(IsolatedReflectedStaticBytes::$inferredProperty), ':', IsolatedReflectedStaticBytes::$inferredProperty, '|';
+    }
+    echo 'return|';
+}
+storeIsolatedReflectedStaticBytes("\x07aaaaaaaZ" . str_repeat('q', 4000), $argc);
+storeIsolatedReflectedStaticBytes("\x07\x00\x00\x00HPLEZ" . str_repeat('q', 4000), $argc);
+if ($argc === 8) {
+    IsolatedReflectedStaticBytes::$kept = null;
+    IsolatedReflectedStaticBytes::$typedClass = '';
+    IsolatedReflectedStaticBytes::$typedProperty = '';
+    IsolatedReflectedStaticBytes::$inferredClass = '';
+    IsolatedReflectedStaticBytes::$inferredProperty = '';
+    echo 'reset|';
+}
+echo 'shutdown|';
+"#, &[&[], &["x"], &["x", "x"], &["x", "x", "x"], &["x", "x", "x", "x"], &["x", "x", "x", "x", "x"], &["x", "x", "x", "x", "x", "x"], &["x", "x", "x", "x", "x", "x", "x"]]);
+    assert_eq!(runs.len(), 8);
+    let labels = ["class-mixed", "property-mixed", "class-typed", "property-typed", "class-inferred", "property-inferred"];
+    let all = labels.iter().map(|label| format!("{label}|90:Z|")).collect::<String>();
+    let mut failures = Vec::new();
+    for (mode, out) in runs.iter().enumerate() {
+        let body = if mode == 0 || mode == 7 { all.clone() } else { format!("{}|90:Z|", labels[mode - 1]) };
+        let expected = format!("{}{}shutdown|", format!("{body}return|").repeat(2), if mode == 7 { "reset|" } else { "" });
+        if !out.success || out.stdout != expected || !out.stderr.contains("HEAP DEBUG: leak summary: clean") {
+            failures.push(format!("mode={mode} success={} stdout={:?} expected={expected:?}\n{}", out.success, out.stdout, out.stderr));
+        }
+    }
+    assert!(failures.is_empty(), "{}\nReflected byte store assembly:\n{}", failures.join("\n"), selected_function_assembly(&assembly, &[elephc::names::function_symbol("storeIsolatedReflectedStaticBytes")]));
 }
 
 /// Nested parent creation persists direct byte keys before hash insertion.

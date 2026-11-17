@@ -124,7 +124,10 @@ fn dummy_check_result() -> CheckResult {
 
     CheckResult {
         tolerated_runtime_faults: Vec::new(),
+        trait_collision_defaults: HashMap::default(),
+        class_binding: Default::default(),
         requested_instantiations: Vec::new(),
+        requested_promotable_clones: Vec::new(),
         requested_class_instantiations: Vec::new(),
         requested_method_instantiations: Vec::new(),
         generic_method_sites: crate::fast_hash::FastMap::default(),
@@ -138,6 +141,7 @@ fn dummy_check_result() -> CheckResult {
         return_alias_summaries: Default::default(),
         callable_return_sigs: HashMap::default(),
         callable_array_return_sigs: HashMap::default(),
+        closure_param_hints: HashMap::default(),
         interfaces: HashMap::default(),
         classes,
         enums,
@@ -153,6 +157,8 @@ fn dummy_check_result() -> CheckResult {
         array_push_property_plans: HashMap::default(),
         member_receiver_types: HashMap::default(),
         flow_typed_property_accesses: HashMap::default(),
+        array_append_element_types: HashMap::default(),
+        local_value_read_types: Default::default(),
         boxed_reference_promotion_sites: HashMap::default(),
         buffer_read_sites: Default::default(),
         first_class_builtin_call_types: HashMap::default(),
@@ -174,6 +180,8 @@ fn dummy_check_result() -> CheckResult {
         mixed_storage_store_sites: Default::default(),
         user_filters_reachable: true,
         user_filter_registered: None,
+        sparse_key_write_sites: Default::default(),
+        promotable_arrays: Default::default(),
     }
 }
 
@@ -213,6 +221,8 @@ fn class_info(_class_name: &str) -> ClassInfo {
         constants: HashMap::default(),
         constant_order: Vec::new(),
         constant_deprecations: HashMap::default(),
+        property_initialization_order: Vec::new(),
+        trait_collision_defaults: Vec::new(),
         constant_types: HashMap::default(),
         constant_visibilities: Default::default(),
         final_constants: Default::default(),
@@ -241,6 +251,7 @@ fn class_info(_class_name: &str) -> ClassInfo {
         backed_hooked_properties: Default::default(),
         reference_properties: Default::default(),
         owned_reference_properties: Default::default(),
+        owned_reference_property_slots: Default::default(),
         promoted_properties: Default::default(),
         property_reference_slots: Vec::new(),
         property_slot_declaring_classes: Vec::new(),
@@ -513,6 +524,9 @@ fn lowers_every_stmt_variant_smoke() {
         stmt(StmtKind::IfDef { symbol: "FEATURE".to_string(), then_body: vec![stmt(StmtKind::Echo(str_lit("ifdef")))], else_body: None }),
         stmt(StmtKind::While { condition: bool_lit(false), body: vec![stmt(StmtKind::Continue(1))] }),
         stmt(StmtKind::DoWhile { body: vec![stmt(StmtKind::Break(1))], condition: bool_lit(false) }),
+        // A label that survives `goto` lowering (its file has no `goto`) lowers to nothing.
+        // `StmtKind::Goto` has no lowering by design: it is refused, see `lower_stmt`.
+        stmt(StmtKind::GotoLabel("unused".to_string())),
         stmt(StmtKind::For {
             init: Some(Box::new(stmt(StmtKind::Assign { name: "i".to_string(), value: int(0) }))),
             condition: Some(bool_lit(false)),

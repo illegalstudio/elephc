@@ -59,36 +59,31 @@ pub(super) fn lower_referenced_builtin_spl_methods(
 ///
 /// WHY A SCAN CANNOT FIND THESE. Every other producer in `referenced_builtin_spl_methods` reads an
 /// EIR instruction: an `ObjectNew` with a class immediate, a `MethodCall` with a receiver type.
-/// Text that arrives at RUN TIME has no instruction to read — `include $path` lowers to one
-/// `RuntimeCall(DynamicInclude)` and the `new ArrayObject(…)` inside the included file is not in
+/// Text that arrives at RUN TIME has no instruction to read -- `include $path` lowers to one
+/// `RuntimeCall(DynamicInclude)` and the `new ArrayObject(...)` inside the included file is not in
 /// this module at all. So the surface has to be forced, exactly as
 /// `ir_lower::builtin_datetime::lower_eval_date_alias_methods_if_needed` forces the date aliases.
 ///
 /// WHY THE INTERPRETER CANNOT COVER FOR US, which is what makes SPL different from Reflection.
 /// `ir_lower::reflection` notes that Reflection values owned by the bridge "are dispatched by
 /// Magician, whose interpreter exposes the complete Reflection surface without forcing those
-/// bodies into AOT" — the magician owns `crates/elephc-magician/src/interpreter/reflection/`. It
+/// bodies into AOT" -- the magician owns `crates/elephc-magician/src/interpreter/reflection/`. It
 /// owns no SPL implementation. An `ArrayObject` the interpreter builds is an AOT object, allocated
 /// by `__rt_new_by_name` and initialized by the AOT `__construct`, so if that body never reached
 /// EIR there is nothing to run.
 ///
-/// THE GATE IS THE BRIDGE FLAG. `required_runtime_features.eval_bridge` is the same authority the
-/// date/time pass now reads, and it is already set for every route into the interpreter —
-/// a bridge-requiring `eval`, `extract`, `spl_autoload_register`, and `DynamicInclude`. A program
-/// with none of them keeps paying nothing: the loop below is skipped, and the class family was
-/// never registered by `builtin_spl_classes::program_may_reference_spl` in the first place, so
-/// `module.class_infos` holds none of these names to iterate.
-///
-/// WHAT IT FORCES is what the `DynamicObjectNewMixed` arm below already forces for `new $c`: the
-/// constructor, plus `push_builtin_spl_metadata_methods` — the interface and vtable methods a
-/// constructed object needs even when nothing calls them by name. Promising more than `new $c`
-/// already promises would be a new claim; promising less would allocate an object whose runtime
-/// class-id dispatch jumps through a null vtable slot.
+/// WHAT IT FORCES is what the eval fragments demand (`eval_demand`): every method of a class a
+/// fragment names, and the methods a fragment calls on a receiver of unknown class, wherever the
+/// class table has them. Only the demanded classes pay, so a program whose fragments name no SPL
+/// class keeps its bodies out. A constructed object also needs the interface and vtable methods
+/// `push_builtin_spl_metadata_methods` lists even when nothing calls them by name; promising less
+/// than that would allocate an object whose runtime class-id dispatch jumps through a null vtable
+/// slot.
 ///
 /// Measured, `php -n` 8.5.6 as the oracle: a runtime-included file doing
 /// `new ArrayObject([1,2,3])` then `new SplFixedArray(2)` printed
 /// `Fatal error: eval() runtime failed: could not construct class "ArrayObject"` before the
-/// checker gate opened — the ALLOCATION failing, one layer above this — and then a bare
+/// checker gate opened -- the ALLOCATION failing, one layer above this -- and then a bare
 /// `Fatal error: eval() runtime failed` with the gate open and this pass absent, which
 /// `ELEPHC_EVAL_TRACE=1` resolves to `phase=native_constructor_error stage=construct`. PHP prints
 /// `3;a;done`.
@@ -96,35 +91,32 @@ fn push_eval_bridge_builtin_spl_methods(methods: &mut Vec<(String, String)>, mod
     if !module.required_runtime_features.eval_bridge {
         return;
     }
+    let demand = eval_demand(module);
     let construct_key = php_method_key("__construct");
-    for class_name in module.class_infos.keys() {
-        // Every registered class the interpreter can allocate by name, not only the ones generic
-        // `new $c` in compiled code may build: the bridge's `new_object` answers for any class in
-        // the name table. `EmptyIterator` is "known" to dynamic `new` but not a candidate there,
-        // so an interpreted `new EmptyIterator()` handed compiled code an object whose `valid()`
-        // slot was null, and the first `foreach` over it jumped to address 0.
+    for (class_name, info) in &module.class_infos {
+        // The compiler's own helper classes are never named by a fragment.
         if class_name.starts_with("__Elephc") {
             continue;
         }
         // The regex iterators call the `preg_*` helpers, an optional capability (`pcre2`) that
-        // only `--with-regex` or a compiled regex call turns on. Forcing their constructors here
-        // would make every eval-bridge program require that native package; without it, an
-        // interpreted `new RegexIterator(...)` could not match anything anyway.
+        // only `--with-regex` or a compiled regex call turns on. Opaque eval can reach native
+        // methods without enabling optional providers, so only an already enabled regex surface
+        // may demand them implicitly; without it, an interpreted `new RegexIterator(...)` could not
+        // match anything anyway.
         if !module.required_runtime_features.regex && is_regex_iterator_class(class_name) {
             continue;
         }
-        push_supported_builtin_spl_method_for_receiver(methods, module, class_name, &construct_key);
-        push_builtin_spl_metadata_methods(methods, module, class_name);
-        // Interpreted text calls the rest of the surface by name too (`$heap->insert()`,
-        // `$storage->attach()`), and no EIR instruction names those calls: without their bodies
-        // the bridge had no slot and reported "unsupported MethodCall ->insert()". Only the
-        // classes whose allocation the bridge can reach are widened, so a program that never
-        // opens the bridge pays nothing.
-        if let Some(class_info) = module.class_infos.get(class_name) {
-            let mut keys: Vec<&String> = class_info.methods.keys().collect();
-            keys.sort();
-            for key in keys {
-                push_supported_builtin_spl_method_for_receiver(methods, module, class_name, key);
+        if demand.names_class(class_name) {
+            push_supported_builtin_spl_method_for_receiver(methods, module, class_name, &construct_key);
+            push_builtin_spl_metadata_methods(methods, module, class_name);
+        }
+        let mut keys: Vec<&String> = info.methods.keys().collect();
+        keys.sort();
+        for method_key in keys {
+            if demand.names_class(class_name)
+                || demand.names_wildcard_method(|name| name == method_key)
+            {
+                push_supported_builtin_spl_method_for_receiver(methods, module, class_name, method_key);
             }
         }
     }

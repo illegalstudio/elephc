@@ -428,6 +428,7 @@ fn materialize_class_vars(
     expr: &Expr,
 ) -> LoweredValue {
     let entries = visible_class_default_entries(ctx, &class_name);
+    emit_class_vars_deprecations(ctx, class_name, &entries, expr.span);
     let hash_ty = PhpType::AssocArray {
         key: Box::new(PhpType::Str),
         value: Box::new(PhpType::Mixed),
@@ -447,7 +448,8 @@ fn materialize_class_vars(
                 // Visibility was filtered in the caller's scope. Relative constants in a
                 // default instead belong to the property declaration, including inherited slots.
                 let caller_class = ctx.current_class.replace(entry.declaring_class);
-                let value = lower_expr(ctx, &default);
+                // The deprecations php-src raises for these defaults were reported above.
+                let value = with_constant_deprecations_suppressed(|| lower_expr(ctx, &default));
                 ctx.current_class = caller_class;
                 value
             }
@@ -463,6 +465,77 @@ fn materialize_class_vars(
         );
     }
     hash
+}
+
+/// Raises what `get_class_vars()` reports: php-src initializes the class (its ancestors first),
+/// then copies each default it returns, evaluating every static default again on each call.
+/// The instance defaults were evaluated in place by the initialization, so they stay silent.
+/// A trait is initialized like a class without ancestors.
+fn emit_class_vars_deprecations(
+    ctx: &mut LoweringContext<'_, '_>,
+    class_name: &str,
+    entries: &[ClassDefaultEntry],
+    span: crate::span::Span,
+) {
+    use crate::ir_lower::initializer_evaluation::{InitializerFrame, LineSource};
+    use crate::ir_lower::initializer_reads::{emit_initializer_reads, reaches_deprecated_read_in};
+    let reaching = |ctx: &LoweringContext<'_, '_>, entry: &&ClassDefaultEntry| {
+        entry.default.as_ref().is_some_and(|default| {
+            reaches_deprecated_read_in(ctx, Some(&entry.declaring_class), default)
+        })
+    };
+    // An interface has no properties, but php-src still evaluates its constant table.
+    if ctx.interfaces.contains_key(class_name) {
+        for (owner, name) in crate::ir_lower::initializer_reads::class_constant_table(ctx, class_name) {
+            crate::ir_lower::initializer_reads::emit_class_constant_evaluation(ctx, &owner, &name, LineSource::Static(span));
+        }
+        return;
+    }
+    let trait_constants = if ctx.classes.contains_key(class_name) {
+        Vec::new()
+    } else {
+        crate::ir_lower::initializer_reads::trait_constants(class_name)
+            .into_iter()
+            .filter(|(_, value)| reaches_deprecated_read_in(ctx, Some(class_name), value))
+            .collect()
+    };
+    if ctx.classes.contains_key(class_name) {
+        crate::ir_lower::property_default_errors::emit_initialization_deprecations(ctx, class_name, span);
+    } else if !trait_constants.is_empty() || entries.iter().any(|entry| reaching(ctx, &entry)) {
+        let label = crate::ir_lower::property_default_errors::trait_initialization_label(class_name);
+        let defaults: Vec<&ClassDefaultEntry> = entries.iter().filter(|entry| reaching(ctx, entry)).collect();
+        crate::ir_lower::initializer_evaluation::emit_until_success(ctx, &label, span, |ctx| {
+            // The trait's own constants first, held by the trait itself.
+            for (name, value) in &trait_constants {
+                let lone = crate::ir_lower::initializer_reads::lone_global_read(ctx, Some(class_name), value);
+                let key = crate::ir_lower::initializer_evaluation::class_constant_once_key(class_name, name);
+                let frame = InitializerFrame::top(true, LineSource::Static(span), lone, Some(key));
+                emit_initializer_reads(ctx, value, Some(class_name), &frame);
+            }
+            for entry in &defaults {
+                let default = entry.default.as_ref().expect("filtered on a default");
+                let lone = crate::ir_lower::initializer_reads::lone_global_read(ctx, Some(&entry.declaring_class), default);
+                let frame = InitializerFrame::top(true, LineSource::Static(span), lone, None);
+                emit_initializer_reads(ctx, default, Some(&entry.declaring_class), &frame);
+            }
+        });
+    }
+    let statics: Vec<&ClassDefaultEntry> = entries.iter().filter(|entry| entry.is_static).collect();
+    let ordered: Vec<&ClassDefaultEntry> = if ctx.classes.contains_key(class_name) {
+        crate::ir_lower::initializer_reads::class_static_default_names(ctx, class_name)
+            .into_iter()
+            .filter_map(|name| statics.iter().copied().find(|entry| entry.name == name))
+            .collect()
+    } else {
+        statics
+    };
+    let replayed: Vec<&ClassDefaultEntry> = ordered.into_iter().filter(|entry| reaching(ctx, entry)).collect();
+    for entry in replayed {
+        let default = entry.default.as_ref().expect("filtered on a default");
+        let lone = crate::ir_lower::initializer_reads::lone_global_read(ctx, Some(&entry.declaring_class), default);
+        let frame = InitializerFrame::top(true, LineSource::Static(span), lone, None);
+        emit_initializer_reads(ctx, default, Some(&entry.declaring_class), &frame);
+    }
 }
 
 /// Materializes visible method names from compact data instead of per-method EIR push sequences.
@@ -538,12 +611,18 @@ fn visible_class_method_names(
     class_name: &str,
 ) -> Vec<String> {
     let mut names = if let Some(info) = ctx.classes.get(class_name) {
-        let mut order = Vec::new();
-        let mut declaration = Some(info);
-        while let Some(declaring) = declaration {
-            order.extend(declaring.method_decls.iter().map(|method| php_symbol_key(&method.name)));
-            declaration = declaring.parent.as_ref().and_then(|parent| ctx.classes.get(parent));
-        }
+        // Zend's function-table order: own methods, the parent's table, then trait methods.
+        let mut order = crate::types::method_order::zend_method_table_order(
+            class_name,
+            ctx.classes,
+            &|class| {
+                crate::types::method_order::trait_imported_method_keys(
+                    class,
+                    ctx.declared_trait_methods,
+                    &|method: &crate::ir::TraitMethodInfo| method.span,
+                )
+            },
+        );
         if ctx.enums.contains_key(class_name) {
             order.extend(["cases", "from", "tryfrom"].map(str::to_string));
         }
@@ -561,8 +640,14 @@ fn visible_class_method_names(
             })
             .filter(|method| class_method_visible(ctx, class_name, info, method))
             .filter(|method| {
-                elephc_builtin_contract::lookup_class(class_name)
-                    .is_none_or(|class| class.method_is_php_visible(method))
+                let declaring = info.method_declaring_classes.get(*method)
+                    .or_else(|| info.static_method_declaring_classes.get(*method))
+                    .map(String::as_str)
+                    .unwrap_or(class_name);
+                [class_name, declaring].iter().all(|owner| {
+                    elephc_builtin_contract::lookup_class(owner)
+                        .is_none_or(|class| class.method_is_php_visible(method))
+                })
             })
             .map(|method| class_method_display_name(ctx, class_name, info, method))
             .collect::<Vec<_>>()
@@ -718,6 +803,8 @@ struct ClassDefaultEntry {
     name: String,
     declaring_class: String,
     default: Option<Expr>,
+    /// Whether the entry is a static property.
+    is_static: bool,
 }
 
 /// Collects visible instance and static property defaults in physical declaration order.
@@ -739,6 +826,7 @@ fn visible_class_default_entries(
         }
         return names.into_iter().map(|name| ClassDefaultEntry {
             name: name.to_string(), declaring_class: class_name.to_string(), default: None,
+            is_static: false,
         }).collect();
     }
     let Some(info) = ctx.classes.get(class_name) else {
@@ -752,6 +840,7 @@ fn visible_class_default_entries(
             .map(|property| ClassDefaultEntry {
                 name: property.name.clone(), declaring_class: class_name.to_string(),
                 default: property.default.clone(),
+                is_static: property.is_static,
             })
             .collect();
     };
@@ -770,6 +859,7 @@ fn visible_class_default_entries(
             declaring_class: info.property_declaring_classes.get(property)
                 .cloned().unwrap_or_else(|| class_name.to_string()),
             default: info.defaults.get(index).cloned().flatten(),
+            is_static: false,
         });
     }
     let instance_count = entries.len();
@@ -783,6 +873,7 @@ fn visible_class_default_entries(
             declaring_class: info.static_property_declaring_classes.get(property)
                 .cloned().unwrap_or_else(|| class_name.to_string()),
             default: info.static_defaults.get(index).cloned().flatten(),
+            is_static: true,
         });
     }
     // php lists the instance properties, then the static ones, each in reflection order: the

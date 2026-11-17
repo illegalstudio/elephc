@@ -48,6 +48,6 @@ pub(in crate::interpreter) fn eval_builtin_fileinfo_expr_call(name: &str, args: 
 
 /// Forwards dynamic callable invocations after their arguments have been evaluated.
 pub(in crate::interpreter) fn eval_fileinfo_values_result(name: &str, args: &[RuntimeCellHandle], context: &mut ElephcEvalContext, values: &mut impl RuntimeValueOps) -> Result<RuntimeCellHandle, EvalStatus> {
-    let args = args.iter().map(|value| EvaluatedCallArg { name: None, value: *value, ref_target: None }).collect();
+    let args = args.iter().map(|value| EvaluatedCallArg { evaluation_owner: None, name: None, value: *value, ref_target: None }).collect();
     forward(name, args, context, values)
 }

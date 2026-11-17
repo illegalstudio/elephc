@@ -8,6 +8,7 @@
 //! - Runtime class dispatch produces owned Mixed results and preserves null warnings.
 
 use super::*;
+use crate::codegen::lower_inst::method_call_types::MethodCallTarget;
 
 /// Lowers a property read from a raw object whose static type is polymorphic.
 ///
@@ -241,6 +242,9 @@ pub(super) fn lower_union_object_prop_get(
     class_name: &str,
     property: &str,
 ) -> Result<()> {
+    if ctx.module.class_infos.get(class_name).is_some_and(|info| info.visible_property(property).is_none()) {
+        return lower_mixed_prop_get(ctx, inst, object, property);
+    }
     let slot = resolve_property_slot_for_class(ctx, class_name, property, inst)?;
     let object_label = ctx.next_label("union_prop_object");
     let done_label = ctx.next_label("union_prop_done");
@@ -427,11 +431,11 @@ pub(super) fn lower_declared_mixed_prop_get(
                 let property = candidate.candidate.slot.property.clone();
                 let base_reg = abi::int_result_reg(ctx.emitter);
                 // The arm matched a class that resolves the name to a strict ancestor's private
-                // slot, which is the one dynamic shape php DOES warn about on a value read.
+                // slot. An absent entry can still reach this runtime class's magic accessor.
                 let warn_on_miss = mode.is_read();
                 match dynamic_property_hash_offset_for_class(ctx, &class_name, &property)? {
-                    Some(hash_offset) => emit_scope_dynamic_property_hash_probe(
-                        ctx, &class_name, &property, base_reg, hash_offset, warn_on_miss,
+                    Some(hash_offset) => emit_hash_property_read(
+                        ctx, &class_name, &property, base_reg, hash_offset, mode, &done_label,
                     )?,
                     None => {
                         if warn_on_miss {
@@ -474,18 +478,19 @@ pub(super) fn lower_declared_mixed_prop_get(
     }
 
     // The class-only hash arms, in the same order their labels were appended above. Each answers
-    // from THIS class's hash at THIS class's offset, and a miss keeps the shared miss arm's
-    // answer, which is php's `Undefined property` warning on a value read and silence on a probe.
+    // from THIS class's hash at THIS class's offset. A missing entry uses that class's magic
+    // accessors before falling back to an undefined-property warning or a quiet probe.
     for (arm, label) in hash_arms.iter().zip(match_labels.iter().skip(candidates.len())) {
         ctx.emitter.label(label);
         let base_reg = abi::int_result_reg(ctx.emitter);
-        emit_scope_dynamic_property_hash_probe(
+        emit_hash_property_read(
             ctx,
             &arm.class_name,
             property,
             base_reg,
             arm.hash_offset,
-            mode.is_read(),
+            mode,
+            &done_label,
         )?;
         abi::emit_jump(ctx.emitter, &done_label);
     }
@@ -591,6 +596,262 @@ fn class_name_for_id(ctx: &FunctionContext<'_>, class_id: u64) -> Option<String>
         .iter()
         .find(|(_, info)| info.class_id == class_id)
         .map(|(name, _)| name.clone())
+}
+
+/// Reads a real dynamic entry first, then uses magic accessors only when that key is absent.
+fn emit_hash_property_read(
+    ctx: &mut FunctionContext<'_>, class: &str, property: &str, object_reg: &str,
+    hash_offset: usize, mode: PropertyFetchMode, done_label: &str,
+) -> Result<()> {
+    let Some(magic) = magic_property_arm(ctx, class, mode)? else {
+        return emit_scope_dynamic_property_hash_probe(
+            ctx, class, property, object_reg, hash_offset, mode.is_read(),
+        );
+    };
+    let target = ctx.emitter.target;
+    let found = ctx.next_label("mixed_prop_hash_found");
+    let (name, len) = ctx.data.add_string(property.as_bytes());
+    abi::emit_push_reg(ctx.emitter, object_reg);
+    abi::emit_load_from_address(ctx.emitter, abi::int_arg_reg_name(target, 0), object_reg, hash_offset);
+    abi::emit_symbol_address(ctx.emitter, abi::int_arg_reg_name(target, 1), &name);
+    abi::emit_load_int_immediate(ctx.emitter, abi::int_arg_reg_name(target, 2), len as i64);
+    abi::emit_call_label(ctx.emitter, "__rt_hash_get");
+    emit_branch_if_hash_entry_found(ctx, &found);
+    abi::emit_pop_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
+    emit_magic_property_arm(ctx, &magic, property, done_label)?;
+    abi::emit_jump(ctx.emitter, done_label);
+    ctx.emitter.label(&found);
+    let payload = if target.arch == Arch::AArch64 { "x1" } else { "rdi" };
+    abi::emit_reg_move(ctx.emitter, abi::int_result_reg(ctx.emitter), payload);
+    abi::emit_incref_if_refcounted(ctx.emitter, &PhpType::Mixed);
+    abi::emit_release_temporary_stack(ctx.emitter, 16);
+    Ok(())
+}
+
+/// One class of a `Mixed` ladder that answers a name from its magic accessors.
+pub(super) struct MixedMagicArm {
+    pub(super) class_id: u64,
+    pub(super) class_name: String,
+    /// `__get`, when the class has one whose result boxes without dropping an owner.
+    pub(super) get: Option<MethodCallTarget>,
+    /// `__isset`, consulted first by a probe, when it returns a plain bool.
+    pub(super) isset: Option<MethodCallTarget>,
+    /// An `isset()` probe: `__isset` answers alone.
+    pub(super) isset_only: bool,
+    /// An `isset()` or `empty()` probe on a class without `__isset`: php reports the name absent
+    /// and never calls `__get`.
+    pub(super) absent_without_isset: bool,
+}
+
+/// Whether a magic accessor's result can become the ladder's owned Mixed cell: an owned Mixed
+/// box is passed through, a scalar is boxed by value, and a string, array or object result (the
+/// caller owns a method's return value) moves into the box with its owner.
+fn magic_result_boxes_cleanly(ty: &PhpType) -> bool {
+    matches!(
+        ty.codegen_repr(),
+        PhpType::Mixed
+            | PhpType::Int
+            | PhpType::Bool
+            | PhpType::Float
+            | PhpType::TaggedScalar
+            | PhpType::Str
+            | PhpType::Array(_)
+            | PhpType::AssocArray { .. }
+            | PhpType::Object(_)
+    )
+}
+
+/// Converts the getter's physical return ABI into one owned Mixed value snapshot.
+pub(super) fn box_magic_result(ctx: &mut FunctionContext<'_>, getter: &MethodCallTarget) {
+    if getter.by_ref_return {
+        crate::codegen::runtime_callable_invoker::reference_return::emit_boxed_reference_return(
+            ctx.emitter, &getter.return_ty,
+        );
+        return;
+    }
+    let owned = ctx.next_label("magic_return_owned");
+    let done = ctx.next_label("magic_return_boxed");
+    if matches!(getter.return_ty.codegen_repr(), PhpType::Mixed | PhpType::Union(_)) {
+        crate::codegen_support::abi::emit_branch_if_php_return_owned(ctx.emitter, &owned);
+        abi::emit_incref_if_refcounted(ctx.emitter, &PhpType::Mixed);
+        ctx.emitter.label(&owned);
+    } else {
+        crate::codegen_support::emit_box_current_php_return_as_mixed(
+            ctx.emitter, &getter.return_ty, &owned, &done,
+        );
+    }
+}
+
+/// The magic accessors class `class_name` answers a `mode` read through, or `None` when it has
+/// none this ladder can call.
+pub(super) fn magic_property_arm(
+    ctx: &mut FunctionContext<'_>,
+    class_name: &str,
+    mode: PropertyFetchMode,
+) -> Result<Option<MixedMagicArm>> {
+    let Some(class_info) = ctx.module.class_infos.get(class_name) else {
+        return Ok(None);
+    };
+    let class_id = class_info.class_id;
+    let has_get = class_info.methods.contains_key(&php_symbol_key("__get"));
+    let has_isset = class_info.methods.contains_key(&php_symbol_key("__isset"));
+    let get = if has_get {
+        let target = resolve_method_call_target(ctx, class_name, "__get", 2)?;
+        (magic_result_boxes_cleanly(&target.return_ty) && !target.ref_params.first().copied().unwrap_or(false))
+            .then_some(target)
+    } else {
+        None
+    };
+    let isset = if has_isset && !mode.uses_magic_get() {
+        let target = resolve_method_call_target(ctx, class_name, "__isset", 2)?;
+        // A probe php answers from `__isset` must never call `__get` in its place: a class whose
+        // `__isset` result this arm cannot read (not a `bool`) gets no arm at all.
+        if target.return_ty.codegen_repr() != PhpType::Bool {
+            return Ok(None);
+        }
+        Some(target)
+    } else {
+        None
+    };
+    // Without `__get`, `isset()` takes `__isset`'s answer alone; any other read needs `__get`
+    // (`empty()` reports a get-less name empty, which the other arms already answer).
+    if get.is_none() && !(mode == PropertyFetchMode::Isset && isset.is_some()) {
+        return Ok(None);
+    }
+    let isset_only = mode == PropertyFetchMode::Isset && isset.is_some();
+    let absent_without_isset = mode.skips_get_without_isset() && !has_isset;
+    Ok(Some(MixedMagicArm {
+        class_id,
+        class_name: class_name.to_string(),
+        get,
+        isset,
+        isset_only,
+        absent_without_isset,
+    }))
+}
+
+/// Classes, not yet in `dispatched`, that answer `property` from `__get`/`__isset` because they
+/// neither declare it nor resolve it to a dynamic slot: php calls the accessor for such a name.
+pub(super) fn mixed_magic_get_arms(
+    ctx: &mut FunctionContext<'_>,
+    property: &str,
+    mode: PropertyFetchMode,
+    dispatched: &[u64],
+) -> Result<Vec<MixedMagicArm>> {
+    let mut names: Vec<String> = ctx
+        .module
+        .class_infos
+        .iter()
+        .filter(|(name, info)| {
+            !crate::types::checker::builtin_stdclass::is_stdclass(name)
+                && !dispatched.contains(&info.class_id)
+                && !info.properties.iter().any(|(declared, _)| declared == property)
+                && (info.methods.contains_key(&php_symbol_key("__get"))
+                    || (mode == PropertyFetchMode::Isset
+                        && info.methods.contains_key(&php_symbol_key("__isset"))))
+        })
+        .map(|(name, _)| name.clone())
+        .collect();
+    names.sort();
+    let mut arms = Vec::new();
+    for name in names {
+        if let Some(arm) = magic_property_arm(ctx, &name, mode)? {
+            arms.push(arm);
+        }
+    }
+    arms.sort_by_key(|arm| arm.class_id);
+    Ok(arms)
+}
+
+/// Loads the receiver (already in the integer result register) and the property name as the
+/// `(this, string $name)` arguments of a magic accessor.
+fn emit_magic_accessor_args(ctx: &mut FunctionContext<'_>, property: &str) {
+    let (label, len) = ctx.data.add_string(property.as_bytes());
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            abi::emit_symbol_address(ctx.emitter, "x1", &label);
+            abi::emit_load_int_immediate(ctx.emitter, "x2", len as i64);
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("mov rdi, rax");                            // pass the receiver as the accessor's $this
+            abi::emit_symbol_address(ctx.emitter, "rsi", &label);
+            abi::emit_load_int_immediate(ctx.emitter, "rdx", len as i64);
+        }
+    }
+}
+
+/// Answers a `Mixed` property read from the receiver's magic accessors, leaving an owned Mixed
+/// cell in the result register: a probe asks `__isset` first and answers null when it says no,
+/// then reads through `__get` (or answers `true` when the class has no `__get`).
+fn emit_magic_property_arm(
+    ctx: &mut FunctionContext<'_>,
+    arm: &MixedMagicArm,
+    property: &str,
+    done_label: &str,
+) -> Result<()> {
+    if arm.absent_without_isset {
+        emit_boxed_null(ctx);
+        return Ok(());
+    }
+    if let Some(isset) = &arm.isset {
+        let absent = ctx.next_label("mixed_prop_magic_absent");
+        abi::emit_push_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
+        emit_magic_accessor_args(ctx, property);
+        super::super::emit_resolved_method_call(ctx, isset)?;
+        if isset.by_ref_return {
+            // Bool has one raw payload word; preserve it while retiring the transferred cell.
+            let result = abi::int_result_reg(ctx.emitter);
+            abi::emit_push_reg(ctx.emitter, result);
+            abi::emit_load_from_address(ctx.emitter, result, result, 0);
+            abi::emit_push_reg(ctx.emitter, result);
+            abi::emit_load_temporary_stack_slot(ctx.emitter, result, 16);
+            abi::emit_call_label(ctx.emitter, "__rt_reference_cell_owner");
+            abi::emit_call_label(ctx.emitter, "__rt_reference_cell_release");
+            abi::emit_pop_reg(ctx.emitter, result);
+            abi::emit_release_temporary_stack(ctx.emitter, 16);
+        }
+        match ctx.emitter.target.arch {
+            Arch::AArch64 => {
+                ctx.emitter.instruction("cmp x0, #0");                          // did __isset() report the name as set?
+                ctx.emitter.instruction(&format!("b.eq {}", absent));           // no: the probe answers null
+            }
+            Arch::X86_64 => {
+                ctx.emitter.instruction("test rax, rax");                       // did __isset() report the name as set?
+                ctx.emitter.instruction(&format!("je {}", absent));             // no: the probe answers null
+            }
+        }
+        abi::emit_pop_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
+        match &arm.get {
+            // `isset()` uses only the answer's nullness: `__isset` said yes, and php stops there.
+            _ if arm.isset_only => {
+                abi::emit_load_int_immediate(ctx.emitter, abi::int_result_reg(ctx.emitter), 1);
+                emit_box_current_value_as_mixed(ctx.emitter, &PhpType::Bool);
+            }
+            Some(get) => {
+                emit_magic_accessor_args(ctx, property);
+                super::super::emit_resolved_method_call(ctx, get)?;
+                box_magic_result(ctx, get);
+            }
+            None => {
+                abi::emit_load_int_immediate(ctx.emitter, abi::int_result_reg(ctx.emitter), 1);
+                emit_box_current_value_as_mixed(ctx.emitter, &PhpType::Bool);
+            }
+        }
+        abi::emit_jump(ctx.emitter, done_label);
+        ctx.emitter.label(&absent);
+        abi::emit_pop_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
+        emit_boxed_null(ctx);
+        return Ok(());
+    }
+    match &arm.get {
+        Some(get) => {
+            emit_magic_accessor_args(ctx, property);
+            super::super::emit_resolved_method_call(ctx, get)?;
+            box_magic_result(ctx, get);
+        }
+        None => emit_boxed_null(ctx),
+    }
+    Ok(())
 }
 
 /// Collects the classes a `Mixed` read must answer from `__get` although they declare no slot.

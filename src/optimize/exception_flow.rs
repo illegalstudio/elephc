@@ -20,6 +20,7 @@ use crate::fast_hash::{FastMap as HashMap, FastSet as HashSet};
 use std::rc::Rc;
 
 mod callables;
+mod checker;
 mod destruction;
 mod hierarchy;
 mod method_defaults;
@@ -35,6 +36,7 @@ use types::{
     domain_can_match, domain_is_empty, domains_overlap, exact_in_domain, intersect_domain,
 };
 pub(super) use types::{CatchReachability, ThrownTypes};
+pub(crate) use checker::{CheckerExceptionAnalysis, CheckerThrownTypes};
 
 /// Returns whether every argument is a freshly constructed object.
 ///
@@ -68,6 +70,11 @@ pub(super) struct ExceptionFlowAnalysis {
     has_internal_object_operators: bool,
     hierarchy: ExceptionHierarchy,
     function_throws: HashMap<String, ThrownTypes>,
+    /// Declaration spelling for each case-folded function name, fixed before summary iteration.
+    function_names: HashMap<String, String>,
+    /// Aliased property constraints can reject writes or invoke PHP during coercion.
+    reference_parameters: HashMap<String, HashSet<String>>,
+    return_boundaries: HashMap<String, Rc<ReturnBoundaryFacts>>,
     static_method_throws: HashMap<String, ThrownTypes>,
     instance_method_throws: HashMap<String, ThrownTypes>,
     /// Declared object references can reject a cell retyped by an earlier call at entry.
@@ -76,6 +83,9 @@ pub(super) struct ExceptionFlowAnalysis {
     instance_method_object_ref_checks: HashMap<String, bool>,
     /// Class property initialization can raise Error independently of constructor argument omission.
     constructor_default_errors: HashSet<String>,
+    /// Classes whose first `new` may raise a deprecation from their initialization, which a
+    /// throwing error handler turns into any exception.
+    initialization_reports: HashSet<String>,
     function_error_defaults: HashMap<String, FunctionSig>,
     function_unresolved_defaults: HashSet<String>,
     static_method_error_defaults: HashMap<String, FunctionSig>,
@@ -108,6 +118,8 @@ pub(super) struct ExceptionFlowAnalysis {
     /// program that also contains an unrelated throwing destructor; absence is the
     /// conservative answer and reproduces the previous behavior.
     scalar_frame_callables: HashSet<String>,
+    /// Checker-proven upper bounds for local retirement within one lexical frame.
+    checker_retirement_types: Option<Rc<crate::types::TypeEnv>>,
     /// While one body is summarized, the summary keys it reads (see [`SummaryKind`]); `None`
     /// outside summarization, where reads are not recorded.
     summary_reads: RefCell<Option<Vec<SummaryKey>>>,
@@ -282,7 +294,40 @@ fn declared_object_reference_can_throw(signature: &FunctionSig) -> bool {
     // A by-value object parameter also runs the runtime union guard for a
     // `Class|false` / `Class|null` argument before entering the body. Treat every
     // object parameter conservatively so try/catch DCE keeps its handler reachable.
-    signature.params.iter().any(|(_, ty)| matches!(ty.codegen_repr(), PhpType::Object(_)))
+    //
+    // A by-reference parameter of a class (`?A &$v`), of an array (`array &$v`,
+    // `?array &$v`) or of a union of them checks a boxed (`mixed`) argument at the call
+    // boundary and raises `TypeError` there (the EIR reference-argument guards), so it can
+    // throw too.
+    signature.params.iter().enumerate().any(|(index, (_, ty))| {
+        matches!(ty.codegen_repr(), PhpType::Object(_))
+            || (signature.ref_params.get(index).copied().unwrap_or(false)
+                && by_ref_param_checks_boxed_argument(signature, index, ty))
+    })
+}
+
+/// Whether the EIR call lowering guards a boxed argument bound to by-reference parameter
+/// `index` of type `ty`: a php array, a union of `null`, arrays and objects, or a `mixed`
+/// slot declared with a class name.
+fn by_ref_param_checks_boxed_argument(signature: &FunctionSig, index: usize, ty: &PhpType) -> bool {
+    if ty.is_php_array() {
+        return true;
+    }
+    match ty {
+        PhpType::Union(members) => members.iter().all(|member| {
+            member.is_php_array()
+                || matches!(
+                    member,
+                    PhpType::Void | PhpType::Object(_) | PhpType::Array(_) | PhpType::AssocArray { .. }
+                )
+        }),
+        PhpType::Mixed => matches!(
+            signature.param_type_exprs.get(index).and_then(Option::as_ref),
+            Some(crate::parser::ast::TypeExpr::Named(name))
+                if !name.as_str().eq_ignore_ascii_case("mixed")
+        ),
+        _ => false,
+    }
 }
 
 /// Installs exception summaries for one optimizer pass and restores the previous analysis.
@@ -439,6 +484,19 @@ impl ExceptionFlowAnalysis {
             &HashMap<String, InterfaceInfo>,
         )>,
     ) -> Self {
+        Self::from_program_with_registered_parents(program, type_metadata, &[])
+    }
+
+    /// Adds registered nominal parents without replacing AST callable and default discovery.
+    pub(super) fn from_program_with_registered_parents(
+        program: &[Stmt],
+        type_metadata: Option<(
+            &HashMap<String, FunctionSig>,
+            &crate::fast_hash::FastMap<String, ClassInfo>,
+            &HashMap<String, InterfaceInfo>,
+        )>,
+        registered_parents: &[(String, String)],
+    ) -> Self {
         let mut function_bodies = HashMap::default();
         let mut static_method_bodies = HashMap::default();
         let mut instance_method_bodies = HashMap::default();
@@ -450,6 +508,8 @@ impl ExceptionFlowAnalysis {
             &mut instance_method_bodies,
             &mut class_contexts,
         );
+        let mut reference_parameters = HashMap::default();
+        callables::collect_reference_parameter_scopes(program, &mut reference_parameters);
         let function_returns = type_metadata
             .map(|(functions, _, _)| {
                 functions
@@ -561,6 +621,7 @@ impl ExceptionFlowAnalysis {
             ExceptionHierarchy::from_program(program, declared_classes)
         };
         hierarchy.collect_program_declarations(program);
+        hierarchy.add_registered_parents(registered_parents);
         let function_bodies = attach_class_contexts(function_bodies, &class_contexts);
         let static_method_bodies = attach_class_contexts(static_method_bodies, &class_contexts);
         let instance_method_bodies = attach_class_contexts(instance_method_bodies, &class_contexts);
@@ -573,10 +634,15 @@ impl ExceptionFlowAnalysis {
                 &mut static_method_unresolved_defaults, &mut instance_method_unresolved_defaults);
         }
         let mut analysis = Self {
+            checker_retirement_types: None,
+            reference_parameters,
             has_internal_object_operators: class_contexts.keys().any(|name|
                 elephc_builtin_contract::is_operator_class_name(name)),
             hierarchy,
             function_throws: empty_summaries(function_bodies.keys()),
+            return_boundaries: super::return_boundaries::collect_return_boundaries(program),
+            function_names: function_bodies.keys().map(|name|
+                (php_symbol_key(name), name.clone())).collect(),
             static_method_throws: empty_summaries(static_method_bodies.keys()),
             instance_method_throws: empty_summaries(instance_method_bodies.keys()),
             function_object_ref_checks,
@@ -601,6 +667,9 @@ impl ExceptionFlowAnalysis {
                             .any(crate::types::deferred_defaults::contains_deferred_error)
                 }).map(|(name, _)| php_symbol_key(name)).collect()
             }).unwrap_or_else(|| property_defaults::imported_default_errors(program)),
+            initialization_reports: type_metadata.map(|(_, classes, interfaces)| {
+                classes.keys().filter(|name| initialization_may_report(classes, interfaces, name)).map(|name| php_symbol_key(name)).collect()
+            }).unwrap_or_else(|| property_defaults::imported_initialization_reports(program)),
             function_returns,
             static_method_returns,
             instance_method_returns,
@@ -703,8 +772,10 @@ impl ExceptionFlowAnalysis {
     fn summarize_body(&self, name: &str, body: &ExceptionBody<'_>) -> ThrownTypes {
         #[cfg(test)]
         EXCEPTION_BODY_SUMMARIES.with(|count| count.set(count.get() + 1));
-        let mut thrown = self
-            .block_throws(body.body, &HashMap::default(), body.class_context)
+        let mut thrown = with_reference_parameter_scope(false,
+            self.reference_parameters.get(name).cloned().unwrap_or_default(), ||
+            with_return_boundary_facts(self.return_boundaries.get(name), ||
+                self.block_throws(body.body, &HashMap::default(), body.class_context)))
             .combined(self.scope_cleanup_throws(name));
         // The declaration's own nominal boundary, which no statement in the body spells.
         if self.nominal_boundary_callables.contains(name) {
@@ -856,65 +927,103 @@ impl ExceptionFlowAnalysis {
         bindings: &HashMap<String, ThrownTypes>,
         class_context: Option<&ExceptionClassContext>,
     ) -> ThrownTypes {
+        let retired = match &stmt.kind {
+            StmtKind::Assign { name, .. } | StmtKind::TypedAssign { name, .. } =>
+                self.checker_retirement_types.as_ref().and_then(|types| types.get(name)),
+            _ => None,
+        };
+        self.stmt_throws_at_boundary(stmt, bindings, class_context, true, retired, None)
+    }
+
+    /// Separates a statement's callbacks and cleanup from operands already visited by the checker.
+    fn stmt_throws_at_boundary(
+        &self, stmt: &Stmt, bindings: &HashMap<String, ThrownTypes>,
+        class_context: Option<&ExceptionClassContext>, include_operands: bool,
+        retired_type: Option<&PhpType>, reference_write: Option<bool>,
+    ) -> ThrownTypes {
+        // The checker publishes switch comparison throws at each evaluated label prefix.
+        if !include_operands && !matches!(stmt.kind,
+            StmtKind::Echo(_) | StmtKind::ExprStmt(_) | StmtKind::StaticVar { .. }
+            | StmtKind::ListUnpack { .. } | StmtKind::Assign { .. } | StmtKind::TypedAssign { .. }
+            | StmtKind::RefAssign { .. } | StmtKind::Global { .. }
+            | StmtKind::StaticPropertyAssign { .. } | StmtKind::ArrayPush { .. }
+            | StmtKind::StaticPropertyArrayPush { .. } | StmtKind::ArrayAssign { .. }
+            | StmtKind::PropertyArrayAssign { .. } | StmtKind::StaticPropertyArrayAssign { .. }
+            | StmtKind::NestedArrayAssign { .. } | StmtKind::PropertyAssign { .. }
+            | StmtKind::PropertyArrayPush { .. } | StmtKind::Foreach { .. }) {
+            return ThrownTypes::default();
+        }
         let mut effective_bindings = bindings.clone();
-        invalidate_throw_bindings(&mut effective_bindings, stmt_invalidation(stmt));
+        if include_operands { invalidate_throw_bindings(&mut effective_bindings, stmt_invalidation(stmt)); }
         let bindings = &effective_bindings;
+        let operand = |expr: &Expr| if include_operands {
+            self.expr_throws(expr, bindings, class_context)
+        } else { ThrownTypes::default() };
+        let block = |body: &[Stmt]| if include_operands {
+            self.block_throws(body, bindings, class_context)
+        } else { ThrownTypes::default() };
+        let overwrite = || retired_type.map_or_else(|| self.overwrite_cleanup_throws(),
+            |ty| self.type_destruction_throws(ty));
         match &stmt.kind {
             StmtKind::Synthetic(body)
             | StmtKind::NamespaceBlock { body, .. }
             | StmtKind::IncludeOnceGuard { body, .. } => {
-                self.block_throws(body, bindings, class_context)
+                block(body)
             }
             // `echo` and a discarded expression statement both retire the value the expression
             // materialized; a `return` hands its value to the caller instead.
-            StmtKind::Echo(expr) => self
-                .expr_throws(expr, bindings, class_context)
+            StmtKind::Echo(expr) => operand(expr)
                 .combined(self.string_conversion_throws(expr, class_context))
                 .combined(self.temporary_destruction_throws(expr, class_context))
                 .combined(host_output_throws()),
-            StmtKind::ExprStmt(expr) => self
-                .expr_throws(expr, bindings, class_context)
+            StmtKind::ExprStmt(expr) => operand(expr)
                 .combined(self.temporary_destruction_throws(expr, class_context)),
             // A static-variable initializer and a list unpack both rebind storage that may have
             // held the last owner of an object, which retires it here.
             StmtKind::StaticVar { init: expr, .. }
-            | StmtKind::ListUnpack { value: expr, .. } => self
-                .expr_throws(expr, bindings, class_context)
-                .combined(self.overwrite_cleanup_throws()),
-            StmtKind::ConstDecl { value: expr, .. } | StmtKind::Return(Some(expr)) => {
-                self.expr_throws(expr, bindings, class_context)
-            }
-            StmtKind::Throw(expr) => self
-                .expr_throws(expr, bindings, class_context)
+            | StmtKind::ListUnpack { value: expr, .. } => operand(expr)
+                .combined(overwrite()),
+            StmtKind::Global { vars } => vars.iter().fold(ThrownTypes::default(), |thrown, name|
+                thrown.combined(self.local_retirement_throws(&Expr::var(name)))),
+            StmtKind::ConstDecl { value: expr, .. } => operand(expr),
+            StmtKind::Return(Some(expr)) => operand(expr).combined(
+                if super::return_boundaries::active_return_boundary_may_throw(expr) {
+                    ThrownTypes::exact("TypeError")
+                } else { ThrownTypes::default() }),
+            StmtKind::Throw(expr) => operand(expr)
                 .combined(self.thrown_value_types(expr, bindings, class_context)),
             // Rebinding retires the target's previous value, and that value's destructor runs
             // in THIS frame, so a same-frame catch can still see it.
-            StmtKind::Assign { value, .. }
-            | StmtKind::TypedAssign { value, .. } => self
-                .expr_throws(value, bindings, class_context)
-                .combined(self.overwrite_cleanup_throws()),
+            StmtKind::Assign { name, value }
+            | StmtKind::TypedAssign { name, value, .. } => operand(value)
+                .combined(overwrite())
+                .combined(if reference_write.unwrap_or_else(|| is_reference_volatile(name)) { ThrownTypes::unknown() }
+                    else { ThrownTypes::default() }),
+            // The untyped optimizer cannot prove reference rebinding harmless. The
+            // checker boundary has already validated its source and supplies target storage.
+            StmtKind::RefAssign { source, .. } => operand(source).combined(overwrite())
+                .combined(if include_operands { ThrownTypes::unknown() }
+                    else { ThrownTypes::default() }),
             StmtKind::StaticPropertyAssign { receiver, value, .. } => {
                 let initialization = resolve_exception_receiver(receiver, class_context)
                     .filter(|name| self.constructor_default_errors.contains(&php_symbol_key(name)))
                     .map(|_| ThrownTypes::exact("Error"))
                     .unwrap_or_default();
-                self.expr_throws(value, bindings, class_context)
-                    .combined(self.overwrite_cleanup_throws())
+                operand(value)
+                    .combined(overwrite())
                     .combined(initialization)
+                    .combined(ThrownTypes::unknown())
             }
             StmtKind::ArrayPush { value, .. }
-            | StmtKind::StaticPropertyArrayPush { value, .. } => self
-                .expr_throws(value, bindings, class_context)
+            | StmtKind::StaticPropertyArrayPush { value, .. } => operand(value)
                 .combined(ThrownTypes::unknown()),
             StmtKind::ArrayAssign { index, value, .. }
             | StmtKind::PropertyArrayAssign { index, value, .. }
-            | StmtKind::StaticPropertyArrayAssign { index, value, .. } => self
-                .expr_throws(index, bindings, class_context)
-                .combined(self.expr_throws(value, bindings, class_context))
+            | StmtKind::StaticPropertyArrayAssign { index, value, .. } => operand(index)
+                .combined(operand(value))
                 .combined(ThrownTypes::unknown()),
-            StmtKind::NestedArrayAssign { target, value } => self
-                .expr_throws(target, bindings, class_context)
-                .combined(self.expr_throws(value, bindings, class_context))
+            StmtKind::NestedArrayAssign { target, value } => operand(target)
+                .combined(operand(value))
                 .combined(ThrownTypes::unknown()),
             StmtKind::PropertyAssign {
                 object: target,
@@ -925,9 +1034,8 @@ impl ExceptionFlowAnalysis {
                 object: target,
                 value,
                 ..
-            } => self
-                .expr_throws(target, bindings, class_context)
-                .combined(self.expr_throws(value, bindings, class_context))
+            } => operand(target)
+                .combined(operand(value))
                 .combined(ThrownTypes::unknown()),
             StmtKind::If {
                 condition,
@@ -935,15 +1043,16 @@ impl ExceptionFlowAnalysis {
                 elseif_clauses,
                 else_body,
             } => {
-                let mut thrown = self.expr_throws(condition, bindings, class_context);
-                thrown = thrown.combined(self.block_throws(then_body, bindings, class_context));
+                let mut thrown = operand(condition).combined(self.internal_conversion_throws(condition));
+                thrown = thrown.combined(block(then_body));
                 for (condition, body) in elseif_clauses {
                     thrown = thrown
-                        .combined(self.expr_throws(condition, bindings, class_context))
-                        .combined(self.block_throws(body, bindings, class_context));
+                        .combined(operand(condition))
+                        .combined(self.internal_conversion_throws(condition))
+                        .combined(block(body));
                 }
                 if let Some(body) = else_body {
-                    thrown = thrown.combined(self.block_throws(body, bindings, class_context));
+                    thrown = thrown.combined(block(body));
                 }
                 thrown
             }
@@ -952,15 +1061,15 @@ impl ExceptionFlowAnalysis {
                 else_body,
                 ..
             } => {
-                let mut thrown = self.block_throws(then_body, bindings, class_context);
+                let mut thrown = block(then_body);
                 if let Some(body) = else_body {
-                    thrown = thrown.combined(self.block_throws(body, bindings, class_context));
+                    thrown = thrown.combined(block(body));
                 }
                 thrown
             }
-            StmtKind::While { condition, body } | StmtKind::DoWhile { condition, body } => self
-                .expr_throws(condition, bindings, class_context)
-                .combined(self.block_throws(body, bindings, class_context)),
+            StmtKind::While { condition, body } | StmtKind::DoWhile { condition, body } => operand(condition)
+                .combined(self.internal_conversion_throws(condition))
+                .combined(block(body)),
             StmtKind::For {
                 init,
                 condition,
@@ -973,7 +1082,7 @@ impl ExceptionFlowAnalysis {
                 .combined(
                     condition
                         .as_ref()
-                        .map(|expr| self.expr_throws(expr, bindings, class_context))
+                        .map(|expr| operand(expr).combined(self.internal_conversion_throws(expr)))
                         .unwrap_or_default(),
                 )
                 .combined(
@@ -982,10 +1091,9 @@ impl ExceptionFlowAnalysis {
                         .map(|stmt| self.stmt_throws(stmt, bindings, class_context))
                         .unwrap_or_default(),
                 )
-                .combined(self.block_throws(body, bindings, class_context)),
-            StmtKind::Foreach { array, body, .. } => self
-                .expr_throws(array, bindings, class_context)
-                .combined(self.block_throws(body, bindings, class_context))
+                .combined(block(body)),
+            StmtKind::Foreach { array, body, .. } => operand(array)
+                .combined(block(body))
                 // Iteration can invoke IteratorAggregate::getIterator and the
                 // Iterator protocol, warn through a user handler, and retire
                 // values whose destructors throw. Those callbacks are hidden
@@ -996,15 +1104,18 @@ impl ExceptionFlowAnalysis {
                 cases,
                 default,
             } => {
-                let mut thrown = self.expr_throws(subject, bindings, class_context);
+                let mut thrown = operand(subject);
                 for (patterns, body) in cases {
                     for pattern in patterns {
-                        thrown = thrown.combined(self.expr_throws(pattern, bindings, class_context));
+                        thrown = thrown.combined(operand(pattern));
+                        if binary_op_has_dynamic_throw(subject, &BinOp::Eq, pattern) {
+                            thrown = thrown.combined(ThrownTypes::unknown());
+                        }
                     }
-                    thrown = thrown.combined(self.block_throws(body, bindings, class_context));
+                    thrown = thrown.combined(block(body));
                 }
                 if let Some(body) = default {
-                    thrown = thrown.combined(self.block_throws(body, bindings, class_context));
+                    thrown = thrown.combined(block(body));
                 }
                 thrown
             }
@@ -1036,6 +1147,8 @@ impl ExceptionFlowAnalysis {
             }
             let mut catch_bindings = bindings.clone();
             if let Some(variable) = &catch.variable {
+                // Binding runs outside the protected try; its cleanup escapes to outer handlers.
+                escaping = escaping.combined(self.local_retirement_throws(&Expr::var(variable)));
                 catch_bindings.insert(variable.clone(), route.incoming);
             }
             escaping = escaping.combined(self.block_throws(
@@ -1058,6 +1171,13 @@ impl ExceptionFlowAnalysis {
         }
     }
 
+    /// Includes native conversion errors while literal scalars retain their exact throw domain.
+    fn internal_conversion_throws(&self, expr: &Expr) -> ThrownTypes {
+        if self.has_internal_object_operators && !effects::literal_scalar_operand(expr) {
+            ThrownTypes::unknown()
+        } else { ThrownTypes::default() }
+    }
+
     /// Computes throwable flow for an expression, preserving exact explicit and callable throws.
     fn expr_throws(
         &self,
@@ -1065,51 +1185,67 @@ impl ExceptionFlowAnalysis {
         bindings: &HashMap<String, ThrownTypes>,
         class_context: Option<&ExceptionClassContext>,
     ) -> ThrownTypes {
+        self.expr_throws_at_boundary(expr, bindings, class_context, true)
+    }
+
+    /// Queries an operation separately from operand evaluation for source-order checker edges.
+    fn expr_throws_at_boundary(
+        &self, expr: &Expr, bindings: &HashMap<String, ThrownTypes>,
+        class_context: Option<&ExceptionClassContext>, include_operands: bool,
+    ) -> ThrownTypes {
         let mut effective_bindings = bindings.clone();
-        invalidate_throw_bindings(&mut effective_bindings, expr_invalidation(expr));
+        if include_operands {
+            invalidate_throw_bindings(&mut effective_bindings, expr_invalidation(expr));
+        }
         let bindings = &effective_bindings;
+        let operand = |value: &Expr| if include_operands {
+            self.expr_throws(value, bindings, class_context)
+        } else { ThrownTypes::default() };
+        let operands = |values: &[Expr]| if include_operands {
+            self.expr_list_throws(values, bindings, class_context)
+        } else { ThrownTypes::default() };
         match &expr.kind {
-            ExprKind::Throw(inner) => self
-                .expr_throws(inner, bindings, class_context)
+            ExprKind::Throw(inner) => operand(inner)
                 .combined(self.thrown_value_types(inner, bindings, class_context)),
-            ExprKind::Negate(inner) => {
-                let thrown = self.expr_throws(inner, bindings, class_context);
+            ExprKind::Negate(inner) | ExprKind::BitNot(inner) => {
+                let thrown = operand(inner);
                 if self.has_internal_object_operators && !effects::literal_scalar_operand(inner) {
                     thrown.combined(ThrownTypes::unknown())
                 } else { thrown }
             }
-            ExprKind::Not(inner)
-            | ExprKind::BitNot(inner)
-            | ExprKind::ErrorSuppress(inner)
-            | ExprKind::PtrCast { expr: inner, .. } => self.expr_throws(inner, bindings, class_context),
+            ExprKind::Not(inner) => operand(inner).combined(self.internal_conversion_throws(inner)),
+            ExprKind::ErrorSuppress(inner)
+            | ExprKind::PtrCast { expr: inner, .. } => operand(inner),
             ExprKind::Spread(inner) => {
-                let evaluated = self.expr_throws(inner, bindings, class_context);
+                let evaluated = operand(inner);
                 if matches!(inner.kind, ExprKind::ArrayLiteral(_) | ExprKind::ArrayLiteralAssoc(_)) {
                     evaluated
                 } else {
                     evaluated.combined(ThrownTypes::unknown())
                 }
             }
-            ExprKind::Print(inner) => self
-                .expr_throws(inner, bindings, class_context)
+            ExprKind::Print(inner) => operand(inner)
                 .combined(self.string_conversion_throws(inner, class_context))
                 .combined(host_output_throws()),
             ExprKind::Cast { target, expr: inner } => {
-                let mut thrown = self.expr_throws(inner, bindings, class_context);
+                let mut thrown = operand(inner);
                 if matches!(target, CastType::String) {
                     thrown = thrown.combined(self.string_conversion_throws(inner, class_context));
+                } else if matches!(target, CastType::Bool | CastType::Array) {
+                    thrown = thrown.combined(self.internal_conversion_throws(inner));
                 }
                 thrown
             }
-            ExprKind::Clone(inner) | ExprKind::YieldFrom(inner) => self
-                .expr_throws(inner, bindings, class_context)
+            ExprKind::Clone(inner) | ExprKind::YieldFrom(inner) => operand(inner)
                 .combined(ThrownTypes::unknown()),
             ExprKind::BinaryOp { left, op, right } => {
-                let mut thrown = self
-                    .expr_throws(left, bindings, class_context)
-                    .combined(self.expr_throws(right, bindings, class_context));
+                let mut thrown = operand(left)
+                    .combined(operand(right));
                 if self.has_internal_object_operators && effects::internal_arithmetic_candidate(left, op, right) {
                     thrown = thrown.combined(ThrownTypes::unknown());
+                } else if matches!(op, BinOp::And | BinOp::Or | BinOp::Xor) {
+                    thrown = thrown.combined(self.internal_conversion_throws(left))
+                        .combined(self.internal_conversion_throws(right));
                 } else if let Some(class_name) = binary_op_exact_throw_type(left, op, right) {
                     thrown = thrown.combined(ThrownTypes::exact(class_name));
                 } else if binary_op_has_dynamic_throw(left, op, right) {
@@ -1123,40 +1259,39 @@ impl ExceptionFlowAnalysis {
                 thrown
             }
             ExprKind::FunctionCall { name, args } => {
-                let mut thrown = self
-                    .expr_list_throws(args, bindings, class_context)
-                    .combined(self.operand_cleanup_throws(args, class_context));
+                let name = self.canonical_exception_function_name(name.as_str());
+                let mut thrown = operands(args);
                 // `unset` is a PHP language CONSTRUCT the parser models as a call node, not a
                 // callee this analysis dispatches on: it retires the storage it names.
-                if name.as_str().eq_ignore_ascii_case("unset") {
-                    return thrown.combined(self.overwrite_cleanup_throws());
+                if name.eq_ignore_ascii_case("unset") {
+                    return args.iter().fold(thrown, |thrown, target|
+                        thrown.combined(self.local_retirement_throws(target)));
                 }
-                if self.function_object_ref_checks.contains(name.as_str())
+                thrown = thrown.combined(self.operand_cleanup_throws(args, class_context));
+                if self.function_object_ref_checks.contains(name)
                     && !all_arguments_are_fresh_objects(args)
                 {
                     thrown = thrown.combined(ThrownTypes::exact("TypeError"));
                 }
-                if self.function_unresolved_defaults.contains(name.as_str())
-                    || self.function_error_defaults.get(name.as_str()).is_some_and(|signature|
+                if self.function_unresolved_defaults.contains(name)
+                    || self.function_error_defaults.get(name).is_some_and(|signature|
                         method_defaults::can_throw(signature, args, expr.span))
                 {
                     thrown = thrown.combined(ThrownTypes::unknown());
                 }
-                if let Some(summary) = self.function_summary(name.as_str()) {
+                if let Some(summary) = self.function_summary(name) {
                     return thrown.combined(summary.clone());
                 }
-                if function_call_effect(name.as_str(), args).may_throw {
+                if function_call_effect(name, args).may_throw {
                     thrown = thrown.combined(ThrownTypes::unknown());
                 }
                 thrown
             }
-            ExprKind::NewObject { class_name, args } => self
-                .expr_list_throws(args, bindings, class_context)
+            ExprKind::NewObject { class_name, args } => operands(args)
                 .combined(self.operand_cleanup_throws(args, class_context))
                 .combined(self.constructor_throws(class_name.as_str(), args, expr.span)),
             ExprKind::NewScopedObject { receiver, args } => {
-                let mut thrown = self
-                    .expr_list_throws(args, bindings, class_context)
+                let mut thrown = operands(args)
                     .combined(self.operand_cleanup_throws(args, class_context));
                 if let Some(class_name) = resolve_exception_receiver(receiver, class_context) {
                     thrown = thrown.combined(self.constructor_throws(&class_name, args, expr.span));
@@ -1170,8 +1305,7 @@ impl ExceptionFlowAnalysis {
                 method,
                 args,
             } => {
-                let mut thrown = self
-                    .expr_list_throws(args, bindings, class_context)
+                let mut thrown = operands(args)
                     .combined(self.operand_cleanup_throws(args, class_context));
                 if let Some(class_name) = resolve_exception_receiver(receiver, class_context) {
                     if self.resolve_method_value(&class_name, method, &self.static_method_unresolved_defaults) == Some(true) {
@@ -1214,9 +1348,8 @@ impl ExceptionFlowAnalysis {
                 method,
                 args,
             } => {
-                let mut thrown = self
-                    .expr_throws(object, bindings, class_context)
-                    .combined(self.expr_list_throws(args, bindings, class_context))
+                let mut thrown = operand(object)
+                    .combined(operands(args))
                     .combined(self.operand_cleanup_throws(args, class_context))
                     // A `(new C())->m()` receiver temporary is retired by this call site.
                     .combined(self.temporary_destruction_throws(object, class_context));
@@ -1251,15 +1384,13 @@ impl ExceptionFlowAnalysis {
                 }
                 thrown
             }
-            ExprKind::ExprCall { callee, args } => self
-                .expr_throws(callee, bindings, class_context)
-                .combined(self.expr_list_throws(args, bindings, class_context))
+            ExprKind::ExprCall { callee, args } => operand(callee)
+                .combined(operands(args))
                 .combined(self.operand_cleanup_throws(args, class_context))
                 .combined(self.callable_value_retirement_throws(callee, class_context))
                 .combined(self.callable_expr_throws(callee, bindings, class_context)),
-            ExprKind::Pipe { value, callable } => self
-                .expr_throws(value, bindings, class_context)
-                .combined(self.expr_throws(callable, bindings, class_context))
+            ExprKind::Pipe { value, callable } => operand(value)
+                .combined(operand(callable))
                 .combined(self.temporary_destruction_throws(value, class_context))
                 .combined(self.callable_value_retirement_throws(callable, class_context))
                 .combined(self.callable_expr_throws(callable, bindings, class_context)),
@@ -1271,44 +1402,44 @@ impl ExceptionFlowAnalysis {
             // `$object->method(...)`: the receiver expression is evaluated (its own throws) and the
             // lookup of a missing or inaccessible method raises `Error`; an object receiver never
             // reaches an autoloader here, so nothing else can escape.
-            ExprKind::FirstClassCallable(CallableTarget::Method { object, .. }) => self
-                .expr_throws(object, bindings, class_context)
+            ExprKind::FirstClassCallable(CallableTarget::Method { object, .. }) => operand(object)
                 .combined(ThrownTypes::exact("Error")),
             ExprKind::FirstClassCallable(_) => ThrownTypes::unknown(),
-            ExprKind::ArrayLiteral(items) => self.expr_list_throws(items, bindings, class_context),
+            ExprKind::ArrayLiteral(items) => operands(items),
             ExprKind::ArrayLiteralAssoc(items) => items.iter().fold(
                 ThrownTypes::default(),
                 |thrown, (key, value)| {
                     thrown
-                        .combined(self.expr_throws(key, bindings, class_context))
-                        .combined(self.expr_throws(value, bindings, class_context))
+                        .combined(operand(key))
+                        .combined(operand(value))
                 },
             ),
             ExprKind::Ternary {
                 condition,
                 then_expr,
                 else_expr,
-            } => self
-                .expr_throws(condition, bindings, class_context)
-                .combined(self.expr_throws(then_expr, bindings, class_context))
-                .combined(self.expr_throws(else_expr, bindings, class_context)),
-            ExprKind::ShortTernary { value, default }
-            | ExprKind::NullCoalesce { value, default } => self
-                .expr_throws(value, bindings, class_context)
-                .combined(self.expr_throws(default, bindings, class_context)),
+            } => operand(condition)
+                .combined(self.internal_conversion_throws(condition))
+                .combined(operand(then_expr))
+                .combined(operand(else_expr)),
+            ExprKind::ShortTernary { value, default } => operand(value)
+                .combined(self.internal_conversion_throws(value))
+                .combined(operand(default)),
+            ExprKind::NullCoalesce { value, default } => operand(value)
+                .combined(operand(default)),
             ExprKind::Match {
                 subject,
                 arms,
                 default,
             } => {
-                let mut thrown = self.expr_throws(subject, bindings, class_context);
+                let mut thrown = operand(subject);
                 for (patterns, value) in arms {
                     thrown = thrown
-                        .combined(self.expr_list_throws(patterns, bindings, class_context))
-                        .combined(self.expr_throws(value, bindings, class_context));
+                        .combined(operands(patterns))
+                        .combined(operand(value));
                 }
                 if let Some(default) = default {
-                    thrown = thrown.combined(self.expr_throws(default, bindings, class_context));
+                    thrown = thrown.combined(operand(default));
                 }
                 thrown
             }
@@ -1318,21 +1449,33 @@ impl ExceptionFlowAnalysis {
                 result_target,
                 prelude,
                 ..
-            } => self
-                .block_throws(prelude, bindings, class_context)
-                .combined(self.expr_throws(target, bindings, class_context))
-                .combined(self.expr_throws(value, bindings, class_context))
+            } => if include_operands { self.block_throws(prelude, bindings, class_context) } else { ThrownTypes::default() }
+                .combined(operand(target))
+                .combined(operand(value))
                 // The assignment retires whatever the target held before this write.
-                .combined(self.overwrite_cleanup_throws())
+                .combined(if let ExprKind::Variable(name) = &target.kind {
+                    self.local_retirement_throws(target).combined(if is_reference_volatile(name) {
+                        ThrownTypes::unknown()
+                    } else { ThrownTypes::default() })
+                } else { ThrownTypes::unknown() })
                 .combined(
                     result_target
                         .as_deref()
-                        .map(|expr| self.expr_throws(expr, bindings, class_context))
+                        .map(|expr| operand(expr))
                         .unwrap_or_default(),
                 ),
+            _ if !include_operands && matches!(expr.kind,
+                ExprKind::NamedArg { .. }) => ThrownTypes::default(),
             _ if expr_effect(expr).may_throw => ThrownTypes::unknown(),
             _ => ThrownTypes::default(),
         }
+    }
+
+    /// Reuses a declaration's canonical spelling for PHP's case-insensitive function lookup.
+    fn canonical_exception_function_name<'a>(&'a self, name: &'a str) -> &'a str {
+        self.function_throws.get_key_value(name).map(|(key, _)| key.as_str())
+            .or_else(|| self.function_names.get(&php_symbol_key(name)).map(String::as_str))
+            .unwrap_or(name)
     }
 
     /// Computes throws from a source-order expression list.
@@ -1401,9 +1544,27 @@ impl ExceptionFlowAnalysis {
         class_context: Option<&ExceptionClassContext>,
     ) -> ThrownTypes {
         match &callee.kind {
-            ExprKind::Closure { body, .. } => self.block_throws(body, bindings, class_context),
+            ExprKind::Closure { params, return_type, body, variadic, variadic_by_ref,
+                captures, capture_refs, by_ref_return, .. } => {
+                let mut references = reference_parameter_names(params, variadic.as_deref(), *variadic_by_ref);
+                references.extend(capture_refs.iter().cloned());
+                let values = closure_value_binding_names(params, captures, capture_refs,
+                    variadic.as_deref(), *variadic_by_ref);
+                let facts = ReturnBoundaryFacts::new(return_type.as_ref(),
+                    params.iter().map(|(name, hint, ..)| (name.as_str(), hint.as_ref())), body);
+                // The callee owns different locals even when their spellings match the caller.
+                let mut callee_analysis;
+                let analysis = if self.checker_retirement_types.is_some() {
+                    callee_analysis = self.clone();
+                    callee_analysis.checker_retirement_types = None;
+                    &callee_analysis
+                } else { self };
+                with_return_boundary_facts(Some(&facts), || with_reference_value_scope(values, ||
+                    with_reference_parameter_scope(*by_ref_return, references, ||
+                        analysis.block_throws(body, bindings, class_context))))
+            }
             ExprKind::FirstClassCallable(CallableTarget::Function(name)) => self
-                .function_summary(name.as_str())
+                .function_summary(self.canonical_exception_function_name(name.as_str()))
                 .cloned()
                 .unwrap_or_else(ThrownTypes::unknown),
             _ => ThrownTypes::unknown(),
@@ -1426,7 +1587,9 @@ impl ExceptionFlowAnalysis {
         } else {
             entry_check
         };
-        if self.resolve_method_value(class_name, "__construct", &self.instance_method_unresolved_defaults) == Some(true) {
+        if self.resolve_method_value(class_name, "__construct", &self.instance_method_unresolved_defaults) == Some(true)
+            || self.initialization_reports.contains(&php_symbol_key(class_name))
+        {
             entry_check = entry_check.combined(ThrownTypes::unknown());
         }
         if let Some(signature) = self.resolve_method_value(
@@ -1659,6 +1822,9 @@ fn binary_op_exact_throw_type(
 /// Returns whether an operator may fail but runtime operand types prevent an exact class claim.
 fn binary_op_has_dynamic_throw(left: &Expr, op: &BinOp, right: &Expr) -> bool {
     match op {
+        BinOp::Eq | BinOp::NotEq => {
+            !effects::literal_scalar_operand(left) || !effects::literal_scalar_operand(right)
+        }
         BinOp::Div | BinOp::Mod => !matches!(
             &right.kind,
             ExprKind::IntLiteral(value) if *value != 0
@@ -1738,4 +1904,62 @@ fn exact_receiver_class(
 /// Chunked native ob_start callbacks still need callback-aware exception analysis.
 fn host_output_throws() -> ThrownTypes {
     if output::output_may_throw() { ThrownTypes::unknown() } else { ThrownTypes::default() }
+}
+
+/// Reports whether the first `new` of `class_name` may raise a deprecation from its class
+/// initialization: its own or an ancestor's defaults or constants, or the constants of an
+/// interface it implements, read a deprecated global constant or any class constant (which
+/// may itself read one). An error handler can throw from that notice, so the `new` may throw.
+/// Conservative: it only keeps a `catch` alive.
+fn initialization_may_report(
+    classes: &HashMap<String, crate::types::ClassInfo>,
+    interfaces: &HashMap<String, InterfaceInfo>,
+    class_name: &str,
+) -> bool {
+    let reads = reads_reporting_constant;
+    let interface_reports = |name: &str| {
+        let mut queue = vec![name.to_string()];
+        let mut seen = HashSet::default();
+        while let Some(name) = queue.pop() {
+            if !seen.insert(php_symbol_key(&name)) {
+                continue;
+            }
+            let Some(interface) = interfaces.get(name.trim_start_matches('\\')) else { continue };
+            if interface.constants.values().any(|expr| reads(expr)) {
+                return true;
+            }
+            queue.extend(interface.parents.iter().cloned());
+        }
+        false
+    };
+    let mut current = Some(class_name.to_string());
+    let mut depth = 0;
+    while let Some(name) = current {
+        let Some(class) = classes.get(&name) else { return false };
+        if class.defaults.iter().chain(class.static_defaults.iter()).flatten().any(|expr| reads(expr))
+            || class.constants.values().any(|expr| reads(expr))
+            || class.interfaces.iter().any(|interface| interface_reports(interface))
+        {
+            return true;
+        }
+        depth += 1;
+        if depth > classes.len() {
+            return false;
+        }
+        current = class.parent.clone();
+    }
+    false
+}
+
+/// Reports whether `expr` reads a deprecated global constant or any class constant.
+fn reads_reporting_constant(expr: &Expr) -> bool {
+    let mut found = false;
+    crate::ir_lower::visit_constant_reads(expr, &mut |read| {
+        found = found
+            || match &read.kind {
+                ExprKind::ConstRef(name) => elephc_builtin_contract::global_constant_deprecation(name.as_str()).is_some(),
+                _ => true,
+            };
+    });
+    found
 }

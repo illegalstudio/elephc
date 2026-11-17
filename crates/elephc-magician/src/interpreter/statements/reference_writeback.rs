@@ -370,7 +370,9 @@ pub(super) fn write_back_method_variadic_ref_args(
     }
     for (key, target) in &bound_arg.variadic_ref_targets {
         let value = values.array_get(entry.cell(), *key)?;
-        write_back_method_ref_target(target, value, context, values)?;
+        let written = write_back_method_ref_target(target, value.borrowed(), context, values);
+        let released = release_expr_result(value, context, values);
+        written.and(released)?;
     }
     Ok(())
 }
@@ -435,6 +437,7 @@ pub(in crate::interpreter) fn write_back_method_ref_target(
             if visible_scope_cell(context, scope, name) == Some(value) {
                 // Native writeback can mutate the existing cell in place. Do
                 // not demote its scope owner to a borrow and release that owner.
+                mark_scope_binding_changed(context, scope, name)?;
                 return Ok(());
             }
             // The named variable can itself BE a reference -- the outer loop variable of a
@@ -451,21 +454,14 @@ pub(in crate::interpreter) fn write_back_method_ref_target(
                 write_back_method_ref_target(&nested_target, value, context, values)?;
             }
             let stored = values.retain(value)?;
-            let replaced = match set_scope_cell(
+            for replaced in set_scope_cell(
                 context,
                 scope,
                 name.clone(),
                 stored,
                 ScopeCellOwnership::Owned,
                 values,
-            ) {
-                Ok(replaced) => replaced,
-                Err(status) => {
-                    let _ = values.release(stored);
-                    return Err(status);
-                }
-            };
-            for replaced in replaced {
+            )? {
                 values.release(replaced)?;
             }
             Ok(())
@@ -549,6 +545,14 @@ pub(in crate::interpreter) fn eval_invoker_slot_ref_target_value(
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     match source_tag {
+        EVAL_INVOKER_TAGGED_SCALAR_SOURCE => {
+            let words = unsafe { *(slot as *const [u64; 2]) };
+            match words[1] {
+                EVAL_TAG_INT => values.raw_word_value(EVAL_TAG_INT, words[0]),
+                EVAL_TAG_NULL => values.null(),
+                _ => Err(EvalStatus::RuntimeFatal),
+            }
+        }
         EVAL_TAG_INT | EVAL_TAG_FLOAT | EVAL_TAG_BOOL | EVAL_TAG_RESOURCE => {
             let word = unsafe { *(slot as *const u64) };
             values.raw_word_value(source_tag, word)
@@ -572,13 +576,20 @@ pub(in crate::interpreter) fn eval_invoker_slot_ref_target_value(
 }
 
 /// Writes a value back into a native descriptor-invoker by-reference slot.
-pub(super) fn write_back_invoker_slot_ref_target(
+pub(in crate::interpreter) fn write_back_invoker_slot_ref_target(
     slot: usize,
     source_tag: u64,
     value: RuntimeCellHandle,
     values: &mut impl RuntimeValueOps,
 ) -> Result<(), EvalStatus> {
     match source_tag {
+        EVAL_INVOKER_TAGGED_SCALAR_SOURCE => {
+            let tag = values.type_tag(value)?;
+            if !matches!(tag, EVAL_TAG_INT | EVAL_TAG_NULL) { return Err(EvalStatus::RuntimeFatal); }
+            let word = values.raw_value_word(value)?;
+            unsafe { *(slot as *mut [u64; 2]) = [word, tag]; }
+            Ok(())
+        }
         EVAL_TAG_INT | EVAL_TAG_FLOAT | EVAL_TAG_BOOL | EVAL_TAG_RESOURCE => {
             let word = values.raw_value_word(value)?;
             unsafe {
@@ -591,6 +602,13 @@ pub(super) fn write_back_invoker_slot_ref_target(
             write_back_invoker_heap_slot(slot, source_tag, value, values)
         }
         EVAL_TAG_MIXED => {
+            let current = RuntimeCellHandle::from_raw(unsafe {
+                *(slot as *const *mut crate::value::RuntimeCell)
+            });
+            if values.is_reference(current)? {
+                let previous = values.reference_replace(current, value)?;
+                return values.release(previous);
+            }
             let retained = values.retain(value)?;
             let replaced = unsafe {
                 let slot = slot as *mut *mut crate::value::RuntimeCell;
@@ -751,25 +769,21 @@ fn write_back_method_nested_array_element_ref_target_value(
         return Ok(());
     }
     let current = eval_reference_target_value(array_target, context, values)?;
-    let array = if values.is_array_like(current)? {
-        values.array_clone_shallow(current).map(|array| {
+    // A property or element read hands back an owner of its own; a variable read only borrows.
+    // The lease releases an owned `current` once the rebuilt array has been written back.
+    with_eval_value_lease(current, context, values, |current, context, values| {
+        let array = if values.is_array_like(current)? {
+            let array = values.array_clone_shallow(current)?;
             context.copy_array_metadata(current, array);
             array
+        } else {
+            eval_new_array_for_index(index, values)?
+        };
+        with_eval_value_lease(array, context, values, |array, context, values| {
+            let array = values.array_set(array, index, value)?;
+            write_back_method_ref_target(array_target, array, context, values)
         })
-    } else {
-        eval_new_array_for_index(index, values)
-    };
-    // A property or element read hands back an owner of its own; a variable read only borrows.
-    if !current.is_borrowed() {
-        values.release(current)?;
-    }
-    let array = values.array_set(array?, index, value)?;
-    let written = write_back_method_ref_target(array_target, array, context, values);
-    // Every target but a static property keeps a reference of its own to the rebuilt array.
-    if !matches!(array_target, EvalReferenceTarget::StaticProperty { .. }) {
-        values.release(array)?;
-    }
-    written
+    })
 }
 
 /// Stores one by-reference method result in a caller-side object property.
@@ -782,7 +796,15 @@ pub(super) fn write_back_method_object_property_ref_target(
     values: &mut impl RuntimeValueOps,
 ) -> Result<(), EvalStatus> {
     let previous_scope = context.replace_execution_scope(access_scope);
-    let result = eval_property_set_result(object, property, value, context, values);
+    let result = (|| {
+        if values.supports_persistent_references() && values.is_reference(value)?
+            && values.reference_is_shared(value)?
+            && super::property_reference_owners::bind_escaped_cell(object, property, value, context, values)?
+        {
+            return Ok(());
+        }
+        eval_property_set_result(object, property, value, context, values)
+    })();
     context.replace_execution_scope(previous_scope);
     result
 }

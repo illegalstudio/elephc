@@ -6,8 +6,10 @@
 //! - `crate::pipeline::compile()`, right before the prelude injections.
 //!
 //! Key details:
-//! - Each prelude (PDO, mysqli, tz, image, hash, tokenizer, curl, xml, fileinfo, var_export) is injected only when
-//!   the program uses its surface, and that decision has to be taken before name resolution so a
+//! - Each prelude (PDO, mysqli, tz, image, hash, tokenizer, curl, xml, fileinfo, var_export,
+//!   web environment, web request, random, bcmath, gmp, listIdentifiers, and core's
+//!   WeakMap/WeakReference) is injected only when the program uses its surface, and that
+//!   decision has to be taken before name resolution so a
 //!   namespaced caller resolves to the injected declarations. The Composer/SPL autoload pass runs
 //!   AFTER name resolution, so a class file it loads that uses `PDO` or `CurlHandle` was never
 //!   scanned: the prelude was skipped and the program failed with `Unknown type: PDO`.
@@ -43,10 +45,18 @@ const PROBED_GROUPS: &[(&str, fn(&[Stmt]) -> bool)] = &[
     ("gmp", crate::gmp_prelude::program_uses_surface),
     ("curl", crate::curl_prelude::program_uses_surface),
     ("xml", crate::xml_prelude::program_uses_surface),
+    ("tidy", crate::tidy_prelude::program_uses_surface),
     ("fileinfo", crate::fileinfo_prelude::program_uses_surface),
     ("var_export", crate::var_export_prelude::program_uses_surface),
     // Autoloaded vendor code may register a session save handler the entry file never names.
     ("session_handler", crate::session_prelude::program_registers_save_handler),
+    // The web groups (environment, request, exception handler) come from one usage scan in
+    // `crate::web_prelude::autoloaded_web_groups`, so they are not probed here.
+    ("random", crate::random_prelude::program_uses_random),
+    ("bcmath", crate::bcmath_prelude::program_uses_bcmath),
+    ("list_id", crate::list_id_prelude::program_uses_list_identifiers),
+    ("weak_map", crate::core_prelude::program_uses_weak_map),
+    ("weak_reference", crate::core_prelude::program_uses_weak_reference),
 ];
 
 /// Returns the prelude groups some file of the autoload closure uses.

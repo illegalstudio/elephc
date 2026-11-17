@@ -324,7 +324,14 @@ fn class_like_exists_candidates(ctx: &FunctionContext<'_>, name: &str) -> Vec<St
                     .cloned(),
             );
         }
-        "interface_exists" => candidates.extend(ctx.module.interface_infos.keys().cloned()),
+        // A class template's marker interface is not an interface php-src would report.
+        "interface_exists" => candidates.extend(
+            ctx.module
+                .interface_infos
+                .iter()
+                .filter(|(_, info)| !info.reflection_hidden)
+                .map(|(name, _)| name.clone()),
+        ),
         "trait_exists" => candidates.extend(ctx.module.trait_table.names.iter().cloned()),
         "enum_exists" => candidates.extend(ctx.module.enum_infos.keys().cloned()),
         _ => {}
@@ -685,9 +692,18 @@ pub(in crate::codegen::lower_inst) fn static_method_exists_on_class_info(
     target_is_object: bool,
 ) -> bool {
     let method_key = php_symbol_key(method_name);
-    if elephc_builtin_contract::lookup_class(resolved_class)
-        .is_some_and(|class| !class.method_is_php_visible(&method_key))
-    {
+    // A builtin's reviewed surface hides its implementation methods (mysqli's `__destruct`,
+    // `__elephc*` helpers) — also when they are inherited by a user subclass.
+    let declaring_class = class_info
+        .method_declaring_classes
+        .get(&method_key)
+        .or_else(|| class_info.static_method_declaring_classes.get(&method_key))
+        .map(String::as_str)
+        .unwrap_or(resolved_class);
+    if [resolved_class, declaring_class].iter().any(|class_name| {
+        elephc_builtin_contract::lookup_class(class_name)
+            .is_some_and(|class| !class.method_is_php_visible(&method_key))
+    }) {
         return false;
     }
     if class_info.methods.contains_key(&method_key) {

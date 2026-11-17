@@ -489,3 +489,13 @@ fn parse_fragment_accepts_a_trailing_comma_in_a_match_arm_condition_list() {
     assert_eq!(arms[0].patterns.len(), 2);
     assert!(parse_fragment(br#"return match ($x) { 1, };"#).is_err());
 }
+
+/// Verifies the array cast used by native object projections survives runtime parsing.
+#[test]
+fn parse_fragment_accepts_array_cast_without_a_space_for_native_projections() {
+    let program = parse_fragment(b"return (array)$value;").expect("array cast should parse");
+    assert_eq!(program.statements(), &[EvalStmt::Return(Some(EvalExpr::Cast {
+        target: EvalCastType::Array,
+        expr: Box::new(EvalExpr::LoadVar("value".to_string())),
+    }))]);
+}

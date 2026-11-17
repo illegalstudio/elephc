@@ -1,14 +1,12 @@
 ---
 title: "preg_match()"
 description: "Performs a regular expression match."
-sidebar:
-  order: 874
 ---
 
 ## preg_match()
 
 ```php
-function preg_match(string $pattern, string $subject, array $matches = null, int $flags = 0, int $offset = 0): int|false
+function preg_match(string $pattern, string $subject, array $matches = null): int|false
 ```
 
 Performs a regular expression match.
@@ -17,15 +15,14 @@ Performs a regular expression match.
 - `$pattern` (`string`)
 - `$subject` (`string`)
 - `$matches` (`array`), passed by reference, default `null`, optional
-- `$flags` (`int`), default `0`, optional
-- `$offset` (`int`), default `0`, optional
 
 **Returns**: `int|false`
 
 ## Availability
 
-- **Compiled (AOT)**: supported by the Elephc code generator.
-- **`eval()` (magician interpreter)**: supported through a declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/regex/preg_match.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/regex/preg_match.rs)).
+| Compiled (AOT) | Magician (eval) |
+|---|---|
+| Available | Available |
 
 _No examples yet. Check `examples/` and `showcases/` for usage patterns._
 

@@ -99,13 +99,18 @@ pub(in crate::ir_lower) fn store_static_property(
         return;
     }
     let data = static_property_ref_data(ctx, receiver, property);
+    let pins = crate::ir_lower::expr::pin_in_flight_owners(ctx, &[value], span);
+    let strict = ctx.builder.emit_const_bool(crate::source::current_strict_types());
+    let mut operands = vec![value, strict];
+    if let Some(owner) = crate::ir_lower::expr::pinned_transfer_owner(ctx, &pins, span) { operands.push(owner); }
     ctx.emit_void(
         Op::StoreStaticProperty,
-        vec![value],
+        operands,
         Some(Immediate::Data(data)),
         Op::StoreStaticProperty.default_effects(),
         Some(span),
     );
+    crate::ir_lower::expr::unpin_in_flight_owners(ctx, pins, span);
 }
 
 /// Formats a static receiver for metadata immediates.
@@ -200,6 +205,9 @@ pub(super) fn object_type_property_type(
     property: &str,
 ) -> Option<PhpType> {
     let (class_name, _) = crate::ir_lower::expr::singular_object_class(object_ty)?;
+    if crate::types::builtin_classes::native_property_method(class_name, property,
+        elephc_builtin_contract::ObjectProperty::Set, ctx.classes).is_some()
+    { return None; }
     ctx.classes
         .get(class_name.trim_start_matches('\\'))?
         .visible_property(property)

@@ -75,6 +75,9 @@ pub(in crate::codegen::lower_inst) fn emit_object_allocation(
     if allow_dynamic_properties {
         emit_dynamic_property_hash_init(ctx, object_reg, dynamic_properties_offset);
     }
+    if !owned_reference_property_offsets.is_empty() {
+        emit_native_reference_bindings(ctx, object_reg);
+    }
     Ok(())
 }
 
@@ -252,6 +255,14 @@ pub(super) fn object_template_label(
         words[1 + offset / 8 + 1] = pair[1].clone();
     }
     ctx.data.add_words(words)
+}
+
+/// Registers distinct physical sources once all cells of a new or cloned object are initialized.
+pub(super) fn emit_native_reference_bindings(ctx: &mut FunctionContext<'_>, object: &str) {
+    if !ctx.module.required_runtime_features.native_reference_validation { return; }
+    abi::emit_reg_move(ctx.emitter, abi::int_arg_reg_name(ctx.emitter.target, 0), object);
+    abi::emit_call_label(ctx.emitter, "__rt_reference_sources_bind_object");
+    abi::emit_reg_move(ctx.emitter, object, abi::int_result_reg(ctx.emitter));
 }
 
 /// Allocates a zero-initialized 16-byte reference cell for an object-owned reference

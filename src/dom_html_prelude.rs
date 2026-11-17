@@ -81,6 +81,14 @@ fn program_names_dom_class(program: &[Stmt]) -> bool {
         .any(|name| name.trim_start_matches('\\').to_ascii_lowercase().starts_with("dom\\"))
 }
 
+/// Whether the program names a `Dom\` class and so needs this prelude's surface.
+///
+/// The xml receiver detector asks it to know whether the `Dom\` classes will exist next to the
+/// classic DOM ones.
+pub(crate) fn program_uses_dom_html(program: &[Stmt]) -> bool {
+    program_names_dom_class(program) && !program_declares_dom_class(program)
+}
+
 /// Prepends the declarations when the program names a `Dom\` class and declares none itself.
 ///
 /// `force` injects unconditionally (the codegen harness); below php 8.4 the classes do not

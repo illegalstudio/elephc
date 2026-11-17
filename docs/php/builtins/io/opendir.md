@@ -1,28 +1,26 @@
 ---
 title: "opendir()"
 description: "Open directory handle."
-sidebar:
-  order: 379
 ---
 
 ## opendir()
 
 ```php
-function opendir(string $directory, mixed $context = null): mixed
+function opendir(string $directory): mixed
 ```
 
 Open directory handle.
 
 **Parameters**:
 - `$directory` (`string`)
-- `$context` (`mixed`), default `null`, optional
 
 **Returns**: `mixed`
 
 ## Availability
 
-- **Compiled (AOT)**: supported by the Elephc code generator.
-- **`eval()` (magician interpreter)**: supported through a declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/filesystem/opendir.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/filesystem/opendir.rs)).
+| Compiled (AOT) | Magician (eval) |
+|---|---|
+| Available | Available |
 
 _No examples yet. Check `examples/` and `showcases/` for usage patterns._
 

@@ -142,11 +142,13 @@ fn eval_array_walk_ref_result_from_scope(
             };
             let args = vec![
                 EvaluatedCallArg {
+                    evaluation_owner: None,
                     name: None,
                     value: value.borrowed(),
                     ref_target: Some(ref_target),
                 },
                 EvaluatedCallArg {
+                    evaluation_owner: None,
                     name: None,
                     value: key.borrowed(),
                     ref_target: None,

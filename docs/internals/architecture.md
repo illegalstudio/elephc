@@ -54,11 +54,14 @@ Source (.php or .lfc)
      │
      ▼
 ┌──────────────┐
-│   Preludes   │  src/{pdo,mysqli,tz,list_id,var_export,opcache,image,hash,curl,xml,dom_html,web,version}_prelude*
+│   Preludes   │  src/*_prelude* + src/php_ext/prelude.rs
 │              │  Injects only the compiler-owned PHP surfaces required by
 │              │  resolved source usage, forced bridge flags, or --web. Before
 │              │  injection, src/autoload/prelude_probe.rs scans an autoloaded
-│              │  copy for PDO/mysqli/tz/image/hash/curl/xml/var_export usage.
+│              │  copy for PDO/mysqli/tz/image/hash/tokenizer/curl/xml/
+│              │  fileinfo/var_export/WeakMap/WeakReference usage, and for
+│              │  Random, BcMath, GMP, and DateTimeZone::listIdentifiers.
+│              │  Includes finfo declarations and wrappers for hosted extensions.
 │              │  The same probe retains per-request web environment copies for
 │              │  autoloaded observers in both request and application lifecycles.
 └─────┬────────┘
@@ -121,8 +124,8 @@ Source (.php or .lfc)
      ▼
 ┌──────────────┐
 │   Exports    │  src/exports.rs
-│    Scan      │  Collects #[Export]-marked functions and validates their
-│              │  native-library or PHP-extension signatures and post-lowering
+│    Scan      │  Collects #[Export]-marked functions, classes and constants;
+│              │  validates native-library or PHP-extension signatures and post-lowering
 │              │  safety graph (warns and
 │              │  ignores them only in normal executable emission).
 └─────┬────────┘
@@ -327,6 +330,7 @@ src/
 │                              validation and O_EXCL-staged atomic replacement
 ├── exports.rs                 #[Export] collection and boundary validation for library outputs
 ├── phpext/                    PHP 8.5 SDK discovery, Zend adapter, registration, transport, and linking
+├── php_ext/                   Hosted PHP extension commands, project declarations, builds, and wrapper injection
 ├── link_plan.rs               Ordered typed archives, libraries, paths, frameworks, and Linux link mode
 ├── link_planning.rs           Compile/runtime/user/managed inputs to one final ordered link plan
 ├── linker/                    Link-plan rendering, bridge discovery, SDK lookup, and archive handling
@@ -338,7 +342,7 @@ src/
 │   ├── doctor.rs              Read-only project/artifact/cache-size diagnostics
 │   ├── prune.rs               Explicit stale-fingerprint and abandoned-staging cleanup
 │   ├── resolver.rs            Read-only compile requirement to exact archive resolution
-│   └── recipes/               Reviewed PCRE2, zlib, OpenSSL, nghttp2, libssh2, curl, Oniguruma, and libxml2 source-build recipes
+│   └── recipes/               Reviewed PCRE2, zlib, OpenSSL, nghttp2, libssh2, curl, Oniguruma, libxml2, GMP, and libmagic source-build recipes
 ├── timings.rs                 Phase timing collection/reporting
 ├── span.rs                    Source position (line, col)
 ├── intrinsics.rs              Compiler-recognized intrinsic method calls for runtime-managed core objects
@@ -393,8 +397,12 @@ src/
 ├── list_id_prelude/           Identifier-list prelude detection and baked table data
 ├── var_export_prelude.rs      var_export prelude injection entry point
 ├── var_export_prelude/        var_export prelude usage detection
+├── xml_prelude.rs             Usage-gated XMLParser, XMLWriter, and SimpleXML declaration injection
+├── xml_prelude/               XML usage detection and parser/writer prelude declarations
+├── simplexml_prelude.rs       Cached synthetic AST declarations for the SimpleXML surface
+├── simplexml_prelude/         Built SimpleXML classes, functions, and native bridge declarations
 ├── dom_html_prelude.rs        Pay-for-use DOM HTML injection before name resolution and after autoload
-├── dom_html_prelude/          AST builders for the DOM HTML surface, its PHP model and the parse-parity oracle
+├── dom_html_prelude/          Built AST declarations, HTML entity builders, and DOM usage detection
 ├── image_prelude.rs           Image (GD, Exif/IPTC, Imagick, Gmagick, Cairo) prelude injection entry point
 ├── image_prelude/             Image prelude usage detection
 ├── web_prelude.rs             --web request superglobals and session prelude injection (flag-gated, not usage-detected)
@@ -463,7 +471,7 @@ src/
 │   ├── frame.rs               EIR frame layout and local/temporary slots
 │   ├── frame/                 Frame-layout unit tests
 │   ├── stack_numeric.rs       Escape/lifetime proofs for frame-local checked numeric cells
-│   ├── stack_numeric/         Numeric frame-cell proof unit tests
+│   ├── stack_numeric/         Numeric frame-cell lifetime proofs, retirement analysis, and unit tests
 │   ├── block_emit.rs          Basic-block scheduling and emission
 │   ├── block_layout.rs        Hot/cold block order and compare-and-branch fusion
 │   ├── parallel_moves.rs      Direct scalar moves for integer, boolean, and float block arguments
@@ -478,7 +486,7 @@ src/
 │   ├── function_variants.rs   Include-loaded function-variant dispatcher emission
 │   ├── literal_defaults.rs    Literal property defaults → backend-native values
 │   ├── eval_*_helpers.rs      Eval-to-native bridge helpers: arguments, callables, class constants, constructors, error handlers, methods, properties, ref args, reflection (+ owners), static properties, and values (13 files)
-│   ├── shared_*.rs            Shared once-per-program helper frames: the count() TypeError guard, mbstring callable dispatch, the boxed-mixed __toString ladder, their common helper-frame plumbing, and the module-wide state that dedupes callable descriptors and owns the label counter (5 files)
+│   ├── shared_*.rs            Shared once-per-program helper frames: the count() TypeError guard, mbstring callable dispatch, the boxed-mixed __toString ladder, the shared property-read ladder, their common helper-frame plumbing, and the module-wide state that dedupes callable descriptors and owns the label counter (6 files)
 │   ├── fibers.rs              Fiber-aware EIR codegen integration
 │   └── web.rs                 `--web` program-entry lowering
 │
@@ -545,25 +553,25 @@ src/
 │       ├── resource_ids.rs    Runtime resource-kind identifiers shared by cleanup paths
 │       ├── round_mode.rs      PHP rounding-mode constants used by runtime helpers
 │       ├── sysv_call_alignment.rs x86_64 SysV nested-call stack-alignment helpers
-│       ├── strings/           itoa, concat, resource display, ftoa, sprintf, hashes, iconv, mbstring, parse_url, and conversion helpers (106 top-level Rust files + 62 nested Rust helpers)
-│       ├── arrays/            heap_alloc, heap_free, array_free_deep, array_grow, hash_grow, hash_*, mixed boxing/freeing, mixed instanceof, sort, usort, refcount, gc/decref dispatch, ... (210 top-level Rust files + 9 nested target/debug/test helpers)
+│       ├── strings/           itoa, concat, resource display, ftoa, sprintf, hashes, iconv, mbstring, parse_url, and conversion helpers (116 top-level Rust files + 69 nested Rust helpers)
+│       ├── arrays/            heap_alloc, heap_free, array_free_deep, array_grow, hash_grow, hash_*, mixed boxing/freeing, mixed instanceof, sort, usort, refcount, gc/decref dispatch, ... (236 top-level Rust files + 26 nested target/debug/test helpers)
 │       ├── callables/         Runtime `is_callable()` fallback for dynamic strings/arrays/hashes/objects/Mixed, callable descriptor release, and `Closure::bind` support (7 files)
-│       ├── compare/           Loose/strict comparison and truthiness helpers (5 files)
-│       ├── io/                fopen, fgets, fread, stat, streams, sockets, filters, scandir, ... (126 top-level files + 1 nested response-metadata helper)
+│       ├── compare/           Loose/strict comparison and truthiness helpers (5 top-level Rust files + 1 nested object-conversion helper)
+│       ├── io/                fopen, fgets, fread, stat, streams, sockets, filters, scandir, ... (132 top-level Rust files + 2 nested response-metadata helpers)
 │       ├── buffers/           Generation-safe handle resolution, allocation/free, length, bounds/size/use-after-free diagnostics (8 files incl. mod.rs)
 │       ├── bcmath/            Target-aware C-ABI marshalling for exact decimal bridge calls (3 files incl. target assembly)
 │       ├── curl/              Easy, multi, share, callback, multipart, error, and version bridge adapters (14 files)
-│       ├── eval_bridge/       Magician value, array, cast, reflection, clone, mbstring, output, and builtin adapters (37 top-level files + 1 nested output helper)
+│       ├── eval_bridge/       Magician value, array, cast, reflection, clone, mbstring, output, and builtin adapters (44 top-level files + 1 nested output helper)
 │       ├── exceptions.rs      Exception runtime module root / re-exports
-│       ├── exceptions/        cleanup frames, handler dispatch, dynamic instanceof, matching, throwing, and Throwable helpers (23 top-level Rust files + 2 nested cleanup helpers)
+│       ├── exceptions/        cleanup frames, handler dispatch, dynamic instanceof, matching, throwing, and Throwable helpers (24 top-level Rust files + 3 nested cleanup helpers)
 │       ├── pdo/               Target-aware PDO callable callback adapters (5 files)
-│       ├── system/            build_argv, time, getenv, shell_exec, date/JSON/strtotime, serialize/unserialize, preg_*, ... (50 top-level Rust files + 61 nested Rust files)
+│       ├── system/            build_argv, time, getenv, shell_exec, date/JSON/strtotime, serialize/unserialize, preg_*, ... (52 top-level Rust files + 65 nested Rust files)
 │       ├── pointers/          ptoa, ptr_check_nonnull, str_to_cstr, cstr_to_str, ptr_read_string, ptr_write_string, ... (7 files)
-│       ├── fibers/            stack allocation/free, context switch, entry trampoline (4 top-level files) + `api/` (4 target-aware public API helper files)
-│       ├── objects/           stdClass, object handles, Mixed property/index autovivification, object-vars/export, destructor dispatch, and new-by-name helpers (19 files)
+│       ├── fibers/            stack allocation/free, context switch, entry trampoline (5 top-level files) + `api/` (4 target-aware public API helper files)
+│       ├── objects/           stdClass, object handles, Mixed property/index autovivification, object-vars/export, destructor dispatch, and new-by-name helpers (22 files)
 │       ├── spl/               SplDoublyLinkedList and SplFixedArray runtime container helpers, including shared PHP offset conversion (4 files)
 │       ├── generators/        Generator frame layout and fiber-backed coroutine __rt_gen_* helpers (3 files)
-│       └── zval/              Zval bridge packing, unpacking, type, and lifetime helpers (11 files)
+│       └── zval/              Zval bridge packing, unpacking, type, and lifetime helpers (12 files)
 │
 │
 └── errors/
@@ -575,22 +583,31 @@ crates/
 ├── elephc-bcmath/             Pure-Rust arbitrary-precision decimal bridge for PHP `bc*()` functions and immutable `BcMath\Number` objects
 ├── elephc-crypto/             Pure-Rust hashing/HMAC bridge staticlib behind PHP `hash()` / `hash_hmac()`
 ├── elephc-curl/               Static libcurl easy, multi, share, callback, and multipart bridge
+├── elephc-fileinfo/           Binary-safe fileinfo bridge over the managed libmagic package
 ├── elephc-generics/           Shared structural generic type terms, binding, and variance for AOT compilation and Magician
+├── elephc-gmp/                Arbitrary-precision integer engine over the managed libgmp package
 ├── elephc-iconv/              Charset-conversion and RFC 2047 MIME bridge staticlib behind PHP `iconv*()`
 ├── elephc-image/              Pure-Rust image bridge staticlib (GD, Exif, Imagick, Gmagick, Cairo C ABI)
 ├── elephc-instr/              Exact profiling instrumentation runtime
-├── elephc-magician/           Optional EvalIR parser/interpreter staticlib for dynamic eval
+├── elephc-magician/           Optional EvalIR parser, guarded bytecode consumer, and interpreter staticlib for dynamic eval
 ├── elephc-mbstring/           Shared mbstring engine and native bridge with managed Oniguruma-backed mbregex
 ├── elephc-monitoring-contract/ Typed monitoring policy shared by the compiler and every bridge
+├── elephc-openssl/            Symmetric-cipher bridge over the managed openssl-crypto default provider
 ├── elephc-pcntl/              Unix process control, wait, exec, priority, and signal bridge staticlib
 ├── elephc-pdo/                Multi-driver database bridge staticlib behind the PDO prelude
 ├── elephc-phar/               Pure-Rust PHAR/tar/zip archive bridge for `phar://` runtime paths
 ├── elephc-probe/              Sampled profiling and authenticated service endpoint
+├── elephc-process-context/    Shared worker signal deferral and child-process inheritance
 ├── elephc-random/             Pure-Rust `ext/random` engines, CSPRNG, and global Mt19937 state bridge
+├── elephc-reference/          Dependency-neutral native property-reference metadata and validation
+├── elephc-tidy/               ext/tidy bridge over the catalog's static libtidy 5.8.0
 ├── elephc-tls/                TLS bridge for the `https://` stream wrapper
+├── elephc-tokenizer-engine/   Shared byte-preserving PHP tokenizer and parse validation
+├── elephc-tokenizer/          Standalone tokenizer C bridge over the shared engine
 ├── elephc-tz/                 IANA timezone-introspection bridge staticlib with baked tz tables
 ├── elephc-web/                Prefork HTTP bridge with compile-time worker/pool/request isolation
-└── elephc-xml/                ext/xml and ext/xmlwriter bridge over the catalog's static libxml2
+├── elephc-zend/               PHP extension ABI implementation for hosted PECL/PIE extensions
+└── elephc-xml/                XML, XMLWriter, and SimpleXML bridge over the catalog's static libxml2
 ```
 
 ## ARM64 calling conventions
@@ -699,7 +716,7 @@ The runtime data emission in `src/codegen_support/runtime/data/` is split into `
 | CLI globals | `_global_argc`, `_global_argv` | Saved OS argument state used to build `$argv` |
 | Heap allocator | `_heap_buf`, `_heap_off`, `_heap_free_list`, `_heap_small_bins`, `_heap_bin_marks`, `_heap_debug_enabled`, `_heap_max` | Heap storage plus general/small-bin allocator metadata, the per-granule bin marks behind the O(1) double-free check, and heap-debug toggle |
 | Buffer registry | `_buffer_registry`, `_buffer_registry_free`, `_buffer_registry_next` | Static generation-safe descriptors, recycled-slot free-list head, and next never-issued descriptor index |
-| Runtime diagnostics | `_rt_diag_suppression`, `_rt_diag_pending_*`, `_php_diagnostic_*`, `_diag_*`, `_heap_err_msg`, `_arr_cap_err_msg`, `_ptr_null_err_msg`, `_buffer_bounds_msg`, `_buffer_uaf_msg`, `_buffer_alloc_size_msg`, `_buffer_registry_exhausted_msg`, `_match_unhandled_msg`, `_uncaught_exc_msg`, `_instanceof_target_type_msg`, `_heap_dbg_*` | Suppressible and deferred warning state/text plus source locations, fatal messages, and heap-debug summary/failure strings |
+| Runtime diagnostics | `_rt_diag_suppression`, `_rt_diag_pending_*`, `_php_diagnostic_*`, `_diag_*`, `_heap_err_msg`, `_arr_cap_err_msg`, `_ptr_null_err_msg`, `_buffer_bounds_msg`, `_buffer_uaf_msg`, `_buffer_alloc_size_msg`, `_buffer_registry_exhausted_msg`, `_match_unhandled_msg`, `_uncaught_exc_msg`, `_instanceof_target_type_msg`, `_heap_dbg_*` | Suppressible and deferred warning state/text plus source locations, runtime error messages, and heap-debug summary/failure strings |
 | GC statistics and cycle state | `_gc_allocs`, `_gc_frees`, `_gc_live`, `_gc_peak`, `_gc_enabled`, `_gc_collecting`, `_gc_freeing_unreachable`, `_gc_pin_head`, `_gc_pending_throw`, `_gc_release_suppressed`, `_gc_runs`, `_gc_collected`, `_gc_application_started`, `_gc_*_started`, `_gc_*_time`, `_gc_destructor_depth` | Allocation/free/live-byte counters, collector lifecycle and timing state, pinned roots, and deferred throws |
 | Exception and handler state | `_exc_handler_top`, `_exc_call_frame_top`, `_exc_value`, `_magic_set_guard_head`, `_php_error_handler_*`, `_php_exception_handler_*`, `_class_parent_ids` | Active exception and cleanup stacks, current user handlers with heap-backed restore stacks, magic-set recursion guard, and parent links used for catch matching |
 | Reference and resource tracking | `_rt_unmanaged_ref_borrow_top`, `_resource_inventory_head`, `_resource_inventory_tail` | Active unmanaged array-element borrow plus the heap-backed resource-incarnation inventory used by `get_resources()` |

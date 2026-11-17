@@ -266,7 +266,19 @@ fn emit_boxed_constant_value(
         ExprKind::ArrayLiteralAssoc(items) => {
             emit_boxed_array_constant(ctx, items.iter().map(|(key, value)| (key.kind.clone(), value)))?;
         }
-        other => return Err(unsupported_constant_value(other)),
+        // A constant expression kept unfolded (one reading a deprecated constant, which the
+        // compiler never folds so the read still reports) holds the value it evaluates to.
+        other => {
+            let context = crate::codegen::const_default_values::ConstDefaultContext {
+                module: ctx.module, current_class: None,
+            };
+            let expression = Expr::new(other.clone(), crate::span::Span::synthetic());
+            let normalized = crate::codegen::const_default_values::resolve_const_default(&expression, &context)
+                .and_then(crate::codegen::const_default_values::resolved_literal_default)
+                .filter(|normalized| normalized != other)
+                .ok_or_else(|| unsupported_constant_value(other))?;
+            return emit_boxed_constant_value(ctx, &normalized, declared_type);
+        }
     }
     Ok(())
 }

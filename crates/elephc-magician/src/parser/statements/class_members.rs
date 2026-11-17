@@ -80,8 +80,8 @@ impl Parser {
             .with_parameter_defaults(parameter_defaults)
             .with_parameter_by_ref_flags(parameter_is_by_ref)
             .with_parameter_variadic_flags(parameter_is_variadic)
-            .with_return_type(return_type)
-            .with_returns_by_ref(returns_by_ref);
+            .with_returns_by_ref(returns_by_ref)
+            .with_return_type(return_type);
         self.type_parameters.truncate(type_scope);
         self.type_parameter_origins.truncate(type_scope);
         if !generic_parameters.is_empty() {

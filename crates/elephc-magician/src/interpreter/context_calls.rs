@@ -45,7 +45,7 @@ pub fn execute_context_function_outcome(
     let result = (|| {
         let arguments = args
             .iter()
-            .map(|&value| EvaluatedCallArg { name: None, value, ref_target: None })
+            .map(|&value| EvaluatedCallArg { evaluation_owner: None, name: None, value, ref_target: None })
             .collect::<Vec<_>>();
         let function = match context.function(name).cloned() {
             Some(function) => function,
@@ -162,6 +162,18 @@ pub fn execute_context_is_callable(
     eval_is_callable_value(callback, None, context, values)
 }
 
+/// Reads a selected callback's passing mode without evaluating any of its PHP arguments.
+pub fn execute_context_callable_parameter_is_by_ref(
+    context: &mut ElephcEvalContext, callback: RuntimeCellHandle,
+    name: Option<&str>, position: usize, values: &mut impl RuntimeValueOps,
+) -> Result<bool, EvalStatus> {
+    let callable = eval_callable(callback, context, values)?;
+    callable.with_probe(context, values, |callable, context, values| {
+        let modes = CallArgumentModes::for_callable(&callable, context, values)?;
+        Ok(modes.by_reference(name, position))
+    })
+}
+
 /// Constructs a class declared in the shared eval context with prepared positional arguments.
 ///
 /// THE TERMINAL DECISION for `new` through the bridge. Its `try_` half answers `None` when no
@@ -244,6 +256,7 @@ pub fn execute_reflection_new_object_outcome(
     let evaluated_args = args
         .into_iter()
         .map(|value| EvaluatedCallArg {
+            evaluation_owner: None,
             name: None,
             value: value.borrowed(),
             ref_target: None,
@@ -349,6 +362,7 @@ pub fn execute_context_try_new_object_named_outcome(
     let evaluated_args = args
         .into_iter()
         .map(|(name, value)| EvaluatedCallArg {
+            evaluation_owner: None,
             name,
             value: value.borrowed(),
             ref_target: None,
@@ -457,6 +471,88 @@ pub fn execute_context_try_new_object_named_outcome(
             }
             Err(status)
         }
+    }
+}
+
+/// Attempts to allocate an eval class without invoking its PHP constructor.
+pub fn execute_context_try_allocate_object_outcome(
+    context: &mut ElephcEvalContext,
+    name: &str,
+    values: &mut impl RuntimeValueOps,
+) -> Result<Option<EvalOutcome>, EvalStatus> {
+    execute_context_try_allocate_object_inner(context, name, values, false)
+}
+
+/// Native factories can materialize abstract wrappers without invoking user constructors.
+pub fn execute_context_try_allocate_native_object_outcome(
+    context: &mut ElephcEvalContext,
+    name: &str,
+    values: &mut impl RuntimeValueOps,
+) -> Result<Option<EvalOutcome>, EvalStatus> {
+    execute_context_try_allocate_object_inner(context, name, values, true)
+}
+
+/// Keeps non-class refusals and throwable outcomes shared by both allocation policies.
+fn execute_context_try_allocate_object_inner(
+    context: &mut ElephcEvalContext,
+    name: &str,
+    values: &mut impl RuntimeValueOps,
+    native_factory: bool,
+) -> Result<Option<EvalOutcome>, EvalStatus> {
+    let mut scope = ElephcEvalScope::new();
+    let result = (|| {
+        let native_abstract = native_factory && context.class(name).is_some_and(|class| class.is_abstract());
+        if !native_abstract {
+            if let Some(message) = eval_reflection_eval_instantiation_error_message(name, context) {
+                return eval_throw_error(&message, context, values);
+            }
+        }
+        let Some(class) = context.class(name).cloned() else { return Ok(None); };
+        let object = if native_factory {
+            eval_dynamic_class_allocate_native_object(&class, context, &mut scope, values)
+        } else {
+            eval_dynamic_class_allocate_object(&class, context, &mut scope, values)
+        };
+        object.map(Some)
+    })();
+    match result {
+        Ok(value) => Ok(value.map(EvalOutcome::Value)),
+        Err(EvalStatus::UncaughtThrowable) => context.take_pending_throw()
+            .map(EvalOutcome::Throwable).map(Some).ok_or(EvalStatus::UncaughtThrowable),
+        Err(status) => Err(status),
+    }
+}
+
+/// Builds a fresh, complete `ReflectionClass` for a member reflector's lazy class slot.
+///
+/// The compiled `getDeclaringClass()` / `ReflectionParameter::getClass()` getters reach this
+/// through `__elephc_eval_reflection_class_build_v1` with the class name an eval-built
+/// reflector stored. Each call builds and registers a NEW reflector, so two calls never share
+/// an object (as in php) and the eval reflection registry always knows the returned identity.
+/// A class that no longer resolves yields `false`, the value an unresolved slot held before.
+pub fn execute_context_reflection_class_outcome(
+    context: &mut ElephcEvalContext,
+    name: &str,
+    values: &mut impl RuntimeValueOps,
+) -> Result<EvalOutcome, EvalStatus> {
+    match eval_reflection_full_class_object_result(name, context, values) {
+        Ok(value) => Ok(EvalOutcome::Value(value)),
+        Err(EvalStatus::UncaughtThrowable) => context.take_pending_throw()
+            .map(EvalOutcome::Throwable).ok_or(EvalStatus::UncaughtThrowable),
+        Err(status) => Err(status),
+    }
+}
+
+/// Publishes a lookup error without evaluating arguments or invoking the method.
+pub fn execute_context_abstract_method_guard_outcome(
+    context: &mut ElephcEvalContext, object: RuntimeCellHandle, method: &str,
+    values: &mut impl RuntimeValueOps,
+) -> Result<Option<EvalOutcome>, EvalStatus> {
+    match eval_abstract_instance_method_guard(object, method, context, values) {
+        Ok(()) => Ok(None),
+        Err(EvalStatus::UncaughtThrowable) => context.take_pending_throw()
+            .map(EvalOutcome::Throwable).map(Some).ok_or(EvalStatus::UncaughtThrowable),
+        Err(status) => Err(status),
     }
 }
 
@@ -600,6 +696,15 @@ pub fn execute_context_string_outcome(
     }
 }
 
+/// Probes PHP object stringability without invoking the object's `__toString()` method.
+pub fn execute_context_object_has_to_string(
+    context: &mut ElephcEvalContext,
+    value: RuntimeCellHandle,
+    values: &mut impl RuntimeValueOps,
+) -> Result<bool, EvalStatus> {
+    eval_object_has_to_string(value, context, values)
+}
+
 /// Calls a static method on a class-like symbol known to the shared eval context.
 pub fn execute_context_static_method_call_outcome(
     context: &mut ElephcEvalContext,
@@ -630,18 +735,35 @@ fn eval_bridge_positional_args(
 ) -> Result<Vec<EvaluatedCallArg>, EvalStatus> {
     args.into_iter()
         .map(|marker| {
-            let (value, ref_target) = eval_invoker_ref_arg_value_and_target(marker, None, values)?;
+            let (value, ref_target) = eval_bridge_ref_arg_value_and_target(marker, values)?;
             // A by-reference marker is decoded into a FRESH cell over the caller's slot (a
             // retained box for an array or object). The caller owns the marker, not that cell,
             // so the call's cleanup must drop it: left unowned, `Z::f($localArray)` kept the
             // whole array alive once per call. A plain argument is the caller's own box.
             Ok(EvaluatedCallArg {
+                evaluation_owner: None,
                 name: None,
                 value: if value != marker { value } else { value.borrowed() },
                 ref_target,
             })
         })
         .collect()
+}
+
+/// Reads a bridge by-reference marker into its current value and writeback target without
+/// retiring the marker: the native caller owns the marker, and the call's cleanup drops only
+/// the cell decoded from it.
+fn eval_bridge_ref_arg_value_and_target(
+    value: RuntimeCellHandle,
+    values: &mut impl RuntimeValueOps,
+) -> Result<(RuntimeCellHandle, Option<EvalReferenceTarget>), EvalStatus> {
+    if values.type_tag(value)? != EVAL_TAG_INVOKER_REF_CELL {
+        return Ok((value, None));
+    }
+    let slot = values.raw_value_word(value)? as usize;
+    let source_tag = values.raw_value_high_word(value)?;
+    let value = eval_invoker_slot_ref_target_value(slot, source_tag, values)?;
+    Ok((value, Some(EvalReferenceTarget::InvokerSlot { slot, source_tag })))
 }
 
 /// Resolves object class-name builtins against eval dynamic-object metadata first.
@@ -688,6 +810,28 @@ pub fn execute_context_dynamic_constant(
             .map(EvalOutcome::Throwable)
             .ok_or(EvalStatus::UncaughtThrowable),
         Err(status) => Err(status),
+    }
+}
+
+/// Returns PHP's `Error: Undefined constant "NAME"` for a global constant generated code read
+/// after `eval()` and found nowhere.
+pub fn execute_context_undefined_constant(
+    context: &mut ElephcEvalContext,
+    name: &str,
+    values: &mut impl RuntimeValueOps,
+) -> Result<EvalOutcome, EvalStatus> {
+    let status = eval_throw_error::<()>(
+        &format!("Undefined constant \"{}\"", name.trim_start_matches('\\')),
+        context,
+        values,
+    )
+    .expect_err("throwing always returns an error status");
+    match status {
+        EvalStatus::UncaughtThrowable => context
+            .take_pending_throw()
+            .map(EvalOutcome::Throwable)
+            .ok_or(EvalStatus::UncaughtThrowable),
+        status => Err(status),
     }
 }
 

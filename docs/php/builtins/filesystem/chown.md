@@ -1,28 +1,27 @@
 ---
 title: "chown()"
 description: "Changes file owner."
-sidebar:
-  order: 276
 ---
 
 ## chown()
 
 ```php
-function chown(string $filename, string|int $user): bool
+function chown(string $filename, string $user): bool
 ```
 
 Changes file owner.
 
 **Parameters**:
 - `$filename` (`string`)
-- `$user` (`string|int`)
+- `$user` (`string`)
 
 **Returns**: `bool`
 
 ## Availability
 
-- **Compiled (AOT)**: supported by the Elephc code generator.
-- **`eval()` (magician interpreter)**: supported through a declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/filesystem/chown.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/filesystem/chown.rs)).
+| Compiled (AOT) | Magician (eval) |
+|---|---|
+| Available | Available |
 
 _No examples yet. Check `examples/` and `showcases/` for usage patterns._
 

@@ -391,18 +391,59 @@ pub(super) fn builtin_reflection_class_object_method(
         return_type: Some(TypeExpr::Named(Name::unqualified(class_name))),
         by_ref_return: false,
         body: vec![Stmt::new(
-            StmtKind::Return(Some(Expr::new(
-                ExprKind::PropertyAccess {
-                    object: Box::new(Expr::new(ExprKind::This, dummy_span)),
-                    property: property.to_string(),
-                },
-                dummy_span,
-            ))),
+            StmtKind::Return(Some(reflection_lazy_class_read(property))),
             dummy_span,
         )],
         span: dummy_span,
         attributes: Vec::new(),
     }
+}
+
+/// `is_int($this->{p}) ? __elephc_reflection_class_build($this->{p})
+///     : (is_string($this->{p}) ? __elephc_eval_reflection_class_build($this->{p}) : $this->{p})`.
+///
+/// A member reflector's declaring-class (and a parameter's class-type) slot never holds a
+/// `ReflectionClass`: php builds a new, complete reflector on every `getDeclaringClass()` /
+/// `getClass()` call, and holding one per member would cost the class's property arrays per
+/// member or, shared, form a cycle with the class's own members. Codegen stores the address
+/// of a compiled builder for the class; an eval-built reflector stores the class's name,
+/// which the eval bridge turns into a fresh reflector it registers. A member with no class
+/// stores `false`/`null`, which comes back unchanged.
+pub(super) fn reflection_lazy_class_read(property: &str) -> Expr {
+    let span = crate::span::Span::dummy();
+    let slot = || super::class_relations::reflection_this_property(property, span);
+    let call = |name: &str| super::class_relations::function_call(name, vec![slot()], span);
+    let eval_read = Expr::new(
+        ExprKind::Ternary {
+            condition: Box::new(call("is_string")),
+            then_expr: Box::new(call("__elephc_eval_reflection_class_build")),
+            else_expr: Box::new(slot()),
+        },
+        span,
+    );
+    Expr::new(
+        ExprKind::Ternary {
+            condition: Box::new(call("is_int")),
+            then_expr: Box::new(call("__elephc_reflection_class_build")),
+            else_expr: Box::new(eval_read),
+        },
+        span,
+    )
+}
+
+/// Returns a public mixed getter that builds the `ReflectionClass` a slot names on each call
+/// (see `reflection_lazy_class_read`).
+pub(super) fn builtin_reflection_lazy_class_getter(method_name: &str, property: &str) -> ClassMethod {
+    let mut method = super::basic_methods::builtin_reflection_slot_getter(
+        method_name,
+        property,
+        mixed_type(),
+    );
+    method.body = vec![Stmt::new(
+        StmtKind::Return(Some(reflection_lazy_class_read(property))),
+        crate::span::Span::dummy(),
+    )];
+    method
 }
 
 /// Returns a public mixed `ReflectionClass` method backed by one private slot.
@@ -411,7 +452,7 @@ pub(super) fn builtin_reflection_class_object_method(
 /// `ReflectionClassConstant::IS_PUBLIC`). The filtered form reuses `getReflectionConstants()`.
 pub(super) fn builtin_reflection_class_get_constants_method() -> ClassMethod {
     use crate::synthetic_class::{e_method_call, e_null, e_this, e_var, s_array_assign, s_assign, s_foreach, s_if, s_return};
-    let mut method = builtin_reflection_class_mixed_method("getConstants", "__constants");
+    let mut method = builtin_reflection_lazy_mixed_method("getConstants", "__constants");
     method.params = vec![(
         "filter".to_string(),
         Some(TypeExpr::Nullable(Box::new(TypeExpr::Int))),
@@ -525,6 +566,54 @@ pub(super) fn builtin_reflection_class_mixed_method(method_name: &str, property:
         span: dummy_span,
         attributes: Vec::new(),
     }
+}
+
+/// Returns the statement that answers a reflection getter through the reflector's `__lazy`
+/// callable when one is set: an `eval()` reflector whose value PHP has not computed when it
+/// was built stores a closure there that makes the evaluation PHP makes on the call (`method`,
+/// with `args`), raising its notices and errors then.
+pub(super) fn reflection_lazy_return(method: &str, args: Vec<Expr>, span: crate::span::Span) -> Stmt {
+    let lazy = Expr::new(
+        ExprKind::PropertyAccess { object: Box::new(Expr::new(ExprKind::This, span)), property: "__lazy".to_string() },
+        span,
+    );
+    let mut call_args = vec![lazy.clone(), Expr::new(ExprKind::StringLiteral(method.to_string()), span)];
+    call_args.extend(args);
+    Stmt::new(
+        StmtKind::If {
+            condition: Expr::new(
+                ExprKind::BinaryOp {
+                    left: Box::new(lazy.clone()),
+                    op: BinOp::StrictNotEq,
+                    right: Box::new(Expr::new(ExprKind::Null, span)),
+                },
+                span,
+            ),
+            then_body: vec![Stmt::new(
+                StmtKind::Return(Some(Expr::new(
+                    ExprKind::FunctionCall { name: Name::unqualified("call_user_func"), args: call_args },
+                    span,
+                ))),
+                span,
+            )],
+            elseif_clauses: Vec::new(),
+            else_body: None,
+        },
+        span,
+    )
+}
+
+/// Returns a public mixed getter backed by one private slot that defers to `__lazy` when set
+/// (see [`reflection_lazy_return`]).
+pub(super) fn builtin_reflection_lazy_mixed_method(method_name: &str, property: &str) -> ClassMethod {
+    let mut method = builtin_reflection_class_mixed_method(method_name, property);
+    method.body.insert(0, reflection_lazy_return(method_name, Vec::new(), crate::span::Span::dummy()));
+    method
+}
+
+/// Returns the private `__lazy` slot of a reflector whose getters defer to it.
+pub(super) fn builtin_reflection_lazy_property() -> ClassProperty {
+    builtin_property("__lazy", Visibility::Private, Some(mixed_type()), Some(Expr::new(ExprKind::Null, crate::span::Span::dummy())))
 }
 
 /// Returns a public `ReflectionClass` boolean method backed by one private slot.

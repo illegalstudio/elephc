@@ -348,3 +348,42 @@ var_dump($bodies[1]->live);
     );
     assert_eq!(out, "3 0\nbool(true)\n");
 }
+
+/// A loop counter re-seeded from packed integer fields after an intervening conditional.
+const PACKED_COUNTER_REINITIALIZATION: &str = r#"<?php
+packed class Cell { public int $first; public int $last; }
+
+function probe(int $count, bool $flag): void
+{
+    $cells = buffer_new<Cell>(2);
+    $cells[0]->first = 1; $cells[0]->last = 2;
+    $cells[1]->first = 4; $cells[1]->last = 5;
+    for ($box = 0; $box < $count; $box++) {
+        for ($row = $cells[$box]->first; $row <= $cells[$box]->last; $row++) { echo $row; }
+    }
+    if ($flag) { echo "|"; }
+    for ($box = $count - 1; $box >= 0; $box--) {
+        for ($row = $cells[$box]->first; $row <= $cells[$box]->last; $row++) { echo $row; }
+    }
+    buffer_free($cells);
+    echo "\n";
+}
+
+probe(2, true);
+probe(0, false);
+"#;
+
+/// Verifies the reported Ivory grid shape compiles and reuses the counter with the optimizer on:
+/// it was rejected with `cannot reassign $row from int|float to int|null`.
+#[test]
+fn test_packed_field_counter_reinitializes_after_a_conditional() {
+    assert_eq!(compile_and_run(PACKED_COUNTER_REINITIALIZATION), "1245|4512\n\n");
+}
+
+/// Verifies the same counter reuse without the EIR optimizer.
+#[test]
+fn test_packed_field_counter_reinitializes_after_a_conditional_without_ir_opt() {
+    without_ir_opt(|| {
+        assert_eq!(compile_and_run(PACKED_COUNTER_REINITIALIZATION), "1245|4512\n\n");
+    });
+}

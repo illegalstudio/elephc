@@ -100,7 +100,8 @@ pub(in crate::codegen::lower_inst) fn lower_dynamic_object_new(
     // the eval bridge instead of dying on the factory fatal.
     let eval_bridge_available = builtins::has_eval_context(ctx)
         || ctx.module.required_runtime_features.eval_bridge;
-    if candidates.is_empty() && !eval_bridge_available {
+    let visibility_refusals = dynamic_new_visibility_refusals(ctx, &required_parent);
+    if candidates.is_empty() && !eval_bridge_available && visibility_refusals.is_empty() {
         return Err(CodegenIrError::unsupported(format!(
             "dynamic object construction for {} without EIR-lowered candidates",
             required_parent
@@ -140,6 +141,14 @@ pub(in crate::codegen::lower_inst) fn lower_dynamic_object_new(
             label
         })
         .collect::<Vec<_>>();
+    let visibility_refusal_labels = visibility_refusals
+        .iter()
+        .map(|refusal| {
+            let label = ctx.next_label("dynamic_new_refused");
+            emit_compare_dynamic_new_class_id(ctx, refusal.class_id, &label);
+            label
+        })
+        .collect::<Vec<_>>();
     abi::emit_jump(ctx.emitter, &unmatched_label);
 
     // Each arm diverges into the unwinder with php's `ArgumentCountError`; see
@@ -175,6 +184,19 @@ pub(in crate::codegen::lower_inst) fn lower_dynamic_object_new(
         ctx.emitter.label(&eval_miss_label);
     }
     emit_dynamic_new_fatal(ctx, &required_parent);
+
+    for (refusal, label) in visibility_refusals.iter().zip(visibility_refusal_labels.iter()) {
+        ctx.emitter.label(label);
+        abi::emit_release_temporary_stack(ctx.emitter, 16);
+        if eval_bridge_available {
+            abi::emit_release_temporary_stack(ctx.emitter, 16);
+        }
+        super::super::exceptions::emit_error_at(
+            ctx,
+            &refusal.message,
+            refusal_location.clone(),
+        );
+    }
 
     for (candidate, label) in candidates.iter().zip(case_labels.iter()) {
         ctx.emitter.label(label);
@@ -258,6 +280,8 @@ pub(in crate::codegen::lower_inst) fn lower_dynamic_object_new_mixed(
         Some(Immediate::I64(count)) => Some(count as usize),
         _ => None,
     };
+    let reflection_construction =
+        matches!(inst.immediate, Some(Immediate::ReflectionConstruction));
     let uses_runtime_arg_container =
         matches!(inst.immediate, Some(Immediate::Bool(true))) || static_arg_count.is_some();
     let constructor_arg_container = if uses_runtime_arg_container {
@@ -295,6 +319,7 @@ pub(in crate::codegen::lower_inst) fn lower_dynamic_object_new_mixed(
             ctx,
             (!uses_runtime_arg_container).then_some(constructor_args.len()),
             inst,
+            reflection_construction,
         )?
     };
     // The ladder is outlined (see `outlined_dynamic_new`): the shared helper holds every candidate
@@ -426,6 +451,7 @@ pub(in crate::codegen::lower_inst) fn lower_dynamic_object_new_mixed(
             constructor_args.len(),
             inst.span.map_or(0, |span| span.source_line()),
             &matched,
+            reflection_construction,
         )
     };
     let refusal_labels = refusals
@@ -532,18 +558,35 @@ pub(in crate::codegen::lower_inst) fn lower_dynamic_object_new_mixed(
     for (refusal, label) in refusals.iter().zip(refusal_labels.iter()) {
         ctx.emitter.label(label);
         abi::emit_release_temporary_stack(ctx.emitter, 16);
-        if refusal.argument_count {
-            super::super::exceptions::emit_argument_count_error(
-                ctx,
-                &refusal.message,
-                refusal_location.clone(),
-            );
-        } else {
-            super::super::exceptions::emit_type_error_at(
-                ctx,
-                &refusal.message,
-                refusal_location.clone(),
-            );
+        match refusal.kind {
+            DynamicNewRefusalKind::ArgumentCount => {
+                super::super::exceptions::emit_argument_count_error(
+                    ctx,
+                    &refusal.message,
+                    refusal_location.clone(),
+                );
+            }
+            DynamicNewRefusalKind::TypeError => {
+                super::super::exceptions::emit_type_error_at(
+                    ctx,
+                    &refusal.message,
+                    refusal_location.clone(),
+                );
+            }
+            DynamicNewRefusalKind::Error => {
+                super::super::exceptions::emit_error_at(
+                    ctx,
+                    &refusal.message,
+                    refusal_location.clone(),
+                );
+            }
+            DynamicNewRefusalKind::Reflection => {
+                super::super::exceptions::emit_reflection_exception_at(
+                    ctx,
+                    &refusal.message,
+                    refusal_location.clone(),
+                );
+            }
         }
     }
 
@@ -613,6 +656,7 @@ pub(in crate::codegen::lower_inst) fn lower_dynamic_object_new_without_construct
     abi::emit_push_result_value(ctx.emitter, &PhpType::Str);
 
     let fallback_label = ctx.next_label("dynamic_new_no_ctor_mixed_fallback");
+    super::constructorless_refusals::emit_constructorless_abstract_refusals(ctx, inst);
     let candidates = dynamic_new_without_constructor_mixed_candidates(ctx, inst)?;
     let (table_candidates, candidates) =
         super::dynamic_new_table::split_table_candidates(ctx, candidates, false);
@@ -653,12 +697,16 @@ pub(in crate::codegen::lower_inst) fn lower_dynamic_object_new_without_construct
     ctx.emitter.label(&fallback_label);
     // A class only the interpreter declared has no compiled case: the polyfill-deepclone
     // rebuild of a cached Doctrine `ParserResult` reached here and died "Class not found".
-    if builtins::has_eval_context(ctx) || ctx.module.required_runtime_features.eval_bridge {
-        let eval_miss_label = ctx.next_label("dynamic_new_no_ctor_mixed_eval_miss");
-        builtins::lower_eval_object_new_without_constructor_fallback(ctx, inst, &eval_miss_label)?;
+    if builtins::has_eval_context(ctx)
+        || ctx.module.required_runtime_features.eval_bridge
+        || crate::codegen::eval_callable_helpers::module_needs_eval_callable_descriptor_support(ctx.module)
+    {
+        let missing = ctx.next_label("dynamic_new_no_ctor_eval_missing");
+        let native_factory = matches!(inst.immediate, Some(Immediate::Bool(true)));
+        builtins::lower_eval_constructorless_fallback(ctx, &missing, native_factory)?;
         ctx.store_result_value(result)?;
         abi::emit_jump(ctx.emitter, &done_label);
-        ctx.emitter.label(&eval_miss_label);
+        ctx.emitter.label(&missing);
     }
     emit_dynamic_new_class_not_found_fatal(ctx);
 

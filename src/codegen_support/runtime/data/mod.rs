@@ -257,6 +257,8 @@ pub(crate) const NOT_SERIALIZABLE_BUILTIN_CLASSES: &[&str] = &[
     "WeakReference",
     "WeakMap",
     "SensitiveParameterValue",
+    "SimpleXMLElement",
+    "SimpleXMLIterator",
     "CURLFile",
     "Closure",
     "CurlHandle",
@@ -302,6 +304,8 @@ pub(crate) const NOT_SERIALIZABLE_BUILTIN_CLASSES: &[&str] = &[
     "SplFileInfo",
     "SplFileObject",
     "SplTempFileObject",
+    "tidy",
+    "tidyNode",
     "XMLParser",
 ];
 /// Prefix for PHP's catchable Error when a name and its positional alias both arrive.

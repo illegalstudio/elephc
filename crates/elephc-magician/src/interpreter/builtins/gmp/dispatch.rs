@@ -46,11 +46,13 @@ pub(in crate::interpreter) fn eval_gmp_values_result(
     let strict = values.bool_value(false)?;
     let mut arguments = Vec::with_capacity(evaluated_args.len() + 1);
     arguments.push(EvaluatedCallArg {
+        evaluation_owner: None,
         name: None,
         value: strict.borrowed(),
         ref_target: None,
     });
     arguments.extend(evaluated_args.iter().copied().map(|value| EvaluatedCallArg {
+        evaluation_owner: None,
         name: None,
         value: value.borrowed(),
         ref_target: None,

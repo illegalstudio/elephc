@@ -34,6 +34,25 @@
 
 use crate::support::compile_and_run;
 
+/// Boxed subjects use runtime class and interface metadata without requiring an eval context.
+#[test]
+fn test_is_a_mixed_subject_literal_target_without_eval() {
+    let out = compile_and_run(r#"<?php
+interface MixedRelationMarker {}
+class MixedRelationBase implements MixedRelationMarker {}
+class MixedRelationChild extends MixedRelationBase {}
+function mixedRelationProbe(mixed $value): void {
+    echo (int)is_a($value, 'MixedRelationBase'), (int)is_a($value, 'MixedRelationMarker');
+    echo (int)is_a($value, 'MixedRelationChild'), (int)is_a($value, 'MissingMixedRelation');
+    echo (int)is_a($value, '\\mIxEdReLaTiOnBaSe'), '|';
+}
+mixedRelationProbe(new MixedRelationChild()); mixedRelationProbe(new MixedRelationBase());
+mixedRelationProbe(new stdClass()); mixedRelationProbe('MixedRelationChild');
+mixedRelationProbe(null); mixedRelationProbe(42);
+"#);
+    assert_eq!(out, "11101|11001|00000|00000|00000|00000|");
+}
+
 /// Verifies the six rows the issue was filed with, plus the two the object form already got
 /// right, so a regression on either side is visible.
 #[test]

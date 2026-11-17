@@ -1,15 +1,16 @@
 //! Purpose:
 //! Emits the `__rt_mixed_array_get` runtime helper for `$mixed[$key]` access.
-//! Routes boxed strings and JSON-style values to string-offset, indexed-array, hash,
-//! stdClass, or `ArrayAccess` lookup paths.
+//! Routes boxed JSON-style values to string, indexed-array, hash, stdClass, or `ArrayAccess` paths.
 //!
 //! Called from:
 //! - `crate::codegen_support::runtime::objects::emit_mixed_array_get()`.
 //!
 //! Key details:
 //! - The key tuple matches `emit_normalized_hash_key`: int keys use `key_hi = -1`.
+//! - Mode bit zero enables read warnings; bit one selects attached internal SPL storage.
 //! - Callers pass an explicit warning flag so normal reads diagnose missing/null
 //!   offsets while `isset()`/`??` keep the same helper quiet.
+//! - Boxed strings share PHP's negative-index, numeric-string, missing-offset, and TypeError rules.
 //! - A container payload that is null or the in-band null-container sentinel
 //!   (`NULL_SENTINEL`, materialized by a missed read forwarded through a ternary merge)
 //!   is treated as an absent container and also returns `Mixed(null)` (issue #585).
@@ -47,6 +48,39 @@ pub fn emit_mixed_array_get(emitter: &mut Emitter) {
     emit_mixed_array_get_aarch64(emitter);
 }
 
+/// Selects a trusted attached getter for write context, retaining the ordinary getter fallback.
+fn emit_offset_get_table(emitter: &mut Emitter, stack_bias: usize) {
+    match emitter.target.arch {
+        Arch::AArch64 => {
+            emitter.instruction(&format!("ldr x12, [sp, #{}]", 40 + stack_bias)); // recover mode above any published operand-owner record
+            emitter.instruction("tbz x12, #1, 976f");                           // ordinary reads always use the public offset getter
+            abi::emit_symbol_address(emitter, "x12", "_class_offsetget_forwrite_ptrs");
+            emitter.instruction("ldr x12, [x12, x11, lsl #3]");                 // only inherited internal SPL getters have an attached entry
+            emitter.instruction("cbnz x12, 977f");                              // a trusted private selector already supplies the final method pointer
+        }
+        Arch::X86_64 => {
+            emitter.instruction("test QWORD PTR [rbp - 32], 2");                // write fetches request the private attached selector
+            emitter.instruction("jz 976f");                                     // reads and quiet probes use public offsetGet
+            abi::emit_symbol_address(emitter, "r12", "_class_offsetget_forwrite_ptrs");
+            emitter.instruction("mov r12, QWORD PTR [r12 + r11 * 8]");          // user overrides have zero entries and keep their ordinary behavior
+            emitter.instruction("test r12, r12");                               // test the selected attached entry
+            emitter.instruction("jnz 977f");                                    // skip public lookup when trusted native storage is selected
+        }
+    }
+    emitter.label("976");
+    match emitter.target.arch {
+        Arch::AArch64 => abi::emit_symbol_address(emitter, "x12", "_class_offsetget_ptrs"),
+        Arch::X86_64 => abi::emit_symbol_address(emitter, "r12", "_class_offsetget_ptrs"),
+    }
+    match emitter.target.arch {
+        Arch::AArch64 => emitter.instruction("ldr x12, [x12, x11, lsl #3]"),    // resolve the concrete or inherited public offset getter
+        Arch::X86_64 => {
+            emitter.instruction("mov r12, QWORD PTR [r12 + r11 * 8]");          // resolve the concrete or inherited public offset getter
+        }
+    }
+    emitter.label("977");
+}
+
 /// Emits `__rt_mixed_array_get` for ARM64 (AAPCS64 ABI).
 ///
 /// Inputs arrive in `x0` = mixed_ptr, `x1` = key_lo, `x2` = key_hi,
@@ -54,7 +88,7 @@ pub fn emit_mixed_array_get(emitter: &mut Emitter) {
 /// Returns an owned pointer to a boxed `Mixed` cell in `x0`.
 ///
 /// The function dispatches on the mixed value's tag:
-/// - Tag 1 → string-offset path
+/// - Tag 1 → string offset path
 /// - Tag 4 → indexed array path
 /// - Tag 5 → associative array path
 /// - Tag 6 → stdClass object path
@@ -91,7 +125,7 @@ fn emit_mixed_array_get_aarch64(emitter: &mut Emitter) {
     emitter.instruction("cbz x0, __rt_mixed_array_get_null_container");         // null Mixed pointers behave as PHP null receivers
     emitter.instruction("ldr x9, [x0]");                                        // load tag from mixed[0]
     emitter.instruction("cmp x9, #1");                                          // tag = 1 (string)?
-    emitter.instruction("b.eq __rt_mixed_array_get_string");                    // read string offsets from the boxed pointer/length pair
+    emitter.instruction("b.eq __rt_mixed_array_get_string");                    // read one byte through PHP's string-offset rules
     emitter.instruction("cmp x9, #4");                                          // tag = 4 (indexed array)?
     emitter.instruction("b.eq __rt_mixed_array_get_indexed");                   // branch on the current JSON decoder condition
     emitter.instruction("cmp x9, #5");                                          // tag = 5 (associative array)?
@@ -102,43 +136,60 @@ fn emit_mixed_array_get_aarch64(emitter: &mut Emitter) {
     emitter.instruction("b.eq __rt_mixed_array_get_null_container");            // null receivers warn only for ordinary reads
     emitter.instruction("b __rt_mixed_array_get_null");                         // any other payload → null
 
-    // String: integer keys select one byte; negative offsets are relative to the end.
+    // String: accept integer keys and integer-form numeric strings, then return one owned byte.
     emitter.label("__rt_mixed_array_get_string");
-    emitter.instruction("ldr x10, [sp, #16]");                                  // load the normalized key high word
-    emitter.instruction("cmn x10, #1");                                         // integer keys carry the -1 high-word sentinel
-    emitter.instruction("b.ne __rt_mixed_array_get_string_key");                // a non-integer string offset is a TypeError on a read
-    emitter.instruction("ldr x10, [x0, #8]");                                   // load the boxed string pointer
-    emitter.instruction("ldr x11, [x0, #16]");                                  // load the boxed string byte length
-    emitter.instruction("ldr x12, [sp, #8]");                                   // load the requested integer offset
-    emitter.instruction("cmp x12, #0");                                         // test whether the offset is relative to the end
-    emitter.instruction("b.ge __rt_mixed_array_get_string_non_negative");       // preserve non-negative offsets
-    emitter.instruction("add x12, x11, x12");                                   // convert a negative offset to length plus offset
-    emitter.instruction("cmp x12, #0");                                         // reject offsets that still precede the string
-    emitter.instruction("b.lt __rt_mixed_array_get_string_empty");              // out-of-bounds string reads return an empty string
+    emitter.instruction("ldr x9, [sp, #16]");                                   // reload the normalized key high word
+    emitter.instruction("cmn x9, #1");                                          // does key_hi carry the integer-key sentinel?
+    emitter.instruction("b.eq __rt_mixed_array_get_string_index");              // integer keys need no further validation
+    emitter.instruction("ldr x0, [sp, #8]");                                    // pass the string key pointer to the bounded numeric parser
+    emitter.instruction("mov x1, x9");                                          // pass the string key byte length
+    emitter.instruction("bl __rt_str_numeric_value");                           // x0=number tag, x1=value, x2=status
+    emitter.instruction("cbnz x2, __rt_mixed_array_get_string_key_error");      // a prefix or non-numeric key is not a string offset
+    emitter.instruction("cbnz x0, __rt_mixed_array_get_string_key_error");      // float-form numeric strings are not integer offsets
+    emitter.instruction("str x1, [sp, #8]");                                    // retain the parsed integer offset in the key slot
+    emitter.label("__rt_mixed_array_get_string_index");
+    emitter.instruction("ldr x12, [sp, #8]");                                   // x12 = requested integer offset
+    emitter.instruction("ldr x10, [sp, #0]");                                   // reload the concrete Mixed string cell
+    emitter.instruction("ldr x1, [x10, #8]");                                   // x1 = string byte pointer
+    emitter.instruction("ldr x2, [x10, #16]");                                  // x2 = string byte length
+    emitter.instruction("cmp x12, #0");                                         // check whether the requested string offset is negative
+    emitter.instruction("b.ge __rt_mixed_array_get_string_non_negative");       // keep non-negative offsets unchanged
+    emitter.instruction("add x12, x2, x12");                                    // convert negative offsets to length plus offset
+    emitter.instruction("cmp x12, #0");                                         // does the adjusted offset still precede the string?
+    emitter.instruction("b.lt __rt_mixed_array_get_string_missing");            // out-of-range negative offsets return an empty string
     emitter.label("__rt_mixed_array_get_string_non_negative");
-    emitter.instruction("cmp x12, x11");                                        // compare the normalized offset with the byte length
-    emitter.instruction("b.ge __rt_mixed_array_get_string_empty");              // offsets at or beyond the end return an empty string
-    emitter.instruction("add x1, x10, x12");                                    // point at the selected byte
-    emitter.instruction("mov x2, #1");                                          // an in-bounds string offset has one byte
-    emitter.instruction("b __rt_mixed_array_get_string_box");                   // box a detached one-byte string result
-    emitter.label("__rt_mixed_array_get_string_empty");
-    // A QUIET read is `isset()`/`??` asking whether the offset exists, and an out-of-range
-    // string offset does not: `isset($mixed[$i])` answered true for every offset, which is how
-    // `PhpDumper::export()` appended `.''` to every path that ends exactly at the target dir.
-    emitter.instruction("ldr x13, [sp, #40]");                                  // reload whether this read reports missing offsets
-    emitter.instruction("cbz x13, __rt_mixed_array_get_null");                  // quiet reads see an absent offset as null
-    emitter.instruction("ldr x0, [sp, #8]");                                    // the requested offset, as written (php prints it unnormalized)
-    emitter.instruction("bl __rt_warn_string_offset");                          // Warning: Uninitialized string offset N
-    emitter.instruction("ldr x0, [sp, #0]");                                    // reload the concrete string receiver the warning call spent
-    emitter.instruction("ldr x10, [x0, #8]");                                   // reload the boxed string pointer
-    emitter.instruction("mov x1, x10");                                         // preserve a valid source pointer for the empty string
-    emitter.instruction("mov x2, #0");                                          // out-of-bounds string offsets stringify to empty
-    emitter.label("__rt_mixed_array_get_string_box");
-    emitter.instruction("mov x0, #1");                                          // runtime tag 1 identifies a string payload
-    emitter.instruction("bl __rt_mixed_from_value");                            // persist and box the selected byte for the caller
+    emitter.instruction("cmp x12, x2");                                         // compare the requested offset against the string length
+    emitter.instruction("b.ge __rt_mixed_array_get_string_missing");            // offsets at or beyond length are absent
+    emitter.instruction("add x1, x1, x12");                                     // point the boxed result at the selected byte
+    emitter.instruction("mov x2, #1");                                          // an in-bounds string offset contains one byte
+    emitter.instruction("mov x0, #1");                                          // runtime value tag 1 = string
+    emitter.instruction("bl __rt_mixed_from_value");                            // persist and box the selected byte
     emitter.instruction("ldp x29, x30, [sp, #24]");                             // restore frame pointer and return address
     emitter.instruction("add sp, sp, #48");                                     // release the local frame
-    emitter.instruction("ret");                                                 // return the owned boxed string in x0
+    emitter.instruction("ret");                                                 // return the owned Mixed string in x0
+    emitter.label("__rt_mixed_array_get_string_missing");
+    emitter.instruction("ldr x9, [sp, #40]");                                   // reload whether ordinary read warnings are enabled
+    emitter.instruction("tbz x9, #0, __rt_mixed_array_get_null");               // quiet reads report an absent offset as null
+    emitter.instruction("ldr x0, [sp, #8]");                                    // reload the original offset for PHP's warning
+    emitter.instruction("bl __rt_warn_string_offset");                          // emit the uninitialized string-offset warning
+    emitter.instruction("mov x0, #1");                                          // runtime value tag 1 = string
+    emitter.instruction("mov x1, #0");                                          // an ordinary missing read returns the empty string
+    emitter.instruction("mov x2, #0");                                          // the empty string contains no bytes
+    emitter.instruction("bl __rt_mixed_from_value");                            // box an owned empty-string result
+    emitter.instruction("ldp x29, x30, [sp, #24]");                             // restore frame pointer and return address
+    emitter.instruction("add sp, sp, #48");                                     // release the local frame
+    emitter.instruction("ret");                                                 // return the owned Mixed empty string in x0
+    emitter.label("__rt_mixed_array_get_string_key_error");
+    emitter.instruction("ldr x9, [sp, #40]");                                   // recover the read or write-fetch mode before diagnosing the key
+    emitter.instruction("cbz x9, __rt_mixed_array_get_null");                   // existence and coalescing probes treat nonnumeric string keys as absent
+    emitter.instruction("ldp x29, x30, [sp, #24]");                             // restore frame pointer and return address before throwing
+    emitter.instruction("add sp, sp, #48");                                     // release the local frame before the non-returning throw
+    crate::codegen_support::runtime::arrays::value_error::emit_throw_static_message_aarch64(
+        emitter,
+        "_spl_type_error_class_id",
+        "_string_offset_type_error_msg",
+        STRING_OFFSET_TYPE_ERROR_MSG_LEN,
+    );
 
     // Indexed array: integer key only. key_hi == -1 marks int keys.
     emitter.label("__rt_mixed_array_get_indexed");
@@ -232,13 +283,13 @@ fn emit_mixed_array_get_aarch64(emitter: &mut Emitter) {
     emitter.instruction("ret");                                                 // return Mixed* in x0
     emitter.label("__rt_mixed_array_get_indexed_missing");
     emitter.instruction("ldr x9, [sp, #40]");                                   // reload whether ordinary read warnings are enabled
-    emitter.instruction("cbz x9, __rt_mixed_array_get_null");                   // `isset()`/`??` suppress undefined-key warnings
+    emitter.instruction("tbz x9, #0, __rt_mixed_array_get_null");               // `isset()`/`??` suppress undefined-key warnings
     emitter.instruction("ldr x0, [sp, #8]");                                    // reload the missing integer key for the PHP warning
     emitter.instruction("bl __rt_warn_undefined_array_key_int");                // emit or suppress the undefined-array-key warning
     emitter.instruction("b __rt_mixed_array_get_null");                         // return boxed Mixed(null) after the warning
     emitter.label("__rt_mixed_array_get_indexed_missing_string");
     emitter.instruction("ldr x9, [sp, #40]");                                   // reload whether ordinary read warnings are enabled
-    emitter.instruction("cbz x9, __rt_mixed_array_get_null");                   // `isset()`/`??` suppress undefined-key warnings
+    emitter.instruction("tbz x9, #0, __rt_mixed_array_get_null");               // `isset()`/`??` suppress undefined-key warnings
     emitter.instruction("ldr x1, [sp, #8]");                                    // reload the missing string key pointer
     emitter.instruction("ldr x2, [sp, #16]");                                   // reload the missing string key length
     emitter.instruction("bl __rt_warn_undefined_array_key_str");                // emit the PHP warning for a missing string key
@@ -281,7 +332,7 @@ fn emit_mixed_array_get_aarch64(emitter: &mut Emitter) {
 
     emitter.label("__rt_mixed_array_get_assoc_missing");
     emitter.instruction("ldr x9, [sp, #40]");                                   // reload whether ordinary read warnings are enabled
-    emitter.instruction("cbz x9, __rt_mixed_array_get_null");                   // `isset()`/`??` suppress undefined-key warnings
+    emitter.instruction("tbz x9, #0, __rt_mixed_array_get_null");               // `isset()`/`??` suppress undefined-key warnings
     emitter.instruction("ldr x9, [sp, #16]");                                   // reload the normalized key high word
     emitter.instruction("cmn x9, #1");                                          // does the missing key use the integer-key sentinel?
     emitter.instruction("b.eq __rt_mixed_array_get_assoc_missing_int");         // integer keys use the decimal warning formatter
@@ -386,8 +437,7 @@ fn emit_mixed_array_get_aarch64(emitter: &mut Emitter) {
     abi::emit_load_symbol_to_reg(emitter, "x12", "_class_iface_method_count", 0);
     emitter.instruction("cmp x11, x12");                                        // is the id within the dense table?
     emitter.instruction("b.hs __rt_mixed_array_get_not_indexable");             // out-of-range ids have no entry
-    abi::emit_symbol_address(emitter, "x12", "_class_offsetget_ptrs");
-    emitter.instruction("ldr x12, [x12, x11, lsl #3]");                         // resolve the concrete or inherited offsetGet
+    emit_offset_get_table(emitter, 0);
     emitter.instruction("cbz x12, __rt_mixed_array_get_not_indexable");         // 0 means the class is not ArrayAccess at all
     emitter.instruction("str x10, [sp, #0]");                                   // save unboxed receiver while boxing the key
     emitter.instruction("ldr x11, [sp, #16]");                                  // reload normalized key high word
@@ -410,9 +460,8 @@ fn emit_mixed_array_get_aarch64(emitter: &mut Emitter) {
     emitter.instruction("ldr x1, [sp, #56]");                                   // pass boxed offset above the 48-byte cleanup record
     emitter.instruction("ldr x0, [sp, #48]");                                   // pass the receiver above the same cleanup record
     emitter.instruction("ldr x11, [x0]");                                       // reload class id, clobbered across the boxing call
-    emitter.instruction("str x11, [sp, #88]");                                  // keep the class id to box a narrowed return (the warning flag, above the cleanup record, is spent)
-    abi::emit_symbol_address(emitter, "x12", "_class_offsetget_ptrs");
-    emitter.instruction("ldr x12, [x12, x11, lsl #3]");                         // re-resolve offsetGet for the same class
+    emit_offset_get_table(emitter, 48);
+    emitter.instruction("str x11, [sp, #88]");                                  // keep the class id to box a narrowed return (the mode word, read just above, is spent)
     emitter.instruction("blr x12");                                             // read through PHP's ArrayAccess::offsetGet
     // -- box a narrowed return (`offsetGet(): self`, `: string`, ...) like a Mixed one --
     // The 48-byte cleanup record is still linked, so the local frame sits 48 bytes higher.
@@ -498,7 +547,7 @@ fn emit_mixed_array_get_aarch64(emitter: &mut Emitter) {
 
     emitter.label("__rt_mixed_array_get_null_container");
     emitter.instruction("ldr x9, [sp, #40]");                                   // reload whether ordinary read warnings are enabled
-    emitter.instruction("cbz x9, __rt_mixed_array_get_null");                   // quiet read contexts suppress the null-offset warning
+    emitter.instruction("tbz x9, #0, __rt_mixed_array_get_null");               // quiet read contexts suppress the null-offset warning
     emitter.instruction("bl __rt_warn_array_offset_on_null");                   // emit PHP's warning for indexing a null receiver
     emitter.label("__rt_mixed_array_get_null");
     emitter.instruction("mov x0, #8");                                          // tag = 8 (null)
@@ -509,19 +558,6 @@ fn emit_mixed_array_get_aarch64(emitter: &mut Emitter) {
     emitter.instruction("add sp, sp, #48");                                     // release the local frame
     emitter.instruction("ret");                                                 // return Mixed* in x0
 
-    // A non-integer string offset read from a string receiver is php's TypeError; quiet reads
-    // (`isset()`, `??`) keep answering null.
-    emitter.label("__rt_mixed_array_get_string_key");
-    emitter.instruction("ldr x9, [sp, #40]");                                   // reload whether ordinary read errors are enabled
-    emitter.instruction("cbz x9, __rt_mixed_array_get_null");                   // quiet read contexts answer null
-    emitter.instruction("ldp x29, x30, [sp, #24]");                             // restore frame pointer and return address
-    emitter.instruction("add sp, sp, #48");                                     // release the local frame before throwing
-    crate::codegen_support::runtime::arrays::value_error::emit_throw_static_message_aarch64(
-        emitter,
-        "_spl_type_error_class_id",
-        "_string_offset_type_error_msg",
-        STRING_OFFSET_TYPE_ERROR_MSG_LEN,
-    );
 }
 
 /// Emits `__rt_mixed_array_get` for x86_64 (SysV ABI).
@@ -531,7 +567,7 @@ fn emit_mixed_array_get_aarch64(emitter: &mut Emitter) {
 /// Returns an owned pointer to a boxed `Mixed` cell in `rax`.
 ///
 /// Same dispatch and return semantics as `emit_mixed_array_get_aarch64`:
-/// - Tag 4 → indexed array, tag 5 → associative array, tag 6 → object (stdClass, an SPL
+/// - Tag 1 → string offset, tag 4 → indexed array, tag 5 → associative array, tag 6 → object (stdClass, an SPL
 ///   container, or any PHP `ArrayAccess`)
 /// - Integer keys on indexed arrays required (`key_hi == -1`); string keys return null
 /// - Objects: only `stdClass` with string key supported; int keys return null
@@ -560,7 +596,7 @@ fn emit_mixed_array_get_x86_64(emitter: &mut Emitter) {
     emitter.instruction("je __rt_mixed_array_get_null_container");              // null Mixed pointers behave as PHP null receivers
     emitter.instruction("mov r10, QWORD PTR [rdi]");                            // load tag from mixed[0]
     emitter.instruction("cmp r10, 1");                                          // tag = 1 (string)?
-    emitter.instruction("je __rt_mixed_array_get_string");                      // read string offsets from the boxed pointer/length pair
+    emitter.instruction("je __rt_mixed_array_get_string");                      // read one byte through PHP's string-offset rules
     emitter.instruction("cmp r10, 4");                                          // tag = 4 (indexed array)?
     emitter.instruction("je __rt_mixed_array_get_indexed");                     // branch on the current JSON decoder condition
     emitter.instruction("cmp r10, 5");                                          // tag = 5 (associative array)?
@@ -571,38 +607,61 @@ fn emit_mixed_array_get_x86_64(emitter: &mut Emitter) {
     emitter.instruction("je __rt_mixed_array_get_null_container");              // null receivers warn only for ordinary reads
     emitter.instruction("jmp __rt_mixed_array_get_null");                       // any other payload → null
 
+    // String: accept integer keys and integer-form numeric strings, then return one owned byte.
     emitter.label("__rt_mixed_array_get_string");
-    emitter.instruction("cmp QWORD PTR [rbp - 24], -1");                        // integer keys carry the -1 high-word sentinel
-    emitter.instruction("jne __rt_mixed_array_get_string_key");                 // a non-integer string offset is a TypeError on a read
-    emitter.instruction("mov r10, QWORD PTR [rdi + 8]");                        // load the boxed string pointer
-    emitter.instruction("mov r11, QWORD PTR [rdi + 16]");                       // load the boxed string byte length
-    emitter.instruction("mov r8, QWORD PTR [rbp - 16]");                        // load the requested integer offset
-    emitter.instruction("cmp r8, 0");                                           // test whether the offset is relative to the end
-    emitter.instruction("jge __rt_mixed_array_get_string_non_negative");        // preserve non-negative offsets
-    emitter.instruction("add r8, r11");                                         // convert a negative offset to length plus offset
-    emitter.instruction("cmp r8, 0");                                           // reject offsets that still precede the string
-    emitter.instruction("jl __rt_mixed_array_get_string_empty");                // out-of-bounds string reads return an empty string
+    emitter.instruction("cmp QWORD PTR [rbp - 24], -1");                        // does key_hi carry the integer-key sentinel?
+    emitter.instruction("je __rt_mixed_array_get_string_index");                // integer keys need no further validation
+    emitter.instruction("mov rdi, QWORD PTR [rbp - 16]");                       // pass the string key pointer to the bounded numeric parser
+    emitter.instruction("mov rsi, QWORD PTR [rbp - 24]");                       // pass the string key byte length
+    emitter.instruction("call __rt_str_numeric_value");                         // rax=number tag, rdi=value, rdx=status
+    emitter.instruction("test rdx, rdx");                                       // is the complete key numeric?
+    emitter.instruction("jnz __rt_mixed_array_get_string_key_error");           // a prefix or non-numeric key is not a string offset
+    emitter.instruction("test rax, rax");                                       // did the key parse as an integer rather than a float?
+    emitter.instruction("jnz __rt_mixed_array_get_string_key_error");           // float-form numeric strings are not integer offsets
+    emitter.instruction("mov QWORD PTR [rbp - 16], rdi");                       // retain the parsed integer offset in the key slot
+    emitter.label("__rt_mixed_array_get_string_index");
+    emitter.instruction("mov r8, QWORD PTR [rbp - 16]");                        // r8 = requested integer offset
+    emitter.instruction("mov r10, QWORD PTR [rbp - 8]");                        // reload the concrete Mixed string cell
+    emitter.instruction("mov rdi, QWORD PTR [r10 + 8]");                        // rdi = string byte pointer
+    emitter.instruction("mov rsi, QWORD PTR [r10 + 16]");                       // rsi = string byte length
+    emitter.instruction("cmp r8, 0");                                           // check whether the requested string offset is negative
+    emitter.instruction("jge __rt_mixed_array_get_string_non_negative");        // keep non-negative offsets unchanged
+    emitter.instruction("add r8, rsi");                                         // convert negative offsets to length plus offset
+    emitter.instruction("cmp r8, 0");                                           // does the adjusted offset still precede the string?
+    emitter.instruction("jl __rt_mixed_array_get_string_missing");              // out-of-range negative offsets return an empty string
     emitter.label("__rt_mixed_array_get_string_non_negative");
-    emitter.instruction("cmp r8, r11");                                         // compare the normalized offset with the byte length
-    emitter.instruction("jge __rt_mixed_array_get_string_empty");               // offsets at or beyond the end return an empty string
-    emitter.instruction("add r10, r8");                                         // point at the selected byte
-    emitter.instruction("mov rsi, 1");                                          // an in-bounds string offset has one byte
-    emitter.instruction("jmp __rt_mixed_array_get_string_box");                 // box a detached one-byte string result
-    emitter.label("__rt_mixed_array_get_string_empty");
-    emitter.instruction("cmp QWORD PTR [rbp - 32], 0");                         // does this read report missing offsets?
-    emitter.instruction("je __rt_mixed_array_get_null");                        // quiet isset()/?? reads see an absent offset as null
-    emitter.instruction("mov rax, QWORD PTR [rbp - 16]");                       // the requested offset, as written (php prints it unnormalized)
-    emitter.instruction("call __rt_warn_string_offset");                        // Warning: Uninitialized string offset N
-    emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // reload the concrete string receiver the warning call spent
-    emitter.instruction("mov r10, QWORD PTR [rdi + 8]");                        // reload the boxed string pointer
-    emitter.instruction("xor esi, esi");                                        // out-of-bounds string offsets stringify to empty
-    emitter.label("__rt_mixed_array_get_string_box");
-    emitter.instruction("mov rax, 1");                                          // runtime tag 1 identifies a string payload
-    emitter.instruction("mov rdi, r10");                                        // pass the selected byte pointer to the boxing helper
-    emitter.instruction("call __rt_mixed_from_value");                          // persist and box the selected byte for the caller
+    emitter.instruction("cmp r8, rsi");                                         // compare the requested offset against the string length
+    emitter.instruction("jge __rt_mixed_array_get_string_missing");             // offsets at or beyond length are absent
+    emitter.instruction("add rdi, r8");                                         // point the boxed result at the selected byte
+    emitter.instruction("mov rsi, 1");                                          // an in-bounds string offset contains one byte
+    emitter.instruction("mov rax, 1");                                          // runtime value tag 1 = string
+    emitter.instruction("call __rt_mixed_from_value");                          // persist and box the selected byte
     emitter.instruction("mov rsp, rbp");                                        // restore stack pointer
     emitter.instruction("pop rbp");                                             // restore caller frame pointer
-    emitter.instruction("ret");                                                 // return the owned boxed string in rax
+    emitter.instruction("ret");                                                 // return the owned Mixed string in rax
+    emitter.label("__rt_mixed_array_get_string_missing");
+    emitter.instruction("test QWORD PTR [rbp - 32], 1");                        // are ordinary read warnings enabled?
+    emitter.instruction("je __rt_mixed_array_get_null");                        // quiet reads report an absent offset as null
+    emitter.instruction("mov rax, QWORD PTR [rbp - 16]");                       // reload the original offset for PHP's warning
+    emitter.instruction("call __rt_warn_string_offset");                        // emit the uninitialized string-offset warning
+    emitter.instruction("mov rax, 1");                                          // runtime value tag 1 = string
+    emitter.instruction("xor edi, edi");                                        // an ordinary missing read returns the empty string
+    emitter.instruction("xor esi, esi");                                        // the empty string contains no bytes
+    emitter.instruction("call __rt_mixed_from_value");                          // box an owned empty-string result
+    emitter.instruction("mov rsp, rbp");                                        // restore stack pointer
+    emitter.instruction("pop rbp");                                             // restore caller frame pointer
+    emitter.instruction("ret");                                                 // return the owned Mixed empty string in rax
+    emitter.label("__rt_mixed_array_get_string_key_error");
+    emitter.instruction("cmp QWORD PTR [rbp - 32], 0");                         // distinguish a quiet probe from ordinary reads and write fetches
+    emitter.instruction("je __rt_mixed_array_get_null");                        // quiet string-key probes return an absent value
+    emitter.instruction("mov rsp, rbp");                                        // release the local frame before throwing
+    emitter.instruction("pop rbp");                                             // restore caller frame pointer before throwing
+    crate::codegen_support::runtime::arrays::value_error::emit_throw_static_message_x86_64(
+        emitter,
+        "_spl_type_error_class_id",
+        "_string_offset_type_error_msg",
+        STRING_OFFSET_TYPE_ERROR_MSG_LEN,
+    );
 
     emitter.label("__rt_mixed_array_get_indexed");
     emitter.instruction("mov r10, QWORD PTR [rdi + 8]");                        // r10 = array pointer
@@ -697,13 +756,13 @@ fn emit_mixed_array_get_x86_64(emitter: &mut Emitter) {
     emitter.instruction("pop rbp");                                             // restore caller frame pointer
     emitter.instruction("ret");                                                 // return Mixed* in rax
     emitter.label("__rt_mixed_array_get_indexed_missing");
-    emitter.instruction("cmp QWORD PTR [rbp - 32], 0");                         // are ordinary read warnings enabled?
+    emitter.instruction("test QWORD PTR [rbp - 32], 1");                        // are ordinary read warnings enabled?
     emitter.instruction("je __rt_mixed_array_get_null");                        // `isset()`/`??` suppress undefined-key warnings
     emitter.instruction("mov rax, QWORD PTR [rbp - 16]");                       // reload the missing integer key for the PHP warning
     emitter.instruction("call __rt_warn_undefined_array_key_int");              // emit or suppress the undefined-array-key warning
     emitter.instruction("jmp __rt_mixed_array_get_null");                       // return boxed Mixed(null) after the warning
     emitter.label("__rt_mixed_array_get_indexed_missing_string");
-    emitter.instruction("cmp QWORD PTR [rbp - 32], 0");                         // are ordinary read warnings enabled?
+    emitter.instruction("test QWORD PTR [rbp - 32], 1");                        // are ordinary read warnings enabled?
     emitter.instruction("je __rt_mixed_array_get_null");                        // `isset()`/`??` suppress undefined-key warnings
     emitter.instruction("mov rdi, QWORD PTR [rbp - 16]");                       // reload the missing string key pointer
     emitter.instruction("mov rsi, QWORD PTR [rbp - 24]");                       // reload the missing string key length
@@ -746,7 +805,7 @@ fn emit_mixed_array_get_x86_64(emitter: &mut Emitter) {
     emitter.instruction("ret");                                                 // return Mixed* in rax
 
     emitter.label("__rt_mixed_array_get_assoc_missing");
-    emitter.instruction("cmp QWORD PTR [rbp - 32], 0");                         // are ordinary read warnings enabled?
+    emitter.instruction("test QWORD PTR [rbp - 32], 1");                        // are ordinary read warnings enabled?
     emitter.instruction("je __rt_mixed_array_get_null");                        // `isset()`/`??` suppress undefined-key warnings
     emitter.instruction("cmp QWORD PTR [rbp - 24], -1");                        // does the missing key use the integer-key sentinel?
     emitter.instruction("je __rt_mixed_array_get_assoc_missing_int");           // integer keys use the decimal warning formatter
@@ -840,8 +899,7 @@ fn emit_mixed_array_get_x86_64(emitter: &mut Emitter) {
     emitter.instruction("js __rt_mixed_array_get_not_indexable");               // synthetic ids cannot index metadata
     emitter.instruction("cmp r11, QWORD PTR [rip + _class_iface_method_count]"); // is the id within the dense table?
     emitter.instruction("jae __rt_mixed_array_get_not_indexable");              // out-of-range ids have no entry
-    emitter.instruction("lea r12, [rip + _class_offsetget_ptrs]");              // dense ArrayAccess::offsetGet table
-    emitter.instruction("mov r12, QWORD PTR [r12 + r11 * 8]");                  // resolve the concrete or inherited offsetGet
+    emit_offset_get_table(emitter, 0);
     emitter.instruction("test r12, r12");                                       // 0 means the class is not ArrayAccess
     emitter.instruction("jz __rt_mixed_array_get_not_indexable");               // 0 means the class is not ArrayAccess at all
     emitter.instruction("mov QWORD PTR [rbp - 8], r10");                        // save unboxed receiver while boxing the key
@@ -865,9 +923,8 @@ fn emit_mixed_array_get_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rsi, QWORD PTR [rbp - 16]");                       // reload the boxed offset after publishing its cleanup record
     emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // pass unboxed receiver as argument 0
     emitter.instruction("mov r11, QWORD PTR [rdi]");                            // reload class id, clobbered across the boxing call
-    emitter.instruction("mov QWORD PTR [rbp - 32], r11");                       // keep the class id to box a narrowed return (the warning flag is spent)
-    emitter.instruction("lea r12, [rip + _class_offsetget_ptrs]");              // dense ArrayAccess::offsetGet table
-    emitter.instruction("mov r12, QWORD PTR [r12 + r11 * 8]");                  // re-resolve offsetGet for the same class
+    emit_offset_get_table(emitter, 48);
+    emitter.instruction("mov QWORD PTR [rbp - 32], r11");                       // keep the class id to box a narrowed return (the mode word, read just above, is spent)
     emitter.instruction("call r12");                                            // read through PHP's ArrayAccess::offsetGet
     // -- box a narrowed return (`offsetGet(): self`, `: string`, ...) like a Mixed one --
     emitter.instruction("mov r11, QWORD PTR [rbp - 32]");                       // reload the receiver's class id
@@ -953,7 +1010,7 @@ fn emit_mixed_array_get_x86_64(emitter: &mut Emitter) {
     emitter.instruction("jmp __rt_throw_current");                              // never returns
 
     emitter.label("__rt_mixed_array_get_null_container");
-    emitter.instruction("cmp QWORD PTR [rbp - 32], 0");                         // are ordinary read warnings enabled?
+    emitter.instruction("test QWORD PTR [rbp - 32], 1");                        // are ordinary read warnings enabled?
     emitter.instruction("je __rt_mixed_array_get_null");                        // quiet read contexts suppress the null-offset warning
     emitter.instruction("call __rt_warn_array_offset_on_null");                 // emit PHP's warning for indexing a null receiver
     emitter.label("__rt_mixed_array_get_null");
@@ -965,25 +1022,49 @@ fn emit_mixed_array_get_x86_64(emitter: &mut Emitter) {
     emitter.instruction("pop rbp");                                             // restore caller frame pointer
     emitter.instruction("ret");                                                 // return Mixed* in rax
 
-    // A non-integer string offset read from a string receiver is php's TypeError; quiet reads
-    // (`isset()`, `??`) keep answering null.
-    emitter.label("__rt_mixed_array_get_string_key");
-    emitter.instruction("cmp QWORD PTR [rbp - 32], 0");                         // are ordinary read errors enabled?
-    emitter.instruction("je __rt_mixed_array_get_null");                        // quiet read contexts answer null
-    emitter.instruction("mov rsp, rbp");                                        // release the local frame before throwing
-    emitter.instruction("pop rbp");                                             // restore caller frame pointer
-    crate::codegen_support::runtime::arrays::value_error::emit_throw_static_message_x86_64(
-        emitter,
-        "_spl_type_error_class_id",
-        "_string_offset_type_error_msg",
-        STRING_OFFSET_TYPE_ERROR_MSG_LEN,
-    );
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::codegen_support::platform::Target;
+
+    /// Invalid string keys return null only for quiet probes, preserving read and write errors.
+    #[test]
+    fn mixed_string_key_error_distinguishes_quiet_probes_on_all_targets() {
+        for target in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+            let mut emitter = Emitter::new(Target::parse(target).unwrap());
+            emit_mixed_array_get(&mut emitter);
+            let assembly = emitter.output();
+            let invalid = assembly.split_once("__rt_mixed_array_get_string_key_error:\n").unwrap().1;
+            let invalid = invalid.split_once("__rt_mixed_array_get_indexed:\n").unwrap().0;
+            let (mode, absent) = if target == "linux-x86_64" {
+                ("cmp QWORD PTR [rbp - 32], 0", "je __rt_mixed_array_get_null")
+            } else { ("ldr x9, [sp, #40]", "cbz x9, __rt_mixed_array_get_null") };
+            assert!(invalid.find(mode).unwrap() < invalid.find(absent).unwrap(), "{target}: {invalid}");
+            assert!(invalid.contains("_string_offset_type_error_msg"), "{target}: {invalid}");
+        }
+    }
+
+    /// An ARM operand-owner record cannot hide the saved mode used to select an attached getter.
+    #[test]
+    fn mixed_array_write_fetch_mode_survives_key_owner_publication_on_all_targets() {
+        for target in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+            let mut emitter = Emitter::new(Target::parse(target).unwrap());
+            emit_mixed_array_get(&mut emitter);
+            let assembly = emitter.output();
+            let getter = assembly.split_once("__rt_mixed_array_get_php_box_key:\n").unwrap().1;
+            let call = getter.find(if target == "linux-x86_64" { "call r12" } else { "blr x12" }).unwrap();
+            let dispatch = &getter[..call];
+            assert!(dispatch.contains("_class_offsetget_forwrite_ptrs"), "{target}: {dispatch}");
+            let mode = if target == "linux-x86_64" { "test QWORD PTR [rbp - 32], 2" }
+                else { "ldr x12, [sp, #88]" };
+            assert!(dispatch.contains(mode), "{target}: {dispatch}");
+            let warn = if target == "linux-x86_64" { "test QWORD PTR [rbp - 32], 1" }
+                else { "tbz x9, #0, __rt_mixed_array_get_null" };
+            assert_eq!(assembly.matches(warn).count(), 5, "{target}: write mode must stay quiet");
+        }
+    }
 
     /// Each native ABI roots the PHP getter's key before dispatch and detaches before release.
     #[test]

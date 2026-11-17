@@ -2,12 +2,12 @@
 //! Publishes the elephc-random global Mt19937 range entry into a late-bound runtime slot.
 //!
 //! Called from:
-//! - The `array_rand`/`shuffle` EIR lowerers, immediately before the shared runtime helper.
+//! - The `shuffle` EIR lowerer, immediately before the shared runtime helper.
 //!
 //! Key details:
-//! - Call-site publication keeps programs without `array_rand`/`shuffle` free of bridge symbol
-//!   references, so a program that never touches the global Mt19937 state links no
-//!   `libelephc_random.a`.
+//! - Call-site publication keeps programs without `shuffle` free of bridge symbol references,
+//!   so a program that never touches the global Mt19937 state links no `libelephc_random.a`.
+//!   `array_rand()` reaches the same state through the injected prelude helper instead.
 //! - Both supported architectures publish the same single entry.
 
 use crate::codegen_support::abi;
@@ -26,7 +26,7 @@ pub(crate) fn publish_elephc_random_function_pointers(emitter: &mut Emitter) {
                 .extern_symbol("elephc_random_mt_uniform");
             abi::emit_extern_symbol_address(emitter, "x9", &symbol);
             abi::emit_symbol_address(emitter, "x10", SLOT);
-            emitter.instruction("str x9, [x10]");                                   // publish the global Mt19937 range entry into its runtime slot
+            emitter.instruction("str x9, [x10]");                               // publish the global Mt19937 range entry into its runtime slot
         }
         Arch::X86_64 => {
             let symbol = emitter

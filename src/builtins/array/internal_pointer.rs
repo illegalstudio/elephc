@@ -21,8 +21,10 @@ use crate::types::PhpType;
 /// The receiver must be array-typed. `Mixed` is allowed because heterogeneous arrays are
 /// `Mixed` at compile time; the runtime helpers report `false`/`null` when a Mixed payload
 /// turns out not to be a container. The four seek operations additionally require either a
-/// writable place or a call result temporary; `key()` and `current()` accept ordinary array
-/// expressions because they do not move the pointer.
+/// writable place or a temporary result (a call, `match`, or ternary): a temporary has no
+/// caller-visible pointer after the expression, so lowering materializes it into a hidden
+/// local and the cursor is sound. `key()` and `current()` accept ordinary array expressions
+/// because they do not move the pointer.
 ///
 /// The registry's `check_arity` has already enforced the single-argument arity, so
 /// `cx.args[0]` is present whenever this runs.
@@ -37,14 +39,8 @@ pub fn check_array_pointer_call(
                 | ExprKind::PropertyAccess { .. }
                 | ExprKind::StaticPropertyAccess { .. }
                 | ExprKind::ArrayAccess { .. }
-                | ExprKind::FunctionCall { .. }
-                | ExprKind::MethodCall { .. }
-                | ExprKind::NullsafeMethodCall { .. }
-                | ExprKind::NullsafeDynamicMethodCall { .. }
-                | ExprKind::StaticMethodCall { .. }
-                | ExprKind::ClosureCall { .. }
-                | ExprKind::ExprCall { .. }
         )
+        && !is_temporary_array_receiver(&cx.args[0].kind)
     {
         return Err(CompileError::new(
             cx.args[0].span,
@@ -72,4 +68,22 @@ fn may_hold_runtime_array(ty: &PhpType) -> bool {
         PhpType::Union(members) => members.iter().any(may_hold_runtime_array),
         _ => false,
     }
+}
+
+/// Returns whether an expression produces a temporary array whose pointer is unobservable
+/// after the call, so the hidden cursor can live on the materialized copy.
+fn is_temporary_array_receiver(kind: &ExprKind) -> bool {
+    matches!(
+        kind,
+        ExprKind::FunctionCall { .. }
+            | ExprKind::MethodCall { .. }
+            | ExprKind::NullsafeMethodCall { .. }
+            | ExprKind::NullsafeDynamicMethodCall { .. }
+            | ExprKind::StaticMethodCall { .. }
+            | ExprKind::ClosureCall { .. }
+            | ExprKind::ExprCall { .. }
+            | ExprKind::Match { .. }
+            | ExprKind::Ternary { .. }
+            | ExprKind::ShortTernary { .. }
+    )
 }

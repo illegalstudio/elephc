@@ -100,12 +100,21 @@ mod tests {
     /// BUMPED TO 21: both branches' deferred-default expressions and retained readonly
     /// setter contracts now share generic declarations and caller-scope access masks.
     /// BUMPED TO 22: retained token streams distinguish reserved qualified-name segments.
-    /// BUMPED TO 23 when the closed-world Symfony branch (its own versions 12 to 16: the
-    /// `EvalAttributeArg::Expr` variant, `SourceLine` markers on included files) was merged
-    /// in. The fingerprint below must be RE-RECORDED once the merged tree compiles: the guard
-    /// test prints the new value.
-    /// RE-RECORDED AT 27: `EvalClosureCapture::implicit` (arrow-function captures).
-    const RECORDED_FINGERPRINT: u64 = 5686664831650677854;
+    /// BUMPED TO 23 on the SimpleXML branch: array casts. On the closed-world Symfony branch
+    /// (its own versions 12 to 16: the `EvalAttributeArg::Expr` variant, `SourceLine` markers on
+    /// included files) 23 was the merge of main's line.
+    /// BUMPED TO 24: retained method reference-return flags and dimension-write statements.
+    /// BUMPED TO 25: main's assignment expressions coexist with the SimpleXML layout.
+    /// BUMPED TO 26: property updates return values and retain dynamic name evaluation.
+    /// BUMPED TO 27: SimpleXML property updates coexist with native variable increment statements.
+    /// BUMPED TO 28: function metadata carries a skipped bytecode cache. The source guard
+    /// requires a new identity even though the serialized field layout is unchanged.
+    /// BUMPED TO 29: `EvalStmt::Goto` and `EvalStmt::Label`, plus `EvalParseError::InvalidJump`.
+    /// BUMPED TO 31: origin/main merged into the closed-world Symfony branch (multi-level
+    /// `break`/`continue`, `Assign` over a target expression, `SourceLine` markers,
+    /// `EvalClosureCapture::implicit`). The fingerprint below must be RE-RECORDED once the merged
+    /// tree compiles: the guard test prints the new value. It still holds main's value at 30.
+    const RECORDED_FINGERPRINT: u64 = 11216578342854289318;
 
     /// Returns a stable fingerprint of every source the stored format depends on.
     ///

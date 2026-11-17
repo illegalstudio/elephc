@@ -337,6 +337,27 @@ fn test_error_leading_comma_in_param_list() {
     expect_error("<?php function f(,) {}", "Expected parameter variable");
 }
 
+/// Verifies that a closure `use` list must capture at least one variable: `use ()` and the
+/// lone comma `use (,)` are both rejected, matching PHP.
+#[test]
+fn test_error_closure_use_list_requires_a_capture() {
+    for source in [
+        "<?php $f = function () use () {};",
+        "<?php $f = function () use (,) {};",
+    ] {
+        expect_error(source, "Expected variable in use() capture list");
+    }
+}
+
+/// Verifies that a doubled trailing comma in a closure `use` list is rejected (`use ($a,,)`).
+#[test]
+fn test_error_closure_use_list_double_trailing_comma() {
+    expect_error(
+        "<?php $a = 1; $f = function () use ($a,,) {};",
+        "Expected variable in use() capture list",
+    );
+}
+
 /// Verifies the error diagnostic for break level must be positive.
 #[test]
 fn test_error_break_level_must_be_positive() {
@@ -479,6 +500,29 @@ fn test_error_foreach_key_by_reference() {
 fn test_error_match_missing_paren() {
     // A `match` expression missing the opening `(` after `match` produces "Expected '(' after 'match'".
     expect_error("<?php $x = match $x {};", "Expected '(' after 'match'");
+}
+
+/// Verifies that a match arm made of a lone comma is rejected (`, => 1`): the trailing comma
+/// PHP allows must follow at least one condition.
+#[test]
+fn test_error_match_arm_lone_comma() {
+    expect_error("<?php echo match (1) { , => 1, default => 2 };", "Unexpected token");
+}
+
+/// Verifies that a doubled trailing comma after a match arm's condition list is rejected
+/// (`1,, => …`), matching PHP.
+#[test]
+fn test_error_match_arm_double_trailing_comma() {
+    expect_error("<?php echo match (1) { 1,, => 1, default => 2 };", "Unexpected token");
+}
+
+/// Verifies that a doubled trailing comma after `default` is rejected (`default,, => …`).
+#[test]
+fn test_error_match_default_double_trailing_comma() {
+    expect_error(
+        "<?php echo match (1) { default,, => 1 };",
+        "Expected '=>' after 'default'",
+    );
 }
 
 /// Verifies the error diagnostic for arrow function missing arrow.
@@ -639,6 +683,150 @@ fn test_error_alternative_if_rejects_brace_else() {
 #[test]
 fn test_non_terminal_goto_compiles() {
     expect_no_error("<?php goto done; done: echo 1;")
+}
+
+// --- goto ---
+
+/// Verifies a malformed `goto` names what is missing instead of a generic token error.
+#[test]
+fn test_error_goto_requires_a_label_name() {
+    expect_error("<?php goto;", "Expected a label name after 'goto'");
+    expect_error("<?php goto $target;", "Expected a label name after 'goto'");
+    expect_error("<?php goto done", "Expected ';'");
+}
+
+/// Verifies a jump to a label that does not exist in the same function or file reports PHP's
+/// diagnostic. A label in another function, or outside a closure, is not in scope.
+#[test]
+fn test_error_goto_undefined_label() {
+    expect_error("<?php goto nope;", "'goto' to undefined label 'nope'");
+    expect_error(
+        "<?php function f() { goto outside; } outside: echo 1;",
+        "'goto' to undefined label 'outside'",
+    );
+    expect_error(
+        "<?php $f = function () { goto outside; }; outside: echo 1;",
+        "'goto' to undefined label 'outside'",
+    );
+    expect_error("<?php goto Done; done: echo 1;", "'goto' to undefined label 'Done'");
+}
+
+/// Verifies a label declared twice in one scope reports PHP's diagnostic.
+#[test]
+fn test_error_goto_duplicate_label() {
+    expect_error("<?php a: echo 1; a: echo 2; goto a;", "Label 'a' already defined");
+}
+
+/// Verifies a jump into a loop or a `switch` from outside it reports PHP's diagnostic.
+#[test]
+fn test_error_goto_into_loop_or_switch() {
+    let message = "'goto' into loop or switch statement is disallowed";
+    expect_error("<?php goto in; while (true) { in: break; }", message);
+    expect_error("<?php goto in; for ($i = 0; $i < 1; $i++) { in: echo $i; }", message);
+    expect_error("<?php goto in; do { in: echo 1; } while (false);", message);
+    expect_error("<?php goto in; foreach ([1] as $v) { in: echo $v; }", message);
+    expect_error("<?php goto in; switch (1) { case 1: in: echo 1; }", message);
+}
+
+/// Verifies jumps into and out of a `finally` block report PHP's diagnostics.
+#[test]
+fn test_error_goto_across_finally() {
+    expect_error(
+        "<?php goto f; try { echo 1; } finally { f: echo 2; }",
+        "jump into a finally block is disallowed",
+    );
+    expect_error(
+        "<?php try { echo 1; } finally { goto out; } out: echo 3;",
+        "jump out of a finally block is disallowed",
+    );
+}
+
+/// Verifies the jump shapes PHP accepts and elephc does not are refused by name instead of
+/// being miscompiled.
+#[test]
+fn test_error_goto_unsupported_shapes() {
+    expect_error(
+        "<?php goto c; try { echo 1; } catch (Exception $e) { c: echo 2; }",
+        "'goto' into a catch block from outside that block is not supported",
+    );
+    expect_error(
+        "<?php switch ($argc) { case 1: goto two; case 2: two: echo 2; }",
+        "'goto' from one case of a switch statement to a label in another case is not supported",
+    );
+    expect_error(
+        "<?php namespace A; goto x; namespace B; x: echo 1;",
+        "'goto' across a namespace declaration is not supported",
+    );
+}
+
+/// Verifies a `const` that a jump skips or repeats is refused: PHP defines it only when its
+/// statement runs, and elephc would otherwise bind it unconditionally.
+#[test]
+fn test_error_goto_across_const_declaration() {
+    expect_error(
+        "<?php goto end; const X = 1; end: echo defined('X') ? 'yes' : 'no';",
+        "'goto' across a const declaration is not supported",
+    );
+    expect_error(
+        "<?php $i = 0; again: const X = 1; $i++; if ($i < 2) goto again; echo X;",
+        "'goto' across a const declaration is not supported",
+    );
+    expect_error(
+        "<?php if ($argc > 5) { goto end; } const X = 7; end: echo 1;",
+        "'goto' across a const declaration is not supported",
+    );
+}
+
+/// Verifies a repeated label is PHP's error even when no `goto` exists in the file, and that
+/// the braced `namespace` blocks of a file share one label scope.
+#[test]
+fn test_error_goto_duplicate_label_without_goto() {
+    expect_error("<?php a: echo 'one'; a: echo 'two';", "Label 'a' already defined");
+    expect_error(
+        "<?php function f() { a: echo 1; a: echo 2; } f();",
+        "Label 'a' already defined",
+    );
+    expect_error(
+        "<?php namespace A { L: echo 'A'; } namespace B { L: echo 'B'; }",
+        "Label 'L' already defined",
+    );
+}
+
+/// Verifies a jump from one braced `namespace` block to a label in another finds the label
+/// and is refused as a namespace crossing, not reported as undefined.
+#[test]
+fn test_error_goto_between_namespace_blocks() {
+    expect_error(
+        "<?php namespace A { goto L; } namespace B { L: echo 'from-B'; }",
+        "'goto' across a namespace declaration is not supported",
+    );
+}
+
+/// Verifies a `use` that a jump skips or repeats is refused: the import applies only to the
+/// statements written after it, which a dispatch loop cannot express.
+#[test]
+fn test_error_goto_across_use_declaration() {
+    expect_error(
+        "<?php namespace A; const X = 1; namespace B; goto a; back: echo X; return; \
+         use const A\\X; a: echo 'go '; goto back;",
+        "'goto' across a use declaration is not supported",
+    );
+}
+
+/// Verifies a `break` or `continue` that was already out of range stays an error when a
+/// dispatch loop is wrapped around it, and that the diagnostic names the level the program
+/// wrote, not the one renumbered past the synthesized loop.
+#[test]
+fn test_error_goto_does_not_capture_stray_break() {
+    expect_error("<?php again: echo 1; break; goto again;", "Cannot 'break' 1 levels");
+    expect_error(
+        "<?php while ($argc > 9) { again: break 2; goto again; }",
+        "Cannot 'break' 2 levels",
+    );
+    expect_error(
+        "<?php again: echo 1; continue; goto again;",
+        "Cannot 'continue' 1 levels",
+    );
 }
 
 // --- References inside array literals ---

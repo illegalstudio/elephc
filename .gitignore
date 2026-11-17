@@ -41,3 +41,6 @@ docs/superpowers/
 # Scratch files and directories the magician unit tests create in the crate directory (named
 # `elephc_magician_<case>_<pid>`); an interrupted run leaves them behind.
 /crates/elephc-magician/elephc_magician_*
+
+# Local benchmark harnesses and measurement output — never committed.
+/.bench-scratch/

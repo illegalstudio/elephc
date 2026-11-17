@@ -49,6 +49,11 @@ pub(super) fn eval_stmt_uses_this_property(stmt: &EvalStmt, property_name: &str)
         EvalStmt::VarReferenceBind { source, .. } => {
             eval_expr_uses_this_property(source, property_name)
         }
+        EvalStmt::DimensionWrite { array, index, value, .. } => {
+            eval_expr_uses_this_property(array, property_name)
+                || index.as_ref().is_some_and(|index| eval_expr_uses_this_property(index, property_name))
+                || eval_expr_uses_this_property(value, property_name)
+        }
         EvalStmt::Break(_)
         | EvalStmt::Continue(_)
         | EvalStmt::ClassDecl(_)
@@ -64,6 +69,7 @@ pub(super) fn eval_stmt_uses_this_property(stmt: &EvalStmt, property_name: &str)
         | EvalStmt::SourceLine(_)
         | EvalStmt::ReferenceAssign { .. }
         | EvalStmt::TraitDecl(_)
+        | EvalStmt::IncDecVar { .. }
         | EvalStmt::UnsetVar { .. } => false,
         // A `declare(…) { … }` body is ordinary statements in the same scope, so a hook writing
         // its backing slot inside one still writes it.
@@ -358,6 +364,17 @@ pub(super) fn eval_expr_uses_this_property(expr: &EvalExpr, property_name: &str)
         EvalExpr::ArrayGet { array, index } => {
             eval_expr_uses_this_property(array, property_name)
                 || eval_expr_uses_this_property(index, property_name)
+        }
+        EvalExpr::PropertyCompoundAssign { object, property, value, .. } => {
+            eval_is_this_dynamic_property(object, property, property_name)
+                || eval_expr_uses_this_property(object, property_name)
+                || eval_expr_uses_this_property(property, property_name)
+                || eval_expr_uses_this_property(value, property_name)
+        }
+        EvalExpr::PropertyIncDec { object, property, .. } => {
+            eval_is_this_dynamic_property(object, property, property_name)
+                || eval_expr_uses_this_property(object, property_name)
+                || eval_expr_uses_this_property(property, property_name)
         }
         EvalExpr::Call { args, .. }
         | EvalExpr::NamespacedCall { args, .. }

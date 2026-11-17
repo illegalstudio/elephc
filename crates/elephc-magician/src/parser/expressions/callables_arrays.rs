@@ -516,6 +516,16 @@ fn collect_arrow_expr_variables(expr: &EvalExpr, names: &mut Vec<String>) {
         | EvalExpr::PropertyGet { object: method, .. } => {
             collect_arrow_expr_variables(method, names);
         }
+        // A property read-modify-write reads its receiver, a dynamic property name and the operand.
+        EvalExpr::PropertyCompoundAssign { object, property, value, .. } => {
+            collect_arrow_expr_variables(object, names);
+            collect_arrow_expr_variables(property, names);
+            collect_arrow_expr_variables(value, names);
+        }
+        EvalExpr::PropertyIncDec { object, property, .. } => {
+            collect_arrow_expr_variables(object, names);
+            collect_arrow_expr_variables(property, names);
+        }
         EvalExpr::DynamicStaticMethodCallable { class_name, method } => {
             collect_arrow_expr_variables(class_name, names);
             collect_arrow_expr_variables(method, names);

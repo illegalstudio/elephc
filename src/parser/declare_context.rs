@@ -153,7 +153,7 @@ fn mark_main_stmt_strict_types(stmt: &mut Stmt) {
         }
         StmtKind::ClassLikeActivate { .. } => {}
         StmtKind::Return(None) | StmtKind::IncludeOnceMark { .. } | StmtKind::Break(_)
-        | StmtKind::Continue(_) | StmtKind::NamespaceDecl { .. } | StmtKind::UseDecl { .. }
+        | StmtKind::Continue(_) | StmtKind::Goto(_) | StmtKind::GotoLabel(_) | StmtKind::NamespaceDecl { .. } | StmtKind::UseDecl { .. }
         | StmtKind::FunctionVariantGroup { .. } | StmtKind::FunctionVariantMark { .. }
         | StmtKind::Global { .. } | StmtKind::PackedClassDecl { .. }
         | StmtKind::ExternFunctionDecl { .. } | StmtKind::ExternClassDecl { .. }

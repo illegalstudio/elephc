@@ -10,6 +10,36 @@
 
 use crate::support::*;
 
+/// Initialized and empty typed ArrayAccess slots retire a receiver projected from Mixed storage.
+#[test]
+fn test_typed_offset_unset_guard_releases_projected_receiver() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+class ProjectedGuardBag implements ArrayAccess {
+    public function offsetExists(mixed $key): bool { return true; }
+    public function offsetGet(mixed $key): mixed { return null; }
+    public function offsetSet(mixed $key, mixed $value): void {}
+    public function offsetUnset(mixed $key): void { echo 'removed|'; }
+}
+class ProjectedGuardHolder {
+    public ProjectedGuardBag $items;
+    public function __destruct() { echo 'drop|'; }
+}
+function projectedGuardUnset(mixed $holder): void {
+    $holder = new ProjectedGuardHolder();
+    $holder->items = new ProjectedGuardBag();
+    unset($holder->items[0]);
+    unset($holder);
+    $holder = new ProjectedGuardHolder();
+    unset($holder->items[0]);
+    unset($holder);
+}
+projectedGuardUnset(null);
+"#);
+    assert!(out.success, "stdout={} stderr={}", out.stdout, out.stderr);
+    assert_eq!(out.stdout, "removed|drop|drop|");
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
 /// A throwing PHP offsetUnset method must release fresh boxed strings and retained Mixed keys.
 #[test]
 fn test_throwing_boxed_offset_unset_releases_original_key_owners() {

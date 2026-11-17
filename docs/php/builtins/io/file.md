@@ -1,14 +1,12 @@
 ---
 title: "file()"
 description: "Reads an entire file into an array."
-sidebar:
-  order: 335
 ---
 
 ## file()
 
 ```php
-function file(string $filename, int $flags = 0, mixed $context = null): mixed
+function file(string $filename, int $flags = 0): mixed
 ```
 
 Reads an entire file into an array.
@@ -16,14 +14,14 @@ Reads an entire file into an array.
 **Parameters**:
 - `$filename` (`string`)
 - `$flags` (`int`), default `0`, optional
-- `$context` (`mixed`), default `null`, optional
 
 **Returns**: `mixed`
 
 ## Availability
 
-- **Compiled (AOT)**: supported by the Elephc code generator.
-- **`eval()` (magician interpreter)**: supported through a declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/filesystem/file.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/filesystem/file.rs)).
+| Compiled (AOT) | Magician (eval) |
+|---|---|
+| Available | Available |
 
 _No examples yet. Check `examples/` and `showcases/` for usage patterns._
 

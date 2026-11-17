@@ -2543,6 +2543,338 @@ echo show(...[0 => "x", "b" => 2]), "|", show(...["0" => "y", "b" => 3]), "|",
     assert_eq!(out, "x:2|y:3|z:4|w:5");
 }
 
+/// A PHPDoc `@template-covariant` marker that the declaration does not keep (a writable
+/// property, a parameter) is demoted to invariant with a warning instead of rejecting a file
+/// php-src runs.
+#[test]
+fn test_docblock_covariant_marker_broken_by_the_declaration_is_demoted() {
+    let out = compile_and_run(concat!(
+        "<?php\n",
+        "/** @template-covariant TValue */\n",
+        "class Box {\n",
+        "    /** @var TValue */\n",
+        "    protected $value;\n",
+        "    /** @param TValue $value */\n",
+        "    public function __construct($value) { $this->value = $value; }\n",
+        "    /** @param TValue $value */\n",
+        "    public function contains($value): bool { return $this->value === $value; }\n",
+        "    /** @return TValue */\n",
+        "    public function get() { return $this->value; }\n",
+        "}\n",
+        "$b = new Box(\"a\");\n",
+        "echo $b->get(), \" \", var_export($b->contains(\"a\"), true);\n",
+    ));
+    assert_eq!(out, "a true");
+}
+
+/// A PHPDoc bound on a CLASS template is a warning when a construction breaks it, and a class
+/// template no constructor argument determines is read at `mixed`: php-src runs both programs
+/// (issue #1899).
+#[test]
+fn test_docblock_class_template_bound_violation_and_undetermined_parameter() {
+    let source = r#"<?php
+class Entity {}
+class Other { public string $n = "other"; }
+/** @template T of Entity */
+class Holder {
+    /** @var T */
+    public $item;
+    /** @param T $item */
+    public function __construct($item) { $this->item = $item; }
+}
+/** @template T */
+class Middleware {
+    public function name(): string { return "mw"; }
+}
+$h = new Holder(new Other());
+echo $h->item->n, "|", (new Middleware())->name();
+"#;
+    let warnings = compile_cli_file_with_flags_capturing_stderr(source, &[]);
+    assert!(
+        warnings.contains(
+            "Constructing 'Holder' binds type parameter <T> to Other, which does not satisfy \
+             its bound Entity; the bound is a PHPDoc annotation php-src does not enforce"
+        ),
+        "{warnings}"
+    );
+    assert_eq!(compile_cli_file_and_run_with_flags(source, &[]), "other|mw");
+}
+
+/// PHPStan-style type arguments on built-in interfaces (`IteratorAggregate<K, V>`,
+/// `ArrayAccess<K, V>`) describe nothing elephc stores and are erased.
+#[test]
+fn test_docblock_type_arguments_on_builtin_interfaces_are_erased() {
+    let out = compile_and_run(concat!(
+        "<?php\n",
+        "/**\n",
+        " * @implements IteratorAggregate<string, int>\n",
+        " * @implements ArrayAccess<string, int>\n",
+        " */\n",
+        "class Bag implements IteratorAggregate, ArrayAccess {\n",
+        "    private array $items = [];\n",
+        "    public function getIterator(): ArrayIterator { return new ArrayIterator($this->items); }\n",
+        "    public function offsetExists(mixed $k): bool { return isset($this->items[$k]); }\n",
+        "    public function offsetGet(mixed $k): mixed { return $this->items[$k]; }\n",
+        "    public function offsetSet(mixed $k, mixed $v): void { $this->items[$k] = $v; }\n",
+        "    public function offsetUnset(mixed $k): void {}\n",
+        "}\n",
+        "$b = new Bag(); $b[\"x\"] = 1; $b[\"y\"] = 2;\n",
+        "foreach ($b as $k => $v) { echo $k, \"=\", $v, \";\"; } echo $b[\"y\"];\n",
+    ));
+    assert_eq!(out, "x=1;y=2;2");
+}
+
+/// `foreach` over an instantiation inferred in the same round (`new Bag([...])`) is deferred to
+/// the round that splices the class, instead of rejecting the not-yet-declared `Bag<string, int>`.
+#[test]
+fn test_foreach_over_an_inferred_generic_iterator_aggregate() {
+    let out = compile_and_run(concat!(
+        "<?php\n",
+        "/**\n",
+        " * @template TKey of array-key\n",
+        " * @template TValue\n",
+        " * @implements IteratorAggregate<TKey, TValue>\n",
+        " */\n",
+        "class Bag implements IteratorAggregate {\n",
+        "    /** @param array<TKey, TValue> $items */\n",
+        "    public function __construct(private array $items) {}\n",
+        "    public function getIterator(): ArrayIterator { return new ArrayIterator($this->items); }\n",
+        "}\n",
+        "foreach (new Bag([\"x\" => 1, \"y\" => 2]) as $k => $v) { echo $k, \"=\", $v, \";\"; }\n",
+    ));
+    assert_eq!(out, "x=1;y=2;");
+}
+
+/// A non-generic class that implements a PHPDoc-generic interface by its bare name still
+/// implements it: the bare parent is read as the interface's default instantiation instead of
+/// naming the stripped template.
+#[test]
+fn test_bare_docblock_generic_interface_on_a_plain_class() {
+    let out = compile_and_run(concat!(
+        "<?php\n",
+        "/**\n",
+        " * @template TKey of array-key\n",
+        " * @template TValue\n",
+        " */\n",
+        "interface Arrayable {\n",
+        "    /** @return array<TKey, TValue> */\n",
+        "    public function toArray();\n",
+        "}\n",
+        "class Model implements Arrayable {\n",
+        "    public function toArray() { return [\"id\" => 1]; }\n",
+        "}\n",
+        "function dump(Arrayable $a) { echo count($a->toArray()); }\n",
+        "dump(new Model());\n",
+    ));
+    assert_eq!(out, "1");
+}
+
+/// `instanceof` against a PHPDoc interface template is true for a class implementing it bare,
+/// and the narrowed guard still evaluates once per object.
+#[test]
+fn test_instanceof_bare_docblock_generic_interface() {
+    let out = compile_and_run(concat!(
+        "<?php\n",
+        "/**\n",
+        " * @template TKey of array-key\n",
+        " * @template TValue\n",
+        " */\n",
+        "interface Arrayable {\n",
+        "    /** @return array<TKey, TValue> */\n",
+        "    public function toArray();\n",
+        "}\n",
+        "class Model implements Arrayable {\n",
+        "    public function toArray() { return [\"id\" => 1]; }\n",
+        "}\n",
+        "class Other {}\n",
+        "echo var_export(new Model() instanceof Arrayable, true), \"|\";\n",
+        "function chk($x) { echo var_export($x instanceof Arrayable, true), \"|\"; }\n",
+        "chk(new Model()); chk(new Other()); chk(3);\n",
+        "$o = new Model(); if ($o instanceof Arrayable) { echo \"yes\"; } else { echo \"no\"; }\n",
+    ));
+    assert_eq!(out, "true|true|false|false|yes");
+}
+
+/// `instanceof` against a PHPDoc interface template is true for a class implementing one of
+/// its instantiations (`@implements Arrayable<string, int>`).
+#[test]
+fn test_instanceof_docblock_generic_interface_through_an_instantiation() {
+    let out = compile_and_run(concat!(
+        "<?php\n",
+        "/**\n",
+        " * @template TKey of array-key\n",
+        " * @template TValue\n",
+        " */\n",
+        "interface Arrayable {\n",
+        "    /** @return array<TKey, TValue> */\n",
+        "    public function toArray();\n",
+        "}\n",
+        "/** @implements Arrayable<string, int> */\n",
+        "class Model implements Arrayable {\n",
+        "    public function toArray() { return [\"id\" => 1]; }\n",
+        "}\n",
+        "function chk($x) { echo var_export($x instanceof Arrayable, true), \"|\"; }\n",
+        "chk(new Model());\n",
+        "$o = new Model(); echo var_export($o instanceof Arrayable, true);\n",
+    ));
+    assert_eq!(out, "true|true");
+}
+
+/// `instanceof` against a generic CLASS template is true for any of its instantiations and for
+/// a subclass extending one, PHPDoc or native alike.
+#[test]
+fn test_instanceof_generic_class_template_matches_every_instantiation() {
+    let out = compile_and_run(concat!(
+        "<?php\n",
+        "/**\n",
+        " * @template TKey of array-key\n",
+        " * @template TValue\n",
+        " */\n",
+        "class Coll {\n",
+        "    /** @param array<TKey, TValue> $items */\n",
+        "    public function __construct(public array $items) {}\n",
+        "}\n",
+        "/** @extends Coll<string, string> */\n",
+        "class SColl extends Coll {}\n",
+        "class Box<T> { public function __construct(public T $v) {} }\n",
+        "function chk($x) { echo var_export($x instanceof Coll, true), \"|\"; }\n",
+        "chk(new Coll([\"a\" => 1])); chk(new Coll([1 => \"b\"])); chk(new SColl([\"k\" => \"v\"]));\n",
+        "chk(new Box(1));\n",
+        "$b = new Box<int>(1); $s = new Box<string>(\"s\");\n",
+        "echo var_export($b instanceof Box, true), \"|\", var_export($s instanceof Box, true), \"|\";\n",
+        "echo var_export(new Coll([\"z\" => 0]) instanceof Coll, true);\n",
+    ));
+    assert_eq!(out, "true|true|true|false|true|true|true");
+}
+
+/// Erasing a PHPDoc template's `array<TKey, TValue>` on a dispatched method gives back the plain
+/// `array` php-src sees, so the method still adapts to an interface declaring `array`.
+#[test]
+fn test_erased_docblock_assoc_array_matches_a_native_array_contract() {
+    let out = compile_and_run(concat!(
+        "<?php\n",
+        "interface Enum { public function merge(array $xs); }\n",
+        "/**\n",
+        " * @template TKey of array-key\n",
+        " * @template TValue\n",
+        " */\n",
+        "class Coll implements Enum {\n",
+        "    /** @param array<TKey, TValue> $items */\n",
+        "    public function __construct(public array $items) {}\n",
+        "    /**\n",
+        "     * @param array<TKey, TValue> $xs\n",
+        "     * @return array<TKey, TValue>\n",
+        "     */\n",
+        "    public function merge(array $xs) { $o = $xs; foreach ($this->items as $k => $v) { $o[$k] = $v; } return $o; }\n",
+        "}\n",
+        "/** @extends Coll<string, string> */\n",
+        "class SColl extends Coll {}\n",
+        "$c = new SColl([\"k\" => \"a\"]);\n",
+        "$r = $c->merge([\"p\", \"q\"]); echo implode(\",\", $r), \"|\";\n",
+        "function m(Enum $e) { return implode(\",\", $e->merge([1, 2])); } echo m($c);\n",
+    ));
+    assert_eq!(out, "p,q,a|1,2,a");
+}
+
+/// An `instanceof` guard on a generic template keeps the receiver's methods reachable: the
+/// value is not narrowed to the template's member-less marker, so the call dispatches.
+#[test]
+fn test_instanceof_generic_template_guard_keeps_methods_callable() {
+    let out = compile_and_run(concat!(
+        "<?php\n",
+        "/**\n",
+        " * @template TKey of array-key\n",
+        " * @template TValue\n",
+        " */\n",
+        "interface Arrayable {\n",
+        "    /** @return array<TKey, TValue> */\n",
+        "    public function toArray();\n",
+        "}\n",
+        "class Model implements Arrayable {\n",
+        "    public function toArray() { return [\"id\" => 1, \"n\" => 2]; }\n",
+        "}\n",
+        "function f($x) { if ($x instanceof Arrayable) { return count($x->toArray()); } return -1; }\n",
+        "echo f(new Model()), \"|\", f(3), \"|\";\n",
+        "$o = new Model(); if ($o instanceof Arrayable) { echo implode(\",\", array_keys($o->toArray())); }\n",
+    ));
+    assert_eq!(out, "2|-1|id,n");
+}
+
+/// A CLASS template's marker interface exists only for `instanceof`: reflection sees what php-src
+/// sees (no interface `Box`, nothing extra in `class_implements`), `is_subclass_of` holds only
+/// for a class extending an instantiation, and an INTERFACE template stays a visible interface.
+#[test]
+fn test_class_template_marker_is_hidden_from_reflection() {
+    let out = compile_and_run(concat!(
+        "<?php\n",
+        "/** @template T */\n",
+        "class Box { /** @param T $v */ public function __construct(public $v) {} }\n",
+        "/** @extends Box<int> */\n",
+        "class IntBox extends Box {}\n",
+        "/** @template T */\n",
+        "interface Coll { /** @return T */ public function first(); }\n",
+        "/** @implements Coll<int> */\n",
+        "class IntColl implements Coll { public function first() { return 1; } }\n",
+        "$b = new Box(5); $s = new Box(\"s\"); $i = new IntBox(3);\n",
+        "var_dump($b instanceof Box, $s instanceof Box, $i instanceof Box, new IntColl() instanceof Coll);\n",
+        "var_dump(interface_exists('Box'), is_a($b, 'Box'), is_subclass_of($b, 'Box'), is_subclass_of($i, 'Box'), is_subclass_of('IntBox', 'Box'));\n",
+        "var_dump(in_array('Box', get_declared_interfaces()), in_array('Coll', get_declared_interfaces()), interface_exists('Coll'));\n",
+        "var_dump(class_implements($b), class_implements($i), class_implements('IntBox'));\n",
+    ));
+    assert_eq!(
+        out,
+        concat!(
+            "bool(true)\nbool(true)\nbool(true)\nbool(true)\n",
+            "bool(false)\nbool(true)\nbool(false)\nbool(true)\nbool(true)\n",
+            "bool(false)\nbool(true)\nbool(true)\n",
+            "array(0) {\n}\narray(0) {\n}\narray(0) {\n}\n",
+        )
+    );
+}
+
+/// An `instanceof` guard on a template is not a narrowing for the mixed-storage scan either, so
+/// reassigning the guarded local inside it is an ordinary store.
+#[test]
+fn test_instanceof_generic_template_guard_is_not_a_storage_narrowing() {
+    let out = compile_and_run(concat!(
+        "<?php\n",
+        "/** @template T */\n",
+        "interface Coll { /** @return T */ public function first(); }\n",
+        "/** @implements Coll<int> */\n",
+        "class IntColl implements Coll { public function first() { return 7; } public function extra() { return \"x\"; } }\n",
+        "interface Shape { public function area(); }\n",
+        "class Sq implements Shape, Coll { public function area() { return 4; } public function first() { return 9; } }\n",
+        "function a($x) { return $x instanceof Coll ? $x->first() : -1; }\n",
+        "function b(Shape $x) { if ($x instanceof Coll) { return $x->area(); } return 0; }\n",
+        "function c($x) { if (!$x instanceof Coll) { return \"no\"; } return $x->first(); }\n",
+        "function d($x) { return $x instanceof Coll && $x->first() > 5 ? \"big\" : \"small\"; }\n",
+        "echo a(new IntColl()), a(1), b(new Sq()), c(new Sq()), c(2), d(new IntColl()), d(new Sq()), \"|\";\n",
+        "$v = 1; if ($v instanceof Coll) { $v = new IntColl(); } echo $v, \"|\";\n",
+        "$w = new IntColl(); if ($w instanceof Coll) { echo $w->extra(); }\n",
+    ));
+    assert_eq!(out, "7-149nobigbig|1|x");
+}
+
+/// An `instanceof` guard on a template keeps an object-typed local's own class, so it still
+/// reaches a parameter typed with that class inside and after the guard.
+#[test]
+fn test_instanceof_generic_template_guard_keeps_the_object_type() {
+    let out = compile_and_run(concat!(
+        "<?php\n",
+        "/** @template T */\n",
+        "interface Coll { /** @return T */ public function first(); }\n",
+        "/** @implements Coll<int> */\n",
+        "class IntColl implements Coll { public $n = 3; public function first() { return 7; } }\n",
+        "function take(IntColl $c) { return $c->n; }\n",
+        "$w = new IntColl();\n",
+        "if ($w instanceof Coll) { $y = $w; echo $y->first(), take($w), $w->n, \"|\"; }\n",
+        "echo take($w), \"|\";\n",
+        "$arr = [new IntColl(), 5, \"s\"];\n",
+        "foreach ($arr as $e) { if ($e instanceof Coll) { echo $e->first() + 1; } else { echo \"-\"; } }\n",
+    ));
+    assert_eq!(out, "733|3|8--");
+}
+
 /// `--report-generics` prints the instantiations a program reached, grouped by template, and
 /// prints nothing unless the flag is passed.
 #[test]
@@ -3515,4 +3847,378 @@ echo $vectors->size(), "|", $vectors->data[3]->y, "|", $floats->size();
 "#,
     );
     assert_eq!(out, "4|1.25|2");
+}
+
+/// A PHPDoc class template that takes over a native hint (`@param T`, `@var T` or `@return T`
+/// on `object`, `array`, ...) keeps it binding: a type argument the hint accepts refines it,
+/// and anything else is compiled at the hint itself, so php-src's TypeError stays an error.
+#[test]
+fn test_docblock_class_template_keeps_the_native_hint_it_takes_over() {
+    let declarations = r#"<?php
+class Model {}
+class User extends Model { public function hi() { return "hi"; } }
+class Other {}
+/** @template T of Model */
+class Box {
+    /** @param T $value */
+    public function __construct(public object $value) {}
+    /** @return T */
+    public function get(): object { return $this->value; }
+}
+/** @template T */
+class Items {
+    /** @param T $items */
+    public function __construct(public array $items) {}
+}
+"#;
+    let valid = format!(
+        "{declarations}echo (new Box(new User()))->get()->hi(), \"|\", get_class((new Box(new Other()))->value), \"|\", count((new Items([1, 2]))->items);\n"
+    );
+    let warnings = compile_cli_file_with_flags_capturing_stderr(&valid, &[]);
+    assert!(warnings.contains("<T> to Other, which does not satisfy its bound Model"), "{warnings}");
+    assert_eq!(compile_cli_file_and_run_with_flags(&valid, &[]), "hi|Other|2");
+    for (code, expected) in [
+        ("new Box(\"x\");", "expects object, got string"),
+        ("new Items(\"x\");", "expects array, got string"),
+        (
+            "/** @extends Box<string> */\nclass Bad extends Box {}",
+            "<T> to string, which is not accepted by the native type object",
+        ),
+        (
+            "/** @template T of Model */\nclass Holder {\n    /** @var T */\n    public object $value;\n    public function __construct() { $this->value = \"x\"; }\n}\nnew Holder();",
+            "expects object, got string",
+        ),
+        (
+            "/** @template T */\nclass Maybe {\n    /** @var ?T */\n    public object $value;\n    public function __construct() { $this->value = null; }\n}\nnew Maybe();",
+            "expects object",
+        ),
+    ] {
+        let error =
+            compile_cli_file_with_flags_expect_failure(&format!("{declarations}{code}\n"), &[]);
+        assert!(error.contains(expected), "{code}: {error}");
+    }
+}
+
+/// A bare mention of a PHPDoc class or trait template whose parameter took over a native hint
+/// (`extends Box`, a `Box` parameter, `use BinT`) reads the parameter as that hint, so the
+/// program php-src runs compiles and the hint is still enforced.
+#[test]
+fn test_docblock_class_template_bare_mention_reads_the_native_hint() {
+    let declarations = r#"<?php
+/** @template T */
+class Box {
+    /** @param T $v */
+    public function id(object $v): int { return 1; }
+}
+class Child extends Box {}
+function take(Box $b): int { return $b->id(new stdClass()); }
+interface Sink { public function put(object $v): int; }
+/** @template T */
+trait BinT {
+    /** @param T $v */
+    public function put(object $v): int { return 2; }
+}
+class Bin implements Sink { use BinT; }
+"#;
+    let valid = format!("{declarations}echo take(new Child()), (new Bin())->put(new stdClass());\n");
+    assert_eq!(compile_cli_file_and_run_with_flags(&valid, &[]), "12");
+    let error = compile_cli_file_with_flags_expect_failure(
+        &format!("{declarations}(new Child())->id(5);\n"),
+        &[],
+    );
+    assert!(error.contains("expects object, got int"), "{error}");
+}
+
+/// A dispatched method erased for a PHPDoc class template still type-checks a body that stores
+/// its parameter in a property of the template: the instantiation keeps the property at the
+/// type argument, so the erased parameter stays untyped rather than the native `object`.
+#[test]
+fn test_docblock_class_template_erased_method_stores_into_template_property() {
+    let out = compile_and_run(
+        r#"<?php
+class User {}
+interface Sink { public function put(object $v): int; }
+/** @template T */
+class Bin implements Sink {
+    /** @var T */
+    public object $value;
+    /** @param T $v */
+    public function __construct(object $v) { $this->value = $v; }
+    /** @param T $v */
+    public function put(object $v): int { $this->value = $v; return 1; }
+}
+echo get_class((new Bin(new User()))->value), "|", (new Bin(new User()))->put(new User());
+"#,
+    );
+    assert_eq!(out, "User|1");
+}
+
+/// A union annotation replaces a native hint only when every member refines it: `T|false` on
+/// `: object` and `T|string` on `object $v` would admit values php-src rejects, so the native
+/// hint stays, and so does a hint whose annotation has another shape (`array<T>` on `object`).
+#[test]
+fn test_docblock_union_annotation_does_not_replace_a_native_hint() {
+    for (declarations, expected) in [
+        (
+            "/** @template T */\nclass Box {\n    /** @return T|false */\n    public function get(): object { return false; }\n}\n(new Box())->get();",
+            "expects object",
+        ),
+        (
+            "/**\n * @template T\n * @param T|string $v\n */\nfunction take(object $v): int { return 1; }\ntake(\"x\");",
+            "expects object, got string",
+        ),
+        (
+            "/**\n * @template T\n * @param array<T> $v\n */\nfunction take(object $v): int { return 1; }\ntake([1]);",
+            "expects object",
+        ),
+        (
+            "/**\n * @template T\n * @return T|false\n */\nfunction make(): array { return false; }\nmake();",
+            "expects array",
+        ),
+    ] {
+        let error =
+            compile_cli_file_with_flags_expect_failure(&format!("<?php\n{declarations}\n"), &[]);
+        assert!(error.contains(expected), "{declarations}: {error}");
+    }
+}
+
+/// A dispatched method erased for a PHPDoc class template gets back the native return type the
+/// template took over (`@return T` on `: object` or `: array`), so it still implements its
+/// interface or overrides its parent, and still refuses a value php-src would not return.
+#[test]
+fn test_docblock_class_template_erased_method_keeps_its_native_return_type() {
+    let out = compile_and_run(
+        r#"<?php
+class User {}
+interface Sink { public function fetch(): object; }
+/** @template T */
+class Bin implements Sink {
+    /** @var T */
+    public object $value;
+    /** @param T $v */
+    public function __construct(object $v) { $this->value = $v; }
+    /** @return T */
+    public function fetch(): object { return $this->value; }
+}
+class Base { public function fetch(): object { return new stdClass(); } }
+/** @template T */
+class Derived extends Base {
+    /** @var T */
+    public object $value;
+    /** @param T $v */
+    public function __construct(object $v) { $this->value = $v; }
+    /** @return T */
+    public function fetch(): object { return $this->value; }
+}
+interface Rows { public function all(): array; }
+/** @template T */
+class Table implements Rows {
+    /** @return T */
+    public function all(): array { return [1, 2]; }
+}
+echo get_class((new Bin(new User()))->fetch()), "|", get_class((new Derived(new User()))->fetch()),
+    "|", gettype((new Table())->all());
+"#,
+    );
+    assert_eq!(out, "User|User|array");
+    let error = compile_cli_file_with_flags_expect_failure(
+        r#"<?php
+/** @template T */
+class Box {
+    /** @return T */
+    public function fetch(): object { return "nope"; }
+}
+class Child extends Box {
+    public function fetch(): object { return new stdClass(); }
+}
+"#,
+        &[],
+    );
+    assert!(error.contains("return type expects object, got string"), "{error}");
+}
+
+/// A dispatched method erased for a PHPDoc class template still makes the check php-src makes
+/// on entry: an argument the native hint rejects throws a `TypeError`, `null` passes a nullable
+/// hint, a variadic is checked element by element and numbered as php-src numbers it (named
+/// elements share the number after the last positional one), `iterable` is spelled as php-src
+/// spells it, and the body still stores the parameter in a property of the template.
+#[test]
+fn test_docblock_class_template_erased_method_checks_its_native_parameter_hints() {
+    let out = compile_and_run(
+        r#"<?php
+class User {}
+interface Sink { public function put(object $v): int; }
+/** @template T */
+class Bin implements Sink {
+    /** @var T */
+    public object $value;
+    /** @param T $v */
+    public function __construct(object $v) { $this->value = $v; }
+    /** @param T $v */
+    public function put(object $v): int {
+        $this->value = $v;
+        return 1;
+    }
+}
+interface Rows { public function add(?array $row, callable $f, iterable $it): int; }
+/** @template T */
+class Table implements Rows {
+    /** @param ?T $row */
+    public function add(?array $row, callable $f, iterable $it): int {
+        return $row === null ? 0 : count($row);
+    }
+}
+interface Pile { public function push(int $at, object ...$items): int; }
+/** @template T */
+class Stack implements Pile {
+    /** @param T ...$items */
+    public function push(int $at, object ...$items): int {
+        return count($items) + count(get_defined_vars()) - 2;
+    }
+}
+interface Feed { public function each(iterable $it, ?iterable $more = null): int; }
+/** @template T */
+class Source implements Feed {
+    /**
+     * @param T $it
+     * @param ?T $more
+     */
+    public function each(iterable $it, ?iterable $more = null): int { return 1; }
+}
+class Heap { public function all(object ...$items): int { return 0; } }
+/** @template T */
+class Bag extends Heap {
+    /** @param T ...$items */
+    public function all(object ...$items): int { return 1; }
+}
+$bin = new Bin(new User());
+echo $bin->put(new User()), get_class($bin->value);
+try {
+    $bin->put(5);
+} catch (TypeError $e) {
+    echo "|", $e->getMessage();
+}
+$table = new Table();
+echo "|", $table->add(null, 'strlen', [1]), $table->add([1, 2], 'strlen', [1]);
+try {
+    $table->add("x", 'strlen', [1]);
+} catch (TypeError $e) {
+    echo "|", $e->getMessage();
+}
+$stack = new Stack();
+echo "|", $stack->push(0), $stack->push(0, new User(), new User());
+try {
+    $stack->push(0, new User(), 5);
+} catch (TypeError $e) {
+    echo "|", $e->getMessage();
+}
+try {
+    (new Bag())->all(new User(), b: new User(), c: 5);
+} catch (TypeError $e) {
+    echo "|", $e->getMessage();
+}
+$source = new Source();
+echo "|", $source->each([1]), $source->each([1], null);
+try {
+    $source->each(5);
+} catch (TypeError $e) {
+    echo "|", $e->getMessage();
+}
+try {
+    $source->each([1], 5);
+} catch (TypeError $e) {
+    echo "|", $e->getMessage();
+}
+"#,
+    );
+    assert_eq!(
+        out,
+        "1User|Bin::put(): Argument #1 ($v) must be of type object, integer given\
+         |02|Table::add(): Argument #1 ($row) must be of type ?array, string given\
+         |02|Stack::push(): Argument #3 must be of type object, integer given\
+         |Bag::all(): Argument #2 must be of type object, integer given\
+         |11|Source::each(): Argument #1 ($it) must be of type Traversable|array, integer given\
+         |Source::each(): Argument #2 ($more) must be of type Traversable|array|null, integer given"
+    );
+}
+
+/// A native class hint and the class an annotation names are compared after resolving both
+/// against the namespace and the `use` imports, not by basename: an alias of the annotated
+/// class adopts the annotation, and an unrelated class of the same basename keeps its hint.
+#[test]
+fn test_docblock_annotation_matches_a_native_hint_through_an_import_alias() {
+    let out = compile_and_run(
+        r#"<?php
+namespace Lib {
+    /** @template T */
+    class Box {
+        /** @param T $value */
+        public function __construct(public $value) {}
+    }
+}
+namespace App {
+    use Lib\Box as Crate;
+    class Box {
+        public function __construct(public $value) {}
+    }
+    /**
+     * @template T
+     * @param \Lib\Box<T> $b
+     * @return T
+     */
+    function unwrap(Crate $b) { return $b->value; }
+    /**
+     * @template T
+     * @param \Lib\Box<T> $b
+     * @return T
+     */
+    function own(Box $b) { return $b->value; }
+    echo unwrap(new Crate(7)) + 1, "|", own(new Box("own"));
+}
+"#,
+    );
+    assert_eq!(out, "8|own");
+}
+
+/// An array annotation with one erased component (`array<int, T>` once `T` is erased or read
+/// as `mixed`) goes back to the plain `array` php-src declares: an erased method still matches
+/// the `array` of its interface or of an overriding child, and an instantiation whose
+/// parameter nothing determines returns its plain `array` through a plain `array` return.
+#[test]
+fn test_docblock_array_annotation_with_an_erased_component_is_a_plain_array() {
+    let out = compile_and_run(
+        r#"<?php
+interface Enum { public function merge(array $xs): int; }
+/** @template T */
+class Coll implements Enum {
+    /** @param array<int, T> $xs */
+    public function merge(array $xs): int { return count($xs); }
+}
+/** @template T */
+class Base {
+    /**
+     * @param array<int, T> $xs
+     * @return array<int, T>
+     */
+    public function merge(array $xs): array { return $xs; }
+}
+class Child extends Base {
+    public function merge(array $xs): array { return $xs; }
+}
+function through(Base $b): string { return implode(",", $b->merge([7, 8])); }
+/** @template T */
+class Plain {
+    /** @return array<int, T> */
+    public function merge(array $xs): array { return $xs; }
+}
+/**
+ * @template T
+ * @return array<int, T>
+ */
+function same(array $xs): array { return $xs; }
+echo (new Coll())->merge([10, 20]), "|", through(new Child()), "|",
+    implode(",", (new Plain())->merge([7, 8])), "|", implode(",", same([5, 6]));
+"#,
+    );
+    assert_eq!(out, "2|7,8|7,8|5,6");
 }

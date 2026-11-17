@@ -383,6 +383,15 @@ pub(super) fn emit_release_eval_boxed_operands_keeping_result(
     emit_release_eval_boxed_operands(ctx, boxed);
 }
 
+/// Retires a positional eval argument array while preserving the bridge status.
+pub(super) fn retire_eval_call_argument_boxes(
+    ctx: &mut FunctionContext<'_>, operands: &[ValueId], args_offset: usize,
+) -> Result<()> {
+    let boxes: Vec<_> = operands.iter().enumerate().map(|(index, &value)|
+        (value, args_offset + index * 8)).collect();
+    retire_eval_metadata_operand_boxes(ctx, &boxes)
+}
+
 /// Retires metadata-query adapter boxes while preserving the C status or scalar predicate result.
 /// Existing Mixed operands remain borrowed; native payloads retain their original EIR owner.
 pub(super) fn retire_eval_metadata_operand_boxes(
@@ -432,35 +441,14 @@ pub(super) fn emit_eval_native_frame_override_probe(
     abi::emit_branch_if_int_result_zero(ctx.emitter, no_override_label);
 }
 
-/// Converts an eval Mixed result cell to the concrete EIR type expected here.
+/// Consumes an owned eval result box when a concrete ABI replaces its Mixed representation.
+/// Mixed and union callers instead receive the box itself.
 pub(super) fn emit_eval_result_as_type(ctx: &mut FunctionContext<'_>, result_ty: &PhpType) -> Result<()> {
-    match result_ty.codegen_repr() {
-        PhpType::Mixed | PhpType::Union(_) => Ok(()),
-        PhpType::Str => {
-            abi::emit_call_label(ctx.emitter, "__rt_mixed_cast_string");
-            Ok(())
-        }
-        PhpType::Float => {
-            abi::emit_call_label(ctx.emitter, "__rt_mixed_cast_float");
-            Ok(())
-        }
-        PhpType::Int => {
-            abi::emit_call_label(ctx.emitter, "__rt_mixed_cast_int");
-            Ok(())
-        }
-        PhpType::Bool | PhpType::False => {
-            abi::emit_call_label(ctx.emitter, "__rt_mixed_cast_bool");
-            Ok(())
-        }
-        PhpType::TaggedScalar => {
-            emit_eval_mixed_result_as_tagged_scalar(ctx);
-            Ok(())
-        }
-        PhpType::Void | PhpType::Never => {
-            abi::emit_load_int_immediate(
-                ctx.emitter,
-                abi::int_result_reg(ctx.emitter),
-                0x7fff_ffff_ffff_fffe,
+    let representation = result_ty.codegen_repr();
+    match representation {
+        PhpType::Narrow(_) | PhpType::Resource(_) | PhpType::Packed(_) => {
+            super::super::super::callables::results::emit_detach_owned_mixed_heap_result(
+                ctx.emitter, &representation,
             );
             Ok(())
         }
@@ -474,17 +462,11 @@ pub(super) fn emit_eval_result_as_type(ctx: &mut FunctionContext<'_>, result_ty:
             super::associative_results::emit_eval_owned_object_hash(ctx);
             Ok(())
         }
-        PhpType::Array(_) | PhpType::AssocArray { .. }
-        | PhpType::Iterable
-        | PhpType::Object(_)
-        | PhpType::Buffer(_)
-        | PhpType::Callable
-        | PhpType::Packed(_)
-        | PhpType::Pointer(_)
-        | PhpType::Narrow(_)
-        | PhpType::Resource(_) => {
-            emit_eval_unbox_mixed_to_owned_result(ctx, &result_ty.codegen_repr());
-            Ok(())
+        _ => {
+            let ty = if representation == PhpType::False { PhpType::Bool } else { representation };
+            super::super::super::callables::results::emit_unbox_owned_descriptor_result(
+                ctx.emitter, &ty, crate::ir::Ownership::Owned,
+            )
         }
     }
 }
@@ -504,23 +486,14 @@ pub(super) fn emit_eval_owned_result_as_type(
     result_ty: &PhpType,
 ) -> Result<()> {
     let repr = result_ty.codegen_repr();
-    if !matches!(
-        repr,
-        PhpType::Str
-            | PhpType::Int
-            | PhpType::Float
-            | PhpType::Bool
-            | PhpType::False
-            | PhpType::Array(_)
-            | PhpType::AssocArray { .. }
-            | PhpType::Iterable
-            | PhpType::Object(_)
-            | PhpType::Buffer(_)
-            | PhpType::Callable
-            | PhpType::Packed(_)
-            | PhpType::Pointer(_)
-            | PhpType::Resource(_)
-    ) {
+    // Every concrete conversion consumes the owned box itself. Only a container of objects, which
+    // is rebuilt out of the box's payload slot by slot, leaves the box for this wrapper to retire.
+    let object_container = match &repr {
+        PhpType::Array(element) => matches!(element.codegen_repr(), PhpType::Object(_)),
+        PhpType::AssocArray { value, .. } => matches!(value.codegen_repr(), PhpType::Object(_)),
+        _ => false,
+    };
+    if !object_container {
         return emit_eval_result_as_type(ctx, result_ty);
     }
     let result_reg = abi::int_result_reg(ctx.emitter);
@@ -529,14 +502,7 @@ pub(super) fn emit_eval_owned_result_as_type(
     abi::emit_push_result_value(ctx.emitter, &repr);
     abi::emit_load_temporary_stack_slot(ctx.emitter, result_reg, 16);
     abi::emit_decref_if_refcounted(ctx.emitter, &PhpType::Mixed);
-    match repr {
-        PhpType::Str => {
-            let (ptr_reg, len_reg) = abi::string_result_regs(ctx.emitter);
-            abi::emit_pop_reg_pair(ctx.emitter, ptr_reg, len_reg);
-        }
-        PhpType::Float => abi::emit_pop_float_reg(ctx.emitter, abi::float_result_reg(ctx.emitter)),
-        _ => abi::emit_pop_reg(ctx.emitter, result_reg),
-    }
+    abi::emit_pop_reg(ctx.emitter, result_reg);
     abi::emit_release_temporary_stack(ctx.emitter, 16);
     Ok(())
 }

@@ -36,6 +36,7 @@ AREAS: list[str] = [
     "Web",
     "Image",
     "XML",
+    "Tidy",
 ]
 
 
@@ -84,6 +85,9 @@ REGISTRY_AREA_DEFAULTS: Dict[str, Tuple[str, str]] = {
     # builtin `xml_parse_into_struct`; both PHP modules share one docs area and the
     # narrative page docs/php/xml.md.
     "xml": ("XML", "XML"),
+    # `Area::Tidy`: the 24 `tidy_*` prelude functions and the `tidy`/`tidyNode`
+    # classes, on a pinned static libtidy 5.8.0 from the native catalog.
+    "tidy": ("Tidy", "Tidy"),
     # `ext/random` procedural functions declared by the random prelude.
     "random": ("Math", "Random"),
 }
@@ -280,8 +284,15 @@ REGISTRY_AREA_OVERRIDES: Dict[str, Tuple[str, str]] = {
     "class_get_attributes": ("Class", "Attributes"),
     "ctype_alnum": ("Type", "Ctype"),
     "ctype_alpha": ("Type", "Ctype"),
+    "ctype_cntrl": ("Type", "Ctype"),
     "ctype_digit": ("Type", "Ctype"),
+    "ctype_graph": ("Type", "Ctype"),
+    "ctype_lower": ("Type", "Ctype"),
+    "ctype_print": ("Type", "Ctype"),
+    "ctype_punct": ("Type", "Ctype"),
     "ctype_space": ("Type", "Ctype"),
+    "ctype_upper": ("Type", "Ctype"),
+    "ctype_xdigit": ("Type", "Ctype"),
     "get_called_class": ("Class", "Class"),
     "get_class_methods": ("Class", "Class"),
     "get_class_vars": ("Class", "Class"),
@@ -318,6 +329,7 @@ REGISTRY_AREA_OVERRIDES: Dict[str, Tuple[str, str]] = {
 #   - `None` — leave whatever the parser produced alone (skip refinement).
 ParamSpec = object  # str | Tuple[str, str] | None — kept loose for legibility
 PARAM_TYPES: Dict[str, List[Optional[ParamSpec]]] = {
+    'simplexml_import_dom': ['DOMNode|Dom\\Node', '?string'],
     'finfo_buffer': ['finfo', 'string', 'int', '?resource'],
     'finfo_file': ['finfo', 'string', 'int', '?resource'],
     'finfo_close': ['finfo'],
@@ -443,10 +455,17 @@ PARAM_TYPES: Dict[str, List[Optional[ParamSpec]]] = {
     'curl_share_setopt': ['CurlShareHandle', 'int', 'mixed'],
     'curl_unescape': ['CurlHandle', 'string'],
     'curl_upkeep': ['CurlHandle'],
-    'ctype_alnum': ['string'],
-    'ctype_alpha': ['string'],
-    'ctype_digit': ['string'],
-    'ctype_space': ['string'],
+    'ctype_alnum': ['mixed'],
+    'ctype_alpha': ['mixed'],
+    'ctype_cntrl': ['mixed'],
+    'ctype_digit': ['mixed'],
+    'ctype_graph': ['mixed'],
+    'ctype_lower': ['mixed'],
+    'ctype_print': ['mixed'],
+    'ctype_punct': ['mixed'],
+    'ctype_space': ['mixed'],
+    'ctype_upper': ['mixed'],
+    'ctype_xdigit': ['mixed'],
     'current': ['array'],
     'date': ['string', 'int'],
     'date_default_timezone_set': ['string'],
@@ -804,12 +823,11 @@ class LoweringInfo:
     """Where the builtin is implemented in the compiler source."""
 
     sig_file: Optional[str] = None
-    sig_line: Optional[int] = None
     sig_arm: Optional[str] = None  # e.g. "\"strlen\" => Some(fixed(&[\"string\"]))"
     checker_file: Optional[str] = None
-    checker_line: Optional[int] = None
+    # No line numbers on purpose: they shift with every unrelated edit above the
+    # definition and turn the generated docs into a merge-conflict magnet.
     codegen_file: Optional[str] = None
-    codegen_line: Optional[int] = None
     codegen_function: Optional[str] = None  # e.g. "lower_strlen"
     runtime_helpers: List[str] = field(default_factory=list)
     notes: List[str] = field(default_factory=list)  # pulled from the /// doc comment of the lowering fn
@@ -860,6 +878,9 @@ def slug(name: str) -> str:
 # `check_builtin()` arms (which sometimes narrow to the wrong type, e.g.
 # `array_shift` returns `mixed`, not the array element type).
 RETURN_TYPE_OVERRIDES: Dict[str, str] = {
+    "simplexml_import_dom": "?SimpleXMLElement",
+    "simplexml_load_file": "SimpleXMLElement|false",
+    "simplexml_load_string": "SimpleXMLElement|false",
     "finfo_open": "finfo|false",
     # Numeric aggregates preserve integer overflow and floating-point values.
     # Their neutral Mixed contract covers this union because TypeSpec has no union variant.

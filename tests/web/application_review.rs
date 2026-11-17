@@ -373,6 +373,50 @@ Elephc\Web\Worker::register(new Application());
     assert_eq!(fs::read_to_string(fixture.0.join("lifecycle.log")).unwrap(), "stopped");
 }
 
+/// A normal stop lets an in-flight request and the shutdown hook finish.
+#[test]
+fn web_application_review_shutdown_drains_slow_request() {
+    let fixture = Fixture(make_test_dir("web_application_review_slow_shutdown"));
+    let binary = application(&fixture, r#"<?php
+class Application implements Elephc\Web\WorkerApplication {
+    public function handle(Elephc\Web\Request $request): void {
+        file_put_contents('__LOG__', 'started');
+        usleep(4_000_000);
+        echo 'slow';
+    }
+    public function shutdown(): void { file_put_contents('__LOG__', 'stopped', FILE_APPEND); }
+}
+Elephc\Web\Worker::register(new Application());
+"#);
+    let addr = format!("127.0.0.1:{}", free_port());
+    let mut server = spawn_server(&binary, &addr, "1");
+    let request_addr = addr.clone();
+    let request = std::thread::spawn(move || body(&request_addr, "/"));
+    let log = fixture.0.join("lifecycle.log");
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while Instant::now() < deadline {
+        if fs::read_to_string(&log)
+            .is_ok_and(|contents| contents.contains("started"))
+        {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(25));
+    }
+    let started = fs::read_to_string(&log).unwrap_or_default();
+    assert!(
+        started.contains("started"),
+        "handler did not start before SIGTERM: {started:?}"
+    );
+    server.kill().unwrap();
+    assert_eq!(request.join().unwrap(), "slow");
+    server.wait().unwrap();
+    let finished = fs::read_to_string(&log).unwrap();
+    assert!(
+        finished.ends_with("stopped"),
+        "shutdown hook did not run: {finished:?}"
+    );
+}
+
 /// Bootstrap and handler signal-mask changes survive the callback termination guard.
 #[test]
 fn web_application_review_callback_preserves_application_signal_mask() {

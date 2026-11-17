@@ -25,6 +25,7 @@ builtin! {
 
 /// Infers every input while leaving the by-reference capture destination write-only.
 fn check(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
+    super::preg_match::check_capture_output_storage(cx)?;
     cx.checker.infer_type(&cx.args[0], cx.env)?;
     cx.checker.infer_type(&cx.args[1], cx.env)?;
     if cx.args.len() >= 3

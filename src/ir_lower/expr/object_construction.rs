@@ -17,6 +17,40 @@ pub(super) fn lower_new_object(
     expr: &Expr,
 ) -> LoweredValue {
     let object_type = PhpType::Object(class_name.as_str().to_string());
+    if let Some(info) = ctx.throw_access_sites.get(&(ctx.loop_storage_scope.clone(), expr.span)) {
+        if let crate::types::ThrowAccessKind::PrivateConstructor {
+            visibility,
+            class_name: declaring_class,
+        } = &info.kind
+        {
+            // The throw-site map is keyed by span. `lower_throw_access_error_expr_as`
+            // builds a synthetic `new Error(...)` at that same span, which would find
+            // this entry and recurse forever. Only the class whose constructor owner is
+            // the recorded declaring class is the real construction; `Error` is not.
+            let owner = crate::types::constructor_owner(
+                ctx.classes,
+                class_name.as_str().trim_start_matches('\\'),
+            )
+            .map(|(owner, _)| owner);
+            if owner == Some(declaring_class.as_str()) {
+                let scope = ctx
+                    .current_class
+                    .as_deref()
+                    .map(|class| format!("from scope {class}"))
+                    .unwrap_or_else(|| "from global scope".to_string());
+                let message = format!(
+                    "Call to {} {}::__construct() {scope}",
+                    visibility, declaring_class
+                );
+                return crate::ir_lower::stmt::lower_throw_access_error_expr_as(
+                    ctx,
+                    &message,
+                    expr.span,
+                    object_type,
+                );
+            }
+        }
+    }
     if let Some(error) = crate::ir_lower::property_default_errors::for_class_as(
         ctx,
         class_name.as_str(),
@@ -142,6 +176,12 @@ fn lower_new_object_resolved(
     let mut operands = lower_user_args_with_signature(ctx, sig.as_ref(), call_args);
     ctx.call_description = previous_description;
     let evaluation_intermediates = finish_call_argument_evaluation(ctx, &mut operands);
+    // Publish AFTER argument evaluation: a nested construction executed by an argument
+    // (possibly from an included weak file) must not leave its own strictness behind for
+    // this constructor to read.
+    if is_mt19937_class(ctx, class_name.as_str()) {
+        publish_call_strictness(ctx, expr.span);
+    }
     let roots = root_user_call_operands(
         ctx,
         &mut operands,
@@ -294,6 +334,100 @@ fn unwrap_eval_aggregate_iterator_source(
     let mut rewritten = args.to_vec();
     rewritten[0] = source;
     Some(rewritten)
+}
+
+/// Returns whether a resolved class name is `Random\Engine\Mt19937` or inherits from it.
+///
+/// A subclass keeps the injected constructor, so constructing it must publish the call
+/// site's strictness exactly like a direct `Mt19937` construction.
+fn is_mt19937_class(ctx: &LoweringContext<'_, '_>, class_name: &str) -> bool {
+    let mut current = Some(class_name.trim_start_matches('\\').to_string());
+    while let Some(name) = current {
+        if php_symbol_key(&name) == "random\\engine\\mt19937" {
+            return true;
+        }
+        current = ctx.classes.get(&name).and_then(|info| info.parent.clone());
+    }
+    false
+}
+
+/// Publishes the constructing file's `strict_types` state for the next constructor call.
+///
+/// A prelude constructor cannot read the call site's source profile from PHP, so every site
+/// that may construct `Random\Engine\Mt19937` stores it in the runtime slot the injected
+/// `__elephc_call_strict_types()` builtin reads. Fixed construction publishes for that class
+/// and its subclasses; dynamic construction publishes unconditionally because the class is
+/// only known at run time.
+pub(super) fn publish_call_strictness(ctx: &mut LoweringContext<'_, '_>, span: Span) {
+    publish_call_strictness_value(ctx, span, crate::source::current_strict_types());
+}
+
+/// Publishes the caller's strictness before an explicit `__construct` method call.
+///
+/// `new` sites publish through the construction lowerers; an explicit
+/// `$engine->__construct(...)` or `parent::__construct(...)` is an ordinary method call
+/// and must publish the same per-file state before the injected constructor reads it.
+pub(super) fn publish_constructor_call_strictness(
+    ctx: &mut LoweringContext<'_, '_>,
+    method: &str,
+    span: Span,
+) {
+    // Compiler-generated constructor dispatch thunks (dynamic `new` planning) carry no
+    // source profile; publishing there would overwrite the user's call site with weak mode.
+    if span.is_from_source() && php_symbol_key(method) == "__construct" {
+        // A reflected invocation coerces its arguments regardless of the calling file's
+        // `strict_types` mode, so it must publish weak typing instead of suppressing the
+        // publication (the slot would otherwise keep the previous construction site's value).
+        // Only the dispatched call itself matches; constructors nested in its forwarded
+        // arguments keep the calling file's mode.
+        let reflected = ctx.reflected_invoke_call_span == Some(span);
+        let strict = !reflected && crate::source::current_strict_types();
+        publish_call_strictness_value(ctx, span, strict);
+    }
+}
+
+/// Publishes the caller's strictness before an explicit `Mt19937::__construct` static call.
+///
+/// A synthesized reflection-subclass constructor must keep its forwarding
+/// `parent::__construct(...)` as the first action, so only a static receiver that actually
+/// names `Random\Engine\Mt19937` (or inherits it) publishes here; an unrelated parent call
+/// must not insert an instruction ahead of the forwarding invariant.
+pub(super) fn publish_static_constructor_call_strictness(
+    ctx: &mut LoweringContext<'_, '_>,
+    receiver: &StaticReceiver,
+    method: &str,
+    span: Span,
+) {
+    if !span.is_from_source() || php_symbol_key(method) != "__construct" {
+        return;
+    }
+    let Some(class_name) = super::static_method_calls::static_receiver_class_name(ctx, receiver)
+    else {
+        return;
+    };
+    if is_mt19937_class(ctx, &class_name) {
+        let reflected = ctx.reflected_invoke_call_span == Some(span);
+        let strict = !reflected && crate::source::current_strict_types();
+        publish_call_strictness_value(ctx, span, strict);
+    }
+}
+
+/// Publishes an explicit `strict_types` value for the next constructor call.
+pub(super) fn publish_call_strictness_value(
+    ctx: &mut LoweringContext<'_, '_>,
+    span: Span,
+    strict_types: bool,
+) {
+    let strict = ctx.builder.emit_const_bool(strict_types);
+    ctx.emit_void(
+        Op::CoreBuiltin,
+        vec![strict],
+        Some(Immediate::I64(
+            crate::ir::CoreBuiltinOp::PublishCallStrictness.as_i64(),
+        )),
+        crate::ir::CoreBuiltinOp::PublishCallStrictness.effects(),
+        Some(span),
+    );
 }
 
 /// Emits fixed-class object construction and releases owned constructor argument temporaries.
@@ -708,11 +842,19 @@ pub(super) fn lower_new_dynamic(
 ) -> LoweredValue {
     let args = expand_static_call_spread_args(args);
     let name_value = lower_expr(ctx, name_expr);
-    let owns_name = ctx.value_is_owning_temporary(name_value)
-        && !ctx.value_is_owned_unboxed_local_load(name_value.value);
-    if owns_name { guard_descriptor_container(ctx, name_value, expr.span); }
+    // Constructor arguments can replace the original class-name binding. Retain its
+    // evaluated value, including provisional string projections from Mixed locals.
+    let name_type = ctx.builder.value_php_type(name_value.value);
+    let (name_value, name_owner) = if Ownership::php_type_needs_lifetime_tracking(&name_type) {
+        let name_temp = ctx.declare_hidden_temp(name_type.clone());
+        store_value_into_temp(ctx, &name_temp, name_type, name_value, expr.span);
+        let slot = ctx.local_slots[&name_temp];
+        register_owned_call_operand(ctx, slot, expr.span);
+        let borrowed = ctx.load_local(&name_temp, Some(expr.span));
+        ctx.builder.set_value_ownership(borrowed.value, Ownership::Borrowed);
+        (borrowed, Some(slot))
+    } else { (name_value, None) };
     crate::ir_lower::property_default_errors::for_dynamic_class(ctx, name_value, expr.span);
-    if owns_name { ctx.unguard_call_argument(name_value.value, expr.span); }
     // The bodies of the builtin `ReflectionClass::newInstance()` family are `new $this->__name(...$args)`
     // over a runtime array: planning that per class repeats a class-specific argument binder for
     // every class in the module, in every one of those bodies (about 1M instructions each in a
@@ -726,12 +868,20 @@ pub(super) fn lower_new_dynamic(
             .is_some_and(|class| crate::ir_lower::reflection::canonical_builtin_reflection_class_name(class).is_some())
         && args.len() == 1
         && is_spread_arg(&args[0]);
-    if !reflection_body_with_runtime_args {
-        if let Some(value) = lower_new_dynamic_planned_dispatch(ctx, name_value, &args, expr) {
-            return value;
-        }
+    let planned = if reflection_body_with_runtime_args {
+        None
+    } else {
+        lower_new_dynamic_planned_dispatch(ctx, name_value, &args, expr)
+    };
+    let result = planned.unwrap_or_else(|| lower_new_dynamic_generic(ctx, name_value, &args, expr));
+    if let Some(slot) = name_owner {
+        let guard_result = ctx.value_is_owning_temporary(result)
+            && !ctx.has_call_argument_guard(result.value);
+        if guard_result { guard_descriptor_container(ctx, result, expr.span); }
+        retire_owned_call_operand(ctx, slot, expr.span);
+        if guard_result { ctx.unguard_call_argument(result.value, expr.span); }
     }
-    lower_new_dynamic_generic(ctx, name_value, &args, expr)
+    result
 }
 
 /// Emits the generic runtime class-name dispatch for `new $class(...)`.
@@ -758,7 +908,6 @@ pub(super) fn lower_new_dynamic_generic(
         ctx.declare_eval_context_local();
     }
     let mut operands = vec![name_value.value];
-    let mut positional_operands: Vec<crate::ir::ValueId> = Vec::new();
     let spread_or_named =
         args.iter().any(is_spread_arg) || crate::types::call_args::has_named_args(args);
     // Plain positional arguments take the same container, so the site constructs through the
@@ -784,6 +933,12 @@ pub(super) fn lower_new_dynamic_generic(
             )
         });
     let uses_runtime_arg_container = spread_or_named || positional_container;
+    let result_staging = if uses_runtime_arg_container { None } else {
+        prepublish_call_result(ctx, &PhpType::Mixed, expr.span)
+    };
+    let mut positional = Vec::new();
+    let mut intermediates = Vec::new();
+    let mut roots = Vec::new();
     let arg_container = if uses_runtime_arg_container {
         let arg_container = lower_untyped_descriptor_invoker_arg_container(ctx, args, expr.span);
         // A variadic parameter that received a named argument is typed `iterable` (its storage
@@ -802,10 +957,17 @@ pub(super) fn lower_new_dynamic_generic(
         }
         Some((arg_container, owns_arguments))
     } else {
-        positional_operands = lower_args(ctx, args);
-        operands.extend(positional_operands.iter().copied());
+        begin_call_argument_evaluation(ctx);
+        positional = lower_args(ctx, args);
+        intermediates = finish_call_argument_evaluation(ctx, &mut positional);
+        roots = root_user_call_operands(ctx, &mut positional, None, &ReturnArgAlias::None,
+            &PhpType::Mixed, expr.span);
+        operands.extend(positional.iter().copied());
         None
     };
+    // Arguments are fully evaluated above; a nested construction cannot overwrite the
+    // published strictness before this constructor runs.
+    publish_call_strictness(ctx, expr.span);
     let result = ctx.emit_value(
         Op::DynamicObjectNewMixed,
         operands,
@@ -818,17 +980,7 @@ pub(super) fn lower_new_dynamic_generic(
         Op::DynamicObjectNewMixed.default_effects(),
         Some(expr.span),
     );
-    // The constructor copies what it keeps, so an owned temporary argument (an array element read,
-    // `strtoupper($x)`) is still the site's to retire: it leaked one block per call.
-    if !positional_operands.is_empty() {
-        release_owned_call_arg_temporaries(
-            ctx,
-            &positional_operands,
-            Some(result.value),
-            &ReturnArgAlias::Unknown,
-            expr.span,
-        );
-    }
+    stage_call_result(ctx, result_staging.as_ref(), result, expr.span);
     if let Some((arg_container, true)) = arg_container {
         let guard_result = ctx.value_is_owning_temporary(result);
         if guard_result {
@@ -839,8 +991,12 @@ pub(super) fn lower_new_dynamic_generic(
         if guard_result {
             ctx.unguard_call_argument(result.value, expr.span);
         }
+    } else if !uses_runtime_arg_container {
+        release_owned_call_arg_temporaries_with_roots(ctx, &positional, None,
+            &ReturnArgAlias::None, None, &roots, expr.span);
+        retire_call_argument_intermediates(ctx, &intermediates);
     }
-    result
+    take_prepublished_call_result(ctx, result_staging, result, expr.span)
 }
 
 /// Lowers dynamic object construction.
@@ -861,6 +1017,7 @@ pub(super) fn lower_new_dynamic_object(
     }
     let mut operands = vec![class_name.value];
     operands.extend(lower_args(ctx, args));
+    publish_call_strictness(ctx, expr.span);
     let name = format!("{}|{}", fallback_class.as_str(), required_parent.as_str());
     let data = ctx.intern_class_name(&name);
     ctx.emit_value(

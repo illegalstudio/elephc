@@ -6,6 +6,9 @@
 //!
 //! Key details:
 //! - Preserves compile-time metadata, target-aware object layout, and ownership.
+//! - Fresh nested reflectors transfer their producer reference into each boxed property.
+//! - Declaring-class slots hold a builder address, so a member reflector owns no
+//!   `ReflectionClass` and never forms a cycle with one.
 
 use super::*;
 
@@ -166,7 +169,8 @@ pub(super) fn emit_reflection_parent_class_property(
     let object_reg = abi::symbol_scratch_reg(ctx.emitter);
     abi::emit_push_reg(ctx.emitter, result_reg);
     if let Some(parent_class_name) = parent_class_name {
-        emit_full_reflection_class_object(ctx, parent_class_name)?;
+        let parent_metadata = reflection_class_metadata_for_name(ctx, parent_class_name)?;
+        emit_reflection_owner_object(ctx, "ReflectionClass", &parent_metadata)?;
         emit_box_current_owned_value_as_mixed(
             ctx.emitter,
             &PhpType::Object("ReflectionClass".to_string()),
@@ -183,14 +187,27 @@ pub(super) fn emit_reflection_parent_class_property(
     Ok(())
 }
 
-/// Replaces a member reflector's private declaring-class slot with `ReflectionClass|false`.
+/// Leaves a boxed `int` holding the address of `class_name`'s module-level `ReflectionClass`
+/// builder in the integer result register.
 ///
-/// A reflector whose class declares `__declaring_class_thunk` (`ReflectionMethod`,
-/// `ReflectionProperty`) records the address of its declaring class's shared shallow
-/// materializer there instead, and `getDeclaringClass()` builds the object when asked. Building
-/// it here made every reflector a graph that a `--web` request then tore down: Symfony's
-/// `Request::setProperty()` keeps seven reflectors in a static and never asks one for its class,
-/// and the eager objects cost 2.15M of its 16.89M instructions per request.
+/// Member reflectors (methods, properties, constants, enum cases, parameters) store this
+/// address instead of a `ReflectionClass`, and their getters call it through
+/// `__elephc_reflection_class_build()`. Materializing a reflector per member cost the class's
+/// default and static property arrays per member (megabytes for `mysqli`), and sharing one
+/// complete reflector would form a cycle with its own members. Building at call time gives
+/// php's fresh, complete reflector per call, and the member holds no object at all.
+pub(super) fn emit_reflection_class_builder_address_as_mixed(
+    ctx: &mut FunctionContext<'_>,
+    class_name: &str,
+) {
+    let label = ctx.shared.request_reflection_class_builder(class_name);
+    let result_reg = abi::int_result_reg(ctx.emitter);
+    abi::emit_symbol_address(ctx.emitter, result_reg, &label);
+    emit_box_current_value_as_mixed(ctx.emitter, &PhpType::Int);
+}
+
+/// Replaces a member reflector's private declaring-class slot with its class's builder
+/// address (see `emit_reflection_class_builder_address_as_mixed`), or `false`.
 pub(super) fn emit_reflection_declaring_class_property(
     ctx: &mut FunctionContext<'_>,
     member_class_name: &str,
@@ -238,11 +255,7 @@ pub(super) fn emit_reflection_declaring_class_property(
         return Ok(());
     }
     if let Some(declaring_class_name) = declaring_class_name {
-        emit_shallow_reflection_class_object(ctx, declaring_class_name)?;
-        emit_box_current_owned_value_as_mixed(
-            ctx.emitter,
-            &PhpType::Object("ReflectionClass".to_string()),
-        );
+        emit_reflection_class_builder_address_as_mixed(ctx, declaring_class_name);
     } else {
         abi::emit_load_int_immediate(ctx.emitter, result_reg, 0);
         emit_box_current_value_as_mixed(ctx.emitter, &PhpType::Bool);
@@ -273,7 +286,8 @@ pub(super) fn emit_reflection_enum_property(
     let object_reg = abi::symbol_scratch_reg(ctx.emitter);
     abi::emit_push_reg(ctx.emitter, result_reg);
     if let Some(enum_name) = enum_name {
-        emit_shallow_reflection_enum_object(ctx, enum_name)?;
+        let enum_metadata = reflection_enum_metadata_for_name(ctx, enum_name)?;
+        emit_reflection_owner_object(ctx, "ReflectionEnum", &enum_metadata)?;
         emit_box_current_owned_value_as_mixed(
             ctx.emitter,
             &PhpType::Object("ReflectionEnum".to_string()),

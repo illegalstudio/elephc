@@ -1,27 +1,26 @@
 ---
 title: "ctype_digit()"
 description: "Checks if all characters in the string are digits."
-sidebar:
-  order: 1096
 ---
 
 ## ctype_digit()
 
 ```php
-function ctype_digit(string $text): bool
+function ctype_digit(mixed $text): bool
 ```
 
 Checks if all characters in the string are digits.
 
 **Parameters**:
-- `$text` (`string`)
+- `$text` (`mixed`)
 
 **Returns**: `bool`
 
 ## Availability
 
-- **Compiled (AOT)**: supported by the Elephc code generator.
-- **`eval()` (magician interpreter)**: supported through a declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/string/ctype_digit.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/string/ctype_digit.rs)).
+| Compiled (AOT) | Magician (eval) |
+|---|---|
+| Available | Available |
 
 _No examples yet. Check `examples/` and `showcases/` for usage patterns._
 

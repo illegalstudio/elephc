@@ -60,7 +60,7 @@ fn candidate_gc_subgraphs_assemble_on_all_supported_targets() {
             crate::codegen_support::runtime::fibers::emit_fiber_resume(&mut emitter);
             crate::codegen_support::runtime::fibers::emit_fiber_throw(&mut emitter);
             crate::codegen_support::runtime::fibers::emit_fiber_suspend(&mut emitter);
-            crate::codegen_support::runtime::reference_cells::emit_reference_cells(&mut emitter);
+            crate::codegen_support::runtime::reference_cells::emit_reference_cells(&mut emitter, false);
             crate::codegen_support::runtime::callables::emit_callable_descriptor_release(&mut emitter);
             crate::codegen_support::callable_descriptor::emit_initialize_runtime_descriptor(
                 &mut emitter, if target.arch == Arch::AArch64 { "x0" } else { "rax" });

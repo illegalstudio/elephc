@@ -82,6 +82,9 @@ pub(in crate::interpreter) fn execute_class_decl_stmt(
         );
         return Err(EvalStatus::RuntimeFatal);
     }
+    // The class as written, before trait expansion: the trait-collision deprecations compare its
+    // own property defaults against the traits'.
+    let declared = Arc::clone(class);
     // Nothing to expand, nothing to stamp: the parsed class IS the declared class, so it is
     // shared rather than copied. `expand_eval_class_traits` answers `class.clone()` for a
     // trait-free class and both stamps are no-ops in that case, which made every request deep-copy
@@ -221,6 +224,11 @@ pub(in crate::interpreter) fn execute_class_decl_stmt(
             validate_concrete_class_aot_interface_requirements(class, context, values, false),
         )?;
     }
+    // While the class is bound early, an override PHP accepts only once it has found a class
+    // keeps the class for its statement when that class does not exist yet.
+    if eval_required_override_lookup_is_missing(class, context, values)? {
+        return Err(EvalStatus::RuntimeFatal);
+    }
     let declaration_file = eval_declaration_source_file(context);
     if context.define_class(Arc::clone(class)) {
         context.set_class_source_file(class.name(), declaration_file);
@@ -232,27 +240,19 @@ pub(in crate::interpreter) fn execute_class_decl_stmt(
         }
         trace_class_decl_result(
             class,
-            "initialize_constants",
-            initialize_eval_declared_constants(
-                class.name(),
-                class.constants(),
-                context,
-                scope,
-                values,
-            ),
-        )?;
-        let result = trace_class_decl_result(
-            class,
             "initialize_static_properties",
             initialize_eval_static_properties(class, context, scope, values),
-        );
-        if result.is_ok() && crate::eval_trace::enabled() {
+        )?;
+        // Taken when the class is bound: at program entry for a class php-src binds while
+        // compiling the program (see `early_binding`), at its statement otherwise.
+        eval_record_declaration_snapshot(class.name(), context, values)?;
+        if crate::eval_trace::enabled() {
             eprintln!(
                 "[elephc-eval-trace] phase=class_decl_ok class={:?}",
                 class.name(),
             );
         }
-        result
+        eval_raise_trait_collision_deprecations(&declared, context, values)
     } else {
         trace_class_decl_stage(class, "define_class", EvalStatus::RuntimeFatal);
         Err(EvalStatus::RuntimeFatal)
@@ -491,4 +491,30 @@ pub(in crate::interpreter) fn eval_declaration_source_file(context: &ElephcEvalC
         })
         .flatten()
         .unwrap_or_else(|| context.eval_file_magic())
+}
+
+/// Evaluates, when execution reaches the class statement, the defaults php-src compares while
+/// binding the class's traits (a class property compatibly redeclaring a trait's, or two traits
+/// declaring the same property; see `eval_trait_collision_defaults`). Their deprecation notices
+/// are raised here; class initialization later evaluates the winning default again.
+fn eval_raise_trait_collision_deprecations(
+    declared: &EvalClass,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<(), EvalStatus> {
+    let defaults = eval_trait_collision_defaults(declared.properties(), declared.traits(), context);
+    for (default, origin) in &defaults {
+        // A trait initialized before this statement holds its default already evaluated.
+        if origin.as_deref().is_some_and(|origin| context.class_initialization_ran(origin)) {
+            continue;
+        }
+        let mut default_scope = ElephcEvalScope::new();
+        let value = eval_class_like_member_default(
+            declared.name(), None, default, context, &mut default_scope, values,
+        )?;
+        if !value.is_borrowed() {
+            values.release(value)?;
+        }
+    }
+    Ok(())
 }

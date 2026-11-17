@@ -155,8 +155,10 @@ impl FakeOps {
                 Self::object_property(&properties, "__constructor").map_or_else(|| self.null(), Ok)
             }
             (FakeValue::Object(properties), "getdeclaringclass") if args.is_empty() => {
-                Self::object_property(&properties, "__declaring_class")
-                    .map_or_else(|| self.bool_value(false), Ok)
+                match Self::object_property(&properties, "__declaring_class") {
+                    Some(slot) => self.reflection_lazy_class_read(slot),
+                    None => self.bool_value(false),
+                }
             }
             (FakeValue::Object(properties), "getdeclaringfunction") if args.is_empty() => {
                 Self::object_property(&properties, "__declaring_function")
@@ -321,7 +323,10 @@ impl FakeOps {
                     .map_or_else(|| self.null(), Ok)
             }
             (FakeValue::Object(properties), "getclass") if args.is_empty() => {
-                Self::object_property(&properties, "__class").map_or_else(|| self.null(), Ok)
+                match Self::object_property(&properties, "__class") {
+                    Some(slot) => self.reflection_lazy_class_read(slot),
+                    None => self.null(),
+                }
             }
             (FakeValue::Object(properties), "isdynamic") if args.is_empty() => {
                 Self::object_property(&properties, "__is_dynamic")

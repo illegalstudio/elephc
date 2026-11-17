@@ -383,8 +383,10 @@ pub(super) fn reflection_constant_value(
             left,
             op,
             right,
-            depth,
-        ),
+            depth + 1,
+        ).or_else(|error| super::constant_resolved::reflection_resolved_constant_value(
+            ctx, current_class, expr,
+        ).ok_or(error)),
         ExprKind::ClassConstant { receiver } => {
             let class_name =
                 reflection_static_receiver_name(current_class, current_info, receiver)?;
@@ -475,10 +477,12 @@ pub(super) fn reflection_constant_value(
                 depth,
             )
         }
-        other => Err(CodegenIrError::unsupported(format!(
-            "ReflectionClass constant metadata expression {:?}",
-            other
-        ))),
+        // Projections, branch selectors and coalescing share the property-default folder.
+        other => super::constant_resolved::reflection_resolved_constant_value(ctx, current_class, expr)
+            .ok_or_else(|| CodegenIrError::unsupported(format!(
+                "ReflectionClass constant metadata expression {:?}",
+                other
+            ))),
     }
 }
 
@@ -834,6 +838,7 @@ pub(super) fn reflection_constant_value_kind(value: &ReflectionConstantValue) ->
         ReflectionConstantValue::Str(_) => "string",
         ReflectionConstantValue::Null => "null",
         ReflectionConstantValue::EnumCase { .. } => "enum-case",
+        ReflectionConstantValue::Evaluated { value, .. } => reflection_constant_value_kind(value),
         ReflectionConstantValue::Array(_) => "array",
         ReflectionConstantValue::AssocArray(_) => "assoc-array",
         ReflectionConstantValue::Undefined(_) => "undefined-constant",

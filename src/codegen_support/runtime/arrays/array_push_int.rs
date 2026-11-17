@@ -7,6 +7,9 @@
 //!
 //! Key details:
 //! - Array helpers operate on runtime array headers and element cells; mutations must respect capacity and COW contracts.
+//! - A unique, non-empty array with spare capacity appends in a leaf path: no frame, no
+//!   `__rt_array_ensure_unique` call, and no growth call. Shared, empty, or full arrays keep the
+//!   original COW/shape/growth path unchanged.
 
 use crate::codegen_support::emit::Emitter;
 use crate::codegen_support::platform::Arch;
@@ -35,12 +38,30 @@ pub fn emit_array_push_int(emitter: &mut Emitter) {
 
     // -- a destination already promoted to hash storage (an earlier sparse/negative keyed
     //    write converted it) appends at PHP's next integer key, not the packed length --
+    emitter.instruction("cbz x0, __rt_array_push_int_slow");                    // null receivers stay on the conservative path
     emitter.instruction("ldr x9, [x0, #-8]");                                   // load the packed heap-kind/value_type word
     emitter.instruction("and x9, x9, #0xff");                                   // isolate the low byte holding the storage kind
     emitter.instruction("cmp x9, #3");                                          // kind 3 = an earlier write already promoted this destination to a hash
     emitter.instruction("b.eq __rt_array_push_int_already_hash");               // delegate to __rt_hash_append instead of walking packed storage
+    // -- append into a unique, pre-shaped array with spare capacity without a call --
+    emitter.comment("-- append into a unique array that already has scalar shape and capacity --");
+    emitter.instruction("cbz x0, __rt_array_push_int_slow");                    // null receivers stay on the conservative path
+    emitter.instruction("ldr w9, [x0, #-12]");                                  // load the current array refcount from the uniform heap header
+    emitter.instruction("cmp w9, #1");                                          // can this owner append without a COW split?
+    emitter.instruction("b.hi __rt_array_push_int_slow");                       // shared arrays still need the cloning path
+    emitter.instruction("ldr x9, [x0]");                                        // load the current logical length
+    emitter.instruction("cbz x9, __rt_array_push_int_slow");                    // the first append still needs shape specialization
+    emitter.instruction("ldr x10, [x0, #8]");                                   // load the current capacity
+    emitter.instruction("cmp x9, x10");                                         // is there room for one more scalar slot?
+    emitter.instruction("b.hs __rt_array_push_int_slow");                       // full arrays still need the growth path
+    emitter.instruction("add x10, x0, #24");                                    // compute the base of the scalar payload region
+    emitter.instruction("str x1, [x10, x9, lsl #3]");                           // store the appended scalar into the next slot
+    emitter.instruction("add x9, x9, #1");                                      // advance the logical length
+    emitter.instruction("str x9, [x0]");                                        // publish the updated length
+    emitter.instruction("ret");                                                 // return the unchanged unique array pointer
 
     // -- split shared arrays before appending in place --
+    emitter.label("__rt_array_push_int_slow");
     emitter.instruction("sub sp, sp, #32");                                     // allocate 32 bytes on the stack
     emitter.instruction("stp x29, x30, [sp, #16]");                             // save frame pointer and return address
     emitter.instruction("add x29, sp, #16");                                    // set up new frame pointer
@@ -124,11 +145,32 @@ fn emit_array_push_int_linux_x86_64(emitter: &mut Emitter) {
 
     // -- a destination already promoted to hash storage (an earlier sparse/negative keyed
     //    write converted it) appends at PHP's next integer key, not the packed length --
+    emitter.instruction("test rdi, rdi");                                       // null receivers stay on the conservative path
+    emitter.instruction("jz __rt_array_push_int_x86_slow");                     // preserve the slow path's null handling
     emitter.instruction("mov r10, QWORD PTR [rdi - 8]");                        // load the packed heap-kind/value_type word
     emitter.instruction("and r10, 0xff");                                       // isolate the low byte holding the storage kind
     emitter.instruction("cmp r10, 3");                                          // kind 3 = an earlier write already promoted this destination to a hash
     emitter.instruction("je __rt_array_push_int_already_hash");                 // delegate to __rt_hash_append instead of walking packed storage
+    // -- append into a unique, pre-shaped array with spare capacity without a call --
+    emitter.comment("-- append into a unique array that already has scalar shape and capacity --");
+    emitter.instruction("test rdi, rdi");                                       // null receivers stay on the conservative path
+    emitter.instruction("jz __rt_array_push_int_x86_slow");                     // preserve the slow path's null handling
+    emitter.instruction("mov r10d, DWORD PTR [rdi - 12]");                      // load the current indexed-array refcount from the uniform heap header
+    emitter.instruction("cmp r10d, 1");                                         // can this owner append without a COW split?
+    emitter.instruction("ja __rt_array_push_int_x86_slow");                     // shared arrays still need the cloning path
+    emitter.instruction("mov r10, QWORD PTR [rdi]");                            // load the current logical length
+    emitter.instruction("test r10, r10");                                       // is this the first append into a freshly empty array?
+    emitter.instruction("jz __rt_array_push_int_x86_slow");                     // the first append still needs shape specialization
+    emitter.instruction("mov r11, QWORD PTR [rdi + 8]");                        // load the current capacity
+    emitter.instruction("cmp r10, r11");                                        // is there room for one more scalar slot?
+    emitter.instruction("jae __rt_array_push_int_x86_slow");                    // full arrays still need the growth path
+    emitter.instruction("mov QWORD PTR [rdi + 24 + r10 * 8], rsi");             // store the appended scalar into the next slot
+    emitter.instruction("add r10, 1");                                          // advance the logical length
+    emitter.instruction("mov QWORD PTR [rdi], r10");                            // publish the updated length
+    emitter.instruction("mov rax, rdi");                                        // return the unchanged unique array pointer
+    emitter.instruction("ret");                                                 // return to the caller
 
+    emitter.label("__rt_array_push_int_x86_slow");
     emitter.instruction("push rbp");                                            // preserve the caller frame pointer before reserving indexed-array append spill slots
     emitter.instruction("mov rbp, rsp");                                        // establish a stable frame base for the saved scalar payload and array pointer
     emitter.instruction("sub rsp, 16");                                         // reserve aligned spill slots for the appended scalar payload and the possibly-grown array pointer
@@ -180,4 +222,68 @@ fn emit_array_push_int_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("cmp rcx, 8");                                          // the never placeholder (an empty array promoted before any typed write) means int
     emitter.instruction("cmove rcx, r10");                                      // fall back to the plain integer tag for the placeholder
     emitter.instruction("jmp __rt_hash_append");                                // tail-call: insert at max(int keys) + 1, matching PHP's append rule
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::codegen_support::platform::{Arch, Target};
+
+    use super::*;
+
+    /// Every target appends into a unique, pre-shaped array without a helper call or frame.
+    #[test]
+    fn array_push_int_has_a_call_free_unique_path_on_every_target() {
+        for name in [
+            "macos-aarch64",
+            "ios-arm64",
+            "ios-sim-arm64",
+            "linux-aarch64",
+            "linux-x86_64",
+        ] {
+            let target = Target::parse(name).unwrap();
+            let mut emitter = Emitter::new(target);
+            emit_array_push_int(&mut emitter);
+            let asm = emitter.output();
+            let slow = if target.arch == Arch::X86_64 {
+                "__rt_array_push_int_x86_slow:"
+            } else {
+                "__rt_array_push_int_slow:"
+            };
+            let start = asm.find("__rt_array_push_int:\n").expect("push helper");
+            let end = asm.find(slow).expect("slow-path label");
+            let leaf = &asm[start..end];
+            assert!(!leaf.contains("__rt_array_ensure_unique"), "{name}: {leaf}");
+            assert!(!leaf.contains("__rt_array_grow"), "{name}: {leaf}");
+            assert!(!leaf.contains("sub sp"), "{name}: {leaf}");
+            assert!(!leaf.contains("push rbp"), "{name}: {leaf}");
+            assert!(leaf.contains("ret"), "{name}: {leaf}");
+        }
+    }
+
+    /// The slow path keeps copy-on-write, first-append shape, and growth handling.
+    #[test]
+    fn array_push_int_slow_path_keeps_cow_shape_and_growth_on_every_target() {
+        for name in [
+            "macos-aarch64",
+            "ios-arm64",
+            "ios-sim-arm64",
+            "linux-aarch64",
+            "linux-x86_64",
+        ] {
+            let target = Target::parse(name).unwrap();
+            let mut emitter = Emitter::new(target);
+            emit_array_push_int(&mut emitter);
+            let asm = emitter.output();
+            let slow = if target.arch == Arch::X86_64 {
+                "__rt_array_push_int_x86_slow:"
+            } else {
+                "__rt_array_push_int_slow:"
+            };
+            let start = asm.find(slow).expect("slow-path label");
+            let tail = &asm[start..];
+            assert!(tail.contains("__rt_array_ensure_unique"), "{name}: {tail}");
+            assert!(tail.contains("__rt_array_push_int_shape_ready"), "{name}: {tail}");
+            assert!(tail.contains("__rt_array_push_int_grow"), "{name}: {tail}");
+        }
+    }
 }

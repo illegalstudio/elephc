@@ -389,6 +389,9 @@ impl Checker {
     /// as an operation on a null-typed value: issue #892 reported
     /// `unsupported EIR backend feature: icmp for PHP type Void`, positionless, from
     /// `$running = null; do { … } while ($running > 0);` around `curl_multi_exec()`.
+    ///
+    /// `layout_contract` says the parameter carries a written array type; rule 4 in the body
+    /// (in-place conversion of a typed list to that layout) applies to no other parameter.
     pub(crate) fn require_boxed_by_ref_storage(
         &mut self,
         expected_ty: &PhpType,
@@ -396,14 +399,81 @@ impl Checker {
         arg: &Expr,
         env: &TypeEnv,
         can_widen_local: bool,
+        layout_contract: bool,
         context: &str,
     ) -> Result<(), CompileError> {
+        if matches!(expected_ty.codegen_repr(), PhpType::Mixed | PhpType::Object(_))
+            && self.is_native_selection_reference_argument(arg, env)?
+        {
+            // Native XML selections receive independent managed cells instead of borrowing
+            // the parent's physical property or dimension storage.
+            return Ok(());
+        }
+        // Guards refine the current value, while a reference still addresses the original
+        // slot. Coalescing assignments likewise keep nullable parameter storage alive.
+        let storage_ty = self.guarded_local_storage_type(arg, env).unwrap_or(actual_ty).clone();
+        // A declared-type array/object/float local bound to a nullable parameter of its own
+        // kind keeps its typed slot: the call writes the boxed cell back and verifies its kind.
+        // Any other local takes the boxed cell below instead.
+        if self.nullable_reference_keeps_concrete_storage(expected_ty, actual_ty, arg) {
+            return Ok(());
+        }
+        // Rule 4: a declared container parameter reads and writes the caller's storage with the
+        // layout it declares. A typed list has another layout when the parameter is a hash
+        // (`array<K, V>`) or a list of boxed values (a written `array<mixed>`). `types_compatible`
+        // admits the list (correct for a by-VALUE parameter, which receives a converted copy), so
+        // nothing refused the binding: `function f(array<int, int> &$ids) { $ids[0] = 7; }` given
+        // `$ids = [4, 5]` wrote hash entries into the vector and crashed, and `array<mixed> &$a`
+        // stored boxed cells the caller went on reading as integers.
+        //
+        // An ordinary local can change representation in place, exactly as `unset($a[$k])`
+        // promotes one, and lowering emits that conversion before taking the reference. Storage
+        // other code already reads as a typed list (a declared `array<T>` variable, a parameter
+        // bound by reference, an alias, a global, a static, a property, an element) cannot.
+        //
+        // Only a WRITTEN array type is that contract (`layout_contract`). A plain `array` hint
+        // resolves to the same `array<mixed>` before a call site sharpens it, and is bound
+        // through the boxed reference cell below: `mysqli_poll(..., array &$reject, ...)`
+        // forwards its own parameter to `mysqli::poll()`'s, which no caller could convert.
+        if layout_contract
+            && crate::types::binds_packed_reference_argument(expected_ty, &storage_ty)
+        {
+            // `can_widen_local` was decided before this argument was recorded as an alias root,
+            // so it answers for the FIRST time a call binds the local. A call can be checked
+            // more than once (a loop infers its calls before its body is checked), and by then
+            // the local is an alias root: the conversion that earlier check approved is still
+            // pending and approves this one. A pending output of another layout (an earlier
+            // `mixed &` slot of the same call boxing the local) is a conflict instead.
+            let target =
+                crate::types::packed_reference_argument_storage(expected_ty, &storage_ty);
+            let pending = self.pending_boxed_reference_output(by_ref_storage_place(arg));
+            let approved = match pending {
+                Some(pending) => Some(pending) == target.as_ref(),
+                None => can_widen_local,
+            };
+            let promotable = matches!(by_ref_storage_place(arg).kind, ExprKind::Variable(_))
+                && target.is_some()
+                && approved;
+            if promotable {
+                return Ok(());
+            }
+            return Err(CompileError::new(
+                arg.span,
+                &format!(
+                    "{} expects {}, got {}: a by-reference parameter uses the caller's own \
+                     storage, and this list cannot be converted to the parameter's layout \
+                     there. Declare the variable with the parameter's type (`{} $v = [...]`), \
+                     or declare the parameter as the list `{}` or as plain `array`",
+                    context, expected_ty, storage_ty, expected_ty, storage_ty
+                ),
+            ));
+        }
         // The caller-storage preparation pass widens concrete variables to boxed cells whenever
         // a gradual or nullable reference contract can replace their value. Conversely, EIR
         // lowering inserts a checked concrete temporary for a boxed caller passed to a concrete
         // reference parameter, then publishes the result back. Representation equality at the
-        // source call site is therefore no longer a validity requirement (this also retires the
-        // main-side "boxed variable cannot receive a raw scalar write" refusal).
+        // source call site is therefore no longer a validity requirement (this retires the
+        // "boxed variable cannot receive a raw scalar write" refusal).
         // A pointer by-reference parameter writes a raw pointer word back through the caller's
         // storage. Only a whole local can receive it (lowering then checks that its frame slot
         // is a pointer word); an array element lives in boxed or null element storage.
@@ -439,8 +509,78 @@ impl Checker {
                 ),
             ));
         }
-        let _ = (can_widen_local, env);
         Ok(())
+    }
+
+    /// Returns the storage a call still being checked has decided to give the local `arg` names.
+    ///
+    /// Recorded outputs are removed once their call has been applied, so an entry of the current
+    /// scope belongs to a call whose arguments are still being validated, or to a call a loop
+    /// inferred ahead of checking its body.
+    fn pending_boxed_reference_output(&self, arg: &Expr) -> Option<&PhpType> {
+        let ExprKind::Variable(name) = &arg.kind else {
+            return None;
+        };
+        self.boxed_reference_outputs
+            .iter()
+            .filter(|((scope, _), _)| scope == &self.current_loop_storage_scope)
+            .find_map(|(_, outputs)| outputs.get(name))
+    }
+
+    /// Refuses a list argument whose elements cannot be rebuilt as a declared hash parameter's
+    /// values.
+    ///
+    /// A list is a valid value for a declared `array<K, V>` parameter and lowering rebuilds it
+    /// as the hash the callee is compiled for (`crate::types::packed_argument_hash_storage`).
+    /// Element storage that conversion cannot produce is refused: bound unchanged, the callee
+    /// would read one layout as another.
+    pub(crate) fn require_packed_argument_hash_storage(
+        &self,
+        expected_ty: &PhpType,
+        actual_ty: &PhpType,
+        span: crate::span::Span,
+        context: &str,
+    ) -> Result<(), CompileError> {
+        if crate::types::binds_packed_argument_to_hash(expected_ty, actual_ty)
+            && crate::types::packed_argument_hash_storage(expected_ty, actual_ty).is_none()
+        {
+            return Err(CompileError::new(
+                span,
+                &format!(
+                    "{} expects {}, got {}; the element storage differs",
+                    context, expected_ty, actual_ty
+                ),
+            ));
+        }
+        Ok(())
+    }
+
+    /// Returns the storage contract hidden by a local's current guard or coalescing view.
+    pub(crate) fn guarded_local_storage_type(&self, arg: &Expr, env: &TypeEnv) -> Option<&PhpType> {
+        let ExprKind::Variable(name) = &by_ref_storage_place(arg).kind else {
+            return None;
+        };
+        self.guarded_union_types.get(name)
+            .filter(|origin| env.get(name).is_some_and(|view|
+                self.merged_assignment_type(&origin.ty, view).as_ref() == Some(&origin.ty)))
+            .map(|origin| &origin.ty)
+            .or_else(|| self.narrowed_local_origins.get(name)
+                .filter(|origin| origin.view.as_ref().is_some_and(|view| env.get(name) == Some(view)))
+                .map(|origin| &origin.origin))
+    }
+
+    /// Returns whether checked updates must preserve an externally shared tagged integer cell.
+    pub(crate) fn has_fixed_tagged_reference_storage(&self, name: &str, env: &TypeEnv) -> bool {
+        let fixed = self.active_ref_params.contains(name)
+            || self.active_external_ref_bindings.contains(name)
+            || self.ref_assign_aliased_locals.contains(name)
+            || self.by_ref_captured_locals.contains(name);
+        if !fixed {
+            return false;
+        }
+        let Some(current) = env.get(name) else { return false; };
+        self.guarded_local_storage_type(&Expr::var(name), env).unwrap_or(current)
+            .codegen_repr() == PhpType::TaggedScalar
     }
 
     /// Returns whether a by-reference call may give one ordinary local canonical Mixed storage.
@@ -513,6 +653,26 @@ impl Checker {
             ExprKind::ScopedConstantAccess { receiver, name } => {
                 self.infer_scoped_constant_access(receiver, name, default_expr)?
             }
+            // `K::ALL[0]` and `E::A ? E::B : E::C` select a constant's value; their syntactic
+            // type is the string guess for each scoped constant, not the selected value. An
+            // untaken branch may hold a lazy Error (`[parent::A]` without a parent), which
+            // inference reports eagerly, so a failed inference keeps the syntactic answer.
+            _ if crate::types::deferred_defaults::default_value_depends_on_scoped_constant(default_expr) => {
+                match self.infer_type(default_expr, &TypeEnv::default()) {
+                    Ok(ty) => ty,
+                    // `Pure::A->value` reads a case directly, so it has no lazy branch to
+                    // protect: the failed read is the diagnostic, not the syntactic guess's
+                    // misleading "got int". `(E::A ? E::A : E::Missing)->value` keeps the
+                    // fallback, because PHP never evaluates the untaken `E::Missing`.
+                    Err(error) if matches!(
+                        &default_expr.kind,
+                        ExprKind::PropertyAccess { object, .. }
+                        | ExprKind::NullsafePropertyAccess { object, .. }
+                            if matches!(object.kind, ExprKind::ScopedConstantAccess { .. })
+                    ) => return Err(error),
+                    Err(_) => self.declaration_default_type(default_expr),
+                }
+            }
             _ => self.declaration_default_type(default_expr),
         };
         self.require_compatible_arg_type(expected_ty, &default_ty, span, context)
@@ -539,7 +699,7 @@ impl Checker {
         // through: a missing case or an incompatible scalar constant is still reported, just
         // from the pass that can tell the difference.
         if default_expr
-            .is_some_and(|default| matches!(default.kind, ExprKind::ScopedConstantAccess { .. }))
+            .is_some_and(crate::types::deferred_defaults::default_value_depends_on_scoped_constant)
         {
             return Ok(());
         }
@@ -729,6 +889,8 @@ impl Checker {
         let saved_untyped_ref_params =
             std::mem::replace(&mut self.untyped_ref_params, untyped_ref_params);
         let saved_local_binding_scope = self.enter_local_binding_scope(param_names);
+        self.definitely_bound_locals.extend(pre_bound_own_storage.keys().cloned());
+        if self.current_class.is_some() { self.definitely_bound_locals.insert("this".to_string()); }
         let saved_ref_params = self.active_ref_params.clone();
         let saved_external_ref_bindings = self.active_external_ref_bindings.clone();
         let saved_globals = self.active_globals.clone();
@@ -737,10 +899,10 @@ impl Checker {
         let saved_foreach_keys = self.foreach_key_locals.clone();
         let saved_eval_barrier_active = self.eval_barrier_active;
         let saved_break_continue_depth = self.break_continue_depth;
-        let saved_loop_break_envs = std::mem::take(&mut self.loop_break_envs);
         let saved_finally_break_continue_bases = self.finally_break_continue_bases.clone();
         let saved_null_probe_scope_is_top_level = self.null_probe_scope_is_top_level;
 
+        self.definitely_bound_locals.extend(ref_param_names.iter().cloned());
         self.active_ref_params = ref_param_names.into_iter().collect();
         self.active_external_ref_bindings = self.active_ref_params.clone();
         self.non_builtin_ref_aliased_locals
@@ -775,12 +937,17 @@ impl Checker {
         // name with something outside. A marked name from this map is announced only when
         // `--strict-locals` would really reject the body; see `run_mixed_storage_scan`.
         self.run_mixed_storage_scan(body, &pre_bound_own_storage);
+        let candidates = super::super::promotable_arrays::find_candidates(self, body);
+        let saved_promotable_array_candidates =
+            std::mem::replace(&mut self.promotable_array_candidates, candidates);
+        self.activate_promotable_params(&pre_bound_own_storage);
         let (sites, dependents) = super::super::numeric_regions::find(body, &pre_bound_own_storage);
         self.numeric_region_sites = sites;
         self.numeric_region_dependents = dependents;
 
         let result = f(self);
 
+        self.promotable_array_candidates = saved_promotable_array_candidates;
         self.active_ref_params = saved_ref_params;
         self.untyped_ref_params = saved_untyped_ref_params;
         self.active_external_ref_bindings = saved_external_ref_bindings;
@@ -790,7 +957,6 @@ impl Checker {
         self.foreach_key_locals = saved_foreach_keys;
         self.eval_barrier_active = saved_eval_barrier_active;
         self.break_continue_depth = saved_break_continue_depth;
-        self.loop_break_envs = saved_loop_break_envs;
         self.finally_break_continue_bases = saved_finally_break_continue_bases;
         self.null_probe_scope_is_top_level = saved_null_probe_scope_is_top_level;
         self.exit_local_binding_scope(saved_local_binding_scope);

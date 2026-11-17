@@ -80,7 +80,7 @@ pub(in crate::interpreter) fn eval_file_put_contents_result(
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     let path = eval_path_string(filename, values)?;
     let data = if values.is_array_like(data)? {
-        let joined = eval_implode_without_separator(data, context, values)?;
+        let joined = eval_implode_named_result("implode", &[data], context, values)?;
         let bytes = values.string_bytes(joined);
         // The joined string is this call's own result cell: only its bytes are written.
         values.release(joined)?;

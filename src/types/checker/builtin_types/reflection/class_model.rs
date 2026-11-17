@@ -536,6 +536,7 @@ fn builtin_reflection_class_shell() -> FlattenedClass {
                 Some(mixed_type()),
                 empty_array(),
             ),
+            builtin_reflection_lazy_property(),
             builtin_property(
                 "__default_error",
                 Visibility::Private,
@@ -764,6 +765,7 @@ pub(super) fn builtin_reflection_object_class() -> FlattenedClass {
 pub(super) fn builtin_reflection_enum_class() -> FlattenedClass {
     let mut class = builtin_reflection_class();
     class.name = "ReflectionEnum".to_string();
+    class.extends = Some("ReflectionClass".to_string());
     // An enum is never instantiated: php answers every instantiation method of a ReflectionEnum
     // with `Error: Cannot instantiate enum E`. The inherited bodies call
     // `$this->newInstanceWithoutConstructor()`, which only a `ReflectionClass`/`ReflectionObject`

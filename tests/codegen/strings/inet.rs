@@ -67,6 +67,7 @@ fn test_inet_pton_keeps_ipv4_and_still_rejects_invalid_input() {
 foreach ([
     '127.0.0.1',
     '0.0.0.0',
+    '01.2.3.4',
     '255.255.255.255',
     '256.0.0.1',
     '1.2.3',
@@ -80,18 +81,27 @@ foreach ([
 }
 "#,
     );
+    let leading_zero = if cfg!(any(target_os = "macos", target_os = "ios")) {
+        "4:01020304\n"
+    } else {
+        "false\n"
+    };
     assert_eq!(
         out,
-        concat!(
-            "4:7f000001\n",
-            "4:00000000\n",
-            "4:ffffffff\n",
-            "false\n",
-            "false\n",
-            "false\n",
-            "false\n",
-            "false\n",
-            "false\n",
+        format!(
+            concat!(
+                "4:7f000001\n",
+                "4:00000000\n",
+                "{}",
+                "4:ffffffff\n",
+                "false\n",
+                "false\n",
+                "false\n",
+                "false\n",
+                "false\n",
+                "false\n",
+            ),
+            leading_zero
         )
     );
 }
@@ -200,6 +210,28 @@ echo bin2hex(inet_pton('9.9.9.9')), "\n";
 ///
 /// The parameter is `string $ip`, so an int coerces and the answer is the one PHP gives for the
 /// coerced text -- `inet_pton(42)` asks about `"42"`, which is no address either way.
+/// The fast IPv4 parser must pass the original pointer/length to the libc fallback.
+///
+/// A short or malformed dotted-decimal input leaves the fast parser mid-way; the
+/// generic path then reads the address with the preserved source registers. The
+/// x86_64 lowering used to fall back with clobbered `rdi`/`rsi` and crashed on
+/// `inet_pton(42)`.
+#[test]
+fn test_inet_pton_falls_back_with_the_original_source() {
+    let out = compile_and_run(
+        r#"<?php
+var_dump(inet_pton("1.2.3"));
+var_dump(inet_pton("1.2.3.4x"));
+var_dump(inet_pton("42"));
+echo bin2hex(inet_pton("::1")), "\n";
+"#,
+    );
+    assert_eq!(
+        out,
+        "bool(false)\nbool(false)\nbool(false)\n00000000000000000000000000000001\n"
+    );
+}
+
 #[test]
 fn test_inet_helpers_coerce_a_scalar_argument_like_php() {
     let out = compile_and_run(

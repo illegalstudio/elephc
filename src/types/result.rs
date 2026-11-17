@@ -21,8 +21,34 @@ use super::{
     InterfaceInfo, PackedClassInfo, PhpType, ReturnAliasSummaries, TypeEnv,
 };
 
+/// Typed scalar packed locals whose storage may become a hash at run time, and the whole-value
+/// reads the checker typed as boxed `array<mixed>` because of it.
+///
+/// A write whose integer key cannot be bounded keeps such a local typed (`array<int>`) instead of
+/// widening every slot to `mixed`; codegen promotes the storage to a hash only when a key really
+/// skips a slot. Element operations dispatch on the heap kind, so only whole-value reads (passing,
+/// returning, copying, iterating the array) need the `array<mixed>` view that every boxed-array
+/// consumer already accepts in either storage kind.
+#[derive(Debug, Clone, Default)]
+pub struct PromotableArrays {
+    /// `(function-like scope, local name)` of every promotable local.
+    pub locals: HashSet<(String, String)>,
+    /// `(function-like scope, read span, local name)` of every whole-value read lowered through
+    /// the kind-aware `ArrayToMixed` view.
+    pub value_reads: HashSet<(String, Span, String)>,
+    /// `(function-like scope, call span)` of every call to a function returning a promotable
+    /// `array<int>` whose result is used as a whole value, lowered through the same view.
+    pub call_views: HashSet<(String, Span)>,
+    /// `(function-like scope, span)` of every promotable value a sink takes raw. They win over a
+    /// view recorded for the same span by an earlier checker visit.
+    pub raw_sites: HashSet<(String, Span)>,
+}
+
 /// Fixed-point loop storage contracts keyed by `(function-like scope, loop span)`.
 pub(crate) type LoopStorageTypes = HashMap<(String, Span), TypeEnv>;
+
+/// Value reads keyed by body scope, source span and local name; visits join conservatively.
+pub(crate) type LocalValueReadTypes = HashMap<(String, Span, String), PhpType>;
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 /// Describes a statically-known access violation that PHP raises as a catchable
@@ -45,6 +71,13 @@ pub enum ThrowAccessKind {
         class_name: String,
         /// Method name without the trailing parentheses (e.g. `secret`).
         method: String,
+    },
+    /// A private/protected constructor call from an inaccessible scope.
+    PrivateConstructor {
+        /// Visibility label (`private` or `protected`).
+        visibility: String,
+        /// Class declaring the constructor (e.g. `C`).
+        class_name: String,
     },
     /// A readonly write requiring a runtime initialization check.
     ReadonlyProperty {
@@ -132,11 +165,21 @@ pub struct CheckResult {
     /// demotion (`autoload::runtime_faults`). The pipeline must demote every one of them before
     /// this result describes the program; it checks again when one cannot be.
     pub tolerated_runtime_faults: Vec<crate::errors::CompileError>,
+    /// Default expressions php-src evaluates when execution reaches a class or trait statement
+    /// whose properties compatibly redeclare a used trait's, keyed by class or trait name. A
+    /// trait has no `ClassInfo`, so lowering reads its entry here.
+    pub trait_collision_defaults: HashMap<String, Vec<crate::types::TraitCollisionDefault>>,
+    /// How each user class-like is bound (compile time or at its statement) and where its
+    /// trait-imported properties come from.
+    pub class_binding: crate::types::ClassBindingFacts,
     /// Every instantiation a call site asked for, as (template name, type arguments).
     ///
     /// The pipeline splices one declaration per entry into the program and re-checks, because
     /// lowering walks the AST rather than the checker's tables.
     pub requested_instantiations: Vec<(String, crate::generics::Bindings)>,
+    /// Typed clones of user functions that direct calls handing on a promotable `array<int>`
+    /// asked for; spliced like the instantiations above (`generics::promotable_clones`).
+    pub requested_promotable_clones: Vec<crate::generics::promotable_clones::PromotableCloneRequest>,
     /// Call site -> the instantiated function that call resolved to.
     ///
     /// Keyed by `Span` exactly like `builtin_call_types`, and consumed by lowering the same
@@ -182,12 +225,20 @@ pub struct CheckResult {
     pub builtin_call_types: HashMap<(String, Span), PhpType>,
     /// Closure literals whose checked source bodies contain yield, keyed by source identity.
     pub closure_generator_spans: HashSet<Span>,
+    /// Contextual PHP parameter types inferred for closure literals passed to array callbacks,
+    /// keyed by the closure expression's span. Lowering replays these hints so the compiled
+    /// closure parameter matches the element/accumulator type the checker already proved.
+    pub closure_param_hints: HashMap<Span, Vec<PhpType>>,
     /// Native array_push property decisions, scoped to the body and original place span.
     pub array_push_property_plans: HashMap<(String, Span), ArrayPushPropertyPlan>,
     /// Checked member receiver types by body scope and source node; conflicting visits are None.
     pub member_receiver_types: HashMap<(String, Span), Option<PhpType>>,
     /// Authoritative checker result types for property reads through flow-narrowed receivers.
     pub flow_typed_property_accesses: HashMap<(String, Span), PhpType>,
+    /// Source-point element proofs for declared-array appends; conflicts disable projection.
+    pub array_append_element_types: HashMap<(String, Span), Option<PhpType>>,
+    /// Source-point value read contracts; these never change a local's reference storage.
+    pub local_value_read_types: LocalValueReadTypes,
     /// Checker-authorized call-argument sites that may widen one local to a boxed Mixed cell.
     pub boxed_reference_promotion_sites: HashMap<(String, Span), HashSet<String>>,
     /// Reads proven to use native buffers on every checker visit to the source span.
@@ -280,6 +331,13 @@ pub struct CheckResult {
     pub user_filters_reachable: bool,
     /// See `Checker::user_filter_registered`.
     pub user_filter_registered: Option<crate::fast_hash::FastSet<String>>,
+    /// Local array writes promoted to hash storage because their integer key may skip a slot of
+    /// a non-empty packed array, as span -> the SET of local NAMES written there. Keyed like
+    /// `local_bind_kill_sites`; the decision is idempotent, so post-typecheck clones need no veto.
+    pub sparse_key_write_sites: HashMap<Span, HashSet<String>>,
+    /// Typed scalar packed locals that may be promoted to a hash at run time; see
+    /// [`PromotableArrays`].
+    pub promotable_arrays: PromotableArrays,
 }
 
 impl CheckResult {

@@ -5,7 +5,8 @@
 //! - `cargo test` through Rust's test harness.
 //!
 //! Key details:
-//! - Submodules group focused fixtures for basics, errors, arguments, captures, scenarios.
+//! - Submodules group focused fixtures for basics, errors, arguments, captures, scenarios, and
+//!   user methods named like Fiber state predicates.
 
 use crate::support::*;
 
@@ -14,3 +15,4 @@ mod errors;
 mod arguments;
 mod captures;
 mod scenarios;
+mod predicate_names;

@@ -33,7 +33,6 @@ pub(in crate::interpreter) fn eval_reflection_class_lazy_relation_result(
             eval_reflection_constructor_object_result(
                 EVAL_REFLECTION_OWNER_CLASS,
                 &reflected_name,
-                true,
                 context,
                 values,
             )
@@ -49,7 +48,6 @@ pub(in crate::interpreter) fn eval_reflection_class_lazy_relation_result(
             eval_reflection_related_class_result(
                 EVAL_REFLECTION_OWNER_CLASS,
                 parent_class_name.as_deref(),
-                false,
                 context,
                 values,
             )
@@ -371,7 +369,6 @@ pub(in crate::interpreter) fn eval_reflection_class_basic_metadata_result(
             eval_reflection_related_class_result(
                 EVAL_REFLECTION_OWNER_CLASS,
                 metadata.parent_class_name.as_deref(),
-                true,
                 context,
                 values,
             )
@@ -382,7 +379,6 @@ pub(in crate::interpreter) fn eval_reflection_class_basic_metadata_result(
             eval_reflection_constructor_object_result(
                 EVAL_REFLECTION_OWNER_CLASS,
                 &metadata.resolved_name,
-                true,
                 context,
                 values,
             )
@@ -792,13 +788,14 @@ pub(in crate::interpreter) fn eval_reflection_enum_methods_result(
                     .collect::<Vec<_>>();
                 (case_names, eval_reflection_enum_case_owner_kind(&enum_name, context)?)
             };
-            let mut result = values.array_new(case_names.len())?;
-            for (index, case_name) in case_names.iter().enumerate() {
+            let mut result = values.object_array_new(case_names.len())?;
+            for case_name in &case_names {
                 let case_object = eval_reflection_enum_case_object_result(
                     owner_kind, &enum_name, case_name, context, values,
                 )?;
-                let key = values.int(index as i64)?;
-                result = values.array_set(result, key, case_object)?;
+                result = crate::interpreter::reflection::owned_collections::push_owned_object(
+                    values, result, case_object,
+                )?;
             }
             Ok(Some(result))
         }
@@ -948,21 +945,53 @@ pub(in crate::interpreter) fn eval_reflection_class_get_constants_result(
     else {
         return Ok(None);
     };
-    let names = eval_reflection_constant_names(&reflected_name, context, values)?;
+    eval_reflection_constants_map(&reflected_name, filter, context, values).map(Some)
+}
+
+/// Builds the name-keyed constant map `getConstants()` answers for one reflected class, enum
+/// cases included, optionally restricted by a `ReflectionClassConstant::IS_*` filter.
+///
+/// Shared by eval's own `getConstants()` handler and by class reflector construction, which
+/// stores the unfiltered map where the compiled getter reads it.
+pub(super) fn eval_reflection_constants_map(
+    reflected_name: &str,
+    filter: Option<u64>,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let names = eval_reflection_constant_names(reflected_name, context, values)?;
     let mut result = values.assoc_new(names.len())?;
     for name in names {
-        if !eval_reflection_constant_matches_filter(&reflected_name, &name, filter, context, values)?
+        if !eval_reflection_constant_matches_filter(reflected_name, &name, filter, context, values)?
         {
             continue;
         }
-        let Some(value) = eval_reflection_constant_value(&reflected_name, &name, context, values)?
-        else {
+        // A reflector being built (a silent evaluation) stores null for a value php-src has
+        // not evaluated yet and eval cannot preview; `getConstants()` evaluates it.
+        let value = eval_reflection_constant_value(reflected_name, &name, context, values);
+        let value = if context.deprecations_silenced() {
+            match crate::interpreter::statements::eval_preview_outcome(value, context, values)? {
+                Some(value) => value,
+                None => Some(values.null()?),
+            }
+        } else {
+            value?
+        };
+        let Some(value) = value else {
             continue;
         };
         let key = values.string(&name)?;
-        result = values.array_set(result, key, value)?;
+        result = crate::interpreter::reflection::owned_collections::insert_retained_element(values, result, key, value)?;
     }
-    Ok(Some(result))
+    Ok(result)
+}
+
+/// What `ReflectionClass::getDefaultProperties()` answers for one reflected class.
+pub(super) enum EvalReflectionDefaultProperties {
+    /// The name-keyed default values, as one owned array.
+    Values(RuntimeCellHandle),
+    /// The retained default Error message php throws instead of answering.
+    DeferredError(String),
 }
 
 /// Handles eval-backed `ReflectionClass::getDefaultProperties()` calls.
@@ -985,23 +1014,48 @@ pub(in crate::interpreter) fn eval_reflection_class_get_default_properties_resul
     else {
         return Ok(None);
     };
-    let property_names = eval_reflection_default_property_names(&reflected_name, context, values)?;
+    // php-src initializes the class on this call, then evaluates every static default again
+    // for the array; the materialization below keeps its own notices out of that.
+    eval_raise_class_initialization_deprecations(&reflected_name, context, values)?;
+    eval_raise_reflected_static_default_deprecations(&reflected_name, context, values)?;
+    context.begin_deprecation_silence();
+    let defaults = eval_reflection_default_properties(&reflected_name, context, values);
+    context.end_deprecation_silence();
+    match defaults? {
+        EvalReflectionDefaultProperties::Values(result) => Ok(Some(result)),
+        EvalReflectionDefaultProperties::DeferredError(message) => {
+            super::super::throwables::eval_throw_error(&message, context, values)
+        }
+    }
+}
+
+/// Materializes the default-property map of one reflected class, or reports the retained
+/// default error its declaration deferred to this call.
+///
+/// Shared by eval's own `getDefaultProperties()` handler and by class reflector construction,
+/// which stores the answer where the compiled getter reads it.
+pub(super) fn eval_reflection_default_properties(
+    reflected_name: &str,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<EvalReflectionDefaultProperties, EvalStatus> {
+    let property_names = eval_reflection_default_property_names(reflected_name, context, values)?;
     // php lists the static defaults first, then the instance ones, each in reflection order.
     let mut statics = Vec::new();
     let mut instance = Vec::new();
     for name in property_names {
         let Some(member) =
-            eval_reflection_default_property_metadata(&reflected_name, &name, context, values)?
+            eval_reflection_default_property_metadata(reflected_name, &name, context, values)?
         else {
             continue;
         };
-        let declaring_class = member.declaring_class_name.as_deref().unwrap_or(&reflected_name);
+        let declaring_class = member.declaring_class_name.as_deref().unwrap_or(reflected_name);
         if let Some(message) = context.native_property_default_error(declaring_class, &name)
-            .or_else(|| context.native_property_default_error(&reflected_name, &name))
+            .or_else(|| context.native_property_default_error(reflected_name, &name))
             .map(str::to_string)
         {
             // Check retained errors before skipping missing values or allocating the result.
-            return super::super::throwables::eval_throw_error(&message, context, values);
+            return Ok(EvalReflectionDefaultProperties::DeferredError(message));
         }
         if member.default_value.is_none() {
             continue;
@@ -1027,10 +1081,10 @@ pub(in crate::interpreter) fn eval_reflection_class_get_default_properties_resul
             result = stored?;
             released_value.and(released_key)?;
         }
-        Ok(Some(result))
+        Ok(result)
     })();
     if outcome.is_err() { let _ = eval_release_value(context, values, result); }
-    outcome
+    outcome.map(EvalReflectionDefaultProperties::Values)
 }
 
 /// Handles eval-backed `ReflectionClass::getStaticProperties()` calls.
@@ -1053,6 +1107,8 @@ pub(in crate::interpreter) fn eval_reflection_class_get_static_properties_result
     else {
         return Ok(None);
     };
+    // Reading the static properties initializes the class, as in php-src.
+    eval_raise_class_initialization_deprecations(&reflected_name, context, values)?;
     let property_names = eval_reflection_static_property_names(&reflected_name, context, values)?;
     let mut result = values.assoc_new(property_names.len())?;
     for name in property_names {
@@ -1086,6 +1142,9 @@ pub(in crate::interpreter) fn eval_reflection_class_get_static_property_value_re
     };
     let (property_name, default_value) =
         eval_reflection_static_property_value_args(evaluated_args)?;
+    // php-src initializes the reflected class once the arguments are evaluated, whether the
+    // property exists or not.
+    eval_raise_class_initialization_deprecations(&reflected_name, context, values)?;
     let property_name = eval_reflection_string_arg(property_name, values)?;
     if let Some(value) =
         eval_reflection_static_property_value(&reflected_name, &property_name, context, values)?
@@ -1127,6 +1186,9 @@ pub(in crate::interpreter) fn eval_reflection_class_set_static_property_value_re
         evaluated_args,
     )?;
     let property_name = eval_reflection_string_arg(args[0], values)?;
+    // php-src initializes the reflected class once the arguments are evaluated, whether the
+    // property exists or not.
+    eval_raise_class_initialization_deprecations(&reflected_name, context, values)?;
     let Some(member) =
         eval_reflection_static_property_metadata(&reflected_name, &property_name, context, values)?
     else {

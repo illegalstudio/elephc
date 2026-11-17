@@ -1,28 +1,27 @@
 ---
 title: "array_replace_recursive()"
 description: "Replaces elements from passed arrays into the first array recursively."
-sidebar:
-  order: 42
 ---
 
 ## array_replace_recursive()
 
 ```php
-function array_replace_recursive(array $array, ...$replacements): array
+function array_replace_recursive(array $array, array $replacements): mixed
 ```
 
 Replaces elements from passed arrays into the first array recursively.
 
 **Parameters**:
 - `$array` (`array`)
-- `...$replacements` - variadic: collects excess arguments into `$replacements`.
+- `$replacements` (`array`)
 
-**Returns**: `array`
+**Returns**: `mixed`
 
 ## Availability
 
-- **Compiled (AOT)**: supported by the Elephc code generator.
-- **`eval()` (magician interpreter)**: supported through a declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/array/array_recursive.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/array/array_recursive.rs)).
+| Compiled (AOT) | Magician (eval) |
+|---|---|
+| Available | Not available yet |
 
 _No examples yet. Check `examples/` and `showcases/` for usage patterns._
 

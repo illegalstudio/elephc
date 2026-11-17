@@ -10,6 +10,7 @@
 //! - Scope writes flow through shared scope-cell helpers so global aliases and reference aliases stay coherent.
 
 mod abstract_requirements;
+mod abstract_method_calls;
 mod array_updates;
 mod array_append;
 mod attributes_magic_validation;
@@ -19,7 +20,10 @@ mod class_declarations;
 mod class_resolution;
 mod closure_binding;
 mod dispatch;
+mod early_binding;
+mod dimension_writes;
 mod dynamic_method_execution;
+mod constant_evaluation;
 mod enum_declarations;
 mod exceptions;
 mod instance_property_access;
@@ -32,10 +36,18 @@ mod native_argument_binding;
 mod native_constructor_defaults;
 mod native_method_execution;
 mod native_property_access;
+mod native_static_references;
 mod native_property_unset;
 mod native_static_dispatch;
 mod property_constant_validation;
+mod property_reference_owners;
 mod property_dispatch;
+mod property_dimension_writes;
+mod property_append_fetch;
+mod property_dimension_guards;
+mod property_dimension_unset;
+mod property_write_receivers;
+mod property_update_expressions;
 mod property_validation;
 mod abstract_setter;
 mod readonly_property_writes;
@@ -47,15 +59,24 @@ mod static_property_access;
 mod trait_declarations;
 
 use super::*;
+use property_write_receivers::{prepare_property_write_receiver, finish_property_write_receiver,
+    eval_write_property_get_result, with_eval_property_write_operands, with_eval_named_property_write_operands,
+    with_eval_named_property_write_result};
+pub(in crate::interpreter) use property_update_expressions::{
+    eval_property_compound_expression, eval_property_inc_dec_expression,
+};
+use property_update_expressions::{eval_property_compound_assign_value, eval_property_inc_dec_value};
 use crate::context::{
     NativeCallableArrayDefaultElement, NativeCallableArrayDefaultKey,
     NativeCallableObjectDefaultArg, NativeCallableSignature,
-    push_native_frame_called_class_override,
+    push_native_frame_called_class_override, push_native_frame_context,
 };
 
 use abstract_requirements::*;
-use array_append::{eval_array_append_owned_value_with_type, eval_array_append_value};
+pub(in crate::interpreter) use abstract_method_calls::*;
+use array_append::eval_array_append_owned_value_with_type;
 pub(crate) use array_updates::*;
+pub(in crate::interpreter) use array_updates::eval_inc_dec_value;
 // Re-exported under a distinct name so the `class_resolution::*` glob below and the crate-level
 // re-export in `interpreter/mod.rs` cannot import the same name at two visibilities.
 #[cfg(not(test))]
@@ -65,6 +86,7 @@ pub(crate) use class_resolution::eval_object_clone_with_properties_result as eva
 pub(crate) use instance_property_access::eval_property_set_result as eval_property_set_for_ffi;
 use attributes_magic_validation::*;
 use core_attributes::*;
+pub(in crate::interpreter) use core_attributes::warn_eval_discarded_function_call;
 pub(in crate::interpreter) use callable_objects::*;
 pub(in crate::interpreter) use class_declarations::*;
 pub(in crate::interpreter) use class_resolution::*;
@@ -77,7 +99,9 @@ pub(in crate::interpreter) use closure_binding::{
 };
 pub(in crate::interpreter) use closure_binding::eval_closure_bind_this_for_ffi;
 pub(in crate::interpreter) use dispatch::*;
+use early_binding::{bind_program_declarations, eval_required_override_lookup_is_missing};
 pub(in crate::interpreter) use dynamic_method_execution::*;
+pub(in crate::interpreter) use constant_evaluation::*;
 pub(in crate::interpreter) use enum_declarations::*;
 pub(in crate::interpreter) use exceptions::*;
 pub(in crate::interpreter) use instance_property_access::*;
@@ -90,10 +114,16 @@ pub(in crate::interpreter) use native_argument_binding::*;
 pub(in crate::interpreter) use native_constructor_defaults::*;
 pub(in crate::interpreter) use native_method_execution::*;
 pub(in crate::interpreter) use native_property_access::*;
+pub(in crate::interpreter) use native_static_references::*;
 use native_property_unset::*;
 pub(in crate::interpreter) use native_static_dispatch::*;
 use property_constant_validation::*;
 use property_dispatch::*;
+use property_dimension_unset::{eval_property_dimension_unset, eval_missing_unset_property};
+use property_dimension_writes::{
+    eval_property_dimension_write, DimensionProperty,
+    eval_static_property_array_append_result, eval_static_property_array_set_result,
+};
 pub(in crate::interpreter) use property_validation::*;
 pub(in crate::interpreter) use abstract_setter::*;
 use readonly_property_writes::*;

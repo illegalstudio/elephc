@@ -47,9 +47,8 @@ pub use function::{
 };
 pub use instr::{
     BuiltinId, CheckedNumericChainImmediate, CmpPredicate, CoreBuiltinOp, GcControlOp, Immediate,
-    IncludeFrameImmediate, InstId, Instruction, IterStartMetadata, MixedNumericOp,
-    NominalObjectBoundary, Op, PassOrigin,
-    PhpTypePredicate, PropertyFetchMode, RuntimeId,
+    IncludeFrameImmediate, InstId, Instruction, IterStartMetadata, MinMaxRule, MixedNumericOp,
+    NominalObjectBoundary, Op, PassOrigin, PhpTypePredicate, PropertyFetchMode, RuntimeId,
 };
 pub use module::{
     ClassTable, CloneOverrideApplicator, ClosedInclude, ClosedIncludeKind, ClosureScopeVariant,

@@ -110,7 +110,8 @@ pub(in crate::interpreter) fn eval_extension_loaded_result(
     values.bool_value(eval_extension_is_loaded_in(name.as_ref(), context))
 }
 
-/// `eval_extension_is_loaded` plus the one answer that depends on the HOST program:
+/// `eval_extension_is_loaded` plus the answers that depend on the HOST program (the
+/// PDO / mysqli surfaces, see `EVAL_PRELUDE_SURFACES`, and gmp):
 /// `xml` / `xmlwriter` are loaded exactly when the compiled program registered the xml
 /// prelude's functions into this eval context, i.e. when it linked `elephc_xml`. That
 /// keeps `extension_loaded('xml')` identical inside and outside `eval()` in one program.
@@ -118,7 +119,7 @@ pub(in crate::interpreter) fn eval_extension_is_loaded_in(
     name: &str,
     context: &ElephcEvalContext,
 ) -> bool {
-    if name.eq_ignore_ascii_case("xml") || name.eq_ignore_ascii_case("xmlwriter") {
+    if name.eq_ignore_ascii_case("xml") || name.eq_ignore_ascii_case("xmlwriter") || name.eq_ignore_ascii_case("simplexml") {
         return context.native_function("xml_parser_create").is_some();
     }
     if eval_gmp_bridge_extension(name, context) {
@@ -126,6 +127,12 @@ pub(in crate::interpreter) fn eval_extension_is_loaded_in(
     }
     if name.eq_ignore_ascii_case("session") {
         return eval_session_bridge_linked(context);
+    }
+    if let Some(probe) = eval_prelude_surface_probe(name) {
+        return context.native_function(probe).is_some();
+    }
+    if eval_tidy_bridge_extension(name, context) {
+        return true;
     }
     eval_extension_is_loaded(name)
 }
@@ -140,6 +147,24 @@ pub(in crate::interpreter) fn eval_extension_is_loaded_in(
 /// the extension is missing while `session_start()` was callable from that very code.
 pub(in crate::interpreter) fn eval_session_bridge_linked(context: &ElephcEvalContext) -> bool {
     context.native_function("session_start").is_some()
+}
+
+/// The prelude-backed PHP surfaces whose presence the HOST program reveals, with one
+/// prelude function each surface always declares. A program that links the PDO / mysqli
+/// surface registers their prelude functions into the eval context, exactly when the native
+/// side reports the extension (`linked_php_surfaces`), so `extension_loaded('mysqli')` agrees
+/// inside and outside `eval()`.
+///
+/// KEEP IN SYNC with `src/pipeline.rs` (`linked_php_surfaces`).
+pub(in crate::interpreter) const EVAL_PRELUDE_SURFACES: &[(&str, &str)] =
+    &[("PDO", "pdo_drivers"), ("mysqli", "mysqli_init")];
+
+/// Returns the probe function of a prelude-backed surface named `name` (case-insensitive).
+fn eval_prelude_surface_probe(name: &str) -> Option<&'static str> {
+    EVAL_PRELUDE_SURFACES
+        .iter()
+        .find(|(surface, _)| surface.eq_ignore_ascii_case(name))
+        .map(|(_, probe)| *probe)
 }
 
 /// Returns whether `name` is in eval's known extension set, compared case-insensitively.

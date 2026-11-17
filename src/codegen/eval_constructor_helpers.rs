@@ -83,7 +83,12 @@ pub(in crate::codegen) const BUILTIN_THROWABLE_CONSTRUCTOR_CLASSES: &[&str] = &[
     "JsonException",
     "FiberError",
 ];
-const CONSTRUCTOR_HELPER_BASE_FRAME_SIZE: usize = 80;
+/// AArch64 frame slots past the shared bridge layout (0..127): the owner head sits at 72 in every
+/// ARM bridge (`argument_owners::head_address`), so the resolved AOT constructor target name
+/// length and the selected dispatch class id live above it.
+const CONSTRUCTOR_TARGET_LEN_SLOT: usize = 128;
+const CONSTRUCTOR_DISPATCH_ID_SLOT: usize = 136;
+const CONSTRUCTOR_HELPER_BASE_FRAME_SIZE: usize = 144;
 const CONSTRUCTOR_HELPER_HANDLER_OFFSET: usize = CONSTRUCTOR_HELPER_BASE_FRAME_SIZE;
 const CONSTRUCTOR_HELPER_FRAME_SIZE: usize =
     CONSTRUCTOR_HELPER_BASE_FRAME_SIZE + TRY_HANDLER_SLOT_SIZE;
@@ -94,6 +99,8 @@ const X86_64_CONSTRUCTOR_CONTEXT_FRAME_OFFSET: usize = 64;
 /// A BY-VALUE argument is rooted by Magician's normalized argument array for the whole native
 /// activation, so the bridge stages only a borrowed payload. The generated function prologue
 /// independently retains parameter slots that its ownership analysis marks as owned.
+/// Fresh callable adapters have a separate bridge collection, since the normalized array
+/// owns the original callback representation rather than the newly adapted descriptor.
 ///
 /// A BY-REFERENCE slot is different. `eval_ref_arg_slots` gives constructor slots
 /// `raw_refcounted_owned = true`, so writeback releases the raw slot on the changed and the
@@ -418,7 +425,8 @@ fn emit_constructor_aarch64(
     emitter.instruction("str x1, [sp, #24]");                                   // save the boxed eval argument array
     emitter.instruction("str x4, [sp, #64]");                                   // save the active eval context for callable descriptors
     emitter.instruction("str x5, [sp, #40]");                                   // save an optional resolved AOT constructor target name
-    emitter.instruction("str x6, [sp, #72]");                                   // save the optional AOT constructor target name length
+    emitter.instruction(&format!("str x6, [sp, #{}]", CONSTRUCTOR_TARGET_LEN_SLOT)); // save the optional AOT constructor target name length
+    super::eval_callable_helpers::argument_owners::begin(emitter, 64, 48);
     emitter.instruction(&format!("cbz x0, {}", success_label));                 // a null object pointer means there is nothing to construct
     emitter.instruction("bl __rt_mixed_unbox");                                 // expose receiver tag and object payload
     emitter.instruction("cmp x0, #6");                                          // runtime tag 6 means the Mixed receiver is an object
@@ -452,6 +460,9 @@ fn emit_constructor_aarch64(
     emitter.label(success_label);
     emitter.instruction("mov x0, #1");                                          // report successful construction or no-op
     emitter.label(done_label);
+    super::eval_callable_helpers::argument_owners::finish(
+        emitter, 64, 48, CONSTRUCTOR_HELPER_FRAME_SIZE, false, done_label,
+    );
     emitter.instruction("ldp x29, x30, [sp, #48]");                             // restore the Rust caller frame
     emitter.instruction(                                                        //release the constructor helper frame and boundary handler
         &format!("add sp, sp, #{}", CONSTRUCTOR_HELPER_FRAME_SIZE)
@@ -479,6 +490,7 @@ fn emit_constructor_x86_64(
     emitter.instruction("mov QWORD PTR [rbp - 32], rsi");                       // save the boxed eval argument array
     emitter.instruction("mov QWORD PTR [rbp - 64], r8");                        // save the active eval context for callable descriptors
     emitter.instruction("mov QWORD PTR [rbp - 16], r9");                        // save an optional resolved AOT constructor target name
+    super::eval_callable_helpers::argument_owners::begin(emitter, 64, 48);
     emitter.instruction("test rdi, rdi");                                       // check whether the boxed receiver pointer is null
     emitter.instruction(&format!("jz {}", success_label));                      // a null object pointer means there is nothing to construct
     emitter.instruction("mov rax, rdi");                                        // move the receiver into the mixed-unbox input register
@@ -515,6 +527,9 @@ fn emit_constructor_x86_64(
     emitter.label(success_label);
     emitter.instruction("mov eax, 1");                                          // report successful construction or no-op
     emitter.label(done_label);
+    super::eval_callable_helpers::argument_owners::finish(
+        emitter, 64, 48, CONSTRUCTOR_HELPER_FRAME_SIZE, false, done_label,
+    );
     emitter.instruction("mov rsp, rbp");                                        // discard helper spill slots
     emitter.instruction("pop rbp");                                             // restore the Rust caller frame pointer
     emitter.instruction("ret");                                                 // return the constructor status flag to Rust
@@ -866,14 +881,14 @@ fn emit_aarch64_constructor_dispatch_target(emitter: &mut Emitter) {
     emitter.instruction("ldr x9, [sp, #40]");                                   // reload the optional resolved AOT constructor target name
     emitter.instruction(&format!("cbz x9, {}", receiver_label));                // use the receiver class when no declaring target was supplied
     emitter.instruction("mov x0, x9");                                          // pass the resolved AOT constructor target name to the class registry
-    emitter.instruction("ldr x1, [sp, #72]");                                   // pass the resolved AOT constructor target name length to the class registry
+    emitter.instruction(&format!("ldr x1, [sp, #{}]", CONSTRUCTOR_TARGET_LEN_SLOT)); // pass the resolved AOT constructor target name length to the class registry
     abi::emit_call_label(emitter, "__rt_class_id_by_name");
-    emitter.instruction("str x0, [sp, #72]");                                   // retain the selected constructor class id across dispatch tests
+    emitter.instruction(&format!("str x0, [sp, #{}]", CONSTRUCTOR_DISPATCH_ID_SLOT)); // retain the selected constructor class id across dispatch tests
     emitter.instruction(&format!("b {}", done_label));                          // skip receiver-id extraction after a named target lookup
     emitter.label(receiver_label);
     emitter.instruction("ldr x9, [sp, #16]");                                   // reload the unboxed object pointer for receiver-id dispatch
     emitter.instruction("ldr x9, [x9]");                                        // load the receiver runtime class id
-    emitter.instruction("str x9, [sp, #72]");                                   // retain the receiver constructor class id across dispatch tests
+    emitter.instruction(&format!("str x9, [sp, #{}]", CONSTRUCTOR_DISPATCH_ID_SLOT)); // retain the receiver constructor class id across dispatch tests
     emitter.label(done_label);
 }
 
@@ -948,7 +963,7 @@ fn emit_aarch64_constructor_dispatch(
     let groups = grouped_slots(slots).into_iter().collect::<Vec<_>>();
     let ids = groups.iter().map(|(class_id, _)| *class_id).collect::<Vec<_>>();
     let load_id = |emitter: &mut Emitter, reg: &str| {
-        emitter.instruction(&format!("ldr {}, [sp, #72]", reg));                // reload the selected constructor dispatch class id
+        emitter.instruction(&format!("ldr {}, [sp, #{}]", reg, CONSTRUCTOR_DISPATCH_ID_SLOT)); // reload the selected constructor dispatch class id
     };
     let switch = ClassIdSwitch { load_id: &load_id, stem: "__elephc_eval_constructor", suffix: "" };
     emit_class_id_switch(emitter, &switch, &ids, &mut |emitter, index| {
@@ -1450,6 +1465,9 @@ fn emit_aarch64_constructor_ref_arg_cells(
     for slot in &ref_slots {
         emit_aarch64_load_eval_arg(module, emitter, slot.param_index, fail_label);
         emitter.instruction("ldr x0, [x29, #-16]");                             // reload the original eval Mixed cell for by-reference writeback
+        if slot.param_ty.codegen_repr() != PhpType::Mixed {
+            abi::emit_call_label(emitter, "__rt_mixed_deref");
+        }
         abi::emit_push_result_value(emitter, &PhpType::Mixed);
         if matches!(slot.param_ty.codegen_repr(), PhpType::Mixed) {
             emitter.instruction("ldr x0, [x29, #-16]");                         // seed the mutable by-reference Mixed slot with the original cell
@@ -1490,6 +1508,9 @@ fn emit_x86_64_constructor_ref_arg_cells(
     for slot in &ref_slots {
         emit_x86_64_load_eval_arg(module, emitter, slot.param_index, fail_label);
         emitter.instruction("mov rax, QWORD PTR [rbp - 40]");                   // reload the original eval Mixed cell for by-reference writeback
+        if slot.param_ty.codegen_repr() != PhpType::Mixed {
+            abi::emit_call_label(emitter, "__rt_mixed_deref");
+        }
         abi::emit_push_result_value(emitter, &PhpType::Mixed);
         if matches!(slot.param_ty.codegen_repr(), PhpType::Mixed) {
             emitter.instruction("mov rax, QWORD PTR [rbp - 40]");               // seed the mutable by-reference Mixed slot with the original cell
@@ -1528,9 +1549,9 @@ fn emit_x86_64_load_eval_arg(_module: &Module, emitter: &mut Emitter, index: usi
 /// Acquires an owner for a staged constructor argument only when the slot owns it.
 ///
 /// `abi::emit_incref_if_refcounted` already selects the active ABI, so both targets share this
-/// rule. A borrowed by-value argument keeps exactly one owner, the one Magician's normalized
-/// argument array holds across the whole native activation; acquiring a second one here would
-/// leak a reference the bridge has no path on which to release it.
+/// rule. Ordinary borrowed values are rooted by Magician's normalized argument array. Callable
+/// adapters transfer their initial descriptor owner into the bridge's cleanup collection.
+/// Only by-reference raw slots acquire another owner for their writeback discipline here.
 fn emit_acquire_staged_constructor_arg(
     emitter: &mut Emitter,
     param_ty: &PhpType,
@@ -1643,6 +1664,10 @@ fn emit_aarch64_cast_eval_array_arg(
 ) {
     let accepted_label = format!("{label_prefix}_array_accepted");
     emitter.instruction("ldr x0, [x29, #-16]");                                 // reload the boxed eval argument for array unboxing
+    if super::eval_argument_helpers::emit_unbox_mixed_element_array(emitter, param_ty, fail_label) {
+        emit_acquire_staged_constructor_arg(emitter, param_ty, owner);
+        return;
+    }
     emitter.instruction("bl __rt_mixed_unbox");                                 // expose the eval array payload for the constructor ABI
     emitter.instruction("cmp x0, #4");                                          // runtime tag 4 means indexed array
     emitter.instruction(&format!("b.eq {}", accepted_label));                   // indexed arrays satisfy PHP array parameters
@@ -1811,6 +1836,10 @@ fn emit_x86_64_cast_eval_array_arg(
 ) {
     let accepted_label = format!("{label_prefix}_array_accepted");
     emitter.instruction("mov rax, QWORD PTR [rbp - 40]");                       // reload the boxed eval argument for array unboxing
+    if super::eval_argument_helpers::emit_unbox_mixed_element_array(emitter, param_ty, fail_label) {
+        emit_acquire_staged_constructor_arg(emitter, param_ty, owner);
+        return;
+    }
     emitter.instruction("call __rt_mixed_unbox");                               // expose the eval array payload for the constructor ABI
     emitter.instruction("cmp rax, 4");                                          // runtime tag 4 means indexed array
     emitter.instruction(&format!("je {}", accepted_label));                     // indexed arrays satisfy PHP array parameters
@@ -2163,6 +2192,24 @@ mod argument_ownership_tests {
         emitter.output()
     }
 
+    /// Layout-neutral Mixed arrays admit packed and hash payloads while typed arrays stay strict.
+    #[test]
+    fn mixed_array_constructor_arguments_accept_both_layouts_on_every_target() {
+        for name in SUPPORTED_TARGETS {
+            let target = Target::parse(name).unwrap();
+            for (param, accepts_hash) in [
+                (PhpType::Array(Box::new(PhpType::Mixed)), true),
+                (PhpType::Array(Box::new(PhpType::Int)), false),
+                (PhpType::AssocArray { key: Box::new(PhpType::Str), value: Box::new(PhpType::Int) }, false),
+            ] {
+                let asm = constructor_argument_asm(target, param, false);
+                let range = if target.arch == Arch::AArch64 { "sub x0, x0, #4" } else { "sub rax, 4" };
+                assert_eq!(asm.contains(range), accepts_hash, "{name}: {asm}");
+                assert!(!asm.contains("__rt_incref"), "{name}: borrowed argument acquired an extra owner");
+            }
+        }
+    }
+
     /// By-value refcounted constructor arguments stay borrowed on every target.
     ///
     /// Magician's normalized array roots the value for the whole native activation. An extra
@@ -2204,43 +2251,27 @@ mod argument_ownership_tests {
                 true,
             );
             assert_eq!(asm.matches("__rt_incref").count(), 1, "{name}: {asm}");
+            let sequence = match target.arch {
+                Arch::AArch64 => "ldr x0, [x29, #-16]\n    bl __rt_mixed_deref",
+                Arch::X86_64 => {
+                    "mov rax, QWORD PTR [rbp - 40]\n    call __rt_mixed_deref"
+                }
+            };
+            assert!(asm.contains(sequence), "{name}: {asm}");
         }
     }
 
-    /// Callable constructor arguments reach the array and invokable-object lookups through
-    /// unconditional AArch64 branches.
-    ///
-    /// The string-name descriptor lookup emitted between the tag ladder and those lookups grows
-    /// with the program's callable names, so a `b.eq` across it can leave the ±1 MiB
-    /// conditional-branch range (#1444). x86_64 keeps its rel32 `je`.
+    /// Retaining Mixed constructors receive the original PHP reference, never its current child.
     #[test]
-    fn callable_constructor_argument_ladder_widens_aarch64_branches() {
+    fn mixed_constructor_reference_arguments_preserve_wrapper_on_every_target() {
         for name in SUPPORTED_TARGETS {
             let target = Target::parse(name).unwrap();
-            let asm = constructor_argument_asm(target, PhpType::Callable, false);
-            let lines = asm.lines().map(str::trim).collect::<Vec<_>>();
-            for (suffix, sites) in [("_callable_array", 2), ("_callable_object", 1)] {
-                let reaches = |line: &str, mnemonic: &str| {
-                    line.strip_prefix(mnemonic).is_some_and(|label| label.ends_with(suffix))
-                };
-                match target.arch {
-                    Arch::AArch64 => {
-                        assert!(
-                            !lines.iter().any(|line| reaches(line, "b.eq ")),
-                            "{name}: near branch to {suffix}:\n{asm}"
-                        );
-                        let wide = lines
-                            .windows(2)
-                            .filter(|pair| pair[0] == "b.ne 1f" && reaches(pair[1], "b "))
-                            .count();
-                        assert_eq!(wide, sites, "{name}: wide branches to {suffix}:\n{asm}");
-                    }
-                    Arch::X86_64 => {
-                        let near = lines.iter().filter(|line| reaches(line, "je ")).count();
-                        assert_eq!(near, sites, "{name}: je branches to {suffix}:\n{asm}");
-                    }
-                }
-            }
+            let asm = constructor_argument_asm(target, PhpType::Mixed, true);
+            let dereference = match target.arch {
+                Arch::AArch64 => "ldr x0, [x29, #-16]\n    bl __rt_mixed_deref",
+                Arch::X86_64 => "mov rax, QWORD PTR [rbp - 40]\n    call __rt_mixed_deref",
+            };
+            assert!(!asm.contains(dereference), "{name}: keep the PHP reference identity: {asm}");
         }
     }
 

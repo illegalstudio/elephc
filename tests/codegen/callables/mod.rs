@@ -8,6 +8,7 @@
 //! - Submodules group focused fixtures for closures, closure array-literal returns, expr calls, language features, constants and system, state and variadics, argument introspection, callable strings, compiler-generated local visibility, callable dispatch branch reach, where descriptor thunks land relative to their caller, and callable arrays naming methods the caller cannot reach.
 
 mod boxed_calls;
+mod shared_boxed_dispatch;
 mod branch_reach;
 mod resolver_sharing;
 mod inaccessible_callbacks;

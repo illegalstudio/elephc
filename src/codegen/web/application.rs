@@ -91,7 +91,7 @@ pub(super) fn emit(emitter: &mut Emitter, module: &Module, data: &DataSection) {
         abi::load_at_offset(emitter, abi::int_result_reg(emitter), 24);
         cleanup.call(emitter, "__rt_decref_hash", false);
     }
-    for symbol in ["_cstr_base", "_cstr2_base", "_print_r_base"] {
+    for symbol in ["_cstr_base", "_cstr2_base", "_print_r_ptr"] {
         abi::emit_load_symbol_to_reg(emitter, abi::int_result_reg(emitter), symbol, 0);
         abi::emit_store_zero_to_symbol(emitter, symbol, 0);
         cleanup.call(emitter, "__rt_heap_free_safe", false);
@@ -175,6 +175,12 @@ mod tests {
             assert!(request.contains("__rt_cleanup_call"), "{name}");
             assert!(request.find("__rt_decref_hash").unwrap() < request.find("__rt_gc_collect_cycles_explicit").unwrap(), "{name}");
             assert!(request.contains("__rt_web_inventory_prune"), "{name}");
+            let cleanup = assembly.find(&format!("{}:\n", target.extern_symbol("elephc_web_application_request_end"))).unwrap();
+            let cleanup = &assembly[cleanup..end];
+            let capture = &cleanup[cleanup.find("_print_r_ptr").unwrap()..];
+            assert!(capture.find("__rt_heap_free_safe").unwrap() < capture.find("_print_r_cap").unwrap(),
+                "{name}: the growable capture must be freed before resetting its capacity");
+            assert!(!cleanup.contains("_print_r_base"), "{name}: removed print_r buffer symbol");
         }
     }
 }

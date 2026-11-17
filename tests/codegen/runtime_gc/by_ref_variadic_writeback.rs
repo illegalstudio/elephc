@@ -107,3 +107,40 @@ echo $p, "\n";
         out_stderr
     );
 }
+
+/// A closure capturing a by-reference variadic BY REFERENCE sees the argument array and writes
+/// through it, whether it runs inside the callee or is returned and run later (the shape of
+/// `mysqli_stmt::bind_result()`), and when only one branch captures it. The variadic's raw
+/// slot used to be widened in place as if it held a reference cell, so the closure read null.
+/// Expected output is php 8.5's.
+#[test]
+fn test_by_ref_variadic_captured_by_reference_in_a_closure() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+function bind(mixed &...$vars): Closure {
+    return function (array $row) use (&$vars): void {
+        $_n = count($vars);
+        for ($_i = 0; $_i < $_n; $_i++) { $vars[$_i] = $row[$_i]; }
+    };
+}
+function direct(mixed &...$vars): void {
+    $c = function () use (&$vars): void { echo count($vars), ":"; $vars[0] = "w"; };
+    $c();
+}
+function branch(bool $f, mixed &...$vars): void {
+    if ($f) { $c = function () use (&$vars): void { $vars[0] = "b"; }; $c(); }
+    echo count($vars), ":";
+    $vars[1] = "z";
+}
+$x = 1; $y = 2;
+direct($x, $y);
+echo $x, "|";
+$w = bind($x, $y);
+$w([10, 20]);
+echo $x, ",", $y, "|";
+branch(true, $x, $y); echo $x, $y, "|";
+branch(false, $x, $y); echo $x, $y, "\n";
+"#,
+    );
+    assert_heap_clean(out, "2:w|10,20|2:bz|2:bz\n");
+}

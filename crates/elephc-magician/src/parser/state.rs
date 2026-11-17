@@ -71,6 +71,9 @@ pub(super) struct Parser {
     pub(super) track_source_lines: bool,
     /// Line of the last marker emitted, so an unchanged line does not emit a second one.
     pub(super) last_source_line: i64,
+    /// Whether a `goto` or a label has been parsed so far, so jump validation is skipped for
+    /// the fragments that have none.
+    pub(super) saw_jump: bool,
 }
 
 /// A parsed PHP name plus whether it used a leading global namespace separator.
@@ -221,6 +224,7 @@ impl Parser {
             error_pos: None,
             track_source_lines: false,
             last_source_line: 0,
+            saw_jump: false,
         }
     }
 
@@ -287,6 +291,18 @@ impl Parser {
                             .php_description(),
                     ));
                 }
+            }
+        }
+        if self.saw_jump {
+            if let Err(error) = super::jumps::validate_jump_scope(&statements) {
+                // A `goto` into a missing label is found after the whole fragment parsed, so the
+                // cursor sits on EOF and the diagnostic names the fragment's last line.
+                let pos = self.failing_token_pos();
+                return Err(EvalParseDiagnostic::new(
+                    error,
+                    self.token_lines.get(pos).copied().unwrap_or(1),
+                    self.tokens.get(pos).unwrap_or(&TokenKind::Eof).php_description(),
+                ));
             }
         }
         let cli_superglobals = self.named_cli_superglobals();

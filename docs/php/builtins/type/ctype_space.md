@@ -1,27 +1,26 @@
 ---
 title: "ctype_space()"
 description: "Checks if all characters in the string are whitespace characters."
-sidebar:
-  order: 1097
 ---
 
 ## ctype_space()
 
 ```php
-function ctype_space(string $text): bool
+function ctype_space(mixed $text): bool
 ```
 
 Checks if all characters in the string are whitespace characters.
 
 **Parameters**:
-- `$text` (`string`)
+- `$text` (`mixed`)
 
 **Returns**: `bool`
 
 ## Availability
 
-- **Compiled (AOT)**: supported by the Elephc code generator.
-- **`eval()` (magician interpreter)**: supported through a declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/string/ctype_space.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/string/ctype_space.rs)).
+| Compiled (AOT) | Magician (eval) |
+|---|---|
+| Available | Available |
 
 _No examples yet. Check `examples/` and `showcases/` for usage patterns._
 

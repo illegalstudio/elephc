@@ -10,6 +10,10 @@
 //!   later passes can assume table IDs, branch args, and value types are sound.
 
 mod string_append;
+mod reference_results;
+mod dominators;
+
+use dominators::DominatorSets;
 
 use crate::fast_hash::{FastMap as HashMap, FastSet as HashSet};
 
@@ -105,6 +109,9 @@ pub enum ValidationError {
         actual: Option<IrType>,
     },
     NeverFunctionReturns,
+    InvalidReferenceOwner { local: LocalSlotId, owner: LocalSlotId },
+    InvalidReferenceArgumentOwner(LocalSlotId),
+    InvalidReferenceCallResult { inst: InstId, operand: ValueId },
 }
 
 /// Validates every function stored in a module.
@@ -169,13 +176,73 @@ pub fn validate_function(function: &Function) -> Result<(), ValidationError> {
     #[cfg(test)]
     VALIDATED_FUNCTIONS.with(|count| count.set(count.get() + 1));
     validate_function_shape(function)?;
+    for local in &function.locals {
+        if local.is_reference_argument_owner && local.kind != LocalKind::RefCell {
+            return Err(ValidationError::InvalidReferenceArgumentOwner(local.id));
+        }
+        if let Some(owner) = local.ref_cell_owner {
+            if function.locals.get(owner.as_raw() as usize)
+                .is_none_or(|slot| slot.kind != LocalKind::RefCell || slot.id == local.id)
+            {
+                return Err(ValidationError::InvalidReferenceOwner { local: local.id, owner });
+            }
+        }
+    }
     validate_value_table(function)?;
     validate_instruction_placement(function)?;
     let dominators = compute_dominators(function);
     validate_instructions(function, &dominators)?;
     validate_terminators(function, &dominators)?;
     string_append::validate_transfers(function)?;
+    reference_results::validate_transfers(function)?;
     Ok(())
+}
+
+#[cfg(test)]
+mod reference_owner_metadata_tests {
+    use super::*;
+
+    /// Pending argument ownership is legal only on a cell that the unwind chain can retire.
+    #[test]
+    fn native_reference_argument_role_requires_a_ref_cell_owner() {
+        let mut function = Function::new("native_argument_metadata".into(), IrType::Void, PhpType::Void);
+        {
+            let mut builder = crate::ir::Builder::new(&mut function);
+            let entry = builder.create_named_block("entry", vec![]);
+            builder.position_at_end(entry);
+            builder.terminate(Terminator::Return { value: None });
+        }
+        let owner = function.add_local(None, IrType::I64, PhpType::Mixed, LocalKind::RefCell);
+        function.locals[owner.as_raw() as usize].is_reference_argument_owner = true;
+        assert_eq!(validate_function(&function), Ok(()));
+        for invalid in [LocalKind::PhpLocal, LocalKind::OwnedTemp, LocalKind::ReturnRefCell] {
+            function.locals[owner.as_raw() as usize].kind = invalid;
+            assert_eq!(validate_function(&function), Err(ValidationError::InvalidReferenceArgumentOwner(owner)));
+        }
+    }
+
+    /// Invalid lease metadata fails before a backend can detach or release an unrelated slot.
+    #[test]
+    fn native_reference_owner_metadata_requires_a_distinct_ref_cell_slot() {
+        let mut function = Function::new("native_owner_metadata".into(), IrType::Void, PhpType::Void);
+        {
+            let mut builder = crate::ir::Builder::new(&mut function);
+            let entry = builder.create_named_block("entry", vec![]);
+            builder.position_at_end(entry);
+            builder.terminate(Terminator::Return { value: None });
+        }
+        let local = function.add_local(Some("value".into()), IrType::I64, PhpType::Int, LocalKind::PhpLocal);
+        let owner = function.add_local(Some("lease".into()), IrType::I64, PhpType::Int, LocalKind::RefCell);
+        function.locals[local.as_raw() as usize].ref_cell_owner = Some(owner);
+        assert_eq!(validate_function(&function), Ok(()));
+        for invalid in [local, LocalSlotId::from_raw(900)] {
+            function.locals[local.as_raw() as usize].ref_cell_owner = Some(invalid);
+            assert_eq!(validate_function(&function), Err(ValidationError::InvalidReferenceOwner { local, owner: invalid }));
+        }
+        function.locals[local.as_raw() as usize].ref_cell_owner = Some(owner);
+        function.locals[owner.as_raw() as usize].kind = LocalKind::OwnedTemp;
+        assert_eq!(validate_function(&function), Err(ValidationError::InvalidReferenceOwner { local, owner }));
+    }
 }
 
 /// Validates block existence, IDs, entry placement, and terminators.
@@ -300,7 +367,7 @@ fn validate_instruction_placement(function: &Function) -> Result<(), ValidationE
 /// Validates instruction operands, result metadata, immediates, effects, and dominance.
 fn validate_instructions(
     function: &Function,
-    dominators: &Dominators,
+    dominators: &DominatorSets,
 ) -> Result<(), ValidationError> {
     for block in &function.blocks {
         for (index, inst_id) in block.instructions.iter().enumerate() {
@@ -308,7 +375,12 @@ fn validate_instructions(
                 .instruction(*inst_id)
                 .ok_or(ValidationError::UnknownInstruction(*inst_id))?;
             validate_instruction_result(function, block.id, index as u32, *inst_id, inst)?;
-            validate_instruction_effects(*inst_id, inst)?;
+            let operand_type = inst
+                .operands
+                .first()
+                .and_then(|value| function.value(*value))
+                .map(|value| value.php_type.clone());
+            validate_instruction_effects_with_operand(*inst_id, inst, operand_type)?;
             validate_instruction_immediate(*inst_id, inst)?;
             validate_instruction_operands(
                 function,
@@ -368,11 +440,31 @@ fn validate_instruction_result(
 /// the immutable-local pass proves that the named scalar slot cannot change.
 /// Physical property initialization additionally allocates owned reference cells.
 /// A named `prop_set` additionally admits exactly the packed field store effects.
+#[cfg(test)]
 fn validate_instruction_effects(
     inst_id: InstId,
     inst: &Instruction,
 ) -> Result<(), ValidationError> {
-    let expected = if inst.op == Op::MixedUnbox {
+    validate_instruction_effects_with_operand(inst_id, inst, None)
+}
+
+/// Validates one instruction's effects against its canonical contract and an optional
+/// operand PHP type used for type-proven refinements.
+fn validate_instruction_effects_with_operand(
+    inst_id: InstId,
+    inst: &Instruction,
+    operand_type: Option<PhpType>,
+) -> Result<(), ValidationError> {
+    // `(int)` over an int or bool is a representation re-stamp: it cannot warn,
+    // fail, allocate, or observe heap state. The operand may already have been
+    // folded from bool to int, so both types admit the pure refinement.
+    let pure_int_restamp = inst.op == Op::Cast
+        && inst.result_php_type == PhpType::Int
+        && inst.effects.is_pure()
+        && operand_type.is_some_and(|ty| matches!(ty.codegen_repr(), PhpType::Int | PhpType::Bool));
+    let expected = if pure_int_restamp {
+        Effects::PURE
+    } else if inst.op == Op::MixedUnbox {
         Op::mixed_unbox_effects(&inst.result_php_type)
     } else if inst.op == Op::FToI && matches!(inst.immediate, Some(Immediate::WeakFloatToInt)) {
         Op::FToI.default_effects() | Effects::MAY_WARN | Effects::MAY_THROW
@@ -387,6 +479,14 @@ fn validate_instruction_effects(
         && matches!(inst.immediate, Some(Immediate::PropertyRef { .. }))
     {
         inst.op.default_effects() | Effects::ALLOC_HEAP
+    } else if matches!(
+        inst.op,
+        Op::ICheckedAddToInt | Op::ICheckedSubToInt | Op::ICheckedMulToInt
+    ) && matches!(inst.immediate, Some(Immediate::Data(_)))
+    {
+        // A declared-int return boundary turns the checked arithmetic overflow into PHP's
+        // catchable TypeError, so the specialized producer carries throw/fatal effects.
+        inst.op.default_effects() | Effects::MAY_THROW | Effects::MAY_FATAL
     } else {
         inst.op.default_effects()
     };
@@ -457,6 +557,36 @@ mod instruction_effect_tests {
             instruction.effects = effects | Effects::OUTPUT;
             assert!(validate_instruction_effects(id, &instruction).is_err());
         }
+    }
+
+    /// A pure int re-stamp cast is valid over int or bool operands only.
+    #[test]
+    fn int_restamp_cast_admits_pure_effects_only_for_scalar_operands() {
+        let mut instruction = Instruction::new(
+            Op::Cast,
+            Vec::new(),
+            Some(Immediate::CastTarget(IrType::I64)),
+            None,
+            IrType::I64,
+            PhpType::Int,
+            Ownership::NonHeap,
+            Effects::PURE,
+            None,
+        );
+        let id = InstId::from_raw(0);
+        for ty in [PhpType::Int, PhpType::Bool] {
+            assert_eq!(
+                validate_instruction_effects_with_operand(id, &instruction, Some(ty)),
+                Ok(())
+            );
+        }
+        for ty in [PhpType::Float, PhpType::Str, PhpType::Mixed] {
+            assert!(validate_instruction_effects_with_operand(id, &instruction, Some(ty)).is_err());
+        }
+        instruction.effects = Effects::MAY_WARN;
+        assert!(
+            validate_instruction_effects_with_operand(id, &instruction, Some(PhpType::Bool)).is_err()
+        );
     }
 
     /// Physical initializer writes require allocation effects without weakening ordinary writes.
@@ -635,7 +765,9 @@ fn validate_instruction_immediate(
         ConstF64 => require_immediate(inst_id, inst, "f64", |imm| matches!(imm, Imm::F64(_))),
         ConstBool => require_immediate(inst_id, inst, "bool", |imm| matches!(imm, Imm::Bool(_))),
         IncludeOnceMark | IncludeOnceGuard => {
-            require_immediate(inst_id, inst, "source id", |imm| matches!(imm, Imm::Source(_)))
+            require_immediate(inst_id, inst, "source id or data id", |imm| {
+                matches!(imm, Imm::Source(_) | Imm::Data(_))
+            })
         }
         IncludeFrameEnter | IncludeFrameExit => require_immediate(
             inst_id,
@@ -643,7 +775,7 @@ fn validate_instruction_immediate(
             "include frame",
             |imm| matches!(imm, Imm::IncludeFrame(_)),
         ),
-        ConstStr | ConstClassName | ClosureScopeClassName | DataAddr | Warn
+        ConstStr | ConstClassName | ClosureScopeClassName | DataAddr | Warn | IncludeOnceTest
         | FunctionVariantMark | FunctionVariantDispatch | LoadPropRefCell | BindPropRefCell
         | LoadPropRefCellChecked
         | LoadStaticPropertyRefCell
@@ -657,11 +789,16 @@ fn validate_instruction_immediate(
         | PackedFieldMixedToFloat
         | PackedFieldMixedToBool
         | ReturnBoundaryMixedToInt
+        | PropertyBoundaryCheckedToInt
         | PropInitialized
         | StaticPropInitialized
         | ReflectionStaticPropertyInitialized => {
             require_immediate(inst_id, inst, "data id", |imm| matches!(imm, Imm::Data(_)))
         }
+        MethodLookup => match inst.immediate {
+            Some(Imm::Data(_)) | None => Ok(()),
+            _ => Err(ValidationError::UnexpectedImmediate(inst_id)),
+        },
         EvalLiteralCall => require_immediate(inst_id, inst, "profiled data id", |imm| {
             matches!(imm, Imm::Data(_) | Imm::ProfiledData { .. })
         }),
@@ -679,9 +816,9 @@ fn validate_instruction_immediate(
         PropUnset => require_immediate(inst_id, inst, "property name or initializer physical slot", |imm| {
             matches!(imm, Imm::Data(_) | Imm::PropertyRef { .. })
         }),
-        StrAppend | LoadLocal | StoreLocal | UnsetLocal | ZeroLocalSlot | LoadRefCell | StoreRefCell
+        StrAppend | LoadLocal | StoreLocal | UnsetLocal | ZeroLocalSlot | LoadRefCell | LoadRefCellValue | StoreRefCell
         | ReleaseLocalRefCell | AcquireRefCell
-        | ReleaseLocalSlot | PushCallOperandOwner | PopCallOperandOwner
+        | ReleaseLocalSlot | ReleaseRawLocalSlot | PushCallOperandOwner | PopCallOperandOwner
         | LoadStaticLocal | StoreStaticLocal | InitStaticLocal | StaticLocalUninitialized => require_immediate(inst_id, inst, "local slot", |imm| {
             matches!(imm, Imm::LocalSlot(_))
         }),
@@ -713,6 +850,11 @@ fn validate_instruction_immediate(
                         .all(crate::ir_passes::checked_numeric_chain::is_checked_chain_operation))
             })
         }
+        // A pair rule selects between exactly two operands, a fold rule among three or more.
+        MixedMinMax => require_immediate(inst_id, inst, "min/max rule for its operand count", |imm| {
+            matches!(imm, Imm::I64(rule) if crate::ir::MinMaxRule::from_immediate(*rule)
+                .is_some_and(|rule| rule.accepts_operand_count(inst.operands.len())))
+        }),
         StrIncDec => require_immediate(inst_id, inst, "increment delta", |imm| {
             matches!(imm, Imm::I64(1) | Imm::I64(-1))
         }),
@@ -734,7 +876,7 @@ fn validate_instruction_immediate(
         IterEnd => require_immediate(inst_id, inst, "iterator-state local slot", |imm| {
             matches!(imm, Imm::LocalSlot(_))
         }),
-        StrCharAt => {
+        StrCharAt | DynamicObjectNewWithoutConstructorMixed => {
             if matches!(inst.immediate, None | Some(Imm::Bool(_))) {
                 Ok(())
             } else {
@@ -817,7 +959,7 @@ fn validate_instruction_operands(
     inst_index: u32,
     _inst_id: InstId,
     inst: &Instruction,
-    dominators: &Dominators,
+    dominators: &DominatorSets,
 ) -> Result<(), ValidationError> {
     for operand in &inst.operands {
         validate_use(function, *operand, block, Some(inst_index), dominators)?;
@@ -838,9 +980,10 @@ fn validate_opcode_rules(
         | CallableArrayNew | GeneratorNew | InvokerRefArg | ArrayLocalRefCell
         | ErrorSuppressBegin | ErrorSuppressEnd | TryPushHandler | TryPopHandler
         | CatchCurrent | CatchBind | FinallyEnter | FinallyExit | IncludeOnceMark
-        | IncludeOnceGuard | IncludeFrameEnter | IncludeFrameExit | ClassLikeActivate
+        | IncludeOnceGuard | IncludeOnceTest | IncludeFrameEnter | IncludeFrameExit | ClassLikeActivate
         | FunctionVariantMark | FunctionVariantDispatch | EvalFunctionExists
-        | EvalConstantExists | EvalConstantFetch | ConcatReset | GcCollect | Nop => {
+        | EvalClassExists | EvalConstantExists | EvalConstantFetch | ConcatReset | GcCollect
+        | Nop => {
             check_count(inst_id, inst, 0, "0")
         }
         // Memory-usage selectors carry the optional `$real_usage` flag as their one operand.
@@ -881,11 +1024,22 @@ fn validate_opcode_rules(
                 _ => Err(ValidationError::UnexpectedImmediate(inst_id)),
             }
         }
-        FirstClassCallableNew => check_count_at_most(inst_id, inst, 1, "0 or 1"),
+        FirstClassCallableNew | CallableValueNew => check_count_at_most(inst_id, inst, 1, "0 or 1"),
         ObjectNew => Ok(()),
         EvalStaticMethodCall => Ok(()),
         IAdd | ISub | IMul | IDiv | ISDiv | ISMod | IPow | IBitAnd | IBitOr | IBitXor
         | IShl | IShrA => check_binary(function, inst_id, inst, IrType::I64, "I64"),
+        IOverflows => {
+            check_binary(function, inst_id, inst, IrType::I64, "I64")?;
+            match inst.immediate {
+                Some(Immediate::MixedNumericOp(
+                    crate::ir::MixedNumericOp::Add
+                    | crate::ir::MixedNumericOp::Sub
+                    | crate::ir::MixedNumericOp::Mul,
+                )) => Ok(()),
+                _ => Err(ValidationError::UnexpectedImmediate(inst_id)),
+            }
+        }
         ICheckedAdd | ICheckedSub | ICheckedMul | ICheckedAddToInt | ICheckedSubToInt
         | ICheckedMulToInt | ICheckedPow | ICheckedDiv => {
             check_binary(function, inst_id, inst, IrType::I64, "I64")
@@ -893,6 +1047,10 @@ fn validate_opcode_rules(
         ICheckedNumericChainToInt => check_checked_numeric_chain(function, inst_id, inst),
         FAdd | FSub | FMul | FDiv | FPow => check_binary(function, inst_id, inst, IrType::F64, "F64"),
         MixedNumericBinop => check_count(inst_id, inst, 2, "2"),
+        // Each operand is a raw int/float scalar or a boxed Mixed cell; the backend dispatches
+        // on the operand's EIR type. The rule immediate pins the exact arity (two for a pair
+        // rule, three or more for a fold rule).
+        MixedMinMax => check_count_at_least(inst_id, inst, 2, "at least 2"),
         // The operand is either a concrete `Str` payload or a boxed Mixed cell, so only
         // the arity is pinned here; the backend dispatches on the operand's EIR type.
         StrIncDec => check_count(inst_id, inst, 1, "1"),
@@ -940,6 +1098,15 @@ fn validate_opcode_rules(
             check_operand_type(function, inst_id, inst, 1, IrType::I64, "I64")
         }
         BufferNew | RefCellMixedPayload => check_unary(function, inst_id, inst, IrType::I64, "I64"),
+        LoadRefCellValue => {
+            check_count(inst_id, inst, 0, "0")?;
+            let result = inst.result.ok_or(ValidationError::InstructionResultMissing(inst_id))?;
+            if inst.result_type != IrType::Heap(crate::ir::IrHeapKind::Mixed)
+                || inst.result_php_type != PhpType::Mixed
+                || inst.result_ownership != Ownership::Owned
+            { return Err(ValidationError::ResultTypeMismatch(result)); }
+            Ok(())
+        }
         LoadLocal
         | LoadRefCell
         | LoadGlobal
@@ -956,7 +1123,7 @@ fn validate_opcode_rules(
         ThrowErrorValue => check_unary(function, inst_id, inst, IrType::Str, "Str"),
         UnsetLocal | ZeroLocalSlot | PromoteLocalRefCell | AliasLocalRefCell | RetainLocalRefCell
         | ReleaseLocalRefCell
-        | ReleaseLocalSlot | PushCallOperandOwner | PopCallOperandOwner => {
+        | ReleaseLocalSlot | ReleaseRawLocalSlot | PushCallOperandOwner | PopCallOperandOwner => {
             check_count(inst_id, inst, 0, "0")
         }
         AcquireRefCell => {
@@ -969,8 +1136,60 @@ fn validate_opcode_rules(
             }
             Ok(())
         }
-        StoreLocal | StoreGlobal | StoreStaticLocal | InitStaticLocal | StoreStaticProperty
-        | StoreReflectionStaticProperty | ExternGlobalStore | StoreRefCell | BindRefCellPtr | AdoptRefCellPtr
+        StoreStaticProperty | StoreReflectionStaticProperty => {
+            if !(1..=3).contains(&inst.operands.len()) {
+                return check_count(inst_id, inst, 1, "original RHS, optional assignment-site Bool and source owner");
+            }
+            if inst.operands.len() >= 2 {
+                check_operand_type(function, inst_id, inst, 1, IrType::I64, "assignment-site bool (I64)")?;
+            }
+            if let Some(owner_id) = inst.operands.get(2) {
+                let owner = function.value(*owner_id).ok_or(ValidationError::UnknownValue(*owner_id))?;
+                let ValueDef::Instruction { inst: load, .. } = owner.def else {
+                    return Err(ValidationError::OwnershipTypeMismatch(*owner_id));
+                };
+                let parking_slot = function.instruction(load).and_then(|load| {
+                    if load.op != Op::LoadLocal { return None; }
+                    let Some(Immediate::LocalSlot(slot)) = load.immediate else { return None; };
+                    function.locals.get(slot.as_raw() as usize)
+                });
+                if parking_slot.is_none_or(|slot| slot.kind != LocalKind::OwnedTemp)
+                    || owner.ownership != Ownership::Borrowed
+                    || !function.instructions.iter().any(|instruction|
+                        instruction.op == Op::PushCallOperandOwner
+                            && instruction.immediate == function.instruction(load).unwrap().immediate)
+                { return Err(ValidationError::OwnershipTypeMismatch(*owner_id)); }
+            }
+            Ok(())
+        }
+        StoreRefCell => {
+            if !(1..=3).contains(&inst.operands.len()) {
+                return check_count(inst_id, inst, 1, "original RHS, optional assignment-site Bool and source owner");
+            }
+            if inst.operands.len() >= 2 {
+                check_operand_type(function, inst_id, inst, 1, IrType::I64, "assignment-site bool (I64)")?;
+            }
+            if let Some(owner_id) = inst.operands.get(2) {
+                let owner = function.value(*owner_id).ok_or(ValidationError::UnknownValue(*owner_id))?;
+                let ValueDef::Instruction { inst: load, .. } = owner.def else {
+                    return Err(ValidationError::OwnershipTypeMismatch(*owner_id));
+                };
+                let parking_slot = function.instruction(load).and_then(|load| {
+                    if load.op != Op::LoadLocal { return None; }
+                    let Some(Immediate::LocalSlot(slot)) = load.immediate else { return None; };
+                    function.locals.get(slot.as_raw() as usize)
+                });
+                if parking_slot.is_none_or(|slot| !matches!(slot.kind, LocalKind::OwnedTemp | LocalKind::HiddenTemp))
+                    || owner.ownership != Ownership::Borrowed
+                    || !function.instructions.iter().any(|instruction|
+                        instruction.op == Op::PushCallOperandOwner
+                            && instruction.immediate == function.instruction(load).unwrap().immediate)
+                { return Err(ValidationError::OwnershipTypeMismatch(*owner_id)); }
+            }
+            Ok(())
+        }
+        StoreLocal | StoreGlobal | StoreStaticLocal | InitStaticLocal
+        | ExternGlobalStore | BindRefCellPtr | AdoptRefCellPtr
         | Acquire | Release | Move | Borrow | EnsureOwned | EchoValue | PrintValue | WriteStdout
         | WriteStrStdout | VarDump | PrintR | ThrowException | GeneratorReturn
         | ThrowNamedParameterOverwrite | PtrCheckNonnull => {
@@ -1017,6 +1236,59 @@ fn validate_opcode_rules(
         // ArrayToHash normalizes either supported PHP array storage kind. An in-place PHP array
         // operation can change packed/hash storage without changing the source-level array type.
         ArrayToHash => check_array_to_hash(function, inst_id, inst),
+        // The producer proved the receiver is a private, int-shaped array with reserved capacity.
+        ArrayPushReserved => {
+            check_count(inst_id, inst, 2, "2")?;
+            check_operand_type(function, inst_id, inst, 0, IrType::Heap(IrHeapKind::Array), "Heap(Array)")?;
+            check_operand_type(function, inst_id, inst, 1, IrType::I64, "I64")?;
+            Ok(())
+        }
+        // The producer pass proved the receiver is a private int-shaped packed array and the
+        // requested range is in bounds; the helper returns an owned Mixed int/float cell.
+        ArraySumInt => {
+            check_count(inst_id, inst, 4, "4")?;
+            check_operand_type(function, inst_id, inst, 0, IrType::Heap(IrHeapKind::Array), "Heap(Array)")?;
+            check_operand_type(function, inst_id, inst, 1, IrType::I64, "I64")?;
+            check_operand_type(function, inst_id, inst, 2, IrType::I64, "I64")?;
+            check_operand_type(function, inst_id, inst, 3, IrType::Heap(IrHeapKind::Mixed), "Heap(Mixed)")?;
+            let result = inst
+                .result
+                .ok_or(ValidationError::InstructionResultMissing(inst_id))?;
+            if inst.result_type != IrType::Heap(IrHeapKind::Mixed) {
+                return Err(ValidationError::ResultTypeMismatch(result));
+            }
+            if function
+                .value(result)
+                .ok_or(ValidationError::UnknownValue(result))?
+                .php_type
+                != PhpType::Mixed
+            {
+                return Err(ValidationError::PhpTypeMismatch(result));
+            }
+            Ok(())
+        }
+        // The producer pass proved the receiver is a private int-shaped packed array and the
+        // index is in `[0, length)`; the result is a raw PHP int, never PHP null.
+        ArrayGetUnchecked => {
+            check_count(inst_id, inst, 2, "2")?;
+            check_first_heap(function, inst_id, inst, IrHeapKind::Array, "Heap(Array)")?;
+            check_operand_type(function, inst_id, inst, 1, IrType::I64, "I64")?;
+            let result = inst
+                .result
+                .ok_or(ValidationError::InstructionResultMissing(inst_id))?;
+            if inst.result_type != IrType::I64 {
+                return Err(ValidationError::ResultTypeMismatch(result));
+            }
+            if function
+                .value(result)
+                .ok_or(ValidationError::UnknownValue(result))?
+                .php_type
+                != PhpType::Int
+            {
+                return Err(ValidationError::PhpTypeMismatch(result));
+            }
+            Ok(())
+        }
         // Typed fetch-for-write reads require an already integer-coerced key. Mixed-result
         // nested parents instead use the storage-aware runtime reader, which accepts string
         // and boxed keys on an indexed or runtime-promoted receiver.
@@ -1131,6 +1403,11 @@ fn validate_opcode_rules(
             check_descriptor_from_buffer_resolve(function, inst_id, inst)?;
             check_operand_type(function, inst_id, inst, 1, IrType::I64, "I64 buffer index")
         }
+        MethodLookup => if inst.immediate.is_some() {
+            check_count(inst_id, inst, 1, "1 for a literal method name")
+        } else {
+            check_count(inst_id, inst, 2, "2 for a runtime method name")
+        },
         DynamicObjectNewWithoutConstructorMixed
         | PropGet
         | PropGetForWrite
@@ -1141,7 +1418,6 @@ fn validate_opcode_rules(
         | DynamicPropSet
         | NullsafePropGet
         | NullsafeMethodCall
-        | MethodLookup
         | MethodCall
         | InstanceOf
         | InstanceOfDynamic => {
@@ -1651,7 +1927,7 @@ fn check_first_heap(
 /// Validates all block terminators and their CFG edge argument contracts.
 fn validate_terminators(
     function: &Function,
-    dominators: &Dominators,
+    dominators: &DominatorSets,
 ) -> Result<(), ValidationError> {
     for block in &function.blocks {
         let Some(term) = &block.terminator else {
@@ -1722,7 +1998,7 @@ fn validate_switch_case(
     function: &Function,
     source_block: BlockId,
     case: &SwitchCase,
-    dominators: &Dominators,
+    dominators: &DominatorSets,
 ) -> Result<(), ValidationError> {
     validate_branch_args(function, case.target, &case.args)?;
     validate_terminator_uses(function, source_block, &case.args, dominators)
@@ -1739,7 +2015,7 @@ fn validate_return(
     function: &Function,
     block: BlockId,
     value: Option<ValueId>,
-    dominators: &Dominators,
+    dominators: &DominatorSets,
 ) -> Result<(), ValidationError> {
     if matches!(function.return_php_type, PhpType::Never) {
         return Err(ValidationError::NeverFunctionReturns);
@@ -1788,7 +2064,7 @@ fn validate_terminator_uses(
     function: &Function,
     block: BlockId,
     values: &[ValueId],
-    dominators: &Dominators,
+    dominators: &DominatorSets,
 ) -> Result<(), ValidationError> {
     for value in values {
         validate_use(function, *value, block, None, dominators)?;
@@ -1865,7 +2141,7 @@ fn validate_use(
     value: ValueId,
     use_block: BlockId,
     use_inst_index: Option<u32>,
-    dominators: &Dominators,
+    dominators: &DominatorSets,
 ) -> Result<(), ValidationError> {
     let Some(value_ref) = function.value(value) else {
         return Err(ValidationError::UnknownValue(value));
@@ -1877,9 +2153,8 @@ fn validate_use(
     // prospective predecessor terminates. Cross-block dominance has no executable meaning there,
     // including when the definition also belongs to a dead continuation. Keep checking IDs, types,
     // and same-block ordering so malformed instructions still fail validation.
-    // (An unreachable block carries only itself as a dominator, so the entry does not dominate it.)
-    let use_is_unreachable =
-        use_block != function.entry && !dominators.dominates(function.entry, use_block);
+    let use_is_unreachable = use_block != function.entry
+        && dominators.is_singleton(use_block);
     let definition_block = match value_ref.def {
         ValueDef::BlockParam { block, .. } | ValueDef::Instruction { block, .. } => block,
     };
@@ -1901,11 +2176,12 @@ fn definition_dominates_use(
     def: ValueDef,
     use_block: BlockId,
     use_inst_index: Option<u32>,
-    dominators: &Dominators,
+    dominators: &DominatorSets,
 ) -> bool {
     match def {
         ValueDef::BlockParam { block, .. } => {
-            block == use_block || dominators.dominates(block, use_block)
+            block == use_block
+                || dominators.dominates(block, use_block)
         }
         ValueDef::Instruction { block, index, .. } if block == use_block => use_inst_index
             .map(|use_index| index < use_index)
@@ -1926,7 +2202,7 @@ fn definition_dominates_use(
 /// a later pass forwards into the loop. Unreachable blocks themselves resolve
 /// to `{self}`. Validation skips cross-block dominance for their uses while
 /// still rejecting same-block use-before-definition.
-fn compute_dominators(function: &Function) -> Dominators {
+fn compute_dominators(function: &Function) -> DominatorSets {
     let predecessors = compute_predecessors(function);
     let reverse_postorder = reachable_reverse_postorder(function, &predecessors);
     let reachable: HashSet<BlockId> = reverse_postorder
@@ -1979,11 +2255,10 @@ fn compute_dominators(function: &Function) -> Dominators {
             }
         }
     }
-    Dominators {
-        bitsets: dominators,
-        #[cfg(test)]
-        sweeps,
-    }
+    let sets = DominatorSets::new(dominators);
+    #[cfg(test)]
+    let sets = sets.with_sweeps(sweeps);
+    sets
 }
 
 /// Converts reachable predecessor block ids into dense block indices for bitset dominator scans.
@@ -2044,69 +2319,6 @@ fn bitset_and_assign(left: &mut [u64], right: &[u64]) {
     for (left_word, right_word) in left.iter_mut().zip(right.iter()) {
         *left_word &= *right_word;
     }
-}
-
-/// Dominator sets for one function, kept as the dense per-block bitsets the fixed point
-/// already computes.
-///
-/// The fixed point below produces one `Vec<u64>` bitset per block, indexed by block index;
-/// `validate_function_shape` has already proven `blocks[i].id == BlockId::from_raw(i)` before
-/// `compute_dominators` runs, so a block id IS its bitset index. The validator only ever asks
-/// one question of this structure — "does A dominate B?" — which the bitset answers with one
-/// bounds-checked load and a shift.
-///
-/// This used to be materialized into a `HashMap<BlockId, HashSet<BlockId>>` by walking every
-/// (block, candidate) pair, i.e. O(blocks^2) SipHash insertions per validated function, on a
-/// path `validate_lowered_module` takes unconditionally in release. The map was never mutated
-/// and never iterated: only `definition_dominates_use` read it, one membership test at a time.
-struct Dominators {
-    /// One dominator bitset per block, addressed by block index.
-    bitsets: Vec<Vec<u64>>,
-    /// Fixed-point sweeps, retained only for deterministic scheduling regressions.
-    #[cfg(test)]
-    sweeps: usize,
-}
-
-impl Dominators {
-    /// Returns whether `candidate` is in `block`'s dominator set.
-    ///
-    /// Out-of-range ids answer `false` on both sides, which is exactly what the
-    /// `HashMap::get(..).map(|set| set.contains(..)).unwrap_or(false)` chain this replaces did:
-    /// the map only ever held keys for real blocks, and a set only ever held real block ids
-    /// (`set_block_bit` is called only with in-range indices, and the trailing bits of the last
-    /// word are masked out of `full_block_bitset`, so a padding bit is never set).
-    fn dominates(&self, candidate: BlockId, block: BlockId) -> bool {
-        self.bitsets
-            .get(block.as_raw() as usize)
-            .is_some_and(|bits| block_bit_is_set(bits, candidate.as_raw() as usize))
-    }
-
-    /// Materializes the block-id map this analysis used to return.
-    ///
-    /// Test-only: it exists so the bitset accessor can be differentially compared against the
-    /// shape it replaced, on the same function, for every (block, candidate) pair.
-    #[cfg(test)]
-    fn to_block_id_map(&self, function: &Function) -> HashMap<BlockId, HashSet<BlockId>> {
-        let mut map = HashMap::with_capacity_and_hasher(function.blocks.len(), Default::default());
-        for (block_index, block) in function.blocks.iter().enumerate() {
-            let mut set = HashSet::default();
-            for (candidate_index, candidate) in function.blocks.iter().enumerate() {
-                if block_bit_is_set(&self.bitsets[block_index], candidate_index) {
-                    set.insert(candidate.id);
-                }
-            }
-            map.insert(block.id, set);
-        }
-        map
-    }
-}
-
-/// Returns whether a block index is present in a dominator bitset.
-fn block_bit_is_set(bits: &[u64], block_index: usize) -> bool {
-    let word = block_index / u64::BITS as usize;
-    let bit = block_index % u64::BITS as usize;
-    bits.get(word)
-        .is_some_and(|word_bits| (word_bits & (1_u64 << bit)) != 0)
 }
 
 /// Traverses the validator's graph, including its implicit exception-handler edges.

@@ -134,9 +134,12 @@ macro_rules! impl_numeric_string_ops {
         })
     }
 
-    /// Applies integer bitwise NOT through the generated runtime wrapper.
+    /// Applies PHP bitwise NOT while routing native throws through eval's catch machinery.
     fn bit_not(&mut self, value: RuntimeCellHandle) -> Result<RuntimeCellHandle, EvalStatus> {
-        Self::handle(unsafe { __elephc_eval_value_bit_not(value.as_ptr()) })
+        let mut result = core::ptr::null_mut();
+        let status = unsafe { __elephc_eval_value_bit_not_v1(value.as_ptr(), &mut result) };
+        self.handle_native_cleanup_status(status)?;
+        Self::handle(result)
     }
 
     /// Concatenates two boxed Mixed cells using elephc runtime string semantics.

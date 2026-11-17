@@ -17,6 +17,10 @@ pub enum EvalClosureObjectTarget {
         target: Box<EvalClosureObjectTarget>,
         owner: pcntl_runtime::EvalPcntlContextLease,
     },
+    NativeDescriptor {
+        callback: RuntimeCellHandle,
+        display_name: String,
+    },
     Named(String),
     BoundNamed {
         name: String,
@@ -50,6 +54,7 @@ impl EvalClosureObjectTarget {
     pub(crate) fn receiver_mut(&mut self) -> Option<&mut RuntimeCellHandle> {
         match self {
             Self::ForeignContext { target, .. } => target.receiver_mut(),
+            Self::NativeDescriptor { callback, .. } => Some(callback),
             Self::BoundNamed { bound_this, .. } => bound_this.as_mut(),
             Self::InvokableObject { object } | Self::ObjectMethod { object, .. } => Some(object),
             Self::Named(_) | Self::StaticMethod { .. } => None,
@@ -146,6 +151,9 @@ pub struct EvalClosure {
     /// closure LITERAL and is shared by every object made from it, so keying statics on it made
     /// the two share one slot.
     pub(super) slot_key: String,
+    /// The class whose code created the closure (lowercased), keying its parameter-default
+    /// cache: each copy of a trait method creates its own closure op_array in php-src.
+    pub(super) creating_class: Option<String>,
 }
 
 impl EvalClosure {
@@ -174,6 +182,22 @@ impl EvalClosure {
             declaring_called_class_scope: None,
             declaring_this: None,
             declaring_call_site: None,
+            creating_class: None,
+        }
+    }
+
+    /// Records the class whose code created the closure.
+    pub fn with_creating_class(mut self, class: Option<&str>) -> Self {
+        self.creating_class = class.filter(|class| !class.is_empty()).map(str::to_ascii_lowercase);
+        self
+    }
+
+    /// Returns the key of this closure's parameter-default cache: its declaration, and the
+    /// class whose code created it.
+    pub fn default_site(&self) -> String {
+        match &self.creating_class {
+            Some(class) => format!("{}@{class}", self.function.name()),
+            None => self.function.name().to_string(),
         }
     }
 

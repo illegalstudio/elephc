@@ -483,3 +483,68 @@ echo json_encode($m), "\n";
     assert_eq!(out.stdout, "3 {\"0\":[\"a\",\"c\",\"b\"],\"w\":[\"a\",\"\",\"\"],\"1\":[\"a\",\"\",\"\"],\"v\":[\"\",\"\",\"b\"],\"2\":[\"\",\"\",\"b\"],\"MARK\":{\"0\":\"A\",\"2\":\"B\"}}\n3 [{\"0\":\"a\",\"w\":\"a\",\"1\":\"a\",\"MARK\":\"A\"},[\"c\"],{\"0\":\"b\",\"w\":\"\",\"1\":\"\",\"v\":\"b\",\"2\":\"b\",\"MARK\":\"B\"}]\n3 [{\"0\":[\"a\",0],\"w\":[\"a\",0],\"1\":[\"a\",0],\"MARK\":\"A\"},[[\"c\",1]],{\"0\":[\"b\",2],\"w\":[\"\",-1],\"1\":[\"\",-1],\"v\":[\"b\",2],\"2\":[\"b\",2],\"MARK\":\"B\"}]\n3 {\"0\":[\"a\",\"c\",\"b\"],\"w\":[\"a\",null,null],\"1\":[\"a\",null,null],\"v\":[null,null,\"b\"],\"2\":[null,null,\"b\"],\"MARK\":{\"0\":\"A\",\"2\":\"B\"}}\n{\"0\":[\"y\",\"x\",\"y\"],\"MARK\":{\"1\":\"M1\"}}\n{\"1\":\"M1\"}\n[[\"z\",\"z\"]]\n");
     assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
 }
+
+/// Capture writeback preserves PHP references exported from native properties to eval aliases.
+#[test]
+fn preg_capture_native_property_alias_writeback_bundle() {
+    let source = r#"<?php
+class RegexNativeReference {
+    public mixed $matches = [];
+    public function &matchesRef(): mixed { return $this->matches; }
+}
+function exerciseRegexNativeReferences(bool $run): void {
+    $holder = new RegexNativeReference();
+    $alias =& $holder->matchesRef();
+    $code = $run ? '
+function captureRegexNativeReference(&$value): callable {
+    return function () use (&$value): mixed { return $value; };
+}
+$escaped = captureRegexNativeReference($holder->matches);
+' : '';
+    eval($code);
+    echo preg_match('/(a)/', 'a', $alias), ':', json_encode($escaped()), '|';
+    echo preg_match_all('/(b)/', 'bb', $alias), ':', json_encode($escaped()), '|';
+    $alias = ['after'];
+    echo json_encode($escaped()), '|';
+    unset($holder, $alias, $code);
+    echo json_encode($escaped()), '|';
+    unset($escaped);
+}
+exerciseRegexNativeReferences($argc > 0);
+"#;
+    let output = compile_and_run_with_heap_debug(source);
+    assert!(output.success, "stdout={} stderr={}", output.stdout, output.stderr);
+    assert_eq!(output.stdout, "1:[\"a\",\"a\"]|2:[[\"b\",\"b\"],[\"b\",\"b\"]]|[\"after\"]|[\"after\"]|");
+    assert!(output.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", output.stderr);
+}
+
+/// First-use capture locals start from null even when their native frame reuses nonzero stack words.
+#[test]
+fn preg_capture_fresh_local_initialization_on_dirty_stack_bundle() {
+    let output = compile_and_run_with_heap_debug_and_c_fixture(r#"<?php
+extern function poison_fresh_regex_stack(): void;
+function readFreshSingleRegexFrame(string $subject): void {
+    preg_match('/(a)/', $subject, $matches);
+    echo $matches[1], '|';
+}
+function readFreshAllRegexFrame(string $subject): void {
+    preg_match_all('/(a)/', $subject, $matches);
+    echo $matches[1][0], '|';
+}
+for ($i = 0; $i < 4; $i++) {
+    poison_fresh_regex_stack(); readFreshSingleRegexFrame('za');
+    poison_fresh_regex_stack(); readFreshAllRegexFrame('za');
+    poison_fresh_regex_stack(); readFreshSingleRegexFrame('a');
+    poison_fresh_regex_stack(); readFreshAllRegexFrame('a');
+}
+"#, r#"
+__attribute__((noinline)) void poison_fresh_regex_stack(void) {
+    volatile unsigned long slots[2048];
+    for (unsigned long i = 0; i < 2048; ++i) slots[i] = 1;
+    (void)slots[0];
+}
+"#);
+    assert!(output.success, "stdout={} stderr={}", output.stdout, output.stderr);
+    assert_eq!(output.stdout, "a|".repeat(16));
+    assert!(output.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", output.stderr);
+}

@@ -148,6 +148,7 @@ pub(in crate::codegen) fn emit_pending_property_guard_helpers(
             width: None,
             is_reference: false,
             abstract_setter_type_error_prefix: None,
+            reference_declaration: None,
         };
         emitter.comment(&format!(
             "{}{:012x}",
@@ -231,7 +232,9 @@ fn emit_helper_body(ctx: &mut FunctionContext<'_>, slot: &PropertySlot) -> Resul
                 emit_refuse_source(ctx, &refuse_label, type_name);
             }
             // The arm builds a value, which only the site can place; it runs the arm whole.
-            TagAction::NumericStringIntOrFloat | TagAction::CoerceScalar { .. } => {
+            TagAction::NumericStringIntOrFloat { .. }
+            | TagAction::FalseOrScalar(_)
+            | TagAction::CoerceScalar { .. } => {
                 abi::emit_jump(ctx.emitter, &coerce_label)
             }
             TagAction::ObjectClasses(plan) => {

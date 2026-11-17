@@ -139,7 +139,7 @@ pub(super) fn validate_concrete_class_aot_interface_requirements(
     for (requirement_owner, requirement) in
         pending_class_aot_interface_property_requirements(class, context, values)?
     {
-        if !class_has_interface_property(class, &requirement_owner, &requirement, context) {
+        if !class_has_aot_interface_property(class, &requirement_owner, &requirement, context, values)? {
             return Err(EvalStatus::RuntimeFatal);
         }
     }

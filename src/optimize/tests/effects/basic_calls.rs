@@ -10,6 +10,23 @@
 
 use super::*;
 
+/// Discarded NaN or dynamic string casts retain warning callbacks and catchable throws.
+#[test]
+fn test_nan_string_cast_effects_preserve_callbacks() {
+    for operand in [Expr::new(ExprKind::FloatLiteral(f64::NAN), Span::dummy()), Expr::var("value")] {
+        let cast = Expr::new(ExprKind::Cast {
+            target: CastType::String, expr: Box::new(operand),
+        }, Span::dummy());
+        let effect = expr_effect(&cast);
+        assert!(effect.has_side_effects && effect.may_throw && effect.writes_globals);
+    }
+    let finite = Expr::new(ExprKind::Cast {
+        target: CastType::String,
+        expr: Box::new(Expr::new(ExprKind::FloatLiteral(1.5), Span::dummy())),
+    }, Span::dummy());
+    assert!(!expr_is_observable(&finite));
+}
+
 /// Dynamic spreads retain validation and callback effects; known array literals keep their child effects.
 #[test]
 fn test_effect_analysis_keeps_dynamic_array_spread_observable() {
@@ -448,4 +465,18 @@ fn test_program_function_effects_propagate_throwing_calls() {
         function_effects.get("wrapper"),
         Some(&Effect::PURE.with_side_effects().with_may_throw())
     );
+}
+
+/// Declared dynamic int returns can throw, while inferred and native int returns stay pure.
+#[test]
+fn test_function_effects_keep_declared_int_return_verification() {
+    let tokens = crate::lexer::tokenize("<?php function checked(mixed $input): int { return $input; } function inferred(mixed $input) { return $input; } function nativeInt(int $input): int { return $input; } function changed(int $input, mixed $replacement): int { $input = $replacement; return $input; } function relay(int $input): int { return NATIVEINT($input); } function strlen(mixed $input): mixed { return $input; } function shadowed(mixed $input): int { return STRLEN($input); }").unwrap();
+    let program = crate::parser::parse(&tokens).unwrap();
+    let (effects, _, _) = compute_program_callable_effects(&program);
+    assert!(effects["checked"].may_throw);
+    assert!(effects["changed"].may_throw);
+    assert_eq!(effects["inferred"], Effect::PURE);
+    assert_eq!(effects["nativeInt"], Effect::PURE);
+    assert_eq!(effects["relay"], Effect::PURE);
+    assert!(effects["shadowed"].may_throw);
 }

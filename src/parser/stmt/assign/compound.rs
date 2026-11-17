@@ -232,8 +232,9 @@ fn try_parse_reference_append_source(
 
 /// Returns true when an expression is a legal source for `$x = &<source>`.
 ///
-/// PHP allows aliasing variables, array elements, object properties, and the
-/// results of calls that return by reference. Other expressions are rejected.
+/// PHP allows aliasing variables, array elements, named and dynamic object properties, static
+/// properties, and the results of calls that return by reference. Other expressions are rejected
+/// until their storage-specific lowering is available.
 pub(crate) fn is_valid_reference_source(kind: &ExprKind) -> bool {
     matches!(
         kind,

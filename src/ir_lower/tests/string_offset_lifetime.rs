@@ -33,6 +33,60 @@ function reviewYield(string $bytes) { yield $bytes[0] => 1; }
     }
 }
 
+/// Silent typed-property offset guards preserve misses before boxing on every target.
+#[test]
+fn silent_typed_property_offsets_normalize_misses_on_all_targets() {
+    use crate::ir::{Immediate, Op};
+    let source = r#"<?php
+class SilentOffsetProbe {
+    public string $bytes;
+    public function __construct(string $bytes) { $this->bytes = $bytes; }
+    public function probe(): void {
+        echo $this->bytes[5000] ?? "missing";
+    }
+}
+"#;
+    for target in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+        let module = super::lower_source_at_for_target(
+            source,
+            std::path::Path::new("main.php"),
+            std::path::Path::new("."),
+            crate::codegen::platform::Target::parse(target).unwrap(),
+        );
+        let function = module
+            .class_methods
+            .iter()
+            .find(|function| function.name.ends_with("::probe"))
+            .expect("expected the silent offset probe method");
+        let reads = function
+            .instructions
+            .iter()
+            .filter(|instruction| {
+                instruction.op == Op::StrCharAt
+                    && instruction.immediate == Some(Immediate::Bool(false))
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(reads.len(), 1, "{target}: null coalescing stays silent");
+        for read in reads {
+            let value = read.result.expect("string offset read result");
+            // A property read can own its receiver, so the byte is acquired before that
+            // receiver is retired. The acquired view preserves the missing sentinel.
+            let guard = function.instructions.iter().find(|instruction| {
+                instruction.op == Op::IsNull && instruction.operands.first().is_some_and(|selected| {
+                    *selected == value || function.instructions.iter().any(|forward|
+                        forward.op == Op::Acquire && forward.operands == [value]
+                            && forward.result == Some(*selected))
+                })
+            }).unwrap_or_else(|| panic!("{target}: test the missing sentinel before boxing"));
+            assert!(function.instructions.iter().any(|instruction| {
+                instruction.op == Op::MixedBox && instruction.operands == guard.operands
+            }), "{target}: box only the present string byte");
+        }
+        crate::codegen::generate_user_asm_from_ir(&module, false, false)
+            .unwrap_or_else(|error| panic!("{target}: {error:?}"));
+    }
+}
+
 /// An offset view is copied before an owned receiver can be released on every target.
 #[test]
 fn string_offset_lifetime_stabilizes_views_on_all_targets() {
@@ -225,8 +279,12 @@ offsetBoundaries("\x07aaaaaaaZ");
                     .filter(|inst| inst.op == Op::StrCharAt)
                     .filter_map(|inst| inst.result)
                     .collect::<Vec<_>>();
-                assert_eq!(byte_results.len(), 2,
-                    "{target}: the static nested update reads and writes the parent key");
+                assert_eq!(byte_results.len(), 1,
+                    "{target}: attached static updates capture the parent key once");
+                assert!(function.instructions.iter().any(|inst| matches!(inst.immediate,
+                    Some(Immediate::RuntimeCall(crate::ir::RuntimeCallTarget::ArrayFetchForWrite
+                        | crate::ir::RuntimeCallTarget::ArrayFetchForWriteAlreadyDiagnosed)))),
+                    "{target}: preserve the attached parent fetch while sharing its persisted key");
                 let stabilized = byte_results.iter().filter(|result| {
                     function.instructions.iter().any(|inst| {
                         inst.op == Op::Acquire && inst.operands == [**result]
@@ -321,10 +379,35 @@ offsetBoundaries("\x07aaaaaaaZ");
                     continue;
                 }
                 if function.name == "offsetReflectionStaticValues" {
-                    assert!(function.instructions[index + 1..].iter().any(|inst| {
-                        inst.op == Op::StoreReflectionStaticProperty
-                            && inst.operands.contains(&read.result.unwrap())
-                    }), "{target}: reflection static stores must preserve the direct byte producer");
+                    let byte = read.result.unwrap();
+                    let direct = function.instructions[index + 1..].iter().any(|inst| {
+                        inst.op == Op::StoreReflectionStaticProperty && inst.operands.first() == Some(&byte)
+                    });
+                    if !direct {
+                        // Mixed destinations box the direct byte before retaining Reflection's
+                        // argument and cloning the separate consuming destination owner.
+                        let boxed = function.instructions[index + 1..].iter().find(|inst|
+                            inst.op == Op::MixedBox && inst.operands == [byte])
+                            .and_then(|inst| inst.result)
+                            .expect("Mixed Reflection arguments must box the direct byte producer");
+                        let stored = function.instructions[index + 1..].iter().find(|inst|
+                            inst.op == Op::MixedClone && inst.operands == [boxed])
+                            .and_then(|inst| inst.result)
+                            .expect("the setter must own a separate clone of its retained argument");
+                        assert!(function.instructions[index + 1..].iter().any(|inst|
+                            inst.op == Op::StoreReflectionStaticProperty && inst.operands.first() == Some(&stored)),
+                            "{target}: the boxed byte must reach its Reflection destination");
+                        let owner = function.instructions[index + 1..].iter().find(|inst|
+                            inst.op == Op::StoreLocal && inst.operands == [boxed])
+                            .and_then(|inst| inst.immediate.as_ref()).cloned()
+                            .expect("the boxed argument must have an unwind-visible owner");
+                        assert!(function.instructions.iter().any(|inst|
+                            inst.op == Op::PushCallOperandOwner && inst.immediate == Some(owner.clone())),
+                            "{target}: protect Reflection's argument through the setter");
+                        assert!(function.instructions.iter().any(|inst|
+                            inst.op == Op::ReleaseLocalSlot && inst.immediate == Some(owner.clone())),
+                            "{target}: retire Reflection's original argument after the setter");
+                    }
                     persisted_reads += 1;
                     continue;
                 }
@@ -343,7 +426,8 @@ offsetBoundaries("\x07aaaaaaaZ");
                 persisted_reads += 1;
             }
         }
-        assert_eq!(reads, 44, "{target}: reads and persistent stores exercise StrCharAt");
+        assert_eq!(reads, 43,
+            "{target}: reads and persistent stores exercise StrCharAt with one captured nested key");
         assert_eq!(store_reads, 7,
             "{target}: cover indexed, mixed, hash-key, hash-value and property stores");
         let asm = crate::codegen::generate_user_asm_from_ir(&module, false, false).unwrap();

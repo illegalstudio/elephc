@@ -45,6 +45,7 @@ pub(super) fn eval_reflection_closure_invoke_method_new(
     values: &mut impl RuntimeValueOps,
 ) -> Result<Option<RuntimeCellHandle>, EvalStatus> {
     let argument = EvaluatedCallArg {
+        evaluation_owner: None,
         name: None,
         value: closure.borrowed(),
         ref_target: None,
@@ -168,7 +169,8 @@ fn eval_reflection_resolved_callable_new(
         let return_type_metadata = function
             .return_type()
             .and_then(eval_reflection_parameter_type_metadata);
-        return eval_reflection_callable_object_result(
+        let previous = context.replace_reflected_closure(closure_target.is_some().then_some(args[0]));
+        let result = eval_reflection_callable_object_result(
             invoke_method,
             &requested_name,
             function.attributes(),
@@ -209,6 +211,8 @@ fn eval_reflection_resolved_callable_new(
             Ok(object)
         })
         .map(Some);
+        context.replace_reflected_closure(previous);
+        return result;
     }
     if method_target.is_none() {
     if let Some(function) = context.function(&lookup_name).cloned() {
@@ -752,6 +756,7 @@ pub(super) fn eval_reflection_function_closure_target_name(target: &EvalClosureO
         EvalClosureObjectTarget::ForeignContext { target, .. } => {
             eval_reflection_function_closure_target_name(target)
         }
+        EvalClosureObjectTarget::NativeDescriptor { display_name, .. } => display_name.clone(),
         EvalClosureObjectTarget::Named(name)
         | EvalClosureObjectTarget::BoundNamed { name, .. } => name.clone(),
         EvalClosureObjectTarget::InvokableObject { .. } => String::from("__invoke"),

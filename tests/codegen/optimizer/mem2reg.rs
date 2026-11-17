@@ -192,8 +192,7 @@ fn test_mem2reg_keeps_dynamic_eval_slot_traffic() {
 }
 
 /// Dead-store and immutable-load passes also retain a single later eval-visible store.
-#[test]
-fn test_mem2reg_keeps_single_store_visible_to_dynamic_eval() {
+fn assert_single_store_visible_to_dynamic_eval(optimized: bool) {
     let source = r#"<?php
 function repeat_eval(string $code): void {
     for ($i = 0; $i < 3; $i++) {
@@ -205,8 +204,19 @@ function repeat_eval(string $code): void {
 repeat_eval('echo "n=$n\\n";');
 "#;
     let expected = "step\nn=7\nstep\nn=7\nstep\n";
-    assert_eq!(run_variant(source, false), expected);
-    assert_eq!(run_variant(source, true), expected);
+    assert_eq!(run_variant(source, optimized), expected);
+}
+
+/// The unoptimized build keeps the single later eval-visible store.
+#[test]
+fn test_mem2reg_keeps_single_store_visible_to_dynamic_eval() {
+    assert_single_store_visible_to_dynamic_eval(false);
+}
+
+/// The optimized build keeps the single later eval-visible store.
+#[test]
+fn test_mem2reg_keeps_single_store_visible_to_dynamic_eval_optimized() {
+    assert_single_store_visible_to_dynamic_eval(true);
 }
 
 /// A scalar defined before a loop remains promotable when its back edge has no store.

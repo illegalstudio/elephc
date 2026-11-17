@@ -21,19 +21,28 @@ pub(super) fn try_int_binop(ctx: &mut FunctionContext<'_>, inst: &Instruction) -
     let Some(usage) = immediate_use(ctx.function, inst, ctx.emitter.target) else { return Ok(false); };
     let reg = abi::int_result_reg(ctx.emitter);
     let encoding = usage.encoding;
+    let home = inst.result.and_then(|result| ctx.allocation.register_of(result));
+    let destination = home.unwrap_or(reg);
     let assembly = match ctx.emitter.target.arch {
         Arch::AArch64 => {
             let source = super::arithmetic::integer_operand_register(ctx, usage.other, reg, inst)?;
-            format!("{} {reg}, {source}, {}", encoding.mnemonic, encoding.operand)
+            format!(
+                "{} {destination}, {source}, {}",
+                encoding.mnemonic, encoding.operand
+            )
         }
         Arch::X86_64 => {
-            super::arithmetic::load_integer_operand(ctx, usage.other, reg, inst)?;
-            format!("{} {reg}, {}", encoding.mnemonic, encoding.operand)
+            if ctx.allocation.register_of(usage.other) != Some(destination) {
+                super::arithmetic::load_integer_operand(ctx, usage.other, destination, inst)?;
+            }
+            format!("{} {destination}, {}", encoding.mnemonic, encoding.operand)
         }
     };
     // -- incorporate the constant directly in the consuming instruction --
     ctx.emitter.instruction(&assembly);                                         // compute without a constant register or spill load
-    store_if_result(ctx, inst)?;
+    if home.is_none() {
+        store_if_result(ctx, inst)?;
+    }
     Ok(true)
 }
 

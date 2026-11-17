@@ -12,7 +12,7 @@ mod array_key;
 mod casts;
 mod compare;
 mod defined;
-mod expr;
+pub(crate) mod expr;
 mod inline_closure;
 mod ops;
 mod pipes;

@@ -367,6 +367,8 @@ pub(super) fn encode_constant(data: &mut DataSection, constant: &ReflectionConst
         ReflectionConstantValue::EnumCase { enum_name, case_name } => {
             encode_enum_case(data, enum_name, case_name)
         }
+        // A value computed from enum singletons in PHP order has no data form.
+        ReflectionConstantValue::Evaluated { .. } => return None,
     })
 }
 
@@ -394,9 +396,6 @@ pub(super) fn encode_default(
         ReflectionParameterDefaultValue::Str(text) => {
             node(value::STRING, pool(data, std::slice::from_ref(text)), DataWord::U64(0))
         }
-        ReflectionParameterDefaultValue::EnumCase { enum_name, case_name } => {
-            encode_enum_case(data, enum_name, case_name)
-        }
         ReflectionParameterDefaultValue::Array(elements) => {
             let mut entries = Vec::new();
             for (index, element) in elements.iter().enumerate() {
@@ -423,7 +422,9 @@ pub(super) fn encode_default(
         // A lazily failing default and a default produced by a separately stored factory have
         // no data form; the row stays with the generic reflector that knows them.
         ReflectionParameterDefaultValue::DeferredError(_)
-        | ReflectionParameterDefaultValue::EirHelper(_) => return None,
+        | ReflectionParameterDefaultValue::EirHelper(_)
+        | ReflectionParameterDefaultValue::EnumCase(_)
+        | ReflectionParameterDefaultValue::Evaluated { .. } => return None,
         ReflectionParameterDefaultValue::Object { class_name, args, .. } => {
             let mut entries = Vec::new();
             for (index, argument) in args.iter().enumerate() {
@@ -510,7 +511,7 @@ fn build_row(
     let Some(reflected) = metadata.reflected_name.clone() else { return Ok(None) };
     collect_constant_members(ctx, members, &reflected, &metadata)?;
     let enum_full = if metadata.is_enum {
-        Some(reflection_enum_metadata_for_name(ctx, &reflected)?)
+        Some(reflection_enum_class_metadata_for_name(ctx, &reflected)?)
     } else {
         None
     };

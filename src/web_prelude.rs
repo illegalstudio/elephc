@@ -72,13 +72,15 @@ pub(crate) mod build;
 mod environment;
 
 /// Detects environment observers in the discarded autoload probe before web injection.
-#[cfg(test)]
+#[allow(dead_code)]
 pub(crate) fn program_observes_environment(program: &[Stmt]) -> bool {
     environment::is_observable(program, &usage::collect_environment(program))
 }
 
 /// The autoload probe group for a closure that observes the process environment.
 pub(crate) const ENVIRONMENT_GROUP: &str = "web_environment";
+/// The autoload probe group for a closure that observes `$_REQUEST`.
+pub(crate) const REQUEST_GROUP: &str = "web_request";
 /// The autoload probe group for a closure that can register an exception handler.
 pub(crate) const EXCEPTION_HANDLER_GROUP: &str = "web_exception_handler";
 
@@ -87,6 +89,7 @@ pub(crate) fn autoloaded_web_groups(program: &[Stmt]) -> impl Iterator<Item = &'
     let usage = usage::collect_environment(program);
     [
         (environment::is_observable(program, &usage), ENVIRONMENT_GROUP),
+        (request_is_observable(program, &usage), REQUEST_GROUP),
         (may_register_exception_handler(program, &usage), EXCEPTION_HANDLER_GROUP),
     ]
     .into_iter()
@@ -109,6 +112,71 @@ fn may_register_exception_handler(program: &[Stmt], usage: &usage::Usage) -> boo
         || usage.includes_runtime_php
         || usage.references("eval")
         || (usage.callable_names.has_unknown_target() && usage::has_reachable_unknown_callable(program, usage))
+}
+
+/// Detects `$_REQUEST` observers in the discarded autoload probe before web injection.
+pub(crate) fn program_observes_request(program: &[Stmt]) -> bool {
+    request_is_observable(program, &usage::collect_environment(program))
+}
+
+/// Which request superglobals the handler body can actually observe.
+///
+/// The prelude used to build every one of them on every request. That is the
+/// PHP-FPM model, but most of the work is invisible to the program: a handler
+/// that never names `$_REQUEST` cannot tell whether it was populated. The scan
+/// is the same conservative channel set as `environment::is_observable`, so
+/// `$GLOBALS`, storage aliases, `compact`, eval, and unknown callables all keep
+/// the value.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct SuperglobalNeeds {
+    /// Build `$_ENV` from the process environment.
+    pub(crate) env: bool,
+    /// Build `$_REQUEST` by merging `$_GET` and `$_POST`.
+    pub(crate) request: bool,
+}
+
+impl SuperglobalNeeds {
+    /// Every superglobal, used where the source cannot be scanned (printing
+    /// round-trips, parity gates).
+    #[cfg(test)]
+    pub(crate) const ALL: Self = Self {
+        env: true,
+        request: true,
+    };
+}
+
+/// Decides which superglobals a scanned program can observe.
+///
+/// Environment observability is owned by `environment::is_observable`, which
+/// covers storage variables, aliases, callables, and eval. `$_REQUEST` uses the
+/// same conservative channels because every one of them can hand the whole
+/// variable table to code this walk cannot see.
+fn superglobal_needs(program: &[Stmt], usage: &usage::Usage) -> SuperglobalNeeds {
+    SuperglobalNeeds {
+        env: environment::is_observable(program, usage),
+        request: request_is_observable(program, usage),
+    }
+}
+
+/// Decides whether a program can observe `$_REQUEST`.
+///
+/// The scan uses the same conservative channels as the environment probe:
+/// direct names, storage slots, compact/eval, and calls whose target is unknown.
+fn request_is_observable(program: &[Stmt], usage: &usage::Usage) -> bool {
+    ["_REQUEST", "GLOBALS"]
+        .iter()
+        .any(|name| usage.variables.contains(*name) || usage.storage_variables.contains(*name))
+        || ["eval", "get_defined_vars", "compact"]
+            .iter()
+            .any(|name| usage.references(name))
+        || ["eval", "get_defined_vars"]
+            .iter()
+            .any(|name| usage.literals.contains(*name))
+        // `compact('_REQUEST')` names the array through a literal; the autoload
+        // probe scans a different closure shape than the entry program.
+        || usage.literals.contains("_REQUEST")
+        || (usage.callable_names.has_unknown_target()
+            && usage::has_reachable_unknown_callable(program, usage))
 }
 
 /// The catch-all wrapper: the whole handler body goes inside its `try` so an uncaught exception
@@ -390,6 +458,7 @@ pub fn inject_if_web(
 #[derive(Clone, Copy, Default)]
 pub(crate) struct AutoloadedWebUsage {
     pub(crate) observes_environment: bool,
+    pub(crate) observes_request: bool,
     pub(crate) registers_exception_handler: bool,
 }
 
@@ -444,6 +513,7 @@ fn inject_if_web_on_compiler_stack(
     let program = crate::error_handling_prelude::without_shadowing_declarations(program);
     let program = lift_preload_to_startup(program, preload_path);
     let user_usage = usage::collect_environment(&program);
+    let superglobals = superglobal_needs(&program, &user_usage);
     let needs_callable_session_handler = user_usage.references("session_set_save_handler")
         || user_usage.dynamic_function_call;
     let dispatch_handler =
@@ -451,7 +521,8 @@ fn inject_if_web_on_compiler_stack(
     let combined = build::web_declarations_with_environment(
         php_version,
         ini_overrides,
-        autoloaded.observes_environment || environment::is_observable(&program, &user_usage),
+        superglobals.env || autoloaded.observes_environment,
+        superglobals.request || autoloaded.observes_request,
     );
     // `$_SERVER['SCRIPT_FILENAME'] / ['DOCUMENT_ROOT'] / ['SCRIPT_NAME'] / ['PHP_SELF']` and
     // `trigger_error()`'s handler call are built with `__FILE__` / `__DIR__` / `__LINE__`, and
@@ -615,6 +686,86 @@ mod tests {
             ("<?php $f = $argv[1]; $f();", none, true),
         ] {
             assert_eq!(calls_handler(source, autoloaded), expected, "{source}");
+        }
+    }
+
+    /// Returns the superglobal build decisions for one source fixture.
+    fn needs(source: &str) -> SuperglobalNeeds {
+        let program = parse(source);
+        let usage = usage::collect_environment(&program);
+        superglobal_needs(&program, &usage)
+    }
+
+    /// A handler that never names `$_ENV` or `$_REQUEST` must not pay to build them.
+    #[test]
+    fn plain_handler_skips_invisible_superglobals() {
+        assert_eq!(
+            needs("<?php echo 'ok';"),
+            SuperglobalNeeds {
+                env: false,
+                request: false,
+            }
+        );
+    }
+
+    /// Spelling a superglobal in the source keeps its bootstrap.
+    #[test]
+    fn spelled_superglobals_are_built() {
+        assert_eq!(
+            needs("<?php echo $_ENV['HOME'];"),
+            SuperglobalNeeds {
+                env: true,
+                request: false,
+            }
+        );
+        assert_eq!(
+            needs("<?php echo $_REQUEST['q'];"),
+            SuperglobalNeeds {
+                env: false,
+                request: true,
+            }
+        );
+    }
+
+    /// A string subscript or `compact()` names the superglobal without spelling it.
+    #[test]
+    fn literal_references_keep_the_superglobal() {
+        assert_eq!(
+            needs("<?php print_r(compact('_ENV'));"),
+            SuperglobalNeeds {
+                env: true,
+                request: true,
+            }
+        );
+        assert_eq!(
+            needs("<?php echo compact('_REQUEST')['_REQUEST'];"),
+            SuperglobalNeeds {
+                env: true,
+                request: true,
+            }
+        );
+    }
+
+    /// Every channel that enumerates globals must see the complete set.
+    #[test]
+    fn global_enumeration_forces_every_superglobal() {
+        for source in [
+            "<?php foreach ($GLOBALS as $name => $value) {}",
+            "<?php print_r(get_defined_vars());",
+            "<?php $code = 'echo 1;'; eval($code);",
+        ] {
+            assert_eq!(needs(source), SuperglobalNeeds::ALL, "{source}");
+        }
+    }
+
+    /// Any eval can reach the whole variable table, so it keeps both superglobals.
+    #[test]
+    fn eval_keeps_every_superglobal() {
+        for source in [
+            "<?php eval('echo 1;');",
+            "<?php eval('echo $_ENV[\"HOME\"];');",
+        ] {
+            assert_eq!(needs(source), SuperglobalNeeds::ALL, "{source}");
         }
     }
 

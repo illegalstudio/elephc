@@ -59,8 +59,7 @@ pub(in crate::interpreter) fn eval_reflection_class_get_reflection_constants_res
     };
     let filter = eval_reflection_member_filter(evaluated_args, values)?;
     let names = eval_reflection_constant_names(&reflected_name, context, values)?;
-    let mut result = values.array_new(names.len())?;
-    let mut index = 0;
+    let mut result = values.object_array_new(names.len())?;
     for name in &names {
         if !eval_reflection_constant_matches_filter(reflected_name.as_str(), name, filter, context, values)?
         {
@@ -68,9 +67,7 @@ pub(in crate::interpreter) fn eval_reflection_class_get_reflection_constants_res
         }
         let object =
             eval_reflection_class_constant_object_result(&reflected_name, name, context, values)?;
-        let key = values.int(index)?;
-        result = values.array_set(result, key, object)?;
-        index += 1;
+        result = crate::interpreter::reflection::owned_collections::push_owned_object(values, result, object)?;
     }
     Ok(Some(result))
 }
@@ -340,24 +337,26 @@ pub(super) fn eval_reflection_constant_names(
     }
 }
 
-/// Returns a materialized eval constant value for Reflection without visibility checks.
+/// Returns an eval constant value for Reflection without visibility checks, after php-src's
+/// first evaluation of it: an enum case object or the class constant's value. A silent
+/// evaluation can return an unstored value the caller owns (see `eval_class_constant_value`).
 pub(super) fn eval_reflection_eval_constant_value(
     reflected_name: &str,
     constant_name: &str,
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<Option<RuntimeCellHandle>, EvalStatus> {
-    if let Some(case) = context.enum_case(reflected_name, constant_name) {
-        return Ok(Some(case));
+    if eval_is_enum_case(reflected_name, constant_name, context) {
+        return eval_enum_case_object(reflected_name, constant_name, context, values);
     }
-    let Some((declaring_class, constant)) = context.class_constant(reflected_name, constant_name)
-    else {
+    let Some((declaring_class, constant)) = context.class_constant(reflected_name, constant_name) else {
         return Ok(None);
     };
-    eval_class_like_constant_cell(&declaring_class, &constant, context, values).map(Some)
+    eval_class_constant_value(&declaring_class, constant.name(), context, values)
 }
 
-/// Returns a materialized eval or AOT constant value for Reflection without visibility checks.
+/// Returns an eval or AOT constant value for Reflection without visibility checks, evaluating
+/// an eval class constant first as php-src's `getConstant[s]()` and `__toString()` do.
 pub(super) fn eval_reflection_constant_value(
     reflected_name: &str,
     constant_name: &str,
@@ -371,6 +370,22 @@ pub(super) fn eval_reflection_constant_value(
     values.reflection_constant_value(runtime_class_name, constant_name)
 }
 
+/// Returns a constant value for a `ReflectionClassConstant` being built, which php-src does
+/// without evaluating the constant (see `eval_class_constant_preview`). The flag tells whether
+/// the caller owns the value.
+pub(super) fn eval_reflection_constant_preview_value(
+    reflected_name: &str,
+    constant_name: &str,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<Option<(RuntimeCellHandle, bool)>, EvalStatus> {
+    if eval_reflection_class_like_exists(reflected_name, context) {
+        return eval_class_constant_preview(reflected_name, constant_name, context, values);
+    }
+    let runtime_class_name = reflected_name.trim_start_matches('\\');
+    Ok(values.reflection_constant_value(runtime_class_name, constant_name)?.map(|value| (value, false)))
+}
+
 /// Builds one eval-backed `ReflectionClassConstant` object for a visible constant name.
 pub(super) fn eval_reflection_class_constant_object_result(
     reflected_name: &str,
@@ -381,8 +396,8 @@ pub(super) fn eval_reflection_class_constant_object_result(
     let (declaring_class_name, attributes, visibility, is_final, is_enum_case) =
         eval_reflection_class_constant_metadata(reflected_name, constant_name, context, values)?
             .ok_or(EvalStatus::RuntimeFatal)?;
-    let constant_value =
-        eval_reflection_constant_value(reflected_name, constant_name, context, values)?
+    let (constant_value, _owned) =
+        eval_reflection_constant_preview_value(reflected_name, constant_name, context, values)?
             .ok_or(EvalStatus::RuntimeFatal)?;
     let mut flags = eval_reflection_member_flags(visibility, false, is_final, false, false);
     if is_enum_case {
@@ -492,7 +507,6 @@ fn eval_reflection_append_native_ancestor_methods(
     };
     let mut seen: std::collections::HashSet<String> = listed.iter().map(|name| name.to_ascii_lowercase()).collect();
     let names = eval_reflection_aot_member_names(EVAL_REFLECTION_OWNER_METHOD, &native_parent, values)?;
-    let mut index = values.array_len(result)? as i64;
     for name in &names {
         if !seen.insert(name.to_ascii_lowercase()) {
             continue;
@@ -518,9 +532,7 @@ fn eval_reflection_append_native_ancestor_methods(
             context,
             values,
         )?;
-        let key = values.int(index)?;
-        result = eval_reflection_array_set_owned(result, key, member_object, values)?;
-        index += 1;
+        result = crate::interpreter::reflection::owned_collections::push_owned_object(values, result, member_object)?;
     }
     Ok(result)
 }

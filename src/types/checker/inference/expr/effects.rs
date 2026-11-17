@@ -20,7 +20,8 @@ use super::super::super::Checker;
 use super::buffer_merges::buffer_merge_result_type;
 use super::merge_match_arm_result_type;
 use super::null_coalesce::{
-    null_coalesce_buffer_merge_type, null_coalesce_result_type, operand_is_never_null,
+    coalesce_default_type, null_coalesce_buffer_merge_type, null_coalesce_result_type,
+    operand_is_never_null,
 };
 
 /// Returns what a local holds after `++`/`--`, or `None` when the update cannot retype it.
@@ -35,8 +36,18 @@ use super::null_coalesce::{
 ///
 /// A `string` stays `mixed`: `"9"++` is `int(10)`, `"a"++` is `"b"` and `""++` is `"1"`, so the
 /// result genuinely spans three types and none of them is knowable here.
-fn incremented_local_type(current: Option<&PhpType>) -> Option<PhpType> {
+/// A fixed tagged reference remains Int on normal continuation; overflow exits.
+fn incremented_local_type(checker: &Checker, current: Option<&PhpType>, fixed_tagged_reference: bool) -> Option<PhpType> {
+    if let Some(ty) = current {
+        if let Some(plan) = crate::types::object_operators::binary_plan_with_classes(
+            &BinOp::Add, ty, &PhpType::Int, &checker.classes,
+        ) {
+            let result = plan.result_type(&BinOp::Add);
+            if result.is_int_float_union() { return Some(result); }
+        }
+    }
     match current {
+        Some(PhpType::Int) if fixed_tagged_reference => Some(PhpType::Int),
         Some(PhpType::Int) => Some(PhpType::Union(vec![PhpType::Int, PhpType::Float])),
         Some(PhpType::Str) => Some(PhpType::Mixed),
         _ => None,
@@ -172,6 +183,22 @@ impl Checker {
         }
     }
 
+    /// Binds, in `branch_env` only, the never-declared roots a truthy `condition` proves set.
+    ///
+    /// The flow-guard machinery (`guard_narrowings` / `with_flow_narrowings`) narrows declared
+    /// bindings; a probe root created along one earlier path has no binding to narrow, so the
+    /// true arm (`then` of `?:`/`if`, the right operand of `&&`) gets the branch-local `Mixed`
+    /// fact here. `drop_truthy_isset_root_facts` ends it before the arm's effects are joined.
+    pub(crate) fn install_truthy_isset_roots(
+        condition: &Expr,
+        before: &TypeEnv,
+        branch_env: &mut TypeEnv,
+    ) {
+        for root in Self::truthy_isset_fact_roots(condition, before) {
+            branch_env.entry(root).or_insert(PhpType::Mixed);
+        }
+    }
+
     /// Ends the branch-local `isset()` root facts a truthy condition installed.
     ///
     /// `install_truthy_isset_root_facts` binds a never-declared probe root to `Mixed` for the
@@ -197,6 +224,11 @@ impl Checker {
         let mut roots = Vec::new();
         collect_truthy_isset_roots(condition, before, &mut roots);
         roots
+    }
+
+    /// Merges array layout changes from a conditionally evaluated boolean operand.
+    pub(crate) fn merge_short_circuit_storage_effects(env: &mut TypeEnv, branch: &TypeEnv) {
+        merge_array_storage_effects(env, branch);
     }
 
     /// Infers the type of an expression while tracking assignment effects through the environment.
@@ -228,6 +260,20 @@ impl Checker {
         env: &mut TypeEnv,
     ) -> Result<PhpType, CompileError> {
         let result = match &expr.kind {
+            ExprKind::Throw(value) => {
+                let thrown = self.infer_type_with_assignment_effects(value, env)?;
+                self.validate_finally_throw_type(&thrown, expr.span)?;
+                self.record_finally_throw(&thrown, value, env);
+                Ok(PhpType::Void)
+            }
+            ExprKind::Closure { capture_refs, .. } => {
+                for name in capture_refs {
+                    self.invalidate_local_flow_narrowing(name, env);
+                }
+                let result = self.infer_type(expr, env);
+                if result.is_ok() { self.definitely_bound_locals.extend(capture_refs.iter().cloned()); }
+                result
+            }
             ExprKind::Variable(name) if self.eval_barrier_active && !env.contains_key(name) => {
                 env.insert(name.clone(), PhpType::Mixed);
                 Ok(PhpType::Mixed)
@@ -283,54 +329,33 @@ impl Checker {
             }
             ExprKind::PreIncrement(name) | ExprKind::PreDecrement(name) => {
                 let old_ty = env.get(name).cloned();
+                let fixed_tagged_reference = self.has_fixed_tagged_reference_storage(name, env);
                 let result_ty = self.infer_type(expr, env)?;
-                if let Some(updated) = incremented_local_type(old_ty.as_ref()) {
+                if let Some(updated) = incremented_local_type(self, old_ty.as_ref(), fixed_tagged_reference) {
+                    self.record_local_storage_effect(name, &updated);
                     env.insert(name.clone(), updated);
                 }
                 Ok(result_ty)
             }
             ExprKind::PostIncrement(name) | ExprKind::PostDecrement(name) => {
                 let old_ty = env.get(name).cloned();
+                let fixed_tagged_reference = self.has_fixed_tagged_reference_storage(name, env);
                 let result_ty = self.infer_type(expr, env)?;
                 // Same retype as the pre-form: only the RESULT differs, and it was already
                 // computed above against the type the local held before the update.
-                if let Some(updated) = incremented_local_type(old_ty.as_ref()) {
+                if let Some(updated) = incremented_local_type(self, old_ty.as_ref(), fixed_tagged_reference) {
+                    self.record_local_storage_effect(name, &updated);
                     env.insert(name.clone(), updated);
                 }
                 Ok(result_ty)
             }
-            ExprKind::BinaryOp { left, op, right } => {
+            ExprKind::BinaryOp { op: BinOp::And | BinOp::Or, .. } => {
+                self.infer_short_circuit_type(expr, env, true)
+            }
+            ExprKind::BinaryOp { left, right, .. } => {
                 self.infer_type_with_assignment_effects(left, env)?;
-                if matches!(op, BinOp::And | BinOp::Or) {
-                    let mut right_env = env.clone();
-                    if *op == BinOp::And {
-                        self.install_truthy_short_circuit_effects(left, &mut right_env)?;
-                    } else {
-                        self.install_falsy_short_circuit_effects(left, &mut right_env)?;
-                    }
-                    if let Some(narrowing) = self.guard_narrowing(left, &right_env)? {
-                        right_env.insert(
-                            narrowing.var,
-                            if *op == BinOp::And {
-                                narrowing.then_ty
-                            } else {
-                                narrowing.else_ty
-                            },
-                        );
-                    }
-                    self.local_conditional_depth += 1;
-                    let right_result = self.infer_type_with_assignment_effects(right, &mut right_env);
-                    self.local_conditional_depth -= 1;
-                    right_result?;
-                    if *op == BinOp::And {
-                        Self::drop_truthy_isset_root_facts(left, env, &mut right_env);
-                    }
-                    merge_conditional_storage_effects(env, &right_env);
-                    Ok(PhpType::Bool)
-                } else {
-                    self.infer_type_with_assignment_effects(right, env)?;
-                    self.infer_type(expr, env)
-                }
+                self.infer_type_with_assignment_effects(right, env)?;
+                self.infer_type(expr, env)
             }
             ExprKind::NullCoalesce { value, default } => {
                 // `$neverDefined ?? $d` is a null probe: PHP answers `$d` without an
@@ -343,15 +368,18 @@ impl Checker {
                 let default_ty = if value_ty == PhpType::Void {
                     self.infer_type_with_assignment_effects(default, env)?
                 } else {
+                    let mut flow = self.snapshot_conditional_flow(env);
                     let mut default_env = env.clone();
                     self.local_conditional_depth += 1;
-                    let default_ty =
-                        self.infer_type_with_assignment_effects(default, &mut default_env);
+                    let default_ty = self.with_conditional_flow_arm(&mut flow,
+                        &mut default_env, |checker, env| checker.infer_type_with_assignment_effects(default, env));
                     self.local_conditional_depth -= 1;
                     let default_ty = default_ty?;
-                    merge_conditional_storage_effects(env, &default_env);
+                    merge_array_storage_effects(env, &default_env);
+                    self.finish_conditional_flow(flow, env);
                     default_ty
                 };
+                let default_ty = coalesce_default_type(default, default_ty);
                 match null_coalesce_buffer_merge_type(
                     self,
                     value,
@@ -372,19 +400,24 @@ impl Checker {
             }
             ExprKind::ShortTernary { value, default } => {
                 let value_ty = self.infer_type_with_assignment_effects(value, env)?;
-                if value_ty == PhpType::Void {
-                    self.infer_type_with_assignment_effects(default, env)?;
+                let (default_ty, flow) = if matches!(value_ty, PhpType::Void | PhpType::False) {
+                    (self.infer_type_with_assignment_effects(default, env)?, None)
                 } else {
+                    let mut flow = self.snapshot_conditional_flow(env);
                     let mut default_env = env.clone();
                     self.local_conditional_depth += 1;
-                    let default_result =
-                        self.infer_type_with_assignment_effects(default, &mut default_env);
+                    let ty = self.with_conditional_flow_arm(&mut flow, &mut default_env,
+                        |checker, env| checker.infer_type_with_assignment_effects(default, env));
                     self.local_conditional_depth -= 1;
-                    default_result?;
-                    merge_conditional_storage_effects(env, &default_env);
-                }
-                // Result type comes from the Mixed-aware short-ternary merge in `infer_type`.
-                self.infer_type(expr, env)
+                    let ty = ty?;
+                    merge_array_storage_effects(env, &default_env);
+                    (ty, Some(flow))
+                };
+                let arms = [(&**value, value_ty.clone()), (&**default, default_ty.clone())];
+                let result = buffer_merge_result_type("a `?:`", &arms, expr.span)?.unwrap_or_else(||
+                    merge_match_arm_result_type(self, super::truthy_short_ternary_type(self, value_ty), default_ty));
+                if let Some(flow) = flow { self.finish_conditional_flow(flow, env); }
+                Ok(result)
             }
             ExprKind::Ternary {
                 condition,
@@ -395,51 +428,50 @@ impl Checker {
                 // Flow-narrowing across the branches (see guard_narrowing): `$x instanceof X`
                 // and simple `$x->prop instanceof X` guards narrow the branch envs. A ternary is a
                 // single expression, so branch narrowing is write-invalidation-safe.
-                let guard = self.guard_narrowing(condition, env)?;
+                let mut guards = self.guard_narrowings(condition, env)?;
+                let mut flow = self.snapshot_conditional_flow(env);
+                self.exclude_conditional_binding_entry(&mut flow);
                 let mut then_env = env.clone();
+                Self::install_truthy_isset_roots(condition, env, &mut then_env);
                 let mut else_env = env.clone();
-                self.install_truthy_short_circuit_effects(condition, &mut then_env)?;
-                self.install_falsy_short_circuit_effects(condition, &mut else_env)?;
-                // A side the guard rules out cannot run; see the dead-branch note in
-                // `infer_type`'s ternary arm.
-                let (then_dead, else_dead) =
-                    guard.as_ref().map_or((false, false), |guard| (guard.then_dead, guard.else_dead));
-                if let Some(guard) = guard {
-                    let then_ty = if guard.then_dead { PhpType::Mixed } else { guard.then_ty };
-                    let else_ty = if guard.else_dead { PhpType::Mixed } else { guard.else_ty };
-                    then_env.insert(guard.var.clone(), then_ty);
-                    else_env.insert(guard.var, else_ty);
-                }
+                // A side the guard rules out cannot run; see the dead-branch note in `infer_type`'s
+                // ternary arm: it is checked with the binding `mixed`, and only the live side types the result.
+                let (then_dead, else_dead) = match guards.as_mut_slice() {
+                    [guard] => {
+                        let dead = (guard.then_dead, guard.else_dead);
+                        if guard.then_dead { guard.then_ty = PhpType::Mixed; }
+                        if guard.else_dead { guard.else_ty = PhpType::Mixed; }
+                        dead
+                    }
+                    _ => (false, false),
+                };
                 // Neither branch is certain to run, so a store in one is no straight-line retype
                 // (`Checker::local_binding_is_killable`), exactly as for an `if` statement.
                 self.local_conditional_depth += 1;
-                let then_ty = self.infer_type_with_assignment_effects(then_expr, &mut then_env);
+                let then_ty = self.with_conditional_flow_arm(&mut flow, &mut then_env,
+                    |checker, env| checker.with_flow_narrowings(&guards, true, env,
+                        |checker, env| checker.infer_type_with_assignment_effects(then_expr, env)));
                 self.local_conditional_depth -= 1;
                 let then_ty = then_ty?;
-                let then_ty = if matches!(then_expr.kind, ExprKind::Throw(_)) {
-                    PhpType::Never
-                } else {
-                    then_ty
-                };
+                let then_ty = if matches!(then_expr.kind, ExprKind::Throw(_)) { PhpType::Never } else { then_ty };
                 Self::drop_truthy_isset_root_facts(condition, env, &mut then_env);
-                merge_conditional_storage_effects(env, &then_env);
-                merge_conditional_storage_effects(&mut else_env, &then_env);
+                merge_array_storage_effects(env, &then_env);
+                merge_array_storage_effects(&mut else_env, &then_env);
                 self.local_conditional_depth += 1;
-                let else_ty = self.infer_type_with_assignment_effects(else_expr, &mut else_env);
+                let else_ty = self.with_conditional_flow_arm(&mut flow, &mut else_env,
+                    |checker, env| checker.with_flow_narrowings(&guards, false, env,
+                        |checker, env| checker.infer_type_with_assignment_effects(else_expr, env)));
                 self.local_conditional_depth -= 1;
                 let else_ty = else_ty?;
-                let else_ty = if matches!(else_expr.kind, ExprKind::Throw(_)) {
-                    PhpType::Never
-                } else {
-                    else_ty
-                };
-                merge_conditional_storage_effects(env, &else_env);
+                let else_ty = if matches!(else_expr.kind, ExprKind::Throw(_)) { PhpType::Never } else { else_ty };
+                merge_array_storage_effects(env, &else_env);
+                self.finish_conditional_flow(flow, env);
                 match (then_dead, else_dead) {
                     (false, true) => Ok(then_ty),
                     (true, false) => Ok(else_ty),
                     _ => {
-                        // A `throw` arm types as `never` here, so the buffer merge skips it by its
-                        // shape, as `infer_type` does through `match_arm_result_type`.
+                        // A `throw` arm types as `never` here, so the buffer merge skips it by its shape,
+                        // as `infer_type` does through `match_arm_result_type`.
                         let arms = [(&**then_expr, then_ty), (&**else_expr, else_ty)];
                         match buffer_merge_result_type("a ternary", &arms, expr.span)? {
                             Some(buffer) => Ok(buffer),
@@ -472,60 +504,7 @@ impl Checker {
                 }
                 self.infer_type(expr, env)
             }
-            ExprKind::Match {
-                subject,
-                arms,
-                default,
-            } => {
-                self.infer_type_with_assignment_effects(subject, env)?;
-                let mut fallthrough_env = env.clone();
-                let mut result_ty: Option<PhpType> = None;
-                let mut arm_types: Vec<(&Expr, PhpType)> = Vec::new();
-                for (conditions, result) in arms {
-                    let mut arm_env = fallthrough_env.clone();
-                    for condition in conditions {
-                        if let Err(error) =
-                            self.infer_type_with_assignment_effects(condition, &mut arm_env)
-                        {
-                            return Err(self.with_other_match_condition_errors(error, arms, &arm_env));
-                        }
-                    }
-                    fallthrough_env = arm_env.clone();
-                    let mut result_env =
-                        self.match_arm_narrowed_env(subject, conditions, &arm_env)?;
-                    let ty = self.infer_type_with_assignment_effects(result, &mut result_env)?;
-                    let ty = if matches!(result.kind, ExprKind::Throw(_)) {
-                        PhpType::Never
-                    } else {
-                        ty
-                    };
-                    arm_types.push((result, ty.clone()));
-                    result_ty = Some(match result_ty {
-                        Some(acc) => merge_match_arm_result_type(self, acc, ty),
-                        None => ty,
-                    });
-                    merge_conditional_storage_effects(env, &result_env);
-                }
-                if let Some(default) = default {
-                    let mut default_env = fallthrough_env;
-                    let ty = self.infer_type_with_assignment_effects(default, &mut default_env)?;
-                    let ty = if matches!(default.kind, ExprKind::Throw(_)) {
-                        PhpType::Never
-                    } else {
-                        ty
-                    };
-                    arm_types.push((&**default, ty.clone()));
-                    result_ty = Some(match result_ty {
-                        Some(acc) => merge_match_arm_result_type(self, acc, ty),
-                        None => ty,
-                    });
-                    merge_conditional_storage_effects(env, &default_env);
-                }
-                if let Some(buffer) = buffer_merge_result_type("a match", &arm_types, expr.span)? {
-                    return Ok(buffer);
-                }
-                Ok(result_ty.unwrap_or(PhpType::Void))
-            }
+            ExprKind::Match { .. } => self.infer_match_effects(expr, env),
             ExprKind::ArrayAccess { array, index } => {
                 self.infer_type_with_assignment_effects(array, env)?;
                 self.infer_type_with_assignment_effects(index, env)?;
@@ -537,7 +516,6 @@ impl Checker {
             }
             ExprKind::Negate(inner)
             | ExprKind::BitNot(inner)
-            | ExprKind::Throw(inner)
             | ExprKind::ErrorSuppress(inner)
             | ExprKind::Print(inner)
             | ExprKind::Spread(inner) => {
@@ -673,12 +651,14 @@ impl Checker {
                             _ => idx,
                         };
                         if contextual_callbacks.contains(&param_idx) {
+                            self.infer_contextual_callback_effects(arg, env)?;
                             continue;
                         }
                         if crate::builtins::mbstring::is_capture_output_argument(builtin_name, arg, idx) {
                             // Forming the output reference requires dynamic storage before later
                             // source arguments can pass that same variable to a mutating call.
                             if let Some(name) = output_variable(arg) {
+                                self.record_local_storage_effect(name, &PhpType::Mixed);
                                 env.insert(name.clone(), PhpType::Mixed);
                             }
                             continue;
@@ -735,21 +715,29 @@ impl Checker {
                                 builtin_name,
                                 &expanded_args,
                             );
+                            self.record_local_storage_effect(name, &matches_ty);
+                            self.definitely_bound_locals.insert(name.clone());
                             env.insert(name.clone(), matches_ty);
                         }
                     }
                     if crate::builtins::mbstring::is_capture_output_argument(builtin_name, arg, idx) {
                         if let Some(name) = output_variable(arg) {
+                            self.record_local_storage_effect(name, &PhpType::Mixed);
+                            self.definitely_bound_locals.insert(name.clone());
                             env.insert(name.clone(), PhpType::Mixed);
                         }
                     }
                     if let Some(output_ty) = pcntl_output_type(builtin_name, arg, idx) {
                         if let Some(name) = output_variable(arg) {
+                            self.record_local_storage_effect(name, &output_ty);
+                            self.definitely_bound_locals.insert(name.clone());
                             env.insert(name.clone(), output_ty);
                         }
                     }
                     if let Some(output_ty) = xml_struct_output_type(builtin_name, arg, idx) {
                         if let Some(name) = output_variable(arg) {
+                            self.record_local_storage_effect(name, &output_ty);
+                            self.definitely_bound_locals.insert(name.clone());
                             env.insert(name.clone(), output_ty);
                         }
                     }
@@ -757,6 +745,8 @@ impl Checker {
                 if builtin_name.eq_ignore_ascii_case("openssl_encrypt") {
                     if let Some(arg) = openssl_encrypt_tag_arg(&expanded_args) {
                         if let Some(name) = output_variable(arg) {
+                            self.record_local_storage_effect(name, &PhpType::Str);
+                            self.definitely_bound_locals.insert(name.clone());
                             env.insert(name.clone(), PhpType::Str);
                         }
                     }
@@ -768,9 +758,9 @@ impl Checker {
                     // `unset($a)` on an eligible local KILLS the binding, which is what PHP
                     // does: a later read is "Undefined variable" and a later assignment binds
                     // fresh, at whatever type it likes. Ineligible names (conditional depth,
-                    // reference-aliased, `global`, `static`, declared-typed) keep today's
-                    // typing no-op. Iterating the SOURCE args keeps the recorded span on a node
-                    // EIR lowering actually visits.
+                    // reference-aliased, `global`, `static`, declared-typed) keep the binding
+                    // but invalidate its temporary read facts. Iterating the SOURCE args keeps
+                    // the recorded span on a node EIR lowering actually visits.
                     //
                     // ONLY from statement position. `unset` is a statement in PHP's grammar, but
                     // elephc's parser also accepts it as an expression, so this arm is reachable
@@ -791,6 +781,7 @@ impl Checker {
                             // `unset($var)` ends this binding even when escaped-reference
                             // conservatism keeps the name in `ref_aliased_locals`. A later `=&`
                             // assignment must establish fresh cell provenance for the new binding.
+                            self.definitely_bound_locals.remove(var);
                             self.invalidate_boxed_ref_alias_binding(var);
                             // Detaching a promoted reference is separate from killing its type
                             // binding: escaped aliases still prohibit incompatible reassignments.
@@ -800,6 +791,7 @@ impl Checker {
                                         .insert(var.clone());
                                     self.active_ref_params.remove(var);
                                     self.active_external_ref_bindings.remove(var);
+                                    self.by_ref_captured_locals.remove(var);
                                     self.ref_aliased_locals.remove(var);
                                     self.non_builtin_ref_aliased_locals.remove(var);
                                     self.ref_assign_aliased_locals.remove(var);
@@ -818,6 +810,7 @@ impl Checker {
                             // rest of the program reaching storage the environment no longer knows.
                             // Lowering refuses to abandon the same slots, from the same collected
                             // set — see `Checker::top_level_binding_is_program_global`.
+                            self.invalidate_local_flow_narrowing(var, env);
                             if env.contains_key(var)
                                 && self.local_binding_is_killable(var)
                                 && !self.top_level_binding_is_program_global(var)
@@ -966,6 +959,7 @@ impl Checker {
                     || self.callable_array_targets.contains_key(var);
                 for (idx, arg) in expanded_args.iter().enumerate() {
                     if skip_contextual_callback && idx == 1 {
+                        self.infer_contextual_callback_effects(arg, env)?;
                         continue;
                     }
                     if descriptor_args && matches!(arg.kind, ExprKind::Spread(_)) {
@@ -976,6 +970,13 @@ impl Checker {
                 }
                 let ty = self.infer_type(expr, env)?;
                 self.purge_property_narrowings_after_call(env);
+                Ok(ty)
+            }
+            ExprKind::Pipe { value, callable } => {
+                self.infer_type_with_assignment_effects(value, env)?;
+                self.infer_type_with_assignment_effects(callable, env)?;
+                let ty = self.infer_type(expr, env)?;
+                Self::purge_property_narrowings(env);
                 Ok(ty)
             }
             ExprKind::ExprCall { callee, args } => {
@@ -995,6 +996,7 @@ impl Checker {
                     .expr_targets_preg_replace_callback(callee);
                 for (idx, arg) in expanded_args.iter().enumerate() {
                     if skip_contextual_callback && idx == 1 {
+                        self.infer_contextual_callback_effects(arg, env)?;
                         continue;
                     }
                     if matches!(arg.kind, ExprKind::Spread(_)) {
@@ -1011,23 +1013,19 @@ impl Checker {
                 self.infer_type_with_assignment_effects(value, env)?;
                 self.infer_type(expr, env)
             }
-            ExprKind::PropertyAccess { object, .. }
-            | ExprKind::NullsafePropertyAccess { object, .. } => {
+            ExprKind::NullsafePropertyAccess { .. } | ExprKind::NullsafeDynamicPropertyAccess { .. }
+            | ExprKind::NullsafeMethodCall { .. } | ExprKind::NullsafeDynamicMethodCall { .. } =>
+                self.infer_nullsafe_effects(expr, env),
+            ExprKind::PropertyAccess { object, .. } => {
                 self.infer_type_with_assignment_effects(object, env)?;
                 self.infer_type(expr, env)
             }
-            ExprKind::DynamicPropertyAccess { object, property }
-            | ExprKind::NullsafeDynamicPropertyAccess { object, property } => {
+            ExprKind::DynamicPropertyAccess { object, property } => {
                 self.infer_type_with_assignment_effects(object, env)?;
                 self.infer_type_with_assignment_effects(property, env)?;
                 self.infer_type(expr, env)
             }
             ExprKind::MethodCall {
-                object,
-                method,
-                args,
-            }
-            | ExprKind::NullsafeMethodCall {
                 object,
                 method,
                 args,
@@ -1093,19 +1091,6 @@ impl Checker {
                 self.purge_property_narrowings_after_call(env);
                 Ok(ty)
             }
-            ExprKind::NullsafeDynamicMethodCall {
-                object,
-                method,
-                args,
-            } => {
-                self.infer_type_with_assignment_effects(object, env)?;
-                self.infer_type_with_assignment_effects(method, env)?;
-                let expanded_args = crate::types::call_args::expand_static_assoc_spread_args(args);
-                for arg in &expanded_args {
-                    self.infer_call_argument_with_assignment_effects(arg, env)?;
-                }
-                self.infer_type(expr, env)
-            }
             ExprKind::BufferNew { len, .. } => {
                 self.infer_type_with_assignment_effects(len, env)?;
                 self.infer_type(expr, env)
@@ -1119,10 +1104,18 @@ impl Checker {
                 self.purge_property_narrowings_after_call(env);
                 Ok(ty)
             }
-            _ => self.infer_type(expr, env),
+            _ => {
+                self.infer_fallback_operand_effects(expr, env)?;
+                self.infer_type(expr, env)
+            },
         };
         if result.is_ok() {
+            let captures = std::mem::take(&mut self.pending_ref_capture_invalidations);
+            for name in captures {
+                self.invalidate_local_flow_narrowing(&name, env);
+            }
             self.apply_boxed_reference_outputs(expr.span, env);
+            self.record_operation_exception_flow(expr, env);
         }
         result
     }
@@ -1966,14 +1959,51 @@ impl Checker {
             .is_some_and(callable_target_is_preg_replace_callback)
     }
 
+    /// Widens PDO binding destinations before by-reference signature validation.
+    pub(super) fn promote_pdo_binding_ref_storage(
+        &mut self,
+        object: &Expr,
+        method: &str,
+        args: &[Expr],
+        env: &mut TypeEnv,
+    ) -> Result<(), CompileError> {
+        let object_ty = self.infer_type(object, env)?;
+        if !type_may_be_pdo_statement(&object_ty) {
+            return Ok(());
+        }
+        let parameter_name = match crate::names::php_symbol_key(method).as_str() {
+            "bindparam" => "variable",
+            "bindcolumn" => "var",
+            _ => return Ok(()),
+        };
+        let argument = args.iter().enumerate().find_map(|(index, arg)| match &arg.kind {
+            ExprKind::NamedArg { name, value } if name == parameter_name => Some(value.as_ref()),
+            ExprKind::NamedArg { .. } => None,
+            _ if index == 1 => Some(arg),
+            _ => None,
+        });
+        let Some(Expr {
+            kind: ExprKind::Variable(name),
+            ..
+        }) = argument
+        else {
+            return Ok(());
+        };
+        self.record_local_storage_effect(name, &PhpType::Mixed);
+        env.insert(name.clone(), PhpType::Mixed);
+        Ok(())
+    }
+
     /// Marks the active statement stream as having crossed eval and widens local facts.
     fn mark_eval_barrier(&mut self, env: &mut TypeEnv) {
+        self.definitely_bound_locals.clear();
         self.eval_barrier_active = true;
         let local_names = env.keys().cloned().collect::<Vec<_>>();
         for ty in env.values_mut() {
             *ty = PhpType::Mixed;
         }
         for name in local_names {
+            self.record_local_storage_effect(&name, &PhpType::Mixed);
             self.closure_return_types.remove(&name);
             self.callable_sigs.remove(&name);
             self.callable_captures.remove(&name);
@@ -2050,6 +2080,11 @@ fn collect_truthy_isset_roots(condition: &Expr, env: &TypeEnv, roots: &mut Vec<S
 /// Array layout changes retain their common converted representation. Any other conditional
 /// creation, removal, or retyping loses its precise fact and becomes `Mixed`; synthetic property
 /// narrowing keys are omitted because they describe flow facts rather than runtime bindings.
+fn merge_array_storage_effects(env: &mut TypeEnv, branch_env: &TypeEnv) {
+    merge_conditional_storage_effects(env, branch_env);
+}
+
+/// The conditional-arm merge itself; see [`merge_array_storage_effects`], its only entry point.
 fn merge_conditional_storage_effects(env: &mut TypeEnv, branch_env: &TypeEnv) {
     let mut names = env
         .keys()
@@ -2322,4 +2357,13 @@ fn promote_indexed_local_for_element_unset(arg: &Expr, env: &mut TypeEnv) {
             value: Box::new(value_ty),
         },
     );
+}
+
+/// Returns whether a receiver type may contain a PDOStatement instance.
+fn type_may_be_pdo_statement(ty: &PhpType) -> bool {
+    match ty {
+        PhpType::Object(class) => class.trim_start_matches('\\') == "PDOStatement",
+        PhpType::Union(members) => members.iter().any(type_may_be_pdo_statement),
+        _ => false,
+    }
 }

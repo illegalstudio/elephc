@@ -1,28 +1,27 @@
 ---
 title: "lchown()"
 description: "Changes user ownership of a symlink."
-sidebar:
-  order: 304
 ---
 
 ## lchown()
 
 ```php
-function lchown(string $filename, string|int $user): bool
+function lchown(string $filename, string $user): bool
 ```
 
 Changes user ownership of a symlink.
 
 **Parameters**:
 - `$filename` (`string`)
-- `$user` (`string|int`)
+- `$user` (`string`)
 
 **Returns**: `bool`
 
 ## Availability
 
-- **Compiled (AOT)**: supported by the Elephc code generator.
-- **`eval()` (magician interpreter)**: supported through a declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/filesystem/lchown.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/filesystem/lchown.rs)).
+| Compiled (AOT) | Magician (eval) |
+|---|---|
+| Available | Available |
 
 _No examples yet. Check `examples/` and `showcases/` for usage patterns._
 

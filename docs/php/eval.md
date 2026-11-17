@@ -32,7 +32,7 @@ elephc chooses the narrowest execution path it can prove safe:
 | Eligible string literal with no caller-scope access | Parsed at compile time and lowered as an internal EIR function | No eval scope, eval context, or Magician bridge |
 | Eligible string literal with read-only caller values | Lowered as an internal EIR function with boxed `Mixed` parameters | No eval scope, eval context, or Magician bridge |
 | Eligible string literal with known scope writes | Lowered as an internal scope-aware EIR function using `EvalScopeGet` / `EvalScopeSet` | Core eval scope only; no interpreter bridge |
-| Dynamic string, runtime declaration, include, reference, dynamic dispatch, or unsupported literal construct | Parsed into EvalIR and interpreted at runtime | Persistent eval context, synchronized scopes, and `elephc_magician` |
+| Dynamic string, runtime declaration, include, reference, dynamic dispatch, or unsupported literal construct | Parsed into EvalIR, then executed by the admitted bytecode slice or the tree walker | Persistent eval context, synchronized scopes, and `elephc_magician` |
 
 The compiler makes this decision per literal call. A program may therefore use
 `eval()` without linking Magician when every call is fully handled by the AOT
@@ -73,8 +73,14 @@ the materialization required for the statically known reads and writes.
 Interpreter fallback parses dynamic source into EvalIR. Exact source strings
 up to 64 KiB share a process-wide FIFO cache of 256 immutable parse results;
 larger fragments bypass the cache. The cache avoids repeated tokenization and
-parsing, but execution remains interpreted. Repeated native function activations
-also share an immutable catalog of the module's native callable signatures,
+parsing. Eligible scalar/control-flow fragments and simple exact-arity positional
+functions also share a separate source-keyed bytecode cache and execute on an
+explicit activation stack. Unsupported fragments keep the ordinary EvalIR tree
+walker. Both paths run declarations, effects and scope writes on every execution;
+only the executable form is cached. See the
+[bytecode subset](../internals/eval-runtime.md#magician-bytecode-slice) for its
+limits. Repeated native function activations also share an immutable catalog of
+the module's native callable signatures,
 class metadata and constants. Each thread retains up to eight module catalogs;
 activation scopes, dynamic declarations, references, handlers and materialized
 default values remain separate. On a catalog cache miss, short numeric-only
@@ -107,6 +113,8 @@ for global-scope synchronization. Throwing a class declared by an earlier
 [`examples/eval-throw/`](https://github.com/illegalstudio/elephc/tree/main/examples/eval-throw).
 Dynamic regex opt-in is shown in
 [`examples/eval_regex/`](https://github.com/illegalstudio/elephc/tree/main/examples/eval_regex).
+Declarations a fragment uses above the line that declares them are shown in
+[`examples/eval-early-binding/`](https://github.com/illegalstudio/elephc/tree/main/examples/eval-early-binding).
 The implementation boundary is documented in
 [Eval Runtime Architecture](../internals/eval-runtime.md).
 
@@ -198,13 +206,19 @@ makes it one shared value everywhere.
 | Output | `echo` supports comma-separated arguments. `print` is an expression. |
 | Variables | Reads, writes, by-name assignment, by-reference assignment, `unset()`, `isset()`, and `empty()` are supported. |
 | Assignment forms | Simple variable assignment, by-reference variable, eval object-property, eval static-property, and bridge-supported generated/AOT static-property binding, compound assignment for variables, object properties, and static properties (`+=`, `-=`, `*=`, `**=`, `/=`, `%=`, `&=`, `|=`, `^=`, `<<=`, `>>=`, `.=`), simple variable increment/decrement (`++$x`, `$x++`, `--$x`, `$x--`), object property increment/decrement, and static property increment/decrement are supported. |
-| Control flow | Braced and single-statement `if`/`elseif`/`else`, `else if`, `while`, `do/while`, `for`, `foreach`, `switch`, `break`, and `continue` are supported. |
+| Control flow | Braced and single-statement `if`/`elseif`/`else`, `else if`, `while`, `do/while`, `for`, `foreach`, `switch`, `break`, `continue`, and `goto` with its labels are supported. A fragment is a label scope of its own, as is each function, method, and closure it declares. An invalid jump refuses the whole fragment as a parse error before any of it runs. A declaration bound before the fragment runs (see Declaration binding) stays declared when a jump skips it, and is not declared twice when a jump goes back over it. Any other declaration runs with its statement: a jump that skips it leaves it undeclared, and a jump back over it declares it a second time, which is an error, as in PHP. |
+| Declaration binding | As PHP does when it compiles a file, a fragment or an included file binds some of its top-level declarations before its first statement runs, so code may use them above the line that declares them. These are: every function; a class with no interfaces, no traits and no `__toString` method whose parent, if any, already exists or is bound earlier in the same fragment; an interface with no parents and no `__toString` method; a trait that uses no traits. A function whose name is taken, or a class bound this way that cannot extend its parent, stops the fragment before any statement runs. So does a top-level class or interface whose `__toString` method PHP refuses to compile: a static one, one that takes a parameter other than a variadic one, one whose declared return type is not exactly `string`, or an abstract one in a class that is not abstract. A class, interface or trait whose name is taken is left to its statement, which reports the redeclaration. So is a child class whose overrides can only be checked against its parent with a class that does not exist yet (a return type narrowed to a class declared further down, for example): it is linked when its statement runs. Enums, every other shape, and every declaration inside a block or a function are declared when their statement runs. Binding evaluates no member: a class constant or a property default is evaluated at its first use, so it may read a constant that a later statement defines. |
 | Exceptions | `throw`, `try`, `catch`, union catches, class-specific catches, optional catch variables, and `finally` are supported. `finally` runs before a fragment returns or propagates a `Throwable`; a control action from `finally` replaces the pending action from the protected body or catch. |
 | Functions | Eval fragments can declare functions. Static locals inside eval-declared functions are initialized once per eval context and persist across later calls through that context. Top-level `static` declarations in separate eval fragments are initialized for each eval execution. |
 | Classes | Eval fragments can declare classes and traits with properties including comma-separated simple property declarations, PHP's legacy `var` public-property marker, asymmetric property write visibility (`private(set)` / `protected(set)`, on declared and promoted properties), constructor property promotion including by-reference promotion for variable, array-element, object-property, static-property, property-array-element, static-property-array-element, and default-value targets, concrete property get/set hooks including by-reference get-hook syntax and PHP-compatible explicit set-hook parameter typing, methods, `__construct()`, inheritance, visibility, readonly properties/classes, abstract/final modifiers, trait uses with `insteadof` / `as` adaptations and PHP-compatible property/constant conflict checks, interface implementations, static members, class/interface/trait comma-separated constants including `final` constants, and class-level attributes. Duplicate eval class-like names and PHP-reserved bare class-like declaration/reference names are rejected. |
 | Enums | Eval fragments can declare pure and `int` / `string` backed enums with cases, comma-separated constants including `final` constants, methods, interface implementations, `::cases()`, `::from()`, `::tryFrom()`, `->name`, and backed `->value`. |
 | Includes | `include`, `include_once`, `require`, and `require_once` execute local filesystem paths from inside fragments. |
 | Namespaces | Both `namespace Name;` and `namespace Name { ... }` forms are supported, including simple and grouped `use`, `use function`, and `use const` declarations. |
+
+Opaque eval rejects indexed increment/decrement, including `$a[0]++`,
+`--Store::$items[0]`, and `$object->items[$key]--`. Use indexed `+=` and `-=`
+for numeric updates. Compiled code supports indexed increment/decrement,
+including PHP's distinct null and alphanumeric string behavior.
 
 `foreach` supports value-only and key-value iteration over indexed and
 associative arrays, plus eval-declared and generated/AOT `Iterator` and
@@ -241,6 +255,7 @@ runtime include-execution history.
 | Expression area | Support |
 |---|---|
 | Scalars | `null`, booleans, integers, floats, and strings. |
+| Property update values | Object-property compound assignments and prefix/postfix increments or decrements can appear inside `echo`, arguments, conditions and return values. Computed receivers and dynamic names are evaluated once, and postfix updates return the previous value. SimpleXML properties use the same native update protocol as compiled PHP. |
 | Variables and properties | Variable reads, `$this->property` reads/writes from native methods including public/protected/private scalar including string, nullable scalar, Mixed, array, and object AOT property slots when eval is executing in a PHP-visible native class scope, dynamic `stdClass` properties, eval object property access including `__get()` / `__set()` fallback for missing or inaccessible eval properties, `isset()`, `empty()`, and `unset()` magic property dispatch through `__isset()` / `__unset()`, `instanceof` over static and dynamic class/interface targets, eval-declared static property access, runtime-valued static receivers for `$class::$property` reads/writes, increment/decrement, and `isset()` / `empty()` probes, expression-valued static receivers for `($expr)::$property` reads/writes, array writes/appends, and increment/decrement, dynamic static property names (`ClassName::${expr}` / `$class::${expr}` / `($expr)::${expr}`) for reads/writes, `isset()` / `empty()` probes, array writes/appends, array-element unsets, and increment/decrement, static-property unset attempts including dynamic names as PHP-compatible catchable errors, public/protected/private scalar including string, nullable scalar, Mixed, array, and object AOT static property access from PHP-visible native class scopes, and public/protected/private generated/AOT class-like constant fetches through the bridge. |
 | Arrays | Indexed and associative literals, modern `[...]` and legacy `array(...)`, keyed elements, append writes (`$array[] = value`), numeric-index reads/writes, string-key reads/writes, object-property and static-property array writes/appends/unsets, and eval-declared or generated/AOT `ArrayAccess` object reads, writes, appends, `isset()`, `empty()`, and `unset()` through `offsetGet()`, `offsetSet()`, `offsetExists()`, and `offsetUnset()`. |
 | Function-like calls | Direct calls, named arguments, argument unpacking (`...`), dynamic string/expression calls, first-class callable syntax for supported function, method, and invokable-object targets, invokable eval and generated/AOT objects, `call_user_func()`, and `call_user_func_array()` for supported call targets. |
@@ -254,6 +269,35 @@ runtime include-execution history.
 | Match | Strict pattern comparison, comma-separated patterns, lazy result-arm evaluation, and `default`. A miss without `default` is reported as an eval runtime fatal. |
 
 Supported unary operators are `+`, `-`, `!`, and integer bitwise `~`.
+
+Nested array writes and appends keep their storage path, including
+`$rows["items"][] = $value` and `$registry->handlers["save"][] = $handler`.
+Property writes can use indexed object receivers such as `$views[0]->name`.
+Object dimensions returned by a method remain writable, including
+`$xml->attributes()["id"] = "new"`. Array replacements preserve copied snapshots.
+A temporary array with no variable or property to receive its replacement raises
+`Error`; native object dimensions keep their shared object identity. A by-value
+`ArrayAccess::offsetGet()` array result is a disposable copy: nested writes emit
+an indirect-modification notice and do not call `offsetSet()`. Builtin `ArrayObject`
+and `ArrayIterator` getters retain writable storage, including inherited eval
+subclasses. A by-reference `offsetGet()` runs once: an object result retains
+identity mutation, while a non-object result raises an explicit unsupported-write
+`Error` because its reference attachment cannot yet be represented. A native subclass overriding
+`offsetSet()` also raises an unsupported-write `Error` when a nested array must be
+written back; eval subclasses can use the builtin storage implementation directly.
+
+Nested object unsets such as `unset($rows[firstKey()][lastKey()])` evaluate
+computed keys in source order before selecting live variable storage. A computed
+root such as `rows()` is captured before those keys. Missing intermediate
+dimensions remain quiet. An array leaf requiring nested array writeback raises
+an explicit unsupported-storage `Error`.
+String and numeric intermediate containers throw PHP's offset errors; `false`
+emits its array-conversion deprecation and `null` remains quiet.
+The string-offset error distinguishes a following property from a following
+dimension. Non-indexable objects, including closures, raise a catchable `Error`.
+Fetching a Closure property as an unset container raises
+`Cannot create dynamic property Closure::$name` after converting the name.
+Unsetting its final property name remains quiet.
 
 Supported binary operators are:
 
@@ -282,9 +326,9 @@ global user functions support positional, named, and spread arguments inside
 eval fragments. String keys in unpacked argument arrays bind as named
 parameters. Direct calls and variable-function calls can also invoke registered
 AOT global user functions when their by-reference parameters use generated
-`mixed`/union-style boxed storage or one-word scalar raw storage (`int`, `bool`,
-or `float`), string raw storage, or one-word heap raw storage (`array`,
-`iterable`, and object/class parameters). Nullable scalar, native-only ABI
+`mixed`/union, array, object, or class boxed storage; two-word scalar raw storage
+(`int`, `bool`, or `float`); two-word string raw storage; or two-word raw heap
+storage for `iterable`. Nullable scalar, native-only ABI
 layouts, and other unsupported raw-storage by-reference free-function
 parameters remain metadata-only until the function bridge has typed
 staging/writeback for those ABI layouts.
@@ -361,6 +405,9 @@ satisfies PHP visibility. Generated AOT bridge dispatch can invoke
 object, and supported union/intersection object shapes, with by-reference method
 and constructor parameters limited to the staged scalar/nullable
 scalar/Mixed/array/iterable/object slice.
+Ordinary value reads from generated/AOT methods declared with `&` copy the
+referenced value, including scalar, array and object results. Binding that return
+to an eval reference remains unsupported.
 
 Post-barrier native direct calls and string-literal `call_user_func()` callbacks
 currently accept simple positional arguments. Post-barrier
@@ -551,11 +598,12 @@ through `isInternal()`, `isUserDefined()`, `isClosure()`,
 `isGenerator()`, `isVariadic()`, `isStatic()`,
 `hasTentativeReturnType()`, and `getTentativeReturnType()`.
 `returnsReference()` reports the reflected declaration: `true` for a compiled
-`function &f()` or `function &m()`, for an eval-declared `&get` property
+`function &f()` or `function &m()`, for an eval-declared `function &m()` or `&get` property
 hook, and for an abstract or interface `&get` hook contract, whether eval or
-compiled code declares it. Eval code itself cannot declare a by-reference
-function, method, or closure (the fragment is rejected), so those report
-`false`. `hasReturnType()`
+compiled code declares it. Eval retains method reference-return declarations for
+reflection and dimension-write validation. Binding a method return as a reference
+remains unsupported. Eval code cannot declare a by-reference free function or
+closure (the fragment is rejected). `hasReturnType()`
 and `getReturnType()` expose retained eval return type metadata for supported
 named, nullable, union, and intersection declarations, including `void` and
 `never` as builtin non-nullable named types.
@@ -778,9 +826,9 @@ generated/AOT free functions with positional variadic tails when the generated
 signature has no by-reference parameters. Direct, variable-function,
 first-class callable, `Closure::fromCallable()`, and `call_user_func_array()`
 paths can additionally invoke generated/AOT free functions whose by-reference
-parameters use boxed Mixed/union storage or one-word scalar raw storage
-(`int`, `bool`, or `float`), string raw storage, or one-word heap raw storage
-(`array`, `iterable`, and object/class parameters), including positional
+parameters use boxed Mixed/union, array, object, or class storage; two-word
+scalar raw storage (`int`, `bool`, or `float`); two-word string raw storage; or
+two-word raw heap storage for `iterable`, including positional
 `&...` variadic tails when the tail arguments have lvalue/ref-cell storage.
 Registered generated/AOT free-function parameter
 names, declared types, return types, by-reference and variadic flags,
@@ -1101,7 +1149,7 @@ where listed below unless a note says otherwise.
 | File and directory streams | `fopen()`, `fclose()`, `feof()`, `fflush()`, `fgetc()`, `fgets()`, `fgetcsv()`, `fpassthru()`, `fprintf()`, `fputcsv()`, `fread()`, `fscanf()`, `flock()`, `fseek()`, `fstat()`, `fsync()`, `fdatasync()`, `ftell()`, `ftruncate()`, `fwrite()`, `rewind()`, `vfprintf()`, `opendir()`, `readdir()`, `closedir()`, `rewinddir()` |
 | Streams and stream contexts | `stream_get_filters()`, `stream_get_transports()`, `stream_get_wrappers()`, `stream_isatty()`, `stream_is_local()`, `stream_supports_lock()`, `stream_get_contents()`, `stream_get_line()`, `stream_get_meta_data()`, `stream_copy_to_stream()`, `stream_resolve_include_path()`, `stream_select()`, `stream_set_blocking()`, `stream_set_chunk_size()`, `stream_set_read_buffer()`, `stream_set_timeout()`, `stream_set_write_buffer()`, `stream_context_create()`, `stream_context_get_default()`, `stream_context_get_options()`, `stream_context_get_params()`, `stream_context_set_default()`, `stream_context_set_option()`, `stream_context_set_params()`, `stream_wrapper_register()`, `stream_wrapper_unregister()`, `stream_wrapper_restore()`, `stream_filter_register()`, `stream_filter_append()`, `stream_filter_prepend()`, `stream_filter_remove()`, `stream_bucket_new()`, `stream_bucket_make_writeable()`, `stream_bucket_append()`, `stream_bucket_prepend()` |
 | Stream sockets and network databases | `stream_socket_server()`, `stream_socket_client()`, `stream_socket_accept()`, `stream_socket_enable_crypto()`, `stream_socket_get_name()`, `stream_socket_pair()`, `stream_socket_recvfrom()`, `stream_socket_sendto()`, `stream_socket_shutdown()`, `fsockopen()`, `pfsockopen()`, `gethostname()`, `gethostbyname()`, `gethostbyaddr()`, `getprotobyname()`, `getprotobynumber()`, `getservbyname()`, `getservbyport()`, `long2ip()`, `ip2long()`, `inet_pton()`, `inet_ntop()` |
-| Strings, bytes, and formatting | `strlen()`, `ord()`, `chr()`, `strtolower()`, `strtoupper()`, `ucfirst()`, `lcfirst()`, `ucwords()`, `str_contains()`, `str_starts_with()`, `str_ends_with()`, `strpos()`, `strrpos()`, `strcmp()`, `strcasecmp()`, `trim()`, `ltrim()`, `rtrim()`, `chop()`, `strrev()`, `grapheme_strrev()`, `str_repeat()`, `substr()`, `substr_replace()`, `str_pad()`, `strstr()`, `str_split()`, `wordwrap()`, `nl2br()`, `explode()`, `implode()`, `str_replace()`, `str_ireplace()`, `htmlspecialchars()`, `htmlentities()`, `html_entity_decode()`, `strip_tags()`, `parse_url()`, `urlencode()`, `urldecode()`, `rawurlencode()`, `rawurldecode()`, `ctype_alpha()`, `ctype_digit()`, `ctype_alnum()`, `ctype_space()`, `addslashes()`, `stripslashes()`, `bin2hex()`, `hex2bin()`, `base64_encode()`, `base64_decode()`, `gzcompress()`, `gzdeflate()`, `gzinflate()`, `gzuncompress()`, `number_format()`, `sprintf()`, `printf()`, `vsprintf()`, `vprintf()`, `sscanf()` |
+| Strings, bytes, and formatting | `strlen()`, `ord()`, `chr()`, `strtolower()`, `strtoupper()`, `ucfirst()`, `lcfirst()`, `ucwords()`, `str_contains()`, `str_starts_with()`, `str_ends_with()`, `strpos()`, `strrpos()`, `strcmp()`, `strcasecmp()`, `trim()`, `ltrim()`, `rtrim()`, `chop()`, `strrev()`, `grapheme_strrev()`, `str_repeat()`, `substr()`, `substr_replace()`, `str_pad()`, `strstr()`, `str_split()`, `wordwrap()`, `nl2br()`, `explode()`, `implode()`, `str_replace()`, `str_ireplace()`, `htmlspecialchars()`, `htmlentities()`, `html_entity_decode()`, `strip_tags()`, `parse_url()`, `urlencode()`, `urldecode()`, `rawurlencode()`, `rawurldecode()`, `ctype_alnum()`, `ctype_alpha()`, `ctype_cntrl()`, `ctype_digit()`, `ctype_graph()`, `ctype_lower()`, `ctype_print()`, `ctype_punct()`, `ctype_space()`, `ctype_upper()`, `ctype_xdigit()`, `addslashes()`, `stripslashes()`, `bin2hex()`, `hex2bin()`, `base64_encode()`, `base64_decode()`, `gzcompress()`, `gzdeflate()`, `gzinflate()`, `gzuncompress()`, `number_format()`, `sprintf()`, `printf()`, `vsprintf()`, `vprintf()`, `sscanf()` |
 | Hashing | `crc32()`, `hash()`, `hash_file()`, `hash_hmac()`, `md5()`, `sha1()`, `hash_equals()`, `hash_algos()`, `hash_init()`, `hash_update()`, `hash_final()`, `hash_copy()` |
 | JSON | `json_encode()`, `json_decode()`, `json_validate()`, `json_last_error()`, `json_last_error_msg()` |
 | Regex | `preg_match()`, `preg_match_all()`, `preg_replace()`, `preg_replace_callback()`, `preg_split()`, `mb_ereg_match()` |
@@ -1242,6 +1290,13 @@ updates, but eval `fclose()` still closes only eval-managed streams. Native loca
 synchronized into eval remain retained until the next synchronization or context
 release, which can delay last-owner resource retirement.
 
+Materializing an eval scope refuses a visible native reference with unboxed indexed-array or associative-array
+values, such as an alias of an `array<int>` or `array<string, int>` property or parameter. Normalizing those values
+would invalidate the native layout shared by other aliases, so compilation reports
+`Unsupported eval: native reference $name has unboxed array elements`. Already boxed whole-local
+array aliases remain supported. For a literal fragment using scope helpers, the check applies
+only to the names that fragment writes; unrelated native aliases do not trigger it.
+
 Dynamic fragments and literal fragments outside the current AOT eligibility
 rules execute through the `elephc_magician` interpreter bridge. Eligible
 literal fragments instead use the normal AST -> EIR -> native codegen pipeline,
@@ -1252,10 +1307,12 @@ object construction, fail at runtime with an eval fatal diagnostic.
 The fragment subset is broad but not the full elephc language surface. Eval
 retains `ReflectionFunction` closure metadata for common
 `Closure::fromCallable()` targets, including bound free functions, object
-methods, static methods, and invokable objects. Advanced native callable
-descriptors and full PHP `Closure` APIs, such as arbitrary scope mutation and
-reflection over every first-class callable shape, are still outside eval
-fragments. Runtime/AOT free-function, object-method, static-method, and
+methods, static methods, and invokable objects. Registered generated/AOT native
+callable descriptors support direct and variable calls, `call_user_func()`,
+`call_user_func_array()`, first-class callable syntax, and
+`Closure::fromCallable()`. Full PHP `Closure` APIs, such as arbitrary scope
+mutation, and reflection over every first-class callable shape are still outside
+eval fragments. Runtime/AOT free-function, object-method, static-method, and
 constructor fallback from eval
 can bind registered names, defaults, and positional variadic tails; method,
 static-method, and constructor fallback can also bind by-reference lvalue
@@ -1263,9 +1320,9 @@ metadata. Generated AOT bridge dispatch supports visibility-checked method,
 static-method, and constructor signatures whose generated ABI storage is
 scalar/string, callable descriptor, boxed Mixed/union, array/hash, iterable, or
 object, plus free-function signatures using the descriptor invoker ABI when
-by-reference parameters, if any, use boxed Mixed/union storage or raw one-word
-scalar storage (`int`, `bool`, or `float`), string raw storage, or one-word heap
-storage (`array`, `iterable`, and object/class parameters), including
+by-reference parameters, if any, use boxed Mixed/union, array, object, or class
+storage; two-word scalar raw storage (`int`, `bool`, or `float`); two-word string
+raw storage; or two-word raw heap storage for `iterable`, including
 positional `&...` variadic tail element writeback.
 Registered type specs validate nullable and union members, intersection object
 parameters, and intersection object returns before or after the generated AOT
@@ -1301,7 +1358,7 @@ by-reference and variadic parameter flags, and generated/AOT
 class/method/property/class-constant attributes are exposed for registered
 metadata slices, while unsupported native-only bridge shapes and raw-storage
 by-reference free-function bridge shapes beyond the current
-Mixed/scalar/string/one-word heap slice remain metadata-only rather than
+Mixed/scalar/string/iterable slice remain metadata-only rather than
 invocable through eval.
 
 The type checker and AST optimizer conservatively treat every `eval()` call as

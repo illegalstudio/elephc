@@ -1,0 +1,21 @@
+# Traefik static configuration (file provider).
+# Traefik's Unix-socket backend support varies by version, so this example uses
+# loopback TCP. Start the origin with:
+#   ./app --listen 127.0.0.1:8080 --trusted-proxy 127.0.0.1/32
+entryPoints:
+  web:
+    address: ":80"
+  websecure:
+    address: ":443"
+
+providers:
+  file:
+    filename: /etc/traefik/dynamic.yml
+
+certificatesResolvers:
+  le:
+    acme:
+      email: admin@example.com
+      storage: /var/lib/traefik/acme.json
+      httpChallenge:
+        entryPoint: web

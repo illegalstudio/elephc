@@ -16,6 +16,47 @@ pub(super) fn store_mixed_scope_cell_to_local(
     local: &EvalSyncLocal,
     pending_throw: Option<usize>,
 ) -> Result<()> {
+    let payload_ty = ctx.ref_cell_payload_type(local.slot)?.codegen_repr();
+    if ctx.local_slot_ever_stores_ref_cell_pointer(local.slot) {
+        if let Some(state) = ctx.ref_cell_state_offset(local.slot) {
+            let attached = ctx.next_label("eval_local_reload_attached_ref_cell");
+            let done = ctx.next_label("eval_local_reload_representation_done");
+            let result = abi::int_result_reg(ctx.emitter);
+            abi::emit_push_reg(ctx.emitter, result);
+            abi::load_at_offset(ctx.emitter, result, state);
+            match ctx.emitter.target.arch {
+                Arch::AArch64 => {
+                    ctx.emitter.instruction(&format!("cbnz {result}, {attached}")); // attached aliases retain their physical cell payload ABI
+                }
+                Arch::X86_64 => {
+                    ctx.emitter.instruction(&format!("test {result}, {result}")); // distinguish a raw widened local from an attached reference cell
+                    ctx.emitter.instruction(&format!("jne {attached}"));        // attached aliases use their physical cell payload ABI
+                }
+            }
+            abi::emit_pop_reg(ctx.emitter, result);
+            store_mixed_scope_cell_to_logical_local(ctx, local, pending_throw)?;
+            abi::emit_jump(ctx.emitter, &done);
+            ctx.emitter.label(&attached);
+            abi::emit_pop_reg(ctx.emitter, result);
+            store_mixed_scope_cell_to_ref_cell(ctx, local, &payload_ty, pending_throw)?;
+            ctx.emitter.label(&done);
+            return Ok(());
+        }
+    }
+    if ctx.local_slot_ever_stores_ref_cell_pointer(local.slot) {
+        return store_mixed_scope_cell_to_ref_cell(ctx, local, &payload_ty, pending_throw);
+    }
+    store_mixed_scope_cell_to_logical_local(ctx, local, pending_throw)
+}
+
+/// Converts a scope Mixed cell back to the local's logical raw storage representation.
+fn store_mixed_scope_cell_to_logical_local(
+    ctx: &mut FunctionContext<'_>,
+    local: &EvalSyncLocal,
+    pending_throw: Option<usize>,
+) -> Result<()> {
+    let rejected = ctx.next_label("eval_local_reload_rejected");
+    scope_reload_checks::guard_heap_replacement(ctx, &local.ty, &local.name, pending_throw, &rejected);
     match local.ty.codegen_repr() {
         PhpType::Mixed | PhpType::Union(_) => {
             if ctx.local_stores_ref_cell_pointer(local.slot) {
@@ -30,6 +71,10 @@ pub(super) fn store_mixed_scope_cell_to_local(
         }
         PhpType::Int => {
             abi::emit_call_label(ctx.emitter, "__rt_mixed_cast_int");
+            ctx.store_current_result_to_local(local.slot)?;
+        }
+        PhpType::TaggedScalar => {
+            emit_nullable_int_reload(ctx);
             ctx.store_current_result_to_local(local.slot)?;
         }
         PhpType::Bool => {
@@ -56,7 +101,7 @@ pub(super) fn store_mixed_scope_cell_to_local(
             };
             let result_reg = abi::int_result_reg(ctx.emitter);
             ctx.emitter
-                .instruction(&format!("mov {}, {}", result_reg, payload_reg)); // move the unboxed heap pointer into the local-store result register
+                .instruction(&format!("mov {}, {}", result_reg, payload_reg));  // move the unboxed heap pointer into the local-store result register
             abi::emit_incref_if_refcounted(ctx.emitter, &local.ty);
             replace_owned_eval_local(ctx, local, pending_throw)?;
         }
@@ -67,7 +112,127 @@ pub(super) fn store_mixed_scope_cell_to_local(
             )))
         }
     }
+    ctx.emitter.label(&rejected);
     Ok(())
+}
+
+/// Converts a scope Mixed cell back to an attached reference cell's physical payload ABI.
+fn store_mixed_scope_cell_to_ref_cell(
+    ctx: &mut FunctionContext<'_>,
+    local: &EvalSyncLocal,
+    payload_ty: &PhpType,
+    pending_throw: Option<usize>,
+) -> Result<()> {
+    let rejected = ctx.next_label("eval_ref_cell_reload_rejected");
+    // A canonical snapshot imports the wrapper itself. Eval has already published
+    // assignments through that wrapper, so writing its projected bits back would corrupt C.
+    let incoming = abi::int_result_reg(ctx.emitter);
+    let snapshot = abi::secondary_scratch_reg(ctx.emitter);
+    let converted = ctx.next_label("eval_ref_cell_reload_shared_wrapper");
+    let offset = ctx.local_offset(local.slot)?;
+    abi::emit_push_reg(ctx.emitter, incoming);
+    abi::load_at_offset(ctx.emitter, incoming, offset);
+    abi::emit_call_label(ctx.emitter, "__rt_reference_cell_canonical");
+    abi::emit_load_temporary_stack_slot(ctx.emitter, snapshot, 0);
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction(&format!("cmp {incoming}, {snapshot}"));    // detect the exact shared wrapper imported into this eval scope
+            ctx.emitter.instruction(&format!("b.eq {converted}"));              // its current child is already visible through the native alias
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction(&format!("cmp {incoming}, {snapshot}"));    // detect the exact shared wrapper imported into this eval scope
+            ctx.emitter.instruction(&format!("je {converted}"));                // its current child is already visible through the native alias
+        }
+    }
+    abi::emit_pop_reg(ctx.emitter, incoming);
+    scope_reload_checks::guard_heap_replacement(
+        ctx,
+        payload_ty,
+        &local.name,
+        pending_throw,
+        &rejected,
+    );
+    match payload_ty.codegen_repr() {
+        PhpType::Mixed | PhpType::Union(_) => {
+            abi::emit_incref_if_refcounted(ctx.emitter, &PhpType::Mixed);
+            replace_owned_eval_ref_cell(ctx, local, payload_ty, pending_throw)?;
+        }
+        PhpType::Int => {
+            abi::emit_call_label(ctx.emitter, "__rt_mixed_cast_int");
+            ctx.store_current_result_to_ref_cell_local(local.slot, payload_ty)?;
+        }
+        PhpType::TaggedScalar => {
+            emit_nullable_int_reload(ctx);
+            ctx.store_current_result_to_ref_cell_local(local.slot, payload_ty)?;
+        }
+        PhpType::Bool => {
+            abi::emit_call_label(ctx.emitter, "__rt_mixed_cast_bool");
+            ctx.store_current_result_to_ref_cell_local(local.slot, payload_ty)?;
+        }
+        PhpType::Float => {
+            abi::emit_call_label(ctx.emitter, "__rt_mixed_cast_float");
+            ctx.store_current_result_to_ref_cell_local(local.slot, payload_ty)?;
+        }
+        PhpType::Str => {
+            let string = ctx.next_label("eval_ref_reload_string_payload");
+            let persist = ctx.next_label("eval_ref_reload_persist_string");
+            abi::emit_owned_mixed_string(ctx.emitter, &string, &persist);
+            replace_owned_eval_ref_cell(ctx, local, payload_ty, pending_throw)?;
+        }
+        PhpType::Object(_)
+        | PhpType::Array(_)
+        | PhpType::AssocArray { .. }
+        | PhpType::Iterable
+        | PhpType::Callable => {
+            abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
+            let payload_reg = match ctx.emitter.target.arch {
+                Arch::AArch64 => "x1",
+                Arch::X86_64 => "rdi",
+            };
+            abi::emit_reg_move(ctx.emitter, abi::int_result_reg(ctx.emitter), payload_reg);
+            abi::emit_incref_if_refcounted(ctx.emitter, payload_ty);
+            replace_owned_eval_ref_cell(ctx, local, payload_ty, pending_throw)?;
+        }
+        other => {
+            return Err(CodegenIrError::unsupported(format!(
+                "eval reference-cell reload for PHP type {:?}",
+                other
+            )))
+        }
+    }
+    abi::emit_jump(ctx.emitter, &rejected);
+    ctx.emitter.label(&converted);
+    abi::emit_release_temporary_stack(ctx.emitter, 16);
+    ctx.emitter.label(&rejected);
+    Ok(())
+}
+
+/// Preserves null and applies the integer reload policy before storing a nullable scalar.
+/// Foreign heap tags must never enter the two-word nullable-integer representation.
+fn emit_nullable_int_reload(ctx: &mut FunctionContext<'_>) {
+    let null = ctx.next_label("eval_reload_nullable_int_null");
+    let done = ctx.next_label("eval_reload_nullable_int_done");
+    let result = abi::int_result_reg(ctx.emitter);
+    abi::emit_push_reg(ctx.emitter, result);
+    abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction(&format!("cmp {result}, #8"));              // distinguish null from values that require integer conversion
+            ctx.emitter.instruction(&format!("b.eq {null}"));                   // preserve a nullable integer's null arm
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction(&format!("cmp {result}, 8"));               // distinguish null from values that require integer conversion
+            ctx.emitter.instruction(&format!("je {null}"));                     // preserve a nullable integer's null arm
+        }
+    }
+    abi::emit_pop_reg(ctx.emitter, result);
+    abi::emit_call_label(ctx.emitter, "__rt_mixed_cast_int");
+    crate::codegen::sentinels::emit_tagged_scalar_from_int_result(ctx.emitter);
+    abi::emit_jump(ctx.emitter, &done);
+    ctx.emitter.label(&null);
+    abi::emit_release_temporary_stack(ctx.emitter, 16);
+    crate::codegen::sentinels::emit_tagged_scalar_null(ctx.emitter);
+    ctx.emitter.label(&done);
 }
 
 /// Converts a scope Mixed cell back to a program-global storage symbol.
@@ -79,6 +244,8 @@ pub(super) fn store_mixed_scope_cell_to_global(
     let symbol = ir_global_symbol(&global.name);
     let ty = global.ty.codegen_repr();
     ctx.data.add_comm(symbol.clone(), ty.stack_size().max(8));
+    let rejected = ctx.next_label("eval_global_reload_rejected");
+    scope_reload_checks::guard_heap_replacement(ctx, &ty, &global.name, pending_throw, &rejected);
     match &ty {
         PhpType::Mixed | PhpType::Union(_) => {
             if ctx.shared.uses_shared_ref_cell(ctx.module, &global.name) {
@@ -120,7 +287,7 @@ pub(super) fn store_mixed_scope_cell_to_global(
             };
             let result_reg = abi::int_result_reg(ctx.emitter);
             ctx.emitter
-                .instruction(&format!("mov {}, {}", result_reg, payload_reg)); // move the unboxed array payload into the ABI result register
+                .instruction(&format!("mov {}, {}", result_reg, payload_reg));  // move the unboxed array payload into the ABI result register
             abi::emit_incref_if_refcounted(ctx.emitter, &ty);
             if ctx.shared.uses_shared_ref_cell(ctx.module, &global.name) {
                 super::super::super::globals_constants::lower_replace_shared_global(
@@ -140,6 +307,7 @@ pub(super) fn store_mixed_scope_cell_to_global(
             )))
         }
     }
+    ctx.emitter.label(&rejected);
     Ok(())
 }
 
@@ -193,6 +361,31 @@ fn replace_owned_eval_local(
     Ok(())
 }
 
+/// Publishes an acquired replacement through an attached cell before retiring its old payload.
+fn replace_owned_eval_ref_cell(
+    ctx: &mut FunctionContext<'_>,
+    local: &EvalSyncLocal,
+    payload_ty: &PhpType,
+    pending_throw: Option<usize>,
+) -> Result<()> {
+    let ty = payload_ty.codegen_repr();
+    ctx.emitter.comment("publish eval reference-cell replacement before retiring its previous payload");
+    abi::emit_push_result_value(ctx.emitter, &ty);
+    ctx.load_ref_cell_payload_to_result(local.slot, &ty)?;
+    abi::emit_push_result_value(ctx.emitter, &ty);
+    load_saved_eval_local_result(ctx, &ty, 16);
+    ctx.store_current_result_to_ref_cell_local(local.slot, &ty)?;
+    load_saved_eval_local_result(ctx, &ty, 0);
+    abi::emit_release_temporary_stack(ctx.emitter, 32);
+    if ty == PhpType::Str {
+        let (ptr, _) = abi::string_result_regs(ctx.emitter);
+        abi::emit_reg_move(ctx.emitter, abi::int_result_reg(ctx.emitter), ptr);
+    }
+    retire_eval_replacement_owner(ctx.emitter, &ty, pending_throw);
+    ctx.emitter.comment("eval reference cell owns its converted payload");
+    Ok(())
+}
+
 /// Retires one published replacement's old owner without interrupting guarded scope writeback.
 pub(super) fn retire_eval_replacement_owner(
     emitter: &mut crate::codegen_support::emit::Emitter,
@@ -205,6 +398,14 @@ pub(super) fn retire_eval_replacement_owner(
         abi::refcount_release_helper(ty)
     };
     let Some(entry) = entry else { return; };
+    retire_eval_owner_with_entry(emitter, entry, pending_throw);
+}
+
+/// Retires a unary owner through the same exception boundary as ordinary scope replacements.
+pub(super) fn retire_eval_owner_with_entry(
+    emitter: &mut crate::codegen_support::emit::Emitter,
+    entry: &str, pending_throw: Option<usize>,
+) {
     if let Some(offset) = pending_throw {
         let payload = abi::int_arg_reg_name(emitter.target, 1);
         abi::emit_reg_move(emitter, payload, abi::int_result_reg(emitter));
@@ -233,52 +434,7 @@ pub(super) fn store_missing_scope_entry_to_local(
     local: &EvalSyncLocal,
     pending_throw: Option<usize>,
 ) -> Result<()> {
-    // A reference-bound local (`global $g`, `$a = &$b`) shares its cell with another name, and
-    // eval's `unset($g)` only broke that binding. Writing the null fallback through the cell
-    // cleared the global or the referenced variable itself. The binding is kept instead: a later
-    // read of the name in this frame still sees the shared value, where php would see it unset.
-    if ctx.local_ref_cell_representation_is_definite(local.slot) {
-        return Ok(());
-    }
-    // A slot promoted at run time (`global $g` in a function) carries its state in a flag.
-    let still_bound = ctx.next_label("eval_scope_missing_keeps_reference");
-    let skip_when_bound = ctx.ref_cell_state_offset(local.slot);
-    if let Some(state_offset) = skip_when_bound {
-        let state_reg = abi::secondary_scratch_reg(ctx.emitter);
-        abi::load_at_offset(ctx.emitter, state_reg, state_offset);
-        match ctx.emitter.target.arch {
-            crate::codegen::platform::Arch::AArch64 => {
-                ctx.emitter.instruction(&format!("cbnz {state_reg}, {still_bound}")); // a reference binding is only broken, never written through
-            }
-            crate::codegen::platform::Arch::X86_64 => {
-                ctx.emitter.instruction(&format!("test {state_reg}, {state_reg}")); // is the slot a promoted reference?
-                ctx.emitter.instruction(&format!("jne {still_bound}"));          // a reference binding is only broken, never written through
-            }
-        }
-    }
-    store_missing_scope_entry_to_unbound_local(ctx, local, pending_throw)?;
-    if skip_when_bound.is_some() {
-        ctx.emitter.label(&still_bound);
-    }
-    Ok(())
-}
-
-/// Stores the null fallback into a local slot that is not a reference binding.
-fn store_missing_scope_entry_to_unbound_local(
-    ctx: &mut FunctionContext<'_>,
-    local: &EvalSyncLocal,
-    pending_throw: Option<usize>,
-) -> Result<()> {
-    let ty = local.ty.codegen_repr();
-    if (ty == PhpType::Str || ty.is_refcounted())
-        && !ctx.local_ref_cell_representation_is_definite(local.slot)
-    {
-        // Removing the eval entry does not consume the raw native slot's owner.
-        // That slot still owns its previous payload. Use the existing
-        // cleanup guard so a runtime-promoted reference is not treated as raw.
-        let offset = ctx.local_offset(local.slot)?;
-        crate::codegen::frame::emit_owned_local_cleanup(ctx, local.slot, offset, &ty);
-    }
+    scope_reload_checks::detach_missing_local(ctx, local, pending_throw)?;
     match local.ty.codegen_repr() {
         PhpType::Mixed | PhpType::Union(_) => {
             ensure_eval_local_writeback_owns_value(ctx, local)?;
@@ -289,6 +445,10 @@ fn store_missing_scope_entry_to_unbound_local(
         }
         PhpType::Int | PhpType::Bool => {
             abi::emit_load_int_immediate(ctx.emitter, abi::int_result_reg(ctx.emitter), 0);
+            ctx.store_current_result_to_local(local.slot)?;
+        }
+        PhpType::TaggedScalar => {
+            crate::codegen::sentinels::emit_tagged_scalar_null(ctx.emitter);
             ctx.store_current_result_to_local(local.slot)?;
         }
         PhpType::Float => {

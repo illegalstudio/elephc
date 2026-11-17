@@ -60,6 +60,10 @@ fn injected_prelude_programs() -> Vec<(&'static str, crate::parser::ast::Program
             crate::list_id_prelude::list_id_declarations(),
         ),
         (
+            "locale_prelude",
+            crate::locale_prelude::locale_declarations(),
+        ),
+        (
             "pdo_prelude",
             crate::pdo_prelude::build::pdo_declarations(
                 crate::php_version::PhpVersion::default(),
@@ -69,6 +73,8 @@ fn injected_prelude_programs() -> Vec<(&'static str, crate::parser::ast::Program
         ("image_prelude", crate::image_prelude::image_declarations()),
         ("curl_prelude", parsed_curl_prelude()),
         ("xml_prelude", crate::xml_prelude::xml_declarations()),
+        ("simplexml_prelude", crate::simplexml_prelude::declarations()),
+        ("tidy_prelude", crate::tidy_prelude::tidy_declarations()),
         ("fileinfo_prelude", crate::fileinfo_prelude::fileinfo_declarations()),
         ("tokenizer_prelude", crate::tokenizer_prelude::tokenizer_declarations()),
         ("testing_prelude", crate::testing_prelude::testing_declarations()),
@@ -107,6 +113,7 @@ fn injected_prelude_programs() -> Vec<(&'static str, crate::parser::ast::Program
             crate::web_prelude::build::web_declarations(
                 crate::web_prelude::PhpVersion::Php85,
                 &[],
+                crate::web_prelude::SuperglobalNeeds::ALL,
             ),
         ),
         ("web_prelude(wrap)", vec![crate::web_prelude::web_wrap_stmt()]),
@@ -151,10 +158,12 @@ fn injected_prelude_programs() -> Vec<(&'static str, crate::parser::ast::Program
     // The mysqli prelude is a second bridge surface built as Rust AST like the others; the
     // gate must cover its `__elephc_*` internal-alias discipline too. The shared `elephc_pdo`
     // extern block declares only symbols and calls nothing, and the PDO build above already
-    // carries it, so it needs no separate entry.
+    // carries it, so it needs no separate entry. The NEWEST profile is audited: the mysqli
+    // surface only ever grows (`mysqli_quote_string` is PHP 8.6+), so it declares every
+    // contracted function.
     built.push((
         "mysqli_prelude",
-        crate::mysqli_prelude::build::mysqli_declarations(crate::php_version::PhpVersion::default()),
+        crate::mysqli_prelude::build::mysqli_declarations(crate::php_version::PhpVersion::Php86),
     ));
     built
 }
@@ -282,6 +291,13 @@ const UNCONTRACTED_PRELUDE_DECLARATIONS: &[(&str, &str)] = &[
          request state, which only exists in a --web build, so there is no CLI builtin for a \
          contract to describe and no eval binding. A contract would publish it to programs that \
          cannot call it.",
+    ),
+    (
+        "ob_tidyhandler",
+        "the output-buffering callback registered by ob_start('ob_tidyhandler'). php-src \
+         exposes it as an output-handler alias, not as a function in ext/tidy's stub, so \
+         the shared builtin catalog has no row for it. The tidy prelude declares it so the \
+         handler string resolves at compile time and eval() sees the same name.",
     ),
 ];
 
@@ -475,8 +491,15 @@ fn prelude_contracts_match_their_injected_signatures() {
             let at = format!("{name}(${}) in {prelude}", param.name);
             assert_eq!(actual.by_ref, param.by_ref, "{at}: by-reference marker");
             assert!(!actual.variadic, "{at}: fixed parameter declared variadic");
+            // Tidy's prelude widens its configuration and encoding parameters to `mixed`
+            // so its explicit adapter can reproduce internal Tidy's weak scalar coercion
+            // and TypeError ordering. The public contract keeps PHP's documented union
+            // types; docs/php/tidy.md records the reflection difference.
+            let tidy_adapter = name.starts_with("tidy_")
+                && matches!(param.name, "config" | "encoding")
+                && actual.php_type == "mixed";
             assert!(
-                php_type_matches(param.ty, &actual.php_type),
+                tidy_adapter || php_type_matches(param.ty, &actual.php_type),
                 "{at}: declared type `{}` is not the contract's {:?}",
                 actual.php_type,
                 param.ty

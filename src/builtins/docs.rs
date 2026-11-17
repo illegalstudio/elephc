@@ -68,6 +68,7 @@ fn area_str(area: Area) -> &'static str {
         Area::Image => "image",
         Area::Opcache => "opcache",
         Area::Xml => "xml",
+        Area::Tidy => "tidy",
         Area::Random => "random",
     }
 }
@@ -206,6 +207,7 @@ fn semantics_json(semantics: BuiltinSemantics) -> Value {
         BuiltinArgumentLowering::OpensslEncrypt => "openssl_encrypt",
         BuiltinArgumentLowering::ArraySplice => "array_splice",
         BuiltinArgumentLowering::XmlHandlerSetter => "xml_handler_setter",
+        BuiltinArgumentLowering::WriteOnlyMixedOutputs(_) => "write_only_mixed_outputs",
         BuiltinArgumentLowering::BareArrayValues { .. } => "bare_array_values",
         BuiltinArgumentLowering::WeakStringUnion { .. } => "weak_string_union",
         BuiltinArgumentLowering::ArrayInternalPointer(_) => "array_internal_pointer",

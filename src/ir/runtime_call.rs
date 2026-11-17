@@ -65,6 +65,10 @@ pub enum RuntimeArgumentLayout {
 /// Typed runtime operation selected by backend-neutral EIR lowering.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum RuntimeCallTarget {
+    /// Returns the writable layout of a reference place: boxed 0, attached raw 1, detached raw 2.
+    ReferenceCellMutationLayout,
+    /// Validates one original boxed RHS against immutable native property declaration metadata.
+    ReferencePropertyCoerce { class_id: u64, slot: u32, is_static: bool },
     /// Releases the native owner represented by one private PHP host lease.
     PhpextObjectRelease,
     /// Publishes graph roots after excluding ordinary owners held by PHP wrappers.
@@ -79,6 +83,10 @@ pub enum RuntimeCallTarget {
     WeakObjectId,
     /// Returns a freshly boxed nullable referent without retaining it in the wrapper.
     WeakReferenceGet,
+    /// Tests whether a concrete object has a trusted attached internal SPL getter.
+    SplStorageHasAttachedWriteFetch,
+    /// Snapshots whether a selected callable parameter binds by reference before argument effects.
+    CallableParameterIsByRef,
     /// Initializes a builtin Throwable constructor without assuming a compact receiver layout.
     ThrowableInitialize,
     /// Appends an exception to the END of another's `previous` chain, as php-src's
@@ -99,6 +107,12 @@ pub enum RuntimeCallTarget {
     /// Fetches an intermediate array element in write context, installing an
     /// empty child container when the addressed parent slot is missing or null.
     ArrayFetchForWrite,
+    /// Fetches an owned attached cell from a known ordinary dynamic-property hash.
+    PropertyHashFetchForWrite,
+    /// Tests an ordinary dynamic-property hash entry without invoking PHP accessors.
+    PropertyHashContains,
+    /// Copies a stored dynamic-property value without accessors, returning null for a missing entry.
+    PropertyHashRead,
     /// Fetches a parent whose key conversion was diagnosed by the update's preceding read.
     ArrayFetchForWriteAlreadyDiagnosed,
     /// Fetches through a pending append parent, preserving a payload-only survivor selected
@@ -108,6 +122,8 @@ pub enum RuntimeCallTarget {
     PendingAppendFetchForWriteAlreadyDiagnosed,
     /// Retains the concrete cell behind PHP wrappers and boxed caller-reference markers.
     MixedCellResolveForWrite,
+    /// Copies a public getter value for write while preserving explicit PHP reference wrappers.
+    MixedCellCopyForWrite,
     /// Checks whether exactly one of the selected array cell and its payload survives beyond
     /// the pending compiler lease. Non-array cells stay active; older compiler ancestor leases
     /// must already be retired.
@@ -134,6 +150,8 @@ pub enum RuntimeCallTarget {
         /// and `$routes = require $dump;` are both real code that reads it.
         value_discarded: bool,
     },
+    /// Tests whether an object cell still has an owner besides the pending write.
+    ObjectCellHasOtherOwner,
     /// Borrows a boxed PHP array and returns an independently owned hash for literal unpacking.
     /// Rejects non-array values without mutating the original cell or its payload.
     ArrayUnpackToHash,
@@ -161,6 +179,8 @@ pub enum RuntimeCallTarget {
         /// Whether this enters the scope (true) or leaves it (false).
         enter: bool,
     },
+    /// Complements a borrowed PHP value, preserving string bytes and implicit float diagnostics.
+    MixedBitNot,
     /// Registers an owner after the supplied guard (zero means chain head), returning its guard token.
     ExceptionGuardOwned,
     /// Removes an owned-value guard without releasing the value on the normal path.
@@ -183,6 +203,8 @@ pub enum RuntimeCallTarget {
     StringOffsetSet,
     /// A typed PCNTL process-control operation with target-aware availability.
     Pcntl(crate::ir::PcntlRuntime),
+    /// PHP's direct positional `implode($array)` fast path binds its sole operand as the array.
+    PositionalImplode,
     /// A stable runtime function whose target-aware implementation is backend-owned.
     Function(crate::ir::RuntimeFnId),
     /// A source-sensitive runtime function with visibility and parameter-coercion profiles.
@@ -203,6 +225,20 @@ impl RuntimeCallTarget {
     /// Returns the logical signature shared by EIR validation and backend lowering.
     pub fn signature(self) -> Option<RuntimeCallSignature> {
         match self {
+            RuntimeCallTarget::ReferenceCellMutationLayout => Some(RuntimeCallSignature::Fixed {
+                parameters: &[IrType::Heap(IrHeapKind::Mixed)], result: IrType::I64,
+            }),
+            RuntimeCallTarget::ReferencePropertyCoerce { .. } => Some(RuntimeCallSignature::Fixed {
+                parameters: &[IrType::I64, IrType::Heap(IrHeapKind::Mixed)],
+                result: IrType::Heap(IrHeapKind::Mixed),
+            }),
+            RuntimeCallTarget::CallableParameterIsByRef => Some(RuntimeCallSignature::Fixed {
+                parameters: &[IrType::Heap(IrHeapKind::Mixed), IrType::Str, IrType::I64],
+                result: IrType::I64,
+            }),
+            RuntimeCallTarget::SplStorageHasAttachedWriteFetch => Some(RuntimeCallSignature::Fixed {
+                parameters: &[IrType::Heap(IrHeapKind::Object)], result: IrType::I64,
+        }),
             RuntimeCallTarget::PhpextObjectRelease => Some(RuntimeCallSignature::Fixed {
                 parameters: &[IrType::I64], result: IrType::Void,
             }),
@@ -241,6 +277,14 @@ impl RuntimeCallTarget {
                 parameters: &[IrType::Heap(IrHeapKind::Object)],
                 result: IrType::Void,
             }),
+            RuntimeCallTarget::PropertyHashContains => Some(RuntimeCallSignature::Fixed {
+                parameters: &[IrType::Heap(IrHeapKind::Object), IrType::Str],
+                result: IrType::I64,
+            }),
+            RuntimeCallTarget::PropertyHashFetchForWrite | RuntimeCallTarget::PropertyHashRead => Some(RuntimeCallSignature::Fixed {
+                parameters: &[IrType::Heap(IrHeapKind::Object), IrType::Str],
+                result: IrType::Heap(IrHeapKind::Mixed),
+            }),
             RuntimeCallTarget::ArrayFetchForWrite
             | RuntimeCallTarget::ArrayFetchForWriteAlreadyDiagnosed
             | RuntimeCallTarget::PendingAppendFetchForWrite
@@ -264,6 +308,9 @@ impl RuntimeCallTarget {
                     max_operands: Some(1),
                 })
             }
+            RuntimeCallTarget::ObjectCellHasOtherOwner => Some(RuntimeCallSignature::Fixed {
+                parameters: &[IrType::Heap(IrHeapKind::Object)], result: IrType::I64,
+            }),
             RuntimeCallTarget::MixedCellPromoteToHash(_)
             | RuntimeCallTarget::MixedCellPromoteAttachedToHash(_)
             | RuntimeCallTarget::ArrayUnpackToHash => {
@@ -272,7 +319,10 @@ impl RuntimeCallTarget {
                     result: IrType::Heap(IrHeapKind::Hash),
                 })
             }
-            RuntimeCallTarget::MixedCellClone | RuntimeCallTarget::MixedCellResolveForWrite => Some(RuntimeCallSignature::Fixed {
+            RuntimeCallTarget::MixedCellClone
+            | RuntimeCallTarget::MixedCellResolveForWrite
+            | RuntimeCallTarget::MixedCellCopyForWrite
+            | RuntimeCallTarget::MixedBitNot => Some(RuntimeCallSignature::Fixed {
                 parameters: &[IrType::Heap(IrHeapKind::Mixed)],
                 result: IrType::Heap(IrHeapKind::Mixed),
             }),
@@ -318,6 +368,9 @@ impl RuntimeCallTarget {
                 result: IrType::Str,
             }),
             RuntimeCallTarget::Pcntl(target) => Some(target.signature()),
+            RuntimeCallTarget::PositionalImplode => Some(RuntimeCallSignature::Polymorphic {
+                min_operands: 1, max_operands: Some(1),
+            }),
             RuntimeCallTarget::Function(target) => {
                 target.descriptor().logical_signature
             }
@@ -335,6 +388,10 @@ impl RuntimeCallTarget {
     /// Returns the stable backend-neutral spelling used by textual EIR.
     pub fn as_eir(self) -> &'static str {
         match self {
+            RuntimeCallTarget::ReferenceCellMutationLayout => "reference.mutation_layout",
+            RuntimeCallTarget::ReferencePropertyCoerce { .. } => "reference.property_coerce",
+            RuntimeCallTarget::CallableParameterIsByRef => "callable.parameter_is_by_ref",
+            RuntimeCallTarget::SplStorageHasAttachedWriteFetch => "object.spl_has_attached_write_fetch",
             RuntimeCallTarget::PhpextObjectRelease => "phpext.object_release",
             RuntimeCallTarget::PhpextPublishObjectRoots => "phpext.publish_object_roots",
             RuntimeCallTarget::PhpextCollectObjectCycles => "phpext.collect_object_cycles",
@@ -350,6 +407,9 @@ impl RuntimeCallTarget {
                 "object.exception_catch_host_replacement"
             }
             RuntimeCallTarget::ArrayFetchForWrite => "array.fetch_for_write",
+            RuntimeCallTarget::PropertyHashFetchForWrite => "object.property_hash_fetch_for_write",
+            RuntimeCallTarget::PropertyHashContains => "object.property_hash_contains",
+            RuntimeCallTarget::PropertyHashRead => "object.property_hash_read",
             RuntimeCallTarget::ArrayFetchForWriteAlreadyDiagnosed => "array.fetch_for_write_already_diagnosed",
             RuntimeCallTarget::PendingAppendFetchForWrite => "array.pending_append_fetch_for_write",
             RuntimeCallTarget::PendingAppendFetchForWriteAlreadyDiagnosed => {
@@ -357,6 +417,7 @@ impl RuntimeCallTarget {
             }
             RuntimeCallTarget::StringWriteOffset => "string.write_offset",
             RuntimeCallTarget::MixedCellResolveForWrite => "array.mixed_cell_resolve_for_write",
+            RuntimeCallTarget::MixedCellCopyForWrite => "array.mixed_cell_copy_for_write",
             RuntimeCallTarget::MixedArrayCellHasLiveOwner => "array.mixed_cell_has_live_owner",
             RuntimeCallTarget::WriteDiagnostic => "diagnostic.write",
             RuntimeCallTarget::MixedCellHasOtherOwner => "mixed.has_other_owner",
@@ -380,6 +441,7 @@ impl RuntimeCallTarget {
                 required: true,
                 ..
             } => "require.dynamic_once",
+            RuntimeCallTarget::ObjectCellHasOtherOwner => "object.has_other_owner",
             RuntimeCallTarget::ArrayUnpackToHash => "array.unpack_to_hash",
             RuntimeCallTarget::MixedCellPromoteToHash(ArrayKeySort::Ascending) => {
                 "array.mixed_cell_promote_to_hash_ksort"
@@ -396,6 +458,7 @@ impl RuntimeCallTarget {
             RuntimeCallTarget::MixedCellClone => "array.mixed_cell_clone",
             RuntimeCallTarget::EvalQuietPropertyFetch { enter: true } => "eval.quiet_fetch_enter",
             RuntimeCallTarget::EvalQuietPropertyFetch { enter: false } => "eval.quiet_fetch_leave",
+            RuntimeCallTarget::MixedBitNot => "mixed.bit_not",
             RuntimeCallTarget::ExceptionGuardOwned => "exception.guard_owned",
             RuntimeCallTarget::ExceptionUnguardOwned => "exception.unguard_owned",
             RuntimeCallTarget::ExceptionUpdateArrayGuard => "exception.update_array_guard",
@@ -408,6 +471,7 @@ impl RuntimeCallTarget {
             RuntimeCallTarget::UnaryString(runtime) => runtime.as_eir(),
             RuntimeCallTarget::StringOffsetSet => "string.offset_set",
             RuntimeCallTarget::Pcntl(target) => target.as_eir(),
+            RuntimeCallTarget::PositionalImplode => "implode.positional",
             RuntimeCallTarget::Function(target) => target.as_eir(),
             RuntimeCallTarget::ProfiledFunction { target, .. } => target.as_eir(),
         }

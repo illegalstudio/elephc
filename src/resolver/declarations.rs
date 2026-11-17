@@ -7,11 +7,14 @@
 //!
 //! Key details:
 //! - Discoverable declarations must keep namespace context and include-loaded function variant metadata.
+//! - A class or trait hoisted out of an included file leaves a class-binding mark where php-src
+//!   binds it, so its binding effects run when the include does.
 
+use crate::fast_hash::{FastSet as HashSet};
 use std::path::Path;
 
 use crate::names::{canonical_name_for_decl, Name};
-use crate::parser::ast::{ClassLikeKind, Stmt, StmtKind};
+use crate::parser::ast::{class_binding_mark_label, ClassLikeKind, Stmt, StmtKind};
 
 use super::discovery::{FunctionVariantKey, FunctionVariantRegistry};
 use super::state::namespace_string;
@@ -78,6 +81,10 @@ pub(super) fn extract_discoverable_declarations(stmts: &[Stmt]) -> Vec<Stmt> {
 /// should be active in the including file's scope. File-level functions bind before
 /// the file body, including declarations in later namespace blocks. Existing child
 /// include markers and conditional declarations retain their execution positions.
+///
+/// In an included file (`canonical` set) each named class or trait leaves a class-binding
+/// mark (`class_binding_mark_label`) where php-src binds it: at the start of the file for one
+/// it binds while compiling the file, at its statement for the others.
 pub(super) fn strip_discoverable_declarations(
     stmts: Vec<Stmt>,
     canonical: Option<&Path>,
@@ -85,6 +92,10 @@ pub(super) fn strip_discoverable_declarations(
     outcome: &mut ConditionalDeclarationOutcome,
 ) -> Vec<Stmt> {
     let mut early_bindings = Vec::new();
+    // Classes and traits php-src binds while compiling the file leave their binding mark at the
+    // very start; only an included file (`canonical` set) has marks.
+    let early = if canonical.is_some() { compile_time_bound_classes(&stmts) } else { Vec::new() };
+    let early_keys: HashSet<String> = early.iter().map(|(name, _)| name.to_ascii_lowercase()).collect();
     let body = strip_stmts(
         stmts,
         canonical,
@@ -93,9 +104,86 @@ pub(super) fn strip_discoverable_declarations(
         &mut early_bindings,
         true,
         outcome,
+        &early_keys,
     );
-    early_bindings.extend(body);
-    early_bindings
+    let mut executable: Vec<Stmt> = early
+        .into_iter()
+        .map(|(name, span)| Stmt::new(StmtKind::IncludeOnceMark { source_path: class_binding_mark_label(&name).into() }, span))
+        .collect();
+    executable.extend(early_bindings);
+    executable.extend(body);
+    executable
+}
+
+/// Returns, in order, the named classes and traits of one file that php-src binds while
+/// compiling it (CLI, no opcache): top level, no interface, no trait use, and a parent that is
+/// declared outside the file (bound before the file is included) or bound earlier in it.
+/// Each comes with its declaration span.
+fn compile_time_bound_classes(stmts: &[Stmt]) -> Vec<(String, crate::span::Span)> {
+    let mut declared = HashSet::default();
+    collect_file_class_names(stmts, None, &mut declared);
+    let mut bound = HashSet::default();
+    let mut early = Vec::new();
+    collect_compile_time_bound(stmts, None, &declared, &mut bound, &mut early);
+    early
+}
+
+/// Collects the lowercased fully qualified names of the classes a file declares at top level.
+fn collect_file_class_names(stmts: &[Stmt], namespace: Option<String>, out: &mut HashSet<String>) {
+    let mut namespace = namespace;
+    for stmt in stmts {
+        match &stmt.kind {
+            StmtKind::NamespaceDecl { name } => namespace = Some(namespace_string(name)),
+            StmtKind::NamespaceBlock { name, body } => collect_file_class_names(body, Some(namespace_string(name)), out),
+            StmtKind::Synthetic(body) => collect_file_class_names(body, namespace.clone(), out),
+            StmtKind::ClassDecl { name, .. } | StmtKind::TraitDecl { name, .. } => {
+                out.insert(canonical_name_for_decl(namespace.as_deref(), name).to_ascii_lowercase());
+            }
+            _ => {}
+        }
+    }
+}
+
+/// Body of [`compile_time_bound_classes`].
+fn collect_compile_time_bound(
+    stmts: &[Stmt],
+    namespace: Option<String>,
+    declared: &HashSet<String>,
+    bound: &mut HashSet<String>,
+    early: &mut Vec<(String, crate::span::Span)>,
+) {
+    let mut namespace = namespace;
+    for stmt in stmts {
+        match &stmt.kind {
+            StmtKind::NamespaceDecl { name } => namespace = Some(namespace_string(name)),
+            StmtKind::NamespaceBlock { name, body } => {
+                collect_compile_time_bound(body, Some(namespace_string(name)), declared, bound, early)
+            }
+            StmtKind::Synthetic(body) => collect_compile_time_bound(body, namespace.clone(), declared, bound, early),
+            StmtKind::ClassDecl { name, extends, implements, trait_uses, .. } if !crate::parser::is_anonymous_class_name(name) => {
+                let parent_bound = extends.as_ref().is_none_or(|parent| {
+                    let parent = if parent.is_fully_qualified() {
+                        parent.as_str().trim_start_matches('\\').to_string()
+                    } else {
+                        canonical_name_for_decl(namespace.as_deref(), parent.as_str())
+                    };
+                    let parent = parent.to_ascii_lowercase();
+                    !declared.contains(&parent) || bound.contains(&parent)
+                });
+                if implements.is_empty() && trait_uses.is_empty() && parent_bound {
+                    let full = canonical_name_for_decl(namespace.as_deref(), name);
+                    bound.insert(full.to_ascii_lowercase());
+                    early.push((full, stmt.span));
+                }
+            }
+            StmtKind::TraitDecl { name, trait_uses, .. } if trait_uses.is_empty() => {
+                let full = canonical_name_for_decl(namespace.as_deref(), name);
+                bound.insert(full.to_ascii_lowercase());
+                early.push((full, stmt.span));
+            }
+            _ => {}
+        }
+    }
 }
 
 /// Internal recursive helper that processes statements and strips discoverable
@@ -109,6 +197,7 @@ fn strip_stmts(
     early_bindings: &mut Vec<Stmt>,
     allow_early_bindings: bool,
     outcome: &mut ConditionalDeclarationOutcome,
+    early: &HashSet<String>,
 ) -> Vec<Stmt> {
     let mut stripped = Vec::new();
     let mut namespace = namespace;
@@ -131,6 +220,7 @@ fn strip_stmts(
             early_bindings,
             allow_early_bindings,
             outcome,
+            early,
         ) {
             if allow_early_bindings && (is_function || is_early_interface) {
                 push_early_binding(early_bindings, stmt, stmt_namespace.as_deref());
@@ -191,6 +281,7 @@ fn strip_stmt(
     early_bindings: &mut Vec<Stmt>,
     allow_early_bindings: bool,
     outcome: &mut ConditionalDeclarationOutcome,
+    early: &HashSet<String>,
 ) -> Option<Stmt> {
     let span = stmt.span;
     match stmt.kind {
@@ -262,6 +353,7 @@ fn strip_stmt(
                 early_bindings,
                 false,
                 &mut *outcome,
+                early,
             );
             let elseif_clauses = elseif_clauses
                 .into_iter()
@@ -276,6 +368,7 @@ fn strip_stmt(
                             early_bindings,
                             false,
                             &mut *outcome,
+                            early,
                         ),
                     )
                 })
@@ -289,6 +382,7 @@ fn strip_stmt(
                     early_bindings,
                     false,
                     &mut *outcome,
+                    early,
                 )
             });
             Some(Stmt::new(
@@ -461,6 +555,15 @@ fn strip_stmt(
         {
             Some(Stmt { kind, ..stmt })
         }
+        // A class or trait of an included file binds when the include runs: a mark keeps the
+        // statement's place for one php-src binds there (see `strip_discoverable_declarations`).
+        StmtKind::ClassDecl { name, .. } | StmtKind::TraitDecl { name, .. }
+            if canonical.is_some() && !crate::parser::is_anonymous_class_name(&name) =>
+        {
+            let full = canonical_name_for_decl(namespace, &name);
+            (!early.contains(&full.to_ascii_lowercase()))
+                .then(|| Stmt::new(StmtKind::IncludeOnceMark { source_path: class_binding_mark_label(&full).into() }, span))
+        }
         kind if is_discoverable_declaration(&kind) => None,
         StmtKind::NamespaceDecl { name } => {
             *current_namespace = Some(namespace_string(&name));
@@ -476,6 +579,7 @@ fn strip_stmt(
                     early_bindings,
                     true,
                     &mut *outcome,
+                    early,
                 ),
                 name,
             },
@@ -490,6 +594,7 @@ fn strip_stmt(
                 early_bindings,
                 allow_early_bindings,
                 &mut *outcome,
+                early,
             );
             if body.is_empty() {
                 None
@@ -519,6 +624,7 @@ fn strip_deferred_body(
         early_bindings,
         false,
         outcome,
+        &HashSet::default(),
     )
 }
 

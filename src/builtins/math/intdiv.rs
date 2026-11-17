@@ -12,7 +12,11 @@
 
 builtin! {
     contract: "intdiv",
-    semantics: crate::builtins::semantics::runtime_fn_semantics(
+    semantics: crate::builtins::semantics::eir_runtime_semantics(
         crate::ir::RuntimeFnId::Intdiv,
+        lower,
     ),
 }
+
+
+eir_runtime_lowering!(lower, crate::ir::RuntimeFnId::Intdiv);

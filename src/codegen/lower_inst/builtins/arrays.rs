@@ -37,6 +37,8 @@ mod unshift;
 mod unshift_dynamic;
 pub(in crate::codegen::lower_inst) mod values;
 mod basic;
+mod keyed_kernels;
+mod type_check;
 mod push;
 mod boxed_map_callback;
 mod boxed_merge;
@@ -97,6 +99,12 @@ use in_array_cases::*;
 use in_array_coercions::*;
 use in_array_strings::*;
 
+pub(crate) use keyed_kernels::{
+    lower_array_filter_count_mod, lower_array_map_sum_add, lower_array_map_sum_add_int,
+    lower_array_map_sum_add_int_cached, lower_array_map_sum_add_safe,
+    lower_array_map_sum_probe_int,
+};
+pub(crate) use type_check::lower_array_element_type_check;
 pub(crate) use basic::{
     lower_call_user_func_builtin_escape, lower_array_sum, lower_array_product,
     lower_array_chunk, lower_array_pad, lower_array_fill, lower_array_fill_keys,
@@ -119,7 +127,7 @@ pub(crate) use boxed_reduce::lower_array_reduce;
 pub(crate) use boxed_predicates::{lower_array_find, lower_array_any, lower_array_all};
 pub(crate) use boxed_set_comparator::{lower_array_udiff, lower_array_uintersect};
 pub(crate) use misc_dispatch::{
-    lower_array_values, lower_array_keys, lower_array_rand, lower_range,
+    lower_array_values, lower_array_keys, lower_range,
     lower_by_runtime_storage_kind, lower_array_pop, lower_array_shift, lower_array_unshift, lower_sort,
     lower_rsort, lower_asort, lower_arsort, lower_ksort,
     lower_krsort, lower_natsort, lower_natcasesort, lower_shuffle,

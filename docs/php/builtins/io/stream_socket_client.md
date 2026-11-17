@@ -1,32 +1,26 @@
 ---
 title: "stream_socket_client()"
 description: "Open Internet or Unix domain socket connection."
-sidebar:
-  order: 411
 ---
 
 ## stream_socket_client()
 
 ```php
-function stream_socket_client(string $address, mixed $error_code = null, mixed $error_message = null, mixed $timeout = null, int $flags = 4, mixed $context = null): mixed
+function stream_socket_client(string $address): mixed
 ```
 
 Open Internet or Unix domain socket connection.
 
 **Parameters**:
 - `$address` (`string`)
-- `$error_code` (`mixed`), passed by reference, default `null`, optional
-- `$error_message` (`mixed`), passed by reference, default `null`, optional
-- `$timeout` (`mixed`), default `null`, optional
-- `$flags` (`int`), default `4`, optional
-- `$context` (`mixed`), default `null`, optional
 
 **Returns**: `mixed`
 
 ## Availability
 
-- **Compiled (AOT)**: supported by the Elephc code generator.
-- **`eval()` (magician interpreter)**: supported through a declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/filesystem/stream_socket_client.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/filesystem/stream_socket_client.rs)).
+| Compiled (AOT) | Magician (eval) |
+|---|---|
+| Available | Available |
 
 _No examples yet. Check `examples/` and `showcases/` for usage patterns._
 

@@ -29,6 +29,7 @@ fn source_argument_bindings_are_explicit_and_have_direct_hooks() {
             "clone",
             "extract",
             "get_defined_vars",
+            "implode",
         ]
     );
     for name in source_arguments {

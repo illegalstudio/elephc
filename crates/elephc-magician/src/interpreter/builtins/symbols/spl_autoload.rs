@@ -352,6 +352,7 @@ fn eval_autoload_callback_trace_kind(callback: &EvaluatedCallable) -> String {
         EvaluatedCallable::BoundClosure { name, .. } => format!("closure:{name}"),
         EvaluatedCallable::InvokableObject { .. } => "invokable-object".to_string(),
         EvaluatedCallable::NativeDescriptor { .. } => "native-descriptor".to_string(),
+        EvaluatedCallable::DecodedDescriptor { .. } => "native-descriptor".to_string(),
         EvaluatedCallable::ObjectMethod {
             method,
             native_class,

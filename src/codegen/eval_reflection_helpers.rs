@@ -25,7 +25,8 @@ struct ReflectionAttributeLayout {
     class_id: u64,
     property_count: usize,
     public_name_lo: usize,
-    public_name_hi: usize,
+    /// Whether `$name` is an object-owned reference property (bound with `=&` somewhere).
+    public_name_owns_reference: bool,
     name_lo: usize,
     name_hi: usize,
     args_lo: usize,
@@ -72,7 +73,8 @@ fn reflection_attribute_layout(module: &Module) -> Option<ReflectionAttributeLay
         class_id: info.class_id,
         property_count: info.properties.len(),
         public_name_lo,
-        public_name_hi: public_name_lo + 8,
+        public_name_owns_reference:
+            super::eval_reflection_mirrors::reflection_property_owns_reference(info, "name"),
         name_lo,
         name_hi: name_lo + 8,
         args_lo,
@@ -136,14 +138,7 @@ fn emit_reflection_attribute_new_aarch64(
     emitter.instruction("ldr x1, [sp, #24]");                                   // move the ReflectionAttribute object pointer into the Mixed payload
     emitter.instruction("mov x2, xzr");                                         // object payloads do not use a high word
     emitter.instruction("bl __rt_mixed_from_value");                            // box the ReflectionAttribute object for eval
-    // Boxing an object RETAINS it, so the box owns one reference and the helper still owns the
-    // one the allocation gave it. Handing that one back is what lets the box's release free the
-    // object: it leaked every materialized attribute (with its name, arguments and rendering),
-    // 24 blocks per `new ReflectionFunction($closure)` that carried parameter attributes.
-    abi::emit_push_reg(emitter, "x0");                                          // keep the boxed attribute across the release
-    emitter.instruction("ldr x0, [sp, #40]");                                   // reload the object pointer, past the 16-byte save slot
-    abi::emit_call_label(emitter, "__rt_decref_object");                        // drop the allocation reference now held only by the box
-    abi::emit_pop_reg(emitter, "x0");                                           // restore the boxed attribute as the helper result
+    super::eval_reflection_owner_helpers::retire_reflection_owner_allocation_after_boxing(emitter, 40);
     emitter.instruction(&format!("b {}", done_label));                          // skip the fail-closed return path after boxing
     emitter.label(fail_label);
     emitter.instruction("mov x0, xzr");                                         // return a null pointer so Rust reports runtime failure
@@ -180,11 +175,7 @@ fn emit_reflection_attribute_new_x86_64(emitter: &mut Emitter, layout: &Reflecti
     emitter.instruction("xor esi, esi");                                        // object payloads do not use a high word
     emitter.instruction("mov eax, 6");                                          // runtime tag 6 = object
     emitter.instruction("call __rt_mixed_from_value");                          // box the ReflectionAttribute object for eval
-    // See the ARM64 helper: boxing retained the object, so give the allocation reference back.
-    abi::emit_push_reg(emitter, "rax");                                         // keep the boxed attribute across the release
-    emitter.instruction("mov rax, QWORD PTR [rbp - 48]");                       // reload the object pointer for the release
-    abi::emit_call_label(emitter, "__rt_decref_object");                        // drop the allocation reference now held only by the box
-    abi::emit_pop_reg(emitter, "rax");                                          // restore the boxed attribute as the helper result
+    super::eval_reflection_owner_helpers::retire_reflection_owner_allocation_after_boxing(emitter, 48);
     emitter.instruction(&format!("jmp {}", done_label));                        // skip the fail-closed return path after boxing
     emitter.label(fail_label);
     emitter.instruction("xor eax, eax");                                        // return a null pointer so Rust reports runtime failure
@@ -248,9 +239,15 @@ fn emit_set_name_property_aarch64(emitter: &mut Emitter, layout: &ReflectionAttr
     emitter.instruction("ldr x1, [sp, #0]");                                    // reload the original name pointer for the public mirror copy
     emitter.instruction("ldr x2, [sp, #8]");                                    // reload the original name length for the public mirror copy
     emitter.instruction("bl __rt_str_persist");                                 // give the mutable public mirror independent string storage
-    emitter.instruction("ldr x9, [sp, #24]");                                   // reload the ReflectionAttribute object pointer
-    abi::emit_store_to_address(emitter, "x1", "x9", layout.public_name_lo);
-    abi::emit_store_to_address(emitter, "x2", "x9", layout.public_name_hi);
+    super::eval_reflection_mirrors::emit_store_reflection_mirror_string(
+        emitter,
+        "x9",
+        layout.public_name_lo,
+        layout.public_name_owns_reference,
+        |emitter| {
+            emitter.instruction("ldr x9, [sp, #24]");                           // reload the ReflectionAttribute object pointer
+        },
+    );
 }
 
 /// Stores the incoming x86_64 attribute name into the private slot and public mirror.
@@ -264,9 +261,15 @@ fn emit_set_name_property_x86_64(emitter: &mut Emitter, layout: &ReflectionAttri
     emitter.instruction("mov rax, QWORD PTR [rbp - 8]");                        // reload the original name pointer for the public mirror copy
     emitter.instruction("mov rdx, QWORD PTR [rbp - 16]");                       // reload the original name length for the public mirror copy
     emitter.instruction("call __rt_str_persist");                               // give the mutable public mirror independent string storage
-    emitter.instruction("mov r10, QWORD PTR [rbp - 48]");                       // reload the ReflectionAttribute object pointer
-    abi::emit_store_to_address(emitter, "rax", "r10", layout.public_name_lo);
-    abi::emit_store_to_address(emitter, "rdx", "r10", layout.public_name_hi);
+    super::eval_reflection_mirrors::emit_store_reflection_mirror_string(
+        emitter,
+        "r10",
+        layout.public_name_lo,
+        layout.public_name_owns_reference,
+        |emitter| {
+            emitter.instruction("mov r10, QWORD PTR [rbp - 48]");               // reload the ReflectionAttribute object pointer
+        },
+    );
 }
 
 /// Stores the incoming ARM64 `__toString` rendering into the object private slot.

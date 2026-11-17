@@ -29,18 +29,27 @@ pub(super) fn reflection_parameter_default_value(
     if let Some(value) = reflection_deferred_default_value(default) {
         return Ok(Some(value));
     }
-    if let Some(helper) = ctx.module.callable_default_helpers_at(default.span)
-        .find(|function| {
-            #[cfg(test)]
-            DEFAULT_HELPER_CANDIDATES.with(|count| count.set(count.get() + 1));
-            (function.lexical_class.is_none() && current_class.is_empty()
+    let helper_for_default = |function: &&crate::ir::Function| (function.lexical_class.is_none() && current_class.is_empty()
             || function.lexical_class.as_deref().is_some_and(|scope|
             scope == current_class || current_info.is_some_and(|info|
                 info.method_impl_classes.values().chain(info.static_method_impl_classes.values())
                     .any(|owner| owner == scope))))
             && function.callable_default.as_ref()
-                .is_some_and(|value| value == default && value.span == default.span)
-        })
+                .is_some_and(|value| value == default && value.span == default.span);
+    // A default that reads a deprecated constant has a reflection twin, which reports on every
+    // call at the caller's line instead of consuming the parameter's own once flags. The module
+    // indexes the helpers by the default's span, so only those few are examined.
+    let helpers = || {
+        ctx.module.callable_default_helpers_at(default.span)
+            .inspect(|_| {
+                #[cfg(test)]
+                DEFAULT_HELPER_CANDIDATES.with(|count| count.set(count.get() + 1));
+            })
+            .filter(helper_for_default)
+    };
+    if let Some(helper) = helpers()
+        .find(|function| crate::ir_lower::is_reflection_default_helper(&function.name))
+        .or_else(|| helpers().next())
     {
         return Ok(Some(ReflectionParameterDefaultValue::EirHelper(helper.name.clone())));
     }
@@ -163,7 +172,10 @@ pub(super) fn reflection_literal_parameter_default_non_object_value(
 /// Returns whether a retained default contains an object value.
 pub(super) fn reflection_default_value_contains_object(value: &ReflectionParameterDefaultValue) -> bool {
     match value {
-        ReflectionParameterDefaultValue::Object { .. } => true,
+        ReflectionParameterDefaultValue::Object { .. }
+        | ReflectionParameterDefaultValue::EnumCase(_)
+        // Its singleton reads are object materialization, even when the result is scalar.
+        | ReflectionParameterDefaultValue::Evaluated { .. } => true,
         ReflectionParameterDefaultValue::Array(elements) => elements
             .iter()
             .any(reflection_default_value_contains_object),
@@ -176,8 +188,7 @@ pub(super) fn reflection_default_value_contains_object(value: &ReflectionParamet
         | ReflectionParameterDefaultValue::Str(_)
         | ReflectionParameterDefaultValue::DeferredError(_)
         | ReflectionParameterDefaultValue::EirHelper(_)
-        | ReflectionParameterDefaultValue::Null
-        | ReflectionParameterDefaultValue::EnumCase { .. } => false,
+        | ReflectionParameterDefaultValue::Null => false,
     }
 }
 
@@ -285,8 +296,12 @@ pub(super) fn reflection_parameter_default_from_constant_value(
         ReflectionConstantValue::Null => Some(ReflectionParameterDefaultValue::Null),
         // No static default to hand out: the value only exists as php's `Error`.
         ReflectionConstantValue::Undefined(_) => None,
-        ReflectionConstantValue::EnumCase { enum_name, case_name } => {
-            Some(ReflectionParameterDefaultValue::EnumCase { enum_name, case_name })
+        ReflectionConstantValue::EnumCase { .. } => None,
+        ReflectionConstantValue::Evaluated { value, enum_cases } => {
+            Some(ReflectionParameterDefaultValue::Evaluated {
+                value: Box::new(reflection_parameter_default_from_constant_value(*value)?),
+                enum_cases,
+            })
         }
         ReflectionConstantValue::Array(elements) => elements
             .into_iter()

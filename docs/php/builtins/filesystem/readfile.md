@@ -1,29 +1,26 @@
 ---
 title: "readfile()"
 description: "Outputs a file."
-sidebar:
-  order: 311
 ---
 
 ## readfile()
 
 ```php
-function readfile(string $filename, bool $use_include_path = false, mixed $context = null): mixed
+function readfile(string $filename): mixed
 ```
 
 Outputs a file.
 
 **Parameters**:
 - `$filename` (`string`)
-- `$use_include_path` (`bool`), default `false`, optional
-- `$context` (`mixed`), default `null`, optional
 
 **Returns**: `mixed`
 
 ## Availability
 
-- **Compiled (AOT)**: supported by the Elephc code generator.
-- **`eval()` (magician interpreter)**: supported through a declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/filesystem/readfile.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/filesystem/readfile.rs)).
+| Compiled (AOT) | Magician (eval) |
+|---|---|
+| Available | Available |
 
 _No examples yet. Check `examples/` and `showcases/` for usage patterns._
 

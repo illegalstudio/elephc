@@ -10,6 +10,46 @@
 
 use crate::support::compile_and_run_with_heap_debug;
 
+/// Boxed scalar snapshots survive property replacement and retire at each expression boundary.
+#[test]
+fn test_scalar_union_property_incdec_capture_owners() {
+    assert_clean(r#"<?php
+class ScalarUnionCounter {
+    public ?float $optional = 2.5;
+    public int|float $numeric = 4;
+    public function optionalPost(): ?float { return $this->optional++; }
+    public function optionalPre(): ?float { return ++$this->optional; }
+    public function numericPost(): int|float { return $this->numeric++; }
+    public function numericPre(): int|float { return ++$this->numeric; }
+}
+function exerciseScalarUnionCounter(): void {
+    $counter = new ScalarUnionCounter();
+    for ($i = 0; $i < 40; $i++) {
+        $counter->optional = 2.5;
+        $old = $counter->optionalPost();
+        $prefix = $counter->optionalPre();
+        if ($i === 39) { var_dump($old, $prefix, $counter->optional); }
+        $counter->optional = null;
+        $old = $counter->optionalPost();
+        if ($i === 39) { var_dump($old, $counter->optional); }
+        $counter->numeric = PHP_INT_MAX;
+        $numericOld = $counter->numericPost();
+        if ($i === 39) { echo $numericOld === PHP_INT_MAX ? 'old-int|' : 'bad|'; echo is_float($counter->numeric) ? 'overflow-float|' : 'bad|'; }
+        $counter->numeric = 4.5;
+        $numericOld = $counter->numericPost();
+        $numericPrefix = $counter->numericPre();
+        if ($i === 39) { echo $numericOld, ':', $numericPrefix, ':', $counter->numeric, '|'; }
+    }
+    $reference =& $counter->numeric;
+    $counter->numeric = 8.5;
+    $numericOld = $counter->numericPost();
+    echo $numericOld, ':', $reference;
+    unset($reference, $counter, $old, $prefix, $numericOld, $numericPrefix);
+}
+exerciseScalarUnionCounter();
+"#, "float(2.5)\nfloat(4.5)\nfloat(4.5)\nNULL\nfloat(1)\nold-int|overflow-float|4.5:6.5:6.5|8.5:9.5");
+}
+
 /// Checks observable output, successful execution, and ownership after a store loop.
 fn assert_clean(source: &str, expected: &str) {
     let out = compile_and_run_with_heap_debug(source);

@@ -20,7 +20,7 @@ const ZEND_LOADED_EXTENSIONS: &[&str] = &["Zend OPcache"];
 /// The extensions the xml bridge contributes, appended when the host linked it.
 ///
 /// KEEP IN SYNC with `src/linker/bridges.rs` (the `elephc_xml` bridge's `php_extensions`).
-const XML_BRIDGE_EXTENSIONS: &[&str] = &["xml", "xmlwriter"];
+const XML_BRIDGE_EXTENSIONS: &[&str] = &["xml", "xmlwriter", "SimpleXML"];
 
 eval_builtin! {
     contract: "get_loaded_extensions",
@@ -76,9 +76,11 @@ pub(in crate::interpreter) fn eval_get_loaded_extensions_result(
     let with_gmp = !zend_extensions && eval_gmp_bridge_linked(context);
     let with_session =
         !zend_extensions && super::extension_loaded::eval_session_bridge_linked(context);
+    let with_tidy = !zend_extensions && eval_tidy_bridge_linked(context);
     let extra_capacity = usize::from(with_curl)
         + usize::from(with_gmp)
         + usize::from(with_session)
+        + usize::from(with_tidy)
         + if with_xml { XML_BRIDGE_EXTENSIONS.len() } else { 0 };
     let mut names = values.string_array_new(set.len().max(1) + extra_capacity)?;
     for name in set {
@@ -90,8 +92,18 @@ pub(in crate::interpreter) fn eval_get_loaded_extensions_result(
     if with_gmp {
         names = values.string_array_push(names, "gmp")?;
     }
+    if with_tidy {
+        names = values.string_array_push(names, "tidy")?;
+    }
     if !zend_extensions && context.native_function("finfo_open").is_some() {
         names = values.string_array_push(names, "fileinfo")?;
+    }
+    if !zend_extensions {
+        for (surface, probe) in super::extension_loaded::EVAL_PRELUDE_SURFACES {
+            if context.native_function(probe).is_some() {
+                names = values.string_array_push(names, surface)?;
+            }
+        }
     }
     if with_xml {
         for name in XML_BRIDGE_EXTENSIONS {

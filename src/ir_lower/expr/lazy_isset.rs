@@ -115,6 +115,7 @@ pub(super) fn lower_lazy_isset(
     let false_block = ctx.builder.create_named_block("isset.lazy_false", Vec::new());
     let merge = ctx.builder.create_named_block("isset.lazy_merge", Vec::new());
     for (idx, arg) in args.iter().enumerate() {
+        ctx.begin_quiet_undefined_reads(arg);
         let checked = lower_operand_in_quiet_property_fetch(ctx, arg, |ctx| {
         lower_lazy_isset_operand(ctx, arg).unwrap_or_else(|| {
             // `isset()` never emits undefined-offset warnings, so eager array
@@ -127,6 +128,7 @@ pub(super) fn lower_lazy_isset(
             emit_builtin_call_value(ctx, name, vec![value.value], PhpType::Int, arg.span, None)
         })
         });
+        ctx.end_quiet_undefined_reads();
         let then_target = if idx + 1 == args.len() {
             ctx.builder.create_named_block("isset.lazy_true", Vec::new())
         } else {
@@ -176,7 +178,31 @@ pub(super) fn lower_lazy_isset_operand(
         // and kept, so nothing re-reads it after the release.
         ExprKind::ArrayAccess { array, index } => {
             if array_access_expr_satisfies_array_access(ctx, array) {
-                return Some(lower_array_access_offset_exists(ctx, array, index, arg));
+                if matches!(array.kind, ExprKind::Variable(_)) {
+                    let (key, key_temp) = evaluate_once(ctx, index, arg);
+                    let owner = key_temp.as_ref().filter(|name|
+                        Ownership::php_type_needs_lifetime_tracking(&ctx.local_type(name)))
+                        .map(|name| ctx.local_slots[name]);
+                    if let Some(slot) = owner { register_owned_call_operand(ctx, slot, arg.span); }
+                    let value = if array_access_expr_satisfies_array_access(ctx, array) {
+                        let ty = array_cast_source::array_cast_source_type_for_ir(ctx, array);
+                        // `isset()` reads the container quietly too: an uninitialized typed
+                        // property is not set.
+                        let object = lower_subscript_receiver_silently(ctx, array);
+                        native_dimension_probes::lower(ctx, object, &ty, &key,
+                            elephc_builtin_contract::ObjectDimension::Isset, arg)
+                    } else { lower_native_isset_offset_probe(ctx, array, &key, arg) };
+                    if let Some(slot) = owner { unregister_owned_call_operand(ctx, slot, arg.span); }
+                    release_evaluated_once(ctx, key_temp, arg.span);
+                    return Some(value);
+                }
+                let ty = array_cast_source::array_cast_source_type_for_ir(ctx, array);
+                let object = lower_subscript_receiver_silently(ctx, array);
+                return Some(native_dimension_probes::lower(ctx, object, &ty, index,
+                    elephc_builtin_contract::ObjectDimension::Isset, arg));
+            }
+            if !array_access_expr_supports_native_isset_probe(ctx, array) {
+                return native_xml_empty::lower(ctx, "isset", arg, arg);
             }
             Some(lower_native_isset_offset_probe(ctx, array, index, arg))
         }
@@ -233,74 +259,6 @@ pub(super) fn lower_lazy_isset_operand(
     }
 }
 
-/// Lowers `isset($arrayAccess[$key])`, returning false without a call for a null receiver.
-fn lower_array_access_offset_exists(
-    ctx: &mut LoweringContext<'_, '_>,
-    array: &Expr,
-    index: &Expr,
-    arg: &Expr,
-) -> LoweredValue {
-    // `isset()` reads the container quietly too: an uninitialized typed property is not set.
-    let receiver = lower_subscript_receiver_silently(ctx, array);
-    let args = vec![index.clone()];
-    if !value_is_nullable(ctx, receiver.value) {
-        return lower_method_call_with_receiver(
-            ctx,
-            receiver,
-            "offsetExists",
-            &args,
-            Op::MethodCall,
-            arg,
-        );
-    }
-
-    let is_null = ctx.emit_value(
-        Op::IsNull,
-        vec![receiver.value],
-        None,
-        PhpType::Bool,
-        Op::IsNull.default_effects(),
-        Some(arg.span),
-    );
-    let temp_name = ctx.declare_hidden_temp(PhpType::Bool);
-    let null_block = ctx
-        .builder
-        .create_named_block("isset.array_access.null", Vec::new());
-    let call_block = ctx
-        .builder
-        .create_named_block("isset.array_access.call", Vec::new());
-    let merge = ctx
-        .builder
-        .create_named_block("isset.array_access.merge", Vec::new());
-    ctx.builder.terminate(Terminator::CondBr {
-        cond: is_null.value,
-        then_target: null_block,
-        then_args: Vec::new(),
-        else_target: call_block,
-        else_args: Vec::new(),
-    });
-
-    ctx.builder.position_at_end(null_block);
-    let false_value = emit_bool_literal(ctx, false, Some(arg.span));
-    store_value_into_temp(ctx, &temp_name, PhpType::Bool, false_value, arg.span);
-    branch_to(ctx, merge);
-
-    ctx.builder.position_at_end(call_block);
-    let exists = lower_method_call_with_receiver(
-        ctx,
-        receiver,
-        "offsetExists",
-        &args,
-        Op::MethodCall,
-        arg,
-    );
-    store_value_into_temp(ctx, &temp_name, PhpType::Bool, exists, arg.span);
-    branch_to(ctx, merge);
-
-    ctx.builder.position_at_end(merge);
-    take_owned_temp(ctx, &temp_name, arg.span)
-}
-
 /// Whether a property chain's receiver reads through an array element (`$list[$k]->a->b`).
 pub(super) fn object_chain_reads_an_element(object: &Expr) -> bool {
     match &object.kind {
@@ -339,6 +297,21 @@ pub(super) fn lower_lazy_empty(
     {
         return None;
     }
+    if ctx.classes.contains_key("SimpleXMLElement") {
+        if let Some(value) = nullsafe_chain::lower_empty(ctx, &args[0]) {
+            return Some(value);
+        }
+    }
+    if let Some(value) = native_xml_empty::lower(ctx, name, &args[0], expr) {
+        return Some(value);
+    }
+    lower_lazy_empty_without_native(ctx, name, args, expr)
+}
+
+/// Keeps ordinary empty semantics after an enclosing native receiver guard has selected fallback.
+pub(super) fn lower_lazy_empty_without_native(
+    ctx: &mut LoweringContext<'_, '_>, name: &str, args: &[Expr], expr: &Expr,
+) -> Option<LoweredValue> {
     if let ExprKind::ArrayAccess { array, index } = &args[0].kind {
         // The receiver is read ONCE and judged by the type it lowers to. `$this`, a property
         // and a call or `new` result only get that type by being lowered (#1448), and even a
@@ -683,7 +656,7 @@ fn lower_empty_through_exists_then_get(
     // boxed `Mixed` (`empty($this->inner['k'])` dispatches `offsetExists()` that way), and a
     // branch condition must be a canonical bool.
     let exists = lower_expr(ctx, exists_call);
-    let exists = super::unary_logic::lower_truthy_bool(ctx, exists, Some(expr.span));
+    let exists = ctx.truthy_consuming(exists, Some(expr.span));
     ctx.builder.terminate(Terminator::CondBr {
         cond: exists.value,
         then_target: present_block,
@@ -802,6 +775,9 @@ pub(super) fn property_existence_magic_class(
     magic: &str,
 ) -> Option<String> {
     let class_name = instance_callable_object_class(ctx, object)?;
+    if crate::types::builtin_classes::native_property_method(
+        &class_name, property, elephc_builtin_contract::ObjectProperty::Probe, ctx.classes,
+    ).is_some() { return None; }
     let class_info = ctx.classes.get(&class_name)?;
     if property_is_accessible_for_ir(ctx, &class_name, class_info, property) {
         return None;

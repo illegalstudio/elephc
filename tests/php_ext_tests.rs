@@ -781,6 +781,7 @@ impl ServerGroup {
 }
 
 impl Drop for ServerGroup {
+    /// Kills and reaps the fixture's server process group when its owner leaves scope.
     fn drop(&mut self) {
         // SAFETY: signals the server's own process group, which this test created.
         unsafe { libc::killpg(self.0.id() as libc::pid_t, libc::SIGKILL) };

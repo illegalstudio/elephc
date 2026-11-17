@@ -1,0 +1,75 @@
+name: elephc-edge-ferron
+
+# Ferron 2.8.x variant of the edge stack. The Ferron 3 RC uses a different
+# .conf syntax; this stack intentionally pins the stable KDL line.
+#
+#   docker compose -f examples/web-edge/deploy/compose.ferron.yml up --build
+
+services:
+  init:
+    image: busybox:1.36
+    command:
+      - sh
+      - -c
+      - |
+        mkdir -p /run/elephc /var/lib/elephc/sessions /var/cache/ferron-acme /var/log/ferron
+        chown -R 10001:10001 /run/elephc /var/lib/elephc /var/cache/ferron-acme /var/log/ferron
+        chmod 0770 /run/elephc
+    volumes:
+      - elephc-run:/run/elephc
+      - elephc-sessions:/var/lib/elephc/sessions
+      - ferron-acme:/var/cache/ferron-acme
+      - ferron-logs:/var/log/ferron
+    restart: "no"
+
+  app:
+    build:
+      context: ../../..
+      dockerfile: examples/web-edge/deploy/Dockerfile.app
+    user: "10001:10001"
+    environment:
+      ELEPHC_SESSION_SAVE_PATH: /var/lib/elephc/sessions
+    volumes:
+      - elephc-run:/run/elephc
+      - elephc-sessions:/var/lib/elephc/sessions
+    depends_on:
+      init:
+        condition: service_completed_successfully
+    healthcheck:
+      test: ["CMD-SHELL", "test -S /run/elephc/app.sock"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+    restart: unless-stopped
+
+  edge:
+    image: ferronserver/ferron:2.8.1-alpine
+    user: "10001:10001"
+    cap_add:
+      - NET_BIND_SERVICE
+    command: ["-c", "/etc/ferron.kdl"]
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - elephc-run:/run/elephc:ro
+      - ../ferron/ferron-2.kdl:/etc/ferron.kdl:ro
+      - ../public:/srv/app/public:ro
+      - ferron-acme:/var/cache/ferron-acme
+      - ferron-logs:/var/log/ferron
+    depends_on:
+      app:
+        condition: service_started
+    healthcheck:
+      # Alpine's BusyBox provides nc; this only checks that Ferron is listening.
+      test: ["CMD-SHELL", "nc -z 127.0.0.1 80"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+    restart: unless-stopped
+
+volumes:
+  elephc-run:
+  elephc-sessions:
+  ferron-acme:
+  ferron-logs:

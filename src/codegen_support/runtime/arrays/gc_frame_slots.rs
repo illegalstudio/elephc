@@ -20,13 +20,42 @@ pub(crate) fn emit_native_frame_owners(e: &mut Emitter, label: &str, offsets: &[
     op(e, "str x1, [sp, #8]", "mov QWORD PTR [rsp + 8], rsi", "preserve this walk's independent context");
     for offset in offsets {
         op(e, "ldr x0, [sp]", "mov rdi, QWORD PTR [rsp]", "recover the same base used by native cleanup");
-        op(e, &format!("add x0, x0, #{offset}"), &format!("add rdi, {offset}"), "address one independently owned native frame slot");
+        if e.target.arch == Arch::AArch64 && *offset > 4095 {
+            abi::emit_load_int_immediate(e, "x9", *offset as i64);
+            e.instruction("add x0, x0, x9");                                    // address an owner beyond the immediate-offset range
+        } else {
+            op(e, &format!("add x0, x0, #{offset}"), &format!("add rdi, {offset}"), "address one independently owned native frame slot");
+        }
         op(e, "mov x1, #0", "xor esi, esi", "native slots hold direct owners rather than raw reference cells");
         op(e, "ldr x2, [sp, #8]", "mov rdx, QWORD PTR [rsp + 8]", "reuse the caller's mode and physical-slot set");
         abi::emit_call_label(e, "__rt_gc_frame_owner_slot");
     }
     abi::emit_frame_restore(e, 32);
     abi::emit_return(e);
+}
+
+#[cfg(test)]
+mod native_frame_tests {
+    use super::*;
+    use crate::codegen_support::platform::Target;
+
+    /// Large descriptor signatures can place an owner beyond AArch64's add-immediate range.
+    #[test]
+    fn native_frame_owners_address_large_offsets_on_every_target() {
+        for name in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+            let target = Target::parse(name).unwrap();
+            let mut emitter = Emitter::new(target);
+            emit_native_frame_owners(&mut emitter, "large_native_owners", &[8, 5008]);
+            let assembly = emitter.output();
+            assert_eq!(assembly.matches("__rt_gc_frame_owner_slot").count(), 2, "{name}: {assembly}");
+            if target.arch == Arch::AArch64 {
+                assert!(!assembly.contains("add x0, x0, #5008"), "{name}: invalid immediate");
+                assert!(assembly.contains("add x0, x0, x9"), "{name}: {assembly}");
+            } else {
+                assert!(assembly.contains("add rdi, 5008"), "{name}: {assembly}");
+            }
+        }
+    }
 }
 
 /// Emits the C-ABI slot reader and its independent native slot-identity set.

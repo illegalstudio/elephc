@@ -10,6 +10,8 @@
 //!   the key, releases its string storage, unlinks and tombstones the entry, and decrements
 //!   the live count before releasing the value owner.
 //! - Value release can invoke PHP or throw; no table or entry writes occur after that call.
+//! - The returned flag asks for cycle collection only when the removed value's own tag says it
+//!   may own a graph; leaf values (int, float, bool, string, null), boxed or not, clear it.
 //! - A missing key (or null/empty table) is a no-op. Callers must not republish the returned
 //!   pointer: a destructor may already have replaced or freed the receiver's table.
 
@@ -29,7 +31,9 @@ use crate::codegen_support::platform::Arch;
 ///         (key_hi = -1 means an integer key with key_lo = value; otherwise a string key
 ///          with key_lo = pointer and key_hi = length)
 /// Output: x0 = the incoming table pointer, possibly retired by a reentrant destructor;
-///         x1 = 1 when an entry was removed, 0 for a missing key
+///         x1 = 1 when the removed value may own a graph that can close a cycle (container,
+///              object, boxed Mixed, reference, callable or resource), 0 for a missing key or a
+///              removed int, float, bool, string or null
 pub fn emit_hash_unset(emitter: &mut Emitter) {
     if emitter.target.arch == Arch::X86_64 {
         emit_hash_unset_linux_x86_64(emitter);
@@ -186,6 +190,22 @@ pub fn emit_hash_unset(emitter: &mut Emitter) {
     emitter.instruction("stp xzr, xzr, [x12, #8]");                             // clear the released key pointer and key length
     emitter.instruction("stp xzr, xzr, [x12, #24]");                            // clear the removed payload words before callback entry
     emitter.instruction("str xzr, [x12, #40]");                                 // retire the old value tag with its payload
+    // -- only a value that may own a graph keeps the collection flag --
+    emitter.instruction("cmp x14, #3");                                         // int, string, float and bool tags own no PHP children
+    emitter.instruction("b.ls __rt_hash_unset_leaf_value");                     // a leaf value cannot strand a cycle
+    emitter.instruction("cmp x14, #8");                                         // null owns nothing either
+    emitter.instruction("b.eq __rt_hash_unset_leaf_value");                     // a removed null cannot strand a cycle
+    emitter.instruction("cmp x14, #7");                                         // a boxed Mixed value hides its payload tag
+    emitter.instruction("b.ne __rt_hash_unset_owner_value");                    // containers, objects and references keep the flag
+    emitter.instruction("cbz x0, __rt_hash_unset_leaf_value");                  // a null box pointer reads as PHP null
+    emitter.instruction("ldr x15, [x0]");                                       // read the boxed payload tag without unboxing
+    emitter.instruction("cmp x15, #3");                                         // a boxed int, string, float or bool owns no children
+    emitter.instruction("b.ls __rt_hash_unset_leaf_value");                     // the box itself cannot close a cycle
+    emitter.instruction("cmp x15, #8");                                         // a boxed null owns nothing either
+    emitter.instruction("b.ne __rt_hash_unset_owner_value");                    // nested boxes and graph payloads keep the flag
+    emitter.label("__rt_hash_unset_leaf_value");
+    emitter.instruction("str xzr, [sp, #48]");                                  // report a removal that needs no cycle collection
+    emitter.label("__rt_hash_unset_owner_value");
     emitter.instruction("ldr x15, [sp, #32]");                                  // a capture guard may already own the detached payload
     emitter.instruction("cbz x15, __rt_hash_unset_done");                       // leave that owner for the outer release
     emitter.instruction("cmp x14, #8");                                         // null values have no heap owner
@@ -225,7 +245,8 @@ pub fn emit_hash_unset(emitter: &mut Emitter) {
 /// (key_hi = -1 means an integer key). The caller has already split and published the table.
 /// Mirrors the AArch64 logic: linear probe, key release, unlink, tombstone, count decrement,
 /// then detached value release. The returned input pointer is not safe for receiver writeback.
-/// Returns the legacy table pointer in rax and the per-call removal flag in rdx.
+/// Returns the legacy table pointer in rax and the per-call collection flag in rdx (set only for
+/// a removed value that may own a graph).
 fn emit_hash_unset_linux_x86_64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: hash_unset ---");
@@ -376,6 +397,23 @@ fn emit_hash_unset_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov QWORD PTR [r8 + 24], 0");                          // detach the payload before callback entry
     emitter.instruction("mov QWORD PTR [r8 + 32], 0");                          // clear the payload high word
     emitter.instruction("mov QWORD PTR [r8 + 40], 0");                          // retire the old value tag with its payload
+    // -- only a value that may own a graph keeps the collection flag --
+    emitter.instruction("cmp r9, 3");                                           // int, string, float and bool tags own no PHP children
+    emitter.instruction("jbe __rt_hash_unset_leaf_value");                      // a leaf value cannot strand a cycle
+    emitter.instruction("cmp r9, 8");                                           // null owns nothing either
+    emitter.instruction("je __rt_hash_unset_leaf_value");                       // a removed null cannot strand a cycle
+    emitter.instruction("cmp r9, 7");                                           // a boxed Mixed value hides its payload tag
+    emitter.instruction("jne __rt_hash_unset_owner_value");                     // containers, objects and references keep the flag
+    emitter.instruction("test rax, rax");                                       // a null box pointer reads as PHP null
+    emitter.instruction("jz __rt_hash_unset_leaf_value");                       // treat the null box as a leaf
+    emitter.instruction("mov r11, QWORD PTR [rax]");                            // read the boxed payload tag without unboxing
+    emitter.instruction("cmp r11, 3");                                          // a boxed int, string, float or bool owns no children
+    emitter.instruction("jbe __rt_hash_unset_leaf_value");                      // the box itself cannot close a cycle
+    emitter.instruction("cmp r11, 8");                                          // a boxed null owns nothing either
+    emitter.instruction("jne __rt_hash_unset_owner_value");                     // nested boxes and graph payloads keep the flag
+    emitter.label("__rt_hash_unset_leaf_value");
+    emitter.instruction("mov QWORD PTR [rbp - 56], 0");                         // report a removal that needs no cycle collection
+    emitter.label("__rt_hash_unset_owner_value");
     emitter.instruction("cmp QWORD PTR [rbp - 40], 0");                         // a capture guard may already own the detached payload
     emitter.instruction("je __rt_hash_unset_done");                             // leave that owner for the outer release
     emitter.instruction("cmp r9, 8");                                           // null values have no heap owner
@@ -484,6 +522,14 @@ mod tests {
             assert!(asm[found..done].contains(matched), "{target:?}");
             assert!(asm[done..null].contains(result), "{target:?}");
             assert!(asm[null..].contains(null_result), "{target:?}");
+            let leaf = asm.find("__rt_hash_unset_leaf_value:").unwrap();
+            let owner = asm.find("__rt_hash_unset_owner_value:").unwrap();
+            let clear = match target.arch {
+                Arch::AArch64 => "str xzr, [sp, #48]",
+                Arch::X86_64 => "mov QWORD PTR [rbp - 56], 0",
+            };
+            assert!(found < leaf && leaf < owner && owner < done, "{target:?}");
+            assert!(asm[leaf..owner].contains(clear), "leaf values clear the flag on {target:?}");
         }
     }
 }

@@ -71,12 +71,26 @@ pub(in crate::interpreter) fn eval_get_class_vars_result(
     context.sync_global_eval_classes();
     let class_name = eval_resolved_class_metadata_name(*target, context, values)?;
     if context.has_class(&class_name) || context.has_enum(&class_name) {
-        return eval_dynamic_class_vars_result(&class_name, context, values);
+        // php-src initializes the class, then copies each default it returns, evaluating every
+        // visible static default again on each call; the instance defaults were evaluated in
+        // place by the initialization.
+        eval_raise_class_initialization_deprecations(&class_name, context, values)?;
+        eval_raise_visible_static_default_deprecations(&class_name, context, values)?;
+        context.begin_deprecation_silence();
+        let result = eval_dynamic_class_vars_result(&class_name, context, values);
+        context.end_deprecation_silence();
+        return result;
     }
     if context.has_trait(&class_name) {
-        return eval_dynamic_trait_vars_result(&class_name, context, values);
+        eval_raise_trait_vars_deprecations(&class_name, context, values)?;
+        context.begin_deprecation_silence();
+        let result = eval_dynamic_trait_vars_result(&class_name, context, values);
+        context.end_deprecation_silence();
+        return result;
     }
     if context.has_interface(&class_name) {
+        // No properties, but php-src still evaluates the interface's constant table.
+        eval_class_constant_table_evaluation(&class_name, context, values)?;
         return values.assoc_new(0);
     }
     if eval_class_relation_name_exists(&class_name, context, values)? {
@@ -162,6 +176,64 @@ fn append_class_var_entries<V: RuntimeValueOps>(
         })?;
     }
     Ok(())
+}
+
+/// Raises what `get_class_vars()` reports for an eval-declared trait: php-src initializes it
+/// like a class without ancestors (its instance defaults, then its static ones, once), then
+/// evaluates every visible static default again on each call.
+fn eval_raise_trait_vars_deprecations(
+    trait_name: &str,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<(), EvalStatus> {
+    if context.deprecations_silenced() {
+        return Ok(());
+    }
+    let Some(trait_decl) = context.trait_decl(trait_name) else { return Ok(()) };
+    let name = trait_decl.name().to_string();
+    let properties = trait_decl.properties().to_vec();
+    let constants: Vec<String> = trait_decl.constants().iter().map(|constant| constant.name().to_string()).collect();
+    let instance = properties.iter().filter(|property| !property.is_static());
+    let statics = properties.iter().filter(|property| property.is_static());
+    if context.begin_class_initialization(&name) {
+        // The trait's own constants first, held by the trait itself, then its instance and
+        // static defaults. An initializer that throws leaves the trait uninitialized, so the
+        // next use initializes it again, as php-src does.
+        let initialized = (|| -> Result<(), EvalStatus> {
+            for constant in &constants {
+                eval_class_constant_first_evaluation(&name, constant, context, values)?;
+            }
+            for property in instance.chain(statics.clone()) {
+                eval_trait_default_evaluation(&name, property, context, values)?;
+            }
+            Ok(())
+        })();
+        if initialized.is_err() {
+            context.abort_class_initialization(&name);
+        }
+        initialized?;
+    }
+    let replayed: Vec<&EvalClassProperty> = statics
+        .filter(|property| validate_eval_member_access(&name, property.visibility(), context).is_ok())
+        .collect();
+    for property in replayed {
+        eval_trait_default_evaluation(&name, property, context, values)?;
+    }
+    Ok(())
+}
+
+/// Evaluates trait `name`'s default for `property`, if it has one, and drops the value.
+fn eval_trait_default_evaluation(
+    name: &str,
+    property: &EvalClassProperty,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<(), EvalStatus> {
+    if property.default().is_none() || property.is_virtual() {
+        return Ok(());
+    }
+    let value = eval_class_vars_property_default_value(name, property, context, values)?;
+    values.release(value)
 }
 
 /// Builds `get_class_vars()` for an eval-declared trait.

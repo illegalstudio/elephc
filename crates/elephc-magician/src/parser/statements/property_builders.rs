@@ -10,6 +10,17 @@
 use super::*;
 use crate::parser::expressions::precedence::is_assignment_target;
 
+/// Keeps plain local indexed stores on their fast path and shares all richer mutation tails.
+pub(super) fn needs_dimension_tail(target: &EvalExpr, next: &TokenKind) -> bool {
+    match target {
+        EvalExpr::PropertyGet { .. } | EvalExpr::DynamicPropertyGet { .. }
+            | EvalExpr::PropertyCompoundAssign { .. } | EvalExpr::PropertyIncDec { .. } => true,
+        EvalExpr::ArrayGet { array, .. } => !matches!(array.as_ref(), EvalExpr::LoadVar(_))
+            || !matches!(next, TokenKind::Equal),
+        _ => false,
+    }
+}
+
 /// Builds a property by-reference binding statement from a parsed property target.
 pub(super) fn property_reference_bind_stmt(
     target: EvalExpr,
@@ -128,21 +139,7 @@ pub(super) fn property_array_append_stmt(target: EvalExpr, value: EvalExpr) -> R
             property: *property,
             value,
         }),
-        // Any other writable chain — `$this->listeners[$name][$priority][] = $listener;` above
-        // all. Only this builder refused to hand one over, because it enumerated property shapes
-        // alone. That refusal cost twenty-one Symfony files, and it surfaced at the NEXT
-        // statement's first token, which is why they were reported as `unexpected "}"` and
-        // `unexpected "return"`.
-        //
-        // The append is built as the EXPRESSION form even here. PHP's append is an assignment
-        // expression whose value is the assigned one, so the statement spelling is that
-        // expression with its result discarded, and building the same node either way keeps one
-        // evaluator for both positions.
-        target if is_assignment_target(&target) => Ok(EvalStmt::Expr(EvalExpr::ArrayAppendAssign {
-            target: Box::new(target),
-            value: Box::new(value),
-        })),
-        _ => Err(EvalParseError::UnexpectedToken),
+        array => Ok(EvalStmt::DimensionWrite { array, index: None, op: None, value }),
     }
 }
 
@@ -188,27 +185,7 @@ pub(super) fn property_array_set_stmt(
             op,
             value,
         }),
-        // Any other writable chain — `$statistics[$name]['time'] += …`. The nested element is an
-        // ordinary assignment target once it is spelled as one, and `EvalExpr::Assign` and
-        // `CompoundAssign` both write through the general location machinery.
-        target if is_assignment_target(&target) => {
-            let target = EvalExpr::ArrayGet {
-                array: Box::new(target),
-                index: Box::new(index),
-            };
-            Ok(EvalStmt::Expr(match op {
-                Some(op) => EvalExpr::CompoundAssign {
-                    target: Box::new(target),
-                    op,
-                    value: Box::new(value),
-                },
-                None => EvalExpr::Assign {
-                    target: Box::new(target),
-                    value: Box::new(value),
-                },
-            }))
-        }
-        _ => Err(EvalParseError::UnexpectedToken),
+        array => Ok(EvalStmt::DimensionWrite { array, index: Some(index), op, value }),
     }
 }
 

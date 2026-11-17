@@ -1,8 +1,6 @@
 ---
 title: "decoct()"
 description: "Converts an integer to its octal string representation."
-sidebar:
-  order: 599
 ---
 
 ## decoct()
@@ -20,8 +18,9 @@ Converts an integer to its octal string representation.
 
 ## Availability
 
-- **Compiled (AOT)**: supported by the Elephc code generator.
-- **`eval()` (magician interpreter)**: supported through a declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/math/decoct.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/math/decoct.rs)).
+| Compiled (AOT) | Magician (eval) |
+|---|---|
+| Available | Not available yet |
 
 _No examples yet. Check `examples/` and `showcases/` for usage patterns._
 

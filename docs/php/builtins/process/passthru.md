@@ -1,28 +1,28 @@
 ---
 title: "passthru()"
 description: "Executes an external program and passes its output directly."
-sidebar:
-  order: 865
 ---
 
 ## passthru()
 
 ```php
-function passthru(string $command, int $result_code = null): void
+function passthru(string $command): void
 ```
 
 Executes an external program and passes its output directly.
 
 **Parameters**:
 - `$command` (`string`)
-- `$result_code` (`int`), passed by reference, default `null`, optional
 
 **Returns**: `void`
 
 ## Availability
 
-- **Compiled (AOT)**: supported on the three executable/release hosts (macOS ARM64, Linux ARM64, and Linux x86_64); calls are refused at compile time for iOS library targets.
-- **`eval()` (magician interpreter)**: supported through a declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/network_env/passthru.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/network_env/passthru.rs)).
+| Compiled (AOT) | Magician (eval) |
+|---|---|
+| Available | Available |
+
+- Compiled code can call it on the three executable/release hosts (macOS ARM64, Linux ARM64, and Linux x86_64); calls are refused at compile time for iOS library targets.
 
 _No examples yet. Check `examples/` and `showcases/` for usage patterns._
 

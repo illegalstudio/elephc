@@ -1,8 +1,6 @@
 ---
 title: "var_export() - internals"
 description: "Compiler internals for var_export(): lowering path, type checks, and runtime helpers."
-sidebar:
-  order: 423
 ---
 
 ## `var_export()` - internals
@@ -10,7 +8,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`crates/elephc-builtin-contract/src/catalog_data.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-builtin-contract/src/catalog_data.rs)
-- **Lowering**: [`src/var_export_prelude.rs`:374](https://github.com/illegalstudio/elephc/blob/main/src/var_export_prelude.rs#L374) (`var_export`)
+- **Lowering**: [`src/var_export_prelude.rs`](https://github.com/illegalstudio/elephc/blob/main/src/var_export_prelude.rs) (`var_export`)
 - **Function symbol**: `var_export()`
 
 
@@ -38,11 +36,8 @@ function var_export(mixed $value, bool $return = false): mixed
 
 ## Eval interpreter (magician)
 
-- **Declaration**: [`crates/elephc-magician/src/interpreter/builtins/core/var_export.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/core/var_export.rs) (`eval_builtin!`)
-- **Execution**: Magician interpreter adapter.
-- **Adapter reason**: `dynamic-language-surface`.
-- **Dispatch hooks**: `direct`, `values`
+_Not callable from eval'd code - the magician interpreter has no entry for this builtin._
 
 ## Cross-references
 
-- [User reference for `var_export()`](../../../php/builtins/io/var_export.md)
+- [User reference for `var_export()`](../../../php/builtins/type/var_export.md)

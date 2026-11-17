@@ -765,6 +765,16 @@ fn scan_common_dynamic_method_signature(
     ctx: &LoweringContext<'_, '_>,
     method_key: &str,
 ) -> Option<FunctionSig> {
+    if method_key == "__invoke" {
+        return None;
+    }
+    // A class whose `__call` answers the name has no signature of its own for it: a magic hook
+    // can return a different representation and accepts its own keys.
+    for class_name in classes_with_method(ctx, "__call") {
+        if class_method_signature(ctx, class_name, method_key).is_none() {
+            return None;
+        }
+    }
     // Comparing borrowed signatures and cloning only the winner: the previous form cloned a
     // whole `FunctionSig` for every class in the module on every call, to throw all but one away.
     let mut common: Option<&FunctionSig> = None;

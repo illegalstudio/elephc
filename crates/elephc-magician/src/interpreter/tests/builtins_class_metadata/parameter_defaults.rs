@@ -10,7 +10,8 @@
 use super::super::super::*;
 use super::super::support::*;
 
-/// Registered native errors are raised before omitted slots and result allocations are skipped.
+/// Registered native errors are raised before omitted slots and result allocations are skipped,
+/// and repeated calls keep no temporary owners.
 #[test]
 fn reflected_class_registered_default_error_keeps_no_temporary_owners() {
     let mut context = ElephcEvalContext::new();
@@ -28,7 +29,9 @@ fn reflected_class_registered_default_error_keeps_no_temporary_owners() {
         let error = context.take_pending_throw().expect("owned default Error");
         assert!(!error.is_borrowed());
         eval_release_value(&mut context, &mut values, error).unwrap();
-        assert_eq!(values.cell_owners.values().sum::<usize>(), 0);
+        // The class initialization keeps its evaluated instance default ("good") in the
+        // context's default table; nothing else outlives a call.
+        assert_eq!(values.cell_owners.values().sum::<usize>(), 1);
     }
 }
 
@@ -47,7 +50,9 @@ fn reflected_class_partial_default_map_keeps_no_temporary_owners() {
         assert_eq!(eval_reflection_class_get_default_properties_result(
             7, "getDefaultProperties", Vec::new(), &mut context, &mut values,
         ), Err(EvalStatus::UnsupportedConstruct));
-        assert_eq!(values.cell_owners.values().sum::<usize>(), 0);
+        // The class initialization keeps its two evaluated instance defaults in the context's
+        // default table; nothing else outlives a call.
+        assert_eq!(values.cell_owners.values().sum::<usize>(), 2);
     }
 }
 

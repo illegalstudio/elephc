@@ -22,22 +22,6 @@ pub(crate) fn lower_array_keys(ctx: &mut FunctionContext<'_>, inst: &Instruction
     keys::lower_array_keys(ctx, inst)
 }
 
-/// Lowers `array_rand()` for indexed arrays.
-pub(crate) fn lower_array_rand(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
-    // The checker has already refused every `$num` but the literal 1, and one key is exactly what
-    // the single-argument form returns, so the second operand carries no work for the backend.
-    super::super::ensure_arg_count_between(inst, "array_rand", 1, 2)?;
-    let array = expect_operand(inst, 0)?;
-    require_indexed_array_builtin(ctx.value_php_type(array)?, "array_rand")?;
-    ctx.load_value_to_result(array)?;
-    if ctx.emitter.target.arch == Arch::X86_64 {
-        ctx.emitter.instruction("mov rdi, rax");                                // pass the indexed-array pointer as the random-key helper argument
-    }
-    crate::codegen::random::publish_elephc_random_function_pointers(ctx.emitter);
-    abi::emit_call_label(ctx.emitter, "__rt_array_rand");
-    store_if_result(ctx, inst)
-}
-
 /// Lowers `range()` for integer endpoints through the shared runtime constructor.
 ///
 /// PHP's optional `$step` becomes the helper's third argument. Its sign never chooses the

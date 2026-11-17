@@ -37,6 +37,12 @@ pub struct PreludeGroup {
     /// is false, and it kept `PDOStatement::getIterator` and, through it, the whole fetch surface
     /// of any program that touched a statement.
     pub array_iteration_only: bool,
+    /// Compiler-owned functions codegen calls without a PHP-level reference to them.
+    ///
+    /// A builtin lowered onto a prelude helper names that helper from EIR, after reachability has
+    /// run, so no AST node keeps it alive. Recording it here roots the declaration for exactly
+    /// the programs whose backend path needs it.
+    pub required_functions: HashSet<String>,
 }
 
 impl PreludeInventory {
@@ -97,6 +103,21 @@ impl PreludeInventory {
                 group.classes.contains(&key)
             }
         })
+    }
+
+    /// Records one prelude function that codegen must keep without an AST reference to it.
+    pub fn record_required_function(&mut self, id: &str, name: &str) {
+        let key = php_symbol_key(name);
+        let group = self.group_mut(id);
+        group.required_functions.insert(key);
+    }
+
+    /// Returns every declaration codegen reaches directly rather than through PHP source.
+    pub(crate) fn required_functions(&self) -> HashSet<String> {
+        self.groups
+            .values()
+            .flat_map(|group| group.required_functions.iter().cloned())
+            .collect()
     }
 
     /// Marks one compiler-owned method whose dynamic-call syntax only invokes closures created internally.
@@ -270,6 +291,8 @@ fn record_statements(group: &mut PreludeGroup, statements: &[Stmt], namespace: O
             | StmtKind::TypedAssign { .. }
             | StmtKind::Throw(_)
             | StmtKind::Break(_)
+            | StmtKind::Goto(_)
+            | StmtKind::GotoLabel(_)
             | StmtKind::Continue(_)
             | StmtKind::ExprStmt(_)
             | StmtKind::UseDecl { .. }

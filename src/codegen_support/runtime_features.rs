@@ -5,6 +5,7 @@
 //!
 //! Called from:
 //! - `crate::pipeline::compile()` before runtime-cache preparation.
+//! - `crate::cli::capability_report` for the native packages a forced capability needs.
 //!
 //! Key details:
 //! - Direct `preg_*` calls and emitted regex iterator classes both enable regex
@@ -123,6 +124,8 @@ pub struct RuntimeFeatures {
     /// True when lowered native code can clone an object. The boxed clone adapter is also
     /// required by the full eval bridge, which exposes the same operation to Magician.
     pub object_clone: bool,
+    /// True when native property publishers use the weak source registry and validation coordinator.
+    pub native_reference_validation: bool,
 }
 
 /// Every `RuntimeFeatures` field is a `bool`, so the struct is exactly one byte per feature and
@@ -180,13 +183,14 @@ impl RuntimeFeatures {
             | ((self.object_clone as u64) << 18)
             | ((self.mbregex as u64) << 19)
             | ((self.mbstring_mime as u64) << 20)
+            | ((self.native_reference_validation as u64) << 21)
     }
 
     /// Number of feature bits `cache_key_bits` packs, which is also the number of fields.
     ///
     /// `runtime_cache::identity` puts the relocation and library-boundary modes in bits 62/63,
     /// so appending features here stays free until bit 62.
-    pub const CACHE_KEY_BIT_COUNT: u32 = 21;
+    pub const CACHE_KEY_BIT_COUNT: u32 = 22;
 
     /// Returns one variant per field, each with exactly that field set and every other clear.
     ///
@@ -225,6 +229,10 @@ impl RuntimeFeatures {
             ("mbstring_mime", Self { mbstring_mime: true, ..Self::none() }),
             ("handler_state", Self { handler_state: true, ..Self::none() }),
             ("object_clone", Self { object_clone: true, ..Self::none() }),
+            (
+                "native_reference_validation",
+                Self { native_reference_validation: true, ..Self::none() },
+            ),
         ]
     }
 
@@ -252,6 +260,7 @@ impl RuntimeFeatures {
             diag_user_handler: false,
             handler_state: false,
             object_clone: false,
+            native_reference_validation: false,
         }
     }
 
@@ -280,6 +289,7 @@ impl RuntimeFeatures {
             diag_user_handler: true,
             handler_state: true,
             object_clone: true,
+            native_reference_validation: true,
         }
     }
 }
@@ -296,6 +306,26 @@ pub fn runtime_features_for_program_and_classes(
     classes: &crate::fast_hash::FastMap<String, ClassInfo>,
 ) -> RuntimeFeatures {
     runtime_features_for_program_and_classes_opt(program, Some(classes))
+}
+
+/// Turns on the runtime features a `--with-<flag>` capability forces.
+///
+/// Dynamic source is opaque to AOT feature detection, so these flags enable the
+/// runtime families and their native requirements explicitly: `regex` the PCRE2
+/// runtime (which eval setup then registers with Magician), and `mbstring` the
+/// multibyte, `mb_ereg*`, and MIME families. Bridge-only flags change nothing
+/// here. The backend applies this to compiled programs and `--print-capabilities`
+/// applies it to report each flag's managed native packages.
+pub fn force_runtime_features_for_flag(features: &mut RuntimeFeatures, flag: &str) {
+    match flag {
+        "regex" => features.regex = true,
+        "mbstring" => {
+            features.mbstring = true;
+            features.mbregex = true;
+            features.mbstring_mime = true;
+        }
+        _ => {}
+    }
 }
 
 /// Returns typed final-link requirements for the selected optional runtime features.
@@ -346,6 +376,9 @@ pub fn link_requirements_for_runtime_features(features: RuntimeFeatures) -> Vec<
         // Regex is a separate optional capability registered only when enabled.
         requirements.push(LinkRequirement::Bridge("elephc_magician"));
         requirements.push(LinkRequirement::Bridge("elephc_bcmath"));
+    }
+    if features.native_reference_validation {
+        requirements.push(LinkRequirement::Bridge("elephc_reference"));
     }
     if features.mbstring || features.mbregex || features.eval_bridge {
         requirements.push(LinkRequirement::Bridge("elephc_mbstring"));
@@ -564,6 +597,8 @@ fn stmt_has_regex_call(stmt: &Stmt) -> bool {
         StmtKind::Return(None)
         | StmtKind::RefAssign { .. }
         | StmtKind::Break(_)
+        | StmtKind::Goto(_)
+        | StmtKind::GotoLabel(_)
         | StmtKind::Continue(_)
         | StmtKind::NamespaceDecl { .. }
         | StmtKind::UseDecl { .. }
@@ -934,6 +969,8 @@ fn stmt_needs_descriptor_invoker(stmt: &Stmt) -> bool {
         StmtKind::Return(None)
         | StmtKind::RefAssign { .. }
         | StmtKind::Break(_)
+        | StmtKind::Goto(_)
+        | StmtKind::GotoLabel(_)
         | StmtKind::Continue(_)
         | StmtKind::NamespaceDecl { .. }
         | StmtKind::UseDecl { .. }
@@ -1297,6 +1334,24 @@ mod tests {
                 LinkRequirement::Bridge("elephc_mbstring")
             ]
         );
+    }
+
+    /// Native reference coordination links its Rust owner without enabling the eval runtime.
+    #[test]
+    fn test_native_reference_validation_selects_an_independent_bridge_and_cache_bit() {
+        let features = RuntimeFeatures { native_reference_validation: true, ..RuntimeFeatures::none() };
+        assert!(!features.eval_bridge);
+        assert_eq!(features.cache_key_bits(), 1 << 21);
+        let expected = vec![LinkRequirement::Bridge("elephc_reference")];
+        assert_eq!(link_requirements_for_runtime_features(features), expected);
+        assert_eq!(link_requirements_for_runtime_features(RuntimeFeatures {
+            descriptor_invoker: true, ..features
+        }), vec![LinkRequirement::Bridge("elephc_crypto"), LinkRequirement::Bridge("elephc_reference")],
+            "native coordination does not carry the interpreter's crypto dependency");
+        let combined = link_requirements_for_runtime_features(RuntimeFeatures {
+            eval_bridge: true, ..features
+        });
+        assert_eq!(combined.iter().filter(|entry| **entry == LinkRequirement::Bridge("elephc_reference")).count(), 1);
     }
 
     /// Verifies eval plus regex requests PCRE2 and both eval bridge archives.

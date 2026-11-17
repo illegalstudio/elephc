@@ -289,6 +289,8 @@ fn collect_in_stmt(stmt: &Stmt, names: &mut HashSet<String>) {
         // Leaves: no sub-statements and no sub-expressions.
         | StmtKind::Return(None)
         | StmtKind::Break(_)
+        | StmtKind::Goto(_)
+        | StmtKind::GotoLabel(_)
         | StmtKind::Continue(_)
         | StmtKind::IncludeOnceMark { .. }
         | StmtKind::NamespaceDecl { .. }

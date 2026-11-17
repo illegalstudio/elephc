@@ -1,8 +1,6 @@
 ---
 title: "array_replace() - internals"
 description: "Compiler internals for array_replace(): lowering path, type checks, and runtime helpers."
-sidebar:
-  order: 41
 ---
 
 ## `array_replace()` - internals
@@ -10,7 +8,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/array/array_replace.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/array/array_replace.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:752](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L752) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 
@@ -39,21 +37,16 @@ sidebar:
 ## Signature summary
 
 ```php
-function array_replace(array $array, ...$replacements): array
+function array_replace(array $array, array $replacements): mixed
 ```
 
 ## What the type checker enforces
 
-- **Arity**: takes exactly 1 argument.
-- **Variadic**: collects excess arguments into `$replacements`.
+- **Arity**: takes exactly 2 arguments.
 
 ## Eval interpreter (magician)
 
-- **Declaration**: [`crates/elephc-magician/src/interpreter/builtins/array/array_replace.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/array/array_replace.rs) (`eval_builtin!`)
-- **Execution**: Magician interpreter adapter.
-- **Adapter reason**: `interpreter-specific-value-semantics`.
-- **Dispatch hooks**: `direct`, `values`
-- **Variadic**: collects excess arguments into `$replacements`.
+_Not callable from eval'd code - the magician interpreter has no entry for this builtin._
 
 ## Cross-references
 

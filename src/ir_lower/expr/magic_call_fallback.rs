@@ -8,7 +8,7 @@
 //! - The class-id ladder behind `$unknown->m()` lists the classes that DECLARE `m`. An object of a
 //!   class that has `__call()` but no `m` is not on it, so the call died with "Call to undefined
 //!   method" where php hands the name and arguments to `__call()`. A receiver whose static class
-//!   is known takes that route already (`method_calls::magic_call_dispatch_args`); this covers
+//!   is known takes that route already (`magic_method_calls::lower`); this covers
 //!   the `mixed`, union and bare-`object` receivers an untyped parameter or array element has.
 //! - The call is rewritten to
 //!   `is_object($r) && !method_exists($r, 'm') ? __elephc_magic_call($r, 'm', [args]) : $r->m(args)`

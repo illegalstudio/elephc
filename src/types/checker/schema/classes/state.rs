@@ -224,6 +224,8 @@ impl ClassBuildState {
                 .iter()
                 .map(|constant| constant.name.clone())
                 .collect(),
+            property_initialization_order: Vec::new(),
+            trait_collision_defaults: Vec::new(),
             constant_deprecations: class
                 .constants
                 .iter()
@@ -280,6 +282,7 @@ impl ClassBuildState {
             backed_hooked_properties: self.backed_hooked_properties,
             reference_properties: self.reference_properties,
             owned_reference_properties: HashSet::default(),
+            owned_reference_property_slots: HashSet::default(),
             promoted_properties: self.promoted_properties,
             property_reference_slots: self.property_reference_slots,
             property_slot_declaring_classes: self.property_slot_declaring_classes,

@@ -155,6 +155,8 @@ fn stmt_carries_decision(stmt: &Stmt) -> bool {
         StmtKind::FunctionVariantGroup { name: _, variants: _ }
         | StmtKind::FunctionVariantMark { name: _, variant: _ }
         | StmtKind::Break(_)
+        | StmtKind::Goto(_)
+        | StmtKind::GotoLabel(_)
         | StmtKind::Continue(_)
         | StmtKind::Global { vars: _ }
         | StmtKind::IncludeOnceMark { .. }

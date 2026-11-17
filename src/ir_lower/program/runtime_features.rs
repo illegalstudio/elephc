@@ -169,12 +169,15 @@ fn lowered_runtime_features_with(module: &Module, count_opcache_links: bool) -> 
                     // receiver an eval context owns, and without the bridge there is none, so the
                     // backend drops the scope. Letting it link the bridge put the interpreter into
                     // every program with a `$this->arr[$k] = ...`, and two bridge calls around it.
-                    // A closed-world include is answered from the compiled-source table.
+                    // A closed-world include is answered from the compiled-source table. The
+                    // by-reference test of a callable parameter asks the bridge when it owns the
+                    // callable; a closed world has none.
                     features.eval_bridge |= !module.closed_world
                         && matches!(
                             inst.immediate,
                             Some(Immediate::RuntimeCall(
                                 crate::ir::RuntimeCallTarget::DynamicInclude { .. }
+                                    | crate::ir::RuntimeCallTarget::CallableParameterIsByRef
                             ))
                         );
                     // `opcache_compile_file()` is the ONE runtime-tier operation whose job is
@@ -1072,7 +1075,7 @@ pub(super) fn eval_literal_static_method_supported_by_module(
 fn function_references_callable_runtime(module: &Module, function: &Function, accepts: fn(&str) -> bool) -> bool {
     let names = std::cell::OnceCell::new();
     function.instructions.iter().any(|inst| {
-        if inst.op == Op::FirstClassCallableNew {
+        if matches!(inst.op, Op::FirstClassCallableNew | Op::CallableValueNew) {
             let data = match inst.immediate {
                 Some(Immediate::Data(data) | Immediate::ProfiledData { data, .. }) => data,
                 _ => return false,

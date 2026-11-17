@@ -562,6 +562,8 @@ fn scan_stmt(stmt: &Stmt, usage: &mut Usage) {
         | StmtKind::FunctionVariantGroup { .. }
         | StmtKind::FunctionVariantMark { .. }
         | StmtKind::IncludeOnceMark { .. }
+        | StmtKind::Goto(_)
+        | StmtKind::GotoLabel(_)
         | StmtKind::PackedClassDecl { .. }
         | StmtKind::ExternFunctionDecl { .. }
         | StmtKind::ExternClassDecl { .. }

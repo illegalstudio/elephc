@@ -47,6 +47,12 @@ pub enum EvalStmt {
     },
     Break(u32),
     Continue(u32),
+    DimensionWrite {
+        array: EvalExpr,
+        index: Option<EvalExpr>,
+        op: Option<EvalBinOp>,
+        value: EvalExpr,
+    },
     DoWhile {
         body: Vec<EvalStmt>,
         condition: EvalExpr,
@@ -298,6 +304,14 @@ pub enum EvalStmt {
         name: String,
         value: EvalExpr,
     },
+    /// `$name++`, `$name--`, `++$name`, or `--$name` as a statement.
+    ///
+    /// Kept distinct from `StoreVar` because PHP leaves a null local unchanged on
+    /// decrement instead of evaluating `null - 1`.
+    IncDecVar {
+        name: String,
+        increment: bool,
+    },
     Switch {
         expr: EvalExpr,
         cases: Vec<EvalSwitchCase>,
@@ -353,6 +367,40 @@ impl EvalStmt {
     pub fn class_decl(class: EvalClass) -> Self {
         Self::ClassDecl(Arc::new(class))
     }
+
+    /// Returns whether a jump to `label` can resume at this statement: it is that label, or
+    /// the label sits in one of its `if` branches or in its `try` body, at any depth.
+    ///
+    /// This is the ONE definition of where a `goto` may land. The parser validates every jump
+    /// against it and the interpreter resolves every jump with it, so a jump the parser accepts
+    /// is exactly a jump execution can complete. Loop and `switch` bodies are deliberately not
+    /// searched: PHP forbids jumping into them. `catch` and `finally` bodies are not searched
+    /// either: PHP forbids entering a `finally`, and entering a `catch` is refused here as it is
+    /// by the ahead-of-time compiler. A label inside any of them is reachable only from inside,
+    /// where its own statement list finds it.
+    pub fn holds_jump_label(&self, label: &str) -> bool {
+        match self {
+            EvalStmt::Label(name) => name == label,
+            EvalStmt::If {
+                then_branch,
+                else_branch,
+                ..
+            } => sequence_holds_jump_label(then_branch, label)
+                || sequence_holds_jump_label(else_branch, label),
+            EvalStmt::Try { body, .. } => sequence_holds_jump_label(body, label),
+            _ => false,
+        }
+    }
+}
+
+/// Returns the index of the statement of `statements` a jump to `label` resumes at.
+pub fn jump_label_position(statements: &[EvalStmt], label: &str) -> Option<usize> {
+    statements.iter().position(|stmt| stmt.holds_jump_label(label))
+}
+
+/// Returns whether a jump to `label` can resume somewhere in `statements`.
+pub fn sequence_holds_jump_label(statements: &[EvalStmt], label: &str) -> bool {
+    jump_label_position(statements, label).is_some()
 }
 
 /// One `catch` block attached to an eval `try` statement.

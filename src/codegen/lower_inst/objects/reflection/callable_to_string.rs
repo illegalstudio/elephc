@@ -236,6 +236,9 @@ fn reflection_parameter_default_to_string(parameter: &ReflectionParameterMember)
 /// Renders one default value, including the array and object forms PHP prints in a dump.
 pub(super) fn reflection_dump_default_value(default: &ReflectionParameterDefaultValue) -> String {
     match default {
+        ReflectionParameterDefaultValue::EnumCase(value) =>
+            format!("{}::{}", reflection_dump_text(&value.enum_name), reflection_dump_text(&value.case_name)),
+        ReflectionParameterDefaultValue::Evaluated { value, .. } => reflection_dump_default_value(value),
         ReflectionParameterDefaultValue::Int(value) => value.to_string(),
         ReflectionParameterDefaultValue::Bool(value) => value.to_string(),
         ReflectionParameterDefaultValue::Float(value) => reflection_dump_float(*value),
@@ -244,10 +247,6 @@ pub(super) fn reflection_dump_default_value(default: &ReflectionParameterDefault
             &elephc_builtin_contract::string_literal::literal_bytes(value),
         ),
         ReflectionParameterDefaultValue::Null => String::from("NULL"),
-        // An enum case prints as the qualified case constant.
-        ReflectionParameterDefaultValue::EnumCase { enum_name, case_name } => {
-            format!("\\{}::{}", enum_name.trim_start_matches('\\'), case_name)
-        }
         ReflectionParameterDefaultValue::DeferredError(_)
         | ReflectionParameterDefaultValue::EirHelper(_) => String::new(),
         // Written arguments retain their source order and names independently of the

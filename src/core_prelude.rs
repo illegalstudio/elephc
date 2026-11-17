@@ -68,6 +68,40 @@ pub(crate) fn core_declarations() -> Program {
             properties[0].readonly = true;
         }
         declarations.push(sensitive);
+        // Used by the parser's append autovivification lowering (`$x[]->p = v`). The
+        // `mixed` return keeps the appended element opaque so the checker cannot prove it
+        // is null and fold the following property write into a terminating throw; arrays
+        // still raise PHP's catchable "on null" Error at run time.
+        declarations.push(crate::synthetic_class::function("__elephc_append_element")
+            .param("container", t_mixed())
+            .param("key", t_mixed())
+            .returns(t_mixed())
+            .body(vec![crate::synthetic_class::s_return(e_index(e_var("container"), e_var("key")))])
+            .build());
+        // A document-root SimpleXMLElement rejects `$sxe[]->prop = v` before the append runs.
+        // The class only exists when the XML prelude is injected, so the probe goes through
+        // `is_a` with a string class name and a dynamic method call; both are legal on a
+        // `mixed` receiver and cost nothing for programs without SimpleXML.
+        declarations.push(crate::synthetic_class::function("__elephc_append_property_root_append")
+            .param("container", t_mixed())
+            .returns(TypeExpr::Bool)
+            .body(vec![
+                s_if(
+                    crate::synthetic_class::e_not(crate::synthetic_class::e_call(
+                        "is_a",
+                        vec![e_var("container"), e_str("SimpleXMLElement")],
+                    )),
+                    vec![crate::synthetic_class::s_return(crate::synthetic_class::e_bool(false))],
+                    Vec::new(),
+                    None,
+                ),
+                crate::synthetic_class::s_return(crate::synthetic_class::e_method_call(
+                    e_var("container"),
+                    "__elephc_simplexml_root_append_failure",
+                    Vec::new(),
+                )),
+            ])
+            .build());
         declarations.push(class("WeakReference").final_()
             .private_prop("__elephc_target", TypeExpr::Int, Some(e_int(0)))
             .method(method("__construct").body(vec![s_throw(e_new_fq("Error", vec![e_str(
@@ -154,7 +188,8 @@ fn as_attribute(mut declaration: Stmt, targets: i64) -> Stmt {
 }
 
 /// Adds Core's `WeakReference` declaration to a program that does not declare it yet: a prelude
-/// injected after the Core one (the hosted-extension wrappers) may need it on its own.
+/// injected after Core (DOM or hosted extensions) may need it on its own. Generated
+/// declarations are resolved here so this also works after the main namespace pass.
 pub fn ensure_weak_reference(
     mut program: Program,
     inventory: &mut crate::optimize::reachability::PreludeInventory,
@@ -164,23 +199,64 @@ pub fn ensure_weak_reference(
         return program;
     }
     let declaration: Program = core_declarations().into_iter().filter(declared).collect();
+    let declaration = crate::name_resolver::resolve(declaration)
+        .expect("WeakReference prelude must resolve");
     inventory.record_program("core", &declaration);
     program.splice(0..0, declaration);
     program
 }
 
+/// Returns true when `program` names `WeakMap`, so its prelude class must be declared.
+///
+/// Run by `crate::autoload::prelude_probe` over the autoload closure: a Composer class file
+/// that types a property `\WeakMap` is only loaded after this prelude's injection decision.
+/// Introspection on a computed name (`class_exists($name)`) or a dynamic `new $class` keeps the
+/// class too, as [`inject_if_used`] does for the entry program.
+pub fn program_uses_weak_map(program: &[Stmt]) -> bool {
+    let usage = crate::prelude_prune::usage::collect(program);
+    usage.introspects
+        || usage.constructs_dynamic_class
+        || usage.classes.contains("weakmap")
+        || usage.literals.contains("weakmap")
+}
+
+/// Returns true when `program` names `WeakReference`; see [`program_uses_weak_map`].
+pub fn program_uses_weak_reference(program: &[Stmt]) -> bool {
+    let usage = crate::prelude_prune::usage::collect(program);
+    usage.introspects
+        || usage.constructs_dynamic_class
+        || usage.classes.contains("weakreference")
+        || usage.literals.contains("weakreference")
+}
+
 /// Injects the reachable Core class declarations, widening for introspection and eval.
+///
+/// `autoloaded_weak_map` / `autoloaded_weak_reference` keep those classes when a file of the
+/// autoload closure uses them (`crate::autoload::prelude_probe`), which the entry program
+/// cannot show.
 pub fn inject_if_used(
     program: Program,
+    autoloaded_weak_map: bool,
+    autoloaded_weak_reference: bool,
     inventory: &mut crate::optimize::reachability::PreludeInventory,
 ) -> Program {
     crate::compiler_stack::with_compiler_stack(|| {
         let usage = crate::prelude_prune::usage::collect(&program);
         let mut declarations = core_declarations();
         let dynamic = usage.introspects || usage.constructs_dynamic_class;
-        let weak_map = dynamic || usage.classes.contains("weakmap") || usage.literals.contains("weakmap");
-        let weak_reference = weak_map || usage.classes.contains("weakreference") || usage.literals.contains("weakreference");
+        let weak_map = autoloaded_weak_map
+            || dynamic
+            || usage.classes.contains("weakmap")
+            || usage.literals.contains("weakmap");
+        let weak_reference = weak_map
+            || autoloaded_weak_reference
+            || usage.classes.contains("weakreference")
+            || usage.literals.contains("weakreference");
         declarations.retain(|stmt| {
+            if let StmtKind::FunctionDecl { name, .. } = &stmt.kind {
+                return name == "__elephc_append_element"
+                    || name == "__elephc_append_property_root_append";
+            }
             let StmtKind::ClassDecl { name, .. } = &stmt.kind else { return false };
             if name == "WeakMap" || name == "__ElephcWeakMapIterator" { return weak_map; }
             if name == "WeakReference" { return weak_reference; }
@@ -203,7 +279,7 @@ mod tests {
             let tokens = crate::lexer::tokenize("<?php get_declared_classes();").unwrap();
             let program = crate::parser::parse(&tokens).unwrap();
             let mut inventory = crate::optimize::reachability::PreludeInventory::new();
-            let program = super::inject_if_used(program, &mut inventory);
+            let program = super::inject_if_used(program, false, false, &mut inventory);
             let program = crate::name_resolver::resolve(program).unwrap();
             let target = crate::codegen_support::platform::Target::parse(target).unwrap();
             let result = crate::types::checker::check_types(&program, target)

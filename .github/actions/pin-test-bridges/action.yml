@@ -1,0 +1,26 @@
+name: Pin archived CLI bridges
+description: Make compiler subprocesses reuse the archive instead of rebuilding on checkout mtimes.
+inputs:
+  root:
+    description: Nextest extraction directory relative to RUNNER_TEMP, containing target/debug
+    default: nextest
+runs:
+  using: composite
+  steps:
+    - name: Pin CLI library discovery to the extracted test payload
+      shell: bash
+      env:
+        TEST_ARTIFACT_ROOT: ${{ inputs.root }}
+      run: |
+        python3 -B - <<'PYTHON' >> "$GITHUB_ENV"
+        import os
+        from pathlib import Path
+        import sys
+        sys.path.insert(0, 'scripts/ci')
+        from build_artifacts import bridge_environment
+        relative = Path(os.environ['TEST_ARTIFACT_ROOT'])
+        if relative.is_absolute() or '..' in relative.parts:
+            raise ValueError('Test extraction directory must be relative to RUNNER_TEMP')
+        root = Path(os.environ['RUNNER_TEMP']) / relative
+        print(bridge_environment(Path.cwd(), 'debug', artifact_root=root), end='')
+        PYTHON

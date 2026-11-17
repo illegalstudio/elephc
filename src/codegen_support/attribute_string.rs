@@ -74,8 +74,8 @@ fn render_value(value: &AttrArgValue, out: &mut String) {
         // `{:?}` is the spelling that keeps PHP's trailing `.0` on a whole float (`1.0`, not `1`).
         AttrArgValue::Float(bits) => out.push_str(&format!("{:?}", f64::from_bits(*bits))),
         AttrArgValue::Str(s) => render_string(s, out),
-        AttrArgValue::ConstRef(name) => out.push_str(name),
-        AttrArgValue::ScopedConst(owner, member) => {
+        AttrArgValue::ConstRef(name, _) => out.push_str(name),
+        AttrArgValue::ScopedConst(owner, member, _) => {
             out.push_str(owner);
             out.push_str("::");
             out.push_str(member);
@@ -132,7 +132,7 @@ mod tests {
 
     /// Builds a positional argument entry.
     fn positional(value: AttrArgValue) -> AttrArgEntry {
-        AttrArgEntry { key: None, value }
+        AttrArgEntry { key: None, value, span: crate::span::Span::dummy() }
     }
 
     /// An attribute with no arguments is one line with no block, as `php -n` prints it.
@@ -180,6 +180,7 @@ mod tests {
             AttrArgEntry {
                 key: Some(AttrKey::Str("name".to_string())),
                 value: AttrArgValue::Str("n".to_string()),
+                span: crate::span::Span::dummy(),
             },
             positional(AttrArgValue::Array(vec![
                 positional(AttrArgValue::Str("a".to_string())),
@@ -188,6 +189,7 @@ mod tests {
             positional(AttrArgValue::Array(vec![AttrArgEntry {
                 key: Some(AttrKey::Str("k".to_string())),
                 value: AttrArgValue::Int(1),
+                span: crate::span::Span::dummy(),
             }])),
             positional(AttrArgValue::Array(Vec::new())),
         ];

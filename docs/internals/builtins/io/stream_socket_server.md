@@ -1,8 +1,6 @@
 ---
 title: "stream_socket_server() - internals"
 description: "Compiler internals for stream_socket_server(): lowering path, type checks, and runtime helpers."
-sidebar:
-  order: 417
 ---
 
 ## `stream_socket_server()` - internals
@@ -10,7 +8,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/io/stream_socket_server.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/io/stream_socket_server.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:752](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L752) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 
@@ -39,21 +37,19 @@ sidebar:
 ## Signature summary
 
 ```php
-function stream_socket_server(string $address, mixed $error_code = null, mixed $error_message = null, int $flags = 12, mixed $context = null): mixed
+function stream_socket_server(string $address): mixed
 ```
 
 ## What the type checker enforces
 
-- **Arity**: takes 1–5 arguments (4 optional).
-- **By-reference parameters**: `$error_code`, `$error_message`.
+- **Arity**: takes exactly 1 argument.
 
 ## Eval interpreter (magician)
 
 - **Declaration**: [`crates/elephc-magician/src/interpreter/builtins/filesystem/stream_socket_server.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/filesystem/stream_socket_server.rs) (`eval_builtin!`)
 - **Execution**: Magician interpreter adapter.
-- **Adapter reason**: `by-reference-or-lvalue`.
+- **Adapter reason**: `runtime-state-or-resource`.
 - **Dispatch hooks**: `direct`, `values`
-- **By-reference parameters**: `$error_code`, `$error_message`.
 
 ## Cross-references
 

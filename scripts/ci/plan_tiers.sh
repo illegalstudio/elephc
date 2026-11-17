@@ -34,16 +34,14 @@ case "$EVENT" in
         reason="$EVENT runs every tier"
         ;;
     push)
-        if count=$(gh api "repos/$REPO/actions/workflows/$WORKFLOW_FILE/runs?head_sha=$SHA&event=merge_group&status=success&per_page=1" --jq '.total_count'); then
-            if [[ $count =~ ^[0-9]+$ && $count -gt 0 ]]; then
-                run=false
-                extended=false
-                reason="a successful merge_group run of $WORKFLOW_FILE already tested $SHA"
-            else
-                reason="no merge_group run of $WORKFLOW_FILE tested $SHA, so every tier runs"
-            fi
+        # A former standalone CI run does not prove the consolidated PDO gates.
+        # Only the coordinator's verified artifact resolver can authorize reuse.
+        if [[ ${VERIFIED_REUSE_RUN:-} =~ ^[1-9][0-9]*$ ]]; then
+            run=false
+            extended=false
+            reason="verified artifacts and all required gates from run $VERIFIED_REUSE_RUN"
         else
-            reason="could not look up merge_group runs for $SHA, so every tier runs"
+            reason="no verified complete artifact set for $SHA, so every tier runs"
         fi
         ;;
     pull_request)

@@ -27,6 +27,9 @@ pub(in crate::interpreter) fn eval_evaluated_callable_with_call_array_args(
                 )
             })
         }
+        EvaluatedCallable::NativeDescriptor { callback, .. } => {
+            eval_native_descriptor_with_call_args(*callback, evaluated_args, context, values)
+        }
         EvaluatedCallable::Named { name, .. } => {
             if let Some(closure) = context.closure(name).cloned() {
                 let parameter_is_by_ref = closure.function().parameter_is_by_ref();
@@ -90,7 +93,7 @@ pub(in crate::interpreter) fn eval_evaluated_callable_with_call_array_args(
         EvaluatedCallable::InvokableObject { object } => {
             eval_invokable_object_with_call_user_func_args(*object, evaluated_args, context, values)
         }
-        EvaluatedCallable::NativeDescriptor { descriptor } => {
+        EvaluatedCallable::DecodedDescriptor { descriptor } => {
             let Some(decoded) =
                 (unsafe { decode_callable_descriptor(*descriptor as *mut std::ffi::c_void) })
             else {

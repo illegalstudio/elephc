@@ -43,7 +43,7 @@ fn consumes_possibly_promoted_array(target: RuntimeFnId) -> bool {
             | F::ArrayMergeRecursive | F::ArrayReplace | F::ArrayChunk | F::ArraySplice
             | F::Sort | F::Rsort | F::Usort | F::Uasort | F::Uksort | F::Asort | F::Arsort
             | F::Ksort | F::Krsort | F::ArrayFilter | F::ArrayWalk
-            | F::ArrayReduce | F::ArrayRand | F::ArrayFirst | F::ArrayLast | F::ArrayIsList
+            | F::ArrayReduce | F::ArrayFirst | F::ArrayLast | F::ArrayIsList
             | F::Natsort | F::Natcasesort | F::ArrayMerge | F::ArrayPad | F::Shuffle
     )
 }

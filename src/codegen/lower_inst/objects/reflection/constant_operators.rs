@@ -57,6 +57,7 @@ pub(super) fn reflection_constant_truthiness(value: &ReflectionConstantValue) ->
         ReflectionConstantValue::Array(items) => !items.is_empty(),
         ReflectionConstantValue::AssocArray(entries) => !entries.is_empty(),
         ReflectionConstantValue::EnumCase { .. } => true,
+        ReflectionConstantValue::Evaluated { value, .. } => return reflection_constant_truthiness(value),
         ReflectionConstantValue::Undefined(_) => return None,
     })
 }

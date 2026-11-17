@@ -143,9 +143,50 @@ pub(super) fn reflection_class_method_names_for_filter(
         );
     }
     let mut names = Vec::new();
-    for name in reflection_class_method_order(class_info) {
-        if reflection_method_matches_filter(class_info, &name, filter) {
-            names.push(name);
+    let mut seen = std::collections::HashSet::new();
+    // Zend's function-table order first (own methods, the parent's table, trait methods),
+    // then anything the declarations did not cover.
+    let ordered = crate::types::method_order::zend_method_table_order(
+        class_name.trim_start_matches('\\'),
+        ctx.classes,
+        &|class| {
+            crate::types::method_order::trait_imported_method_keys(
+                class,
+                ctx.declared_trait_methods,
+                &|method: &crate::ir::TraitMethodInfo| method.span,
+            )
+        },
+    );
+    let ordered: Vec<String> = ordered
+        .into_iter()
+        .filter_map(|key| {
+            class_info
+                .methods
+                .keys()
+                .chain(class_info.static_methods.keys())
+                .find(|name| php_symbol_key(name) == key)
+                .cloned()
+        })
+        .collect();
+    // Then php's order of what the declarations carry (enum cases, imported trait members), and
+    // the signature-only methods sorted so the list is stable.
+    let declared_order = reflection_class_method_order(class_info);
+    for name in ordered.iter().chain(declared_order.iter()) {
+        // Builtin implementation methods a subclass inherits stay hidden (mysqli's `__destruct`).
+        let declaring = class_info
+            .method_declaring_classes
+            .get(name)
+            .or_else(|| class_info.static_method_declaring_classes.get(name));
+        if declaring.is_some_and(|owner| {
+            elephc_builtin_contract::lookup_class(owner)
+                .is_some_and(|class| !class.method_is_php_visible(name))
+        }) {
+            continue;
+        }
+        if seen.insert(php_symbol_key(name))
+            && reflection_method_matches_filter(class_info, name, filter)
+        {
+            names.push(name.clone());
         }
     }
     Some(names)

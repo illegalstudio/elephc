@@ -296,6 +296,22 @@ fn decl(stmt: &Stmt, depth: usize) -> String {
                     }
                 };
                 out.push_str(&format!("\n{}{}", pad(depth + 1), call));
+                if property.hooks.any() {
+                    assert!(
+                        !property.hooks.get_by_ref,
+                        "transcribe: by-reference get hooks are not modelled ({})",
+                        property.name
+                    );
+                    // The hook BODIES are ordinary `__propget_*` / `__propset_*`
+                    // methods emitted below; only the property's hook flags live here.
+                    out.push_str(&format!(
+                        "\n{}.hooked({}, {}, {})",
+                        pad(depth + 1),
+                        property.hooks.get,
+                        property.hooks.set,
+                        property.hooks.uses_backing_slot
+                    ));
+                }
             }
             for class_method in methods {
                 assert!(
@@ -747,24 +763,39 @@ fn statement(stmt: &Stmt, depth: usize) -> String {
             receiver,
             property,
             value,
-        } => format!(
-            "s_static_prop_array_push({}, {}, {})",
-            lit(&static_receiver_name(receiver)),
-            lit(property),
-            expr(value, depth)
-        ),
+        } => match receiver {
+            StaticReceiver::Self_ => format!(
+                "s_self_static_prop_array_push({}, {})",
+                lit(property),
+                expr(value, depth)
+            ),
+            other => format!(
+                "s_static_prop_array_push({}, {}, {})",
+                lit(&static_receiver_name(other)),
+                lit(property),
+                expr(value, depth)
+            ),
+        },
         StmtKind::StaticPropertyArrayAssign {
             receiver,
             property,
             index,
             value,
-        } => format!(
-            "s_static_prop_array_assign({}, {}, {}, {})",
-            lit(&static_receiver_name(receiver)),
-            lit(property),
-            expr(index, depth),
-            expr(value, depth)
-        ),
+        } => match receiver {
+            StaticReceiver::Self_ => format!(
+                "s_self_static_prop_array_assign({}, {}, {})",
+                lit(property),
+                expr(index, depth),
+                expr(value, depth)
+            ),
+            other => format!(
+                "s_static_prop_array_assign({}, {}, {}, {})",
+                lit(&static_receiver_name(other)),
+                lit(property),
+                expr(index, depth),
+                expr(value, depth)
+            ),
+        },
         StmtKind::DoWhile { body, condition } => format!(
             "s_do_while({}, {})",
             stmt_vec(body, depth),
@@ -893,6 +924,7 @@ fn statement(stmt: &Stmt, depth: usize) -> String {
                 stmt_vec(body, depth)
             )
         }
+        StmtKind::Synthetic(body) => format!("s_synthetic({})", stmt_vec(body, depth)),
         other => panic!("transcribe: unmodelled statement {:?}", other),
     }
 }
@@ -919,11 +951,12 @@ fn expr(value: &Expr, depth: usize) -> String {
         ExprKind::Variable(name) => format!("e_var({})", lit(name)),
         ExprKind::ConstRef(name) => format!("e_const({})", lit(&name.as_canonical())),
         ExprKind::PostIncrement(name) => format!("e_post_inc({})", lit(name)),
-        ExprKind::PostDecrement(name) => format!("e_post_dec({})", lit(name)),
         ExprKind::PreIncrement(name) => format!("e_pre_inc({})", lit(name)),
+        ExprKind::PostDecrement(name) => format!("e_post_dec({})", lit(name)),
         ExprKind::PreDecrement(name) => format!("e_pre_dec({})", lit(name)),
         ExprKind::Negate(inner) => format!("e_neg({})", expr(inner, depth)),
         ExprKind::Not(inner) => format!("e_not({})", expr(inner, depth)),
+        ExprKind::ErrorSuppress(inner) => format!("e_error_suppress({})", expr(inner, depth)),
         ExprKind::Cast { target, expr: inner } => format!(
             "e_cast(CastType::{}, {})",
             cast_type(target),
@@ -999,15 +1032,46 @@ fn expr(value: &Expr, depth: usize) -> String {
             conditional_value_temp,
         } => {
             assert!(
-                result_target.is_none()
-                    && prelude.is_empty()
-                    && conditional_value_temp.is_none(),
-                "only plain assignments are modelled"
+                conditional_value_temp.is_none(),
+                "only plain assignments are modelled (assignment at {:?})",
+                target.span
+            );
+            if result_target.is_none() && prelude.is_empty() {
+                return format!(
+                    "e_assign({}, {})",
+                    expr(target, depth),
+                    expr(value, depth)
+                );
+            }
+            // The parser lowered a non-local target (`$o->{"k"} = v`) into a
+            // value temporary bound in `prelude`. `e_assign` re-runs that same
+            // lowering, so recover the ORIGINAL value from the temporary and emit
+            // the plain form — then prove the round trip rebuilds this exact node.
+            let original = match &value.kind {
+                ExprKind::Variable(temp) => prelude
+                    .iter()
+                    .find_map(|stmt| match &stmt.kind {
+                        StmtKind::Assign { name, value } if name == temp => Some(value.clone()),
+                        _ => None,
+                    })
+                    .unwrap_or_else(|| (**value).clone()),
+                _ => (**value).clone(),
+            };
+            let rebuilt = crate::parser::expr::plain_assignment_expression(
+                (**target).clone(),
+                original.clone(),
+                value_span_or(value),
+            );
+            assert_eq!(
+                strip_debug_spans(&format!("{:?}", rebuilt.kind)),
+                strip_debug_spans(&format!("{:?}", value_owner_kind(target, value, result_target, prelude))),
+                "transcribe: lowered assignment at {:?} does not round-trip through e_assign",
+                target.span
             );
             format!(
                 "e_assign({}, {})",
                 expr(target, depth),
-                expr(value, depth)
+                expr(&original, depth)
             )
         }
         ExprKind::FunctionCall { name, args } => format!(
@@ -1063,6 +1127,11 @@ fn expr(value: &Expr, depth: usize) -> String {
         ExprKind::ClosureCall { var, args } => format!(
             "e_closure_call({}, {})",
             lit(var),
+            expr_vec(args, depth)
+        ),
+        ExprKind::ExprCall { callee, args } => format!(
+            "e_expr_call({}, {})",
+            expr(callee, depth),
             expr_vec(args, depth)
         ),
         ExprKind::Closure {
@@ -1172,6 +1241,13 @@ fn ty_expr(ty: &TypeExpr) -> String {
         TypeExpr::Ptr(None) => "t_ptr()".to_string(),
         TypeExpr::Never => "TypeExpr::Never".to_string(),
         TypeExpr::Iterable => "TypeExpr::Iterable".to_string(),
+        TypeExpr::Array(inner) => format!("TypeExpr::Array(Box::new({}))", ty_expr(inner)),
+        TypeExpr::AssocArray { key, value } => format!(
+            "TypeExpr::AssocArray {{ key: Box::new({}), value: Box::new({}) }}",
+            ty_expr(key),
+            ty_expr(value)
+        ),
+        TypeExpr::Buffer(inner) => format!("TypeExpr::Buffer(Box::new({}))", ty_expr(inner)),
         TypeExpr::Nullable(inner) => format!("t_nullable({})", ty_expr(inner)),
         TypeExpr::Union(members) => {
             let rendered: Vec<String> = members.iter().map(ty_expr).collect();
@@ -1245,6 +1321,44 @@ fn bin_op(op: &BinOp) -> &'static str {
         BinOp::Spaceship => "Spaceship",
         BinOp::NullCoalesce => "NullCoalesce",
     }
+}
+
+/// The span a re-lowered assignment is stamped with: any span works, because the
+/// round-trip comparison strips spans and temp names are compared structurally.
+fn value_span_or(value: &Expr) -> crate::span::Span {
+    value.span
+}
+
+/// Rebuilds the parsed `Assignment` node kind so it can be compared with a re-lowering.
+fn value_owner_kind(
+    target: &Expr,
+    value: &Expr,
+    result_target: &Option<Box<Expr>>,
+    prelude: &[Stmt],
+) -> ExprKind {
+    ExprKind::Assignment {
+        target: Box::new(target.clone()),
+        value: Box::new(value.clone()),
+        result_target: result_target.clone(),
+        prelude: prelude.to_vec(),
+        conditional_value_temp: None,
+    }
+}
+
+/// Removes span payloads and generated temp-name positions so two lowerings of
+/// the same assignment compare on structure alone.
+fn strip_debug_spans(rendered: &str) -> String {
+    let mut cleaned = String::with_capacity(rendered.len());
+    let mut rest = rendered;
+    while let Some(at) = rest.find("Span {") {
+        cleaned.push_str(&rest[..at]);
+        cleaned.push_str("Span");
+        let after = &rest[at..];
+        let close = after.find('}').map(|end| end + 1).unwrap_or(after.len());
+        rest = &after[close..];
+    }
+    cleaned.push_str(rest);
+    crate::synthetic_class::oracle::assignment_names(&cleaned)
 }
 
 #[cfg(test)]
@@ -1373,10 +1487,16 @@ class Demo implements Iterator {
     private int $handle;
     private $target;
     private $alias;
+    private static array $items = [];
     public function __construct(int $handle) {
         $this->handle = $handle;
         $this->target = null;
         $this->alias = &$this->target;
+    }
+    public static function collect(): void {
+        self::$items[] = 1;
+        self::$items[0] = 2;
+        @file_get_contents("missing");
     }
     private function fail(string $message): void {
         if ($this->handle == 2) {
@@ -1397,6 +1517,19 @@ class Demo implements Iterator {
 }
 function demo_make(int $h) {
     return new Demo($h);
+}
+function demo_invoke(string $value): int {
+    return ("strlen")($value);
+}
+function demo_adjust(): int {
+    $_j = 1;
+    $_j--;
+    ++$_j;
+    --$_j;
+    return $_j;
+}
+function demo_suppress(string $path): string {
+    return @file_get_contents($path);
 }
 function demo_match($value) {
     return match ($value) { 1, 2 => "one", default => match ($value) {} };
@@ -1419,12 +1552,20 @@ function demo_match($value) {
             "e_null_coalesce",
             "s_for(",
             "s_foreach(",
+            "s_self_static_prop_array_push(",
+            "s_self_static_prop_array_assign(",
+            "e_error_suppress(",
             "e_ternary(",
             "e_match(e_var(\"value\"), vec![(vec![e_int(1), e_int(2)], e_str(\"one\"))], Some(e_match(e_var(\"value\"), vec![], None)))",
             "t_union(vec![TypeExpr::Str, TypeExpr::Bool])",
             "t_nullable(TypeExpr::Str)",
             ".param_untyped_default(\"flag\"",
             "e_new(\"Demo\"",
+            "e_expr_call(e_str(\"strlen\"), vec![e_var(\"value\")])",
+            "e_post_dec(\"_j\")",
+            "e_pre_inc(\"_j\")",
+            "e_pre_dec(\"_j\")",
+            "e_error_suppress(e_call(\"file_get_contents\", vec![e_var(\"path\")]))",
         ] {
             assert!(
                 rendered.contains(needle),

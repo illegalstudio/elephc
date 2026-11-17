@@ -38,6 +38,15 @@ pub(in crate::codegen) fn emit_error(ctx: &mut FunctionContext<'_>, message: &st
     emit_static_exception(ctx, "Error", "_spl_error_class_id", message);
 }
 
+/// Throws a catchable PHP `Error` carrying a static message and a source location.
+pub(super) fn emit_error_at(
+    ctx: &mut FunctionContext<'_>,
+    message: &str,
+    location: Option<(String, u32)>,
+) {
+    emit_static_exception_at(ctx, "Error", "_spl_error_class_id", message, location);
+}
+
 /// Throws a catchable PHP `TypeError` carrying a static message.
 pub(in crate::codegen) fn emit_type_error(ctx: &mut FunctionContext<'_>, message: &str) {
     emit_static_exception(ctx, "TypeError", "_spl_type_error_class_id", message);
@@ -292,6 +301,24 @@ pub(super) fn emit_type_error_at(
     emit_static_exception_at(ctx, "TypeError", "_spl_type_error_class_id", message, location);
 }
 
+/// Throws a catchable PHP `ReflectionException` carrying a static message and source location.
+///
+/// `ReflectionClass::newInstance()` reports an inaccessible constructor through
+/// `ReflectionException`, unlike a direct `new`, which raises `Error`.
+pub(super) fn emit_reflection_exception_at(
+    ctx: &mut FunctionContext<'_>,
+    message: &str,
+    location: Option<(String, u32)>,
+) {
+    emit_static_exception_at(
+        ctx,
+        "ReflectionException",
+        "_spl_reflection_exception_class_id",
+        message,
+        location,
+    );
+}
+
 /// Throws a catchable PHP `Error` whose message is a runtime string value.
 pub(super) fn emit_error_value(ctx: &mut FunctionContext<'_>, message: ValueId) -> Result<()> {
     let (message_ptr_reg, message_len_reg) = abi::string_result_regs(ctx.emitter);
@@ -418,6 +445,24 @@ fn emit_static_exception_at(
         emit_uncaught_exception_fatal_if_no_handler(ctx, &fatal_label, fatal_len);
     }
 
+    emit_static_throwable_owner(ctx, class_id_symbol, message, creation_line);
+    abi::emit_store_reg_to_symbol(ctx.emitter, abi::int_result_reg(ctx.emitter), "_exc_value", 0);
+    // This is an inline PHP-frame guard, so the runtime entry needs an ordinary call.
+    // On x86_64 its prologue relies on the return address for SysV stack alignment.
+    abi::emit_call_label(ctx.emitter, "__rt_throw_current");
+}
+
+/// Allocates an owned TypeError without throwing before guarded eval writeback has completed.
+pub(in crate::codegen) fn emit_type_error_owner(ctx: &mut FunctionContext<'_>, message: &str) {
+    let line = ctx.current_source_location().map_or(0, |(_, line)| line);
+    emit_static_throwable_owner(ctx, "_spl_type_error_class_id", message, line);
+}
+
+/// Initializes the standard compact Throwable layout and returns its acquired object owner.
+fn emit_static_throwable_owner(
+    ctx: &mut FunctionContext<'_>, class_id_symbol: &str, message: &str, creation_line: u32,
+) {
+    let (message_label, message_len) = ctx.data.add_string(message.as_bytes());
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
             crate::codegen_support::throwable_layout::emit_allocate(ctx.emitter, crate::codegen_support::throwable_layout::PAYLOAD_SIZE);
@@ -438,8 +483,6 @@ fn emit_static_exception_at(
                 creation_line,
             );
             ctx.emitter.instruction(&format!("str xzr, [x0, #{}]", crate::codegen_support::throwable_layout::PREVIOUS_OFFSET)); // previous defaults to null
-            abi::emit_store_reg_to_symbol(ctx.emitter, "x0", "_exc_value", 0);
-            abi::emit_jump(ctx.emitter, "__rt_throw_current");
         }
         Arch::X86_64 => {
             crate::codegen_support::throwable_layout::emit_allocate(ctx.emitter, crate::codegen_support::throwable_layout::PAYLOAD_SIZE);
@@ -461,8 +504,6 @@ fn emit_static_exception_at(
                 creation_line,
             );
             ctx.emitter.instruction(&format!("mov QWORD PTR [rax + {}], 0", crate::codegen_support::throwable_layout::PREVIOUS_OFFSET)); // previous defaults to null
-            abi::emit_store_reg_to_symbol(ctx.emitter, "rax", "_exc_value", 0);
-            abi::emit_jump(ctx.emitter, "__rt_throw_current");
         }
     }
 }
@@ -644,7 +685,7 @@ fn emit_dynamic_throwable_object(ctx: &mut FunctionContext<'_>, class_id_symbol:
             ctx.emitter.instruction(&format!("str xzr, [x0, #{}]", crate::codegen_support::throwable_layout::PREVIOUS_OFFSET)); // previous defaults to null
             abi::emit_release_temporary_stack(ctx.emitter, 16);
             abi::emit_store_reg_to_symbol(ctx.emitter, "x0", "_exc_value", 0);
-            abi::emit_jump(ctx.emitter, "__rt_throw_current");
+            abi::emit_call_label(ctx.emitter, "__rt_throw_current");
         }
         Arch::X86_64 => {
             crate::codegen_support::throwable_layout::emit_allocate(ctx.emitter, crate::codegen_support::throwable_layout::PAYLOAD_SIZE);
@@ -664,7 +705,7 @@ fn emit_dynamic_throwable_object(ctx: &mut FunctionContext<'_>, class_id_symbol:
             ctx.emitter.instruction(&format!("mov QWORD PTR [rax + {}], 0", crate::codegen_support::throwable_layout::PREVIOUS_OFFSET)); // previous defaults to null
             abi::emit_release_temporary_stack(ctx.emitter, 16);
             abi::emit_store_reg_to_symbol(ctx.emitter, "rax", "_exc_value", 0);
-            abi::emit_jump(ctx.emitter, "__rt_throw_current");
+            abi::emit_call_label(ctx.emitter, "__rt_throw_current");
         }
     }
 }

@@ -16,6 +16,66 @@ use crate::span::Span;
 use super::usage::scan_program;
 use super::{prune_unreachable_declarations, PreludeInventory, PruneOptions};
 
+/// A literal expression-call target contributes one exact edge instead of a global hazard.
+#[test]
+fn prune_literal_expression_calls_keep_exact_targets() {
+    let source = r#"<?php
+function retainedTarget(): int { return 1; }
+function unusedTarget(): int { return 2; }
+echo ("RETAINEDTARGET")();
+"#;
+    let usage = scan_program(&parse(source));
+    assert!(usage.functions.contains(&php_symbol_key("retainedTarget")));
+    assert!(!usage.hazards.dynamic_function);
+    assert!(!usage.hazards.dynamic_method);
+    let (program, _) = prune(source);
+    assert!(has_function(&program, "retainedTarget"));
+    assert!(!has_function(&program, "unusedTarget"));
+}
+
+/// A literal callable array names its method without preserving unrelated declarations.
+#[test]
+fn prune_literal_array_expression_calls_keep_exact_methods() {
+    for call in [
+        "echo (['LiteralArrayBox', 'ping'])();",
+        "eval('echo ([\"LiteralArrayBox\", \"ping\"])();');",
+    ] {
+        let source = format!(r#"<?php
+function unusedArrayTarget(): int {{ return 2; }}
+class LiteralArrayBox {{
+    public static function ping(): int {{ return 1; }}
+    public static function other(): int {{ return 3; }}
+}}
+class UnrelatedArrayBox {{ public static function other(): int {{ return 4; }} }}
+{call}
+"#);
+        let usage = scan_program(&parse(&source));
+        assert!(!usage.hazards.dynamic_function, "{call}");
+        assert!(!usage.hazards.dynamic_method, "{call}");
+        assert!(!usage.hazards.dynamic_class, "{call}");
+        let (program, _) = prune(&source);
+        assert!(has_method(&program, "LiteralArrayBox", "ping"), "{call}");
+        // Literal eval keeps a named class's complete interpreter metadata, while
+        // an ordinary native callable needs only the exact method edge.
+        assert_eq!(has_method(&program, "LiteralArrayBox", "other"), call.starts_with("eval("), "{call}");
+        assert!(!has_function(&program, "unusedArrayTarget"), "{call}");
+        assert!(!has_class(&program, "UnrelatedArrayBox"), "{call}");
+    }
+}
+
+/// Runtime expression-call targets retain conservative lookup, including inside literal eval.
+#[test]
+fn scan_runtime_expression_calls_keep_lookup_hazards() {
+    for source in [
+        "<?php ($argv[1])();",
+        "<?php eval('($argv[1])();');",
+    ] {
+        let usage = scan_program(&parse(source));
+        assert!(usage.hazards.dynamic_function, "{source}");
+        assert!(usage.hazards.dynamic_method, "{source}");
+    }
+}
+
 /// Folded class-name strings keep runtime static-callable targets without rooting unrelated classes.
 #[test]
 fn prune_keeps_runtime_static_callable_class_after_class_constant_folding() {
@@ -1423,6 +1483,59 @@ fn prune_structural_interface_method_does_not_widen_hazards() {
     assert!(!has_method(&program, "T", "unused"));
 }
 
+/// Verifies a recorded backend-required prelude function survives without an AST reference.
+#[test]
+fn prune_keeps_recorded_backend_required_prelude_function() {
+    let source = r#"<?php
+function __elephc_array_rand(array $array, int $num = 1): mixed { return $num; }
+function unused_prelude_helper(): int { return 1; }
+echo "array_rand";
+"#;
+    let program = parse(source);
+    let mut check = crate::types::check(&program).expect("fixture must type check");
+    let mut inventory = PreludeInventory::new();
+    inventory.record_program("random", &program);
+    inventory.record_required_function("random", "__elephc_array_rand");
+    let roots = HashSet::default();
+    let program = prune_unreachable_declarations(
+        program,
+        &mut check,
+        PruneOptions {
+            inventory: &inventory,
+            forced_groups: &roots,
+            exported_functions: &roots,
+            eval_forced: false,
+        },
+    );
+    assert!(has_function(&program, "__elephc_array_rand"));
+    assert!(!has_function(&program, "unused_prelude_helper"));
+}
+
+/// Verifies the same helper is pruned when no prelude records it as backend-required.
+#[test]
+fn prune_drops_unreferenced_prelude_function_without_a_required_record() {
+    let source = r#"<?php
+function __elephc_array_rand(array $array, int $num = 1): mixed { return $num; }
+echo "array_rand";
+"#;
+    let program = parse(source);
+    let mut check = crate::types::check(&program).expect("fixture must type check");
+    let mut inventory = PreludeInventory::new();
+    inventory.record_program("random", &program);
+    let roots = HashSet::default();
+    let program = prune_unreachable_declarations(
+        program,
+        &mut check,
+        PruneOptions {
+            inventory: &inventory,
+            forced_groups: &roots,
+            exported_functions: &roots,
+            eval_forced: false,
+        },
+    );
+    assert!(!has_function(&program, "__elephc_array_rand"));
+}
+
 /// Verifies explicitly marked compiler-owned closure dispatch does not pin sibling methods.
 #[test]
 fn prune_ignores_internal_prelude_closure_dispatch_hazard() {
@@ -1745,4 +1858,42 @@ fn prune_walks_a_vtable_family_once_not_once_per_member() {
     }
     eprintln!("VTABLE_WALKS_FAMILY={walks}");
     assert!(walks <= 3, "{walks} vtable walks for one family of eight members");
+}
+
+/// Object-only class probes do not retain unrelated classes through a dynamic-name hazard.
+#[test]
+fn scan_object_class_probes_preserve_class_pruning() {
+    for source in [
+        "<?php echo is_a($object, 'A');",
+        "<?php echo is_a($object, 'A', false);",
+        "<?php echo is_subclass_of($object, 'A', false);",
+        "<?php $object = new A(); echo is_subclass_of($object, 'A');",
+        "<?php echo is_a(new A(), 'A', true);",
+        "<?php class A { public function check(): bool { return is_subclass_of($this, 'A'); } }",
+        "<?php echo is_a(allow_string: false, class: 'A', object_or_class: $object);",
+    ] {
+        let usage = scan_program(&parse(source));
+        assert!(!usage.hazards.dynamic_class, "{source}");
+        assert!(usage.classes.contains(&php_symbol_key("A")), "{source}");
+    }
+    for probe in ["is_a($object, 'A')", "is_subclass_of($object, 'A')"] {
+        let source = format!("<?php class A {{}} class Unused {{}} $object = new A(); var_dump({probe});");
+        let (program, _) = prune(&source);
+        assert!(!has_class(&program, "Unused"), "{probe}");
+    }
+}
+
+/// String-enabled probes still conservatively retain dynamically selected class declarations.
+#[test]
+fn scan_string_class_probes_keep_dynamic_lookup_hazards() {
+    for source in [
+        "<?php echo is_a($argv[1], 'A', true);",
+        "<?php echo is_subclass_of($argv[1], 'A');",
+    ] {
+        assert!(scan_program(&parse(source)).hazards.dynamic_class, "{source}");
+    }
+    let usage = scan_program(&parse("<?php echo is_a('Child', 'Base', true);"));
+    assert!(!usage.hazards.dynamic_class);
+    assert!(usage.classes.contains(&php_symbol_key("Child")));
+    assert!(usage.classes.contains(&php_symbol_key("Base")));
 }

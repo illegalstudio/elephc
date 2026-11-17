@@ -14,11 +14,14 @@
 mod incref_register_tests;
 #[cfg(test)]
 mod gc_incoming_cache_tests;
+#[cfg(test)]
+mod overwrite_order_tests;
 
 mod array_chunk;
 mod array_chunk_refcounted;
 mod array_chunk_to_hash;
 mod call_argument_unpack;
+mod container_refusal_owner;
 mod array_count_values;
 mod array_column;
 mod array_column_boxed;
@@ -41,8 +44,10 @@ mod array_fill_keys;
 mod array_fill_keys_refcounted;
 mod array_fill_refcounted;
 mod array_fill_str;
+mod array_filter_int_direct;
 mod array_predicate_boxed;
 mod array_filter_mixed;
+mod array_reduce_int_direct;
 mod array_flip;
 mod array_flip_boxed;
 mod array_flip_string;
@@ -56,6 +61,7 @@ mod array_intersect;
 mod array_intersect_refcounted;
 mod array_intersect_key;
 mod array_is_list;
+mod array_unbox_slots;
 mod array_key_exists;
 mod array_key_exists_mixed_key;
 mod array_map;
@@ -75,6 +81,11 @@ mod array_pad;
 mod array_pad_refcounted;
 mod array_product;
 mod array_numeric_aggregate;
+mod array_map_sum_probe;
+mod array_sum_probe_small;
+mod array_sum_int;
+mod array_type_check;
+mod keyed_kernels;
 mod array_push_int;
 mod array_push_refcounted;
 mod array_push_str;
@@ -85,7 +96,6 @@ mod elem_ref_cell;
 mod array_set_mixed_key;
 mod array_set_refcounted;
 mod array_set_str;
-mod array_rand;
 mod mt_uniform;
 mod random_u32;
 mod random_uniform;
@@ -144,6 +154,7 @@ mod gc_host_roots;
 mod gc_safepoint;
 mod gc_collect_cycles_x86_64;
 mod gc_control;
+mod gc_collect_budget;
 mod memory;
 mod gc_destructors;
 mod gc_weak_observers;
@@ -179,6 +190,7 @@ mod hash_key_hash;
 mod hash_normalize_key;
 mod hash_may_have_cyclic_values;
 mod hash_ensure_unique;
+mod hash_set_reference_layout;
 mod hash_entry_reference;
 mod hash_flip;
 mod hash_slice;
@@ -214,6 +226,7 @@ mod natsort;
 
 pub(super) mod deep_cleanup;
 mod object_free_deep;
+mod native_reference_source_retirement;
 mod range;
 mod incref;
 mod foreach_non_iterable_warning;
@@ -222,8 +235,11 @@ mod nan_bool_coercion_warning;
 mod iterable_unsupported_kind;
 mod iterable_write_stdout;
 mod mixed_abs;
+mod mixed_bit_not;
 mod mixed_cast_array;
 mod mixed_clone;
+mod mixed_min_max;
+mod mixed_reuse_int_cell;
 mod mixed_reference;
 mod mixed_cast_bool;
 mod mixed_cast_float;
@@ -312,9 +328,11 @@ pub use array_fill_refcounted::emit_array_fill_refcounted;
 /// Emit refcounted array fill helper.
 pub use array_fill_str::emit_array_fill_str;
 /// Emit storage-neutral array search and filter predicates.
+pub use array_filter_int_direct::emit_array_filter_int_direct;
 pub use array_predicate_boxed::emit_array_predicate_boxed;
 /// Emit runtime-dispatched array filter support for boxed gradual arrays (`preg_grep()`).
 pub use array_filter_mixed::emit_array_filter_mixed;
+pub use array_reduce_int_direct::emit_array_reduce_int_direct;
 /// Emit array find/any/all predicate helper.
 pub use array_flip::emit_array_flip;
 pub use array_flip_boxed::emit_array_flip_boxed;
@@ -343,6 +361,8 @@ pub use array_intersect_refcounted::emit_array_intersect_refcounted;
 pub use array_intersect_key::emit_array_intersect_key;
 /// Emit array list-shape predicate helper (array_is_list).
 pub use array_is_list::emit_array_is_list;
+/// Emit the boxed-slot to raw-slot indexed array conversion helper.
+pub use array_unbox_slots::emit_array_unbox_slots;
 /// Emit array key existence check helper.
 pub use array_key_exists::emit_array_key_exists;
 /// Emit the storage-kind-dispatching presence-only array key existence helper.
@@ -378,6 +398,11 @@ pub use array_pad::emit_array_pad;
 pub use array_pad_refcounted::emit_array_pad_refcounted;
 /// Emit refcounted array pad helper.
 pub use array_product::emit_array_product;
+pub use array_map_sum_probe::emit_array_map_sum_probe_int;
+pub use array_sum_probe_small::emit_array_sum_probe_small;
+pub use array_sum_int::emit_array_sum_int;
+pub use array_type_check::emit_array_type_check;
+pub use keyed_kernels::emit_keyed_kernels;
 pub use array_numeric_aggregate::{emit_array_numeric_aggregate, ARRAY_AGGREGATE_MESSAGES};
 /// Emit array product helper.
 pub use array_push_int::emit_array_push_int;
@@ -396,11 +421,9 @@ pub use array_set_mixed_key::emit_array_set_mixed_key;
 pub use array_get_mixed_key::emit_array_get_mixed_key;
 /// Emit refcounted indexed-array set helper.
 pub use array_set_refcounted::emit_array_set_refcounted;
-/// Emit refcounted indexed-array set helper.
-pub use array_set_str::emit_array_set_str;
 /// Emit string indexed-array set helper.
-pub use array_rand::emit_array_rand;
-/// Emit random array element helper.
+pub use array_set_str::emit_array_set_str;
+/// Emit random u32 draw helper.
 pub use random_u32::emit_random_u32;
 /// Emit 32-bit random unsigned integer helper.
 pub use random_uniform::emit_random_uniform;
@@ -601,7 +624,8 @@ pub use foreach_non_iterable_warning::{
 /// Emit the PHP `foreach()` non-iterable-argument warning helper.
 pub use nan_bool_coercion_warning::{
     emit_nan_bool_coercion_probe, emit_nan_bool_coercion_probe_leaf,
-    emit_nan_bool_coercion_warning, nan_bool_coercion_warning_enabled,
+    emit_nan_bool_coercion_warning, emit_nan_string_coercion_probe,
+    nan_bool_coercion_warning_enabled,
     NAN_BOOL_COERCION_MESSAGES,
 };
 /// Emit the PHP 8.5 NAN-to-bool coercion warning helper and its inline call-site probe.
@@ -614,13 +638,18 @@ pub use natsort::emit_natsort;
 pub use min_max_container::{emit_min_max_hash, emit_min_max_mixed, emit_min_max_str};
 /// Emit the single-array `min()` / `max()` reductions for Mixed, string, and hash containers.
 pub use mixed_abs::emit_mixed_abs;
+pub(crate) use mixed_bit_not::{emit_mixed_bit_not, BIT_NOT_PREFIX, BIT_NOT_TYPE_ROWS};
 /// Emit boxed-Mixed-to-array cast helper.
 pub use mixed_cast_array::emit_mixed_cast_array;
 /// Emit a resource-aware owned Mixed value read.
 pub use mixed_clone::emit_mixed_clone;
+/// Emit the two-operand `min()` / `max()` selection over Mixed-shaped cells.
+pub use mixed_min_max::emit_mixed_min_max;
+/// Emit the in-place integer boxing helper for a uniquely owned Mixed local cell.
+pub use mixed_reuse_int_cell::emit_mixed_reuse_int_cell;
 pub use mixed_reference::emit_mixed_reference;
 /// Emit Mixed from value conversion helper.
-pub use mixed_from_value::emit_mixed_from_value;
+pub use mixed_from_value::{emit_mixed_from_owned_string, emit_mixed_from_value};
 /// Emit Mixed instanceof check helper.
 pub use mixed_instanceof::emit_mixed_instanceof;
 pub use mixed_cast_bool::emit_mixed_cast_bool;

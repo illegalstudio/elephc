@@ -1,6 +1,7 @@
 //! Purpose:
-//! Per-function machine-layout state: the block emitted next, the compare fused into the
-//! current block's conditional branch, and cold paths deferred to the end of the function.
+//! Per-function machine-layout state: the block emitted next, the compare or signed overflow
+//! test fused into the current block's conditional branch, and cold paths deferred to the
+//! end of the function.
 //!
 //! Called from:
 //! - `crate::codegen::block_emit` (layout order, compare fusion, cold flush).
@@ -25,6 +26,11 @@ pub(crate) struct MachineLayoutState {
     pub(crate) next_block: Option<BlockId>,
     /// Scalar compare whose flags the current block's `cond_br` consumes directly.
     pub(crate) fused_compare: Option<InstId>,
+    /// Signed arithmetic whose overflow flags the current block's `cond_br` consumes.
+    ///
+    /// The pair is the wrapping arithmetic instruction and the `IOverflows` flag. Both are
+    /// emitted by the branch so the flag-setting operation and the branch stay adjacent.
+    pub(crate) fused_overflow: Option<(InstId, InstId)>,
     /// Out-of-line cold text collected for this function, when deferral is active.
     cold_text: Option<String>,
 }
@@ -40,6 +46,13 @@ impl FunctionContext<'_> {
     /// Returns true when `inst` is a scalar compare lowered by the following `cond_br`.
     pub(in crate::codegen) fn is_fused_compare(&self, inst: InstId) -> bool {
         self.machine_layout.fused_compare == Some(inst)
+    }
+
+    /// Returns true when `inst` is the arithmetic or flag half of a fused overflow branch.
+    pub(in crate::codegen) fn is_fused_overflow(&self, inst: InstId) -> bool {
+        self.machine_layout
+            .fused_overflow
+            .is_some_and(|(arith, flag)| inst == arith || inst == flag)
     }
 
     /// Starts collecting cold paths for this function's out-of-line tail.

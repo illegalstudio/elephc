@@ -18,6 +18,49 @@
 #define ELEPHC_PCRE2_CFLAG_DUPNAMES         0x10000U
 #define ELEPHC_PCRE2_CFLAG_NO_AUTO_CAPTURE  0x20000U
 
+
+/* Compiles one pattern with character tables for the current libc locale.
+ *
+ * PHP's pcre extension does not change LC_CTYPE; PCRE2 receives the locale's ctype
+ * tables explicitly. pcre2_code_copy_with_tables gives the compiled code its own copy
+ * so the temporary table block can be freed before returning. */
+static pcre2_code *elephc_pcre2_compile_locale(
+    const uint8_t *pattern,
+    PCRE2_SIZE length,
+    uint32_t options,
+    int *errorcode,
+    PCRE2_SIZE *erroffset)
+{
+    const uint8_t *tables = pcre2_maketables(NULL);
+    pcre2_compile_context *context = pcre2_compile_context_create(NULL);
+    pcre2_code *code;
+
+    if (context != NULL && tables != NULL) {
+        pcre2_set_character_tables(context, tables);
+    }
+    code = pcre2_compile((PCRE2_SPTR)pattern, length, options,
+        errorcode, erroffset, context);
+    if (context != NULL) {
+        pcre2_compile_context_free(context);
+    }
+    if (code != NULL && tables != NULL) {
+        pcre2_code *owned = pcre2_code_copy_with_tables(code);
+        if (owned == NULL) {
+            pcre2_code_free(code);
+            code = NULL;
+            *errorcode = PCRE2_ERROR_NOMEMORY;
+        } else {
+            pcre2_code_free(code);
+            code = owned;
+        }
+    }
+    if (tables != NULL) {
+        pcre2_maketables_free(NULL, tables);
+    }
+    return code;
+}
+
+
 typedef struct elephc_pcre2_v1_handle {
     regex_t regex;
     size_t slot_count;
@@ -344,7 +387,7 @@ int32_t elephc_pcre2_v1_compile(
         code = cached->code;
         capture_count = cached->capture_count;
     } else {
-        code = pcre2_compile((PCRE2_SPTR)pattern_z, PCRE2_ZERO_TERMINATED, native_options, &errorcode, &erroffset, NULL);
+        code = elephc_pcre2_compile_locale((const uint8_t *)pattern_z, PCRE2_ZERO_TERMINATED, native_options, &errorcode, &erroffset);
         if (code == NULL) {
             free(handle);
             elephc_pcre2_v1_error = 1;
@@ -690,8 +733,9 @@ int32_t elephc_pcre2_v1_mime_compile(
         || (pattern == NULL && length != 0) || length > PTRDIFF_MAX) {
         return PCRE2_ERROR_BADDATA;
     }
-    code = pcre2_compile(pattern == NULL ? (const uint8_t *)"" : pattern,
-        (PCRE2_SIZE)length, PCRE2_CASELESS, &error, &offset, NULL);
+    code = elephc_pcre2_compile_locale(
+        pattern == NULL ? (const uint8_t *)"" : pattern,
+        (PCRE2_SIZE)length, PCRE2_CASELESS, &error, &offset);
     if (code == NULL) {
         *error_offset_out = (uint64_t)offset;
         return (int32_t)error;

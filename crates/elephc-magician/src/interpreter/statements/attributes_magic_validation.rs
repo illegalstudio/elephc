@@ -347,6 +347,38 @@ pub(super) fn eval_method_implements_interface(
         }))
 }
 
+/// Returns whether PHP refuses to compile a `__toString` method of this shape, in a class or
+/// an interface: a static one, one that takes a parameter other than a variadic one, or one
+/// whose declared return type is not exactly `string` (measured on PHP 8.5.12).
+///
+/// Visibility is not part of it: PHP only warns about a non-public `__toString` while
+/// compiling, and reports the access level when the class is linked.
+pub(super) fn eval_to_string_signature_is_rejected(
+    is_static: bool,
+    params: &[String],
+    parameter_is_variadic: &[bool],
+    return_type: Option<&EvalParameterType>,
+) -> bool {
+    let variadic = parameter_is_variadic.iter().filter(|is_variadic| **is_variadic).count();
+    is_static
+        || params.len() > variadic
+        || return_type.is_some_and(|return_type| !magic_return_type_matches(return_type, MagicReturnType::String))
+}
+
+/// Rejects an interface whose `__toString` method PHP refuses to compile.
+pub(super) fn validate_eval_interface_to_string(interface: &EvalInterface) -> Result<(), EvalStatus> {
+    let rejected = interface.methods().iter().any(|method| {
+        method.name().eq_ignore_ascii_case("__toString")
+            && eval_to_string_signature_is_rejected(
+                method.is_static(),
+                method.params(),
+                method.parameter_is_variadic(),
+                method.return_type(),
+            )
+    });
+    if rejected { Err(EvalStatus::RuntimeFatal) } else { Ok(()) }
+}
+
 /// Validates PHP magic-method contracts for one eval class-like method list.
 pub(super) fn validate_eval_magic_methods(methods: &[EvalClassMethod]) -> Result<(), EvalStatus> {
     for method in methods {

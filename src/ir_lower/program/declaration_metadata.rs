@@ -263,6 +263,7 @@ pub(super) fn collect_declared_trait_methods(
                                 is_static: method.is_static,
                                 is_final: method.is_final,
                                 is_abstract: method.is_abstract,
+                                span: method.span,
                             };
                             (method_key, info)
                         })
@@ -466,6 +467,9 @@ pub(super) fn collect_program_declared_names<T, S: std::hash::BuildHasher>(
                 let Some(name) = pick(stmt) else {
                     continue;
                 };
+                if is_internal_synthetic_class_name(name) {
+                    continue;
+                }
                 let key = crate::names::php_symbol_key(name);
                 let is_known = known.contains_key(name)
                     || known.keys().any(|candidate| {

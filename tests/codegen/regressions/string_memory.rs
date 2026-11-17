@@ -1349,7 +1349,7 @@ echo "done";
 /// The `unset` sits inside a branch on purpose. A straight-line `unset($x)` now KILLS the
 /// binding (see `docs/php/types.md`, Local retyping), so `is_null($x)` after it is an
 /// `Undefined variable` diagnostic instead of a read of the nulled slot — that half of the
-/// contract lives in `tests/error_tests/type_system.rs::test_read_after_unset_is_undefined`. A
+/// contract lives in `tests/error_tests/type_system.rs::test_read_after_unset_warns_at_runtime`. A
 /// conditional `unset` is not kill-eligible, so it keeps the release-and-null-store behaviour
 /// this regression is about. `$argc` is 1 under the harness, so the branch does run and the
 /// string is still freed here.

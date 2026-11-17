@@ -225,6 +225,34 @@ impl Parser {
                 default: Box::new(default),
             });
         }
+        // A compound update of a property yields its computed value with the receiver evaluated
+        // once (`echo ($box->receiver()->number += 3);`), which a generic `CompoundAssign` over
+        // the property read would replay.
+        if let Some(Some(op)) = assignment {
+            if matches!(
+                target,
+                EvalExpr::PropertyGet { .. } | EvalExpr::DynamicPropertyGet { .. }
+            ) {
+                self.advance();
+                let value = self.parse_assignment()?;
+                let (object, property, dynamic) = match target {
+                    EvalExpr::PropertyGet { object, property } => (
+                        object,
+                        Box::new(EvalExpr::Const(EvalConst::String(property))),
+                        false,
+                    ),
+                    EvalExpr::DynamicPropertyGet { object, property } => (object, property, true),
+                    _ => unreachable!("matched a property read above"),
+                };
+                return Ok(EvalExpr::PropertyCompoundAssign {
+                    object,
+                    property,
+                    dynamic,
+                    op,
+                    value: Box::new(value),
+                });
+            }
+        }
         if assignment == Some(None)
             && matches!(self.peek(), TokenKind::Ampersand)
             && !is_assignment_target(&target)
@@ -644,20 +672,52 @@ impl Parser {
     }
 
     /// Parses a prefix increment or decrement expression and returns its updated value.
+    ///
+    /// The operand is a postfix-level variable, so `++$a ** 2` is `(++$a) ** 2` as in PHP's
+    /// grammar (`T_INC variable`). A property target keeps its receiver evaluated once.
     fn parse_prefix_inc_dec_expr(&mut self, increment: bool) -> Result<EvalExpr, EvalParseError> {
-        let target = self.parse_unary()?;
+        let target = self.parse_postfix()?;
         if !is_assignment_target(&target) {
             return Err(EvalParseError::UnexpectedToken);
         }
-        Ok(EvalExpr::CompoundAssign {
-            target: Box::new(target),
-            op: if increment {
-                EvalBinOp::Add
-            } else {
-                EvalBinOp::Sub
-            },
-            value: Box::new(EvalExpr::Const(EvalConst::Int(1))),
-        })
+        let updated = if matches!(
+            target,
+            EvalExpr::PropertyGet { .. } | EvalExpr::DynamicPropertyGet { .. }
+        ) {
+            Self::property_inc_dec_expression(target, increment, true)?
+        } else {
+            EvalExpr::CompoundAssign {
+                target: Box::new(target),
+                op: if increment {
+                    EvalBinOp::Add
+                } else {
+                    EvalBinOp::Sub
+                },
+                value: Box::new(EvalExpr::Const(EvalConst::Int(1))),
+            }
+        };
+        if self.consume(TokenKind::StarStar) {
+            let right = self.parse_unary()?;
+            return Ok(EvalExpr::Binary {
+                op: EvalBinOp::Pow,
+                left: Box::new(updated),
+                right: Box::new(right),
+            });
+        }
+        Ok(updated)
+    }
+
+    /// Captures the property place represented by a prefix or postfix expression.
+    pub(in crate::parser) fn property_inc_dec_expression(
+        target: EvalExpr, increment: bool, prefix: bool,
+    ) -> Result<EvalExpr, EvalParseError> {
+        let (object, property, dynamic) = match target {
+            EvalExpr::PropertyGet { object, property } =>
+                (object, Box::new(EvalExpr::Const(EvalConst::String(property))), false),
+            EvalExpr::DynamicPropertyGet { object, property } => (object, property, true),
+            _ => return Err(EvalParseError::UnsupportedConstruct),
+        };
+        Ok(EvalExpr::PropertyIncDec { object, property, dynamic, increment, prefix })
     }
 
     /// Returns the cast target represented by the current `(type)` token window.
@@ -671,7 +731,9 @@ impl Parser {
         if !matches!(self.tokens.get(self.pos + 2), Some(TokenKind::RParen)) {
             return None;
         }
-        if ident_eq(name, "int") || ident_eq(name, "integer") {
+        if ident_eq(name, "array") {
+            Some(EvalCastType::Array)
+        } else if ident_eq(name, "int") || ident_eq(name, "integer") {
             Some(EvalCastType::Int)
         } else if ident_eq(name, "float") || ident_eq(name, "double") || ident_eq(name, "real") {
             Some(EvalCastType::Float)

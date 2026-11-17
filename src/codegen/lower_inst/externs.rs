@@ -583,7 +583,7 @@ fn callable_signature_for_value_seen(
     }
     seen.push(value);
     let signature = value_instruction(ctx, value).and_then(|inst| match inst.op {
-        Op::FirstClassCallableNew => first_class_callable_signature(ctx, inst),
+        Op::FirstClassCallableNew | Op::CallableValueNew => first_class_callable_signature(ctx, inst),
         Op::ClosureNew => capturing_closure_signature(ctx, inst),
         Op::LoadLocal => load_local_callable_signature(ctx, inst, seen),
         Op::Acquire | Op::Move | Op::Borrow => inst

@@ -43,6 +43,7 @@ mod eval_value_helpers;
 mod eval_property_helpers;
 mod eval_ref_arg_helpers;
 mod eval_reflection_helpers;
+mod eval_reflection_mirrors;
 mod eval_reflection_owner_helpers;
 mod eval_static_property_helpers;
 mod eval_status_helper;
@@ -53,6 +54,7 @@ mod literal_defaults;
 mod literal_method_index;
 mod local_analysis;
 mod mbstring_configuration;
+mod null_local_proof;
 pub(crate) mod lower_inst;
 #[cfg(test)]
 pub(crate) use lower_inst::callables::{CLASS_ANCESTOR_BUILDS, INSTANCE_REACH_CHECKS, INSTANCE_TARGET_BUILDS, NON_PUBLIC_STATIC_SCANS, SCOPE_INSTANCE_TABLE_BUILDS, SHADOW_PAIR_CHECKS, STATIC_TABLE_BUILDS, STRING_TABLE_BUILDS};
@@ -76,9 +78,11 @@ mod parallel_moves;
 mod runtime_callable_invoker;
 #[cfg(test)]
 pub(crate) use runtime_callable_invoker::function_returns_owned_string;
+mod rotated_loops;
 mod runtime_metadata;
 mod return_ownership;
 mod shared_count_guard;
+mod shared_property_read;
 mod shared_helper;
 mod shared_mixed_callable;
 mod shared_mixed_string;
@@ -91,7 +95,7 @@ mod shared_mbstring_callable;
 mod op_outline;
 mod shared_state;
 pub(crate) mod stack_guard;
-mod stack_numeric;
+pub(crate) mod stack_numeric;
 pub mod value_placement;
 mod web;
 use runtime_metadata::*;
@@ -813,6 +817,7 @@ fn finalize_user_asm(
         user_asm.push('\n');
         user_asm.push_str(&runtime::emit_member_exists_registry_data(module));
     }
+    user_asm.push_str(&emit_native_reference_metadata(module)?);
     // The late passes read the spilled prefix through a clean, file-backed mapping.
     let prefix = user_assembly::PrefixView::open(spilled.as_ref())
         .map_err(|error| CodegenIrError::io("cannot read the spilled user assembly", error))?;

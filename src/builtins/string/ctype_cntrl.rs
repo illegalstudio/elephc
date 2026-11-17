@@ -10,7 +10,6 @@
 //!   (`Bool`) is fully determined by its declaration. The registry derives the
 //!   return type from the `returns:` field without calling a check hook.
 
-
 builtin! {
     contract: "ctype_cntrl",
     semantics: crate::builtins::semantics::runtime_fn_semantics(

@@ -1,8 +1,6 @@
 ---
 title: "mysqli_ssl_set()"
-description: "Records the TLS key, certificate and CA files a MYSQLI_CLIENT_SSL connection uses."
-sidebar:
-  order: 173
+description: "Collects TLS settings for the next connection."
 ---
 
 ## mysqli_ssl_set()
@@ -11,7 +9,7 @@ sidebar:
 function mysqli_ssl_set(mixed $mysql, ?string $key, ?string $certificate, ?string $ca_certificate, ?string $ca_path, ?string $cipher_algos): bool
 ```
 
-Records the TLS key, certificate and CA files a MYSQLI_CLIENT_SSL connection uses.
+Collects TLS settings for the next connection.
 
 **Parameters**:
 - `$mysql` (`mixed`)
@@ -25,8 +23,9 @@ Records the TLS key, certificate and CA files a MYSQLI_CLIENT_SSL connection use
 
 ## Availability
 
-- **Compiled (AOT)**: supported through an injected elephc-PHP prelude.
-- **`eval()` (magician interpreter)**: not available inside eval'd code.
+| Compiled (AOT) | Magician (eval) |
+|---|---|
+| Available | Not available yet |
 
 _No examples yet. Check `examples/` and `showcases/` for usage patterns._
 

@@ -144,32 +144,34 @@ fn eval_json_decode_to_cell(
     objects_as_assoc: bool,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
+    use super::super::collection_builder::EvalArrayBuilder;
+
     match value {
         JsonValue::Null => values.null(),
         JsonValue::Bool(value) => values.bool_value(value),
         JsonValue::Number(value) => eval_json_decode_number_to_cell(&value, flags, values),
         JsonValue::String(value) => values.string_bytes_value(&value),
         JsonValue::Array(elements) => {
-            let mut result = values.array_new(elements.len())?;
+            let mut result = EvalArrayBuilder::indexed(values, elements.len())?;
             for (index, element) in elements.into_iter().enumerate() {
-                let index = i64::try_from(index).map_err(|_| EvalStatus::RuntimeFatal)?;
-                let key = values.int(index)?;
-                let element = eval_json_decode_to_cell(element, flags, objects_as_assoc, values)?;
-                result = values.array_set(result, key, element)?;
+                result.index(index, |values| {
+                    eval_json_decode_to_cell(element, flags, objects_as_assoc, values)
+                })?;
             }
-            Ok(result)
+            Ok(result.finish())
         }
         JsonValue::Object(entries) => {
             if !objects_as_assoc {
                 return eval_json_decode_object_to_cell(entries, flags, values);
             }
-            let mut result = values.assoc_new(entries.len())?;
+            let mut result = EvalArrayBuilder::assoc(values, entries.len())?;
             for (key, value) in entries {
-                let key = values.string_bytes_value(&key)?;
-                let value = eval_json_decode_to_cell(value, flags, objects_as_assoc, values)?;
-                result = values.array_set(result, key, value)?;
+                result.entry(
+                    |values| eval_json_decode_to_cell(value, flags, objects_as_assoc, values),
+                    |values, _| values.string_bytes_value(&key),
+                )?;
             }
-            Ok(result)
+            Ok(result.finish())
         }
     }
 }
@@ -181,10 +183,19 @@ fn eval_json_decode_object_to_cell(
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     let object = values.new_object("stdClass")?;
-    for (key, value) in entries {
-        let key = std::str::from_utf8(&key).map_err(|_| EvalStatus::RuntimeFatal)?;
-        let value = eval_json_decode_to_cell(value, flags, false, values)?;
-        values.property_set(object, key, value)?;
+    let result = (|| {
+        for (key, value) in entries {
+            let key = std::str::from_utf8(&key).map_err(|_| EvalStatus::RuntimeFatal)?;
+            let value = eval_json_decode_to_cell(value, flags, false, values)?;
+            let inserted = values.property_set(object, key, value);
+            let released = values.release(value);
+            inserted.and(released)?;
+        }
+        Ok(())
+    })();
+    if let Err(status) = result {
+        let _ = values.release(object);
+        return Err(status);
     }
     Ok(object)
 }

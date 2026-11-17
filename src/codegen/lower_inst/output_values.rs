@@ -79,11 +79,8 @@ pub(super) fn lower_object_echo_value(
         emit_value_dynamic_object_to_string(ctx, value)?;
         return emit_owned_string_result_to_stdout(ctx);
     }
-    let return_ty = emit_object_tostring_call(ctx, value, normalized)?.codegen_repr();
-    if return_ty == PhpType::Str {
-        return emit_owned_string_result_to_stdout(ctx);
-    }
-    emit_loaded_value_to_stdout(ctx, &return_ty)
+    let return_ty = emit_object_tostring_call(ctx, value, normalized)?;
+    emit_owned_tostring_result_to_stdout(ctx, &return_ty.codegen_repr())
 }
 
 /// Writes the string a `__toString()` call just returned, then releases it.
@@ -91,10 +88,17 @@ pub(super) fn lower_object_echo_value(
 /// The call happens inside this instruction, so no IR value owns its result: `echo $object`
 /// leaked one string per echo (Blade and `Stringable` output in a long-running `--web` worker).
 pub(super) fn emit_owned_string_result_to_stdout(ctx: &mut FunctionContext<'_>) -> Result<()> {
-    let (ptr_reg, len_reg) = abi::string_result_regs(ctx.emitter);
-    abi::emit_push_reg_pair(ctx.emitter, ptr_reg, len_reg);
-    emit_loaded_value_to_stdout(ctx, &PhpType::Str)?;
-    abi::emit_pop_reg_pair(ctx.emitter, ptr_reg, len_reg);
+    emit_owned_tostring_result_to_stdout(ctx, &PhpType::Str)
+}
+
+/// Writes an owned method string while preserving its pointer for the matching release.
+pub(super) fn emit_owned_tostring_result_to_stdout(
+    ctx: &mut FunctionContext<'_>, ty: &PhpType,
+) -> Result<()> {
+    let (ptr, len) = abi::string_result_regs(ctx.emitter);
+    abi::emit_push_reg_pair(ctx.emitter, ptr, len);
+    emit_loaded_value_to_stdout(ctx, ty)?;
+    abi::emit_pop_reg_pair(ctx.emitter, ptr, len);
     super::ownership::release_loaded_string(ctx);
     Ok(())
 }
@@ -240,6 +244,9 @@ pub(super) fn emit_loaded_value_to_stdout(ctx: &mut FunctionContext<'_>, ty: &Ph
         | PhpType::Iterable
         | PhpType::Resource(_)
         | PhpType::Pointer(_) => {
+            if matches!(ty, PhpType::Float) {
+                super::predicates::emit_nan_string_coercion_probe(ctx);
+            }
             abi::emit_write_stdout(ctx.emitter, ty);
             Ok(())
         }

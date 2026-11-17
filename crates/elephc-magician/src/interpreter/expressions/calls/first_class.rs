@@ -61,8 +61,24 @@ pub(in crate::interpreter) fn eval_invokable_callable_expr(
     scope: &mut ElephcEvalScope,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
-    with_eval_operands(&[object], context, scope, values, |args, context, scope, values| {
-        eval_first_class_callable_from_value(args[0].borrowed(), context, scope, values)
+    with_eval_operands(&[object], context, scope, values, |args, context, _, values| {
+        let object = args[0].borrowed();
+        if values.type_tag(object)? == EVAL_TAG_CALLABLE {
+            if let Some(signature) = values.native_callable_signature(object)? {
+                return eval_closure_object_expr(
+                    EvalClosureObjectTarget::NativeDescriptor {
+                        callback: object,
+                        display_name: signature.display_name,
+                    },
+                    context,
+                    values,
+                );
+            }
+        }
+        eval_invokable_object_precheck(object, context, values)?;
+        eval_closure_object_expr(
+            EvalClosureObjectTarget::InvokableObject { object }, context, values,
+        )
     })
 }
 

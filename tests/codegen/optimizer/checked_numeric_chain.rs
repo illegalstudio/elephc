@@ -194,7 +194,10 @@ echo (int) (PHP_INT_MIN * -$one + $one);
     assert_eq!(optimized, "-9223372036854775808|-9223372036854775808");
 }
 
-/// Eliminates all transient heap allocations in the benchmark loop's optimized hot path.
+/// Eliminates all transient heap allocations in the benchmark loop in both IR modes.
+///
+/// Without EIR optimization the boxed counter's checked updates use frame-local numeric cells,
+/// and its raw `$i = 1` seed uses the counter's seed cell, so neither mode allocates.
 #[test]
 fn test_checked_numeric_chain_benchmark_loop_allocates_nothing() {
     let source = r#"<?php
@@ -210,7 +213,6 @@ echo $h;
     let (optimized_stdout, optimized_stderr) = compile_and_run_variant(source, &["--gc-stats"]);
 
     assert_eq!(optimized_stdout, unoptimized_stdout);
-    assert!(unoptimized_stderr.contains("GC: allocs="));
-    assert!(!unoptimized_stderr.contains("GC: allocs=0 "));
-    assert!(optimized_stderr.contains("GC: allocs=0 frees=0"));
+    assert!(unoptimized_stderr.contains("GC: allocs=0 frees=0"), "{unoptimized_stderr}");
+    assert!(optimized_stderr.contains("GC: allocs=0 frees=0"), "{optimized_stderr}");
 }

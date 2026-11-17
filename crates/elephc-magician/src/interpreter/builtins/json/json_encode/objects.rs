@@ -15,6 +15,7 @@ pub(super) enum EvalJsonObjectEncoding {
     Properties,
     /// A plain (non-enum) `JsonSerializable`: encoded as its `jsonSerialize()` result.
     Serializable,
+    NativeOperator(&'static str),
     SerializableEnum,
     BackedEnum(RuntimeCellHandle),
     UnitEnum,
@@ -26,6 +27,9 @@ pub(super) fn eval_json_object_encoding(
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<EvalJsonObjectEncoding, EvalStatus> {
+    if let Some(method) = runtime_ops::object_operators::json_method(values, value)? {
+        return Ok(EvalJsonObjectEncoding::NativeOperator(method));
+    }
     let is_enum = match dynamic_object_is_a(value, "UnitEnum", false, context, values)? {
         Some(is_enum) => is_enum,
         None => {

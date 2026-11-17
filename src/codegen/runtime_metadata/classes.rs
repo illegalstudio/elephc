@@ -133,6 +133,7 @@ fn scan_runtime_referenced_class_names(module: &Module) -> HashSet<String> {
                 .map(|(class_name, _)| class_name.clone()),
         );
     }
+    names.extend(static_default_enum_class_names(module));
     seed_runtime_throwable_class_names(module, &mut names);
     seed_runtime_stdclass_name(module, &mut names);
     seed_builtin_reflection_class_names(module, &mut names);
@@ -217,6 +218,29 @@ pub(in crate::codegen) fn module_uses_unserialize(module: &Module) -> bool {
         .any(|inst| typed_builtin_target(inst) == Some(crate::ir::RuntimeFnId::Unserialize))
 }
 
+/// Returns enums whose singletons static property defaults materialize outside EIR.
+///
+/// `main`'s prologue stores those defaults directly, so no `ScopedConstantGet` names the enum
+/// and the dense class-name table would otherwise drop it: `var_dump()` of the stored case then
+/// printed an anonymous `object()`. Every singleton the default reads is kept, including
+/// reads behind a folded scalar such as `E::A ? 1 : 2`.
+fn static_default_enum_class_names(module: &Module) -> HashSet<String> {
+    let mut names = HashSet::default();
+    for (class_name, class_info) in &module.class_infos {
+        let context = crate::codegen::const_default_values::ConstDefaultContext::for_class(module, class_name);
+        for default in class_info.static_defaults.iter().flatten() {
+            let reads = crate::codegen::const_default_values::resolve_enum_case_default(default, &context)
+                .map(|value| value.evaluated)
+                .or_else(|| crate::codegen::const_default_values::resolve_enum_read_scalar_default(default, &context)
+                    .map(|(_, reads)| reads))
+                .unwrap_or_default();
+            names.extend(reads.into_iter().map(|(enum_name, _)| enum_name)
+                .filter(|enum_name| module.class_infos.contains_key(enum_name)));
+        }
+    }
+    names
+}
+
 // The eager enum-singleton reachability scan that used to live here is gone.
 // It existed only to keep `main`'s prologue from allocating a case object (and
 // burning an object handle) for an enum user code never touched. Cases are now
@@ -241,6 +265,7 @@ pub(in crate::codegen) fn seed_runtime_throwable_class_names(module: &Module, na
         "ArgumentCountError",  // _spl_argument_count_error_class_id, including dynamic mbstring calls
         "ValueError",          // _spl_value_error_class_id
         "ArithmeticError",     // _spl_arithmetic_error_class_id
+        "ReflectionException", // _spl_reflection_exception_class_id
         "DivisionByZeroError", // _spl_division_by_zero_error_class_id
         "JsonException",       // _json_exception_class_id
         // `JsonException extends Exception` DIRECTLY, as in reference PHP, so the ancestor

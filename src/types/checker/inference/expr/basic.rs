@@ -72,7 +72,26 @@ impl Checker {
             ExprKind::StringLiteral(_) => Ok(PhpType::Str),
             ExprKind::IntLiteral(_) => Ok(PhpType::Int),
             ExprKind::FloatLiteral(_) => Ok(PhpType::Float),
-            ExprKind::Variable(name) => self.variable_type_or_eval_dynamic(name, expr.span, env),
+            // `$GLOBALS` is the program's global symbol table projected as an array. It is
+            // not an ordinary variable, so it never produces the undefined-variable warning.
+            ExprKind::Variable(name) if name == "GLOBALS" => Ok(PhpType::AssocArray {
+                key: Box::new(PhpType::Str),
+                value: Box::new(PhpType::Mixed),
+            }),
+            ExprKind::Variable(name) => {
+                let ty = match self.variable_type_or_eval_dynamic(name, expr.span, env) {
+                    Ok(ty) => ty,
+                    // PHP 8 reads an undefined variable as `null` and raises E_WARNING. The
+                    // warning is emitted by EIR lowering at the read site so it carries the
+                    // caller's file/line and participates in `@` suppression and handlers.
+                    Err(error) if !self.strict_locals
+                        && error.message.starts_with("Undefined variable: $") => PhpType::Void,
+                    Err(error) => return Err(error),
+                };
+                let ty = self.promotable_array_value_view(name, expr.span, ty);
+                self.record_local_value_read(name, expr.span, &ty, env);
+                Ok(ty)
+        }
             ExprKind::ArrayReference(inner) => {
                 self.infer_type(inner, env)?;
                 // `[&$this->pauseExpiry, ...]` (Symfony's `NativeResponse`): the literal's slot
@@ -92,8 +111,10 @@ impl Checker {
             }
             ExprKind::Negate(inner) => {
                 let ty = self.infer_type(inner, env)?;
-                if crate::types::object_operators::binary_plan(&crate::parser::ast::BinOp::Sub, &PhpType::Int, &ty).is_some() {
-                    return Ok(ty);
+                if let Some(plan) = crate::types::object_operators::binary_plan_with_classes(
+                    &crate::parser::ast::BinOp::Sub, &PhpType::Int, &ty, &self.classes,
+                ) {
+                    return Ok(plan.result_type(&crate::parser::ast::BinOp::Sub));
                 }
                 match ty {
                     PhpType::Int => {
@@ -132,8 +153,22 @@ impl Checker {
                 Ok(PhpType::Int)
             }
             ExprKind::PreIncrement(name) | ExprKind::PreDecrement(name) => match env.get(name) {
-                Some(ty) if crate::types::object_operators::operator_class(ty).is_some() => Ok(ty.clone()),
-                Some(PhpType::Int) => Ok(PhpType::Mixed),
+                Some(ty) if crate::types::object_operators::binary_plan_with_classes(
+                    &crate::parser::ast::BinOp::Add, ty, &PhpType::Int, &self.classes,
+                ).is_some() => {
+                    let plan = crate::types::object_operators::binary_plan_with_classes(
+                        &crate::parser::ast::BinOp::Add, ty, &PhpType::Int, &self.classes,
+                    ).unwrap();
+                    let result = plan.result_type(&crate::parser::ast::BinOp::Add);
+                    if result.is_int_float_union() {
+                        self.reject_unboxable_native_incdec(name, ty, expr.span)?;
+                        self.record_string_incdec_local(name);
+                    }
+                    Ok(result)
+                },
+                Some(PhpType::Int) => Ok(if self.has_fixed_tagged_reference_storage(name, env) {
+                    PhpType::Int
+                } else { PhpType::Mixed }),
                 Some(PhpType::Mixed) => Ok(PhpType::Mixed),
                 // PHP's string increment can change the value's type (`"9"++` is
                 // `int(10)`), so the pre-form's value is dynamically tagged. EIR lowering
@@ -165,7 +200,18 @@ impl Checker {
                 )),
             },
             ExprKind::PostIncrement(name) | ExprKind::PostDecrement(name) => match env.get(name) {
-                Some(ty) if crate::types::object_operators::operator_class(ty).is_some() => Ok(ty.clone()),
+                Some(ty) if crate::types::object_operators::binary_plan_with_classes(
+                    &crate::parser::ast::BinOp::Add, ty, &PhpType::Int, &self.classes,
+                ).is_some() => {
+                    let plan = crate::types::object_operators::binary_plan_with_classes(
+                        &crate::parser::ast::BinOp::Add, ty, &PhpType::Int, &self.classes,
+                    ).unwrap();
+                    if plan.result_type(&crate::parser::ast::BinOp::Add).is_int_float_union() {
+                        self.reject_unboxable_native_incdec(name, ty, expr.span)?;
+                        self.record_string_incdec_local(name);
+                    }
+                    Ok(ty.clone())
+                },
                 Some(PhpType::Int)
                 | Some(PhpType::Bool)
                 | Some(PhpType::False)
@@ -373,31 +419,32 @@ impl Checker {
                 // recognized guards) narrow `$x` — or a simple `$x->prop` — in the then/else
                 // branches. A ternary is a single expression (no intervening writes), so the
                 // narrowing is safe to scope to each branch's inference.
-                let (then_ty, else_ty) = if let Some(guard) =
-                    self.guard_narrowing(condition, env)?
-                {
-                    // A branch the guard rules out cannot run for this binding: league/commonmark's
-                    // `is_int($stackBottom) ? $stackBottom : self::getIndex($stackBottom)` over an
-                    // `int` specialization. It is checked with the binding `mixed`, so nothing it
-                    // does with it is refused, and only the live branch types the result.
-                    let mut then_env = env.clone();
-                    let then_ty = if guard.then_dead { PhpType::Mixed } else { guard.then_ty };
-                    then_env.insert(guard.var.clone(), then_ty);
-                    let mut else_env = env.clone();
-                    let else_ty = if guard.else_dead { PhpType::Mixed } else { guard.else_ty };
-                    else_env.insert(guard.var, else_ty);
-                    let then_result = self.match_arm_result_type(then_expr, &then_env)?;
-                    let else_result = self.match_arm_result_type(else_expr, &else_env)?;
-                    match (guard.then_dead, guard.else_dead) {
-                        (false, true) => (then_result.clone(), then_result),
-                        (true, false) => (else_result.clone(), else_result),
-                        _ => (then_result, else_result),
+                let mut then_env = env.clone();
+                let mut else_env = env.clone();
+                let mut guards = self.guard_narrowings(condition, env)?;
+                // A branch the guard rules out cannot run for this binding: league/commonmark's
+                // `is_int($stackBottom) ? $stackBottom : self::getIndex($stackBottom)` over an
+                // `int` specialization. It is checked with the binding `mixed`, so nothing it
+                // does with it is refused, and only the live branch types the result.
+                let (then_dead, else_dead) = match guards.as_mut_slice() {
+                    [guard] => {
+                        let dead = (guard.then_dead, guard.else_dead);
+                        if guard.then_dead { guard.then_ty = PhpType::Mixed; }
+                        if guard.else_dead { guard.else_ty = PhpType::Mixed; }
+                        dead
                     }
-                } else {
-                    (
-                        self.match_arm_result_type(then_expr, env)?,
-                        self.match_arm_result_type(else_expr, env)?,
-                    )
+                    _ => (false, false),
+                };
+                let then_result = self.with_preserved_binding_flow(|checker|
+                    checker.with_flow_narrowings(&guards, true, &mut then_env,
+                        |checker, env| checker.match_arm_result_type(then_expr, env)))?;
+                let else_result = self.with_preserved_binding_flow(|checker|
+                    checker.with_flow_narrowings(&guards, false, &mut else_env,
+                        |checker, env| checker.match_arm_result_type(else_expr, env)))?;
+                let (then_ty, else_ty) = match (then_dead, else_dead) {
+                    (false, true) => (then_result.clone(), then_result),
+                    (true, false) => (else_result.clone(), else_result),
+                    _ => (then_result, else_result),
                 };
                 let arms = [(&**then_expr, then_ty), (&**else_expr, else_ty)];
                 if let Some(buffer) = buffer_merge_result_type("a ternary", &arms, expr.span)? {
@@ -416,40 +463,22 @@ impl Checker {
                     return Ok(buffer);
                 }
                 let [(_, value_ty), (_, default_ty)] = arms;
-                Ok(merge_match_arm_result_type(self, value_ty, default_ty))
+                Ok(merge_match_arm_result_type(self, super::truthy_short_ternary_type(self, value_ty), default_ty))
             }
             // A `throw` EXPRESSION never produces a value: it is the bottom type, accepted wherever
             // a value is wanted (`new LogicException(throw new RuntimeException(..))`, an argument
             // of a call, the arm of a `??`), and it must not read as a `null` of type `void`.
             ExprKind::Throw(inner) => {
                 let thrown_ty = self.infer_type(inner, env)?;
-                match thrown_ty {
-                    PhpType::Object(type_name)
-                        if self.object_type_implements_throwable(&type_name)
-                            || self.unresolved_new_object_defers_to_runtime(inner, &type_name)
-                            || self.absent_class_defers_to_runtime(&type_name)
-                            || self.object_type_may_be_eval_declared(&type_name) =>
-                    {
-                        Ok(PhpType::Never)
+                // An object whose class the closed world never saw is left to php's runtime.
+                if let PhpType::Object(type_name) = &thrown_ty {
+                    if self.unresolved_new_object_defers_to_runtime(inner, type_name) {
+                        return Ok(PhpType::Never);
                     }
-                    PhpType::Mixed if self.eval_barrier_active => Ok(PhpType::Never),
-                    PhpType::Object(_) => Err(CompileError::new(
-                        expr.span,
-                        "Type error: throw requires an object implementing Throwable",
-                    )),
-                    // `Never` reaches here only from a guard the checker has just proven
-                    // cannot be taken, so the statement is unreachable rather than wrong.
-                    PhpType::Never => Ok(PhpType::Never),
-                    ref ty
-                        if crate::types::checker::type_compat::type_is_gradual_object_family(ty) =>
-                    {
-                        Ok(PhpType::Never)
-                    }
-                    _ => Err(CompileError::new(
-                        expr.span,
-                        "Type error: throw requires an object value",
-                    )),
                 }
+                // Shared with the finally-flow walk, so both sites refuse the same operands.
+                self.validate_finally_throw_type(&thrown_ty, expr.span)?;
+                Ok(PhpType::Never)
             }
             ExprKind::Cast { target, expr } => {
                 let source_ty = self.infer_type(expr, env)?;

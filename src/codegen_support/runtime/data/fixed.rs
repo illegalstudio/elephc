@@ -78,6 +78,7 @@ pub(crate) fn emit_runtime_data_fixed(
 ) -> String {
     let mut out = String::new();
     out.push_str(".data\n");
+    out.push_str(&format!("_native_debug_info_fatal:\n    .ascii {:?}\n", elephc_builtin_contract::NATIVE_DEBUG_INFO_FATAL));
     // The scratch arena follows `--heap-size`; `concat_scratch_capacity` (also baked into
     // `_concat_capacity` below) is the bound every writer checks against.
     out.push_str(&comm_directive("_concat_buf", heap_size.max(65_536), target));
@@ -216,6 +217,12 @@ pub(crate) fn emit_runtime_data_fixed(
     // (unlike the argument-type diagnostics, which spell the type as `bool`).
     out.push_str(".globl _unser_type_true\n_unser_type_true:\n    .ascii \"true\"\n");
     out.push_str(".globl _unser_type_false\n_unser_type_false:\n    .ascii \"false\"\n");
+    out.push_str(&format!(".globl _bit_not_prefix\n_bit_not_prefix:\n    .ascii {:?}\n",
+        crate::codegen_support::runtime::arrays::BIT_NOT_PREFIX));
+    out.push_str(".p2align 3\n.globl _bit_not_type_rows\n_bit_not_type_rows:\n");
+    for (symbol, len) in crate::codegen_support::runtime::arrays::BIT_NOT_TYPE_ROWS {
+        out.push_str(&format!("    .quad {symbol}, {len}\n"));
+    }
     out.push_str(&format!(
         ".globl _unser_property_assign_prefix\n_unser_property_assign_prefix:\n    .ascii {UNSER_PROPERTY_ASSIGN_PREFIX:?}\n"
     ));
@@ -234,11 +241,34 @@ pub(crate) fn emit_runtime_data_fixed(
         ".globl _spl_float_string_suffix\n_spl_float_string_suffix:\n    .ascii {:?}\n",
         crate::codegen_support::runtime::spl::SPL_FLOAT_STRING_SUFFIX
     ));
+    out.push_str(".p2align 4\n.globl _ascii_lower\n_ascii_lower:\n");
+    for byte in 0u16..256 {
+        let folded = if (b'A' as u16..=b'Z' as u16).contains(&byte) {
+            byte + 32
+        } else {
+            byte
+        };
+        out.push_str(&format!("    .byte {folded}\n"));
+    }
+    out.push_str(".globl _hex_digits\n_hex_digits:\n    .ascii \"0123456789abcdef\"\n");
+    out.push_str(".p2align 8\n.globl _crc32_table\n_crc32_table:\n");
+    for entry in crate::codegen_support::runtime::strings::CRC32_TABLE {
+        out.push_str(&format!("    .long {entry}\n"));
+    }
+    out.push_str(".p2align 8\n.globl _crc32_table8\n_crc32_table8:\n");
+    for table in crate::codegen_support::runtime::strings::CRC32_TABLE8 {
+        for entry in table {
+            out.push_str(&format!("    .long {entry}\n"));
+        }
+    }
     out.push_str(".globl _sprintf_closure_class_name\n_sprintf_closure_class_name:\n    .ascii \"Closure\"\n");
     out.push_str(".globl _mbstring_tostring_name\n_mbstring_tostring_name:\n    .ascii \"__toString\"\n");
     out.push_str(".globl _mbstring_warning_prefix\n_mbstring_warning_prefix:\n    .ascii \"Warning: \"\n");
     out.push_str(".globl _mbstring_deprecated_prefix\n_mbstring_deprecated_prefix:\n    .ascii \"Deprecated: \"\n");
     out.push_str(".globl _mbstring_diagnostic_newline\n_mbstring_diagnostic_newline:\n    .ascii \"\\n\"\n");
+    for (symbol, text) in crate::codegen_support::runtime::strings::trim_warnings::STATIC_STRINGS {
+        out.push_str(&format!(".globl {symbol}\n{symbol}:\n    .ascii {text:?}\n"));
+    }
     out.push_str(&format!(
         ".globl _diag_sprintf_array_to_string\n_diag_sprintf_array_to_string:\n    .ascii {SPRINTF_ARRAY_TO_STRING_WARNING:?}\n"
     ));
@@ -252,17 +282,15 @@ pub(crate) fn emit_runtime_data_fixed(
         ".globl _diag_sprintf_object_to_float_suffix\n_diag_sprintf_object_to_float_suffix:\n    .ascii {SPRINTF_OBJECT_TO_FLOAT_WARNING_SUFFIX:?}\n"
     ));
     out.push_str(".globl _incomplete_class_property_name\n_incomplete_class_property_name:\n    .ascii \"__PHP_Incomplete_Class_Name\"\n");
-    // print_r($value, true) return-mode capture state. _print_r_mode is a flag
-    // (0 = write to stdout, 1 = append to _print_r_buf) consulted by
+    // print_r rendering capture state. _print_r_mode is a flag
+    // (0 = write to stdout, 1 = append to _print_r_ptr) consulted by
     // __rt_stdout_write and __rt_pr_write; _print_r_off tracks the accumulated
-    // byte count; _print_r_buf is the 64 KiB accumulation buffer finalized by
+    // byte count; _print_r_ptr owns raw growable storage finalized by
     // __rt_pr_finish into an owned heap string. Only non-zero during an active
-    // print_r return-mode rendering, so non-print_r output is unaffected.
+    // print_r rendering, so ordinary output is unaffected.
     out.push_str(&comm_directive("_print_r_mode", 8, target));
     out.push_str(&comm_directive("_print_r_off", 8, target));
-    out.push_str(&comm_directive("_print_r_buf", 65536, target));
-    // _print_r_base / _print_r_cap: the grown capture block (0 = the static buffer above, capacity 65536).
-    out.push_str(&comm_directive("_print_r_base", 8, target));
+    out.push_str(&comm_directive("_print_r_ptr", 8, target));
     out.push_str(&comm_directive("_print_r_cap", 8, target));
     // Output-buffering (ob_*) stack state. _ob_level is the active nesting depth
     // (0 = no buffering) consulted by __rt_stdout_write and __rt_pr_write before
@@ -435,6 +463,9 @@ pub(crate) fn emit_runtime_data_fixed(
     out.push_str(&format!(".globl {site}\n.p2align 3\n{site}:\n    .quad _php_site_none\n"));
     // The record an interpreter-published site is written into (see `__elephc_eval_publish_*`).
     out.push_str(&comm_directive("_php_site_eval", 16, target));
+    // Active boxed-value validation roots are excluded from PHP-visible sharing counts.
+    out.push_str(&comm_directive("_rt_reference_validation_pins_top", 8, target));
+    out.push_str(&comm_directive("_php_backtrace_next_line", 8, target));
     for symbol in ["_rt_diag_pending_ptr", "_rt_diag_pending_len", "_rt_diag_warning_message_len", "_php_diagnostic_file", "_php_diagnostic_file_len", "_php_diagnostic_line"] {
         out.push_str(&comm_directive(symbol, 8, target));
     }
@@ -443,6 +474,29 @@ pub(crate) fn emit_runtime_data_fixed(
     }
     for (symbol, value) in [("_rt_warning_prefix", "Warning: "), ("_rt_notice_prefix", "Notice: "), ("_rt_deprecated_prefix", "Deprecated: ")] {
         out.push_str(&format!(".globl {symbol}\n{symbol}:\n    .ascii \"{value}\"\n"));
+    }
+    // -- ctype deprecation text and its kind-indexed function-name table --
+    for (symbol, value) in [
+        ("_ctype_deprecated_suffix", crate::codegen_support::runtime::strings::ctype::DEPRECATION_SUFFIX),
+        ("_ctype_deprecated_newline", crate::codegen_support::runtime::strings::ctype::NEWLINE),
+        ("_ctype_type_int", crate::codegen_support::runtime::strings::ctype::TYPE_INT),
+        ("_ctype_type_float", crate::codegen_support::runtime::strings::ctype::TYPE_FLOAT),
+        ("_ctype_type_bool", crate::codegen_support::runtime::strings::ctype::TYPE_BOOL),
+        ("_ctype_type_null", crate::codegen_support::runtime::strings::ctype::TYPE_NULL),
+        ("_ctype_type_array", crate::codegen_support::runtime::strings::ctype::TYPE_ARRAY),
+        ("_ctype_type_resource", crate::codegen_support::runtime::strings::ctype::TYPE_RESOURCE),
+        ("_ctype_type_closure", crate::codegen_support::runtime::strings::ctype::TYPE_CLOSURE),
+        ("_ctype_type_unknown", crate::codegen_support::runtime::strings::ctype::TYPE_UNKNOWN),
+    ] {
+        out.push_str(&format!(".globl {symbol}\n{symbol}:\n    .ascii {value:?}\n"));
+    }
+    for (kind, prefix) in crate::codegen_support::runtime::strings::ctype::PREFIXES.iter().enumerate() {
+        let label = format!("_ctype_prefix_{kind}");
+        out.push_str(&format!(".globl {label}\n{label}:\n    .ascii {prefix:?}\n"));
+    }
+    out.push_str(".p2align 3\n.globl _ctype_deprecated_prefix_table\n_ctype_deprecated_prefix_table:\n");
+    for (kind, prefix) in crate::codegen_support::runtime::strings::ctype::PREFIXES.iter().enumerate() {
+        out.push_str(&format!("    .quad _ctype_prefix_{kind}\n    .quad {}\n", prefix.len()));
     }
     out.push_str(&comm_directive("_exc_value", 8, target));
     // Set by the shared owner-call helper when the bridge declined the call (the object's
@@ -484,6 +538,7 @@ pub(crate) fn emit_runtime_data_fixed(
     ));
     out.push_str(&comm_directive("_realpath_cache_epoch", 8, target));
     out.push_str(&comm_directive("_fiber_main_saved_magic_set_guard", 8, target));
+    out.push_str(&comm_directive("_fiber_main_saved_gc_release_suppressed", 8, target));
     // Call-stack overflow guard state. _stack_limit is the low-water stack address of the
     // execution context that is running right now: every compiled function prologue does an
     // unsigned compare of the stack pointer against it and branches to __rt_stack_overflow
@@ -821,6 +876,8 @@ pub(crate) fn emit_runtime_data_fixed(
     out.push_str(&comm_directive("_gc_release_suppressed", 8, target));
     out.push_str(&comm_directive("_hash_write_guard_top", 8, target));
     out.push_str(&comm_directive("_gc_runs", 8, target));
+    out.push_str(&comm_directive("_gc_safe_point_credit", 8, target));
+    out.push_str(&comm_directive("_gc_safe_point_live_limit", 8, target));
     out.push_str(&comm_directive("_gc_collected", 8, target));
     out.push_str(&comm_directive("_gc_application_started", 8, target));
     out.push_str(&comm_directive("_gc_collector_started", 8, target));
@@ -943,6 +1000,13 @@ pub(crate) fn emit_runtime_data_fixed(
     out.push_str(".globl _array_cast_unsupported_msg\n_array_cast_unsupported_msg:\n    .ascii \"Fatal error: (array) cast of associative array or object is unsupported\\n\"\n");
     out.push_str(".globl _unmanaged_reference_escape_msg\n_unmanaged_reference_escape_msg:\n    .ascii \"Escaping a borrowed boxed array_walk() element reference is not supported\"\n");
     out.push_str(".globl _borrowed_reference_return_msg\n_borrowed_reference_return_msg:\n    .ascii \"Cannot return a reference to storage that has no independent reference cell\"\n");
+    for (label, message) in [
+        ("_tagged_reference_argument_msg", crate::codegen_support::runtime::reference_cells::TAGGED_REFERENCE_ARGUMENT_MSG),
+        ("_tagged_reference_assignment_msg", crate::codegen_support::runtime::reference_cells::TAGGED_REFERENCE_ASSIGNMENT_MSG),
+        ("_native_reference_conflict_msg", crate::codegen_support::runtime::reference_cells::NATIVE_REFERENCE_CONFLICT_MSG),
+    ] {
+        out.push_str(&format!(".globl {label}\n{label}:\n    .ascii {message:?}\n"));
+    }
     out.push_str(".globl _iterable_array_str\n_iterable_array_str:\n    .ascii \"Array\"\n");
     out.push_str(".globl _match_unhandled_msg\n_match_unhandled_msg:\n    .ascii \"Fatal error: unhandled match case\\n\"\n");
     out.push_str(".globl _static_prop_private_access_msg\n_static_prop_private_access_msg:\n    .ascii \"Fatal error: Cannot access private static property\\n\"\n");
@@ -1110,9 +1174,11 @@ pub(crate) fn emit_runtime_data_fixed(
         symbol = crate::codegen_support::runtime::exceptions::ABSENT_MESSAGE_SYMBOL,
         message = crate::codegen_support::runtime::exceptions::ABSENT_MESSAGE,
     ));
-    out.push_str(".globl _instanceof_target_type_msg\n_instanceof_target_type_msg:\n    .ascii \"Fatal error: Class name must be a valid object or a string\\n\"\n");
+    out.push_str(".globl _instanceof_target_type_msg\n_instanceof_target_type_msg:\n    .ascii \"Class name must be a valid object or a string\"\n");
     out.push_str(".globl _diag_file_get_contents_failed_msg\n_diag_file_get_contents_failed_msg:\n    .ascii \"Warning: file_get_contents(): Failed to open stream\\n\"\n");
     out.push_str(".globl _diag_fopen_failed_msg\n_diag_fopen_failed_msg:\n    .ascii \"Warning: fopen(): Failed to open stream\\n\"\n");
+    out.push_str(".globl _simplexml_wrapper_init_message\n_simplexml_wrapper_init_message:\n    .ascii \"SimpleXMLElement is not properly initialized\"\n");
+    out.push_str(".globl _simplexml_wrapper_context_message\n_simplexml_wrapper_context_message:\n    .ascii \"It's not possible to assign a complex type to properties, resource given\"\n");
     out.push_str(".globl _swr_bad_proto_msg\n_swr_bad_proto_msg:\n    .ascii \"Warning: stream_wrapper_register(): Invalid protocol scheme specified.\\n\"\n");
     out.push_str(".globl _swr_dup_proto_msg\n_swr_dup_proto_msg:\n    .ascii \"Warning: stream_wrapper_register(): Protocol is already defined.\\n\"\n");
     // -- php-src's unreachable-seek warning fragments, shared with `__rt_file_get_contents_range` --
@@ -1152,6 +1218,7 @@ pub(crate) fn emit_runtime_data_fixed(
         ("_diag_float_key_precision_suffix", " to int loses precision\n"),
         ("_diag_float_key_range_prefix", "Warning: The float "),
         ("_diag_float_key_range_suffix", " is not representable as an int, cast occurred\n"),
+        ("_diag_sqrt_nan_warning", crate::codegen_support::runtime::numeric::SQRT_NAN_WARNING),
     ] {
         out.push_str(&format!(".globl {label}\n{label}:\n    .ascii {message:?}\n"));
     }
@@ -1381,17 +1448,17 @@ pub(crate) fn emit_runtime_data_fixed(
     // Symmetric-cipher bridge slots. OpenSSL call sites publish these separately
     // from the hash family so hash-only programs never reference cipher symbols.
     out.push_str(&comm_directive(
-        "_elephc_crypto_cipher_iv_length_fn",
+        "_elephc_openssl_cipher_iv_length_fn",
         8,
         target,
     ));
     out.push_str(&comm_directive(
-        "_elephc_crypto_cipher_methods_fn",
+        "_elephc_openssl_cipher_methods_fn",
         8,
         target,
     ));
-    out.push_str(&comm_directive("_elephc_crypto_encrypt_fn", 8, target));
-    out.push_str(&comm_directive("_elephc_crypto_decrypt_fn", 8, target));
+    out.push_str(&comm_directive("_elephc_openssl_encrypt_fn", 8, target));
+    out.push_str(&comm_directive("_elephc_openssl_decrypt_fn", 8, target));
     // The sodium bridge slot is published only by `__elephc_sodium_box` call sites; the
     // status word is what `__elephc_sodium_status()` reads back.
     out.push_str(&comm_directive("_elephc_crypto_sodium_fn", 8, target));
@@ -1435,7 +1502,7 @@ pub(crate) fn emit_runtime_data_fixed(
         out.push_str(&comm_directive(slot, 8, target));
     }
     // _elephc_random_mt_uniform_fn: indirect pointer to elephc_random_mt_uniform, published
-    // only at array_rand()/shuffle() call sites so the shared __rt_mt_uniform trampoline can
+    // only at shuffle() call sites so the shared __rt_mt_uniform trampoline can
     // consume the global Mt19937 state without a program that never shuffles linking the
     // random bridge.
     out.push_str(&comm_directive("_elephc_random_mt_uniform_fn", 8, target));
@@ -1727,6 +1794,7 @@ pub(crate) fn emit_runtime_data_fixed(
     // registrations, each entry 32 bytes (protocol_ptr/len + class_ptr/len).
     // Slot is free when protocol_ptr is null. 64 × 32 = 2048 bytes.
     out.push_str(&comm_directive("_user_wrappers", 2048, target));
+    out.push_str(&comm_directive("_simplexml_unwind_stream", 8, target));
     // _user_wrapper_handles: USER_WRAPPER_HANDLES_CAP = 256 active stream-handle
     // slots, each storing the wrapper object pointer keyed by synthetic fd
     // `USER_WRAPPER_FD_BASE + slot_index`. Slot is free when the stored pointer
@@ -1918,10 +1986,19 @@ pub(crate) fn emit_runtime_data_fixed(
     out.push_str(".globl _heap_dbg_live_blocks_short_label\n_heap_dbg_live_blocks_short_label:\n    .ascii \"live_blocks=\"\n");
     out.push_str(".globl _heap_dbg_clean_label\n_heap_dbg_clean_label:\n    .ascii \"clean\\n\"\n");
     out.push_str(".globl _heap_dbg_newline\n_heap_dbg_newline:\n    .ascii \"\\n\"\n");
+    out.push_str(".globl _rt_diag_leading_newline\n_rt_diag_leading_newline:\n    .ascii \"\\n\"\n");
+    out.push_str(".globl _rt_diag_in\n_rt_diag_in:\n    .ascii \" in \"\n");
+    out.push_str(".globl _rt_diag_on_line\n_rt_diag_on_line:\n    .ascii \" on line \"\n");
+    out.push_str(".globl _rt_diag_newline\n_rt_diag_newline:\n    .ascii \"\\n\"\n");
     out.push_str(".globl _heap_dbg_block_offset\n_heap_dbg_block_offset:\n    .ascii \"HEAP DEBUG: live offset=\"\n");
     out.push_str(".globl _heap_dbg_block_bytes\n_heap_dbg_block_bytes:\n    .ascii \" bytes=\"\n");
     out.push_str(".globl _heap_dbg_block_kind\n_heap_dbg_block_kind:\n    .ascii \" kind=\"\n");
     out.push_str(".globl _heap_dbg_block_refs\n_heap_dbg_block_refs:\n    .ascii \" refs=\"\n");
+    out.push_str(".globl _heap_dbg_block_class\n_heap_dbg_block_class:\n    .ascii \" class_id=\"\n");
+    out.push_str(".globl _heap_dbg_block_class_name\n_heap_dbg_block_class_name:\n    .ascii \" class=\"\n");
+    out.push_str(".globl _heap_dbg_block_tag\n_heap_dbg_block_tag:\n    .ascii \" tag=\"\n");
+    out.push_str(".globl _heap_dbg_block_length\n_heap_dbg_block_length:\n    .ascii \" length=\"\n");
+    out.push_str(".globl _heap_dbg_block_fingerprint\n_heap_dbg_block_fingerprint:\n    .ascii \" fingerprint=\"\n");
     out.push_str(".globl _resource_id_prefix\n_resource_id_prefix:\n    .ascii \"Resource id #\"\n");
     for (label, value) in [
         ("_bt_arg_unknown", "Unknown"),
@@ -1986,6 +2063,11 @@ pub(crate) fn emit_runtime_data_fixed(
         let bits = elephc_builtin_contract::ctype_class_bits(byte, target.platform == Platform::MacOS);
         out.push_str(&format!("    .short {}\n", bits));
     }
+    // Half-width katakana U+FF61..U+FF9D mapped to their full-width UTF-8 triples, in
+    // codepoint order. `__rt_mb_convert_kana_k_utf8` indexes one triple per accepted
+    // character; voiced sound marks are rejected because they combine with the previous
+    // character and must stay on the shared bridge.
+    out.push_str(".globl _mb_halfwidth_kana_tbl\n_mb_halfwidth_kana_tbl:\n    .byte 227, 128, 130, 227, 128, 140, 227, 128, 141, 227, 128, 129, 227, 131, 187, 227, 131, 178, 227, 130, 161, 227, 130, 163, 227, 130, 165, 227, 130, 167, 227, 130, 169, 227, 131, 163, 227, 131, 165, 227, 131, 167, 227, 131, 131, 227, 131, 188, 227, 130, 162, 227, 130, 164, 227, 130, 166, 227, 130, 168, 227, 130, 170, 227, 130, 171, 227, 130, 173, 227, 130, 175, 227, 130, 177, 227, 130, 179, 227, 130, 181, 227, 130, 183, 227, 130, 185, 227, 130, 187, 227, 130, 189, 227, 130, 191, 227, 131, 129, 227, 131, 132, 227, 131, 134, 227, 131, 136, 227, 131, 138, 227, 131, 139, 227, 131, 140, 227, 131, 141, 227, 131, 142, 227, 131, 143, 227, 131, 146, 227, 131, 149, 227, 131, 152, 227, 131, 155, 227, 131, 158, 227, 131, 159, 227, 131, 160, 227, 131, 161, 227, 131, 162, 227, 131, 164, 227, 131, 166, 227, 131, 168, 227, 131, 169, 227, 131, 170, 227, 131, 171, 227, 131, 172, 227, 131, 173, 227, 131, 175, 227, 131, 179\n");
     out.push_str(".globl _b64_decode_tbl\n_b64_decode_tbl:\n");
 
     // php-src's `base64_reverse_table`, transposed from its signed `short` entries onto
@@ -2095,6 +2177,19 @@ pub(crate) fn emit_runtime_data_fixed(
     out
 }
 
+/// Orders `_callable_builtin_table`: the strict-profile builtins first, then the rest, each
+/// range sorted the way `__rt_strcasecmp` orders names (ASCII-lowercased bytes, then length).
+///
+/// `__rt_is_callable_string` binary-searches each range, so a name resolves in a handful of
+/// comparisons instead of a scan over every builtin; a strict call site searches only the first.
+fn callable_builtin_table_order() -> Vec<&'static str> {
+    let strict_builtins: std::collections::HashSet<&'static str> =
+        supported_builtin_function_names_for_profile(true).into_iter().collect();
+    let mut builtins = all_supported_builtin_function_names();
+    builtins.sort_by_cached_key(|name| (!strict_builtins.contains(name), name.to_ascii_lowercase()));
+    builtins
+}
+
 /// Emit symbol data for all first-class-callable builtin functions.
 ///
 /// Produces per-name labels (`_callable_builtin_name_N`), a null-terminated
@@ -2104,9 +2199,7 @@ pub(crate) fn emit_runtime_data_fixed(
 /// routine and callable-invoke paths.
 fn emit_builtin_callable_data(target: Target) -> String {
     let mut out = String::new();
-    let strict_builtins = supported_builtin_function_names_for_profile(true);
-    let mut builtins = all_supported_builtin_function_names();
-    builtins.sort_by_key(|name| !strict_builtins.contains(name));
+    let builtins = callable_builtin_table_order();
     for (idx, name) in builtins.iter().enumerate() {
         out.push_str(&format!(
             ".globl _callable_builtin_name_{0}\n_callable_builtin_name_{0}:\n    .ascii \"{1}\"\n",
@@ -2128,7 +2221,7 @@ fn emit_builtin_callable_data(target: Target) -> String {
     out.push_str(
         ".globl _callable_builtin_strict_count\n_callable_builtin_strict_count:\n",
     );
-    out.push_str(&format!("    .quad {}\n", strict_builtins.len()));
+    out.push_str(&format!("    .quad {}\n", supported_builtin_function_names_for_profile(true).len()));
     out.push_str(&comm_directive("_callable_strict_profile", 8, target));
     out.push_str(".globl _callable_builtin_table\n_callable_builtin_table:\n");
     for (idx, name) in builtins.iter().enumerate() {
@@ -2171,6 +2264,22 @@ fn emit_spl_autoload_extensions_data() -> String {
 mod tests {
     use super::*;
     use crate::codegen_support::platform::{Arch, Platform};
+
+    /// Each range of the builtin callable table is sorted by `__rt_strcasecmp` order, which the
+    /// binary search in `__rt_is_callable_string` relies on, and the strict range comes first.
+    #[test]
+    fn callable_builtin_table_ranges_are_sorted_for_binary_search() {
+        let strict = supported_builtin_function_names_for_profile(true);
+        let order = callable_builtin_table_order();
+        let (head, tail) = order.split_at(strict.len());
+        assert!(head.iter().all(|name| strict.contains(name)));
+        for range in [head, tail] {
+            for pair in range.windows(2) {
+                let key = |name: &str| name.to_ascii_lowercase().into_bytes();
+                assert!(key(pair[0]) < key(pair[1]), "{} must sort before {}", pair[0], pair[1]);
+            }
+        }
+    }
 
     /// Every common symbol carries at least 8-byte alignment, while the heap keeps its
     /// allocator-wide 16-byte granule alignment.

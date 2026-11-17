@@ -22,15 +22,6 @@ pub(super) fn reserve_eval_subclass_property_storage(module: &mut Module) {
     }
 }
 
-/// Converts a PHP source path into the canonical display string stored in EIR metadata.
-pub(super) fn canonical_source_path(source_path: &Path) -> String {
-    source_path
-        .canonicalize()
-        .unwrap_or_else(|_| source_path.to_path_buf())
-        .display()
-        .to_string()
-}
-
 /// Copies declaration metadata into the EIR module placeholder tables.
 pub(super) fn populate_metadata(module: &mut Module, program: &Program, check_result: &CheckResult) {
     module.class_table.names = sorted_keys(&check_result.classes);
@@ -54,6 +45,10 @@ pub(super) fn populate_metadata(module: &mut Module, program: &Program, check_re
         .collect();
     module.declared_trait_constant_names = collect_declared_trait_constant_names(program);
     module.declared_trait_constants = collect_declared_trait_constants(program);
+    crate::ir_lower::initializer_reads::set_trait_constants(
+        &module.declared_trait_constant_names,
+        &module.declared_trait_constants,
+    );
     module.declared_trait_constant_types = collect_declared_trait_constant_types(program);
     module.declared_trait_constant_visibilities =
         collect_declared_trait_constant_visibilities(program);

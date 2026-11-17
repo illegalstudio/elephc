@@ -48,7 +48,7 @@ pub fn inject(
     inventory: &mut crate::optimize::reachability::PreludeInventory,
     preload: Option<&std::path::Path>,
 ) -> Program {
-    inject_with_autoload_usage(program, version, ini, entry_path, inventory, preload, false)
+    inject_with_autoload_usage(program, version, ini, entry_path, inventory, preload, false, false)
 }
 
 /// Installs application callbacks while retaining environment observers discovered by autoload.
@@ -60,9 +60,17 @@ pub(crate) fn inject_with_autoload_usage(
     inventory: &mut crate::optimize::reachability::PreludeInventory,
     preload: Option<&std::path::Path>,
     autoload_observes_environment: bool,
+    autoload_observes_request: bool,
 ) -> Program {
     crate::compiler_stack::with_compiler_stack(|| inject_on_compiler_stack(
-        program, version, ini, entry_path, inventory, preload, autoload_observes_environment,
+        program,
+        version,
+        ini,
+        entry_path,
+        inventory,
+        preload,
+        autoload_observes_environment,
+        autoload_observes_request,
     ))
 }
 
@@ -75,11 +83,13 @@ fn inject_on_compiler_stack(
     inventory: &mut crate::optimize::reachability::PreludeInventory,
     preload: Option<&std::path::Path>,
     autoload_observes_environment: bool,
+    autoload_observes_request: bool,
 ) -> Program {
     let program = super::lift_preload_to_startup(program, preload);
     let usage = super::usage::collect_environment(&program);
-    let populate_environment = autoload_observes_environment
-        || super::environment::is_observable(&program, &usage);
+    let superglobals = super::superglobal_needs(&program, &usage);
+    let populate_environment = autoload_observes_environment || superglobals.env;
+    let populate_request = autoload_observes_request || superglobals.request;
     let needs_callable_session_handler = usage.references("session_set_save_handler")
         || usage.dynamic_function_call;
     let mut declarations_only = Vec::new();
@@ -87,7 +97,12 @@ fn inject_on_compiler_stack(
     // The request bootstrap spells `$_SERVER['SCRIPT_FILENAME']` and friends with `__FILE__` /
     // `__DIR__`, introduced after the per-file magic-constant pass: resolve them against the entry.
     let request_declarations = crate::magic_constants::substitute_file_constants(
-        super::build::web_declarations_with_environment(version, ini, populate_environment),
+        super::build::web_declarations_with_environment(
+            version,
+            ini,
+            populate_environment,
+            populate_request,
+        ),
         entry_path,
     );
     for statement in request_declarations {

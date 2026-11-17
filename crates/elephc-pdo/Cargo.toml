@@ -17,7 +17,7 @@ elephc-monitoring-contract = { path = "../elephc-monitoring-contract" }
 # PHP binaries stay standalone (no system -lsqlite3 runtime dependency). Cost:
 # a C compile of sqlite at crate build time (cc is already required to build
 # elephc's runtime objects).
-libsqlite3-sys = { version = "0.30", features = ["bundled"] }
+libsqlite3-sys = { version = "0.39", features = ["bundled"] }
 # The synchronous, pure-Rust PostgreSQL client (no system libpq), so compiled
 # PHP binaries stay standalone. Connects to a running PostgreSQL server over
 # TCP/Unix sockets when a `pgsql:` DSN is opened. The `with-*` features add the

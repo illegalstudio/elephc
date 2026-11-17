@@ -1,8 +1,6 @@
 ---
 title: "join() - internals"
 description: "Compiler internals for join(): lowering path, type checks, and runtime helpers."
-sidebar:
-  order: 949
 ---
 
 ## `join()` - internals
@@ -10,14 +8,14 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/string/join.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/string/join.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:752](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L752) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 
 ### Lowering notes
 
 - Uses the `runtime_call` strategy from the single-source builtin descriptor.
-- Emits the typed EIR target `runtime.implode` through `BuiltinLoweringContext`.
+- Emits the typed EIR target `runtime.join` through `BuiltinLoweringContext`.
 - The backend resolves that typed target through `src/codegen/lower_inst/runtime_calls.rs`; PHP builtin names do not participate in dispatch.
 
 ## Semantic descriptor
@@ -33,7 +31,7 @@ sidebar:
 
 ## EIR and runtime boundary
 
-- **Typed EIR target**: `runtime.implode`
+- **Typed EIR target**: `runtime.join`
 - **Backend boundary**: `src/codegen/lower_inst/runtime_calls.rs` resolves the typed target without PHP-name dispatch.
 
 ## Signature summary
@@ -48,7 +46,7 @@ function join(mixed $separator, mixed $array = null): string
 
 ## Eval interpreter (magician)
 
-- **Declaration**: [`crates/elephc-magician/src/interpreter/builtins/string/implode.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/string/implode.rs) (`eval_builtin!`)
+- **Declaration**: [`crates/elephc-magician/src/interpreter/builtins/string/join.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/string/join.rs) (`eval_builtin!`)
 - **Execution**: Magician interpreter adapter.
 - **Adapter reason**: `interpreter-specific-value-semantics`.
 - **Dispatch hooks**: `direct`, `values`

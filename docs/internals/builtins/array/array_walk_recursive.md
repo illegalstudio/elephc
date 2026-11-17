@@ -1,8 +1,6 @@
 ---
 title: "array_walk_recursive() - internals"
 description: "Compiler internals for array_walk_recursive(): lowering path, type checks, and runtime helpers."
-sidebar:
-  order: 59
 ---
 
 ## `array_walk_recursive()` - internals
@@ -10,7 +8,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/array/array_walk_recursive.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/array/array_walk_recursive.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:752](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L752) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 
@@ -39,21 +37,17 @@ sidebar:
 ## Signature summary
 
 ```php
-function array_walk_recursive(array $array, callable $callback, mixed $arg = null): bool
+function array_walk_recursive(array $array, callable $callback): bool
 ```
 
 ## What the type checker enforces
 
-- **Arity**: takes 2–3 arguments (1 optional).
+- **Arity**: takes exactly 2 arguments.
 - **By-reference parameters**: `$array`.
 
 ## Eval interpreter (magician)
 
-- **Declaration**: [`crates/elephc-magician/src/interpreter/builtins/array/array_walk_recursive.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/array/array_walk_recursive.rs) (`eval_builtin!`)
-- **Execution**: Magician interpreter adapter.
-- **Adapter reason**: `by-reference-or-lvalue`.
-- **Dispatch hooks**: `values`
-- **By-reference parameters**: `$array`.
+_Not callable from eval'd code - the magician interpreter has no entry for this builtin._
 
 ## Cross-references
 

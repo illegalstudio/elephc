@@ -53,6 +53,8 @@ mod misc;
 mod attributes;
 #[path = "oop/reflection_array_constants.rs"]
 mod reflection_array_constants;
+#[path = "oop/reflection_static_lifetimes.rs"]
+mod reflection_static_lifetimes;
 #[path = "oop/constants.rs"]
 mod constants;
 #[path = "oop/abstract_properties.rs"]
@@ -63,6 +65,8 @@ mod property_hooks;
 mod datetime;
 #[path = "oop/dom.rs"]
 mod dom;
+#[path = "oop/datetime_lazy_evaluation.rs"]
+mod datetime_lazy_evaluation;
 #[path = "oop/reflection_properties.rs"]
 mod reflection_properties;
 #[path = "oop/reflection_member_order.rs"]

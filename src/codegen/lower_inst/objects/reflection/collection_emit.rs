@@ -1,5 +1,5 @@
 //! Purpose:
-//! Reflection arrays, hashes, constants, and static-property collections.
+//! Reflection arrays, hashes, constants, and declaration collections.
 //!
 //! Called from:
 //! - `crate::codegen::lower_inst::objects::reflection`.
@@ -8,6 +8,8 @@
 //! - Preserves compile-time metadata, target-aware object layout, and ownership.
 
 use super::*;
+use crate::codegen::UNINITIALIZED_TYPED_PROPERTY_SENTINEL;
+use crate::names::static_property_symbol;
 
 /// Allocates a metadata hash without reserving buckets for absent entries.
 ///

@@ -21,9 +21,106 @@ pub(in crate::codegen::lower_inst::builtins) enum SprintfSpecCat {
     Str,
 }
 /// Lowers `sprintf(format, values...)` by packing variadic records for `__rt_sprintf`.
+///
+/// A literal `"%d"` over one integer or `"%s"` over one scalar skips the formatter entirely:
+/// the result is exactly PHP's string coercion of that operand, already produced by the shared
+/// borrowed-string helpers (`__rt_itoa` for integers).
 pub(crate) fn lower_sprintf(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
-    emit_sprintf_runtime_call(ctx, inst, "sprintf")?;
+    if !try_lower_simple_sprintf(ctx, inst)? {
+        emit_sprintf_runtime_call(ctx, inst, "sprintf")?;
+    }
     store_if_result(ctx, inst)
+}
+
+/// Emits the one-conversion `%d`/`%s` formatter shortcut when the format is a literal.
+fn try_lower_simple_sprintf(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+) -> Result<bool> {
+    if inst.operands.len() != 2 {
+        return Ok(false);
+    }
+    let format = expect_operand(inst, 0)?;
+    let Some(value_ref) = ctx.function.value(format) else {
+        return Ok(false);
+    };
+    let ValueDef::Instruction { inst: format_inst, .. } = value_ref.def else {
+        return Ok(false);
+    };
+    let Some(format_inst) = ctx.function.instruction(format_inst) else {
+        return Ok(false);
+    };
+    let (Op::ConstStr, Some(Immediate::Data(data))) =
+        (format_inst.op, format_inst.immediate.as_ref())
+    else {
+        return Ok(false);
+    };
+    let Some(raw) = ctx.module.data.strings.get(data.as_raw() as usize) else {
+        return Ok(false);
+    };
+    let bytes = crate::string_bytes::literal_bytes(raw);
+    let value = expect_operand(inst, 1)?;
+    let value_ty = ctx.value_php_type(value)?.codegen_repr();
+    if bytes.as_slice() == b"%d" && matches!(value_ty, PhpType::Mixed | PhpType::Union(_)) {
+        return lower_mixed_sprintf_int(ctx, inst, value);
+    }
+    let supported = match bytes.as_slice() {
+        b"%d" => value_ty == PhpType::Int,
+        b"%s" => matches!(
+            value_ty,
+            PhpType::Int | PhpType::Float | PhpType::Str | PhpType::Bool | PhpType::TaggedScalar
+        ),
+        _ => false,
+    };
+    if !supported {
+        return Ok(false);
+    }
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => load_value_as_string_to_regs(ctx, value, "sprintf", "x1", "x2")?,
+        Arch::X86_64 => load_value_as_string_to_regs(ctx, value, "sprintf", "rax", "rdx")?,
+    }
+    Ok(true)
+}
+
+/// Emits the `%d` shortcut for a boxed value, staying on the fast path for a live integer cell.
+///
+/// A loop counter that reaches `sprintf()` through a boxed local is still an integer at runtime.
+/// The tag and payload are read inline; every other runtime type (including a nested Mixed
+/// wrapper) falls back to the general formatter, which owns the warning and coercion rules.
+fn lower_mixed_sprintf_int(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+    value: ValueId,
+) -> Result<bool> {
+    let slow = ctx.next_label("sprintf_mixed_d_slow");
+    let done = ctx.next_label("sprintf_mixed_d_done");
+    ctx.load_value_to_result(value)?;
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction("mov x10, x0");                             // keep the boxed cell across the fast tag read
+            ctx.emitter.instruction(&format!("cbz x10, {slow}"));               // a null cell takes the runtime coercion path
+            ctx.emitter.instruction("ldr x9, [x10]");                           // read the cell's runtime tag
+            ctx.emitter.instruction(&format!("cbnz x9, {slow}"));               // only a direct integer cell uses itoa
+            ctx.emitter.instruction("ldr x0, [x10, #8]");                       // load the integer payload
+            abi::emit_call_label(ctx.emitter, "__rt_itoa");                    // format the integer directly
+            abi::emit_jump(ctx.emitter, &done);                                // join the general formatter result
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("mov r10, rax");                            // keep the boxed cell across the fast tag read
+            ctx.emitter.instruction(&format!("test r10, r10"));                 // is the boxed cell pointer null?
+            ctx.emitter.instruction(&format!("jz {slow}"));                     // a null cell takes the runtime coercion path
+            ctx.emitter.instruction("mov r11, QWORD PTR [r10]");                // read the cell's runtime tag
+            ctx.emitter.instruction(&format!("test r11, r11"));                 // is this a direct integer cell?
+            ctx.emitter.instruction(&format!("jnz {slow}"));                    // every other tag uses the runtime formatter
+            ctx.emitter.instruction("mov rax, QWORD PTR [r10 + 8]");            // load the integer payload
+            abi::emit_call_label(ctx.emitter, "__rt_itoa");                    // format the integer directly
+            abi::emit_jump(ctx.emitter, &done);                                // join the general formatter result
+        }
+    }
+    ctx.emitter.label(&slow);
+    emit_sprintf_runtime_call(ctx, inst, "sprintf")?;
+    ctx.emitter.label(&done);
+    Ok(true)
 }
 
 /// Lowers `printf(format, values...)` as `sprintf()` followed by stdout emission.

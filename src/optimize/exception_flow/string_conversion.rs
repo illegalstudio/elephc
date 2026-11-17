@@ -20,6 +20,14 @@ impl ExceptionFlowAnalysis {
         class_context: Option<&ExceptionClassContext>,
     ) -> ThrownTypes {
         match &expr.kind {
+            ExprKind::FloatLiteral(value) if value.is_nan() => ThrownTypes::unknown(),
+            // Operand failures are summarized separately; a proven failing operator
+            // cannot produce a value for the subsequent string conversion.
+            ExprKind::BinaryOp { left, op, right } if matches!(op,
+                BinOp::Add | BinOp::Sub | BinOp::Mul | BinOp::Div | BinOp::Pow
+            ) && binary_op_exact_throw_type(left, op, right).is_none() => ThrownTypes::unknown(),
+            ExprKind::Negate(inner) => self.string_conversion_throws(inner, class_context),
+            ExprKind::Cast { target: CastType::Float, .. } => ThrownTypes::unknown(),
             ExprKind::StringLiteral(_)
             | ExprKind::IntLiteral(_)
             | ExprKind::FloatLiteral(_)
@@ -29,13 +37,10 @@ impl ExceptionFlowAnalysis {
             | ExprKind::ArrayLiteralAssoc(_)
             | ExprKind::BinaryOp { .. }
             | ExprKind::InstanceOf { .. }
-            | ExprKind::Negate(_)
             | ExprKind::Not(_)
             | ExprKind::BitNot(_)
             | ExprKind::Print(_)
             | ExprKind::Cast { .. }
-            | ExprKind::ConstRef(_)
-            | ExprKind::ClassConstant { .. }
             | ExprKind::ObjectClassName { .. }
             | ExprKind::MagicConstant(_)
             | ExprKind::Throw(_) => ThrownTypes::default(),
@@ -137,13 +142,13 @@ impl ExceptionFlowAnalysis {
                 },
             ),
             PhpType::Mixed
+            | PhpType::Float
             | PhpType::Iterable
             | PhpType::Callable
             | PhpType::Buffer(_)
             | PhpType::Packed(_)
             | PhpType::Pointer(_) => ThrownTypes::unknown(),
             PhpType::Int
-            | PhpType::Float
             | PhpType::Narrow(_)
             | PhpType::Str
             | PhpType::Bool

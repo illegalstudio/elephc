@@ -972,7 +972,7 @@ pub fn inject_if_used(
     // run-time static-method table only lists compiled classes, and `Closure` is none.
     let needs_closure_from_callable = crate::closure_from_callable_prelude::named_by(&program);
     // And so is intl's `Locale` default, which Symfony reads once `class_exists(\Locale::class)`.
-    let needs_locale = crate::locale_prelude::needed_by(&program);
+    let needs_locale = crate::intl_locale_prelude::needed_by(&program);
     // php 8.4's `BcMath\Number` is not injected here: `crate::bcmath_prelude` owns it (with its
     // typed object operators), in the pipeline's early prelude phase.
     // And so are the length / context forms of `fgets()`, `fwrite()`, `rmdir()` and friends.
@@ -1297,7 +1297,7 @@ pub fn inject_if_used(
         combined.extend(declarations);
     }
     if needs_locale {
-        let declarations = crate::locale_prelude::declarations();
+        let declarations = crate::intl_locale_prelude::declarations();
         inventory.record_program(BACKEND_GAP_GROUP, &declarations);
         combined.extend(declarations);
     }

@@ -44,11 +44,16 @@ impl ArchiveFormat {
 
 impl SourceArchive {
     /// Derives the archive format from the catalog URL suffix, failing closed on any other suffix
-    /// so an unrecognised container can never reach the extractor.
+    /// so an unrecognised container can never reach the extractor. Codeload URLs carry the
+    /// compression as a path segment (`/tar.gz/refs/tags/...`) rather than a file suffix.
     pub fn format(&self) -> Result<ArchiveFormat, NativeError> {
         [ArchiveFormat::TarGz, ArchiveFormat::TarXz]
             .into_iter()
-            .find(|format| self.https_url.ends_with(&format!(".{}", format.extension())))
+            .find(|format| {
+                let extension = format.extension();
+                self.https_url.ends_with(&format!(".{extension}"))
+                    || self.https_url.contains(&format!("/{extension}/"))
+            })
             .ok_or_else(|| {
                 NativeError::new(
                     NativeErrorKind::Catalog,
@@ -248,6 +253,38 @@ const OPENSSL_VERSIONS: &[PackageVersion] = &[PackageVersion {
     retained_headers: OPENSSL_HEADERS,
     provides: &["openssl"],
 }];
+/// The libcrypto-only OpenSSL build used by the cipher bridge. It is deliberately
+/// separate from curl's 3.5.8 TLS pin: PHP 8.5's 135-cipher default-provider list
+/// gained nine AES-CBC-HMAC-ETM entries in 3.6.4, and curl's TLS link must not be
+/// forced onto that newer ABI by an unrelated cipher feature.
+const OPENSSL_CRYPTO_ARCHIVES: &[&str] = &["lib/libcrypto.a"];
+const OPENSSL_CRYPTO_HEADERS: &[&str] = &[
+    "include/openssl/core_dispatch.h",
+    "include/openssl/core_names.h",
+    "include/openssl/crypto.h",
+    "include/openssl/evp.h",
+    "include/openssl/objects.h",
+    "include/openssl/opensslv.h",
+    "include/openssl/params.h",
+    "include/openssl/provider.h",
+    "include/openssl/types.h",
+];
+const OPENSSL_CRYPTO_VERSIONS: &[PackageVersion] = &[PackageVersion {
+    version: "3.6.4",
+    source: SourceArchive {
+        https_url:
+            "https://github.com/openssl/openssl/releases/download/openssl-3.6.4/openssl-3.6.4.tar.gz",
+        sha256: "9bffaa1ad1e07b354c21bd3324ec02fa15579f45a7d0494b3e74bc449b7333ef",
+        exact_size: 55_003_802,
+        body_limit: 128 * 1024 * 1024,
+    },
+    recipe_revision: 1,
+    dependencies: &["zlib"],
+    supported_targets: TARGETS,
+    ordered_link_outputs: OPENSSL_CRYPTO_ARCHIVES,
+    retained_headers: OPENSSL_CRYPTO_HEADERS,
+    provides: &["openssl-crypto"],
+}];
 /// libcurl's HTTP/2 framing library. Built `--enable-lib-only`, which is why it has no
 /// dependencies of its own: only nghttp2's *applications* need zlib/OpenSSL/libev/c-ares.
 const NGHTTP2_VERSIONS: &[PackageVersion] = &[PackageVersion {
@@ -339,7 +376,7 @@ const LIBXML2_VERSIONS: &[PackageVersion] = &[PackageVersion {
         exact_size: 3_152_452,
         body_limit: 16 * 1024 * 1024,
     },
-    recipe_revision: 1,
+    recipe_revision: 11,
     dependencies: &[],
     supported_targets: TARGETS,
     ordered_link_outputs: LIBXML2_ARCHIVES,
@@ -364,6 +401,36 @@ const GMP_VERSIONS: &[PackageVersion] = &[PackageVersion {
     ordered_link_outputs: GMP_ARCHIVES,
     retained_headers: GMP_HEADERS,
     provides: &["gmp"],
+}];
+/// The tidy bridge's parser: HTML Tidy 5.8.0, the last stable libtidy release.
+///
+/// libtidy is a pure-C library with no catalogued dependencies. The bridge reaches it
+/// through its public API only, so `libtidy.a` is the sole link output and the four
+/// public headers are retained for future extensions. Upstream publishes only binary
+/// installers as release assets, so the source comes from GitHub's codeload endpoint
+/// (byte-identical to the tag archive); the release-asset fallback does not apply.
+const LIBTIDY_ARCHIVES: &[&str] = &["lib/libtidy.a"];
+/// Every public libtidy 5.8.0 header installed by the upstream build.
+const LIBTIDY_HEADERS: &[&str] = &[
+    "include/tidy.h",
+    "include/tidybuffio.h",
+    "include/tidyenum.h",
+    "include/tidyplatform.h",
+];
+const LIBTIDY_VERSIONS: &[PackageVersion] = &[PackageVersion {
+    version: "5.8.0",
+    source: SourceArchive {
+        https_url: "https://codeload.github.com/htacg/tidy-html5/tar.gz/refs/tags/5.8.0",
+        sha256: "59c86d5b2e452f63c5cdb29c866a12a4c55b1741d7025cf2f3ce0cde99b0660e",
+        exact_size: 1_015_303,
+        body_limit: 16 * 1024 * 1024,
+    },
+    recipe_revision: 1,
+    dependencies: &[],
+    supported_targets: TARGETS,
+    ordered_link_outputs: LIBTIDY_ARCHIVES,
+    retained_headers: LIBTIDY_HEADERS,
+    provides: &["libtidy"],
 }];
 /// Pinned file/libmagic with a database embedded by the reviewed recipe.
 const LIBMAGIC_VERSIONS: &[PackageVersion] = &[PackageVersion {
@@ -399,6 +466,11 @@ const PACKAGES: &[PackageSpec] = &[
         versions: OPENSSL_VERSIONS,
     },
     PackageSpec {
+        name: "openssl-crypto",
+        default_version: "3.6.4",
+        versions: OPENSSL_CRYPTO_VERSIONS,
+    },
+    PackageSpec {
         name: "nghttp2",
         default_version: "1.70.0",
         versions: NGHTTP2_VERSIONS,
@@ -427,6 +499,11 @@ const PACKAGES: &[PackageSpec] = &[
         name: "gmp",
         default_version: "6.3.0",
         versions: GMP_VERSIONS,
+    },
+    PackageSpec {
+        name: "libtidy",
+        default_version: "5.8.0",
+        versions: LIBTIDY_VERSIONS,
     },
 ];
 
@@ -577,7 +654,7 @@ mod tests {
     fn catalog_rejects_unknown_selection() {
         assert_eq!(
             package("libfoo").unwrap_err().to_string(),
-            "native catalog error: unknown native package 'libfoo'; known packages: libmagic, pcre2, zlib, openssl, nghttp2, libssh2, curl, oniguruma, libxml2, gmp"
+            "native catalog error: unknown native package 'libfoo'; known packages: libmagic, pcre2, zlib, openssl, openssl-crypto, nghttp2, libssh2, curl, oniguruma, libxml2, gmp, libtidy"
         );
         assert!(version("pcre2", Some("10.46")).is_err());
     }
@@ -599,6 +676,25 @@ mod tests {
         assert!(version.retained_headers.contains(&"include/openssl/ssl.h"));
         assert!(version.retained_headers.contains(&"include/openssl/crypto.h"));
         assert!(version.dependencies.is_empty());
+        assert_eq!(version.supported_targets, TARGETS);
+    }
+
+    /// Verifies the libcrypto-only OpenSSL 3.6.4 source identity and its exact
+    /// `libcrypto.a` contract, including the zlib dependency used by its
+    /// compression BIO paths.
+    #[test]
+    fn openssl_crypto_catalog_snapshot_is_exact() {
+        let version = version("openssl-crypto", None).expect("catalogue entry");
+        assert_eq!(version.version, "3.6.4");
+        assert_eq!(version.recipe_revision, 1);
+        assert_eq!(version.source.exact_size, 55_003_802);
+        assert_eq!(
+            version.source.sha256,
+            "9bffaa1ad1e07b354c21bd3324ec02fa15579f45a7d0494b3e74bc449b7333ef"
+        );
+        assert_eq!(version.ordered_link_outputs, &["lib/libcrypto.a"]);
+        assert_eq!(version.retained_headers, OPENSSL_CRYPTO_HEADERS);
+        assert_eq!(version.dependencies, &["zlib"]);
         assert_eq!(version.supported_targets, TARGETS);
     }
 
@@ -655,6 +751,28 @@ mod tests {
         assert!(spec.dependencies.is_empty());
     }
 
+    /// Verifies the pinned HTML Tidy 5.8.0 source identity and dependency-free static
+    /// archive contract. libtidy is compiled from `src/*.c` by the reviewed recipe with
+    /// no CMake and no system fallback.
+    #[test]
+    fn libtidy_catalog_snapshot_is_exact() {
+        let version = version("libtidy", None).expect("catalogue entry");
+        assert_eq!(version.version, "5.8.0");
+        assert_eq!(version.source.exact_size, 1_015_303);
+        assert_eq!(
+            version.source.sha256,
+            "59c86d5b2e452f63c5cdb29c866a12a4c55b1741d7025cf2f3ce0cde99b0660e"
+        );
+        assert_eq!(version.source.format().unwrap(), ArchiveFormat::TarGz);
+        assert_eq!(version.ordered_link_outputs, LIBTIDY_ARCHIVES);
+        assert_eq!(version.ordered_link_outputs, &["lib/libtidy.a"]);
+        assert_eq!(version.retained_headers, LIBTIDY_HEADERS);
+        assert_eq!(version.retained_headers.len(), 4);
+        assert_eq!(version.recipe_revision, 1);
+        assert!(version.dependencies.is_empty());
+        assert_eq!(version.supported_targets, TARGETS);
+    }
+
     /// Verifies the official libxml2 source identity, the shim-first static archive contract, and
     /// the complete public header set (45 shipped plus the generated `xmlversion.h`). libxml2 is
     /// the first `.tar.xz` source, so the derived archive format is pinned here too.
@@ -679,7 +797,7 @@ mod tests {
         assert!(version.retained_headers.contains(&"include/libxml/xmlversion.h"));
         assert!(version.retained_headers.contains(&"include/libxml/xmlwriter.h"));
         assert!(version.retained_headers.iter().all(|header| header.starts_with("include/libxml/") && header.ends_with(".h")));
-        assert_eq!(version.recipe_revision, 1);
+        assert_eq!(version.recipe_revision, 11);
         assert!(version.dependencies.is_empty());
         assert_eq!(version.supported_targets, TARGETS);
     }
@@ -715,10 +833,23 @@ mod tests {
                 let format = version.source.format().unwrap_or_else(|error| {
                     panic!("{} {}: {error}", package.name, version.version)
                 });
-                assert!(version.source.https_url.ends_with(format.extension()));
+                assert!(
+                    version.source.https_url.ends_with(format.extension())
+                        || version
+                            .source
+                            .https_url
+                            .contains(&format!("/{}/", format.extension()))
+                );
             }
         }
         assert_eq!(version("zlib", None).unwrap().source.format().unwrap(), ArchiveFormat::TarGz);
+        let codeload = SourceArchive {
+            https_url: "https://codeload.github.com/htacg/tidy-html5/tar.gz/refs/tags/5.8.0",
+            sha256: "",
+            exact_size: 0,
+            body_limit: 0,
+        };
+        assert_eq!(codeload.format().unwrap(), ArchiveFormat::TarGz);
         let unknown = SourceArchive { https_url: "https://example.invalid/source.zip", sha256: "", exact_size: 0, body_limit: 0 };
         let error = unknown.format().unwrap_err();
         assert_eq!(error.kind, NativeErrorKind::Catalog);

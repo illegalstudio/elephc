@@ -32,7 +32,7 @@ pub(super) fn lower_arguments(
     ).expect("selected enum runtime binding consumes the validated shared plan");
     // The plan validates last-wins binding, but its projection can omit overwritten
     // array values. Construct the original arrays so every source effect still runs.
-    let container = lower_named_descriptor_invoker_arg_container(ctx, args, Some(signature), span);
+    let container = lower_named_descriptor_invoker_arg_container(ctx, args, Some(signature), true, span);
     let container = unbox_array_param_storage(ctx, container, PhpType::AssocArray {
         key: Box::new(PhpType::Mixed), value: Box::new(PhpType::Mixed),
     }, Some(span));

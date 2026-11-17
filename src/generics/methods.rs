@@ -212,7 +212,7 @@ fn doc_template_erased_candidate(
         .values()
         .filter(|template| {
             !template.type_params.is_empty()
-                && template.type_params.iter().all(|param| param.doc_annotated)
+                && template.type_params.iter().all(|param| param.from_docblock)
         })
         .map(|template| {
             let bindings: Bindings = template
@@ -285,17 +285,18 @@ fn attach(
 /// checker from treating the result as a template again.
 fn substitute(mut method: ClassMethod, instantiated: &str, bindings: &Bindings) -> ClassMethod {
     method.name = instantiated.to_string();
+    let erased = super::docblock_params_read_as_mixed(&method.type_params, bindings);
     method.type_params = Vec::new();
     for (_, declared, _, _) in method.params.iter_mut() {
         if let Some(ty) = declared.as_mut() {
-            *ty = super::substitute_value_type(ty, bindings);
+            *ty = super::substitute_signature_type(ty, bindings, &erased);
         }
     }
     if let Some(ty) = method.variadic_type.as_mut() {
-        *ty = super::substitute_value_type(ty, bindings);
+        *ty = super::substitute_signature_type(ty, bindings, &erased);
     }
     if let Some(ty) = method.return_type.as_mut() {
-        *ty = super::substitute_value_type(ty, bindings);
+        *ty = super::substitute_signature_type(ty, bindings, &erased);
     }
     method.body = substitute_body(std::mem::take(&mut method.body), bindings);
     method

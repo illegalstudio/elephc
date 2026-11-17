@@ -34,10 +34,14 @@ mod search;
 mod highlight;
 #[path = "strings/transform.rs"]
 mod transform;
+#[path = "strings/implode_arguments.rs"]
+mod implode_arguments;
 #[path = "strings/implode_boxed.rs"]
 mod implode_boxed;
 #[path = "strings/encoding.rs"]
 mod encoding;
+#[path = "strings/ctype.rs"]
+mod ctype;
 #[path = "strings/inet.rs"]
 mod inet;
 #[path = "strings/iconv.rs"]
@@ -69,6 +73,8 @@ mod offset_writes;
 
 #[path = "strings/mbstring.rs"]
 mod mbstring;
+#[path = "strings/mbstring_fast_semantics.rs"]
+mod mbstring_fast_semantics;
 #[path = "strings/mbstring_coercion.rs"]
 mod mbstring_coercion;
 #[path = "strings/mbstring_scalar.rs"]

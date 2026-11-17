@@ -14,15 +14,20 @@ mod array_pointer_scan;
 mod boxed_array_appends;
 mod builtin_datetime;
 mod clone_overrides;
+mod closure_param_hints;
 mod closure_scopes;
 mod context;
 mod diagnostics;
 mod effect_refinement;
 mod effects_lookup;
+mod eval_reference_layouts;
 mod entry_locals;
 mod expr;
 mod fibers;
 mod function;
+mod initializer_evaluation;
+mod initializer_reads;
+pub(crate) use initializer_reads::visit_constant_reads;
 mod integer_local_contracts;
 mod local_definedness;
 mod loop_closures;
@@ -32,15 +37,23 @@ pub(crate) mod gradual_coercions;
 pub(crate) use clone_overrides::driver_function_name as clone_override_driver_function_name;
 pub(crate) use function::{dynamic_constructor_thunk_name, dynamic_constructor_thunk_owner};
 pub(crate) use function::eval_native_default_helper_name;
+pub(crate) use function::is_reflection_default_helper;
 pub(crate) use function::{lower_array_merge_callable, lower_boxed_usort_callable, lower_prepared_builtin_callable};
 mod ownership;
+mod object_boundaries;
 mod program;
+mod boxed_operators;
+mod reference_property_validators;
+pub use reference_property_validators::enable_native_reference_validation;
 mod property_initializers;
 mod property_default_errors;
+mod reflection_deprecations;
 mod reflection;
 pub(crate) mod static_refs;
 mod stmt;
+mod scoped_writes;
 mod throwable_constructors;
+mod validation_context;
 mod core_methods;
 
 #[cfg(test)]
@@ -132,6 +145,8 @@ pub enum LoweringError {
         /// The lowered module the failures were found in.
         module: Box<crate::ir::Module>,
     },
+    /// Retains the failing function and value metadata for remote validation failures.
+    ValidationInFunction { function: String, error: ValidationError, detail: String },
     /// A PHP shape this lowering deliberately refuses, reported as a source diagnostic.
     ///
     /// Lowering refuses instead of emitting code whenever the selected path cannot honor an
@@ -146,6 +161,9 @@ impl fmt::Display for LoweringError {
         match self {
             LoweringError::Validation(err) | LoweringError::InvalidBodies { first: err, .. } => {
                 write!(f, "EIR validation failed: {:?}", err)
+            }
+            LoweringError::ValidationInFunction { function, error, detail } => {
+                write!(f, "EIR validation failed in {function}: {error:?}{detail}")
             }
             LoweringError::Unsupported(err) => write!(
                 f,

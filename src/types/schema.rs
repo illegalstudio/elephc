@@ -47,21 +47,65 @@ pub enum AttrArgValue {
     Str(String),
     Float(u64),
     Array(Vec<AttrArgEntry>),
-    /// Reference to a global constant by canonical name (`#[A(SOME_CONST)]`).
-    ConstRef(String),
+    /// Reference to a global constant by canonical name (`#[A(SOME_CONST)]`), with the line
+    /// of the read, which reflection reports a deprecated constant at.
+    ConstRef(String, u32),
     /// Reference to a class constant or enum case, carried as
-    /// (canonical type name, member name) — e.g. `#[A(C::BAR)]` or `#[A(E::Case)]`.
-    ScopedConst(String, String),
+    /// (canonical type name, member name, line of the read) — e.g. `#[A(C::BAR)]` or
+    /// `#[A(E::Case)]`.
+    ScopedConst(String, String, u32),
 }
 
 /// One entry of an attribute argument list or of a nested attribute array.
 /// `key` is `None` for a positional argument / next sequential array element,
 /// `Some(AttrKey::Str)` for a named argument (`#[A(name: 1)]`) or string array
 /// key, and `Some(AttrKey::Int)` for an explicit integer array key.
-#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
+#[derive(Debug, Clone)]
 pub struct AttrArgEntry {
     pub key: Option<AttrKey>,
     pub value: AttrArgValue,
+    /// Declaration span of the attribute this argument belongs to.
+    ///
+    /// Reflection reports a deprecated constant read at this span, at every
+    /// `newInstance()` call. The span is deliberately NOT part of the identity below:
+    /// two identical attributes must share one reflection factory, and only a deprecated
+    /// constant read needs per-declaration factories (see `attribute_factory_key`).
+    pub span: Span,
+}
+
+/// Compares only the PHP-visible key and value, ignoring the diagnostic span.
+impl PartialEq for AttrArgEntry {
+    /// Returns whether two entries carry the same argument, regardless of declaration site.
+    fn eq(&self, other: &Self) -> bool {
+        self.key == other.key && self.value == other.value
+    }
+}
+
+impl Eq for AttrArgEntry {}
+
+/// Hashes only the PHP-visible key and value, ignoring the diagnostic span.
+impl std::hash::Hash for AttrArgEntry {
+    /// Feeds the argument key and value into `state`.
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        self.key.hash(state);
+        self.value.hash(state);
+    }
+}
+
+/// Orders entries by their PHP-visible key and value, ignoring the diagnostic span.
+impl PartialOrd for AttrArgEntry {
+    /// Returns the argument order of the two entries.
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+/// Orders entries by their PHP-visible key and value, ignoring the diagnostic span.
+impl Ord for AttrArgEntry {
+    /// Compares the argument key and value of the two entries.
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        (&self.key, &self.value).cmp(&(&other.key, &other.value))
+    }
 }
 
 /// A resolved array/named-argument key for an [`AttrArgEntry`].
@@ -106,8 +150,12 @@ pub(crate) fn collect_attribute_args(
                     }
                     _ => (None, arg_expr),
                 };
-                match fold_attr_value(value_expr) {
-                    Some(value) => entries.push(AttrArgEntry { key, value }),
+                match fold_attr_value(value_expr, attr.span) {
+                    Some(value) => entries.push(AttrArgEntry {
+                        key,
+                        value,
+                        span: attr.span,
+                    }),
                     None => {
                         supported = false;
                         break;
@@ -121,14 +169,18 @@ pub(crate) fn collect_attribute_args(
 }
 
 /// Folds one attribute argument expression to retained reflection metadata.
-fn fold_attr_value(expr: &Expr) -> Option<AttrArgValue> {
+///
+/// Every retained entry carries the ATTRIBUTE's span: php-src reports a deprecated constant
+/// read from an attribute argument at the attribute declaration, even when the argument
+/// itself sits on a later line of a multi-line attribute.
+fn fold_attr_value(expr: &Expr, span: Span) -> Option<AttrArgValue> {
     match &expr.kind {
         ExprKind::StringLiteral(value) => Some(AttrArgValue::Str(value.clone())),
         ExprKind::IntLiteral(value) => Some(AttrArgValue::Int(*value)),
         ExprKind::FloatLiteral(value) => Some(AttrArgValue::Float(value.to_bits())),
         ExprKind::BoolLiteral(value) => Some(AttrArgValue::Bool(*value)),
         ExprKind::Null => Some(AttrArgValue::Null),
-        ExprKind::ConstRef(name) => Some(AttrArgValue::ConstRef(name.as_str().to_string())),
+        ExprKind::ConstRef(name) => Some(AttrArgValue::ConstRef(name.as_str().to_string(), span.line)),
         ExprKind::ScopedConstantAccess {
             receiver: StaticReceiver::Named(class),
             name,
@@ -136,13 +188,13 @@ fn fold_attr_value(expr: &Expr) -> Option<AttrArgValue> {
             builtin_attribute_flag(class.as_str(), name).map(AttrArgValue::Int)
         }
         ExprKind::ScopedConstantAccess { receiver, name } => scoped_receiver_type_name(receiver)
-            .map(|type_name| AttrArgValue::ScopedConst(type_name, name.clone())),
+            .map(|type_name| AttrArgValue::ScopedConst(type_name, name.clone(), span.line)),
         // `#[\Attribute(\Attribute::TARGET_CLASS | \Attribute::IS_REPEATABLE)]`: flags combine.
         ExprKind::BinaryOp {
             left,
             op: op @ (BinOp::BitOr | BinOp::BitAnd | BinOp::BitXor),
             right,
-        } => match (fold_attr_value(left)?, fold_attr_value(right)?) {
+        } => match (fold_attr_value(left, span)?, fold_attr_value(right, span)?) {
             (AttrArgValue::Int(l), AttrArgValue::Int(r)) => Some(AttrArgValue::Int(match op {
                 BinOp::BitOr => l | r,
                 BinOp::BitAnd => l & r,
@@ -164,7 +216,8 @@ fn fold_attr_value(expr: &Expr) -> Option<AttrArgValue> {
             for element in elements {
                 entries.push(AttrArgEntry {
                     key: None,
-                    value: fold_attr_value(element)?,
+                    value: fold_attr_value(element, span)?,
+                    span,
                 });
             }
             Some(AttrArgValue::Array(entries))
@@ -174,7 +227,8 @@ fn fold_attr_value(expr: &Expr) -> Option<AttrArgValue> {
             for (key_expr, value_expr) in pairs {
                 entries.push(AttrArgEntry {
                     key: Some(fold_attr_key(key_expr)?),
-                    value: fold_attr_value(value_expr)?,
+                    value: fold_attr_value(value_expr, span)?,
+                    span,
                 });
             }
             Some(AttrArgValue::Array(entries))
@@ -315,6 +369,11 @@ pub struct InterfaceInfo {
     pub constant_declaring_interfaces: HashMap<String, String>,
     /// Interface constants declared with PHP 8.1+ `final`, including inherited parents.
     pub final_constants: HashSet<String>,
+    /// `true` for the marker interface a generic CLASS template leaves behind
+    /// (`crate::generics::classes`). php-src has a class there, not an interface, so the marker
+    /// answers `instanceof` and nothing else: reflection (`interface_exists`,
+    /// `get_declared_interfaces`, `class_implements`, `is_subclass_of`) does not see it.
+    pub reflection_hidden: bool,
 }
 
 /// Class metadata for resolved declarations. Tracks inheritance, properties,
@@ -369,6 +428,14 @@ pub struct ClassInfo {
     /// Deprecation reason for class constants carrying `#[\Deprecated]`, keyed
     /// by the case-sensitive constant name. An empty string means no reason.
     pub constant_deprecations: HashMap<String, String>,
+    /// Properties this class declares itself (instance and static), in the order php-src
+    /// evaluates their defaults when it initializes the class: its own declarations in source
+    /// order, then the ones imported from traits. Empty for compiler-built classes.
+    pub property_initialization_order: Vec<String>,
+    /// Default expressions php-src evaluates when execution reaches the class statement,
+    /// because a class property compatibly redeclares a trait property: per such property, in
+    /// trait order, the class's default and then the trait's.
+    pub trait_collision_defaults: Vec<TraitCollisionDefault>,
     /// PHP 8.3 declared types for constants declared directly on this class-like symbol.
     pub constant_types: HashMap<String, TypeExpr>,
     /// Class constant visibilities keyed by case-sensitive constant name.
@@ -443,6 +510,8 @@ pub struct ClassInfo {
     /// caller). The object allocates a cell per such property at construction and releases
     /// it on destruction.
     pub owned_reference_properties: HashSet<String>,
+    /// Physical indices of object-owned reference cells, including hidden ancestor slots.
+    pub owned_reference_property_slots: HashSet<usize>,
     pub promoted_properties: HashSet<String>,
     /// Per-layout-slot by-reference flags for instance properties.
     ///
@@ -892,6 +961,11 @@ impl ClassInfo {
             .unwrap_or_else(|| self.declared_properties.contains(property))
     }
 
+    /// Returns whether this physical slot owns its native reference-cell allocation.
+    pub fn property_slot_owns_reference(&self, index: usize) -> bool {
+        self.owned_reference_property_slots.contains(&index)
+    }
+
     /// Establishes the runtime layout of untyped array slots before return inference reads them.
     /// A hash with boxed values represents both lists and keyed arrays. Keeping a precise packed
     /// type here until EIR metadata is built lets a forwarding function retain that obsolete ABI
@@ -1157,6 +1231,12 @@ pub enum EnumCaseValue {
 pub struct EnumCaseInfo {
     pub name: String,
     pub value: Option<EnumCaseValue>,
+    /// Declaration span, when the case came from user source.
+    pub span: Option<Span>,
+    /// True when the backing value read `MT_RAND_PHP`, which php-src deprecates at first
+    /// access. Keeping the flag here lets lowering raise the notice without re-reading
+    /// the (folded) value expression.
+    pub deprecated_mt_rand_php: bool,
     pub attribute_names: Vec<String>,
     pub attribute_args: Vec<Option<Vec<AttrArgEntry>>>,
 }
@@ -1229,4 +1309,35 @@ pub struct PackedFieldInfo {
     pub php_type: PhpType,
     pub offset: usize,
     pub width: Option<ScalarWidth>,
+}
+
+/// One default php-src evaluates at a class or trait statement while binding a used trait
+/// (see `ClassInfo::trait_collision_defaults`).
+#[derive(Debug, Clone, PartialEq)]
+pub struct TraitCollisionDefault {
+    /// The default expression.
+    pub default: crate::parser::ast::Expr,
+    /// The trait the default was imported from, or `None` for the class's own declaration.
+    /// A trait initialized before the statement already holds its value evaluated.
+    pub trait_name: Option<String>,
+}
+
+/// How php-src binds each user class-like, which decides what a class copies from its parent
+/// and traits: a class bound at run time (at its statement) copies their defaults and trait
+/// constants as they are then, already evaluated when those were initialized.
+#[derive(Debug, Clone, Default)]
+pub struct ClassBindingFacts {
+    /// Classes and traits php-src binds when execution reaches their statement rather than at
+    /// compile time: not top level, implementing an interface, using a trait, or extending a
+    /// class not bound before them.
+    pub runtime_bound: crate::fast_hash::FastSet<String>,
+    /// Classes and traits whose binding effects run elsewhere than at their (hoisted)
+    /// declaration: those of an included file, at their class-binding mark, and anonymous
+    /// classes, at their first `new`. Keys are lowercased names without a leading backslash.
+    pub bound_elsewhere: crate::fast_hash::FastSet<String>,
+    /// For each class or trait, the used trait each imported (not redeclared) property was
+    /// copied from.
+    pub property_trait_origins: HashMap<String, HashMap<String, String>>,
+    /// The traits each class or trait uses directly, in `use` order.
+    pub trait_uses: HashMap<String, Vec<String>>,
 }

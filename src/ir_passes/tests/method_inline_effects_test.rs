@@ -64,7 +64,8 @@ echo decorate(new Label(), 'item'), "\n";
         let module = optimized(source, target);
         let decorate = function(&module, "decorate");
         assert!(called_methods(&module, decorate).is_empty(),
-            "{target}: string-building method stayed a real call");
+            "{target}: string-building method stayed a real call\ncaller:\n{}\ncallee:\n{}",
+            crate::ir::print_function(decorate), crate::ir::print_function(method(&module, "Label::wrap")));
         assert!(placed(decorate).any(|inst| matches!(inst.op, Op::StrConcat | Op::StrAppend)),
             "{target}: expected concatenation after the splice");
         crate::codegen::generate_user_asm_from_ir(&module, false, false)

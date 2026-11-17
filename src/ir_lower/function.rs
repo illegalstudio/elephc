@@ -31,6 +31,7 @@ use crate::types::{
 };
 
 mod builtin_wrappers;
+pub(in crate::ir_lower) use builtin_wrappers::lower_builtin_callable_body;
 mod closure_defaults;
 pub(crate) use crate::types::deferred_defaults::contains_deferred_error;
 mod object_comparisons;
@@ -112,6 +113,8 @@ pub(crate) fn lower_main(
         &check_result.array_push_property_plans,
         &check_result.member_receiver_types,
         &check_result.flow_typed_property_accesses,
+        &check_result.array_append_element_types,
+        &check_result.local_value_read_types,
         &check_result.boxed_reference_promotion_sites,
         &check_result.first_class_builtin_call_types,
         &check_result.generic_call_sites,
@@ -123,7 +126,9 @@ pub(crate) fn lower_main(
         &check_result.local_ref_detach_sites,
         &check_result.local_retype_sites,
         &check_result.mixed_storage_store_sites,
-        "main".to_string(),
+        &check_result.sparse_key_write_sites,
+        &check_result.promotable_arrays,
+        crate::types::TOP_LEVEL_SCOPE.to_string(),
         constants,
         None,
         PhpType::Void,
@@ -220,6 +225,7 @@ pub(crate) fn lower_user_function(
     // callers; only the EIR body return type becomes Mixed so `return $x`
     // lowers to a plain boxed Mixed return instead of a Generator coercion.
     let body_return_type = generator_body_return_type(body, &eir_signature.return_type, signature.is_generator);
+    let body_signature = logical_object_reference_body_signature(signature, &eir_signature);
     let mut function = Function::new(
         name.to_string(),
         return_ir_type(&body_return_type),
@@ -228,6 +234,10 @@ pub(crate) fn lower_user_function(
     function.params = function_params(&eir_signature);
     function.flags.is_internal = is_internal;
     function.flags.by_ref_return = signature.by_ref_return && !signature.is_generator;
+    // A typed promotable clone is the original function to PHP: backtraces and introspection
+    // name the original, and `function_exists()` never lists the clone.
+    function.source_name = crate::generics::promotable_clones::promotable_clone_source_name(name)
+        .map(str::to_string);
     function.source_signature = Some(source_signature(name, &eir_signature));
     function.signature = Some(eir_runtime_metadata_signature(&eir_signature));
     function.source_defaults = params.iter().map(|(_, _, default, _)| default.clone()).collect();
@@ -253,7 +263,7 @@ pub(crate) fn lower_user_function(
         None,
         &mut module.data,
         body,
-        env_from_signature(&eir_signature, web),
+        env_from_signature(&body_signature, web),
         web_gated_global_env(&check_result.global_env, web),
         &check_result.functions,
         &check_result.extern_functions,
@@ -275,6 +285,8 @@ pub(crate) fn lower_user_function(
         &check_result.array_push_property_plans,
         &check_result.member_receiver_types,
         &check_result.flow_typed_property_accesses,
+        &check_result.array_append_element_types,
+        &check_result.local_value_read_types,
         &check_result.boxed_reference_promotion_sites,
         &check_result.first_class_builtin_call_types,
         &check_result.generic_call_sites,
@@ -286,6 +298,8 @@ pub(crate) fn lower_user_function(
         &check_result.local_ref_detach_sites,
         &check_result.local_retype_sites,
         &check_result.mixed_storage_store_sites,
+        &check_result.sparse_key_write_sites,
+        &check_result.promotable_arrays,
         name.to_string(),
         constants,
         None,
@@ -407,6 +421,8 @@ pub(crate) fn lower_class_method(
         &check_result.array_push_property_plans,
         &check_result.member_receiver_types,
         &check_result.flow_typed_property_accesses,
+        &check_result.array_append_element_types,
+        &check_result.local_value_read_types,
         &check_result.boxed_reference_promotion_sites,
         &check_result.first_class_builtin_call_types,
         &check_result.generic_call_sites,
@@ -418,6 +434,8 @@ pub(crate) fn lower_class_method(
         &check_result.local_ref_detach_sites,
         &check_result.local_retype_sites,
         &check_result.mixed_storage_store_sites,
+        &check_result.sparse_key_write_sites,
+        &check_result.promotable_arrays,
         name.clone(),
         constants,
         Some(class_name.to_string()),
@@ -458,9 +476,11 @@ fn eval_aot_decision_maps() -> (
     crate::fast_hash::FastMap<Span, crate::fast_hash::FastSet<String>>,
     crate::fast_hash::FastMap<Span, crate::fast_hash::FastSet<String>>,
     crate::fast_hash::FastMap<Span, crate::fast_hash::FastSet<String>>,
+    crate::fast_hash::FastMap<Span, crate::fast_hash::FastSet<String>>,
     crate::fast_hash::FastMap<(String, Span), crate::fast_hash::FastSet<String>>,
 ) {
     (
+        crate::fast_hash::FastMap::default(),
         crate::fast_hash::FastMap::default(),
         crate::fast_hash::FastMap::default(),
         crate::fast_hash::FastMap::default(),
@@ -505,8 +525,11 @@ pub(crate) fn lower_eval_aot_function(
         ref_detach_sites,
         retype_sites,
         mixed_storage_store_sites,
+        sparse_key_write_sites,
         boxed_reference_promotion_sites,
     ) = eval_aot_decision_maps();
+    // An eval fragment was never checked, so no promotion decision exists for its locals.
+    let promotable_arrays = crate::types::PromotableArrays::default();
     let closures = lower_body_into_function(
         module.shared_source_catalog(),
         module.runtime_bound_functions.clone(),
@@ -536,6 +559,8 @@ pub(crate) fn lower_eval_aot_function(
         &check_result.array_push_property_plans,
         &check_result.member_receiver_types,
         &check_result.flow_typed_property_accesses,
+        &check_result.array_append_element_types,
+        &check_result.local_value_read_types,
         &boxed_reference_promotion_sites,
         &check_result.first_class_builtin_call_types,
         &check_result.generic_call_sites,
@@ -547,7 +572,9 @@ pub(crate) fn lower_eval_aot_function(
         &ref_detach_sites,
         &retype_sites,
         &mixed_storage_store_sites,
-        "main".to_string(),
+        &sparse_key_write_sites,
+        &promotable_arrays,
+        crate::types::TOP_LEVEL_SCOPE.to_string(),
         constants,
         None,
         return_type,
@@ -641,8 +668,11 @@ pub(crate) fn lower_eval_aot_scope_function(
         ref_detach_sites,
         retype_sites,
         mixed_storage_store_sites,
+        sparse_key_write_sites,
         boxed_reference_promotion_sites,
     ) = eval_aot_decision_maps();
+    // An eval fragment was never checked, so no promotion decision exists for its locals.
+    let promotable_arrays = crate::types::PromotableArrays::default();
     let closures = lower_body_into_function(
         module.shared_source_catalog(),
         module.runtime_bound_functions.clone(),
@@ -672,6 +702,8 @@ pub(crate) fn lower_eval_aot_scope_function(
         &check_result.array_push_property_plans,
         &check_result.member_receiver_types,
         &check_result.flow_typed_property_accesses,
+        &check_result.array_append_element_types,
+        &check_result.local_value_read_types,
         &boxed_reference_promotion_sites,
         &check_result.first_class_builtin_call_types,
         &check_result.generic_call_sites,
@@ -683,7 +715,9 @@ pub(crate) fn lower_eval_aot_scope_function(
         &ref_detach_sites,
         &retype_sites,
         &mixed_storage_store_sites,
-        "main".to_string(),
+        &sparse_key_write_sites,
+        &promotable_arrays,
+        crate::types::TOP_LEVEL_SCOPE.to_string(),
         constants,
         None,
         return_type,
@@ -853,6 +887,8 @@ fn lower_property_default_thunk(
         &check_result.array_push_property_plans,
         &check_result.member_receiver_types,
         &check_result.flow_typed_property_accesses,
+        &check_result.array_append_element_types,
+        &check_result.local_value_read_types,
         &check_result.boxed_reference_promotion_sites,
         &check_result.first_class_builtin_call_types,
         &check_result.generic_call_sites,
@@ -864,6 +900,8 @@ fn lower_property_default_thunk(
         &check_result.local_ref_detach_sites,
         &check_result.local_retype_sites,
         &check_result.mixed_storage_store_sites,
+        &check_result.sparse_key_write_sites,
+        &check_result.promotable_arrays,
         function_name.clone(),
         constants,
         Some(class_name.to_string()),
@@ -1006,6 +1044,10 @@ pub(crate) fn lower_dynamic_constructor_thunk(
     if existing_thunks.contains(&function_name) {
         return;
     }
+    // The padded constructor is the owner's (`dynamic_constructor_thunk_owner` resolved it from the
+    // runtime-selected class): a descendant of a private constructor carries no `__construct`
+    // entry of its own, and PHP still runs the ancestor's.
+    let constructor_class_name = class_name.to_string();
     let regular = crate::types::call_args::regular_param_count(constructor);
     let is_variadic = constructor.variadic.is_some();
     if is_variadic {
@@ -1076,14 +1118,14 @@ pub(crate) fn lower_dynamic_constructor_thunk(
         }
     };
     let slot_type = |index: usize| -> Option<PhpType> {
-        crate::types::call_args::positional_param_type(constructor, index)
+        crate::types::call_args::positional_param_type(&constructor, index)
     };
     if (0..provided_args).any(|index| slot_type(index).is_none()) {
         return;
     }
     // What the collector declares one element to be. `None` means it collects anything, and the
     // overflow is passed through untouched.
-    let element = crate::types::call_args::variadic_element_type(constructor);
+    let element = crate::types::call_args::variadic_element_type(&constructor);
     let cast = match element.as_ref().map(PhpType::codegen_repr) {
         None | Some(PhpType::Mixed) => None,
         Some(PhpType::Int) => Some(CastType::Int),
@@ -1096,7 +1138,7 @@ pub(crate) fn lower_dynamic_constructor_thunk(
     };
 
     let span = Span::dummy();
-    let this_type = PhpType::Object(class_name.to_string());
+    let this_type = PhpType::Object(constructor_class_name.clone());
     let mut args = Vec::with_capacity(provided_args.max(constructor.params.len()));
     let mut guards = Vec::new();
     for index in 0..provided_args {
@@ -1112,7 +1154,7 @@ pub(crate) fn lower_dynamic_constructor_thunk(
                 // The guard is what keeps that from becoming a silent `(int)"x" === 0`: php raises
                 // a TypeError for a value it cannot read as a number, and so does this.
                 guards.push(coercible_or_throw_stmt(
-                    class_name,
+                    &constructor_class_name,
                     &variable,
                     index + 1,
                     target.clone(),
@@ -1225,6 +1267,8 @@ pub(crate) fn lower_dynamic_constructor_thunk(
         &check_result.array_push_property_plans,
         &check_result.member_receiver_types,
         &check_result.flow_typed_property_accesses,
+        &check_result.array_append_element_types,
+        &check_result.local_value_read_types,
         &check_result.boxed_reference_promotion_sites,
         &check_result.first_class_builtin_call_types,
         &check_result.generic_call_sites,
@@ -1236,6 +1280,8 @@ pub(crate) fn lower_dynamic_constructor_thunk(
         &check_result.local_ref_detach_sites,
         &check_result.local_retype_sites,
         &check_result.mixed_storage_store_sites,
+        &check_result.sparse_key_write_sites,
+        &check_result.promotable_arrays,
         function_name.clone(),
         constants,
         Some(class_name.to_string()),
@@ -1356,6 +1402,8 @@ pub(crate) fn lower_clone_override_function(
         &check_result.array_push_property_plans,
         &check_result.member_receiver_types,
         &check_result.flow_typed_property_accesses,
+        &check_result.array_append_element_types,
+        &check_result.local_value_read_types,
         &check_result.boxed_reference_promotion_sites,
         &check_result.first_class_builtin_call_types,
         &check_result.generic_call_sites,
@@ -1367,6 +1415,8 @@ pub(crate) fn lower_clone_override_function(
         &check_result.local_ref_detach_sites,
         &check_result.local_retype_sites,
         &check_result.mixed_storage_store_sites,
+        &check_result.sparse_key_write_sites,
+        &check_result.promotable_arrays,
         function_name.to_string(),
         constants,
         scope.map(str::to_string),
@@ -1439,13 +1489,17 @@ pub(crate) fn eval_native_default_helper_name(
     )
 }
 
-/// Lowers native deferred defaults and eval-safe deep literals into zero-argument EIR helpers.
+/// Lowers native deferred defaults, eval-safe deep literals, and defaults that read a
+/// deprecated constant into zero-argument EIR helpers.
 ///
 /// Compact eval metadata deliberately has a recursion bound. A finite source literal beyond that
 /// bound is still safe for the compiler to lower normally, so the binder calls one of these
 /// helpers when no compact value was registered. Deferred-error helpers run only on native
 /// callable and reflection paths. Eval receives those trees as owned data, never as callbacks
-/// that could unwind through interpreter-owned Rust frames.
+/// that could unwind through interpreter-owned Rust frames. A default that reads a deprecated
+/// constant (`DATE_RFC7231`, an `RFC7231` class constant) gets a helper too, for functions,
+/// methods, and closures alike, so a dynamic call raises the notice on first use instead of
+/// materializing a value folded at compile time.
 pub(crate) fn lower_eval_native_default_helpers(
     module: &mut Module,
     check_result: &CheckResult,
@@ -1463,6 +1517,10 @@ pub(crate) fn lower_eval_native_default_helpers(
         })
     });
     let mut specs = Vec::new();
+    let tables = super::initializer_reads::ConstantTables {
+        classes: &module.class_infos,
+        interfaces: &check_result.interfaces,
+    };
     let mut classes = module.class_infos.iter().collect::<Vec<_>>();
     classes.sort_by_key(|(_, info)| info.class_id);
     for (class_name, class_info) in classes {
@@ -1479,6 +1537,9 @@ pub(crate) fn lower_eval_native_default_helpers(
                         && !matches!(default.kind, ExprKind::Throw(_))
                         || (uses_eval && eval_native_default_helper_literal(&default.kind)
                             && crate::types::signatures::literal_default_exceeds_compact_depth(default))
+                        || super::initializer_reads::default_reaches_deprecated_read(
+                            &tables, Some(class_name.as_str()), default,
+                        )
                     {
                         let scope = if is_static {
                             class_info.static_method_impl_classes.get(method_name)
@@ -1497,13 +1558,50 @@ pub(crate) fn lower_eval_native_default_helpers(
     for (name, signature) in functions {
         for (index, default) in signature.defaults.iter().enumerate() {
             let Some(default) = default else { continue; };
-            if contains_deferred_error(default) && !matches!(default.kind, ExprKind::Throw(_)) {
+            if contains_deferred_error(default) && !matches!(default.kind, ExprKind::Throw(_))
+                || super::initializer_reads::default_reaches_deprecated_read(
+                    &tables, None, default,
+                )
+            {
                 specs.push((format!("__elephc_eval_default\\function\\{name}\\{index}"),
                     None, default.clone()));
             }
         }
     }
-    for (function_name, default_scope, default) in specs {
+    // A closure's descriptor invoker fills an omitted default from a value folded at compile
+    // time. A default that reads a deprecated constant must raise its notice on first use
+    // instead, so it is evaluated through a helper like a deferred-error default.
+    for closure in &module.closures {
+        let Some(signature) = &closure.signature else { continue };
+        for (index, default) in signature.defaults.iter().enumerate() {
+            let Some(default) = default else { continue };
+            if super::initializer_reads::default_reaches_deprecated_read(
+                &tables, closure.lexical_class.as_deref(), default,
+            ) {
+                specs.push((
+                    format!("__elephc_eval_default\\closure\\{}\\{index}", closure.name),
+                    closure.lexical_class.clone(),
+                    default.clone(),
+                ));
+            }
+        }
+    }
+    // `ReflectionParameter::getDefaultValue()` evaluates a fresh copy of the default on every
+    // call, at the caller's line, and leaves the parameter's own once flags alone. It gets a
+    // twin of each helper whose default reads a deprecated constant.
+    let reflection_specs: Vec<_> = specs
+        .iter()
+        .filter(|(_, scope, default)| {
+            super::initializer_reads::default_reaches_deprecated_read(&tables, scope.as_deref(), default)
+        })
+        .map(|(name, scope, default)| (reflection_default_helper_name(name), scope.clone(), default.clone()))
+        .collect();
+    let specs: Vec<_> = specs
+        .into_iter()
+        .map(|(name, scope, default)| (name, scope, default, false))
+        .chain(reflection_specs.into_iter().map(|(name, scope, default)| (name, scope, default, true)))
+        .collect();
+    for (function_name, default_scope, default, for_reflection) in specs {
         if module.functions.iter().any(|function| function.name == function_name) {
             continue;
         }
@@ -1531,10 +1629,18 @@ pub(crate) fn lower_eval_native_default_helpers(
         };
         function.source_signature = Some(source_signature(&function_name, &signature));
         function.signature = Some(eir_runtime_metadata_signature(&signature));
+        let frame = for_reflection.then(|| {
+            super::initializer_evaluation::InitializerFrame::top_unfolded(
+                default_scope.is_some(),
+                super::initializer_evaluation::LineSource::Caller,
+                &default,
+                None,
+            )
+        });
         let body = [Stmt::new(StmtKind::Return(Some(default)), Span::dummy())];
         // The helper inherits class scope through `current_class` below. It must not enter the
         // separate property-initializer path, which skips `body` and expects an object receiver.
-        let closures = lower_body_into_function(
+        let lower = || lower_body_into_function(
             module.shared_source_catalog(),
             module.runtime_bound_functions.clone(),
             &mut function,
@@ -1563,6 +1669,8 @@ pub(crate) fn lower_eval_native_default_helpers(
             &check_result.array_push_property_plans,
             &check_result.member_receiver_types,
             &check_result.flow_typed_property_accesses,
+            &check_result.array_append_element_types,
+            &check_result.local_value_read_types,
             &check_result.boxed_reference_promotion_sites,
             &check_result.first_class_builtin_call_types,
             &check_result.generic_call_sites,
@@ -1574,6 +1682,8 @@ pub(crate) fn lower_eval_native_default_helpers(
             &check_result.local_ref_detach_sites,
             &check_result.local_retype_sites,
             &check_result.mixed_storage_store_sites,
+            &check_result.sparse_key_write_sites,
+            &check_result.promotable_arrays,
             function_name.clone(),
             constants,
             default_scope,
@@ -1588,9 +1698,23 @@ pub(crate) fn lower_eval_native_default_helpers(
             None,
             module.web,
         );
+        let closures = match frame {
+            Some(frame) => super::initializer_evaluation::with_frame(frame, lower),
+            None => lower(),
+        };
         add_closures(module, closures);
         module.add_function(function);
     }
+}
+
+/// Returns the name of the reflection twin of default helper `helper`.
+fn reflection_default_helper_name(helper: &str) -> String {
+    format!("__elephc_reflection_default\\{helper}")
+}
+
+/// Reports whether `name` is a reflection twin made by [`reflection_default_helper_name`].
+pub(crate) fn is_reflection_default_helper(name: &str) -> bool {
+    name.starts_with("__elephc_reflection_default\\")
 }
 
 /// Returns whether a default is a finite, side-effect-free literal tree.
@@ -1668,6 +1792,7 @@ pub(crate) fn lower_closure_function(
     return_type: Option<&TypeExpr>,
     body: &[Stmt],
     captures: &[(String, PhpType, bool)],
+    logical_captures: &[(String, PhpType, bool)],
     signature_captures: &[(String, PhpType, bool)],
     self_ref_callable_capture: Option<&str>,
     by_ref_return: bool,
@@ -1696,6 +1821,7 @@ pub(crate) fn lower_closure_function(
         signature,
         body,
         captures,
+        logical_captures,
         self_ref_callable_capture,
         is_static,
         loop_storage_scope,
@@ -1721,6 +1847,7 @@ pub(crate) fn lower_closure_function_with_context(
     return_type: Option<&TypeExpr>,
     body: &[Stmt],
     captures: &[(String, PhpType, bool)],
+    logical_captures: &[(String, PhpType, bool)],
     signature_captures: &[(String, PhpType, bool)],
     contextual_arg_types: &[PhpType],
     contextual_return_type: Option<&PhpType>,
@@ -1765,6 +1892,7 @@ pub(crate) fn lower_closure_function_with_context(
         signature,
         body,
         captures,
+        logical_captures,
         self_ref_callable_capture,
         is_static,
         loop_storage_scope,
@@ -1780,12 +1908,15 @@ fn lower_closure_function_with_signature(
     signature: FunctionSig,
     body: &[Stmt],
     captures: &[(String, PhpType, bool)],
+    logical_captures: &[(String, PhpType, bool)],
     self_ref_callable_capture: Option<&str>,
     is_static: bool,
     loop_storage_scope: String,
     callable_default: Option<Expr>,
 ) -> FunctionSig {
     closure_defaults::lower_helpers(parent, name, &signature);
+    // Closure descriptors adapt boxed eval reference markers to the declared payload slot.
+    // Keep the closure body on that same concrete ABI so descriptor and callee agree.
     // Generator closures lower their body as a Mixed-returning coroutine; see
     // `generator_body_return_type`.
     let closure_body_return_type = generator_body_return_type(body, &signature.return_type, signature.is_generator);
@@ -1813,13 +1944,13 @@ fn lower_closure_function_with_signature(
         body,
         signature.is_generator,
     );
-    let env = env_with_closure_captures(&signature, captures, parent.web);
-    let lowered_params = params_with_closure_captures(&signature, captures);
+    let env = env_with_closure_captures(&signature, logical_captures, parent.web);
+    let lowered_params = params_with_closure_captures(&signature, logical_captures);
     let recursive_binding = self_ref_callable_capture.map(|local_name| RecursiveClosureBinding {
         local_name: local_name.to_string(),
         closure_name: name.to_string(),
         signature: signature.clone(),
-        captures: captures
+        captures: logical_captures
             .iter()
             .map(|(capture_name, _, by_ref)| (capture_name.clone(), *by_ref))
             .collect(),
@@ -1868,6 +1999,8 @@ fn lower_closure_function_with_signature(
         parent.array_push_property_plans,
         parent.member_receiver_types,
         parent.flow_typed_property_accesses,
+        parent.array_append_element_types,
+        parent.local_value_read_types,
         parent.boxed_reference_promotion_sites,
         parent.first_class_builtin_call_types,
         parent.generic_call_sites,
@@ -1879,6 +2012,8 @@ fn lower_closure_function_with_signature(
         parent.ref_detach_sites,
         parent.retype_sites,
         parent.mixed_storage_store_sites,
+        parent.sparse_key_write_sites,
+        parent.promotable_arrays,
         loop_storage_scope,
         constants,
         parent.current_class.clone(),
@@ -1930,6 +2065,8 @@ fn lower_body_into_function(
     array_push_property_plans: &crate::fast_hash::FastMap<(String, Span), crate::types::ArrayPushPropertyPlan>,
     member_receiver_types: &crate::fast_hash::FastMap<(String, Span), Option<PhpType>>,
     flow_typed_property_accesses: &crate::fast_hash::FastMap<(String, Span), PhpType>,
+    array_append_element_types: &crate::fast_hash::FastMap<(String, Span), Option<PhpType>>,
+    local_value_read_types: &crate::types::LocalValueReadTypes,
     boxed_reference_promotion_sites: &crate::fast_hash::FastMap<
         (String, Span),
         crate::fast_hash::FastSet<String>,
@@ -1947,6 +2084,8 @@ fn lower_body_into_function(
         Span,
         crate::fast_hash::FastSet<String>,
     >,
+    sparse_key_write_sites: &crate::fast_hash::FastMap<Span, crate::fast_hash::FastSet<String>>,
+    promotable_arrays: &crate::types::PromotableArrays,
     loop_storage_scope: String,
     constants: &crate::fast_hash::FastMap<String, (ExprKind, PhpType)>,
     current_class: Option<String>,
@@ -1968,7 +2107,47 @@ fn lower_body_into_function(
     )>,
     web: bool,
 ) -> Vec<Function> {
+    // The constructor calls this ordinary EIR function before allocating a coroutine.
+    // Reuse full lowering so reference/collector validation and exception cleanup stay shared.
+    let mut eager_validators = Vec::new();
+    if function.flags.is_generator && function.signature.as_ref().is_some_and(|signature|
+        super::object_boundaries::needs_parameter_guards(signature, classes, interfaces)) {
+        let mut validator = Function::new(crate::names::generator_parameter_guard_name(&function.name),
+            IrType::Void, PhpType::Void);
+        validator.params = function.params.clone();
+        validator.lexical_class = function.lexical_class.clone();
+        validator.display_name = Some(function.display_name.clone().unwrap_or_else(|| function.name.clone()));
+        validator.flags.is_internal = true;
+        validator.flags.is_synthetic = true;
+        validator.flags.is_eager_parameter_validator = true;
+        validator.signature = function.signature.clone();
+        if let Some(signature) = &mut validator.signature {
+            signature.is_generator = false;
+            signature.return_type = PhpType::Void;
+            signature.declared_return = false;
+            signature.by_ref_return = false;
+        }
+        eager_validators.extend(lower_body_into_function(
+            source_catalog.clone(), runtime_bound_functions.clone(),
+            &mut validator, None, data, &[], env.clone(), top_level_env.clone(), functions,
+            extern_functions, extern_globals, callable_param_sigs, return_alias_summaries,
+            fiber_return_sigs, classes, enums, interfaces, declared_trait_names,
+            declared_trait_methods, declared_trait_properties, packed_classes, extern_classes,
+            throw_access_sites, builtin_call_types, closure_generator_spans,
+            array_push_property_plans, member_receiver_types, flow_typed_property_accesses,
+            array_append_element_types, local_value_read_types,
+            boxed_reference_promotion_sites, first_class_builtin_call_types, generic_call_sites,
+            loop_storage_types, string_incdec_locals, by_ref_local_storage_types,
+            dynamic_ref_local_types, bind_kill_sites, ref_detach_sites,
+            retype_sites, mixed_storage_store_sites, sparse_key_write_sites, promotable_arrays,
+            loop_storage_scope.clone(), constants,
+            current_class.clone(), PhpType::Void, false, params, None, false,
+            all_global_var_names.clone(), None, source_path.clone(), None, web,
+        ));
+        eager_validators.push(validator);
+    }
     let owner_name = function.name.clone();
+    let eager_parameters = function.flags.is_generator;
     let function_by_ref_return = function.flags.by_ref_return;
     let function_is_generator = function.flags.is_generator;
     let by_ref_params = function
@@ -1976,6 +2155,37 @@ fn lower_body_into_function(
         .iter()
         .map(|param| param.by_ref)
         .collect::<Vec<_>>();
+    // By-reference parameters of a union of null, arrays and objects are checked on entry,
+    // after the caller evaluated every argument (php's RECV order).
+    let reference_entry_guards = {
+        let display = function
+            .display_name
+            .clone()
+            .or_else(|| function.source_name.clone())
+            .unwrap_or_else(|| function.name.clone());
+        let mut position = 0;
+        let mut guards = Vec::new();
+        for (index, (name, php_type)) in params.iter().enumerate() {
+            if name == "this"
+                || name == crate::func_args::HIDDEN_ARGC_PARAM
+                || name == crate::func_args::HIDDEN_ARGS_PARAM
+            {
+                continue;
+            }
+            position += 1;
+            if by_ref_params.get(index).copied().unwrap_or(false)
+                && crate::ir_lower::expr::reference_parameter_needs_entry_guard(php_type)
+            {
+                guards.push((display.clone(), position, name.clone(), php_type.clone()));
+            }
+        }
+        guards
+    };
+    let reference_variadic = function.signature.as_ref().and_then(|signature| {
+        let name = signature.variadic.as_ref()?;
+        let index = signature.params.iter().position(|(candidate, _)| candidate == name)?;
+        signature.ref_params.get(index).copied().unwrap_or(false).then(|| name.clone())
+    });
     let mut builder = Builder::new(function);
     let entry = builder.create_named_block("entry", Vec::new());
     builder.set_entry(entry);
@@ -2004,6 +2214,8 @@ fn lower_body_into_function(
         array_push_property_plans,
         member_receiver_types,
         flow_typed_property_accesses,
+        array_append_element_types,
+        local_value_read_types,
         boxed_reference_promotion_sites,
         first_class_builtin_call_types,
         generic_call_sites,
@@ -2015,6 +2227,8 @@ fn lower_body_into_function(
         ref_detach_sites,
         retype_sites,
         mixed_storage_store_sites,
+        sparse_key_write_sites,
+        promotable_arrays,
         loop_storage_scope,
         constants,
         top_level_env,
@@ -2038,6 +2252,8 @@ fn lower_body_into_function(
             && property_initializers.is_none() && !body.is_empty()
             && !crate::ir_lower::body_contains_eval_call(body)
     };
+    ctx.eval_reference_snapshots = crate::ir_lower::body_contains_eval_call(body)
+        || eval_scope_reads.is_some() || property_initializers.is_some();
     ctx.by_ref_return = function_by_ref_return;
     ctx.runtime_global_bindings = crate::global_decls::collect_global_var_names(body);
     ctx.reference_bound_statics =
@@ -2053,6 +2269,15 @@ fn lower_body_into_function(
         if by_ref_params.get(index).copied().unwrap_or(false) {
             ctx.mark_ref_bound_local(name);
         }
+    }
+    // Parameter slots must remain the contiguous ABI prefix before hidden owners are appended.
+    for (index, (name, _)) in params.iter().enumerate() {
+        let incoming_cell = ctx.builder.function().params.get(index)
+            .is_some_and(|parameter| parameter.by_ref && !parameter.variadic);
+        if incoming_cell { ctx.retain_incoming_ref_cell(name); }
+    }
+    if let Some(name) = reference_variadic {
+        ctx.mark_reference_marker_array_local(&name);
     }
     // PHP passes arrays BY VALUE. The call site hands the callee a `+0` borrow of the caller's
     // array, so `__rt_array_ensure_unique` (which only splits at refcount >= 2) stayed inert and
@@ -2098,9 +2323,20 @@ fn lower_body_into_function(
     box_array_reference_sources(&mut ctx, body, params);
     predeclare_extract_targets(&mut ctx, body);
     ctx.lower_with_final_string_storage(|ctx| {
+        if !eager_parameters {
+            super::object_boundaries::guard_parameters(ctx, &reference_entry_guards);
+        }
         if let Some(class) = property_initializers {
             super::property_initializers::lower(ctx, class);
         } else if !super::throwable_constructors::lower(ctx) && !super::core_methods::lower(ctx, body) {
+            if eager_parameters {
+                // Generators check their parameters eagerly elsewhere; these keep their
+                // place at the start of the body.
+                for (display, position, name, php_type) in &reference_entry_guards {
+                    crate::ir_lower::expr::guard_reference_parameter_entry(ctx, display, *position, name, php_type);
+                }
+            }
+            crate::ir_lower::reflection_deprecations::emit_pending_prologue(ctx);
             crate::ir_lower::numeric_storage::lower_body(ctx, body);
         }
     });
@@ -2128,7 +2364,9 @@ fn lower_body_into_function(
     // releases have been pruned, so codegen can consume EIR metadata instead of
     // maintaining a second producer allow-list (issue #595).
     ctx.finalize_value_ownership_metadata();
-    ctx.into_closures()
+    let mut closures = ctx.into_closures();
+    closures.extend(eager_validators);
+    closures
 }
 
 /// Stores an empty array into every local this scope CREATES with an array element write.
@@ -2542,7 +2780,7 @@ pub(crate) fn eir_signature_with_php_param_contracts(
     signature: &FunctionSig,
     callable_param_sigs: &crate::fast_hash::FastMap<(String, String), FunctionSig>,
 ) -> FunctionSig {
-    let mut eir_signature = signature.clone();
+    let mut eir_signature = eir_signature_with_object_reference_contracts(signature);
     let mut has_dynamic_untyped_param = false;
     for (index, (name, php_type)) in eir_signature.params.iter_mut().enumerate() {
         let declared = signature
@@ -2552,17 +2790,28 @@ pub(crate) fn eir_signature_with_php_param_contracts(
             .unwrap_or(false);
         let by_ref = signature.ref_params.get(index).copied().unwrap_or(false);
         let variadic = signature.variadic.as_deref() == Some(name.as_str());
-        if by_ref && matches!(php_type, PhpType::Object(_)) {
-            *php_type = PhpType::Mixed;
+        if by_ref {
             continue;
         }
-        if magic_call_args_param(owner_name, index) {
-            // Every route into `__call()` passes the array it holds with ITS element layout: a
-            // typed site specialized the checker's element type, while a call through a `mixed`
-            // receiver (and `__elephc_magic_call()`) passes whatever array it has, unconverted.
-            // A body specialized to one layout read the other's words as values (`$args` printed
-            // raw pointers; Carbon's `day(1)->month(6)` chain answered the current date). The
-            // declared `array` contract is the one every caller can meet.
+        if index == 1
+            && owner_name.rsplit_once("::").is_some_and(|(_, method)|
+                php_symbol_key(method) == "__call")
+        {
+            // Runtime-selected magic calls can carry any PHP argument tags and string keys.
+            // Call-site specialization must not become the hook body's physical array ABI.
+            *php_type = PhpType::Mixed;
+            has_dynamic_untyped_param = true;
+            continue;
+        }
+        if index == 1
+            && owner_name.rsplit_once("::").is_some_and(|(_, method)|
+                php_symbol_key(method) == "__callstatic")
+        {
+            // Every route into `__callStatic()` passes the array it holds with ITS element layout:
+            // a typed site specialized the checker's element type, while a call through a `mixed`
+            // receiver (and eval-only static hooks) passes whatever array it has, unconverted.
+            // A body specialized to one layout read the other's words as values. The declared
+            // `array` contract is the one every caller can meet.
             *php_type = PhpType::Array(Box::new(PhpType::Mixed));
             continue;
         }
@@ -2581,19 +2830,52 @@ pub(crate) fn eir_signature_with_php_param_contracts(
         }
     }
     if has_dynamic_untyped_param && !signature.declared_return {
-        eir_signature.return_type = crate::types::dynamic_params::dynamic_param_container_return_type(
-            &eir_signature.return_type,
-        );
+        eir_signature.return_type = if owner_name.rsplit_once("::")
+            .is_some_and(|(_, method)| php_symbol_key(method) == "__call")
+        {
+            // An untyped hook can forward a boxed argument selected only at runtime.
+            PhpType::Mixed
+        } else {
+            crate::types::dynamic_params::dynamic_param_container_return_type(&eir_signature.return_type)
+        };
     }
     eir_signature
 }
 
-/// Whether `index` is the `$args` array of an `__call()` or `__callStatic()` method.
-fn magic_call_args_param(owner_name: &str, index: usize) -> bool {
-    index == 1
-        && owner_name.rsplit_once("::").is_some_and(|(_, method)| {
-            matches!(php_symbol_key(method).as_str(), "__call" | "__callstatic")
-        })
+/// Boxes declared object-reference parameters while retaining their source type metadata.
+fn eir_signature_with_object_reference_contracts(signature: &FunctionSig) -> FunctionSig {
+    let mut eir_signature = signature.clone();
+    for (index, (_, php_type)) in eir_signature.params.iter_mut().enumerate() {
+        if signature.ref_params.get(index).copied().unwrap_or(false)
+            && matches!(php_type, PhpType::Object(_))
+        {
+            *php_type = PhpType::Mixed;
+        }
+    }
+    eir_signature
+}
+
+/// Restores declared object-reference views for the body while retaining its boxed entry ABI.
+fn logical_object_reference_body_signature(
+    source_signature: &FunctionSig,
+    eir_signature: &FunctionSig,
+) -> FunctionSig {
+    let mut body_signature = eir_signature.clone();
+    for (index, (_, php_type)) in body_signature.params.iter_mut().enumerate() {
+        let Some((_, source_type)) = source_signature.params.get(index) else {
+            continue;
+        };
+        if source_signature
+            .ref_params
+            .get(index)
+            .copied()
+            .unwrap_or(false)
+            && matches!(source_type.codegen_repr(), PhpType::Object(_))
+        {
+            *php_type = source_type.clone();
+        }
+    }
+    body_signature
 }
 
 /// Marks boxed ABI parameters as materialization targets for reused runtime invokers.
@@ -2651,7 +2933,7 @@ fn magic_method_param_keeps_eir_contract(
             // The $args array keeps its contract only once call sites have
             // specialized the element type. The checker seeds it as
             // Array<Never>; eval-only magic calls never specialize it, and a
-            // Never element would lower every $args[N] read to an empty
+            // Never or normalized Void element would lower every $args[N] read to an empty
             // constant, so those fall back to the boxed Mixed widening.
             (param_index == 0 && matches!(php_type.codegen_repr(), PhpType::Str))
                 || (param_index == 1
@@ -2660,7 +2942,7 @@ fn magic_method_param_keeps_eir_contract(
                     // Never seed to Void and would hide it.
                     && !matches!(
                         php_type,
-                        PhpType::Array(elem) if matches!(elem.as_ref(), PhpType::Never)
+                        PhpType::Array(elem) if matches!(elem.as_ref(), PhpType::Never | PhpType::Void)
                     ))
         }
         _ => false,

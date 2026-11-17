@@ -117,20 +117,8 @@ pub fn emit_return(emitter: &mut Emitter) {
 }
 
 /// Emits code that computes the address of a local frame slot and stores it in `dest`.
-/// Uses the frame pointer (x29/rbp) as the base. A far offset on AArch64 is materialized into
-/// `dest` and applied with one register-form `sub`, matching the single `lea` x86_64 uses.
-///
-/// That far path used to walk the frame pointer down in 4095-byte steps, one `sub` per step. The
-/// offset is a compile-time constant, so the walk bought nothing and cost `offset / 4095`
-/// instructions in a single dependent chain: in the Symfony `--web` build `sub x9, x9, #4095`
-/// alone was 4,706,946 of 40,575,184 emitted lines, 11.6% of the artifact, at ~8.6 steps per
-/// address. `movz`/`movk` reaches any 64-bit constant in at most four instructions and typically
-/// one, so the whole sequence is now 2-3 instructions whatever the frame size.
-///
-/// The offset is staged in `dest` itself, which needs no scratch register because `dest` is a pure
-/// output here -- every caller treats it as clobbered. The one register that cannot stage it is
-/// the frame pointer itself, since `sub x29, x29, x29` would read the staged value as the base;
-/// `dest == "x29"` therefore keeps the original walk.
+/// Uses the frame pointer (x29/rbp) as the base. AArch64 uses shifted 12-bit immediates
+/// for whole pages, then an unshifted remainder, keeping large frames compact.
 pub fn emit_frame_slot_address(emitter: &mut Emitter, dest: &str, offset: usize) {
     match emitter.target.arch {
         Arch::AArch64 => {
@@ -138,16 +126,18 @@ pub fn emit_frame_slot_address(emitter: &mut Emitter, dest: &str, offset: usize)
                 emitter.instruction(&format!("mov {}, x29", dest));             // copy the frame pointer when the requested slot is the frame base itself
             } else if offset <= 4095 {
                 emitter.instruction(&format!("sub {}, x29, #{}", dest, offset)); // compute the local-slot address directly from the frame pointer
-            } else if dest != "x29" {
-                emit_load_int_immediate(emitter, dest, offset as i64);          // materialize the whole distance to the far local slot as one immediate
-                emitter.instruction(&format!("sub {}, x29, {}", dest, dest));   // step the frame pointer down to the distant local slot in a single subtraction
             } else {
-                emitter.instruction(&format!("mov {}, x29", dest));             // seed the destination register from the frame pointer for a far local-slot address
+                // -- address distant slots without a linear walk in byte-sized chunks --
                 let mut remaining = offset;
-                while remaining > 0 {
-                    let chunk = remaining.min(4095);
-                    emitter.instruction(&format!("sub {}, {}, #{}", dest, dest, chunk)); // walk the frame pointer itself down toward the distant local-slot address
-                    remaining -= chunk;
+                let mut base = "x29";
+                while remaining >= 4096 {
+                    let pages = (remaining >> 12).min(4095);
+                    emitter.instruction(&format!("sub {}, {}, #{}, lsl #12", dest, base, pages)); // cover whole pages with the architectural shifted immediate
+                    remaining -= pages << 12;
+                    base = dest;
+                }
+                if remaining != 0 {
+                    emitter.instruction(&format!("sub {}, {}, #{}", dest, base, remaining)); // account for the final bytes without clobbering another register
                 }
             }
         }

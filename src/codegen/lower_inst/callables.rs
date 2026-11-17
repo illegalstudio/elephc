@@ -36,7 +36,7 @@ use super::super::shared_state::{
 use super::{
     class_method_already_emitted, class_method_body_exists, direct_call_stack_pad_bytes,
     emit_call_arg_temp_cleanups, emit_direct_resolved_method_call,
-    emit_instance_method_descriptor_entry_wrapper, emit_ref_arg_writebacks,
+    emit_instance_method_descriptor_entry_wrapper, emit_ref_arg_writebacks_guarding_result,
     emit_runtime_builtin_wrapper_inline, emit_runtime_builtin_invoker_inline,
     emit_runtime_callable_invoker_inline,
     emit_runtime_callable_invoker_in_class,
@@ -44,12 +44,12 @@ use super::{
     emit_runtime_descriptor_with_receiver_capture, emit_runtime_extern_wrapper_inline,
     emit_static_method_descriptor_entry_wrapper, expect_operand, function_signature_from_eir,
     materialize_direct_call_args, materialize_method_call_args_with_receiver_reg_and_refs,
-    runtime_builtin_wrapper_sig, store_call_result,
+    runtime_builtin_wrapper_sig, store_compiled_call_result,
 };
 use crate::codegen::{CodegenIrError, Result};
 
 mod instance_expr;
-mod results;
+pub(super) mod results;
 
 const MIXED_METHOD_TAG_OFFSET: usize = 0;
 const MIXED_METHOD_PAYLOAD_OFFSET: usize = 16;
@@ -251,13 +251,17 @@ pub(super) fn lower_callable_descriptor_invoke(
             arg_mixed,
             "callable_descriptor_invoke",
         ),
-        PhpType::Mixed | PhpType::Union(_) => lower_mixed_callable_descriptor_invoke(
-            ctx,
-            inst,
-            callable,
-            arg_mixed,
-            "callable_descriptor_invoke",
-        ),
+        PhpType::Mixed | PhpType::Union(_) => {
+            if ctx.runtime_callable_candidates(callable).is_none()
+                && super::instruction_strict_php_profile(inst) == crate::strict_php::is_enabled()
+            {
+                lower_shared_mixed_descriptor_invoke(ctx, inst, callable, arg_mixed)
+            } else {
+                lower_mixed_callable_descriptor_invoke(
+                    ctx, inst, callable, arg_mixed, "callable_descriptor_invoke",
+                )
+            }
+        }
         PhpType::Array(elem) if elem.codegen_repr() == PhpType::Mixed => {
             lower_runtime_mixed_callable_array_descriptor_invoke(
                 ctx,
@@ -289,6 +293,20 @@ pub(super) fn lower_callable_descriptor_invoke(
             other
         ))),
     }
+}
+
+/// Resolves an unrestricted boxed callback once per module instead of expanding every candidate.
+fn lower_shared_mixed_descriptor_invoke(
+    ctx: &mut FunctionContext<'_>, inst: &Instruction, callable: ValueId, arguments: ValueId,
+) -> Result<()> {
+    ctx.shared.callable_argument_normalizer = true;
+    ctx.load_value_to_result(callable)?;
+    abi::emit_call_label(ctx.emitter, super::CALLABLE_ARGUMENT_NORMALIZER);
+    let descriptor = abi::nested_call_reg(ctx.emitter);
+    abi::emit_reg_move(ctx.emitter, descriptor, abi::int_result_reg(ctx.emitter));
+    emit_descriptor_reg_invoker_call_with_mixed_arg(
+        ctx, inst, descriptor, arguments, "callable_descriptor_invoke", true,
+    )
 }
 
 /// Lowers descriptor invocation when the callable traveled through a boxed Mixed value.
@@ -454,6 +472,7 @@ pub(in crate::codegen) fn lower_mixed_callable_descriptor_invoke_inline(
         super::instruction_strict_php_profile(inst),
         None,
         string_eval_label.as_deref(),
+        None,
         None,
         None,
     )?;
@@ -999,6 +1018,7 @@ fn emit_inline_mixed_callable_descriptor_value(
         string_eval_label.as_deref(),
         None,
         arity,
+        eval_fallback_slot.map(|_| fatal_label.as_str()),
     )?;
     emit_runtime_descriptor_owned_flag(ctx, false);
     abi::emit_jump(ctx.emitter, &done_label);
@@ -2627,6 +2647,14 @@ fn runtime_builtin_descriptor_cases_at_arity(
                 .extern_decls
                 .iter()
                 .any(|decl| php_symbol_key(&decl.name) == php_symbol_key(name))
+            || !crate::builtins::registry::dynamic_wrapper_prelude_callees(name)
+                .iter()
+                .all(|callee| {
+                    ctx.module
+                        .functions
+                        .iter()
+                        .any(|function| php_symbol_key(&function.name) == php_symbol_key(callee))
+                })
         {
             continue;
         }
@@ -2732,7 +2760,8 @@ fn runtime_user_function_descriptor_cases(
         .functions
         .iter()
         .filter(|function| {
-            !function.flags.is_main && !function.name.starts_with("_class_propinit_")
+            function.has_source_identity()
+                && !function.flags.is_main && !function.name.starts_with("_class_propinit_")
         })
         .collect::<Vec<_>>();
     functions.sort_by(|left, right| left.name.cmp(&right.name));
@@ -2928,7 +2957,8 @@ fn emit_runtime_string_descriptor_value_impl(
 /// Selects a callable descriptor from a string payload just returned by `__rt_mixed_unbox`.
 ///
 /// With `eval_miss_label`, a name no compiled function answers jumps there with the name spill
-/// already released, so the caller can hand the boxed name to the eval bridge instead.
+/// already released, so the caller can hand the boxed name to the eval bridge instead. With
+/// `eval_fallback`, a miss is forwarded to the caller's eval closure fallback the same way.
 fn emit_runtime_string_descriptor_value_from_unboxed(
     ctx: &mut FunctionContext<'_>,
     callable: ValueId,
@@ -2938,6 +2968,7 @@ fn emit_runtime_string_descriptor_value_from_unboxed(
     eval_miss_label: Option<&str>,
     candidate_names: Option<&[String]>,
     arity: Option<usize>,
+    eval_fallback: Option<&str>,
 ) -> Result<()> {
     let known_candidates;
     let candidate_names = match candidate_names {
@@ -2956,7 +2987,7 @@ fn emit_runtime_string_descriptor_value_from_unboxed(
     )?;
     if cases.is_empty() {
         // Nothing is pushed yet, so this miss throws without a stack release.
-        if let Some(label) = eval_miss_label {
+        if let Some(label) = eval_miss_label.or(eval_fallback) {
             abi::emit_jump(ctx.emitter, label);
             return Ok(());
         }
@@ -2980,7 +3011,7 @@ fn emit_runtime_string_descriptor_value_from_unboxed(
         emit_branch_if_lookup_missed(ctx, &miss_label);
         abi::emit_jump(ctx.emitter, &done_label);
         ctx.emitter.label(&miss_label);
-        if let Some(label) = eval_miss_label {
+        if let Some(label) = eval_miss_label.or(eval_fallback) {
             abi::emit_release_temporary_stack(ctx.emitter, 16);
             abi::emit_jump(ctx.emitter, label);
         } else if let Some(message) = type_error {
@@ -3015,7 +3046,7 @@ fn emit_runtime_string_descriptor_value_from_unboxed(
     abi::emit_jump(ctx.emitter, &miss_label);
 
     ctx.emitter.label(&miss_label);
-    if let Some(label) = eval_miss_label {
+    if let Some(label) = eval_miss_label.or(eval_fallback) {
         abi::emit_release_temporary_stack(ctx.emitter, 16);
         abi::emit_jump(ctx.emitter, label);
     } else if let Some(message) = type_error {
@@ -4154,7 +4185,8 @@ fn runtime_static_method_descriptor_cases(
                 .get(&method_key)
                 .cloned()
                 .unwrap_or_else(|| class_name.clone());
-            if !class_method_already_emitted(ctx, &impl_class, &method_key, true) {
+            if !class_method_already_emitted(ctx, &impl_class, &method_key, true)
+                && !super::super::intrinsic_static_descriptor_entry_supported(&impl_class, &method_key) {
                 continue;
             }
             methods.push((
@@ -5527,9 +5559,9 @@ fn emit_runtime_array_instance_method_call(
     emit_direct_resolved_method_call(ctx, &resolved)?;
     abi::emit_release_temporary_stack(ctx.emitter, caller_stack_pad_bytes);
     abi::emit_release_temporary_stack(ctx.emitter, call_args.overflow_bytes);
-    store_call_result(ctx, inst, &target.sig.return_type)?;
-    emit_call_arg_temp_cleanups(ctx, &call_args, inst.result)?;
-    emit_ref_arg_writebacks(ctx, &call_args)
+    store_compiled_call_result(ctx, inst, &target.sig.return_type, target.sig.by_ref_return)?;
+    emit_call_arg_temp_cleanups(ctx, &call_args, None)?;
+    emit_ref_arg_writebacks_guarding_result(ctx, &call_args, inst.result, false)
 }
 
 /// Builds a receiver-captured descriptor for a matched runtime instance method.

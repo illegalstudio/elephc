@@ -65,8 +65,9 @@ pub(crate) fn lower_stream_filter_attach(
         if let Some(id) = stream_filter_id(&filter_name) {
             return lower_builtin_stream_filter_attach(ctx, inst, id);
         }
+        return lower_user_stream_filter_attach(ctx, inst);
     }
-    lower_user_stream_filter_attach(ctx, inst)
+    super::filter_dispatch::lower_dynamic_filter_attach(ctx, inst)
 }
 
 /// Lowers `stream_filter_append($stream, "zlib.deflate", ...)`.

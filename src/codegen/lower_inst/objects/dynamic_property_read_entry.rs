@@ -131,6 +131,9 @@ pub(super) fn lower_dynamic_prop_get_nonnull(
     object: ValueId,
     property_value: ValueId,
 ) -> Result<()> {
+    if property_fetch_mode(inst) == PropertyFetchMode::QuietRead {
+        return super::unset_property_reads::lower(ctx, inst, object, property_value);
+    }
     if let Some(property) = const_string_operand(ctx, property_value)? {
         return lower_const_dynamic_prop_get(ctx, object, property, inst);
     }
@@ -446,13 +449,37 @@ pub(super) fn lower_runtime_dynamic_mixed_prop_get(
     object: ValueId,
     property_value: ValueId,
 ) -> Result<()> {
-    if try_lower_outlined_mixed_prop_get(ctx, inst, object, property_value)? {
+    // Two sharing mechanisms exist for this read: the scope-keyed helper below and the module's
+    // per-(scope, mode) shared body. A helper body never re-enters either, or the two would call
+    // each other without end.
+    let inside_shared_body = ctx.function.name.starts_with("_eir_shared_property_read_");
+    let inside_outlined_body =
+        ctx.function.flags.is_synthetic && ctx.function.name.contains("_dyn_prop_get_");
+    if !inside_shared_body && try_lower_outlined_mixed_prop_get(ctx, inst, object, property_value)? {
         return Ok(());
+    }
+    if !inside_outlined_body {
+        if let Some(label) = crate::codegen::shared_property_read::helper_label(ctx, inst) {
+            crate::codegen::shared_property_read::emit_call(ctx, object, property_value, &label)?;
+            return store_if_result(ctx, inst);
+        }
     }
     ensure_runtime_dynamic_property_name(ctx, property_value, inst)?;
     ensure_dynamic_property_miss_supported(inst)?;
     let mode = property_fetch_mode(inst);
-    let candidates = declared_mixed_property_get_candidates(ctx, mode, inst, None)?;
+    let candidates = declared_mixed_property_get_candidates(ctx, mode, None, inst, None)?;
+    // Magic accessors return an owned Mixed snapshot. Keep narrower result ABIs on their existing
+    // miss path until they can consume that snapshot without changing their physical contract.
+    let magic_supported = inst.result_php_type.codegen_repr() == PhpType::Mixed;
+    let magic_arms = if magic_supported {
+        runtime_magic_read_arms(ctx, mode)?
+    } else {
+        Vec::new()
+    };
+    let magic_class_ids = magic_arms
+        .iter()
+        .map(|arm| arm.magic.class_id)
+        .collect::<Vec<_>>();
     let done_label = ctx.next_label("mixed_dyn_prop_get_done");
     let miss_label = ctx.next_label("mixed_dyn_prop_get_miss");
     let miss_no_stack_label = ctx.next_label("mixed_dyn_prop_get_miss_no_stack");
@@ -475,7 +502,16 @@ pub(super) fn lower_runtime_dynamic_mixed_prop_get(
     let class_names = class_names_by_id(ctx);
     let arm_owner = shared_read_arm_owners(ctx, &class_names, &candidates);
     let match_labels = arm_owner.iter().map(|owner| match_labels[*owner].clone()).collect::<Vec<_>>();
-    let hash_arms = mixed_class_hash_arms(ctx, "", &[])?;
+    let hash_arms = mixed_class_hash_arms(ctx, "", &magic_class_ids)?;
+    let magic_labels = magic_arms
+        .iter()
+        .map(|arm| {
+            ctx.next_label(&format!(
+                "mixed_dyn_prop_get_magic_{}",
+                label_fragment(&arm.magic.class_name)
+            ))
+        })
+        .collect::<Vec<_>>();
     let hash_labels = hash_arms
         .iter()
         .map(|arm| {
@@ -504,11 +540,20 @@ pub(super) fn lower_runtime_dynamic_mixed_prop_get(
         .map(|candidate| candidate.candidate.clone())
         .collect::<Vec<_>>();
     emit_mixed_dynamic_property_candidate_dispatch(ctx, &dispatch_candidates, &match_labels);
+    for (arm, label) in magic_arms.iter().zip(magic_labels.iter()) {
+        emit_branch_if_stacked_object_class_matches(ctx, arm.magic.class_id, 16, label);
+    }
     for (arm, label) in hash_arms.iter().zip(hash_labels.iter()) {
         emit_branch_if_stacked_object_class_matches(ctx, arm.class_id, 16, label);
     }
     emit_branch_if_stacked_object_is_stdclass(ctx, 16, &stdclass_label);
     abi::emit_jump(ctx.emitter, &miss_label);
+
+    for (arm, label) in magic_arms.iter().zip(magic_labels.iter()) {
+        ctx.emitter.label(label);
+        emit_runtime_magic_property_arm(ctx, &arm.magic, arm.hash_offset, 16, 0, 32)?;
+        abi::emit_jump(ctx.emitter, &done_label);
+    }
 
     for (index, (arm, label)) in hash_arms.iter().zip(hash_labels.iter()).enumerate() {
         if hash_owner[index] != index {
@@ -563,8 +608,15 @@ pub(super) fn lower_runtime_dynamic_mixed_prop_get(
                 abi::emit_jump(ctx.emitter, &done_label);
                 continue;
             }
-            // php answers `__get` or `__isset`, which a runtime name cannot reach yet.
+            // php answers `__get` or `__isset` for this declared name without reading its slot.
             MixedPropertyReadKind::MagicDeferred => {
+                if magic_supported {
+                    if let Some(arm) = magic_property_arm(ctx, &slot.class_name, mode)? {
+                        emit_runtime_magic_property_arm(ctx, &arm, None, 16, 0, 32)?;
+                        abi::emit_jump(ctx.emitter, &done_label);
+                        continue;
+                    }
+                }
                 abi::emit_release_temporary_stack(ctx.emitter, 32);
                 emit_dynamic_property_miss_result(ctx, inst);
                 abi::emit_jump(ctx.emitter, &done_label);

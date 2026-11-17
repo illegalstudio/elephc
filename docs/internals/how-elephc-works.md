@@ -92,6 +92,34 @@ If the program uses elephc-only `ifdef SYMBOL { ... } else { ... }` blocks, the 
 
 In this example, there are no `ifdef` blocks, so the AST passes through unchanged.
 
+The same per-file step ends with `goto` lowering (`src/goto_lowering.rs`,
+`src/goto_lowering/`). Every later pass reads control flow from the statement
+tree and none of them builds a control-flow graph, so a jump is removed here
+instead of being taught to each pass. For every label scope (a function,
+method or closure body, or the file's top-level code together with its braced
+`namespace` blocks) the pass:
+
+1. builds the tree of statement lists, resolves each `goto` to its label, and
+   reports PHP's jump errors with PHP's wording;
+2. finds, for each jump, the innermost statement list that holds both the
+   `goto` and the label, and marks every list from there down to the label as a
+   router for that label;
+3. wraps the involved range of each routing list in `while (true)`, split into
+   segments at the labels. Every segment but the last is guarded by
+   `if ($state === 0 || $state === <its labels>)`;
+4. rewrites `goto L` into `$state = <L>; continue N;`, where `N` reaches the
+   loop of the list chosen in step 2, and makes arriving at a label reset
+   `$state` to `0`, so the remaining segments run in source order.
+
+Leaving loops, `switch`es and `try` blocks through `continue N` runs exactly the
+cleanup those statements already implement, `finally` blocks included. A list
+entered by a jump from above (an `if` branch, a `try` body) gets a loop that
+starts at its first statement, and the `if` condition is guarded so the jump
+selects the branch without evaluating it. A `finally` body is a jump island
+with a state local of its own, because it runs while an outer jump is pending.
+`break` and `continue` levels written by the program are renumbered for the
+loops added around them. After this step no `goto` remains in the AST.
+
 ## Phase 5: Autoload registry build
 
 **Files:** `src/autoload/`
@@ -125,7 +153,9 @@ same canonical-name pipeline as user code.
 
 Before injection, `src/autoload/prelude_probe.rs` runs name resolution and
 autoloading on a disposable copy of the include-resolved program. Its PDO,
-mysqli, timezone, image, hash, curl, XML, and `var_export` detectors find uses
+mysqli, timezone, image, hash, tokenizer, curl, XML, fileinfo, `var_export`,
+web-environment, Random, BcMath, GMP, `DateTimeZone::listIdentifiers`, and Core
+`WeakMap`/`WeakReference` detectors find uses
 that occur only in autoloaded class files. The real pipeline then injects those
 preludes before resolving names. The probe restores thread-local source IDs and
 anonymous-class numbering while keeping process-global synthetic spans and

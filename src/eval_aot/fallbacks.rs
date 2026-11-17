@@ -136,9 +136,11 @@ pub(super) fn stmt_fallback_reason(stmt: &Stmt) -> Option<EvalAotFallbackReason>
                     .and_then(|body| body.iter().find_map(stmt_fallback_reason))
             })
             .or(Some(EvalAotFallbackReason::UnsupportedControlFlow)),
-        StmtKind::Break(_) | StmtKind::Continue(_) => {
+        StmtKind::Break(_) | StmtKind::Continue(_) | StmtKind::Goto(_) => {
             Some(EvalAotFallbackReason::UnsupportedControlFlow)
         }
+        // `goto` lowering removes every label; one left in an unlowered tree does nothing.
+        StmtKind::GotoLabel(_) => None,
         StmtKind::Return(None) | StmtKind::NamespaceDecl { .. } | StmtKind::UseDecl { .. } => None,
         StmtKind::IfDef {
             then_body,

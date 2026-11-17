@@ -30,12 +30,14 @@
 
 use crate::ir::{IrHeapKind, IrType, Op};
 use crate::ir_lower::context::{LoweredValue, LoweringContext};
-use crate::ir_lower::expr::lower_expr;
+use crate::ir_lower::expr::{lower_expr, type_satisfies_array_access_for_ir};
 use crate::parser::ast::{
     Expr, ExprKind, StaticReceiver, Stmt, StmtKind, NESTED_APPEND_TEMP_PREFIX,
 };
 use crate::span::Span;
 use crate::types::PhpType;
+
+mod boxed;
 
 /// A `StmtKind::Synthetic` body proven to be a nested append this module can fuse.
 ///
@@ -59,6 +61,7 @@ pub(super) struct NestedAppendGroup<'a> {
 /// into the property, leaving it stale. So a property base gets the auto-vivification (which is the
 /// data-loss fix) but NOT the detach (which is the O(n^2) fix). Correctness first; the property
 /// base stays quadratic until the detach can republish through a property store.
+#[derive(Clone, Copy)]
 enum BaseKind<'a> {
     Local(&'a str),
     Property {
@@ -237,9 +240,14 @@ pub(super) fn try_lower_array_root(
     let mut root = target;
     while let ExprKind::ArrayAccess { array, .. } = &root.kind { root = array; }
     let supported = match &root.kind {
-        ExprKind::Variable(name) => ctx.has_local_slot(name) && matches!(
-            ctx.local_type(name).codegen_repr(), PhpType::Array(_) | PhpType::AssocArray { .. } | PhpType::Mixed
-        ),
+        ExprKind::Variable(name) => {
+            let ty = ctx.local_type(name);
+            ctx.has_local_slot(name)
+                && (matches!(
+                    ty.codegen_repr(),
+                    PhpType::Array(_) | PhpType::AssocArray { .. } | PhpType::Mixed
+                ) || type_satisfies_array_access_for_ir(ctx, &ty))
+        }
         ExprKind::StaticPropertyAccess { .. } =>
             super::nested_array_writes::nested_target_has_static_array_root(ctx, target)
                 && (matches!(array.kind, ExprKind::ArrayAccess { .. })
@@ -288,16 +296,47 @@ pub(super) fn lower(ctx: &mut LoweringContext<'_, '_>, group: &NestedAppendGroup
         lower_deep_nested_append(ctx, group, span);
         return;
     }
-
-    // Load the container and probe the key. For a local this is a `LoadLocal`; for a property it is
-    // an ordinary property read, which is pure and can be replayed.
+    if matches!(group.base, BaseKind::Property { .. }) {
+        let StmtKind::ArrayPush { array, value } = &group.push.kind else { unreachable!() };
+        let rhs = lower_expr(ctx, value);
+        if ctx.builder.insertion_block_is_terminated() { return; }
+        let mut sources = Vec::new();
+        let value = super::nested_write_sources::capture_lowered(ctx, rhs, value.span, &mut sources);
+        let push = Stmt::new(StmtKind::ArrayPush { array: array.clone(), value }, group.push.span);
+        let staged = NestedAppendGroup { prefix: &[], read: group.read, push: &push,
+            write_back: group.write_back, target: group.target, base: group.base, index: group.index };
+        let container = load_container(ctx, &staged, span);
+        lower_from_container(ctx, &staged, container, span);
+        if !ctx.builder.insertion_block_is_terminated() {
+            super::nested_write_sources::retire(ctx, sources, span);
+        }
+        return;
+    }
     let container = load_container(ctx, group, span);
+    lower_from_container(ctx, group, container, span);
+}
+
+/// Probes a loaded container before the shared vivify, append and writeback sequence.
+fn lower_from_container(
+    ctx: &mut LoweringContext<'_, '_>, group: &NestedAppendGroup<'_>, container: LoweredValue, span: Span,
+) {
+    if container.ir_type == IrType::Heap(IrHeapKind::Mixed)
+        && matches!(group.base, BaseKind::Property { .. }) {
+        boxed::lower(ctx, group, container, span);
+        return;
+    }
+    // Probe the key of the loaded container. For a local this is a `LoadLocal`; for a property it
+    // is an ordinary property read, which is pure and can be replayed.
     let container_is_hash = matches!(container.ir_type, IrType::Heap(IrHeapKind::Hash));
     let container_is_array = matches!(container.ir_type, IrType::Heap(IrHeapKind::Array));
     if !container_is_hash && !container_is_array {
         // Anything else (a `Mixed` property, an object) is out of scope: fall open to today's
         // lowering, which is what the parser's desugar already produces. Keep key evaluation in
-        // that path so unsupported receivers do not evaluate it twice.
+        // that path so unsupported receivers do not evaluate it twice. Its bucket read is
+        // quiet: PHP auto-vivifies the missing bucket of `$c[$k][] = $v` without the "Undefined
+        // array key" warning a plain `$tmp = $c[$k]` gives, and the miss still reads back the
+        // null the push vivifies. Only the bucket fetch is quiet: a read inside `$k` warns
+        // before the right-hand side runs, as in PHP.
         //
         // The probe read above still produced a value, and for a `Mixed` property it is an OWNED
         // box (`prop_get` retains one). Nothing below consumes it, so it is retired here; left
@@ -311,7 +350,9 @@ pub(super) fn lower(ctx: &mut LoweringContext<'_, '_>, group: &NestedAppendGroup
         if ctx.value_is_owning_temporary(container) {
             crate::ir_lower::ownership::release_if_owned(ctx, container, Some(span));
         }
+        let quiet = ctx.set_quiet_array_reads(true);
         super::lower_stmt(ctx, group.read);
+        ctx.set_quiet_array_reads(quiet);
         super::lower_stmt(ctx, group.push);
         super::lower_stmt(ctx, group.write_back);
         return;
@@ -666,7 +707,9 @@ fn load_container(
                 },
                 span,
             );
-            lower_expr(ctx, &access)
+            crate::ir_lower::expr::lower_nested_assignment_property_source(
+                ctx, object, property, &access, super::PropertyDimensionFetchMode::Write,
+            )
         }
         BaseKind::StaticProperty { receiver, property } => {
             let access = Expr::new(

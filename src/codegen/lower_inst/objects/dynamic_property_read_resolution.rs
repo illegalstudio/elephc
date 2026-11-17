@@ -557,6 +557,7 @@ pub(super) fn ensure_dynamic_property_plan_results_supported(
 pub(super) fn declared_mixed_property_get_candidates(
     ctx: &FunctionContext<'_>,
     mode: PropertyFetchMode,
+    known_name: Option<&str>,
     inst: &Instruction,
     only: Option<&crate::fast_hash::FastSet<(String, String)>>,
 ) -> Result<Vec<MixedPropertyReadCandidate>> {
@@ -569,6 +570,9 @@ pub(super) fn declared_mixed_property_get_candidates(
         }
         for (property, _) in &class_info.properties {
             if only.is_some_and(|only| !only.contains(&(class_name.clone(), property.clone()))) {
+                continue;
+            }
+            if known_name.is_some_and(|name| name != property) {
                 continue;
             }
             let (slot, kind) =

@@ -31,6 +31,7 @@ impl Parser {
         let mut cases = Vec::new();
         let mut constants = Vec::new();
         let mut methods = Vec::new();
+        let mut member_order: Vec<String> = Vec::new();
         let source_end_line = self.in_class_scope(|parser| {
             let source_end_line = loop {
                 if matches!(parser.current(), TokenKind::DocComment(_)) {
@@ -45,6 +46,7 @@ impl Parser {
                 if matches!(parser.current(), TokenKind::Eof) {
                     return Err(EvalParseError::UnexpectedEof);
                 }
+                let (known_cases, known_constants) = (cases.len(), constants.len());
                 parser.parse_enum_member(
                     &mut cases,
                     &mut constants,
@@ -52,6 +54,10 @@ impl Parser {
                     &mut traits,
                     &mut trait_adaptations,
                 )?;
+                member_order.extend(cases[known_cases..].iter().map(|case: &EvalEnumCase| case.name().to_string()));
+                member_order.extend(
+                    constants[known_constants..].iter().map(|constant: &EvalClassConstant| constant.name().to_string()),
+                );
             };
             Ok(source_end_line)
         })?;
@@ -68,7 +74,8 @@ impl Parser {
                 trait_adaptations,
             )
             .with_source_location(EvalSourceLocation::new(source_start_line, source_end_line))
-            .with_attributes(attributes),
+            .with_attributes(attributes)
+            .with_member_order(member_order),
         );
         Ok(vec![declaration])
     }

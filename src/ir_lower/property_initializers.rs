@@ -20,7 +20,7 @@ pub(super) fn needs_initializer(class: &ClassInfo) -> bool {
         || class.properties.iter().enumerate().any(|(index, (name, _))| {
             class.property_slot_is_declared(index, name)
                 || (class.property_slot_is_reference(index, name)
-                    && class.owned_reference_properties.contains(name))
+                    && class.property_slot_owns_reference(index))
         })
 }
 
@@ -39,7 +39,7 @@ pub(super) fn lower(ctx: &mut LoweringContext<'_, '_>, class: &ClassInfo) {
         let Some(default) = class.defaults.get(index).and_then(Option::as_ref) else {
             if class.property_slot_is_declared(index, name)
                 || (class.property_slot_is_reference(index, name)
-                    && class.owned_reference_properties.contains(name))
+                    && class.property_slot_owns_reference(index))
             {
                 ctx.emit_void(
                     Op::PropUnset, vec![object.value], Some(slot),
@@ -51,7 +51,11 @@ pub(super) fn lower(ctx: &mut LoweringContext<'_, '_>, class: &ClassInfo) {
         if matches!(default.kind, ExprKind::Null) && !ty.null_property_default_required() {
             continue;
         }
-        let value = lower_default_value(ctx, default, ty);
+        // The class initialization at `new` already reported this default's deprecations, once
+        // per initialized class; the per-object evaluation stays silent.
+        let value = super::expr::with_constant_deprecations_suppressed(|| {
+            lower_default_value(ctx, default, ty)
+        });
         let value = super::stmt::coerce_typed_assign_value(ctx, value, ty, default.span);
         ctx.emit_void(
             Op::PropSet, vec![object.value, value.value], Some(slot),

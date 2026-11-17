@@ -131,34 +131,6 @@ fn eval_class_like_attribute_metadata(
     context.native_class_attributes(name)
 }
 
-/// Stores one element into `array` and releases the temporary key and value owners.
-///
-/// `RuntimeValueOps::array_set` borrows its key and value (storage takes its own reference), so a
-/// caller that built them for this store owns one reference of each. Not giving them back leaked
-/// two cells per element and, for a materialized `ReflectionAttribute`, the object with its
-/// argument array -- 24 blocks per `new ReflectionFunction($closure)` parameter walk.
-fn eval_array_set_owned(
-    array: RuntimeCellHandle,
-    key: RuntimeCellHandle,
-    value: RuntimeCellHandle,
-    values: &mut impl RuntimeValueOps,
-) -> Result<RuntimeCellHandle, EvalStatus> {
-    let result = values.array_set(array, key, value);
-    let key_release = values.release(key);
-    let value_release = values.release(value);
-    match result {
-        Ok(array) => {
-            key_release?;
-            value_release?;
-            Ok(array)
-        }
-        Err(status) => {
-            let _ = values.release(array);
-            Err(status)
-        }
-    }
-}
-
 /// Builds the indexed string array returned by `class_attribute_names()`.
 fn eval_class_attribute_names_result(
     attributes: &[EvalAttribute],
@@ -168,7 +140,7 @@ fn eval_class_attribute_names_result(
     for (index, attribute) in attributes.iter().enumerate() {
         let key = values.int(index as i64)?;
         let value = values.string(attribute.name())?;
-        result = eval_array_set_owned(result, key, value, values)?;
+        result = crate::interpreter::reflection::owned_collections::insert_owned_element(values, result, key, value)?;
     }
     Ok(result)
 }
@@ -210,7 +182,7 @@ pub(in crate::interpreter) fn eval_reflection_attribute_array_result(
         let identity = values.object_identity(reflection_attribute)?;
         context.register_eval_reflection_attribute(identity, attribute.clone(), target, repeated);
         values.release(args)?;
-        result = eval_array_set_owned(result, key, reflection_attribute, values)?;
+        result = crate::interpreter::reflection::owned_collections::insert_owned_element(values, result, key, reflection_attribute)?;
     }
     Ok(result)
 }
@@ -383,7 +355,7 @@ pub(in crate::interpreter) fn eval_class_attribute_args_result(
             None => values.int(index as i64)?,
         };
         let value = eval_class_attribute_arg_value(arg.value(), values)?;
-        result = eval_array_set_owned(result, key, value, values)?;
+        result = crate::interpreter::reflection::owned_collections::insert_owned_element(values, result, key, value)?;
     }
     Ok(result)
 }
@@ -428,7 +400,7 @@ fn eval_class_attribute_array_arg_value(
             None => values.int(element.int_key().unwrap_or(index as i64))?,
         };
         let value = eval_class_attribute_arg_value(element.value(), values)?;
-        result = eval_array_set_owned(result, key, value, values)?;
+        result = crate::interpreter::reflection::owned_collections::insert_owned_element(values, result, key, value)?;
     }
     Ok(result)
 }

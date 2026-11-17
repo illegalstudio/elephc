@@ -11,7 +11,8 @@ use super::*;
 
 impl ElephcEvalContext {
     /// Defines an eval-declared class, failing if this context already has it.
-    pub fn define_class(&mut self, class: Arc<EvalClass>) -> bool {
+    pub fn define_class(&mut self, class: impl Into<Arc<EvalClass>>) -> bool {
+        let class: Arc<EvalClass> = class.into();
         let key = normalize_class_name(class.name());
         if self.classes.contains_key(&key)
             || self.class_aliases.contains_key(&key)

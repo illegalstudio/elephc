@@ -1,8 +1,6 @@
 ---
 title: "mysqli_stmt_send_long_data()"
-description: "Sends a parameter's data in chunks; execute() binds the accumulated chunks."
-sidebar:
-  order: 193
+description: "Sends parameter data in chunks."
 ---
 
 ## mysqli_stmt_send_long_data()
@@ -11,7 +9,7 @@ sidebar:
 function mysqli_stmt_send_long_data(mixed $statement, int $param_num, string $data): bool
 ```
 
-Sends a parameter's data in chunks; execute() binds the accumulated chunks.
+Sends parameter data in chunks.
 
 **Parameters**:
 - `$statement` (`mixed`)
@@ -22,8 +20,9 @@ Sends a parameter's data in chunks; execute() binds the accumulated chunks.
 
 ## Availability
 
-- **Compiled (AOT)**: supported through an injected elephc-PHP prelude.
-- **`eval()` (magician interpreter)**: not available inside eval'd code.
+| Compiled (AOT) | Magician (eval) |
+|---|---|
+| Available | Not available yet |
 
 _No examples yet. Check `examples/` and `showcases/` for usage patterns._
 

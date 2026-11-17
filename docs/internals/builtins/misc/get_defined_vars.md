@@ -1,8 +1,6 @@
 ---
 title: "get_defined_vars() - internals"
 description: "Compiler internals for get_defined_vars(): lowering path, type checks, and runtime helpers."
-sidebar:
-  order: 709
 ---
 
 ## `get_defined_vars()` - internals
@@ -10,7 +8,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/system/get_defined_vars.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/system/get_defined_vars.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:752](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L752) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 

@@ -174,7 +174,7 @@ status   = "partial"
 php      = "https://www.php.net/manual/en/book.mysqli.php"
 docs     = "docs/php/mysqli.md"
 evidence = "tests/codegen/mysqli.rs"
-notes    = "Locked v1 subset over the elephc-pdo bridge; divergences on the mysqli page"
+notes    = "Complete selected-profile function, class, method and constant surface over the elephc-pdo bridge; behavioral divergences remain documented on the mysqli page"
 modules  = ["mysqli"]
 
 [[extensions]]
@@ -258,6 +258,24 @@ modules  = ["xml", "xmlwriter"]
 notes    = "ext/xml SAX parser (22 functions, XMLParser, 28 constants) and ext/xmlwriter (42 functions, XMLWriter) on a pinned static libxml2 2.15.3 from the native catalog (elephc native add libxml2); auto-linked or forced with --with-xml, identical inside eval(); the SURFACE INVENTORY is complete — every function, class and constant exists — which is not behavioural parity: see Differences from PHP in docs/php/xml.md, and Runtime limits there for the per-handler-invocation heap cost"
 
 [[extensions]]
+feature  = "SimpleXML"
+status   = "supported"
+php      = "https://www.php.net/manual/en/book.simplexml.php"
+docs     = "docs/php/xml.md"
+evidence = "tests/codegen/simplexml"
+modules  = ["simplexml"]
+notes    = "Three functions and two classes on the managed libxml2 bridge; supports element and attribute selections, mutation, namespace queries, XPath, and recursive iteration. Auto-linked or forced with --with-xml."
+
+[[extensions]]
+feature  = "Tidy"
+status   = "supported"
+php      = "https://www.php.net/manual/en/book.tidy.php"
+docs     = "docs/php/tidy.md"
+evidence = "tests/codegen/tidy.rs"
+modules  = ["tidy"]
+notes    = "ext/tidy (24 functions, tidy/tidyNode, 161 TIDY_* constants) on a pinned static libtidy 5.8.0 from the native catalog (elephc native add libtidy); auto-linked or forced with --with-tidy; the full php-src ext/tidy case corpus is migrated into Rust codegen tests"
+
+[[extensions]]
 feature  = "cURL"
 status   = "supported"
 php      = "https://www.php.net/manual/en/book.curl.php"
@@ -283,7 +301,7 @@ notes    = "Compiled-script manifest plus a runtime parsed-script cache for dyna
 
 [[limitations]]
 title = "eval() coverage of the prelude-implemented modules"
-notes = "The generated eval() counts are zero for gd, exif, mysqli, PDO, and session because their functions use injected PHP preludes without interpreter bindings. OPcache has a separate supported route through native prelude declarations or dedicated interpreter handlers, including the live script cache and API restrictions. The remaining module gaps are tracked by mysqli #746, PDO #748, session #1211, gd and exif #1212, with #906 as the umbrella; call those functions from compiled code and pass the results into the fragment until their eval() surfaces are implemented."
+notes = "Generated eval() counts track explicit interpreter bindings and supported contract routes; a zero for a prelude module does not by itself mean its linked declarations are unavailable at runtime. In particular, eval() can call the PDO and mysqli surface linked into the compiled program. Use --with-pdo or --with-mysqli when only opaque eval source names that surface. OPcache also has native prelude and dedicated interpreter routes. Consult each module page for its runtime availability, required capabilities and remaining limitations."
 
 [[limitations]]
 title = "Static subset, AOT only"
@@ -309,3 +327,19 @@ docs     = "docs/php/fileinfo.md"
 evidence = "tests/codegen/fileinfo.rs"
 modules  = ["fileinfo"]
 notes    = "Six functions, finfo and eleven constants, backed by pinned static libmagic 5.46 with an embedded database; native and eval use the same declarations. Declare the libmagic native package; --with-fileinfo enables opaque dynamic use."
+
+# How php-src builds each baseline extension, exported as `tier` per module in
+# docs/php/compatibility.json. Read from the PHP_ARG_ENABLE/PHP_ARG_WITH defaults in
+# php-src PHP-8.5 ext/*/config*.m4: `always` has no switch to disable it, `default`
+# is enabled by a plain ./configure (--disable-*/--without-* turns it off). Every
+# other baseline extension is opt-in and exported as "optional". Names must be
+# baseline extensions; revisit both lists when the baseline moves to a new minor.
+[build_tiers]
+always = [
+  "core", "date", "hash", "json", "lexbor", "pcre", "random", "reflection", "spl",
+  "standard", "uri", "zend opcache",
+]
+default = [
+  "ctype", "dom", "fileinfo", "filter", "iconv", "libxml", "pdo", "pdo_sqlite", "phar",
+  "posix", "session", "simplexml", "sqlite3", "tokenizer", "xml", "xmlreader", "xmlwriter",
+]

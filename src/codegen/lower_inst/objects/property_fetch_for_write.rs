@@ -58,6 +58,9 @@ pub(in crate::codegen::lower_inst) fn lower_prop_get_for_write(
     } else if slot.is_declared {
         emit_uninitialized_typed_property_guard(ctx, &slot, base_reg);
     }
+    if split.boxed && split.through_reference_cell {
+        return lower_reference_mixed_property_split(ctx, inst, &slot, base_reg);
+    }
     abi::emit_load_from_address(ctx.emitter, arg_reg, base_reg, slot.offset);
     if split.through_reference_cell {
         // A reference slot stores the ref-cell pointer, not the container. The container the
@@ -86,6 +89,35 @@ pub(in crate::codegen::lower_inst) fn lower_prop_get_for_write(
     } else {
         abi::emit_store_to_address(ctx.emitter, result_reg, base_reg, slot.offset);
     }
+    store_if_result(ctx, inst)
+}
+
+/// Splits a Mixed property's child while preserving an escaped PHPRef wrapper in its native cell.
+fn lower_reference_mixed_property_split(
+    ctx: &mut FunctionContext<'_>, inst: &Instruction, slot: &PropertySlot, base_reg: &str,
+) -> Result<()> {
+    let address = reference_pointer_reg(ctx, base_reg);
+    let (value, marker) = match ctx.emitter.target.arch {
+        Arch::AArch64 => ("x12", "x13"),
+        Arch::X86_64 => ("r8", "rcx"),
+    };
+    let payload = ctx.next_label("mixed_property_split_phpref_payload");
+    abi::emit_load_from_address(ctx.emitter, address, base_reg, slot.offset);
+    crate::codegen_support::runtime::reference_cells::follow_mixed_reference_slot(
+        ctx.emitter, address, value, marker, &payload,
+    );
+    let result = abi::int_result_reg(ctx.emitter);
+    abi::emit_load_from_address(ctx.emitter, result, address, 0);
+    abi::emit_push_reg(ctx.emitter, address);
+    abi::emit_push_reg(ctx.emitter, result);
+    abi::emit_call_label(ctx.emitter, "__rt_mixed_clone");
+    abi::emit_load_temporary_stack_slot(ctx.emitter, address, 16);
+    abi::emit_store_to_address(ctx.emitter, result, address, 0);
+    abi::emit_push_reg(ctx.emitter, result);
+    abi::emit_load_temporary_stack_slot(ctx.emitter, result, 16);
+    abi::emit_call_label(ctx.emitter, "__rt_decref_mixed");
+    abi::emit_pop_reg(ctx.emitter, result);
+    abi::emit_release_temporary_stack(ctx.emitter, 32);
     store_if_result(ctx, inst)
 }
 
@@ -200,4 +232,32 @@ fn property_container_split(slot: &PropertySlot) -> Option<PropertyContainerSpli
         through_reference_cell: slot.is_reference,
         boxed: slot.php_type.codegen_repr() == PhpType::Mixed,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::codegen_support::platform::Target;
+
+    /// Mixed write fetches preserve the wrapper and publish their new child before retiring the old box.
+    #[test]
+    fn native_mixed_property_split_preserves_reference_on_every_target() {
+        let source = "<?php class NativeMixedSplitOwner { public mixed $value = []; \
+            public function &valueRef(): mixed { return $this->value; } } \
+            function splitNativeMixedProperty(NativeMixedSplitOwner $holder): void { \
+                $holder->value['nested'][] = 1; } \
+            $holder = new NativeMixedSplitOwner(); $alias =& $holder->valueRef(); \
+            splitNativeMixedProperty($holder);";
+        for name in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+            let module = crate::ir_lower::tests::lower_source_at_for_target(source,
+                std::path::Path::new("main.php"), std::path::Path::new("."), Target::parse(name).unwrap());
+            let assembly = crate::codegen::generate_user_asm_from_ir(&module, false, false).unwrap();
+            let body = assembly.split_once("@fn name=splitNativeMixedProperty symbol=").unwrap().1
+                .split_once("@endfn name=splitNativeMixedProperty").unwrap().0;
+            let follow = body.find("mixed_property_split_phpref_payload").unwrap();
+            let clone = body[follow..].find("__rt_mixed_clone").unwrap() + follow;
+            let release = body[clone..].find("__rt_decref_mixed").unwrap() + clone;
+            let store = if name == "linux-x86_64" { "mov QWORD PTR [r10], rax" } else { "str x0, [x10]" };
+            assert!(body[clone..release].contains(store), "{name}: publish the new child before cleanup");
+        }
+    }
 }

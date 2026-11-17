@@ -1,8 +1,6 @@
 ---
 title: "array_keys() - internals"
 description: "Compiler internals for array_keys(): lowering path, type checks, and runtime helpers."
-sidebar:
-  order: 29
 ---
 
 ## `array_keys()` - internals
@@ -10,7 +8,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/array/array_keys.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/array/array_keys.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:752](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L752) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 
@@ -28,7 +26,7 @@ sidebar:
 - **Result ownership**: `fresh`
 - **Effects**: `static (0 declared effects)`
 - **Requirements**: `static (0 requirements)`
-- **Callable policy**: `dynamic_target`
+- **Callable policy**: `static_only`
 - **Target support**: `macos-aarch64`, `ios-arm64`, `ios-sim-arm64`, `linux-aarch64`, `linux-x86_64`
 
 ## EIR and runtime boundary
@@ -39,12 +37,12 @@ sidebar:
 ## Signature summary
 
 ```php
-function array_keys(array $array, mixed $filter_value, bool $strict = false): array
+function array_keys(array $array): array
 ```
 
 ## What the type checker enforces
 
-- **Arity**: takes 2–3 arguments (1 optional).
+- **Arity**: takes exactly 1 argument.
 
 ## Eval interpreter (magician)
 

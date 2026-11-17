@@ -369,10 +369,39 @@ fn test_reflection_new_instance_resolves_an_inherited_private_constructor() {
         r#"<?php
 class PrivReflOwner {
     private function __construct(public int $n = 6) {}
+    public static function reflectFromInside(): string {
+        try {
+            (new ReflectionClass('PrivReflChild'))->newInstance();
+            return 'bad';
+        } catch (ReflectionException $error) {
+            return $error->getMessage();
+        }
+    }
 }
 class PrivReflChild extends PrivReflOwner {}
+class ProtReflOwner {
+    protected function __construct() {}
+}
+class ProtReflChild extends ProtReflOwner {}
 $reflected = new ReflectionClass('PrivReflChild');
-echo $reflected->newInstance()->n;
+try {
+    $reflected->newInstance();
+} catch (ReflectionException $error) {
+    echo $error->getMessage(), "\n";
+}
+$reflected = new ReflectionClass('ProtReflChild');
+try {
+    $reflected->newInstance();
+} catch (ReflectionException $error) {
+    echo $error->getMessage(), "\n";
+}
+$reflected = new ReflectionClass('PrivReflChild');
+try {
+    $reflected->newInstanceArgs([]);
+} catch (ReflectionException $error) {
+    echo $error->getMessage(), "\n";
+}
+echo PrivReflOwner::reflectFromInside(), "\n";
 "#,
     );
     assert!(

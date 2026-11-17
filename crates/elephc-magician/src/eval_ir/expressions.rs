@@ -113,6 +113,22 @@ pub enum EvalExpr {
     LoadVar(String),
     /// A variable named at run time: `$$name` or `${expr}`. The expression yields the name.
     DynamicVar(Box<EvalExpr>),
+    /// A property read-modify-write yields its computed value without replaying the receiver.
+    PropertyCompoundAssign {
+        object: Box<EvalExpr>,
+        property: Box<EvalExpr>,
+        dynamic: bool,
+        op: EvalBinOp,
+        value: Box<EvalExpr>,
+    },
+    /// A property increment yields the new value for prefix and the old value for postfix.
+    PropertyIncDec {
+        object: Box<EvalExpr>,
+        property: Box<EvalExpr>,
+        dynamic: bool,
+        increment: bool,
+        prefix: bool,
+    },
     Match {
         subject: Box<EvalExpr>,
         arms: Vec<EvalMatchArm>,
@@ -442,14 +458,14 @@ pub enum EvalDestructureSlot {
     Nested(Vec<Option<EvalDestructureTarget>>),
 }
 
-/// Cast targets supported by runtime eval expressions.
+/// PHP cast targets supported by runtime eval expressions.
 #[derive(serde::Serialize, serde::Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
 pub enum EvalCastType {
+    Array,
     Int,
     Float,
     String,
     Bool,
-    Array,
     Object,
 }
 

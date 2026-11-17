@@ -406,7 +406,7 @@ fn emit_get_helper_body(
         None
     };
     let candidates =
-        declared_mixed_property_get_candidates(ctx, mode, &inst, overrides.as_ref())?;
+        declared_mixed_property_get_candidates(ctx, mode, None, &inst, overrides.as_ref())?;
     let done_label = ctx.next_label("mixed_dyn_prop_get_done");
     let finish_label = ctx.next_label("mixed_dyn_prop_get_finish");
     let miss_label = ctx.next_label("mixed_dyn_prop_get_miss");

@@ -109,7 +109,7 @@ fn resolve_relative_class_refs(checker: &mut Checker) {
 /// Rewrites one value (and any array entries inside it) in place.
 fn rewrite_relative_class_ref(value: &mut AttrArgValue, class_name: &str, parent: Option<&str>) {
     match value {
-        AttrArgValue::ScopedConst(type_name, _) => match type_name.as_str() {
+        AttrArgValue::ScopedConst(type_name, _, _) => match type_name.as_str() {
             "self" | "static" => *type_name = class_name.to_string(),
             "parent" => {
                 if let Some(parent) = parent {
@@ -149,7 +149,7 @@ fn arg_list_has_unresolvable_ref(
 /// `ScopedConstantGet` would.
 fn value_has_unresolvable_ref(checker: &Checker, value: &AttrArgValue) -> bool {
     match value {
-        AttrArgValue::ScopedConst(type_name, member) => {
+        AttrArgValue::ScopedConst(type_name, member, _) => {
             !scoped_const_materializable(checker, type_name, member)
         }
         AttrArgValue::Array(entries) => entries

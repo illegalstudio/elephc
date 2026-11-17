@@ -38,7 +38,8 @@ const CURL_SURFACE_LEN: usize = if cfg!(feature = "curl") { 34 } else { 0 };
 /// (`class_vars_prelude`) + the 34 prelude surfaces the closed-world Symfony work added
 /// (`array_*` comparators, `password_*`, `proc_*`, `strtok`, `version_compare`, ...), measured
 /// as 399 when this was re-derived.
-const PRELUDE_PROVIDED_NON_CURL: usize = 399;
+// Main measured 413 for its own prelude surfaces; re-derive after the merged registry builds.
+const PRELUDE_PROVIDED_NON_CURL: usize = 413;
 
 /// The two curl contracts whose eval route needs caller-addressable storage.
 ///
@@ -404,6 +405,7 @@ fn target_public_name_sets_filter_platform_specific_pcntl_builtins() {
         assert!(!ios_names.contains("pcntl_fork"));
         assert!(!ios_names.contains("pcntl_exec"));
         assert!(!ios_names.contains("pcntl_wait"));
+        assert!(!ios_names.contains("pcntl_waitpid"));
         assert!(!ios_names.contains("pcntl_alarm"));
         assert!(!ios_names.contains("pcntl_signal"));
         assert!(!ios_names.contains("pcntl_daemon"));

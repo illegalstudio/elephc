@@ -38,6 +38,9 @@ pub(super) fn lower(
         RuntimeFnId::Base64Decode => Some({
             crate::codegen::lower_inst::builtins::strings::lower_base64_decode(ctx, inst)
         }),
+        RuntimeFnId::Base64DecodedLen => Some({
+            crate::codegen::lower_inst::builtins::strings::lower_base64_decoded_len(ctx, inst)
+        }),
         RuntimeFnId::Chop => Some({
             crate::codegen::lower_inst::builtins::strings::lower_trim_like(
                     ctx,
@@ -59,32 +62,41 @@ pub(super) fn lower(
         RuntimeFnId::CtypeAlpha => Some({
             crate::codegen::lower_inst::builtins::ctype::lower_ctype_alpha(ctx, inst)
         }),
-        RuntimeFnId::CtypeDigit => Some({
-            crate::codegen::lower_inst::builtins::ctype::lower_ctype_digit(ctx, inst)
-        }),
-        RuntimeFnId::CtypeUpper => Some({
-            crate::codegen::lower_inst::builtins::ctype::lower_ctype_upper(ctx, inst)
-        }),
-        RuntimeFnId::CtypeLower => Some({
-            crate::codegen::lower_inst::builtins::ctype::lower_ctype_lower(ctx, inst)
-        }),
-        RuntimeFnId::CtypePunct => Some({
-            crate::codegen::lower_inst::builtins::ctype::lower_ctype_punct(ctx, inst)
-        }),
-        RuntimeFnId::CtypeXdigit => Some({
-            crate::codegen::lower_inst::builtins::ctype::lower_ctype_xdigit(ctx, inst)
-        }),
         RuntimeFnId::CtypeCntrl => Some({
             crate::codegen::lower_inst::builtins::ctype::lower_ctype_cntrl(ctx, inst)
+        }),
+        RuntimeFnId::CtypeDigit => Some({
+            crate::codegen::lower_inst::builtins::ctype::lower_ctype_digit(ctx, inst)
         }),
         RuntimeFnId::CtypeGraph => Some({
             crate::codegen::lower_inst::builtins::ctype::lower_ctype_graph(ctx, inst)
         }),
+        RuntimeFnId::CtypeLower => Some({
+            crate::codegen::lower_inst::builtins::ctype::lower_ctype_lower(ctx, inst)
+        }),
         RuntimeFnId::CtypePrint => Some({
             crate::codegen::lower_inst::builtins::ctype::lower_ctype_print(ctx, inst)
         }),
+        RuntimeFnId::CtypePunct => Some({
+            crate::codegen::lower_inst::builtins::ctype::lower_ctype_punct(ctx, inst)
+        }),
         RuntimeFnId::CtypeSpace => Some({
             crate::codegen::lower_inst::builtins::ctype::lower_ctype_space(ctx, inst)
+        }),
+        RuntimeFnId::CtypeUpper => Some({
+            crate::codegen::lower_inst::builtins::ctype::lower_ctype_upper(ctx, inst)
+        }),
+        RuntimeFnId::CtypeXdigit => Some({
+            crate::codegen::lower_inst::builtins::ctype::lower_ctype_xdigit(ctx, inst)
+        }),
+        RuntimeFnId::ElephcNlLanginfo => Some({
+            crate::codegen::lower_inst::builtins::setlocale::lower_nl_langinfo(ctx, inst)
+        }),
+        RuntimeFnId::ElephcSetlocaleQuery => Some({
+            crate::codegen::lower_inst::builtins::setlocale::lower_setlocale_query(ctx, inst)
+        }),
+        RuntimeFnId::ElephcSetlocaleSet => Some({
+            crate::codegen::lower_inst::builtins::setlocale::lower_setlocale_set(ctx, inst)
         }),
         RuntimeFnId::Explode => Some({
             crate::codegen::lower_inst::builtins::strings::lower_explode(ctx, inst)
@@ -158,8 +170,8 @@ pub(super) fn lower(
         RuntimeFnId::Htmlspecialchars => Some({
             crate::codegen::lower_inst::builtins::strings::lower_html_escape(ctx, inst, "htmlspecialchars")
         }),
-        RuntimeFnId::Implode => Some({
-            crate::codegen::lower_inst::builtins::strings::lower_implode(ctx, inst)
+        RuntimeFnId::Implode | RuntimeFnId::Join => Some({
+            crate::codegen::lower_inst::builtins::strings::lower_implode(ctx, inst, target.as_eir())
         }),
         RuntimeFnId::InetNtop => Some({
             crate::codegen::lower_inst::builtins::strings::lower_inet(
@@ -177,8 +189,14 @@ pub(super) fn lower(
                     "__rt_inet_pton",
                 )
         }),
+        RuntimeFnId::InetPtonLen => Some({
+            crate::codegen::lower_inst::builtins::strings::lower_inet_pton_len(ctx, inst)
+        }),
         RuntimeFnId::Ip2long => Some({
             crate::codegen::lower_inst::builtins::strings::lower_ip2long(ctx, inst)
+        }),
+        RuntimeFnId::Ip2longInt => Some({
+            crate::codegen::lower_inst::builtins::strings::lower_ip2long_int(ctx, inst)
         }),
         RuntimeFnId::Lcfirst => Some({
             crate::codegen::lower_inst::builtins::strings::lower_lcfirst(ctx, inst)

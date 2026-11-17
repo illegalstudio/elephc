@@ -69,6 +69,7 @@ extern "elephc_pdo" {
     function elephc_pdo_rollback(int $conn): int;
     function elephc_pdo_errcode(int $conn): int;
     function elephc_pdo_errmsg(int $conn): string;
+    // $emulated: 0 native prepare, 1 emulated (PDO placeholders), 2 MySQL raw text (mysqli).
     function elephc_pdo_prepare(int $conn, string $sql, int $emulated): int;
     function elephc_pdo_bind_parameter_index(int $stmt, string $name): int;
     function elephc_pdo_bind_int(int $stmt, int $idx, int $val): int;
@@ -277,6 +278,47 @@ extern "elephc_pdo" {
     function elephc_pdo_mysql_charset(int $conn): string;
     function elephc_pdo_sql_has_multiple_statements(int $conn, string $sql, int $len): int;
     function elephc_pdo_real_escape_string(int $conn, string $data, int $len): int;
+    // v60: the rest of the mysqli connection surface over the same client: the
+    // last OK packet's info string ($info / mysqli_info()), a real COM_PING, a
+    // real COM_CHANGE_USER ($has_db = 0 keeps no database selected), and the
+    // server-side id of a native prepare (mysqli_stmt::$id), plus the linked client
+    // library's version string with no connection (mysqli_get_client_info()).
+    function elephc_pdo_mysql_info(int $conn): string;
+    function elephc_pdo_mysql_client_info(): string;
+    function elephc_pdo_mysql_ping(int $conn): int;
+    function elephc_pdo_mysql_set_charset(int $conn, string $name): int;
+    function elephc_pdo_mysql_change_user(int $conn, string $user, string $pass, string $db, int $has_db): int;
+    function elephc_pdo_mysql_stmt_id(int $stmt): int;
+    // v61: MYSQLI_ASYNC on a worker thread — send returns at once, wait blocks up to
+    // $timeout_us microseconds (1 = ready, 0 = timeout, -1 = none in flight), and reap
+    // hands back an executed statement holding the buffered result (-1 = query failed).
+    // $unbuffered (MYSQLI_USE_RESULT) keeps the worker streaming: ready once the first set's
+    // metadata arrived, and the reaped statement reads its rows from the server on demand.
+    function elephc_pdo_mysql_async_send(int $conn, string $sql, int $unbuffered): int;
+    function elephc_pdo_mysql_async_wait(int $conn, int $timeout_us): int;
+    function elephc_pdo_mysql_async_reap(int $conn): int;
+    // v62: raw protocol commands and the OK-packet server status flags (patched mysql
+    // crate, see third_party/mysql-28.0.4/ELEPHC_PATCH.md).
+    function elephc_pdo_mysql_server_status(int $conn): int;
+    function elephc_pdo_mysql_refresh(int $conn, int $options): int;
+    function elephc_pdo_mysql_dump_debug_info(int $conn): int;
+    function elephc_pdo_mysql_process_kill(int $conn, int $id): int;
+    function elephc_pdo_mysql_init_db(int $conn, string $schema, int $len): int;
+    function elephc_pdo_mysql_io_stat(int $conn, int $which): int;
+    function elephc_pdo_mysql_set_server_option(int $conn, int $option): int;
+    function elephc_pdo_mysql_execute(int $stmt): int;
+    function elephc_pdo_mysql_stmt_reset(int $stmt): int;
+    function elephc_pdo_mysql_stmt_fetch_past_end(int $stmt): int;
+    function elephc_pdo_mysql_send_long_data(int $stmt, int $index, string $data, int $len): int;
+    function elephc_pdo_mysql_more_results(int $stmt): int;
+    // MYSQLI_CURSOR_TYPE_READ_ONLY: the cursor type of the next execution, whether the
+    // last one opened a server cursor (rows fetched with COM_STMT_FETCH, link free), and
+    // one COM_STMT_FETCH of every remaining row for get_result() / store_result().
+    function elephc_pdo_mysql_set_cursor_type(int $stmt, int $type): int;
+    function elephc_pdo_mysql_cursor_open(int $stmt): int;
+    // Shuts a busy link's transport down before mysqli closes it (no drain wait).
+    function elephc_pdo_mysql_cancel(int $conn): int;
+    function elephc_pdo_mysql_cursor_fetch_all(int $stmt): int;
     // v22: a live transaction-state read backing PDO::inTransaction() /
     // beginTransaction()'s already-active guard (P1-g). SQLite reads native
     // autocommit; PostgreSQL/MySQL use bridge-maintained state updated after every

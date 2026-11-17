@@ -12,7 +12,7 @@
 use std::fs;
 use std::path::Path;
 
-use crate::codegen_support::platform::{Arch, Platform, Target};
+use crate::codegen_support::platform::{AppleVariant, Arch, Platform, Target};
 
 use super::super::error::{NativeError, NativeErrorKind};
 use super::super::recipe::RecipeRequest;
@@ -21,6 +21,16 @@ use super::util::{copy_regular, require_regular};
 
 /// Builds OpenSSL into the catalog-declared staging prefix.
 pub fn build(request: &RecipeRequest<'_>) -> Result<(), NativeError> {
+    build_variant(request, true)
+}
+
+/// Builds only the OpenSSL `libcrypto` archive for the cipher bridge.
+pub(super) fn build_crypto_only(request: &RecipeRequest<'_>) -> Result<(), NativeError> {
+    build_variant(request, false)
+}
+
+/// Builds OpenSSL with or without the TLS archive into the staging prefix.
+fn build_variant(request: &RecipeRequest<'_>, include_ssl: bool) -> Result<(), NativeError> {
     let build = request.staging_prefix.join("build");
     let include = request.staging_prefix.join("include/openssl");
     let library = request.staging_prefix.join("lib");
@@ -39,13 +49,18 @@ pub fn build(request: &RecipeRequest<'_>) -> Result<(), NativeError> {
         .current_dir(&build)
         .arg(&configure)
         .args([target_name, "no-shared", "no-tests", "no-docs", "no-legacy"]);
+    if !include_ssl {
+        command.arg("no-ssl");
+    }
     run_checked(&mut command, "configure trusted OpenSSL recipe")?;
 
     let mut make = request.toolchain.command(Path::new("make"));
     make.current_dir(&build).arg("build_libs");
     run_checked(&mut make, "build trusted OpenSSL static libraries")?;
 
-    copy_regular("OpenSSL", &build.join("libssl.a"), &library.join("libssl.a"))?;
+    if include_ssl {
+        copy_regular("OpenSSL", &build.join("libssl.a"), &library.join("libssl.a"))?;
+    }
     copy_regular("OpenSSL", &build.join("libcrypto.a"), &library.join("libcrypto.a"))?;
 
     // OpenSSL's out-of-tree build leaves the static public headers in the pristine source tree
@@ -60,7 +75,11 @@ pub fn build(request: &RecipeRequest<'_>) -> Result<(), NativeError> {
         copy_regular("OpenSSL", &source, &include.join(name))?;
     }
 
-    for archive in [library.join("libssl.a"), library.join("libcrypto.a")] {
+    let mut archives = vec![library.join("libcrypto.a")];
+    if include_ssl {
+        archives.push(library.join("libssl.a"));
+    }
+    for archive in archives {
         let mut inspect = request.toolchain.command(&request.toolchain.ar);
         inspect.arg("t").arg(&archive);
         run_checked(&mut inspect, "validate trusted OpenSSL static archive")?;
@@ -72,10 +91,14 @@ pub fn build(request: &RecipeRequest<'_>) -> Result<(), NativeError> {
 
 /// Maps an Elephc target to OpenSSL's own documented `Configure` target name.
 fn configure_target(target: Target) -> Result<&'static str, NativeError> {
-    match (target.platform, target.arch) {
-        (Platform::MacOS, Arch::AArch64) => Ok("darwin64-arm64-cc"),
-        (Platform::Linux, Arch::AArch64) => Ok("linux-aarch64"),
-        (Platform::Linux, Arch::X86_64) => Ok("linux-x86_64"),
+    match (target.platform, target.arch, target.apple_variant) {
+        (Platform::MacOS, Arch::AArch64, AppleVariant::MacOS) => Ok("darwin64-arm64-cc"),
+        (Platform::MacOS, Arch::AArch64, AppleVariant::IOS) => Ok("ios64-xcrun"),
+        (Platform::MacOS, Arch::AArch64, AppleVariant::IOSSimulator) => {
+            Ok("iossimulator-arm64-xcrun")
+        }
+        (Platform::Linux, Arch::AArch64, _) => Ok("linux-aarch64"),
+        (Platform::Linux, Arch::X86_64, _) => Ok("linux-x86_64"),
         _ => Err(NativeError::new(
             NativeErrorKind::Catalog,
             format!("no OpenSSL Configure target for '{}'", target.as_str()),

@@ -16,6 +16,7 @@ use std::path::{Path, PathBuf};
 use std::process;
 use std::time::Instant;
 
+use crate::codegen_support::ini_bool;
 use crate::cli::CliConfig;
 use crate::codegen::platform::Target;
 use crate::codegen::Emit;
@@ -402,7 +403,8 @@ fn compile_config(config: CliConfig, entry: EntryKind<'_>) {
 
     // The preludes below are decided on the entry program, but the autoload pass that loads the
     // Composer class files runs after name resolution, much later. Probe that closure now, so a
-    // vendor file that uses PDO or curl gets its prelude as if the entry file used it.
+    // vendor file that uses PDO, curl, Random, BcMath, GMP, or DateTimeZone::listIdentifiers
+    // gets its prelude as if the entry file used it.
     crate::progress::phase("autoload-prelude-probe");
     let phase_started = Instant::now();
     let autoloaded_preludes = if entry.is_repl_host() {
@@ -418,6 +420,17 @@ fn compile_config(config: CliConfig, entry: EntryKind<'_>) {
     timings.record_since("autoload-prelude-probe", phase_started);
     let autoloaded = |group: &str| autoloaded_preludes.contains(group);
 
+    // Decide XML usage while the AST still contains only user and resolved-include code.
+    // Opaque eval pulls in the large core prelude below; running XML's namespace-aware DOM
+    // receiver analysis after that injection needlessly rescans thousands of declarations for
+    // every eval program, even though compiler preludes cannot introduce user XML usage.
+    let xml_used = with_crates.contains("xml")
+        || autoloaded("xml")
+        || crate::xml_prelude::program_uses_surface(&ast);
+    let tidy_default_config = ini_override(&ini_overrides, "tidy.default_config");
+    let tidy_open_basedir = ini_override(&ini_overrides, "open_basedir");
+    let tidy_clean_output = ini_bool(ini_override(&ini_overrides, "tidy.clean_output"));
+
     let mut prelude_inventory = optimize::reachability::PreludeInventory::new();
     // `curl` belongs here for the same reason `pdo` does, and NOT listing it is a silent
     // no-op rather than a smaller binary: `--with-curl` force-injects the whole surface for
@@ -432,6 +445,7 @@ fn compile_config(config: CliConfig, entry: EntryKind<'_>) {
         (with_crates.contains("image"), "image"),
         (with_crates.contains("curl"), "curl"),
         (with_crates.contains("xml"), "xml"),
+        (with_crates.contains("tidy"), "tidy"),
         (with_crates.contains("bcmath"), "bcmath"),
         (with_crates.contains("gmp"), "gmp"),
         (with_crates.contains("random"), "random"),
@@ -524,7 +538,11 @@ fn compile_config(config: CliConfig, entry: EntryKind<'_>) {
     // is detected, and before name resolution, which desugars both call forms to it.
     crate::progress::phase("list-id-prelude");
     let phase_started = Instant::now();
-    let ast = list_id_prelude::inject_if_used(ast, &mut prelude_inventory);
+    let ast = list_id_prelude::inject_if_used(
+        ast,
+        autoloaded("list_id"),
+        &mut prelude_inventory,
+    );
     timings.record_since("list-id-prelude", phase_started);
 
     // Inject the var_export prelude (a pure elephc-PHP function) only when the program
@@ -648,8 +666,17 @@ fn compile_config(config: CliConfig, entry: EntryKind<'_>) {
         with_crates.contains("tokenizer") || autoloaded("tokenizer"),
         &mut prelude_inventory,
     );
-    let ast = crate::core_prelude::inject_if_used(ast, &mut prelude_inventory);
-    let ast = crate::bcmath_prelude::inject_if_used(ast, with_crates.contains("bcmath"), &mut prelude_inventory);
+    let ast = crate::core_prelude::inject_if_used(
+        ast,
+        autoloaded("weak_map"),
+        autoloaded("weak_reference"),
+        &mut prelude_inventory,
+    );
+    let ast = crate::bcmath_prelude::inject_if_used(
+        ast,
+        with_crates.contains("bcmath") || autoloaded("bcmath"),
+        &mut prelude_inventory,
+    );
     // A `gmp_*` use only an autoloaded vendor class makes (league/uri's `GMPCalculator`) still
     // needs the helpers its calls lower to.
     let ast = crate::gmp_prelude::inject_if_used(
@@ -657,7 +684,11 @@ fn compile_config(config: CliConfig, entry: EntryKind<'_>) {
         with_crates.contains("gmp") || autoloaded("gmp"),
         &mut prelude_inventory,
     );
-    let ast = crate::random_prelude::inject_if_used(ast, with_crates.contains("random"), &mut prelude_inventory);
+    let ast = crate::random_prelude::inject_if_used(
+        ast,
+        with_crates.contains("random") || autoloaded("random"),
+        &mut prelude_inventory,
+    );
     // The sodium sealed-box surface is injected here too, so name resolution sees the
     // functions and folds a differently cased call (`\SODIUM_CRYPTO_BOX_SEAL()`) onto them.
     // The late gate after autoload expansion covers code only an autoloaded class reaches.
@@ -715,12 +746,28 @@ fn compile_config(config: CliConfig, entry: EntryKind<'_>) {
     // preludes; `--with-xml` forces the injection for opaque dynamic use.
     crate::progress::phase("xml-prelude");
     let phase_started = Instant::now();
-    let ast = crate::xml_prelude::inject_if_used(
+    let ast = if xml_used {
+        crate::xml_prelude::inject_if_used(ast, true, &mut prelude_inventory)
+    } else {
+        ast
+    };
+    timings.record_since("xml-prelude", phase_started);
+
+    // Inject the `ext/tidy` prelude (the `tidy`/`tidyNode` classes and `tidy_*`
+    // wrappers over the `elephc_tidy` extern block) only when the program references
+    // that surface, so tidy-free binaries never declare the classes and never link
+    // `-lelephc_tidy`. `--with-tidy` forces the injection for opaque dynamic use.
+    crate::progress::phase("tidy-prelude");
+    let phase_started = Instant::now();
+    let ast = crate::tidy_prelude::inject_if_used(
         ast,
-        with_crates.contains("xml") || autoloaded("xml"),
+        with_crates.contains("tidy") || autoloaded("tidy") || tidy_clean_output,
+        tidy_default_config,
+        tidy_open_basedir,
+        tidy_clean_output,
         &mut prelude_inventory,
     );
-    timings.record_since("xml-prelude", phase_started);
+    timings.record_since("tidy-prelude", phase_started);
     let phase_started = Instant::now();
     let fileinfo_force = with_crates.contains("fileinfo") || autoloaded("fileinfo");
     let ast = if php_version == crate::php_version::PhpVersion::default() {
@@ -734,6 +781,11 @@ fn compile_config(config: CliConfig, entry: EntryKind<'_>) {
     // `Dom\HTMLDocument` and its node classes are injected with the other early preludes above
     // (`dom_html_prelude::inject_if_used`); main's separate Termwind-subset phase is superseded
     // by the branch's `dom_prelude`.
+    crate::progress::phase("locale-prelude");
+    let phase_started = Instant::now();
+    let locale_used = crate::locale_prelude::program_uses_locale(&ast);
+    let ast = crate::locale_prelude::inject_if_used(ast, locale_used, target.platform);
+    timings.record_since("locale-prelude", phase_started);
 
     // The resolved `opcache.preload` path, so the web prelude can find that file's guard by
     // label and lift it out of the per-request handler. Recomputed rather than threaded down
@@ -755,10 +807,13 @@ fn compile_config(config: CliConfig, entry: EntryKind<'_>) {
 
     crate::progress::phase("web-prelude");
     let phase_started = Instant::now();
-    let ast = if web_application && autoloaded(web_prelude::ENVIRONMENT_GROUP) {
+    let autoloads_web_environment = autoloaded(web_prelude::ENVIRONMENT_GROUP);
+    let autoloads_web_request = autoloaded("web_request");
+    let ast = if web_application && (autoloads_web_environment || autoloads_web_request) {
         web_prelude::application::inject_with_autoload_usage(
             ast, php_version, &ini_overrides, Path::new(filename), &mut prelude_inventory,
-            preload_startup_path.as_deref(), true,
+            preload_startup_path.as_deref(),
+            autoloads_web_environment, autoloads_web_request,
         )
     } else if web_application {
         web_prelude::application::inject(
@@ -770,7 +825,8 @@ fn compile_config(config: CliConfig, entry: EntryKind<'_>) {
             ast, web, php_version, &ini_overrides, Path::new(filename), &mut prelude_inventory,
             preload_startup_path.as_deref(),
             web_prelude::AutoloadedWebUsage {
-                observes_environment: autoloaded(web_prelude::ENVIRONMENT_GROUP),
+                observes_environment: autoloads_web_environment,
+                observes_request: autoloads_web_request,
                 registers_exception_handler: autoloaded(web_prelude::EXCEPTION_HANDLER_GROUP),
             },
         )
@@ -2176,6 +2232,10 @@ fn compile_config(config: CliConfig, entry: EntryKind<'_>) {
     // names the helper in the AST, so without a root the pruner removed it and the compiled binary
     // died with `Call to undefined function __elephc_assert_one_arg()`.
     exported_function_names.insert(crate::assert_prelude::ASSERT_ONE_ARG_NAME.to_string());
+    // A promotable clone is reachable the same way: only lowering's redirect names it.
+    exported_function_names.extend(crate::generics::promotable_clones::promotable_clone_roots(
+        &check_result.requested_promotable_clones,
+    ));
     let exported_function_names = exported_function_names;
     // `ELEPHC_PRUNE_STATS=1`: how much of what the checker checked the pruner then drops, which
     // bounds what pruning BEFORE checking could save.
@@ -3145,5 +3205,51 @@ mod declaring_path_tests {
         let canonicalized = DECLARING_PATH_CANONICALIZATIONS.with(|count| count.get());
         let _ = std::fs::remove_dir_all(&dir);
         assert_eq!(canonicalized, 2, "{canonicalized} canonicalizations for two declaring files");
+    }
+}
+
+/// Returns the last INI override for `name`, or an empty string when absent.
+fn ini_override<'a>(overrides: &'a [(String, String)], name: &str) -> &'a str {
+    overrides
+        .iter()
+        .rev()
+        .find(|(key, _)| key.eq_ignore_ascii_case(name))
+        .map_or("", |(_, value)| value.as_str())
+}
+
+#[cfg(test)]
+mod tests {
+    //! Purpose:
+    //! Unit coverage for compile-time INI parsing shared by the tidy prelude.
+    //!
+    //! Called from:
+    //! - `cargo test --bin elephc pipeline::tests`.
+    //!
+    //! Key details:
+    //! - Mirrors `zend_ini_parse_bool`'s named spellings and `strtol` fallback.
+
+    use super::ini_bool;
+
+    /// Named truthy/falsy spellings and leading integer prefixes match PHP.
+    #[test]
+    fn ini_bool_matches_php() {
+        for value in ["1", "2", "-3", "on", "On", "true", "yes", "1x", " 2"] {
+            assert!(ini_bool(value), "{value:?} must be true");
+        }
+        for value in [
+            "",
+            "0",
+            "false",
+            "no",
+            "off",
+            "none",
+            " true ",
+            "0x10",
+            "junk",
+            "  none  ",
+        ] {
+            assert!(!ini_bool(value), "{value:?} must be false");
+        }
+        assert!(ini_bool("999999999999999999999999999999999999999999"));
     }
 }

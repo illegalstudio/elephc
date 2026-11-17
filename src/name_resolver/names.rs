@@ -414,7 +414,7 @@ pub(super) fn resolved_class_constant_name(
     name.as_canonical()
 }
 
-/// Resolves a function reference while preserving PHP fallback for conditional namespace symbols.
+/// Resolves a function reference while preserving deferred PHP namespace fallback.
 /// Qualified names and explicit function imports keep their exact binding even if it is pruned.
 pub(super) fn resolve_function_reference(
     name: &Name,
@@ -428,6 +428,20 @@ pub(super) fn resolve_function_reference(
         return resolved;
     }
     let canonical = resolve_function_name(name, current_namespace, imports, symbols);
+    // A separately resolved autoloaded file cannot see namespace functions declared by
+    // the entry file or another autoloaded file. Preserve that local candidate until the
+    // existing post-autoload fallback pass can inspect the complete declaration inventory.
+    if name.is_unqualified()
+        && current_namespace.is_some_and(|namespace| !namespace.is_empty())
+        && !imports.functions.contains_key(&php_symbol_key(name.as_str()))
+        && !symbols.declares_function(&canonical)
+        && elephc_builtin_contract::lookup(&canonical).is_some_and(|contract| {
+            contract.kind == elephc_builtin_contract::BuiltinKind::PreludeProvided
+        })
+    {
+        let local = format!("{}\\{}", current_namespace.unwrap(), name.as_canonical());
+        return resolved_name(local).with_function_fallback();
+    }
     let conditional = symbols.conditional_functions.contains(&php_symbol_key(&canonical));
     let resolved = resolved_name(canonical);
     if name.function_fallback().is_some() {

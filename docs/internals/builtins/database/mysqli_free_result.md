@@ -1,8 +1,6 @@
 ---
 title: "mysqli_free_result() - internals"
 description: "Compiler internals for mysqli_free_result(): lowering path, type checks, and runtime helpers."
-sidebar:
-  order: 142
 ---
 
 ## `mysqli_free_result()` - internals
@@ -10,7 +8,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`crates/elephc-builtin-contract/src/catalog_data.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-builtin-contract/src/catalog_data.rs)
-- **Lowering**: [`src/mysqli_prelude/build/procedural.rs`:1164](https://github.com/illegalstudio/elephc/blob/main/src/mysqli_prelude/build/procedural.rs#L1164) (`mysqli_free_result`)
+- **Lowering**: [`src/mysqli_prelude/build/procedural.rs`](https://github.com/illegalstudio/elephc/blob/main/src/mysqli_prelude/build/procedural.rs) (`mysqli_free_result`)
 - **Function symbol**: `mysqli_free_result()`
 
 

@@ -203,7 +203,7 @@ pub(super) fn can_store_object_for_object_property(
 }
 
 /// Returns true when `source_name` is the same class/interface or inherits `target_name`.
-pub(super) fn object_type_is_a(ctx: &FunctionContext<'_>, source_name: &str, target_name: &str) -> bool {
+pub(in crate::codegen::lower_inst) fn object_type_is_a(ctx: &FunctionContext<'_>, source_name: &str, target_name: &str) -> bool {
     ctx.shared.type_is_a_memoized(source_name, target_name, || {
         object_type_is_a_uncached(ctx, source_name, target_name)
     })

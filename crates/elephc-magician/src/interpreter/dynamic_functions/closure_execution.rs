@@ -19,6 +19,7 @@ pub(in crate::interpreter) fn eval_dynamic_function_with_values(
     let evaluated_args = evaluated_args
         .into_iter()
         .map(|value| EvaluatedCallArg {
+            evaluation_owner: None,
             name: None,
             value: value.borrowed(),
             ref_target: None,
@@ -82,6 +83,7 @@ pub(in crate::interpreter) fn eval_dynamic_function_with_evaluated_args_and_ref_
     context.push_class_scope(String::new());
     context.push_called_class_scope(String::new());
     let bound_call = match bind_evaluated_function_args_with_ref_mode(
+        function.name(),
         function.name(),
         function.params(),
         function.parameter_types(),
@@ -169,7 +171,13 @@ pub(in crate::interpreter) fn eval_dynamic_function_with_evaluated_args_and_ref_
     let previous_call_line = context.call_line();
     let previous_strict_types = context.set_strict_types(function.strict_types());
     let previous_by_ref = context.set_returns_by_ref(function.returns_by_ref());
-    let result = binding_result.and_then(|()| execute_statements(function.body(), context, &mut function_scope, values));
+    let result = binding_result.and_then(|()| {
+        if let Some(body) = function.bytecode().cloned() {
+            super::super::bytecode::execute_bound_body(body, context, &mut function_scope, values)
+        } else {
+            execute_statements(function.body(), context, &mut function_scope, values)
+        }
+    });
     context.set_returns_by_ref(previous_by_ref);
     let persist_result = persist_static_locals(
         context,
@@ -188,6 +196,7 @@ pub(in crate::interpreter) fn eval_dynamic_function_with_evaluated_args_and_ref_
     let return_result = match (persist_result, writeback_result, result) {
         (Err(status), _, _) | (_, Err(status), _) | (_, _, Err(status)) => Err(status),
         (Ok(()), Ok(()), Ok(control)) => eval_declared_return_control_value(
+            function.name(),
             function.return_type(),
             None,
             None,
@@ -210,6 +219,7 @@ pub(in crate::interpreter) fn eval_dynamic_function_with_evaluated_args_and_ref_
     context.pop_called_class_scope();
     context.pop_class_scope();
     let return_result = finish_activation_scope(&mut function_scope, return_result, context, values);
+    let return_result = finish_native_bound_call(return_result, &evaluated_args, context, values);
     context.pop_call_frame();
     context.pop_function();
     return_result
@@ -743,8 +753,12 @@ fn eval_closure_with_optional_binding_inner(
     let frame_args = evaluated_args.iter().map(|arg| arg.value).collect();
     let call_frame = EvalCallFrame::function(function.name(), Some(frame_args), context);
     context.push_call_frame(call_frame);
+    // Each copy of a trait method creates its own closure op_array in php-src, so the
+    // closure's default cache is keyed by the class whose code created it as well.
+    let default_site = closure.default_site();
     let bound_call = match bind_evaluated_function_args_with_ref_mode(
         &eval_closure_display_name(function, context),
+        &default_site,
         function.params(),
         function.parameter_types(),
         function.parameter_defaults(),
@@ -864,7 +878,13 @@ fn eval_closure_with_optional_binding_inner(
     let previous_call_line = context.call_line();
     let previous_strict_types = context.set_strict_types(function.strict_types());
     let previous_by_ref = context.set_returns_by_ref(function.returns_by_ref());
-    let result = binding_result.and_then(|()| execute_statements(function.body(), context, &mut function_scope, values));
+    let result = binding_result.and_then(|()| {
+        if let Some(body) = function.bytecode().cloned() {
+            super::super::bytecode::execute_bound_body(body, context, &mut function_scope, values)
+        } else {
+            execute_statements(function.body(), context, &mut function_scope, values)
+        }
+    });
     context.set_returns_by_ref(previous_by_ref);
     let persist_result = persist_static_locals(
         context,
@@ -900,6 +920,7 @@ fn eval_closure_with_optional_binding_inner(
         | (_, _, Err(status), _)
         | (_, _, _, Err(status)) => Err(status),
         (Ok(()), Ok(()), Ok(()), Ok(control)) => eval_declared_return_control_value(
+            &eval_closure_display_name(function, context),
             function.return_type(),
             None,
             None,
@@ -924,6 +945,7 @@ fn eval_closure_with_optional_binding_inner(
     }
     let return_result = release_function_args(return_result, context, values);
     let return_result = finish_activation_scope(&mut function_scope, return_result, context, values);
+    let return_result = finish_native_bound_call(return_result, &evaluated_args, context, values);
     context.pop_call_frame();
     context.pop_function();
     context.pop_static_slot_key();
@@ -1240,6 +1262,7 @@ fn visit_static_var_declarations(
             | EvalStmt::ArrayReferenceBind { .. }
             | EvalStmt::ArraySetVar { .. }
             | EvalStmt::Break(_)
+            | EvalStmt::DimensionWrite { .. }
             | EvalStmt::ClassDecl(_)
             | EvalStmt::Continue(_)
             | EvalStmt::Echo(_)
@@ -1281,6 +1304,7 @@ fn visit_static_var_declarations(
             | EvalStmt::StaticPropertySet { .. }
             | EvalStmt::TypedVar { .. }
             | EvalStmt::StoreVar { .. }
+            | EvalStmt::IncDecVar { .. }
             | EvalStmt::Throw(_)
             | EvalStmt::TraitDecl(_)
             | EvalStmt::UnsetArrayElement { .. }

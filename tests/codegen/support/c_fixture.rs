@@ -76,9 +76,21 @@ pub(crate) fn append_c_fixture_asm(assembly: &mut String, fixture_asm: &str) {
 /// The fixture's functions are assembled into the same object as the PHP program, so plain
 /// `extern function` declarations resolve to them without a library or search path.
 pub(crate) fn compile_and_run_with_c_fixture(source: &str, c_source: &str) -> String {
+    let output = compile_and_run_c_fixture(source, c_source, false);
+    assert!(output.success, "{}\n{}", output.stdout, output.stderr);
+    output.stdout
+}
+
+/// Runs a C-backed regression with strict generated-runtime heap diagnostics enabled.
+pub(crate) fn compile_and_run_with_heap_debug_and_c_fixture(source: &str, c_source: &str) -> ProgramOutput {
+    compile_and_run_c_fixture(source, c_source, true)
+}
+
+/// Shares target C compilation and exact-directory cleanup between ordinary and heap-debug fixtures.
+fn compile_and_run_c_fixture(source: &str, c_source: &str, heap_debug: bool) -> ProgramOutput {
     let dir = make_cli_test_dir("elephc_test_c_fixture");
     let (mut assembly, runtime, libraries) =
-        compile_source_to_asm_with_options(source, &dir, 8_388_608, false, false);
+        compile_source_to_asm_with_options(source, &dir, 8_388_608, false, heap_debug);
     let fixture_asm = compile_c_fixture_asm(&dir, "fixture", c_source, &[]);
     append_c_fixture_asm(&mut assembly, &fixture_asm);
     let output = assemble_and_run_capture(
@@ -89,7 +101,9 @@ pub(crate) fn compile_and_run_with_c_fixture(source: &str, c_source: &str) -> St
         &default_link_paths(),
         &[],
     );
+    if heap_debug {
+        super::diagnostics::preserve_heap_failures(source, &assembly, std::slice::from_ref(&output), &[&[]]);
+    }
     let _ = fs::remove_dir_all(&dir);
-    assert!(output.success, "{}\n{}", output.stdout, output.stderr);
-    output.stdout
+    output
 }

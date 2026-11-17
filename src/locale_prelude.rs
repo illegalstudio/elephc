@@ -1,184 +1,182 @@
 //! Purpose:
-//! Declares the `Locale::getDefault()` / `Locale::setDefault()` half of php's intl `Locale` class
-//! for programs that name it.
+//! Injects a real libc-backed `setlocale()` plus `nl_langinfo(CODESET)` for programs
+//! that reference them.
 //!
 //! Called from:
-//! - `crate::backend_gap_prelude::inject_if_used`, when the program names `Locale` statically
-//!   (`\Locale::getDefault()`, `\Locale::class`) and declares no `Locale` class of its own.
+//! - `crate::pipeline::compile()` before name resolution, and the codegen test helper.
 //!
 //! Key details:
-//! - Symfony asks `class_exists(\Locale::class)` and then reads the default locale: the translator
-//!   falls back to it (`TranslatorTrait::getLocale()`), a request publishes its locale through
-//!   `setDefault()`, and `bin/console about` prints it. Without the class every such site took its
-//!   `'en'` / `'n/a'` branch where php, built with intl, answers `en_US_POSIX`.
-//! - The default follows ICU's POSIX resolution, which is what php reads when `intl.default_locale`
-//!   is empty: the first of `LC_ALL`, `LC_MESSAGES` and `LANG` that is set, its codeset (`.UTF-8`)
-//!   dropped and its modifier appended in upper case (`de_DE@euro` is `de_DE_EURO`); `C`, `POSIX`
-//!   or nothing at all is `en_US_POSIX`. `setDefault('')` goes back to that default.
-//! - Only these two methods: the rest of intl (`getDisplayRegion()`, the formatters) stays absent,
-//!   and `extension_loaded('intl')` keeps answering false.
-//! - The declarations are BUILT, never parsed.
+//! - `setlocale()` is a prelude because PHP accepts a variadic list of locale names;
+//!   each name is tried in order through the internal `__elephc_setlocale_set` builtin.
+//! - The `LC_*` and `CODESET` constants are predefined, target-dependent catalog entries;
+//!   the prelude injects only the function declarations.
+//! - A global user declaration (including a libc `extern`) wins; a declaration inside a
+//!   named namespace does not hide the global function. Computed `eval()` source keeps both
+//!   functions available.
+//! - Built entirely from synthetic AST nodes, never parsed PHP source.
 
-use crate::parser::ast::visit::{walk_nodes, Node};
-use crate::parser::ast::{BinOp, ExprKind, Program, StaticReceiver, StmtKind, TypeExpr};
-use crate::synthetic_class::{
-    class, e_binop, e_bool, e_call, e_concat, e_int, e_null, e_self_call, e_self_static_prop,
-    e_str, e_var, method, php_semantics_declarations, s_assign, s_if, s_return,
-    s_self_static_prop_assign, t_nullable,
-};
+use crate::codegen_support::platform::Platform;
+use crate::opcache_prelude::detect::{program_has_bridge_eval, program_references};
+use crate::parser::ast::{BinOp, CastType, Expr, Program, Stmt, StmtKind, TypeExpr};
+use crate::synthetic_class::*;
 
-/// The class this prelude declares.
-const LOCALE_CLASS: &str = "Locale";
-
-/// Whether the program names `Locale` through a static receiver and does not declare it itself.
-pub(crate) fn needed_by(program: &Program) -> bool {
-    let mut named = false;
-    let mut declared = false;
-    walk_nodes(program, &mut |node| match node {
-        Node::Expr(expr) => match &expr.kind {
-            ExprKind::StaticMethodCall { receiver: StaticReceiver::Named(name), .. }
-            | ExprKind::ClassConstant { receiver: StaticReceiver::Named(name) } => {
-                named |= is_locale(name.as_str());
-            }
-            _ => {}
-        },
-        Node::Stmt(stmt) => {
-            if let StmtKind::ClassDecl { name, .. } = &stmt.kind {
-                declared |= is_locale(name);
-            }
-        }
-    });
-    named && !declared
-}
-
-/// Whether a class name is `Locale` (global namespace, any case).
-fn is_locale(name: &str) -> bool {
-    name.trim_start_matches('\\').eq_ignore_ascii_case(LOCALE_CLASS)
-}
-
-/// `$name === false`
-fn is_false(name: &str) -> crate::parser::ast::Expr {
-    e_binop(e_var(name), BinOp::StrictEq, e_bool(false))
-}
-
-/// The body of `Locale::systemDefault()` (see the module notes).
-fn system_default_body() -> Vec<crate::parser::ast::Stmt> {
-    let getenv = |name: &str| e_call("getenv", vec![e_str(name)]);
-    let posix = || e_str("en_US_POSIX");
-    vec![
-        s_assign("id", getenv("LC_ALL")),
-        s_if(is_false("id"), vec![s_assign("id", getenv("LC_MESSAGES"))], vec![], None),
-        s_if(is_false("id"), vec![s_assign("id", getenv("LANG"))], vec![], None),
-        s_if(is_false("id"), vec![s_return(posix())], vec![], None),
-        s_assign("modifier", e_str("")),
-        s_assign("at", e_call("strpos", vec![e_var("id"), e_str("@")])),
+/// Builds `setlocale(int $category, mixed $locales, mixed ...$rest): string|false`.
+fn setlocale_function() -> Stmt {
+    let is_query = e_binop(
+        e_binop(e_var("locale"), BinOp::StrictEq, e_int(0)),
+        BinOp::Or,
+        e_binop(
+            e_binop(e_var("locale"), BinOp::StrictEq, e_str("0")),
+            BinOp::Or,
+            e_binop(e_var("locale"), BinOp::StrictEq, e_null()),
+        ),
+    );
+    let add_candidate = |value: Expr| s_array_push("candidates", value);
+    let flatten_into_candidates = |array: Expr, item: &str| {
+        s_foreach(
+            array,
+            None,
+            item,
+            vec![add_candidate(e_var(item))],
+        )
+    };
+    let body = vec![
+        s_assign("candidates", e_array(vec![])),
         s_if(
-            e_binop(e_var("at"), BinOp::StrictNotEq, e_bool(false)),
+            e_call("is_array", vec![e_var("locales")]),
+            vec![flatten_into_candidates(e_var("locales"), "locale")],
+            vec![],
+            Some(vec![add_candidate(e_var("locales"))]),
+        ),
+        s_foreach(
+            e_var("rest"),
+            None,
+            "extra",
+            vec![s_if(
+                e_call("is_array", vec![e_var("extra")]),
+                vec![flatten_into_candidates(e_var("extra"), "extra_locale")],
+                vec![],
+                Some(vec![add_candidate(e_var("extra"))]),
+            )],
+        ),
+        s_foreach(
+            e_var("candidates"),
+            None,
+            "locale",
             vec![
+                s_if(
+                    is_query,
+                    vec![s_return(e_call(
+                        "__elephc_setlocale_query",
+                        vec![e_var("category")],
+                    ))],
+                    vec![],
+                    None,
+                ),
                 s_assign(
-                    "modifier",
+                    "applied",
                     e_call(
-                        "substr",
-                        vec![e_var("id"), e_binop(e_var("at"), BinOp::Add, e_int(1))],
+                        "__elephc_setlocale_set",
+                        vec![e_var("category"), e_cast(CastType::String, e_var("locale"))],
                     ),
                 ),
-                s_assign("id", e_call("substr", vec![e_var("id"), e_int(0), e_var("at")])),
+                s_if(
+                    e_binop(e_var("applied"), BinOp::StrictNotEq, e_bool(false)),
+                    vec![s_return(e_var("applied"))],
+                    vec![],
+                    None,
+                ),
             ],
-            vec![],
-            None,
         ),
-        s_assign("dot", e_call("strpos", vec![e_var("id"), e_str(".")])),
-        s_if(
-            e_binop(e_var("dot"), BinOp::StrictNotEq, e_bool(false)),
-            vec![s_assign("id", e_call("substr", vec![e_var("id"), e_int(0), e_var("dot")]))],
-            vec![],
-            None,
-        ),
-        s_if(
-            e_binop(
-                e_binop(e_var("id"), BinOp::StrictEq, e_str("C")),
-                BinOp::Or,
-                e_binop(e_var("id"), BinOp::StrictEq, e_str("POSIX")),
-            ),
-            vec![s_return(posix())],
-            vec![],
-            None,
-        ),
-        // ICU spells the modifier after `__` when the id has no country (`sr__LATIN`) and after one
-        // `_` when it has one (`de_DE_EURO`).
-        s_assign("separator", e_str("_")),
-        s_if(
-            e_binop(
-                e_call("strpos", vec![e_var("id"), e_str("_")]),
-                BinOp::StrictEq,
-                e_bool(false),
-            ),
-            vec![s_assign("separator", e_str("__"))],
-            vec![],
-            None,
-        ),
-        s_if(
-            e_binop(e_var("modifier"), BinOp::StrictNotEq, e_str("")),
-            vec![s_return(e_concat(
-                e_concat(e_var("id"), e_var("separator")),
-                e_call("strtoupper", vec![e_var("modifier")]),
-            ))],
-            vec![],
-            None,
-        ),
-        s_return(e_var("id")),
-    ]
+        s_return(e_bool(false)),
+    ];
+    function("setlocale")
+        .param("category", TypeExpr::Int)
+        .param("locales", t_mixed())
+        .variadic("rest", Some(t_mixed()))
+        .returns(t_union(vec![TypeExpr::Str, TypeExpr::False]))
+        .body(body)
+        .build()
 }
 
-/// Returns the `Locale` class declaration.
-pub(crate) fn declarations() -> Program {
-    php_semantics_declarations(|| {
-        let system_default = || e_self_call("systemDefault", vec![]);
-        vec![class(LOCALE_CLASS)
-            .private_static_prop("current", t_nullable(TypeExpr::Str), Some(e_null()))
-            .method(
-                method("getDefault").static_().returns(TypeExpr::Str).body(vec![
-                    s_if(
-                        e_binop(e_self_static_prop("current"), BinOp::StrictEq, e_null()),
-                        vec![s_self_static_prop_assign("current", system_default())],
-                        vec![],
-                        None,
-                    ),
-                    s_return(e_self_static_prop("current")),
-                ]),
-            )
-            .method(
-                method("setDefault")
-                    .static_()
-                    .param("locale", TypeExpr::Str)
-                    .returns(TypeExpr::Bool)
-                    .body(vec![
-                        s_if(
-                            e_binop(e_var("locale"), BinOp::StrictEq, e_str("")),
-                            vec![
-                                s_assign("locale", system_default()),
-                                // An empty system default (`LANG=""`) keeps the current one, as php.
-                                s_if(
-                                    e_binop(e_var("locale"), BinOp::StrictEq, e_str("")),
-                                    vec![s_return(e_bool(true))],
-                                    vec![],
-                                    None,
-                                ),
-                            ],
-                            vec![],
-                            None,
-                        ),
-                        s_self_static_prop_assign("current", e_var("locale")),
-                        s_return(e_bool(true)),
-                    ]),
-            )
-            .method(
-                method("systemDefault")
-                    .private()
-                    .static_()
-                    .returns(TypeExpr::Str)
-                    .body(system_default_body()),
-            )
-            .build()]
+/// Builds `nl_langinfo(int $item): string|false` for one target platform.
+fn nl_langinfo_function(platform: Platform) -> Stmt {
+    let codeset = match platform {
+        Platform::MacOS => 0,
+        Platform::Linux | Platform::Windows => 14,
+    };
+    let body = vec![s_if(
+        e_binop(e_var("item"), BinOp::StrictEq, e_int(codeset)),
+        vec![s_return(e_call(
+            "__elephc_nl_langinfo",
+            vec![e_var("item")],
+        ))],
+        vec![],
+        Some(vec![s_return(e_bool(false))]),
+    )];
+    function("nl_langinfo")
+        .param("item", TypeExpr::Int)
+        .returns(t_union(vec![TypeExpr::Str, TypeExpr::False]))
+        .body(body)
+        .build()
+}
+
+/// Returns every PHP-visible locale declaration for the prelude parity audit.
+#[cfg(test)]
+pub(crate) fn locale_declarations() -> Program {
+    vec![setlocale_function(), nl_langinfo_function(Platform::Linux)]
+}
+
+/// Reports whether the program references the locale surface without a global declaration.
+///
+/// A namespaced declaration does not satisfy a global `\setlocale()` call. Computed
+/// `eval()` source can reach either function at runtime, which the literal-string detector
+/// cannot see.
+pub fn program_uses_locale(program: &[Stmt]) -> bool {
+    program_has_bridge_eval(program)
+        || (program_references(program, "setlocale")
+            && !declares_global_locale_function(program, "setlocale"))
+        || (program_references(program, "nl_langinfo")
+            && !declares_global_locale_function(program, "nl_langinfo"))
+}
+
+/// Reports whether a top-level or global-namespace declaration owns `name`.
+///
+/// Declarations inside a named namespace are local to that namespace and must not suppress
+/// the global prelude function a `\setlocale()` call still needs.
+fn declares_global_locale_function(program: &[Stmt], name: &str) -> bool {
+    program.iter().any(|stmt| match &stmt.kind {
+        StmtKind::FunctionDecl { name: declared, .. }
+        | StmtKind::ExternFunctionDecl { name: declared, .. } => {
+            declared.eq_ignore_ascii_case(name)
+        }
+        StmtKind::NamespaceBlock { name: namespace, body } => {
+            namespace.is_none() && declares_global_locale_function(body, name)
+        }
+        StmtKind::IncludeOnceGuard { body, .. } | StmtKind::Synthetic(body) => {
+            declares_global_locale_function(body, name)
+        }
+        _ => false,
     })
+}
+
+/// Prepends the real locale surface when the program references it.
+pub fn inject_if_used(program: Program, used: bool, platform: Platform) -> Program {
+    if !used {
+        return program;
+    }
+    let runtime_eval = program_has_bridge_eval(&program);
+    let mut declarations = Vec::new();
+    if (runtime_eval || program_references(&program, "setlocale"))
+        && !declares_global_locale_function(&program, "setlocale")
+    {
+        declarations.push(setlocale_function());
+    }
+    if (runtime_eval || program_references(&program, "nl_langinfo"))
+        && !declares_global_locale_function(&program, "nl_langinfo")
+    {
+        declarations.push(nl_langinfo_function(platform));
+    }
+    declarations.extend(program);
+    declarations
 }

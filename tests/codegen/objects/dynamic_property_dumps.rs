@@ -16,6 +16,34 @@
 
 use crate::support::*;
 
+/// Dynamic counts survive initialized and uninitialized native reference marker probes.
+#[test]
+fn test_dump_dynamic_count_after_native_reference_markers() {
+    let output = compile_and_run_with_heap_debug(r#"<?php
+#[\AllowDynamicProperties]
+class NativeDynamicDump {
+    public mixed $value = 42;
+    public mixed $missing;
+}
+$object = new NativeDynamicDump();
+$alias =& $object->value;
+$object->extra = 'dyn';
+ob_start(); var_dump($object); $dump = ob_get_clean();
+echo (int)str_contains($dump, '(2) {'),
+    (int)str_contains($dump, 'int(42)'),
+    (int)str_contains($dump, 'string(3) "dyn"'), '|';
+unset($object->value);
+ob_start(); var_dump($object); $dump = ob_get_clean();
+echo (int)str_contains($dump, '(1) {'),
+    (int)str_contains($dump, 'uninitialized(mixed)'),
+    (int)str_contains($dump, 'string(3) "dyn"'), '|';
+unset($object, $alias, $dump);
+"#);
+    assert!(output.success, "stdout={} stderr={}", output.stdout, output.stderr);
+    assert_eq!(output.stdout, "111|111|");
+    assert!(output.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", output.stderr);
+}
+
 /// `var_dump`, `print_r` and `var_export` list a stdClass's dynamic properties (issue #708), and an empty stdClass stays empty.
 #[test]
 fn test_dump_stdclass_dynamic_properties() {

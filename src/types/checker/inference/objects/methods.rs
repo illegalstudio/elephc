@@ -21,13 +21,13 @@ use super::super::syntactic::wider_type_syntactic;
 impl Checker {
     /// Infers the type of a method call expression (`$obj->method(...)`).
     ///
-    /// Dispatches to `infer_method_call_on_class_type` for `Object` types,
-    /// `infer_method_call_on_interface_type` for interface types, and
-    /// handles nullable union receivers. A `Mixed` receiver dispatches at
-    /// runtime over the classes that declare the method, so its result is the
-    /// union of those candidates' return types (see
-    /// `mixed_receiver_method_return_type`). Other unhandled receiver types fall
-    /// back to `PhpType::Int`.
+    /// Dispatches to `infer_method_call_on_class_type` for concrete `Object`
+    /// types, `infer_method_call_on_interface_type` for interface types, and
+    /// handles nullable union receivers. A `Mixed` or bare `object` receiver
+    /// dispatches at runtime over the classes that declare the method, so its
+    /// result is the union of those candidates' return types (see
+    /// `mixed_receiver_method_return_type`). Other unhandled receiver types
+    /// fall back to `PhpType::Int`.
     pub(crate) fn infer_method_call_type(
         &mut self,
         object: &Expr,
@@ -37,6 +37,14 @@ impl Checker {
         env: &TypeEnv,
     ) -> Result<PhpType, CompileError> {
         let obj_ty = self.infer_type(object, env)?;
+        let class = match &obj_ty {
+            PhpType::Object(name) if !name.is_empty() => Some(name.clone()),
+            PhpType::Union(_) => self.union_single_object_class(&obj_ty),
+            _ => None,
+        };
+        let description = class.map(|class| format!("Method {class}::{method}"))
+            .unwrap_or_else(|| "Method call".to_string());
+        self.require_valid_unresolved_call_argument_order(args, &description)?;
         self.record_member_receiver_type(expr.span, &obj_ty);
         // A receiver that throws (`never`, a tolerated run-time fault) never reaches the member,
         // as in php, which evaluates the receiver first: neither does the type.
@@ -56,7 +64,8 @@ impl Checker {
                 return self
                     .infer_method_call_on_interface_type(class_name, method, args, expr, env);
             }
-            let return_ty = self.infer_method_call_on_class_type(class_name, method, args, expr, env)?;
+            let return_ty =
+                self.infer_method_call_on_class_type(class_name, method, args, expr, env)?;
             return Ok(self
                 .tracked_reflection_class_method_return_type(object, method)
                 .unwrap_or(return_ty));
@@ -223,8 +232,8 @@ impl Checker {
                 _ => {}
             }
         }
-        // A method call on a `mixed` receiver dispatches on the runtime class id
-        // over exactly the classes that declare the method (see
+        // A method call on a `mixed` or bare `object` receiver dispatches on the
+        // runtime class id over exactly the classes that declare the method (see
         // `mixed_method_candidates` / `lower_mixed_method_call` and the
         // Mixed-receiver method emission in `ir_lower::program`). The static
         // result is therefore the union of those candidates' return types. When
@@ -236,7 +245,9 @@ impl Checker {
         // `function f($x) { return $x->name(); }` rendered the returned string as
         // `0`. With no declaring class the runtime would fatal, so `mixed` is the
         // safe static result.
-        if matches!(obj_ty, PhpType::Mixed) {
+        if matches!(&obj_ty, PhpType::Mixed)
+            || matches!(&obj_ty, PhpType::Object(class) if class.is_empty())
+        {
             // A Reflection owner is one of those candidates, so the `getAttributes()` flag guard
             // applies here as well.
             self.reject_unsupported_reflection_attribute_filter_flags(
@@ -276,6 +287,7 @@ impl Checker {
     /// class declares the method at all.
     fn mixed_receiver_method_return_type(&self, method: &str, arg_count: usize) -> Option<PhpType> {
         let method_key = php_symbol_key(method);
+        if method_key == "__invoke" { return Some(PhpType::Mixed); }
         let owners = self.method_owners_of(&method_key)?;
         let mut arity_matched: Vec<PhpType> = Vec::new();
         for class_name in owners.iter() {
@@ -468,6 +480,7 @@ impl Checker {
         expr: &Expr,
         env: &TypeEnv,
     ) -> Result<PhpType, CompileError> {
+        self.require_valid_unresolved_call_argument_order(args, "Nullsafe method call")?;
         let obj_ty = self.infer_type(object, env)?;
         self.record_member_receiver_type(expr.span, &obj_ty);
         // A receiver that throws (`never`, a tolerated run-time fault) never reaches the member,
@@ -670,6 +683,7 @@ impl Checker {
         expr: &Expr,
         env: &TypeEnv,
     ) -> Result<PhpType, CompileError> {
+        self.require_valid_unresolved_call_argument_order(args, "Dynamic method call")?;
         let obj_ty = self.infer_type(object, env)?;
         let Some((_class_name, _nullable)) =
             self.nullsafe_object_receiver(&obj_ty, expr, "method call")?
@@ -1230,6 +1244,7 @@ impl Checker {
         env: &TypeEnv,
         allow_by_ref_spread: bool,
     ) -> Result<PhpType, CompileError> {
+        self.require_valid_unresolved_call_argument_order(args, &format!("Method {class_name}::{method}"))?;
         let method_key = php_symbol_key(method);
         // A private method belongs to the scope that declared it, not to the receiver's class.
         let lexical_scope = self.lexical_private_method_scope(class_name, &method_key);
@@ -1258,7 +1273,13 @@ impl Checker {
         let mut magic_return_ty = None;
         let mut magic_original_args = None;
         if let Some(class_info) = self.classes.get(class_name) {
-            if let Some(sig) = class_info.methods.get(&method_key) {
+            let static_method_call = !class_info.methods.contains_key(&method_key)
+                && class_info.static_methods.contains_key(&method_key);
+            if let Some(sig) = class_info
+                .methods
+                .get(&method_key)
+                .or_else(|| class_info.static_methods.get(&method_key))
+            {
                 if let Some(reason) = sig.deprecation.clone() {
                     let message = if reason.is_empty() {
                         format!("Call to deprecated method: {}::{}()", class_name, method)
@@ -1271,10 +1292,15 @@ impl Checker {
                     self.warnings
                         .push(crate::errors::CompileWarning::new(expr.span, &message));
                 }
-                if let Some(visibility) = class_info.method_visibilities.get(&method_key) {
+                if let Some(visibility) = class_info
+                    .method_visibilities
+                    .get(&method_key)
+                    .or_else(|| class_info.static_method_visibilities.get(&method_key))
+                {
                     let declaring_class = class_info
                         .method_declaring_classes
                         .get(&method_key)
+                        .or_else(|| class_info.static_method_declaring_classes.get(&method_key))
                         .map(String::as_str)
                         .unwrap_or(class_name);
                     if !self.can_access_member(declaring_class, visibility)
@@ -1360,18 +1386,13 @@ impl Checker {
                     )
                     .map_err(|error| Self::tag_too_few_arguments(error, class_name, method))?;
                 }
-            } else if class_info.static_methods.contains_key(&method_key) {
-                let receiver = StaticReceiver::Named(crate::names::Name::from(
-                    class_name.to_string(),
-                ));
-                return self.infer_static_method_call_type_with_options(
-                    &receiver,
-                    method,
-                    args,
-                    expr,
-                    env,
-                    allow_by_ref_spread,
-                );
+                // `$object->staticMethod()` is the static surface called through an object:
+                // its return type comes from the static signature, not the instance table.
+                if static_method_call {
+                    return Ok(late_static_return_type
+                        .clone()
+                        .unwrap_or_else(|| effective_sig.return_type.clone()));
+                }
             } else if let Some(sig) = class_info.methods.get("__call") {
                 let magic_args = Self::magic_call_args(method, args, expr.span);
                 let declared_flags = Self::declared_method_param_flags(class_info, "__call", false);
@@ -2021,6 +2042,16 @@ impl Checker {
         env: &TypeEnv,
         allow_by_ref_spread: bool,
     ) -> Result<PhpType, CompileError> {
+        let named_class = match receiver.written_class_receiver() {
+            StaticReceiver::Named(name) => Some(name.as_str().to_string()),
+            StaticReceiver::Self_ | StaticReceiver::Static => self.current_class.clone(),
+            StaticReceiver::Parent => self.current_class.as_ref().and_then(|name|
+                self.classes.get(name).and_then(|class| class.parent.clone())),
+            StaticReceiver::Generic(_) => None,
+        };
+        let description = named_class.map(|class| format!("Static method {class}::{method}"))
+            .unwrap_or_else(|| "Static method call".to_string());
+        self.require_valid_unresolved_call_argument_order(args, &description)?;
         // `Box::of(5)` on a generic class, BEFORE the receiver is resolved against the class
         // table: a template is stripped from the program, so the table has no entry for it and
         // the ordinary path reports it as an undefined class.
@@ -2713,44 +2744,50 @@ impl Checker {
     }
 
     /// Allows the mysqli prelude's internal static factories to stay private
-    /// (they are not part of PHP's mysqli surface): the buffered-result drain
-    /// factory is invoked by the connection's query/multi_query paths and by
-    /// `mysqli_stmt::get_result`, the prepared-statement factory by
-    /// `mysqli::prepare`, and the unprepared-statement factory by
-    /// `mysqli::stmt_init`.
+    /// (they are not part of PHP's mysqli surface): see
+    /// [`Self::is_mysqli_prelude_friend_call`] for the rule.
     fn can_access_mysqli_prelude_internal_factory(&self, class_name: &str, method: &str) -> bool {
-        let drain_factory = class_name == "mysqli_result"
-            && php_symbol_key(method) == "__elephcfromdrain"
-            && matches!(self.current_class.as_deref(), Some("mysqli" | "mysqli_stmt"));
-        let prepare_factory = class_name == "mysqli_stmt"
-            && php_symbol_key(method) == "__elephcfromprepare"
-            && self.current_class.as_deref() == Some("mysqli");
-        let init_factory = class_name == "mysqli_stmt"
-            && php_symbol_key(method) == "__elephcinit"
-            && self.current_class.as_deref() == Some("mysqli");
-        drain_factory || prepare_factory || init_factory
+        self.is_mysqli_prelude_friend_call(class_name, &php_symbol_key(method))
     }
 
-    /// Allows tightly-scoped private helper calls within the mysqli prelude:
-    /// `mysqli_stmt::requireLinkNotBusy` (the two-step prepare/execute
-    /// commands-out-of-sync guard) reads the connection's private
-    /// pending-result probe, and the procedural `mysqli_stmt_bind_param`
-    /// alias — a compiler-owned free function, identified via
-    /// `current_function` — reaches the statement's private bind-values
-    /// helper (its by-ref variadic tail cannot be spread-forwarded into
-    /// `bind_param`). Neither helper is part of PHP's mysqli surface.
+    /// Allows tightly-scoped private helper calls within the mysqli prelude: see
+    /// [`Self::is_mysqli_prelude_friend_call`] for the rule.
     fn can_access_mysqli_prelude_internal_method(&self, class_name: &str, method_key: &str) -> bool {
-        let pending_probe = class_name == "mysqli"
-            && method_key == "__elephchaspendingresults"
-            && self.current_class.as_deref() == Some("mysqli_stmt")
-            && self.current_method.as_deref() == Some("requirelinknotbusy");
-        let bind_values = class_name == "mysqli_stmt"
-            && method_key == "__elephcbindparamvalues"
+        self.is_mysqli_prelude_friend_call(class_name, method_key)
+    }
+
+    /// The mysqli prelude's friend channel: a private `__elephc*` helper of one of
+    /// the mysqli classes may be called from another mysqli class (the
+    /// connection, result, statement, warning, and exception cooperate through
+    /// such helpers — factories, pending-result probes, statistics, error
+    /// copies) or from a `mysqli_*` procedural alias (whose by-ref variadic tail
+    /// cannot be spread-forwarded into the public method). The `__elephc` prefix
+    /// keeps every ordinary private member, and PHP's whole visible surface,
+    /// under the normal visibility rules.
+    fn is_mysqli_prelude_friend_call(&self, class_name: &str, method_key: &str) -> bool {
+        const MYSQLI_CLASSES: [&str; 6] = [
+            "mysqli",
+            "mysqli_stmt",
+            "mysqli_result",
+            "mysqli_warning",
+            "mysqli_sql_exception",
+            "mysqli_driver",
+        ];
+        let is_mysqli_class = |name: &str| {
+            MYSQLI_CLASSES
+                .iter()
+                .any(|candidate| php_symbol_key(name) == *candidate)
+        };
+        if !method_key.starts_with("__elephc") || !is_mysqli_class(class_name) {
+            return false;
+        }
+        let from_mysqli_class = self.current_class.as_deref().is_some_and(is_mysqli_class);
+        let from_procedural_alias = self.current_class.is_none()
             && self
                 .current_function
                 .as_deref()
-                .is_some_and(|name| php_symbol_key(name) == "mysqli_stmt_bind_param");
-        pending_probe || bind_values
+                .is_some_and(|name| php_symbol_key(name).starts_with("mysqli_"));
+        from_mysqli_class || from_procedural_alias
     }
 
     /// Return types of the concrete classes implementing `union_members` that declare `method`.

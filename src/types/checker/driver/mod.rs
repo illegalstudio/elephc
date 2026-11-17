@@ -77,6 +77,7 @@ use declaration_metadata::{
 /// 8. Top-level program checking (twice: initial pass for errors that stabilize, then final)
 /// 9. Method body type-checking to stability
 /// 10. Implicit Stringable interface application
+/// 11. Re-walk of function bodies whose initial errors the final pass would drop as stale
 ///
 /// Returns `Ok((Checker, TypeEnv))` on success or `Err(CompileError)` if any phase reports errors.
 /// The `Checker` carries resolved class/interface/enum/function metadata; `TypeEnv` holds the global type environment.
@@ -161,6 +162,9 @@ pub(super) fn check_types_impl(
     errors.extend(flatten_errors);
     (checker.trait_imported_properties, checker.trait_imported_constructors) =
         super::schema::collect_trait_default_origins(program, &flattened_classes);
+    checker.trait_method_requirements =
+        super::schema::collect_trait_method_requirements(program, &flattened_classes);
+    checker.trait_property_origins = super::schema::collect_trait_property_origins(program);
     // A prelude parsed from PHP text gives its classes real spans, so the statement's source
     // mode is what tells them apart from the program's own classes (`ClassInfo::is_internal`).
     checker.internal_class_decls = program
@@ -411,6 +415,24 @@ pub(super) fn check_types_impl(
     // `_class_*` metadata tables and the object header each `new` stamps.
     let mut class_names: Vec<String> = class_map.keys().cloned().collect();
     class_names.sort();
+    checker.declared_class_ancestry = class_map
+        .iter()
+        .map(|(name, class)| (name.clone(), (class.extends.clone(), class.implements.clone())))
+        .collect();
+    // Enums are built after every class, so a class method may return an enum that only its
+    // declaration can relate to the interface the parent method returns. Every enum also
+    // implements `UnitEnum`, and a backed one `BackedEnum`, as `build_enum_info` publishes.
+    for stmt in program {
+        if let StmtKind::EnumDecl { name, implements, backing_type, .. } = &stmt.kind {
+            let implements = implements
+                .iter()
+                .map(|name| name.as_str().to_string())
+                .chain(std::iter::once("UnitEnum".to_string()))
+                .chain(backing_type.as_ref().map(|_| "BackedEnum".to_string()))
+                .collect();
+            checker.declared_class_ancestry.entry(name.clone()).or_insert((None, implements));
+        }
+    }
     for class_name in class_names {
         let result = build_class_info_recursive(
             &class_name,
@@ -424,6 +446,7 @@ pub(super) fn check_types_impl(
             errors.extend(error.flatten());
         }
     }
+    checker.declared_class_ancestry.clear();
     if let Err(error) = inject_builtin_enums(program, &mut checker, &mut next_class_id) {
         errors.extend(error.flatten());
     }
@@ -548,6 +571,13 @@ pub(super) fn check_types_impl(
     checker.scan_widened_ref_params(program, &flattened_classes);
     lap("widened_ref_scan", &mut mark);
 
+    // Exception summaries need valid inheritance, and still precede all callable bodies.
+    // Schema errors retain conservative exception flow rather than analyzing invalid cycles.
+    if errors.is_empty() {
+        let registered_parents: Vec<_> = class_map.iter().filter_map(|(name, class)|
+            class.extends.as_ref().map(|parent| (name.clone(), parent.clone()))).collect();
+        checker.exception_analysis = Some(crate::optimize::CheckerExceptionAnalysis::new(program, &registered_parents));
+    }
     let (_, initial_top_level_errors) = checker.check_top_level_program(program);
     lap("top_level_first", &mut mark);
 
@@ -612,6 +642,7 @@ pub(super) fn check_types_impl(
     checker.descendant_classes_cache.borrow_mut().1.clear();
     checker.interface_implementers_cache.borrow_mut().1.clear();
     lap("post_passes", &mut mark);
+    let failed_body_errors = checker.recheck_failed_function_bodies(&initial_top_level_errors);
 
     let (final_global_env, final_top_level_errors) = checker.check_top_level_program(program);
     lap("top_level_final", &mut mark);
@@ -625,6 +656,14 @@ pub(super) fn check_types_impl(
         }
         if !Checker::can_suppress_initial_top_level_errors(&initial_errors) {
             errors.extend(initial_errors);
+        }
+    }
+    // A body error an unsuppressed initial statement already reported is not repeated.
+    for error in checker.unresolved_rechecked_body_errors(failed_body_errors) {
+        if !errors.iter().any(|seen| {
+            seen.span == error.span && seen.file == error.file && seen.message == error.message
+        }) {
+            errors.push(error);
         }
     }
 

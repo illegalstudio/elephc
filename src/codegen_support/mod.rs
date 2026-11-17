@@ -52,12 +52,13 @@ mod wrappers;
 
 pub(crate) use arrays::{array_entry_runtime_tag, emit_array_value_type_stamp};
 pub(crate) use compilation_context::{
-    compile_is_web_sapi, compile_php_version, ini_overrides, linked_extensions,
-    opcache_api_restricted, opcache_manifest_len,
+    compile_is_web_sapi, compile_php_version, linked_extensions, opcache_api_restricted,
+    opcache_manifest_len,
 };
 pub use compilation_context::{
-    autoload_rule_count, set_autoload_rule_count, set_compile_profile, set_ini_overrides,
-    set_linked_extensions, set_opcache_api_restricted, set_opcache_manifest_len,
+    autoload_rule_count, ini_bool, ini_overrides, set_autoload_rule_count, set_compile_profile,
+    set_ini_overrides, set_linked_extensions, set_opcache_api_restricted,
+    set_opcache_manifest_len,
 };
 pub(crate) use declaration_order::{
     declared_class_names, declared_interface_names, declared_trait_names,
@@ -74,10 +75,12 @@ use emitted_classes::collect_emitted_class_names;
 pub(crate) use prescan::collect_constants;
 pub use runtime_features::{LinkRequirement, RuntimeFeatures};
 pub use runtime_features::{
-    link_requirements_for_runtime_features, runtime_features_for_program_and_classes,
+    force_runtime_features_for_flag, link_requirements_for_runtime_features,
+    runtime_features_for_program_and_classes,
 };
 pub(crate) use sentinels::NULL_SENTINEL;
 pub(crate) use value_boxing::{
+    emit_box_current_php_return_as_mixed,
     emit_box_current_owned_value_as_mixed, emit_box_current_value_as_mixed,
     emit_box_runtime_payload_as_mixed, emit_release_pushed_refcounted_temp_after_array_push,
     container_value_tag, mixed_unbox_payload_reg, runtime_value_tag,

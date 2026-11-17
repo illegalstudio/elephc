@@ -8,6 +8,152 @@
 //! - By-value owners are visible to unwinding before later arguments execute.
 //! - By-reference places are never replaced by detached evaluation temporaries.
 
+/// An owned string cast has an independent unwind root when a callee may return its parameter.
+#[test]
+fn alias_returning_calls_root_owned_string_casts_on_all_targets() {
+    use crate::ir::{Immediate, Op};
+    let source = r#"<?php
+function returnOwnedStringCast(string $value): mixed {
+    if ($value === 'throw') { throw new RuntimeException('caught'); }
+    return $value;
+}
+function invokeOwnedStringCast(mixed $value): mixed { return returnOwnedStringCast((string)$value); }
+invokeOwnedStringCast('kept');
+"#;
+    for target in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+        let module = lower_for(source, target);
+        let function = module.functions.iter().find(|function| function.name == "invokeOwnedStringCast").unwrap();
+        let claim = function.instructions.iter().find(|inst| {
+            matches!(inst.op, Op::EnsureOwned | Op::Acquire)
+                && function.instructions.iter().any(|producer| {
+                    producer.result == inst.operands.first().copied() && producer.op == Op::Cast
+                })
+        }).expect("the fresh string cast must have an independently releasing owner");
+        let value = claim.result.unwrap();
+        let cast = function.instructions.iter().find(|inst| inst.result == Some(claim.operands[0])).unwrap();
+        assert_eq!(cast.op, Op::Cast, "{target}");
+        let slot = function.instructions.iter().find_map(|inst| {
+            if inst.op != Op::StoreLocal || inst.operands != [value] { return None; }
+            match inst.immediate { Some(Immediate::LocalSlot(slot)) => Some(slot), _ => None }
+        }).expect("the owned cast is parked for unwind");
+        assert!(function.instructions.iter().any(|inst| inst.op == Op::PushCallOperandOwner
+            && inst.immediate == Some(Immediate::LocalSlot(slot))), "{target}");
+        assert!(function.instructions.iter().any(|inst| inst.op == Op::PopCallOperandOwner
+            && inst.immediate == Some(Immediate::LocalSlot(slot))), "{target}");
+        let push = function.instructions.iter().position(|inst| inst.op == Op::PushCallOperandOwner
+            && inst.immediate == Some(Immediate::LocalSlot(slot))).unwrap();
+        let call = function.instructions.iter().position(|inst| inst.op == Op::Call).unwrap();
+        let pop = function.instructions.iter().position(|inst| inst.op == Op::PopCallOperandOwner
+            && inst.immediate == Some(Immediate::LocalSlot(slot))).unwrap();
+        assert!(push < call && call < pop, "{target}: the root must cover the actual callee");
+        crate::codegen::generate_user_asm_from_ir(&module, false, false).unwrap();
+    }
+}
+
+/// A borrowed trim view still retires its normalized cast through an alias-capable user call.
+#[test]
+fn alias_calls_retire_normalized_string_cast_views_on_all_targets() {
+    use crate::ir::{Immediate, Op, RuntimeCallTarget, RuntimeFnId};
+    let source = r#"<?php
+function wrapNormalizedCast(string $text): string { return '<' . $text . '>'; }
+function callNormalizedCast(int $key): void {
+    $values = ['a'];
+    $text = str_repeat('g', 3);
+    for ($index = 0; $index < 2; $index++) {
+        echo wrapNormalizedCast(trim((string)$text));
+        $text = $key == 99 ? 42 : @$values[$key];
+    }
+}
+callNormalizedCast($argc + 5);
+"#;
+    for target in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+        let module = lower_for(source, target);
+        let function = module.functions.iter().find(|function| function.name == "callNormalizedCast").unwrap();
+        let call = function.instructions.iter().find(|inst| {
+            inst.op == Op::Call && matches!(inst.immediate, Some(Immediate::Data(name))
+                if module.data.function_names[name.as_raw() as usize] == "wrapNormalizedCast")
+        }).expect("user call over the normalized trim view");
+        let trim = function.instructions.iter().find(|inst| {
+            inst.op == Op::RuntimeCall && inst.immediate == Some(Immediate::RuntimeCall(
+                RuntimeCallTarget::Function(RuntimeFnId::Trim)))
+        }).expect("trim view");
+        let copy = function.instructions.iter().find(|inst| {
+            inst.op == Op::StrPersist && inst.immediate == Some(Immediate::Bool(true))
+                && trim.operands.contains(&inst.result.unwrap())
+        }).expect("normalized cast owner borrowed by trim").result.unwrap();
+        assert!(function.instructions.iter().any(|inst| {
+            inst.op == Op::ReleaseUnlessAliases && inst.operands == [copy, call.result.unwrap()]
+        }), "{target}: the user call must settle the normalized cast's owner");
+        crate::codegen::generate_user_asm_from_ir(&module, false, false).unwrap();
+    }
+}
+
+/// An aliasing string builtin persists its view before releasing a single detached cast owner.
+#[test]
+fn single_argument_string_views_release_casts_on_all_targets() {
+    use crate::ir::{Immediate, Op, RuntimeCallTarget, RuntimeFnId};
+    let source = r#"<?php
+function castViewOwner(mixed $value): string { return trim($value); }
+class ObjectCastViewText { public function __toString(): string { return ' kept '; } }
+function objectCastViewOwner(ObjectCastViewText $value): string { return trim((string)$value); }
+echo castViewOwner(' kept ');
+"#;
+    for target in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+        let module = lower_for(source, target);
+        for name in ["castViewOwner", "objectCastViewOwner"] {
+            let function = module.functions.iter().find(|function| function.name == name).unwrap();
+            let (trim_index, trim) = function.instructions.iter().enumerate().find(|(_, inst)| {
+                inst.op == Op::RuntimeCall && inst.immediate == Some(Immediate::RuntimeCall(
+                    RuntimeCallTarget::Function(RuntimeFnId::Trim)))
+            }).expect("trim must read the coerced argument");
+            let cast = trim.operands[0];
+            assert!(function.instructions.iter().any(|inst| inst.op == Op::Cast && inst.result == Some(cast)), "{target}");
+            let persist = function.instructions.iter().enumerate().find(|(_, inst)| {
+                inst.op == Op::StrPersist && inst.operands == [trim.result.unwrap()]
+            }).expect("the result view must survive its base owner's retirement").0;
+            let release = function.instructions.iter().enumerate().find(|(_, inst)| {
+                inst.op == Op::Release && inst.operands == [cast]
+            }).expect("the detached cast must be retired").0;
+            assert!(trim_index < persist && persist < release, "{target}");
+        }
+    }
+}
+
+/// Eval-only object results own their boxes and positional dynamic arguments have unwind roots.
+#[test]
+fn eval_constructor_results_and_dynamic_arguments_own_storage_on_all_targets() {
+    use crate::ir::{Immediate, Op, Ownership};
+    let source = r#"<?php
+$code = $argc > 0 ? 'class OnlyOwnerEval { public function __construct(mixed $a, mixed $b) {} }' : '';
+eval($code);
+$made = new OnlyOwnerEval('first', 1);
+function ownerConstructorArgument(): mixed { return str_repeat('fresh', 2); }
+$name = $argc > 0 ? 'OnlyOwnerEval' : 'stdClass';
+$dynamic = new $name(ownerConstructorArgument(), new stdClass());
+"#;
+    for target in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+        let module = lower_for(source, target);
+        let function = module.functions.iter().find(|function| function.name == "main").unwrap();
+        let named = function.instructions.iter().find(|inst| inst.op == Op::EvalObjectNew).unwrap();
+        assert_eq!(named.result_ownership, Ownership::Owned, "{target}: constructor results own their boxes");
+        assert!(function.instructions.iter().any(|inst| inst.op == Op::Release && inst.operands == [named.result.unwrap()]),
+            "{target}: copying the named constructor result must retire its original box");
+        let (call_index, call) = function.instructions.iter().enumerate()
+            .find(|(_, inst)| inst.op == Op::DynamicObjectNewMixed).unwrap();
+        let operand = call.operands[1];
+        let slot = function.instructions[..call_index].iter().find_map(|inst| {
+            if inst.op == Op::StoreLocal && inst.operands == [operand] {
+                if let Some(Immediate::LocalSlot(slot)) = inst.immediate { return Some(slot); }
+            }
+            None
+        }).expect("dynamic constructor arguments must be visible to exception cleanup");
+        assert!(function.instructions[..call_index].iter().any(|inst| inst.op == Op::PushCallOperandOwner
+            && inst.immediate == Some(Immediate::LocalSlot(slot))), "{target}");
+        assert!(function.instructions[call_index + 1..].iter().any(|inst| inst.op == Op::ReleaseLocalSlot
+            && inst.immediate == Some(Immediate::LocalSlot(slot))), "{target}");
+    }
+}
+
 /// Lowers the argument-owner regression program for one supported target.
 fn lower_for(source: &str, target: &str) -> crate::ir::Module {
     super::lower_source_at_for_target(

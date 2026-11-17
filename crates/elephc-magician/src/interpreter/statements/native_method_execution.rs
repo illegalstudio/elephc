@@ -8,6 +8,7 @@
 //! - Checked and unchecked entry points share binding, bridge scope, and reference-mode handling.
 
 use super::*;
+use crate::runtime_hooks::owner_frames::with_runtime_owners;
 
 /// Records a compiled method activation as a live call frame so `debug_backtrace()` and the
 /// throwable trace see the eval-to-compiled boundary the way PHP shows every call.
@@ -82,6 +83,7 @@ fn positional_native_method_args(values: Vec<RuntimeCellHandle>) -> Vec<Evaluate
     values
         .into_iter()
         .map(|value| EvaluatedCallArg {
+            evaluation_owner: None,
             name: None,
             value,
             ref_target: None,
@@ -345,119 +347,120 @@ pub(super) fn eval_native_method_with_evaluated_args_unchecked_bridge_scope_with
         }
         status
     })?;
-    let mut result = RuntimeCellHandle::from_raw(std::ptr::null_mut());
-    let arg_values = native_bound_arg_values(&bound_args);
-    let pushed_frame = eval_push_native_call_frame(
-        signature_owner,
-        method_name,
-        Some(object),
-        &arg_values,
-        context,
-    );
-    let call_result = context.with_eval_global_sync(|context| {
-        if let Some(scope) = bridge_scope {
-            eval_native_method_call_with_scope_out(
-                scope,
-                called_class_scope,
-                object,
-                method_name,
-                arg_values,
-                &mut result,
-                context,
-                values,
-            )
-        } else {
-            values.method_call_out(object, method_name, arg_values, &mut result)
-        }
-    });
-    if pushed_frame {
-        context.pop_call_frame();
-    }
-    let writeback = if native_bound_args_require_writeback(&bound_args) {
-        write_back_native_callable_ref_args(&bound_args, context, values)
-    } else {
-        Ok(())
-    };
-    let result = match (call_result, writeback) {
-        (Err(status), _) => {
-            if crate::eval_trace::enabled() {
-                eprintln!(
-                    "[elephc-eval-trace] phase=native_method_error stage=invoke class={class_name:?} method={method_name:?} status={status:?} class_scope={:?}",
-                    context.current_class_scope(),
-                );
-            }
-            // The generated method helper answers a name the object's class lacks with a bare
-            // failure and no pending throwable, which surfaced as an uncatchable fatal. php
-            // raises a catchable `Error` there, and `try { $o->nope(); } catch (Error $e)` in
-            // interpreted code depends on it (Laravel's console probes models this way).
-            if status == EvalStatus::RuntimeFatal
-                && eval_native_method_is_absent(object, method_name, context, values)
-            {
-                eval_throw_undefined_method_call_error(class_name, method_name, context, values)
+    let result = with_runtime_owners(&bound_args, || {
+        let arg_values = native_bound_arg_values(&bound_args);
+        let pushed_frame = eval_push_native_call_frame(
+            signature_owner,
+            method_name,
+            Some(object),
+            &arg_values,
+            context,
+        );
+        let call_result = context.with_eval_global_sync(|context| {
+            if let Some(scope) = bridge_scope {
+                eval_native_method_call_with_scope(
+                    scope,
+                    called_class_scope,
+                    object,
+                    method_name,
+                    arg_values,
+                    context,
+                    values,
+                )
             } else {
-                Err(status)
+                values.method_call(object, method_name, arg_values)
             }
+        });
+        if pushed_frame {
+            context.pop_call_frame();
         }
-        (Ok(()), Err(status)) => {
-            if crate::eval_trace::enabled() {
-                eprintln!(
-                    "[elephc-eval-trace] phase=native_method_error stage=writeback class={class_name:?} method={method_name:?} status={status:?} class_scope={:?}",
-                    context.current_class_scope(),
-                );
-            }
-            let _ = release_expr_result(result, context, values);
-            Err(status)
-        }
-        (Ok(()), Ok(())) => {
-            if crate::eval_trace::enabled() {
-                let result_ptr = result.as_ptr();
-                // This block used to read three words straight through the handle and aborted the
-                // whole process -- a non-unwinding panic, SIGABRT with no backtrace and no
-                // `test result:` line, so it read as an infrastructure failure rather than as one
-                // bad read. It fired only with the trace ON.
-                //
-                // The handle is not always a cell pointer. `RuntimeValueOps` has two
-                // implementations, and the test harness mints handles from indices, so its
-                // `as_ptr()` yields values like `0x1`: not null, not aligned, not readable. Only
-                // the implementation that owns the representation may look, so the peek is a trait
-                // method whose default is `None`.
-                let words = values.trace_result_words(result);
-                let tag = values.type_tag(result);
-                let object_refs = matches!(tag, Ok(EVAL_TAG_OBJECT)).then(|| {
-                    let object_ptr = words.map_or(std::ptr::null(), |w| w[1] as *const u8);
-                    // Kept as a braceless closure body on purpose: wrapping it in `{ }` makes
-                    // `unsafe { ... }` a STATEMENT, and the `&` that follows is then parsed as a
-                    // reference rather than a bitwise and -- `expected (), found u32`.
-                    (!object_ptr.is_null())
-                        .then(|| unsafe { object_ptr.sub(12).cast::<u32>().read_unaligned() } & 0x7fff_ffff)
-                });
-                let words_text = words.map_or_else(
-                    || "null".to_string(),
-                    |w| format!("[{:#x}, {:#x}, {:#x}]", w[0], w[1], w[2]),
-                );
-                eprintln!(
-                    "[elephc-eval-trace] phase=native_method_return_contract owner={signature_owner:?} class={class_name:?} method={method_name:?} result={result_ptr:p} words={words_text} return_type={return_type:?} tag={tag:?} object_refs={object_refs:?}",
-                );
-            }
-            eval_declared_native_return_value(
-                return_type.as_ref(),
-                Some(signature_owner),
-                called_class_scope.or(Some(class_name)),
-                result,
-                context,
-                values,
-            )
-            .map_err(|status| {
+        let writeback = if native_bound_args_require_writeback(&bound_args) {
+            write_back_native_callable_ref_args(&bound_args, context, values)
+        } else {
+            Ok(())
+        };
+        let result = match (call_result, writeback) {
+            (Err(status), _) => {
                 if crate::eval_trace::enabled() {
                     eprintln!(
-                        "[elephc-eval-trace] phase=native_method_error stage=return_value class={class_name:?} method={method_name:?} status={status:?} class_scope={:?}",
+                        "[elephc-eval-trace] phase=native_method_error stage=invoke class={class_name:?} method={method_name:?} status={status:?} class_scope={:?}",
                         context.current_class_scope(),
                     );
                 }
-                status
-            })
-        }
-    };
+                // The generated method helper answers a name the object's class lacks with a bare
+                // failure and no pending throwable, which surfaced as an uncatchable fatal. php
+                // raises a catchable `Error` there, and `try { $o->nope(); } catch (Error $e)` in
+                // interpreted code depends on it (Laravel's console probes models this way).
+                if status == EvalStatus::RuntimeFatal
+                    && eval_native_method_is_absent(object, method_name, context, values)
+                {
+                    eval_throw_undefined_method_call_error(class_name, method_name, context, values)
+                } else {
+                    Err(status)
+                }
+            }
+            (Ok(result), Err(status)) => {
+                if crate::eval_trace::enabled() {
+                    eprintln!(
+                        "[elephc-eval-trace] phase=native_method_error stage=writeback class={class_name:?} method={method_name:?} status={status:?} class_scope={:?}",
+                        context.current_class_scope(),
+                    );
+                }
+                let _ = release_expr_result(result, context, values);
+                Err(status)
+            }
+            (Ok(result), Ok(())) => {
+                if crate::eval_trace::enabled() {
+                    let result_ptr = result.as_ptr();
+                    // This block used to read three words straight through the handle and aborted
+                    // the whole process -- a non-unwinding panic, SIGABRT with no backtrace and no
+                    // `test result:` line, so it read as an infrastructure failure rather than as
+                    // one bad read. It fired only with the trace ON.
+                    //
+                    // The handle is not always a cell pointer. `RuntimeValueOps` has two
+                    // implementations, and the test harness mints handles from indices, so its
+                    // `as_ptr()` yields values like `0x1`: not null, not aligned, not readable.
+                    // Only the implementation that owns the representation may look, so the peek
+                    // is a trait method whose default is `None`.
+                    let words = values.trace_result_words(result);
+                    let tag = values.type_tag(result);
+                    let object_refs = matches!(tag, Ok(EVAL_TAG_OBJECT)).then(|| {
+                        let object_ptr = words.map_or(std::ptr::null(), |w| w[1] as *const u8);
+                        // Kept as a braceless closure body on purpose: wrapping it in `{ }` makes
+                        // `unsafe { ... }` a STATEMENT, and the `&` that follows is then parsed as
+                        // a reference rather than a bitwise and -- `expected (), found u32`.
+                        (!object_ptr.is_null())
+                            .then(|| unsafe { object_ptr.sub(12).cast::<u32>().read_unaligned() } & 0x7fff_ffff)
+                    });
+                    let words_text = words.map_or_else(
+                        || "null".to_string(),
+                        |w| format!("[{:#x}, {:#x}, {:#x}]", w[0], w[1], w[2]),
+                    );
+                    eprintln!(
+                        "[elephc-eval-trace] phase=native_method_return_contract owner={signature_owner:?} class={class_name:?} method={method_name:?} result={result_ptr:p} words={words_text} return_type={return_type:?} tag={tag:?} object_refs={object_refs:?}",
+                    );
+                }
+                eval_declared_native_return_value(
+                    return_type.as_ref(),
+                    Some(signature_owner),
+                    called_class_scope.or(Some(class_name)),
+                    result,
+                    context,
+                    values,
+                )
+                .map_err(|status| {
+                    if crate::eval_trace::enabled() {
+                        eprintln!(
+                            "[elephc-eval-trace] phase=native_method_error stage=return_value class={class_name:?} method={method_name:?} status={status:?} class_scope={:?}",
+                            context.current_class_scope(),
+                        );
+                    }
+                    status
+                })
+            }
+        };
+        result
+    });
     finish_native_bound_call(result, &bound_args, context, values)
 }
 
@@ -646,63 +649,68 @@ pub(super) fn eval_native_static_method_with_evaluated_args_unchecked_bridge_sco
             return Err(status);
         }
     };
-    let result = (|| {
-        normalize_tokenizer_native_arguments(signature_owner, method_name, &mut bound_args, context, values)?;
-        if let Some(result) = eval_tokenizer_static_method(signature_owner, method_name,
-            called_class_scope.unwrap_or(class_name), &native_bound_arg_values(&bound_args),
-            context, values) {
-            return result;
+    let normalized = normalize_tokenizer_native_arguments(
+        signature_owner, method_name, &mut bound_args, context, values);
+    let result = with_runtime_owners(&bound_args, || {
+        let result = (|| {
+            normalized?;
+            if let Some(result) = eval_tokenizer_static_method(signature_owner, method_name,
+                called_class_scope.unwrap_or(class_name), &native_bound_arg_values(&bound_args),
+                context, values) {
+                return result;
+            }
+            let arg_values = native_bound_arg_values(&bound_args);
+            let pushed_frame =
+                eval_push_native_call_frame(signature_owner, method_name, None, &arg_values, context);
+            let result = if let Some(scope) = bridge_scope {
+                eval_native_static_method_call_with_scope(
+                    scope,
+                    called_class_scope,
+                    class_name,
+                    method_name,
+                    arg_values,
+                    context,
+                    values,
+                )
+            } else {
+                values.static_method_call(class_name, method_name, arg_values)
+            };
+            if pushed_frame {
+                context.pop_call_frame();
+            }
+            result
+        })();
+        if traced {
+            eprintln!(
+                "[elephc-eval-trace] phase=native_static_call stage=called class={class_name:?} method={method_name:?} outcome={}",
+                match &result {
+                    Ok(_) => "ok".to_string(),
+                    Err(status) => format!("{status:?}"),
+                },
+            );
         }
-        let arg_values = native_bound_arg_values(&bound_args);
-        let pushed_frame =
-            eval_push_native_call_frame(signature_owner, method_name, None, &arg_values, context);
-        let result = if let Some(scope) = bridge_scope {
-            eval_native_static_method_call_with_scope(
-                scope,
-                called_class_scope,
-                class_name,
-                method_name,
-                arg_values,
+        let writeback = if native_bound_args_require_writeback(&bound_args) {
+            write_back_native_callable_ref_args(&bound_args, context, values)
+        } else {
+            Ok(())
+        };
+        let result = match (result, writeback) {
+            (Ok(result), Err(status)) => {
+                let _ = release_expr_result(result, context, values);
+                Err(status)
+            }
+            (Err(status), _) => Err(status),
+            (Ok(result), Ok(())) => eval_declared_native_return_value(
+                return_type.as_ref(),
+                Some(signature_owner),
+                called_class_scope.or(Some(class_name)),
+                result,
                 context,
                 values,
-            )
-        } else {
-            values.static_method_call(class_name, method_name, arg_values)
+            ),
         };
-        if pushed_frame {
-            context.pop_call_frame();
-        }
         result
-    })();
-    if traced {
-        eprintln!(
-            "[elephc-eval-trace] phase=native_static_call stage=called class={class_name:?} method={method_name:?} outcome={}",
-            match &result {
-                Ok(_) => "ok".to_string(),
-                Err(status) => format!("{status:?}"),
-            },
-        );
-    }
-    let writeback = if native_bound_args_require_writeback(&bound_args) {
-        write_back_native_callable_ref_args(&bound_args, context, values)
-    } else {
-        Ok(())
-    };
-    let result = match (result, writeback) {
-        (Ok(result), Err(status)) => {
-            let _ = release_expr_result(result, context, values);
-            Err(status)
-        }
-        (Err(status), _) => Err(status),
-        (Ok(result), Ok(())) => eval_declared_native_return_value(
-            return_type.as_ref(),
-            Some(signature_owner),
-            called_class_scope.or(Some(class_name)),
-            result,
-            context,
-            values,
-        ),
-    };
+    });
     finish_native_bound_call(result, &bound_args, context, values)
 }
 
@@ -743,14 +751,18 @@ pub(in crate::interpreter) fn eval_native_magic_instance_method_call(
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     let magic_args = eval_magic_call_args(method_name, evaluated_args, values)?;
-    eval_native_method_with_evaluated_args_unchecked(
-        object,
-        class_name,
-        "__call",
-        magic_args,
-        context,
-        values,
-    )
+    let owners: Vec<_> = magic_args.iter().map(|argument| argument.value).collect();
+    let result = with_runtime_owners(&owners, || {
+        eval_native_method_with_evaluated_args_unchecked(
+            object,
+            class_name,
+            "__call",
+            magic_args,
+            context,
+            values,
+        )
+    });
+    finish_synthesized_method_arguments(result, owners, context, values)
 }
 
 /// Dispatches a missing or inaccessible generated/AOT static method through `__callStatic()`.
@@ -800,13 +812,17 @@ pub(in crate::interpreter) fn eval_native_magic_static_method_call_as(
         _ => None,
     };
     let called_class_scope = bridge_scope.as_ref().and(called_class_scope);
-    eval_native_static_method_with_evaluated_args_unchecked_bridge_scope(
-        class_name,
-        "__callStatic",
-        magic_args,
-        bridge_scope.as_deref(),
-        called_class_scope,
-        context,
-        values,
-    )
+    let owners: Vec<_> = magic_args.iter().map(|argument| argument.value).collect();
+    let result = with_runtime_owners(&owners, || {
+        eval_native_static_method_with_evaluated_args_unchecked_bridge_scope(
+            class_name,
+            "__callStatic",
+            magic_args,
+            bridge_scope.as_deref(),
+            called_class_scope,
+            context,
+            values,
+        )
+    });
+    finish_synthesized_method_arguments(result, owners, context, values)
 }

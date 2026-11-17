@@ -55,7 +55,7 @@ pub(crate) fn lower_preg_match(ctx: &mut FunctionContext<'_>, inst: &Instruction
     if let Some(slot) = matches_slot {
         abi::emit_call_label(ctx.emitter, "__rt_preg_match_capture");
         emit_preg_compile_warning(ctx, "preg_match");
-        store_matches_unless_pattern_failed(ctx, slot)?;
+        store_matches_array_on_success(ctx, slot, &PhpType::Array(Box::new(PhpType::Str)))?;
     } else {
         abi::emit_call_label(ctx.emitter, "__rt_preg_match");
         emit_preg_compile_warning(ctx, "preg_match");
@@ -115,40 +115,6 @@ pub(crate) fn lower_preg_last_error_msg(
         }
     }
     super::store_if_result(ctx, inst)
-}
-
-/// Stores the `$matches` array a capture helper built, unless its pattern failed to compile.
-///
-/// php leaves `$matches` untouched when the pattern is rejected -- it never got to match -- so the
-/// empty array the helper returns is dropped instead of replacing the variable. Reads the flag
-/// `__rt_preg_compile_warning` leaves in x9/r10, so it must follow that call directly.
-fn store_matches_unless_pattern_failed(ctx: &mut FunctionContext<'_>, slot: LocalSlotId) -> Result<()> {
-    let store = ctx.next_label("preg_matches_store");
-    let done = ctx.next_label("preg_matches_done");
-    match ctx.emitter.target.arch {
-        Arch::AArch64 => {
-            ctx.emitter.instruction(&format!("cbz x9, {store}"));               // the pattern compiled: store the matches
-            ctx.emitter.instruction("str x0, [sp, #-16]!");                     // keep the call's result
-            ctx.emitter.instruction("mov x0, x1");                              // the empty matches array the failed call built
-            abi::emit_call_label(ctx.emitter, "__rt_decref_any");
-            ctx.emitter.instruction("ldr x0, [sp], #16");
-        }
-        Arch::X86_64 => {
-            ctx.emitter.instruction("test r10, r10");
-            ctx.emitter.instruction(&format!("jz {store}"));                    // the pattern compiled: store the matches
-            ctx.emitter.instruction("push rax");                                // keep the call's result
-            ctx.emitter.instruction("push rax");                                // second slot keeps the call aligned
-            ctx.emitter.instruction("mov rax, rdx");                            // the empty matches array the failed call built
-            abi::emit_call_label(ctx.emitter, "__rt_decref_any");
-            ctx.emitter.instruction("pop rax");
-            ctx.emitter.instruction("pop rax");
-        }
-    }
-    abi::emit_jump(ctx.emitter, &done);
-    ctx.emitter.label(&store);
-    store_matches_array(ctx, slot)?;
-    ctx.emitter.label(&done);
-    Ok(())
 }
 
 /// Returns whether the checker typed this preg call's result for its failure value.
@@ -587,7 +553,7 @@ pub(crate) fn lower_preg_match_all(
     }
     emit_preg_compile_warning(ctx, "preg_match_all");
     if let Some(slot) = matches_slot {
-        store_matches_unless_pattern_failed(ctx, slot)?;
+        store_matches_array_on_success(ctx, slot, &PhpType::Array(Box::new(PhpType::Mixed)))?;
     }
     if result_is_boxed(ctx, inst)? {
         emit_box_preg_match_result(ctx);
@@ -1260,7 +1226,7 @@ fn optional_local_slot_operand(
             context
         )));
     };
-    if !matches!(inst_ref.op, Op::LoadLocal | Op::LoadRefCell) {
+    if !matches!(inst_ref.op, Op::LoadLocal | Op::LoadRefCell | Op::LoadRefCellValue) {
         return Err(CodegenIrError::unsupported(format!(
             "{} argument that is not a local variable",
             context
@@ -1295,104 +1261,13 @@ fn optional_matches_local_slot(
     optional_local_slot_operand(ctx, value, "preg_match_all matches")
 }
 
-/// Stores the runtime-built string matches array without clobbering the match flag.
-fn store_matches_array(ctx: &mut FunctionContext<'_>, slot: LocalSlotId) -> Result<()> {
-    let target_ty = ctx.local_php_type(slot)?.codegen_repr();
-    let widen_to_mixed_slots = matches!(
-        &target_ty,
-        PhpType::Array(element_ty) if element_ty.codegen_repr() == PhpType::Mixed
+/// Returns whether a destination typed `array<mixed>` receives the runtime's string-slot list.
+fn matches_need_mixed_slots(target_ty: &PhpType, raw_capture_type: &PhpType) -> bool {
+    let raw_is_string_list = matches!(
+        raw_capture_type, PhpType::Array(element) if element.codegen_repr() == PhpType::Str
     );
-    let box_result = match &target_ty {
-        PhpType::Array(element_ty)
-            if matches!(element_ty.codegen_repr(), PhpType::Str | PhpType::Mixed) =>
-        {
-            false
-        }
-        // A pattern that declares a capture NAME makes the runtime build hash storage, and the
-        // checker types the destination for it. The pointer the runtime returns is already that
-        // hash, so it is stored as-is -- the classification below exists for destinations whose
-        // storage only the runtime knows.
-        PhpType::AssocArray { .. } => false,
-        PhpType::Mixed | PhpType::Union(_) => true,
-        other => {
-            return Err(CodegenIrError::unsupported(format!(
-                "preg_match matches destination PHP type {:?}",
-                other
-            )));
-        }
-    };
-    let result_reg = abi::int_result_reg(ctx.emitter);
-    let matches_reg = match ctx.emitter.target.arch {
-        Arch::AArch64 => "x1",
-        Arch::X86_64 => "rdx",
-    };
-    abi::emit_reserve_temporary_stack(ctx.emitter, 16);
-    abi::emit_store_to_sp(ctx.emitter, result_reg, 0);
-    abi::emit_store_to_sp(ctx.emitter, matches_reg, 8);
-    ctx.release_local_before_refcounted_writeback(slot)?;
-    abi::emit_load_temporary_stack_slot(ctx.emitter, result_reg, 8);
-    if widen_to_mixed_slots {
-        emit_widen_matches_to_mixed_slots(ctx);
-    }
-    if box_result {
-        // A pattern that declares a capture name makes the runtime return hash storage rather
-        // than a list, and only the runtime knows which it built. Stamping the box with the
-        // indexed tag reads that hash back as a dense list: the values survive, the string keys
-        // do not, and every read silently renumbers. Classify the storage instead.
-        match ctx.emitter.target.arch {
-            Arch::AArch64 => {
-                ctx.emitter.instruction("str x0, [sp, #-16]!");                 // hold the matches array across the storage classification
-            }
-            Arch::X86_64 => {
-                ctx.emitter.instruction("sub rsp, 16");                         // reserve one temporary slot for the matches array pointer
-                ctx.emitter.instruction("mov QWORD PTR [rsp], rax");            // hold the matches array across the storage classification
-            }
-        }
-        abi::emit_call_label(ctx.emitter, "__rt_heap_kind");
-        match ctx.emitter.target.arch {
-            Arch::AArch64 => {
-                ctx.emitter.instruction("cmp x0, #3");                          // is the matches array hash storage?
-                ctx.emitter.instruction("mov x0, #4");                          // runtime value tag 4 = indexed array
-                ctx.emitter.instruction("mov x9, #5");                          // runtime value tag 5 = associative array
-                ctx.emitter.instruction("csel x0, x9, x0, eq");                 // box a hash under its own tag, a list under the indexed one
-                ctx.emitter.instruction("ldr x1, [sp], #16");                   // reload the matches array as the Mixed payload
-                ctx.emitter.instruction("mov x2, xzr");                         // an array payload has no high word
-            }
-            Arch::X86_64 => {
-                ctx.emitter.instruction("cmp rax, 3");                          // is the matches array hash storage?
-                ctx.emitter.instruction("mov eax, 4");                          // runtime value tag 4 = indexed array
-                ctx.emitter.instruction("mov r8d, 5");                          // runtime value tag 5 = associative array
-                ctx.emitter.instruction("cmove rax, r8");                       // box a hash under its own tag, a list under the indexed one
-                ctx.emitter.instruction("mov rdi, QWORD PTR [rsp]");            // reload the matches array as the Mixed payload
-                ctx.emitter.instruction("add rsp, 16");                         // release the classification temporary slot
-                ctx.emitter.instruction("xor esi, esi");                        // an array payload has no high word
-            }
-        }
-        abi::emit_call_label(ctx.emitter, "__rt_mixed_from_value");
-        // Boxing RETAINS an array, so the call's own reference to the fresh matches array is
-        // still outstanding: drop it and let the box hold the only one. Without this, every
-        // `preg_match($p, $s, $m)` into a `mixed` local leaked the whole matches array.
-        match ctx.emitter.target.arch {
-            Arch::AArch64 => {
-                ctx.emitter.instruction("str x0, [sp, #-16]!");                 // keep the box across the release
-                ctx.emitter.instruction("ldr x0, [sp, #24]");                   // the matches array the call returned
-                abi::emit_call_label(ctx.emitter, "__rt_decref_any");
-                ctx.emitter.instruction("ldr x0, [sp], #16");                   // the box to store
-            }
-            Arch::X86_64 => {
-                ctx.emitter.instruction("push rax");                            // keep the box across the release
-                ctx.emitter.instruction("push rax");                            // second slot keeps the call aligned
-                ctx.emitter.instruction("mov rax, QWORD PTR [rsp + 24]");       // the matches array the call returned
-                abi::emit_call_label(ctx.emitter, "__rt_decref_any");
-                ctx.emitter.instruction("pop rax");
-                ctx.emitter.instruction("pop rax");                             // the box to store
-            }
-        }
-    }
-    ctx.store_current_result_to_local(slot)?;
-    abi::emit_load_temporary_stack_slot(ctx.emitter, result_reg, 0);
-    abi::emit_release_temporary_stack(ctx.emitter, 16);
-    Ok(())
+    raw_is_string_list
+        && matches!(target_ty, PhpType::Array(element) if element.codegen_repr() == PhpType::Mixed)
 }
 
 /// Widens the runtime-built matches list in the result register to boxed Mixed slots.
@@ -1478,6 +1353,119 @@ fn store_preg_replace_count(ctx: &mut FunctionContext<'_>, slot: LocalSlotId) ->
     abi::emit_load_temporary_stack_slot(ctx.emitter, result_ptr_reg, 0);
     abi::emit_load_temporary_stack_slot(ctx.emitter, result_len_reg, 8);
     abi::emit_release_temporary_stack(ctx.emitter, 32);
+    Ok(())
+}
+
+/// Stores the capture array only when the regex call succeeded, releasing the failure array otherwise.
+///
+/// PHP leaves a caller-supplied `$matches` variable untouched when pattern compilation fails
+/// or `preg_match()` sees the removed `/e` modifier. The runtime reports that path with a `-1`
+/// count and a fresh empty array, so the lowering drops the array instead of writing it.
+fn store_matches_array_on_success(
+    ctx: &mut FunctionContext<'_>,
+    slot: LocalSlotId,
+    raw_capture_type: &PhpType,
+) -> Result<()> {
+    let result = abi::int_result_reg(ctx.emitter);
+    let failed = ctx.next_label("preg_matches_failed");
+    let done = ctx.next_label("preg_matches_store_done");
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction("cmn x0, #1");                              // did pattern compilation return the -1 failure sentinel?
+            ctx.emitter.instruction(&format!("b.eq {}", failed));               // leave the caller's matches variable untouched
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("cmp rax, -1");                             // did pattern compilation return the -1 failure sentinel?
+            ctx.emitter.instruction(&format!("je {}", failed));                 // leave the caller's matches variable untouched
+        }
+    }
+    store_matches_array(ctx, slot, raw_capture_type)?;
+    abi::emit_jump(ctx.emitter, &done);
+    ctx.emitter.label(&failed);
+    abi::emit_push_reg(ctx.emitter, result);
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction("mov x0, x1");                              // pass the unused failure array to the release helper
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("mov rax, rdx");                            // pass the unused failure array to the release helper
+        }
+    }
+    abi::emit_call_label(ctx.emitter, "__rt_decref_array");
+    abi::emit_pop_reg(ctx.emitter, result);
+    ctx.emitter.label(&done);
+    Ok(())
+}
+
+/// Stores the runtime-built matches array into a local slot without clobbering the match flag.
+fn store_matches_array(ctx: &mut FunctionContext<'_>, slot: LocalSlotId, raw_capture_type: &PhpType) -> Result<()> {
+    let result = abi::int_result_reg(ctx.emitter);
+    let array = match ctx.emitter.target.arch {
+        Arch::AArch64 => "x1",
+        Arch::X86_64 => "rdx",
+    };
+    // Both return values must survive retirement and optional Mixed boxing.
+    abi::emit_push_reg(ctx.emitter, result);
+    abi::emit_push_reg(ctx.emitter, array);
+    let dynamic = ctx.local_ref_cell_representation_is_dynamic(slot);
+    let raw = dynamic.then(|| ctx.next_label("preg_matches_raw_slot"));
+    let stored = dynamic.then(|| ctx.next_label("preg_matches_published"));
+    if let Some(raw) = &raw {
+        let state = ctx.ref_cell_state_offset(slot).ok_or_else(||
+            CodegenIrError::invalid_module("dynamic regex capture slot has no representation flag"))?;
+        let scratch = abi::secondary_scratch_reg(ctx.emitter);
+        abi::load_at_offset(ctx.emitter, scratch, state);
+        match ctx.emitter.target.arch {
+            Arch::AArch64 => {
+                ctx.emitter.instruction(&format!("cbz {scratch}, {raw}"));      // only raw storage uses ordinary local writeback
+            }
+            Arch::X86_64 => {
+                ctx.emitter.instruction(&format!("test {scratch}, {scratch}")); // inspect the slot's current representation
+                ctx.emitter.instruction(&format!("jz {raw}"));                  // only raw storage uses ordinary local writeback
+            }
+        }
+    }
+    if ctx.local_stores_ref_cell_pointer(slot) {
+        let payload = ctx.ref_cell_payload_type(slot)?.codegen_repr();
+        let widen = matches_need_mixed_slots(&payload, raw_capture_type);
+        if payload != PhpType::Mixed && payload != *raw_capture_type && !widen
+            && !matches!(payload, PhpType::AssocArray { .. })
+        {
+            return Err(CodegenIrError::unsupported(format!(
+                "regex capture output cannot retype a native reference with {:?} payload", payload,
+            )));
+        }
+        abi::emit_pop_reg(ctx.emitter, result);
+        if widen {
+            emit_widen_matches_to_mixed_slots(ctx);
+        }
+        if payload == PhpType::Mixed {
+            crate::codegen::emit_box_current_owned_value_as_mixed(
+                ctx.emitter, &PhpType::Array(Box::new(PhpType::Mixed)),
+            );
+        }
+        super::super::local_stores::publish_current_ref_cell_value(
+            ctx, slot, &payload, super::super::local_stores::RefCellStorePrevious::RetireAcquired,
+        )?;
+        if let Some(stored) = &stored { abi::emit_jump(ctx.emitter, stored); }
+    }
+    if let Some(raw) = &raw { ctx.emitter.label(raw); }
+    if !ctx.local_ref_cell_representation_is_definite(slot) {
+        ctx.release_local_before_refcounted_writeback(slot)?;
+        abi::emit_pop_reg(ctx.emitter, result);
+        let storage_ty = ctx.local_php_type(slot)?.codegen_repr();
+        if matches_need_mixed_slots(&storage_ty, raw_capture_type) {
+            emit_widen_matches_to_mixed_slots(ctx);
+        }
+        if matches!(storage_ty, PhpType::Mixed | PhpType::Union(_)) {
+            crate::codegen::emit_box_current_owned_value_as_mixed(
+                ctx.emitter, &PhpType::Array(Box::new(PhpType::Mixed)),
+            );
+        }
+        ctx.store_current_result_to_local(slot)?;
+    }
+    if let Some(stored) = &stored { ctx.emitter.label(stored); }
+    abi::emit_pop_reg(ctx.emitter, result);
     Ok(())
 }
 

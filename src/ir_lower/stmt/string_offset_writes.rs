@@ -37,7 +37,7 @@ pub(in crate::ir_lower) fn local_is_string_offset_target(
     ctx: &LoweringContext<'_, '_>,
     name: &str,
 ) -> bool {
-    matches!(ctx.local_type(name).codegen_repr(), PhpType::Str)
+    matches!(ctx.local_mutation_type(name).codegen_repr(), PhpType::Str)
 }
 
 /// Returns whether a boxed local may hold a string at runtime, so an offset write into it may
@@ -85,12 +85,12 @@ pub(in crate::ir_lower) fn lower_string_offset_write(
     let (index_value, value_value, index_pins) = lower_write_key_and_value(ctx, index, value);
     let value_pins = crate::ir_lower::expr::pin_in_flight_owners(ctx, &[value_value.value], span);
     let offset = lower_string_write_offset(ctx, index_value, index.span);
-    let subject = ctx.load_local(name, Some(span));
+    let subject = ctx.load_local_for_mutation(name, Some(span));
     // Only an offset still before the start after counting back from the end writes nothing,
     // and the subject length is what that is measured against: `offset + strlen >= 0`.
     let wrote = offset_reaches_string(ctx, offset, subject, span);
     let value_str = lower_checked_write_value(ctx, value_value, wrote, span);
-    let subject = ctx.load_local(name, Some(span));
+    let subject = ctx.load_local_for_mutation(name, Some(span));
     let pins = crate::ir_lower::expr::pin_in_flight_owners(ctx, &[value_str.value], span);
     let updated = ctx.emit_value(
         Op::RuntimeCall,

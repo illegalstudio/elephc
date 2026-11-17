@@ -59,12 +59,16 @@ fn inject_sort_direction(
             EnumCaseInfo {
                 name: "Ascending".to_string(),
                 value: None,
+                span: None,
+                deprecated_mt_rand_php: false,
                 attribute_names: Vec::new(),
                 attribute_args: Vec::new(),
             },
             EnumCaseInfo {
                 name: "Descending".to_string(),
                 value: None,
+                span: None,
+                deprecated_mt_rand_php: false,
                 attribute_names: Vec::new(),
                 attribute_args: Vec::new(),
             },
@@ -96,12 +100,16 @@ fn inject_property_hook_type(
             EnumCaseInfo {
                 name: "Get".to_string(),
                 value: Some(EnumCaseValue::Str("get".to_string())),
+                span: None,
+                deprecated_mt_rand_php: false,
                 attribute_names: Vec::new(),
                 attribute_args: Vec::new(),
             },
             EnumCaseInfo {
                 name: "Set".to_string(),
                 value: Some(EnumCaseValue::Str("set".to_string())),
+                span: None,
+                deprecated_mt_rand_php: false,
                 attribute_names: Vec::new(),
                 attribute_args: Vec::new(),
             },
@@ -133,6 +141,8 @@ fn inject_property_hook_type(
             .map(|name| EnumCaseInfo {
                 name: name.to_string(),
                 value: None,
+                span: None,
+                deprecated_mt_rand_php: false,
                 attribute_names: Vec::new(),
                 attribute_args: Vec::new(),
             })

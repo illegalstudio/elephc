@@ -428,6 +428,9 @@ impl Checker {
         span: crate::span::Span,
         env: &TypeEnv,
     ) -> Result<FunctionSig, CompileError> {
+        if let CallableTarget::Function(name) = target {
+            self.rewalk_marked_callable_target(name.as_str(), args, span, env)?;
+        }
         let base_sig = self.resolve_first_class_callable_sig(target, span, env)?;
         if base_sig.declared_params.iter().all(|is_declared| *is_declared) {
             return Ok(base_sig);
@@ -546,10 +549,8 @@ impl Checker {
                 promoted |= self.promote_declared_variadic_container(variant)?;
             }
             if promoted {
-                self.functions.remove(name);
+                self.remove_function_signature(name);
                 self.completed_function_signatures.remove(name);
-                // The one removal from these tables: the folded-name index must not keep it.
-                *self.canonical_function_names.borrow_mut() = None;
                 self.ensure_function_variant_group_signature(name, crate::span::Span::dummy())?;
             }
             return Ok(());

@@ -86,7 +86,7 @@ pub(crate) fn lower_array_merge_callable(
 }
 
 /// Applies ordinary parameter ownership and exceptional cleanup to a synthetic callable body.
-pub(super) fn lower_builtin_callable_body(
+pub(in crate::ir_lower) fn lower_builtin_callable_body(
     module: &mut Module,
     label: &str,
     signature: &FunctionSig,
@@ -151,6 +151,9 @@ pub(super) fn lower_builtin_callable_body(
         &Default::default(), // source generator closure spans
         &Default::default(), // array_push property plans
         &Default::default(), // checked member receiver types are absent in synthesized bodies
+        &Default::default(), // flow-typed property accesses
+        &Default::default(), // checked declared-array append elements
+        &Default::default(), // synthesized bodies have no checked integer read sites
         &Default::default(),
         &Default::default(),
         &Default::default(),
@@ -162,9 +165,10 @@ pub(super) fn lower_builtin_callable_body(
         // independent site tables to forward, and a builtin wrapper has neither.
         &Default::default(),
         &Default::default(),
-        &Default::default(),
-        &Default::default(),
-        &Default::default(),
+        &Default::default(), // retype sites
+        &Default::default(), // mixed-storage store sites
+        &Default::default(), // sparse key write sites
+        &Default::default(), // promotable arrays
         label.to_string(),
         &module.global_constants,
         None,

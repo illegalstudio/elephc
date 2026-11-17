@@ -26,6 +26,9 @@
 use super::super::*;
 
 mod dispatch;
+mod simplexml_import_dom;
+mod simplexml_load_file;
+mod simplexml_load_string;
 mod xml_parser_create;
 mod xml_parser_create_ns;
 mod xml_set_object;

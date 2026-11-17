@@ -308,6 +308,7 @@ pub(super) fn add_reflection_member_flag_methods(
             Some(TypeExpr::Str),
             empty_string(),
         ));
+        properties.push(builtin_reflection_lazy_property());
         properties.push(builtin_property(
             "__modifiers",
             Visibility::Private,
@@ -408,12 +409,13 @@ pub(super) fn add_reflection_member_flag_methods(
             Some(mixed_type()),
             Some(Expr::new(ExprKind::Null, crate::span::Span::dummy())),
         ));
-        methods.push(builtin_reflection_class_mixed_method("getValue", "__value"));
+        methods.push(builtin_reflection_lazy_mixed_method("getValue", "__value"));
     }
     if matches!(
         class_name,
         "ReflectionClassConstant" | "ReflectionEnumUnitCase" | "ReflectionEnumBackedCase"
     ) {
+        properties.push(builtin_reflection_lazy_property());
         properties.push(builtin_property(
             "__is_enum_case",
             Visibility::Private,
@@ -462,7 +464,7 @@ pub(super) fn add_reflection_member_flag_methods(
             Some(mixed_type()),
             Some(Expr::new(ExprKind::Null, crate::span::Span::dummy())),
         ));
-        methods.push(builtin_reflection_class_mixed_method("getValue", "__value"));
+        methods.push(builtin_reflection_lazy_mixed_method("getValue", "__value"));
     }
     if class_name == "ReflectionEnumBackedCase" {
         properties.push(builtin_property(
@@ -471,7 +473,7 @@ pub(super) fn add_reflection_member_flag_methods(
             Some(mixed_type()),
             Some(Expr::new(ExprKind::Null, crate::span::Span::dummy())),
         ));
-        methods.push(builtin_reflection_class_mixed_method(
+        methods.push(builtin_reflection_lazy_mixed_method(
             "getBackingValue",
             "__backing_value",
         ));

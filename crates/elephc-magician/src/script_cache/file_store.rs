@@ -93,30 +93,38 @@ use std::sync::atomic::{AtomicU64, Ordering};
 /// contracts, generic declarations, and caller-scope access masks from both branches.
 /// BUMPED TO 22 because retained generic token streams now include ReservedNameHead.
 /// Older token variant indexes must not be decoded as this layout.
-/// BUMPED TO 23 because `EvalExpr` gained the assignment-expression variant; older
-/// variant indexes must not be decoded as this layout.
+/// The closed-world Symfony branch ran its own version line (23 to 27) in parallel with main's
+/// (23 to 30), so no version up to 30 identifies a layout that carries both histories. Branch
+/// line:
 ///
-/// The closed-world Symfony branch ran its own version line (12 to 16) in parallel with the
-/// numbers above, so no version below 24 identifies a layout that carries both histories:
+/// - 23: `EvalExpr` gained the assignment-expression variant;
+/// - 24: its merge of main's eval IR (seven of the fingerprinted `eval_ir` files differed),
+///   `EvalAttributeArg` gained its `Expr` variant (an attribute argument the parser cannot fold
+///   to a literal is kept as an expression for reflection to evaluate), and an included file's
+///   parse started carrying `EvalStmt::SourceLine` markers (an entry written before it is a
+///   program WITHOUT the markers: decoded today it would run with every line stuck at its
+///   function's entry line);
+/// - 26: the `eval_ir::attributes` renderer fix (php's 14-digit float spelling and `\xHH`
+///   escapes in `ReflectionAttribute::__toString()`): no stored shape moved, but the guard
+///   hashes that file's code;
+/// - 27: `EvalClosureCapture::implicit` (arrow-function captures are skipped when the defining
+///   scope lacks the variable).
 ///
-/// - its merge of main's eval IR (seven of the fingerprinted `eval_ir` files differed);
-/// - `EvalAttributeArg` gained its `Expr` variant: an attribute argument the parser cannot
-///   fold to a literal is kept as an expression for reflection to evaluate;
-/// - an included file's parse started carrying `EvalStmt::SourceLine` markers. No
-///   fingerprinted file moved (the change is in `parser::parse_tokens`), but an entry
-///   written before it is a program WITHOUT the markers: decoded today it would run with
-///   every line stuck at its function's entry line.
+/// Main's line:
 ///
-/// BUMPED TO 24 when the branch was rebased onto main's 23: both lines changed the serialized
-/// eval IR, so neither side's published entries may be read as the combined shape.
+/// - 23 added array casts to EvalIR; 24 retained method reference-return flags and
+///   dimension-write statements; 25 combined assignment expressions; 26 added property update
+///   expressions and preserved computed property name staging; 27 combined SimpleXML property
+///   updates with native variable increment statements; 28 recorded bytecode-backed function
+///   metadata in the conservative source guard; 29 added `goto` and label statements and the
+///   parse failure for an invalid jump; 30 is its current format.
 ///
-/// BUMPED TO 26 with the `eval_ir::attributes` renderer fix (php's 14-digit float spelling and
-/// `\xHH` escapes in `ReflectionAttribute::__toString()`): no stored shape moved, but the guard
-/// hashes that file's code.
-///
-/// BUMPED TO 27 with `EvalClosureCapture::implicit` (arrow-function captures are skipped when
-/// the defining scope lacks the variable).
-pub(crate) const FORMAT_VERSION: u32 = 27;
+/// BUMPED TO 31 when origin/main was merged into the closed-world Symfony branch: both lines
+/// changed the serialized eval IR (`EvalStmt::Break`/`Continue` carry a level, `Assign` carries a
+/// target expression, `SourceLine` markers, `EvalClosureCapture::implicit`, next to main's
+/// dimension writes, property update expressions, jumps and bytecode metadata), so neither
+/// side's published entries may be read as the combined shape.
+pub(crate) const FORMAT_VERSION: u32 = 31;
 
 /// Identifies the writer, so one build never reads another's entries.
 ///

@@ -12,7 +12,7 @@
 //!    foreach iterator fast path.
 //!
 //! Key details:
-//!  - A `Generator` object reuses the Fiber 240-byte layout plus the
+//!  - A `Generator` object reuses the Fiber 248-byte layout plus the
 //!    generator-specific fields defined in `coro`; the helpers drive the
 //!    coroutine through `__rt_fiber_*` primitives.
 

@@ -65,6 +65,9 @@ fn accepts_scalar(function: &Function, user: &Instruction, scalar: IrType) -> bo
         | Op::StrictEq | Op::StrictNotEq | Op::LooseEq | Op::LooseNotEq
         | Op::IsNull | Op::IsTruthy
         | Op::TypePredicate | Op::IsEmpty => true,
+        // A min/max selection reads a raw int or float exactly like the boxed cell it replaces,
+        // and still returns the winner in a Mixed cell with that scalar's tag.
+        Op::MixedMinMax => true,
         // Static properties require module metadata and may need a Mixed-to-scalar cast.
         // Static-local assignments do not rebox. Web superglobals can use raw storage.
         // Extern stores select their ABI from the source rather than the declared target.

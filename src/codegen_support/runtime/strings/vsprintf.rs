@@ -98,6 +98,44 @@ pub fn emit_vsprintf(emitter: &mut Emitter) {
     emitter.instruction("orr x17, x17, #1");                                    // tag 1 = string operand
     emitter.instruction("b __rt_vsprintf_push");                                // push the record
     emitter.label("__rt_vsprintf_mixed");
+    emitter.instruction("ldr x16, [x15]");                                      // boxed Mixed cell pointer
+    emitter.instruction("cbz x16, __rt_vsprintf_mixed_null");                   // a null cell packs as the empty string
+    emitter.instruction("ldr x9, [x16]");                                       // concrete cell runtime tag
+    emitter.instruction("cmp x9, #0");                                          // integer cell?
+    emitter.instruction("b.eq __rt_vsprintf_mixed_int");                        // build the integer record directly
+    emitter.instruction("cmp x9, #1");                                          // string cell?
+    emitter.instruction("b.eq __rt_vsprintf_mixed_str");                        // build the string record directly
+    emitter.instruction("cmp x9, #2");                                          // float cell?
+    emitter.instruction("b.eq __rt_vsprintf_mixed_float");                      // build the float record directly
+    emitter.instruction("cmp x9, #3");                                          // bool cell?
+    emitter.instruction("b.eq __rt_vsprintf_mixed_bool");                       // build the bool record directly
+    emitter.instruction("cmp x9, #8");                                          // null cell?
+    emitter.instruction("b.eq __rt_vsprintf_mixed_null");                       // build the empty-string record directly
+    emitter.instruction("b __rt_vsprintf_mixed_slow");                          // nested containers use the shared unbox helper
+    emitter.label("__rt_vsprintf_mixed_int");
+    emitter.instruction("ldr x16, [x16, #8]");                                  // payload = the concrete integer value
+    emitter.instruction("mov x17, #0");                                         // tag 0 = integer operand
+    emitter.instruction("b __rt_vsprintf_push");                                // push the integer record
+    emitter.label("__rt_vsprintf_mixed_str");
+    emitter.instruction("ldr x17, [x16, #8]");                                  // payload = the string pointer
+    emitter.instruction("ldr x9, [x16, #16]");                                  // concrete high word = string byte length
+    emitter.instruction("mov x16, x17");                                        // move the string pointer into the payload register
+    emitter.instruction("lsl x17, x9, #8");                                     // pack the length above the tag byte
+    emitter.instruction("orr x17, x17, #1");                                    // tag 1 = string operand
+    emitter.instruction("b __rt_vsprintf_push");                                // push the string record
+    emitter.label("__rt_vsprintf_mixed_float");
+    emitter.instruction("ldr x16, [x16, #8]");                                  // payload = the double's bit pattern
+    emitter.instruction("mov x17, #2");                                         // tag 2 = float operand
+    emitter.instruction("b __rt_vsprintf_push");                                // push the float record
+    emitter.label("__rt_vsprintf_mixed_bool");
+    emitter.instruction("ldr x16, [x16, #8]");                                  // payload = the boolean value
+    emitter.instruction("mov x17, #3");                                         // tag 3 = bool operand
+    emitter.instruction("b __rt_vsprintf_push");                                // push the bool record
+    emitter.label("__rt_vsprintf_mixed_null");
+    emitter.instruction("mov x16, #0");                                         // null string pointer, which every conversion guards
+    emitter.instruction("mov x17, #1");                                         // (0 << 8) | 1 = a zero-length string record
+    emitter.instruction("b __rt_vsprintf_push");                                // push the empty-string record
+    emitter.label("__rt_vsprintf_mixed_slow");
     // This ladder used to live here inline. It now lives once, in `__rt_sprintf_pack_mixed`,
     // because `sprintf()` needs exactly the same conversion for a Mixed operand whose format
     // string is not a compile-time literal — and a second hand-written copy of an assembly
@@ -204,6 +242,44 @@ fn emit_vsprintf_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("or rcx, 1");                                           // tag 1 = string operand
     emitter.instruction("jmp __rt_vsprintf_push_x86");                          // push the record
     emitter.label("__rt_vsprintf_mixed_x86");
+    emitter.instruction("mov rdi, QWORD PTR [rax]");                            // boxed Mixed cell pointer
+    emitter.instruction("test rdi, rdi");                                       // a null cell packs as the empty string
+    emitter.instruction("jz __rt_vsprintf_mixed_null_x86");                     // build the empty-string record directly
+    emitter.instruction("mov r9, QWORD PTR [rdi]");                             // concrete cell runtime tag
+    emitter.instruction("cmp r9, 0");                                           // integer cell?
+    emitter.instruction("je __rt_vsprintf_mixed_int_x86");                      // build the integer record directly
+    emitter.instruction("cmp r9, 1");                                           // string cell?
+    emitter.instruction("je __rt_vsprintf_mixed_str_x86");                      // build the string record directly
+    emitter.instruction("cmp r9, 2");                                           // float cell?
+    emitter.instruction("je __rt_vsprintf_mixed_float_x86");                    // build the float record directly
+    emitter.instruction("cmp r9, 3");                                           // bool cell?
+    emitter.instruction("je __rt_vsprintf_mixed_bool_x86");                     // build the bool record directly
+    emitter.instruction("cmp r9, 8");                                           // null cell?
+    emitter.instruction("je __rt_vsprintf_mixed_null_x86");                     // build the empty-string record directly
+    emitter.instruction("jmp __rt_vsprintf_mixed_slow_x86");                    // nested containers use the shared unbox helper
+    emitter.label("__rt_vsprintf_mixed_int_x86");
+    emitter.instruction("mov rsi, QWORD PTR [rdi + 8]");                        // payload = the concrete integer value
+    emitter.instruction("xor ecx, ecx");                                        // tag 0 = integer operand
+    emitter.instruction("jmp __rt_vsprintf_push_x86");                          // push the integer record
+    emitter.label("__rt_vsprintf_mixed_str_x86");
+    emitter.instruction("mov rsi, QWORD PTR [rdi + 8]");                        // payload = the string pointer
+    emitter.instruction("mov rcx, QWORD PTR [rdi + 16]");                       // concrete high word = string byte length
+    emitter.instruction("shl rcx, 8");                                          // pack the length above the tag byte
+    emitter.instruction("or rcx, 1");                                           // tag 1 = string operand
+    emitter.instruction("jmp __rt_vsprintf_push_x86");                          // push the string record
+    emitter.label("__rt_vsprintf_mixed_float_x86");
+    emitter.instruction("mov rsi, QWORD PTR [rdi + 8]");                        // payload = the double's bit pattern
+    emitter.instruction("mov rcx, 2");                                          // tag 2 = float operand
+    emitter.instruction("jmp __rt_vsprintf_push_x86");                          // push the float record
+    emitter.label("__rt_vsprintf_mixed_bool_x86");
+    emitter.instruction("mov rsi, QWORD PTR [rdi + 8]");                        // payload = the boolean value
+    emitter.instruction("mov rcx, 3");                                          // tag 3 = bool operand
+    emitter.instruction("jmp __rt_vsprintf_push_x86");                          // push the bool record
+    emitter.label("__rt_vsprintf_mixed_null_x86");
+    emitter.instruction("xor esi, esi");                                        // null string pointer, which every conversion guards
+    emitter.instruction("mov rcx, 1");                                          // (0 << 8) | 1 = a zero-length string record
+    emitter.instruction("jmp __rt_vsprintf_push_x86");                          // push the empty-string record
+    emitter.label("__rt_vsprintf_mixed_slow_x86");
     // Shared with `sprintf()` — see the AArch64 half for why this ladder moved into
     // `__rt_sprintf_pack_mixed`, and for the null-cell behaviour that changed with it. The loop's
     // own state lives in memory off `rbp` and is reloaded after the push, so the only registers
@@ -232,4 +308,35 @@ fn emit_vsprintf_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("call __rt_sprintf");                                   // format; pops the count*16 records, returns rax/rdx
     emitter.instruction("leave");                                               // restore rsp/rbp (records already discarded by __rt_sprintf)
     emitter.instruction("ret");                                                 // return the formatted string (rax/rdx)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::codegen_support::platform::Target;
+
+    /// Emits `__rt_vsprintf` for one target and returns the assembly text.
+    fn vsprintf_asm(target: Target) -> String {
+        let mut emitter = Emitter::new(target);
+        emit_vsprintf(&mut emitter);
+        emitter.output()
+    }
+
+    /// The mixed-array packer must build scalar records directly and keep the shared
+    /// unbox helper only for nested containers. This is what keeps `vsprintf()` from
+    /// paying a helper call per scalar element.
+    #[test]
+    fn mixed_scalar_records_use_direct_pack_paths() {
+        let arm = vsprintf_asm(Target::new(crate::codegen_support::platform::Platform::MacOS, Arch::AArch64));
+        assert!(arm.contains("__rt_vsprintf_mixed_int:"), "{arm}");
+        assert!(arm.contains("__rt_vsprintf_mixed_str:"), "{arm}");
+        assert!(arm.contains("__rt_vsprintf_mixed_null:"), "{arm}");
+        assert!(arm.contains("b __rt_vsprintf_mixed_slow"), "{arm}");
+
+        let x64 = vsprintf_asm(Target::new(crate::codegen_support::platform::Platform::Linux, Arch::X86_64));
+        assert!(x64.contains("__rt_vsprintf_mixed_int_x86:"), "{x64}");
+        assert!(x64.contains("__rt_vsprintf_mixed_str_x86:"), "{x64}");
+        assert!(x64.contains("__rt_vsprintf_mixed_null_x86:"), "{x64}");
+        assert!(x64.contains("jmp __rt_vsprintf_mixed_slow_x86"), "{x64}");
+    }
 }

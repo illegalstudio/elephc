@@ -8,7 +8,7 @@ Checks:
 3. Every cross-link in a generated page resolves to an actual file.
 4. Per-area indexes only contain builtins that belong to that area.
 5. No stray top-level files (everything should be inside an area folder).
-6. Backend availability and all 494 non-registry contract routes remain coherent.
+6. Backend availability and all 510 non-registry contract routes remain coherent.
 7. User-facing pages contain no runs of multiple blank lines.
 8. No override table in ``registry.py`` declares the same builtin twice.
 
@@ -137,17 +137,16 @@ def _check_backend_contracts(
     expected_counts = {
         "language-construct": 5,
         "dedicated-syntax": 1,
-        # Five hash_* (init/update/final/copy/pbkdf2), the 34 PHP-visible curl_* (published
-        # only by the canonical `--features curl` documentation configuration, see
-        # elephc_builtins/extract.py), the 54 xml_* / xmlwriter_* functions the xml prelude
-        # declares, the six procedural random entries, the internal random helper, the six
-        # fileinfo functions, 14 string helpers (addcslashes, levenshtein, parse_str, the five
-        # password_*, four sodium_crypto_box_*, strtok, version_compare), 12 array callbacks
-        # and lookups (array_find_key, array_change_key_case and the u*-assoc/ukey diff and
-        # intersect family), and the functions the image, mysqli/PDO, web, OPcache, tz,
-        # var_export, tokenizer and version preludes declare, all injected-prelude routes.
-        # array_first/array_last and error_log are native registry builtins.
-        "prelude": 429,
+        # Four hash_*, the 34 PHP-visible curl_* (published only by the canonical
+        # `--features curl` documentation configuration, see elephc_builtins/extract.py),
+        # the XML, SimpleXML, tokenizer random and fileinfo functions, the 24 tidy_*
+        # functions the tidy prelude declares, plus the full mysqli procedural surface
+        # and the remaining PDO, web, image, OPcache, tz, var_export and version
+        # functions, all implemented by injected preludes. The closed-world branch's
+        # preludes (proc_*, password_*, the array callback/lookup family, hash_pbkdf2,
+        # get_class_vars) join this count: RE-DERIVE it from the regenerated registry,
+        # the audit prints the real total.
+        "prelude": 447,
         # Calls rewritten from their enclosing lexical function frame.
         "compiler-transform": 3,
         # The date/calendar procedural families the name resolver rewrites onto the

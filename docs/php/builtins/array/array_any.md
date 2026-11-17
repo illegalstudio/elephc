@@ -1,8 +1,6 @@
 ---
 title: "array_any()"
 description: "Returns true when at least one array element satisfies the predicate callback."
-sidebar:
-  order: 2
 ---
 
 ## array_any()
@@ -21,8 +19,9 @@ Returns true when at least one array element satisfies the predicate callback.
 
 ## Availability
 
-- **Compiled (AOT)**: supported by the Elephc code generator.
-- **`eval()` (magician interpreter)**: supported through a declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/array/array_find.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/array/array_find.rs)).
+| Compiled (AOT) | Magician (eval) |
+|---|---|
+| Available | Not available yet |
 
 _No examples yet. Check `examples/` and `showcases/` for usage patterns._
 

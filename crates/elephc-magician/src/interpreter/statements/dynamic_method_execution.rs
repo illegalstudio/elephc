@@ -8,6 +8,23 @@
 //! - Called-class scope, reference modes, positional extraction, and writeback stay paired.
 
 use super::*;
+use crate::runtime_hooks::owner_frames::{with_runtime_owners, with_runtime_scope_owners};
+
+/// Calls a wrapper hook while consuming only the fresh operands synthesized by its caller.
+pub(in crate::interpreter) fn eval_dynamic_method_with_owned_values(
+    class_name: &str, called_class_name: &str, method: &EvalClassMethod,
+    object: RuntimeCellHandle, mut arguments: Vec<EvaluatedCallArg>,
+    context: &mut ElephcEvalContext, values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let owners: Vec<_> = arguments.iter().map(|argument| argument.value).collect();
+    for argument in &mut arguments { argument.value = argument.value.borrowed(); }
+    let result = with_runtime_owners(&owners, || {
+        eval_dynamic_method_with_values(
+            class_name, called_class_name, method, object, arguments, context, values,
+        )
+    });
+    finish_synthesized_method_arguments(result, owners, context, values)
+}
 
 /// Returns the source site a class method's body runs under: its declaring file, that file's
 /// directory, the method's first line and the `__FILE__` override naming the file.
@@ -190,6 +207,7 @@ pub(in crate::interpreter) fn eval_dynamic_method_with_values_and_ref_mode(
     context.push_call_frame(call_frame);
     let binding = match bind_evaluated_function_args_with_ref_mode(
         &qualified_method_name,
+        &qualified_method_name,
         method.params(),
         method.parameter_types(),
         method.parameter_defaults(),
@@ -323,7 +341,11 @@ pub(in crate::interpreter) fn eval_dynamic_method_with_values_and_ref_mode(
     let previous_call_line = context.call_line();
     let previous_strict_types = context.set_strict_types(method.strict_types());
     let previous_by_ref = context.set_returns_by_ref(method.returns_by_ref());
-    let result = binding_result.and_then(|()| execute_statements(method.body(), context, &mut method_scope, values));
+    let result = with_runtime_owners(&evaluated_args, || {
+        with_runtime_scope_owners(&mut method_scope, |scope| {
+            binding_result.and_then(|()| execute_statements(method.body(), context, scope, values))
+        })
+    });
     context.set_returns_by_ref(previous_by_ref);
     let persist_result = persist_static_locals(
         context,
@@ -342,6 +364,7 @@ pub(in crate::interpreter) fn eval_dynamic_method_with_values_and_ref_mode(
     let return_result = match (persist_result, writeback_result, result) {
         (Err(status), _, _) | (_, Err(status), _) | (_, _, Err(status)) => Err(status),
         (Ok(()), Ok(()), Ok(control)) => eval_declared_return_control_value(
+            &qualified_method_name,
             method.return_type(),
             Some(class_name),
             Some(called_class_name),
@@ -366,6 +389,7 @@ pub(in crate::interpreter) fn eval_dynamic_method_with_values_and_ref_mode(
     context.pop_called_class_scope();
     context.pop_class_scope();
     let return_result = finish_activation_scope(&mut method_scope, return_result, context, values);
+    let return_result = finish_native_bound_call(return_result, &evaluated_args, context, values);
     context.pop_call_frame();
     context.pop_function();
     if crate::eval_trace::enabled() {
@@ -447,6 +471,7 @@ pub(in crate::interpreter) fn eval_dynamic_static_method_with_values_and_ref_mod
     let call_frame = EvalCallFrame::method(class_name, method.name(), None, Some(frame_args), context);
     context.push_call_frame(call_frame);
     let binding = match bind_evaluated_function_args_with_ref_mode(
+        &qualified_method_name,
         &qualified_method_name,
         method.params(),
         method.parameter_types(),
@@ -548,7 +573,11 @@ pub(in crate::interpreter) fn eval_dynamic_static_method_with_values_and_ref_mod
     let previous_call_line = context.call_line();
     let previous_strict_types = context.set_strict_types(method.strict_types());
     let previous_by_ref = context.set_returns_by_ref(method.returns_by_ref());
-    let result = binding_result.and_then(|()| execute_statements(method.body(), context, &mut method_scope, values));
+    let result = with_runtime_owners(&evaluated_args, || {
+        with_runtime_scope_owners(&mut method_scope, |scope| {
+            binding_result.and_then(|()| execute_statements(method.body(), context, scope, values))
+        })
+    });
     context.set_returns_by_ref(previous_by_ref);
     let persist_result = persist_static_locals(
         context,
@@ -567,6 +596,7 @@ pub(in crate::interpreter) fn eval_dynamic_static_method_with_values_and_ref_mod
     let return_result = match (persist_result, writeback_result, result) {
         (Err(status), _, _) | (_, Err(status), _) | (_, _, Err(status)) => Err(status),
         (Ok(()), Ok(()), Ok(control)) => eval_declared_return_control_value(
+            &qualified_method_name,
             method.return_type(),
             Some(class_name),
             Some(called_class_name),
@@ -591,6 +621,7 @@ pub(in crate::interpreter) fn eval_dynamic_static_method_with_values_and_ref_mod
     context.pop_called_class_scope();
     context.pop_class_scope();
     let return_result = finish_activation_scope(&mut method_scope, return_result, context, values);
+    let return_result = finish_native_bound_call(return_result, &evaluated_args, context, values);
     context.pop_call_frame();
     context.pop_function();
     return_result
@@ -602,6 +633,7 @@ pub(in crate::interpreter) fn positional_args(
 ) -> Vec<EvaluatedCallArg> {
     args.into_iter()
         .map(|value| EvaluatedCallArg {
+            evaluation_owner: None,
             name: None,
             value: value.borrowed(),
             ref_target: None,

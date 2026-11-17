@@ -279,8 +279,8 @@ pub(super) fn eval_reflection_function_method_target(
     };
     let static_method =
         eval_reflection_eval_method_static_target(declaring_class, method_name, context);
-    // An eval method answers from its declaration, where only an `&get` hook (stored under its
-    // synthetic name) can return by reference, and an abstract or interface `&get` contract,
+    // An eval method answers from its declaration, including an `&get` hook stored under its
+    // synthetic name, and an abstract or interface `&get` contract,
     // which has no accessor, from the property declaring it; a generated AOT method from the
     // flag its metadata row carries.
     let eval_method_name = eval_reflection_property_hook_synthetic_method_name(method_name)
@@ -372,7 +372,9 @@ pub(super) fn eval_reflection_closure_target_method(
             native_class.clone().unwrap_or_else(|| class_name.clone()),
             method.clone(),
         )),
-        EvalClosureObjectTarget::Named(_) | EvalClosureObjectTarget::BoundNamed { .. } => None,
+        EvalClosureObjectTarget::Named(_)
+        | EvalClosureObjectTarget::BoundNamed { .. }
+        | EvalClosureObjectTarget::NativeDescriptor { .. } => None,
     }
 }
 
@@ -718,6 +720,7 @@ fn eval_reflection_closure_target_this_result(
         | EvalClosureObjectTarget::InvokableObject { object }
         | EvalClosureObjectTarget::ObjectMethod { object, .. } => values.retain(*object),
         EvalClosureObjectTarget::Named(_)
+        | EvalClosureObjectTarget::NativeDescriptor { .. }
         | EvalClosureObjectTarget::BoundNamed {
             bound_this: None, ..
         }
@@ -785,6 +788,7 @@ fn eval_reflection_closure_target_scope_class_name(
             eval_reflection_closure_target_scope_class_name(target, owner_context, values)
         }
         EvalClosureObjectTarget::Named(_) => Ok(None),
+        EvalClosureObjectTarget::NativeDescriptor { .. } => Ok(None),
         EvalClosureObjectTarget::BoundNamed {
             name,
             bound_this,
@@ -838,6 +842,7 @@ fn eval_reflection_closure_target_called_class_name(
             eval_reflection_closure_target_called_class_name(target, owner_context, values)
         }
         EvalClosureObjectTarget::Named(_) => Ok(None),
+        EvalClosureObjectTarget::NativeDescriptor { .. } => Ok(None),
         EvalClosureObjectTarget::BoundNamed {
             bound_this,
             bound_scope,

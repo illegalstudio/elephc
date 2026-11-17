@@ -311,6 +311,8 @@ rejected, matching PHP.
 ## switch / case / default
 
 Standard PHP switch with fall-through semantics. Use `break` to prevent fall-through.
+Case labels use loose equality (`==`): `true` matches `case 2`, while an array
+does not match an integer label, including when passed through `iterable`.
 
 ```php
 <?php
@@ -399,29 +401,109 @@ readability choice rather than a templating feature.
 
 ## goto
 
-**`goto` is not supported.** Both the statement and its target label are
-rejected at compile time:
+`goto` jumps to a label in the same function, method, closure, or file. A label
+is a name followed by a colon at statement position.
 
-```text
-error[2:1]: `goto` is not supported: elephc compiles structured control flow
-only, so a jump to an arbitrary label inside a function has no lowering.
-Please restructure the jump with `break`, `continue`, a loop flag, or an early
-`return`
+```php
+<?php
+function fetch(string $url): string {
+    $attempt = 0;
+    retry:
+    try {
+        $attempt++;
+        return download($url);
+    } catch (RuntimeException $e) {
+        if ($attempt < 3) goto retry;
+        throw $e;
+    }
+}
 
-error[4:1]: `goto` labels are not supported: the label `end:` can only be
-reached by `goto`, which elephc does not support.
+foreach ($rows as $row) {
+    foreach ($row as $cell) {
+        if ($cell === $needle) goto found;
+    }
+}
+echo "not found";
+goto done;
+found:
+echo "found";
+done:
 ```
 
-elephc analyses control flow structurally — termination and reachability
-analysis, flow-sensitive type narrowing, loop and branch pruning, and constant
-propagation all assume the statement tree describes the CFG. An arbitrary
-intra-function jump breaks that assumption, so the construct is rejected outright
-rather than partially supported. Use `break` (including `break 2;`), `continue`,
-a loop flag, or an early `return` instead; those cover PHP's common `goto` use
-of bailing out of nested loops.
+The rules are PHP's, with PHP's diagnostics:
 
-`goto` is still a reserved word, so it cannot be used as a function name — but,
-as in PHP, it remains valid as a method or constant name (`$obj->goto()`).
+- The label must be in the same function or file. A function, method, or
+  closure body is a scope of its own, and so is each included file:
+  `'goto' to undefined label 'name'`. The braced `namespace` blocks of a file
+  share the file's scope.
+- A label name can be declared once per scope, whether or not a `goto` targets
+  it: `Label 'name' already defined`. Label names are case-sensitive; the
+  keyword itself is not.
+- A jump cannot enter a loop or a `switch` from outside it:
+  `'goto' into loop or switch statement is disallowed`. Jumping out of them is
+  fine, and so is a jump between two points of the same loop body or `case`.
+- A jump cannot enter or leave a `finally` block:
+  `jump into a finally block is disallowed`,
+  `jump out of a finally block is disallowed`. A jump whose label is in the same
+  `finally` block is allowed.
+
+Leaving a `try` block with `goto` runs its `finally` block first, as `break` and
+`return` do, and leaving a `foreach` releases its iterator. A `finally` block
+that throws on the way cancels the jump, and execution continues from the
+`catch` that handles the exception. A jump may land
+inside an `if`/`elseif`/`else` branch or inside a `try` body. The branch
+condition is not evaluated, and a `try` body entered this way is still covered
+by its `catch` and `finally` clauses. A variable whose assignment the jump
+skipped keeps the value it had before.
+
+A few shapes that PHP accepts are refused at compile time:
+
+- a jump into a `catch` block from outside that block;
+- a jump from one `case` of a `switch` to a label in another `case` of the same
+  `switch`;
+- a jump from one braced `namespace` block of a file to another;
+- a jump that skips or repeats a `namespace`, `use` or top-level `const`
+  declaration, that is, one written between the `goto` and its label. A
+  `namespace` or `use` applies to the code written after it, and PHP defines a
+  `const` only when its statement runs, while elephc binds constants at compile
+  time; elephc refuses the jump instead of binding the name on every path.
+
+Move the label out of the `catch` block or the `switch`, or the declaration out
+of the range the jump covers, to keep the same flow. A declaration written
+between two jumps that do not overlap is fine.
+
+A top-level function or class declared between a `goto` and its label stays
+declared: elephc registers the top-level functions and classes of a file for
+the whole program, with or without a `goto`. A declaration inside a conditional
+or inside another function is not one of those, and a jump does not change that
+either. PHP agrees for top-level functions and for the classes it binds early.
+Other declarations exist in PHP only once their statement has run, so a jump
+over one leaves it undeclared there: for example an enum, a class that
+implements an interface, uses a trait or extends a parent that is not bound
+yet, an interface that extends another, or a trait that uses a trait.
+
+`goto` is a reserved word, so it cannot be used as a function name. As in PHP,
+it remains valid as a method or constant name (`$obj->goto()`).
+
+A label may be named like a type (`int:`, `string:`, `mixed:`), as in PHP. In
+compiled code a label cannot be named `true`, `false`, `null`, `self`, `parent`
+or `enum`, which PHP and `eval()` accept.
+
+### How it is compiled
+
+elephc reads control flow from the statement tree: reachability, type
+narrowing, constant propagation and code generation all work on `if`, loops and
+`switch`, without a control-flow graph. Each file's jumps are therefore
+rewritten into those statements right after parsing. The statements between the
+first and the last one involved in a jump are wrapped in a loop; a `goto`
+records which label it wants in a hidden local and restarts that loop, which
+skips ahead to the label. Code outside that range is left as written.
+
+A jump costs one store, one branch back, and a comparison per label it skips.
+The hidden local is not a PHP variable: its name cannot be written in PHP
+source and it does not appear in `get_defined_vars()`. See
+[How elephc works](../internals/how-elephc-works.md#phase-4-conditional-compilation)
+for the pass itself.
 
 ## match expression
 

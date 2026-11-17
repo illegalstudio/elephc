@@ -121,6 +121,8 @@ fn stmt_has_includes(stmt: &Stmt) -> bool {
         | StmtKind::FunctionVariantMark { .. }
         | StmtKind::IfDef { .. }
         | StmtKind::Break(_)
+        | StmtKind::Goto(_)
+        | StmtKind::GotoLabel(_)
         | StmtKind::Continue(_)
         | StmtKind::NamespaceDecl { .. }
         | StmtKind::UseDecl { .. }

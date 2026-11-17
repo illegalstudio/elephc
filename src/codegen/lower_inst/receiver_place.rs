@@ -80,9 +80,9 @@ impl ReceiverPlace {
         if let Some(Immediate::LocalSlot(slot)) = inst_ref.immediate {
             return match inst_ref.op {
                 Op::LoadLocal => Ok(Self::Local(slot)),
-                Op::LoadRefCell if !ctx.local_ref_cell_representation_is_definite(slot)
+                Op::LoadRefCell | Op::LoadRefCellValue if !ctx.local_ref_cell_representation_is_definite(slot)
                     && !ctx.local_ref_cell_representation_is_dynamic(slot) => Ok(Self::Local(slot)),
-                Op::LoadRefCell => Ok(Self::RefCell(slot)),
+                Op::LoadRefCell | Op::LoadRefCellValue => Ok(Self::RefCell(slot)),
                 // A function `static` is a writable place too, just not a frame one. Leaving it
                 // `Opaque` made every relocating mutation on a `static` array publish its new
                 // pointer nowhere — silently, because `Opaque`'s write-back is `Ok(())` and only

@@ -147,10 +147,18 @@ pub(super) fn builtin_reflection_owner_class(
             ));
             methods.push(builtin_reflection_lazy_declaring_class_method());
         } else {
+            // An enum case's declaring class is always an enum, so its getter is typed with the
+            // `ReflectionEnum` the class factory builds; the other owners' declaring class may or
+            // may not be an enum and keep the `ReflectionClass` base type.
+            let declaring_class = if matches!(name, "ReflectionEnumUnitCase" | "ReflectionEnumBackedCase") {
+                "ReflectionEnum"
+            } else {
+                "ReflectionClass"
+            };
             methods.push(builtin_reflection_class_object_method(
                 "getDeclaringClass",
                 "__declaring_class",
-                "ReflectionClass",
+                declaring_class,
             ));
         }
     }

@@ -6,6 +6,8 @@
 //!
 //! Key details:
 //! - Preserves source-order evaluation, EIR typing, effects, and ownership contracts.
+//! - A scoped read that resolves to a deprecated builtin constant raises `E_DEPRECATED`;
+//!   `static::` decides it per called class.
 
 use super::*;
 use crate::ir_lower::ownership;
@@ -41,9 +43,19 @@ pub(super) fn lower_first_class_callable(ctx: &mut LoweringContext<'_, '_>, targ
     if let CallableTarget::Function(name) = target {
         super::late_bound_call::guard_runtime_function_binding(ctx, name.as_str(), expr);
     }
+    lower_callable_descriptor(ctx, target, expr, Op::FirstClassCallableNew)
+}
+
+/// Lowers an implicit string or array callable without creating PHP Closure identity.
+pub(super) fn lower_callable_value(ctx: &mut LoweringContext<'_, '_>, target: &CallableTarget, expr: &Expr) -> LoweredValue {
+    lower_callable_descriptor(ctx, target, expr, Op::CallableValueNew)
+}
+
+/// Shares invocation metadata while preserving whether the source created a PHP object.
+fn lower_callable_descriptor(ctx: &mut LoweringContext<'_, '_>, target: &CallableTarget, expr: &Expr, op: Op) -> LoweredValue {
     if let CallableTarget::Method { object, method } = target {
         let receiver = lower_expr(ctx, object);
-        if method == "__invoke" {
+        if op == Op::FirstClassCallableNew && method == "__invoke" {
             let receiver_type = ctx.builder.value_php_type(receiver.value).codegen_repr();
             if receiver_type == PhpType::Callable {
                 return receiver;
@@ -73,18 +85,18 @@ pub(super) fn lower_first_class_callable(ctx: &mut LoweringContext<'_, '_>, targ
                 return normalized;
             }
         }
-        return lower_instance_callable_from_receiver(ctx, receiver, method, expr.span);
+        return lower_instance_callable_descriptor(ctx, receiver, method, expr.span, op);
     }
     let data = ctx.intern_string(&callable_target_name(target));
     ctx.emit_value(
-        Op::FirstClassCallableNew,
+        op,
         Vec::new(),
         Some(Immediate::ProfiledData {
             data,
             strict_php: crate::strict_php::is_enabled(),
         }),
         PhpType::Callable,
-        Op::FirstClassCallableNew.default_effects(),
+        op.default_effects(),
         Some(expr.span),
     )
 }
@@ -93,11 +105,18 @@ pub(super) fn lower_first_class_callable(ctx: &mut LoweringContext<'_, '_>, targ
 pub(super) fn lower_instance_callable_from_receiver(
     ctx: &mut LoweringContext<'_, '_>, receiver: LoweredValue, method: &str, span: crate::span::Span,
 ) -> LoweredValue {
+    lower_instance_callable_descriptor(ctx, receiver, method, span, Op::FirstClassCallableNew)
+}
+
+/// Captures the receiver once for either a PHP Closure or an internal callable value.
+fn lower_instance_callable_descriptor(
+    ctx: &mut LoweringContext<'_, '_>, receiver: LoweredValue, method: &str, span: crate::span::Span, op: Op,
+) -> LoweredValue {
     let data = ctx.intern_string(&format!("object::{method}"));
     ctx.emit_value(
-        Op::FirstClassCallableNew, vec![receiver.value],
+        op, vec![receiver.value],
         Some(Immediate::ProfiledData { data, strict_php: crate::strict_php::is_enabled() }),
-        PhpType::Callable, Op::FirstClassCallableNew.default_effects(), Some(span),
+        PhpType::Callable, op.default_effects(), Some(span),
     )
 }
 
@@ -199,11 +218,21 @@ pub(super) fn lower_object_class_name(
 pub(super) fn lower_scoped_constant(ctx: &mut LoweringContext<'_, '_>, receiver: &StaticReceiver, name: &str, expr: &Expr) -> LoweredValue {
     let class_name = scoped_constant_receiver_name(ctx, receiver);
     let normalized_class_name = class_name.trim_start_matches('\\');
-    if ctx
+    // The first fetch of any constant or case of a backed enum initializes the enum.
+    super::static_method_calls::emit_backed_enum_initialization(ctx, normalized_class_name, expr.span);
+    let enum_case = ctx
         .enums
         .get(normalized_class_name)
-        .is_some_and(|enum_info| enum_info.cases.iter().any(|case| case.name == name))
-    {
+        .and_then(|enum_info| enum_info.cases.iter().find(|case| case.name == name))
+        .map(|case| (case.deprecated_mt_rand_php, case.span));
+    if let Some((deprecated, declaration_span)) = enum_case {
+        // php-src evaluates enum case values lazily: the deprecated backing-value read
+        // deprecates once, when the case is first fetched, at the case declaration line.
+        if deprecated {
+            if let Some(span) = declaration_span {
+                super::constants::emit_mt_rand_php_deprecation(ctx, span, span);
+            }
+        }
         let key = format!("{}::{}", normalized_class_name, name);
         let data = ctx.intern_string(&key);
         return ctx.emit_owned_value(
@@ -218,8 +247,9 @@ pub(super) fn lower_scoped_constant(ctx: &mut LoweringContext<'_, '_>, receiver:
     if matches!(receiver, StaticReceiver::Static) {
         return lower_late_static_scoped_constant(ctx, name, expr);
     }
+    emit_inherited_constant_deprecation(ctx, &class_name, name, expr);
     if let Some(value) = ctx.scoped_constant_value(&class_name, name) {
-        return lower_expr(ctx, &value);
+        return lower_class_constant_value(ctx, &class_name, name, &value, expr.span);
     }
     // A class the closed-world compilation never saw (a runtime-autoloaded one) has its
     // constants read through the eval bridge, which needs this function's eval context. Without
@@ -312,6 +342,60 @@ fn release_receiver_temporary(ctx: &mut LoweringContext<'_, '_>, receiver: Lower
     }
 }
 
+/// Raises PHP's `E_DEPRECATED` when a scoped constant read that reaches lowering resolves to a
+/// deprecated builtin class constant: `DateTimeInterface::RFC7231` read as `self::RFC7231`,
+/// `parent::RFC7231`, `static::RFC7231`, through a user subclass of `DateTime`, or through a
+/// builtin receiver left in a constant expression. The message names the declaring class, as
+/// php-src does. Ordinary reads that name a builtin receiver never get here: the name resolver
+/// rewrote them into an inline deprecation.
+fn emit_inherited_constant_deprecation(
+    ctx: &mut LoweringContext<'_, '_>,
+    class_name: &str,
+    name: &str,
+    expr: &Expr,
+) {
+    if !elephc_builtin_contract::is_deprecated_class_constant_name(name) {
+        return;
+    }
+    let Some(message) = crate::ir_lower::initializer_reads::scoped_read_deprecation(ctx, class_name, name) else {
+        return;
+    };
+    match crate::ir_lower::initializer_evaluation::current_frame() {
+        Some(frame) => crate::ir_lower::initializer_evaluation::emit_node_read(ctx, &frame, message, expr.span),
+        None => super::constants::emit_constant_read_deprecation(ctx, message, expr.span),
+    }
+}
+
+/// Lowers the initializer of user class constant `class_name::name` read at `read`: the
+/// first evaluation php-src makes of it, so its deprecated reads report once, at the lines
+/// php-src reports them (see `crate::ir_lower::initializer_evaluation`).
+fn lower_class_constant_value(
+    ctx: &mut LoweringContext<'_, '_>,
+    class_name: &str,
+    name: &str,
+    value: &Expr,
+    read: crate::span::Span,
+) -> LoweredValue {
+    with_class_constant_frame(ctx, class_name, name, value, read, |ctx| lower_expr(ctx, value))
+}
+
+/// Runs `lower` while the first evaluation of class constant `class_name::name` (whose
+/// initializer is `value`, read at `read`) is the innermost initializer frame.
+fn with_class_constant_frame<T>(
+    ctx: &mut LoweringContext<'_, '_>,
+    class_name: &str,
+    name: &str,
+    value: &Expr,
+    read: crate::span::Span,
+    lower: impl FnOnce(&mut LoweringContext<'_, '_>) -> T,
+) -> T {
+    use crate::ir_lower::initializer_evaluation::{current_frame, with_frame, InitializerFrame};
+    let owner = ctx.scoped_constant_owner(class_name, name).unwrap_or_else(|| class_name.to_string());
+    let lone = crate::ir_lower::initializer_reads::lone_global_read(ctx, Some(&owner), value);
+    let frame = InitializerFrame::class_constant(current_frame().as_ref(), read, &owner, name, lone);
+    with_frame(frame, || lower(ctx))
+}
+
 /// Returns the class name to use for a scoped constant lookup.
 pub(super) fn scoped_constant_receiver_name(ctx: &LoweringContext<'_, '_>, receiver: &StaticReceiver) -> String {
     match receiver {
@@ -347,10 +431,12 @@ fn lower_runtime_class_scoped_constant(
     expr: &Expr,
 ) -> LoweredValue {
     let fallback_value = ctx.scoped_constant_value(base_class, name);
-    let candidates = late_static_constant_candidates(ctx, base_class, name);
+    let candidates = late_static_deprecation_aware_candidates(ctx, base_class, name);
     if candidates.is_empty() {
+        // Every called class reads the lexical declaration, so it decides the deprecation.
+        emit_inherited_constant_deprecation(ctx, base_class, name, expr);
         if let Some(value) = fallback_value {
-            return lower_expr(ctx, &value);
+            return lower_class_constant_value(ctx, base_class, name, &value, expr.span);
         }
         return lower_scoped_constant_fallback(ctx, base_class, name, expr);
     }
@@ -393,14 +479,22 @@ fn lower_runtime_class_scoped_constant(
         .as_ref()
         .map(|v| v.clone())
         .unwrap_or_else(|| Expr::new(ExprKind::Null, expr.span));
-    store_expr_into_temp(ctx, &temp_name, result_type.clone(), &fallback_expr, expr.span);
+    // Each arm reads one declaration, and that declaration decides the deprecation: the
+    // fallback arm reads the lexical one, a candidate arm its own class's.
+    emit_inherited_constant_deprecation(ctx, &base_class, name, expr);
+    with_class_constant_frame(ctx, &base_class, name, &fallback_expr, expr.span, |ctx| {
+        store_expr_into_temp(ctx, &temp_name, result_type.clone(), &fallback_expr, expr.span)
+    });
     branch_to(ctx, merge);
     for (block, class_name, _class_id) in branch_labels {
         ctx.builder.position_at_end(block);
         ctx.restore_initialized_slots(split_initialized.clone());
+        emit_inherited_constant_deprecation(ctx, &class_name, name, expr);
         let value = ctx.scoped_constant_value(&class_name, name)
             .unwrap_or_else(|| fallback_expr.clone());
-        store_expr_into_temp(ctx, &temp_name, result_type.clone(), &value, expr.span);
+        with_class_constant_frame(ctx, &class_name, name, &value, expr.span, |ctx| {
+            store_expr_into_temp(ctx, &temp_name, result_type.clone(), &value, expr.span)
+        });
         branch_to(ctx, merge);
     }
     ctx.builder.position_at_end(merge);
@@ -671,6 +765,36 @@ pub(super) fn late_static_constant_candidates(
             continue;
         }
         candidates.push((class_name.clone(), class_info.class_id));
+    }
+    candidates.sort_by_key(|(_, id)| *id);
+    candidates
+}
+
+/// Returns the `static::CONST` dispatch candidates: the descendants whose value differs from
+/// the lexical one ([`late_static_constant_candidates`]), plus those whose declaration differs
+/// in deprecation from the lexical one even when the value is the same. A redeclared
+/// `RFC7231` with the builtin's exact string is silent while the inherited one deprecates, so
+/// the called class has to pick the arm.
+fn late_static_deprecation_aware_candidates(
+    ctx: &LoweringContext<'_, '_>,
+    base_class: &str,
+    const_name: &str,
+) -> Vec<(String, u64)> {
+    let mut candidates = late_static_constant_candidates(ctx, base_class, const_name);
+    if !elephc_builtin_contract::is_deprecated_class_constant_name(const_name) {
+        return candidates;
+    }
+    let base_deprecation = crate::ir_lower::initializer_reads::scoped_read_deprecation(ctx, base_class, const_name);
+    for (class_name, class_info) in ctx.classes {
+        if class_name == base_class
+            || candidates.iter().any(|(candidate, _)| candidate == class_name)
+            || !is_same_or_descendant_class(ctx, class_name, base_class)
+        {
+            continue;
+        }
+        if crate::ir_lower::initializer_reads::scoped_read_deprecation(ctx, class_name, const_name) != base_deprecation {
+            candidates.push((class_name.clone(), class_info.class_id));
+        }
     }
     candidates.sort_by_key(|(_, id)| *id);
     candidates

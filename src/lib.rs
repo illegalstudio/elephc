@@ -91,7 +91,7 @@ mod is_callable_prelude;
 pub mod opcache_preload_sources;
 pub mod scoped_include_units;
 pub(crate) mod closure_from_callable_prelude;
-pub(crate) mod locale_prelude;
+pub(crate) mod intl_locale_prelude;
 pub(crate) mod bcmath_number_prelude;
 pub(crate) mod stdclass_by_ref_walk;
 pub(crate) mod php_token_prelude;
@@ -155,6 +155,8 @@ pub mod func_args;
 pub mod generics;
 pub mod literal_format_split;
 pub(crate) mod highlight_prelude;
+/// Lowers `goto` and its labels into structured control flow right after parsing.
+pub mod goto_lowering;
 /// The program-wide set of names some body declares `global`, shared by the checker and lowering.
 pub(crate) mod global_decls;
 /// `$GLOBALS` literal-key aliasing onto ordinary global storage.
@@ -257,7 +259,10 @@ pub mod types;
 /// Conditionally-injected timezone-introspection prelude (extern + marshalling).
 pub mod tz_prelude;
 pub mod xml_prelude;
+mod simplexml_prelude;
+pub mod tidy_prelude;
 pub mod fileinfo_prelude;
+pub mod locale_prelude;
 pub mod tokenizer_prelude;
 /// Conditionally-injected `var_export` prelude (elephc-PHP rendering function).
 pub mod var_export_prelude;

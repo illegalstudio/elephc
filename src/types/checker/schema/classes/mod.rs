@@ -22,9 +22,11 @@ mod methods;
 mod properties;
 mod property_defaults;
 mod state;
+mod trait_requirements;
 
 pub(crate) use property_defaults::validate_trait_property_defaults;
-pub(crate) use property_defaults::collect_trait_default_origins;
+pub(crate) use property_defaults::{collect_trait_default_origins, collect_trait_property_origins, TraitPropertyOrigins};
+pub(crate) use trait_requirements::{collect_trait_method_requirements, TraitMethodRequirements};
 pub(crate) use constants::validate_compile_time_default_in_scope;
 pub(crate) use constants::normalize_lexical_default_in_scope;
 pub(crate) use constants::normalize_free_function_default_in_scope;
@@ -97,8 +99,16 @@ fn build_class_info_recursive_untagged(
     }
 
     let class = load_class(class_name, class_map)?;
-    build_loaded_class_info(class_name, class, class_map, checker, next_class_id, building)
-        .map_err(|error| locate_at_declaration(error, class_span_of(class_name, class_map)))
+    let result = build_loaded_class_info(class_name, class, class_map, checker, next_class_id, building)
+        .map_err(|error| locate_at_declaration(error, class_span_of(class_name, class_map)));
+    // A failed build must not poison later sibling builds with a stale "circular inheritance"
+    // diagnostic: the class is genuinely absent, but it is not still being built.
+    building.remove(class_name);
+    // The hint exists only while this class's own ancestry is unresolved. Once the build ends,
+    // `is_subclass_of` reads the registered `ClassInfo`, so a stale entry could otherwise answer
+    // for a later same-named class after a failed build.
+    checker.pending_class_parents.remove(class_name);
+    result
 }
 
 /// The declaration span of `class_name`, when the program declares it.
@@ -174,12 +184,43 @@ fn build_loaded_class_info(
     // from compiler-generated statements.
     let is_internal =
         !class.span.is_from_source() || checker.internal_class_decls.contains(&class.name);
-    let class_info = state.into_class_info(
+    let mut class_info = state.into_class_info(
         *next_class_id,
         &class,
         constructor_param_to_prop,
         is_internal,
     )?;
+    // php-src evaluates a class's own property defaults in source order, then the ones its
+    // traits import. Flattening puts trait properties first and lets a compatible class
+    // redeclaration take the trait slot, so the class's source order comes from the
+    // declaration itself.
+    let imported = checker.trait_imported_properties.get(&class.name);
+    let is_imported = |name: &str| imported.is_some_and(|names| names.contains(name));
+    let own: Vec<String> = match checker.trait_property_origins.direct_order.get(&class.name) {
+        Some(direct) => direct.clone(),
+        None => class
+            .properties
+            .iter()
+            .filter(|property| !is_imported(&property.name))
+            .map(|property| property.name.clone())
+            .collect(),
+    };
+    class_info.property_initialization_order = own
+        .into_iter()
+        .chain(
+            class
+                .properties
+                .iter()
+                .filter(|property| is_imported(&property.name))
+                .map(|property| property.name.clone()),
+        )
+        .collect();
+    class_info.trait_collision_defaults = checker
+        .trait_property_origins
+        .collision_defaults
+        .get(&class.name)
+        .cloned()
+        .unwrap_or_default();
     checker.classes.insert(class.name.clone(), class_info);
     *next_class_id += 1;
     building.remove(class_name);
@@ -239,6 +280,9 @@ fn resolve_parent_info(
             ),
         ));
     }
+    checker
+        .pending_class_parents
+        .insert(class_name.to_string(), parent_name.clone());
     build_class_info_recursive(parent_name, class_map, checker, next_class_id, building)?;
     checker
         .classes

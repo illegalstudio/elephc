@@ -30,8 +30,11 @@ pub use oop::{
     Attribute, AttributeGroup, ClassConst, ClassMethod, ClassProperty, EnumCaseDecl,
     PropertyHooks, TraitAdaptation, TraitUse, Visibility,
 };
-pub use stmt::{CatchClause, ClassLikeKind, Program, Stmt, StmtKind, UseItem, UseKind};
-pub use types::{GenericDecl, TypeExpr, TypeParam, Variance};
+pub use stmt::{
+    class_binding_mark_class, class_binding_mark_label, CatchClause, ClassLikeKind, Program, Stmt,
+    StmtKind, UseItem, UseKind,
+};
+pub use types::{GenericDecl, NativeHint, TypeExpr, TypeParam, Variance};
 
 /// Name prefix of the temporary a nested append (`$a[$k][] = $v`) reads its bucket into.
 ///
@@ -54,6 +57,10 @@ pub const NESTED_APPEND_TEMP_PREFIX: &str = "__elephc_napp_";
 /// something the native backend lays out (the element read back null), so the class that writes it
 /// is handed to the runtime autoloader (or the build is refused) instead of miscompiling.
 pub const ARRAY_PROPERTY_REF_TEMP_PREFIX: &str = "__elephc_refsrc_";
+
+/// Captures introduced by statement write planners, owned only until that statement ends.
+pub const SCOPED_WRITE_TEMP_PREFIX: &str = "__elephc_scoped_write_";
+
 /// Attribute the include rewrite puts on the `break` an included file's `return` becomes.
 ///
 /// `resolver::engine_includes::confine_nested_returns` turns each `return` of an included file

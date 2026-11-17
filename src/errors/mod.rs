@@ -85,8 +85,6 @@ pub enum WarningKind {
     /// Ordinary compiler warning.
     #[default]
     Warning,
-    /// PHP deprecation notice raised while compiling a constant expression.
-    Deprecation,
 }
 
 #[derive(Debug, Clone)]
@@ -219,15 +217,6 @@ impl CompileWarning {
             span,
             message: message.to_string(),
             kind: WarningKind::Warning,
-        }
-    }
-
-    /// Creates a deprecation diagnostic with the given span and message.
-    pub fn deprecation(span: Span, message: &str) -> Self {
-        Self {
-            span,
-            message: message.to_string(),
-            kind: WarningKind::Deprecation,
         }
     }
 }

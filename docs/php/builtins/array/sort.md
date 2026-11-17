@@ -1,28 +1,26 @@
 ---
 title: "sort()"
 description: "Sorts an array in ascending order. In compiled (AOT) code, arrays with runtime-typed (`mixed`) elements, including declared PHP array parameters, are accepted when every element is `null`, `bool`, `int`, `float`, or `string`. Keys are reindexed and value copies keep their original order. A non-scalar element (nested array, object, resource, or boxed callable) terminates execution before sorting with `Fatal error: sorting Mixed arrays containing non-scalar values is not supported`. This deliberate restriction does not implement full PHP container ordering."
-sidebar:
-  order: 81
 ---
 
 ## sort()
 
 ```php
-function sort(array $array, int $flags = 0): bool
+function sort(array $array): bool
 ```
 
 Sorts an array in ascending order. In compiled (AOT) code, arrays with runtime-typed (`mixed`) elements, including declared PHP array parameters, are accepted when every element is `null`, `bool`, `int`, `float`, or `string`. Keys are reindexed and value copies keep their original order. A non-scalar element (nested array, object, resource, or boxed callable) terminates execution before sorting with `Fatal error: sorting Mixed arrays containing non-scalar values is not supported`. This deliberate restriction does not implement full PHP container ordering.
 
 **Parameters**:
 - `$array` (`array`), passed by reference
-- `$flags` (`int`), default `0`, optional
 
 **Returns**: `bool`
 
 ## Availability
 
-- **Compiled (AOT)**: supported by the Elephc code generator.
-- **`eval()` (magician interpreter)**: supported through a declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/array/sort.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/array/sort.rs)).
+| Compiled (AOT) | Magician (eval) |
+|---|---|
+| Available | Available |
 
 _No examples yet. Check `examples/` and `showcases/` for usage patterns._
 

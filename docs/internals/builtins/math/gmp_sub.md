@@ -1,8 +1,6 @@
 ---
 title: "gmp_sub() - internals"
 description: "Compiler internals for gmp_sub(): lowering path, type checks, and runtime helpers."
-sidebar:
-  order: 654
 ---
 
 ## `gmp_sub()` - internals
@@ -10,7 +8,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/gmp/gmp_sub.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/gmp/gmp_sub.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:752](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L752) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 

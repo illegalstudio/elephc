@@ -14,6 +14,7 @@ use crate::codegen::{
     abi, emit_array_value_type_stamp,
     emit_box_current_value_as_mixed, Result,
 };
+use crate::ir::Immediate;
 use crate::ir::Instruction;
 use crate::ir::Op;
 use crate::types::PhpType;
@@ -75,8 +76,48 @@ pub(super) fn lower_diagnostic_caller_line(ctx: &mut FunctionContext<'_>) {
     ctx.emitter.label(&done);
 }
 
+/// Publishes the source file/line read by a warning emitted on this instruction's cold path.
+pub(super) fn publish_diagnostic_site(ctx: &mut FunctionContext<'_>, inst: &Instruction) {
+    if inst.span.is_some_and(|span| !span.is_from_source()) {
+        return;
+    }
+    let scratch = abi::int_result_reg(ctx.emitter);
+    abi::emit_symbol_address(ctx.emitter, scratch, "_script_source_file");
+    abi::emit_store_reg_to_symbol(ctx.emitter, scratch, "_php_diagnostic_file", 0);
+    abi::emit_load_symbol_to_reg(ctx.emitter, scratch, "_script_source_file_len", 0);
+    abi::emit_store_reg_to_symbol(ctx.emitter, scratch, "_php_diagnostic_file_len", 0);
+    abi::emit_load_int_immediate(ctx.emitter, scratch, i64::from(inst.span.map_or(0, |span| span.line)));
+    abi::emit_store_reg_to_symbol(ctx.emitter, scratch, "_php_diagnostic_line", 0);
+}
+
 /// Publishes the caller's source line before a nested PHP call so the callee's activation can record it.
 pub(super) fn prepare_call_site(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+) -> Result<()> {
+    if matches!(
+        inst.immediate,
+        Some(Immediate::RuntimeCall(
+            crate::ir::RuntimeCallTarget::Function(
+                crate::ir::RuntimeFnId::ArraySumIntCached
+            )
+        ))
+    ) {
+        return Ok(());
+    }
+    publish_call_site(ctx, inst)
+}
+
+/// Publishes the call site on the warning branch of a deferred cached dispatch.
+pub(super) fn prepare_deferred_call_site(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+) -> Result<()> {
+    publish_call_site(ctx, inst)
+}
+
+/// Publishes the diagnostic and backtrace metadata for one instruction.
+fn publish_call_site(
     ctx: &mut FunctionContext<'_>,
     inst: &Instruction,
 ) -> Result<()> {
@@ -84,7 +125,7 @@ pub(super) fn prepare_call_site(
     // source location from its own frame, so eagerly updating diagnostics here only burdens
     // scalar Mixed rebinds whose fast path cannot invoke PHP code.
     let warns_at_call_site = inst.effects.contains(crate::ir::Effects::MAY_WARN)
-        && !matches!(inst.op, Op::ReleaseLocalRefCell | Op::ReleaseLocalSlot);
+        && !matches!(inst.op, Op::ReleaseLocalRefCell | Op::ReleaseLocalSlot | Op::ReleaseRawLocalSlot);
     // The file this instruction's code came from: an included or autoloaded file's spans carry
     // its source identity. `None` is the entry file, `_script_source_file`.
     let span_file = ctx.span_source_file(inst.span).map(str::to_string);
@@ -93,7 +134,7 @@ pub(super) fn prepare_call_site(
     // file or line of their own, and a warning raised inside one names the user call that reached
     // it. Publishing line 0 here made `highlight_file()`'s warnings say "on line 0".
     let from_source = inst.span.is_some_and(|span| span.is_from_source());
-    if from_source && (instruction_may_enter_php_frame(inst) || warns_at_call_site) {
+    if from_source && (instruction_may_enter_php_frame(ctx, inst) || warns_at_call_site) {
         // ONE pointer store names this site: a static `{file descriptor, line}` record, shared by
         // every site with the same file and line. It is both the location a warning raised here
         // names and the caller `file`/`line` a callee's prologue copies into its activation.
@@ -141,8 +182,69 @@ pub(super) fn prepare_call_site(
     Ok(())
 }
 
+/// Reads the file published by the nearest real PHP call site into the string result registers.
+///
+/// The zero-initialized slot means "no call site published yet"; the program entry file is the
+/// same fallback a span-less diagnostic uses.
+pub(super) fn lower_diagnostic_caller_file(ctx: &mut FunctionContext<'_>) {
+    let (ptr_reg, len_reg) = abi::string_result_regs(ctx.emitter);
+    let fallback = ctx.next_label("diagnostic_caller_file_fallback");
+    let done = ctx.next_label("diagnostic_caller_file_done");
+    abi::emit_load_symbol_to_reg(ctx.emitter, ptr_reg, "_php_diagnostic_file", 0);
+    emit_branch_if_zero(ctx, ptr_reg, &fallback);
+    abi::emit_load_symbol_to_reg(ctx.emitter, len_reg, "_php_diagnostic_file_len", 0);
+    abi::emit_jump(ctx.emitter, &done);
+    ctx.emitter.label(&fallback);
+    abi::emit_symbol_address(ctx.emitter, ptr_reg, "_script_source_file");
+    abi::emit_load_symbol_to_reg(ctx.emitter, len_reg, "_script_source_file_len", 0);
+    ctx.emitter.label(&done);
+}
+
+/// Returns whether a runtime call cannot run PHP code, warn, throw or produce output.
+///
+/// Such a call needs neither a backtrace frame nor a diagnostic-site publication. The
+/// effect summary is the shared contract: user-code reaches are excluded by throw/warn/fatal,
+/// output, refcount retirement and blocking-I/O bits, and callable or object operands are
+/// rejected even when a target summary is incomplete.
+fn is_leaf_runtime_call(ctx: &FunctionContext<'_>, inst: &Instruction) -> bool {
+    if !matches!(inst.immediate, Some(Immediate::RuntimeCall(_))) {
+        return false;
+    }
+    const USER_CODE: crate::ir::Effects = crate::ir::Effects::MAY_THROW
+        .union(crate::ir::Effects::MAY_WARN)
+        .union(crate::ir::Effects::MAY_FATAL)
+        .union(crate::ir::Effects::OUTPUT)
+        .union(crate::ir::Effects::REFCOUNT_OP)
+        .union(crate::ir::Effects::BLOCKING_IO)
+        .union(crate::ir::Effects::NETWORK_IO);
+    if inst.effects.intersects(USER_CODE) {
+        return false;
+    }
+    !inst.operands.iter().any(|&operand| {
+        ctx.value_php_type(operand).is_ok_and(|ty| {
+            matches!(
+                ty.codegen_repr(),
+                PhpType::Callable | PhpType::Object(_) | PhpType::Mixed | PhpType::Union(_)
+            )
+        })
+    })
+}
+
 /// Returns whether an instruction can synchronously enter another PHP-visible frame.
-fn instruction_may_enter_php_frame(inst: &Instruction) -> bool {
+fn instruction_may_enter_php_frame(ctx: &FunctionContext<'_>, inst: &Instruction) -> bool {
+    // The once-flag read/store touches only module-private storage; treating it as a frame
+    // entry would publish the declaration location over the user's live call site.
+    if inst.op == Op::CoreBuiltin
+        && inst.immediate
+            == Some(crate::ir::Immediate::I64(
+                crate::ir::CoreBuiltinOp::DeprecatedOnceBegin.as_i64(),
+            ))
+    {
+        return false;
+    }
+    if is_leaf_runtime_call(ctx, inst) {
+        return false;
+    }
     matches!(
         inst.op,
         Op::Call

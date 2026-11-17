@@ -119,6 +119,27 @@ class Reader {
     }
 }
 
+/// `$_REQUEST` reads confined to an autoloaded class retain request population.
+#[test]
+fn web_request_autoloaded_observer_retains_population() {
+    let dir = EnvironmentFixture(make_test_dir("web_request_autoloaded"));
+    fs::create_dir(dir.0.join("src")).unwrap();
+    fs::write(dir.0.join("composer.json"), r#"{"autoload":{"psr-4":{"WebReq\\":"src/"}}}"#).unwrap();
+    fs::write(dir.0.join("src/Reader.php"), r#"<?php
+namespace WebReq;
+class Reader {
+    public static function value(): string {
+        return (string) ($_REQUEST['q'] ?? 'MISSING');
+    }
+}
+"#).unwrap();
+    let binary = compile_web(&dir.0, "<?php echo \\WebReq\\Reader::value();", "app");
+    let addr = format!("127.0.0.1:{}", free_port());
+    let _server = spawn_server(&binary, &addr, "1");
+    let response = http_get(&addr, "/?q=hi");
+    assert_eq!(raw_response_body(&response).trim(), "hi");
+}
+
 /// Runtime-sourced eval retains environment population even without an inline $_ENV reference.
 #[test]
 fn web_environment_opaque_eval_retains_population() {

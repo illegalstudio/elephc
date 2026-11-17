@@ -12,9 +12,7 @@ use crate::fast_hash::{FastMap as HashMap, FastSet as HashSet};
 
 use crate::codegen_support::data_section::comm_directive;
 use crate::codegen_support::platform::Target;
-use crate::codegen_support::sentinels::{
-    REFERENCE_PROPERTY_TAG_FLAG, SERPROP_FALSE_ONLY_BIT, TAGGED_SCALAR_PROPERTY_TAG,
-};
+use crate::codegen_support::sentinels::{CANONICAL_SCALAR_PROPERTY_FLAG, JSON_DECLARED_PROPERTY_FLAG, JSON_REFERENCE_PROPERTY_FLAG, SERPROP_FALSE_ONLY_BIT, SERPROP_REFERENCE_PROPERTY_FLAG, SERPROP_MIXED_REFERENCE_PROPERTY_FLAG, TAGGED_SCALAR_PROPERTY_TAG};
 use crate::codegen_support::source_method_adapters::{self, MethodAbiPlan, MethodKind};
 use crate::names::{
     enum_case_symbol, function_variant_active_symbol, interface_method_wrapper_symbol, mangle_fqn,
@@ -26,6 +24,29 @@ use crate::types::{ClassInfo, EnumInfo, FunctionSig, InterfaceInfo, PhpType};
 
 use super::instanceof::{escaped_ascii, escaped_bytes};
 use super::NOT_SERIALIZABLE_BUILTIN_CLASSES;
+
+/// Emits the per-class "native SimpleXML storage" flag used by the user stream-wrapper
+/// dispatch: php-src assigns the stream context resource before calling `stream_open`, and a
+/// SimpleXML object rejects that write with its initialization Error.
+fn emit_class_native_xml_table(
+    out: &mut String,
+    max_class_id: Option<u64>,
+    class_name_by_id: &HashMap<u64, &String>,
+    classes: &HashMap<String, ClassInfo>,
+) {
+    out.push_str(".globl _class_native_xml\n_class_native_xml:\n");
+    match max_class_id {
+        Some(max) => {
+            for class_id in 0..=max {
+                let native = class_name_by_id.get(&class_id).is_some_and(|name| {
+                    crate::types::builtin_classes::has_native_dimensions(name, classes)
+                });
+                out.push_str(&format!("    .byte {}\n", u8::from(native)));
+            }
+        }
+        None => out.push_str("    .byte 0\n"),
+    }
+}
 
 /// Returns whether a declared property is compiler storage hidden from PHP enumeration.
 fn class_property_is_hidden(class_name: &str, property: &str) -> bool {
@@ -134,7 +155,8 @@ pub(crate) fn emit_runtime_data_user(
     let mut static_property_symbols: Vec<String> = static_property_symbols.into_iter().collect();
     static_property_symbols.sort();
     for symbol in static_property_symbols {
-        out.push_str(&comm_directive(&symbol, 16, target));
+        out.push_str(&comm_directive(&symbol,
+            crate::codegen_support::runtime::reference_cells::STATIC_BINDING_BYTES, target));
     }
 
     let mut sorted_enum_names: Vec<&String> = enums.keys().collect();
@@ -184,6 +206,7 @@ pub(crate) fn emit_runtime_data_user(
     super::instanceof::emit_instanceof_target_lookup_data(&mut out, &sorted_interfaces, &sorted_classes);
     emit_class_name_lookup_data(&mut out, max_class_id, &class_name_by_id);
     super::throwable_previous::emit_previous_slots(&mut out, max_class_id, &class_info_by_id);
+    emit_class_native_xml_table(&mut out, max_class_id, &class_name_by_id, classes);
     let weak_map_retire = classes.get("WeakMap")
         .filter(|class| class.is_internal)
         .map(|class| source_static_vtable_entry(class, "__elephc_retire", classes))
@@ -256,6 +279,7 @@ pub(crate) fn emit_runtime_data_user(
         ("_weak_map_class_id", "WeakMap"),
         ("_spl_value_error_class_id", "ValueError"),
         ("_spl_arithmetic_error_class_id", "ArithmeticError"),
+        ("_spl_reflection_exception_class_id", "ReflectionException"),
         // Emitted for the `intdiv($a, 0)` / `$a % 0` zero-divisor guards, which
         // raise reference PHP's catchable DivisionByZeroError from codegen with
         // no EIR class reference to hang the id off.
@@ -730,23 +754,59 @@ pub(crate) fn emit_runtime_data_user(
     ] {
         out.push_str(&format!(".globl {table}\n{table}:\n"));
         if let Some(max_class_id) = max_class_id {
-            let method_key = php_symbol_key(method);
             for class_id in 0..=max_class_id {
+                let native = match method {
+                    "offsetGet" => Some(elephc_builtin_contract::ObjectDimension::Get),
+                    "offsetSet" => Some(elephc_builtin_contract::ObjectDimension::Set),
+                    "offsetUnset" => Some(elephc_builtin_contract::ObjectDimension::Unset),
+                    _ => None,
+                }.and_then(|op| class_name_by_id.get(&class_id).and_then(|name|
+                    crate::types::builtin_classes::native_dimension_method(name, op, classes)));
+                let method_key = php_symbol_key(native.unwrap_or(method));
                 let entry = class_info_by_id
                     .get(&class_id)
                     .filter(|class_info| {
-                        class_info
-                            .interfaces
-                            .iter()
-                            .any(|name| name.eq_ignore_ascii_case(interface))
-                            && class_info.methods.get(&method_key).is_some_and(|sig| {
-                                let repr = sig.return_type.codegen_repr();
-                                repr == returns
-                                    || (method == "offsetGet"
-                                        && raw_value_return_tag(&repr, sig.by_ref_return) != 0)
-                            })
+                        (class_info.interfaces.iter().any(|name| name.eq_ignore_ascii_case(interface))
+                            || (interface == "ArrayAccess" && class_name_by_id.get(&class_id)
+                                .is_some_and(|name| crate::types::builtin_classes::has_native_dimensions(name, classes))))
+                            && class_info
+                                .methods
+                                .get(&method_key)
+                                .is_some_and(|sig| {
+                                    let ret = sig.return_type.codegen_repr();
+                                    ret == returns
+                                        || (method == "offsetGet"
+                                            && raw_value_return_tag(&ret, sig.by_ref_return) != 0)
+                                        || (interface == "Countable"
+                                            && method == "count"
+                                            && matches!(
+                                                ret,
+                                                PhpType::Bool
+                                                    | PhpType::Float
+                                                    | PhpType::Str
+                                                    | PhpType::Mixed
+                                            ))
+                                })
                     })
-                    .map(|class_info| source_instance_method_entry(class_info, &method_key, classes))
+                    .map(|class_info| {
+                        // `count()` hands back a bare integer, but the tentative Countable
+                        // contract lets a subclass return any scalar under
+                        // `#[ReturnTypeWillChange]`. Route every non-int/bool representation
+                        // through the adapter that applies PHP's int coercion.
+                        let coerced_count = interface == "Countable"
+                            && method == "count"
+                            && class_info.methods.get(&method_key).is_some_and(|sig| {
+                                matches!(
+                                    sig.return_type.codegen_repr(),
+                                    PhpType::Float | PhpType::Str | PhpType::Mixed
+                                )
+                            });
+                        if coerced_count {
+                            Ok(format!("_count_int_wrap_{}", class_info.class_id))
+                        } else {
+                            source_instance_method_entry(class_info, &method_key, classes)
+                        }
+                    })
                     .transpose()?
                     .unwrap_or_else(|| "0".to_string());
                 out.push_str(&format!("    .quad {}\n", entry));
@@ -774,6 +834,39 @@ pub(crate) fn emit_runtime_data_user(
                 .map(|sig| raw_value_return_tag(&sig.return_type.codegen_repr(), sig.by_ref_return))
                 .unwrap_or(0);
             out.push_str(&format!("    .quad {}\n", tag));
+        }
+    }
+
+    out.push_str(".globl _class_offsetget_forwrite_ptrs\n_class_offsetget_forwrite_ptrs:\n");
+    if let Some(max_class_id) = max_class_id {
+        for class_id in 0..=max_class_id {
+            let entry = class_name_by_id.get(&class_id)
+                .and_then(|name| crate::types::builtin_classes::spl_storage_write_fetch_owner(name, classes))
+                .map(|owner| source_instance_method_entry(owner, "__elephc_fetch_for_write", classes))
+                .transpose()?.unwrap_or_else(|| "0".into());
+            out.push_str(&format!("    .quad {entry}\n"));
+        }
+    }
+
+    // Native property projections retain PHP's own interface membership.
+    for (table, methods) in [
+        ("_class_array_projection_ptrs", &["__elephc_array"][..]),
+        ("_class_debug_projection_ptrs", &["__elephc_debug_info", "__elephc_debug_projection"][..]),
+    ] {
+        out.push_str(&format!(".globl {table}\n{table}:\n"));
+        if let Some(max_class_id) = max_class_id {
+            for class_id in 0..=max_class_id {
+                for method in methods {
+                    let key = php_symbol_key(method);
+                    let entry = class_name_by_id.get(&class_id)
+                        .filter(|name| crate::types::builtin_classes::has_native_dimensions(name, classes))
+                        .and_then(|name| classes.get(*name))
+                        .filter(|info| info.methods.contains_key(&key))
+                        .map(|info| source_instance_method_entry(info, &key, classes))
+                        .transpose()?.unwrap_or_else(|| "0".into());
+                    out.push_str(&format!("    .quad {entry}\n"));
+                }
+            }
         }
     }
 
@@ -1290,7 +1383,7 @@ pub(crate) fn emit_runtime_data_user(
                                 arg_rows.push((8u64, "0".to_string(), 0u64));
                             }
                             crate::types::AttrArgValue::Array(_)
-                            | crate::types::AttrArgValue::ConstRef(_)
+                            | crate::types::AttrArgValue::ConstRef(..)
                             | crate::types::AttrArgValue::ScopedConst(..) => {
                                 // This legacy flat (tag, lo, hi) table cannot
                                 // represent a nested array or a deferred symbolic
@@ -1417,11 +1510,16 @@ pub(crate) fn emit_runtime_data_user(
                             .is_some_and(|visible_index| visible_index == *prop_index)
                     })
                     .filter(|(_, (name, _))| {
-                        !class_property_is_hidden(class_name, name)
-                            && class_info
-                            .property_visibilities
+                        let declaring_class = class_info
+                            .property_declaring_classes
                             .get(name)
-                            .map_or(true, |v| matches!(v, Visibility::Public))
+                            .map(String::as_str)
+                            .unwrap_or(class_name);
+                        !class_property_is_hidden(declaring_class, name)
+                            && class_info
+                                .property_visibilities
+                                .get(name)
+                                .map_or(true, |v| matches!(v, Visibility::Public))
                     })
                     .map(|(index, prop)| (index, prop.clone()))
                     .collect(),
@@ -1454,10 +1552,11 @@ pub(crate) fn emit_runtime_data_user(
         } else {
             0
         };
-        let flags: u64 = if implements_jsonserializable { 1 | (return_tag << 8) } else { 0 };
+        let native_projection = crate::types::builtin_classes::has_native_dimensions(class_name, classes);
+        let flags: u64 = if implements_jsonserializable || native_projection { 1 | (return_tag << 8) } else { 0 };
         out.push_str(&format!("    .quad {}\n", flags));
-        if implements_jsonserializable {
-            let key = php_symbol_key("jsonSerialize");
+        if implements_jsonserializable || native_projection {
+            let key = php_symbol_key(if implements_jsonserializable { "jsonSerialize" } else { "__elephc_json" });
             out.push_str(&format!(
                 "    .quad {}\n",
                 source_instance_method_entry(class_info, &key, classes)?,
@@ -1467,9 +1566,7 @@ pub(crate) fn emit_runtime_data_user(
         }
         out.push_str(&format!("    .quad {}\n", public_props.len()));
         for (prop_index, (prop_name, prop_ty)) in &public_props {
-            let tag = if class_info.property_slot_is_reference(*prop_index, prop_name) {
-                prop_type_value_tag(prop_ty) | REFERENCE_PROPERTY_TAG_FLAG
-            } else if prop_ty.codegen_repr() == PhpType::TaggedScalar {
+            let tag = if prop_ty.codegen_repr() == PhpType::TaggedScalar {
                 TAGGED_SCALAR_PROPERTY_TAG
             } else if crate::types::is_nullable_pointer_type(prop_ty) {
                 // A `?ptr<T>` slot holds the bare pointer word (null is 0), like a `ptr` slot.
@@ -1497,6 +1594,13 @@ pub(crate) fn emit_runtime_data_user(
                     | PhpType::Void => 0,
                 }
             };
+            let tag = tag | if class_info.property_slot_is_reference(*prop_index, prop_name) {
+                JSON_REFERENCE_PROPERTY_FLAG
+            } else { 0 };
+            let tag = tag | if class_info.property_slot_is_declared(*prop_index, prop_name) {
+                JSON_DECLARED_PROPERTY_FLAG
+            } else { 0 };
+            let tag = tag | canonical_scalar_property_flag(class_info, *prop_index, prop_ty);
             out.push_str(&format!(
                 "    .quad _class_json_pname_{}_{}\n",
                 class_info.class_id, prop_index,
@@ -1517,12 +1621,8 @@ pub(crate) fn emit_runtime_data_user(
                     out.push_str(", ");
                 }
                 let prop_name = &class_info.properties[i].0;
-                // Owned cells are decided per physical slot: a hidden ancestor private shares the
-                // child's name, and the name-keyed set left its cell unreleased at destruction.
-                let tag = if class_info.property_slot_is_owned_reference(i) {
-                    11
-                } else if class_info.property_slot_is_reference(i, prop_name) {
-                    0
+                let tag = if class_info.property_slot_is_reference(i, prop_name) {
+                    if class_info.property_slot_owns_reference(i) { 11 } else { 0 }
                 } else if prop_ty.codegen_repr() == PhpType::TaggedScalar {
                     // An inline `{payload, tag}` slot owns no heap reference: reading it as
                     // Mixed (7) handed the integer payload to decref/mark as a cell pointer.
@@ -1581,7 +1681,7 @@ pub(crate) fn emit_runtime_data_user(
                         Some((
                             key.into_bytes(),
                             class_info.property_slot_offset(index),
-                            prop_slot_value_tag(class_info, index),
+                            serialized_property_tag(classes, class_info, class_name, index),
                             class_info.class_id,
                             index,
                         ))
@@ -1591,7 +1691,13 @@ pub(crate) fn emit_runtime_data_user(
                 // `get_object_vars()`, object casts, JSON, and PHP's serialized property table.
                 None => (0..class_info.properties.len())
                     .filter(|prop_index| {
-                        !class_property_is_hidden(class_name, &class_info.properties[*prop_index].0)
+                        let name = &class_info.properties[*prop_index].0;
+                        let declaring_class = class_info
+                            .property_declaring_classes
+                            .get(name)
+                            .map(String::as_str)
+                            .unwrap_or(class_name);
+                        !class_property_is_hidden(declaring_class, name)
                     })
                     .map(|prop_index| {
                         let (_, declaring_class) =
@@ -1599,7 +1705,7 @@ pub(crate) fn emit_runtime_data_user(
                         (
                             mangled_property_slot_name(class_info, class_name, prop_index),
                             class_info.property_slot_offset(prop_index),
-                            prop_slot_value_tag(class_info, prop_index),
+                            serialized_property_tag(classes, class_info, class_name, prop_index),
                             all_class_id_by_name
                                 .get(declaring_class)
                                 .copied()
@@ -2646,9 +2752,6 @@ fn emit_eval_reflection_property_lookup_data(
         // name can own two slots when the class shadows an ancestor's private property; the
         // visible one is the class's own, the last.
         for property_name in &class_info.reflection_properties {
-            if class_property_is_hidden(class_name, property_name) {
-                continue;
-            }
             let instance_slot = class_info
                 .properties
                 .iter()
@@ -2678,21 +2781,24 @@ fn emit_eval_reflection_property_lookup_data(
             } else {
                 continue;
             };
+            if class_property_is_hidden(declaring_class, property_name) {
+                continue;
+            }
             let class_label = format!("_eval_reflection_property_class_{}", index);
             let property_label = format!("_eval_reflection_property_name_{}", index);
             let declaring_label = format!("_eval_reflection_property_declaring_class_{}", index);
             out.push_str(&format!(
-                "{0}:\n    .ascii \"{1}\"\n",
+                ".globl {0}\n{0}:\n    .ascii \"{1}\"\n",
                 class_label,
                 escaped_ascii(class_name)
             ));
             out.push_str(&format!(
-                "{0}:\n    .ascii \"{1}\"\n",
+                ".globl {0}\n{0}:\n    .ascii \"{1}\"\n",
                 property_label,
                 escaped_ascii(property_name)
             ));
             out.push_str(&format!(
-                "{0}:\n    .ascii \"{1}\"\n",
+                ".globl {0}\n{0}:\n    .ascii \"{1}\"\n",
                 declaring_label,
                 escaped_ascii(declaring_class)
             ));
@@ -4605,7 +4711,7 @@ fn var_dump_descriptor_rows(
                         .get(&prop_name)
                         .copied()
                         .unwrap_or(8 + layout_index * 16),
-                    tag: prop_value_tag(metadata, &prop_name, prop_ty),
+                    tag: prop_value_tag(metadata, &prop_name, prop_ty, layout_index),
                     type_name: var_dump_property_type_name(prop_ty),
                 })
             })
@@ -4626,8 +4732,12 @@ fn var_dump_descriptor_rows(
                 key: var_dump_property_slot_key(class_info, class_name, layout_index),
                 print_r_key: print_r_property_slot_key(class_info, class_name, layout_index),
                 plain_key: prop_name.clone(),
-                offset: class_info.property_slot_offset(layout_index),
-                tag: prop_slot_value_tag(class_info, layout_index),
+                offset: metadata
+                    .property_offsets
+                    .get(prop_name)
+                    .copied()
+                    .unwrap_or(8 + layout_index * 16),
+                tag: prop_value_tag(metadata, prop_name, prop_ty, layout_index),
                 type_name: var_dump_property_type_name(prop_ty),
             })
         })
@@ -4671,7 +4781,8 @@ fn is_reflection_backing_slot(class_info: &ClassInfo, class_name: &str, prop_nam
         .get(prop_name)
         .map(String::as_str)
         .unwrap_or(class_name);
-    REFLECTION_CLASS_NAMES.contains(&declaring_class)
+    class_property_is_hidden(declaring_class, prop_name)
+        || REFLECTION_CLASS_NAMES.contains(&declaring_class)
 }
 
 /// Resolves by-name metadata on the nearest ancestor where this physical slot is visible.
@@ -5069,14 +5180,13 @@ fn serprop_widens_int_to_float(prop_ty: &PhpType) -> bool {
 
 /// Maps a declared property's static type to the runtime value tag consumed by
 /// `__rt_serialize_value` when serializing that property's 16-byte object slot.
-/// Mirrors the gc-descriptor tag mapping; reference and untyped/nullable
-/// properties are stored as boxed `Mixed` cells (tag 7), except `int|null`, whose
+/// Reference indirection is an independent descriptor flag; the payload retains its logical tag.
+/// Untyped/nullable properties use boxed `Mixed` cells (tag 7), except `int|null`, whose
 /// inline `{payload, tag}` pair gets `TAGGED_SCALAR_PROPERTY_TAG`. A `Closure`
 /// property holds its callable descriptor directly (tag 10), never a Mixed box.
-fn prop_value_tag(class_info: &ClassInfo, prop_name: &str, prop_ty: &PhpType) -> u64 {
-    if class_info.reference_properties.contains(prop_name) {
-        return prop_type_value_tag(prop_ty) | REFERENCE_PROPERTY_TAG_FLAG;
-    }
+fn prop_value_tag(class_info: &ClassInfo, prop_name: &str, prop_ty: &PhpType, index: usize) -> u64 {
+    // A Throwable's `trace` slot is declared `Mixed` but holds a raw array pointer; describe it
+    // as the array it is (see `is_raw_throwable_trace_slot`).
     if is_raw_throwable_trace_slot(
         prop_name,
         prop_ty,
@@ -5088,7 +5198,9 @@ fn prop_value_tag(class_info: &ClassInfo, prop_name: &str, prop_ty: &PhpType) ->
     ) {
         return 4;
     }
-    prop_type_value_tag(prop_ty)
+    serialized_property_payload_tag(prop_ty)
+        | if class_info.property_slot_is_reference(index, prop_name) { SERPROP_REFERENCE_PROPERTY_FLAG } else { 0 }
+        | canonical_scalar_property_flag(class_info, index, prop_ty)
 }
 
 /// Whether this descriptor row describes a Throwable's `trace` slot.
@@ -5111,24 +5223,45 @@ fn is_raw_throwable_trace_slot(prop_name: &str, prop_ty: &PhpType, offset: usize
 /// by-reference flag comes from the slot itself rather than the name-keyed set.
 fn prop_slot_value_tag(class_info: &ClassInfo, index: usize) -> u64 {
     let (prop_name, prop_ty) = &class_info.properties[index];
-    if !class_info.property_slot_is_hidden(index) {
-        return prop_value_tag(class_info, prop_name, prop_ty);
-    }
-    if is_raw_throwable_trace_slot(
-        prop_name,
-        prop_ty,
-        class_info.property_slot_offset(index),
-    ) {
-        return 4;
-    }
-    if class_info.property_slot_is_reference(index, prop_name) {
-        return prop_type_value_tag(prop_ty) | REFERENCE_PROPERTY_TAG_FLAG;
-    }
-    prop_type_value_tag(prop_ty)
+    prop_value_tag(class_info, prop_name, prop_ty, index)
 }
 
-/// Returns the runtime value tag a non-reference property of this type stores.
-fn prop_type_value_tag(prop_ty: &PhpType) -> u64 {
+/// Returns the tag of one `serialize()` property-table row: the slot's value tag plus the
+/// Mixed-reference flag for an owned, unrestricted Mixed reference slot.
+fn serialized_property_tag(
+    classes: &crate::fast_hash::FastMap<String, ClassInfo>,
+    class_info: &ClassInfo,
+    class_name: &str,
+    index: usize,
+) -> u64 {
+    let (prop_name, prop_ty) = &class_info.properties[index];
+    let (metadata, _) = physical_property_slot_metadata(classes, class_info, class_name, index, prop_name);
+    let mixed_reference = if *prop_ty == PhpType::Mixed
+        && class_info.property_slot_owns_reference(index)
+        && !metadata.is_internal
+        && !metadata.readonly_properties.contains(prop_name)
+        && !metadata.property_set_visibilities.contains_key(prop_name)
+        && metadata.property_hooks.get(prop_name).is_none_or(|hooks| !hooks.any())
+    {
+        SERPROP_MIXED_REFERENCE_PROPERTY_FLAG
+    } else {
+        0
+    };
+    prop_slot_value_tag(class_info, index) | mixed_reference
+}
+
+/// Marks only owned scalar cells, so renderer probes never inspect a borrowed slot's header.
+fn canonical_scalar_property_flag(class: &ClassInfo, index: usize, ty: &PhpType) -> u64 {
+    if class.property_slot_owns_reference(index)
+        && matches!(ty.codegen_repr(), PhpType::Int | PhpType::Bool | PhpType::False
+            | PhpType::Float | PhpType::Str | PhpType::TaggedScalar)
+    {
+        CANONICAL_SCALAR_PROPERTY_FLAG
+    } else { 0 }
+}
+
+/// Returns the logical serialization tag of a property's native payload after following its cell.
+fn serialized_property_payload_tag(prop_ty: &PhpType) -> u64 {
     if prop_ty.codegen_repr() == PhpType::TaggedScalar {
         return TAGGED_SCALAR_PROPERTY_TAG;
     }
@@ -5492,6 +5625,8 @@ mod tests {
             constants: HashMap::default(),
             constant_order: Vec::new(),
     constant_deprecations: HashMap::default(),
+    property_initialization_order: Vec::new(),
+    trait_collision_defaults: Vec::new(),
     constant_types: HashMap::default(),
     constant_visibilities: HashMap::default(),
     final_constants: HashSet::default(),
@@ -5520,6 +5655,7 @@ mod tests {
             backed_hooked_properties: HashSet::default(),
             reference_properties: HashSet::default(),
             owned_reference_properties: HashSet::default(),
+            owned_reference_property_slots: HashSet::default(),
             promoted_properties: HashSet::default(),
             property_reference_slots: Vec::new(),
             property_slot_declaring_classes: Vec::new(),

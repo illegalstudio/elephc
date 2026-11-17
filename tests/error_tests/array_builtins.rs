@@ -1180,6 +1180,13 @@ fn test_error_array_pointer_non_array_receiver() {
     }
 }
 
+/// Verifies a call-result receiver is accepted: its temporary owns no caller-visible pointer.
+/// Fixture: `current(f())` where `f()` returns a fresh array.
+#[test]
+fn test_array_pointer_call_result_receiver_is_accepted() {
+    expect_no_error(r#"<?php function f(): array { return [1, 2]; } echo current(f());"#);
+}
+
 /// Verifies a seek operation rejects an array literal because its by-reference parameter
 /// has no writable caller-visible place.
 #[test]

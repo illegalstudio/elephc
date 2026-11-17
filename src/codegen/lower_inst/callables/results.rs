@@ -1,12 +1,13 @@
 //! Purpose:
-//! Converts descriptor-owned Mixed results into the caller's concrete ABI.
+//! Converts owned Mixed call results into the caller's concrete ABI.
 //!
 //! Called from:
 //! - `super::store_descriptor_invoker_result()` after descriptor invocation.
+//! - Eval method adapters that receive the same owned boxed result contract.
 //!
 //! Key details:
 //! - Mixed results transfer their box; concrete results consume it after conversion.
-//! - Converted scalars and detached Mixed-element arrays survive the box release.
+//! - Converted scalars and detached heap payloads survive the box release.
 
 use crate::codegen::{CodegenIrError, Result};
 use crate::codegen_support::{abi, emit::Emitter, platform::Arch};
@@ -14,7 +15,7 @@ use crate::ir::Ownership;
 use crate::types::PhpType;
 
 /// Converts an owned result box and retires it unless the caller retains the Mixed representation.
-pub(super) fn emit_unbox_owned_descriptor_result(
+pub(in crate::codegen::lower_inst) fn emit_unbox_owned_descriptor_result(
     emitter: &mut Emitter,
     ty: &PhpType,
     ownership: Ownership,
@@ -46,20 +47,9 @@ pub(super) fn emit_unbox_owned_descriptor_result(
         PhpType::Float => "__rt_mixed_cast_float",
         PhpType::Str => "__rt_mixed_cast_string",
         PhpType::TaggedScalar => "__rt_mixed_unbox",
-        // Any container or object payload sits in the box's low word: retain it, retire the
-        // box. A narrower inferred return type -- `array<string, mixed>` from a callback that
-        // returns `get_object_vars()` -- reached this as an unsupported result type.
-        PhpType::Array(_)
-        | PhpType::AssocArray { .. }
-        | PhpType::Object(_)
-        | PhpType::Iterable => {
-            emit_detach_owned_mixed_array_result(emitter, &PhpType::Array(Box::new(PhpType::Mixed)));
-            return Ok(());
-        }
-        // A closure returned by a closure (`return function () use (&$s) { ... };`) travels as a
-        // descriptor pointer in the box's payload word; it is retained like any callable value.
-        PhpType::Callable => {
-            emit_detach_owned_mixed_array_result(emitter, &PhpType::Callable);
+        PhpType::Array(_) | PhpType::AssocArray { .. }
+        | PhpType::Callable | PhpType::Iterable => {
+            emit_detach_owned_mixed_heap_result(emitter, ty);
             return Ok(());
         }
         other => return Err(CodegenIrError::unsupported(format!(
@@ -119,24 +109,23 @@ fn emit_object_descriptor_result(emitter: &mut Emitter, ty: &PhpType) {
     abi::emit_release_temporary_stack(emitter, 16);
 }
 
-/// Transfers a container or object payload out of its owned Mixed result box.
+/// Transfers the low payload out of an owned Mixed box, retaining refcounted values.
 ///
-/// An array may use indexed or promoted hash storage at runtime, and an object is a single
-/// pointer too. Every such shape exposes its pointer in the low Mixed payload word, and the
-/// generic retain preserves any heap kind.
-fn emit_detach_owned_mixed_array_result(emitter: &mut Emitter, retained_ty: &PhpType) {
+/// `Array(Mixed)` may use indexed or promoted hash storage at runtime. Both shapes expose their
+/// container pointer in the low Mixed payload word, and the generic retain preserves either kind.
+pub(in crate::codegen::lower_inst) fn emit_detach_owned_mixed_heap_result(emitter: &mut Emitter, ty: &PhpType) {
     let result = abi::int_result_reg(emitter);
     abi::emit_push_reg(emitter, result);
     abi::emit_call_label(emitter, "__rt_mixed_unbox");
     match emitter.target.arch {
         Arch::AArch64 => {
-            emitter.instruction("mov x0, x1");                                  // move the borrowed array payload into the raw array result register
+            emitter.instruction("mov x0, x1");                                  // move the borrowed heap payload into the concrete result register
         }
         Arch::X86_64 => {
-            emitter.instruction("mov rax, rdi");                                // move the borrowed array payload into the raw array result register
+            emitter.instruction("mov rax, rdi");                                // move the borrowed heap payload into the concrete result register
         }
     }
-    abi::emit_incref_if_refcounted(emitter, retained_ty);
+    abi::emit_incref_if_refcounted(emitter, ty);
     abi::emit_push_reg(emitter, result);
     abi::emit_load_temporary_stack_slot(emitter, result, 16);
     abi::emit_call_label(emitter, "__rt_decref_mixed");
@@ -271,6 +260,25 @@ mod tests {
                 asm.find("__rt_incref").unwrap() < asm.find("__rt_decref_mixed").unwrap(),
                 "{name}",
             );
+        }
+    }
+
+    /// Typed containers and callable payloads acquire their owner before the source box is freed.
+    #[test]
+    fn concrete_heap_descriptor_results_consume_their_box_on_all_targets() {
+        for name in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+            for ty in [
+                PhpType::Array(Box::new(PhpType::Int)),
+                PhpType::AssocArray { key: Box::new(PhpType::Str), value: Box::new(PhpType::Int) },
+                PhpType::Callable, PhpType::Iterable,
+            ] {
+                let mut emitter = Emitter::new(Target::parse(name).unwrap());
+                emit_unbox_owned_descriptor_result(&mut emitter, &ty, Ownership::Owned).unwrap();
+                let assembly = emitter.output();
+                assert_eq!(assembly.matches("__rt_decref_mixed").count(), 1, "{name}: {ty:?}");
+                assert!(assembly.find("__rt_mixed_unbox").unwrap()
+                    < assembly.find("__rt_decref_mixed").unwrap(), "{name}: {ty:?}");
+            }
         }
     }
 }

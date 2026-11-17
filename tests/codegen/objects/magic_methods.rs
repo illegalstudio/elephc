@@ -9,6 +9,25 @@
 
 use super::*;
 
+/// Inaccessible declared names read their magic value while lexical reads keep the real slot.
+#[test]
+fn test_magic_get_reads_inaccessible_declared_property() {
+    let source = r#"<?php
+class HiddenMagicRead {
+    private mixed $value = 'stored';
+    public function __get(string $name): mixed { echo 'get|'; return 'visible'; }
+    public function own(): mixed { return $this->value; }
+}
+function readHiddenMagic(HiddenMagicRead $object): mixed { return $object->value; }
+$object = new HiddenMagicRead();
+echo readHiddenMagic($object), '|', $object->own();
+"#;
+    let out = compile_and_run_with_heap_debug(source);
+    assert!(out.success, "stdout={} stderr={}", out.stdout, out.stderr);
+    assert_eq!(out.stdout, "get|visible|stored");
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
 /// Verifies `__toString` result is usable in direct `echo`, string concatenation, and explicit `(string)` cast.
 #[test]
 fn test_magic_tostring_supports_echo_concat_and_cast() {

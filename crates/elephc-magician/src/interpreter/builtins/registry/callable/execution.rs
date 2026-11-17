@@ -22,6 +22,14 @@ pub(in crate::interpreter) fn eval_evaluated_callable_with_values(
                 eval_evaluated_callable_with_values(callback, evaluated_args, owner_context, values)
             })
         }
+        EvaluatedCallable::NativeDescriptor { callback, .. } => {
+            eval_native_descriptor_with_call_args(
+                *callback,
+                positional_args(evaluated_args),
+                context,
+                values,
+            )
+        }
         EvaluatedCallable::Named { name, .. } => {
             if let Some(closure) = context.closure(name).cloned() {
                 return eval_closure_with_evaluated_args(
@@ -58,7 +66,7 @@ pub(in crate::interpreter) fn eval_evaluated_callable_with_values(
                 values,
             )
         }
-        EvaluatedCallable::NativeDescriptor { descriptor } => eval_native_descriptor_call(
+        EvaluatedCallable::DecodedDescriptor { descriptor } => eval_native_descriptor_call(
             *descriptor,
             positional_args(evaluated_args),
             context,
@@ -254,6 +262,14 @@ pub(super) fn eval_evaluated_callable_with_call_user_func_values(
                 )
             })
         }
+        EvaluatedCallable::NativeDescriptor { callback, .. } => {
+            eval_native_descriptor_with_call_args(
+                *callback,
+                positional_args(evaluated_args),
+                context,
+                values,
+            )
+        }
         EvaluatedCallable::Named { name, .. } => {
             eval_named_callable_with_call_user_func_values(name, evaluated_args, context, values)
         }
@@ -297,7 +313,7 @@ pub(super) fn eval_evaluated_callable_with_call_user_func_values(
                 values,
             )
         }
-        EvaluatedCallable::NativeDescriptor { descriptor } => eval_native_descriptor_call(
+        EvaluatedCallable::DecodedDescriptor { descriptor } => eval_native_descriptor_call(
             *descriptor,
             positional_args(evaluated_args),
             context,
@@ -398,6 +414,14 @@ pub(in crate::interpreter) fn eval_evaluated_callable_with_by_value_call_args(
                 )
             })
         }
+        EvaluatedCallable::NativeDescriptor { callback, .. } => {
+            eval_native_descriptor_with_call_args(
+                *callback,
+                evaluated_args,
+                context,
+                values,
+            )
+        }
         EvaluatedCallable::Named { name, .. } => {
             eval_named_callable_with_call_user_func_args(name, evaluated_args, context, values)
         }
@@ -440,7 +464,7 @@ pub(in crate::interpreter) fn eval_evaluated_callable_with_by_value_call_args(
                 values,
             )
         }
-        EvaluatedCallable::NativeDescriptor { descriptor } => {
+        EvaluatedCallable::DecodedDescriptor { descriptor } => {
             eval_native_descriptor_call(*descriptor, evaluated_args, context, values)
         }
         EvaluatedCallable::ObjectMethod {
@@ -526,6 +550,7 @@ pub(super) fn eval_clear_evaluated_arg_ref_targets(
     evaluated_args
         .into_iter()
         .map(|arg| EvaluatedCallArg {
+            evaluation_owner: None,
             name: arg.name,
             value: arg.value,
             ref_target: None,

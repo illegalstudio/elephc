@@ -41,6 +41,8 @@ use crate::types::{PhpType, TypeEnv};
 
 use super::super::Checker;
 
+mod conditions;
+
 /// A detected type-guard narrowing: the guarded binding's env key and the types it takes in the
 /// then-branch (guard true) and else-branch (guard false).
 pub(crate) struct GuardNarrowing {
@@ -149,6 +151,41 @@ impl Checker {
         Ok(narrowed)
     }
 
+    /// Checks a branch under its guarded read views while retaining the original storage types.
+    pub(crate) fn with_flow_narrowings<T>(
+        &mut self,
+        guards: &[GuardNarrowing],
+        then_branch: bool,
+        env: &mut TypeEnv,
+        body: impl FnOnce(&mut Self, &mut TypeEnv) -> Result<T, CompileError>,
+    ) -> Result<T, CompileError> {
+        let storage_entry = self.guarded_union_types.clone();
+        let mut saved = Vec::with_capacity(guards.len());
+        for guard in guards {
+            let view = if then_branch { &guard.then_ty } else { &guard.else_ty };
+            let previous = env.get(&guard.var).cloned();
+            saved.push((self.enter_flow_narrowing(&guard.var, previous.as_ref(), view), previous));
+            env.insert(guard.var.clone(), view.clone());
+        }
+        let result = body(self, env);
+        for (origin, previous) in saved.into_iter().rev() {
+            // A guard-only view refines the existing value without rebinding its storage.
+            // Close an unrepresentable view before the arm's exit is joined.
+            let guard_only = self.narrowed_local_origins.get(&origin.name).is_some_and(|entry|
+                !entry.stored_in_region && entry.view.as_ref() == env.get(&origin.name));
+            if let Some(previous) = previous {
+                if guard_only && env.get(&origin.name).is_some_and(|view|
+                    !self.type_contains_values(&previous, view))
+                {
+                    env.insert(origin.name.clone(), previous);
+                }
+            }
+            self.exit_flow_narrowing(origin);
+        }
+        self.restore_guarded_storage_provenance(&storage_entry);
+        result
+    }
+
     /// Detects a type-predicate guard in an `if`/ternary condition and computes the then/else
     /// narrowing for the guarded binding against the current environment. Handles the scalar
     /// `is_*` predicates, `is_null`, `instanceof Class`, and `=== false` / `=== null`, each with an
@@ -175,6 +212,13 @@ impl Checker {
             return Ok(None);
         };
         let negated = prefix_negated ^ comparison_negated;
+        // `instanceof Coll` where `Coll` is a generic template tests its member-less MARKER
+        // interface (`crate::generics::classes`), which every instantiation implements. Narrowing
+        // to it would hide every method the value has; see `template_guard_narrowing`.
+        let template_guard = matches!(
+            &target,
+            GuardTarget::Exact(PhpType::Object(class)) if self.names_generic_template(class)
+        );
         let Some(key) = self.guard_env_key(receiver) else {
             return Ok(None);
         };
@@ -207,9 +251,14 @@ impl Checker {
             }
             None => return Ok(None),
         };
-        let matched = self.narrow_to(&current, &target);
-        let complement = self.narrow_complement(&current, &target);
-        let complement_dead = self.guard_covers_every_member(&current, &target);
+        let (matched, complement) = if template_guard {
+            (template_guard_narrowing(&current), current.clone())
+        } else {
+            (self.narrow_to(&current, &target), self.narrow_complement(&current, &target))
+        };
+        // A template guard keeps the whole current type on its complement, so nothing is dead.
+        let complement_dead =
+            !template_guard && self.guard_covers_every_member(&current, &target);
         // `!` on the condition and a self-negating guard (`isset(...)`, `!== null`) each swap the
         // branches, so two negations cancel out — `negated` is already that XOR.
         let (then_ty, else_ty, then_dead, else_dead) = if negated {
@@ -297,6 +346,23 @@ impl Checker {
         }))
     }
 
+    /// Whether `class` names a generic class or interface TEMPLATE, which after monomorphization
+    /// is only the member-less marker interface its instantiations share
+    /// (`crate::generics::classes`). An `instanceof` against it is not a narrowing.
+    pub(crate) fn names_generic_template(&self, class: &str) -> bool {
+        let key = crate::generics::classes::template_key(class);
+        self.class_templates.iter().any(|template| template.key == key)
+    }
+
+    /// Whether `name` is a generic CLASS template, whose marker interface is hidden from
+    /// reflection (see `InterfaceInfo::reflection_hidden`).
+    pub(crate) fn names_generic_class_template(&self, name: &str) -> bool {
+        let key = crate::generics::classes::template_key(name);
+        self.class_templates
+            .iter()
+            .any(|template| template.is_class && template.key == key)
+    }
+
     /// Synthetic `TypeEnv` key for a narrowed simple property access `$var->prop` (`None` for a
     /// more complex receiver). The `\x01` sigil bytes cannot appear in a real variable name, so
     /// this key never collides with a variable binding — a normal property read only picks it up
@@ -335,6 +401,15 @@ impl Checker {
         }
         let class_name = self.resolve_static_property_receiver(receiver, expr).ok()?;
         Some(format!("\u{1}sprop\u{1}{class_name}::${property}"))
+    }
+
+    /// Returns whether a narrowing key names a property place rather than a plain local.
+    ///
+    /// Synthetic property keys carry the `\x01` sigil, which no PHP variable name can contain.
+    /// Only these places can be re-established by a write inside a guarded branch, so the
+    /// post-`if` join in `control_flow` is limited to them.
+    pub(crate) fn narrowed_place_key_is_property(key: &str) -> bool {
+        key.starts_with('\u{1}')
     }
 
     /// `TypeEnv` key for a guard receiver: a variable's name, bare `$this`, or the synthetic
@@ -1098,10 +1173,35 @@ fn guard_receiver_and_target<'a>(
 ///
 /// `Mixed` and `Never` are treated as possibly-null because neither carries enough information
 /// to prove otherwise; a union is non-null only when every member is.
-fn type_is_definitely_non_null(ty: &PhpType) -> bool {
+pub(in crate::types::checker) fn type_is_definitely_non_null(ty: &PhpType) -> bool {
     match ty {
-        PhpType::Void | PhpType::Never | PhpType::Mixed => false,
+        PhpType::Void | PhpType::Never | PhpType::Mixed | PhpType::TaggedScalar => false,
         PhpType::Union(members) => members.iter().all(type_is_definitely_non_null),
         _ => true,
+    }
+}
+
+/// The type a local takes where `instanceof <Template>` holds.
+///
+/// An object keeps its own class (the class already carries every method the marker would hide),
+/// a union keeps its object members, and anything else — `mixed`, or a scalar the guard can never
+/// match at runtime — becomes `mixed`, so a call dispatches on the runtime class and a store under
+/// the guard merges against `mixed` the way one under `instanceof Shape` merges against `Shape`.
+fn template_guard_narrowing(current: &PhpType) -> PhpType {
+    match current {
+        PhpType::Object(_) => current.clone(),
+        PhpType::Union(members) => {
+            let objects: Vec<PhpType> = members
+                .iter()
+                .filter(|member| matches!(member, PhpType::Object(_)))
+                .cloned()
+                .collect();
+            match objects.len() {
+                0 => PhpType::Mixed,
+                1 => objects.into_iter().next().expect("one object member"),
+                _ => PhpType::Union(objects),
+            }
+        }
+        _ => PhpType::Mixed,
     }
 }

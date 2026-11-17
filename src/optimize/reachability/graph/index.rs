@@ -367,6 +367,8 @@ impl DeclarationIndex {
                 | StmtKind::IncludeOnceMark { .. }
                 | StmtKind::Throw(_)
                 | StmtKind::Break(_)
+                | StmtKind::Goto(_)
+                | StmtKind::GotoLabel(_)
                 | StmtKind::Continue(_)
                 | StmtKind::ExprStmt(_)
                 | StmtKind::NamespaceDecl { .. }

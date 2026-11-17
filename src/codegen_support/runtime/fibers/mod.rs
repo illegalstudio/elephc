@@ -31,8 +31,9 @@
 //! | 176    | 8    | start_arg_count   | number of boxed values copied by `start()` |
 //! | 184    | 48   | reserved          | legacy slot file; descriptor captures now carry hidden Fiber callback args |
 //! | 232    | 8    | own_magic_set_guard | saved `__set` reentrancy chain head for this fiber |
+//! | 240    | 8    | own_gc_release_suppressed | saved deep-release GC protection for this fiber |
 //!
-//! Total payload = 240 bytes.
+//! Total payload = 248 bytes.
 
 mod alloc;
 mod api;
@@ -95,6 +96,8 @@ pub(crate) const FIBER_OWN_EXC_HEAD_OFFSET: i32 = 96;
 pub(crate) const FIBER_OWN_CALL_FRAME_OFFSET: i32 = 104;
 /// Byte offset of the saved runtime-name `__set` reentrancy chain for this fiber.
 pub(crate) const FIBER_OWN_MAGIC_SET_GUARD_OFFSET: i32 = 232;
+/// Byte offset of the saved deep-release GC suppression for this execution context.
+pub(crate) const FIBER_OWN_GC_RELEASE_SUPPRESSED_OFFSET: i32 = 240;
 /// Byte offset of the first `start_args` slot (up to 7 Mixed pointers passed to Fiber::start; parallels AArch64 int arg regs).
 pub(crate) const FIBER_START_ARGS_OFFSET: i32 = 112;
 /// Maximum number of `start_args` slots (one per AArch64 integer argument register minus `$this`).
@@ -107,7 +110,8 @@ pub(crate) const FIBER_START_ARG_COUNT_OFFSET: i32 = 176;
 pub(crate) const FIBER_FLOAT_ARGS_OFFSET: i32 = 184;
 /// Maximum number of reserved legacy float slots.
 pub(crate) const FIBER_FLOAT_ARGS_MAX: i32 = 6;
-/// Byte offset of the trailing start-argument slots only GENERATORS use, past every Fiber field.
+/// Byte offset of the trailing start-argument slots only GENERATORS use, past every Fiber field
+/// (the last of which is the GC release suppression at 240).
 ///
 /// A generator boxes each parameter, closure captures included, into a start slot until its body
 /// first runs. Seven were too few: Laravel's `Query\Builder::orderedLazyById()` returns a
@@ -116,7 +120,7 @@ pub(crate) const FIBER_FLOAT_ARGS_MAX: i32 = 6;
 /// Sixteen were too few too: symfony/http-client's `CachingHttpClient::request()` returns a
 /// generator closure with nineteen (two parameters, `$this`, fourteen captures and by-ref boxes),
 /// which sent the class to the interpreter and failed the Symfony Demo's closed-world build.
-pub(crate) const GENERATOR_EXTRA_ARGS_OFFSET: i32 = 240;
+pub(crate) const GENERATOR_EXTRA_ARGS_OFFSET: i32 = 248;
 /// Number of trailing generator-only start-argument slots (32 start slots in all).
 pub(crate) const GENERATOR_EXTRA_ARGS_MAX: i32 = 25;
 /// Total start-argument slots a generator may fill: the Fiber ones, then the trailing ones.

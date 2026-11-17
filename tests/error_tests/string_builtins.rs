@@ -211,6 +211,48 @@ expect_builtin_arity_error!(
 );
 
 expect_builtin_arity_error!(
+    test_error_ctype_cntrl_wrong_args,
+    "<?php ctype_cntrl();",
+    "ctype_cntrl() takes exactly 1 argument"
+);
+
+expect_builtin_arity_error!(
+    test_error_ctype_graph_wrong_args,
+    "<?php ctype_graph();",
+    "ctype_graph() takes exactly 1 argument"
+);
+
+expect_builtin_arity_error!(
+    test_error_ctype_lower_wrong_args,
+    "<?php ctype_lower();",
+    "ctype_lower() takes exactly 1 argument"
+);
+
+expect_builtin_arity_error!(
+    test_error_ctype_print_wrong_args,
+    "<?php ctype_print();",
+    "ctype_print() takes exactly 1 argument"
+);
+
+expect_builtin_arity_error!(
+    test_error_ctype_punct_wrong_args,
+    "<?php ctype_punct();",
+    "ctype_punct() takes exactly 1 argument"
+);
+
+expect_builtin_arity_error!(
+    test_error_ctype_upper_wrong_args,
+    "<?php ctype_upper();",
+    "ctype_upper() takes exactly 1 argument"
+);
+
+expect_builtin_arity_error!(
+    test_error_ctype_xdigit_wrong_args,
+    "<?php ctype_xdigit();",
+    "ctype_xdigit() takes exactly 1 argument"
+);
+
+expect_builtin_arity_error!(
     test_error_chop_wrong_args,
     "<?php chop();",
     "chop() takes 1 or 2 arguments"
@@ -314,18 +356,14 @@ fn test_error_ord_wrong_args() {
     expect_error("<?php ord();", "ord() takes exactly 1 argument");
 }
 
-/// Verifies that a pure-data registry builtin (`ord`) infers argument types so that
-/// an undefined variable passed as an argument produces the correct diagnostic.
+/// Verifies that a pure-data registry builtin (`ord`) still infers its argument type.
 ///
-/// This is a regression test for Fix B: before the fix, the registry-first dispatch
-/// branch skipped `infer_type` for builtins with no check hook, so undefined-variable
-/// errors were silently dropped.
+/// This is a regression test for Fix B: before the fix, the registry-first dispatch branch
+/// skipped `infer_type` for builtins with no check hook. Undefined reads are now PHP 8 runtime
+/// warnings, so the program type-checks and lowering emits the warning at the read site.
 #[test]
-fn test_error_ord_undefined_variable_arg() {
-    expect_error(
-        "<?php ord($undeclared);",
-        "Undefined variable: $undeclared",
-    );
+fn test_ord_undefined_variable_arg_is_a_runtime_warning() {
+    expect_no_error("<?php ord($undeclared);");
 }
 
 /// Verifies that `explode()` with only one argument produces the correct arity error.
@@ -866,5 +904,22 @@ fn test_error_mbstring_text_contracts() {
         ("<?php mb_strimwidth('a', 0, 1, []);", "mb_strimwidth() trim_marker argument must be string"),
     ] {
         expect_error(source, message);
+    }
+}
+
+/// Array-search forms must not reach the string-only backend without the literal rewrite.
+#[test]
+fn test_simplexml_followup_str_replace_rejects_unlowerable_array_search() {
+    for source in [
+        r#"<?php function replace_runtime(string $replacement): string {
+            return str_replace(["a", "b"], $replacement, "ab");
+        }"#,
+        r#"<?php echo str_replace(search: ["a", "b"], replace: "x", subject: "ab");"#,
+        r#"<?php echo str_replace(...[["a", "b"], "x", "ab"]);"#,
+    ] {
+        expect_error(
+            source,
+            "str_replace(): Argument #1 ($search) must be of type string, array given",
+        );
     }
 }

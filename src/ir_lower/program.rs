@@ -162,12 +162,22 @@ fn lower_on_compiler_stack(
     );
     let _program_names_weak_map =
         super::context::set_program_names_weak_map(program_names_weak_map(program, check_result));
+    let _closure_param_hints =
+        crate::ir_lower::closure_param_hints::install(&check_result.closure_param_hints);
+    let _closure_defaults = crate::ir_lower::initializer_reads::install(check_result);
     let mut module = match source_catalog {
         Some(catalog) => Module::with_source_catalog(target, catalog),
         None => Module::new(target),
     };
-    module.source_path = source_path.map(canonical_source_path);
+    module.source_path = source_path.map(crate::source::canonical_source_path);
     module.source_files = crate::span::Span::source_paths_snapshot();
+    // Codegen may run on another thread than parsing, so freeze the span-to-file table here.
+    // Paths are canonicalized exactly like `_script_source_file` and `__FILE__`: the CLI may
+    // name the entry file through a symlink, and a diagnostic must not report that spelling.
+    module.source_paths = crate::span::Span::registered_source_paths()
+        .into_iter()
+        .map(|(id, path)| (id, crate::source::canonical_source_path(Path::new(&path))))
+        .collect();
     module.web = web;
     module.closed_world = closed_world;
     module.runtime_bound_functions = std::sync::Arc::new(
@@ -217,6 +227,11 @@ fn lower_on_compiler_stack(
         &constants,
         &fiber_return_sigs,
     );
+    // A completed source function's refusal is definitive. Avoid lowering the prelude's
+    // class catalog when an unsupported native reference already rejects the program.
+    if let Some(error) = super::diagnostics::take_first() {
+        return Err(LoweringError::Unsupported(error));
+    }
     lower_class_like_methods(
         program,
         &mut module,
@@ -232,6 +247,12 @@ fn lower_on_compiler_stack(
         &constants,
         &fiber_return_sigs,
     );
+    // Source bodies have finished their speculative lowering and rollback. A definitive
+    // refusal cannot be repaired by the synthetic eval/reflection helpers below, so report
+    // it before materializing the opaque-eval builtin catalog for a rejected program.
+    if let Some(error) = super::diagnostics::take_first() {
+        return Err(LoweringError::Unsupported(error));
+    }
     function::lower_eval_native_default_helpers(
         &mut module,
         check_result,
@@ -266,6 +287,8 @@ fn lower_on_compiler_stack(
         &constants,
         &fiber_return_sigs,
     )?;
+    super::boxed_operators::lower_requested(&mut module);
+    include_lowered_runtime_features(&mut module);
     super::boxed_array_appends::normalize_module(&mut module);
     super::closure_scopes::specialize_module(&mut module);
     super::effect_refinement::refine_module(&mut module);
@@ -304,7 +327,8 @@ pub(super) fn validate_finished_module(module: Module, collect: bool) -> Result<
         crate::ir::validate_module_references(&module)?;
         return Ok(module);
     }
-    validate_lowered_module(&module)?;
+    validate_lowered_module(&module)
+        .map_err(|error| super::validation_context::describe(&module, error))?;
     Ok(module)
 }
 

@@ -96,6 +96,10 @@ class Fixture:
     def output(self):
         return self.root / "docs" / "php" / "compatibility.md"
 
+    @property
+    def json_output(self):
+        return self.root / "docs" / "php" / "compatibility.json"
+
 
 def run_gen(**kwargs):
     with tempfile.TemporaryDirectory() as tmp:
@@ -171,6 +175,14 @@ class ValidationTests(unittest.TestCase):
         code, out = run_gen(registry=[public("strlen")], catalog=catalog)
         self.assertEqual(code, 1)
         self.assertIsNone(out)
+
+    def test_failed_validation_writes_no_json(self):
+        """A rejected run leaves neither the page nor its JSON twin behind."""
+        catalog = '[[language]]\nfeature = "X"\nstatus = "supported"\n'
+        with tempfile.TemporaryDirectory() as tmp:
+            fx = Fixture(tmp, registry=[public("strlen")], catalog=catalog)
+            self.assertEqual(gen.run(fx.root), 1)
+            self.assertFalse(fx.json_output.exists())
 
     def test_dangling_evidence_fails(self):
         catalog = ('[[language]]\nfeature = "X"\nstatus = "supported"\n'
@@ -341,6 +353,93 @@ class RenderTests(unittest.TestCase):
         self.assertIn("constants **2 / 3**", first)
         # strrev is compiled-only, so the standard functions row diverges between backends.
         self.assertIn("- `standard` functions: 2 / 1", first)
+
+
+
+class JsonTests(unittest.TestCase):
+    def generate(self, **kwargs):
+        """Run the generator twice and return (first JSON text, parsed data, rerun text)."""
+        with tempfile.TemporaryDirectory() as tmp:
+            fx = Fixture(tmp, **kwargs)
+            self.assertEqual(gen.run(fx.root), 0)
+            first = fx.json_output.read_text()
+            self.assertEqual(gen.run(fx.root), 0)
+            return first, json.loads(first), fx.json_output.read_text()
+
+    def test_json_mirrors_the_page_counts_deterministically(self):
+        """The JSON carries the same per-module and overall counts as the Markdown table."""
+        reg = [public("strlen"), public("strrev", eval_supported=False)]
+        symbols = {
+            "classes": [klass("php_user_filter")],
+            "constants": [const("SORT_ASC", value=4), const("PREG_SPLIT_NO_EMPTY", module="pcre", value=1)],
+        }
+        text, data, rerun = self.generate(registry=reg, symbols=symbols)
+        self.assertEqual(text, rerun)  # byte-identical
+        self.assertTrue(text.endswith("}\n"))
+        self.assertEqual(data["schema_version"], gen.JSON_SCHEMA_VERSION)
+        self.assertEqual(data["baseline"], {
+            "php_version": "8.5.10", "generated_at": "2026-09-04",
+            "extensions": 2, "functions": 4, "classes": 2, "constants": 3,
+        })
+        self.assertEqual(data["coverage"], {
+            "functions": {"have": 2, "total": 4},
+            "classes": {"have": 1, "total": 2},
+            "constants": {"have": 2, "total": 3},
+        })
+        rows = {row["name"]: row for row in data["modules"]}
+        self.assertEqual([row["name"] for row in data["modules"]], ["pcre", "standard"])
+        self.assertEqual(rows["standard"]["functions"], {"have": 2, "total": 3, "eval": 1})
+        self.assertEqual(rows["standard"]["classes"], {"have": 1, "total": 2, "eval": 1})
+        self.assertEqual(rows["pcre"]["functions"], {"have": 0, "total": 1, "eval": 0})
+        self.assertIsNone(rows["pcre"]["classes"])  # the module has no classes at all
+        self.assertIsNone(rows["standard"]["docs"])  # no docs/php page in the fixture
+        self.assertEqual(rows["standard"]["extension"], "standard")
+        self.assertEqual(rows["standard"]["tier"], "optional")  # no [build_tiers] in the fixture
+        self.assertEqual(data["language"], [{
+            "feature": "Generators", "status": "supported", "docs": None, "php": None, "notes": None,
+        }])
+        self.assertEqual(data["limitations"], [{"title": "Static subset", "notes": "AOT only."}])
+
+    def test_json_links_module_pages_and_lists_side_sets(self):
+        """Module docs links, symbol-less extensions, PECL and elephc-only symbols are exported."""
+        baseline = dict(BASELINE, extensions=[*BASELINE["extensions"], "lexbor"])
+        reg = [public("strlen"), public("clamp", module="elephc", area="Math")]
+        symbols = {"classes": [klass("Imagick", module="imagick")], "constants": []}
+        with tempfile.TemporaryDirectory() as tmp:
+            fx = Fixture(tmp, registry=reg, baseline=baseline, symbols=symbols)
+            (fx.root / "docs" / "php" / "regex.md").write_text("# Regex\n")
+            self.assertEqual(gen.run(fx.root), 0)
+            data = json.loads(fx.json_output.read_text())
+        rows = {row["name"]: row for row in data["modules"]}
+        self.assertEqual(rows["pcre"]["docs"], f"docs/php/regex.md#{gen.SECTION_ANCHOR}")
+        self.assertEqual(data["symbolless_extensions"], ["lexbor"])
+        self.assertEqual(data["pecl"], [{"name": "imagick", "functions": 0, "classes": 1, "constants": 0}])
+        self.assertEqual(data["beyond_php"]["functions"], [{"name": "clamp", "area": "Math"}])
+
+    def test_json_exports_extension_directory_and_build_tier(self):
+        """Modules carry their php-src ext/ directory and how php-src builds them."""
+        baseline = dict(
+            BASELINE, extensions=[*BASELINE["extensions"], "zend opcache"],
+            functions={**BASELINE["functions"], "opcache_get_status": "zend opcache"},
+        )
+        catalog = CATALOG_OK + '\n[build_tiers]\nalways = ["zend opcache", "pcre"]\ndefault = ["standard"]\n'
+        _, data, _ = self.generate(registry=[public("strlen")], baseline=baseline, catalog=catalog)
+        rows = {row["name"]: row for row in data["modules"]}
+        self.assertEqual(rows["zend opcache"]["extension"], "opcache")
+        self.assertEqual(rows["zend opcache"]["tier"], "always")
+        self.assertEqual(rows["pcre"]["tier"], "always")
+        self.assertEqual(rows["standard"]["tier"], "default")
+
+    def test_build_tiers_must_name_baseline_extensions_once(self):
+        """Unknown, misspelled or duplicated tier entries fail generation."""
+        for tiers in (
+            'always = ["pcre"]\ndefault = ["pcre"]\n',
+            'always = ["opcache"]\n',
+            'sometimes = ["pcre"]\n',
+        ):
+            code, out = run_gen(registry=[public("strlen")], catalog=CATALOG_OK + "\n[build_tiers]\n" + tiers)
+            self.assertEqual(code, 1, tiers)
+            self.assertIsNone(out)
 
 
 if __name__ == "__main__":

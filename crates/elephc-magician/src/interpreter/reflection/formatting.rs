@@ -442,8 +442,11 @@ pub(super) fn eval_reflection_class_constant_to_string(
         values,
     )?);
     parts.push(constant_name.to_string());
-    let value = eval_reflection_class_constant_display_value(value, values)?;
-    Ok(format!("Constant [ {} ] {{ {} }}\n", parts.join(" "), value))
+    let display = eval_reflection_class_constant_display_value(value, values);
+    if !value.is_borrowed() {
+        values.release(value)?;
+    }
+    Ok(format!("Constant [ {} ] {{ {} }}\n", parts.join(" "), display?))
 }
 
 /// Returns the type label PHP prints for a reflected class constant value.

@@ -10,6 +10,27 @@
 
 use crate::support::*;
 
+/// Opaque eval retires decoded scalar, array and object producers after storage acquires them.
+#[test]
+fn test_json_decode_eval_container_owners_bundle() {
+    check_json_owners(r###"<?php
+$code = $argc > 0 ? '
+$indexed = json_decode("[\"abc\",\"\",5,1.5,true,false,null]", true);
+echo json_encode($indexed), "|";
+$assoc = json_decode("{\"x\":[\"old\"],\"x\":{\"values\":[1,2]},\"empty\":{}}", true);
+echo json_encode($assoc), "|";
+$object = json_decode("{\"x\":[{\"s\":\"v\"}],\"empty\":{}}");
+echo json_encode($object);
+unset($indexed, $assoc, $object);' : '';
+eval($code);
+unset($code);
+"###, concat!(
+        "[\"abc\",\"\",5,1.5,true,false,null]|",
+        "{\"x\":{\"values\":[1,2]},\"empty\":[]}|",
+        "{\"x\":[{\"s\":\"v\"}],\"empty\":{}}",
+    ));
+}
+
 /// Runs a JSON ownership fixture in both optimizer modes and checks the optional PHP oracle.
 fn check_json_owners(source: &str, expected: &str) {
     for mode in ["--ir-opt=off", "--ir-opt=on"] {

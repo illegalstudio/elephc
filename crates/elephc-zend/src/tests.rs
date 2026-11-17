@@ -405,6 +405,7 @@ fn quiet_parsing_throws_nothing() {
 /// SimpleXML's are in PHP, and that `is_numeric_str_function` refuses trailing data.
 #[test]
 fn object_truthiness_asks_the_cast_handler() {
+    /// Supplies false for boolean casts and seven for integer casts in this fixture.
     unsafe extern "C" fn always_false(_object: *mut zend_object, out: *mut zval, r#type: c_int) -> zend_result {
         if r#type == _IS_BOOL as c_int {
             (*out).u1.type_info = IS_FALSE as u32;
@@ -1212,21 +1213,27 @@ fn event(name: &'static str) -> zend_result {
     SUCCESS
 }
 
+/// Records module initialization in the lifecycle fixture.
 unsafe extern "C" fn minit(_type: c_int, _number: c_int) -> zend_result {
     event("MINIT")
 }
+/// Records request initialization in the lifecycle fixture.
 unsafe extern "C" fn rinit(_type: c_int, _number: c_int) -> zend_result {
     event("RINIT")
 }
+/// Records request shutdown in the lifecycle fixture.
 unsafe extern "C" fn rshutdown(_type: c_int, _number: c_int) -> zend_result {
     event("RSHUTDOWN")
 }
+/// Records module shutdown in the lifecycle fixture.
 unsafe extern "C" fn mshutdown(_type: c_int, _number: c_int) -> zend_result {
     event("MSHUTDOWN")
 }
+/// Records destruction of a regular resource in the lifecycle fixture.
 unsafe extern "C" fn close_regular(_res: *mut zend_resource) {
     event("ld");
 }
+/// Records destruction of a persistent resource in the lifecycle fixture.
 unsafe extern "C" fn close_persistent(_res: *mut zend_resource) {
     event("pld");
 }

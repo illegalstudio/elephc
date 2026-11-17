@@ -1,8 +1,6 @@
 ---
 title: "asort() - internals"
 description: "Compiler internals for asort(): lowering path, type checks, and runtime helpers."
-sidebar:
-  order: 61
 ---
 
 ## `asort()` - internals
@@ -10,7 +8,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/array/asort.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/array/asort.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:752](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L752) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 
@@ -39,12 +37,12 @@ sidebar:
 ## Signature summary
 
 ```php
-function asort(array $array, int $flags = 0): bool
+function asort(array $array): bool
 ```
 
 ## What the type checker enforces
 
-- **Arity**: takes 1–2 arguments (1 optional).
+- **Arity**: takes exactly 1 argument.
 - **By-reference parameters**: `$array`.
 
 ## Eval interpreter (magician)

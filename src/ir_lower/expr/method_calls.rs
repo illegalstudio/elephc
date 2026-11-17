@@ -76,6 +76,35 @@ pub(super) fn lower_method_call_on_scalar(
     ))
 }
 
+/// Returns the catchable `Error` message recorded for a private/protected method call at
+/// `expr` that PHP only rejects at runtime, or `None` when the call is accessible.
+pub(super) fn recorded_method_access_message(
+    ctx: &LoweringContext<'_, '_>,
+    expr: &Expr,
+    op: Op,
+) -> Option<String> {
+    if !matches!(op, Op::MethodCall | Op::NullsafeMethodCall) {
+        return None;
+    }
+    ctx.throw_access_sites
+        .get(&(ctx.loop_storage_scope.clone(), expr.span))
+        .and_then(|info| {
+        if let ThrowAccessKind::PrivateMethod {
+            visibility,
+            class_name,
+            method,
+        } = &info.kind
+        {
+            Some(format!(
+                "Call to {} method {}::{}() from global scope",
+                visibility, class_name, method
+            ))
+        } else {
+            None
+        }
+    })
+}
+
 /// Lowers an object method call.
 pub(super) fn lower_method_call(
     ctx: &mut LoweringContext<'_, '_>,
@@ -88,34 +117,31 @@ pub(super) fn lower_method_call(
     // A statically-decided private/protected method access from an inaccessible
     // scope raises a catchable `Error` in PHP rather than a compile-time error,
     // but the receiver expression must still be evaluated first.
-    let throw_access_message = if op == Op::MethodCall {
-        ctx.throw_access_sites
-            .get(&(ctx.loop_storage_scope.clone(), expr.span))
-            .and_then(|info| {
-            if let ThrowAccessKind::PrivateMethod {
-                visibility,
-                class_name,
-                method: m,
-            } = &info.kind
-            {
-                Some(format!(
-                    "Call to {} method {}::{}() from global scope",
-                    visibility, class_name, m
-                ))
-            } else {
-                None
-            }
-        })
-    } else {
-        None
-    };
+    let throw_access_message = recorded_method_access_message(ctx, expr, op);
     let object_expr = object;
-    let object = lower_member_receiver(ctx, object_expr, expr);
-    // The method name first: the class-table scan ran for every argument-less method call.
+    let mut object = lower_member_receiver(ctx, object_expr, expr);
+    // PHP checks method visibility before it decides whether the call is instance or
+    // static, so a recorded private/protected access must throw before the static-only
+    // reroute below can run the method.
+    if let Some(message) = throw_access_message {
+        release_owning_receiver_temporary(ctx, object, expr.span);
+        return crate::ir_lower::stmt::lower_throw_access_error_expr(ctx, &message, expr.span);
+    }
+    // PHP permits `$object->staticMethod()` and resolves the static method from the
+    // object's class. The checker accepts that shape alongside the instance table; here
+    // the receiver is evaluated for its side effects, then the call is emitted through the
+    // static-method path so codegen never passes the object as `$this`.
+    if op == Op::MethodCall {
+        if let Some(result) = try_static_only_method_through_receiver(ctx, object, method, args, expr) {
+            return result;
+        }
+    }
+    // These reflection methods initialize the reflected class (deferred default errors and
+    // property-default deprecations), like php-src does.
     if op == Op::MethodCall && args.is_empty()
         && matches!(php_symbol_key(method).as_str(),
             "getdefaultproperties" | "getstaticproperties" | "newinstancewithoutconstructor")
-        && ctx.classes.values().any(|class| class.deferred_property_default_error.is_some())
+        && ctx.classes.keys().any(|class| crate::ir_lower::property_default_errors::has_initialization_effect(ctx, class))
     {
         if is_reflection_class_construction_receiver(ctx, object.value) {
             let owns_receiver = ctx.value_is_owning_temporary(object)
@@ -131,6 +157,11 @@ pub(super) fn lower_method_call(
                 Some(expr.span));
             let name = lower_property_get_from_value(ctx, borrowed, "__name", Op::PropGet, expr);
             crate::ir_lower::property_default_errors::for_dynamic_class(ctx, name, expr.span);
+            if php_symbol_key(method) == "getdefaultproperties" {
+                crate::ir_lower::property_default_errors::for_reflection_default_properties(
+                    ctx, name, expr.span,
+                );
+            }
             if owns_receiver { ctx.unguard_call_argument(object.value, expr.span); }
         }
     }
@@ -142,10 +173,6 @@ pub(super) fn lower_method_call(
     // much as the one that built it.
     if op == Op::MethodCall && !is_table_reflector_internal(method) && receiver_is_runtime_metadata_reflector(ctx, object.value) {
         ctx.declare_eval_context_local();
-    }
-    if let Some(message) = throw_access_message {
-        release_owning_receiver_temporary(ctx, object, expr.span);
-        return crate::ir_lower::stmt::lower_throw_access_error_expr(ctx, &message, expr.span);
     }
     // Before the null test, which reads an int's zero payload as the null sentinel.
     if let Some(error) = lower_method_call_on_scalar(ctx, object, method, op, expr) {
@@ -181,6 +208,7 @@ pub(super) fn lower_method_call(
     }
     if op == Op::MethodCall
         && (value_is_nullable(ctx, object.value)
+            || value_may_be_false(ctx, object.value)
             || value_may_carry_container_miss(ctx, object.value))
     {
         return lower_nullable_regular_method_call(ctx, object, method, args, expr);
@@ -239,6 +267,11 @@ pub(super) fn lower_method_call(
     if op == Op::MethodCall && reflection_property_reflected_target(ctx, object_expr).is_some() {
         // Specialized property calls still evaluate a reflector receiver. Keep its
         // independent owner through argument/guard throws and retire it on success.
+        if ctx.value_is_owned_unboxed_local_load(object.value) {
+            let source = object;
+            object = crate::ir_lower::ownership::acquire_lifetime_pin_if_refcounted(ctx, source, Some(expr.span));
+            crate::ir_lower::ownership::release_if_owned(ctx, source, Some(expr.span));
+        }
         let pins = pin_in_flight_owners(ctx, &[object.value], expr.span);
         let result = lower_reflection_property_value_call(ctx, Some(object_expr), object, method, args, expr);
         unpin_in_flight_owners(ctx, pins, expr.span);
@@ -264,22 +297,13 @@ pub(super) fn lower_method_call(
     if let Some(call) = enum_interface_calls::lower_enum_interface_call(ctx, object, method, args, op, expr) {
         return call;
     }
-    if op == Op::MethodCall {
-        if let Some(receiver) = object_static_method_receiver(ctx, object.value, method) {
-            let call = lower_static_method_call(ctx, &receiver, method, args, expr);
-            release_owning_receiver_temporary(ctx, object, expr.span);
-            return call;
-        }
+    if let Some(call) = selected_native_methods::lower(ctx, object, method, args, op, expr) {
+        return call;
     }
-    let magic_args;
-    let (dispatch_method, args) = if let Some(args) =
-        magic_call_dispatch_args(ctx, object.value, method, args, object_expr.span)
-    {
-        magic_args = args;
-        ("__call", magic_args.as_slice())
-    } else {
-        (method, args)
-    };
+    if let Some(call) = magic_method_calls::lower(ctx, object, method, args, op, expr) {
+        return call;
+    }
+    let dispatch_method = method;
     let result_type = method_call_result_type(ctx, object.value, dispatch_method, op, expr);
     let sig = super::method_metadata::boxed_receiver_source_signature(
         ctx,
@@ -360,6 +384,7 @@ pub(super) fn lower_method_call(
     // A concrete local load may later unbox physical Mixed storage after eval widens
     // its slot. Acquiring a root is safe for both borrowed and independently owned loads.
     let (object, receiver_owner) = root_method_receiver(ctx, object, expr.span);
+    emit_native_factory_method_lookup(ctx, object, method, expr.span);
     let mut operands = vec![object.value];
     let prepared = sig
         .as_ref()
@@ -383,6 +408,13 @@ pub(super) fn lower_method_call(
         .map_or(call_args, |rewrite| rewrite.args.as_slice());
     let arg_values = lower_user_args_with_signature(ctx, sig.as_ref(), call_args);
     ctx.call_description = previous_description;
+    // php-src initializes the reflected class once the arguments are evaluated, whether the
+    // static property exists or not.
+    if op == Op::MethodCall
+        && matches!(php_symbol_key(dispatch_method).as_str(), "getstaticpropertyvalue" | "setstaticpropertyvalue")
+    {
+        initialize_reflected_class_from_receiver(ctx, object, expr);
+    }
     let mut arg_values = arg_values;
     if method_is_fiber_start(ctx, object.value, dispatch_method) {
         for argument in &mut arg_values {
@@ -407,6 +439,11 @@ pub(super) fn lower_method_call(
         expr.span,
     );
     operands.extend(arg_values.iter().copied());
+    super::object_construction::publish_constructor_call_strictness(
+        ctx,
+        dispatch_method,
+        expr.span,
+    );
     let data = ctx.intern_string(dispatch_method);
     let call = ctx.emit_value(
         op,
@@ -572,7 +609,9 @@ pub(super) fn lower_runtime_spread_method_call(
         // The signature decides which unpacked elements become references to their source slot.
         let outer = std::mem::replace(&mut ctx.direct_by_ref_unpack, true);
         let container =
-            super::descriptor_args::lower_named_descriptor_invoker_arg_container(ctx, args, signature, expr.span);
+            super::descriptor_args::lower_named_descriptor_invoker_arg_container(
+                ctx, args, signature, true, expr.span,
+            );
         ctx.direct_by_ref_unpack = outer;
         container
     } else {
@@ -644,27 +683,90 @@ fn static_only_object_method_receiver(
     Some(receiver)
 }
 
-/// Builds synthetic `__call` arguments when a class lacks the requested method.
-pub(super) fn magic_call_dispatch_args(
+/// Native factories can create abstract wrappers, whose method error precedes argument effects.
+pub(super) fn emit_native_factory_method_lookup(
+    ctx: &mut LoweringContext<'_, '_>, object: LoweredValue, method: &str, span: Span,
+) {
+    if !ctx.classes.contains_key("SimpleXMLElement") { return; }
+    let key = php_symbol_key(method);
+    let receiver_type = ctx.builder.value_php_type(object.value);
+    if let Some((class, _)) = singular_object_class(&receiver_type) {
+        if ctx.classes.get(class.trim_start_matches('\\'))
+            .is_some_and(|info| info.method_impl_classes.contains_key(&key)) { return; }
+    }
+    let data = ctx.intern_string(method);
+    ctx.emit_void(Op::MethodLookup, vec![object.value], Some(Immediate::Data(data)),
+        Op::MethodLookup.default_effects(), Some(span));
+}
+
+/// Returns whether a receiver type carries PHP's `false` failure sentinel.
+///
+/// Inspect the semantic type, not `codegen_repr()`: a union lowers to `Mixed`, so reading the
+/// representation here made every `Object|false` factory return look false-free and sent it
+/// through the direct dispatcher's "on null" fatal.
+fn value_may_be_false(ctx: &LoweringContext<'_, '_>, value: crate::ir::ValueId) -> bool {
+    match ctx.builder.value_php_type(value) {
+        PhpType::False => true,
+        PhpType::Union(members) => members.contains(&PhpType::False),
+        _ => false,
+    }
+}
+
+/// Returns the single object class of a receiver, allowing `false`/`null` failure branches.
+fn method_receiver_single_class(ty: &PhpType) -> Option<&str> {
+    match ty {
+        PhpType::Object(name) => Some(name.as_str()),
+        PhpType::Union(members) => {
+            let mut found: Option<&str> = None;
+            for member in members {
+                match member {
+                    PhpType::Object(name) => {
+                        if found.is_some_and(|existing| existing != name.as_str()) {
+                            return None;
+                        }
+                        found = Some(name.as_str());
+                    }
+                    PhpType::Void | PhpType::False => {}
+                    _ => return None,
+                }
+            }
+            found
+        }
+        _ => None,
+    }
+}
+
+/// Returns the receiver's class when `method` exists only in its static method table.
+///
+/// The checker accepts `$object->staticMethod()` because PHP resolves it statically; this
+/// predicate is the lowering-side half of that rule. A class that declares an instance
+/// method of the same name keeps ordinary instance dispatch.
+pub(super) fn static_only_method_class(
     ctx: &LoweringContext<'_, '_>,
     object: crate::ir::ValueId,
     method: &str,
-    args: &[Expr],
-    span: Span,
-) -> Option<Vec<Expr>> {
-    if method_signature(ctx, object, method).is_some() {
+) -> Option<String> {
+    let class_name = match ctx.builder.value_php_type(object).codegen_repr() {
+        PhpType::Object(class_name) => class_name.trim_start_matches('\\').to_string(),
+        _ => return None,
+    };
+    let key = php_symbol_key(method);
+    let class_info = ctx.classes.get(class_name.as_str())?;
+    if class_info.methods.contains_key(&key) {
         return None;
     }
-    let object_ty = ctx.builder.value_php_type(object);
-    let Some((class_name, _)) = singular_object_class(&object_ty) else {
-        return None;
-    };
-    let normalized = class_name.trim_start_matches('\\');
-    class_method_signature(ctx, normalized, &php_symbol_key("__call"))?;
-    Some(vec![
-        Expr::new(ExprKind::StringLiteral(method.to_string()), span),
-        Expr::new(ExprKind::ArrayLiteral(args.to_vec()), span),
-    ])
+    class_info.static_methods.contains_key(&key).then_some(class_name)
+}
+
+/// Builds the static receiver naming `class_name` for a static call via an instance.
+pub(super) fn static_receiver_for_class_name(class_name: &str) -> crate::parser::ast::StaticReceiver {
+    use crate::parser::ast::StaticReceiver;
+    let parts = class_name
+        .trim_start_matches('\\')
+        .split('\\')
+        .map(str::to_string)
+        .collect();
+    StaticReceiver::Named(crate::names::Name::qualified(parts))
 }
 
 /// Returns the signature to use for method-call argument normalization.
@@ -703,7 +805,10 @@ fn narrowed_receiver_argument_signature(
     method: &str,
 ) -> Option<FunctionSig> {
     let object_ty = ctx.builder.value_php_type(object);
-    let (class_name, _) = singular_object_class(&object_ty)?;
+    // A factory-style `Object|false` receiver still has one object class after the success
+    // branch. Accept it here so the call gets the callee signature and fills trailing
+    // defaults; the call remains a dynamic dispatch that throws on the `false` branch.
+    let class_name = method_receiver_single_class(&object_ty)?;
     let normalized = class_name.trim_start_matches('\\');
     if normalized.is_empty()
         || ctx.has_eval_barrier()
@@ -711,7 +816,11 @@ fn narrowed_receiver_argument_signature(
     {
         return None;
     }
-    common_dynamic_method_signature(ctx, &php_symbol_key(method))
+    if php_symbol_key(method) == "__construct" {
+        class_method_signature(ctx, normalized, &php_symbol_key(method)).cloned()
+    } else {
+        common_dynamic_method_signature(ctx, &php_symbol_key(method))
+    }
 }
 
 /// The by-reference shape every class declaring `method` agrees on, for a `mixed` receiver.
@@ -832,6 +941,33 @@ pub(super) fn lower_nullable_regular_method_call(
     let merge = ctx
         .builder
         .create_named_block("method.nullable.merge", Vec::new());
+    // `?Object` and `Object|false` factory returns both need an object-tag check. Truthiness
+    // is wrong here: an empty SimpleXMLElement converts to false even though it is an object.
+    let is_object = ctx.emit_value(
+        Op::TypePredicate,
+        vec![object.value],
+        Some(Immediate::TypePredicate(crate::ir::PhpTypePredicate::Object)),
+        PhpType::Bool,
+        Op::TypePredicate.default_effects(),
+        Some(expr.span),
+    );
+    ctx.builder.terminate(Terminator::CondBr {
+        cond: is_object.value,
+        then_target: call_block,
+        then_args: Vec::new(),
+        else_target: fatal_block,
+        else_args: Vec::new(),
+    });
+
+    ctx.builder.position_at_end(fatal_block);
+    // `?Object` only reaches null here, while `Object|false` factory returns carry false.
+    // PHP names the actual value in the fatal, so split the two messages.
+    let null_block = ctx
+        .builder
+        .create_named_block("method.null.fatal", Vec::new());
+    let false_block = ctx
+        .builder
+        .create_named_block("method.false.fatal", Vec::new());
     let is_null = ctx.emit_value(
         Op::IsNull,
         vec![object.value],
@@ -842,17 +978,39 @@ pub(super) fn lower_nullable_regular_method_call(
     );
     ctx.builder.terminate(Terminator::CondBr {
         cond: is_null.value,
-        then_target: fatal_block,
+        then_target: null_block,
         then_args: Vec::new(),
-        else_target: call_block,
+        else_target: false_block,
         else_args: Vec::new(),
     });
 
-    ctx.builder.position_at_end(fatal_block);
+    ctx.builder.position_at_end(null_block);
     terminate_method_call_on_null(ctx, method);
 
+    ctx.builder.position_at_end(false_block);
+    terminate_method_call_on_false(ctx, method);
+
     ctx.builder.position_at_end(call_block);
-    let call = if let Some(object_ty) =
+    // Re-entering a constructor on an existing `Object|false` view must dispatch against
+    // the concrete class so omitted defaults are filled and `__construct` mutates `$this`.
+    // Other nullable/interface methods keep their existing Mixed dispatcher.
+    let call = if php_symbol_key(method) == "__construct" {
+        let call_object = match method_receiver_single_class(&ctx.builder.value_php_type(object.value)) {
+            Some(class_name) => {
+                let target = PhpType::Object(class_name.to_string());
+                ctx.emit_owned_value(
+                    Op::MixedUnbox,
+                    vec![object.value],
+                    None,
+                    target.clone(),
+                    Op::mixed_unbox_effects(&target),
+                    Some(expr.span),
+                )
+            }
+            None => object,
+        };
+        lower_method_call_with_receiver(ctx, call_object, method, args, Op::MethodCall, expr)
+    } else if let Some(object_ty) =
         super::override_arity::nullable_receiver_ladder_type(ctx, object, method, args)
     {
         lower_call_on_unboxed_receiver(ctx, object, object_ty, method, args, expr)
@@ -931,4 +1089,23 @@ pub(super) fn lower_call_on_unboxed_receiver(
     unpin_in_flight_owners(ctx, receiver_pins, expr.span);
     release_owning_receiver_temporary(ctx, object, expr.span);
     call
+}
+
+/// Initializes the class a `ReflectionClass` receiver reflects (deferred default errors and
+/// property-default deprecations), reading its runtime name without consuming the receiver.
+fn initialize_reflected_class_from_receiver(
+    ctx: &mut LoweringContext<'_, '_>,
+    object: LoweredValue,
+    expr: &Expr,
+) {
+    if !is_reflection_class_construction_receiver(ctx, object.value)
+        || !ctx.classes.keys().any(|class| crate::ir_lower::property_default_errors::has_initialization_effect(ctx, class))
+    {
+        return;
+    }
+    let borrowed = ctx.emit_value(Op::Borrow, vec![object.value], None,
+        ctx.builder.value_php_type(object.value).clone(), Op::Borrow.default_effects(),
+        Some(expr.span));
+    let name = lower_property_get_from_value(ctx, borrowed, "__name", Op::PropGet, expr);
+    crate::ir_lower::property_default_errors::for_dynamic_class(ctx, name, expr.span);
 }

@@ -30,16 +30,6 @@ pub(super) fn runtime_value_tag(name: &str, elem: &PhpType) -> Result<u8> {
     }
 }
 
-/// Verifies a builtin receives an indexed array operand.
-pub(super) fn require_indexed_array_builtin(ty: PhpType, name: &str) -> Result<()> {
-    match ty.codegen_repr() {
-        PhpType::Array(_) => Ok(()),
-        other => Err(CodegenIrError::unsupported(format!(
-            "{} for PHP type {:?}",
-            name, other
-        ))),
-    }
-}
 
 /// Returns the supported element payload type for an indexed-array `array_pop()`.
 pub(super) fn array_pop_element_type(ty: PhpType) -> Result<PhpType> {

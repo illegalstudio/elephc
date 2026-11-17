@@ -31,7 +31,27 @@ impl Checker {
     /// A recursive self-call that widens the parameters (`recursive_param_widenings`) re-runs the
     /// body with the widened types until they stop changing. A round that failed is retried the
     /// same way, since its error may only exist under the narrower types.
+    ///
+    /// The body is walked again while a walk denies a local the promotable `?int` read view
+    /// (`Checker::end_promotable_walk`), so the result is the one of the walk whose views match
+    /// its promotions. Denials only grow, which bounds the repetition.
     pub(crate) fn resolve_function_signature(
+        &mut self,
+        name: &str,
+        decl: &FnDecl,
+        param_types: Vec<(String, PhpType)>,
+    ) -> Result<PhpType, CompileError> {
+        loop {
+            let denials = self.promotable_view_denials_within(name);
+            let result = self.resolve_function_signature_walk(name, decl, param_types.clone());
+            if self.promotable_view_denials_within(name) == denials {
+                return result;
+            }
+        }
+    }
+
+    /// Walks a function body once for `resolve_function_signature`.
+    fn resolve_function_signature_walk(
         &mut self,
         name: &str,
         decl: &FnDecl,
@@ -107,6 +127,8 @@ impl Checker {
         decl: &FnDecl,
         param_types: Vec<(String, PhpType)>,
     ) -> Result<PhpType, CompileError> {
+        // This walk replaces whatever a previous failed walk of the body recorded.
+        self.failed_function_body_errors.remove(name);
         let mut local_env: TypeEnv = TypeEnv::default();
         for (pname, pty) in &param_types {
             // A by-reference parameter this body widens is bound `mixed` for the whole body,
@@ -210,7 +232,7 @@ impl Checker {
         }
 
         let provisional_sig = self.provisional_function_sig(decl, param_types.clone());
-        self.functions.insert(name.to_string(), provisional_sig);
+        self.publish_function_signature(name.to_string(), provisional_sig);
 
         let mut return_type = PhpType::Void;
         let mut all_return_infos = Vec::new();
@@ -236,6 +258,7 @@ impl Checker {
         let prev_by_ref_return = self.current_by_ref_return;
         self.current_by_ref_return = decl.by_ref_return;
         self.clear_loop_storage_scope(&function_key);
+        self.begin_promotable_walk(&function_key);
         let previous_loop_storage_scope =
             std::mem::replace(&mut self.current_loop_storage_scope, function_key.clone());
         self.resolving_functions.insert(function_key.clone());
@@ -248,7 +271,9 @@ impl Checker {
         // frame's own storage and are excluded from marking outright, so they are left out.
         let pre_bound_own_storage: crate::fast_hash::FastMap<String, PhpType> =
             param_types.iter().cloned().collect();
-        let body_check_result = self.with_local_storage_context(
+        let return_facts = crate::optimize::ReturnBoundaryFacts::new(decl.return_type.as_ref(),
+            decl.params.iter().zip(&decl.param_types).map(|(name, hint)| (name.as_str(), hint.as_ref())), &decl.body);
+        let body_check_result = crate::optimize::with_return_boundary_facts(Some(&return_facts), || self.with_local_storage_context(
             ref_param_names,
             param_names,
             pre_bound_own_storage,
@@ -257,6 +282,7 @@ impl Checker {
                 checker.boxed_parameter_locals.extend(decl.params.iter().enumerate()
                     .filter(|(index, _)| decl.param_types.get(*index).is_none_or(Option::is_none))
                     .map(|(_, name)| name.clone()));
+                checker.seed_parameter_value_proofs(&local_env);
                 for stmt in &decl.body {
                     if let Err(error) = checker.check_stmt(stmt, &mut local_env) {
                         // Naming the enclosing function is what lets `pipeline` recover the FILE:
@@ -280,7 +306,8 @@ impl Checker {
                 }
                 Ok(())
             },
-        );
+        ));
+        self.end_promotable_walk(&function_key);
         self.current_function = previous_function;
         self.resolving_functions.remove(&function_key);
         self.current_loop_storage_scope = previous_loop_storage_scope;
@@ -326,6 +353,9 @@ impl Checker {
             }
         }
         if !errors.is_empty() {
+            // Kept so the driver can find the bodies whose errors it may drop as stale initial
+            // top-level errors, and walk them again (`recheck_failed_function_bodies`).
+            self.failed_function_body_errors.insert(name.to_string(), errors.clone());
             return Err(CompileError::from_many(errors));
         }
 
@@ -428,7 +458,7 @@ impl Checker {
             // is PHP's rule, and the thing lowering must not try to re-derive later.
             is_generator: contains_yield,
         };
-        self.functions.insert(name.to_string(), sig);
+        self.publish_function_signature(name.to_string(), sig);
         if return_type == PhpType::Callable {
             if let Some(callable_sig) = matching_callable_sig(&callable_return_sigs) {
                 self.callable_return_sigs

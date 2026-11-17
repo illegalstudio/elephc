@@ -69,6 +69,7 @@ pub(super) fn lower_new_dynamic_planned_value(
         result_type: &result_type,
         merge,
         fallback: fallback_block,
+        initialized_exits: Default::default(),
     };
     if candidates.len() >= PLANNED_NEW_HASH_DISPATCH_MIN {
         emit_planned_new_hashed_dispatch(
@@ -95,9 +96,14 @@ pub(super) fn lower_new_dynamic_planned_value(
     let name_value = ctx.load_local(&name_temp, Some(expr.span));
     let fallback = super::object_construction::lower_new_dynamic_generic(ctx, name_value, args, expr);
     store_value_into_temp(ctx, &result_temp, PhpType::Mixed, fallback, expr.span);
+    let mut joined_initialized = ctx.initialized_slots_snapshot();
+    for arm in branches.initialized_exits.take() {
+        joined_initialized.retain(|slot| arm.contains(slot));
+    }
     branch_to(ctx, merge);
 
     ctx.builder.position_at_end(merge);
+    ctx.restore_initialized_slots(joined_initialized);
     retire_owned_call_operand(ctx, ctx.local_slots[&name_temp], expr.span);
     take_owned_temp(ctx, &result_temp, expr.span)
 }
@@ -223,20 +229,41 @@ fn dynamic_new_class_is_planning_candidate(
     if class_info.declaration_span == Span::dummy() {
         return false;
     }
-    if !class_info
+    let Some((owner_name, constructor_owner)) = crate::types::constructor_owner(ctx.classes, class_name) else {
+        return false;
+    };
+    let implementation = constructor_owner.method_impl_classes.get(constructor_key)
+        .map(String::as_str).unwrap_or(owner_name);
+    let Some(body_owner) = ctx.classes.get(implementation) else { return false; };
+    if body_owner.declaration_span == Span::dummy() || !body_owner
         .method_decls
         .iter()
         .any(|method| php_symbol_key(&method.name) == constructor_key && method.has_body)
     {
         return false;
     }
-    let Some(sig) = class_info.methods.get(constructor_key) else {
+    let Some(sig) = constructor_owner.methods.get(constructor_key) else {
         return false;
     };
+    let owns_promoted_references = body_owner.constructor_param_to_prop.iter().flatten()
+        .any(|property| body_owner.visible_property_index(property)
+            .is_some_and(|slot| body_owner.property_slot_owns_reference(slot)));
+    // Eval and backtraces append a hidden collector even to nonvariadic constructors.
+    // The generic padding thunk refuses references, so these constructors must retain the
+    // fixed-class argument planner that promotes and transfers their caller-owned cells.
+    if owns_promoted_references && crate::func_args::sig_collects_surplus_args(sig)
+        && !args.iter().any(is_spread_arg)
+    {
+        if crate::types::call_args::has_named_args(args) {
+            return crate::types::call_args::plan_call_args(sig, args, args[0].span, false, false).is_ok();
+        }
+        let regular = crate::types::call_args::regular_param_count(sig);
+        return args.len() >= regular || sig.defaults[args.len()..regular].iter().all(Option::is_some);
+    }
     if sig.variadic.is_some() {
         return false;
     }
-    if !dynamic_new_args_need_planning(sig, args) {
+    if !dynamic_new_args_need_planning(sig, args) && !owns_promoted_references {
         return false;
     }
     dynamic_new_args_lower_to_exact_arity(ctx, sig, args)
@@ -364,6 +391,7 @@ pub(super) fn lower_new_late_static_planned_dispatch(
         result_type: &result_type,
         merge,
         fallback: fallback_block,
+        initialized_exits: Default::default(),
     };
 
     if candidates.len() >= PLANNED_NEW_HASH_DISPATCH_MIN {
@@ -408,7 +436,7 @@ pub(super) fn lower_new_late_static_planned_dispatch(
             Op::DynamicObjectNew.default_effects(),
             Some(expr.span),
         );
-        store_value_into_temp(ctx, &result_temp, result_type, fallback, expr.span);
+        store_value_into_temp(ctx, &result_temp, result_type.clone(), fallback, expr.span);
         branch_to(ctx, merge);
     } else if required_parent.is_some() {
         // A spread or named argument list for an interpreted late-static class. The constrained
@@ -423,11 +451,16 @@ pub(super) fn lower_new_late_static_planned_dispatch(
     } else {
         let name_value = ctx.load_local(&name_temp, Some(expr.span));
         let fallback = lower_new_dynamic_generic(ctx, name_value, args, expr);
-        store_value_into_temp(ctx, &result_temp, result_type, fallback, expr.span);
+        store_value_into_temp(ctx, &result_temp, result_type.clone(), fallback, expr.span);
         branch_to(ctx, merge);
     }
 
+    let mut joined_initialized = ctx.initialized_slots_snapshot();
+    for arm in branches.initialized_exits.take() {
+        joined_initialized.retain(|slot| arm.contains(slot));
+    }
     ctx.builder.position_at_end(merge);
+    ctx.restore_initialized_slots(joined_initialized);
     if name_type == PhpType::Str {
         // A null scalar has no string-register payload. Writing it through a Str hidden slot
         // would leave stale pointer/length registers behind, then release an unrelated live
@@ -469,6 +502,8 @@ struct PlannedNewBranches<'a> {
     merge: BlockId,
     /// Reached when no candidate matched: the generic opcode, the eval bridge, or the fatal.
     fallback: BlockId,
+    /// The initialized-slot facts at each constructing arm's exit, joined at the merge.
+    initialized_exits: std::cell::RefCell<Vec<crate::fast_hash::FastSet<crate::ir::LocalSlotId>>>,
 }
 
 /// Emits one candidate test at the current position: a match constructs that class and
@@ -497,6 +532,7 @@ fn emit_planned_new_candidate_test(
         else_target: next_block,
         else_args: Vec::new(),
     });
+    let split_initialized = ctx.initialized_slots_snapshot();
 
     ctx.builder.position_at_end(match_block);
     let class = Name::unqualified(class_name.to_string());
@@ -518,9 +554,17 @@ fn emit_planned_new_candidate_test(
         object,
         branches.expr.span,
     );
+    branches
+        .initialized_exits
+        .borrow_mut()
+        .push(ctx.initialized_slots_snapshot());
     branch_to(ctx, branches.merge);
 
     ctx.builder.position_at_end(next_block);
+    // Ref-bound aliases are MAY facts, but an owner created by a different class arm
+    // is not initialized on this miss path. Restore MUST facts so each selected arm
+    // emits its own idempotent promotion before a constructor can retain the binding.
+    ctx.restore_initialized_slots(split_initialized);
 }
 
 /// Dispatches a planned dynamic `new` through `crc32(strtolower($class))` and a balanced tree
@@ -632,9 +676,11 @@ fn emit_planned_new_hash_tree(
         else_target: upper_half,
         else_args: Vec::new(),
     });
+    let split_initialized = ctx.initialized_slots_snapshot();
     ctx.builder.position_at_end(lower_half);
     emit_planned_new_hash_tree(ctx, branches, hash_var, &buckets[..mid], span);
     ctx.builder.position_at_end(upper_half);
+    ctx.restore_initialized_slots(split_initialized);
     emit_planned_new_hash_tree(ctx, branches, hash_var, &buckets[mid..], span);
 }
 

@@ -198,7 +198,10 @@ pub(super) fn lower_reflection_static_method_invoke(
         crate::ir_lower::ownership::release_if_owned(ctx, ignored_object, Some(object_arg.span));
     }
     let receiver = StaticReceiver::Named(Name::from(class_name.to_string()));
-    lower_static_method_call(ctx, &receiver, reflected_method, forwarded_args, expr)
+    let previous = ctx.reflected_invoke_call_span.replace(expr.span);
+    let result = lower_static_method_call(ctx, &receiver, reflected_method, forwarded_args, expr);
+    ctx.reflected_invoke_call_span = previous;
+    result
 }
 
 /// Lowers an instance reflected-method invocation using the first invoke argument as receiver,
@@ -232,20 +235,24 @@ fn lower_reflection_instance_method_invoke_scoped(
         }
         _ => object,
     };
+    let previous = ctx.reflected_invoke_call_span.replace(expr.span);
     if value_is_nullable(ctx, object.value) {
-        return lower_nullable_regular_method_call(
+        let result = lower_nullable_regular_method_call(
             ctx,
             object,
             reflected_method,
             forwarded_args,
             expr,
         );
+        ctx.reflected_invoke_call_span = previous;
+        return result;
     }
     // Only a receiver the backend can type as an object takes the pinned call.
     if matches!(ctx.builder.value_php_type(object.value), PhpType::Object(_)) {
         ctx.direct_method_call_class = direct_class;
     }
-    let call = lower_method_call_with_receiver(
+    // The source receiver is the ReflectionMethod object; this is its selected target.
+    let result = lower_method_call_with_receiver_direct(
         ctx,
         object,
         reflected_method,
@@ -254,7 +261,8 @@ fn lower_reflection_instance_method_invoke_scoped(
         expr,
     );
     ctx.direct_method_call_class = None;
-    call
+    ctx.reflected_invoke_call_span = previous;
+    result
 }
 
 /// Splits `ReflectionMethod::invoke($object, ...$args)` into receiver and method args.

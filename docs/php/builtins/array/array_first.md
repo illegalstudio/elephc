@@ -1,8 +1,6 @@
 ---
 title: "array_first()"
 description: "Returns the first value of an array in insertion order, or null when it is empty."
-sidebar:
-  order: 18
 ---
 
 ## array_first()
@@ -20,8 +18,9 @@ Returns the first value of an array in insertion order, or null when it is empty
 
 ## Availability
 
-- **Compiled (AOT)**: supported by the Elephc code generator.
-- **`eval()` (magician interpreter)**: supported through a declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/array/array_first.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/array/array_first.rs)).
+| Compiled (AOT) | Magician (eval) |
+|---|---|
+| Available | Not available yet |
 
 _No examples yet. Check `examples/` and `showcases/` for usage patterns._
 

@@ -10,8 +10,29 @@
 
 use super::*;
 
+/// A nullable local stays nullable when either conditional exit can still carry null.
+#[test]
+fn test_nullable_object_lazy_local_join_rejects_nullable_exits() {
+    for branch in [
+        "if ($service === null) {}",
+        "if ($service === null) { if ($flag) { $service = new Service(); } }",
+        "if ($service === null) { $service = new Service(); } else { $service = null; }",
+        "if ($service === null) { $service = new Service(); } else { $service = new Service(); $service = null; }",
+        "if ($service === null) { $service = new Service(); } else { $service = new Service(); $service = $replacement; }",
+        "if ($service === null) { $service = new Service(); } else { $service = new Service(); if ($flag) { $service = null; } }",
+        "if ($service === null) { $service = $replacement; }",
+        "if ($service === null) { $service = new Service(); $service = null; }",
+        "if ($service === null) { $service = new Service(); } $service = null;",
+    ] {
+        let source = format!("<?php final class Service {{}} function get(?Service $service, ?Service $replacement, bool $flag): Service {{ {branch} return $service; }}");
+        let error = check_source(&source).expect_err(branch);
+        assert!(error.contains("return type expects Service, got Service|null"), "{branch}: {error}");
+    }
+}
+
 /// Guarded union writes are accepted in permissive mode, as in php, and still reported by
-/// `--strict-locals`.
+/// `--strict-locals`; they stay within the original contract, and contracts are isolated
+/// between function frames.
 #[test]
 fn test_guarded_union_assignment_preserves_declared_boundaries() {
     for source in [

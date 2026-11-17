@@ -44,6 +44,25 @@ class CompareTests(unittest.TestCase):
                     run.assert_not_called()
                     self.assertFalse(output.exists())
 
+    def test_php_without_an_active_jit_is_rejected_before_compilation(self):
+        with tempfile.TemporaryDirectory(prefix="elephc-compare-jit-") as temporary:
+            compiler = Path(temporary) / "compiler"
+            compiler.write_bytes(b"compiler")
+            output = Path(temporary) / "results.json"
+            argv = ["compare.py", "--json", str(output), "--compiler", f"main={compiler}",
+                    "--revision", "main=main-sha"]
+            error = StringIO()
+            with patch("sys.argv", argv), patch("compare.shutil.which", return_value="/usr/bin/php"), \
+                    patch("compare.php_jit_problem", return_value="OPcache tracing JIT inactive (JIT off)") as probe, \
+                    patch("compare.subprocess.run") as run, redirect_stderr(error):
+                with self.assertRaises(SystemExit) as raised:
+                    main()
+            self.assertEqual(raised.exception.code, 2)
+            self.assertIn("JIT inactive", error.getvalue())
+            probe.assert_called_once_with("/usr/bin/php", isolated=True, timeout=120)
+            run.assert_not_called()
+            self.assertFalse(output.exists())
+
     @patch("compare.execute", return_value="python3\n/usr/bin/rustc\nas\n")
     def test_idle_guard_rejects_builders_even_when_timing_dispersion_would_be_low(self, execute):
         with self.assertRaisesRegex(RuntimeError, "concurrent compilation detected"):

@@ -51,6 +51,10 @@ pub(super) fn emit_rooted_expr_call(
     let (callback, callback_owner) = root_owned_call_operand(ctx, callback, span);
     let mut operands = vec![callback.value];
     operands.extend(lower_args_with_signature(ctx, signature, args));
+    let conversion_roots = root_unpublished_argument_conversions(ctx, &mut operands[1..], span);
+    // `ExprCall` can dispatch a first-class `__construct` callable; publish the invocation
+    // site's `strict_types` after the arguments are evaluated.
+    super::object_construction::publish_call_strictness(ctx, span);
     let call = ctx.emit_value(
         Op::ExprCall,
         operands,
@@ -60,6 +64,9 @@ pub(super) fn emit_rooted_expr_call(
         Some(span),
     );
     stage_call_result(ctx, result_staging.as_ref(), call, span);
+    for slot in conversion_roots.into_iter().rev() {
+        retire_owned_call_operand(ctx, slot, span);
+    }
     if let Some(slot) = callback_owner {
         retire_owned_call_operand(ctx, slot, span);
     }
@@ -331,7 +338,7 @@ pub(super) fn lower_descriptor_invoker_arg_array_for_call_user_func_array(
     );
     let owner = publish_constructed_container(ctx, array, span);
     for (index, item) in items.iter().enumerate() {
-        let value = lower_signature_invoker_ref_arg_marker(ctx, sig, index, item)
+        let value = lower_signature_invoker_ref_arg_marker(ctx, sig, index, item, false)
             .unwrap_or_else(|| {
                 let value = lower_expr(ctx, item);
                 coerce_variadic_tail_value(ctx, value, &array_ty, item.span)
@@ -479,9 +486,16 @@ pub(super) fn lower_call_user_func_descriptor_invoke_from_value(
     expr: &Expr,
 ) -> LoweredValue {
     let result_type = descriptor_invoker_result_type(sig);
-    let callback = root_descriptor_callback(ctx, callback, result_type, expr.span);
-    let arg_container =
-        lower_descriptor_invoker_arg_container_for_call_user_func(ctx, args, sig, expr.span);
+    let mut callback = root_descriptor_callback(ctx, callback, result_type, expr.span);
+    let native_references = !matches!(&expr.kind, ExprKind::FunctionCall { name, .. }
+        if php_symbol_key(name.as_str().trim_start_matches('\\')) == "call_user_func");
+    let arg_container = if native_references
+        && args.iter().any(|arg| may_be_native_selection_reference_argument(ctx, arg))
+    {
+        lower_untyped_descriptor_invoker_arg_container_for_callable(ctx, &mut callback, args, expr.span)
+    } else {
+        lower_descriptor_invoker_arg_container_for_call_user_func(ctx, args, sig, native_references, expr.span)
+    };
     emit_callable_descriptor_invoke_as(
         ctx,
         callback,
@@ -517,13 +531,15 @@ pub(super) fn callback_validating_builtin(expr: &Expr) -> Option<&'static str> {
 /// callback and container records are retired while that result is still only an SSA temporary.
 pub(super) struct RootedDescriptorCallback {
     /// Operand the invocation passes, which is the published lease when one was taken.
-    value: LoweredValue,
+    pub(super) value: LoweredValue,
     /// Owner slot to retire after the invocation, absent for a borrowed callback.
     owner: Option<crate::ir::LocalSlotId>,
     /// Result type the invocation must be emitted with, and the staging declared for it.
     result_type: PhpType,
     /// Staging holding the owned result while the callback and container records retire.
     result: Option<PrepublishedCallResult>,
+    /// Selection cells published outside the argument container and retired after dispatch.
+    pub(super) selection_aliases: Vec<(String, Span)>,
 }
 
 /// Publishes a descriptor invocation's result staging and then its callback.
@@ -540,7 +556,7 @@ pub(super) fn root_descriptor_callback(
 ) -> RootedDescriptorCallback {
     let result = prepublish_call_result(ctx, &result_type, span);
     let (value, owner) = root_owned_call_operand(ctx, callback, span);
-    RootedDescriptorCallback { value, owner, result_type, result }
+    RootedDescriptorCallback { value, owner, result_type, result, selection_aliases: Vec::new() }
 }
 
 /// Roots the temporary container owner across a descriptor call and retires every owner on return.
@@ -570,11 +586,15 @@ pub(super) fn emit_callable_descriptor_invoke_as(
         owner: callback_owner,
         result_type,
         result: result_staging,
+        selection_aliases,
     } = callback;
     // The backend borrows this container and owns either its normalized copy
     // or a separate retain of a prebuilt Mixed box. Root both raw and boxed
     // owners so a throw cannot bypass their EIR retirement.
     let (arg_container, container_owner) = root_owned_call_operand(ctx, arg_container, span);
+    // The descriptor may target a first-class `__construct` callable; php-src binds the
+    // invocation site's `strict_types`, so publish it once the arguments are evaluated.
+    super::object_construction::publish_call_strictness(ctx, span);
     let strict_types = ctx.builder.emit_const_bool(crate::source::current_strict_types());
     // A builtin names itself in the immediate so its callback validation words its own
     // diagnostics; any other call carries the plain profile.
@@ -601,6 +621,11 @@ pub(super) fn emit_callable_descriptor_invoke_as(
         retire_owned_call_operand(ctx, slot, span);
     } else if ctx.value_is_owning_temporary(arg_container) {
         crate::ir_lower::ownership::release_if_owned(ctx, arg_container, Some(span));
+    }
+    for (alias, alias_span) in selection_aliases.into_iter().rev() {
+        let slot = ctx.ref_cell_owner_slot(&alias).expect("published selection cell");
+        unregister_owned_call_operand(ctx, slot, alias_span);
+        ctx.release_ref_cell_owner(&alias, Some(alias_span));
     }
     if let Some(slot) = callback_owner {
         retire_owned_call_operand(ctx, slot, span);

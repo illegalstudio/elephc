@@ -21,6 +21,7 @@ pub(super) fn coerce_to_return_type(
 ) -> LoweredValue {
     let return_php_type = ctx.return_php_type.clone();
     let value = ctx.retype_packed_address_for_pointer_sink(value, &return_php_type, span);
+    crate::ir_lower::object_boundaries::guard_return(ctx, value, span);
     let value = guard_generic_object_nominal_return(ctx, value, &return_php_type, span);
     let value = guard_gradual_union_return(ctx, value, &return_php_type, span);
     let source_declared_type = ctx.builder.value_php_type(value.value).clone();
@@ -237,13 +238,13 @@ fn declared_int_return_boundary(
     value: LoweredValue,
     span: Option<Span>,
 ) -> Option<LoweredValue> {
-    if !ctx.return_type_is_declared || ctx.return_php_type != PhpType::Int {
-        return None;
-    }
     let source_repr = ctx.builder.value_php_type(value.value).codegen_repr();
-    if !matches!(
-        source_repr,
-        PhpType::Mixed | PhpType::Float | PhpType::TaggedScalar
+    if !(crate::types::declared_int_return_requires_validation(
+        ctx.return_type_is_declared, &ctx.return_php_type,
+        &ctx.builder.value_php_type(value.value),
+    ) || (ctx.return_type_is_declared
+        && ctx.return_php_type == PhpType::Int
+        && source_repr == PhpType::TaggedScalar)
     ) {
         return None;
     }

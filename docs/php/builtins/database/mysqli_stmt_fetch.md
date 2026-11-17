@@ -1,8 +1,6 @@
 ---
 title: "mysqli_stmt_fetch()"
-description: "Fetches the next result row into the variables bound by mysqli_stmt_bind_result()."
-sidebar:
-  order: 183
+description: "Fetches the next row into the bound result variables."
 ---
 
 ## mysqli_stmt_fetch()
@@ -11,7 +9,7 @@ sidebar:
 function mysqli_stmt_fetch(mixed $statement): ?bool
 ```
 
-Fetches the next result row into the variables bound by mysqli_stmt_bind_result().
+Fetches the next row into the bound result variables.
 
 **Parameters**:
 - `$statement` (`mixed`)
@@ -20,8 +18,9 @@ Fetches the next result row into the variables bound by mysqli_stmt_bind_result(
 
 ## Availability
 
-- **Compiled (AOT)**: supported through an injected elephc-PHP prelude.
-- **`eval()` (magician interpreter)**: not available inside eval'd code.
+| Compiled (AOT) | Magician (eval) |
+|---|---|
+| Available | Not available yet |
 
 _No examples yet. Check `examples/` and `showcases/` for usage patterns._
 

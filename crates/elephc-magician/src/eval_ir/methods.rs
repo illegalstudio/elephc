@@ -31,7 +31,7 @@ pub struct EvalClassMethod {
     parameter_is_by_ref: Vec<bool>,
     parameter_is_variadic: Vec<bool>,
     return_type: Option<EvalParameterType>,
-    /// Whether the method was declared `function &name()`, PHP's return-by-reference form.
+    /// Whether a method declaration or an `&get` property hook returns by reference.
     returns_by_ref: bool,
     /// Whether the FILE that declared this was under `declare(strict_types=1)`.
     ///

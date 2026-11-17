@@ -211,6 +211,8 @@ fn walk_stmt<'a>(stmt: &'a Stmt, visit: &mut dyn FnMut(Node<'a>)) {
             walk_expr(value, visit);
         }
         StmtKind::IncludeOnceMark { .. }
+        | StmtKind::Goto(_)
+        | StmtKind::GotoLabel(_)
         | StmtKind::Break(_)
         | StmtKind::Continue(_)
         | StmtKind::NamespaceDecl { .. }
@@ -586,6 +588,8 @@ fn walk_stmt_mut(stmt: &mut Stmt, visit: &mut dyn FnMut(NodeMut<'_>)) {
             walk_expr_mut(value, visit);
         }
         StmtKind::IncludeOnceMark { .. }
+        | StmtKind::Goto(_)
+        | StmtKind::GotoLabel(_)
         | StmtKind::Break(_)
         | StmtKind::Continue(_)
         | StmtKind::NamespaceDecl { .. }

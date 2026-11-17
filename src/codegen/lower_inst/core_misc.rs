@@ -42,14 +42,9 @@ pub(super) fn lower_closure_capture(_ctx: &mut FunctionContext<'_>, _inst: &Inst
     Ok(())
 }
 
-/// Lowers an explicit cycle-collection safe point.
-///
-/// Calls the THROTTLE, not the collector. `__rt_gc_collect_cycles` is a four-pass mark and
-/// sweep over the whole heap, and `unset()` is its only caller, so running it per `unset()`
-/// put more than a third of a Symfony request inside the collector. `__rt_gc_safepoint`
-/// buffers possible roots the way php-src does and collects once the buffer fills.
+/// Lowers an automatic cycle-collection safe point through the heap-proportional scan budget.
 pub(super) fn lower_gc_collect(ctx: &mut FunctionContext<'_>) -> Result<()> {
-    abi::emit_call_label(ctx.emitter, "__rt_gc_safepoint");
+    abi::emit_call_label(ctx.emitter, "__rt_gc_collect_cycles_budgeted");
     Ok(())
 }
 

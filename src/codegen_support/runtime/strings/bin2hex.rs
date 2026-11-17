@@ -10,7 +10,7 @@
 //! - The `2 * len` result is reserved through `__rt_concat_reserve` before the first store, so
 //!   inputs whose hexadecimal expansion exceeds the 64 KiB concat scratch fall back to heap storage.
 
-use crate::codegen_support::{emit::Emitter, platform::Arch};
+use crate::codegen_support::{abi, emit::Emitter, platform::Arch};
 
 /// Emits the `__rt_bin2hex` runtime helper for the `bin2hex` builtin.
 /// Dispatches to target-specific implementations. On ARM64, uses x1/x2 for input
@@ -41,31 +41,18 @@ pub fn emit_bin2hex(emitter: &mut Emitter) {
     emitter.instruction("mov x10, x0");                                         // save result start
     emitter.instruction("ldp x1, x2, [sp]");                                    // reload the borrowed source pointer and length
     emitter.instruction("mov x11, x2");                                         // remaining count
+    abi::emit_symbol_address(emitter, "x14", "_hex_digits");                   // hexadecimal digit table
 
     emitter.label("__rt_bin2hex_loop");
     emitter.instruction("cbz x11, __rt_bin2hex_done");                          // done if no bytes left
     emitter.instruction("ldrb w12, [x1], #1");                                  // load byte, advance source
     emitter.instruction("sub x11, x11, #1");                                    // decrement remaining
-    // -- high nibble --
-    emitter.instruction("lsr w13, w12, #4");                                    // extract high 4 bits
-    emitter.instruction("cmp w13, #10");                                        // >= 10?
-    emitter.instruction("b.ge __rt_bin2hex_hi_af");                             // yes → use a-f
-    emitter.instruction("add w13, w13, #48");                                   // convert 0-9 to '0'-'9'
-    emitter.instruction("b __rt_bin2hex_hi_store");                             // store
-    emitter.label("__rt_bin2hex_hi_af");
-    emitter.instruction("add w13, w13, #87");                                   // convert 10-15 to 'a'-'f'
-    emitter.label("__rt_bin2hex_hi_store");
-    emitter.instruction("strb w13, [x9], #1");                                  // write high nibble hex char
-    // -- low nibble --
-    emitter.instruction("and w13, w12, #0xf");                                  // extract low 4 bits
-    emitter.instruction("cmp w13, #10");                                        // >= 10?
-    emitter.instruction("b.ge __rt_bin2hex_lo_af");                             // yes → use a-f
-    emitter.instruction("add w13, w13, #48");                                   // convert 0-9 to '0'-'9'
-    emitter.instruction("b __rt_bin2hex_lo_store");                             // store
-    emitter.label("__rt_bin2hex_lo_af");
-    emitter.instruction("add w13, w13, #87");                                   // convert 10-15 to 'a'-'f'
-    emitter.label("__rt_bin2hex_lo_store");
-    emitter.instruction("strb w13, [x9], #1");                                  // write low nibble hex char
+    emitter.instruction("lsr w13, w12, #4");                                    // extract the high nibble
+    emitter.instruction("ldrb w13, [x14, x13]");                                // map it through the digit table
+    emitter.instruction("strb w13, [x9], #1");                                  // write the high hexadecimal character
+    emitter.instruction("and w15, w12, #0xf");                                  // extract the low nibble
+    emitter.instruction("ldrb w15, [x14, x15]");                                // map it through the digit table
+    emitter.instruction("strb w15, [x9], #1");                                  // write the low hexadecimal character
     emitter.instruction("b __rt_bin2hex_loop");                                 // next byte
 
     emitter.label("__rt_bin2hex_done");
@@ -100,6 +87,7 @@ fn emit_bin2hex_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov r10, r9");                                         // preserve the hexadecimal string start pointer for the return value
     emitter.instruction("mov rcx, QWORD PTR [rbp - 16]");                       // copy the source byte count into a decrementing loop counter
     emitter.instruction("mov rsi, QWORD PTR [rbp - 8]");                        // copy the source pointer into a cursor register for byte-by-byte reads
+    abi::emit_symbol_address(emitter, "r11", "_hex_digits");                   // hexadecimal digit table
 
     emitter.label("__rt_bin2hex_loop_linux_x86_64");
     emitter.instruction("test rcx, rcx");                                       // stop once every source byte has been converted to two hex characters
@@ -107,30 +95,15 @@ fn emit_bin2hex_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("movzx eax, BYTE PTR [rsi]");                           // load the next source byte and widen it for nibble extraction
     emitter.instruction("add rsi, 1");                                          // advance the source cursor after consuming one byte
     emitter.instruction("sub rcx, 1");                                          // record that one source byte has been consumed
-
     emitter.instruction("mov edx, eax");                                        // copy the source byte into a scratch register for the high nibble
     emitter.instruction("shr edx, 4");                                          // isolate the high nibble from the source byte
-    emitter.instruction("cmp edx, 10");                                         // decide whether the high nibble maps to 0-9 or a-f
-    emitter.instruction("jge __rt_bin2hex_hi_af_linux_x86_64");                 // branch when the high nibble must be rendered as a-f
-    emitter.instruction("add edx, 48");                                         // map high nibble 0-9 to ASCII '0'-'9'
-    emitter.instruction("jmp __rt_bin2hex_hi_store_linux_x86_64");              // skip the a-f conversion once the numeric digit is ready
-    emitter.label("__rt_bin2hex_hi_af_linux_x86_64");
-    emitter.instruction("add edx, 87");                                         // map high nibble 10-15 to ASCII 'a'-'f'
-    emitter.label("__rt_bin2hex_hi_store_linux_x86_64");
-    emitter.instruction("mov BYTE PTR [r9], dl");                               // write the high nibble as the first hexadecimal character
-    emitter.instruction("add r9, 1");                                           // advance the destination cursor after writing the first hex character
-
-    emitter.instruction("mov edx, eax");                                        // copy the source byte into a scratch register for the low nibble
-    emitter.instruction("and edx, 15");                                         // isolate the low nibble from the source byte
-    emitter.instruction("cmp edx, 10");                                         // decide whether the low nibble maps to 0-9 or a-f
-    emitter.instruction("jge __rt_bin2hex_lo_af_linux_x86_64");                 // branch when the low nibble must be rendered as a-f
-    emitter.instruction("add edx, 48");                                         // map low nibble 0-9 to ASCII '0'-'9'
-    emitter.instruction("jmp __rt_bin2hex_lo_store_linux_x86_64");              // skip the a-f conversion once the numeric digit is ready
-    emitter.label("__rt_bin2hex_lo_af_linux_x86_64");
-    emitter.instruction("add edx, 87");                                         // map low nibble 10-15 to ASCII 'a'-'f'
-    emitter.label("__rt_bin2hex_lo_store_linux_x86_64");
-    emitter.instruction("mov BYTE PTR [r9], dl");                               // write the low nibble as the second hexadecimal character
-    emitter.instruction("add r9, 1");                                           // advance the destination cursor after writing the second hex character
+    emitter.instruction("movzx r8d, BYTE PTR [r11 + rdx]");                     // map the high nibble through the digit table
+    emitter.instruction("mov BYTE PTR [r9], r8b");                              // write the high hexadecimal character
+    emitter.instruction("add r9, 1");                                           // advance the destination cursor
+    emitter.instruction("and eax, 15");                                         // isolate the low nibble from the source byte
+    emitter.instruction("movzx r8d, BYTE PTR [r11 + rax]");                     // map the low nibble through the digit table
+    emitter.instruction("mov BYTE PTR [r9], r8b");                              // write the low hexadecimal character
+    emitter.instruction("add r9, 1");                                           // advance the destination cursor
     emitter.instruction("jmp __rt_bin2hex_loop_linux_x86_64");                  // continue converting subsequent source bytes
 
     emitter.label("__rt_bin2hex_done_linux_x86_64");
@@ -145,4 +118,22 @@ fn emit_bin2hex_linux_x86_64(emitter: &mut Emitter) {
     // -- impossible result size: report the shared allocation-overflow fatal error --
     emitter.label("__rt_bin2hex_size_overflow_linux_x86_64");
     emitter.instruction("jmp __rt_alloc_overflow");                             // unconditional branch keeps the fatal trampoline reachable from every caller
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::codegen_support::platform::Target;
+
+    /// Verifies both targets map nibbles through the shared hexadecimal table.
+    #[test]
+    fn bin2hex_emits_the_digit_table_path_on_all_targets() {
+        for name in ["macos-aarch64", "linux-x86_64"] {
+            let target = Target::parse(name).expect("supported target");
+            let mut emitter = Emitter::new(target);
+            emit_bin2hex(&mut emitter);
+            let assembly = emitter.output();
+            assert!(assembly.contains("_hex_digits"), "{name}: {assembly}");
+        }
+    }
 }

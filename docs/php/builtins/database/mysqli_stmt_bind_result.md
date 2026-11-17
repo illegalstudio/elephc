@@ -1,8 +1,6 @@
 ---
 title: "mysqli_stmt_bind_result()"
-description: "Binds variables to a prepared statement's result columns."
-sidebar:
-  order: 177
+description: "Binds variables to a prepared statement for result storage."
 ---
 
 ## mysqli_stmt_bind_result()
@@ -11,7 +9,7 @@ sidebar:
 function mysqli_stmt_bind_result(mixed $statement, ...$vars): bool
 ```
 
-Binds variables to a prepared statement's result columns.
+Binds variables to a prepared statement for result storage.
 
 **Parameters**:
 - `$statement` (`mixed`)
@@ -21,8 +19,9 @@ Binds variables to a prepared statement's result columns.
 
 ## Availability
 
-- **Compiled (AOT)**: supported through an injected elephc-PHP prelude.
-- **`eval()` (magician interpreter)**: not available inside eval'd code.
+| Compiled (AOT) | Magician (eval) |
+|---|---|
+| Available | Not available yet |
 
 _No examples yet. Check `examples/` and `showcases/` for usage patterns._
 
