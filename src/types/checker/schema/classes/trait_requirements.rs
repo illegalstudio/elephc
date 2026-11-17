@@ -200,6 +200,18 @@ fn summary_of_uses(uses: &[TraitUse], walk: &mut RequirementWalk<'_>) -> TraitSu
                 summary.required.insert(php_symbol_key(alias));
             }
         }
+        // `insteadof` drops the excluded traits' bodies (aliases above still read them, as
+        // flattening does), so `use Needs, Gives { Needs::foo insteadof Gives; }` keeps `foo`
+        // abstract. The excluded abstract methods stay requirements.
+        let mut per_trait = per_trait;
+        for adaptation in &use_decl.adaptations {
+            let TraitAdaptation::InsteadOf { method, instead_of, .. } = adaptation else { continue };
+            for excluded in instead_of {
+                if let Some(methods) = per_trait.get_mut(&php_symbol_key(excluded.as_str())) {
+                    methods.provided.remove(&php_symbol_key(method));
+                }
+            }
+        }
         for methods in per_trait.into_values() {
             summary.required.extend(methods.required);
             summary.provided.extend(methods.provided);

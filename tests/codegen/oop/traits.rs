@@ -385,3 +385,20 @@ echo (new Direct())->foo(), (new Wrapped())->bar(), (new Wrapped())->foo(), "\n"
     );
     assert_eq!(out, "DBG\n");
 }
+
+/// `insteadof` that keeps a trait's abstract method over another trait's body leaves the
+/// wrapper trait's method abstract, so a class using it implements a requirement and
+/// `#[\Override]` holds, as php 8.5.12 accepts.
+#[test]
+fn test_trait_requirement_kept_abstract_by_insteadof_in_a_wrapper_trait() {
+    let out = compile_and_run(
+        r#"<?php
+trait NeedsFoo { abstract public function foo(): string; }
+trait GivesFoo { public function foo(): string { return "g"; } }
+trait W { use NeedsFoo, GivesFoo { NeedsFoo::foo insteadof GivesFoo; } }
+final class C { use W; #[\Override] public function foo(): string { return "c"; } }
+echo (new C())->foo(), "\n";
+"#,
+    );
+    assert_eq!(out, "c\n");
+}
