@@ -138,7 +138,8 @@ fn fold(function: &mut Function, data: &mut DataPool, call_id: InstId) -> bool {
     for (raw, inst) in function.instructions.iter().enumerate() {
         let id = InstId::from_raw(raw as u32);
         let touches_slot = matches!(inst.immediate, Some(Immediate::LocalSlot(found)) if found == slot)
-            || matches!(inst.immediate, Some(Immediate::LocalSlotPair { first, second }) if first == slot || second == slot);
+            || matches!(inst.immediate, Some(Immediate::LocalSlotPair { first, second }) if first == slot || second == slot)
+            || matches!(inst.immediate, Some(Immediate::PropertyRefCell { first, .. }) if first == slot);
         if !touches_slot {
             continue;
         }

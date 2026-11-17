@@ -70,7 +70,12 @@ pub(in crate::interpreter) fn eval_boundary_type_label(
         }
     }
     Ok(if ty.is_intersection() {
-        names.join("&")
+        let intersection = names.join("&");
+        if ty.allows_null() {
+            format!("({intersection})|null")
+        } else {
+            intersection
+        }
     } else if names.len() == 1 {
         elephc_builtin_contract::reflection_format::named_type(&names[0], ty.allows_null())
     } else {

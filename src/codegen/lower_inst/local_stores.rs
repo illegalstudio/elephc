@@ -1074,6 +1074,18 @@ pub(super) fn coerce_ref_cell_store_value(
         coerce_loaded_value_to_tagged_scalar(ctx, &source_ty)?;
         return Ok(());
     }
+    // Raw scalar ref cells keep the declared payload shape, so a numeric representation change
+    // must happen before the store publishes the result. Without this a `float &$x` / `int &$x`
+    // pair (or a typed property cell) published the wrong register (`int(2.5)` became the line
+    // number held in x0/rax).
+    if matches!(source_ty, PhpType::Int | PhpType::Bool) && target_ty == PhpType::Float {
+        abi::emit_int_result_to_float_result(ctx.emitter);
+        return Ok(());
+    }
+    if source_ty == PhpType::Float && target_ty == PhpType::Int {
+        abi::emit_float_result_to_int_result(ctx.emitter);
+        return Ok(());
+    }
     if source_ty == PhpType::Mixed {
         match target_ty {
             PhpType::Int => {

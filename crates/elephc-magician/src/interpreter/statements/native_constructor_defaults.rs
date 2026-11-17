@@ -67,9 +67,11 @@ pub(super) fn eval_native_constructor_with_evaluated_args_and_ref_mode(
         eval_native_constructor_bridge_scope(class_name, context, values)?;
     let signature = number_scalar_binding_signature(class_name,
         context.native_constructor_signature(class_name));
+    let callee = format!("{}::__construct", class_name.trim_start_matches('\\'));
     let bound_args = bind_native_callable_bound_args_with_mode(
         signature,
         evaluated_args,
+        Some(&callee),
         by_ref_mode,
         context,
         values,

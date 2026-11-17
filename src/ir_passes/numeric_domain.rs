@@ -234,7 +234,8 @@ fn local_accesses(function: &Function) -> Vec<LocalAccess> {
                     _ => access.forbidden = true,
                 }
             }
-            Some(Immediate::LocalSlotPair { first, second }) => {
+            Some(Immediate::LocalSlotPair { first, second })
+            | Some(Immediate::PropertyRefCell { first, second, .. }) => {
                 for slot in [first, second] {
                     if let Some(access) = accesses.get_mut(slot.as_raw() as usize) { access.forbidden = true; }
                 }

@@ -54,6 +54,7 @@ fn emit_property_new(emitter: &mut Emitter) {
     emitter.label_global("__rt_property_reference_cell_new");
     match emitter.target.arch {
         Arch::AArch64 => {
+            // -- preserve the descriptor and diagnostics, then allocate the owned cell --
             emitter.instruction("sub sp, sp, #48");                             // reserve metadata and linkage slots
             emitter.instruction("stp x29, x30, [sp, #32]");                     // preserve the caller frame and return address
             emitter.instruction("add x29, sp, #32");                            // establish the allocator frame
@@ -62,6 +63,7 @@ fn emit_property_new(emitter: &mut Emitter) {
             emitter.instruction("str x0, [sp, #24]");                           // keep the payload descriptor tag
             abi::emit_load_int_immediate(emitter, "x0", PROPERTY_REFERENCE_CELL_BYTES); // request payload plus metadata words
             abi::emit_call_label(emitter, "__rt_heap_alloc");                   // allocate the owned cell
+            // -- publish the cell header, diagnostic metadata, and zeroed payload --
             emitter.instruction("ldr x9, [sp, #24]");                           // reload the payload descriptor tag
             emitter.instruction("lsl x9, x9, #8");                              // position the tag above the cell kind
             abi::emit_load_int_immediate(emitter, "x10", PROPERTY_REFERENCE_CELL_FLAG); // materialize the typed-property marker
@@ -78,11 +80,13 @@ fn emit_property_new(emitter: &mut Emitter) {
             emitter.instruction(&format!("str xzr, [x0, #{}]", PROPERTY_REFERENCE_TYPE_CODE + 8)); // leave the metadata tail zeroed
             emitter.instruction("str xzr, [x0, #0]");                           // initialize the low payload word
             emitter.instruction("str xzr, [x0, #8]");                           // initialize the high payload word
+            // -- restore the allocator frame --
             emitter.instruction("ldp x29, x30, [sp, #32]");                     // restore the caller frame and return address
             emitter.instruction("add sp, sp, #48");                             // release the allocator frame
             abi::emit_return(emitter);
         }
         Arch::X86_64 => {
+            // -- preserve the descriptor and diagnostics, then allocate the owned cell --
             emitter.instruction("push rbp");                                    // preserve the caller frame pointer
             emitter.instruction("mov rbp, rsp");                                // establish the allocator frame
             emitter.instruction("sub rsp, 48");                                 // reserve metadata and linkage slots
@@ -92,6 +96,7 @@ fn emit_property_new(emitter: &mut Emitter) {
             emitter.instruction("mov QWORD PTR [rbp - 32], rcx");               // keep the property acceptance code
             abi::emit_load_int_immediate(emitter, "rax", PROPERTY_REFERENCE_CELL_BYTES); // request payload plus metadata words
             abi::emit_call_label(emitter, "__rt_heap_alloc");                   // allocate the owned cell
+            // -- publish the cell header, diagnostic metadata, and zeroed payload --
             emitter.instruction("mov r10, QWORD PTR [rbp - 8]");                // reload the payload descriptor tag
             emitter.instruction("shl r10, 8");                                  // position the tag above the cell kind
             abi::emit_load_int_immediate(emitter, "r11", PROPERTY_REFERENCE_CELL_FLAG); // materialize the typed-property marker
@@ -108,6 +113,7 @@ fn emit_property_new(emitter: &mut Emitter) {
             emitter.instruction(&format!("mov QWORD PTR [rax + {}], 0", PROPERTY_REFERENCE_TYPE_CODE + 8)); // leave the metadata tail zeroed
             emitter.instruction("mov QWORD PTR [rax], 0");                      // initialize the low payload word
             emitter.instruction("mov QWORD PTR [rax + 8], 0");                  // initialize the high payload word
+            // -- restore the allocator frame --
             emitter.instruction("mov rsp, rbp");                                // release the allocator frame
             emitter.instruction("pop rbp");                                     // restore the caller frame pointer
             abi::emit_return(emitter);
@@ -131,6 +137,7 @@ fn emit_property_store_guard(emitter: &mut Emitter) {
 
 /// Emits the reference-assignment type guard for AArch64.
 fn emit_property_store_guard_aarch64(emitter: &mut Emitter) {
+    // -- validate that the reference target is a live typed-property cell --
     emitter.instruction("sub sp, sp, #96");                                     // reserve target, source, unbox and message slots
     emitter.instruction("stp x29, x30, [sp, #80]");                             // preserve the caller frame and return address
     emitter.instruction("add x29, sp, #80");                                    // establish the guard frame
@@ -145,10 +152,12 @@ fn emit_property_store_guard_aarch64(emitter: &mut Emitter) {
     emitter.instruction("tst x10, x11");                                        // does this cell carry a typed-property guard?
     emitter.instruction("b.eq __rt_property_reference_store_guard_done");       // ordinary local references keep their fast path
     emitter.instruction("str x0, [sp, #16]");                                   // keep the validated property cell
+    // -- unbox the source value into a runtime tag and payload words --
     emitter.instruction("ldr x0, [sp, #8]");                                    // load the boxed source value
     abi::emit_call_label(emitter, "__rt_mixed_unbox");                         // expose the source runtime tag and payload
     emitter.instruction("stp x0, x1, [sp, #24]");                               // keep the source tag and low payload word
     emitter.instruction("str x2, [sp, #40]");                                   // keep the source high payload word for string lengths
+    // -- dispatch on the property's declared type --
     emitter.instruction("ldr x9, [sp, #16]");                                   // reload the property cell
     emitter.instruction(&format!("ldr x10, [x9, #{PROPERTY_REFERENCE_TYPE_CODE}]")); // load the declared-type acceptance code
     emitter.instruction(&format!("cmp x10, #{PROPERTY_REF_TYPE_INT}"));         // is the property declared int?
@@ -166,6 +175,7 @@ fn emit_property_store_guard_aarch64(emitter: &mut Emitter) {
     emitter.instruction("b __rt_property_reference_store_guard_done");          // unknown selector keeps prior semantics
 
     emitter.label("__rt_property_reference_guard_int");
+    // -- int properties accept ints, bools, and numeric strings --
     emitter.instruction("ldr x9, [sp, #24]");                                   // reload the source tag
     emitter.instruction("cbz x9, __rt_property_reference_store_guard_done");    // int payloads satisfy int properties
     emitter.instruction("cmp x9, #3");                                          // is the source a bool?
@@ -204,6 +214,7 @@ fn emit_property_store_guard_aarch64(emitter: &mut Emitter) {
     emitter.instruction("b __rt_property_reference_store_guard_done");          // finite in-range floats weakly convert
 
     emitter.label("__rt_property_reference_guard_string");
+    // -- string properties accept scalars and Stringable objects --
     emitter.instruction("ldr x9, [sp, #24]");                                   // reload the source tag
     emitter.instruction("cmp x9, #3");                                          // scalars convert to strings
     emitter.instruction("b.ls __rt_property_reference_store_guard_done");       // accept int, float, string and bool sources
@@ -212,6 +223,7 @@ fn emit_property_store_guard_aarch64(emitter: &mut Emitter) {
     emitter.instruction("b __rt_property_reference_guard_reject");              // arrays and null are rejected
 
     emitter.label("__rt_property_reference_guard_float");
+    // -- float properties accept ints, floats, bools, and numeric strings --
     emitter.instruction("ldr x9, [sp, #24]");                                   // reload the source tag
     emitter.instruction("cbz x9, __rt_property_reference_store_guard_done");    // ints widen to float
     emitter.instruction("cmp x9, #2");                                          // is the source already a float?
@@ -230,6 +242,7 @@ fn emit_property_store_guard_aarch64(emitter: &mut Emitter) {
     emitter.instruction("b __rt_property_reference_guard_reject");              // non-numeric strings are rejected
 
     emitter.label("__rt_property_reference_guard_bool");
+    // -- bool properties accept scalar sources; false and array keep their exact contracts --
     emitter.instruction("ldr x9, [sp, #24]");                                   // reload the source tag
     emitter.instruction("cmp x9, #3");                                          // scalars convert to bool
     emitter.instruction("b.hi __rt_property_reference_guard_reject");           // null and containers are not scalar bools
@@ -252,6 +265,7 @@ fn emit_property_store_guard_aarch64(emitter: &mut Emitter) {
     emitter.instruction("b __rt_property_reference_guard_reject");              // everything else is rejected
 
     emitter.label("__rt_property_reference_guard_reject");
+    // -- render the rejected source's PHP type name and raise the reference TypeError --
     emit_property_reference_name_row_aarch64(emitter);
     emitter.label("__rt_property_reference_guard_throw");
     emitter.instruction("ldr x9, [sp, #16]");                                   // reload the property cell
@@ -262,6 +276,7 @@ fn emit_property_store_guard_aarch64(emitter: &mut Emitter) {
     emitter.instruction(&format!("mov x1, #{}", PROPERTY_REFERENCE_ERROR_PREFIX.len())); // pass its byte length
     abi::emit_call_label(emitter, "__rt_spl_throw_offset_type");               // raise the reference-form TypeError
     emitter.label("__rt_property_reference_store_guard_done");
+    // -- restore the guard frame --
     emitter.instruction("ldp x29, x30, [sp, #80]");                             // restore the caller frame and return address
     emitter.instruction("add sp, sp, #96");                                     // release the guard frame
     abi::emit_return(emitter);
@@ -327,6 +342,7 @@ fn emit_name_row_aarch64(emitter: &mut Emitter, label: &str, symbol: &str, len: 
 
 /// Emits the reference-assignment type guard for x86_64.
 fn emit_property_store_guard_x86_64(emitter: &mut Emitter) {
+    // -- validate that the reference target is a live typed-property cell --
     emitter.instruction("push rbp");                                            // preserve the caller frame pointer
     emitter.instruction("mov rbp, rsp");                                        // establish the guard frame
     emitter.instruction("sub rsp, 96");                                         // reserve target, source, unbox and message slots
@@ -342,11 +358,13 @@ fn emit_property_store_guard_x86_64(emitter: &mut Emitter) {
     emitter.instruction("test QWORD PTR [rax - 8], r10");                       // does this cell carry a typed-property guard?
     emitter.instruction("je __rt_property_reference_store_guard_done_x");       // ordinary local references keep their fast path
     emitter.instruction("mov QWORD PTR [rbp - 24], rax");                       // keep the validated property cell
+    // -- unbox the source value into a runtime tag and payload words --
     emitter.instruction("mov rax, QWORD PTR [rbp - 16]");                       // load the boxed source value
     abi::emit_call_label(emitter, "__rt_mixed_unbox");                         // expose the source runtime tag and payload
     emitter.instruction("mov QWORD PTR [rbp - 32], rax");                       // keep the source tag
     emitter.instruction("mov QWORD PTR [rbp - 40], rdi");                       // keep the source low payload word
     emitter.instruction("mov QWORD PTR [rbp - 48], rdx");                       // keep the source high payload word for string lengths
+    // -- dispatch on the property's declared type --
     emitter.instruction("mov r9, QWORD PTR [rbp - 24]");                        // reload the property cell
     emitter.instruction(&format!("mov r10, QWORD PTR [r9 + {PROPERTY_REFERENCE_TYPE_CODE}]")); // load the declared-type acceptance code
     emitter.instruction(&format!("cmp r10, {PROPERTY_REF_TYPE_INT}"));          // is the property declared int?
@@ -364,6 +382,7 @@ fn emit_property_store_guard_x86_64(emitter: &mut Emitter) {
     emitter.instruction("jmp __rt_property_reference_store_guard_done_x");      // unknown selector keeps prior semantics
 
     emitter.label("__rt_property_reference_guard_int_x");
+    // -- int properties accept ints, bools, and numeric strings --
     emitter.instruction("mov r9, QWORD PTR [rbp - 32]");                        // reload the source tag
     emitter.instruction("test r9, r9");                                         // int payloads satisfy int properties
     emitter.instruction("je __rt_property_reference_store_guard_done_x");       // accept raw ints
@@ -403,6 +422,7 @@ fn emit_property_store_guard_x86_64(emitter: &mut Emitter) {
     emitter.instruction("jmp __rt_property_reference_store_guard_done_x");      // finite in-range floats weakly convert
 
     emitter.label("__rt_property_reference_guard_string_x");
+    // -- string properties accept scalars and Stringable objects --
     emitter.instruction("mov r9, QWORD PTR [rbp - 32]");                        // reload the source tag
     emitter.instruction("cmp r9, 3");                                           // scalars convert to strings
     emitter.instruction("jbe __rt_property_reference_store_guard_done_x");      // accept int, float, string and bool sources
@@ -411,6 +431,7 @@ fn emit_property_store_guard_x86_64(emitter: &mut Emitter) {
     emitter.instruction("jmp __rt_property_reference_guard_reject_x");          // arrays and null are rejected
 
     emitter.label("__rt_property_reference_guard_float_x");
+    // -- float properties accept ints, floats, bools, and numeric strings --
     emitter.instruction("mov r9, QWORD PTR [rbp - 32]");                        // reload the source tag
     emitter.instruction("test r9, r9");                                         // ints widen to float
     emitter.instruction("je __rt_property_reference_store_guard_done_x");       // accept raw ints
@@ -431,6 +452,7 @@ fn emit_property_store_guard_x86_64(emitter: &mut Emitter) {
     emitter.instruction("jmp __rt_property_reference_guard_reject_x");          // non-numeric strings are rejected
 
     emitter.label("__rt_property_reference_guard_bool_x");
+    // -- bool properties accept scalar sources; false and array keep their exact contracts --
     emitter.instruction("mov r9, QWORD PTR [rbp - 32]");                        // reload the source tag
     emitter.instruction("cmp r9, 3");                                           // scalars convert to bool
     emitter.instruction("ja __rt_property_reference_guard_reject_x");           // null and containers are not scalar bools
@@ -453,6 +475,7 @@ fn emit_property_store_guard_x86_64(emitter: &mut Emitter) {
     emitter.instruction("jmp __rt_property_reference_guard_reject_x");          // everything else is rejected
 
     emitter.label("__rt_property_reference_guard_reject_x");
+    // -- render the rejected source's PHP type name and raise the reference TypeError --
     emit_property_reference_name_row_x86_64(emitter);
     emitter.label("__rt_property_reference_guard_throw_x");
     emitter.instruction("mov r9, QWORD PTR [rbp - 24]");                        // reload the property cell
@@ -463,6 +486,7 @@ fn emit_property_store_guard_x86_64(emitter: &mut Emitter) {
     emitter.instruction(&format!("mov rsi, {}", PROPERTY_REFERENCE_ERROR_PREFIX.len())); // pass its byte length
     abi::emit_call_label(emitter, "__rt_spl_throw_offset_type");               // raise the reference-form TypeError
     emitter.label("__rt_property_reference_store_guard_done_x");
+    // -- restore the guard frame --
     emitter.instruction("mov rsp, rbp");                                        // release the guard frame
     emitter.instruction("pop rbp");                                             // restore the caller frame pointer
     abi::emit_return(emitter);
@@ -540,6 +564,7 @@ fn emit_property_numeric(emitter: &mut Emitter) {
 /// Emits the AArch64 numeric-string scanner.
 fn emit_property_numeric_aarch64(emitter: &mut Emitter) {
     emitter.label_global("__rt_property_reference_numeric");
+    // -- scanner state: byte index, magnitude, float-form flag, and sign --
     emitter.instruction("mov x0, #0");                                          // 0 = non-numeric
     emitter.instruction("cbz x2, __rt_property_reference_numeric_done");        // an empty string is not numeric
     emitter.instruction("mov x9, #0");                                          // start at the first byte
@@ -547,6 +572,7 @@ fn emit_property_numeric_aarch64(emitter: &mut Emitter) {
     emitter.instruction("mov x14, #0");                                         // 0 = exact integer form, 1 = float form, 2 = integer overflow
     emitter.instruction("mov x15, #0");                                         // negative sign flag
     emitter.label("__rt_property_reference_numeric_leading");
+    // -- skip PHP's leading whitespace bytes --
     emitter.instruction("ldrb w10, [x1, x9]");                                  // inspect the current byte
     emitter.instruction("cmp w10, #0x20");                                      // space?
     emitter.instruction("b.eq __rt_property_reference_numeric_leading_space");  // consume PHP whitespace
@@ -566,6 +592,7 @@ fn emit_property_numeric_aarch64(emitter: &mut Emitter) {
     emitter.instruction("b.lo __rt_property_reference_numeric_leading");        // keep skipping
     emitter.instruction("b __rt_property_reference_numeric_done");              // whitespace-only is not numeric
     emitter.label("__rt_property_reference_numeric_sign");
+    // -- consume an optional sign --
     emitter.instruction("cmp w10, #0x2b");                                      // leading plus?
     emitter.instruction("b.eq __rt_property_reference_numeric_sign_done");      // consume it
     emitter.instruction("cmp w10, #0x2d");                                      // leading minus?
@@ -576,6 +603,7 @@ fn emit_property_numeric_aarch64(emitter: &mut Emitter) {
     emitter.instruction("cmp x9, x2");                                          // is anything left?
     emitter.instruction("b.hs __rt_property_reference_numeric_done");           // a bare sign is not numeric
     emitter.label("__rt_property_reference_numeric_int");
+    // -- accumulate the integer digits with overflow detection --
     emitter.instruction("mov x11, #0");                                         // count integer and fractional digits
     emitter.label("__rt_property_reference_numeric_int_loop");
     emitter.instruction("ldrb w10, [x1, x9]");                                  // inspect the current byte
@@ -598,6 +626,7 @@ fn emit_property_numeric_aarch64(emitter: &mut Emitter) {
     emitter.instruction("b.lo __rt_property_reference_numeric_int_loop");       // keep reading digits
     emitter.instruction("b __rt_property_reference_numeric_after");             // no fraction or exponent remains
     emitter.label("__rt_property_reference_numeric_int_overflow");
+    // -- stop accumulating once the magnitude leaves unsigned 64 bits --
     emitter.instruction("mov x14, #2");                                         // remember that the integer exceeded i64
     emitter.instruction("add x9, x9, #1");                                      // consume the overflowing digit
     emitter.label("__rt_property_reference_numeric_int_skip");
@@ -611,6 +640,7 @@ fn emit_property_numeric_aarch64(emitter: &mut Emitter) {
     emitter.instruction("add x9, x9, #1");                                      // consume the digit without accumulating
     emitter.instruction("b __rt_property_reference_numeric_int_skip");          // keep consuming digits
     emitter.label("__rt_property_reference_numeric_int_done");
+    // -- parse the fractional part when a decimal point follows --
     emitter.instruction("cmp w10, #0x2e");                                      // decimal point?
     emitter.instruction("b.ne __rt_property_reference_numeric_exponent");       // no fractional part
     emitter.instruction("mov x14, #1");                                         // mark a float-form spelling
@@ -627,6 +657,7 @@ fn emit_property_numeric_aarch64(emitter: &mut Emitter) {
     emitter.instruction("add x9, x9, #1");                                      // advance
     emitter.instruction("b __rt_property_reference_numeric_frac");              // keep reading fractional digits
     emitter.label("__rt_property_reference_numeric_exponent");
+    // -- parse an optional exponent and its sign --
     emitter.instruction("cbz x11, __rt_property_reference_numeric_done");       // a point alone is not numeric
     emitter.instruction("cmp w10, #0x65");                                      // lowercase exponent marker?
     emitter.instruction("b.eq __rt_property_reference_numeric_exponent_digits"); // parse its digits
@@ -665,6 +696,7 @@ fn emit_property_numeric_aarch64(emitter: &mut Emitter) {
     emitter.label("__rt_property_reference_numeric_after");
     emitter.instruction("cbz x11, __rt_property_reference_numeric_done");       // a sign with no digits is not numeric
     emitter.label("__rt_property_reference_numeric_trailing");
+    // -- consume trailing PHP whitespace --
     emitter.instruction("cmp x9, x2");                                          // reached the end?
     emitter.instruction("b.hs __rt_property_reference_numeric_accept");         // the whole spelling is numeric
     emitter.instruction("ldrb w10, [x1, x9]");                                  // inspect the current byte
@@ -684,6 +716,7 @@ fn emit_property_numeric_aarch64(emitter: &mut Emitter) {
     emitter.instruction("add x9, x9, #1");                                      // consume the whitespace byte
     emitter.instruction("b __rt_property_reference_numeric_trailing");          // continue scanning
     emitter.label("__rt_property_reference_numeric_accept");
+    // -- classify the numeric spelling by value --
     emitter.instruction("cbnz x14, __rt_property_reference_numeric_float");     // fraction and exponent forms need a float check
     emitter.instruction("mov x16, #1");                                         // materialize 2^63
     emitter.instruction("lsl x16, x16, #63");                                   // the exclusive upper bound for both signs
@@ -701,12 +734,14 @@ fn emit_property_numeric_aarch64(emitter: &mut Emitter) {
     emitter.label("__rt_property_reference_numeric_float");
     emitter.instruction("mov x0, #2");                                          // ask the caller to check the numeric value
     emitter.label("__rt_property_reference_numeric_done");
+    // -- return the classification --
     abi::emit_return(emitter);
 }
 
 /// Emits the x86_64 numeric-string scanner.
 fn emit_property_numeric_x86_64(emitter: &mut Emitter) {
     emitter.label_global("__rt_property_reference_numeric_x");
+    // -- scanner state: byte index, magnitude, float-form flag, and sign --
     emitter.instruction("sub rsp, 32");                                         // reserve length, sign and float-form slots
     emitter.instruction("mov r11, rax");                                        // preserve the string pointer before returning the classification in rax
     emitter.instruction("mov QWORD PTR [rsp], rdx");                            // keep the string length across the `mul` instruction
@@ -717,6 +752,7 @@ fn emit_property_numeric_x86_64(emitter: &mut Emitter) {
     emitter.instruction("je __rt_property_reference_numeric_fail_x");           // return 0
     emitter.instruction("xor r8, r8");                                          // start at the first byte
     emitter.label("__rt_property_reference_numeric_leading_x");
+    // -- skip PHP's leading whitespace bytes --
     emitter.instruction("movzx r9d, BYTE PTR [r11 + r8]");                      // inspect the current byte
     emitter.instruction("cmp r9d, 0x20");                                       // space?
     emitter.instruction("je __rt_property_reference_numeric_leading_space_x");  // consume PHP whitespace
@@ -736,6 +772,7 @@ fn emit_property_numeric_x86_64(emitter: &mut Emitter) {
     emitter.instruction("jb __rt_property_reference_numeric_leading_x");        // keep skipping
     emitter.instruction("jmp __rt_property_reference_numeric_fail_x");          // whitespace-only is not numeric
     emitter.label("__rt_property_reference_numeric_sign_x");
+    // -- consume an optional sign --
     emitter.instruction("cmp r9d, 0x2b");                                       // leading plus?
     emitter.instruction("je __rt_property_reference_numeric_sign_done_x");      // consume it
     emitter.instruction("cmp r9d, 0x2d");                                       // leading minus?
@@ -746,6 +783,7 @@ fn emit_property_numeric_x86_64(emitter: &mut Emitter) {
     emitter.instruction("cmp r8, QWORD PTR [rsp]");                             // is anything left?
     emitter.instruction("jae __rt_property_reference_numeric_fail_x");          // a bare sign is not numeric
     emitter.label("__rt_property_reference_numeric_int_x");
+    // -- accumulate the integer digits with overflow detection --
     emitter.instruction("xor ecx, ecx");                                        // count integer and fractional digits
     emitter.label("__rt_property_reference_numeric_int_loop_x");
     emitter.instruction("movzx r9d, BYTE PTR [r11 + r8]");                      // inspect the current byte
@@ -768,6 +806,7 @@ fn emit_property_numeric_x86_64(emitter: &mut Emitter) {
     emitter.instruction("jb __rt_property_reference_numeric_int_loop_x");       // keep reading digits
     emitter.instruction("jmp __rt_property_reference_numeric_after_x");         // no fraction or exponent remains
     emitter.label("__rt_property_reference_numeric_int_overflow_x");
+    // -- stop accumulating once the magnitude leaves unsigned 64 bits --
     emitter.instruction("mov QWORD PTR [rsp + 16], 2");                         // remember that the integer exceeded i64
     emitter.instruction("add r8, 1");                                           // consume the overflowing digit
     emitter.label("__rt_property_reference_numeric_int_skip_x");
@@ -781,6 +820,7 @@ fn emit_property_numeric_x86_64(emitter: &mut Emitter) {
     emitter.instruction("add r8, 1");                                           // consume the digit without accumulating
     emitter.instruction("jmp __rt_property_reference_numeric_int_skip_x");      // keep consuming digits
     emitter.label("__rt_property_reference_numeric_int_done_x");
+    // -- parse the fractional part when a decimal point follows --
     emitter.instruction("cmp r9d, 0x2e");                                       // decimal point?
     emitter.instruction("jne __rt_property_reference_numeric_exponent_x");      // no fractional part
     emitter.instruction("mov QWORD PTR [rsp + 16], 1");                         // mark a float-form spelling
@@ -797,6 +837,7 @@ fn emit_property_numeric_x86_64(emitter: &mut Emitter) {
     emitter.instruction("add r8, 1");                                           // advance
     emitter.instruction("jmp __rt_property_reference_numeric_frac_x");          // keep reading fractional digits
     emitter.label("__rt_property_reference_numeric_exponent_x");
+    // -- parse an optional exponent and its sign --
     emitter.instruction("test rcx, rcx");                                       // a point alone is not numeric
     emitter.instruction("je __rt_property_reference_numeric_fail_x");           // return 0
     emitter.instruction("cmp r9d, 0x65");                                       // lowercase exponent marker?
@@ -838,6 +879,7 @@ fn emit_property_numeric_x86_64(emitter: &mut Emitter) {
     emitter.instruction("test rcx, rcx");                                       // a sign with no digits is not numeric
     emitter.instruction("je __rt_property_reference_numeric_fail_x");           // return 0
     emitter.label("__rt_property_reference_numeric_trailing_x");
+    // -- consume trailing PHP whitespace --
     emitter.instruction("cmp r8, QWORD PTR [rsp]");                             // reached the end?
     emitter.instruction("jae __rt_property_reference_numeric_accept_x");        // the whole spelling is numeric
     emitter.instruction("movzx r9d, BYTE PTR [r11 + r8]");                      // inspect the current byte
@@ -857,6 +899,7 @@ fn emit_property_numeric_x86_64(emitter: &mut Emitter) {
     emitter.instruction("add r8, 1");                                           // consume the whitespace byte
     emitter.instruction("jmp __rt_property_reference_numeric_trailing_x");      // continue scanning
     emitter.label("__rt_property_reference_numeric_accept_x");
+    // -- classify the numeric spelling by value --
     emitter.instruction("cmp QWORD PTR [rsp + 16], 0");                         // fraction and exponent forms need a float check
     emitter.instruction("jne __rt_property_reference_numeric_float_x");         // report a numeric spelling that is not an i64 integer
     abi::emit_load_int_immediate(emitter, "rdx", i64::MIN);                     // materialize 2^63 as the negative limit
@@ -874,6 +917,7 @@ fn emit_property_numeric_x86_64(emitter: &mut Emitter) {
     emitter.label("__rt_property_reference_numeric_fail_x");
     emitter.instruction("xor eax, eax");                                        // 0 = non-numeric
     emitter.label("__rt_property_reference_numeric_done_x");
+    // -- return the classification --
     emitter.instruction("add rsp, 32");                                         // release the scanner frame
     abi::emit_return(emitter);
 }

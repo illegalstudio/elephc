@@ -148,7 +148,9 @@ impl Parser {
     pub(super) fn parse_program(&mut self) -> Result<EvalProgram, EvalParseError> {
         let mut statements = Vec::new();
         while !matches!(self.current(), TokenKind::Eof) {
-            if self.try_parse_strict_types_declare()? {
+            // PHP allows a run of leading `declare` directives but rejects `strict_types`
+            // once any other statement has been parsed.
+            if statements.is_empty() && self.try_parse_strict_types_declare()? {
                 continue;
             }
             statements.extend(self.parse_stmt()?);

@@ -398,4 +398,44 @@ fn parse_fragment_rejects_invalid_strict_types_values() {
             "invalid strict_types fragment parsed: {rejected}"
         );
     }
+    for displaced in [
+        "echo 1; declare(strict_types=1);",
+        "$value = 1; declare(strict_types=0);",
+    ] {
+        assert!(
+            parse_fragment(displaced.as_bytes()).is_err(),
+            "non-leading strict_types fragment parsed: {displaced}"
+        );
+    }
+}
+
+/// Verifies `call_user_func()` forwards the caller's strict mode instead of using the
+/// engine-frame coercive mode that `array_map()` and other callback builtins use.
+#[test]
+fn execute_program_strict_eval_call_user_func_forwards_strict_mode() {
+    let program = parse_fragment(
+        br#"declare(strict_types=1);
+function strictCallUserFuncReader(int $value) {
+    return $value;
+}
+try {
+    call_user_func("strictCallUserFuncReader", "7");
+} catch (TypeError $error) {
+    return $error->getMessage();
+}
+return "missed";"#,
+    )
+    .expect("parse eval fragment");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+
+    let result = execute_program(&program, &mut scope, &mut values).expect("catch strict call_user_func");
+
+    assert_eq!(
+        values.get(result),
+        FakeValue::String(
+            "strictCallUserFuncReader(): Argument #1 ($value) must be of type int, string given"
+                .to_string()
+        )
+    );
 }

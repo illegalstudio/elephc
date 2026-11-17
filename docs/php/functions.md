@@ -424,14 +424,15 @@ exactly as PHP's shared reference is. The same rewrite accepts scalar, string, a
 `mixed`, union, and nullable properties, static properties, static methods, and free
 functions.
 
-A fixed scalar, string, or array property reference also carries the property's declared
-type into the callee's hidden cell. When the callee writes a wider runtime value that the
-property cannot accept — for example `function w(int &$x, mixed $v) { $x = $v; }` called with
-an arbitrary string — the write raises PHP's reference-form `TypeError` before coercion
-(`Cannot assign string to reference held by property C::$n of type int`). Valid weak
-property writes (numeric strings, bools, and in-range floats) still convert normally. The
-write-back itself remains copy-in/copy-out for object, `mixed`, union, and nullable
-properties.
+A property reference whose declared type has a single raw storage shape (`int`, `float`,
+`bool`, `false`, `string`, or `array<T>`) also carries the property's declared type into the
+callee's hidden cell. When the callee writes a wider runtime value that the property cannot
+accept — for example `function w(int &$x, mixed $v) { $x = $v; }` called with an arbitrary
+string — the write raises PHP's reference-form `TypeError` before coercion
+(`Cannot assign string to reference held by property C::$n of type int`). Valid weak property
+writes (numeric strings, bools, and in-range floats) still convert normally. The write-back
+itself remains copy-in/copy-out for object, `mixed`, union (including bare `array`), and
+nullable properties.
 
 The same property places also bind to by-reference **variadics**, including array
 properties: the variadic collector transports the boxed container, and the write-back

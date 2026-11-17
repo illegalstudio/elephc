@@ -79,7 +79,7 @@ pub(in crate::interpreter) fn eval_declared_native_return_value(
             return Err(EvalStatus::RuntimeFatal);
         }
         eval_declared_return_value(
-            callee, return_type, return_owner, called_class_name, value, context, values,
+            callee, false, return_type, return_owner, called_class_name, value, context, values,
         )
     })();
     finish_declared_return_value(value, result, context, values)
@@ -156,6 +156,7 @@ fn eval_declared_explicit_return_value(
     }
     eval_declared_return_value(
         Some(callee),
+        context.strict_types(),
         return_type,
         return_owner,
         called_class_name,
@@ -166,8 +167,12 @@ fn eval_declared_explicit_return_value(
 }
 
 /// Applies a non-void declared return type to one returned runtime value.
+///
+/// `strict` selects PHP's strict return rules; compiled AOT callables pass `false` because
+/// their declared return values are already checked when the host is compiled.
 fn eval_declared_return_value(
     callee: Option<&str>,
+    strict: bool,
     return_type: &EvalParameterType,
     return_owner: Option<&str>,
     called_class_name: Option<&str>,
@@ -191,7 +196,7 @@ fn eval_declared_return_value(
         }
         return Err(EvalStatus::RuntimeFatal);
     }
-    if context.strict_types() {
+    if strict {
         // A strict fragment allows only exact return types plus int-to-float widening.
         if values.type_tag(value)? == EVAL_TAG_INT
             && return_type

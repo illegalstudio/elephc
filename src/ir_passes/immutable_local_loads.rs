@@ -215,7 +215,8 @@ fn immutable_scalar_slots(
                     eligible.remove(slot);
                 }
             },
-            Some(Immediate::LocalSlotPair { first, second }) => {
+            Some(Immediate::LocalSlotPair { first, second })
+            | Some(Immediate::PropertyRefCell { first, second, .. }) => {
                 eligible.remove(first);
                 eligible.remove(second);
             }

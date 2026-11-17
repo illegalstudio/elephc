@@ -744,7 +744,8 @@ impl<'a> ConcatInertAnalysis<'a> {
                     | Op::RetainLocalRefCell
                     | Op::BindRefCellPtr
                     | Op::AdoptRefCellPtr,
-                    Some(Immediate::LocalSlotPair { first, second }),
+                    Some(Immediate::LocalSlotPair { first, second })
+                    | Some(Immediate::PropertyRefCell { first, second, .. }),
                 ) => {
                     if let Some(entry) = slot_never_ref_cell.get_mut(first.as_raw() as usize) {
                         *entry = false;

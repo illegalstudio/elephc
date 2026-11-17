@@ -31259,3 +31259,31 @@ eval($code);
     );
     assert!(!err.contains("ran"), "invalid strict_types fragment executed: {err}");
 }
+
+/// Verifies a strict bridge-run eval fragment reports a mismatched scalar argument on an AOT
+/// method as PHP's catchable TypeError instead of ending the eval runtime.
+#[test]
+fn test_eval_runtime_strict_types_rejects_aot_method_scalar_argument() {
+    let out = compile_and_run(
+        r#"<?php
+class EvalStrictAotMethodBox {
+    public function read(int $value): int {
+        return $value;
+    }
+}
+$code = $argc > 0 ? <<<'__ELEPHC_EVAL__'
+declare(strict_types=1);
+try {
+    echo (new EvalStrictAotMethodBox())->read("7"), "\n";
+} catch (TypeError $error) {
+    echo "caught:", $error->getMessage(), "\n";
+}
+__ELEPHC_EVAL__ : '';
+eval($code);
+"#,
+    );
+    assert_eq!(
+        out,
+        "caught:EvalStrictAotMethodBox::read(): Argument #1 ($value) must be of type int, string given\n"
+    );
+}

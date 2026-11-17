@@ -209,7 +209,8 @@ fn index(function: &Function) -> Index {
 pub(super) fn slots_of(function: &Function, id: InstId) -> Vec<LocalSlotId> {
     match function.instructions[id.as_raw() as usize].immediate.as_ref() {
         Some(Immediate::LocalSlot(slot)) => vec![*slot],
-        Some(Immediate::LocalSlotPair { first, second }) => vec![*first, *second],
+        Some(Immediate::LocalSlotPair { first, second })
+        | Some(Immediate::PropertyRefCell { first, second, .. }) => vec![*first, *second],
         Some(Immediate::IterStart(metadata)) => metadata.local_slots().collect(),
         _ => Vec::new(),
     }

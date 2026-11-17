@@ -564,7 +564,8 @@ fn instructions_name_slot(function: &Function, instructions: &[InstId], slot: Lo
 pub(super) fn instruction_mentions_slot(inst: &Instruction, slot: LocalSlotId) -> bool {
     match inst.immediate.as_ref() {
         Some(Immediate::LocalSlot(named)) => *named == slot,
-        Some(Immediate::LocalSlotPair { first, second }) => *first == slot || *second == slot,
+        Some(Immediate::LocalSlotPair { first, second })
+        | Some(Immediate::PropertyRefCell { first, second, .. }) => *first == slot || *second == slot,
         Some(Immediate::IterStart(metadata)) => metadata.local_slots().any(|named| named == slot),
         _ => false,
     }

@@ -180,11 +180,11 @@ impl Parser {
         let then_branch = if self.consume(TokenKind::Colon) {
             None
         } else {
-            let expr = self.parse_expr()?;
+            let expr = self.parse_rhs_with_assignment(Self::parse_expr)?;
             self.expect(TokenKind::Colon)?;
             Some(Box::new(expr))
         };
-        let else_branch = self.parse_expr()?;
+        let else_branch = self.parse_rhs_with_assignment(Self::parse_expr)?;
         Ok(EvalExpr::Ternary {
             condition: Box::new(condition),
             then_branch,
@@ -198,7 +198,7 @@ impl Parser {
         if !self.consume(TokenKind::QuestionQuestion) {
             return Ok(value);
         }
-        let default = self.parse_null_coalesce()?;
+        let default = self.parse_rhs_with_assignment(Self::parse_null_coalesce)?;
         Ok(EvalExpr::NullCoalesce {
             value: Box::new(value),
             default: Box::new(default),

@@ -50,7 +50,8 @@ pub(super) fn owned_local_roots(function: &Function) -> HashSet<LocalSlotId> {
                         }
                     }
                 }
-                Some(Immediate::LocalSlotPair { first, second }) => {
+                Some(Immediate::LocalSlotPair { first, second })
+                | Some(Immediate::PropertyRefCell { first, second, .. }) => {
                     owners.remove(&first);
                     owners.remove(&second);
                     invalid_roots.extend([first, second]);

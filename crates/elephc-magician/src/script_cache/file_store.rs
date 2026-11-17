@@ -104,7 +104,8 @@ use std::sync::atomic::{AtomicU64, Ordering};
 /// Format 29 adds `goto` and label statements, and the parse failure for an invalid jump.
 /// Format 31 records each eval function, method, and generic template's defining
 /// `strict_types` mode, which changes the serialized callable layout.
-pub(crate) const FORMAT_VERSION: u32 = 31;
+/// Format 32 rejects a `declare(strict_types=...)` that follows another eval statement.
+pub(crate) const FORMAT_VERSION: u32 = 32;
 
 /// Identifies the writer, so one build never reads another's entries.
 ///

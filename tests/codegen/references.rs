@@ -935,3 +935,73 @@ echo $f->f > 1e29 ? "float-big\n" : "float-small\n";
          8=42\n9=42\nfloat-big\n"
     );
 }
+
+/// Verifies a raw scalar reference cell converts between PHP's int and float representations
+/// instead of publishing the source register that belongs to the other type.
+#[test]
+fn test_typed_reference_numeric_representation_conversion() {
+    let out = compile_and_run(
+        r#"<?php
+class C { public int $n = 0; public float $f = 0.0; }
+function w(int &$x, float &$y): void { $x = 2.5; $y = 3; }
+$c = new C();
+w($c->n, $c->f);
+var_dump($c->n, $c->f);
+$n = 0;
+$f = 0.0;
+w($n, $f);
+var_dump($n, $f);
+"#,
+    );
+    assert_eq!(out, "int(2)\nfloat(3)\nint(2)\nfloat(3)\n");
+}
+
+/// Verifies the string, bool, false, and float typed-property reference guards accept PHP's
+/// weak scalar conversions and reject container/null sources with the reference-form message.
+#[test]
+fn test_typed_property_reference_scalar_guard_matrix() {
+    let out = compile_and_run(
+        r#"<?php
+class S { public string $s = "x"; }
+class B { public bool $b = false; }
+class Fal { public false $flag = false; }
+class F { public float $f = 0.0; }
+class Str { public function __toString(): string { return "ok"; } }
+function ws(string &$x, mixed $v): void { $x = $v; }
+function wb(bool &$x, mixed $v): void { $x = $v; }
+function wf(false &$x, mixed $v): void { $x = $v; }
+function wl(float &$x, mixed $v): void { $x = $v; }
+$s = new S();
+ws($s->s, 42); echo $s->s, ":";
+ws($s->s, true); echo $s->s, ":";
+ws($s->s, new Str()); echo $s->s, ":";
+try { ws($s->s, []); } catch (TypeError $e) { echo $e->getMessage(), ":"; }
+try { ws($s->s, null); } catch (TypeError $e) { echo $e->getMessage(), ":"; }
+$b = new B();
+wb($b->b, 2); var_dump($b->b);
+wb($b->b, ""); var_dump($b->b);
+try { wb($b->b, []); } catch (TypeError $e) { echo $e->getMessage(), "\n"; }
+$fal = new Fal();
+wf($fal->flag, false); var_dump($fal->flag);
+try { wf($fal->flag, true); } catch (TypeError $e) { echo $e->getMessage(), "\n"; }
+$f = new F();
+wl($f->f, 3); var_dump($f->f);
+wl($f->f, "2.5"); var_dump($f->f);
+try { wl($f->f, "abc"); } catch (TypeError $e) { echo $e->getMessage(), "\n"; }
+"#,
+    );
+    assert_eq!(
+        out,
+        "42:1:ok:\
+Cannot assign array to reference held by property S::$s of type string:\
+Cannot assign null to reference held by property S::$s of type string:\
+bool(true)\n\
+bool(false)\n\
+Cannot assign array to reference held by property B::$b of type bool\n\
+bool(false)\n\
+Cannot assign true to reference held by property Fal::$flag of type false\n\
+float(3)\n\
+float(2.5)\n\
+Cannot assign string to reference held by property F::$f of type float\n"
+    );
+}
