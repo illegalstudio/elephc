@@ -201,10 +201,13 @@ enum ListEntry {
     },
 }
 
-/// The target of a list pattern entry: a plain expression, an append target (`$x[]`), or a nested list.
+/// The target of a list pattern entry: a plain expression, a by-reference variable (`&$x`), an
+/// append target (`$x[]`), or a nested list.
 #[derive(Debug, Clone)]
 enum ListTarget {
     Expr(Expr),
+    /// `[$a, &$b] = $arr`: the variable becomes a reference to the source element.
+    Ref(String),
     Append(Expr),
     Nested(ListPattern),
 }
@@ -343,6 +346,17 @@ fn parse_list_target_from_slice(
 ) -> Result<ListTarget, CompileError> {
     if tokens.is_empty() {
         return Err(CompileError::new(span, "Expected target in list unpacking"));
+    }
+
+    if tokens[0].0 == Token::Ampersand {
+        let expr = parse_expr_from_slice(&tokens[1..], span)?;
+        return match expr.kind {
+            ExprKind::Variable(name) => Ok(ListTarget::Ref(name)),
+            _ => Err(CompileError::new(
+                span,
+                "Only a variable can be a by-reference list destructuring target",
+            )),
+        };
     }
 
     if is_wrapped_by(tokens, 0, Token::LBracket, Token::RBracket) {

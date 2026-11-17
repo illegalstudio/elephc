@@ -34,9 +34,35 @@ pub(super) fn lower_list_unpack(pattern: ListPattern, value: Expr, span: Span) -
     }
 
     let mut lowerer = ListLowerer::new(span);
-    let source = lowerer.bind_temp(value);
+    // A by-reference entry aliases an element of the SOURCE, so an addressable source is read in
+    // place rather than through a copy of it.
+    let by_ref = pattern_has_ref_target(&pattern);
+    let source = if by_ref && is_addressable(&value) { value } else { lowerer.bind_temp(value) };
+    lowerer.by_ref = by_ref;
     lowerer.lower_pattern(&pattern, source);
     Stmt::new(StmtKind::Synthetic(lowerer.stmts), span)
+}
+
+/// Whether the pattern, nested ones included, has a `&$var` entry.
+fn pattern_has_ref_target(pattern: &ListPattern) -> bool {
+    pattern.entries.iter().any(|entry| match entry {
+        ListEntry::Target { target: ListTarget::Ref(_), .. } => true,
+        ListEntry::Target { target: ListTarget::Nested(nested), .. } => {
+            pattern_has_ref_target(nested)
+        }
+        _ => false,
+    })
+}
+
+/// Whether `expr` names storage a reference can be taken to (a variable or an element chain).
+fn is_addressable(expr: &Expr) -> bool {
+    match &expr.kind {
+        ExprKind::Variable(_)
+        | ExprKind::PropertyAccess { .. }
+        | ExprKind::StaticPropertyAccess { .. } => true,
+        ExprKind::ArrayAccess { array, .. } => is_addressable(array),
+        _ => false,
+    }
 }
 
 /// Returns whether one of the unpack targets names the variable the value is read from.
@@ -77,6 +103,8 @@ struct ListLowerer {
     next_temp: usize,
     /// Statements emitted during lowering, in order.
     stmts: Vec<Stmt>,
+    /// Whether the pattern has a by-reference entry: nested sources are then read in place.
+    by_ref: bool,
 }
 
 impl ListLowerer {
@@ -87,6 +115,7 @@ impl ListLowerer {
             span,
             next_temp: 0,
             stmts: Vec::new(),
+            by_ref: false,
         }
     }
 
@@ -134,8 +163,15 @@ impl ListLowerer {
     fn lower_target(&mut self, target: &ListTarget, value: Expr) {
         match target {
             ListTarget::Nested(pattern) => {
-                let nested_source = self.bind_temp(value);
+                let nested_source =
+                    if self.by_ref { value } else { self.bind_temp(value) };
                 self.lower_pattern(pattern, nested_source);
+            }
+            ListTarget::Ref(name) => {
+                self.stmts.push(Stmt::new(
+                    StmtKind::RefAssign { target: name.clone(), source: value },
+                    self.span,
+                ));
             }
             ListTarget::Expr(expr) => {
                 if let Some(stmt) = lower_assignment_target(expr.clone(), value, expr.span) {

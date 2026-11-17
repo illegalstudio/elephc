@@ -114,3 +114,23 @@ g(new ArrayIterator([5]));
     assert!(out.stdout.starts_with("Array\n(\n    [0] => 1\n    [x] => s\n)\narray(2) {\n  [0]=>\n  int(1)\n  [\"x\"]=>\n  string(1) \"s\"\n}\n"), "{}", out.stdout);
     assert!(out.stdout.contains("ArrayIterator Object"), "{}", out.stdout);
 }
+
+/// By-reference list destructuring (`[$a, &$b] = $arr`) aliases the source elements, nested
+/// patterns, keyed entries and a by-reference parameter source included.
+#[test]
+fn test_by_reference_list_destructuring() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+$arr = [1, 2, [3, 4]];
+[$a, &$b] = $arr; $b = 9;
+[, , [, &$c]] = $arr; $c = 7;
+$m = ['k' => 5, 'j' => 6];
+['k' => &$e, 'j' => $f] = $m; $e = 50;
+echo json_encode($arr), json_encode($m), $a, $f, "\n";
+function g(array &$p) { [&$x] = $p; $x = 'z'; }
+$q = [1]; g($q); echo json_encode($q), "\n";
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "[1,9,[3,7]]{\"k\":50,\"j\":6}16\n[\"z\"]\n");
+}
