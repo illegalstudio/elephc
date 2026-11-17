@@ -539,6 +539,15 @@ impl Checker {
             if has_value && *actual == PhpType::Void { return Ok(()); }
             return Err(CompileError::new(span, &format!("{context} must return a null value")));
         }
+        // `void` shares the null type's storage, so `return null;` reaches the type check with an
+        // actual `Void` that is indistinguishable from a null-only declaration. php refuses every
+        // value after `void` at compile time, the literal `null` included.
+        if has_value && matches!(hint, TypeExpr::Void) {
+            return Err(CompileError::new(
+                span,
+                &format!("{context} must not return a value"),
+            ));
+        }
         self.require_compatible_return_type(expected, actual, has_value, strict_types, span, context)
     }
 
