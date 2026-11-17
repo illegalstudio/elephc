@@ -50,7 +50,7 @@ pub(in crate::ir_lower) fn lower_object_comparison_dispatch(module: &mut Module)
 }
 
 /// Symbol of the ordering comparator `__rt_php_compare` calls for two non-scalar operands.
-const ORDER_COMPARE_FUNCTION: &str = "__elephc_internal_order_compare";
+pub(in crate::ir_lower) const ORDER_COMPARE_FUNCTION: &str = "__elephc_internal_order_compare";
 
 /// Emits `__elephc_internal_order_compare(mixed $left, mixed $right): int`, php's `zend_compare`
 /// for two arrays or two objects, which `__rt_php_compare` used to report as equal.

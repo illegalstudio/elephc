@@ -471,6 +471,13 @@ pub(super) fn promote_eval_bridge_method_argument_locals(
     if !plain_positional_call_args(args) {
         return;
     }
+    // The ordering comparator calls `format("u")` on a `mixed` pair it has just proved to be
+    // `DateTimeInterface` objects: compiled built-ins whose methods take no by-reference
+    // argument, so there is nothing for an eval context to bind. Declaring one linked the
+    // interpreter into every program that merely contains an `eval()`.
+    if ctx.owner_name() == crate::ir_lower::function::ORDER_COMPARE_FUNCTION {
+        return;
+    }
     let bridge_args = match signature {
         Some(signature) => signature
             .ref_params
