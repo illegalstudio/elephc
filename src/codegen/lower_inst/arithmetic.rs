@@ -496,6 +496,7 @@ fn lower_mixed_add_runtime_dispatch(ctx: &mut FunctionContext<'_>) -> Result<()>
     let array_union = ctx.next_label("mixed_add_array_union");
     let numeric = ctx.next_label("mixed_add_numeric");
     let right_array_error = ctx.next_label("mixed_add_right_array_error");
+    let unsupported = ctx.next_label("mixed_add_unsupported");
     let done = ctx.next_label("mixed_add_done");
 
     load_mixed_cell_at(ctx, 16, abi::int_result_reg(ctx.emitter));
@@ -511,10 +512,13 @@ fn lower_mixed_add_runtime_dispatch(ctx: &mut FunctionContext<'_>) -> Result<()>
     load_mixed_cell_at(ctx, 0, abi::int_result_reg(ctx.emitter));
     abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
     emit_branch_if_array_tag(ctx, &array_union);
-    emit_unsupported_add_operands_error(ctx, true);
+    emit_unsupported_add_operands_operands(ctx, true);
+    abi::emit_jump(ctx.emitter, &unsupported);
 
     ctx.emitter.label(&right_array_error);
-    emit_unsupported_add_operands_error(ctx, false);
+    emit_unsupported_add_operands_operands(ctx, false);
+    ctx.emitter.label(&unsupported);
+    emit_unsupported_add_operands_throw(ctx);
 
     ctx.emitter.label(&array_union);
     emit_mixed_array_union(ctx);
@@ -527,14 +531,62 @@ fn lower_mixed_add_runtime_dispatch(ctx: &mut FunctionContext<'_>) -> Result<()>
     Ok(())
 }
 
-/// Throws PHP's `Unsupported operand types: <left> + <right>` for a boxed `+` that mixes an array
-/// with a non-array operand.
+/// Loads the non-array operand and the operand-order flag for the shared unsupported-`+` throw.
 ///
-/// Like php-src's `zend_binop_error`, the non-array operand is named by its runtime type
-/// (`int`, `float`, `string`, `bool`, `null`, `resource`, `Closure`, or the object's class),
-/// read from the boxed cell the dispatch left on the stack: the right operand at offset 0 when
-/// the array is on the left, the left operand at offset 16 otherwise.
-fn emit_unsupported_add_operands_error(ctx: &mut FunctionContext<'_>, array_on_left: bool) {
+/// Like php-src's `zend_binop_error`, the non-array operand is named by its runtime type, read
+/// from the boxed cell the dispatch left on the stack: the right operand at offset 0 when the
+/// array is on the left, the left operand at offset 16 otherwise. The flag travels in the second
+/// integer argument register to `mixed_add_error_message_helper`.
+fn emit_unsupported_add_operands_operands(ctx: &mut FunctionContext<'_>, array_on_left: bool) {
+    let result = abi::int_result_reg(ctx.emitter);
+    load_mixed_cell_at(ctx, if array_on_left { 0 } else { 16 }, result);
+    let flag = abi::int_arg_reg_name(ctx.emitter.target, 1);
+    abi::emit_load_int_immediate(ctx.emitter, flag, i64::from(array_on_left));
+}
+
+/// Throws PHP's `Unsupported operand types: <left> + <right>` for the operands
+/// `emit_unsupported_add_operands_operands` loaded.
+///
+/// The message is built by one shared out-of-line helper, so each `+` site pays a call and the
+/// throw, not a copy of the type ladder and the concatenations.
+fn emit_unsupported_add_operands_throw(ctx: &mut FunctionContext<'_>) {
+    let message_helper = mixed_add_error_message_helper(ctx);
+    abi::emit_call_label(ctx.emitter, &message_helper);
+    super::exceptions::emit_type_error_from_string_result(ctx);
+}
+
+/// Returns the label of the shared helper that builds the unsupported-`+` message, emitting it out
+/// of line the first time a body needs it.
+///
+/// In: the non-array operand's boxed cell in the integer result register, and `1` in the second
+/// integer argument register when the array is the LEFT operand (`0` for `<type> + array`). Out:
+/// the persisted message in the string result registers. The operand is named by its runtime type
+/// (`int`, `string`, `float`, `bool`, `null`, `resource`, `Closure`, or the object's class name).
+/// The helper keeps its own frame, so the calls inside it cannot clobber the caller's return
+/// address.
+fn mixed_add_error_message_helper(ctx: &mut FunctionContext<'_>) -> String {
+    let key = "mixed_add_error_message";
+    let label = ctx.keyed_global_label(key, "mixed_add_error_message");
+    if !ctx.shared.first_keyed_helper_emission(key) {
+        return label;
+    }
+    let frame_slot_base = ctx.emitter.frame_slot_base.take();
+    let scope = ctx.emitter.begin_out_of_line();
+    ctx.emit_keyed_helper(key, |ctx| {
+        ctx.emitter.label_global(&label);
+        abi::emit_frame_prologue(ctx.emitter, 16);
+        emit_mixed_add_error_message_body(ctx);
+        abi::emit_frame_restore(ctx.emitter, 16);
+        abi::emit_return(ctx.emitter);
+    });
+    ctx.emitter.end_out_of_line(scope);
+    ctx.emitter.frame_slot_base = frame_slot_base;
+    label
+}
+
+/// Body of the shared message helper: names the operand in the result register, then wraps the
+/// name in the `array + <type>` or `<type> + array` message and persists it.
+fn emit_mixed_add_error_message_body(ctx: &mut FunctionContext<'_>) {
     let int_case = ctx.next_label("mixed_add_error_int");
     let string_case = ctx.next_label("mixed_add_error_string");
     let float_case = ctx.next_label("mixed_add_error_float");
@@ -544,8 +596,11 @@ fn emit_unsupported_add_operands_error(ctx: &mut FunctionContext<'_>, array_on_l
     let resource_case = ctx.next_label("mixed_add_error_resource");
     let closure_case = ctx.next_label("mixed_add_error_closure");
     let named = ctx.next_label("mixed_add_error_named");
+    let array_left = ctx.next_label("mixed_add_error_array_left");
+    let message_done = ctx.next_label("mixed_add_error_message_done");
     let result = abi::int_result_reg(ctx.emitter);
-    load_mixed_cell_at(ctx, if array_on_left { 0 } else { 16 }, result);
+    let flag = abi::int_arg_reg_name(ctx.emitter.target, 1);
+    abi::emit_push_reg(ctx.emitter, flag);
     abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
     super::builtins::emit_branch_on_gettype_mixed_tag(ctx, 0, &int_case);
     super::builtins::emit_branch_on_gettype_mixed_tag(ctx, 1, &string_case);
@@ -574,17 +629,29 @@ fn emit_unsupported_add_operands_error(ctx: &mut FunctionContext<'_>, array_on_l
     );
     super::runtime_class_messages::emit_runtime_class_name_to_string_result(ctx, result, "object");
     ctx.emitter.label(&named);
-    if array_on_left {
-        super::runtime_class_messages::emit_concat_static_prefix(
-            ctx,
-            "Unsupported operand types: array + ",
-        );
-    } else {
-        super::runtime_class_messages::emit_concat_static_prefix(ctx, "Unsupported operand types: ");
-        super::runtime_class_messages::emit_concat_static_suffix(ctx, " + array");
+    // The register the flag is popped into lies outside the string result pair on both targets
+    // (`x10`, `rcx`), so the type name survives the pop.
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            abi::emit_pop_reg(ctx.emitter, "x10");
+            ctx.emitter.instruction(&format!("cbnz x10, {}", array_left));      // the array was the left operand
+        }
+        Arch::X86_64 => {
+            abi::emit_pop_reg(ctx.emitter, "rcx");
+            ctx.emitter.instruction("test rcx, rcx");                           // was the array the left operand?
+            ctx.emitter.instruction(&format!("jnz {}", array_left));            // the array was the left operand
+        }
     }
+    super::runtime_class_messages::emit_concat_static_prefix(ctx, "Unsupported operand types: ");
+    super::runtime_class_messages::emit_concat_static_suffix(ctx, " + array");
+    abi::emit_jump(ctx.emitter, &message_done);
+    ctx.emitter.label(&array_left);
+    super::runtime_class_messages::emit_concat_static_prefix(
+        ctx,
+        "Unsupported operand types: array + ",
+    );
+    ctx.emitter.label(&message_done);
     abi::emit_call_label(ctx.emitter, "__rt_str_persist");
-    super::exceptions::emit_type_error_from_string_result(ctx);
 }
 
 /// Branches when the current unboxed Mixed tag denotes an indexed or associative array.
