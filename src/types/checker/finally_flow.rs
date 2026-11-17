@@ -76,7 +76,7 @@ impl Checker {
     /// Records validation before a return unwinds through its local catches and finally blocks.
     pub(super) fn record_return_boundary_exception_flow(&mut self, source: &PhpType, env: &TypeEnv) {
         if self.finally_flow_frames.is_empty()
-            || !crate::optimize::active_return_boundary_checks_source(source) { return; }
+            || !crate::optimize::active_return_boundary_checks_source(source, self.strict_types) { return; }
         self.record_exception_flow(CheckerThrownTypes::from_value(&PhpType::Object("TypeError".into()), true), env);
     }
 

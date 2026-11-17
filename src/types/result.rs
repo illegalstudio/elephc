@@ -254,8 +254,9 @@ pub struct CheckResult {
     /// Reads proven to use native buffers on every checker visit to the source span.
     /// Buffer bounds checks cannot invoke PHP warning handlers.
     pub buffer_read_sites: HashSet<Span>,
-    /// See `Checker::scalar_guard_arg_sites`: arguments whose parameter binding can throw
-    /// `TypeError` at run time, kept observable by the post-typecheck optimizer.
+    /// See `Checker::scalar_guard_arg_sites`: arguments whose parameter binding, and returned
+    /// expressions whose declared scalar return, can throw `TypeError` at run time, kept
+    /// observable by the post-typecheck optimizer.
     pub scalar_guard_arg_sites: HashSet<Span>,
     /// See `Checker::first_class_builtin_call_types`.
     pub first_class_builtin_call_types: HashMap<Span, PhpType>,

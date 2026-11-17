@@ -512,8 +512,9 @@ pub(crate) struct LoweringContext<'m, 'f> {
     pub builtin_call_types: &'m HashMap<Span, PhpType>,
     /// Source-body generator classification for closure literals.
     pub closure_generator_spans: &'m HashSet<Span>,
-    /// Argument spans bound to a declared scalar parameter that need the runtime
-    /// `TypeError` check (`CheckResult::scalar_guard_arg_sites`).
+    /// Argument spans bound to a declared scalar parameter, and returned expressions of a
+    /// declared `string`/`float`/`bool` return, that need the runtime `TypeError` check
+    /// (`CheckResult::scalar_guard_arg_sites`).
     pub scalar_guard_arg_sites: &'m HashSet<Span>,
     /// Checked property classes and write refusals before opaque calls erase flow facts.
     pub array_push_property_plans: &'m HashMap<(String, Span), crate::types::ArrayPushPropertyPlan>,

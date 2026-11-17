@@ -68,13 +68,12 @@ impl ReturnBoundaryFacts {
         Rc::new(Self { declared_scalar, declared_callable, declared_result, stable_parameters })
     }
 
-    /// Returns whether a value of `source` type reaching this boundary is checked at run time.
-    fn checks_source(&self, source: &PhpType) -> bool {
+    /// Returns whether a value of `source` type reaching this boundary is checked at run time
+    /// under the declaring file's `strict` mode.
+    fn checks_source(&self, source: &PhpType, strict: bool) -> bool {
         self.declared_callable || match &self.declared_scalar {
             Some(PhpType::Int) => declared_int_return_requires_validation(true, &PhpType::Int, source),
-            // `string`, `float` and `bool` returns check a value that can hold a refused type;
-            // the strict rule is the wider one, so it is the conservative answer here.
-            Some(declared) => crate::types::param_binding::runtime_scalar_guard_needed(declared, source, true),
+            Some(declared) => crate::types::param_binding::runtime_scalar_guard_needed(declared, source, strict),
             None => false,
         }
     }
@@ -82,9 +81,18 @@ impl ReturnBoundaryFacts {
     /// Exposes only the representation promised by the source declaration.
     pub(super) fn declared_result(&self) -> PhpType { self.declared_result.clone() }
 
-    /// Tests the same representation predicate used by EIR, with unknown values treated as boxed.
+    /// Tests the same decision EIR lowering makes for this returned expression.
+    ///
+    /// An `int` return applies the representation predicate, with unknown values treated as
+    /// boxed. A `string`/`float`/`bool` return is checked only where the checker recorded the
+    /// returned expression (`Checker::record_scalar_guard_arg_site`), which lowering consults too.
+    /// A declared `callable` return can throw on every return.
     fn may_throw(&self, expr: &Expr) -> bool {
-        self.checks_source(&self.source_type(expr))
+        self.declared_callable || match &self.declared_scalar {
+            Some(PhpType::Int) => self.checks_source(&self.source_type(expr), true),
+            Some(_) => super::binding_decisions::is_scalar_guard_site(expr.span),
+            None => false,
+        }
     }
 
     /// Recognizes native values without assuming a mutable local keeps its original hint.
@@ -131,18 +139,9 @@ impl ReturnBoundaryFacts {
 
 /// Returns the declared non-nullable scalar return type whose boundary verifies its value.
 fn declared_scalar_return(hint: Option<&TypeExpr>) -> Option<PhpType> {
-    match hint? {
-        TypeExpr::Int => Some(PhpType::Int),
-        TypeExpr::Float => Some(PhpType::Float),
-        TypeExpr::Str => Some(PhpType::Str),
-        TypeExpr::Bool => Some(PhpType::Bool),
-        TypeExpr::Named(name) => match name.as_str().to_ascii_lowercase().as_str() {
-            "int" => Some(PhpType::Int),
-            "float" => Some(PhpType::Float),
-            "string" => Some(PhpType::Str),
-            "bool" => Some(PhpType::Bool),
-            _ => None,
-        },
+    hint?;
+    match parameter_type(hint) {
+        scalar @ (PhpType::Int | PhpType::Float | PhpType::Str | PhpType::Bool) => Some(scalar),
         _ => None,
     }
 }
@@ -155,6 +154,14 @@ fn parameter_type(hint: Option<&TypeExpr>) -> PhpType {
         Some(TypeExpr::Bool) => PhpType::Bool,
         Some(TypeExpr::False) => PhpType::False,
         Some(TypeExpr::Str) => PhpType::Str,
+        // A scalar keyword spelled as a name (`Named("string")`) is the same declaration.
+        Some(TypeExpr::Named(name)) => match name.as_str().to_ascii_lowercase().as_str() {
+            "int" => PhpType::Int,
+            "float" => PhpType::Float,
+            "string" => PhpType::Str,
+            "bool" => PhpType::Bool,
+            _ => PhpType::Mixed,
+        },
         Some(TypeExpr::Nullable(inner)) => PhpType::Union(vec![parameter_type(Some(inner)), PhpType::Void]),
         Some(TypeExpr::Union(members)) => PhpType::Union(members.iter().map(|hint| parameter_type(Some(hint))).collect()),
         _ => PhpType::Mixed,
@@ -176,10 +183,11 @@ pub(super) fn active_return_boundary_may_throw(expr: &Expr) -> bool {
     ACTIVE_RETURN_BOUNDARY.with(|slot| slot.borrow().as_ref().is_some_and(|facts| facts.may_throw(expr)))
 }
 
-/// Uses the checker's source-point type once inference has established the current read view.
-pub(crate) fn active_return_boundary_checks_source(source: &PhpType) -> bool {
+/// Uses the checker's source-point type once inference has established the current read view,
+/// under the declaring file's `strict` mode.
+pub(crate) fn active_return_boundary_checks_source(source: &PhpType, strict: bool) -> bool {
     ACTIVE_RETURN_BOUNDARY.with(|slot| slot.borrow().as_ref().is_some_and(|facts|
-        facts.checks_source(source)))
+        facts.checks_source(source, strict)))
 }
 
 /// Returns whether the active `string`/`float`/`bool` return boundary checks a returned value

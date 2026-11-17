@@ -211,9 +211,11 @@ impl Checker {
                         self.record_declared_callable_literal_name(e, env);
                     }
                     // EIR lowering checks a runtime-typed value returned from a declared
-                    // `string`/`float`/`bool` return type only where recorded here.
+                    // `string`/`float`/`bool` return type only where recorded here, and the
+                    // optimizer's exception summaries read the same record (the recorded
+                    // site set holds these return spans next to the guarded arguments).
                     if crate::optimize::active_scalar_return_needs_guard(&returned, self.strict_types) {
-                        self.scalar_guard_arg_sites.insert(e.span);
+                        self.record_scalar_guard_arg_site(e.span);
                     }
                     // Record the type as observed HERE, in flow order, so the later
                     // flow-insensitive return-coverage pass does not apply a narrowing that
