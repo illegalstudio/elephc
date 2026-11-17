@@ -77,8 +77,14 @@ pub(super) fn lower_yield_from(ctx: &mut LoweringContext<'_, '_>, inner: &Expr, 
         || matches!(&source_ty, PhpType::Object(name)
             if name.trim_start_matches('\\') != "Generator"
                 && ctx.interfaces.contains_key(name.trim_start_matches('\\')));
-    if runtime_class {
+    // A program that loads code at run time can hand this site a Generator the interpreter
+    // built: it has no fiber for `__rt_gen_delegate` to drive (a SIGSEGV in `_rt_fiber_switch`),
+    // while the iterator loop below reaches it through the probing `__rt_gen_*` helpers.
+    if runtime_class && !ctx.program_loads_code_at_run_time() {
         return lower_yield_from_runtime_class(ctx, value, expr);
+    }
+    if runtime_class {
+        return lower_yield_from_array(ctx, value, expr);
     }
     if matches!(source_ty, PhpType::Array(_) | PhpType::AssocArray { .. })
         || matches!(&source_ty, PhpType::Object(name) if name.trim_start_matches('\\') != "Generator")
