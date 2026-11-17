@@ -260,6 +260,14 @@ impl Parser {
         if !nullable_shorthand && matches!(self.current(), TokenKind::LParen) {
             return self.parse_dnf_type_decl(position);
         }
+        // `null|(A&B)`: php accepts the null atom ahead of the group as it does behind it.
+        if !nullable_shorthand
+            && matches!(self.current(), TokenKind::Ident(word) if word.eq_ignore_ascii_case("null"))
+            && matches!(self.peek(), TokenKind::Pipe)
+            && matches!(self.tokens.get(self.pos + 2), Some(TokenKind::LParen))
+        {
+            return self.parse_dnf_type_decl(position);
+        }
         let first = self.parse_type_name(position)?;
         let mut variants = Vec::new();
         let mut allows_null = nullable_shorthand || matches!(first, None);

@@ -122,6 +122,20 @@ fn parse_fragment_accepts_an_empty_dimension_reference_source() {
     }
 }
 
+/// Verifies a DNF type may put its null atom first: `null|(A&B)` is as valid in php as
+/// `(A&B)|null`.
+#[test]
+fn parse_fragment_accepts_a_null_atom_ahead_of_a_dnf_group() {
+    for source in [
+        &br#"function f(null|(A&B) $x){} return 1;"#[..],
+        &br#"function f((A&B)|null $x){} return 1;"#[..],
+    ] {
+        parse_fragment(source).unwrap_or_else(|error| {
+            panic!("{} should parse: {:?}", String::from_utf8_lossy(source), error.error())
+        });
+    }
+}
+
 /// Verifies a by-reference declaration and a bind to its result both parse.
 ///
 /// The gap this test was written to pin -- the declaration parsing while the BIND stayed refused
