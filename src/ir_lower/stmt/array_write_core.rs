@@ -262,19 +262,24 @@ fn lower_array_assign_selected(
         string_offset_writes::lower_string_offset_assign(ctx, array, index, value, span);
         return;
     }
-    let array_value = load_array_local_for_write(ctx, array, span);
+    let auto_viv = super::array_write_storage::auto_vivified_array_type(ctx, array);
+    let array_value = match &auto_viv {
+        Some(ty) => super::array_write_storage::empty_auto_vivified_container(ctx, array, ty, span),
+        None => load_array_local_for_write(ctx, array, span),
+    };
     if let Some(increment) = incdec {
         if super::native_dimension_incdec::lower(ctx, array_value, index, increment, value_incdec_locals(value), span,
-            |ctx, array_value| lower_array_assign_from_value(ctx, array, array_value, index, value, span, key_already_diagnosed, incdec))
+            |ctx, array_value| lower_array_assign_from_value(ctx, array, array_value, index, value, span, key_already_diagnosed, incdec, auto_viv.clone()))
         { return; }
     }
-    lower_array_assign_from_value(ctx, array, array_value, index, value, span, key_already_diagnosed, incdec);
+    lower_array_assign_from_value(ctx, array, array_value, index, value, span, key_already_diagnosed, incdec, auto_viv);
 }
 
 /// Preserves the established typed and boxed writer after a native incdec guard.
 fn lower_array_assign_from_value(
     ctx: &mut LoweringContext<'_, '_>, array: &str, array_value: LoweredValue,
     index: &Expr, value: &Expr, span: Span, key_already_diagnosed: bool, incdec: Option<bool>,
+    auto_viv: Option<PhpType>,
 ) {
     if let Some(update) = incdec.and_then(|increment| {
         super::buffer_element_updates::statement_update(ctx, array_value, value, increment)
@@ -295,6 +300,13 @@ fn lower_array_assign_from_value(
     value_value = ctx.borrow_write_operand_if_needed(value_value, span);
     let container_ty = ctx.builder.value_php_type(array_value.value);
     value_value = ctx.retype_value_for_container_element(&container_ty, value_value, Some(value.span));
+    // The offset and value expressions have run; publish the auto-vivified container now.
+    let array_value = match auto_viv {
+        Some(ty) => super::array_write_storage::publish_auto_vivified_container(
+            ctx, array, array_value, ty, span,
+        ),
+        None => array_value,
+    };
     // A hash whose stamped value type cannot hold the assigned value widens its storage first,
     // like the indexed path does; PHP's untyped arrays keep the runtime value (#1951).
     let (array_value, hash_storeback) = if op == Op::HashSet {
