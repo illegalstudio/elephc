@@ -69,6 +69,46 @@ fn memoir_hash_references_preserve_assembly() {
         "hash reference extraction changed assembly");
 }
 
+/// Uses the compiler's supplied class identity without selecting a PHP class inside Memoir.
+#[test]
+fn memoir_weak_cache_uses_host_class_identity() {
+    for name in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+        for mode in 0..6 {
+            let target = Target::parse(name).unwrap();
+            let original = emit_references(target, mode, true).output();
+            let mut emitter = Emitter::new(target);
+            emitter.pic_data_refs = mode == 1 || mode == 2;
+            emitter.cdylib_boundary = mode == 2 || mode == 3;
+            emitter.phpext_output = mode == 4;
+            emitter.dead_strip = mode == 5;
+            elephc_memoir::weak_cache::emit(&mut emitter, "_memoir_host_observer_class");
+            assert!(original.contains("_weak_reference_class_id"), "{name}, mode={mode}");
+            assert_eq!(emitter.output(),
+                original.replace("_weak_reference_class_id", "_memoir_host_observer_class"),
+                "{name}, mode={mode}: weak cache ignored host class identity");
+        }
+    }
+}
+
+/// Keeps direct hash payload views allocation-free and free of ownership helper calls.
+#[test]
+fn memoir_inline_hash_reads_remain_borrowed() {
+    for name in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+        let target = Target::parse(name).unwrap();
+        let mut emitter = Emitter::new(target);
+        let (tag, lo, hi) = if name == "linux-x86_64" {
+            ("r9", "rcx", "r8")
+        } else { ("x5", "x3", "x4") };
+        hash_entry_reference::emit_inline_entry_deref(&mut emitter,
+            "__memoir_borrow_done", tag, lo, hi);
+        let output = emitter.output();
+        assert!(output.contains("__memoir_borrow_done:"), "{name}");
+        for forbidden in ["__rt_", "call ", "bl ", "str ", "mov QWORD PTR ["] {
+            assert!(!output.contains(forbidden), "{name}: borrowed read emitted {forbidden}");
+        }
+    }
+}
+
 /// Cross-assembles both complete reference inventories on all targets and modes.
 #[test]
 #[ignore = "requires clang with ELF and Apple AArch64 assembler support"]

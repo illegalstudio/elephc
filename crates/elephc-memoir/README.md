@@ -20,7 +20,8 @@ owner retirement, validated boxed object transfers, the object-handle pool, guar
 zend_string allocation, recursive zval/string/array storage retirement, and memory
 proofs for direct scalar/empty-array cleanup, static binding storage, guard
 records, depth-stamped temporary owner lists, abandoned activation cleanup,
-stored-property ownership completion, previous-slot release and box reuse during hydration.
+stored-property ownership completion, previous-slot release and box reuse during hydration,
+non-owning observer caches, hash-entry reference promotion and borrowed payload views.
 It also emits fixed heap, GC, buffer, reference-root, handle-table and string-scratch
 declarations, including raw capture-buffer storage, keeping their existing order
 and byte layout.
@@ -57,6 +58,13 @@ Memoir detaches every abandoned record before invoking its cleanup callback.
 context names the host uninitialized marker, box deferral entry and saved-payload
 release entry. Wire parsing, property validation, duplicate-key selection and
 parser completion stay in the compiler.
+`weak_cache` receives the compiler's wrapper class-id symbol. It publishes cached
+observers without retaining referents and clears both directions before storage
+reuse. `hash_entry_references` separates shared Mixed boxes before moving the
+entry's owner into a reference cell. Its inline reads use caller-selected registers
+and return a borrow without allocating or changing ownership. Both modules require
+only assembly output and target ABI capabilities. Iterator cursor and successor
+rules, PHP method validation and class identity stay in the compiler.
 
 The compiler retains EIR lifetime analysis, ownership optimization and placement,
 PHP reference/type validation, formatting, output routing, zval pack/unpack,
@@ -84,6 +92,9 @@ native reference-validation settings, raw-slot conversion, writable wrapper slot
 and scalar/empty-array release gates through the full compiler cleanup boundary.
 Owner-record fingerprints cover static readers and record size, weak unbinding,
 guard ownership transfer and scoped list detachment through the compiler adapters.
+Reference-storage fingerprints cover weak-cache creation, reads and retirement,
+complete hash-reference integration, and two inline register arrangements. These
+60 cases cover every supported target and emission mode without fixed semantic data.
 
 `build.rs` includes this crate's Rust sources in the runtime-cache identity.
 Changes to these emitters therefore invalidate cached runtime objects even when
