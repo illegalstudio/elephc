@@ -431,7 +431,7 @@ pub(super) fn callable_label(ctx: &LoweringContext<'_, '_>) -> String {
             }
         }
     }
-    ctx.owner_name().to_string()
+    ctx.php_owner_name()
 }
 
 /// Branches on the shared null representation and balances a temporary on both outcomes.

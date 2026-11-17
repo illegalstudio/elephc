@@ -133,3 +133,56 @@ outer();
     );
     assert_eq!(out, "{closure:F:4}(): Return value must be of type string, null returned\n{closure:F:5}(): Return value must be of type float, string returned\n{closure:F:6}(): Return value must be of type bool, array returned\n{closure:F:7}(): Return value must be of type int, null returned\n{closure:outer():9}(): Return value must be of type string, null returned\n");
 }
+
+/// A function an included file declares is lowered under a generated include-variant symbol;
+/// its return `TypeError`, and the label of a closure declared inside it, name the PHP function.
+#[test]
+fn test_return_type_error_names_an_included_function_by_its_php_name() {
+    let out = compile_and_run_files(
+        &[
+            (
+                "defs.php",
+                r#"<?php
+declare(strict_types=1);
+function ps(mixed $v): string { return $v; }
+function pi_(mixed $v): int { return $v; }
+function mk(): Closure { return fn(mixed $v): bool => $v; }
+"#,
+            ),
+            (
+                "main.php",
+                r#"<?php
+require __DIR__ . '/defs.php';
+function box(mixed $v): mixed { return $v; }
+try { ps(box(5)); } catch (TypeError $e) { echo $e->getMessage(), "\n"; }
+try { pi_(box(null)); } catch (TypeError $e) { echo $e->getMessage(), "\n"; }
+$c = mk();
+try { $c(box("x")); } catch (TypeError $e) { echo $e->getMessage(), "\n"; }
+"#,
+            ),
+        ],
+        "main.php",
+    );
+    assert_eq!(out, "ps(): Return value must be of type string, int returned\npi_(): Return value must be of type int, null returned\n{closure:mk():5}(): Return value must be of type bool, string returned\n");
+}
+
+/// An anonymous class's method is named `class@anonymous::m` (`Parent@anonymous::m`,
+/// `Interface@anonymous::m`), not by the class's generated `class@anonymous#N` symbol.
+#[test]
+fn test_return_type_error_names_an_anonymous_class_like_php() {
+    let out = compile_and_run(
+        r#"<?php
+function box(mixed $v): mixed { return $v; }
+class Base {}
+interface I {}
+$c = new class { public function s(mixed $v): string { return $v; } public function i(mixed $v): int { return $v; } };
+$d = new class extends Base { public function f(mixed $v): float { return $v; } };
+$e = new class implements I { public function b(mixed $v): bool { return $v; } };
+try { $c->s(box(null)); } catch (TypeError $x) { echo $x->getMessage(), "\n"; }
+try { $c->i(box(null)); } catch (TypeError $x) { echo $x->getMessage(), "\n"; }
+try { $d->f(box(null)); } catch (TypeError $x) { echo $x->getMessage(), "\n"; }
+try { $e->b(box(null)); } catch (TypeError $x) { echo $x->getMessage(), "\n"; }
+"#,
+    );
+    assert_eq!(out, "class@anonymous::s(): Return value must be of type string, null returned\nclass@anonymous::i(): Return value must be of type int, null returned\nBase@anonymous::f(): Return value must be of type float, null returned\nI@anonymous::b(): Return value must be of type bool, null returned\n");
+}

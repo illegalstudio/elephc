@@ -1132,7 +1132,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         } else if self.in_main {
             self.source_path.clone().unwrap_or_else(|| "unknown".to_string())
         } else {
-            format!("{}()", self.owner_name)
+            format!("{}()", self.php_owner_name())
         };
         self.closure_display_names
             .insert(closure_name.to_string(), format!("{{closure:{context}:{line}}}"));
@@ -2503,6 +2503,18 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
             .or_else(|| info.declared_interfaces.first().cloned()))
             .unwrap_or_else(|| "class".to_string());
         format!("{}@anonymous", base.trim_start_matches('\\'))
+    }
+
+    /// The body's name as PHP spells it in messages and closure labels: a function an
+    /// included file declares is lowered under a generated variant symbol, reported here by
+    /// its PHP name; an anonymous class's method reads `class@anonymous::m`
+    /// ([`Self::php_class_label`]) as in PHP's return errors.
+    pub(crate) fn php_owner_name(&self) -> String {
+        if let Some((class, method)) = self.owner_name.split_once("::") {
+            return format!("{}::{method}", self.php_class_label(class));
+        }
+        crate::ir_lower::expr::variant_public_name(&self.owner_name)
+            .unwrap_or_else(|| self.owner_name.clone())
     }
 
     /// Returns a deterministic EIR function name for the next closure literal in this body.
