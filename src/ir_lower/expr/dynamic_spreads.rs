@@ -268,7 +268,6 @@ fn lower_source(ctx: &mut LoweringContext<'_, '_>, sig: &FunctionSig, state: &Sp
     // and the loop exit retires it.
     let lease_slot = initialize_owned_slot(ctx, PhpType::Mixed, &Expr::new(ExprKind::Null, state.span));
     ctx.store_local(&lease_slot, source, PhpType::Mixed, Some(state.span));
-    crate::ir_lower::ownership::release_if_owned(ctx, source, Some(state.span));
     let source = ctx.load_local(&lease_slot, Some(state.span));
     let (iterator, iterator_owner, _) = ctx.emit_iter_start(source, false, state.span);
     let key_slot = initialize_owned_slot(
