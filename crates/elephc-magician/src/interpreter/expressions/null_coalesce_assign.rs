@@ -681,7 +681,9 @@ fn eval_persistent_return_target(
     context: &ElephcEvalContext,
     scope: &ElephcEvalScope,
 ) -> EvalReferenceTarget {
-    let function = context.current_function().unwrap_or_default().to_string();
+    // The static-slot key, not the frame name: a closure keeps its statics under a per-object
+    // key while its frame is named `{closure}`.
+    let function = context.current_static_slot_key().unwrap_or_default();
     match target {
         EvalReferenceTarget::Variable { scope: _, name } => {
             eval_persistent_name_target(&function, &name, context, scope)

@@ -164,3 +164,21 @@ echo $b;"#,
         ]
     );
 }
+
+/// Verifies a STATIC LOCAL of a CLOSURE returned by reference is written through by the caller.
+///
+/// `php -n` 8.5.6 prints `15`: `$w += 10` reaches the closure's own static, which the second
+/// call reads back. Plain functions and methods already did; the closure kept its static under
+/// a different store key and answered `5`.
+#[test]
+fn a_closure_static_returned_by_reference_is_written_through() {
+    assert_eq!(
+        out(
+            br#"$fn = function &() { static $n = 5; return $n; };
+$w = &$fn();
+$w += 10;
+echo $fn();"#
+        ),
+        "15",
+    );
+}
