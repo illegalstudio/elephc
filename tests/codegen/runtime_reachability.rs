@@ -624,3 +624,42 @@ fn test_dying_temporaries_sharing_slots_keep_the_result() {
     // 9 one-digit suffixes: 3 bytes each; 31 two-digit suffixes: 4 bytes each; plus $n = 1.
     assert_eq!(compile_and_run(&source), "152\n");
 }
+
+/// The ordering comparator for arrays and objects is a constant stub in a program that never
+/// orders, and a real body in one that does.
+///
+/// `__elephc_internal_order_compare` is the routine the shared `__rt_php_compare` calls for a
+/// pair of non-scalars. Emitted in full for every program it cost a trivial `echo 1;` thousands
+/// of assembly lines, a `format("u")` mixed-method helper and a second `count()` site, so the
+/// single-site inline guard and the per-key helper counts of unrelated programs moved with it.
+#[test]
+fn test_order_comparator_body_is_emitted_only_for_programs_that_order() {
+    let dir = make_cli_test_dir("elephc_order_comparator_reachability");
+    let (plain_asm, _runtime_asm, _libraries) =
+        compile_source_to_asm_with_options("<?php echo 1;", &dir, 8_388_608, false, false);
+    let comparator = |asm: &str| {
+        let start = asm
+            .find("_fn__u__u_elephc_u_internal_u_order_u_compare:")
+            .expect("comparator symbol");
+        let end = asm[start..].find("_epilogue:").expect("comparator epilogue");
+        asm[start..start + end].lines().count()
+    };
+    let stub_lines = comparator(&plain_asm);
+    assert!(
+        stub_lines < 80,
+        "a program that never orders carries the full comparator ({stub_lines} lines)"
+    );
+    let (ordering_asm, _runtime_asm, _libraries) = compile_source_to_asm_with_options(
+        "<?php $a = [1, 2]; $b = [1, 3]; var_dump($a < $b, $a <=> $b);",
+        &dir,
+        8_388_608,
+        false,
+        false,
+    );
+    let full_lines = comparator(&ordering_asm);
+    assert!(
+        full_lines > 10 * stub_lines,
+        "an ordering program lost the comparator body ({full_lines} lines)"
+    );
+    let _ = fs::remove_dir_all(&dir);
+}

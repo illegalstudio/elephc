@@ -42,7 +42,7 @@ pub(in crate::ir_lower) fn lower_object_comparison_dispatch(module: &mut Module)
             module, "__elephc_internal_object_compare", &signature, false, statements,
         )
     } else {
-        lower_no_handler_stub(&signature)
+        lower_no_handler_stub("__elephc_internal_object_compare", &signature)
     };
     function.flags.is_internal = true;
     function.flags.is_synthetic = true;
@@ -64,6 +64,16 @@ pub(in crate::ir_lower) const ORDER_COMPARE_FUNCTION: &str = "__elephc_internal_
 /// relational operator is false and `<=>` is 1), and `3` for any other pair, which keeps the
 /// runtime's own rule.
 pub(in crate::ir_lower) fn lower_order_comparison_dispatch(module: &mut Module) {
+    if !program_can_order_non_scalars(module) {
+        // No instruction can reach the runtime ordering with an array or an object, so the
+        // comparator the shared `__rt_php_compare` calls is the constant "unhandled" stub: the
+        // full body, and the sites and helpers it drags in, are paid for by programs that order.
+        let mut function = lower_no_handler_stub(ORDER_COMPARE_FUNCTION, &order_signature());
+        function.flags.is_internal = true;
+        function.flags.is_synthetic = true;
+        module.add_function(function);
+        return;
+    }
     let mut statements = Vec::new();
     if module.interface_infos.contains_key("DateTimeInterface") {
         let instant = |side: &str, method: &str| {
@@ -124,13 +134,7 @@ pub(in crate::ir_lower) fn lower_order_comparison_dispatch(module: &mut Module) 
         None,
     ));
     statements.push(s_return(e_int(3)));
-    let signature = FunctionSig {
-        params: vec![("left".into(), PhpType::Mixed), ("right".into(), PhpType::Mixed)],
-        param_type_exprs: vec![Some(t_mixed()); 2], param_attributes: vec![Vec::new(); 2],
-        defaults: vec![None; 2], return_type: PhpType::Int, declared_return: true,
-        by_ref_return: false, ref_params: vec![false; 2], declared_params: vec![true; 2],
-        variadic: None, deprecation: None, is_generator: false,
-    };
+    let signature = order_signature();
     let mut function = super::builtin_wrappers::lower_builtin_callable_body(
         module, ORDER_COMPARE_FUNCTION, &signature, false, statements,
     );
@@ -187,10 +191,8 @@ fn ordered_entries_walk(left: &str, right: &str, prefix: &str) -> Vec<Stmt> {
 }
 
 /// Keeps the runtime callback ABI without creating unused owning parameter shadows.
-fn lower_no_handler_stub(signature: &FunctionSig) -> Function {
-    let mut function = Function::new(
-        "__elephc_internal_object_compare".into(), IrType::I64, PhpType::Int,
-    );
+fn lower_no_handler_stub(name: &str, signature: &FunctionSig) -> Function {
+    let mut function = Function::new(name.into(), IrType::I64, PhpType::Int);
     function.params = function_params(signature);
     function.signature = Some(signature.clone());
     for parameter in function.params.clone() {
@@ -204,4 +206,59 @@ fn lower_no_handler_stub(signature: &FunctionSig) -> Function {
     let result = builder.emit_const_i64(3);
     builder.terminate(Terminator::Return { value: Some(result) });
     function
+}
+
+/// Signature of the two-operand comparators the shared runtime calls: `(mixed, mixed): int`.
+fn order_signature() -> FunctionSig {
+    FunctionSig {
+        params: vec![("left".into(), PhpType::Mixed), ("right".into(), PhpType::Mixed)],
+        param_type_exprs: vec![Some(t_mixed()); 2], param_attributes: vec![Vec::new(); 2],
+        defaults: vec![None; 2], return_type: PhpType::Int, declared_return: true,
+        by_ref_return: false, ref_params: vec![false; 2], declared_params: vec![true; 2],
+        variadic: None, deprecation: None, is_generator: false,
+    }
+}
+
+/// Whether some lowered body can hand two arrays or two objects to the runtime ordering
+/// (`__rt_php_compare`).
+///
+/// The ordering operators (`<`, `>`, `<=`, `>=`, `<=>`), the sort family without a user callback,
+/// `min()`/`max()`, and any program that runs `eval()` (whose interpreter compares through the
+/// same routine) are the routes in. A program with none of them never needs the comparator body;
+/// one that reaches the ordering through a route this scan cannot see keeps the runtime's own
+/// rule for such a pair, the behaviour before the comparator existed.
+fn program_can_order_non_scalars(module: &Module) -> bool {
+    use crate::ir::{Immediate, RuntimeCallTarget, RuntimeFnId};
+    // Compiler-internal bodies (the preludes the runtime injects, `__elephc_min_max_mixed`...) are
+    // not scanned: they exist in programs that never reach them, and the user-written call that
+    // does is what the scan looks for.
+    crate::ir_lower::program::all_lowered_functions(module).filter(|function| !function.flags.is_internal).any(|function| {
+        function.locals.iter().any(|local| {
+            matches!(
+                local.kind,
+                crate::ir::LocalKind::EvalContext
+                    | crate::ir::LocalKind::EvalScope
+                    | crate::ir::LocalKind::EvalGlobalScope
+            )
+        }) || function.instructions.iter().any(|inst| {
+            if matches!(inst.op, Op::PhpRelCmp | Op::Spaceship) {
+                return true;
+            }
+            let target = match inst.immediate {
+                Some(Immediate::RuntimeCall(RuntimeCallTarget::Function(target))) => target,
+                Some(Immediate::RuntimeCall(RuntimeCallTarget::ProfiledFunction { target, .. })) => target,
+                _ => return false,
+            };
+            matches!(
+                target,
+                RuntimeFnId::ArrayMultisort
+                    | RuntimeFnId::Arsort
+                    | RuntimeFnId::Asort
+                    | RuntimeFnId::Rsort
+                    | RuntimeFnId::Sort
+                    | RuntimeFnId::Max
+                    | RuntimeFnId::Min
+            )
+        })
+    })
 }
