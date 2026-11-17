@@ -42,3 +42,6 @@ pub mod hash_to_mixed;
 pub mod array_to_hash;
 pub mod array_set_refcounted;
 pub mod hash_unset;
+pub mod object_clone_slots;
+pub mod eval_scope_storage;
+pub mod reference_registry;

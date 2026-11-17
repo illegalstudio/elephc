@@ -19,3 +19,5 @@ pub mod capture_buffer;
 pub mod strcopy;
 
 pub mod guarded_snapshot;
+pub mod owner_pair;
+pub mod byte_view;
