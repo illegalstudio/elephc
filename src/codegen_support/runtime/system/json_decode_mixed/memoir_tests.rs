@@ -46,6 +46,29 @@ fn memoir_json_owners_preserves_assembly() {
         "json_owners ownership extraction changed complete unserialize assembly");
 }
 
+/// Keeps host entry naming explicit and acquires the box owner before retiring its payload.
+#[test]
+fn memoir_consuming_box_uses_host_entry_and_balanced_transfer() {
+    for name in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+        for mode in 0..6 {
+            let mut emitter = Emitter::new(Target::parse(name).unwrap());
+            emitter.pic_data_refs = mode == 1 || mode == 2;
+            emitter.cdylib_boundary = mode == 2 || mode == 3;
+            emitter.phpext_output = mode == 4;
+            emitter.dead_strip = mode == 5;
+            elephc_memoir::values::owned_container::emit(&mut emitter,
+                "__memoir_test_consume_container", "--- host consuming container ---");
+            let output = emitter.output();
+            assert!(output.contains("__memoir_test_consume_container:"), "{name}, mode={mode}");
+            assert!(output.contains("host consuming container"), "{name}, mode={mode}");
+            assert!(!output.contains("_json_"), "{name}, mode={mode}: parser policy escaped into boxing");
+            let acquire = output.find("__rt_mixed_from_value").unwrap();
+            let release = output.find("__rt_decref_any").unwrap();
+            assert!(acquire < release, "{name}, mode={mode}: release preceded box acquisition");
+        }
+    }
+}
+
 /// Cross-assembles the complete integration inventory on all targets and modes.
 #[test]
 #[ignore = "requires clang with ELF and Apple AArch64 assembler support"]

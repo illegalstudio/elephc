@@ -119,6 +119,18 @@ impl elephc_memoir::TargetAbi for Emitter {
     fn emit_frame_slot_address(&mut self, dest: &str, offset: usize) {
         abi::emit_frame_slot_address(self, dest, offset);
     }
+    /// Selects the symbol-address scratch register without borrowing live result registers.
+    fn symbol_scratch_reg(&self) -> &'static str { abi::symbol_scratch_reg(self) }
+    /// Stores a register in host-selected temporary stack storage.
+    fn emit_store_to_sp(&mut self, reg: &str, offset: usize) { abi::emit_store_to_sp(self, reg, offset) }
+    /// Computes an address relative to the active temporary stack base.
+    fn emit_temporary_stack_address(&mut self, dest: &str, offset: usize) { abi::emit_temporary_stack_address(self, dest, offset) }
+    /// Reserves aligned scratch through the host stack ABI.
+    fn emit_reserve_temporary_stack(&mut self, amount: usize) { abi::emit_reserve_temporary_stack(self, amount) }
+    /// Releases scratch through the host stack ABI.
+    fn emit_release_temporary_stack(&mut self, amount: usize) { abi::emit_release_temporary_stack(self, amount) }
+    /// Restores a register from host temporary stack storage.
+    fn emit_load_temporary_stack_slot(&mut self, reg: &str, offset: usize) { abi::emit_load_temporary_stack_slot(self, reg, offset) }
 }
 
 impl elephc_memoir::MemoryContext for Emitter {

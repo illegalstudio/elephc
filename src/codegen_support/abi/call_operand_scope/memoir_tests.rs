@@ -66,6 +66,39 @@ fn memoir_activation_records_preserves_assembly() {
         "activation_records ownership extraction changed complete unserialize assembly");
 }
 
+/// Confirms that both record forms use host symbols without introducing runtime calls.
+#[test]
+fn memoir_activation_records_use_host_context() {
+    use elephc_memoir::{owner_records, FrameOffset};
+    for name in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+        for mode in 0..6 {
+            let mut emitter = Emitter::new(Target::parse(name).unwrap());
+            emitter.pic_data_refs = mode == 1 || mode == 2;
+            emitter.cdylib_boundary = mode == 2 || mode == 3;
+            emitter.phpext_output = mode == 4;
+            emitter.dead_strip = mode == 5;
+            let owner = tertiary_scratch_reg(&emitter);
+            let context = owner_records::Context {
+                head: "_memoir_test_record_head",
+                cleanup: "__memoir_test_record_cleanup",
+                visitor: "__memoir_test_record_visitor",
+            };
+            owner_records::publish_stack(&mut emitter, owner, 96, context);
+            owner_records::link_frame(&mut emitter, owner, FrameOffset::new(256), context);
+            owner_records::unlink_record(&mut emitter, context.head);
+            let output = emitter.output();
+            for symbol in [context.head, context.cleanup, context.visitor] {
+                assert!(output.matches(symbol).count() >= 2, "{name}, mode={mode}: {symbol}");
+            }
+            for implicit in ["_exc_call_frame_top", "__rt_cleanup_call_operand_owner", "__rt_gc_operand_frame_owners"] {
+                assert!(!output.contains(implicit), "{name}, mode={mode}: implicit {implicit}");
+            }
+            assert!(!output.lines().any(|line| line.trim_start().starts_with("bl ")
+                || line.trim_start().starts_with("call ")), "{name}, mode={mode}: record operations must not call runtime code");
+        }
+    }
+}
+
 /// Cross-assembles the complete integration inventory on all targets and modes.
 #[test]
 #[ignore = "requires clang with ELF and Apple AArch64 assembler support"]

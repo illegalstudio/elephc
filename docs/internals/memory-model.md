@@ -19,7 +19,8 @@ Mixed-array slot conversion, reference-wrapper promotion and child-slot selectio
 scalar/empty-array cleanup eligibility checks, static binding storage, guarded
 owner slots, depth-stamped temporary owner lists, abandoned activation cleanup
 and hydrated-property owner transfers, non-owning observer caches, hash-entry
-reference promotion and borrowed payload views.
+reference promotion and borrowed payload views, temporary/fixed-frame owner record
+publication, exact chain unlink and consuming container boxing.
 It also owns fixed heap/GC/buffer state, handle tables and string-scratch
 declarations. It is an ordinary compiler dependency and is never linked as a Rust
 library into compiled PHP programs. Those programs contain the same
@@ -49,6 +50,13 @@ before transferring the entry's existing owner into a managed cell. Borrowed rea
 including inline reads using caller-selected registers, allocate nothing and
 change no refcounts. PHP class/method policy and hash iterator cursor/successor
 semantics remain compiler-owned.
+Temporary call owners and fixed return leases share Memoir's six-word record
+contract. Publication receives the compiler-selected chain, cleanup and visitor;
+exact unlink preserves newer records and live argument registers without runtime
+calls. The compiler chooses frame placement and owner discipline, and its target
+ABI supplies stack addressing and scratch storage operations. Fresh-container
+boxing acquires the Mixed payload owner before retiring the builder's original
+owner. The JSON parser retains flag handling, failure propagation and throwing policy.
 Memoir source changes also participate in runtime-object cache identity.
 
 The host API composes assembly output, target ABI and memory-context capabilities.
