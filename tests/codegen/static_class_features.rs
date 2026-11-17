@@ -548,3 +548,23 @@ echo C::probe(), "\n";
     );
     assert_eq!(out, "bool(false)\nbool(true)\nbool(false)\nstring(7) \"default\"\nbool(true)\nnnyde\n");
 }
+
+/// `static::$$name` follows late static binding: a child that redeclares the property owns its own
+/// slot, and both the read and the write must pick it by the called class, not the lexical one.
+#[test]
+fn test_runtime_named_static_property_follows_late_static_binding() {
+    let out = compile_and_run(
+        r#"<?php
+class A {
+    public static $p = "A";
+    public static function g($n) { return static::$$n; }
+    public static function s($n, $v) { static::$$n = $v; }
+}
+class B extends A { public static $p = "B"; }
+echo B::g('p'), A::g('p'), "\n";
+B::s('p', "B2"); A::s('p', "A2");
+echo B::g('p'), A::g('p'), A::$p, B::$p, "\n";
+"#,
+    );
+    assert_eq!(out, "BA\nB2A2A2B2\n");
+}

@@ -906,8 +906,7 @@ fn load_dynamic_static_property_as(
     php_type: PhpType,
     span: Span,
 ) -> LoweredValue {
-    let class_name =
-        static_receiver_class_name(ctx, receiver).unwrap_or_else(|| receiver_name(receiver));
+    let class_name = dynamic_static_property_label(ctx, receiver);
     let data = ctx.intern_string(&class_name);
     ctx.emit_value(
         Op::LoadDynamicStaticProperty,
@@ -927,8 +926,7 @@ fn store_dynamic_static_property(
     value: crate::ir::ValueId,
     span: Span,
 ) {
-    let class_name =
-        static_receiver_class_name(ctx, receiver).unwrap_or_else(|| receiver_name(receiver));
+    let class_name = dynamic_static_property_label(ctx, receiver);
     let data = ctx.intern_string(&class_name);
     ctx.emit_void(
         Op::StoreDynamicStaticProperty,

@@ -127,7 +127,7 @@ pub(in crate::ir_lower) use nested_unset::{
 };
 pub(in crate::ir_lower) use property_array_writes::release_rewritten_property_value_after_retaining_store;
 pub(in crate::ir_lower) use instance_property_writes::lower_raw_property_assign;
-pub(in crate::ir_lower) use static_property_helpers::{object_property_type, static_property_ref_data, store_static_property};
+pub(in crate::ir_lower) use static_property_helpers::{dynamic_static_property_label, object_property_type, static_property_ref_data, store_static_property};
 pub(crate) use array_write_core::{
     desugared_element_update, lower_array_assign_with_diagnosed_key, ElementUpdate,
 };

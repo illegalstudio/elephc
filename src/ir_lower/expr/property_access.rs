@@ -1958,8 +1958,7 @@ pub(super) fn lower_dynamic_static_property_get(
 ) -> LoweredValue {
     let name = lower_expr(ctx, property);
     let name = coerce_to_string_at_span(ctx, name, Some(property.span));
-    let class_name =
-        static_receiver_class_name(ctx, receiver).unwrap_or_else(|| receiver_name(receiver));
+    let class_name = crate::ir_lower::stmt::dynamic_static_property_label(ctx, receiver);
     let data = ctx.intern_string(&class_name);
     let result_type = dynamic_static_property_result_type(ctx, receiver);
     let value = ctx.emit_value(

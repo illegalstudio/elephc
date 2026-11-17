@@ -142,6 +142,22 @@ pub(crate) fn static_property_type(
         .map(|(_, property_ty)| property_lowering_type(property_ty))
 }
 
+/// Returns the class label of a runtime-named static-property op.
+///
+/// A `static::` receiver keeps the literal `static` so codegen can dispatch on the called
+/// class (late static binding) instead of the lexical class the method was declared in.
+pub(in crate::ir_lower) fn dynamic_static_property_label(
+    ctx: &LoweringContext<'_, '_>,
+    receiver: &StaticReceiver,
+) -> String {
+    if matches!(receiver.written_class_receiver(), StaticReceiver::Static)
+        && ctx.current_class.is_some()
+    {
+        return "static".to_string();
+    }
+    static_receiver_class_name(ctx, receiver).unwrap_or_else(|| receiver_name(receiver))
+}
+
 /// Resolves a static receiver to a concrete class name when lexical metadata is available.
 pub(super) fn static_receiver_class_name(
     ctx: &LoweringContext<'_, '_>,

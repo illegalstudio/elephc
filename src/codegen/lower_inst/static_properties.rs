@@ -236,9 +236,11 @@ pub(super) fn lower_store_dynamic_static_property(
     let value = expect_operand(inst, 1)?;
     let value_ty = ctx.value_php_type(value)?;
     let release_previous = !value_is_same_dynamic_static_property_load(ctx, value, inst)?;
-    let class_name = static_property_label(ctx, inst)?
-        .trim_start_matches('\\')
-        .to_string();
+    let class_name = resolve_static_property_receiver(
+        ctx,
+        static_property_label(ctx, inst)?.trim_start_matches('\\'),
+        inst,
+    )?;
     dispatch_dynamic_static_property(ctx, inst, |ctx, slot| {
         if ensure_static_property_value_supported(slot, &value_ty, inst).is_err() {
             emit_dynamic_static_property_type_mismatch_fatal(ctx, &class_name, &slot.property);
@@ -292,9 +294,11 @@ where
 {
     let name_value = expect_operand(inst, 0)?;
     ensure_runtime_dynamic_static_property_name(ctx, name_value, inst)?;
-    let class_name = static_property_label(ctx, inst)?
+    let raw_class = static_property_label(ctx, inst)?
         .trim_start_matches('\\')
         .to_string();
+    let late_bound = raw_class == "static";
+    let class_name = resolve_static_property_receiver(ctx, &raw_class, inst)?;
     let slots = dynamic_static_property_candidates(ctx, &class_name, inst)?;
     if slots.is_empty() {
         return Err(CodegenIrError::unsupported(format!(
@@ -324,7 +328,39 @@ where
 
     for (slot, label) in slots.iter().zip(&match_labels) {
         ctx.emitter.label(label);
-        per_slot(ctx, slot)?;
+        let branches = dynamic_static_property_branches(
+            ctx,
+            late_bound,
+            &slot.property,
+            &slot.declaring_class,
+        );
+        let class_id_reg = class_id_work_reg(ctx.emitter);
+        if !branches.is_empty() && emit_called_class_id_to_reg(ctx, class_id_reg)? {
+            // `static::$$name`: a descendant that redeclares the property owns its own slot, so
+            // the called class picks the slot before the shared per-slot emission runs.
+            let slot_done = ctx.next_label("dyn_static_prop_slot_done");
+            let mut targets = Vec::new();
+            for branch in &branches {
+                let target = ctx.next_label("dyn_static_prop_late");
+                emit_branch_if_class_id_matches(ctx, class_id_reg, branch.class_id, &target);
+                targets.push((target, branch));
+            }
+            per_slot(ctx, slot)?;
+            abi::emit_jump(ctx.emitter, &slot_done);
+            for (target, branch) in targets {
+                ctx.emitter.label(&target);
+                if branch.private_inaccessible {
+                    emit_private_static_property_access_fatal(ctx);
+                    continue;
+                }
+                let branch_slot = branch_static_property_slot(ctx, slot, branch);
+                per_slot(ctx, &branch_slot)?;
+                abi::emit_jump(ctx.emitter, &slot_done);
+            }
+            ctx.emitter.label(&slot_done);
+        } else {
+            per_slot(ctx, slot)?;
+        }
         abi::emit_release_temporary_stack(ctx.emitter, 16);
         abi::emit_jump(ctx.emitter, &done_label);
     }
