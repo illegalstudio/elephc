@@ -45,6 +45,7 @@ pub(crate) fn generic_type(ty: &EvalParameterType) -> Type {
         EvalParameterTypeVariant::Object => Type::atom("object"),
         EvalParameterTypeVariant::String => Type::atom("string"),
         EvalParameterTypeVariant::Void => Type::atom("void"),
+        EvalParameterTypeVariant::Resource => Type::atom(elephc_semantics::native_local_contract::RESOURCE_TYPE_SPEC),
     }).collect::<Vec<_>>();
     if ty.allows_null() && types.len() == 1 && types[0] != Type::atom("mixed") {
         return Type::Nullable(Box::new(types.remove(0)));
@@ -52,6 +53,11 @@ pub(crate) fn generic_type(ty: &EvalParameterType) -> Type {
     if ty.allows_null() { types.push(Type::atom("null")); }
     if types.len() == 1 { return types.remove(0); }
     if ty.is_intersection() { Type::Intersection(types) } else { Type::Union(types) }
+}
+
+/// Displays internal value contracts using PHP names without exposing generated type atoms.
+pub(crate) fn php_type_label(ty: &EvalParameterType) -> String {
+    generic_type(ty).to_string().replace(elephc_semantics::native_local_contract::RESOURCE_TYPE_SPEC, "resource")
 }
 
 /// Builds ordinary PHP metadata or a retained structural generic type.
@@ -75,6 +81,7 @@ pub(crate) fn parameter_type(ty: &Type) -> EvalParameterType {
                 "mixed" => EvalParameterTypeVariant::Mixed, "never" => EvalParameterTypeVariant::Never,
                 "object" => EvalParameterTypeVariant::Object, "string" => EvalParameterTypeVariant::String,
                 "void" => EvalParameterTypeVariant::Void,
+                elephc_semantics::native_local_contract::RESOURCE_TYPE_SPEC => EvalParameterTypeVariant::Resource,
                 "null" => return EvalParameterType::new(Vec::new(), true),
                 _ => EvalParameterTypeVariant::Class(name.clone()),
             };

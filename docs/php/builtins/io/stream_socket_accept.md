@@ -6,7 +6,7 @@ description: "Accept a connection on a socket created by stream_socket_server().
 ## stream_socket_accept()
 
 ```php
-function stream_socket_accept(resource $socket, float $timeout = null, string $peer_name = null): mixed
+function stream_socket_accept(resource $socket, float $timeout = null, string $peer_name = null): resource|false
 ```
 
 Accept a connection on a socket created by stream_socket_server().
@@ -16,7 +16,7 @@ Accept a connection on a socket created by stream_socket_server().
 - `$timeout` (`float`), default `null`, optional
 - `$peer_name` (`string`), passed by reference, default `null`, optional
 
-**Returns**: `mixed`
+**Returns**: `resource|false`
 
 ## Availability
 

@@ -371,18 +371,19 @@ evidence and outstanding guarantees are recorded below.
 
 ## Implementation progress
 
-Verified through step123 (this commit), with remaining feature integration in progress. Issue:
+Verified through step134 (this commit). Remaining feature integration is active. Issue:
 https://github.com/illegalstudio/elephc/issues/2347.
 
 The full task remains active. The user requested complete implementation, with a
 commit for every verified step and no partial delivery. Do not expose unfinished
 flags as successful no-ops. The public integrated mask contains Locals, Bools, DynamicCode, Opcache, Arithmetic,
-Overflow, Strings, Coercions, Casts and Comparisons. Locals includes the verified116-120 numeric/value binding, native reference and eval extensions;
+Overflow, Strings, Coercions, Casts and Comparisons. Locals includes numeric, scalar, nominal, array-kind, callable/iterable binding,
+resource, native reference and eval origin extensions through134;
 its complete reference/global/eval and broader binding-flow contract remains outstanding. All
 other guarantees and the complete umbrella remain explicitly gated until their
 whole contract is enforced.
 
-This progress ledger condenses verified implementation through step120.
+This progress ledger condenses verified implementation through step133.
 Detailed evidence remains in Git history, historical Code Journal plan revisions,
 the linked work logs, and the current agent-facing architecture document
 3739892b. The approved behavior and delivery requirements above are unchanged.
@@ -467,7 +468,7 @@ and native return/effect foundations are signed112 and113; public Comparisons
 admission is verified114. Its [detailed history](strict-semantic-profile-comparisons.md)
 retains the adapter, reference-storage, dispatch and method-owner corrections. Step115
 repairs the original permissive native/eval catch-name collision. Stronger Locals
-still needs numeric, reference, global and flow coverage. Nullability/Mixed/Initialization, exact keys/
+still needs interpreted parameter, capture, global, foreach, reference reentry and flow coverage. Nullability/Mixed/Initialization, exact keys/
 types/indexing and full host/cache/combination acceptance remain unfinished.
 
 ### Verification discipline
@@ -617,7 +618,21 @@ paths. Keep this plan, agent documentation and the current journal log synchroni
 | 117 | `f1b64aa4cd` | feat(strict): guard nullable numeric binding updates |
 | 118 | `bfab7777ec` | feat(strict): preserve numeric caller reference contracts |
 | 119 | `4b72179d63` | feat(strict): preserve native numeric contracts during eval |
-| 120 | this commit | feat(strict): preserve scalar and nominal local value contracts |
+| 120 | `08d7c78270` | feat(strict): preserve scalar and nominal local value contracts |
+| 121 | `bd5ed6f699` | feat(strict): preserve local contracts during mutating conversions |
+| 122 | `d6d6557899` | feat(strict): preserve native bindings across literal eval |
+| 123 | `95d4fbe5e9` | fix(eval): balance scope finalizer value owners |
+| 124 | `86ff70f4cc` | fix(strict): validate literal eval writes in source order |
+| 125 | `cb76d22fb7` | feat(strict): track fresh literal eval binding origins |
+| 126 | `824dbed7b4` | feat(strict): preserve binding presence across eval snapshots |
+| 127 | `1da05774fc` | fix(strict): preserve eval origins across native writes |
+| 128 | `b5fec3b5c6` | feat(strict): retain runtime eval binding origins |
+| 129 | `60a1d1c370` | feat(strict): preserve native eval producer contracts |
+| 130 | `bd5dfddb55` | feat(strict): preserve conditional native binding origins |
+| 131 | `ed4423fae2` | fix(strict): validate native writes against current eval origins |
+| 132 | `bba9d412bd` | feat(strict): retain independent native copy contracts |
+| 133 | `b3e9fd2292` | feat(strict): preserve callable and iterable binding contracts |
+| 134 | this commit | feat(strict): preserve resource local binding contracts |
 
 
 ### Latest verified admission checkpoint
@@ -666,660 +681,71 @@ loop joins and legitimate unset/rebind behavior. The completed baseline and
 Comparisons temporary validation directories are removed after evidence capture.
 
 
-### Verified115: native eval binding presence
-
-The native snapshot publisher now lives in
-src/codegen/lower_inst/builtins/eval/native_local_contracts.rs. An Object slot
-with a zero occupant clears its snapshot contract instead of publishing a
-future inferred class. Existing object occupants keep their declared native
-contract. The shared target-aware load and branch helpers implement this on all
-five targets without a new runtime symbol or ABI. Non-object behavior is unchanged.
-
-Job487778c9 passed the compiler build and four exact gates: the all-target
-presence emitter, the original catch-scope TVN regression in both IR modes,
-existing typed native alias rejection/unset behavior, and Magician's pre-store
-object snapshot validator. The builtin EIR architecture audit also passed. Total duration was 5m23s;
-the catch-scope regression took 71.73s and existing typed native alias coverage
-took 86.79s. Heap accounting is clean in both optimizer modes. The task-owned
-verification directory is removed after evidence capture. This is preparatory
-correctness work for stronger Locals, not its admission.
-
-
-### Verified116: numeric local binding contracts
-
-Numeric local contracts are separate from read narrowing and physical storage in
-src/types/checker/numeric_local_contracts.rs. LocalStoreContract retains the
-owning feature; neutral/compiler membership plans and rooted EIR guards preserve
-Locals independence from Coercions and Overflow. Statement/expression writes and
-prefix/postfix updates validate before mutation. AST effects and exact TypeError
-summaries retain their handlers. Wrong numeric kinds produce source diagnostics
-when known, or TypeError on a dynamic write; the previous value remains intact.
-
-A closure's cloned enclosing environment is not binding evidence. Fresh locals
-use actual scope/binding facts, replaced reference targets retire their old
-inferred contract, self-alias preserves it, and diagnostic-only inference restores
-numeric origins. Proven bound non-null variables and intrinsic non-null values
-have nonexecuting coalesce defaults; absence-aware property/offset probes retain
-their real default effects. Explicit mixed/numeric unions and legitimate unset/
-rebind retain their contracts. Source/type origin still requires the broader
-reference/global/eval and scalar-flow audit described above.
-
-Job5705df4f passed the compiler build, twelve exact gates and builtin architecture
-audit in 2m52s. Both native IR modes have clean heap accounting. The expanded
-emitter/library gate covers all five targets; native execution is Linux x86_64.
-The [binding investigation history](strict-semantic-profile-bindings.md) retains
-intermediate failures, controls and the remaining source-point design notes.
-The owned verification directory is removed after evidence capture. Continue the
-full task: this is a numeric binding step, not completed stronger Locals or the
-full umbrella.
-
-
-### Verified117: nullable numeric bindings and shared updates
-
-Numeric contracts retain explicit null alternatives, and successful guards keep
-the narrower kinds actually produced by an expression. The existing completed-
-store proof preserves a non-null read after an accepted compound arithmetic
-result, so a valid int return is not weakened to int|null. Nullable reference
-updates validate an ordinary PHP-promoting candidate before the raw tagged
-storage changes. With Locals alone a float result raises TypeError; independently
-enabled Overflow raises ArithmeticError first. Reference layout eligibility and
-permissive storage behavior are unchanged.
-
-Job8d7c8fcc passed the compiler build without new warnings, ten exact gates and
-the builtin architecture audit in2m39s. Both IR modes and Overflow settings have
-clean heaps; MIN/MAX, shared updates, repeated prefix/postfix results, explicit
-null, exact large integers, typed compound returns, the example and existing
-nullable reference/coalesce regressions pass. Both nullable and ordinary EIR/
-library emitter gates cover all five targets. The
-[binding history](strict-semantic-profile-bindings.md) retains baseline and
-intermediate diagnosis.
-
-Continue contract transport across untyped reference parameters (a7dce035) and
-opaque eval (a6343333). Direct local aliases/global writes and fresh integer
-closure shadowing are passing signed116 controls. Exact future regressions are
-preserved, not yet registered, in tests/fixtures/strict/native_untyped_local_contract.php
-and native_eval_local_contract.php, excluded from117 staging. The owned baseline/
-verification directory is removed after evidence capture. Complete broader Locals,
-the other six families and full umbrella/host acceptance before ending the task.
-
-
-### Verified118: caller contracts through native references
-
-Numeric binding contracts now survive boxing for untyped/mixed reference
-parameters and runtime-selected native descriptors. Checker metadata records the
-semantic contract even when a declared numeric union already uses Mixed storage.
-BindLocalRefContract explicitly carries the declaration through EIR, including
-textual output and profile validation. A shared C-ABI callback factory supplies
-borrowed original inputs and independently owned accepted candidates. Exact
-numeric membership callbacks use the existing protected reference coordinator,
-canonical identity and weak source registry. Hidden owner bindings unregister
-before unset, normal frame cleanup and exceptional cleanup. Physical reference
-eligibility and permissive behavior remain unchanged.
-
-Jobbd8c3124 passed the compiler build, eight exact gates and builtin architecture
-audit in2m46s. Both IR modes have clean heaps for invalid and valid numeric
-references, exact large integers, parameter entry, nullable writes, explicit
-numeric union rejection, explicit mixed openness, runtime-selected descriptors,
-unset and exceptional frame exit. The extended example and existing ordinary/
-nullable numeric guards pass. EIR/native callback generation and existing property
-metadata cover all five supported targets. Native execution is Linux x86_64.
-
-This resolves the recorded native untyped-reference baselinea7dce035 for numeric
-contracts. Intermediate jobs8e574690,18ed5c3f,4b25fd6f,7f65ab1a and24539791
-exposed and isolated unknown-descriptor and already-boxed union gaps before final
-acceptance. Their verified successors are permanent regression fixtures. The
-owned verification directory is removed after evidence capture.
-
-Continue native/eval source-point contracts (a6343333), broader stable bindings,
-the remaining six feature families and complete umbrella/host acceptance. The
-saved native_eval_local_contract.php fixture remains untracked for that work.
-
-
-### Verified119: native numeric bindings during opaque eval
-
-The checker records initialized source-point numeric origins at each eval site.
-Before an interpreter barrier, EIR promotes only eligible current owned bindings
-through the existing canonical reference snapshot protocol. The shared protected
-reference publisher therefore validates an interpreted replacement before the
-native child changes. This reuses118 callbacks, source registry and snapshot
-ownership without adding an eval ABI or reconstructing a contract from a future
-frame slot. Eval unset/rebind detachment unregisters the weak source before
-retiring its native owner. Existing raw reference layout eligibility is retained.
-
-Jobf0dec17e passed the build, five exact gates and the architecture audit in6m04s.
-The two target gates check existing binding origins and native validator/emitter
-contracts on all five targets. Both optimizer modes and default/Locals profiles
-run with clean heaps, covering rejected float writes, null, exact large integers,
-explicit numeric unions, explicit mixed, unset, and future scalar slots. Existing
-reference lifetimes and the future-catch-scope regression pass. Probe310ef94b
-independently showed the original native/eval baseline now retains integer1 with
-a catchable TypeError. An earlier bare-library eval test lacked the production
-object-cast prelude for the full opaque catalog; it was replaced by focused
-source-origin checks paired with real CLI/native execution.
-
-Final job2861d910 passed the build and two exact gates in2m30s after naming the
-long native test as a bundle and tightening the future-slot fixture: its later
-integer assignment is on a nonexecuting branch, so the fixture tests absence of
-an earlier contract without requiring an incompatible later binding write. The
-opaque eval bundle took114.74s and has the established360s CI budget. Both
-nextest profile overrides and assembly-comment alignment were checked.
-
-This resolves the original numeric native/eval baselinea6343333. Remaining
-Locals work includes nonnumeric and runtime-established binding origins, reverse
-eval-to-native transport, globals/captures/foreach and array-kind independence.
-Probec045a07a confirms dynamic Mixed replacements still bypass nonnumeric
-inferred string, boolean, null, object and array-kind contracts; explicit mixed
-and replacing array elements remain passing openness controls. Complete those
-boundaries, six unintegrated feature families and full umbrella/host acceptance.
-The owned target/strict-native-eval-8r76iwqo directory is removed after baseline
-evidence capture; follow-up fixture sources are preserved when needed.
-
-
-### Verified120: scalar, nominal and array-kind local contracts
-
-The shared origin helper is now src/types/checker/local_binding_contracts.rs;
-inferred_local_contracts replaces the numeric-only per-body map. Scalar/null,
-nominal and union membership uses the existing independently owned Locals plans,
-rooted pre-store checks and protected native reference callbacks. Inferred array
-contracts preserve the PHP array kind without pinning element or packed/hash
-storage details; a narrow inferred-array merge accepts that guarded broad view.
-Concrete declared element contracts retain the existing structural/layout checker.
-Callbacks now cover scalar, false/null, class and array membership. Accepted
-boxed nulls become unboxed null storage after retiring only their owned source,
-fixing the40-byte leak exposed by a valid null replacement.
-
-Job8f868713 passed build, five exact gates and architecture audit in3m42s.
-Probe7bd2efe1 validated scalar, subclass, array, false/null, union and declared
-array controls, and exposed the boxed-null leak before acceptance. Job21481870
-then passed build, eight exact gates and architecture audit in6m02s. The expanded
-all-five-target gate includes nominal/array/false/null callbacks. Native both IR
-modes have clean heaps for rejected and accepted writes, explicit mixed/union,
-array element openness, nullable numerics, unset/rebind, opaque eval and future
-catch names. The opaque eval and catch regressions took115.88s and57.52s.
-
-Final job58a74c9d passed build and six exact gates in42s after adding string/null
-references, one-time destructor retirement on rejection, the extended example
-and existing include/CLI flag controls. Both native modes are heap-clean;
-legacy literal-eval freedom still passes its old test and is identified below
-as an unfinished stronger-Locals boundary, not accepted final semantics.
-
-This resolves direct/ordinary-reference nonnumeric baselined59f314d. Remaining
-stronger Locals includes runtime-established/reverse eval origins (b99d1b21),
-known literal eval decision maps, and mutating builtin publications. Probeb863be83
-shows settype still changes bool to int and int to string under Locals; the latter
-also leaks an original40-byte int box in both profiles. Numeric string increment
-is a passing control (Locals rejects the promoted int and preserves string9).
-Null array append remains an inherited backend refusal in both profiles.
-
-The full approved task remains active: complete these boundaries, broader
-global/capture/foreach flow and remaining feature families, then verify the full
-umbrella and hosts. The task-owned verification directory is removed after
-baseline evidence capture; the reverse-eval and settype sources remain saved for
-the next implementation steps.
-
-
-### Verified121: mutating conversion and typed reference source contracts
-
-Locals-owned settype calls use the existing checked conversion/publication graph,
-including literal targets, runtime targets and prepared callable bodies. Literal
-success-only type updates no longer poison a catch's original view. Each candidate
-passes the shared local membership boundary before publication, while explicit
-mixed remains open. Locals selects reference/copy protocols independently of the
-Casts and Coercions policies. Prepared aliases bind the original caller source
-before introducing their synthetic names; call_user_func values retain separate
-argument cells.
-
-A shared checker helper records caller source contracts for resolved, inferred
-and descriptor function calls. EIR prepares eligible owned bindings before typed
-reference arguments, so a later widened frame layout cannot expose a boxed pointer
-as a raw bool payload. This preserves named-argument source order, rejected writes
-and the current false value without leaking the original boolean box.
-Permissive scalar specialization retains its raw ABI; boxed legacy settype output
-now uses the shared owned-output publisher and retires its previous occupant.
-
-Job00d2da5e passed the all-five-target source-registration/emission gate. Job53a27848
-passed the build and six exact gates: new target/native settype cases, extended
-example, existing checked callable values/owners, permissive prepared bodies and
-valid local reference/union membership. Both native optimizer modes have clean
-heaps for literal/runtime targets, first-class/runtime-selected callbacks, value
-copies, named source-order effects, null, explicit mixed and array membership.
-Permissive bool-to-int and argc-to-string controls preserve values and clean heaps.
-Final jobee32fb15 passed the full builtin documentation generation, site compatibility
-and architecture audits, restored default Magician/compiler archives and passed
-two exact numeric reference lifetime/nullable update controls in14s. Generated
-registry/pages have no diff. Assembly comments and git diff hygiene pass.
-
-The complete implementation remains active: literal eval decision maps and their
-old permissive expectations (37ae1f9b), runtime-established reverse eval origins
-(b99d1b21), remaining global/capture/foreach/mutation flow, the six unintegrated
-feature families and full umbrella/host acceptance still require completion.
-
-
-### Verified122: imported native contracts across literal eval
-
-Literal scope writes prepare existing caller source contracts even when the AOT
-planner avoids an interpreter barrier. BindLocalRefContract now selects typed
-canonical promotion for a supported owned payload, without relabeling the raw
-alias ABI. A null payload has an explicit canonical layout, and Locals-only null
-snapshot and reload support keeps raw null references visible at this boundary.
-
-A scope-set input flag distinguishes assignment from native snapshot installation.
-Both Magician scope assignment and the scope-only native map use the existing
-protected reference_replace_v2 and release_v3 contracts. The native helper uses
-shared ABI operations, preserving its old wrapper while validating before mutation
-and consuming candidate/displaced owners before propagating a contained Throwable.
-EvalScopeSet now explicitly models MAY_THROW. Repeated installation of an owned
-snapshot retires the previous lease even if both pointers are equal, fixing the
-pure-scope wrapper/child80-byte leak found during acceptance.
-
-The native scope-only implementation and Magician scope implementation are distinct.
-A literal unset in a combined fixture selects Magician for the module, so it cannot
-stand in for scope-only coverage. Isolated scalar probes first exposed that missing
-native path, which is now independently tested. The pure target gate asserts that
-Locals plus DynamicCode remains AOT and does not select the interpreter bridge.
-
-Joba09659ce passed the build and eight exact gates before the updated example
-exposed the existing body-wide eval/unset restriction. Those gates cover pure and
-bridge native scalar/null/reference/union/mixed behavior in both IR modes with
-clean heaps, all-five-target EIR, legacy imported-binding expectations, numeric and
-settype controls, layout classification, and real clang assembly for scope helpers
-and canonical promotions on all five targets. The example's eval demonstration is
-in a dedicated function so the earlier unset demonstration keeps its own body.
-Final jobe23097c1 passed the build, updated example and opaque-eval bundle in2m08s;
-the opaque bundle took116.72s. All changed emitter comments and diff hygiene pass.
-Default Magician/compiler archives were built. No full suite, push or PR was run.
-
-The full approved implementation remains active. Fragment-owned local decisions
-still need isolated source facts or runtime origin transport: the first part of
-test_eval_fragment_composes_with_strict_locals deliberately retains its previous
-own-local expectation for now; its imported native-binding part now catches the
-TypeError and observes integer1. Reverse eval origins b99d1b21, broader binding
-flow and the six remaining feature families plus umbrella/host acceptance remain.
-
-
-### Verified123: eval finalizer value ownership
-
-emit_eval_scope_finalizer now roots the loaded publication value across a throwing
-EvalScopeSet, unpins on normal return and retires that loaded value after the scope
-has taken its independent owner. The former finalizer emitted a MaybeOwned string
-load and scope store without releasing its value copy, leaking one string per
-activation. The same helper covers normal and rejected publication without a new
-target-specific path or changes to binding acceptance.
-
-Job3f893fed passed build and two exact native gates in1m26s. Final job762d9fc5
-passed build, three exact gates and diff hygiene in1m54s after sharing the valid
-same-kind string fixture with the all-five-target literal emission gate. Default
-and Locals, both IR modes, repeated fresh/open scope activations and rejected
-publication have clean heaps. Existing pure/bridge literal binding behavior passes.
-The regression uses same-kind string stores, so it does not encode the unfinished
-fresh-binding retype freedom as an approved requirement.
-
-Origin baseline45552126 remains separate: the identical fragment assigning int
-then string is shared by a fresh caller and an explicit-mixed caller, and both
-currently print changedW|changedO|. Only the fresh activation should reject.
-Reverse opaque-eval origin still prints Winteger|1 in both profiles. Continue the
-full approved implementation with source-origin transport and all remaining
-profile families, preserving legitimate mixed/union producer openness.
-
-
-### Verified124: source-ordered literal eval publication
-
-With Locals enabled, literal fragments with writes select the existing direct
-scope publication mode. Every assignment reaches the protected source contract
-before later PHP effects, even when a subsequent assignment would overwrite it.
-A shared rooted publisher protects in-flight values for both direct stores and
-finalizers. Finalizers retain their explicit loaded-value release. Explicit mixed
-imports stay open and inferred PHP arrays retain their kind without silently
-enabling ArrayTypes. Earlier accepted writes survive a later rejection.
-
-Job6e007a99 passed the build and five exact gates in39s: all-five-target EIR
-emission, new source-order regression, finalizer ownership, imported native
-contracts and the updated example. Native regression covers pure and bridge
-scopes, both IR modes, owned producer effects and rejected array-kind changes,
-with clean heaps. Diff hygiene passes. Full implementation remains active: fresh
-and runtime-established eval origins, remaining binding flow, six pending feature
-families and complete umbrella/host acceptance still need implementation.
-
-
-### Verified125: activation-owned literal eval origins
-
-The dependency-neutral reference bridge now keeps scope/name origins in stable
-two-word slots. An imported or explicitly mixed producer records an open origin,
-which later concrete writes cannot close. Fresh literal producers select an exact
-local validator and one canonical managed reference cell. Identical compiled
-fragment bodies therefore retain different contracts in separate activations.
-Unset and scope retirement detach native source records before their cell owners
-retire. Native teardown contains PHP exits before returning to Rust. Both native
-linked-list scopes and Magician scopes use the same origin publisher and lifetime
-helpers. Exact PHP array kind contracts remain independent from ArrayTypes.
-
-EvalScopeStoreImmediate explicitly carries the static name and producer contract.
-Its entire record is boxed to preserve the production112-byte Instruction bound;
-boxing only the type still enlarged the immediate payload. The EIR validator
-rejects noncanonical contracts and missing Locals profiles. Callback generation
-reuses the existing local membership and protected reference coordinator.
-
-Registry job08b938cd passed two exact stable-address/open-origin/retirement gates.
-Job94229e53 passed default build and pure plus bridge probes, including split
-fragments and repeated unset/rebinding, with clean heaps. An earlier probe found
-a C-ABI cell argument incorrectly passed in the result register, corrected before
-acceptance. Jobd4e5609e passed build and eight exact gates in4m20s: five-target
-EIR, real five-target helper assembly, fresh/imported/mixed/null/array native
-origins in both IR modes, legacy composition, source ordering, finalizer owners,
-imported native contracts and example. Jobbfeb6b59 passed the full builtin docs
-workflow, all audits and default archive restoration in1m58s, with no generated
-diff. The final scope-core assembler gate exposed an Apple conditional branch to
-an external label. It now branches locally before an unconditional propagation
-branch. Finale5c2550f passed build and four exact five-target/native gates in2m34s.
-Assembly comments and diff hygiene pass. No full suite, push or PR was run.
-
-The complete approved implementation remains active. Native-frame exposure of a
-fresh eval name still bypasses its origin: probeeb10dc54 prints
-integer:Wstring:bad|Winteger:1| with clean heaps. The synchronization inventory
-currently publishes every matching frame slot without an initialized-binding
-guard. Next complete initialized origin transport and native-store enforcement,
-then opaque-eval origins b99d1b21, remaining binding flow and the six pending
-feature families plus umbrella and host acceptance.
-
-
-### Verified126: initialized native bindings and suspended scope ownership
-
-Source initialization and binding retirement now emit SetLocalBindingState EIR
-events in user frames with eval under Locals. Representation-only stores suppress
-these events. Independent frame presence words start unbound, including for null
-slots with no payload bytes. Eval snapshotting skips unbound slots; successful
-reloads and missing entries update presence independently from projected values.
-A native observation no longer imports a future zero-filled slot before a literal
-fragment creates its binding. Conditional mixed declarations preserve openness
-only on the branch that actually executes the declaration. This does not admit
-the still-pending Initialization feature.
-
-Build493a0401 passed in1m36s. Probe86613921 passed both IR modes with clean heaps:
-integer:Tinteger:1|Winteger:1|, resolving the native-observer part of eb10dc54 while
-leaving the native-writer part explicit. Job1a91d15a passed build and six exact
-frame/five-target/native gates in4m11s, including conditional declarations, existing
-fresh origins, native imports and example.
-
-An additional generator/GC probe1de64a1e found the inherited missing native-core
-__elephc_eval_scope_visit_owners_v1 symbol even in permissive mode. The compact
-linked-list scope now implements that pure slot visitor through shared target ABI
-helpers. Both scope implementations also enumerate the independent managed cell
-owners held by the native scope-origin registry. Enumeration preserves exact
-owner-slot identity and borrows immutable registry state only across pure collector
-callbacks, with no PHP execution, ownership changes or scope mutation.
-Job403cd725 passed compiler/default native archives and pure suspended scope
-acceptance in1m43s: default1W and Locals1T, both clean heaps. Final job03999afe
-passed build and seven exact registry/EIR/real-assembler/native gates in3m55s.
-All five supported targets emit and assemble the new visitor; pure and bridge
-scopes, both IR modes, generator suspension plus cycle collection, native
-observations and imported scalar aliases pass with clean heaps. Assembly comments
-and diff hygiene pass. No builtin home/signature changed; prior generated docs
-remain unchanged. No full suite, push or PR was run.
-
-Continue the full approved task. Native stores after a literal-created float still
-print Winteger:1 (tests/fixtures/strict/literal_eval_native_store_origin.php).
-Opaque runtime origins b99d1b21 also remain open. Next validate original native
-store candidates against surviving scope origins and preserve their physical
-representation, then complete remaining binding flow, six feature families and
-umbrella/host acceptance.
-
-
-### Verified127: native stores preserve literal eval origins
-
-Native assignments and typed reference arguments prepare canonical managed-cell
-storage before replacing an eval-visible value. The shared preparation keeps the
-scope's surviving semantic source without inventing an incoming native contract.
-Static membership guards run first when present. Whole-frame Mixed storage keeps
-a float value intact while the existing protected reference coordinator validates
-the original candidate. Valid stores remain visible to later fragments; explicit
-mixed stays open, value copies stay independent and array-kind rules remain
-independent from element contracts.
-
-Probe739e7b89 exposed a raw float-reference ABI mismatch after eval reload. GDB
-confirmed float4.5 bits reached reference inspection. Preparing the source before
-typed reference argument lowering fixes that boundary. Jobead4260c passed build
-and complete pure/bridge probes with clean heaps. Final captured job843e0e5c
-passed build and seven exact gates in1m10s: all-five-target EIR/emission, native
-stores, native observation, imported native contracts, settype mutation, suspended
-generator ownership and example. Native cases cover both IR modes, owned rejected
-string candidates, accepted floats, typed float references, array replacement and
-permissive controls. Diff hygiene passes. No full suite, push or PR was run.
-
-Continue the complete approved implementation. Opaque runtime-origin transport
-b99d1b21 remains open; then complete remaining binding flow, six pending feature
-families and complete umbrella/host acceptance.
-
-
-### Verified128: runtime-established eval binding origins
-
-A focused source-aware store helper captures producer contracts before RHS effects
-and records only successful fresh bindings. Inferred origins live separately from
-explicit declarations and physical native snapshot contracts. Existing mixed imports
-and explicitly mixed producers stay open. Closed origins reuse persistent reference
-storage and weak context allocation lifetimes, so native stores consult the same
-canonical reference coordinator after eval returns. Unset and scope drain retire
-inferred name metadata; surviving aliases retain their shared storage constraints.
-
-The bytecode VM has an explicit PrepareStore opcode and immutable source metadata.
-Nested assignments preserve producer evaluation order without storing runtime owners
-in cached code. Walker and VM consume the same helper. The existing protected exact
-eval prepass now checks local-reference types under Locals independently from the
-property Coercions policy; weak property coercion remains selected independently.
-
-Build5e678b2d and basic native probe8e73ce38 passed, resolving the original
-b99d1b21 baseline: default Winteger|1 versus Locals Tdouble|2.5, both heap-clean.
-Job243e5fad passed build and eight exact gates in4m51s: both-engine first-value
-and openness/independent-copy ownership tests, five-target prepass selection, weak
-property independence, real five-target clang assembly, native opaque origins,
-existing literal native stores and fresh literal origins. The native opaque test
-took116.68s, covers both IR modes/default/Locals and has clean heaps for string,
-array, null, reference alias, unset and mixed cases. It now uses the existing bundle
-timeout suffix. Finald707cd44 passed build, both exact engine gates, unique bundle
-registration, updated runtime-source example, assembly comments and diff hygiene
-in1m10s. The redundant generic membership adapter was removed because the existing
-validator already checks exact kinds. No builtin homes/signatures, generated docs,
-full suite, push or PR were changed.
-
-Producer baselinec737d63d is now explicit for the next step: a runtime conditional
-int/float producer followed by a float store rejects, while a copied native int
-producer can retype to string. It prints T|W| with a clean heap; expected is U|T|.
-The current helper still needs complete alternative propagation and native logical
-producer metadata, separate from physical storage. Continue this and the complete
-approved task, including remaining binding flow, six pending families and umbrella
-plus host acceptance.
-
-
-### Verified129: checked native producer metadata and alternatives
-
-EvalScopeBindLocalType carries a checked source-point name/type contract separately
-from scope snapshot layout. Existing LocalStoreContracts drive lowering after
-canonical native source preparation. Validation requires Locals, canonical metadata
-and a persistent scope slot. Shared target ABI lowering reuses native signature
-type spellings; pure scope helpers expose a link-complete no-op ABI because those
-fragments do not enter the interpreter. Native binding types have their own scope
-map and retire with unset, scope drain and native snapshot retirement, so old
-native sources cannot constrain later bindings. This producer map does not replace
-canonical reference validation or infer contracts from physical frame types.
-
-The shared producer helper preserves known conditional alternatives and declared
-function/builtin return contracts. Builtin TypeSpec adapts directly into the existing
-generic vocabulary, without parsing rendered documentation. Void producer results
-mean null, pointer-only contracts stay open, and array producer kinds do not enable
-ArrayTypes. Literal and cast producers provide explicit kinds. Mixed imports and
-explicit mixed producers retain their prior openness.
-
-First builde7d25aea found only a new helper re-export visibility error, corrected
-before acceptance. Probed5ae727a passed build and the four-case native proof in
-1m56s: U|T|R|B|,130 allocations and130 frees. Final9f76629a passed compiler/default
-archives and ten exact gates in6m45s: both-engine first values/openness/precise
-producer ownership, snapshot lifetime, all-five-target EIR metadata/emission, real
-five-target core scope assembly, the combined native runtime-origin bundle, literal
-native stores, fresh literal origins and updated example. Native bundle116.00s
-covers both IR modes/default/Locals with clean heaps; example35.81s. Assembly
-comments, builtin EIR target-architecture audit and diff hygiene pass. No full
-suite, push or PR was run.
-
-Next130 has a verified baseline rather than an inferred requirement: conditional
-native bindings bypass Locals when they are initialized on only one predecessor.
-Probe28dfcc3a prints Wdouble:2.5| four times, for bound/unbound runtime and literal
-eval activations, with a clean heap. The bound activation must reject and retain
-integer1; the unbound activation may establish a fresh float. Preserve real binding
-presence while adding conditional origin transport. Then continue remaining
-binding flow, six pending semantic families and complete umbrella/host acceptance.
-
-
-### Verified130: conditional native binding provenance
-
-Checker eval capture retains available origin facts across conditional initialization.
-A reusable when_native_bound CFG helper reads explicit GetNativeBindingState EIR
-before native source promotion and type publication. It restores entry MUST
-initialization facts at the join while existing EIR analysis retains MAY alias
-representations. Only real PHP source names qualify; compiler-generated argument
-collectors do not have source presence words. Safe Mixed-owner paths can prepare
-again on later eval calls without changing a raw typed-reference ABI.
-
-Initialized presence alone is insufficient. Private frame words now distinguish
-unbound0, native1 and eval2 origins. Snapshotting still tests nonzero presence.
-Native preparation reads only the native-origin bit. Ordinary native writes and
-scope reloads preserve an established nonzero origin; unset/detachment ends it.
-An eval-created float therefore cannot acquire the int contract of an unexecuted
-native predecessor on a subsequent loop iteration. No frame ABI or runtime type
-universe was added.
-
-Initial5c8f568e found an invalid state read for a generated argument collector;
-EIR inspection636a4839 identified it and source eligibility now excludes it.
-64ff8912 passed basic runtime/literal bound and unbound cases in1m30s,73 allocations
-and frees. Repeated baseline7ec2ef09 showed false-branch firstFloat acceptance
-followed by a wrong second rejection, with a clean heap. Native/eval provenance
-repairs that case:081143a5 passed both proofs in2m28s, repeated88 allocations/frees.
-First full gate5a3a8a64 passed the extended native bundle and target gates, then
-exposed a bridge-only null metadata rejection. Pure null alias isolationb124f360
-passed, and the shared compact native type decoder was found to reject standalone
-null as an empty variant list. It now retains the null-only contract, with focused
-parameter/return/nullable/void controls.
-
-Finalea32a07f passed compiler/default archives and thirteen exact gates in6m02s:
-metadata decoder controls, independent frame storage, conditional CFG and existing
-producer metadata on all five targets, real five-target origin-state assembly,
-combined native origins/producers/conditional/repeated/unset bundle, native
-observation, scalar/null aliases, fresh literal origins, suspended scope ownership,
-settype and example. Both IR modes and permissive/Locals native cases remain heap
-clean. Assembly comments and diff hygiene pass. No full suite, push or PR was run.
-
-Next131 is explicit: probe13af4be7 prints Tdouble:2.5|Winteger:1|Winteger:1|
-for native writes after eval unset/rebinding and a native copy of a runtime-created
-float. The required behavior is Wdouble:3.5|Tdouble:2.5|Tdouble:2.5|. Its isolated
-pure-literal native copy also prints Winteger:1| instead of Tdouble:2.5|. Both
-baselines have clean heaps. Complete native dynamic-origin store/copy transport,
-then remaining binding flow, six pending semantic families and umbrella plus host
-acceptance.
-
-
-### Verified131: native writes follow the surviving eval origin
-
-GetEvalBindingState reads the existing private frame provenance word. A shared
-provenance-dependent CFG helper keeps old membership guards only while eval has
-not replaced the binding. Owned Mixed destinations retain the original RHS and
-refresh canonical reference storage idempotently, without inventing a logical
-initialization event or reboxing a narrowed stale view. Raw and borrowed reference
-ABIs retain their existing paths. The checker preserves incoming source views
-after an opaque barrier and defers old inferred membership to the native-origin
-predecessor, including known float replacements.
-
-First gatee9fcde78 exposed a by-value Mixed copy regression: a native copy changed
-the original2.5 to3.5. The assignment path now reuses copy_assignment_value.
-Gate2f601e48 then exposed a missing slot on a fresh post-eval assignment; the
-source state slot is declared before the provenance read. Final43e1625e passed
-build and nine exact gates in5m21s: all-five-target EIR/CFG and real clang state
-assembly, native runtime origins/producers/rebinding, pure literal conditional
-and known-float stores, existing scalar/null aliases and typed references, settype
-and the example. The combined native bundle passed117.92s, both IR modes and
-permissive/Locals modes with clean heaps. Comments and diff hygiene pass.
-
-Independent native copies still need their own transferred producer contract,
-including runtime-created and pure literal-created origins. Preserve the saved
-copy fixtures for that next portion, then finish remaining binding flow, six
-pending semantic families and full umbrella/host acceptance. No full suite,
-push or PR was run.
-
-
-### Verified132: independent native copy origins
-
-Native value copies now transport the original producer contract into independent
-canonical reference storage. A single statement/expression helper emits explicit
-EvalScopeCopyBindingType EIR only for a fresh destination. The existing private
-provenance word preserves a transported runtime origin on later native writes.
-Checked native-origin alternatives select their immutable callback descriptor;
-eval-origin copies consult live scope descriptors and interpreter producer types.
-Declared array sources copy bare PHP array kind independently of ArrayTypes.
-Explicit mixed producers and preexisting explicit mixed destinations remain open.
-
-LocalStoreContracts now transports checked copy facts alongside membership stores.
-This matters after AST propagation replaces `$second=$copy` with a float constant:
-the original source contract remains authoritative. No new compiler type universe
-or duplicate runtime reference registry was introduced. Dependency-neutral versioned
-C metadata records live in elephc-semantics. Native local descriptors preserve the
-four-word callback prefix and append version/type spelling. The formatter moved
-to types/native_type_spec and is shared with native callable registration. The
-neutral scope registry exposes immutable descriptor lookup; the Rust scope copy
-ABI binds weak allocation-token types without running PHP or consuming values.
-
-37500970 passed original runtime/pure copies with102/18 allocations and frees.
-Expanded05ef2a4c exposed lost copy-of-copy provenance;7330b46e repaired it with235
-allocations/frees and native Int/union/open/expression controls. Initial complete
-cf58141a passed ten gates in7m39s. A skipped-eval control then exposed missing
-persistent-scope preparation and lost original parameter facts. The copy operation
-now uses the existing lazy scope helper and checker eval capture retains original
-native contracts before widening. Debug303ca7d9 also found aliased C metadata stubs
-falling through into resource_id code after runtime pruning, returning status5.
-Each C entry now owns a separate success/return body.8e069c67 passes executed and
-skipped branches in pure/bridge modes, with43/56 allocations and frees.
-
-Final632cd6ca passes build/default archives and ten exact gates in5m18s: shared ABI,
-neutral descriptor lifetime and interpreter type tests, five-target EIR with AST
-propagation and real clang assembly, pure/bridge copied scalar/null/array kinds,
-aliases, copied chains and skipped eval, combined native origins120.25s bundle,
-existing native-store/scalar-alias controls and example36.09s. Both IR modes and
-permissive/Locals execution remain heap clean. New Rust warnings are removed;
-only inherited warnings remain. Assembly comments and diff hygiene pass. The pure
-copy codegen test has its own module to keep the numeric/local test file compact.
-
-Continue broader local binding flow and Callable/Resource/Iterable coverage, then
-Nullability, Mixed, Initialization, ArrayTypes, ArrayKeys and Indexing, complete
-host/eval parity and full umbrella acceptance. The whole approved implementation
-remains active. No full suite, push or PR was run.
-
-### Verified133: native callable and iterable binding capabilities
-
-Inferred native callable bindings now require actual callability rather than a
-string/array/object shape. Native iterable bindings preserve array-or-Traversable
-membership, including parameter reassignment and writes through mixed reference
-aliases. The shared local callback builder selects the existing typed IsCallable
-runtime target or structural predicate and preserves the original candidate until
-validation succeeds. The Magician exact matchers also select callable lookup for
-Locals alone, with declared-local walker/VM owner-accounting controls.
-
-Late callable guards reserve object-cast dependencies before checking. Declaration
-reachability attaches their lookup hazards to the owning checked body, including
-lexical closures, so a dead function cannot widen executable roots. The scanner
-and late guards share one unknown-callable hazard helper. Native user-function
-lookup now compares names case-insensitively on both architectures. NormalizeCallable
-results are classified as owning temporaries after retaining consumers, fixing a
-96-byte descriptor and 24-byte invokable receiver leak.
-
-Proof93848a70 accepts uppercase names and leaves default217/217 and strict265/265
-heaps clean. Final ef8b00e4 passes the build/default archives and nine exact gates:
-five-target EIR, real clang program/runtime assembly, reachable/dead guard dependency
-controls, prelude reservation, walker/VM declared callable checks, both-optimizer
-native capability/alias/expression/static/trait/invokable cases (6.50s), the updated
-example (37.05s), and the existing opaque sort ownership regression (58.99s).
-Two earlier verification attempts exposed brittle assertions about explicit EIR
-release shapes; ownership acceptance uses the native retaining-store heap regression.
-Diff hygiene and assembly comment alignment pass. Only inherited warnings remain.
-
-Resource origins and inferred/interpreted parameter/capture/global/foreach binding
-flows remain under audit. The related resource and parameter probes run separately
-from these nine acceptance gates; proposed resource patches are not yet applied.
-Continue the full approved implementation, including Nullability, Mixed,
+### Current local binding mechanisms through signed133
+
+Detailed115-133 investigation and acceptance evidence is retained in Git commit
+`b3e9fd22920cccfbd51886045a5ff39cb1e74aef`, Code Journal plan revision205,
+work log47d89b07 and architecture document3739892b. Those records preserve the
+intermediate failures; the current implementation uses these shared mechanisms:
+
+- Checker local store/copy contracts retain semantic producer alternatives across
+  read narrowing, AST propagation and physical widening. Inferred arrays preserve
+  PHP array kind independently of ArrayTypes; explicit mixed stays open. Conditional
+  flow joins preserve binding presence and original contracts.
+- Reference callback plans validate the rooted original candidate before conversion
+  or publication. Existing scalar, nominal, structural and callable membership
+  checks are shared. NormalizeCallable results own their descriptor/receiver leases.
+- Literal and runtime eval copy successful binding origins into activation-owned
+  scope metadata. A private provenance word distinguishes absent, native and eval
+  origins. Native writes and independent copies select the surviving contract;
+  unset ends only the detached name's origin. Immutable ABI1 metadata records live
+  in elephc-semantics; weak allocation tokens do not own PHP values.
+- Scope publication is ordered with source effects. Finalizers copy values before
+  destructive stores and retire temporary owners. Lazy scope materialization covers
+  skipped eval branches, suspended callbacks and first post-eval locals.
+- Callable/iterable locals use actual callable lookup or array/Traversable membership.
+  Late guard dependencies belong to their reachable body, including lexical closures.
+  Native user-function lookup is case-insensitive on both architectures.
+
+Latest signed133 acceptance, jobef8b00e4, passes the build/default archives and nine
+exact gates: all-five-target EIR and real clang program/runtime assembly, live/dead
+callable dependency controls, prelude reservation, walker/VM declared callable owner
+checks, both-optimizer native capability/alias/expression/static/trait/invokable
+cases (6.50s), example (37.05s), and opaque sort ownership (58.99s). Native default
+217/217 and strict265/265 allocation/free counts are clean. Assembly comments,
+diff hygiene and SSH commit signature are verified.
+
+### Verified134: resource local binding capabilities
+
+Fourteen neutral builtin producer contracts now describe resource or resource|false
+results. Native check hooks retain false precisely, and native/eval binding origins
+share resource tag membership. Resource subtypes remain interchangeable within this
+PHP value-kind contract. Generated metadata uses a reserved @resource atom so a PHP
+class named resource keeps its ordinary class identity. LocalBinding and Return
+positions admit that atom; unsupported resource parameter staging remains rejected.
+The new eval metadata variant is appended, preserving earlier serialized indices.
+
+Canonical promotion and raw-to-Mixed boxing retain semantic Resource metadata
+separately from integer ABI storage. EIR already retained the correct producer type;
+using codegen_repr at the boxing boundary had changed rejected old values into
+integers. Both ordinary and canonical property boxing now preserve their resource tag.
+
+The full builtin-docs workflow passes in2f860c9c: 1312 exported builtins, 2484 rendered
+pages, zero builtin/site audit errors and zero target architecture inventory errors.
+Eight original exact gates passed. Correctede9140a8d passes all-five-target EIR and
+the native bundle (157.60s, IR on/off, default/Locals, clean heaps), including aliases,
+expressions, literal/opaque eval, independent copies and unset/rebind. Final6ac5f436
+passes the default build (47.84s) and walker/VM resource alias owner gate (0.07s),
+completing all eleven exact gates. Earlier fixture-only failures concerned VM admission,
+assembly spelling and a conditional unset shape. Assembly comments and diff hygiene
+pass; only inherited Rust warnings remain. No full suite, push or PR was run.
+
+The next bounded baseline is explicit: interpreted parameter bodies currently lose
+their declared binding origins, and inferred eval closures retain an incidental
+signature instead of callable capability. Default W11|W|W|W| versus Locals
+T2|W|W|W| confirms both gaps with clean57/57 and75/75 heaps. The next change transfers declared parameter origins through the shared binder and
+records inferred closure capability directly, with mixed/untyped controls.
+
+Continue all approved work through complete Locals flow, Nullability, Mixed,
 Initialization, ArrayTypes, ArrayKeys, Indexing and final host/umbrella acceptance.
-No full local suite, push or PR was run.
+No full local suite, push or PR has been requested or performed.

@@ -151,3 +151,16 @@ function checkQuantityCallback(mixed $replacement): void {
     echo $format(3), PHP_EOL;
 }
 checkQuantityCallback('missingQuantityFormatter');
+
+// A resource-or-false producer keeps both alternatives without accepting an integer.
+function checkQuantityStream(mixed $replacement): void {
+    $stream=tmpfile();
+    $owner=$stream;
+    try {
+        $stream=$replacement;
+    } catch (TypeError $error) {
+        echo "The stream kept its resource contract", PHP_EOL;
+    }
+    fclose($owner);
+}
+checkQuantityStream(1);

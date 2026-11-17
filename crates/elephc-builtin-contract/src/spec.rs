@@ -119,6 +119,8 @@ pub enum TypeSpec {
     /// Same reason as `Ptr`: `__elephc_normalize_callable` checks as `PhpType::Callable`, whose
     /// representation is a descriptor rather than a boxed cell.
     Callable,
+    /// PHP resource value kind, which is not a userland type-hint keyword.
+    Resource,
 }
 
 /// Static PHP value used as an optional builtin parameter default.

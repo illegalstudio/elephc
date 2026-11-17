@@ -73,7 +73,7 @@ fn builtin_producer_type(ty: elephc_builtin_contract::TypeSpec) -> Type {
         TypeSpec::Int => "int", TypeSpec::Float => "float", TypeSpec::Str => "string",
         TypeSpec::Bool => "bool", TypeSpec::Object => "object", TypeSpec::False => "false",
         TypeSpec::Null | TypeSpec::Void => "null", TypeSpec::Mixed | TypeSpec::Ptr => "mixed",
-        TypeSpec::Array => "array", TypeSpec::Callable => "callable",
+        TypeSpec::Array => "array", TypeSpec::Callable => "callable", TypeSpec::Resource => elephc_semantics::native_local_contract::RESOURCE_TYPE_SPEC,
         TypeSpec::Nullable(inner) => return Type::Nullable(Box::new(builtin_producer_type(*inner))),
         TypeSpec::Union(members) => return Type::Union(members.iter().copied().map(builtin_producer_type).collect()),
     };
@@ -107,6 +107,7 @@ fn value_contract(value: RuntimeCellHandle, context: &ElephcEvalContext,
             EvalParameterTypeVariant::Generic(ty)
         }
         EVAL_TAG_CALLABLE => EvalParameterTypeVariant::Callable,
+        EVAL_TAG_RESOURCE => EvalParameterTypeVariant::Resource,
         _ => EvalParameterTypeVariant::Mixed,
     };
     Ok(EvalParameterType::new(vec![variant], false))

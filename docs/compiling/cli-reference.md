@@ -944,6 +944,13 @@ Native inferred callable bindings require a callable value, including function n
 missing name or method fails before the old value changes. Native iterable parameters
 retain their array-or-Traversable contract during reassignment. These checks also
 apply through reference aliases and assignment expressions.
+Resource producers keep their declared alternatives: for example, `fopen()` and
+`tmpfile()` produce `resource|false`. Such a binding accepts false and other
+resources, and rejects integers or true. Native and interpreted stores preserve
+the previous value on failure, including reference aliases, copies and eval.
+Resource kinds remain distinct from their integer handle representation; a
+successful replacement also retains the resource subtype. This adds no PHP
+`resource` type-hint keyword: a class named `resource` keeps its ordinary meaning.
 A rejected conversion preserves the original value; explicit `mixed` declarations
 remain open. Passing a value through `call_user_func()` uses a separate argument
 cell rather than attaching the caller's binding contract to that copy.

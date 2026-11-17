@@ -6,7 +6,7 @@ description: "Open directory handle."
 ## opendir()
 
 ```php
-function opendir(string $directory): mixed
+function opendir(string $directory): resource|false
 ```
 
 Open directory handle.
@@ -14,7 +14,7 @@ Open directory handle.
 **Parameters**:
 - `$directory` (`string`)
 
-**Returns**: `mixed`
+**Returns**: `resource|false`
 
 ## Availability
 

@@ -433,12 +433,11 @@ impl<'a> FunctionContext<'a> {
 
     /// Returns the type a value is boxed into `mixed` as.
     ///
-    /// That is its codegen type, except for a `?ptr<T>`: its codegen form is the bare pointer,
-    /// and only the declared union tells the boxer that address 0 is PHP null (a plain `ptr`
-    /// boxes 0 as the integer it is).
+    /// Nullable pointers retain null at address zero. Resources retain their PHP tag even
+    /// though their native payload uses the same integer-word representation as an int.
     pub(super) fn mixed_box_type(&self, value: ValueId) -> Result<PhpType> {
         let raw = self.raw_value_php_type(value)?;
-        if crate::types::is_nullable_pointer_type(&raw) {
+        if crate::types::is_nullable_pointer_type(&raw) || matches!(raw, PhpType::Resource(_)) {
             Ok(raw)
         } else {
             self.value_php_type(value)

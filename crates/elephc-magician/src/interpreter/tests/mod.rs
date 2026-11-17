@@ -70,6 +70,7 @@ mod control_flow;
 mod strict_semantics;
 mod strict_local_origins;
 mod strict_structural_locals;
+mod strict_resource_locals;
 mod strict_checked_casts;
 mod strict_builtin_casts;
 mod strict_settype;

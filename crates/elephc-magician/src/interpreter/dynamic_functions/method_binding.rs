@@ -607,7 +607,7 @@ pub(in crate::interpreter) fn eval_method_parameter_value(
     }
     if param_type.variants().iter().any(|ty| matches!(ty, EvalParameterTypeVariant::Generic(_)))
         || context.current_function().is_some_and(|name| name.contains('<')) {
-        return eval_throw_type_error(&format!("Value does not satisfy {}", crate::eval_ir::generic_type(param_type)), context, values);
+        return eval_throw_type_error(&format!("Value does not satisfy {}", crate::eval_ir::php_type_label(param_type)), context, values);
     }
     Err(EvalStatus::RuntimeFatal)
 }
@@ -677,6 +677,7 @@ fn eval_method_parameter_variant_accepts_exact(
         EvalParameterTypeVariant::Never | EvalParameterTypeVariant::Void => Ok(false),
         EvalParameterTypeVariant::Object => Ok(matches!(tag, EVAL_TAG_OBJECT | EVAL_TAG_CALLABLE)),
         EvalParameterTypeVariant::String => Ok(tag == EVAL_TAG_STRING),
+        EvalParameterTypeVariant::Resource => Ok(tag == EVAL_TAG_RESOURCE),
     }
 }
 

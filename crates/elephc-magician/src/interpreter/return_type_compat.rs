@@ -437,7 +437,8 @@ fn eval_return_variant_accepts_actual_variant(
         | (EvalParameterTypeVariant::Float, EvalParameterTypeVariant::Float)
         | (EvalParameterTypeVariant::Int, EvalParameterTypeVariant::Int)
         | (EvalParameterTypeVariant::Iterable, EvalParameterTypeVariant::Iterable)
-        | (EvalParameterTypeVariant::String, EvalParameterTypeVariant::String) => true,
+        | (EvalParameterTypeVariant::String, EvalParameterTypeVariant::String)
+        | (EvalParameterTypeVariant::Resource, EvalParameterTypeVariant::Resource) => true,
         (EvalParameterTypeVariant::Object, EvalParameterTypeVariant::Class(_)) => true,
         (EvalParameterTypeVariant::Iterable, EvalParameterTypeVariant::Array) => true,
         (EvalParameterTypeVariant::Iterable, EvalParameterTypeVariant::Class(actual_name)) => {

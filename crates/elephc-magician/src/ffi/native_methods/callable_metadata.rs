@@ -232,6 +232,8 @@ fn native_callable_type_variant(
         "array" => EvalParameterTypeVariant::Array,
         "bool" => EvalParameterTypeVariant::Bool,
         "callable" => EvalParameterTypeVariant::Callable,
+        elephc_semantics::native_local_contract::RESOURCE_TYPE_SPEC if !matches!(position, NativeCallableTypePosition::Parameter) => EvalParameterTypeVariant::Resource,
+        elephc_semantics::native_local_contract::RESOURCE_TYPE_SPEC => return None,
         "false" => EvalParameterTypeVariant::Generic(elephc_generics::Type::atom("false")),
         "true" => EvalParameterTypeVariant::Generic(elephc_generics::Type::atom("true")),
         "float" => EvalParameterTypeVariant::Float,
@@ -249,6 +251,7 @@ fn native_callable_type_variant(
         }
         "void" | "never" => return None,
         "self" | "parent" | "static" => EvalParameterTypeVariant::Class(lower),
+        _ if member.starts_with('@') => return None,
         _ => EvalParameterTypeVariant::Class(member.trim_start_matches('\\').to_string()),
     };
     Some(Some(variant))
@@ -319,6 +322,31 @@ mod tests {
         assert!(native_callable_type_from_spec("", NativeCallableTypePosition::Parameter).is_none());
         assert_eq!(native_callable_type_from_spec("void", NativeCallableTypePosition::Return).unwrap().variants(),
             &[EvalParameterTypeVariant::Void]);
+    }
+
+
+    /// Resource value metadata cannot turn PHP's ordinary resource class name into a builtin hint.
+    #[test]
+    fn native_resource_contract_distinguishes_class_names_and_parameter_positions() {
+        use crate::eval_ir::{generic_type, parameter_type, php_type_label};
+        use elephc_semantics::native_local_contract::RESOURCE_TYPE_SPEC;
+        for position in [NativeCallableTypePosition::LocalBinding, NativeCallableTypePosition::Return] {
+            let resource = native_callable_type_from_spec(RESOURCE_TYPE_SPEC, position).unwrap();
+            assert_eq!(resource.variants(), &[EvalParameterTypeVariant::Resource]);
+            assert_eq!(parameter_type(&generic_type(&resource)), resource);
+            assert_eq!(php_type_label(&resource), "resource");
+            let nullable = native_callable_type_from_spec(&format!("{RESOURCE_TYPE_SPEC}|false|null"), position).unwrap();
+            assert!(nullable.allows_null());
+            assert!(nullable.variants().contains(&EvalParameterTypeVariant::Resource));
+        }
+        assert!(native_callable_type_from_spec(RESOURCE_TYPE_SPEC, NativeCallableTypePosition::Parameter).is_none());
+        assert!(native_callable_type_from_spec("@unknown", NativeCallableTypePosition::LocalBinding).is_none());
+        for position in [NativeCallableTypePosition::Parameter, NativeCallableTypePosition::LocalBinding,
+            NativeCallableTypePosition::Return] {
+            let class = native_callable_type_from_spec("resource", position).unwrap();
+            assert_eq!(class.variants(), &[EvalParameterTypeVariant::Class("resource".into())]);
+            assert_eq!(parameter_type(&generic_type(&class)), class);
+        }
     }
 
 }

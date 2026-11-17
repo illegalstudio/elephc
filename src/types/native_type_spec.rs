@@ -6,7 +6,8 @@
 //!
 //! Key details:
 //! - Null value contracts are distinct from void return declarations.
-//! - All consumers share the existing native callable type grammar.
+//! - All consumers share the generated type grammar.
+//! - Resource values use a reserved metadata atom, leaving PHP class names unchanged.
 
 use super::PhpType;
 
@@ -29,13 +30,13 @@ pub(crate) fn php_type_spec(php_type: &PhpType, allow_return_atoms: bool) -> Opt
         PhpType::Mixed => Some("mixed".to_string()),
         PhpType::Array(_) | PhpType::AssocArray { .. } => Some("array".to_string()),
         PhpType::Callable => Some("callable".to_string()),
+        PhpType::Resource(_) => Some(elephc_semantics::native_local_contract::RESOURCE_TYPE_SPEC.to_string()),
         PhpType::Object(name) if name.is_empty() => Some("object".to_string()),
         PhpType::Object(name) => Some(name.clone()),
         PhpType::Union(members) => member_specs(members),
         PhpType::Buffer(_)
         | PhpType::Packed(_)
         | PhpType::Pointer(_)
-        | PhpType::Resource(_)
         | PhpType::Narrow(_)
         | PhpType::TaggedScalar => None,
     }

@@ -32,7 +32,7 @@ pub unsafe extern "C" fn __elephc_eval_scope_native_type_v1(
         let Ok(name) = abi_name_to_string(name_ptr, name_len) else { return EvalStatus::RuntimeFatal.code(); };
         let ty = if type_len == 0 { None } else {
             let Some(ty) = super::native_methods::native_callable_type_from_abi(
-                type_ptr, type_len, super::native_methods::NativeCallableTypePosition::Parameter,
+                type_ptr, type_len, super::native_methods::NativeCallableTypePosition::LocalBinding,
             ) else { return EvalStatus::RuntimeFatal.code(); };
             Some(ty)
         };
@@ -54,7 +54,7 @@ pub unsafe extern "C" fn __elephc_eval_scope_binding_type_v1(
         let Some(scope) = scope.as_mut() else { return EvalStatus::RuntimeFatal.code(); };
         let Ok(name) = abi_name_to_string(name_ptr, name_len) else { return EvalStatus::RuntimeFatal.code(); };
         let Some(ty) = super::native_methods::native_callable_type_from_abi(
-            type_ptr, type_len, super::native_methods::NativeCallableTypePosition::Parameter,
+            type_ptr, type_len, super::native_methods::NativeCallableTypePosition::LocalBinding,
         ) else { return EvalStatus::RuntimeFatal.code(); };
         scope.set_native_binding_type(name, ty);
         EvalStatus::Ok.code()
@@ -116,7 +116,7 @@ unsafe fn copied_local_type(scope: &ElephcEvalScope, source: &str, target: &str,
     match descriptor {
         Some(descriptor) => super::native_methods::native_callable_type_from_abi(
             descriptor.type_ptr, descriptor.type_len as u64,
-            super::native_methods::NativeCallableTypePosition::Parameter,
+            super::native_methods::NativeCallableTypePosition::LocalBinding,
         ).ok_or(EvalStatus::RuntimeFatal),
         None => Ok(crate::eval_ir::EvalParameterType::new(
             vec![crate::eval_ir::EvalParameterTypeVariant::Mixed], false)),
@@ -319,7 +319,7 @@ mod copy_origin_tests {
             let copied = unsafe { copied_local_type(&scope, "source", "copy", Some(&descriptor)) }.unwrap();
             let expected = super::super::native_methods::native_callable_type_from_abi(
                 spelling.as_ptr(), spelling.len() as u64,
-                super::super::native_methods::NativeCallableTypePosition::Parameter,
+                super::super::native_methods::NativeCallableTypePosition::LocalBinding,
             ).unwrap();
             assert_eq!(copied, expected);
         }

@@ -17,6 +17,7 @@ pub(super) fn publish(ctx: &mut FunctionContext<'_>, pointer_reg: &str, prop_ty:
         || !crate::types::canonical_property_reference_payload(prop_ty).is_some_and(|payload|
             payload != crate::types::CanonicalReferencePayload::Boxed)
     { return Ok(false); }
+    let boxing_ty = prop_ty.clone();
     let prop_ty = prop_ty.codegen_repr();
     let raw = ctx.next_label("scalar_property_reference_raw");
     let done = ctx.next_label("scalar_property_reference_done");
@@ -34,7 +35,7 @@ pub(super) fn publish(ctx: &mut FunctionContext<'_>, pointer_reg: &str, prop_ty:
     abi::emit_pop_reg(ctx.emitter, pointer_reg);
     restore_property_store_result(ctx, &incoming_result_ty.codegen_repr());
     abi::emit_push_reg(ctx.emitter, pointer_reg);
-    emit_box_current_owned_value_as_mixed(ctx.emitter, &prop_ty);
+    emit_box_current_owned_value_as_mixed(ctx.emitter, &boxing_ty);
     abi::emit_pop_reg(ctx.emitter, pointer_reg);
     publish_raw_reference_cell_result(ctx, pointer_reg, &PhpType::Mixed, &PhpType::Mixed)?;
     abi::emit_jump(ctx.emitter, &done);

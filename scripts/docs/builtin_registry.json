@@ -50605,7 +50605,7 @@
           "type": "mixed"
         }
       ],
-      "return_type": "mixed",
+      "return_type": "resource|false",
       "variadic": null
     },
     "since": null,
@@ -51916,7 +51916,7 @@
           "type": "float"
         }
       ],
-      "return_type": "mixed",
+      "return_type": "resource|false",
       "variadic": null
     },
     "since": null,
@@ -113425,7 +113425,7 @@
           "type": "string"
         }
       ],
-      "return_type": "mixed",
+      "return_type": "resource|false",
       "variadic": null
     },
     "since": null,
@@ -119795,7 +119795,7 @@
           "type": "float"
         }
       ],
-      "return_type": "mixed",
+      "return_type": "resource|false",
       "variadic": null
     },
     "since": null,
@@ -120343,7 +120343,7 @@
           "type": "string"
         }
       ],
-      "return_type": "mixed",
+      "return_type": "resource|false",
       "variadic": null
     },
     "since": null,
@@ -136891,7 +136891,7 @@
           "type": "array"
         }
       ],
-      "return_type": "mixed",
+      "return_type": "resource",
       "variadic": null
     },
     "since": null,
@@ -137030,7 +137030,7 @@
           "type": "array"
         }
       ],
-      "return_type": "mixed",
+      "return_type": "resource",
       "variadic": null
     },
     "since": null,
@@ -137449,7 +137449,7 @@
           "type": "array"
         }
       ],
-      "return_type": "mixed",
+      "return_type": "resource",
       "variadic": null
     },
     "since": null,
@@ -138216,7 +138216,7 @@
           "type": "mixed"
         }
       ],
-      "return_type": "mixed",
+      "return_type": "resource|false",
       "variadic": null
     },
     "since": null,
@@ -138417,7 +138417,7 @@
           "type": "mixed"
         }
       ],
-      "return_type": "mixed",
+      "return_type": "resource|false",
       "variadic": null
     },
     "since": null,
@@ -141196,7 +141196,7 @@
           "type": "string"
         }
       ],
-      "return_type": "mixed",
+      "return_type": "resource|false",
       "variadic": null
     },
     "since": null,
@@ -141335,7 +141335,7 @@
           "type": "string"
         }
       ],
-      "return_type": "mixed",
+      "return_type": "resource|false",
       "variadic": null
     },
     "since": null,
@@ -142424,7 +142424,7 @@
           "type": "string"
         }
       ],
-      "return_type": "mixed",
+      "return_type": "resource|false",
       "variadic": null
     },
     "since": null,
@@ -147821,7 +147821,7 @@
     },
     "sig": {
       "params": [],
-      "return_type": "mixed",
+      "return_type": "resource|false",
       "variadic": null
     },
     "since": null,

@@ -344,6 +344,7 @@ pub(super) fn eval_reflection_named_type_variant_metadata(
             Some(eval_reflection_builtin_named_type("string", allows_null))
         }
         EvalParameterTypeVariant::Void => Some(eval_reflection_builtin_named_type("void", false)),
+        EvalParameterTypeVariant::Resource => Some(eval_reflection_builtin_named_type("resource", allows_null)),
     }
 }
 

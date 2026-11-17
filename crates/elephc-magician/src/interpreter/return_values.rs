@@ -198,7 +198,7 @@ fn eval_declared_return_value(
     }
     if return_type.variants().iter().any(|ty| matches!(ty, EvalParameterTypeVariant::Generic(_)))
         || context.current_function().is_some_and(|name| name.contains('<')) {
-        return eval_throw_type_error(&format!("Return value does not satisfy {}", crate::eval_ir::generic_type(return_type)), context, values);
+        return eval_throw_type_error(&format!("Return value does not satisfy {}", crate::eval_ir::php_type_label(return_type)), context, values);
     }
     Err(EvalStatus::RuntimeFatal)
 }

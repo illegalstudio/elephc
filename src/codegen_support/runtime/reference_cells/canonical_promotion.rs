@@ -24,6 +24,7 @@ pub(crate) fn promotion_entry(payload: CanonicalReferencePayload) -> &'static st
         CanonicalReferencePayload::Object => "__rt_reference_cell_promote_object",
         CanonicalReferencePayload::Array => "__rt_reference_cell_promote_array",
         CanonicalReferencePayload::Iterable => "__rt_reference_cell_promote_iterable",
+        CanonicalReferencePayload::Resource => "__rt_reference_cell_promote_resource",
     }
 }
 
@@ -37,7 +38,8 @@ pub(super) fn emit(emitter: &mut Emitter) {
         (CanonicalReferencePayload::NullableInt, PhpType::TaggedScalar),
         (CanonicalReferencePayload::Object, PhpType::Object(String::new())),
         (CanonicalReferencePayload::Array, PhpType::Array(Box::new(PhpType::Mixed))),
-        (CanonicalReferencePayload::Iterable, PhpType::Iterable)] {
+        (CanonicalReferencePayload::Iterable, PhpType::Iterable),
+        (CanonicalReferencePayload::Resource, PhpType::Resource(None))] {
         let entry = promotion_entry(payload);
         let done = format!("{entry}_done");
         let result = abi::int_result_reg(emitter);
@@ -119,8 +121,8 @@ mod tests {
             process.stdin.take().unwrap().write_all(assembly.as_bytes()).unwrap();
             let output = process.wait_with_output().unwrap();
             assert!(output.status.success(), "{name}: {}", String::from_utf8_lossy(&output.stderr));
-            assert_eq!(assembly.matches("__rt_reference_cell_canonical").count(), 9, "{name}");
-            assert_eq!(assembly.matches("__rt_reference_cell_promote_mixed").count(), 9, "{name}");
+            assert_eq!(assembly.matches("__rt_reference_cell_canonical").count(), 10, "{name}");
+            assert_eq!(assembly.matches("__rt_reference_cell_promote_mixed").count(), 10, "{name}");
         }
     }
 }

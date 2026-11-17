@@ -6,7 +6,7 @@ description: "Open Internet or Unix domain socket connection."
 ## stream_socket_client()
 
 ```php
-function stream_socket_client(string $address): mixed
+function stream_socket_client(string $address): resource|false
 ```
 
 Open Internet or Unix domain socket connection.
@@ -14,7 +14,7 @@ Open Internet or Unix domain socket connection.
 **Parameters**:
 - `$address` (`string`)
 
-**Returns**: `mixed`
+**Returns**: `resource|false`
 
 ## Availability
 

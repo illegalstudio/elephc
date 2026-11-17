@@ -33,6 +33,9 @@ pub struct BindingCopyV1 {
     pub descriptor: *const LocalTypeDescriptorV1,
 }
 
+/// Reserved generated type atom, distinct from PHP class names and source type hints.
+pub const RESOURCE_TYPE_SPEC: &str = "@resource";
+
 #[cfg(test)]
 mod tests {
     use super::*;

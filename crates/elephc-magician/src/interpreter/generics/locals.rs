@@ -45,7 +45,7 @@ pub(in crate::interpreter) fn validate_generic_local_contracts(scope: &ElephcEva
 /// Checks an initialized or reassigned typed local without coercing its stored value.
 pub(in crate::interpreter) fn validate_generic_local(declared: &EvalParameterType, name: &str, value: RuntimeCellHandle, context: &mut ElephcEvalContext, values: &mut impl RuntimeValueOps) -> Result<(), EvalStatus> {
     if generic_value_accepts(&generic_type(declared), value, context, values)? { return Ok(()); }
-    eval_throw_type_error(&format!("Typed local ${name} expects {}", generic_type(declared)), context, values)
+    eval_throw_type_error(&format!("Typed local ${name} expects {}", crate::eval_ir::php_type_label(declared)), context, values)
 }
 
 /// Checks an array write against its key and element contracts before mutating storage.

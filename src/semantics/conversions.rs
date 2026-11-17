@@ -117,6 +117,7 @@ pub(crate) fn inferred_binding_contract(ty: &PhpType) -> Option<PhpType> {
     Some(match ty {
         PhpType::Int | PhpType::Float | PhpType::Bool | PhpType::False | PhpType::Str
         | PhpType::Void | PhpType::Object(_) | PhpType::Callable | PhpType::Iterable => ty.clone(),
+        PhpType::Resource(_) => PhpType::Resource(None),
         PhpType::Array(_) | PhpType::AssocArray { .. } => PhpType::php_array(),
         PhpType::Union(members) if !members.is_empty() => crate::types::checker::normalize_union_members(
             members.iter().map(inferred_binding_contract).collect::<Option<Vec<_>>>()?),

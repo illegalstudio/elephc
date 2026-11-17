@@ -52,11 +52,13 @@ pub(crate) enum CanonicalReferencePayload {
     Object,
     Array,
     Iterable,
+    Resource,
 }
 
 /// Selects reviewed declaration layouts without inferring indirection from pointer size.
 pub(crate) fn canonical_property_reference_payload(ty: &PhpType) -> Option<CanonicalReferencePayload> {
     if !declaration_contract(ty) { return None; }
+    if matches!(ty, PhpType::Resource(_)) { return Some(CanonicalReferencePayload::Resource); }
     Some(match ty.codegen_repr() {
         PhpType::Mixed => CanonicalReferencePayload::Boxed,
         PhpType::Void => CanonicalReferencePayload::Null,
@@ -77,7 +79,7 @@ fn declaration_contract(ty: &PhpType) -> bool {
     match ty {
         PhpType::Mixed | PhpType::Int | PhpType::Float | PhpType::Bool | PhpType::False
         | PhpType::Str | PhpType::Void | PhpType::Object(_) | PhpType::Array(_)
-        | PhpType::AssocArray { .. } | PhpType::Iterable => true,
+        | PhpType::AssocArray { .. } | PhpType::Iterable | PhpType::Resource(_) => true,
         PhpType::Union(members) => !members.is_empty() && members.iter().all(declaration_contract),
         _ => false,
     }
@@ -125,6 +127,8 @@ mod tests {
             Some(CanonicalReferencePayload::Array));
         assert_eq!(canonical_property_reference_payload(&PhpType::Iterable),
             Some(CanonicalReferencePayload::Iterable));
+        assert_eq!(canonical_property_reference_payload(&PhpType::Resource(None)),
+            Some(CanonicalReferencePayload::Resource));
         assert_eq!(canonical_property_reference_payload(&PhpType::Pointer(None)), None);
     }
 }

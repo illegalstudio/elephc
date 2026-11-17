@@ -761,6 +761,7 @@ mod strict_typed_stores;
 mod strict_numeric_locals;
 mod strict_copy_origins;
 mod strict_structural_locals;
+mod strict_resource_locals;
 
 mod strict_defaults;
 

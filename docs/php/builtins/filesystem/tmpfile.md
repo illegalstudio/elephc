@@ -6,14 +6,14 @@ description: "Creates a temporary file."
 ## tmpfile()
 
 ```php
-function tmpfile(): mixed
+function tmpfile(): resource|false
 ```
 
 Creates a temporary file.
 
 **Parameters**: none.
 
-**Returns**: `mixed`
+**Returns**: `resource|false`
 
 ## Availability
 

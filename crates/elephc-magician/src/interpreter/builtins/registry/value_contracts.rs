@@ -100,6 +100,7 @@ fn builtin_type_accepts_exact(
         TypeSpec::Object => matches!(tag, EVAL_TAG_OBJECT | EVAL_TAG_CALLABLE),
         TypeSpec::Array => matches!(tag, EVAL_TAG_ARRAY | EVAL_TAG_ASSOC),
         TypeSpec::Callable => eval_is_callable_value(value, None, context, values)?,
+        TypeSpec::Resource => tag == EVAL_TAG_RESOURCE,
         TypeSpec::Void => false,
         TypeSpec::Nullable(inner) => tag == EVAL_TAG_NULL
             || builtin_type_accepts_exact(*inner, value, tag, context, values)?,

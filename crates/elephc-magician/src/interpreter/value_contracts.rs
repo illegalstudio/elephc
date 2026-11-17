@@ -118,6 +118,7 @@ fn declared_variant_accepts_exact(
         EvalParameterTypeVariant::Never | EvalParameterTypeVariant::Void => Ok(false),
         EvalParameterTypeVariant::Object => Ok(matches!(tag, EVAL_TAG_OBJECT | EVAL_TAG_CALLABLE)),
         EvalParameterTypeVariant::String => Ok(tag == EVAL_TAG_STRING),
+        EvalParameterTypeVariant::Resource => Ok(tag == EVAL_TAG_RESOURCE),
     }
 }
 

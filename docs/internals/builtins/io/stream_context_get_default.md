@@ -37,7 +37,7 @@ description: "Compiler internals for stream_context_get_default(): lowering path
 ## Signature summary
 
 ```php
-function stream_context_get_default(array $options = null): mixed
+function stream_context_get_default(array $options = null): resource
 ```
 
 ## What the type checker enforces

@@ -5,11 +5,10 @@
 //! - Checker, EIR, optimizer, ownership, and callable consumers through `crate::builtins::registry`.
 //!
 //! Key details:
-//! - `check` returns `Union(stream_resource, Bool)` to reflect PHP's false-on-failure
-//!   pattern. The arguments are a command string and mode string, not resources — they
+//! - `check` returns `Union(stream_resource, False)` to reflect PHP's false-on-failure
+//!   pattern. The arguments are a command string and mode string, not resources; they
 //!   are pre-inferred by the registry and no resource validation is performed.
-//! - `returns: Mixed` is used because the union involves a resource type that the
-//!   scalar `returns:` field cannot express.
+//! - The shared catalog declares `resource|false`; the checker refines its native stream kind.
 
 use crate::builtins::spec::BuiltinCheckCtx;
 use crate::errors::CompileError;
@@ -23,7 +22,7 @@ builtin! {
     ),
 }
 
-/// Returns `Union(stream_resource, Bool)` for the pipe open result.
+/// Returns `Union(stream_resource, False)` for the pipe open result.
 ///
 /// The arguments are command and mode strings, not stream resources; no resource
 /// validation is performed here. The common registry path pre-infers the arguments.
@@ -31,6 +30,6 @@ fn check(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
     crate::builtins::spec::reject_if_process_spawn_forbidden(cx)?;
     Ok(cx.checker.normalize_union_type(vec![
         PhpType::stream_resource(),
-        PhpType::Bool,
+        PhpType::False,
     ]))
 }
