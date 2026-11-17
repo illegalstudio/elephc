@@ -807,6 +807,10 @@ pub(in crate::interpreter) fn compile_program(program: &EvalProgram) -> Result<A
 
 /// Compiles one function and the simple functions nested inside it.
 fn compile_attached(function: &EvalFunction) -> Result<Arc<CompiledBody>, CompileGap> {
+    // A by-reference return hands the caller a target, which the tree walker's `return` builds.
+    if function.returns_by_ref() {
+        return Err(CompileGap::new("ReturnByReference"));
+    }
     if let Some(what) = admission_gap(
         function.attributes(),
         function.parameter_attributes(),

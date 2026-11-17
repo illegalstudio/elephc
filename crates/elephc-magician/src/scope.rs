@@ -233,6 +233,11 @@ impl EvalScopeRef {
 }
 
 impl ElephcEvalScope {
+    /// Returns this scope's never-reused id, the one an [`EvalScopeRef`] to it carries.
+    pub(crate) const fn scope_id(&self) -> u64 {
+        self.id
+    }
+
     /// Creates an empty materialized activation scope.
     pub fn new() -> Self {
         Self {

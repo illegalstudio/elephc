@@ -685,6 +685,15 @@ fn eval_persistent_return_target(
     // key while its frame is named `{closure}`.
     let function = context.current_static_slot_key().unwrap_or_default();
     match target {
+        // A target already naming ANOTHER activation's storage (a by-reference parameter's
+        // element resolves to the CALLER's variable) outlives this call as it is.
+        EvalReferenceTarget::Variable { scope: owner, .. }
+        | EvalReferenceTarget::ArrayElement { scope: owner, .. }
+            if owner.id() != scope.scope_id() && unsafe { owner.live_mut() }.is_some() =>
+        {
+            crate::interpreter::persistent_references::persistent_reference_target(target.clone())
+                .unwrap_or(target)
+        }
         EvalReferenceTarget::Variable { scope: _, name } => {
             eval_persistent_name_target(&function, &name, context, scope)
         }
