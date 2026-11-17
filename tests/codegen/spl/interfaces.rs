@@ -1215,3 +1215,27 @@ var_dump($it->key(), $it->current());
     assert_eq!(out.stdout, "a=1 b=2 c=3 0=4 7=5 8=6 NULL\nNULL\n");
     assert!(!out.stderr.contains("Warning"), "{}", out.stderr);
 }
+
+/// Verifies a `foreach` over a user `Iterator` calls `current()` before `key()` on every step, in
+/// every typing of the iterated expression (`php -n` order: rewind, valid, current, key, body).
+#[test]
+fn test_foreach_reads_current_before_key_over_an_iterator() {
+    let step = "rewind\nvalid\ncurrent\nkey\nbody\nnext\nvalid\n";
+    let out = compile_and_run(
+        r#"<?php
+class K implements Iterator {
+    private $i = 0;
+    public function rewind(): void { echo "rewind\n"; }
+    public function valid(): bool { echo "valid\n"; return $this->i < 1; }
+    public function current(): mixed { echo "current\n"; return 1; }
+    public function key(): mixed { echo "key\n"; return 0; }
+    public function next(): void { echo "next\n"; $this->i++; }
+}
+function f(iterable $it) { foreach ($it as $k => $v) { echo "body\n"; } }
+function g(Iterator $it) { foreach ($it as $k => $v) { echo "body\n"; } }
+function h(mixed $it) { foreach ($it as $k => $v) { echo "body\n"; } }
+f(new K); g(new K); h(new K);
+"#,
+    );
+    assert_eq!(out, step.repeat(3));
+}

@@ -578,17 +578,8 @@ pub(super) fn lower_foreach(
         iterator_cleanup: by_ref_origin.map(|_| (iterator_state, array.span)),
         receiver_pin,
     });
-    if let Some(key_var) = key_var {
-        let key = ctx.emit_value(
-            Op::IterCurrentKey,
-            vec![iterator.value],
-            None,
-            PhpType::Mixed,
-            Op::IterCurrentKey.default_effects(),
-            Some(array.span),
-        );
-        ctx.store_local(key_var, key, PhpType::Mixed, Some(array.span));
-    }
+    // php reads `current()` BEFORE `key()` on every step of an Iterator foreach, and assigns the
+    // value before the key; a user Iterator observes that order.
     if value_by_ref {
         let slot = ctx.declare_local(value_var, foreach_ref_value_type(&source_ty));
         ctx.release_ref_cell_owner(value_var, Some(array.span));
@@ -605,6 +596,17 @@ pub(super) fn lower_foreach(
         let value_ty = foreach_value_type(&source_ty);
         let value = lower_foreach_current_value(ctx, iterator, &source_ty, &value_ty, array.span);
         ctx.store_local(value_var, value, value_ty, Some(array.span));
+    }
+    if let Some(key_var) = key_var {
+        let key = ctx.emit_value(
+            Op::IterCurrentKey,
+            vec![iterator.value],
+            None,
+            PhpType::Mixed,
+            Op::IterCurrentKey.default_effects(),
+            Some(array.span),
+        );
+        ctx.store_local(key_var, key, PhpType::Mixed, Some(array.span));
     }
     lower_block(ctx, body);
     ctx.loop_stack.pop();
