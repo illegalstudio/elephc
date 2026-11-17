@@ -10,7 +10,7 @@
 //! - Every captured owner is released in reverse order on success and failure.
 
 use super::*;
-use super::property_write_receivers::{prepare_index, finish_name, release_receivers, PreparedPropertyName, finish_property_unset_receiver, finish_dimension_unset_receiver, require_unset_array_access};
+use super::property_write_receivers::{prepare_index, finish_name, release_receivers, PreparedPropertyName, finish_property_unset_receiver, finish_dimension_unset_receiver_tracked, require_unset_array_access};
 
 /// Captures nested keys before fetching live storage, preserving computed roots and quiet hops.
 pub(super) fn eval_nested_dimension_unset(
@@ -22,17 +22,20 @@ pub(super) fn eval_nested_dimension_unset(
         let receiver = prepare_property_write_receiver(array, &mut owners, context, scope, values)?;
         let index = eval_owned_expr(index, context, scope, values)?;
         owners.push(index);
-        let array = finish_dimension_unset_receiver(receiver, &mut owners, context, scope, values)?;
+        let mut trail = Vec::new();
+        let array = finish_dimension_unset_receiver_tracked(receiver, &mut owners, &mut trail, context, scope, values)?;
         owners.push(array);
-        if matches!(values.type_tag(array)?, EVAL_TAG_ARRAY | EVAL_TAG_ASSOC) {
+        if matches!(values.type_tag(array)?, EVAL_TAG_ARRAY | EVAL_TAG_ASSOC)
+            && !trail.iter().any(|parent| !matches!(parent, super::dimension_writes::Parent::Index { .. })) {
             return eval_throw_error(
                 "Unsupported unset(): erased array storage has no attached removal path", context, values,
             );
         }
-        // Objects mutate by identity; all other admitted values only produce scalar diagnostics.
+        // Objects mutate by identity and scalars only produce diagnostics; an array is rebuilt
+        // and committed from the leaf toward its root through the recorded parents.
         let replacement = unset_value(array, index, context, values)?;
-        debug_assert!(replacement.is_none());
-        Ok(())
+        if let Some(replacement) = replacement { owners.push(replacement); }
+        super::dimension_writes::propagate(replacement, &mut trail, &mut owners, context, scope, values)
     })();
     result.and(release_receivers(owners, context, values))
 }

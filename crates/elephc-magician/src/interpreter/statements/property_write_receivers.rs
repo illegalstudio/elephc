@@ -11,6 +11,7 @@
 
 use super::*;
 use super::property_dimension_writes::DimensionProperty;
+use super::dimension_writes::Parent;
 
 /// A receiver traversal with computed operands captured before the assignment RHS.
 pub(super) enum PreparedWriteReceiver<'a> {
@@ -74,7 +75,7 @@ pub(super) fn finish_property_write_receiver(
     plan: PreparedWriteReceiver<'_>, owners: &mut Vec<RuntimeCellHandle>,
     context: &mut ElephcEvalContext, scope: &mut ElephcEvalScope, values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
-    finish_receiver(plan, owners, context, scope, values, false, false)
+    finish_receiver(plan, owners, context, scope, values, false, false, None)
 }
 
 /// Fetches unset properties for write while keeping every dimension hop non-creating and quiet.
@@ -82,7 +83,7 @@ pub(super) fn finish_property_unset_receiver(
     plan: PreparedWriteReceiver<'_>, owners: &mut Vec<RuntimeCellHandle>,
     context: &mut ElephcEvalContext, scope: &mut ElephcEvalScope, values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
-    finish_receiver(plan, owners, context, scope, values, true, true)
+    finish_receiver(plan, owners, context, scope, values, true, true, None)
 }
 
 /// Fetches an unset dimension receiver whose selected value will feed another dimension.
@@ -90,37 +91,72 @@ pub(super) fn finish_dimension_unset_receiver(
     plan: PreparedWriteReceiver<'_>, owners: &mut Vec<RuntimeCellHandle>,
     context: &mut ElephcEvalContext, scope: &mut ElephcEvalScope, values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
-    finish_receiver(plan, owners, context, scope, values, true, false)
+    finish_receiver(plan, owners, context, scope, values, true, false, None)
+}
+
+/// Like `finish_dimension_unset_receiver`, recording the storage chain so a rebuilt array can be
+/// written back leaf to root.
+pub(super) fn finish_dimension_unset_receiver_tracked(
+    plan: PreparedWriteReceiver<'_>, owners: &mut Vec<RuntimeCellHandle>, trail: &mut Vec<Parent>,
+    context: &mut ElephcEvalContext, scope: &mut ElephcEvalScope, values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    finish_receiver(plan, owners, context, scope, values, true, false, Some(trail))
 }
 
 /// Resolves prepared storage with distinct property and dimension behavior for unset.
 fn finish_receiver(
     plan: PreparedWriteReceiver<'_>, owners: &mut Vec<RuntimeCellHandle>,
     context: &mut ElephcEvalContext, scope: &mut ElephcEvalScope, values: &mut impl RuntimeValueOps,
-    unset: bool, as_object: bool,
+    unset: bool, as_object: bool, mut trail: Option<&mut Vec<Parent>>,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     let value = match plan {
-        PreparedWriteReceiver::Late(expr) => return eval_owned_expr(expr, context, scope, values),
+        PreparedWriteReceiver::Late(expr) => {
+            if let Some(trail) = trail {
+                match expr {
+                    EvalExpr::LoadVar(name) => trail.push(Parent::Variable(name.clone())),
+                    EvalExpr::StaticPropertyGet { class_name, property } =>
+                        trail.push(Parent::Static { class: class_name.clone(), property: property.clone() }),
+                    _ => {}
+                }
+            }
+            return eval_owned_expr(expr, context, scope, values);
+        }
         PreparedWriteReceiver::Value(value) => return values.retain(value),
-        PreparedWriteReceiver::Static { class, property } =>
-            eval_static_property_get_result(&class, &property, context, values)?,
+        PreparedWriteReceiver::Static { class, property } => {
+            let current = eval_static_property_get_result(&class, &property, context, values)?;
+            if let Some(trail) = trail { trail.push(Parent::Static { class, property }); }
+            current
+        }
         PreparedWriteReceiver::Property(parent, property) => {
-            let parent = finish_receiver(*parent, owners, context, scope, values, unset, true)?;
+            let parent = finish_receiver(*parent, owners, context, scope, values, unset, true, trail.as_deref_mut())?;
             owners.push(parent);
-            if unset && !matches!(values.type_tag(parent)?, EVAL_TAG_OBJECT | EVAL_TAG_CALLABLE) { values.null()? }
-            else if unset { eval_unset_property_get_result(parent, &property, context, values)? }
+            if unset && !matches!(values.type_tag(parent)?, EVAL_TAG_OBJECT | EVAL_TAG_CALLABLE) {
+                if let Some(trail) = trail { trail.push(Parent::Discard); }
+                values.null()?
+            }
+            else if unset {
+                let selected = eval_unset_property_get_result(parent, &property, context, values)?;
+                if let Some(trail) = trail { trail.push(Parent::Property { object: parent, property }); }
+                selected
+            }
             else { eval_write_property_get_result(parent, &property, context, values)? }
         }
         PreparedWriteReceiver::DynamicProperty(parent, property, name_first) => {
             let early = if name_first && !unset { Some(finish_name_with_source(property, owners, context, scope, values)?) } else { None };
-            let parent = finish_receiver(*parent, owners, context, scope, values, unset, true)?;
+            let parent = finish_receiver(*parent, owners, context, scope, values, unset, true, trail.as_deref_mut())?;
             owners.push(parent);
-            if unset && !matches!(values.type_tag(parent)?, EVAL_TAG_OBJECT | EVAL_TAG_CALLABLE) { return values.null(); }
+            if unset && !matches!(values.type_tag(parent)?, EVAL_TAG_OBJECT | EVAL_TAG_CALLABLE) {
+                if let Some(trail) = trail { trail.push(Parent::Discard); }
+                return values.null();
+            }
             let (property, name_owner) = if let Some(property) = early { property } else {
                 finish_name_with_source(property, owners, context, scope, values)?
             };
             let selected = if unset { eval_unset_property_get_result(parent, &property, context, values) }
                 else { eval_write_property_get_result(parent, &property, context, values) };
+            if unset && selected.is_ok() {
+                if let Some(trail) = trail { trail.push(Parent::Property { object: parent, property: property.clone() }); }
+            }
             // A property-name temporary expires at this traversal step. Its destructor can
             // change the selected object's fields before the outer write reads them.
             let selected = selected.and_then(|value| if value.is_borrowed() { values.retain(value) } else { Ok(value) });
@@ -135,11 +171,16 @@ fn finish_receiver(
             };
         }
         PreparedWriteReceiver::Index(parent, index) => {
-            let parent = finish_receiver(*parent, owners, context, scope, values, unset, false)?;
+            let parent = finish_receiver(*parent, owners, context, scope, values, unset, false, trail.as_deref_mut())?;
             owners.push(parent);
             let index = finish_index(index, owners, context, scope, values)?;
             if unset {
                 let value = unset_dimension(parent, index, as_object, owners, context, values)?;
+                if let Some(trail) = trail {
+                    trail.push(if matches!(values.type_tag(parent)?, EVAL_TAG_ARRAY | EVAL_TAG_ASSOC) {
+                        Parent::Index { array: parent, index, published: false }
+                    } else { Parent::Discard });
+                }
                 return if value.is_borrowed() { values.retain(value) } else { Ok(value) };
             }
             match super::super::runtime_ops::simplexml_properties::dimension(

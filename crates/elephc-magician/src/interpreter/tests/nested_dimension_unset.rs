@@ -87,8 +87,7 @@ unset($old, $replacement, $nestedUnsetRows, $nestedUnsetIndex, $error);
         execute_program_with_context(&mut context, &program, &mut scope, &mut values).unwrap();
     eval_release_value(&mut context, &mut values, result).unwrap();
     assert_eq!(values.output,
-        "inner|key|new:id|root|key|old:id|late|new:id|root|inner|fail|caught|quiet|\
-         Unsupported unset(): erased array storage has no attached removal path|1");
+        "inner|key|new:id|root|key|old:id|late|new:id|root|inner|fail|caught|quiet|");
     assert!(values.warnings.is_empty(), "{:?}", values.warnings);
 }
 

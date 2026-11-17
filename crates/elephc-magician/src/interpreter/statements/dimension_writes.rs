@@ -15,7 +15,7 @@ use super::property_dimension_guards::{DimensionFetchMode, selected_property};
 use super::property_write_receivers::{PreparedWriteReceiver, finish_index, finish_name};
 
 /// One traversal parent which can receive a copied child or terminate attached propagation.
-enum Parent {
+pub(super) enum Parent {
     Variable(String),
     Discard,
     Static { class: String, property: String },
@@ -45,37 +45,12 @@ pub(super) fn eval_dimension_write(
             && !parents.iter().any(|parent| !matches!(parent, Parent::Index { .. })) {
             return eval_throw_error("Unsupported dimension write: temporary arrays have no attached storage", context, values);
         }
-        let mut replacement = if current.published {
+        let replacement = if current.published {
             write_attached_value(current.value, key, op, assigned, &mut owners, context, values)?
         } else {
             write_value(current.value, key, op, assigned, &mut owners, context, values)?
         };
-        while let Some(value) = replacement {
-            let Some(parent) = parents.pop() else { break; };
-            replacement = match parent {
-                Parent::Discard => None,
-                Parent::Variable(name) => {
-                    validate_generic_local_contracts(scope, &name, value, context, values)?;
-                    write_back_owned_variable_ref_target(scope, &name, value, context, values)?;
-                    None
-                }
-                Parent::Static { class, property } => {
-                    eval_static_property_set_result(&class, &property, value, context, values)?;
-                    None
-                }
-                Parent::Property { object, property } => {
-                    eval_property_set_result(object, &property, value, context, values)?;
-                    None
-                }
-                Parent::Index { array, index, published } => if published {
-                    write_attached_value(array, Some(index), None, value,
-                        &mut owners, context, values)?
-                } else {
-                    write_value(array, Some(index), None, value,
-                        &mut owners, context, values)?
-                },
-            };
-        }
+        propagate(replacement, &mut parents, &mut owners, context, scope, values)?;
         Ok(())
     })();
     for owner in owners.into_iter().rev() {
@@ -83,6 +58,41 @@ pub(super) fn eval_dimension_write(
         if result.is_ok() { result = released; }
     }
     result
+}
+
+/// Commits a replacement array from the leaf toward the root through the recorded parents.
+pub(super) fn propagate(
+    mut replacement: Option<RuntimeCellHandle>, parents: &mut Vec<Parent>,
+    owners: &mut Vec<RuntimeCellHandle>, context: &mut ElephcEvalContext,
+    scope: &mut ElephcEvalScope, values: &mut impl RuntimeValueOps,
+) -> Result<(), EvalStatus> {
+    while let Some(value) = replacement {
+        let Some(parent) = parents.pop() else { break; };
+        replacement = match parent {
+            Parent::Discard => None,
+            Parent::Variable(name) => {
+                validate_generic_local_contracts(scope, &name, value, context, values)?;
+                write_back_owned_variable_ref_target(scope, &name, value, context, values)?;
+                None
+            }
+            Parent::Static { class, property } => {
+                eval_static_property_set_result(&class, &property, value, context, values)?;
+                None
+            }
+            Parent::Property { object, property } => {
+                eval_property_set_result(object, &property, value, context, values)?;
+                None
+            }
+            Parent::Index { array, index, published } => if published {
+                write_attached_value(array, Some(index), None, value,
+                    owners, context, values)?
+            } else {
+                write_value(array, Some(index), None, value,
+                    owners, context, values)?
+            },
+        };
+    }
+    Ok(())
 }
 
 /// Retains a traversal value and records the storage needed only if an array is replaced.
