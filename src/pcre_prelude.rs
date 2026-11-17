@@ -1,5 +1,5 @@
 //! Purpose:
-//! Injects `preg_grep()` as a declared PHP function built on `preg_match()`.
+//! Injects `preg_grep()` as a declared PHP function built on `preg_split()` and `preg_match()`.
 //!
 //! Called from:
 //! - `crate::pipeline::compile()`, next to the version prelude and before name resolution,
@@ -12,8 +12,11 @@
 //!   never mentions `preg_grep` carries nothing, and a program declaring its own global
 //!   `preg_grep` keeps it. A namespaced `App\preg_grep` does not suppress the injection.
 //! - The body is PHP's algorithm over the shared regex builtins, so every target and the
-//!   regex runtime detection see ordinary `preg_match()` calls. The pattern is validated
-//!   once up front (an invalid pattern is `false` even for an empty array); each entry is
+//!   regex runtime detection see ordinary `preg_split()` / `preg_match()` calls. The
+//!   pattern is compiled once up front without matching anything: `preg_split()` with a
+//!   limit of 1 compiles it and stops before its first match, so an invalid pattern is
+//!   `false` even for an empty array, while a valid pattern that would fail on some
+//!   subject (`/a|(?R)/` on `""`) never fails the call before an entry runs. Each entry is
 //!   matched as its string value and keeps its key; a match error stops the scan and
 //!   returns the entries collected so far with `preg_last_error()` still set, like php-src.
 
@@ -33,10 +36,11 @@ fn preg_grep_decl() -> Stmt {
         .param_default("flags", TypeExpr::Int, e_int(0))
         .returns(t_union(vec![t_array(), TypeExpr::False]))
         .body(vec![
-            // An invalid pattern fails before any entry is inspected.
+            // An invalid pattern fails before any entry is inspected. A one-piece split
+            // compiles the pattern but runs no match, so no subject can fail this check.
             s_if(
                 e_binop(
-                    e_call("preg_match", vec![e_var("pattern"), e_str("")]),
+                    e_call("preg_split", vec![e_var("pattern"), e_str(""), e_int(1)]),
                     BinOp::StrictEq,
                     e_bool(false),
                 ),

@@ -271,3 +271,28 @@ echo $caught, ':', count($kept), "\n";
         assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{program}\n{}", out.stderr);
     }
 }
+
+/// `preg_grep()` checks that the pattern compiles without matching it against a probe subject:
+/// a valid pattern that fails on `""` (`/a|(?R)/` loops on an empty subject) still filters its
+/// entries, a match error stops at the failing entry, an empty array runs no match and leaves
+/// no error, and only an invalid pattern returns `false`; the same holds in eval.
+#[test]
+fn test_preg_grep_compiles_the_pattern_without_a_probe_match() {
+    let source = r#"echo json_encode(preg_grep('/a|(?R)/', ['a'])), preg_last_error(), "\n";
+echo json_encode(preg_grep('/a|(?R)/', ['x' => 'a', 'k' => 'ba', 'y' => 'a'])), preg_last_error() === PREG_NO_ERROR ? 'ok' : 'error', "\n";
+echo json_encode(preg_grep('/a|(?R)/', [])), preg_last_error(), "\n";
+echo json_encode(preg_grep('/a/', [])), preg_last_error(), "\n";
+var_dump(preg_grep('/(/', []));
+echo preg_last_error(), "\n";
+"#;
+    let expected = "[\"a\"]0\n{\"x\":\"a\"}error\n[]0\n[]0\nbool(false)\n1\n";
+    let quoted = source.replace('\\', "\\\\").replace('\'', "\\'");
+    for program in [
+        format!("<?php\n{source}"),
+        format!("<?php\neval('{quoted}' . ' // ' . $argc);\n"),
+    ] {
+        let out = compile_and_run_capture_with_regex(&program);
+        assert!(out.success, "{}", out.stderr);
+        assert_eq!(out.stdout, expected, "{program}");
+    }
+}
