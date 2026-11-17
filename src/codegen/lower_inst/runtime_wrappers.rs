@@ -120,22 +120,6 @@ pub(super) fn emit_runtime_callable_invoker_in_class(
     )
 }
 
-/// Emits a closure's descriptor invoker: like [`emit_runtime_callable_invoker_in_class`], but a
-/// scalar-parameter `TypeError` names the closure (`{closure:file:line}`), which its descriptor
-/// does not carry, so a guarded closure gets an invoker of its own.
-pub(super) fn emit_runtime_closure_invoker(
-    ctx: &mut FunctionContext<'_>,
-    sig: &FunctionSig,
-    captures: &[(String, PhpType, bool)],
-    owns_string_return: bool,
-    current_class: Option<&str>,
-    display_name: &str,
-) -> String {
-    emit_runtime_callable_invoker_named(
-        ctx, sig, captures, owns_string_return, true, current_class, Some(display_name),
-    )
-}
-
 /// Shared body of the user-callable invoker emitters; `guard_callee` overrides the descriptor
 /// name in scalar-parameter errors.
 fn emit_runtime_callable_invoker_named(

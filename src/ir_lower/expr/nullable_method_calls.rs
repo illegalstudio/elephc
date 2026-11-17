@@ -275,7 +275,7 @@ fn lower_method_call_with_binding(
                     ctx, signature, args, &class, dispatch_method, expr.span,
                 )).flatten())));
     let call_description = receiver_class
-        .map(|class_name| format!("{class_name}::{dispatch_method}"))
+        .map(|class_name| super::scalar_param_guards::method_guard_description(ctx, &class_name, dispatch_method, false))
         .unwrap_or_else(|| dispatch_method.to_string());
     let previous_description = ctx.call_description.replace(call_description);
     let previous_call_site = ctx.call_site_span.replace(expr.span);

@@ -108,9 +108,9 @@ pub(super) fn lower_new_object(
         .last_mut()
         .expect("call argument scope")
         .live_property_reference_arguments = !args.iter().any(is_spread_arg);
-    let previous_description = ctx
-        .call_description
-        .replace(format!("{}::__construct", class_name.as_str()));
+    let previous_description = ctx.call_description.replace(
+        super::scalar_param_guards::method_guard_description(ctx, class_name.as_str(), "__construct", false),
+    );
     let previous_call_site = ctx.call_site_span.replace(expr.span);
     let ref_place_rewrite = sig.as_ref().and_then(|signature| {
         super::ref_place_args::rewrite_typed_property_ref_args(ctx, signature, args)

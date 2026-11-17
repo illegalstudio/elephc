@@ -57,10 +57,13 @@ impl Drop for ParamDeclLinesScope {
 /// precision") while binding the parameter, so it reports the PARAMETER's file and line, not
 /// the call's. The AST keeps no span per parameter; the parser records the lines keyed by
 /// declaration, and the declaration's span names its file (an included one too).
-pub(crate) fn install_param_decl_lines(program: &[Stmt]) -> ParamDeclLinesScope {
+pub(crate) fn install_param_decl_lines(
+    program: &[Stmt],
+    classes: &HashMap<String, crate::types::ClassInfo>,
+) -> ParamDeclLinesScope {
     let mut lines = HashMap::new();
     let mut groups = Vec::new();
-    collect_param_decl_lines(program, &mut lines, &mut groups);
+    collect_param_decl_lines(program, classes, &mut lines, &mut groups);
     // A function an included file declares is lowered under a generated variant name, while
     // its guards name the PHP function: give that name the variant's sites when every
     // variant declares its parameters on the same lines of the same file.
@@ -78,8 +81,12 @@ pub(crate) fn install_param_decl_lines(program: &[Stmt]) -> ParamDeclLinesScope 
 
 /// Records the parameter sites of the declarations in `stmts`, including those an included
 /// file, a namespace block or a conditional body declares.
+///
+/// A class's methods come from the checker's flattened declarations when it has them, so a
+/// method a trait supplies is recorded under the using class (`C::m`), the name PHP reports.
 fn collect_param_decl_lines(
     stmts: &[Stmt],
+    classes: &HashMap<String, crate::types::ClassInfo>,
     lines: &mut HashMap<String, Vec<Span>>,
     groups: &mut Vec<(String, Vec<String>)>,
 ) {
@@ -91,6 +98,7 @@ fn collect_param_decl_lines(
                 }
             }
             StmtKind::ClassDecl { name, methods, .. } | StmtKind::EnumDecl { name, methods, .. } => {
+                let methods = classes.get(name).map_or(methods.as_slice(), |info| info.method_decls.as_slice());
                 for method in methods {
                     if let Some(params) = param_sites(method.span) {
                         lines.insert(
@@ -101,14 +109,14 @@ fn collect_param_decl_lines(
                 }
             }
             StmtKind::NamespaceBlock { body, .. } | StmtKind::Synthetic(body)
-            | StmtKind::IncludeOnceGuard { body, .. } => collect_param_decl_lines(body, lines, groups),
+            | StmtKind::IncludeOnceGuard { body, .. } => collect_param_decl_lines(body, classes, lines, groups),
             StmtKind::If { then_body, elseif_clauses, else_body, .. } => {
-                collect_param_decl_lines(then_body, lines, groups);
+                collect_param_decl_lines(then_body, classes, lines, groups);
                 for (_, body) in elseif_clauses {
-                    collect_param_decl_lines(body, lines, groups);
+                    collect_param_decl_lines(body, classes, lines, groups);
                 }
                 if let Some(body) = else_body {
-                    collect_param_decl_lines(body, lines, groups);
+                    collect_param_decl_lines(body, classes, lines, groups);
                 }
             }
             StmtKind::FunctionVariantGroup { name, variants } => {
@@ -141,6 +149,33 @@ fn param_decl_site(callee: &str, index: usize) -> Option<Span> {
     PARAM_DECL_LINES.with(|slot| {
         slot.borrow().get(&crate::names::php_symbol_key(callee)).and_then(|sites| sites.get(index).copied())
     })
+}
+
+/// Names a method the way PHP's parameter `TypeError` does: `Declaring::method`, the class whose
+/// body declares the implementation the receiver's class dispatches to (`A::m` for an inherited
+/// `B::m`, the using class for a trait method), with the method's declared spelling. That is
+/// also the key [`install_param_decl_lines`] records the parameter lines under.
+pub(super) fn method_guard_description(
+    ctx: &LoweringContext<'_, '_>,
+    class_name: &str,
+    method: &str,
+    is_static: bool,
+) -> String {
+    let class_name = class_name.trim_start_matches('\\');
+    let key = crate::names::php_symbol_key(method);
+    let declaring = ctx.classes.get(class_name).and_then(|info| {
+        let implementations = if is_static {
+            &info.static_method_impl_classes
+        } else {
+            &info.method_impl_classes
+        };
+        implementations.get(&key)
+    });
+    let declaring = declaring.map(String::as_str).unwrap_or(class_name);
+    let spelled = ctx.classes.get(declaring)
+        .and_then(|info| info.method_decls.iter().find(|decl| crate::names::php_symbol_key(&decl.name) == key))
+        .map_or(method, |decl| decl.name.as_str());
+    format!("{declaring}::{spelled}")
 }
 
 /// Where the decision to guard one operand comes from.
