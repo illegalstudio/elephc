@@ -21,3 +21,15 @@ echo (new Loc)->hi(), "\n";
     );
     assert_eq!(out, "hi\nhi\n");
 }
+
+/// The compiler's `__Elephc*` helper classes are not listed by `get_declared_classes()`.
+#[test]
+fn test_get_declared_classes_hides_helper_classes() {
+    let out = compile_and_run(
+        r#"<?php
+class Q { static $s = 1; }
+echo count(array_filter(get_declared_classes(), fn($c) => str_starts_with(strtolower($c), '__elephc'))), "\n";
+"#,
+    );
+    assert_eq!(out, "0\n");
+}
