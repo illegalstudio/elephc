@@ -487,17 +487,20 @@ fn emit_branch_if_slot_string_has_nul(ctx: &mut FunctionContext<'_>, slot: usize
 }
 
 /// Saves the class id of the object in the result register to the frame's slot 40, branching
-/// to `unrelated` for a null object.
+/// to `unrelated` for a null object: a zero pointer, or the in-band null sentinel a missed
+/// array read (`@$objects[$missing]`) leaves in an object slot.
 fn emit_object_class_id(ctx: &mut FunctionContext<'_>, unrelated: &str) {
+    let (result, scratch) = match ctx.emitter.target.arch {
+        Arch::AArch64 => ("x0", "x9"),
+        Arch::X86_64 => ("rax", "r10"),
+    };
+    crate::codegen_support::sentinels::emit_branch_if_null_container(ctx.emitter, result, scratch, unrelated);
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
-            ctx.emitter.instruction(&format!("cbz x0, {unrelated}"));           // a null object is related to no class
             ctx.emitter.instruction("ldr x0, [x0]");                            // load the runtime class id from the object header
             ctx.emitter.instruction("str x0, [sp, #40]");                       // save the subject's class id for the dispatch
         }
         Arch::X86_64 => {
-            ctx.emitter.instruction("test rax, rax");                           // a null object is related to no class
-            ctx.emitter.instruction(&format!("je {unrelated}"));                // answer false without reading a header
             ctx.emitter.instruction("mov rax, QWORD PTR [rax]");                // load the runtime class id from the object header
             ctx.emitter.instruction("mov QWORD PTR [rsp + 40], rax");           // save the subject's class id for the dispatch
         }
