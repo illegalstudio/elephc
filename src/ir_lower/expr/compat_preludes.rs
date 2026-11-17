@@ -937,6 +937,34 @@ pub(super) fn lower_backend_gap_builtin_shape(
             expr,
         ));
     }
+    // Two-argument `strtr()` over a pair array whose values are not statically strings goes to
+    // `crate::strtr_pairs_prelude`, which coerces each replacement once up front like php; the
+    // native helper reads such a slot as a string (garbage for an int or an object) and spells a
+    // boxed one twice.
+    if builtin == "strtr"
+        && args.len() == 2
+        // A prelude's own call (a dummy or synthetic span) stays native, which is how the helper
+        // reaches the string fast path without routing to itself.
+        && expr.span.line != 0
+        && expr.span.line < crate::span::SYNTHETIC_LINE_BASE
+        && !crate::types::call_args::has_named_args(args)
+        && !args.iter().any(is_spread_arg)
+        && match materialized_expr_type_for_merge(ctx, &args[1]).codegen_repr() {
+            PhpType::Array(value) | PhpType::AssocArray { value, .. } => {
+                value.codegen_repr() != PhpType::Str
+            }
+            // An array only known to be one at run time: its values are boxed cells.
+            PhpType::Mixed | PhpType::Union(_) => true,
+            _ => false,
+        }
+    {
+        return Some(lower_function_call(
+            ctx,
+            &crate::names::Name::unqualified(crate::strtr_pairs_prelude::STRTR_PAIRS_NAME),
+            args,
+            expr,
+        ));
+    }
     // `html_entity_decode()`: the native helper knows five references and no `$flags` or
     // `$encoding`, so the prelude walks the references and applies php's table and the caller's.
     if builtin == "html_entity_decode"

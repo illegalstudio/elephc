@@ -1274,6 +1274,26 @@ echo strtr("int|string|null|bool", $pairs);
     assert_eq!(out, "7|ok||1");
 }
 
+/// Verifies a statically typed pair array of ints, floats, bools and objects spells each value as
+/// php does, and that an object's `__toString()` runs once per pair, not once per match.
+#[test]
+fn test_strtr_replacement_pairs_coerce_typed_values_once() {
+    let out = compile_and_run(
+        r#"<?php
+class S { function __toString(): string { echo "[ts]"; return "OBJ"; } }
+echo strtr("a-b", ["a" => 5, "b" => 6]), "\n";
+echo strtr("a-b", ["a" => 1.5, "b" => 2.5]), "\n";
+echo strtr("a-b", ["a" => true, "b" => false]), "\n";
+function f(array $p) { return strtr("a-a-a", $p); }
+echo f(["a" => 7]), "\n";
+echo f(["a" => new S]), "\n";
+$p = ["x" => new S];
+echo strtr("xxx", $p), "\n";
+"#,
+    );
+    assert_eq!(out, "5-6\n1.5-2.5\n1-\n7-7-7\n[ts]OBJ-OBJ-OBJ\n[ts]OBJOBJOBJ\n");
+}
+
 /// Verifies `strtr()` skips keys longer than the subject, matches numeric-string and integer
 /// keys through their decimal spelling, and returns the subject for an empty pair list.
 #[test]
