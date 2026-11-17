@@ -40,6 +40,7 @@ mod strict_structural_locals;
 mod strict_resource_locals;
 mod strict_parameter_locals;
 mod strict_capture_locals;
+mod strict_static_snapshot_owners;
 mod strict_numeric_aggregates;
 mod strict_numeric_eval;
 mod strict_eval_diagnostics;

@@ -371,7 +371,7 @@ evidence and outstanding guarantees are recorded below.
 
 ## Implementation progress
 
-Verified through step136 (this commit). Remaining feature integration is active. Issue:
+Verified through step137 (this commit). Remaining feature integration is active. Issue:
 https://github.com/illegalstudio/elephc/issues/2347.
 
 The full task remains active. The user requested complete implementation, with a
@@ -634,7 +634,8 @@ paths. Keep this plan, agent documentation and the current journal log synchroni
 | 133 | `b3e9fd2292` | feat(strict): preserve callable and iterable binding contracts |
 | 134 | `ac5e3f53aa` | feat(strict): preserve resource local binding contracts |
 | 135 | `f3f1a66f47` | feat(strict): retain interpreted parameter binding origins |
-| 136 | this commit | feat(strict): preserve closure capture binding origins |
+| 136 | `1ce7e03b84` | feat(strict): preserve closure capture binding origins |
+| 137 | this commit | fix(eval): retire reflection snapshot temporaries |
 
 
 ### Latest verified admission checkpoint
@@ -804,3 +805,19 @@ Reuse reference_is_shared before retaining a snapshot, plus the existing canonic
 reference/origin coordinator. Foreach needs the array producer/element policy audit
 alongside ArrayTypes. Continue all six pending families and final host/umbrella
 acceptance; no full local suite, push or PR was requested or run.
+
+### Verified137: Reflection snapshot temporary ownership
+
+Static and captured-variable snapshots now use the shared EvalArrayBuilder, which
+retires each owned key and retained value after the result array takes ownership.
+The related baseline exposed thirteen leaked blocks (456 bytes) in both profiles.
+The FakeOps object identity helper also resolves reference wrappers before returning
+the underlying identity, matching native object identity and Reflection registration.
+
+Default build passes in11.02s. Native snapshot regression passes119.51s in both IR
+modes and default/Locals, with every heap clean. Final job1905ad17 passes the two
+exact fake identity/snapshot owner regressions in10s; all fake cell owners reach
+zero. The earlier UnsupportedConstruct was isolated to getClosureUsedVariables
+under Locals, then traced to the mock wrapper identity. No target emitter or ABI
+changed. Diff hygiene passes; inherited warnings remain. Static origins and the
+six pending families continue next; no full suite, push or PR was run.

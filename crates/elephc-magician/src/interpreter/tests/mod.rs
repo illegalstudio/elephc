@@ -73,6 +73,7 @@ mod strict_structural_locals;
 mod strict_resource_locals;
 mod strict_parameter_locals;
 mod strict_capture_locals;
+mod strict_static_snapshot_owners;
 mod strict_checked_casts;
 mod strict_builtin_casts;
 mod strict_settype;

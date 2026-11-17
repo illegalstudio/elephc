@@ -333,11 +333,12 @@ impl FakeOps {
             _ => self.string(""),
         }
     }
-    /// Returns the fake object handle as a stable object identity.
+    /// Returns the underlying fake object identity across PHP reference wrappers.
     pub(in crate::interpreter::tests::support) fn runtime_object_identity(
         &mut self,
-        object: RuntimeCellHandle,
+        mut object: RuntimeCellHandle,
     ) -> Result<u64, EvalStatus> {
+        while let Some(value) = self.references.get(&(object.as_ptr() as usize)) { object = *value; }
         match self.get(object) {
             FakeValue::Object(_) | FakeValue::Iterator { .. } => Ok(object.as_ptr() as u64),
             _ => Err(EvalStatus::RuntimeFatal),
