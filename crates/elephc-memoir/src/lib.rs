@@ -82,3 +82,5 @@ pub mod scoped_owners;
 
 pub mod weak_cache;
 pub mod hash_entry_references;
+
+pub mod owner_records;

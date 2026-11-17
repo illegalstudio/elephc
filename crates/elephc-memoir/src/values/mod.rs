@@ -31,3 +31,5 @@ pub mod mixed_reference;
 pub mod mixed_unbox;
 
 pub mod array_unbox_slots;
+
+pub mod owned_container;

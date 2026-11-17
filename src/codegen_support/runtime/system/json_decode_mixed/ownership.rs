@@ -8,6 +8,7 @@
 //! - Recursive parsers return failures normally so each frame releases partial owners.
 //! - Only the outer entry restores JSON_THROW_ON_ERROR and publishes the exception.
 //! - Container boxing retires the fresh owner after Mixed acquires its own reference.
+//! - The consuming transfer delegates to Memoir; JSON flags and throwing remain here.
 
 use crate::codegen_support::{abi, emit::Emitter, platform::Arch};
 
@@ -52,23 +53,8 @@ fn emit_aarch64(emitter: &mut Emitter) {
     emitter.instruction("add sp, sp, #32");                                     // release the boundary frame
     emitter.instruction("ret");                                                 // return to the PHP-visible decode call
 
-    emitter.blank();
-    emitter.comment("--- runtime: json_box_owned_container ---");
-    emitter.label_global("__rt_json_box_owned_container");
-
-    // -- tags 4/5/6 keep the borrowed boxing ABI while consuming the fresh payload --
-    emitter.instruction("sub sp, sp, #32");                                     // reserve payload, result, and saved linkage
-    emitter.instruction("stp x29, x30, [sp, #16]");                             // preserve the container builder frame
-    emitter.instruction("add x29, sp, #16");                                    // establish a frame across retain and release
-    emitter.instruction("str x1, [sp]");                                        // save the fresh array, hash, or object owner
-    emitter.instruction("bl __rt_mixed_from_value");                            // let the new Mixed cell retain the container
-    emitter.instruction("str x0, [sp, #8]");                                    // preserve the new boxed owner across release
-    emitter.instruction("ldr x0, [sp]");                                        // recover the builder's original container reference
-    emitter.instruction("bl __rt_decref_any");                                  // retire that reference after Mixed has acquired its own
-    emitter.instruction("ldr x0, [sp, #8]");                                    // return the independently owned Mixed cell
-    emitter.instruction("ldp x29, x30, [sp, #16]");                             // restore the container builder frame
-    emitter.instruction("add sp, sp, #32");                                     // release boxing scratch storage
-    emitter.instruction("ret");                                                 // transfer the boxed graph to the parser caller
+    elephc_memoir::values::owned_container::emit(emitter,
+        "__rt_json_box_owned_container", "--- runtime: json_box_owned_container ---");
 }
 
 /// Mirrors deferred exceptions and consuming container boxing for the x86_64 runtime ABI.
@@ -103,21 +89,6 @@ fn emit_x86_64(emitter: &mut Emitter) {
     emitter.instruction("pop rbp");                                             // restore the outer caller frame pointer
     emitter.instruction("ret");                                                 // return to the PHP-visible decode call
 
-    emitter.blank();
-    emitter.comment("--- runtime: json_box_owned_container ---");
-    emitter.label_global("__rt_json_box_owned_container");
-
-    // -- tags 4/5/6 consume the fresh payload after the ordinary boxer retains it --
-    emitter.instruction("push rbp");                                            // preserve the container builder frame pointer
-    emitter.instruction("mov rbp, rsp");                                        // establish stable payload and result spill slots
-    emitter.instruction("sub rsp, 16");                                         // keep calls aligned while saving both owners
-    emitter.instruction("mov QWORD PTR [rbp - 8], rdi");                        // save the fresh array, hash, or object reference
-    emitter.instruction("call __rt_mixed_from_value");                          // acquire the container reference owned by the Mixed cell
-    emitter.instruction("mov QWORD PTR [rbp - 16], rax");                       // preserve the boxed result across uniform release
-    emitter.instruction("mov rax, QWORD PTR [rbp - 8]");                        // recover the original builder reference
-    emitter.instruction("call __rt_decref_any");                                // retire the fresh owner now retained by Mixed
-    emitter.instruction("mov rax, QWORD PTR [rbp - 16]");                       // return the independently owned Mixed cell
-    emitter.instruction("mov rsp, rbp");                                        // release the boxing scratch frame
-    emitter.instruction("pop rbp");                                             // restore the container builder frame pointer
-    emitter.instruction("ret");                                                 // transfer the boxed graph to the parser caller
+    elephc_memoir::values::owned_container::emit(emitter,
+        "__rt_json_box_owned_container", "--- runtime: json_box_owned_container ---");
 }

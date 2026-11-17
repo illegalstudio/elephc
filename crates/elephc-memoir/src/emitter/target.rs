@@ -93,4 +93,16 @@ pub trait TargetAbi {
     fn emit_cmp_reg_to_symbol(&mut self, reg: &str, symbol: &str);
     /// Uses the host ABI to address a local slot in the active native frame.
     fn emit_frame_slot_address(&mut self, dest: &str, offset: usize);
+    /// Selects the symbol-address scratch register without borrowing live result registers.
+    fn symbol_scratch_reg(&self) -> &'static str;
+    /// Stores a register in host-selected temporary stack storage.
+    fn emit_store_to_sp(&mut self, reg: &str, offset: usize);
+    /// Computes an address relative to the active temporary stack base.
+    fn emit_temporary_stack_address(&mut self, dest: &str, offset: usize);
+    /// Reserves aligned scratch through the host stack ABI.
+    fn emit_reserve_temporary_stack(&mut self, amount: usize);
+    /// Releases scratch through the host stack ABI.
+    fn emit_release_temporary_stack(&mut self, amount: usize);
+    /// Restores a register from host temporary stack storage.
+    fn emit_load_temporary_stack_slot(&mut self, reg: &str, offset: usize);
 }

@@ -21,7 +21,9 @@ zend_string allocation, recursive zval/string/array storage retirement, and memo
 proofs for direct scalar/empty-array cleanup, static binding storage, guard
 records, depth-stamped temporary owner lists, abandoned activation cleanup,
 stored-property ownership completion, previous-slot release and box reuse during hydration,
-non-owning observer caches, hash-entry reference promotion and borrowed payload views.
+non-owning observer caches, hash-entry reference promotion and borrowed payload views,
+temporary/fixed-frame owner record publication, exact chain unlink and consuming
+container boxing.
 It also emits fixed heap, GC, buffer, reference-root, handle-table and string-scratch
 declarations, including raw capture-buffer storage, keeping their existing order
 and byte layout.
@@ -65,6 +67,15 @@ entry's owner into a reference cell. Its inline reads use caller-selected regist
 and return a borrow without allocating or changing ownership. Both modules require
 only assembly output and target ABI capabilities. Iterator cursor and successor
 rules, PHP method validation and class identity stay in the compiler.
+`owner_records` centralizes the complete six-word record size, publication and exact
+unlink operation. Its context carries the host chain, cleanup and visitor symbols;
+fixed records use `FrameOffset`. The compiler chooses record placement and owner
+discipline. Stack addressing, scratch register selection and scratch reservation
+continue through the compiler's authoritative target ABI. Record linking and unlinking
+emit no runtime calls and preserve newer activation records and live arguments.
+`values::owned_container` receives its entry label and assembly heading from the
+compiler. It lets Mixed acquire the fresh container before retiring the caller's
+original owner. JSON flags, parsing and exception publication stay in the compiler.
 
 The compiler retains EIR lifetime analysis, ownership optimization and placement,
 PHP reference/type validation, formatting, output routing, zval pack/unpack,
@@ -95,6 +106,8 @@ guard ownership transfer and scoped list detachment through the compiler adapter
 Reference-storage fingerprints cover weak-cache creation, reads and retirement,
 complete hash-reference integration, and two inline register arrangements. These
 60 cases cover every supported target and emission mode without fixed semantic data.
+Another 60 cases preserve the complete temporary-owner adapter inventory and recursive
+JSON decoder, including custom callback records and fixed return leases.
 
 `build.rs` includes this crate's Rust sources in the runtime-cache identity.
 Changes to these emitters therefore invalidate cached runtime objects even when
