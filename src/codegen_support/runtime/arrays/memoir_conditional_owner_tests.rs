@@ -1,5 +1,5 @@
 //! Purpose:
-//! Pins conditional_owner integration assembly before its Memoir extraction.
+//! Preserves conditional-owner integration assembly across its Memoir extraction.
 //!
 //! Called from:
 //! - Focused compiler tests for external owner lifetimes.
@@ -14,13 +14,19 @@ use crate::codegen_support::abi;
 use crate::codegen_support::{emit::Emitter, platform::Target};
 use sha2::{Digest, Sha256};
 
-/// Emits the original selected integration inventory with independent output flags.
-fn emit_conditional_owner(target: Target, mode: u8, variant: u8) -> Emitter {
+/// Creates independent output state for one supported target and emission mode.
+fn configured_emitter(target: Target, mode: u8) -> Emitter {
     let mut emitter = Emitter::new(target);
     emitter.pic_data_refs = mode == 1 || mode == 2;
     emitter.cdylib_boundary = mode == 2 || mode == 3;
     emitter.phpext_output = mode == 4;
     emitter.dead_strip = mode == 5;
+    emitter
+}
+
+/// Emits the selected integration inventory with independent output flags.
+fn emit_conditional_owner(target: Target, mode: u8, variant: u8) -> Emitter {
+    let mut emitter = configured_emitter(target, mode);
     emitter.label_global("__memoir_conditional_owner_probe");
     abi::emit_frame_prologue(&mut emitter, 128);
     if variant == 0 { container_refusal_owner::emit_release(&mut emitter); }
@@ -86,4 +92,35 @@ fn memoir_conditional_owner_assembles_on_all_supported_targets() {
 #[test]
 fn memoir_conditional_owner_preserves_assembly() {
     assert_eq!(conditional_owner_fingerprints(&[0, 1]), include_str!("memoir_conditional_owner_baseline.txt").trim());
+}
+
+/// A different host frame and ownership bit still gate protected retirement of only the extra owner.
+#[test]
+fn memoir_conditional_owner_uses_host_layout() {
+    for name in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+        for mode in 0..6 {
+            let mut emitter = configured_emitter(Target::parse(name).unwrap(), mode);
+            elephc_memoir::conditional_owner::emit(&mut emitter, elephc_memoir::conditional_owner::Layout {
+                aarch64_mode: elephc_memoir::RecordOffset::new(80),
+                aarch64_payload: elephc_memoir::RecordOffset::new(16),
+                x86_64_mode: elephc_memoir::FrameOffset::new(96),
+                x86_64_payload: elephc_memoir::FrameOffset::new(24),
+                owner_bit: 3,
+            });
+            let assembly = emitter.output();
+            let (gate, payload) = if name == "linux-x86_64" {
+                ("test QWORD PTR [rbp - 96], 8", "mov rax, QWORD PTR [rbp - 24]")
+            } else {
+                assert!(assembly.contains("ldr x9, [sp, #80]"), "{name}");
+                ("tbz x9, #3, 986f", "ldr x0, [sp, #16]")
+            };
+            let gate = assembly.find(gate).unwrap();
+            let payload = assembly.find(payload).unwrap();
+            let cleanup = assembly.find("__rt_cleanup_preserve_exception").unwrap();
+            assert!(gate < payload && payload < cleanup, "{name}, mode={mode}");
+            assert!(assembly.find("__rt_decref_any").unwrap() < cleanup, "{name}");
+            assert!(cleanup < assembly.find("986:").unwrap(), "{name}");
+            assert!(!assembly.contains("__rt_throw_current"), "{name}: propagation belongs to the host");
+        }
+    }
 }

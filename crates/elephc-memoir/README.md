@@ -23,7 +23,9 @@ records, depth-stamped temporary owner lists, abandoned activation cleanup,
 stored-property ownership completion, previous-slot release and box reuse during hydration,
 non-owning observer caches, hash-entry reference promotion and borrowed payload views,
 temporary/fixed-frame owner record publication, exact chain unlink and consuming
-container boxing and Mixed symbol publication through persistent reference children.
+container boxing, Mixed symbol publication through persistent reference children,
+external owner record publication, contained foreign-owner release and conditional
+retirement of independently acquired helper owners.
 It also emits fixed heap, GC, buffer, reference-root, handle-table and string-scratch
 declarations, including raw capture-buffer storage, keeping their existing order
 and byte layout.
@@ -82,6 +84,17 @@ offset, prior-owner release policy, optional transfer slot and label prefix.
 It publishes the replacement through any persistent wrapper, clears transferred
 ownership and initialization metadata, then retires the prior owner when requested.
 Static-property type checks and EIR ownership decisions remain in the compiler.
+`owner_records::publish_external` receives caller-owned record, visitor and borrowed
+data registers, plus chain and cleanup symbols. It initializes the entire record
+before publication without calling the runtime. The compiler retains its versioned
+C ABI wrappers, pure visitor adaptation and external cleanup discipline.
+`foreign_release` receives an optional staging-owner transfer hook and explicit
+exception unboxing/boxing hooks. It releases through the existing guarded cleanup
+boundary, updates the caller's owned nullable exception accumulator and returns
+whether destruction threw. ABI versioning and hook selection stay in the compiler.
+`conditional_owner` receives typed mode/payload offsets for both architectures and
+the flag bit identifying an extra owner. Its cleanup preserves the pending exception;
+the compiler creates and propagates PHP assignment-refusal errors.
 
 The compiler retains EIR lifetime analysis, ownership optimization and placement,
 PHP reference/type validation, formatting, output routing, zval pack/unpack,
@@ -116,6 +129,9 @@ Another 60 cases preserve the complete temporary-owner adapter inventory and rec
 JSON decoder, including custom callback records and fixed return leases.
 Mixed symbol publication adds 180 cases covering both release policies and absent,
 small and large transferred-owner slots on every target and emission mode.
+External ownership adds 150 cases covering complete external-record adapters,
+ordinary and staging-pin release, conditional retirement and the surrounding PHP
+refusal path. These cases also cross-assemble on all five targets and six modes.
 
 `build.rs` includes this crate's Rust sources in the runtime-cache identity.
 Changes to these emitters therefore invalidate cached runtime objects even when

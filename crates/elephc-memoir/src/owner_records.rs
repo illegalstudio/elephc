@@ -1,8 +1,8 @@
 //! Purpose:
-//! Publishes temporary owner records and splices exact records from activation chains.
+//! Publishes complete owner records and splices exact records from activation chains.
 //!
 //! Called from:
-//! - Compiler call-operand ABI adapters for temporary slots and fixed return leases.
+//! - Compiler ABI adapters for temporary slots, fixed return leases and external records.
 //!
 //! Key details:
 //! - The compiler supplies placement, chain symbols and cleanup/visitor entry points.
@@ -10,7 +10,7 @@
 
 use crate::{Arch, AssemblyEmitter, TargetAbi, FrameOffset};
 
-/// Complete six-word owner activation shared by temporary and fixed-frame records.
+/// Complete six-word owner activation shared by temporary, fixed-frame and external records.
 pub const RECORD_BYTES: usize = 48;
 
 /// Compiler-selected storage and callbacks for one complete owner activation.
@@ -124,3 +124,33 @@ pub fn unlink_record<E: AssemblyEmitter + TargetAbi>(emitter: &mut E, head_symbo
     emitter.label("964");
 }
 
+/// Host registers and callbacks for a complete externally supplied owner activation.
+#[derive(Clone, Copy)]
+pub struct ExternalRecord<'a> {
+    /// Register containing the caller-owned address of the complete record.
+    pub record_address: &'a str,
+    /// Register containing the pure visitor callback address.
+    pub visitor: &'a str,
+    /// Register containing the borrowed opaque visitor payload.
+    pub data: &'a str,
+    /// Writable symbol containing the active activation-chain head.
+    pub head_symbol: &'a str,
+    /// Cleanup entry selected by the external owner, including a no-op discipline.
+    pub cleanup_symbol: &'a str,
+}
+
+/// Initializes every external record field before publishing its address in the host chain.
+///
+/// Input registers must not alias the host ABI's reserved scratch registers.
+pub fn publish_external<E: AssemblyEmitter + TargetAbi>(emitter: &mut E, context: ExternalRecord<'_>) {
+    let scratch = emitter.secondary_scratch_reg();
+    emitter.emit_load_symbol_to_reg(scratch, context.head_symbol, 0);
+    emitter.emit_store_to_address(scratch, context.record_address, 0);
+    emitter.emit_store_to_address(context.data, context.record_address, 16);
+    emitter.emit_store_to_address(context.visitor, context.record_address, 40);
+    emitter.emit_store_zero_to_address(context.record_address, 24);
+    emitter.emit_store_zero_to_address(context.record_address, 32);
+    emitter.emit_symbol_address(scratch, context.cleanup_symbol);
+    emitter.emit_store_to_address(scratch, context.record_address, 8);
+    emitter.emit_store_reg_to_symbol(context.record_address, context.head_symbol, 0);
+}
