@@ -180,6 +180,14 @@ fn program_uses_dom(program: &[Stmt]) -> bool {
         || used.functions.iter().any(|name| FUNCTIONS.contains(&name.as_str()))
 }
 
+/// Whether the classic DOM classes will exist: the program names one and declares none itself.
+///
+/// The xml receiver detector asks it to know whether a `loadXML` receiver can be a prelude DOM
+/// object.
+pub(crate) fn program_uses_classic_dom(program: &[Stmt]) -> bool {
+    program_uses_dom(program) && !program_declares_dom_class(program)
+}
+
 /// Prepends the DOM declarations unconditionally, without recording them anywhere.
 ///
 /// Used by the frontend harnesses that type-check a snippet against the surface; the compiler

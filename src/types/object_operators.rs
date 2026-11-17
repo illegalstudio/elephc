@@ -188,7 +188,7 @@ fn binary_plan_for_class(class: &'static ClassContract, op: &BinOp, left: &PhpTy
     }
     let accepts = |ty: &PhpType| operators.accepts_any_operands || comparison
         || matches!(ty, PhpType::Int | PhpType::Float | PhpType::Bool | PhpType::False | PhpType::Str | PhpType::Mixed | PhpType::TaggedScalar)
-        || (*ty == PhpType::Void && operators.arithmetic_result == elephc_builtin_contract::ObjectArithmeticResult::Number)
+        || (matches!(ty, PhpType::Void | PhpType::Never) && operators.arithmetic_result == elephc_builtin_contract::ObjectArithmeticResult::Number)
         || matches!(ty, PhpType::Object(name) if name.eq_ignore_ascii_case(class.name)
             || (operators.arithmetic_result == elephc_builtin_contract::ObjectArithmeticResult::Number
                 && operator_class(ty).and_then(|other| other.operators)

@@ -549,11 +549,18 @@ fn lower_expr_inner(ctx: &mut LoweringContext<'_, '_>, expr: &Expr) -> LoweredVa
             )
         }
         // A run-time-typed operand is a string, a number or a TypeError, decided by a helper.
+        // A program that declares an internal class with a `~` handler (SimpleXMLElement's
+        // refusal adapter, GMP) keeps the object-aware lowering, whose scalar fallback is the
+        // typed `MixedBitNot` runtime call.
         ExprKind::BitNot(inner)
             if matches!(
                 merge_temps::materialized_expr_type_for_merge(ctx, inner),
                 PhpType::Mixed | PhpType::Union(_)
-            ) =>
+            ) && !ctx.classes.keys().any(|name| {
+                elephc_builtin_contract::lookup_class(name)
+                    .and_then(|class| class.operators)
+                    .is_some_and(|operators| operators.bit_not.is_some())
+            }) =>
         {
             lower_function_call(
                 ctx,

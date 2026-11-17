@@ -104,8 +104,10 @@ fn source_marker_validation_rejects_unknown_ids_and_unresolved_paths() {
     let path = std::path::PathBuf::from("/missing.php");
     assert_eq!(validate_module(&source_marker_module(Immediate::UnresolvedSource(Box::new(path.clone())))),
         Err(ValidationError::UnresolvedSource(path)));
-    assert!(matches!(validate_module(&source_marker_module(Immediate::Data(crate::ir::DataId::from_raw(0)))),
-        Err(ValidationError::MissingImmediate { expected: "source id", .. })));
+    // A once flag named by a data string is valid (class initialization, constant evaluation);
+    // any other immediate is not.
+    assert!(matches!(validate_module(&source_marker_module(Immediate::I64(0))),
+        Err(ValidationError::MissingImmediate { expected: "source id or data id", .. })));
 }
 
 /// An empty function has no valid entry block and fails validation.

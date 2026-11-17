@@ -163,10 +163,13 @@ fn superglobal_needs(program: &[Stmt], usage: &usage::Usage) -> SuperglobalNeeds
 /// The scan uses the same conservative channels as the environment probe:
 /// direct names, storage slots, compact/eval, and calls whose target is unknown.
 fn request_is_observable(program: &[Stmt], usage: &usage::Usage) -> bool {
+    // The parser rewrites `$GLOBALS['_REQUEST']` to its global alias and a whole-array `$GLOBALS`
+    // read to the globals snapshot call, so both spellings count as observing it.
+    let observed = |name: &str| usage.variables.contains(name) || usage.storage_variables.contains(name);
     ["_REQUEST", "GLOBALS"]
         .iter()
-        .any(|name| usage.variables.contains(*name) || usage.storage_variables.contains(*name))
-        || ["eval", "get_defined_vars", "compact"]
+        .any(|name| observed(name) || observed(&crate::globals_array::alias_name(name)))
+        || ["eval", "get_defined_vars", "compact", crate::globals_array::SNAPSHOT_FUNCTION]
             .iter()
             .any(|name| usage.references(name))
         || ["eval", "get_defined_vars"]

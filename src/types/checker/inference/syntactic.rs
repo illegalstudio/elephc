@@ -219,6 +219,8 @@ pub(crate) fn null_coalesce_merge_type(value_ty: &PhpType, default_ty: &PhpType)
             // The tagged scalar layouts carry the null member in their own representation.
             _ if is_unboxed_scalar_type(value_ty) => scalar_with_null_member(value_ty),
             PhpType::Mixed => PhpType::Mixed,
+            // Arrays and objects are pointers whose null state is their own sentinel.
+            PhpType::Array(_) | PhpType::Object(_) => value_ty.clone(),
             PhpType::Union(members) if members.contains(&PhpType::Void) => value_ty.clone(),
             PhpType::Union(members) => {
                 let mut members = members.clone();

@@ -80,7 +80,8 @@ fn xml_classes() -> &'static [&'static str] {
 /// be injected ahead of user code. Resolution errors are left for the pipeline's normal
 /// name-resolution phase; an invalid program does not need speculative bridge injection.
 pub(super) fn program_uses_xml(program: &[Stmt]) -> bool {
-    let dom_available = crate::dom_html_prelude::program_uses_dom_html(program);
+    let dom_available = crate::dom_prelude::program_uses_classic_dom(program)
+        || crate::dom_html_prelude::program_uses_dom_html(program);
     let mut classes = xml_classes().to_vec();
     classes.push("DOMDocument");
     classes.push("DOMNode");

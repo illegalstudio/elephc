@@ -616,7 +616,7 @@ function __elephc_tidy_document(mixed $value, string $label): tidy
     return $value;
 }
 
-/**
+/*
  * Owns one native tidy document handle and releases it with the PHP object storage.
  *
  * A subclass may override `tidy::__destruct()`; this companion is still a property of
@@ -654,7 +654,7 @@ final class __elephc_tidy_document
     }
 }
 
-/**
+/*
  * The `tidy` document object.
  */
 class tidy
