@@ -51,6 +51,15 @@ pub(super) fn lower_include_once_guard(ctx: &mut FunctionContext<'_>, inst: &Ins
     store_if_result(ctx, inst)
 }
 
+/// Lowers a read-only test of an include-once flag: the flag holds 0 until a guard or mark
+/// on the same symbol stores 1, so its word is already the boolean result.
+pub(super) fn lower_include_once_test(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+    let label = include_once_label(ctx, inst)?;
+    ctx.data.add_comm(label.clone(), 8);
+    abi::emit_load_symbol_to_reg(ctx.emitter, abi::int_result_reg(ctx.emitter), &label, 0);
+    store_if_result(ctx, inst)
+}
+
 /// Returns the include-once guard symbol stored in the module data pool.
 pub(super) fn include_once_label(ctx: &FunctionContext<'_>, inst: &Instruction) -> Result<String> {
     let data = expect_data(inst)?;

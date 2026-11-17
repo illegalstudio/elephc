@@ -358,7 +358,8 @@ class EvalFinalImplConstBox implements EvalFinalImplConstIface {
     assert_eq!(err, EvalStatus::RuntimeFatal);
 }
 
-/// Verifies trait constants are readable directly and from classes using the trait.
+/// Verifies trait constants are readable from classes using the trait, including through
+/// `self::` in an imported method. (A direct read through the trait throws, as in PHP 8.2+.)
 #[test]
 fn execute_program_reads_eval_trait_constants() {
     let program = parse_fragment(
@@ -371,7 +372,6 @@ fn execute_program_reads_eval_trait_constants() {
 class EvalConstTraitBox {
     use EvalConstReusableTrait;
 }
-echo EvalConstReusableTrait::SEED; echo ":";
 echo EvalConstTraitBox::SEED; echo ":";
 return EvalConstTraitBox::readTraitSeed();"#,
     )
@@ -381,7 +381,7 @@ return EvalConstTraitBox::readTraitSeed();"#,
 
     let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
 
-    assert_eq!(values.output, "6:6:");
+    assert_eq!(values.output, "6:");
     assert_eq!(values.get(result), FakeValue::Int(6));
 }
 

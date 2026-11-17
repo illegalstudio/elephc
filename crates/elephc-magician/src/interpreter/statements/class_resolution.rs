@@ -6,6 +6,7 @@
 //!
 //! Key details:
 //! - self/parent/static scope, native parents, constructor modes, and clone hooks are resolved here.
+//! - Instantiation initializes the class first; per-object default evaluation stays silent.
 
 use super::*;
 
@@ -742,6 +743,8 @@ fn eval_dynamic_class_allocate_object_inner(
     if (class.is_abstract() && !native_factory) || context.has_enum(class.name()) {
         return Err(EvalStatus::RuntimeFatal);
     }
+    // Instantiation initializes the class first, as php-src's object creation does.
+    eval_raise_class_initialization_deprecations(class.name(), context, values)?;
     let backing_class = context
         .class_native_parent_name(class.name())
         .unwrap_or_else(|| String::from("stdClass"));
@@ -769,14 +772,26 @@ fn eval_dynamic_class_allocate_object_inner(
                     continue;
                 }
                 let value = if let Some(default) = property.default() {
-                    Some(eval_class_like_member_default(
-                        class.name(),
-                        property.trait_origin(),
-                        default,
-                        context,
-                        caller_scope,
-                        values,
-                    )?)
+                    // The class initialization above evaluated the default once; the object
+                    // copies that value. Only a class initialized in a silent evaluation (which
+                    // stores nothing) evaluates it here, silently.
+                    let storage_name = eval_instance_property_storage_name(class.name(), property);
+                    match context.instance_default_cell(&object_class_name, &storage_name) {
+                        Some(cell) => Some(cell),
+                        None => {
+                            context.begin_deprecation_silence();
+                            let value = eval_class_like_member_default(
+                                class.name(),
+                                property.trait_origin(),
+                                default,
+                                context,
+                                caller_scope,
+                                values,
+                            );
+                            context.end_deprecation_silence();
+                            Some(value?)
+                        }
+                    }
                 } else if property.property_type().is_none() {
                     Some(values.null()?)
                 } else {

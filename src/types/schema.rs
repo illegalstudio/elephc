@@ -46,11 +46,13 @@ pub enum AttrArgValue {
     Str(String),
     Float(u64),
     Array(Vec<AttrArgEntry>),
-    /// Reference to a global constant by canonical name (`#[A(SOME_CONST)]`).
-    ConstRef(String),
+    /// Reference to a global constant by canonical name (`#[A(SOME_CONST)]`), with the line
+    /// of the read, which reflection reports a deprecated constant at.
+    ConstRef(String, u32),
     /// Reference to a class constant or enum case, carried as
-    /// (canonical type name, member name) — e.g. `#[A(C::BAR)]` or `#[A(E::Case)]`.
-    ScopedConst(String, String),
+    /// (canonical type name, member name, line of the read) — e.g. `#[A(C::BAR)]` or
+    /// `#[A(E::Case)]`.
+    ScopedConst(String, String, u32),
 }
 
 /// One entry of an attribute argument list or of a nested attribute array.
@@ -177,9 +179,9 @@ fn fold_attr_value(expr: &Expr, span: Span) -> Option<AttrArgValue> {
         ExprKind::FloatLiteral(value) => Some(AttrArgValue::Float(value.to_bits())),
         ExprKind::BoolLiteral(value) => Some(AttrArgValue::Bool(*value)),
         ExprKind::Null => Some(AttrArgValue::Null),
-        ExprKind::ConstRef(name) => Some(AttrArgValue::ConstRef(name.as_str().to_string())),
+        ExprKind::ConstRef(name) => Some(AttrArgValue::ConstRef(name.as_str().to_string(), expr.span.line)),
         ExprKind::ScopedConstantAccess { receiver, name } => scoped_receiver_type_name(receiver)
-            .map(|type_name| AttrArgValue::ScopedConst(type_name, name.clone())),
+            .map(|type_name| AttrArgValue::ScopedConst(type_name, name.clone(), expr.span.line)),
         ExprKind::ClassConstant {
             receiver: StaticReceiver::Named(name),
         } => Some(AttrArgValue::Str(name.as_str().to_string())),
@@ -366,6 +368,14 @@ pub struct ClassInfo {
     /// Deprecation reason for class constants carrying `#[\Deprecated]`, keyed
     /// by the case-sensitive constant name. An empty string means no reason.
     pub constant_deprecations: HashMap<String, String>,
+    /// Properties this class declares itself (instance and static), in the order php-src
+    /// evaluates their defaults when it initializes the class: its own declarations in source
+    /// order, then the ones imported from traits. Empty for compiler-built classes.
+    pub property_initialization_order: Vec<String>,
+    /// Default expressions php-src evaluates when execution reaches the class statement,
+    /// because a class property compatibly redeclares a trait property: per such property, in
+    /// trait order, the class's default and then the trait's.
+    pub trait_collision_defaults: Vec<TraitCollisionDefault>,
     /// PHP 8.3 declared types for constants declared directly on this class-like symbol.
     pub constant_types: HashMap<String, TypeExpr>,
     /// Class constant visibilities keyed by case-sensitive constant name.
@@ -963,4 +973,35 @@ pub struct PackedFieldInfo {
     pub php_type: PhpType,
     pub offset: usize,
     pub width: Option<ScalarWidth>,
+}
+
+/// One default php-src evaluates at a class or trait statement while binding a used trait
+/// (see `ClassInfo::trait_collision_defaults`).
+#[derive(Debug, Clone, PartialEq)]
+pub struct TraitCollisionDefault {
+    /// The default expression.
+    pub default: crate::parser::ast::Expr,
+    /// The trait the default was imported from, or `None` for the class's own declaration.
+    /// A trait initialized before the statement already holds its value evaluated.
+    pub trait_name: Option<String>,
+}
+
+/// How php-src binds each user class-like, which decides what a class copies from its parent
+/// and traits: a class bound at run time (at its statement) copies their defaults and trait
+/// constants as they are then, already evaluated when those were initialized.
+#[derive(Debug, Clone, Default)]
+pub struct ClassBindingFacts {
+    /// Classes and traits php-src binds when execution reaches their statement rather than at
+    /// compile time: not top level, implementing an interface, using a trait, or extending a
+    /// class not bound before them.
+    pub runtime_bound: std::collections::HashSet<String>,
+    /// Classes and traits whose binding effects run elsewhere than at their (hoisted)
+    /// declaration: those of an included file, at their class-binding mark, and anonymous
+    /// classes, at their first `new`. Keys are lowercased names without a leading backslash.
+    pub bound_elsewhere: std::collections::HashSet<String>,
+    /// For each class or trait, the used trait each imported (not redeclared) property was
+    /// copied from.
+    pub property_trait_origins: HashMap<String, HashMap<String, String>>,
+    /// The traits each class or trait uses directly, in `use` order.
+    pub trait_uses: HashMap<String, Vec<String>>,
 }

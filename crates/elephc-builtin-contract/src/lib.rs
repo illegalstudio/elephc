@@ -16,6 +16,7 @@ mod aot_profile;
 mod callback_parameters;
 mod class_spec;
 mod constant_spec;
+mod constant_deprecation;
 mod catalog_classes;
 mod catalog_constants;
 mod catalog_constants_locale;
@@ -61,6 +62,10 @@ pub use eval_profile::{
 };
 pub use class_spec::{ClassContract, ClassKind, ClassRoute};
 pub use constant_spec::{ConstType, ConstValue, ConstantContract, ConstantRoute};
+pub use constant_deprecation::{
+    class_constant_deprecation, global_constant_deprecation, is_deprecated_class_constant_name,
+    ConstantDeprecation,
+};
 pub use id::BuiltinId;
 pub use core_functions::CORE_FUNCTION_NAMES;
 pub use core_constants::{core_environment_constant, EXECUTABLE_PATH_DEFAULT_KIND};

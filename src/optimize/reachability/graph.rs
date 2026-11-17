@@ -96,6 +96,19 @@ pub fn compute(
         check_result,
     );
     state.apply_usage(executable_usage, true);
+    // A class or trait statement whose trait binding compares defaults that read a deprecated
+    // constant raises that notice when execution reaches it, used or not.
+    let mut statement_roots = usage::Usage::default();
+    for (name, defaults) in &check_result.trait_collision_defaults {
+        if defaults.iter().any(|collision| {
+            let mut reads = false;
+            crate::ir_lower::visit_constant_reads(&collision.default, &mut |_| reads = true);
+            reads
+        }) {
+            statement_roots.classes.insert(php_symbol_key(name));
+        }
+    }
+    state.apply_usage(statement_roots, true);
     // Backend-only prelude helpers have no AST reference; their owning prelude recorded them so
     // the EIR lowering that calls them still finds a declaration.
     for name in options.inventory.required_functions() {

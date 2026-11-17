@@ -100,6 +100,7 @@ impl Checker {
             trait_imported_properties: HashMap::new(),
             trait_imported_constructors: HashSet::new(),
             trait_method_requirements: HashMap::new(),
+            trait_property_origins: Default::default(),
             current_class: None,
             current_method: None,
             current_function: None,

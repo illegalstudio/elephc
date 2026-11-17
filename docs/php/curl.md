@@ -464,6 +464,8 @@ target version, the same way `JSON_*` is — including the PHP 8.5 additions
 `CURLOPT_SSL_SIGNATURE_ALGORITHMS`, `CURLFOLLOW_*`, `CURLOPT_INFILESIZE_LARGE`).
 Their values are frozen from the pinned libcurl 8.21.0 headers, which understands
 all of them at every profile, so `--php-version 8.4` still resolves them.
+`CURLOPT_BINARYTRANSFER`, which PHP 8.4 deprecates, raises `E_DEPRECATED` with
+php-src's message when read under the 8.4 and later profiles.
 
 `curl_share_init_persistent()` deserves one note: the native share it creates is
 **process-lifetime**. elephc has no PHP-FPM-worker-restart boundary to key a
