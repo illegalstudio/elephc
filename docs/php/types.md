@@ -474,6 +474,8 @@ Two gaps remain: array callables (`[$obj, "method"]`, `["Class", "method"]`) are
 
 ### Known incompatibilities with PHP
 
+- An override or interface implementation may append trailing optional parameters only to an instance method. PHP also accepts them on a static method, accepts an appended variadic, and accepts making an inherited required parameter optional; elephc rejects those overrides at compile time. A widened method called on a `mixed` or untyped receiver whose candidate classes disagree on the parameter count fails at run time with a member-call-on-`null` error; type the receiver with the parent class or interface instead.
+
 - Appending through `__get()` for a missing or inaccessible ordinary property raises a catchable `Error` in compiled code and opaque `eval()`. This form needs a write fetch that preserves PHP's receiver destruction order. Use a declared array property or an existing dynamic entry instead. SimpleXML native properties use their supported native write-fetch protocol.
 
 - A dimension write to an explicitly unset, accessible typed array property in a class with `__get` or `__set` treats the slot as never initialized and creates an array. PHP can invoke `__get` for the unset slot. Never-initialized declared properties initialize without calling magic methods, matching PHP.
