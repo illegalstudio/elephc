@@ -807,3 +807,62 @@ echo Lib\f(box("2.5")), "\n";
     );
     assert_eq!(out, "defs.php:7 Implicit conversion from float 1.5 to int loses precision\n1\ndefs.php:12 Implicit conversion from float-string \"2.5\" to int loses precision\n2\n");
 }
+
+/// PHP binds the supplied parameters before it evaluates an omitted default: a refused argument
+/// throws `TypeError` before a throwing default (`int $n = 1 % 0`) runs. The default ran first
+/// and its `DivisionByZeroError` won. When the check accepts, the string it converted and an
+/// earlier default (`array $l = []`) must not leak when the later default throws (review on
+/// the deferred positional checks).
+#[test]
+fn test_supplied_parameters_are_checked_before_omitted_defaults() {
+    let output = compile_and_run_with_heap_debug(
+        r#"<?php
+class Name { public function __toString(): string { return str_repeat("n", 30); } }
+function box(mixed $v): mixed { return $v; }
+function f(string $s, int $n = 1 % 0): string { return $s . $n; }
+function g(int $a, string $s, array $l = [], int $n = 1 % 0): string { return $a . $s; }
+function show(Throwable $e): void { echo get_class($e), ": ", str_replace(__FILE__, "F", $e->getMessage()), "\n"; }
+for ($i = 0; $i < 2; $i++) {
+    try { echo f(box(null)), "\n"; } catch (Throwable $e) { show($e); }
+    try { echo f(box(new Name())), "\n"; } catch (Throwable $e) { show($e); }
+    try { echo g(box(1), box([1])), "\n"; } catch (Throwable $e) { show($e); }
+    try { echo g(box(1), box(new Name())), "\n"; } catch (Throwable $e) { show($e); }
+}
+"#,
+    );
+    assert!(output.success, "{}", output.stderr);
+    let round = "TypeError: f(): Argument #1 ($s) must be of type string, null given, called in F on line 8\nDivisionByZeroError: Modulo by zero\nTypeError: g(): Argument #2 ($s) must be of type string, array given, called in F on line 10\nDivisionByZeroError: Modulo by zero\n";
+    assert_eq!(output.stdout, round.repeat(2));
+    assert!(output.stderr.contains("leak summary: clean"), "{}", output.stderr);
+}
+
+/// An accepted `string` check converts at once, and a `Stringable`'s `__toString()` can throw
+/// before the next parameter is checked. The other unpublished arguments (a fresh array from
+/// `make()`, the operand's own box, an earlier converted string) were released only by a
+/// guard's refusal, so each caught call leaked them (review on the deferred string conversion).
+#[test]
+fn test_throwing_string_conversion_releases_the_other_arguments() {
+    let output = compile_and_run_with_heap_debug(
+        r#"<?php
+class Bad { public function __toString(): string { throw new RuntimeException("bad"); } }
+class Name { public function __toString(): string { return str_repeat("n", 30); } }
+function box(mixed $v): mixed { return $v; }
+function make(): mixed { return [str_repeat("a", 40), 2]; }
+function u(string $s, int $b): int { return strlen($s) + $b; }
+function v(string $a, string $b, int $c): int { return 1; }
+$bad = box(new Bad());
+$n = 0;
+for ($i = 0; $i < 3; $i++) {
+    try { u($bad, make()); } catch (RuntimeException $e) { $n++; }
+    try { u(box(new Bad()), make()); } catch (RuntimeException $e) { $n++; }
+    try { v(box(new Name()), $bad, make()); } catch (RuntimeException $e) { $n++; }
+    try { v(box(str_repeat("s", 20)), box(new Bad()), box(3)); } catch (RuntimeException $e) { $n++; }
+    $n += u(box(new Name()), box("4")) + v(box(new Name()), box("x"), box(5));
+}
+echo $n, "\n";
+"#,
+    );
+    assert!(output.success, "{}", output.stderr);
+    assert_eq!(output.stdout, "117\n");
+    assert!(output.stderr.contains("leak summary: clean"), "{}", output.stderr);
+}

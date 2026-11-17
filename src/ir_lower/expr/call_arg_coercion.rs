@@ -1714,11 +1714,31 @@ pub(super) fn coerce_operands_to_params_guarded(
                 continue;
             }
             if deferred_positional[index] && param_ty.codegen_repr() == PhpType::Str {
+                // The conversion can throw (a `Stringable`'s `__toString()`), and only a guard's
+                // refusal releases the other unpublished operands: publish them first.
+                if publish_others {
+                    for other in 0..limit {
+                        if still_owned[other].is_empty() {
+                            continue;
+                        }
+                        let operand = lowered_value_from_id(ctx, operands[other]);
+                        // A later operand, or an earlier string guard's converted string.
+                        if let Some(position) =
+                            still_owned[other].iter().position(|value| *value == operand.value)
+                        {
+                            still_owned[other].remove(position);
+                            operands[other] =
+                                root_evaluated_call_argument(ctx, operand, Span::dummy()).value;
+                        }
+                    }
+                }
                 // The same owned conversion argument lowering would have made. It carries the
                 // call's span: a conversion that can warn publishes its span as the current
                 // line, and a span-less one would publish line 0 over the caller's site (a
                 // compiler-generated span is not published at all).
-                let string = coerce_to_string_at_span(ctx, lowered, Some(guard_span));
+                // Its own box may have been published just above.
+                let source = lowered_value_from_id(ctx, operands[index]);
+                let string = coerce_to_string_at_span(ctx, source, Some(guard_span));
                 if publish_others && ctx.value_is_owning_temporary(string) {
                     still_owned[index].push(string.value);
                 }
@@ -2253,10 +2273,102 @@ pub(super) fn lower_args_with_signature_options_for_capture(
     );
     ctx.scalar_guard_deferral = previous_deferral;
     let sources = (!capture_values).then_some(guard_sources.as_slice());
-    coerce_operands_to_params_guarded(ctx, sig, operands, sources, true)
+    let mut operands = coerce_operands_to_params_guarded(ctx, sig, operands, sources, true);
+    // PHP binds the supplied parameters before it evaluates an omitted default, so a refused
+    // argument throws `TypeError` before a throwing default (`int $n = 1 % 0`) runs.
+    if !trim_trailing_defaults && fixed_arg_count < regular_param_count {
+        let throwing_default = sig.defaults.iter().take(regular_param_count).skip(fixed_arg_count)
+            .flatten().any(|default| !default_is_inert(default));
+        if !capture_values && throwing_default {
+            // The checks leave what they converted (a `mixed`-to-string cast) unrooted: claim
+            // it as an owned string so the root releases it if the default throws.
+            for index in 0..operands.len() {
+                if sig.ref_params.get(index).copied().unwrap_or(false) {
+                    continue;
+                }
+                let claimed = super::call_operand_owners::claim_owned_string_operand(
+                    ctx, operands[index], Span::dummy(),
+                );
+                let lowered = lowered_value_from_id(ctx, claimed);
+                operands[index] =
+                    root_evaluated_call_argument(ctx, lowered, Span::dummy()).value;
+            }
+        }
+        lower_omitted_defaults_and_tail(
+            ctx, sig, args, &mut operands, regular_param_count, fixed_arg_count, capture_values,
+        );
+        // A default still gets the storage normalization (a packed `[]` bound to a hash).
+        let defaults_end = operands.len().min(regular_param_count);
+        if (fixed_arg_count..defaults_end)
+            .any(|index| operand_needs_param_coercion(ctx, sig, &operands, index))
+        {
+            operands = coerce_operands_to_params(ctx, sig, operands);
+        }
+    }
+    operands
 }
 
-/// Lowers fixed positional arguments in source order, then defaults and the variadic tail.
+/// Returns whether a default is a literal (or a literal array) whose evaluation cannot throw.
+fn default_is_inert(default: &Expr) -> bool {
+    match &default.kind {
+        ExprKind::StringLiteral(_) | ExprKind::IntLiteral(_) | ExprKind::FloatLiteral(_)
+        | ExprKind::BoolLiteral(_) | ExprKind::Null => true,
+        ExprKind::ArrayLiteral(values) => values.iter().all(default_is_inert),
+        ExprKind::ArrayLiteralAssoc(entries) => entries.iter()
+            .all(|(key, value)| default_is_inert(key) && default_is_inert(value)),
+        _ => false,
+    }
+}
+
+/// Returns whether an omitted parameter's default can throw when it is evaluated.
+fn omitted_default_can_throw(sig: &FunctionSig, fixed_arg_count: usize, regular_param_count: usize) -> bool {
+    sig.defaults.iter().take(regular_param_count).skip(fixed_arg_count)
+        .flatten().any(crate::types::deferred_defaults::contains_deferred_error)
+}
+
+/// Appends the omitted parameters' defaults and the (empty) variadic tail of a positional call.
+fn lower_omitted_defaults_and_tail(
+    ctx: &mut LoweringContext<'_, '_>,
+    sig: &FunctionSig,
+    args: &[Expr],
+    operands: &mut Vec<crate::ir::ValueId>,
+    regular_param_count: usize,
+    fixed_arg_count: usize,
+    capture_values: bool,
+) {
+    for idx in fixed_arg_count..regular_param_count {
+        let Some(Some(default)) = sig.defaults.get(idx) else {
+            break;
+        };
+        let value = lower_arg_with_signature(ctx, sig, idx, default);
+        // A later default can still throw (`array $l = [], int $n = 1 % 0`): root this one.
+        let later_throws = sig.defaults.iter().take(regular_param_count).skip(idx + 1)
+            .flatten().any(|later| !default_is_inert(later));
+        let value = if later_throws && !capture_values && !sig.ref_params.get(idx).copied().unwrap_or(false) {
+            let lowered = lowered_value_from_id(ctx, value);
+            root_evaluated_call_argument(ctx, lowered, default.span).value
+        } else {
+            value
+        };
+        operands.push(value);
+    }
+    if sig.variadic.is_some() {
+        let tail = if args.len() > regular_param_count {
+            &args[regular_param_count..]
+        } else {
+            &[]
+        };
+        if crate::func_args::sig_has_hidden_argc_param(sig) {
+            operands.push(emit_i64_at_span(ctx, args.len() as i64, crate::span::Span::dummy()).value);
+        }
+        operands.push(lower_variadic_tail_array(ctx, sig, tail, args.len()).value);
+    }
+}
+
+/// Lowers fixed positional arguments in source order, then the variadic tail.
+///
+/// When a parameter is omitted, only the supplied arguments are returned: the caller checks
+/// them and then appends the defaults and the (empty) tail.
 #[allow(clippy::too_many_arguments)]
 fn lower_positional_operands(
     ctx: &mut LoweringContext<'_, '_>,
@@ -2302,8 +2414,7 @@ fn lower_positional_operands(
             if let Some((name, ty)) = previous { ctx.set_local_logical_type(&name, ty); }
             // Omitted defaults execute after every caller expression, including the last one.
             let deferred_default = !trim_trailing_defaults
-                && sig.defaults.iter().take(regular_param_count).skip(fixed_arg_count)
-                    .flatten().any(crate::types::deferred_defaults::contains_deferred_error);
+                && omitted_default_can_throw(sig, fixed_arg_count, regular_param_count);
             if !capture_values && (index + 1 < args.len() || deferred_default) {
                 root_prior_argument_preserving_reference_place(
                     ctx, sig, index, arg, value,
@@ -2313,13 +2424,10 @@ fn lower_positional_operands(
             }
         })
         .collect();
-    if !trim_trailing_defaults {
-        for idx in fixed_arg_count..regular_param_count {
-            let Some(Some(default)) = sig.defaults.get(idx) else {
-                break;
-            };
-            operands.push(lower_arg_with_signature(ctx, sig, idx, default));
-        }
+    // Omitted defaults (and the then empty variadic tail) are lowered by the caller once the
+    // supplied parameters were checked: PHP binds those first.
+    if !trim_trailing_defaults && fixed_arg_count < regular_param_count {
+        return operands;
     }
     if sig.variadic.is_some() {
         let tail = if args.len() > regular_param_count {
