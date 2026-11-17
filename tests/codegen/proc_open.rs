@@ -191,6 +191,7 @@ function attempt(callable $call): void {
 }
 attempt(function () { proc_open([], [], $pipes); });
 attempt(function () { proc_open(['a', "b\0c"], [], $pipes); });
+attempt(function () { proc_open(['', 'x'], [], $pipes); });
 attempt(function () { proc_open('true', ['x' => ['pipe', 'r']], $pipes); });
 attempt(function () { proc_open('true', [0 => 5], $pipes); });
 attempt(function () { proc_open('true', [0 => []], $pipes); });
@@ -206,6 +207,7 @@ attempt(fn() => proc_get_status(STDIN));
         out,
         "ValueError: proc_open(): Argument #1 ($command) must not be empty\n\
          ValueError: Command array element 2 contains a null byte\n\
+         ValueError: First element must contain a non-empty program name\n\
          ValueError: proc_open(): Argument #2 ($descriptor_spec) must be an integer indexed array\n\
          ValueError: proc_open(): Argument #2 ($descriptor_spec) must only contain arrays and streams\n\
          ValueError: Missing handle qualifier\n\
@@ -558,4 +560,63 @@ fn test_stream_builtins_reject_a_process_resource() {
         assert_eq!(out.stdout, "start\n", "{source}");
         assert!(out.stderr.contains(message), "{source}\n{}", out.stderr);
     }
+}
+
+/// `['socket']` hands the child one end of a socket pair; the parent end is a stream.
+#[test]
+fn test_proc_open_socket_descriptor() {
+    let out = compile_and_run(
+        r#"<?php
+$process = proc_open(['sh', '-c', 'read line <&3; echo "got $line" >&3'], [3 => ['socket']], $pipes);
+echo get_resource_type($pipes[3]), "|";
+fwrite($pipes[3], "ping\n");
+echo fgets($pipes[3]);
+fclose($pipes[3]);
+echo proc_close($process);
+"#,
+    );
+    assert_eq!(out, "stream|got ping\n0");
+}
+
+/// A warning turned into an exception by the error handler while a later descriptor is
+/// staged still frees the descriptors staged before it.
+#[test]
+fn test_proc_open_throwing_staging_warning_releases_staged_descriptors() {
+    let out = compile_and_run(
+        r#"<?php
+set_error_handler(function (int $level, string $message): bool { throw new Exception($message); });
+$before = count(scandir('/dev/fd'));
+for ($i = 0; $i < 5; $i++) {
+    try {
+        proc_open(['true'], [0 => ['pipe', 'r'], 1 => ['file', '/nonexistent-dir/out', 'w']], $pipes);
+    } catch (Exception $error) {
+        if ($i === 0) {
+            echo $error->getMessage(), "\n";
+        }
+    }
+}
+echo count(scandir('/dev/fd')) - $before;
+"#,
+    );
+    assert_eq!(out, "proc_open(/nonexistent-dir/out): Failed to open stream: No such file or directory\n0");
+}
+
+/// A process resource dropped without `proc_close()` releases its pipes and reaps a child
+/// that has already exited, like php-src's resource destructor, so no zombie is left.
+#[test]
+fn test_proc_open_dropped_process_is_reaped() {
+    let out = compile_and_run(
+        r#"<?php
+function spawn_and_drop(): void {
+    $process = proc_open(['true'], [1 => ['pipe', 'w']], $pipes);
+    echo stream_get_contents($pipes[1]);
+    usleep(200000);
+}
+for ($i = 0; $i < 3; $i++) {
+    spawn_and_drop();
+}
+echo trim(shell_exec('ps -o stat= -o ppid= -A | awk -v parent=' . getmypid() . ' \'$2 == parent && $1 ~ /Z/\' | wc -l'));
+"#,
+    );
+    assert_eq!(out, "0");
 }

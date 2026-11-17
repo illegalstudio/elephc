@@ -64,6 +64,7 @@ const EXTERNS: &[ExternSpec] = &[
     ),
     ("elephc_proc_builder_fd", &[("builder", CType::Int), ("index", CType::Int), ("fd", CType::Int)], CType::Int),
     ("elephc_proc_builder_null", &[("builder", CType::Int), ("index", CType::Int)], CType::Int),
+    ("elephc_proc_builder_socket", &[("builder", CType::Int), ("index", CType::Int)], CType::Int),
     (
         "elephc_proc_builder_redirect",
         &[("builder", CType::Int), ("index", CType::Int), ("target", CType::Int)],

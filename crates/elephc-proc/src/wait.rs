@@ -3,7 +3,8 @@
 //! behind `proc_get_status()`, and the blocking reap behind `proc_close()`.
 //!
 //! Called from:
-//! - The `elephc_proc_poll` / `elephc_proc_status_field` / `elephc_proc_close` C ABI in `crate`.
+//! - The `elephc_proc_poll` / `elephc_proc_status_field` / `elephc_proc_close` /
+//!   `elephc_proc_release` C ABI in `crate`.
 //!
 //! Key details:
 //! - ONLY A NORMAL EXIT IS CACHED, exactly like php-src (PHP 8.3+): a stopped child may
@@ -155,6 +156,15 @@ impl Process {
             .ok()
             .and_then(|index| self.fields.get(index).copied())
             .unwrap_or(-1)
+    }
+
+    /// The resource destructor's non-blocking reap: release the pipes, then collect the
+    /// child only if it has already exited (`WNOHANG`), as php-src does outside `pclose_wait`.
+    pub(crate) fn release(&mut self) {
+        self.close_pipes();
+        while self.waitpid_cached(libc::WNOHANG).0 == -1
+            && crate::spawn::last_errno() == libc::EINTR
+        {}
     }
 
     /// `proc_close()`'s blocking reap: the exit code of a normal exit, the raw wait status

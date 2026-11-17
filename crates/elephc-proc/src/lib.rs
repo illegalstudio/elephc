@@ -244,6 +244,12 @@ pub extern "C" fn elephc_proc_builder_null(builder: i64, index: i64) -> i64 {
     with_builder(builder, |builder| builder.null(index))
 }
 
+/// Stages `['socket']` for child descriptor `index`.
+#[no_mangle]
+pub extern "C" fn elephc_proc_builder_socket(builder: i64, index: i64) -> i64 {
+    with_builder(builder, |builder| builder.socket(index))
+}
+
 /// Stages `['redirect', $target]` for child descriptor `index`.
 #[no_mangle]
 pub extern "C" fn elephc_proc_builder_redirect(builder: i64, index: i64, target: i64) -> i64 {
@@ -354,6 +360,16 @@ pub extern "C" fn elephc_proc_close(process: i64) -> i64 {
         return -1;
     };
     record.close()
+}
+
+/// Releases a process resource dropped without `proc_close()` (php-src's
+/// `proc_open_rsrc_dtor` outside `proc_close()`): the pipes are released and the child is
+/// reaped only if it already exited, never waited for. An unknown id is a no-op.
+#[no_mangle]
+pub extern "C" fn elephc_proc_release(process: i64) {
+    if let Some(mut record) = with_table(&PROCESSES, |table| table.entries.remove(&process)) {
+        record.release();
+    }
 }
 
 /// `proc_nice()`: changes the priority by `increment`; returns 1 on success, 0 when the

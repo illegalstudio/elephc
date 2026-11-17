@@ -10,8 +10,7 @@
 - [ ] Follow-up PR: Magician (eval) support; today the family is AOT-only.
 - [ ] Follow-up PR: `STDIN`/`STDOUT`/`STDERR` inside a heterogeneous array literal lose
       their resource type (pre-existing); homogeneous `[STDIN, STDOUT, STDERR]` works.
-- [ ] Follow-up PR: `get_resources('process')`, and reaping a process resource dropped
-      without `proc_close()`.
+- [ ] Follow-up PR: `get_resources('process')`.
 
 ## Shape
 
@@ -34,8 +33,10 @@ close-on-exec. `waitpid` results follow php-src's `waitpid_cached`: only a norma
 is cached, a signal death is reported once.
 
 The process resource is a tag-9 Mixed cell whose high word is kind 11, which
-`__rt_resource_type_name` reports as `process`; kind 11 has no scope-exit destructor
-(php-src's dtor only reaps with `WNOHANG`). `proc_close()` closes the pipes the bridge
+`__rt_resource_type_name` reports as `process`. Its scope-exit destructor calls
+`elephc_proc_release` through the `_elephc_proc_release_fn` runtime slot that the process
+boxing publishes: the pipes are released and the child is reaped with `WNOHANG`, like
+php-src's dtor. `proc_close()` closes the pipes the bridge
 spawned for the process (only while each descriptor still has the spawned pipe's
 inode, so a number the program already closed and reused is never touched), waits,
 stamps the closed sentinel, and returns the status. "Closes" means the pipe end is
