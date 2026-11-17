@@ -1203,4 +1203,11 @@ echo every(foo: "no_such_function");
 "#,
         "Undefined function for first-class callable: no_such_function",
     );
+    expect_error(
+        r#"<?php
+$apply = function (callable $f) { return 1; };
+echo $apply("no_such_function");
+"#,
+        "Undefined function for first-class callable: no_such_function",
+    );
 }

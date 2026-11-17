@@ -130,6 +130,11 @@ pub(crate) struct Usage {
     user_callable_slots: Option<std::rc::Rc<super::callable_slots::UserCallableSlots>>,
     /// Walk state: the callable being scanned declares a `callable` return type.
     returns_callable: bool,
+    /// Merged `callable` parameter lists of every closure and arrow function seen so far.
+    closure_callable_slots: Option<super::callable_slots::Slots>,
+    /// Literals passed to calls through a value, resolved against closure and `__invoke`
+    /// parameters once the walk is complete.
+    pending_value_call_literals: Vec<(super::callable_slots::PendingArgument, String)>,
 }
 
 impl Usage {
@@ -375,6 +380,7 @@ pub(crate) fn collect(program: &[Stmt]) -> Usage {
     for stmt in program {
         scan_stmt(stmt, &mut usage);
     }
+    finish_callable_slot_literals(&mut usage);
     usage
 }
 
@@ -386,6 +392,20 @@ fn user_callable_slots(program: &[Stmt]) -> Option<std::rc::Rc<super::callable_s
 
 /// Records the literals one call hands to the program's own `callable` parameters.
 fn record_user_callable_slots(expr: &Expr, usage: &mut Usage) {
+    match &expr.kind {
+        ExprKind::ClosureCall { args, .. } | ExprKind::ExprCall { args, .. } => {
+            super::callable_slots::pending_value_call(args, &mut usage.pending_value_call_literals);
+            return;
+        }
+        ExprKind::Pipe { value, .. } => {
+            super::callable_slots::pending_value_call(
+                std::slice::from_ref(value.as_ref()),
+                &mut usage.pending_value_call_literals,
+            );
+            return;
+        }
+        _ => {}
+    }
     let Some(slots) = usage.user_callable_slots.clone() else {
         return;
     };
@@ -402,6 +422,17 @@ fn record_user_callable_slots(expr: &Expr, usage: &mut Usage) {
     }
 }
 
+/// Resolves the literals passed through value calls against every closure and `__invoke`
+/// parameter list, once the whole program has been walked.
+fn finish_callable_slot_literals(usage: &mut Usage) {
+    let mut slots = usage.closure_callable_slots.take().unwrap_or_default();
+    if let Some(invoke) = usage.user_callable_slots.as_ref().and_then(|table| table.invoke_slots()) {
+        slots.merge(invoke.clone());
+    }
+    let pending = std::mem::take(&mut usage.pending_value_call_literals);
+    super::callable_slots::resolve_value_calls(&slots, &pending, &mut usage.callable_slot_literals);
+}
+
 /// Collects ordinary usage plus the dispatch metadata needed to exclude unreferenced callbacks.
 pub(crate) fn collect_environment(program: &[Stmt]) -> Usage {
     let mut usage = Usage {
@@ -416,6 +447,7 @@ pub(crate) fn collect_environment(program: &[Stmt]) -> Usage {
         scan_program(program, &mut usage);
         usage.callable_constructor_metadata = None;
     }
+    finish_callable_slot_literals(&mut usage);
     usage
 }
 
@@ -1245,6 +1277,7 @@ fn scan_expr(expr: &Expr, usage: &mut Usage) {
             scan_expr(default, usage);
         }
         ExprKind::Pipe { value, callable } => {
+            record_user_callable_slots(expr, usage);
             usage.callable_names.expression_call(callable);
             usage.callable_names.arguments(std::slice::from_ref(value.as_ref()));
             scan_expr(value, usage);
@@ -1316,7 +1349,10 @@ fn scan_expr(expr: &Expr, usage: &mut Usage) {
             scan_expr(then_expr, usage);
             scan_expr(else_expr, usage);
         }
-        ExprKind::Closure { params, variadic, body, captures, capture_refs, return_type, .. } => {
+        ExprKind::Closure { params, variadic, variadic_type, body, captures, capture_refs, return_type, .. } => {
+            if let Some(slots) = super::callable_slots::slots_for(params, variadic.is_some(), variadic_type.as_ref()) {
+                usage.closure_callable_slots.get_or_insert_with(Default::default).merge(slots);
+            }
             for name in capture_refs { usage.callable_names.write(name); }
             usage.storage_variables.extend(captures.iter().chain(capture_refs).cloned());
             let mut outer = enter_callable_scope(usage, captures);

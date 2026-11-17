@@ -1125,7 +1125,25 @@ impl Checker {
                                 None,
                                 supplied_reference,
                             )?;
+                        } else if !supplied_reference
+                            && *expected_ty == PhpType::DeclaredCallable
+                            && sig.declared_params.get(param_idx).copied().unwrap_or(false)
+                        {
+                            // A closure, arrow function or first-class callable binds without
+                            // coercion, but a literal name still has to be resolved and recorded
+                            // for the runtime dispatch, as a named function's `callable` does.
+                            self.require_declared_callable_arg(
+                                expected_ty,
+                                &actual_ty,
+                                arg,
+                                caller_env,
+                                &format!("{} parameter ${}", callee_desc, param_name),
+                                None,
+                            )?;
                         } else {
+                            if !supplied_reference && expected_ty.declares_callable() {
+                                self.record_declared_callable_literal_name(arg);
+                            }
                             self.require_compatible_arg_type(
                                 expected_ty,
                                 &actual_ty,

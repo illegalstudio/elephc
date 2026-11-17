@@ -108,6 +108,14 @@ comparison checks the descriptor's object handle before selecting Closure conver
 invocation target kinds alone do not distinguish these PHP value forms. Each global runtime
 entry explicitly branches to its shared body so linker section collection retains it.
 
+A declared `callable` reaches codegen as a boxed `Mixed` cell (see `DeclaredCallable` in the
+type checker guide). `Op::NormalizeCallable` with the `Immediate::Bool(true)` marker lowers it
+through `lower_elephc_normalize_callable` with `declared_callable_candidates` set, so the string
+dispatch only emits cases for the program's functions, its static methods and the recorded
+literal builtin names (`declared_callable_name_cases`, which skips a name whose prelude helpers
+are absent). A runtime-selected builtin outside that set misses; when `is_callable()` accepts the
+name, the miss throws a catchable `Error` naming it, after any eval callback fallback.
+
 ## Pipeline Position
 
 Internal value classes can declare operator adapters in their shared

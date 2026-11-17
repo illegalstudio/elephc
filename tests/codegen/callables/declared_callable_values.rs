@@ -232,8 +232,30 @@ echo take(...["x", "ucwords"], extra: "lcfirst"), " ", apply2(...["bin2hex"], n:
     assert_eq!(out, "xAbab 6162 none sba_pmg\n");
 }
 
-/// Verifies a GMP builtin named as a literal argument or `callable` return value invokes through
-/// the declared callable, as the call `gmp_abs(...)` would.
+/// Verifies a literal builtin name bound to a `callable` parameter of a closure, an arrow
+/// function, an immediately invoked closure or a pipe target invokes, and that a `callable`
+/// return selected by `match` keeps every arm's builtin name.
+///
+/// Those calls bind without coercion, so the literal was never recorded for the runtime dispatch
+/// and `$apply("strlen")` stopped with the runtime-only builtin error; a `match` return recorded
+/// no arm at all. Each form names a different builtin so none rides on another's record.
+#[test]
+fn test_declared_callable_closure_params_and_match_returns_record_literal_names() {
+    let out = compile_and_run(
+        r#"<?php
+$apply = function (callable $f) { return $f("ab"); };
+$arrow = fn (callable $f) => $f("ab");
+$piped = function (callable $f) { return $f("ab"); };
+function pick(int $n): callable { return match ($n) { 0 => "strrev", default => "lcfirst" }; }
+echo $apply("strlen"), " ", $arrow("ucfirst"), " ", (function (callable $f) { return $f("ab"); })("bin2hex"), " ", "strtoupper" |> $piped, " ", pick(0)("ab"), " ", pick(1)("AB"), "\n";
+"#,
+    );
+    assert_eq!(out, "2 Ab 6162 AB ba aB\n");
+}
+
+/// Verifies a GMP builtin named as a literal argument or `callable` return value (also as an arm
+/// of a ternary), or passed to an invokable object or a closure whose parameter is `callable`,
+/// invokes through the declared callable, as the call `gmp_abs(...)` would.
 ///
 /// The literal used to be recorded without injecting the GMP prelude, so its wrapper had no
 /// helper to forward to and the call stopped with the runtime-only builtin error.
@@ -243,10 +265,13 @@ fn test_declared_callable_gmp_literal_injects_its_prelude() {
         r#"<?php
 function apply(callable $f): mixed { return $f(-3); }
 function pick(): callable { return "gmp_neg"; }
-echo apply("gmp_abs"), " ", pick()(5), "\n";
+function choose(int $n): callable { return $n > 0 ? "gmp_sqrt" : "gmp_sign"; }
+class Box { public function __invoke(callable $fn) { return $fn(-7); } }
+$viaClosure = function (callable $f) { return $f(9); };
+echo apply("gmp_abs"), " ", pick()(5), " ", choose(1)(16), " ", (new Box())("gmp_neg"), " ", $viaClosure("gmp_sqrt"), "\n";
 "#,
     );
-    assert_eq!(out, "3 -5\n");
+    assert_eq!(out, "3 -5 4 7 3\n");
 }
 
 /// Verifies an XML builtin whose lowering calls prelude helpers invokes when named as a literal

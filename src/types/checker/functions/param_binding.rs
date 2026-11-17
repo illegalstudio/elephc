@@ -381,8 +381,15 @@ impl Checker {
     /// callable keeps the string. An unknown name is left to the runtime `TypeError`, as PHP
     /// raises it.
     pub(crate) fn record_declared_callable_literal_name(&mut self, value: &Expr) {
-        let crate::parser::ast::ExprKind::StringLiteral(name) = &static_callable_argument(value).kind
-        else {
+        let value = static_callable_argument(value);
+        if let Some(arms) = selected_value_arms(value) {
+            // Each arm of a conditional is the value itself, so it is a certain callable.
+            for arm in arms {
+                self.record_declared_callable_literal_name(arm);
+            }
+            return;
+        }
+        let crate::parser::ast::ExprKind::StringLiteral(name) = &value.kind else {
             self.record_static_callable_literals(value);
             return;
         };
@@ -577,5 +584,21 @@ fn static_callable_argument(arg: &Expr) -> &Expr {
     match &arg.kind {
         crate::parser::ast::ExprKind::NamedArg { value, .. } => static_callable_argument(value),
         _ => arg,
+    }
+}
+
+/// Returns the expressions a conditional can evaluate to (`?:`, `??`, `match`), or `None` for
+/// any other expression. Each of them is the selected value itself, not data beside it.
+pub(crate) fn selected_value_arms(expr: &Expr) -> Option<Vec<&Expr>> {
+    use crate::parser::ast::ExprKind;
+    match &expr.kind {
+        ExprKind::Ternary { then_expr, else_expr, .. } => Some(vec![then_expr, else_expr]),
+        ExprKind::ShortTernary { value, default } | ExprKind::NullCoalesce { value, default } => {
+            Some(vec![value, default])
+        }
+        ExprKind::Match { arms, default, .. } => {
+            Some(arms.iter().map(|(_, result)| result).chain(default.as_deref()).collect())
+        }
+        _ => None,
     }
 }
