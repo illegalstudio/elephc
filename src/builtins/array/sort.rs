@@ -32,5 +32,6 @@ fn check(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
     if !crate::types::checker::builtins::arrays::array_arg_is_gradually_acceptable(&ty) && !ty.is_php_array() {
         return Err(CompileError::new(cx.span, &format!("{}() argument must be array", cx.name)));
     }
+    super::key_sort::check_flags(cx)?;
     Ok(PhpType::Bool)
 }

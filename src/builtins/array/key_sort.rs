@@ -38,6 +38,7 @@ pub(super) fn check(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
     {
         return Err(CompileError::new(cx.span, &format!("{}() argument must be array", cx.name)));
     }
+    check_flags(cx)?;
     Ok(PhpType::Bool)
 }
 
@@ -86,4 +87,28 @@ fn is_supported_parent_place(expr: &Expr) -> bool {
         ExprKind::ArrayAccess { array, .. } => is_supported_parent_place(array),
         _ => false,
     }
+}
+
+/// Binds the optional `$flags` argument of a sort-family builtin to php's `int` parameter.
+///
+/// A string, array or other non-int-coercible value throws php's `TypeError`
+/// (`sort(): Argument #2 ($flags) must be of type int, string given`), like any other declared
+/// `int` parameter; the custom receiver check would otherwise accept it silently.
+pub(super) fn check_flags(cx: &mut BuiltinCheckCtx) -> Result<(), CompileError> {
+    let Some(arg) = cx.args.get(1) else {
+        return Ok(());
+    };
+    if matches!(arg.kind, ExprKind::NamedArg { .. } | ExprKind::Spread(_)) {
+        return Ok(());
+    }
+    let actual = cx.checker.infer_type(arg, cx.env)?;
+    cx.checker.require_bound_param_arg_type(
+        &PhpType::Int,
+        &actual,
+        arg,
+        cx.env,
+        &format!("Function '{}' parameter $flags", cx.name),
+        None,
+        false,
+    )
 }

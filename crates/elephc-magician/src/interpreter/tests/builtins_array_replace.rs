@@ -278,3 +278,15 @@ echo probe(fn() => array_uintersect("x", [1], fn($a, $b) => $a <=> $b));"#;
 TypeError: array_uintersect(): Argument #1 ($array) must be of type array, string given",
     );
 }
+
+/// `array_udiff` / `array_uintersect` take any number of arrays before the comparator, so an
+/// eval call with three arrays is accepted (it answered "expects exactly 3 arguments, 4 given").
+///
+/// `php -n` 8.5.6: `array_udiff([1,2,3,4],[2],[4],cb)` keeps `1,3`; `array_uintersect([1,2,3],[2,3],[3],cb)` keeps `3`.
+#[test]
+fn array_ucompare_family_accepts_three_arrays_before_the_comparator() {
+    let fragment = br#"$cb = fn($a, $b) => $a <=> $b;
+echo implode(",", array_udiff([1, 2, 3, 4], [2], [4], $cb)), ":";
+echo implode(",", array_uintersect([1, 2, 3], [2, 3], [3], $cb));"#;
+    assert_eq!(out(fragment), "1,3:3");
+}

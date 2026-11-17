@@ -1083,3 +1083,16 @@ fn test_source_variadic_override_rejects_hidden_argc_abi_mismatch() {
         "the inherited signature cannot be widened to collect surplus arguments",
     );
 }
+
+/// A non-int `$flags` argument of the sort family is refused like any other declared `int`
+/// parameter (php throws `sort(): Argument #2 ($flags) must be of type int, string given`); the
+/// custom receiver check used to accept it silently.
+#[test]
+fn test_sort_family_refuses_a_string_flags_argument() {
+    for call in ["sort($a, \"x\")", "rsort($a, \"x\")", "asort($a, \"x\")", "arsort($a, \"x\")", "ksort($a, \"x\")"] {
+        expect_error(
+            &format!("<?php $a = [3, 1, 2]; {call};"),
+            "parameter $flags expects int, got string",
+        );
+    }
+}

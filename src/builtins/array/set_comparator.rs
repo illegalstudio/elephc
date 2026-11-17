@@ -27,6 +27,12 @@ fn result_type(_input: &BuiltinSemanticInput<'_>) -> PhpType {
 
 /// Validates both array operands and contextualizes the two comparator inputs.
 pub(super) fn check(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
+    // The contract is variadic (php accepts any number of arrays before the comparator, and eval
+    // runs them all); the compiled lowering only implements the two-array form.
+    if cx.args.len() != 3 {
+        return Err(CompileError::new(cx.span,
+            &format!("{}() supports exactly two arrays and a comparator in compiled code", cx.name)));
+    }
     let mut types = Vec::with_capacity(2);
     for (index, argument) in cx.args.iter().take(2).enumerate() {
         let array = cx.checker.infer_type(argument, cx.env)?;
