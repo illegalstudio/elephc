@@ -103,6 +103,7 @@ fn lower_on_compiler_stack(
     super::diagnostics::begin_collection();
     let _closure_param_hints =
         crate::ir_lower::closure_param_hints::install(&check_result.closure_param_hints);
+    let _closure_defaults = crate::ir_lower::initializer_reads::install(check_result);
     let mut module = Module::new(target);
     module.source_path = source_path.map(crate::source::canonical_source_path);
     // Codegen may run on another thread than parsing, so freeze the span-to-file table here.

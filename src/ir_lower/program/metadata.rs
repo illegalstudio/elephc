@@ -44,6 +44,10 @@ pub(super) fn populate_metadata(module: &mut Module, program: &Program, check_re
         .collect();
     module.declared_trait_constant_names = collect_declared_trait_constant_names(program);
     module.declared_trait_constants = collect_declared_trait_constants(program);
+    crate::ir_lower::initializer_reads::set_trait_constants(
+        &module.declared_trait_constant_names,
+        &module.declared_trait_constants,
+    );
     module.declared_trait_constant_types = collect_declared_trait_constant_types(program);
     module.declared_trait_constant_visibilities =
         collect_declared_trait_constant_visibilities(program);

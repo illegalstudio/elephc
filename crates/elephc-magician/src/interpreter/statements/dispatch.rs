@@ -43,7 +43,12 @@ pub(in crate::interpreter) fn execute_program_statements(
             }
         }
     }
-    execute_statement_sequence(statements, true, context, scope, values)
+    let early_bound = eval_record_early_binding_snapshots(statements, context, values)?;
+    let result = execute_statement_sequence(statements, true, context, scope, values);
+    for name in early_bound {
+        context.take_early_bound_class(&name);
+    }
+    result
 }
 
 /// Executes nested statements in source order without registering unreachable declarations.

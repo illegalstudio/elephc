@@ -10027,23 +10027,24 @@ echo DynEvalNativeFetchConst;
     assert_eq!(out, "dynamic");
 }
 
-/// Verifies native constant fetch misses after eval fail through the eval runtime path.
+/// Verifies a native constant fetch miss after eval throws PHP's uncaught undefined-constant
+/// `Error`.
 #[test]
 fn test_eval_missing_native_dynamic_constant_fetch_fails() {
     let err = compile_and_run_expect_failure("<?php eval(''); echo MissingNativeEvalConst;");
     assert!(
-        err.contains("Fatal error: eval() runtime failed"),
-        "stderr did not contain eval runtime fatal diagnostic: {err}"
+        err.contains("Uncaught Error: Undefined constant \"MissingNativeEvalConst\""),
+        "stderr did not contain the undefined-constant Error: {err}"
     );
 }
 
-/// Verifies missing eval dynamic constants fail through the eval runtime path.
+/// Verifies a missing constant read in eval throws PHP's uncaught undefined-constant `Error`.
 #[test]
 fn test_eval_missing_dynamic_constant_fetch_fails() {
     let err = compile_and_run_expect_failure("<?php eval('return MissingEvalConst;');");
     assert!(
-        err.contains("Fatal error: eval() runtime failed"),
-        "stderr did not contain eval runtime fatal diagnostic: {err}"
+        err.contains("Uncaught Error: Undefined constant \"MissingEvalConst\""),
+        "stderr did not contain the undefined-constant Error: {err}"
     );
 }
 
@@ -10091,7 +10092,7 @@ fn test_eval_error_contract_reports_unsupported_construct() {
 #[test]
 fn test_eval_error_contract_reports_runtime_failure() {
     let stderr = assert_eval_failure_contains(
-        "<?php eval('return MissingEvalContractConst;');",
+        "<?php eval('class EvalContractTwice {} class EvalContractTwice {}');",
         "Fatal error: eval() runtime failed",
     );
     assert_no_rust_panic_leaked(&stderr);
@@ -28654,7 +28655,7 @@ echo EvalConstParentIface::BASE . ":";
 echo EvalConstChildIface::BASE . ":";
 echo EvalConstIfaceTraitBox::BASE . ":";
 echo EvalConstIfaceTraitBox::LOCAL . ":";
-echo EvalConstReusableTrait::SEED . ":";
+try { echo EvalConstReusableTrait::SEED . ":"; } catch (Error $e) { echo "direct:"; }
 echo EvalConstIfaceTraitBox::SEED . ":";
 echo EvalConstIfaceTraitBox::readTraitSeed() . ":";
 echo EvalConstDuplicateTraitBox::DUP . ":";
@@ -28666,7 +28667,8 @@ echo EvalConstDuplicateClassBox::DUP;');
         "program failed: stdout={:?} stderr={}",
         out.stdout, out.stderr
     );
-    assert_eq!(out.stdout, "2:2:2:3:6:6:6:9:9");
+    // A trait constant read through the trait throws, as in PHP 8.2+.
+    assert_eq!(out.stdout, "2:2:2:3:direct:6:6:9:9");
 }
 
 /// Verifies eval-declared trait constant conflicts follow PHP compatibility rules.
@@ -31109,4 +31111,16 @@ eval('$x = true and false; var_dump($x); $y = 1 or 0; var_dump($y);');
 "#,
     );
     assert_eq!(out, "bool(true)\nint(1)\n");
+}
+
+/// An eval-declared property default reading `self::` resolves against the declaring class,
+/// including its private constants, for instance and static defaults alike.
+#[test]
+fn test_eval_property_defaults_resolve_self_constants() {
+    let out = compile_and_run(
+        r#"<?php
+eval('class EvalSelfDefaults { private const C = "x"; public $a = self::C; public static $s = self::C . "y"; } $o = new EvalSelfDefaults; echo $o->a, EvalSelfDefaults::$s, "\n";');
+"#,
+    );
+    assert_eq!(out, "xxy\n");
 }

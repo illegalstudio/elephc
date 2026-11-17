@@ -69,7 +69,7 @@ pub(crate) fn attr_entries_unsupported_by_flat_helper(
     entries.iter().any(|entry| {
         matches!(
             &entry.value,
-            crate::types::AttrArgValue::ConstRef(_)
+            crate::types::AttrArgValue::ConstRef(..)
                 | crate::types::AttrArgValue::ScopedConst(..)
         )
             || matches!(

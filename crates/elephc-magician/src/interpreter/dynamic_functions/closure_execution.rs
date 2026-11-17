@@ -79,6 +79,7 @@ pub(in crate::interpreter) fn eval_dynamic_function_with_evaluated_args_and_ref_
     context.push_called_class_scope(String::new());
     let bound_call = match bind_evaluated_function_args_with_ref_mode(
         function.name(),
+        function.name(),
         function.params(),
         function.parameter_types(),
         function.parameter_defaults(),
@@ -422,8 +423,12 @@ fn eval_closure_with_optional_binding(
         context.push_class_scope(binding.class_scope.clone());
         context.push_called_class_scope(binding.called_class.clone());
     }
+    // Each copy of a trait method creates its own closure op_array in php-src, so the
+    // closure's default cache is keyed by the class whose code created it as well.
+    let default_site = closure.default_site();
     let bound_call = match bind_evaluated_function_args_with_ref_mode(
         &eval_closure_display_name(function, context),
+        &default_site,
         function.params(),
         function.parameter_types(),
         function.parameter_defaults(),

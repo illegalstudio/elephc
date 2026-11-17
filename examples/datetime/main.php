@@ -124,7 +124,8 @@ date_default_timezone_set("Europe/Paris");
 // The T/e specifiers name the zone (abbreviation / identifier).
 echo "Paris:    " . date("Y-m-d H:i", $summer) . " " . date("T", $summer) . " (" . date("e", $summer) . ")\n";
 // The O/P/Z specifiers render the zone's UTC offset (DST-aware): Paris is +02:00 in summer.
-echo "ISO 8601: " . date('Y-m-d\TH:i:sP', $summer) . " (" . date("Z", $summer) . "s)\n";
+// DATE_ATOM is the global form of DateTimeInterface::ATOM (`Y-m-d\TH:i:sP`).
+echo "ISO 8601: " . date(DATE_ATOM, $summer) . " (" . date("Z", $summer) . "s)\n";
 date_default_timezone_set("America/New_York");
 echo "New York: " . date("Y-m-d H:i", $summer) . " " . date("P", $summer) . "\n";
 echo "Zone is now: " . date_default_timezone_get() . "\n";

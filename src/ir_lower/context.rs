@@ -456,10 +456,6 @@ pub(crate) struct LoweringContext<'m, 'f> {
     /// Function-like scope key paired with loop spans for storage-contract lookup.
     pub loop_storage_scope: String,
     pub constants: HashMap<String, (ExprKind, PhpType)>,
-    /// Span a `MT_RAND_PHP` constant-expression deprecation reports instead of the stored
-    /// value's own span. A class-constant access reports the access site, like php-src; the
-    /// once-per-declaration key still comes from the stored value's span.
-    pub(crate) const_deprecation_report_span: Option<Span>,
     pub top_level_env: TypeEnv,
     pub current_class: Option<String>,
     pub loop_stack: Vec<LoopFrame>,
@@ -716,7 +712,6 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
             promotable_arrays,
             loop_storage_scope,
             constants: constants.clone(),
-            const_deprecation_report_span: None,
             top_level_env,
             current_class,
             loop_stack: Vec::new(),
@@ -1203,6 +1198,42 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
                     let owner = info.constant_declaring_interfaces.get(const_name)
                         .map(String::as_str).unwrap_or(name.as_str());
                     return self.constant_value_in_scope(value, owner);
+                }
+                queue.extend(info.parents.iter().cloned());
+            }
+        }
+        None
+    }
+
+    /// Returns the class or interface whose declaration `class_name::const_name` resolves to,
+    /// searching parent classes first and then implemented and parent interfaces, like
+    /// [`Self::scoped_constant_value`].
+    pub(crate) fn scoped_constant_owner(&self, class_name: &str, const_name: &str) -> Option<String> {
+        let mut current = Some(class_name);
+        while let Some(name) = current {
+            let Some(info) = self.classes.get(name) else {
+                break;
+            };
+            if info.constants.contains_key(const_name) {
+                return Some(name.to_string());
+            }
+            current = info.parent.as_deref();
+        }
+        let mut queue = self
+            .classes
+            .get(class_name)
+            .map(|info| info.interfaces.clone())
+            .unwrap_or_default();
+        queue.push(class_name.to_string());
+        let mut visited = HashSet::new();
+        while let Some(name) = queue.pop() {
+            if !visited.insert(name.clone()) {
+                continue;
+            }
+            if let Some(info) = self.interfaces.get(&name) {
+                if info.constants.contains_key(const_name) {
+                    let owner = info.constant_declaring_interfaces.get(const_name).unwrap_or(&name);
+                    return Some(owner.clone());
                 }
                 queue.extend(info.parents.iter().cloned());
             }

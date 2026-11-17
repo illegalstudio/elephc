@@ -35,6 +35,7 @@ pub(in crate::interpreter) fn execute_class_decl_stmt(
     {
         return Err(EvalStatus::RuntimeFatal);
     }
+    let declared = class.clone();
     let class = expand_eval_class_traits(class, context)?.with_readonly_properties();
     let class = resolve_eval_inherited_property_hooks(class, context, values)?;
     let class = &class;
@@ -62,14 +63,13 @@ pub(in crate::interpreter) fn execute_class_decl_stmt(
                 return Err(EvalStatus::RuntimeFatal);
             }
         }
-        initialize_eval_declared_constants(
-            class.name(),
-            class.constants(),
-            context,
-            scope,
-            values,
-        )?;
-        initialize_eval_static_properties(class, context, scope, values)
+        initialize_eval_static_properties(class, context, scope, values)?;
+        // A class php-src binds while compiling the program took its snapshot when the
+        // program started.
+        if !context.take_early_bound_class(class.name()) {
+            eval_record_declaration_snapshot(class.name(), context, values)?;
+        }
+        eval_raise_trait_collision_deprecations(&declared, context, values)
     } else {
         Err(EvalStatus::RuntimeFatal)
     }
@@ -172,4 +172,30 @@ pub(in crate::interpreter) fn ensure_eval_anonymous_class_decl(
         };
     }
     execute_class_decl_stmt(class, context, scope, values)
+}
+
+/// Evaluates, when execution reaches the class statement, the defaults php-src compares while
+/// binding the class's traits (a class property compatibly redeclaring a trait's, or two traits
+/// declaring the same property; see `eval_trait_collision_defaults`). Their deprecation notices
+/// are raised here; class initialization later evaluates the winning default again.
+fn eval_raise_trait_collision_deprecations(
+    declared: &EvalClass,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<(), EvalStatus> {
+    let defaults = eval_trait_collision_defaults(declared.properties(), declared.traits(), context);
+    for (default, origin) in &defaults {
+        // A trait initialized before this statement holds its default already evaluated.
+        if origin.as_deref().is_some_and(|origin| context.class_initialization_ran(origin)) {
+            continue;
+        }
+        let mut default_scope = ElephcEvalScope::new();
+        let value = eval_class_like_member_default(
+            declared.name(), None, default, context, &mut default_scope, values,
+        )?;
+        if !value.is_borrowed() {
+            values.release(value)?;
+        }
+    }
+    Ok(())
 }

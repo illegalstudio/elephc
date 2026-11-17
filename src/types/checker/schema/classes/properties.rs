@@ -200,7 +200,7 @@ fn apply_static_property(
         refine_declared_array_type_from_default(declared_ty, prop.default.as_ref())
     } else if let Some(default) = &prop.default {
         state.declared_static_properties.remove(&prop.name);
-        infer_untyped_property_default_type(default)
+        infer_untyped_property_default_type(&resolve_class_constants_for_typing(default, class, checker))
     } else {
         state.declared_static_properties.remove(&prop.name);
         PhpType::Void
@@ -357,7 +357,7 @@ fn apply_instance_property(
         is_declared_slot = true;
         refine_declared_array_type_from_default(declared_ty, prop.default.as_ref())
     } else if let Some(default) = &prop.default {
-        infer_untyped_property_default_type(default)
+        infer_untyped_property_default_type(&resolve_class_constants_for_typing(default, class, checker))
     } else {
         PhpType::Void
     };
@@ -468,7 +468,7 @@ fn apply_instance_property_redeclaration(
         state.declared_properties.insert(prop.name.clone());
         refine_declared_array_type_from_default(declared_ty, prop.default.as_ref())
     } else if let Some(default) = &prop.default {
-        infer_untyped_property_default_type(default)
+        infer_untyped_property_default_type(&resolve_class_constants_for_typing(default, class, checker))
     } else {
         PhpType::Void
     };
@@ -564,7 +564,7 @@ fn apply_private_parent_property_shadowing(
         refine_declared_array_type_from_default(declared_ty, prop.default.as_ref())
     } else if let Some(default) = &prop.default {
         state.declared_properties.remove(&prop.name);
-        infer_expr_type_syntactic(default)
+        infer_expr_type_syntactic(&resolve_class_constants_for_typing(default, class, checker))
     } else {
         state.declared_properties.remove(&prop.name);
         PhpType::Void
@@ -1009,6 +1009,101 @@ fn refine_declared_array_type_from_default(declared_ty: PhpType, default: Option
         }
     }
     declared_ty
+}
+
+/// Returns `default` with the class constants it reads replaced by their initializers, so an
+/// untyped property slot gets the type of the value rather than syntactic inference's guess
+/// for a `Class::CONST` read (`string`): `public $p = self::LIMIT` with an `int` constant must
+/// get an `int` slot. A constant that cannot be resolved here is left as written.
+fn resolve_class_constants_for_typing(default: &Expr, class: &FlattenedClass, checker: &Checker) -> Expr {
+    substitute_class_constants(default, &class.name, class, checker, 0)
+}
+
+/// Recursive body of [`resolve_class_constants_for_typing`]: `owner` is the class `self::`
+/// names inside `expr`, and `depth` bounds constant cycles.
+fn substitute_class_constants(
+    expr: &Expr,
+    owner: &str,
+    class: &FlattenedClass,
+    checker: &Checker,
+    depth: usize,
+) -> Expr {
+    const MAX_DEPTH: usize = 16;
+    let sub = |inner: &Expr| Box::new(substitute_class_constants(inner, owner, class, checker, depth));
+    let kind = match &expr.kind {
+        ExprKind::ScopedConstantAccess { receiver, name } if depth < MAX_DEPTH => {
+            let receiver_class = match receiver {
+                crate::parser::ast::StaticReceiver::Named(written) => {
+                    Some(written.as_str().trim_start_matches('\\').to_string())
+                }
+                crate::parser::ast::StaticReceiver::Self_ | crate::parser::ast::StaticReceiver::Static => {
+                    Some(owner.to_string())
+                }
+                crate::parser::ast::StaticReceiver::Parent => if owner == class.name {
+                    class.extends.clone()
+                } else {
+                    checker.classes.get(owner).and_then(|info| info.parent.clone())
+                },
+                crate::parser::ast::StaticReceiver::Generic(_) => None,
+            };
+            let resolved = receiver_class.and_then(|receiver| typing_constant_value(&receiver, name, class, checker));
+            return match resolved {
+                Some((declaring, value)) => substitute_class_constants(&value, &declaring, class, checker, depth + 1),
+                None => expr.clone(),
+            };
+        }
+        ExprKind::ArrayLiteral(elements) => ExprKind::ArrayLiteral(
+            elements.iter().map(|element| *sub(element)).collect(),
+        ),
+        ExprKind::ArrayLiteralAssoc(pairs) => ExprKind::ArrayLiteralAssoc(
+            pairs.iter().map(|(key, value)| (*sub(key), *sub(value))).collect(),
+        ),
+        ExprKind::BinaryOp { left, op, right } => ExprKind::BinaryOp { left: sub(left), op: op.clone(), right: sub(right) },
+        ExprKind::Ternary { condition, then_expr, else_expr } => ExprKind::Ternary {
+            condition: sub(condition),
+            then_expr: sub(then_expr),
+            else_expr: sub(else_expr),
+        },
+        ExprKind::ShortTernary { value, default } => ExprKind::ShortTernary { value: sub(value), default: sub(default) },
+        ExprKind::NullCoalesce { value, default } => ExprKind::NullCoalesce { value: sub(value), default: sub(default) },
+        ExprKind::Negate(inner) => ExprKind::Negate(sub(inner)),
+        _ => return expr.clone(),
+    };
+    Expr::new(kind, expr.span)
+}
+
+/// Finds class constant `receiver::name` for slot typing: in the class being built, or in an
+/// already built class and its parents, or an interface. Returns the declaring class-like and
+/// the initializer.
+fn typing_constant_value(
+    receiver: &str,
+    name: &str,
+    class: &FlattenedClass,
+    checker: &Checker,
+) -> Option<(String, Expr)> {
+    if receiver.eq_ignore_ascii_case(&class.name) {
+        if let Some(constant) = class.constants.iter().find(|constant| constant.name == name) {
+            return Some((class.name.clone(), constant.value.clone()));
+        }
+        return class.extends.as_deref().and_then(|parent| typing_constant_value(parent, name, class, checker));
+    }
+    let mut current = Some(receiver.to_string());
+    let mut guard = 0;
+    while let Some(class_name) = current {
+        guard += 1;
+        if guard > 64 {
+            return None;
+        }
+        let info = checker.classes.get(&class_name)?;
+        if let Some(value) = info.constants.get(name) {
+            return Some((class_name, value.clone()));
+        }
+        current = info.parent.clone();
+    }
+    checker
+        .interfaces
+        .get(receiver)
+        .and_then(|interface| interface.constants.get(name).map(|value| (receiver.to_string(), value.clone())))
 }
 
 /// Infers storage for an untyped property default while widening the literal `false` subtype.

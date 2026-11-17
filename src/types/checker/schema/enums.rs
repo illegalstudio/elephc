@@ -614,6 +614,8 @@ pub(crate) fn insert_enum_metadata(
             scope_dynamic_property_storage: false,
             constants,
             constant_order: user_constants.iter().map(|constant| constant.name.clone()).collect(),
+            property_initialization_order: Vec::new(),
+            trait_collision_defaults: Vec::new(),
             constant_deprecations: user_constants
                 .iter()
                 .filter_map(|constant| {

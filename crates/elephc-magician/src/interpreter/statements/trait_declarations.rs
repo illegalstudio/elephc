@@ -48,13 +48,7 @@ pub(in crate::interpreter) fn execute_interface_decl_stmt(
     validate_eval_interface_constants(interface.constants())?;
     validate_interface_constant_parent_redeclarations(interface, context, values)?;
     if context.define_interface(interface.clone()) {
-        initialize_eval_declared_constants(
-            interface.name(),
-            interface.constants(),
-            context,
-            scope,
-            values,
-        )
+        Ok(())
     } else {
         Err(EvalStatus::RuntimeFatal)
     }
@@ -84,21 +78,41 @@ pub(in crate::interpreter) fn execute_trait_decl_stmt(
     {
         return Err(EvalStatus::RuntimeFatal);
     }
+    let declared = trait_decl.clone();
     let trait_decl = expand_eval_trait_traits(trait_decl, context)?;
     validate_eval_trait_attribute_targets(&trait_decl)?;
     validate_eval_declared_constants(trait_decl.constants())?;
     validate_eval_magic_methods(trait_decl.methods())?;
     if context.define_trait(trait_decl.clone()) {
-        initialize_eval_declared_constants(
-            trait_decl.name(),
-            trait_decl.constants(),
-            context,
-            scope,
-            values,
-        )
+        eval_record_declaration_snapshot(trait_decl.name(), context, values)?;
+        eval_raise_trait_statement_collision_deprecations(&declared, context, values)
     } else {
         Err(EvalStatus::RuntimeFatal)
     }
+}
+
+/// Evaluates, when execution reaches the trait statement, the defaults php-src compares while
+/// binding the traits it uses (see [`eval_trait_collision_defaults`]).
+fn eval_raise_trait_statement_collision_deprecations(
+    declared: &EvalTrait,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<(), EvalStatus> {
+    let defaults = eval_trait_collision_defaults(declared.properties(), declared.traits(), context);
+    for (default, origin) in &defaults {
+        // A trait initialized before this statement holds its default already evaluated.
+        if origin.as_deref().is_some_and(|origin| context.class_initialization_ran(origin)) {
+            continue;
+        }
+        let mut default_scope = ElephcEvalScope::new();
+        let value = eval_class_like_member_default(
+            declared.name(), None, default, context, &mut default_scope, values,
+        )?;
+        if !value.is_borrowed() {
+            values.release(value)?;
+        }
+    }
+    Ok(())
 }
 
 /// Expands nested eval trait uses into the trait metadata registered by eval.
@@ -798,4 +812,45 @@ pub(super) fn validate_eval_class_modifiers(
 /// Returns whether a class carries PHP's global `#[AllowDynamicProperties]` attribute.
 pub(super) fn eval_class_has_allow_dynamic_properties_attribute(class: &EvalClass) -> bool {
     eval_attributes_have_global_builtin_attribute(class.attributes(), "AllowDynamicProperties")
+}
+
+/// Returns the defaults php-src evaluates when it binds the traits `uses` into a class or trait
+/// declaring `own`: in `use` order, each imported property whose name is already held
+/// (declared, or imported from an earlier trait) is compared with the held one, evaluating the
+/// held default and then the imported one. A used trait's property already holds what the
+/// traits it uses contributed, so each used trait contributes a name once.
+pub(super) fn eval_trait_collision_defaults(
+    own: &[EvalClassProperty],
+    uses: &[String],
+    context: &ElephcEvalContext,
+) -> Vec<(EvalExpr, Option<String>)> {
+    let mut held: Vec<(String, Option<EvalExpr>, Option<String>)> = own
+        .iter()
+        .filter(|property| property.trait_origin().is_none())
+        .map(|property| (property.name().to_string(), property.default().cloned(), None))
+        .collect();
+    let mut defaults = Vec::new();
+    for used_name in uses {
+        let Some(used) = context.trait_decl(used_name) else { continue };
+        let mut contributed = std::collections::HashSet::new();
+        for used_property in used.properties() {
+            if !contributed.insert(used_property.name().to_string()) {
+                continue;
+            }
+            match held.iter().find(|(name, _, _)| name == used_property.name()) {
+                Some((_, held_default, held_origin)) => {
+                    if let (Some(held_default), Some(used_default)) = (held_default, used_property.default()) {
+                        defaults.push((held_default.clone(), held_origin.clone()));
+                        defaults.push((used_default.clone(), Some(used_name.clone())));
+                    }
+                }
+                None => held.push((
+                    used_property.name().to_string(),
+                    used_property.default().cloned(),
+                    Some(used_name.clone()),
+                )),
+            }
+        }
+    }
+    defaults
 }

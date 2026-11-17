@@ -191,7 +191,7 @@
       "total": 329
     },
     "constants": {
-      "have": 1581,
+      "have": 1595,
       "total": 3181
     },
     "functions": {
@@ -661,8 +661,8 @@
         "total": 15
       },
       "constants": {
-        "eval": 3,
-        "have": 3,
+        "eval": 17,
+        "have": 17,
         "total": 17
       },
       "docs": "docs/php/datetime.md#functions",

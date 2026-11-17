@@ -699,7 +699,7 @@ fn validate_instruction_immediate(
         ConstI64 => require_immediate(inst_id, inst, "i64", |imm| matches!(imm, Imm::I64(_))),
         ConstF64 => require_immediate(inst_id, inst, "f64", |imm| matches!(imm, Imm::F64(_))),
         ConstBool => require_immediate(inst_id, inst, "bool", |imm| matches!(imm, Imm::Bool(_))),
-        ConstStr | ConstClassName | DataAddr | Warn | IncludeOnceMark | IncludeOnceGuard
+        ConstStr | ConstClassName | DataAddr | Warn | IncludeOnceMark | IncludeOnceGuard | IncludeOnceTest
         | FunctionVariantMark | FunctionVariantDispatch | LoadPropRefCell
         | LoadPropRefCellChecked
         | LoadStaticPropertyRefCell
@@ -891,7 +891,7 @@ fn validate_opcode_rules(
         | CallableArrayNew | GeneratorNew | InvokerRefArg
         | ErrorSuppressBegin | ErrorSuppressEnd | TryPushHandler | TryPopHandler
         | CatchCurrent | CatchBind | FinallyEnter | FinallyExit | IncludeOnceMark
-        | IncludeOnceGuard | FunctionVariantMark | FunctionVariantDispatch | EvalFunctionExists
+        | IncludeOnceGuard | IncludeOnceTest | FunctionVariantMark | FunctionVariantDispatch | EvalFunctionExists
         | EvalClassExists | EvalConstantExists | EvalConstantFetch | ConcatReset | GcCollect
         | Nop => {
             check_count(inst_id, inst, 0, "0")

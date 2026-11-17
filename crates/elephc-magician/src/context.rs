@@ -16,6 +16,8 @@ mod classes_aliases;
 mod classlike_objects;
 mod closure_metadata;
 mod core;
+mod deprecation_notices;
+pub(crate) use deprecation_notices::EvalReflectedParameterDefault;
 mod functions;
 mod generics;
 mod global_registry;

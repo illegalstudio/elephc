@@ -25,7 +25,7 @@ mod state;
 mod trait_requirements;
 
 pub(crate) use property_defaults::validate_trait_property_defaults;
-pub(crate) use property_defaults::collect_trait_default_origins;
+pub(crate) use property_defaults::{collect_trait_default_origins, collect_trait_property_origins, TraitPropertyOrigins};
 pub(crate) use trait_requirements::{collect_trait_method_requirements, TraitMethodRequirements};
 pub(crate) use constants::validate_compile_time_default_in_scope;
 pub(crate) use constants::normalize_lexical_default_in_scope;
@@ -155,12 +155,43 @@ fn build_loaded_class_info(
     // from compiler-generated statements.
     let is_internal =
         !class.span.is_from_source() || checker.internal_class_decls.contains(&class.name);
-    let class_info = state.into_class_info(
+    let mut class_info = state.into_class_info(
         *next_class_id,
         &class,
         constructor_param_to_prop,
         is_internal,
     )?;
+    // php-src evaluates a class's own property defaults in source order, then the ones its
+    // traits import. Flattening puts trait properties first and lets a compatible class
+    // redeclaration take the trait slot, so the class's source order comes from the
+    // declaration itself.
+    let imported = checker.trait_imported_properties.get(&class.name);
+    let is_imported = |name: &str| imported.is_some_and(|names| names.contains(name));
+    let own: Vec<String> = match checker.trait_property_origins.direct_order.get(&class.name) {
+        Some(direct) => direct.clone(),
+        None => class
+            .properties
+            .iter()
+            .filter(|property| !is_imported(&property.name))
+            .map(|property| property.name.clone())
+            .collect(),
+    };
+    class_info.property_initialization_order = own
+        .into_iter()
+        .chain(
+            class
+                .properties
+                .iter()
+                .filter(|property| is_imported(&property.name))
+                .map(|property| property.name.clone()),
+        )
+        .collect();
+    class_info.trait_collision_defaults = checker
+        .trait_property_origins
+        .collision_defaults
+        .get(&class.name)
+        .cloned()
+        .unwrap_or_default();
     checker.classes.insert(class.name.clone(), class_info);
     *next_class_id += 1;
     building.remove(class_name);
