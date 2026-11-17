@@ -280,7 +280,15 @@ tools/lib/libelephc_web.a
 
 1. `ELEPHC_<NAME>_LIB_DIR`, if set and non-empty — `ELEPHC_WEB_LIB_DIR`,
    `ELEPHC_PDO_LIB_DIR`, and so on, one per bridge. This wins over everything
-   below, and names a **directory**, not the archive itself.
+   below, and names a **directory**, not the archive itself. Two bridges spell
+   the override differently because `<NAME>_LIB_DIR` would be ambiguous with the
+   native library they wrap: `ELEPHC_GMP_BRIDGE_DIR` holds `libelephc_gmp.a`, and
+   `ELEPHC_OPENSSL_BRIDGE_LIB_DIR` holds `libelephc_openssl.a`.
+   `ELEPHC_LIBGMP_DIR` is **not** a bridge override: the `elephc-gmp` crate's build
+   script reads it to link the managed `libgmp.a` into that crate's own test
+   binary (`cargo test -p elephc-gmp`). It is never read when `elephc` links a user
+   program; that link resolves the managed `gmp` package instead (`elephc native
+   add gmp`).
 2. The directory the running `elephc` binary is in.
 3. Its sibling `lib/` (`<bin>/../lib`).
 4. `$CARGO_TARGET_DIR/debug` and `$CARGO_TARGET_DIR/release`, when that variable

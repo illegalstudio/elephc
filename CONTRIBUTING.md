@@ -922,6 +922,11 @@ BridgeStaticlib {
 },
 ```
 
+The `env_var` field normally follows the `ELEPHC_<NAME>_LIB_DIR` spelling. The
+GMP and OpenSSL bridges are the two documented exceptions
+(`ELEPHC_GMP_BRIDGE_DIR` and `ELEPHC_OPENSSL_BRIDGE_LIB_DIR`) because the
+conventional spelling would be ambiguous with the native library they wrap; see
+[Where bridge archives are found](docs/compiling/linking-and-conditional-compilation.md#where-bridge-archives-are-found).
 The `monitoring` field is mandatory. Use `GenericTiming` when function timing
 fully describes the bridge, `Io { ... }` when it must publish a distinct I/O
 operation or wait dimension, and `Infrastructure { reason }` only for monitor or
