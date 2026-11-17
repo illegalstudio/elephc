@@ -275,6 +275,7 @@ impl CounterProof {
                         _ => return None,
                     },
                     Some(Immediate::LocalSlotPair { first, second })
+                    | Some(Immediate::PropertyRefCell { first, second, .. })
                         if slots.contains(&first) || slots.contains(&second) =>
                     {
                         return None

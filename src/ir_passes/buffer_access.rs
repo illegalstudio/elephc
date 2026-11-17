@@ -509,7 +509,8 @@ pub(super) fn slots_named_as_storage<'a>(
             Some(Immediate::LocalSlot(slot)) if inst.op != Op::LoadLocal => {
                 written.insert(*slot);
             }
-            Some(Immediate::LocalSlotPair { first, second }) => {
+            Some(Immediate::LocalSlotPair { first, second })
+            | Some(Immediate::PropertyRefCell { first, second, .. }) => {
                 written.insert(*first);
                 written.insert(*second);
             }

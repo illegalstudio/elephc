@@ -27,6 +27,8 @@ pub struct EvalGenericTemplate {
     pub(crate) imports: NamespaceImports,
     pub(crate) name_index: usize,
     pub(crate) native_syntax: bool,
+    /// `declare(strict_types=...)` mode active where this template was declared.
+    pub(crate) strict_types: bool,
 }
 
 /// Converts retained PHP type metadata into the shared generic type vocabulary.

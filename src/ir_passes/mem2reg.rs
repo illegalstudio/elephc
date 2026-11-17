@@ -148,7 +148,8 @@ fn eligible_slots(function: &Function) -> Vec<LocalSlotId> {
                     }
                 }
             }
-            Some(Immediate::LocalSlotPair { first, second }) => {
+            Some(Immediate::LocalSlotPair { first, second })
+            | Some(Immediate::PropertyRefCell { first, second, .. }) => {
                 eligible.remove(first);
                 eligible.remove(second);
             }

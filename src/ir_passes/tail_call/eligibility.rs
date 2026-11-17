@@ -58,7 +58,7 @@ pub(super) fn frame_is_safe(function: &Function, module: &Module) -> bool {
                         Op::LoadLocal | Op::StoreLocal | Op::ZeroLocalSlot | Op::UnsetLocal)
                         || (roots.contains(&slot)
                             && matches!(inst.op, Op::PushCallOperandOwner | Op::PopCallOperandOwner | Op::ReleaseLocalSlot)),
-                    Some(Immediate::LocalSlotPair { .. } | Immediate::IterStart(_)) => false,
+                    Some(Immediate::LocalSlotPair { .. } | Immediate::PropertyRefCell { .. } | Immediate::IterStart(_)) => false,
                     _ => true,
                 }
         })

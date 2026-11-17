@@ -1402,6 +1402,19 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
+      - name: Cache managed native gmp
+        # The corpus test is `#[ignore]` so only this dedicated job runs it. Reuse the
+        # same managed libgmp cache as the other Linux x86_64 test jobs; a warm run
+        # skips the from-source GMP build entirely.
+        uses: actions/cache@v6
+        with:
+          path: |
+            ~/.cache/elephc/native/artifacts/gmp
+            ~/.cache/elephc/native/sources
+          key: gmp-native-linux-x86_64-${{ hashFiles('examples/gmp/elephc.lock', 'src/native_deps/catalog.rs', 'src/native_deps/recipes/gmp.rs', 'src/native_deps/recipes/mod.rs', 'src/native_deps/recipe.rs') }}
+          restore-keys: |
+            gmp-native-linux-x86_64-
+
       - name: Ensure GMP configure dependency
         # The image contract includes m4; provisioning belongs to its build.
         run: command -v m4

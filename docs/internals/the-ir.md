@@ -768,6 +768,7 @@ Each instruction has:
 | `StoreLocal(slot, value)` | value | `Void` | `writes_local`, maybe `refcount_op` |
 | `UnsetLocal(slot)` | none | `Void` | `writes_local` |
 | `ZeroLocalSlot(slot)` | none | `Void` | `writes_local` |
+| `PromoteLocalRefCell(slot, owner)` | none | `Void` | `reads_local`, `writes_local`, `writes_heap`, `alloc_heap`, `refcount_op` |
 | `LoadRefCell(slot)` | none | value or address | `reads_local`, maybe `reads_heap` |
 | `StoreRefCell(slot, value)` | value | `Void` | `writes_local`, maybe `writes_heap`, `refcount_op` |
 | `LoadGlobal(name)` | none | declared type | `reads_global` |
@@ -777,6 +778,15 @@ Each instruction has:
 | `InitStaticLocal(slot, value)` | value | `Void` | `reads_global`, `writes_global`, maybe allocation/refcount effects |
 | `LoadStaticProperty(class, property)` | none | property type | `reads_global`, maybe `may_deopt` for late static |
 | `StoreStaticProperty(class, property, value, mode?, owner?)` | original value, optional assignment-site Bool and borrowed unwind owner | `Void` | `writes_global`, maybe `refcount_op`, `may_deopt` |
+
+A `PromoteLocalRefCell` for a typed property carries the
+`Immediate::PropertyRefCell { slot, owner, suffix_and_type }` shape instead of a
+plain `LocalSlotPair`. The packed word holds the static diagnostic-suffix data id
+and the property accepting-type code; `StoreRefCell` reads both from the promoted
+temporary so the runtime guard can reject an incompatible callee write before
+coercion. The packing keeps the immediate at three words so `Instruction` stays
+inside its stack budget. Ordinary local and variadic promotions keep the plain
+slot pair and carry no property metadata.
 
 `UnsetLocal` and `ZeroLocalSlot` both clear a slot at its own storage type and
 differ only in the bit pattern, which is what each caller needs. `UnsetLocal`

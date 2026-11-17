@@ -173,7 +173,8 @@ fn exclude_address_escaping_slots(function: &Function, eligible: &mut HashSet<Lo
 fn immediate_slots(immediate: Option<&Immediate>) -> Vec<LocalSlotId> {
     match immediate {
         Some(Immediate::LocalSlot(slot)) => vec![*slot],
-        Some(Immediate::LocalSlotPair { first, second }) => vec![*first, *second],
+        Some(Immediate::LocalSlotPair { first, second })
+        | Some(Immediate::PropertyRefCell { first, second, .. }) => vec![*first, *second],
         Some(Immediate::IterStart(metadata)) => metadata.local_slots().collect(),
         _ => Vec::new(),
     }

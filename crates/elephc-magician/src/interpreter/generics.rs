@@ -132,7 +132,13 @@ fn specialize_generic_function(template: &EvalGenericTemplate, written: Option<&
     let name = specialization_name(template, &bindings);
     if context.function(&name.to_ascii_lowercase()).is_none() {
         let declaration = crate::parser::generics::instantiate(template, &bindings, &name).map_err(|_| EvalStatus::ParseError)?;
-        execute_stmt(&declaration, context, &mut ElephcEvalScope::new(), values)?;
+        // Registration stamps the defining fragment's `strict_types` onto the function, and
+        // specialization may run from a caller in a different mode.
+        let previous_strict_types = context.strict_types();
+        context.set_strict_types(template.strict_types);
+        let declared = execute_stmt(&declaration, context, &mut ElephcEvalScope::new(), values);
+        context.set_strict_types(previous_strict_types);
+        declared?;
     }
     context.function(&name.to_ascii_lowercase()).cloned().ok_or(EvalStatus::RuntimeFatal)
 }

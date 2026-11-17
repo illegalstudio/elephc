@@ -91,7 +91,9 @@ fn invoke_native_function_with_staged_args(
             (Ok(value), Ok(())) => Ok(value),
         };
         let result = finish_eval_argument_values(result, [arg_array.take()], context, values)?;
-        eval_declared_native_return_value(function.return_type(), None, None, result, context, values)
+        eval_declared_native_return_value(
+            Some(function.name()), function.return_type(), None, None, result, context, values,
+        )
     })
 }
 

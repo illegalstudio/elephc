@@ -86,6 +86,23 @@ return function_exists("array_map");"#,
     assert_eq!(values.output, "2:6:X:Y:v:L-1:R-N:13:24:7:Q-9:8:");
     assert_eq!(values.get(result), FakeValue::Bool(true));
 }
+/// Verifies an internal function's callback binds arguments in PHP's engine-frame coercive
+/// mode even when the eval fragment declared strict types.
+#[test]
+fn execute_program_internal_callback_binding_stays_weak_under_strict_eval() {
+    let program = parse_fragment(
+        br#"declare(strict_types=1);
+$mapped = array_map(function (int $value): int { return $value; }, ["7"]);
+return $mapped[0];"#,
+    )
+    .expect("parse eval fragment");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+
+    let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+    assert_eq!(values.get(result), FakeValue::Int(7));
+}
 /// Verifies eval `array_reduce()` folds values through a string callback.
 #[test]
 fn execute_program_dispatches_array_reduce_builtin() {

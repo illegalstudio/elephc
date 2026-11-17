@@ -245,6 +245,17 @@ pub enum Immediate {
         first: LocalSlotId,
         second: LocalSlotId,
     },
+    /// A hidden property-reference cell plus its typed-reference diagnostic metadata.
+    ///
+    /// `first` is the promoted temporary, `second` its managed-cell owner, and
+    /// `suffix_and_type` packs the 28-bit static diagnostic suffix below the four-bit
+    /// acceptance code selected by the property's declared type. The packing keeps this
+    /// immediate at three words so `Instruction` stays within its stack budget.
+    PropertyRefCell {
+        first: LocalSlotId,
+        second: LocalSlotId,
+        suffix_and_type: u32,
+    },
     GlobalName(DataId),
     FunctionRef(FunctionId),
     BuiltinRef(BuiltinId),
@@ -305,6 +316,45 @@ pub enum Immediate {
     IterStart(IterStartMetadata),
 }
 
+impl Immediate {
+    /// Builds the packed immediate for a typed-property reference promotion.
+    pub fn property_ref_cell(
+        first: LocalSlotId,
+        second: LocalSlotId,
+        suffix: DataId,
+        type_code: u8,
+    ) -> Self {
+        debug_assert!(type_code < 16, "typed-property acceptance code must fit four bits");
+        debug_assert!(suffix.as_raw() < (1 << 28), "property diagnostic data id exceeds 28 bits");
+        Immediate::PropertyRefCell {
+            first,
+            second,
+            suffix_and_type: suffix.as_raw() | (u32::from(type_code) << 28),
+        }
+    }
+
+    /// Returns the slot pair, diagnostic suffix and acceptance code of a property promotion.
+    pub(crate) fn property_ref_cell_parts(
+        &self,
+    ) -> Option<(LocalSlotId, LocalSlotId, DataId, u8)> {
+        let Immediate::PropertyRefCell {
+            first,
+            second,
+            suffix_and_type,
+        } = self
+        else {
+            return None;
+        };
+        Some((
+            *first,
+            *second,
+            DataId::from_raw(*suffix_and_type & ((1 << 28) - 1)),
+            (*suffix_and_type >> 28) as u8,
+        ))
+    }
+}
+
+/// Value-semantic metadata for `Op::IterStart`.
 /// Value-semantic metadata for `Op::IterStart`.
 ///
 /// `state` is the addressable local that owns the iterator's cursor and private relocation

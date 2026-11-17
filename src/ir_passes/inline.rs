@@ -790,7 +790,8 @@ pub(super) fn remap_immediate_local(imm: &mut Immediate, local_map: &HashMap<Loc
                 *ls = nl;
             }
         }
-        Immediate::LocalSlotPair { first, second } => {
+        Immediate::LocalSlotPair { first, second }
+        | Immediate::PropertyRefCell { first, second, .. } => {
             if let Some(&nl) = local_map.get(first) {
                 *first = nl;
             }

@@ -60,7 +60,12 @@ impl LocalSlotAnalysis {
             // output (for example preg_match's captures) has no ordinary StoreLocal, but its raw
             // slot must still be initialized by the prologue before that read can acquire it.
             if inst.op == Op::PromoteLocalRefCell {
-                if let Some(Immediate::LocalSlotPair { first, .. }) = inst.immediate {
+                let first = match inst.immediate {
+                    Some(Immediate::LocalSlotPair { first, .. })
+                    | Some(Immediate::PropertyRefCell { first, .. }) => Some(first),
+                    _ => None,
+                };
+                if let Some(first) = first {
                     stored_slots.insert(first);
                 }
             }
@@ -185,6 +190,10 @@ fn ref_cell_target_slot(
         (
             Op::PromoteLocalRefCell | Op::AliasLocalRefCell | Op::BindRefCellPtr | Op::AdoptRefCellPtr,
             Some(Immediate::LocalSlotPair { first, .. }),
+        ) => Some(*first),
+        (
+            Op::PromoteLocalRefCell,
+            Some(Immediate::PropertyRefCell { first, .. }),
         ) => Some(*first),
         (
             Op::BindRefCellPtr | Op::IterCurrentValueRef,

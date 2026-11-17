@@ -26,6 +26,30 @@ fn execute_program_evaluates_compound_assignments() {
     assert_eq!(values.output, "v15");
     assert_eq!(values.get(x), FakeValue::Int(15));
 }
+/// Verifies assignment on the right of `??` and both ternary branches binds to that operand,
+/// matching PHP's grammar quirk (`$a ?? $b = 1` is `$a ?? ($b = 1)`).
+#[test]
+fn execute_program_parses_assignment_on_coalesce_and_ternary_rhs() {
+    let program = parse_fragment(
+        br#"$value = null; $first = 0;
+$coalesced = $value ?? $first = 1;
+$flag = true; $second = 0;
+$then_assigned = $flag ? $second = 2 : 3;
+$third = 0;
+$else_skipped = $flag ? 4 : $third = 5;
+return $coalesced . ":" . $first . ":" . $then_assigned . ":" . $second . ":" . $else_skipped . ":" . $third;"#,
+    )
+    .expect("parse eval fragment");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+
+    let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+    assert_eq!(
+        values.get(result),
+        FakeValue::String("1:1:2:2:4:0".to_string())
+    );
+}
 /// Verifies division and modulo evaluate through fake runtime numeric hooks.
 #[test]
 fn execute_program_evaluates_division_and_modulo() {

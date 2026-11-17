@@ -108,7 +108,10 @@ mod tests {
     /// BUMPED TO 28: function metadata carries a skipped bytecode cache. The source guard
     /// requires a new identity even though the serialized field layout is unchanged.
     /// BUMPED TO 29: `EvalStmt::Goto` and `EvalStmt::Label`, plus `EvalParseError::InvalidJump`.
-    const RECORDED_FINGERPRINT: u64 = 11216578342854289318;
+    /// BUMPED TO 31: eval callables and generic templates record their defining
+    /// `strict_types` mode, which changes the serialized payload.
+    /// BUMPED TO 32: strict_types declarations must precede every other eval statement.
+    const RECORDED_FINGERPRINT: u64 = 7113286638228405789;
 
     /// Returns a stable fingerprint of every source the stored format depends on.
     ///

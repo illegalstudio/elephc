@@ -749,7 +749,10 @@ fn validate_instruction_immediate(
         BindRefCellPtr => require_immediate(inst_id, inst, "reference alias slot or alias/owner pair", |imm| {
             matches!(imm, Imm::LocalSlot(_) | Imm::LocalSlotPair { .. })
         }),
-        PromoteLocalRefCell | AliasLocalRefCell | RetainLocalRefCell | AdoptRefCellPtr => require_immediate(inst_id, inst, "local slot pair", |imm| {
+        PromoteLocalRefCell => require_immediate(inst_id, inst, "local slot pair", |imm| {
+            matches!(imm, Imm::LocalSlotPair { .. } | Imm::PropertyRefCell { .. })
+        }),
+        AliasLocalRefCell | RetainLocalRefCell | AdoptRefCellPtr => require_immediate(inst_id, inst, "local slot pair", |imm| {
             matches!(imm, Imm::LocalSlotPair { .. })
         }),
         EvalScopeGet | EvalScopeSet => require_immediate(inst_id, inst, "global name", |imm| {

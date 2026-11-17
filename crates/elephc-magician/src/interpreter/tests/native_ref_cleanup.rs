@@ -94,7 +94,7 @@ fn native_mixed_reference_defaults_have_independent_persistent_owners() {
         signature.set_param_type(0, EvalParameterType::new(vec![param_type], false));
         signature.set_param_by_ref(0, by_ref);
         signature.set_param_default(0, crate::context::NativeCallableDefault::String("default".into()));
-        let args = bind_native_callable_bound_args_with_mode(Some(signature), Vec::new(),
+        let args = bind_native_callable_bound_args_with_mode(Some(signature), Vec::new(), None,
             EvalByRefBindingMode::RequireTarget, &mut context, &mut values).unwrap();
         assert_eq!(values.is_reference(args[0].value).unwrap(), expected_reference);
         let escaped = values.retain(args[0].value).unwrap();

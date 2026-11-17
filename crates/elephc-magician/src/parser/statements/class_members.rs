@@ -76,7 +76,8 @@ impl Parser {
             .with_parameter_by_ref_flags(parameter_is_by_ref)
             .with_parameter_variadic_flags(parameter_is_variadic)
             .with_returns_by_ref(returns_by_ref)
-            .with_return_type(return_type);
+            .with_return_type(return_type)
+            .with_strict_types(self.strict_types);
         self.type_parameters.truncate(type_scope);
         self.type_parameter_origins.truncate(type_scope);
         if !generic_parameters.is_empty() {
@@ -335,7 +336,8 @@ impl Parser {
             body,
         )
         .with_source_location(EvalSourceLocation::new(source_start_line, source_end_line))
-        .with_returns_by_ref(returns_by_ref);
+        .with_returns_by_ref(returns_by_ref)
+        .with_strict_types(self.strict_types);
         if is_set {
             method = method.with_parameter_types(vec![
                 set_hook_type.clone().or_else(|| property_type.cloned()),
