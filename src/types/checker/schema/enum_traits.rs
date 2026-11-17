@@ -86,13 +86,17 @@ pub(crate) fn validate_class_trait_requirements(
     let mut class_uses = HashMap::new();
     collect_class_trait_uses(program, &mut class_uses);
     let mut walk = RequirementWalk::new(&traits);
-    // A pair a trait satisfied itself is one declaration: checked once, by its first user.
+    // A pair a trait satisfied itself is one declaration, checked once by its first user, unless
+    // it names `self`, `parent` or `static`: those resolve against each consuming class, so the
+    // pair is checked for every user and the outcome does not depend on declaration order.
     let mut checked_pairs = HashSet::new();
     for class in classes.iter().filter(|class| !class.used_traits.is_empty()) {
         let Some(uses) = class_uses.get(class.name.as_str()) else { continue };
         let contract = walk.uses_contract(uses);
         let satisfied = contract.satisfied.iter().filter(|(required, actual)| {
-            checked_pairs.insert((required.identity(), actual.identity()))
+            mentions_relative_class_types(&required.method)
+                || mentions_relative_class_types(&actual.method)
+                || checked_pairs.insert((required.identity(), actual.identity()))
         });
         let mut pairs: Vec<(&ClassMethod, &ClassMethod)> =
             satisfied.map(|(required, actual)| (&required.method, &actual.method)).collect();
@@ -112,6 +116,16 @@ pub(crate) fn validate_class_trait_requirements(
         }
     }
     errors
+}
+
+/// Whether `method`'s parameter, variadic or return types name `self`, `parent` or `static`,
+/// which resolve against the class that consumes the trait.
+fn mentions_relative_class_types(method: &ClassMethod) -> bool {
+    let mut probe = method.clone();
+    probe.substitute_relative_class_types("\0self", Some("\0parent"));
+    probe.return_type != method.return_type
+        || probe.variadic_type != method.variadic_type
+        || probe.params.iter().zip(&method.params).any(|(probed, declared)| probed.1 != declared.1)
 }
 
 /// Indexes each class declaration's trait uses by class name, through namespace blocks.
