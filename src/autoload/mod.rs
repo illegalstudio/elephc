@@ -164,6 +164,9 @@ fn run_collecting_included_on_compiler_stack(
     defines: &HashSet<String>,
 ) -> Result<(Program, Vec<PathBuf>, DeclarationSourceFiles), CompileError> {
     if registry.is_empty() {
+        // No eager file declares anything for this compile: forget a previous compile's names on
+        // this thread, or its global-fallback calls would resolve here too.
+        crate::eager_globals::set(HashSet::default());
         return Ok((program, Vec::new(), DeclarationSourceFiles::default()));
     }
     let mut included: HashSet<PathBuf> = HashSet::default();
@@ -2685,6 +2688,18 @@ mod source_units_tests;
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A compile whose registry is empty must not inherit the previous compile's eager global
+    /// functions on the same thread, which would turn a bare call into a runtime-declared one.
+    #[test]
+    fn an_empty_registry_forgets_the_previous_compiles_eager_globals() {
+        crate::eager_globals::set(HashSet::from_iter(["trigger_deprecation".to_string()]));
+        assert!(crate::eager_globals::declares("trigger_deprecation"));
+        let registry = Registry::empty();
+        let result = run_collecting_included(Vec::new(), Path::new("."), &registry);
+        assert!(result.is_ok());
+        assert!(!crate::eager_globals::declares("trigger_deprecation"));
+    }
 
     /// A class asked about only by non-autoloading `class_exists(X, false)` probes is probe-only,
     /// so the closed world keeps answering "not loaded" for it; any real use makes it a use.
