@@ -290,6 +290,81 @@ var_dump(elephc_proc_builder_env_reset($probe + 2));
     assert_eq!(out, "boom\nboom\nint(0)\nint(0)\n");
 }
 
+/// Under `strict_types` a scalar command or cwd is a TypeError, not a converted string, so
+/// nothing is spawned; coercive mode still converts (a `false` cwd becomes `""`).
+#[test]
+fn test_proc_open_rejects_scalar_command_and_cwd_under_strict_types() {
+    let out = compile_and_run_capture(
+        r#"<?php
+declare(strict_types=1);
+function open($command, $cwd): void {
+    try {
+        $process = proc_open($command, [], $pipes, $cwd);
+        echo "spawned ", var_export($process === false ? false : proc_close($process), true), "\n";
+    } catch (TypeError $e) {
+        echo $e->getMessage(), "\n";
+    }
+}
+open(5, null);
+open(true, null);
+open(1.5, null);
+open('true', false);
+open('true', 1);
+open('true', 1.5);
+open(['true'], true);
+open('true', '/');
+try { proc_open('true', [], $pipes, false); } catch (TypeError $e) { echo $e->getMessage(), "\n"; }
+"#,
+    );
+    assert_eq!(
+        out.stdout,
+        "proc_open(): Argument #1 ($command) must be of type array|string, int given\n\
+         proc_open(): Argument #1 ($command) must be of type array|string, true given\n\
+         proc_open(): Argument #1 ($command) must be of type array|string, float given\n\
+         proc_open(): Argument #4 ($cwd) must be of type ?string, false given\n\
+         proc_open(): Argument #4 ($cwd) must be of type ?string, int given\n\
+         proc_open(): Argument #4 ($cwd) must be of type ?string, float given\n\
+         proc_open(): Argument #4 ($cwd) must be of type ?string, true given\n\
+         spawned 0\n\
+         proc_open(): Argument #4 ($cwd) must be of type ?string, false given\n",
+        "{}",
+        out.stderr
+    );
+    assert!(!out.stderr.contains("posix_spawn"), "{}", out.stderr);
+    let coercive = compile_and_run_capture(
+        "<?php $cwd = false; var_dump(proc_open('true', [], $pipes, $cwd));",
+    );
+    assert_eq!(coercive.stdout, "bool(false)\n");
+    assert!(coercive.stderr.contains("posix_spawn() failed"), "{}", coercive.stderr);
+}
+
+/// A helper exception releases the operand boxes the lowering created, and leaves the
+/// caller's own values (typed locals and `Mixed` elements passed through) intact.
+#[test]
+fn test_proc_open_caught_helper_errors_release_operand_boxes() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+function attempt(string $command, array $spec, string $cwd): void {
+    try { proc_open($command, $spec, $pipes, $cwd); } catch (ValueError $e) { echo "v"; }
+}
+$command = str_repeat('t', 1) . 'rue';
+$cwd = sys_get_temp_dir();
+$spec = [0 => 5];
+$mixed = [$command, $spec];
+for ($i = 0; $i < 3; $i++) {
+    attempt($command, $spec, $cwd);
+    try { proc_open($command . '', [0 => 5, 1 => [$i]], $pipes, $cwd . ''); } catch (ValueError $e) { echo "l"; }
+    try { proc_open($mixed[0], $mixed[1], $pipes); } catch (ValueError $e) { echo "m"; }
+    try { proc_terminate(STDIN, 15); } catch (TypeError $e) { echo "t"; }
+}
+echo "|", $command, "|", count($spec), "|", $mixed[0], "|", $cwd === sys_get_temp_dir() ? "same" : "changed", "\n";
+"#,
+    );
+    assert!(out.success, "stdout={:?}\nstderr={}", out.stdout, out.stderr);
+    assert_eq!(out.stdout, "vlmtvlmtvlmt|true|1|true|same\n", "{}", out.stderr);
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
 /// A proc builtin named only by a string literal and invoked through a variable or a user
 /// function's callable parameter still gets its prelude helper.
 #[test]

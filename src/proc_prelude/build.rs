@@ -8,8 +8,9 @@
 //! Key details:
 //! - Transcribed from PHP with `crate::synthetic_class::transcribe`; the spawning half
 //!   (descriptor walk, `__elephc_proc_open`, pipes array) lives in `open`.
-//! - `proc_terminate`/`proc_nice` take a trailing compiler-owned `bool $strict` (the calling
-//!   file's `strict_types`), which `__elephc_proc_int` uses to pick php-src's coercion.
+//! - `proc_open`/`proc_terminate`/`proc_nice` take a trailing compiler-owned `bool $strict`
+//!   (the calling file's `strict_types`): `__elephc_proc_int` uses it to pick php-src's int
+//!   coercion, and `__elephc_proc_open` refuses scalar `$command`/`$cwd` conversions with it.
 //! - Field selectors 0..6 of `elephc_proc_status_field` are `crates/elephc-proc`'s `FIELD_*`.
 //! - A process resource is kind 11 with its bridge id as payload; a closed one keeps the
 //!   kind and carries the negative closed sentinel, which php-src reports as "not a valid

@@ -428,6 +428,11 @@ fn lower_planned_builtin_call_args(
     let argument_lowering = crate::builtins::registry::lookup(&canonical)
         .map(|def| def.spec.semantics.argument_lowering)
         .unwrap_or(crate::builtins::semantics::BuiltinArgumentLowering::Standard);
+    // `proc_open()` boxes every operand for its prelude helper, which applies php-src's
+    // strict or coercive conversions itself: binding a `string|false` cwd to the contract's
+    // `?string` here would convert it before a strict-mode TypeError could be thrown.
+    let value_slots = (canonical == "proc_open").then(|| sig.map(mixed_value_slots)).flatten();
+    let sig = value_slots.as_ref().or(sig);
     let output_locals = prepare_write_only_output_locals(ctx, &canonical, sig, args);
     let capture_regex_output = (canonical == "preg_match" || canonical == "preg_match_all")
         && !output_locals.is_empty();
@@ -799,6 +804,18 @@ pub(super) fn lower_positional_builtin_args_with_signature(
         .collect()
 }
 
+/// Returns a storage copy of `sig` whose by-value slots are `Mixed`, which suppresses scalar
+/// binding while keeping names, defaults, arity and reference modes.
+fn mixed_value_slots(sig: &FunctionSig) -> FunctionSig {
+    let mut storage = sig.clone();
+    for (index, (_, ty)) in storage.params.iter_mut().enumerate() {
+        if !storage.ref_params.get(index).copied().unwrap_or(false) {
+            *ty = PhpType::Mixed;
+        }
+    }
+    storage
+}
+
 /// Uses shared argument planning without converting values before a runtime-owned parameter parser.
 ///
 /// The storage signature retains names, defaults, arity, and reference modes. Mixed value slots
@@ -818,12 +835,7 @@ fn lower_builtin_args_preserving_values(
     {
         return lower_live_mb_convert_variables_args(ctx, args);
     }
-    let mut storage = sig.clone();
-    for (index, (_, ty)) in storage.params.iter_mut().enumerate() {
-        if !storage.ref_params.get(index).copied().unwrap_or(false) {
-            *ty = PhpType::Mixed;
-        }
-    }
+    let storage = mixed_value_slots(sig);
     let capture_output_index = crate::builtins::registry::lookup(name)
         .and_then(|def| def.spec.runtime_builtin_id())
         .filter(|id| matches!(id,

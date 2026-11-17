@@ -6140,6 +6140,28 @@ impl crate::builtins::semantics::BuiltinLoweringContext for LoweringContext<'_, 
         }
     }
 
+    /// Pins only the lowering-owned temporaries in `owned`, never a borrowed caller operand,
+    /// so the unwind chain owns exactly the references the normal path releases below.
+    fn emit_user_call_owning(
+        &mut self,
+        name: &str,
+        operands: Vec<ValueId>,
+        owned: &[ValueId],
+        php_type: PhpType,
+        span: Option<Span>,
+    ) -> crate::builtins::semantics::LoweredBuiltinValue {
+        let at = span.unwrap_or_else(Span::dummy);
+        let pins = crate::ir_lower::expr::call_operand_owners::pin_in_flight_owners(self, owned, at);
+        let lowered = crate::builtins::semantics::BuiltinLoweringContext::emit_user_call(
+            self, name, operands, php_type, span,
+        );
+        crate::ir_lower::expr::unpin_in_flight_owners(self, pins, at);
+        for value in owned {
+            LoweringContext::emit_void(self, Op::Release, vec![*value], None, Op::Release.default_effects(), span);
+        }
+        lowered
+    }
+
     /// Resolves the operand back to the variable it was loaded from and stores through
     /// `store_local`, which routes by storage kind (frame slot, `static`, `global`,
     /// reference cell, extern global, eval scope), so the variable is (re)declared at the
