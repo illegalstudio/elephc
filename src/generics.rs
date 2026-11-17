@@ -435,6 +435,11 @@ fn expand_static_spreads(args: &[crate::parser::ast::Expr], profile: elephc_sema
                 {
                     out.extend(values.iter().cloned())
                 }
+                ExprKind::ArrayLiteralAssoc(_) => {
+                    if let Some(values) = crate::types::call_args::static_assoc_spread_bindings_for_inference(source, profile) {
+                        out.extend(values);
+                    } else { out.push(arg); }
+                }
                 _ => out.push(arg),
             },
             _ => out.push(arg),

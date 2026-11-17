@@ -17,19 +17,6 @@ pub(super) fn reflection_class_new_instance_args(args: &[Expr], profile: elephc_
     args.to_vec()
 }
 
-/// Returns constructor arguments carried by a static `newInstanceArgs()` array argument.
-pub(super) fn reflection_class_new_instance_args_array(
-    ctx: &LoweringContext<'_, '_>,
-    args: &[Expr],
-) -> Option<Vec<Expr>> {
-    let args = reflection_class_new_instance_args(args, ctx.semantic_profile);
-    match args.as_slice() {
-        [] => Some(Vec::new()),
-        [arg] => reflection_class_new_instance_args_value(ctx, arg),
-        _ => None,
-    }
-}
-
 /// Extracts the actual array value passed to the `newInstanceArgs()` `$args` parameter.
 pub(super) fn reflection_class_new_instance_args_value(
     ctx: &LoweringContext<'_, '_>,

@@ -1153,3 +1153,22 @@ new eval/generic/origin gates, default provenance controls and six exact legacy
 named/spread/raw-iterable regressions. All20 unique gates, assembly comments and
 diff hygiene pass. Pre-check dependency policies and duplicate named-key RHS
 effects remain to audit; ArrayKeys and the six pending families stay gated.
+
+### Verified153: evaluated duplicate-key unpack sources
+
+Static bindings preserve first key position and last value for inference while
+retaining the original array for execution whenever overwritten RHS expressions or
+float-key diagnostics could disappear. Positional projections preserve producer
+metadata; float identity uses PHP conversion. Opaque fixed-signature hash unpacks
+reuse boxed argument binding. Reflection newInstanceArgs evaluates its actual
+array before constructor dispatch. Shared focused lowering setup replaces duplicate
+test infrastructure.
+
+Jobf7fb76bc passes two planner/inference gates, warning-order native checks, ten
+profile/target emissions25.61s and eight native mode/profile/optimizer variants
+32.98s with clean heaps. The fixture covers overwritten effects and throws, object
+destructors with GC and final iteration order. PHP output agrees. Final83615103
+passes in5m09s, including compiler/bridge builds123.29s and fourteen exact generic,
+named/spread and Reflection constructor controls. All19 unique gates, assembly
+comments and diff hygiene pass. Function/Method invokeArgs still require actual
+array materialization; ArrayKeys and the six pending strict families stay gated.

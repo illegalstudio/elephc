@@ -44,7 +44,8 @@ pub(super) fn lower_boxed_spread_args(
         || !args.iter().any(|arg| match &arg.kind {
             ExprKind::Spread(source) => {
                 hidden || preserve_values
-                    || spread_source_storage_type_for_ir(ctx, source).codegen_repr() == PhpType::Mixed
+                    || matches!(spread_source_storage_type_for_ir(ctx, source).codegen_repr(),
+                        PhpType::Mixed | PhpType::AssocArray { .. })
                     || nested_spread_assoc_literal(source)
             }
             _ => false,
@@ -54,6 +55,7 @@ pub(super) fn lower_boxed_spread_args(
     }
     let span = args.first()?.span;
     let plan = crate::types::call_args::plan_call_args(sig, args, span, false, false, ctx.semantic_profile).ok()?;
+    if !hidden && !preserve_values && !plan.has_spread_args() { return None; }
     let mut staged = Vec::with_capacity(plan.source_args.len());
     for arg in &plan.source_args {
         staged.push(match &arg.kind {

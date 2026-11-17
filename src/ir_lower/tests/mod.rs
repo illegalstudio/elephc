@@ -804,3 +804,6 @@ mod mixed_literal_key_guards;
 mod array_default_keys;
 
 mod static_unpack_keys;
+
+mod semantic_sources;
+mod duplicate_unpack_values;

@@ -29,4 +29,5 @@ pub(crate) use planner::{
 pub(crate) use static_spread::{
     coalesce_planned_indexed_spreads, coalesce_planned_indexed_spreads_with_prefix,
     expand_planned_positional_spreads, expand_static_assoc_spread_args, has_named_args,
+    static_assoc_spread_bindings_for_inference,
 };

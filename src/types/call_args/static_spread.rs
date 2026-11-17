@@ -9,7 +9,7 @@
 //! - The selected key policy keeps exact strings named and integer keys positional.
 //! - Duplicate keys retain the existing static expansion and runtime fallback rules.
 
-use std::collections::HashSet;
+mod bindings;
 
 use crate::parser::ast::{Expr, ExprKind};
 use crate::span::Span;
@@ -100,19 +100,8 @@ pub(crate) fn validate_static_unpack_order(
         let ExprKind::ArrayLiteralAssoc(pairs) = &inner.kind else {
             continue;
         };
-        let mut seen_named = false;
-        for (key, _) in pairs {
-            match static_assoc_spread_key(key, profile) {
-                Some(StaticAssocSpreadKey::Named(_)) => seen_named = true,
-                Some(StaticAssocSpreadKey::Positional(_)) if seen_named => {
-                    return Err(super::plan::CallArgPlanError::PositionalAfterNamedUnpack {
-                        span: arg.span,
-                    });
-                }
-                Some(StaticAssocSpreadKey::Positional(_)) => {}
-                // A key that is not a literal says nothing about this array.
-                None => break,
-            }
+        if bindings::plan(pairs, profile).is_some_and(|plan| plan.has_positional_after_named()) {
+            return Err(super::plan::CallArgPlanError::PositionalAfterNamedUnpack { span: arg.span });
         }
     }
     Ok(())
@@ -226,58 +215,29 @@ fn expand_static_spread(
 /// Converts an associative array literal's pairs into a flat list of expressions.
 /// String keys become `NamedArg` expressions with `ExpandedArgOrigin::StaticAssocNamed`;
 /// integer-like keys become positional expressions with `ExpandedArgOrigin::StaticAssocPositional`.
-/// Duplicate named keys follow PHP last-wins semantics. A duplicate normalized positional key
-/// keeps the whole spread opaque so array construction can evaluate every overwritten value
-/// before the runtime binder observes the collapsed array.
+/// Duplicate typed keys keep the whole spread opaque so array construction can evaluate
+/// every overwritten value before the runtime binder observes the collapsed array.
 fn expand_static_assoc_spread(
     pairs: &[(Expr, Expr)],
     spread_span: Span,
     profile: elephc_semantics::SemanticProfile,
 ) -> Option<Vec<(Expr, ExpandedArgOrigin)>> {
-    let mut positional_args = Vec::new();
-    let mut positional_keys = HashSet::new();
-    let mut named_args: Vec<(String, Expr)> = Vec::new();
-    for (key, value) in pairs {
-        match static_assoc_spread_key(key, profile)? {
-            StaticAssocSpreadKey::Positional(key) => {
-                if !positional_keys.insert(key) {
-                    return None;
-                }
-                positional_args.push((
-                    Expr::new(value.kind.clone(), spread_span),
-                    ExpandedArgOrigin::StaticAssocPositional,
-                ));
-            }
-            StaticAssocSpreadKey::Named(name) => {
-                if let Some((_, existing_value)) = named_args
-                    .iter_mut()
-                    .find(|(existing_name, _)| existing_name == &name)
-                {
-                    *existing_value = value.clone();
-                } else {
-                    named_args.push((name, value.clone()));
-                }
-            }
-        }
-    }
-    let mut args = positional_args;
-    args.extend(named_args.into_iter().map(|(name, value)| {
-        (
-            Expr::new(
-                ExprKind::NamedArg {
-                    name,
-                    value: Box::new(value),
-                },
-                spread_span,
-            ),
-            ExpandedArgOrigin::StaticAssocNamed,
-        )
-    }));
-    Some(args)
+    let plan = bindings::plan(pairs, profile)?;
+    plan.can_expand().then(|| plan.into_arguments(spread_span))
+}
+
+/// Projects only final value bindings for inference; execution retains the original source array.
+pub(crate) fn static_assoc_spread_bindings_for_inference(
+    source: &Expr, profile: elephc_semantics::SemanticProfile,
+) -> Option<Vec<Expr>> {
+    let ExprKind::ArrayLiteralAssoc(pairs) = &source.kind else { return None; };
+    Some(bindings::plan(pairs, profile)?.into_arguments(source.span)
+        .into_iter().map(|(value, _)| value).collect())
 }
 
 /// Classifies a single array literal key as either a positional (integer-like)
 /// key or a named (string) key according to PHP array-unpack semantics.
+#[derive(Clone, PartialEq, Eq, Hash)]
 enum StaticAssocSpreadKey {
     Positional(i64),
     Named(String),
@@ -293,7 +253,7 @@ fn static_assoc_spread_key(key: &Expr, profile: elephc_semantics::SemanticProfil
             Some(StaticAssocSpreadKey::Positional(i64::from(*value)))
         }
         ExprKind::FloatLiteral(value) if !profile.contains(elephc_semantics::StrictFeature::ArrayKeys) => {
-            Some(StaticAssocSpreadKey::Positional(*value as i64))
+            Some(StaticAssocSpreadKey::Positional(crate::types::php_float_array_key(*value)))
         }
         ExprKind::StringLiteral(value) => {
             let bytes = elephc_builtin_contract::string_literal::literal_bytes(value);
@@ -503,6 +463,45 @@ mod tests {
     /// Checks the same parser-only ordering used before semantic profiles are selected.
     fn validate_syntax_only(args: &[Expr]) -> Result<(), super::super::plan::CallArgPlanError> {
         super::super::planner::validate_syntactic_call_argument_order(args)
+    }
+
+
+    /// Final bindings can guide inference while execution still evaluates every overwritten value.
+    #[test]
+    fn duplicate_unpack_projection_keeps_execution_opaque_and_inference_precise() {
+        use elephc_semantics::{SemanticProfile, StrictFeature};
+        let source = Expr::new(ExprKind::ArrayLiteralAssoc(vec![
+            (Expr::string_lit("value"), Expr::var("first")),
+            (Expr::string_lit("value"), Expr::var("last")),
+        ]), Span::dummy());
+        let unpack = Expr::new(ExprKind::Spread(Box::new(source.clone())), Span::dummy());
+        for exact in [false, true] {
+            let profile = SemanticProfile::PERMISSIVE.with(StrictFeature::ArrayKeys, exact);
+            assert_eq!(expand_static_assoc_spread_args(&[unpack.clone()], profile), vec![unpack.clone()]);
+            let values = static_assoc_spread_bindings_for_inference(&source, profile).unwrap();
+            assert!(matches!(&values[0].kind, ExprKind::NamedArg { name, value }
+                if name == "value" && value.kind == ExprKind::Variable("last".into())));
+        }
+    }
+
+    /// Typed overwrites retain their first iteration position before unpack order is checked.
+    #[test]
+    fn duplicate_unpack_order_uses_final_typed_keys_and_float_identity() {
+        use elephc_semantics::{SemanticProfile, StrictFeature};
+        let unpack = |pairs| Expr::new(ExprKind::Spread(Box::new(Expr::new(
+            ExprKind::ArrayLiteralAssoc(pairs), Span::dummy(),
+        ))), Span::dummy());
+        let source = unpack(vec![(Expr::string_lit("0"), Expr::int_lit(1)),
+            (Expr::string_lit("named"), Expr::int_lit(2)), (Expr::int_lit(0), Expr::int_lit(3))]);
+        for exact in [false, true] {
+            let profile = SemanticProfile::PERMISSIVE.with(StrictFeature::ArrayKeys, exact);
+            assert_eq!(validate_static_unpack_order(&[source.clone()], profile).is_err(), exact);
+        }
+        let source = unpack(vec![(Expr::int_lit(i64::MIN), Expr::int_lit(1)),
+            (Expr::string_lit("named"), Expr::int_lit(2)),
+            (Expr::new(ExprKind::FloatLiteral(-(i64::MIN as f64)), Span::dummy()), Expr::int_lit(3))]);
+        assert!(validate_static_unpack_order(&[source.clone()], SemanticProfile::PERMISSIVE).is_ok());
+        assert_eq!(expand_static_assoc_spread_args(&[source.clone()], SemanticProfile::PERMISSIVE), vec![source]);
     }
 
 }
