@@ -291,6 +291,7 @@ pub(super) fn emit_scope_extras(
             ctx,
             &instance_targets,
             selector_tables::ReceiverSelector::CallableArray,
+            policy.fresh_closure,
             &selected_label,
             &static_label,
         )?;
@@ -326,6 +327,7 @@ pub(super) fn emit_scope_extras(
             ctx,
             &invokable_targets,
             selector_tables::ReceiverSelector::InvokableObject,
+            policy.fresh_closure,
             &selected_label,
             &object_miss,
         )?;

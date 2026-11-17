@@ -723,7 +723,10 @@ fn emit_inline_mixed_callable_descriptor_value(
         Arch::AArch64 => ctx.emitter.instruction("mov x0, x1"),                 // return the unboxed descriptor payload
         Arch::X86_64 => ctx.emitter.instruction("mov rax, rdi"),                // return the unboxed descriptor payload
     }
-    if retain_existing_descriptor {
+    if fresh_closure {
+        // PHP returns a Closure as is, but wraps an implicit or invokable-object callable in one.
+        abi::emit_call_label(ctx.emitter, "__rt_callable_closure_copy");
+    } else if retain_existing_descriptor {
         callable_descriptor::emit_retain_current_descriptor(ctx.emitter);
     }
     abi::emit_jump(ctx.emitter, &done_label);
@@ -732,6 +735,7 @@ fn emit_inline_mixed_callable_descriptor_value(
     let candidate_names = ctx.runtime_callable_candidates(callable);
     // An owned result records that PHP still sees a string here, for gettype(), get_class() and
     // `::class`: the name selects a static descriptor variant carrying that origin.
+    // A Closure factory instead wraps the name's descriptor in a fresh Closure object.
     emit_runtime_string_descriptor_value_from_unboxed(
         ctx,
         op_name,
@@ -757,20 +761,29 @@ fn emit_inline_mixed_callable_descriptor_value(
         let selected_label = ctx.next_label("mixed_callable_value_array_done");
         let static_selected_label = ctx.next_label("mixed_callable_value_array_static_done");
         let static_label = ctx.next_label("mixed_callable_value_array_static");
-        let instance_bound_label = ctx.next_label("mixed_callable_value_array_instance_bound");
+        // A factory's binding is the new Closure itself; any other is a private copy that PHP
+        // still sees as an array, so it records that origin before joining the selected path.
+        let instance_bound_label = if fresh_closure {
+            selected_label.clone()
+        } else {
+            ctx.next_label("mixed_callable_value_array_instance_bound")
+        };
         selector_tables::emit_instance_target_table_lookup(
             ctx,
             &instance_targets,
             selector_tables::ReceiverSelector::CallableArray,
+            fresh_closure,
             &instance_bound_label,
             &static_label,
         )?;
-        ctx.emitter.label(&instance_bound_label);
-        // The receiver-bound copy is private to this value: PHP still sees an array here.
-        callable_descriptor::emit_mark_runtime_descriptor_origin(
-            ctx.emitter, abi::int_result_reg(ctx.emitter), callable_descriptor::CALLABLE_DESC_ORIGIN_ARRAY,
-        );
-        abi::emit_jump(ctx.emitter, &selected_label);
+        if !fresh_closure {
+            ctx.emitter.label(&instance_bound_label);
+            // The receiver-bound copy is private to this value: PHP still sees an array here.
+            callable_descriptor::emit_mark_runtime_descriptor_origin(
+                ctx.emitter, abi::int_result_reg(ctx.emitter), callable_descriptor::CALLABLE_DESC_ORIGIN_ARRAY,
+            );
+            abi::emit_jump(ctx.emitter, &selected_label);
+        }
         ctx.emitter.label(&static_label);
         for case in &static_cases {
             let next_label = ctx.next_label("mixed_callable_value_array_static_next");
@@ -801,23 +814,30 @@ fn emit_inline_mixed_callable_descriptor_value(
         emit_push_mixed_unbox_payload(ctx);
         let selected_label = ctx.next_label("mixed_callable_value_object_done");
         let object_miss_label = ctx.next_label("mixed_callable_value_object_miss");
-        let object_bound_label = ctx.next_label("mixed_callable_value_object_bound");
+        let object_bound_label = if fresh_closure {
+            selected_label.clone()
+        } else {
+            ctx.next_label("mixed_callable_value_object_bound")
+        };
         selector_tables::emit_instance_target_table_lookup(
             ctx,
             &invokable_targets,
             selector_tables::ReceiverSelector::InvokableObject,
+            fresh_closure,
             &object_bound_label,
             &object_miss_label,
         )?;
-        ctx.emitter.label(&object_bound_label);
-        // The template is shared with `[$obj, '__invoke']`, an array in PHP. Only this copy
-        // stands for the object itself, which is_object() and get_class() still see.
-        callable_descriptor::emit_store_kind_to_runtime_descriptor(
-            ctx.emitter,
-            abi::int_result_reg(ctx.emitter),
-            callable_descriptor::CALLABLE_DESC_KIND_OBJECT_INVOKE,
-        );
-        abi::emit_jump(ctx.emitter, &selected_label);
+        if !fresh_closure {
+            ctx.emitter.label(&object_bound_label);
+            // The template is shared with `[$obj, '__invoke']`, an array in PHP. Only this copy
+            // stands for the object itself, which is_object() and get_class() still see.
+            callable_descriptor::emit_store_kind_to_runtime_descriptor(
+                ctx.emitter,
+                abi::int_result_reg(ctx.emitter),
+                callable_descriptor::CALLABLE_DESC_KIND_OBJECT_INVOKE,
+            );
+            abi::emit_jump(ctx.emitter, &selected_label);
+        }
         ctx.emitter.label(&object_miss_label);
         if eval_fallback_slot.is_some() {
             abi::emit_release_temporary_stack(ctx.emitter, MIXED_VALUE_BYTES);
@@ -1969,7 +1989,7 @@ pub(super) fn emit_runtime_mixed_instance_callable_array_descriptor_value(
     for target in &targets {
         let next_label = ctx.next_label("callable_array_instance_next");
         emit_branch_if_runtime_array_instance_mismatch(ctx, target, &next_label);
-        emit_runtime_array_instance_descriptor_value(ctx, target)?;
+        emit_runtime_array_instance_descriptor_value(ctx, target, false)?;
         abi::emit_jump(ctx.emitter, &done_label);
         ctx.emitter.label(&next_label);
     }
@@ -2004,7 +2024,7 @@ fn emit_mixed_callable_array_descriptor_value(
     for target in &instance_targets {
         let next_label = ctx.next_label("callable_array_instance_next");
         emit_branch_if_runtime_array_instance_mismatch(ctx, target, &next_label);
-        emit_runtime_array_instance_descriptor_value(ctx, target)?;
+        emit_runtime_array_instance_descriptor_value(ctx, target, false)?;
         abi::emit_jump(ctx.emitter, &done_label);
         ctx.emitter.label(&next_label);
     }
@@ -2924,6 +2944,7 @@ fn emit_runtime_array_instance_descriptor_invoke(
 fn emit_runtime_array_instance_descriptor_value(
     ctx: &mut FunctionContext<'_>,
     target: &RuntimeArrayInstanceMethodTarget,
+    closure: bool,
 ) -> Result<()> {
     let receiver_ty = PhpType::Object(target.class_name.clone());
     let template = runtime_instance_method_descriptor_template(
@@ -2934,11 +2955,12 @@ fn emit_runtime_array_instance_descriptor_value(
         &target.impl_class,
         &target.sig,
     )?;
-    emit_runtime_descriptor_with_saved_receiver_capture(
+    emit_runtime_receiver_descriptor(
         ctx,
         &template.descriptor_label,
         &receiver_ty,
         MIXED_RECEIVER_PAYLOAD_OFFSET,
+        closure,
     );
     Ok(())
 }
@@ -2969,6 +2991,18 @@ fn emit_runtime_descriptor_with_saved_receiver_capture(
     receiver_ty: &PhpType,
     receiver_payload_offset: usize,
 ) {
+    emit_runtime_receiver_descriptor(ctx, descriptor_label, receiver_ty, receiver_payload_offset, false);
+}
+
+/// Allocates a receiver-bound runtime descriptor; a `closure` one is a Closure object with its own
+/// handle, as `Closure::fromCallable()` and `$callable(...)` create.
+fn emit_runtime_receiver_descriptor(
+    ctx: &mut FunctionContext<'_>,
+    descriptor_label: &str,
+    receiver_ty: &PhpType,
+    receiver_payload_offset: usize,
+    closure: bool,
+) {
     let result_reg = abi::int_result_reg(ctx.emitter);
     let descriptor_reg = abi::nested_call_reg(ctx.emitter);
     let total_bytes = callable_descriptor::CALLABLE_DESC_RUNTIME_CAPTURE_OFFSET + 16;
@@ -2977,6 +3011,9 @@ fn emit_runtime_descriptor_with_saved_receiver_capture(
     abi::emit_push_reg(ctx.emitter, result_reg);
     abi::emit_load_int_immediate(ctx.emitter, result_reg, total_bytes as i64);
     abi::emit_call_label(ctx.emitter, "__rt_heap_alloc");
+    if closure {
+        crate::codegen_support::runtime::emit_acquire_object_handle(ctx.emitter); // a PHP Closure is an object: draw its handle from the object pool
+    }
     ctx.emitter
         .instruction(&format!("mov {}, {}", descriptor_reg, result_reg)); // keep the receiver-bound descriptor while copying its static header
     callable_descriptor::emit_copy_static_descriptor_to_runtime(

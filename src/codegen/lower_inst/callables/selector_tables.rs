@@ -165,11 +165,13 @@ impl ReceiverSelector {
 ///
 /// On a match the integer result register holds a fresh runtime descriptor owning one retained
 /// receiver and control reaches `selected_label`; otherwise `miss_label`. The selector block
-/// stays on the temporary stack on both exits.
+/// stays on the temporary stack on both exits. A `closure` descriptor is a Closure object with
+/// its own handle, as `Closure::fromCallable()` and `$callable(...)` create.
 pub(super) fn emit_instance_target_table_lookup(
     ctx: &mut FunctionContext<'_>,
     targets: &[RuntimeArrayInstanceMethodTarget],
     selector: ReceiverSelector,
+    closure: bool,
     selected_label: &str,
     miss_label: &str,
 ) -> Result<()> {
@@ -324,6 +326,9 @@ fn emit_instance_target_table_scan(
         (callable_descriptor::CALLABLE_DESC_RUNTIME_CAPTURE_OFFSET + 16) as i64,
     );
     abi::emit_call_label(ctx.emitter, "__rt_heap_alloc");
+    if closure {
+        crate::codegen_support::runtime::emit_acquire_object_handle(ctx.emitter); // a PHP Closure is an object: draw its handle from the object pool
+    }
     abi::emit_reg_move(ctx.emitter, descriptor_reg, result_reg);
     abi::emit_load_temporary_stack_slot(ctx.emitter, template_reg, 16);
     callable_descriptor::emit_copy_descriptor_header_to_runtime(ctx.emitter, descriptor_reg, template_reg);
