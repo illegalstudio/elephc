@@ -938,7 +938,9 @@ pub(super) fn magic_get_receiver_class(
     // A class that allows dynamic properties may hold the name in its own hash, which php reads
     // before it ever calls `__get` (guzzle's `FnStream` stores its `_fn_*` callables there). The
     // runtime plan below reads the hash and answers a miss from `__get`.
-    if class_info.allow_dynamic_properties {
+    // Reserved scope storage counts too: a class with `__get` and no `__set` keeps the dynamic
+    // property a write created (`$o->b = 3`), and php reads it before `__get` is consulted.
+    if class_info.dynamic_property_hash_is_name_addressable() {
         return Ok(None);
     }
     if class_info.methods.contains_key(&php_symbol_key("__get")) {

@@ -568,3 +568,18 @@ echo B::g('p'), A::g('p'), A::$p, B::$p, "\n";
     );
     assert_eq!(out, "BA\nB2A2A2B2\n");
 }
+
+/// A class with `__get` but no `__set` keeps the dynamic property a write creates, and php reads
+/// that entry before it ever consults `__get`; only absent names reach the accessor.
+#[test]
+fn test_dynamic_property_created_beside_get_is_read_before_magic_get() {
+    let out = compile_and_run(
+        r#"<?php
+error_reporting(E_ALL & ~E_DEPRECATED);
+class M { public $a = 1; private $hid = 7; public function __get($n) { return "magic:$n"; } }
+$m = new M; $m->b = 3;
+echo $m->b, "|", $m->c, "|", $m->hid, "|", $m->a, "\n";
+"#,
+    );
+    assert_eq!(out, "3|magic:c|magic:hid|1\n");
+}
