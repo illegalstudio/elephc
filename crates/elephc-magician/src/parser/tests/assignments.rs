@@ -104,6 +104,24 @@ fn parse_fragment_refuses_a_reference_append_in_expression_position() {
     assert_eq!(error.error(), EvalParseError::ExpectedSemicolon);
 }
 
+/// Verifies a reference source that ends in an empty dimension parses in every statement form.
+///
+/// `$a[] = &$b[];` creates the null element of `$b` and binds `$a`'s new element to it; the
+/// statement branches used the plain expression parser, which stops in front of the `[]`.
+#[test]
+fn parse_fragment_accepts_an_empty_dimension_reference_source() {
+    for source in [
+        &br#"$a = []; $b = []; $a[] = &$b[];"#[..],
+        &br#"$a = []; $b = []; $a["k"] = &$b[];"#[..],
+        &br#"$a = []; $b = []; $a["k"]["j"] = &$b[];"#[..],
+        &br#"$a = []; $b = []; $a["k"][] = &$b[];"#[..],
+    ] {
+        parse_fragment(source).unwrap_or_else(|error| {
+            panic!("{} should parse: {:?}", String::from_utf8_lossy(source), error.error())
+        });
+    }
+}
+
 /// Verifies a by-reference declaration and a bind to its result both parse.
 ///
 /// The gap this test was written to pin -- the declaration parsing while the BIND stayed refused

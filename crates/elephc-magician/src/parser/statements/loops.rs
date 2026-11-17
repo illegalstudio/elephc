@@ -47,7 +47,7 @@ impl Parser {
         if self.consume(TokenKind::RBracket) {
             self.expect(TokenKind::Equal)?;
             if self.consume(TokenKind::Ampersand) {
-                let source = self.parse_expr()?;
+                let source = self.parse_reference_source_expr()?;
                 self.expect_semicolon()?;
                 return Ok(vec![EvalStmt::ArrayAppendReferenceBind {
                     target: EvalExpr::LoadVar(name),
@@ -101,7 +101,7 @@ impl Parser {
         {
             self.advance();
             self.advance();
-            let source = self.parse_expr()?;
+            let source = self.parse_reference_source_expr()?;
             self.expect_semicolon()?;
             return Ok(vec![EvalStmt::ArrayReferenceBind { target, source }]);
         }
@@ -110,7 +110,7 @@ impl Parser {
         };
         self.advance();
         if op.is_none() && self.consume(TokenKind::Ampersand) {
-            let source = self.parse_expr()?;
+            let source = self.parse_reference_source_expr()?;
             self.expect_semicolon()?;
             return Ok(vec![EvalStmt::ArrayReferenceBind { target, source }]);
         }
