@@ -15,8 +15,9 @@
 //!   requirement found no target.
 //! - Requirements are collected through nested trait uses, by trait name, case-insensitively,
 //!   and include the `as` aliases of abstract trait methods, which flattening makes abstract too.
-//!   A requirement a trait implements itself is satisfied for that trait's users, and an alias
-//!   of a method its trait implements is concrete, not required.
+//!   A requirement a trait implements itself, or that another trait it uses implements, is
+//!   satisfied for that trait's users, and an alias of a method its trait implements is
+//!   concrete, not required. A class's own `use` list keeps such a requirement, as PHP does.
 //!   Each trait's set is memoized once complete, so traits shared along many `use` paths are not
 //!   walked again per path.
 //! - Methods the class body declares itself are recorded too: a requirement satisfied by an
@@ -155,7 +156,12 @@ fn trait_summary(trait_key: &str, walk: &mut RequirementWalk<'_>) -> TraitSummar
     }
     let used = summary_of_uses(&shape.uses, walk);
     let mut required = shape.abstract_methods.clone();
-    required.extend(used.required.into_iter().filter(|key| !shape.concrete_methods.contains(key)));
+    // A requirement another trait used here implements is satisfied too: flattening gives the
+    // trait that concrete method (`trait W { use NeedsFoo, GivesFoo; }`), so its users see no
+    // abstract `foo`. Only a class's own `use` list keeps such a requirement.
+    required.extend(used.required.into_iter().filter(|key| {
+        !shape.concrete_methods.contains(key) && !used.provided.contains(key)
+    }));
     let mut provided = shape.concrete_methods.clone();
     provided.extend(used.provided.into_iter().filter(|key| !shape.abstract_methods.contains(key)));
     let summary = TraitSummary { required, provided };
@@ -192,6 +198,18 @@ fn summary_of_uses(uses: &[TraitUse], walk: &mut RequirementWalk<'_>) -> TraitSu
                 summary.provided.insert(php_symbol_key(alias));
             } else if selected.iter().any(|methods| methods.required.contains(&method_key)) {
                 summary.required.insert(php_symbol_key(alias));
+            }
+        }
+        // `insteadof` drops the excluded traits' bodies (aliases above still read them, as
+        // flattening does), so `use Needs, Gives { Needs::foo insteadof Gives; }` keeps `foo`
+        // abstract. The excluded abstract methods stay requirements.
+        let mut per_trait = per_trait;
+        for adaptation in &use_decl.adaptations {
+            let TraitAdaptation::InsteadOf { method, instead_of, .. } = adaptation else { continue };
+            for excluded in instead_of {
+                if let Some(methods) = per_trait.get_mut(&php_symbol_key(excluded.as_str())) {
+                    methods.provided.remove(&php_symbol_key(method));
+                }
             }
         }
         for methods in per_trait.into_values() {

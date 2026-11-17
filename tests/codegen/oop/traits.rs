@@ -340,3 +340,65 @@ echo (new C())->bar(), (new C())->foo(), "|", (new D())->bar(), (new D())->foo()
     );
     assert_eq!(out, "A::fooA::foo|D::barB::foo\n");
 }
+
+/// An abstract trait method is a requirement, not a definition: two traits may both require a
+/// method, and a concrete trait method satisfies another trait's abstract one in either order,
+/// whether the traits come in one `use` or in several.
+#[test]
+fn test_trait_abstract_method_requirements_do_not_conflict() {
+    let out = compile_and_run(
+        r#"<?php
+trait Rows { abstract public function label(): string; public function rows(): string { return "r" . $this->label(); } }
+trait Hover { abstract public function label(): string; public function hover(): string { return "h" . $this->label(); } }
+final class Panel { use Rows; use Hover; public function label(): string { return "p"; } }
+final class Pane { use Rows, Hover; public function label(): string { return "q"; } }
+
+trait NeedsLabel { abstract public function label(): string; public function show(): string { return "<" . $this->label() . ">"; } }
+trait GivesLabel { public function label(): string { return "x"; } }
+final class First { use NeedsLabel; use GivesLabel; }
+final class Second { use GivesLabel; use NeedsLabel; }
+final class Both { use NeedsLabel, GivesLabel; }
+final class Requirements { use Rows, Hover, GivesLabel; }
+
+$panel = new Panel(); $pane = new Pane(); $req = new Requirements();
+echo $panel->rows(), $panel->hover(), $pane->rows(), $pane->hover(), "|";
+echo (new First())->show(), (new Second())->show(), (new Both())->show(), $req->rows(), $req->hover();
+"#,
+    );
+    assert_eq!(out, "rphprqhq|<x><x><x>rxhx");
+}
+
+/// A class's own `use` list keeps an abstract trait method as a requirement even when another
+/// trait in it implements the method, and a wrapper trait's alias of the abstract method stays
+/// abstract: `#[\Override]` on the class method holds in both cases, as in php 8.5.12.
+#[test]
+fn test_trait_requirement_kept_by_class_use_list_and_abstract_alias() {
+    let out = compile_and_run(
+        r#"<?php
+trait NeedsFoo { abstract public function foo(): string; }
+trait GivesFoo { public function foo(): string { return "G"; } }
+trait W { use NeedsFoo, GivesFoo { NeedsFoo::foo as bar; } }
+final class Direct { use NeedsFoo, GivesFoo; #[\Override] public function foo(): string { return "D"; } }
+final class Wrapped { use W; #[\Override] public function bar(): string { return "B"; } }
+echo (new Direct())->foo(), (new Wrapped())->bar(), (new Wrapped())->foo(), "\n";
+"#,
+    );
+    assert_eq!(out, "DBG\n");
+}
+
+/// `insteadof` that keeps a trait's abstract method over another trait's body leaves the
+/// wrapper trait's method abstract, so a class using it implements a requirement and
+/// `#[\Override]` holds, as php 8.5.12 accepts.
+#[test]
+fn test_trait_requirement_kept_abstract_by_insteadof_in_a_wrapper_trait() {
+    let out = compile_and_run(
+        r#"<?php
+trait NeedsFoo { abstract public function foo(): string; }
+trait GivesFoo { public function foo(): string { return "g"; } }
+trait W { use NeedsFoo, GivesFoo { NeedsFoo::foo insteadof GivesFoo; } }
+final class C { use W; #[\Override] public function foo(): string { return "c"; } }
+echo (new C())->foo(), "\n";
+"#,
+    );
+    assert_eq!(out, "c\n");
+}
