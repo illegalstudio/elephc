@@ -4,7 +4,9 @@
   "pending": {
     "6f823197fdffacb3941c87fb2fe055490248f326": {
       "first_seen": 1794904147,
-      "attempts": 0
+      "attempts": 0,
+      "last_observed": 1794904147,
+      "runs": []
     }
   },
   "completed": [
