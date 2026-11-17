@@ -775,10 +775,6 @@ fn visible_static_slots<'a>(ctx: &'a LoweringContext<'_, '_>, class_name: &str) 
     slots
 }
 
-/// Returns the class constants in `class_name`'s constant table, in php-src's order, each with
-/// the class-like that holds it: the class's own constants (trait constants after them), the
-/// parent's whole table, then each implemented interface's table (its own constants, then its
-/// parents'). A name appears once, at its first position.
 /// Declaration spans of `class_name`'s int enum cases written `MT_RAND_PHP`, which the checker
 /// folds to `1` and flags, in declaration order.
 pub(crate) fn flagged_enum_case_spans(ctx: &LoweringContext<'_, '_>, class_name: &str) -> Vec<Span> {
@@ -792,7 +788,7 @@ pub(crate) fn flagged_enum_case_spans(ctx: &LoweringContext<'_, '_>, class_name:
 /// reflection `getConstant()`/`getConstants()`: in table order, each constant's first
 /// evaluation reporting at `line`. An enum's flagged `MT_RAND_PHP` cases are constants of that
 /// table too, so their notices (at the case declaration, once per case) come in declaration
-/// order among the enum's own constants.
+/// order among the enum's own constants, all before the inherited ones (an interface's).
 pub(crate) fn emit_constant_table_evaluation(
     ctx: &mut LoweringContext<'_, '_>,
     class_name: &str,
@@ -801,11 +797,16 @@ pub(crate) fn emit_constant_table_evaluation(
     let class_name = class_name.trim_start_matches('\\');
     let mut cases = flagged_enum_case_spans(ctx, class_name).into_iter().peekable();
     for (owner, name) in class_constant_table(ctx, class_name) {
-        if owner.eq_ignore_ascii_case(class_name) {
-            let at = ctx.scoped_constant_value(&owner, &name).map(|value| (value.span.line, value.span.col));
-            while let Some(case) = cases.next_if(|case| at.is_some_and(|at| (case.line, case.col) < at)) {
-                crate::ir_lower::expr::emit_mt_rand_php_deprecation(ctx, case, case);
-            }
+        let at = if owner.eq_ignore_ascii_case(class_name) {
+            ctx.scoped_constant_value(&owner, &name).map(|value| (value.span.line, value.span.col))
+        } else {
+            None
+        };
+        // Cases declared before this own constant come first; the first inherited constant
+        // follows every case.
+        let inherited = !owner.eq_ignore_ascii_case(class_name);
+        while let Some(case) = cases.next_if(|case| inherited || at.is_some_and(|at| (case.line, case.col) < at)) {
+            crate::ir_lower::expr::emit_mt_rand_php_deprecation(ctx, case, case);
         }
         emit_class_constant_evaluation(ctx, &owner, &name, line);
     }
@@ -822,6 +823,10 @@ pub(crate) fn constant_table_reports(ctx: &LoweringContext<'_, '_>, class_name: 
         })
 }
 
+/// Returns the class constants in `class_name`'s constant table, in php-src's order, each with
+/// the class-like that holds it: the class's own constants (trait constants after them), the
+/// parent's whole table, then each implemented interface's table (its own constants, then its
+/// parents'). A name appears once, at its first position.
 pub(crate) fn class_constant_table(ctx: &LoweringContext<'_, '_>, class_name: &str) -> Vec<(String, String)> {
     let mut table = Vec::new();
     push_class_constant_table(ctx, class_name.trim_start_matches('\\'), &mut table, 0);

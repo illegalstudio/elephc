@@ -2290,3 +2290,63 @@ end
 "#
     );
 }
+
+/// A class that only inherits a deprecated interface constant reports it on initialization; a throwing handler's exception is caught and the next `new` reports again.
+#[test]
+fn test_interface_constant_initialization_retries_after_a_throwing_handler() {
+    let out = compile_and_run(
+        r#"<?php
+$throws = true;
+set_error_handler(function (int $l, string $m) use (&$throws): bool {
+    echo "  ", substr($m, 0, strpos($m, " is deprecated")), "\n";
+    if ($throws) { $throws = false; throw new Exception("handler"); }
+    return true;
+});
+interface IfaceDep { const K = E_STRICT; }
+class OnlyIface implements IfaceDep {}
+class Child extends OnlyIface {}
+try { new OnlyIface; } catch (Exception $e) { echo "caught ", $e->getMessage(), "\n"; }
+try { new OnlyIface; echo "made\n"; } catch (Exception $e) { echo "caught2 ", $e->getMessage(), "\n"; }
+new Child;
+echo "end\n";
+"#,
+    );
+    assert_eq!(
+        out,
+        r#"  Constant E_STRICT
+caught handler
+  Constant E_STRICT
+made
+end
+"#
+    );
+}
+
+/// A backed enum reports its `MT_RAND_PHP` cases before the constants it inherits from an interface.
+#[test]
+fn test_enum_cases_report_before_interface_constants() {
+    let out = compile_and_run(
+        r#"<?php
+set_error_handler(function (int $l, string $m, string $f, int $line): bool {
+    echo "  ", $line, " ", substr($m, 0, strpos($m, " is deprecated")), "\n";
+    return true;
+});
+interface I { const K = DATE_RFC7231; }
+enum E: int implements I { case A = MT_RAND_PHP; }
+enum F: int implements I { const L = 1; case A = MT_RAND_PHP; }
+echo "e\n"; E::from(1);
+echo "f\n"; F::from(1);
+echo "end\n";
+"#,
+    );
+    assert_eq!(
+        out,
+        r#"e
+  7 Constant MT_RAND_PHP
+  9 Constant DATE_RFC7231
+f
+  8 Constant MT_RAND_PHP
+end
+"#
+    );
+}

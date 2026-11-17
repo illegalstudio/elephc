@@ -471,8 +471,8 @@ impl ExceptionFlowAnalysis {
                             .any(crate::types::deferred_defaults::contains_deferred_error)
                 }).map(|(name, _)| php_symbol_key(name)).collect()
             }).unwrap_or_else(|| property_defaults::imported_default_errors(program)),
-            initialization_reports: type_metadata.map(|(_, classes, _)| {
-                classes.keys().filter(|name| initialization_may_report(classes, name)).map(|name| php_symbol_key(name)).collect()
+            initialization_reports: type_metadata.map(|(_, classes, interfaces)| {
+                classes.keys().filter(|name| initialization_may_report(classes, interfaces, name)).map(|name| php_symbol_key(name)).collect()
             }).unwrap_or_else(|| property_defaults::imported_initialization_reports(program)),
             function_returns,
             static_method_returns,
@@ -1561,17 +1561,38 @@ fn host_output_throws() -> ThrownTypes {
 }
 
 /// Reports whether the first `new` of `class_name` may raise a deprecation from its class
-/// initialization: its own or an ancestor's defaults or constants read a deprecated global
-/// constant, or any class constant (which may itself read one). An error handler can throw
-/// from that notice, so the `new` may throw. Conservative: it only keeps a `catch` alive.
-fn initialization_may_report(classes: &HashMap<String, crate::types::ClassInfo>, class_name: &str) -> bool {
+/// initialization: its own or an ancestor's defaults or constants, or the constants of an
+/// interface it implements, read a deprecated global constant or any class constant (which
+/// may itself read one). An error handler can throw from that notice, so the `new` may throw.
+/// Conservative: it only keeps a `catch` alive.
+fn initialization_may_report(
+    classes: &HashMap<String, crate::types::ClassInfo>,
+    interfaces: &HashMap<String, InterfaceInfo>,
+    class_name: &str,
+) -> bool {
     let reads = reads_reporting_constant;
+    let interface_reports = |name: &str| {
+        let mut queue = vec![name.to_string()];
+        let mut seen = HashSet::new();
+        while let Some(name) = queue.pop() {
+            if !seen.insert(php_symbol_key(&name)) {
+                continue;
+            }
+            let Some(interface) = interfaces.get(name.trim_start_matches('\\')) else { continue };
+            if interface.constants.values().any(|expr| reads(expr)) {
+                return true;
+            }
+            queue.extend(interface.parents.iter().cloned());
+        }
+        false
+    };
     let mut current = Some(class_name.to_string());
     let mut depth = 0;
     while let Some(name) = current {
         let Some(class) = classes.get(&name) else { return false };
         if class.defaults.iter().chain(class.static_defaults.iter()).flatten().any(|expr| reads(expr))
             || class.constants.values().any(|expr| reads(expr))
+            || class.interfaces.iter().any(|interface| interface_reports(interface))
         {
             return true;
         }
