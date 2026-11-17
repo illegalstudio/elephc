@@ -553,6 +553,12 @@ fn emit_aarch64_header_remove_case(emitter: &mut Emitter) {
     emitter.instruction("bl __rt_mixed_unbox");                                 // expose the concrete tag of the name
     emitter.instruction("cmp x0, #8");                                          // runtime tag 8 = null
     emitter.instruction("b.eq __elephc_runtime_builtin_v1_header_remove_all");  // header_remove(null) clears every header too
+    emitter.instruction("cmp x0, #1");                                          // runtime tag 1 = string
+    emitter.instruction("b.ne __elephc_runtime_builtin_v1_header_remove_cast"); // any other name is cast to its string form
+    emitter.instruction("mov x0, x1");                                          // pass the borrowed name pointer to the bridge helper
+    emitter.instruction("mov x1, x2");                                          // pass the borrowed name length to the bridge helper
+    emitter.instruction("b __elephc_runtime_builtin_v1_header_remove_call");    // a string name needs no owned copy
+    emitter.label("__elephc_runtime_builtin_v1_header_remove_cast");
     emitter.instruction("ldr x0, [x20]");                                       // reload the borrowed boxed name cell
     emitter.instruction("bl __rt_mixed_cast_string");                           // x1/x2 = the name as a PHP string
     emitter.instruction("mov x0, x1");                                          // pass the name pointer to the bridge helper
@@ -577,6 +583,11 @@ fn emit_x86_64_header_remove_case(emitter: &mut Emitter) {
     emitter.instruction("call __rt_mixed_unbox");                               // expose the concrete tag of the name
     emitter.instruction("cmp rax, 8");                                          // runtime tag 8 = null
     emitter.instruction("je __elephc_runtime_builtin_v1_header_remove_all_x86"); // header_remove(null) clears every header too
+    emitter.instruction("cmp rax, 1");                                          // runtime tag 1 = string
+    emitter.instruction("jne __elephc_runtime_builtin_v1_header_remove_cast_x86"); // any other name is cast to its string form
+    emitter.instruction("mov rsi, rdx");                                        // pass the borrowed name length to the bridge helper
+    emitter.instruction("jmp __elephc_runtime_builtin_v1_header_remove_call_x86"); // a string name needs no owned copy (rdi already holds its pointer)
+    emitter.label("__elephc_runtime_builtin_v1_header_remove_cast_x86");
     emitter.instruction("mov rax, QWORD PTR [r12]");                            // reload the borrowed boxed name cell
     emitter.instruction("call __rt_mixed_cast_string");                         // rax/rdx = the name as a PHP string
     emitter.instruction("mov rdi, rax");                                        // pass the name pointer to the bridge helper

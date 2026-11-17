@@ -4968,3 +4968,30 @@ var_dump((new ReflectionClass('C'))->hasConstant('B'));
         "{\"A\":{\"k\":1},\"B\":1,\"D\":\":\",\"E\":false,\"F\":true,\"G\":8,\"H\":\"x1.5\",\"I\":0,\"J\":\"dflt\",\"K\":7}\nA 1\nB 1\nD 1\nE 2\nF 1\nG 1\nH 4\nI 1\nJ 1\nK 1\nbool(true)\n"
     );
 }
+
+/// `eval()` concatenates an object operand through its `__toString()` and `header_remove()` takes
+/// a string name, both without keeping a copy of the converted operand.
+///
+/// The concat wrapper dropped the release of the cast result, which for an object is the owned
+/// `__toString()` rendering, and `header_remove()` cast its string name into a copy nobody freed.
+#[test]
+fn test_eval_concat_of_object_operands_and_header_remove_by_name() {
+    let out = compile_and_run(r###"<?php
+final class Label
+{
+    public function __toString(): string
+    {
+        return 'L';
+    }
+}
+$o = new Label();
+$a = eval('return "a" . $o . "b" . $o . 1;');
+$before = memory_get_usage();
+for ($i = 0; $i < 20000; $i++) {
+    eval('$x = $o . "-" . $o; header_remove("X-Custom"); return $x;');
+}
+$grown = memory_get_usage() - $before;
+echo $a, ' ', eval('return $o . $o;'), ' ', $grown < 1000000 ? 'flat' : "leak $grown", "\n";
+"###);
+    assert_eq!(out, "aLbL1 LL flat\n");
+}
