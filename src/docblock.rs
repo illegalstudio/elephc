@@ -234,6 +234,7 @@ fn apply_to_stmt(mut stmt: Stmt, blocks: &HashMap<(u32, u32), DocBlock>) -> Stmt
                 return stmt;
             }
             let own = block.type_params.clone();
+            let names: Vec<String> = own.iter().map(|param| param.name.clone()).collect();
             let mut adopted = false;
             for (name, declared, _, _) in params.iter_mut() {
                 if let Some(annotated) = block.params.get(name) {
@@ -257,8 +258,21 @@ fn apply_to_stmt(mut stmt: Stmt, blocks: &HashMap<(u32, u32), DocBlock>) -> Stmt
                     adopted = true;
                 }
             }
+            let parameter_binds = adopted
+                || params.iter().any(|(_, declared, _, _)| {
+                    declared
+                        .as_ref()
+                        .is_some_and(|ty| ty.mentions_type_param(&names))
+                })
+                || variadic_type
+                    .as_ref()
+                    .is_some_and(|ty| ty.mentions_type_param(&names));
             if let Some(annotated) = &block.return_type {
-                if adopts_annotation(return_type.as_ref(), annotated, &own) {
+                // A return annotation that mentions a template no parameter binds would ask the
+                // call for a type argument inference cannot supply, so the written hint stays.
+                if (!annotated.mentions_type_param(&names) || parameter_binds)
+                    && adopts_annotation(return_type.as_ref(), annotated, &own)
+                {
                     let written = return_type.take();
                     *return_type = Some(with_written_nullability(written.as_ref(), annotated.clone()));
                     adopted = true;
@@ -267,7 +281,6 @@ fn apply_to_stmt(mut stmt: Stmt, blocks: &HashMap<(u32, u32), DocBlock>) -> Stmt
             // A template no position adopted and no written hint mentions changes no declared
             // type: the function is not a template, keeps its name, and compiles exactly as
             // php-src declares it.
-            let names: Vec<String> = own.iter().map(|param| param.name.clone()).collect();
             let written_mentions = params.iter().any(|(_, declared, _, _)| {
                 declared.as_ref().is_some_and(|ty| ty.mentions_type_param(&names))
             }) || variadic_type
@@ -291,7 +304,11 @@ fn apply_to_stmt(mut stmt: Stmt, blocks: &HashMap<(u32, u32), DocBlock>) -> Stmt
         } => {
             let extends_args = adopt_inherited(block, extends.as_ref());
             let type_params = adopt_generics(block, generics, extends_args, implements);
-            members::apply(&type_params, properties, methods, blocks);
+            let class_own: &[TypeParam] = generics
+                .as_ref()
+                .map(|generics| generics.type_params.as_slice())
+                .unwrap_or(&[]);
+            members::apply(&type_params, class_own, properties, methods, blocks);
         }
         StmtKind::InterfaceDecl {
             generics,
@@ -304,17 +321,25 @@ fn apply_to_stmt(mut stmt: Stmt, blocks: &HashMap<(u32, u32), DocBlock>) -> Stmt
             // everything annotated lands in `interface_args` — which is why `GenericDecl` says
             // `extends_args` is always empty for one.
             let type_params = adopt_generics(block, generics, Vec::new(), extends);
-            members::apply(&type_params, properties, methods, blocks);
+            let class_own: &[TypeParam] = generics
+                .as_ref()
+                .map(|generics| generics.type_params.as_slice())
+                .unwrap_or(&[]);
+            members::apply(&type_params, class_own, properties, methods, blocks);
         }
         StmtKind::TraitDecl {
             generics, properties, methods, ..
         } => {
             let type_params = adopt_generics(block, generics, Vec::new(), &[]);
-            members::apply(&type_params, properties, methods, blocks);
+            let class_own: &[TypeParam] = generics
+                .as_ref()
+                .map(|generics| generics.type_params.as_slice())
+                .unwrap_or(&[]);
+            members::apply(&type_params, class_own, properties, methods, blocks);
         }
         // Enums carry no class templates, but their methods may declare their own templates.
         StmtKind::EnumDecl { methods, .. } => {
-            members::apply(&[], &mut [], methods, blocks);
+            members::apply(&[], &[], &mut [], methods, blocks);
         }
         StmtKind::NamespaceBlock { body, .. } => {
             let nested = std::mem::take(body);
