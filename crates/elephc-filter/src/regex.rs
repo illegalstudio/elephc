@@ -129,7 +129,109 @@ fn build_fancy(body: &str, modifiers: &str) -> Option<Regex> {
 /// character classes and byte escapes keep their per-byte width.
 fn build_mapped_fancy(body: &str, modifiers: &str) -> Option<Regex> {
     let source = build_source(body, modifiers);
+    let source = rewrite_byte_mode_classes(&source);
     RegexBuilder::new(&source).build().ok()
+}
+
+/// Replaces PHP's byte-mode shorthand classes with their ASCII equivalents.
+///
+/// `build_mapped_fancy` maps each input byte to one Latin-1 scalar, so the regex engine's
+/// default `\w`, `\d`, `\s` and `\b` would use Unicode classes (for example `\w` would
+/// match `0xE9`). PCRE without the `u` modifier uses ASCII classes, and this rewrite keeps
+/// that contract on the lookaround path. Escapes inside a character class use their
+/// class-body spelling, while the negated forms are only rewritten outside a class, where a
+/// whole negated class is the direct ASCII equivalent.
+fn rewrite_byte_mode_classes(source: &str) -> String {
+    let mut out = String::with_capacity(source.len());
+    let mut chars = source.chars().peekable();
+    let mut in_class = false;
+    // A `]` (or `^` before it) is a literal at the start of a class, and POSIX bracket
+    // expressions such as `[:alpha:]` contain a `]` that does not close the outer class.
+    let mut class_first = false;
+    while let Some(ch) = chars.next() {
+        if in_class {
+            if class_first {
+                class_first = false;
+                if ch == '^' {
+                    out.push(ch);
+                    class_first = true;
+                    continue;
+                }
+                if ch == ']' {
+                    out.push(ch);
+                    continue;
+                }
+            }
+            if ch == '\\' {
+                let Some(next) = chars.next() else {
+                    out.push('\\');
+                    break;
+                };
+                match next {
+                    'd' => out.push_str("0-9"),
+                    'w' => out.push_str("A-Za-z0-9_"),
+                    's' => out.push_str(" \\t\\n\\r\\f\\v"),
+                    _ => {
+                        out.push('\\');
+                        out.push(next);
+                    }
+                }
+                continue;
+            }
+            if ch == '[' {
+                if let Some(kind @ (':' | '.' | '=')) = chars.peek().copied() {
+                    out.push('[');
+                    out.push(chars.next().expect("peeked bracket-expression kind"));
+                    while let Some(inner) = chars.next() {
+                        out.push(inner);
+                        if inner == kind && chars.peek() == Some(&']') {
+                            out.push(chars.next().expect("peeked bracket-expression end"));
+                            break;
+                        }
+                    }
+                    continue;
+                }
+            }
+            if ch == ']' {
+                in_class = false;
+            }
+            out.push(ch);
+            continue;
+        }
+        match ch {
+            '\\' => {
+                let Some(next) = chars.next() else {
+                    out.push('\\');
+                    break;
+                };
+                match next {
+                    'd' => out.push_str("[0-9]"),
+                    'D' => out.push_str("[^0-9]"),
+                    'w' => out.push_str("[A-Za-z0-9_]"),
+                    'W' => out.push_str("[^A-Za-z0-9_]"),
+                    's' => out.push_str("[ \\t\\n\\r\\f\\v]"),
+                    'S' => out.push_str("[^ \\t\\n\\r\\f\\v]"),
+                    'b' => out.push_str(
+                        "(?:(?<=[A-Za-z0-9_])(?![A-Za-z0-9_])|(?<![A-Za-z0-9_])(?=[A-Za-z0-9_]))",
+                    ),
+                    'B' => out.push_str(
+                        "(?:(?<=[A-Za-z0-9_])(?=[A-Za-z0-9_])|(?<![A-Za-z0-9_])(?![A-Za-z0-9_]))",
+                    ),
+                    _ => {
+                        out.push('\\');
+                        out.push(next);
+                    }
+                }
+            }
+            '[' => {
+                in_class = true;
+                class_first = true;
+                out.push(ch);
+            }
+            _ => out.push(ch),
+        }
+    }
+    out
 }
 
 /// Builds one byte-oriented regex for PHP's non-`u` byte semantics.
@@ -365,5 +467,21 @@ mod tests {
         assert!(php_pattern(b"bar", b"/foo|bar/A"));
         assert!(php_pattern(b"foo\n", b"/foo$\n/"));
         assert!(!php_pattern(b"foo\nbar", b"/foo$\n/"));
+    }
+
+    /// The lookaround fallback keeps PHP's non-`u` ASCII shorthand classes.
+    #[test]
+    fn regexp_byte_mode_shorthands_stay_ascii() {
+        assert!(php_pattern(b"abc_123", b"/^\\w+$/"));
+        assert!(!php_pattern(b"\xE9", b"/^\\w+$/"));
+        assert!(php_pattern(b"\xE9", b"/^\\W$/"));
+        assert!(php_pattern(b" ", b"/^\\s+$/"));
+        assert!(!php_pattern(b"\xA0", b"/^\\s+$/"));
+        assert!(php_pattern(b"foo", b"/\\bfoo\\b$/"));
+        assert!(php_pattern(b"\xE9foo", b"/\\bfoo\\b$/"));
+        // POSIX bracket expressions keep their inner `]` from closing the outer class.
+        assert!(php_pattern(b"abc", b"/(?=.)[[:alpha:]\\w]+$/"));
+        assert!(!php_pattern(b"\xE9", b"/(?=.)[[:alpha:]\\w]+$/"));
+        assert!(php_pattern(b"]", b"/(?=.)[]]+$/"));
     }
 }

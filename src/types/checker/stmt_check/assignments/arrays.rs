@@ -19,6 +19,24 @@ use crate::types::{
 
 use super::super::super::{Checker, GuardedLocalStorage};
 
+/// Records the source local of `$array[$key] = &$source` as a reference-set member.
+///
+/// The element shares the source's managed cell, so the local joins an explicit `=&` group:
+/// later assignments may rebind it to any payload type, and neither side may be killed or
+/// retyped independently of the other. This mirrors what `$target = &$source` records,
+/// because both spellings create the same managed reference cell.
+fn record_reference_element_source(checker: &mut Checker, value: &Expr) {
+    let ExprKind::Reference(inner) = &value.kind else {
+        return;
+    };
+    let ExprKind::Variable(name) = &inner.kind else {
+        return;
+    };
+    checker.record_reference_alias_root(inner);
+    checker.record_ref_assign_alias_root(inner);
+    checker.active_ref_params.insert(name.clone());
+}
+
 /// Validates and updates the type environment for `$array[$index] = $value` assignments.
 ///
 /// Checks direct string offset writes and merges element types for arrays/assoc-arrays,
@@ -44,6 +62,7 @@ pub(super) fn check_array_assign(
     if !env.contains_key(array) {
         let idx_ty = checker.infer_type_with_assignment_effects(index, env)?;
         let val_ty = checker.infer_type_with_assignment_effects(value, env)?;
+        record_reference_element_source(checker, value);
         let key_ty = normalized_array_key_type(index, idx_ty);
         let created = if key_ty == PhpType::Int {
             PhpType::Array(Box::new(val_ty))
@@ -58,6 +77,7 @@ pub(super) fn check_array_assign(
     }
     let idx_ty = checker.infer_type_with_assignment_effects(index, env)?;
     let val_ty = checker.infer_type_with_assignment_effects(value, env)?;
+    record_reference_element_source(checker, value);
     super::locals::update_callable_assignment_metadata(checker, array, value, &val_ty, env)?;
     // The write selects its container after index/RHS effects, which may rebind it.
     let storage = checker.guarded_local_storage_type(&Expr::var(array), env).cloned()

@@ -385,6 +385,63 @@ var_dump(filter_var("foo/bar/", FILTER_VALIDATE_REGEXP, ["options" => ["regexp" 
     );
 }
 
+/// `add_empty` is a weak `bool` parameter: arrays/objects are rejected before any body
+/// logic, including `filter_input_array()` with an empty input.
+#[test]
+fn test_filter_array_add_empty_is_a_weak_bool_parameter() {
+    let out = compile_and_run(
+        r#"<?php
+try { filter_var_array("x", [], []); }
+catch (TypeError $e) { echo $e->getMessage(), "
+"; }
+try { filter_input_array("x", [], []); }
+catch (TypeError $e) { echo $e->getMessage(), "
+"; }
+foreach ([["array", []], ["object", new stdClass]] as [$name, $value]) {
+    try { filter_var_array(["a" => "1"], ["missing" => FILTER_DEFAULT], $value); }
+    catch (TypeError $e) { echo $e->getMessage(), "
+"; }
+}
+try { filter_input_array(INPUT_GET, [], []); }
+catch (TypeError $e) { echo $e->getMessage(), "
+"; }
+set_error_handler(function (int $errno, string $message): bool {
+    echo "DEP:", $message, "
+";
+    return true;
+});
+var_dump(filter_var_array(["a" => "1"], ["missing" => FILTER_DEFAULT], null));
+"#,
+    );
+    assert_eq!(
+        out,
+        "filter_var_array(): Argument #1 ($array) must be of type array, string given
+filter_input_array(): Argument #1 ($type) must be of type int, string given
+filter_var_array(): Argument #3 ($add_empty) must be of type bool, array given
+filter_var_array(): Argument #3 ($add_empty) must be of type bool, stdClass given
+filter_input_array(): Argument #3 ($add_empty) must be of type bool, array given
+DEP:filter_var_array(): Passing null to parameter #3 ($add_empty) of type bool is deprecated
+array(0) {
+}
+"
+    );
+}
+
+/// A warning handler that runs another filter cannot replace the outer regexp match result.
+#[test]
+fn test_filter_regexp_warning_handler_cannot_replace_the_match_result() {
+    let out = compile_and_run(
+        r#"<?php
+set_error_handler(function (int $errno, string $message): bool {
+    filter_var("yes", FILTER_VALIDATE_BOOL);
+    return true;
+});
+var_dump(filter_var("value", FILTER_VALIDATE_REGEXP, ["options" => ["regexp" => "/[/"]]));
+"#,
+    );
+    assert_eq!(out, "bool(false)\n");
+}
+
 /// Invalid regexp bodies report PCRE2's exact compilation diagnostic and offset.
 #[test]
 fn test_filter_regexp_compile_errors_match_pcre2() {

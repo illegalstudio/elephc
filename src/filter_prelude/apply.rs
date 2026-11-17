@@ -708,6 +708,10 @@ fn regexp_decl() -> Stmt {
                 "elephc_filter_apply_regexp",
                 vec![e_call("bin2hex", vec![e_var("value")]), e_call("bin2hex", vec![e_var("regexp")])],
             )),
+            // The bridge result is a shared cell. A user error handler can call another
+            // filter function from `__elephc_builtin_warning()`, so capture the match before
+            // that call instead of reading the shared result afterwards.
+            s_assign("matched", e_call("elephc_filter_result_bool", vec![])),
             s_assign(
                 "regexp_error",
                 e_call("elephc_filter_regexp_error", vec![]),
@@ -725,7 +729,7 @@ fn regexp_decl() -> Stmt {
                 None,
             ),
             s_if(
-                e_binop(e_call("elephc_filter_result_bool", vec![]), BinOp::StrictEq, e_int(1)),
+                e_binop(e_var("matched"), BinOp::StrictEq, e_int(1)),
                 vec![s_return(e_var("value"))],
                 vec![],
                 None,

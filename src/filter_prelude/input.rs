@@ -15,14 +15,15 @@
 use crate::parser::ast::{BinOp, CastType, Expr, Program, Stmt, TypeExpr};
 use crate::synthetic_class::{
     e_array, e_binop, e_bool, e_call, e_cast, e_concat_all, e_const, e_index, e_int, e_not,
-    e_null, e_str, e_var, function, s_array_assign, s_assign, s_continue, s_foreach, s_if,
-    s_return, s_throw, t_array, t_bool, t_int, t_mixed,
+    e_null, e_str, e_var, function, s_array_assign, s_assign, s_continue, s_expr, s_foreach,
+    s_if, s_return, s_throw, t_array, t_bool, t_int, t_mixed,
 };
 
 /// Returns the input/array function declarations.
 pub(super) fn declarations() -> Program {
     vec![
         storage_function(),
+        bool_arg_decl(),
         input_type_decl(),
         array_handler_decl(),
         filter_var_array_decl(),
@@ -30,6 +31,70 @@ pub(super) fn declarations() -> Program {
         filter_input_decl(),
         filter_has_var_decl(),
     ]
+}
+
+/// Builds `__elephc_filter_bool_arg(mixed $value, string $caller, int $arg, string $param):
+/// bool`, PHP's weak `bool` parameter rule.
+fn bool_arg_decl() -> Stmt {
+    let throw_type_error = crate::synthetic_class::e_new_fq(
+        "TypeError",
+        vec![e_concat_all(vec![
+            e_var("caller"),
+            e_str("(): Argument #"),
+            e_var("arg"),
+            e_str(" ($"),
+            e_var("param"),
+            e_str(") must be of type bool, "),
+            e_call("__elephc_filter_type_name", vec![e_var("value")]),
+            e_str(" given"),
+        ])],
+    );
+    function("__elephc_filter_bool_arg")
+        .param("value", t_mixed())
+        .param("caller", TypeExpr::Str)
+        .param("arg", t_int())
+        .param("param", TypeExpr::Str)
+        .returns(t_bool())
+        .body(vec![
+            s_if(
+                e_call("is_bool", vec![e_var("value")]),
+                vec![s_return(e_var("value"))],
+                vec![],
+                None,
+            ),
+            s_if(
+                e_binop(
+                    e_call("is_int", vec![e_var("value")]),
+                    BinOp::Or,
+                    e_binop(
+                        e_call("is_float", vec![e_var("value")]),
+                        BinOp::Or,
+                        e_call("is_string", vec![e_var("value")]),
+                    ),
+                ),
+                vec![s_return(e_cast(CastType::Bool, e_var("value")))],
+                vec![],
+                None,
+            ),
+            s_if(
+                e_call("is_null", vec![e_var("value")]),
+                vec![
+                    s_expr(e_call("__elephc_builtin_deprecated", vec![e_concat_all(vec![
+                        e_var("caller"),
+                        e_str("(): Passing null to parameter #"),
+                        e_var("arg"),
+                        e_str(" ($"),
+                        e_var("param"),
+                        e_str(") of type bool is deprecated"),
+                    ])])),
+                    s_return(e_bool(false)),
+                ],
+                vec![],
+                None,
+            ),
+            s_throw(throw_type_error),
+        ])
+        .build()
 }
 
 /// Builds `__elephc_filter_storage(int $type): ?array`, a copy of one raw request array.
@@ -273,6 +338,14 @@ fn filter_var_array_decl() -> Stmt {
                 vec![],
                 None,
             ),
+            // PHP coerces typed arguments in parameter order, so argument #1 above is
+            // validated before this weak bool coercion of argument #3.
+            s_assign("add_empty", e_call("__elephc_filter_bool_arg", vec![
+                e_var("add_empty"),
+                e_str("filter_var_array"),
+                e_int(3),
+                e_str("add_empty"),
+            ])),
             s_assign("options", e_call("__elephc_filter_options_arg", vec![
                 e_var("options"),
                 e_str("filter_var_array"),
@@ -300,7 +373,7 @@ fn filter_var_array_decl() -> Stmt {
             s_return(e_call("__elephc_filter_array_handler", vec![
                 e_cast(CastType::Array, e_var("array")),
                 e_var("options"),
-                e_cast(CastType::Bool, e_var("add_empty")),
+                e_var("add_empty"),
                 e_str("filter_var_array"),
             ])),
         ])
@@ -321,6 +394,15 @@ fn filter_input_array_decl() -> Stmt {
                 e_str("filter_input_array"),
                 e_int(1),
                 e_str("type"),
+            ])),
+            // PHP coerces typed arguments in parameter order, so argument #1 above is
+            // validated before this weak bool coercion of argument #3. The check runs
+            // before the storage lookup, which may legitimately be empty in the CLI.
+            s_assign("add_empty", e_call("__elephc_filter_bool_arg", vec![
+                e_var("add_empty"),
+                e_str("filter_input_array"),
+                e_int(3),
+                e_str("add_empty"),
             ])),
             s_assign("options", e_call("__elephc_filter_options_arg", vec![
                 e_var("options"),
@@ -361,7 +443,7 @@ fn filter_input_array_decl() -> Stmt {
             s_return(e_call("__elephc_filter_array_handler", vec![
                 e_cast(CastType::Array, e_var("storage")),
                 e_var("options"),
-                e_cast(CastType::Bool, e_var("add_empty")),
+                e_var("add_empty"),
                 e_str("filter_input_array"),
             ])),
         ])

@@ -63,6 +63,24 @@ pub(super) fn lower_load_local(ctx: &mut FunctionContext<'_>, inst: &Instruction
     ctx.store_result_value(result)
 }
 
+/// Lowers `LoadLocalRefCellPtr`: reads the raw managed-cell pointer from a ref-cell owner slot.
+///
+/// The owner slot stores one pointer word regardless of the cell's payload type, so this load
+/// must bypass the payload-typed coercion `LoadLocal` applies. The result is a borrowed address:
+/// callers retain the cell themselves when they publish it into another owner.
+pub(super) fn lower_load_local_ref_cell_ptr(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+) -> Result<()> {
+    let slot = expect_local_slot(inst)?;
+    let result = inst.result.ok_or_else(|| {
+        CodegenIrError::invalid_module("load_local_ref_cell_ptr missing result value")
+    })?;
+    let offset = ctx.local_offset(slot)?;
+    abi::load_at_offset(ctx.emitter, abi::int_result_reg(ctx.emitter), offset);
+    ctx.store_int_result_value(result)
+}
+
 /// Returns whether a load reads pointer storage that can hold a zero pointer through a `null` view.
 fn pointer_slot_read_as_null(source_ty: &PhpType, result_ty: &PhpType) -> bool {
     result_ty.codegen_repr() == PhpType::Void

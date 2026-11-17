@@ -682,10 +682,12 @@ impl Checker {
                 let deferred_scope_error =
                     crate::types::deferred_defaults::deferred_error_message(default_expr).is_some();
                 if let Some(type_ann) = decl.param_types.get(i).and_then(|t| t.as_ref()) {
-                    let declared_ty = self.resolve_declared_param_type_hint(
+                    let by_ref = decl.ref_params.get(i).copied().unwrap_or(false);
+                    let declared_ty = self.resolve_declared_param_storage_hint(
                         type_ann,
                         decl.span,
                         &format!("Function '{}' parameter ${}", name, decl.params[i]),
+                        by_ref,
                     )?;
                     let default_ty = if deferred_scope_error {
                         declared_ty.clone()

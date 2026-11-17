@@ -1028,6 +1028,12 @@ pub enum Op {
     UnsetLocal,
     ZeroLocalSlot,
     LoadRefCell,
+    /// Loads the raw managed-cell pointer stored in a hidden ref-cell owner slot.
+    ///
+    /// Operand: none. Immediate: the owner `LocalSlot`. The result is a one-word `Pointer`;
+    /// unlike `LoadRefCell` it neither dereferences the cell nor interprets the slot with the
+    /// cell payload's type, which would box a `string` owner as a Mixed cell.
+    LoadLocalRefCellPtr,
     /// Copies the current value of a reference into an independent owning Mixed snapshot.
     /// The local's physical payload ABI stays unchanged, including for raw native parameters.
     LoadRefCellValue,
@@ -1599,6 +1605,7 @@ impl Op {
             LoadCalledClassId => E::READS_LOCAL,
             LoadLocal | LoadStaticLocal | ClosureCapture => E::READS_LOCAL,
             LoadRefCell => E::READS_LOCAL | E::READS_HEAP,
+            LoadLocalRefCellPtr => E::READS_LOCAL,
             LoadRefCellValue => E::READS_LOCAL | E::READS_HEAP | E::ALLOC_HEAP | E::REFCOUNT_OP,
             StoreLocal | UnsetLocal | ZeroLocalSlot | ListUnpack | FinallyEnter | FinallyExit => {
                 E::WRITES_LOCAL
@@ -1983,6 +1990,7 @@ impl Op {
             UnsetLocal => "unset_local",
             ZeroLocalSlot => "zero_local_slot",
             LoadRefCell => "load_ref_cell",
+            LoadLocalRefCellPtr => "load_local_ref_cell_ptr",
             LoadRefCellValue => "load_ref_cell_value",
             StoreRefCell => "store_ref_cell",
             PromoteLocalRefCell => "promote_local_ref_cell",

@@ -380,6 +380,10 @@ hash, so the same code works for bare elements (`[&$a]`), keyed elements
 assignments (`$data['k'] = &$value`). A filtered value written through the
 reference is visible through the aliased variable as well.
 
+Assigning a reference to an element that already holds one rebinds that entry
+instead of writing through its old cell. `$a = [&$y]; $a[0] = &$x;` leaves `$y`
+unchanged, makes `$a[0]` alias `$x`, and keeps the element's key position.
+
 `var_dump()` prints PHP's `&` marker while the reference cell is shared:
 
 ```text

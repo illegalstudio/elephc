@@ -439,10 +439,17 @@ echo $dynamic($x);
     );
     assert_eq!(output.stdout, "seen|seen|seen");
     let warning = "Warning: inspect(): Argument #1 ($value) must be passed by reference, value given";
-    assert_eq!(output.stderr.lines().count(), 2, "stderr: {:?}", output.stderr);
+    // php-src prefixes every displayed diagnostic with a newline, so ignore the blank lines
+    // that separate the emitted messages when counting them.
+    assert_eq!(
+        output.stderr.lines().filter(|line| !line.is_empty()).count(),
+        2,
+        "stderr: {:?}",
+        output.stderr
+    );
     assert_eq!(output.stderr.matches(warning).count(), 2, "stderr: {:?}", output.stderr);
     assert!(
-        output.stderr.lines().all(|line| line.contains("test.php")),
+        output.stderr.lines().filter(|line| !line.is_empty()).all(|line| line.contains("test.php")),
         "by-reference warnings must name the source file: {:?}",
         output.stderr
     );

@@ -118,6 +118,9 @@ pub enum RuntimeCallTarget {
     /// runtime promotes it to a reference cell and then replaces that cell with the
     /// caller's cell, so repeated `[&$x]` elements share one storage.
     HashEntryBindReference,
+    /// Binds one associative-array entry to a managed reference cell, inserting the entry
+    /// (at the end) when the key is absent and detaching any previous binding in place.
+    HashEntrySetReference,
     /// Fetches an intermediate array element in write context, installing an
     /// empty child container when the addressed parent slot is missing or null.
     ArrayFetchForWrite,
@@ -276,7 +279,8 @@ impl RuntimeCallTarget {
                 parameters: &[IrType::Heap(IrHeapKind::Hash)],
                 result: IrType::Heap(IrHeapKind::Hash),
             }),
-            RuntimeCallTarget::HashEntryBindReference => Some(RuntimeCallSignature::Polymorphic {
+            RuntimeCallTarget::HashEntryBindReference
+            | RuntimeCallTarget::HashEntrySetReference => Some(RuntimeCallSignature::Polymorphic {
                 min_operands: 3,
                 max_operands: Some(3),
             }),
@@ -401,6 +405,7 @@ impl RuntimeCallTarget {
             RuntimeCallTarget::AutoVivifyArray => "array.auto_vivify",
             RuntimeCallTarget::AutoVivifyHash => "hash.auto_vivify",
             RuntimeCallTarget::HashEntryBindReference => "array.hash_entry_bind_reference",
+            RuntimeCallTarget::HashEntrySetReference => "array.hash_entry_set_reference",
             RuntimeCallTarget::StringWriteOffset => "string.write_offset",
             RuntimeCallTarget::MixedCellResolveForWrite => "array.mixed_cell_resolve_for_write",
             RuntimeCallTarget::MixedCellCopyForWrite => "array.mixed_cell_copy_for_write",

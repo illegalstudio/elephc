@@ -20,6 +20,7 @@
 
 use crate::codegen::{
     abi, emit_box_current_owned_value_as_mixed, emit_box_current_value_as_mixed,
+    REFERENCE_CELL_VALUE_TAG,
 };
 use crate::codegen::platform::Arch;
 use crate::codegen::callable_invoker_args::INVOKER_ARG_REF_CELL_TAG;
@@ -366,6 +367,91 @@ pub(super) fn lower_hash_set(ctx: &mut FunctionContext<'_>, inst: &Instruction) 
     ctx.store_result_value(hash)?;
     receiver.store_back_container_writeback(ctx, hash)?;
     ctx.writeback_global_array_source(hash)?;
+    Ok(())
+}
+
+/// Lowers `HashEntrySetReference`: binds one hash entry to a live managed reference cell.
+///
+/// The entry may already belong to another reference set, so the write must DETACH it instead
+/// of writing through its cell. `__rt_hash_set_value` is the bucket-replacing sibling that
+/// performs that detachment, keeps an existing key's insertion position, and inserts a missing
+/// key at the end. The caller's cell is retained for the table before the helper stores it.
+pub(super) fn lower_hash_reference_set(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+) -> Result<()> {
+    let hash = expect_operand(inst, 0)?;
+    let key = expect_operand(inst, 1)?;
+    let cell = expect_operand(inst, 2)?;
+    require_hash(ctx.value_php_type(hash)?, inst)?;
+    if let Some(property) = super::objects::in_place_property_container(ctx, hash)? {
+        // The property lent its own separated table, so only a relocated table is published back.
+        let reload = hash_key_materialization_may_run_user_code(ctx, key)?.then_some(&property);
+        match ctx.emitter.target.arch {
+            Arch::AArch64 => lower_hash_reference_set_aarch64(ctx, hash, key, cell, reload)?,
+            Arch::X86_64 => lower_hash_reference_set_x86_64(ctx, hash, key, cell, reload)?,
+        }
+        return property.publish_relocated(ctx, hash);
+    }
+    let receiver = ReceiverPlace::resolve(ctx, hash)?;
+    receiver.prepare_consuming_storeback(ctx, hash)?;
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => lower_hash_reference_set_aarch64(ctx, hash, key, cell, None)?,
+        Arch::X86_64 => lower_hash_reference_set_x86_64(ctx, hash, key, cell, None)?,
+    }
+    // Growth and copy-on-write can relocate the table, so the operand SSA carries the pointer
+    // the helper returned and the receiver republishes it.
+    ctx.store_result_value(hash)?;
+    receiver.store_back_container_writeback(ctx, hash)?;
+    ctx.writeback_global_array_source(hash)?;
+    Ok(())
+}
+
+/// Emits the AArch64 reference-entry write through `__rt_hash_set_value`.
+fn lower_hash_reference_set_aarch64(
+    ctx: &mut FunctionContext<'_>,
+    hash: ValueId,
+    key: ValueId,
+    cell: ValueId,
+    reload: Option<&super::objects::InPlacePropertyContainer>,
+) -> Result<()> {
+    materialize_hash_key_aarch64(ctx, key)?;
+    abi::emit_push_reg_pair(ctx.emitter, "x1", "x2");
+    if let Some(property) = reload {
+        property.reload(ctx, hash)?;
+    }
+    ctx.load_value_to_reg(cell, "x0")?;
+    abi::emit_call_label(ctx.emitter, "__rt_incref");
+    ctx.load_value_to_reg(cell, "x3")?;
+    abi::emit_pop_reg_pair(ctx.emitter, "x1", "x2");
+    abi::emit_load_int_immediate(ctx.emitter, "x4", 0);
+    abi::emit_load_int_immediate(ctx.emitter, "x5", REFERENCE_CELL_VALUE_TAG as i64);
+    ctx.load_value_to_reg(hash, "x0")?;
+    abi::emit_call_label(ctx.emitter, "__rt_hash_set_value");
+    Ok(())
+}
+
+/// Emits the x86_64 reference-entry write through `__rt_hash_set_value`.
+fn lower_hash_reference_set_x86_64(
+    ctx: &mut FunctionContext<'_>,
+    hash: ValueId,
+    key: ValueId,
+    cell: ValueId,
+    reload: Option<&super::objects::InPlacePropertyContainer>,
+) -> Result<()> {
+    materialize_hash_key_x86_64(ctx, key)?;
+    abi::emit_push_reg_pair(ctx.emitter, "rsi", "rdx");
+    if let Some(property) = reload {
+        property.reload(ctx, hash)?;
+    }
+    ctx.load_value_to_reg(cell, "rdi")?;
+    abi::emit_call_label(ctx.emitter, "__rt_incref");
+    ctx.load_value_to_reg(cell, "rcx")?;
+    abi::emit_pop_reg_pair(ctx.emitter, "rsi", "rdx");
+    abi::emit_load_int_immediate(ctx.emitter, "r8", 0);
+    abi::emit_load_int_immediate(ctx.emitter, "r9", REFERENCE_CELL_VALUE_TAG as i64);
+    ctx.load_value_to_reg(hash, "rdi")?;
+    abi::emit_call_label(ctx.emitter, "__rt_hash_set_value");
     Ok(())
 }
 

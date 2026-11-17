@@ -886,11 +886,15 @@ fn can_replay_instanceof_target(target: &InstanceOfTarget) -> bool {
 
 /// Lowers `$place = &$source` for an array-element or property l-value.
 ///
-/// PHP makes the written slot itself the source variable's reference. The desugaring stores the
-/// source value into the slot, promotes that entry to a managed reference cell, and then aliases
-/// the source local to the same cell. The target's array base and dimension are stabilized first
-/// so each side effect runs exactly once, and a non-variable source is rejected because the
-/// second step can only rebind a local name.
+/// PHP makes the written slot itself the source variable's reference. A plain local array
+/// element keeps the source expression so EIR lowering can rebind the hash entry in place:
+/// the entry either joins the source local's existing cell or receives a fresh one, and any
+/// cell the entry held before is detached without being written through. No other target
+/// shape has that storage-replacement primitive yet, so properties, static properties and
+/// nested elements keep the two-step desugaring: store the source value into the slot, then
+/// alias the source local to the slot's cell. The target's array base and dimension are
+/// stabilized first so each side effect runs exactly once, and a non-variable source is
+/// rejected because the alias step can only rebind a local name.
 fn lower_postfix_reference_assignment(
     target: Expr,
     source: Expr,
@@ -902,12 +906,29 @@ fn lower_postfix_reference_assignment(
             "Reference assignment source must be a variable",
         ));
     };
-    let store_value = Expr::new(ExprKind::Variable(source_name.clone()), source.span);
+    let source_name = source_name.clone();
     let mut lowerer = EffectfulTargetLowerer::new(span);
     let target = lowerer.stabilize_array_target(target);
+    if let ExprKind::ArrayAccess { array, index } = &target.kind {
+        if let ExprKind::Variable(array_name) = &array.kind {
+            // Keep the reference marker in the value position so the array writer can bind
+            // the hash entry to the source's managed cell instead of first storing a value
+            // through whatever reference the entry already holds.
+            let reference = Expr::new(ExprKind::Reference(Box::new(source)), span);
+            let store = StmtKind::ArrayAssign {
+                array: array_name.clone(),
+                index: index.as_ref().clone(),
+                value: reference,
+            };
+            let mut stmts = lowerer.stmts;
+            stmts.push(Stmt::new(store, span));
+            return Ok(Stmt::new(StmtKind::Synthetic(stmts), span));
+        }
+    }
+    let store_value = Expr::new(ExprKind::Variable(source_name.clone()), source.span);
     let store = assignment_target_store_stmt(target.clone(), store_value, span)?;
     let alias = StmtKind::RefAssign {
-        target: source_name.clone(),
+        target: source_name,
         source: target,
     };
     let mut stmts = lowerer.stmts;

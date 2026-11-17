@@ -358,6 +358,60 @@ echo $value;
     assert_eq!(out, "xy");
 }
 
+/// Rebinding an element that already holds a reference detaches the old cell instead of
+/// writing through it, so the variable it used to alias keeps its value.
+#[test]
+fn test_array_element_reference_rebinding_detaches_the_old_cell() {
+    let out = compile_and_run(
+        r#"<?php
+$x = 1;
+$y = 2;
+$a = [&$y];
+$a[0] = &$x;
+echo $x, "|", $y, "|", $a[0], "\n";
+$x = 3;
+echo $x, "|", $y, "|", $a[0], "\n";
+"#,
+    );
+    assert_eq!(out, "1|2|1
+3|2|3
+");
+}
+
+/// Rebinding a packed array's element promotes the container to hash storage without moving
+/// the element's insertion position.
+#[test]
+fn test_packed_array_element_reference_rebinding_preserves_key_order() {
+    let out = compile_and_run(
+        r#"<?php
+$x = 1;
+$y = 2;
+$a = [10, 20];
+$a[0] = &$y;
+$a[0] = &$x;
+echo $x, "|", $y, "|", $a[0], "|", implode(",", array_keys($a)), "\n";
+"#,
+    );
+    assert_eq!(out, "1|2|1|0,1\n");
+}
+
+/// Binding an element to a variable that already owns a reference cell reuses that cell, so
+/// every earlier member of the set observes later writes.
+#[test]
+fn test_array_element_reference_binding_reuses_the_source_cell() {
+    let out = compile_and_run(
+        r#"<?php
+$x = 1;
+$a = [&$x];
+$b = ["k" => 0];
+$b["k"] = &$x;
+$x = 2;
+echo $a[0], "|", $b["k"], "\n";
+"#,
+    );
+    assert_eq!(out, "2|2\n");
+}
+
 /// Repeating `&$value` in later literals reuses the variable's existing cell, so every
 /// earlier element observes the later write instead of keeping a stale copy.
 #[test]

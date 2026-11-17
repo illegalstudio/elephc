@@ -95,6 +95,9 @@ pub(super) fn lower(
         RuntimeCallTarget::AutoVivifyArray => lower_auto_vivify_array(ctx, inst, false),
         RuntimeCallTarget::AutoVivifyHash => lower_auto_vivify_array(ctx, inst, true),
         RuntimeCallTarget::HashEntryBindReference => lower_hash_entry_bind_reference(ctx, inst),
+        RuntimeCallTarget::HashEntrySetReference => {
+            super::hashes::lower_hash_reference_set(ctx, inst)
+        }
         RuntimeCallTarget::StringWriteOffset => super::string_write_offsets::lower_offset(ctx, inst),
         RuntimeCallTarget::WriteDiagnostic => super::string_write_offsets::lower_diagnostic(ctx, inst),
         RuntimeCallTarget::MixedArrayCellHasLiveOwner => super::runtime_array_liveness::lower(ctx, inst),

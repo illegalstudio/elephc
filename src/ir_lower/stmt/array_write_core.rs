@@ -275,12 +275,177 @@ fn lower_array_assign_selected(
     lower_array_assign_from_value(ctx, array, array_value, index, value, span, key_already_diagnosed, incdec, auto_viv);
 }
 
+/// Lowers `$array[$key] = &$source` for a local array receiver.
+///
+/// PHP replaces the element's binding with the source variable's reference cell. A concrete
+/// hash or packed container can express that directly: the source local is promoted to a
+/// managed cell (or keeps the cell it already owns), and the hash entry is rebound to it in
+/// place. Rebinding detaches whatever cell the entry held before without writing through it,
+/// so `$a = [&$y]; $a[0] = &$x;` leaves `$y` untouched, and an existing key keeps its
+/// insertion position. Boxed Mixed receivers and sources that cannot own a frame cell keep
+/// the two-step write-then-alias lowering.
+#[allow(clippy::too_many_arguments)]
+fn lower_array_reference_assignment(
+    ctx: &mut LoweringContext<'_, '_>,
+    array: &str,
+    array_value: LoweredValue,
+    index: &Expr,
+    source: &Expr,
+    source_name: &str,
+    span: Span,
+    key_already_diagnosed: bool,
+    incdec: Option<bool>,
+    auto_viv: Option<PhpType>,
+) {
+    let storage = array_set_op(array_value.ir_type);
+    // A hash entry's tag-11 cell must own a boxed Mixed payload. A source local that is not
+    // bound yet can be promoted directly to that layout; one already sharing a boxed-Mixed
+    // cell can reuse it. A concrete reference cell (a typed by-ref parameter, an interior
+    // element alias) keeps the established two-step lowering instead of changing a payload
+    // layout every other alias of that cell still reads with its concrete type.
+    let bindable_source = !ctx.is_borrowed_element_ref_local(source_name)
+        && ctx.local_can_own_reference_cell(source_name)
+        && (!ctx.is_ref_bound_local(source_name)
+            || ctx.local_type(source_name).codegen_repr() == PhpType::Mixed);
+    if matches!(storage, Op::HashSet | Op::ArraySet) && bindable_source {
+        lower_concrete_array_reference_bind(ctx, array, array_value, index, source_name, span);
+        return;
+    }
+    // A boxed PHP array stores references through the nested persistent-cell ABI, and an
+    // interior element alias owns no cell this frame may hand out. Keep the established
+    // two-step lowering for those receivers: store the source value, then join the
+    // element's cell. The parser stabilizes any effectful key, so re-reading it is safe.
+    lower_array_assign_from_value(
+        ctx, array, array_value, index, source, span, key_already_diagnosed, incdec, auto_viv,
+    );
+    let array_value = load_array_local_for_write(ctx, array, span);
+    let element_ty = array_element_type_for_reference_bind(ctx, array_value);
+    let index_value = lower_expr(ctx, index);
+    let cell = ctx.emit_value(
+        Op::LoadArrayElemRefCell,
+        vec![array_value.value, index_value.value],
+        None,
+        PhpType::Mixed,
+        Op::LoadArrayElemRefCell.default_effects(),
+        Some(span),
+    );
+    ctx.bind_owned_local_ref_cell_ptr(source_name, cell, element_ty, Some(span));
+}
+
+/// Rebinds one concrete hash entry to the source local's managed reference cell.
+///
+/// The hash is widened to Mixed values first, because a reference entry carries runtime tag
+/// 11 instead of a concrete payload. A packed array is converted to a hash of Mixed values;
+/// that representation can hold the reference marker, and PHP's insertion order is unchanged.
+fn lower_concrete_array_reference_bind(
+    ctx: &mut LoweringContext<'_, '_>,
+    array: &str,
+    array_value: LoweredValue,
+    index: &Expr,
+    source_name: &str,
+    span: Span,
+) {
+    ctx.promote_local_mixed_ref_cell(source_name, Some(span));
+    let Some(owner_slot) = ctx.ref_cell_owner_slot(source_name) else {
+        return;
+    };
+    let cell = ctx.emit_value(
+        Op::LoadLocalRefCellPtr,
+        Vec::new(),
+        Some(Immediate::LocalSlot(owner_slot)),
+        PhpType::Pointer(None),
+        Op::LoadLocalRefCellPtr.default_effects(),
+        Some(span),
+    );
+    let (index_value, (), index_pins) = lower_write_key_then(ctx, index, |_| ());
+    let current_ty = ctx.builder.value_php_type(array_value.value);
+    match current_ty.codegen_repr() {
+        PhpType::AssocArray { .. } => {
+            let (hash, updated_ty) = super::array_write_storage::prepare_hash_local_write(
+                ctx, array, array_value, cell, span,
+            );
+            bind_hash_entry_reference(ctx, hash, index_value, cell, span);
+            if let Some(updated_ty) = updated_ty {
+                ctx.store_mutated_local(array, hash, updated_ty, Some(span));
+            }
+        }
+        _ => {
+            let assoc_ty = promoted_assoc_array_type(current_ty, PhpType::Mixed);
+            ctx.prepare_mutated_local_owner_for_backend_retire(
+                array,
+                array_value,
+                assoc_ty.clone(),
+                Some(span),
+            );
+            let hash = ctx.emit_value(
+                Op::ArrayToHash,
+                vec![array_value.value],
+                None,
+                assoc_ty.clone(),
+                Op::ArrayToHash.default_effects(),
+                Some(span),
+            );
+            bind_hash_entry_reference(ctx, hash, index_value, cell, span);
+            ctx.store_prepared_mutated_local(array, hash, assoc_ty, Some(span));
+        }
+    }
+    crate::ir_lower::expr::unpin_in_flight_owners(ctx, index_pins, span);
+    release_hash_key_operand(ctx, index_value, span);
+}
+
+/// Rebinds the entry through the backend, which publishes a relocated hash into `hash`.
+///
+/// The call deliberately has no EIR result: the backend writes the table pointer the helper
+/// returns back into the `hash` operand's SSA home, exactly like `HashSet` does after growth
+/// or copy-on-write, so the caller stores that same operand into the array local.
+fn bind_hash_entry_reference(
+    ctx: &mut LoweringContext<'_, '_>,
+    hash: LoweredValue,
+    index: LoweredValue,
+    cell: LoweredValue,
+    span: Span,
+) {
+    ctx.emit_void(
+        Op::RuntimeCall,
+        vec![hash.value, index.value, cell.value],
+        Some(Immediate::RuntimeCall(
+            RuntimeCallTarget::HashEntrySetReference,
+        )),
+        effects_lookup::runtime_effects(),
+        Some(span),
+    );
+}
+
+/// Returns the payload type a fallback reference binding exposes through its local.
+///
+/// A hash entry is promoted to a managed cell whose payload is always a boxed Mixed value, so
+/// the bound local must read it as Mixed even when the hash's declared value type is concrete.
+/// Packed storage instead exposes the element's inline address with its own raw layout.
+fn array_element_type_for_reference_bind(
+    ctx: &LoweringContext<'_, '_>,
+    array: LoweredValue,
+) -> PhpType {
+    match ctx.builder.value_php_type(array.value).codegen_repr() {
+        PhpType::Array(element) => element.codegen_repr(),
+        _ => PhpType::Mixed,
+    }
+}
+
 /// Preserves the established typed and boxed writer after a native incdec guard.
 fn lower_array_assign_from_value(
     ctx: &mut LoweringContext<'_, '_>, array: &str, array_value: LoweredValue,
     index: &Expr, value: &Expr, span: Span, key_already_diagnosed: bool, incdec: Option<bool>,
     auto_viv: Option<PhpType>,
 ) {
+    if let ExprKind::Reference(source) = &value.kind {
+        if let ExprKind::Variable(source_name) = &source.kind {
+            lower_array_reference_assignment(
+                ctx, array, array_value, index, source, source_name, span,
+                key_already_diagnosed, incdec, auto_viv,
+            );
+            return;
+        }
+    }
     if let Some(update) = incdec.and_then(|increment| {
         super::buffer_element_updates::statement_update(ctx, array_value, value, increment)
     }) {
