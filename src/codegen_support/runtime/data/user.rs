@@ -3016,7 +3016,7 @@ fn eval_reflection_class_is_cloneable(
     let runtime_managed = matches!(
         key.as_str(),
         "throwable" | "error" | "exception" | "generator" | "fiber" | "closure"
-    ) || key.starts_with("reflection")
+    ) || (class_info.is_internal && key.starts_with("reflection"))
         // Every throwable, however deep below Exception or Error: a user class's interface list
         // does not carry the Throwable it inherits, so the parent chain is walked.
         || class_info.interfaces.iter().any(|interface| {

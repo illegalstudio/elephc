@@ -174,6 +174,46 @@ echo eval('$c = "is_countable"; return $c(7) ? "bad" : "eval-var";'), "\n";
     );
 }
 
+/// `var_dump()` hides only properties whose name STARTS with the compiler's cursor marker: a user
+/// property that merely contains it is an ordinary property and is printed.
+#[test]
+fn test_var_dump_keeps_user_properties_containing_the_cursor_marker() {
+    let out = compile_and_run(
+        r#"<?php
+class P { public $my__elephc_cursor_cache = 5; public $b = 1; }
+var_dump(new P);
+"#,
+    );
+    assert_eq!(
+        out,
+        "object(P)#1 (2) {\n  [\"my__elephc_cursor_cache\"]=>\n  int(5)\n  [\"b\"]=>\n  int(1)\n}\n"
+    );
+}
+
+/// A user class whose name merely starts with `Reflection` keeps ordinary storage, so
+/// `ReflectionClass::isCloneable()` answers true for it as in php; only the engine's own
+/// Reflection classes are refused.
+#[test]
+fn test_reflection_is_cloneable_for_a_user_class_named_like_reflection() {
+    let out = compile_and_run(
+        r#"<?php
+class ReflectionThing { public $x = 1; }
+class WithPrivClone { private function __clone() {} }
+$names = ['ReflectionThing', 'WithPrivClone', 'ReflectionClass'];
+$out = [];
+foreach ($names as $n) {
+    $rc = new ReflectionClass($n);
+    $out[$n] = [$rc->isInstantiable(), $rc->isCloneable()];
+}
+echo json_encode($out), "\n";
+"#,
+    );
+    assert_eq!(
+        out,
+        "{\"ReflectionThing\":[true,true],\"WithPrivClone\":[true,false],\"ReflectionClass\":[true,false]}\n"
+    );
+}
+
 /// `is_callable()` answers true for `Class::missing` and `[Class::class, 'missing']` when the class
 /// has a public `__callStatic()`, in a literal probe and in a runtime-built one, and false for a
 /// class without it.
@@ -193,21 +233,5 @@ var_dump(is_callable($a), is_callable($s), is_callable($v), is_callable(['V', 'z
     assert_eq!(
         out,
         "bool(true)\nbool(true)\nbool(true)\nbool(true)\nbool(true)\nbool(false)\nbool(false)\nbool(true)\n"
-    );
-}
-
-/// `var_dump()` hides only properties whose name STARTS with the compiler's cursor marker: a user
-/// property that merely contains it is an ordinary property and is printed.
-#[test]
-fn test_var_dump_keeps_user_properties_containing_the_cursor_marker() {
-    let out = compile_and_run(
-        r#"<?php
-class P { public $my__elephc_cursor_cache = 5; public $b = 1; }
-var_dump(new P);
-"#,
-    );
-    assert_eq!(
-        out,
-        "object(P)#1 (2) {\n  [\"my__elephc_cursor_cache\"]=>\n  int(5)\n  [\"b\"]=>\n  int(1)\n}\n"
     );
 }
