@@ -478,11 +478,14 @@ fn spill_mixed_offset(ctx: &mut FunctionContext<'_>, offset: Option<ValueId>) ->
     let Some(offset) = offset else {
         return Ok(false);
     };
-    if !matches!(ctx.value_php_type(offset)?.codegen_repr(), PhpType::Mixed | PhpType::Union(_)) {
+    if !matches!(
+        ctx.value_php_type(offset)?.codegen_repr(),
+        PhpType::Mixed | PhpType::Union(_) | PhpType::Str | PhpType::Float
+    ) {
         return Ok(false);
     }
-    ctx.load_value_to_result(offset)?;
-    abi::emit_call_label(ctx.emitter, "__rt_mixed_cast_int");
+    // Weak mode: a numeric string or a float reaches the integer parameter converted, as php does.
+    super::super::resolve_int_operand_to_result(ctx, offset, "unpack offset")?;
     abi::emit_push_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
     Ok(true)
 }

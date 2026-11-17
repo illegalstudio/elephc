@@ -132,3 +132,23 @@ ids("x");
         "bool(true)\nbool(true)\nmethod_exists(): Argument #1 ($object_or_class) must be of type object|string, int given\nspl_object_id(): Argument #1 ($object) must be of type object, string given\n"
     );
 }
+
+/// A numeric-string `$offset` reaches unpack() converted to an int, as php's weak mode does.
+#[test]
+fn test_unpack_numeric_string_offset_is_coerced() {
+    let out = compile_and_run(r#"<?php
+$s = $argc > 5 ? '0' : '4';
+echo unpack('N', "\0\0\0\5\0\0\0\6", $s)[1], "\n";
+"#);
+    assert_eq!(out, "6\n");
+}
+
+/// `filter_var(null)` answers a clean empty string, with no stale pointer in the boxed result.
+#[test]
+fn test_filter_var_null_default_is_an_empty_string() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+var_dump(filter_var(null));
+"#);
+    assert_eq!(out.stdout, "string(0) \"\"\n");
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}

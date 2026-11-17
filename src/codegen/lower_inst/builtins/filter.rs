@@ -495,7 +495,8 @@ fn emit_bool_immediate_result(ctx: &mut FunctionContext<'_>, value: bool) {
 /// Sets the string result registers to an empty string (used for `null`'s
 /// `FILTER_DEFAULT` passthrough, which stringifies to `""`).
 fn emit_empty_string_result(ctx: &mut FunctionContext<'_>) {
-    let len_reg = abi::string_result_regs(ctx.emitter).1;
+    let (ptr_reg, len_reg) = abi::string_result_regs(ctx.emitter);
+    abi::emit_load_int_immediate(ctx.emitter, ptr_reg, 0);
     abi::emit_load_int_immediate(ctx.emitter, len_reg, 0);
 }
 
