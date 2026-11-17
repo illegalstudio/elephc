@@ -1385,6 +1385,14 @@ fn decl_class_domnode() -> Stmt {
                         None,
                     ),
                     s_assign("parentPath", e_method_call(e_this_prop("parentNode"), "getNodePath", vec![])),
+                    s_if(
+                        e_binop(e_this_prop("nodeType"), BinOp::StrictEq, e_int(2)),
+                        vec![
+                            s_return(e_binop(e_binop(e_var("parentPath"), BinOp::Concat, e_str("/@")), BinOp::Concat, e_this_prop("nodeName"))),
+                        ],
+                        vec![],
+                        None,
+                    ),
                     s_assign("step", e_this_prop("nodeName")),
                     s_if(
                         e_binop(e_binop(e_this_prop("nodeType"), BinOp::StrictEq, e_int(3)), BinOp::Or, e_binop(e_this_prop("nodeType"), BinOp::StrictEq, e_int(4))),
@@ -2103,6 +2111,15 @@ fn decl_class_domelement() -> Stmt {
                 .returns(t_nullable(t_class("DOMAttr")))
                 .body(vec![
                     s_assign("old", e_null_coalesce(e_index(e_this_prop("attrNodes"), e_prop(e_var("attr"), "nodeName")), e_null())),
+                    s_assign("mine", e_method_call(e_this(), "owningDocument", vec![])),
+                    s_if(
+                        e_binop(e_binop(e_binop(e_var("mine"), BinOp::StrictNotEq, e_null()), BinOp::And, e_binop(e_prop(e_var("attr"), "ownerDocument"), BinOp::StrictNotEq, e_null())), BinOp::And, e_binop(e_prop(e_var("attr"), "ownerDocument"), BinOp::StrictNotEq, e_var("mine"))),
+                        vec![
+                            s_throw(e_new("DOMException", vec![e_str("Wrong Document Error"), e_int(4)])),
+                        ],
+                        vec![],
+                        None,
+                    ),
                     s_if(
                         e_binop(e_var("old"), BinOp::StrictEq, e_var("attr")),
                         vec![
@@ -2111,19 +2128,11 @@ fn decl_class_domelement() -> Stmt {
                         vec![],
                         None,
                     ),
+                    s_assign("holder", e_prop(e_var("attr"), "ownerElement")),
                     s_if(
-                        e_binop(e_prop(e_var("attr"), "ownerElement"), BinOp::StrictNotEq, e_null()),
+                        e_binop(e_var("holder"), BinOp::StrictNotEq, e_null()),
                         vec![
-                            s_throw(e_new("DOMException", vec![e_str("Inuse Attribute Error"), e_int(10)])),
-                        ],
-                        vec![],
-                        None,
-                    ),
-                    s_assign("mine", e_method_call(e_this(), "owningDocument", vec![])),
-                    s_if(
-                        e_binop(e_binop(e_binop(e_var("mine"), BinOp::StrictNotEq, e_null()), BinOp::And, e_binop(e_prop(e_var("attr"), "ownerDocument"), BinOp::StrictNotEq, e_null())), BinOp::And, e_binop(e_prop(e_var("attr"), "ownerDocument"), BinOp::StrictNotEq, e_var("mine"))),
-                        vec![
-                            s_throw(e_new("DOMException", vec![e_str("Wrong Document Error"), e_int(4)])),
+                            s_expr(e_method_call(e_var("holder"), "removeAttributeNode", vec![e_var("attr")])),
                         ],
                         vec![],
                         None,
@@ -2267,9 +2276,33 @@ fn decl_class_domelement() -> Stmt {
                 .param("value", t_mixed())
                 .returns(TypeExpr::Void)
                 .body(vec![
+                    s_if(
+                        e_binop(e_var("qualifiedName"), BinOp::StrictEq, e_str("")),
+                        vec![
+                            s_throw(e_new_fq("ValueError", vec![e_str("DOMElement::setAttributeNS(): Argument #2 ($qualifiedName) must not be empty")])),
+                        ],
+                        vec![],
+                        None,
+                    ),
                     s_assign("value", e_cast(CastType::String, e_var("value"))),
                     s_assign("colon", e_call("strpos", vec![e_var("qualifiedName"), e_str(":")])),
                     s_assign("prefix", e_ternary(e_binop(e_var("colon"), BinOp::StrictEq, e_bool(false)), e_str(""), e_call("substr", vec![e_var("qualifiedName"), e_int(0), e_var("colon")]))),
+                    s_if(
+                        e_binop(e_var("colon"), BinOp::StrictNotEq, e_bool(false)),
+                        vec![
+                            s_assign("local", e_call("substr", vec![e_var("qualifiedName"), e_binop(e_var("colon"), BinOp::Add, e_int(1))])),
+                            s_if(
+                                e_binop(e_binop(e_binop(e_binop(e_binop(e_binop(e_binop(e_var("colon"), BinOp::StrictEq, e_int(0)), BinOp::Or, e_binop(e_var("local"), BinOp::StrictEq, e_str(""))), BinOp::Or, e_binop(e_call("strpos", vec![e_var("local"), e_str(":")]), BinOp::StrictNotEq, e_bool(false))), BinOp::Or, e_binop(e_var("namespace"), BinOp::StrictEq, e_null())), BinOp::Or, e_binop(e_var("namespace"), BinOp::StrictEq, e_str(""))), BinOp::Or, e_binop(e_binop(e_var("prefix"), BinOp::StrictEq, e_str("xml")), BinOp::And, e_binop(e_var("namespace"), BinOp::StrictNotEq, e_str("http://www.w3.org/XML/1998/namespace")))), BinOp::Or, e_binop(e_binop(e_var("prefix"), BinOp::StrictEq, e_str("xmlns")), BinOp::And, e_binop(e_var("namespace"), BinOp::StrictNotEq, e_str("http://www.w3.org/2000/xmlns/")))),
+                                vec![
+                                    s_throw(e_new("DOMException", vec![e_str("Namespace Error"), e_int(14)])),
+                                ],
+                                vec![],
+                                None,
+                            ),
+                        ],
+                        vec![],
+                        None,
+                    ),
                     s_if(
                         e_binop(e_binop(e_binop(e_var("namespace"), BinOp::StrictEq, e_str("http://www.w3.org/2000/xmlns/")), BinOp::Or, e_binop(e_var("prefix"), BinOp::StrictEq, e_str("xmlns"))), BinOp::Or, e_binop(e_var("qualifiedName"), BinOp::StrictEq, e_str("xmlns"))),
                         vec![
@@ -2335,7 +2368,15 @@ fn decl_class_domelement() -> Stmt {
                 .param("isId", TypeExpr::Bool)
                 .returns(TypeExpr::Void)
                 .body(vec![
-                    s_assign("_unused", e_array(vec![e_var("qualifiedName"), e_var("isId")])),
+                    s_if(
+                        e_not(e_method_call(e_this(), "hasAttribute", vec![e_var("qualifiedName")])),
+                        vec![
+                            s_throw(e_new("DOMException", vec![e_str("Not Found Error"), e_int(8)])),
+                        ],
+                        vec![],
+                        None,
+                    ),
+                    s_assign("_unused", e_var("isId")),
                 ]),
         )
         .method(
@@ -3371,11 +3412,20 @@ fn decl_class_elephcdom() -> Stmt {
                             vec![],
                             None,
                         ),
-                        s_assign("decoded", e_self_call("decodeReference", vec![e_call("substr", vec![e_var("value"), e_binop(e_var("i"), BinOp::Add, e_int(1)), e_binop(e_binop(e_var("semi"), BinOp::Sub, e_var("i")), BinOp::Sub, e_int(1))])])),
+                        s_assign("name", e_call("substr", vec![e_var("value"), e_binop(e_var("i"), BinOp::Add, e_int(1)), e_binop(e_binop(e_var("semi"), BinOp::Sub, e_var("i")), BinOp::Sub, e_int(1))])),
+                        s_assign("decoded", e_self_call("decodeReference", vec![e_var("name")])),
                         s_if(
                             e_binop(e_var("decoded"), BinOp::StrictEq, e_null()),
                             vec![
-                                s_return(e_null()),
+                                s_if(
+                                    e_binop(e_binop(e_var("name"), BinOp::StrictEq, e_str("")), BinOp::Or, e_not(e_binop(e_call("ctype_alpha", vec![e_index(e_var("name"), e_int(0))]), BinOp::Or, e_binop(e_index(e_var("name"), e_int(0)), BinOp::StrictEq, e_str("_"))))),
+                                    vec![
+                                        s_return(e_null()),
+                                    ],
+                                    vec![],
+                                    None,
+                                ),
+                                s_assign("decoded", e_str("")),
                             ],
                             vec![],
                             None,
@@ -7412,6 +7462,7 @@ fn decl_class_elephcdomstate() -> Stmt {
         .final_()
         .static_prop("internalErrors", TypeExpr::Bool, Some(e_bool(false)))
         .static_prop("documents", TypeExpr::Int, Some(e_int(0)))
+        .static_prop("entityLoaderDisabled", TypeExpr::Bool, Some(e_bool(false)))
         .build()
 }
 
@@ -7479,8 +7530,19 @@ fn decl_fn_libxml_disable_entity_loader() -> Stmt {
         .param_default("disable", TypeExpr::Bool, e_bool(true))
         .returns(TypeExpr::Bool)
         .body(vec![
-            s_assign("_unused", e_var("disable")),
-            s_return(e_bool(true)),
+            s_assign("previous", e_static_prop("__ElephcDomState", "entityLoaderDisabled")),
+            s_static_prop_assign("__ElephcDomState", "entityLoaderDisabled", e_var("disable")),
+            s_return(e_var("previous")),
+        ])
+        .build()
+}
+
+/// `libxml_get_last_error` — transcribed from the PHP form.
+fn decl_fn_libxml_get_last_error() -> Stmt {
+    function("libxml_get_last_error")
+        .returns(t_union(vec![t_class("LibXMLError"), TypeExpr::False]))
+        .body(vec![
+            s_return(e_bool(false)),
         ])
         .build()
 }
@@ -7582,6 +7644,7 @@ pub(crate) fn dom_declarations() -> Program {
             decl_class_libxmlerror(),
             decl_fn_libxml_get_errors(),
             decl_fn_libxml_disable_entity_loader(),
+            decl_fn_libxml_get_last_error(),
         ]
     })
 }

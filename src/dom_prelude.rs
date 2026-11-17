@@ -145,11 +145,12 @@ const CLASSES: [&str; 14] = [
 ];
 
 /// Free functions the prelude declares: a program calling one of them wants the surface too.
-const FUNCTIONS: [&str; 4] = [
+const FUNCTIONS: [&str; 5] = [
     "libxml_use_internal_errors",
     "libxml_clear_errors",
     "libxml_get_errors",
     "libxml_disable_entity_loader",
+    "libxml_get_last_error",
 ];
 
 /// Builds the declarations, one per helper.

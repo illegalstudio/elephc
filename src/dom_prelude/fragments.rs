@@ -675,6 +675,9 @@ class DOMNode
             return $this instanceof DOMDocument ? '/' : null;
         }
         $parentPath = $this->parentNode->getNodePath();
+        if ($this->nodeType === 2) {
+            return $parentPath . '/@' . $this->nodeName;
+        }
         $step = $this->nodeName;
         if ($this->nodeType === 3 || $this->nodeType === 4) {
             $step = 'text()';
@@ -1104,15 +1107,16 @@ class DOMElement extends DOMNode
     public function setAttributeNode(DOMAttr $attr): ?DOMAttr
     {
         $old = $this->attrNodes[$attr->nodeName] ?? null;
-        if ($old === $attr) {
-            return null;
-        }
-        if ($attr->ownerElement !== null) {
-            throw new DOMException('Inuse Attribute Error', 10);
-        }
         $mine = $this->owningDocument();
         if ($mine !== null && $attr->ownerDocument !== null && $attr->ownerDocument !== $mine) {
             throw new DOMException('Wrong Document Error', 4);
+        }
+        if ($old === $attr) {
+            return null;
+        }
+        $holder = $attr->ownerElement;
+        if ($holder !== null) {
+            $holder->removeAttributeNode($attr);
         }
         if ($old !== null) {
             $old->ownerElement = null;
@@ -1193,9 +1197,18 @@ class DOMElement extends DOMNode
 
     public function setAttributeNS(?string $namespace, string $qualifiedName, mixed $value): void
     {
+        if ($qualifiedName === '') {
+            throw new \ValueError('DOMElement::setAttributeNS(): Argument #2 ($qualifiedName) must not be empty');
+        }
         $value = (string) $value;
         $colon = strpos($qualifiedName, ':');
         $prefix = $colon === false ? '' : substr($qualifiedName, 0, $colon);
+        if ($colon !== false) {
+            $local = substr($qualifiedName, $colon + 1);
+            if ($colon === 0 || $local === '' || strpos($local, ':') !== false || $namespace === null || $namespace === '' || ($prefix === 'xml' && $namespace !== 'http://www.w3.org/XML/1998/namespace') || ($prefix === 'xmlns' && $namespace !== 'http://www.w3.org/2000/xmlns/')) {
+                throw new DOMException('Namespace Error', 14);
+            }
+        }
         if ($namespace === 'http://www.w3.org/2000/xmlns/' || $prefix === 'xmlns' || $qualifiedName === 'xmlns') {
             $declared = $prefix;
             if ($qualifiedName === 'xmlns') {
@@ -1226,7 +1239,10 @@ class DOMElement extends DOMNode
 
     public function setIdAttribute(string $qualifiedName, bool $isId): void
     {
-        $_unused = [$qualifiedName, $isId];
+        if (!$this->hasAttribute($qualifiedName)) {
+            throw new DOMException('Not Found Error', 8);
+        }
+        $_unused = $isId;
     }
 
     public function getElementsByTagName(string $qualifiedName): DOMNodeList
@@ -1849,9 +1865,14 @@ final class __ElephcDom
             if ($semi === false) {
                 return null;
             }
-            $decoded = self::decodeReference(substr($value, $i + 1, $semi - $i - 1));
+            $name = substr($value, $i + 1, $semi - $i - 1);
+            $decoded = self::decodeReference($name);
             if ($decoded === null) {
-                return null;
+                // libxml keeps an undeclared entity as a reference node that renders as nothing.
+                if ($name === '' || !(ctype_alpha($name[0]) || $name[0] === '_')) {
+                    return null;
+                }
+                $decoded = '';
             }
             $out .= $decoded;
             $i = $semi + 1;
@@ -4050,6 +4071,7 @@ final class __ElephcDomState
 {
     public static bool $internalErrors = false;
     public static int $documents = 0;
+    public static bool $entityLoaderDisabled = false;
 }
 
 function libxml_use_internal_errors(?bool $use_errors = null): bool
@@ -4089,8 +4111,14 @@ function libxml_get_errors(): array
 
 function libxml_disable_entity_loader(bool $disable = true): bool
 {
-    $_unused = $disable;
-    return true;
+    $previous = __ElephcDomState::$entityLoaderDisabled;
+    __ElephcDomState::$entityLoaderDisabled = $disable;
+    return $previous;
+}
+
+function libxml_get_last_error(): LibXMLError|false
+{
+    return false;
 }
 
 "####;

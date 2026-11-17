@@ -1323,3 +1323,25 @@ object(LibXMLError)#1 (2) {
 "####
     );
 }
+
+/// Legacy `DOMElement::setAttributeNode()` steals an attribute held by another element instead of
+/// throwing "Inuse Attribute Error"; `getNodePath()` of an attribute ends in `@name`;
+/// `setIdAttribute()` of a missing attribute throws NOT_FOUND_ERR; `libxml_get_last_error()`
+/// answers `false`; `libxml_disable_entity_loader()` answers the previous flag; and an undeclared
+/// entity in a `createElement()` value renders as nothing instead of discarding the value.
+#[test]
+fn test_dom_legacy_attribute_move_node_path_id_attribute_and_libxml_flags() {
+    let out = compile_and_run(
+        r####"<?php
+$doc = new DOMDocument();
+$doc->loadXML('<r><e1 a="1"/><e2/></r>');
+$attr = $doc->documentElement->firstChild->getAttributeNode('a');
+$moved = $doc->documentElement->lastChild->setAttributeNode($attr);
+var_dump($moved);
+echo $attr->getNodePath(), "\n";
+echo $doc->saveXML($doc->documentElement), "\n";
+try {
+    $doc->documentElement->setIdAttribute('missing', true);
+} catch (DOMException $e) {
+    echo $e->getCode(), ' ', $e->getMessage(), "\n";
+}

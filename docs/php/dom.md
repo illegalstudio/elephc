@@ -60,7 +60,8 @@ echo $dom->saveXML();
   UTF-8 (the `'<?xml encoding="UTF-8">' . $html` idiom works).
 - **Constants and functions**: the `LIBXML_*` constants, `XML_*_NODE`, `DOM_*_ERR`,
   `libxml_use_internal_errors()` (state only), `libxml_clear_errors()`,
-  `libxml_get_errors()` (always an empty list of `LibXMLError`, php's typed error record), `libxml_disable_entity_loader()`.
+  `libxml_get_errors()` (always an empty list of `LibXMLError`, php's typed error record),
+  `libxml_get_last_error()` (always `false`), `libxml_disable_entity_loader()` (answers the previous flag).
 
 `Dom\HTMLDocument` (PHP 8.4's HTML5 DOM) is a separate surface with its own parser; the two do
 not share nodes.
