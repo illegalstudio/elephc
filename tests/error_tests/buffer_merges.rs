@@ -39,6 +39,16 @@ fn test_error_match_of_buffer_and_scalar() {
     );
 }
 
+/// A `match` whose buffer arm is built in place is rejected too (the assignment-effects walk of
+/// a `match` used to skip the buffer merge and type the result `mixed`).
+#[test]
+fn test_error_match_of_fresh_buffer_and_scalar() {
+    expect_error(
+        "<?php $k = (int)($argc > 5); $b = match ($k) { 0 => buffer_new<float>(4), default => 0.0 };",
+        "every arm of a match must have the same buffer type: buffer<float> cannot be merged with float",
+    );
+}
+
 /// `?:` between two buffer element types is rejected like a ternary.
 #[test]
 fn test_error_short_ternary_of_different_buffer_types() {

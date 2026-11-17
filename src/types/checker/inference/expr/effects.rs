@@ -480,6 +480,7 @@ impl Checker {
                 self.infer_type_with_assignment_effects(subject, env)?;
                 let mut fallthrough_env = env.clone();
                 let mut result_ty: Option<PhpType> = None;
+                let mut arm_types: Vec<(&Expr, PhpType)> = Vec::new();
                 for (conditions, result) in arms {
                     let mut arm_env = fallthrough_env.clone();
                     for condition in conditions {
@@ -498,6 +499,7 @@ impl Checker {
                     } else {
                         ty
                     };
+                    arm_types.push((result, ty.clone()));
                     result_ty = Some(match result_ty {
                         Some(acc) => merge_match_arm_result_type(self, acc, ty),
                         None => ty,
@@ -512,11 +514,15 @@ impl Checker {
                     } else {
                         ty
                     };
+                    arm_types.push((&**default, ty.clone()));
                     result_ty = Some(match result_ty {
                         Some(acc) => merge_match_arm_result_type(self, acc, ty),
                         None => ty,
                     });
                     merge_conditional_storage_effects(env, &default_env);
+                }
+                if let Some(buffer) = buffer_merge_result_type("a match", &arm_types, expr.span)? {
+                    return Ok(buffer);
                 }
                 Ok(result_ty.unwrap_or(PhpType::Void))
             }
