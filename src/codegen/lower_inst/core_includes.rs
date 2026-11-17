@@ -62,6 +62,17 @@ pub(super) fn lower_include_once_test(ctx: &mut FunctionContext<'_>, inst: &Inst
 
 /// Resolves a typed source identity to its native include-once request-state symbol.
 pub(super) fn include_once_label(ctx: &FunctionContext<'_>, inst: &Instruction) -> Result<String> {
+    // A program-wide once flag (class initialization, constant evaluation) names its symbol in
+    // the module data pool; an include marker carries a typed source identity.
+    if let Some(Immediate::Data(data)) = &inst.immediate {
+        return ctx
+            .module
+            .data
+            .strings
+            .get(data.as_raw() as usize)
+            .cloned()
+            .ok_or_else(|| CodegenIrError::missing_entry("data string", data.as_raw()));
+    }
     let Some(Immediate::Source(id)) = &inst.immediate else {
         return Err(CodegenIrError::invalid_module("include marker requires a source id"));
     };
