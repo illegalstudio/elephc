@@ -373,11 +373,17 @@ fn guard_generic_object_nominal_return(
     // An object source is the same story: the guard materializes its own owner (`__rt_incref` in
     // `store_nominal_object_result`), so an owned call result -- `return parent::add($i);` in an
     // override narrowing `DateTime` to `static` -- leaked one object per call.
-    if matches!(
-        source_type,
-        PhpType::Mixed | PhpType::Union(_) | PhpType::Object(_)
-    ) && matches!(return_type.codegen_repr(), PhpType::Object(_))
-        && ctx.value_is_owning_temporary(value)
+    // A nullable object target (`?C`) is stored as a boxed `Mixed`, and the guard boxes an object
+    // source with a reference of its own just the same, so that boundary releases it too.
+    let guard_takes_own_reference = match return_type.codegen_repr() {
+        PhpType::Object(_) => matches!(
+            source_type,
+            PhpType::Mixed | PhpType::Union(_) | PhpType::Object(_)
+        ),
+        PhpType::Mixed => matches!(source_type, PhpType::Object(_)),
+        _ => false,
+    };
+    if guard_takes_own_reference && ctx.value_is_owning_temporary(value)
     {
         crate::ir_lower::ownership::release_if_owned(ctx, value, span);
     }
