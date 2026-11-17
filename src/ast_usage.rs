@@ -590,6 +590,7 @@ fn scan_expr(expr: &Expr, usage: &mut Usage) {
             // `AttributeFileLoader::findClass()` calls `token_get_all()` from
             // `Symfony\Component\Routing\Loader`, the tokenizer prelude was never built, and the
             // call fell through to an interpreter that has no tokenizer.
+            let fallback_global = name.function_fallback().map(php_symbol_key);
             if let Some(global) = name.function_fallback() {
                 record_name(usage, global);
             }
@@ -692,7 +693,10 @@ fn scan_expr(expr: &Expr, usage: &mut Usage) {
                 bare,
                 args,
             );
-            match name.as_str() {
+            // An unqualified builtin call inside a namespace keeps its namespaced spelling and a
+            // global fallback: the builtin's own name is what the shape checks below match.
+            let builtin_name = fallback_global.as_deref().unwrap_or(name.as_str());
+            match builtin_name {
                 "function_exists" | "is_callable" => {
                     if matches!(args.first().map(|arg| &arg.kind), Some(ExprKind::StringLiteral(_))) {
                         record_literal_function(usage, args.first());
@@ -714,7 +718,7 @@ fn scan_expr(expr: &Expr, usage: &mut Usage) {
                 // it `uksort($paths, 'strnatcmp')` was not a reference to `strnatcmp` at all:
                 // the backend-gap prelude that implements it was never injected, and the
                 // native sort then jumped through an unresolved callable.
-                _ => record_literal_builtin_callback_arguments(usage, &name, args),
+                _ => record_literal_builtin_callback_arguments(usage, builtin_name, args),
             }
             for arg in args {
                 scan_expr(arg, usage);
@@ -964,5 +968,27 @@ fn scan_expr(expr: &Expr, usage: &mut Usage) {
         }
         ExprKind::ObjectClassName { object } => scan_expr(object, usage),
         ExprKind::DynamicScopedConstantAccess { receiver, .. } => scan_expr(receiver, usage),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    /// Parses and name-resolves `source`, then collects its usage as the prelude injectors do.
+    fn usage_of(source: &str) -> super::Usage {
+        let tokens = crate::lexer::tokenize(source).expect("tokenize");
+        let program = crate::parser::parse(&tokens).expect("parse");
+        let program = crate::name_resolver::resolve(program).expect("resolve names");
+        super::collect(&program)
+    }
+
+    /// A literal callback handed to a builtin from inside a namespace is recorded like the
+    /// global spelling, so the helper that implements the callback is still injected.
+    #[test]
+    fn a_namespaced_builtin_call_records_its_literal_callback() {
+        let usage = usage_of("<?php\nnamespace App;\n$p = [];\nuksort($p, 'strnatcmp');\n");
+        assert!(usage.references("strnatcmp"));
+        let usage = usage_of("<?php\nnamespace App;\n$ok = function_exists('my_helper');\n");
+        assert!(usage.references("my_helper"));
+        assert!(!usage.dynamic_function_call);
     }
 }
