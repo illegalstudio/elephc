@@ -1208,7 +1208,8 @@ fn literal_regex_suffix(pattern: &str) -> Option<&str> {
     if !matches!(delimiter, '/' | '#' | '~' | '%') || !pattern.ends_with(delimiter) {
         return None;
     }
-    let body = &pattern[delimiter.len_utf8()..pattern.len() - delimiter.len_utf8()];
+    // A lone delimiter character is both the opening and the closing one: no body at all.
+    let body = pattern.get(delimiter.len_utf8()..pattern.len().checked_sub(delimiter.len_utf8())?)?;
     let suffix = body.strip_suffix('$')?;
     if suffix.is_empty() || suffix.contains(['\\', '.', '*', '+', '?', '(', ')', '[', ']', '{', '}', '|', '^', '$']) {
         return None;
@@ -1259,4 +1260,14 @@ mod tests {
         }
         assert_eq!(found.len(), 4, "{found:?}");
     }
+
+    /// A pattern that is a single delimiter character has no body: it names no suffix (and must not panic).
+    #[test]
+    fn a_one_character_regex_pattern_names_no_suffix() {
+        for pattern in ["/", "#", "~", "%", "//", "/$/"] {
+            assert_eq!(super::literal_regex_suffix(pattern), None, "{pattern}");
+        }
+        assert_eq!(super::literal_regex_suffix("/Foo$/"), Some("Foo"));
+    }
+
 }
