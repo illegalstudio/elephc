@@ -138,8 +138,9 @@ pub(super) fn lower_object_class_name(
     let ty = ctx.builder.value_php_type(object.value).codegen_repr();
     let mut operands = vec![object.value];
     // A callable may be an implicit string or array callable, which `::class` rejects with its
-    // own message; a hidden literal `true` tells get_class() it lowers `::class`.
-    if ty == PhpType::Callable {
+    // own message; a hidden literal `true` tells get_class() it lowers `::class`. A callable the
+    // IR holds boxed (a `foreach` value, a ternary of callables) is a Mixed here.
+    if matches!(ty, PhpType::Callable | PhpType::Mixed | PhpType::Union(_)) {
         operands.push(emit_bool_literal(ctx, true, Some(expr.span)).value);
     }
     // A nullable/mixed receiver can be null at run time. PHP raises its own TypeError
