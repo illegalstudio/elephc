@@ -225,11 +225,11 @@ fn compare_float_to_string(left: f64, right: &str) -> Option<Ordering> {
 }
 
 /// The string php writes for `value` at the default precision, when Rust's shortest
-/// representation is certain to match it: finite, in `[1e-4, 1e15)`, at most 14 significant
+/// representation is certain to match it: finite, in `[1e-4, 1e14)` (php writes exponents from 1e14), at most 14 significant
 /// digits. Returns `None` otherwise.
 fn plain_float_string(value: f64) -> Option<String> {
     let magnitude = value.abs();
-    if !value.is_finite() || !(1e-4..1e15).contains(&magnitude) {
+    if !value.is_finite() || !(1e-4..1e14).contains(&magnitude) {
         return None;
     }
     let text = format!("{}", value);

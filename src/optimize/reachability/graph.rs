@@ -859,7 +859,7 @@ impl GraphState {
     ///   once per chain, so each root lists each candidate at most once;
     /// * the lists are built in ascending `live_classes` position, so the inner loop still visits
     ///   candidates in the same order it did, inserting the same pairs;
-    /// * every other test in the loop (`has_vtable_slot`, the behavioral lookup) is untouched.
+    /// * every other test in the loop (the vtable-slot probe, the behavioral lookup) is untouched.
     ///
     /// Incremental across rounds: the walk of a method against a class depends only on the
     /// method, whether it is behavioral, and the class, and live classes only ever join. So a
@@ -1408,12 +1408,6 @@ impl GraphState {
         }
     }
 
-    /// Returns whether the checker assigned a virtual slot for this visible method.
-    fn has_vtable_slot(&self, class: &str, method: &str, is_static: bool) -> bool {
-        self.vtable_slots
-            .contains(&(class.to_string(), method.to_string(), is_static))
-    }
-
     /// Returns the oldest ancestor that still occupies the same virtual slot.
     fn vtable_lineage_root(&self, class: &str, method: &str, is_static: bool) -> String {
         // One key rewritten per hop: this runs per kept method per fixed-point round.
@@ -1613,16 +1607,6 @@ fn magic_methods_by_visible_class(
     by_class
 }
 
-/// Inverts the live classes' ancestor chains into `root -> positions in live_classes`.
-///
-/// `descendants[root]` holds the position of every live class for which
-/// `class_is_or_descends_from(class, root)` answers `true`, and no other: both come from
-/// `walk_class_ancestors`. Positions are pushed in ascending order, so iterating one root's list
-/// visits candidates in the same order a scan of `live_classes` did.
-/// The live classes a vtable family can reach: only they can pass `has_vtable_slot` below.
-///
-/// `reach.classes` also holds every name a string might denote, 278 392 entries on the Symfony
-/// Demo against ~4 000 classes. Cloning them each fixed-point round was most of the prune phase.
 /// What [`GraphState::seed_vtable_slot_families`] walked in earlier rounds.
 #[derive(Default)]
 struct VtableWalked {
@@ -1641,6 +1625,10 @@ fn reach_verify() -> bool {
     *VERIFY.get_or_init(|| std::env::var_os("ELEPHC_REACH_VERIFY").is_some())
 }
 
+/// The live classes a vtable family can reach: only they can hold a vtable slot.
+///
+/// `reach.classes` also holds every name a string might denote, 278 392 entries on the Symfony
+/// Demo against ~4 000 classes. Cloning them each fixed-point round was most of the prune phase.
 fn classes_with_vtable_slots(
     live_classes: &HashSet<String>,
     vtable_slot_classes: &HashSet<String>,
@@ -1652,6 +1640,12 @@ fn classes_with_vtable_slots(
         .collect()
 }
 
+/// Inverts the live classes' ancestor chains into `root -> positions in live_classes`.
+///
+/// `descendants[root]` holds the position of every live class for which
+/// `class_is_or_descends_from(class, root)` answers `true`, and no other: both come from
+/// `walk_class_ancestors`. Positions are pushed in ascending order, so iterating one root's list
+/// visits candidates in the same order a scan of `live_classes` did.
 fn live_descendants_by_root(
     index: &DeclarationIndex,
     live_classes: &[String],

@@ -853,3 +853,15 @@ fn test_fold_assoc_array_access_without_spread_still_folds() {
     };
     assert_eq!(expr.kind, ExprKind::IntLiteral(1));
 }
+
+/// Verifies a float at or above 1e14 is never folded against a non-numeric string.
+///
+/// php writes `1e14` as `1.0E+14` at its default precision, so `1e14 < "1.1x"` is `true`; the
+/// plain decimal spelling would compare `'0'` against `'.'` and fold to `false`.
+#[test]
+fn test_float_at_exponent_threshold_declines_string_fold() {
+    // php -n -r 'var_dump(1e14 < "1.1x");' => bool(true)
+    let expr = Expr::binop(Expr::float_lit(1e14), BinOp::Lt, Expr::string_lit("1.1x"));
+    let folded = fold_constants(vec![Stmt::echo(expr.clone())]);
+    assert_eq!(folded, vec![Stmt::echo(expr)]);
+}
