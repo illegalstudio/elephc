@@ -11,6 +11,8 @@
 //! - Parameter checks reverse the return-type relation because PHP parameters are contravariant.
 //! - Pending class declarations are checked before they are registered in the eval context.
 //! - Readonly storage over setter-only abstract contracts uses the same supertype relation.
+//! - Each class lookup a check makes is reported to the context (`override_lookups`), so early
+//!   binding can tell a check PHP could decide from one that needs a class not declared yet.
 
 use super::*;
 
@@ -219,8 +221,16 @@ fn eval_property_class_type_matches(
     else {
         return false;
     };
-    eval_resolve_return_class_type_name(required_name, required_owner, pending_class, context)
-        .is_some_and(|required_resolved| property_resolved.eq_ignore_ascii_case(&required_resolved))
+    let Some(required_resolved) =
+        eval_resolve_return_class_type_name(required_name, required_owner, pending_class, context)
+    else {
+        return false;
+    };
+    if property_resolved.eq_ignore_ascii_case(&required_resolved) {
+        return true;
+    }
+    context.note_compared_override_lookup(&property_resolved, &required_resolved);
+    false
 }
 
 /// Returns whether an implementation parameter type is a PHP contravariant supertype.
@@ -399,6 +409,28 @@ fn eval_return_variant_accepts_actual_intersection(
     pending_class: Option<&EvalClass>,
     context: &ElephcEvalContext,
 ) -> bool {
+    match expected_variant {
+        // PHP never accepts an intersection as `callable`, not even one that holds `Closure`.
+        EvalParameterTypeVariant::Callable => return false,
+        // PHP accepts an intersection as `object` once it has found one of its classes.
+        EvalParameterTypeVariant::Object => {
+            let members: Vec<String> = actual_type
+                .variants()
+                .iter()
+                .filter_map(|variant| match variant {
+                    EvalParameterTypeVariant::Class(name) => {
+                        eval_resolve_return_class_type_name(name, actual_owner, pending_class, context)
+                    }
+                    _ => None,
+                })
+                .collect();
+            if !members.is_empty() {
+                context.note_required_override_lookup(&members);
+                return true;
+            }
+        }
+        _ => {}
+    }
     actual_type.variants().iter().any(|actual_variant| {
         eval_return_variant_accepts_actual_variant(
             expected_variant,
@@ -438,7 +470,17 @@ fn eval_return_variant_accepts_actual_variant(
         | (EvalParameterTypeVariant::Int, EvalParameterTypeVariant::Int)
         | (EvalParameterTypeVariant::Iterable, EvalParameterTypeVariant::Iterable)
         | (EvalParameterTypeVariant::String, EvalParameterTypeVariant::String) => true,
-        (EvalParameterTypeVariant::Object, EvalParameterTypeVariant::Class(_)) => true,
+        // PHP accepts any class as `object`, but only once it has found the class.
+        (EvalParameterTypeVariant::Object, EvalParameterTypeVariant::Class(actual_name)) => {
+            if let Some(actual) = eval_resolve_return_class_type_name(actual_name, actual_owner, pending_class, context) {
+                context.note_required_override_lookup(&[actual]);
+            }
+            true
+        }
+        // `callable` accepts `Closure`, the one class PHP knows is callable.
+        (EvalParameterTypeVariant::Callable, EvalParameterTypeVariant::Class(actual_name)) => {
+            eval_return_class_type_is_a(actual_name, actual_owner, "Closure", actual_owner, pending_class, context)
+        }
         (EvalParameterTypeVariant::Iterable, EvalParameterTypeVariant::Array) => true,
         (EvalParameterTypeVariant::Iterable, EvalParameterTypeVariant::Class(actual_name)) => {
             eval_return_class_type_is_a(
@@ -532,6 +574,7 @@ fn eval_return_class_type_is_a(
     if actual_resolved.eq_ignore_ascii_case(&expected_resolved) {
         return true;
     }
+    context.note_compared_override_lookup(&actual_resolved, &expected_resolved);
     if pending_class.is_some_and(|class| class.name().eq_ignore_ascii_case(&actual_resolved)) {
         return pending_class_return_type_is_a(pending_class, &expected_resolved, context);
     }

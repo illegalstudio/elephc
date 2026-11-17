@@ -23,8 +23,10 @@ var_dump(setlocale(LC_CTYPE, ["missing", "C"]));
 var_dump(setlocale(LC_CTYPE, ["missing"], "C"));
 var_dump(setlocale(LC_CTYPE, "missing", ["C"]));
 var_dump(is_string(setlocale(LC_CTYPE, 0, "C")));
+var_dump(is_string(setlocale(LC_CTYPE, ["0"])));
+var_dump(is_string(setlocale(LC_CTYPE, "missing", "0")));
 "#);
-    assert_eq!(out, "string(1) \"C\"\nstring(1) \"C\"\nstring(1) \"C\"\nbool(true)\n");
+    assert_eq!(out, "string(1) \"C\"\nstring(1) \"C\"\nstring(1) \"C\"\nbool(true)\nbool(true)\nbool(true)\n");
 }
 
 /// Verifies `nl_langinfo(CODESET)` reports the active libc codeset, not a name guess.
@@ -105,6 +107,18 @@ check(new It());
     assert_eq!(out, "ctype_alpha(): Argument of type It will be interpreted as string in the futurebool(false)\n");
 }
 
+/// Verifies computed eval does not duplicate a program's own global locale functions.
+#[test]
+fn test_computed_eval_keeps_global_locale_declarations() {
+    let out = compile_and_run(r#"<?php
+function setlocale(int $category, mixed $locales, mixed ...$rest): string|false { return "custom"; }
+function nl_langinfo(int $item): string|false { return "custom"; }
+$code = $argc > 0 ? 'var_dump(setlocale(0, "C"), nl_langinfo(0));' : '';
+eval($code);
+"#);
+    assert_eq!(out, "string(6) \"custom\"\nstring(6) \"custom\"\n");
+}
+
 /// Verifies locale constants are available without any locale function call.
 #[test]
 fn test_locale_constants_inject_without_function_calls() {
@@ -131,10 +145,10 @@ namespace App {
 #[test]
 fn test_computed_eval_reaches_locale_declarations() {
     let out = compile_and_run(r#"<?php
-$code = $argc > 0 ? 'var_dump(function_exists("setlocale"), function_exists("nl_langinfo"));' : '';
+$code = $argc > 0 ? 'var_dump(setlocale(LC_CTYPE, "C")); var_dump(is_string(nl_langinfo(CODESET)));' : '';
 eval($code);
 "#);
-    assert_eq!(out, "bool(true)\nbool(true)\n");
+    assert_eq!(out, "string(1) \"C\"\nbool(true)\n");
 }
 
 /// Asserts the exact byte-class membership counts php-src's ctype matrix reports.

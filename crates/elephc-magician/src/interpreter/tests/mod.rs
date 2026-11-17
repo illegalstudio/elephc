@@ -69,6 +69,7 @@ mod closures;
 mod control_flow;
 mod core;
 mod dynamic_calls;
+mod early_binding;
 mod enums;
 mod expressions;
 mod functions_namespaces;

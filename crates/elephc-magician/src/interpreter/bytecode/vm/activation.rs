@@ -97,7 +97,8 @@ fn push_fast_call(
     Ok(())
 }
 
-/// Defines a compiled function when its declaration statement is reached.
+/// Defines a compiled function: at program entry for a top-level declaration, otherwise when
+/// its declaration statement is reached.
 pub(super) fn define_fn(vm: &mut Vm, index: u16, context: &mut ElephcEvalContext) -> Result<(), EvalStatus> {
     let body = current_body(vm)?
         .defined

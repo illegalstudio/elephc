@@ -288,6 +288,14 @@ fn eval_target_dependent_constant(name: &str) -> Option<EvalPredefinedConstant> 
         // Platform `fnmatch(3)` flag values; the fnmatch/glob builtins interpret the same bits.
         "FNM_NOESCAPE" => EvalPredefinedConstant::Int(EVAL_FNM_NOESCAPE),
         "FNM_PATHNAME" => EvalPredefinedConstant::Int(EVAL_FNM_PATHNAME),
+        "CODESET" => EvalPredefinedConstant::Int(if is_macos { 0 } else { 14 }),
+        "LC_ALL" => EvalPredefinedConstant::Int(if is_macos { 0 } else { 6 }),
+        "LC_COLLATE" => EvalPredefinedConstant::Int(if is_macos { 1 } else { 3 }),
+        "LC_CTYPE" => EvalPredefinedConstant::Int(if is_macos { 2 } else { 0 }),
+        "LC_MESSAGES" => EvalPredefinedConstant::Int(if is_macos { 6 } else { 5 }),
+        "LC_MONETARY" => EvalPredefinedConstant::Int(if is_macos { 3 } else { 4 }),
+        "LC_NUMERIC" => EvalPredefinedConstant::Int(if is_macos { 4 } else { 1 }),
+        "LC_TIME" => EvalPredefinedConstant::Int(if is_macos { 5 } else { 2 }),
         _ => return None,
     })
 }

@@ -374,7 +374,9 @@ Byte classification is delegated to libc's `is*` predicates under the active
 `LC_CTYPE`, and `setlocale()` is a real libc call. Non-ASCII behavior therefore
 matches the host locale exactly, including `de_DE`'s Latin-1 class table.
 `preg_*` installs PCRE2 character tables built with `pcre2_maketables()` for the
-same locale instead of forcing `C.UTF-8`.
+same locale instead of forcing `C.UTF-8`. `LC_COLLATE` is a real libc category
+too, so `ksort()`/`krsort()` with `SORT_LOCALE_STRING` collate under the locale
+`setlocale()` selected; see [arrays](./arrays.md#sorting-an-associative-array).
 
 `trim()`, `ltrim()`, and `rtrim()` expand PHP's `start..end` character ranges
 (for example `"a..z"`) using the same rules as `php_charmask()`: only an

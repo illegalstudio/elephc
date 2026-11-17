@@ -57,6 +57,11 @@ pub(in crate::interpreter) fn execute_class_decl_stmt(
         validate_concrete_class_aot_parent_requirements(class, context, values)?;
         validate_concrete_class_aot_interface_requirements(class, context, values, false)?;
     }
+    // While the class is bound early, an override PHP accepts only once it has found a class
+    // keeps the class for its statement when that class does not exist yet.
+    if eval_required_override_lookup_is_missing(class, context, values)? {
+        return Err(EvalStatus::RuntimeFatal);
+    }
     if context.define_class(class.clone()) {
         if let Some(parent) = native_parent.as_deref() {
             if !context.define_native_class_parent(class.name(), parent) {
@@ -64,11 +69,9 @@ pub(in crate::interpreter) fn execute_class_decl_stmt(
             }
         }
         initialize_eval_static_properties(class, context, scope, values)?;
-        // A class php-src binds while compiling the program took its snapshot when the
-        // program started.
-        if !context.take_early_bound_class(class.name()) {
-            eval_record_declaration_snapshot(class.name(), context, values)?;
-        }
+        // Taken when the class is bound: at program entry for a class php-src binds while
+        // compiling the program (see `early_binding`), at its statement otherwise.
+        eval_record_declaration_snapshot(class.name(), context, values)?;
         eval_raise_trait_collision_deprecations(&declared, context, values)
     } else {
         Err(EvalStatus::RuntimeFatal)

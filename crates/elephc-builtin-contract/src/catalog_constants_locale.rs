@@ -6,9 +6,10 @@
 //!
 //! Key details:
 //! - Every value is `TargetDependent`: Apple's BSD libc and glibc number the `LC_*`
-//!   categories and `CODESET` differently, and `elephc::locale_prelude` injects the
-//!   selected target's numbers.
-//! - The `Prelude` route keeps these names out of the unconditional predefined set.
+//!   categories and `CODESET` differently, and each backend computes the selected
+//!   target's numbers.
+//! - The `Predefined` route makes them available like PHP's standard constants, without
+//!   adding them to the user-constant inventory.
 
 use crate::{BuiltinId, ConstType, ConstValue, ConstantContract, ConstantRoute, PhpModule};
 
@@ -21,7 +22,7 @@ macro_rules! constant {
             module: PhpModule::Standard,
             since: None,
             value: ConstValue::TargetDependent(ConstType::Int),
-            route: ConstantRoute::Prelude,
+            route: ConstantRoute::Predefined,
             extension: false,
             internal: false,
         }

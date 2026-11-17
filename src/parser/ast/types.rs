@@ -10,7 +10,7 @@
 
 use crate::names::Name;
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone)]
 /// One declared type parameter (`T`, `T : Entity`, `K = string`).
 ///
 /// The name is a plain `String` rather than a `Name`: a type parameter resolves against its own
@@ -36,7 +36,62 @@ pub struct TypeParam {
     /// WRITE: two instantiations are then simply different types, which is also what
     /// monomorphization makes them.
     pub variance: Variance,
+    /// Whether the parameter was declared by a PHPDoc `@template*` tag rather than native syntax.
+    ///
+    /// Read by the variance check, which demotes a PHPDoc variance marker the declaration
+    /// breaks to invariant (php-src never enforces one) instead of rejecting the file, and by
+    /// `crate::generics::erasure`, which erases a PHPDoc template's class parameters from its
+    /// dynamically dispatched methods. Native parameters keep both checks strict.
+    /// Excluded from equality, so an annotated declaration and its native spelling stay the
+    /// same AST.
+    pub from_docblock: bool,
+    /// The native hint a PHPDoc parameter took over: `Model` for `@param T $m` documenting a
+    /// native `Model $m`, or `@return T` documenting a native `: Model`.
+    ///
+    /// php-src enforces that hint whatever the annotation says, so it stays binding. A type
+    /// argument it does not accept is replaced by the hint itself (the call is then checked
+    /// against the signature php-src runs), and so is one inference cannot settle. Set by
+    /// `crate::docblock` only when every natively hinted position annotated directly with this
+    /// type parameter carries the same hint. Always `None` for native syntax, and excluded from
+    /// equality like [`TypeParam::from_docblock`].
+    pub native_hint: Option<NativeHint>,
 }
+
+/// The native hint a PHPDoc type parameter took over, and the hints it stood for.
+///
+/// The per-position hints are what lets `crate::generics::erasure` give a dispatched method
+/// back the signature php-src declares: the type parameter may also annotate untyped
+/// parameters, which must stay untyped, and an `object` parameter beside a `Model` return.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NativeHint {
+    /// The hint every type argument must satisfy, without a leading `?`.
+    pub ty: TypeExpr,
+    /// The parameters (the variadic included) that carried a native hint, each with the hint
+    /// as written. Empty for a CLASS type parameter, whose hint spans every member.
+    pub params: Vec<(String, TypeExpr)>,
+    /// The native return type as written, when a function or method type parameter took it
+    /// over too.
+    pub return_type: Option<TypeExpr>,
+    /// For a CLASS type parameter: the methods (by lowercased name) whose native return type
+    /// it took over, each with that type as written.
+    pub member_returns: Vec<(String, TypeExpr)>,
+    /// For a CLASS type parameter: the method parameters `(lowercased method, parameter)` whose
+    /// native hint it took over, each with that hint as written.
+    pub member_params: Vec<(String, String, TypeExpr)>,
+}
+
+impl PartialEq for TypeParam {
+    /// Compares the declaration, ignoring where it was spelled ([`TypeParam::from_docblock`],
+    /// [`TypeParam::native_hint`]).
+    fn eq(&self, other: &Self) -> bool {
+        self.name == other.name
+            && self.bound == other.bound
+            && self.default == other.default
+            && self.variance == other.variance
+    }
+}
+
+impl Eq for TypeParam {}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 /// The subtyping a type parameter permits between two instantiations of its template.

@@ -48,9 +48,6 @@ pub(crate) struct EvalDeprecationNotices {
     reflected_closure: Option<RuntimeCellHandle>,
     /// Constants `define()` gave a string built at run time, which php-src keeps refcounted.
     built_constants: HashSet<String>,
-    /// Classes of the running eval program that php-src binds while compiling it, whose
-    /// declaration snapshot was taken when the program started.
-    early_bound_classes: HashSet<String>,
 }
 
 /// The default a live `ReflectionParameter` reflects, which `getDefaultValue()` evaluates
@@ -162,16 +159,6 @@ impl ElephcEvalContext {
     /// Reports whether `define()` gave constant `name` a string built at run time.
     pub(crate) fn defined_constant_was_built(&self, name: &str) -> bool {
         self.deprecation_notices.built_constants.contains(name.trim_start_matches('\\'))
-    }
-
-    /// Records that php-src binds class `class_name` while compiling the running eval program.
-    pub(crate) fn mark_early_bound_class(&mut self, class_name: &str) {
-        self.deprecation_notices.early_bound_classes.insert(notice_class_key(class_name));
-    }
-
-    /// Returns `true` once when `class_name` was marked early bound, consuming the mark.
-    pub(crate) fn take_early_bound_class(&mut self, class_name: &str) -> bool {
-        self.deprecation_notices.early_bound_classes.remove(&notice_class_key(class_name))
     }
 
     /// Reports whether `class_name` copied instance slot `declaring::$name` already evaluated.

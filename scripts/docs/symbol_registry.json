@@ -5083,19 +5083,19 @@
     },
     {
       "aot": {
-        "kind": "prelude",
+        "kind": "language-intrinsic",
         "supported": true
       },
       "bundled": true,
       "eval": {
-        "reason": "eval-implementation-pending",
-        "supported": false
+        "kind": "interpreter",
+        "supported": true
       },
       "extension": false,
       "internal": false,
       "module": "standard",
       "name": "CODESET",
-      "route": "prelude",
+      "route": "predefined",
       "since": null,
       "value": {
         "target_dependent": "int"
@@ -21211,19 +21211,19 @@
     },
     {
       "aot": {
-        "kind": "prelude",
+        "kind": "language-intrinsic",
         "supported": true
       },
       "bundled": true,
       "eval": {
-        "reason": "eval-implementation-pending",
-        "supported": false
+        "kind": "interpreter",
+        "supported": true
       },
       "extension": false,
       "internal": false,
       "module": "standard",
       "name": "LC_ALL",
-      "route": "prelude",
+      "route": "predefined",
       "since": null,
       "value": {
         "target_dependent": "int"
@@ -21231,19 +21231,19 @@
     },
     {
       "aot": {
-        "kind": "prelude",
+        "kind": "language-intrinsic",
         "supported": true
       },
       "bundled": true,
       "eval": {
-        "reason": "eval-implementation-pending",
-        "supported": false
+        "kind": "interpreter",
+        "supported": true
       },
       "extension": false,
       "internal": false,
       "module": "standard",
       "name": "LC_COLLATE",
-      "route": "prelude",
+      "route": "predefined",
       "since": null,
       "value": {
         "target_dependent": "int"
@@ -21251,19 +21251,19 @@
     },
     {
       "aot": {
-        "kind": "prelude",
+        "kind": "language-intrinsic",
         "supported": true
       },
       "bundled": true,
       "eval": {
-        "reason": "eval-implementation-pending",
-        "supported": false
+        "kind": "interpreter",
+        "supported": true
       },
       "extension": false,
       "internal": false,
       "module": "standard",
       "name": "LC_CTYPE",
-      "route": "prelude",
+      "route": "predefined",
       "since": null,
       "value": {
         "target_dependent": "int"
@@ -21271,19 +21271,19 @@
     },
     {
       "aot": {
-        "kind": "prelude",
+        "kind": "language-intrinsic",
         "supported": true
       },
       "bundled": true,
       "eval": {
-        "reason": "eval-implementation-pending",
-        "supported": false
+        "kind": "interpreter",
+        "supported": true
       },
       "extension": false,
       "internal": false,
       "module": "standard",
       "name": "LC_MESSAGES",
-      "route": "prelude",
+      "route": "predefined",
       "since": null,
       "value": {
         "target_dependent": "int"
@@ -21291,19 +21291,19 @@
     },
     {
       "aot": {
-        "kind": "prelude",
+        "kind": "language-intrinsic",
         "supported": true
       },
       "bundled": true,
       "eval": {
-        "reason": "eval-implementation-pending",
-        "supported": false
+        "kind": "interpreter",
+        "supported": true
       },
       "extension": false,
       "internal": false,
       "module": "standard",
       "name": "LC_MONETARY",
-      "route": "prelude",
+      "route": "predefined",
       "since": null,
       "value": {
         "target_dependent": "int"
@@ -21311,19 +21311,19 @@
     },
     {
       "aot": {
-        "kind": "prelude",
+        "kind": "language-intrinsic",
         "supported": true
       },
       "bundled": true,
       "eval": {
-        "reason": "eval-implementation-pending",
-        "supported": false
+        "kind": "interpreter",
+        "supported": true
       },
       "extension": false,
       "internal": false,
       "module": "standard",
       "name": "LC_NUMERIC",
-      "route": "prelude",
+      "route": "predefined",
       "since": null,
       "value": {
         "target_dependent": "int"
@@ -21331,19 +21331,19 @@
     },
     {
       "aot": {
-        "kind": "prelude",
+        "kind": "language-intrinsic",
         "supported": true
       },
       "bundled": true,
       "eval": {
-        "reason": "eval-implementation-pending",
-        "supported": false
+        "kind": "interpreter",
+        "supported": true
       },
       "extension": false,
       "internal": false,
       "module": "standard",
       "name": "LC_TIME",
-      "route": "prelude",
+      "route": "predefined",
       "since": null,
       "value": {
         "target_dependent": "int"

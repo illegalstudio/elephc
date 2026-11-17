@@ -79,7 +79,14 @@ fn class_like_exists_candidates(ctx: &FunctionContext<'_>, name: &str) -> Vec<St
                     .cloned(),
             );
         }
-        "interface_exists" => candidates.extend(ctx.module.interface_infos.keys().cloned()),
+        // A class template's marker interface is not an interface php-src would report.
+        "interface_exists" => candidates.extend(
+            ctx.module
+                .interface_infos
+                .iter()
+                .filter(|(_, info)| !info.reflection_hidden)
+                .map(|(name, _)| name.clone()),
+        ),
         "trait_exists" => candidates.extend(ctx.module.trait_table.names.iter().cloned()),
         "enum_exists" => candidates.extend(ctx.module.enum_infos.keys().cloned()),
         _ => {}
