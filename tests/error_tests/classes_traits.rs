@@ -406,6 +406,43 @@ class C { use A, B; }
     );
 }
 
+/// A trait's own method, or another used trait's, that satisfies a nested requirement must be
+/// compatible with it, as php 8.5.12 reports `Declaration of A::foo(): string must be compatible
+/// with N::foo(): int`, even though the requirement no longer reaches the class.
+#[test]
+fn test_error_requirement_satisfied_inside_a_trait_must_be_compatible() {
+    expect_error(
+        r#"<?php
+trait N { abstract public function foo(): int; }
+trait A { use N; public function foo(): string { return "a"; } }
+class C { use A; }
+"#,
+        "Cannot change return type when implementing trait method: C::foo",
+    );
+    expect_error(
+        r#"<?php
+trait N { abstract public function foo(): int; }
+trait G { public function foo(): string { return "g"; } }
+trait W { use N, G; }
+class C { use W; }
+"#,
+        "Cannot change return type when implementing trait method: C::foo",
+    );
+}
+
+/// Two instantiations of one generic trait are two traits whose methods share the template's
+/// declaration: each instantiation's requirement is checked, not only the first.
+#[test]
+fn test_error_each_generic_trait_instantiation_requirement_is_checked() {
+    expect_error(
+        r#"<?php
+trait Needs<T> { abstract public function foo(): T; }
+class C { use Needs<int>, Needs<string>; public function foo(): int { return 1; } }
+"#,
+        "Cannot change return type when implementing trait method: C::foo",
+    );
+}
+
 /// Verifies that a class using two traits with a property of the same name but
 /// incompatible visibility reports "incompatible duplicate property".
 #[test]
