@@ -148,3 +148,22 @@ echo "done\n";
     );
     assert_eq!(out.stdout, "long\nshort\nlong\ndone\n");
 }
+
+/// A non-numeric string key read from a boxed string is php's `TypeError`; `isset()` and `??`
+/// stay quiet and numeric keys still select a byte (the read answered null before).
+#[test]
+fn test_boxed_string_read_with_a_non_integer_key_throws() {
+    let out = compile_and_run(
+        r#"<?php
+function g(mixed $m) {
+    try { var_dump($m["x"]); } catch (Throwable $e) { echo get_class($e), ": ", $e->getMessage(), "\n"; }
+    var_dump(isset($m["x"]), $m["x"] ?? "dflt", $m[1], $m["1"]);
+}
+g("abc");
+"#,
+    );
+    assert_eq!(
+        out,
+        "TypeError: Cannot access offset of type string on string\nbool(false)\nstring(4) \"dflt\"\nstring(1) \"b\"\nstring(1) \"b\"\n"
+    );
+}

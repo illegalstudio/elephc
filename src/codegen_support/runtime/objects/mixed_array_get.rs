@@ -28,6 +28,11 @@ use crate::codegen_support::emit::Emitter;
 use crate::codegen_support::platform::Arch;
 use crate::codegen_support::sentinels::emit_branch_if_null_container;
 
+/// Length of `Cannot access offset of type string on string`, the `TypeError` text of a
+/// non-integer string offset read.
+const STRING_OFFSET_TYPE_ERROR_MSG_LEN: usize =
+    "Cannot access offset of type string on string".len();
+
 /// Dispatches to the target-specific `__rt_mixed_array_get` emitter.
 ///
 /// Checks `emitter.target.arch` and routes to either `emit_mixed_array_get_x86_64`
@@ -101,7 +106,7 @@ fn emit_mixed_array_get_aarch64(emitter: &mut Emitter) {
     emitter.label("__rt_mixed_array_get_string");
     emitter.instruction("ldr x10, [sp, #16]");                                  // load the normalized key high word
     emitter.instruction("cmn x10, #1");                                         // integer keys carry the -1 high-word sentinel
-    emitter.instruction("b.ne __rt_mixed_array_get_null");                      // non-integer string offsets are not readable on this fallback path
+    emitter.instruction("b.ne __rt_mixed_array_get_string_key");                // a non-integer string offset is a TypeError on a read
     emitter.instruction("ldr x10, [x0, #8]");                                   // load the boxed string pointer
     emitter.instruction("ldr x11, [x0, #16]");                                  // load the boxed string byte length
     emitter.instruction("ldr x12, [sp, #8]");                                   // load the requested integer offset
@@ -503,6 +508,20 @@ fn emit_mixed_array_get_aarch64(emitter: &mut Emitter) {
     emitter.instruction("ldp x29, x30, [sp, #24]");                             // restore frame pointer and return address
     emitter.instruction("add sp, sp, #48");                                     // release the local frame
     emitter.instruction("ret");                                                 // return Mixed* in x0
+
+    // A non-integer string offset read from a string receiver is php's TypeError; quiet reads
+    // (`isset()`, `??`) keep answering null.
+    emitter.label("__rt_mixed_array_get_string_key");
+    emitter.instruction("ldr x9, [sp, #40]");                                   // reload whether ordinary read errors are enabled
+    emitter.instruction("cbz x9, __rt_mixed_array_get_null");                   // quiet read contexts answer null
+    emitter.instruction("ldp x29, x30, [sp, #24]");                             // restore frame pointer and return address
+    emitter.instruction("add sp, sp, #48");                                     // release the local frame before throwing
+    crate::codegen_support::runtime::arrays::value_error::emit_throw_static_message_aarch64(
+        emitter,
+        "_spl_type_error_class_id",
+        "_string_offset_type_error_msg",
+        STRING_OFFSET_TYPE_ERROR_MSG_LEN,
+    );
 }
 
 /// Emits `__rt_mixed_array_get` for x86_64 (SysV ABI).
@@ -554,7 +573,7 @@ fn emit_mixed_array_get_x86_64(emitter: &mut Emitter) {
 
     emitter.label("__rt_mixed_array_get_string");
     emitter.instruction("cmp QWORD PTR [rbp - 24], -1");                        // integer keys carry the -1 high-word sentinel
-    emitter.instruction("jne __rt_mixed_array_get_null");                       // non-integer string offsets are not readable on this fallback path
+    emitter.instruction("jne __rt_mixed_array_get_string_key");                 // a non-integer string offset is a TypeError on a read
     emitter.instruction("mov r10, QWORD PTR [rdi + 8]");                        // load the boxed string pointer
     emitter.instruction("mov r11, QWORD PTR [rdi + 16]");                       // load the boxed string byte length
     emitter.instruction("mov r8, QWORD PTR [rbp - 16]");                        // load the requested integer offset
@@ -945,6 +964,20 @@ fn emit_mixed_array_get_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rsp, rbp");                                        // restore stack pointer
     emitter.instruction("pop rbp");                                             // restore caller frame pointer
     emitter.instruction("ret");                                                 // return Mixed* in rax
+
+    // A non-integer string offset read from a string receiver is php's TypeError; quiet reads
+    // (`isset()`, `??`) keep answering null.
+    emitter.label("__rt_mixed_array_get_string_key");
+    emitter.instruction("cmp QWORD PTR [rbp - 32], 0");                         // are ordinary read errors enabled?
+    emitter.instruction("je __rt_mixed_array_get_null");                        // quiet read contexts answer null
+    emitter.instruction("mov rsp, rbp");                                        // release the local frame before throwing
+    emitter.instruction("pop rbp");                                             // restore caller frame pointer
+    crate::codegen_support::runtime::arrays::value_error::emit_throw_static_message_x86_64(
+        emitter,
+        "_spl_type_error_class_id",
+        "_string_offset_type_error_msg",
+        STRING_OFFSET_TYPE_ERROR_MSG_LEN,
+    );
 }
 
 #[cfg(test)]
