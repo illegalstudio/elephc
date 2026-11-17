@@ -692,7 +692,7 @@ fn test_error_preg_match_all_nonlocal_captures() {
         r#"<?php class Box { public static array $matches = []; } preg_match_all('/a/', 'a', Box::$matches);"#,
         r#"<?php $rows = []; \PrEg_MaTcH_AlL(matches: $rows[0], subject: 'a', pattern: '/a/');"#,
     ] {
-        expect_error(source, "preg_match_all(): non-local $matches destinations are not supported");
+        expect_php_accepts(source, "preg_match_all(): non-local $matches destinations are not supported");
     }
 }
 

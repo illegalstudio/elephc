@@ -767,41 +767,24 @@ fn test_error_for_clause_rejects_include() {
     );
 }
 
-/// Pins the parser invariant the `for`-clause include guard rests on: `include` is an
-/// expression in exactly ONE position, the whole right-hand side of a plain assignment or a
-/// `return`.
+/// `include` is an expression wherever php allows one: the right-hand side of an indexed,
+/// property or static-property assignment parses like the plain one.
 ///
-/// `ExprKind::IncludeValue` has two construction sites, both in `try_parse_value_include`, and
-/// the assignment one builds a plain `StmtKind::Assign` BEFORE `parse_assignment_value_expr`
-/// runs. So no typed, indexed, property or static-property assignment can carry one, and the
-/// guard in `parse_for_clause` does not need to walk for them.
-///
-/// Raised in review on issue #476 as a possible hole. It is not one today — but it is an
-/// invariant nobody was testing, so if any of these ever starts parsing, this fails and points
-/// at that guard.
+/// php -n accepts `$a[0] = include "f.php";`, `$o->p = include "f.php";` and
+/// `K::$s = include "f.php";` (each warns at run time when the file is missing); the typed
+/// local spelling `int $a = include ...` is a php parse error but an elephc typed declaration.
+/// The expansion of the `IncludeValue` node belongs to the resolver, which this harness does not
+/// run, so the test pins that every php-valid form still parses.
 #[test]
-fn test_error_include_is_only_an_expression_in_an_assignment_rhs() {
-    expect_error(
-        r#"<?php int $a = include "f.php";"#,
-        "Unexpected token: Include",
-    );
-    expect_error(
+fn test_include_is_an_expression_in_every_assignment_target() {
+    for source in [
         r#"<?php $a = []; $a[0] = include "f.php";"#,
-        "Unexpected token: Include",
-    );
-    expect_error(
         r#"<?php $o = new stdClass(); $o->p = include "f.php";"#,
-        "Unexpected token: Include",
-    );
-    expect_error(
         r#"<?php class K { public static $s; } K::$s = include "f.php";"#,
-        "Unexpected token: Include",
-    );
-    // The same rejection inside a clause, which is the case the review asked about.
-    expect_error(
-        r#"<?php for (int $v = include "f.php"; false; ) {} echo 1;"#,
-        "Unexpected token: Include",
-    );
+    ] {
+        let tokens = tokenize(source).expect("the snippet tokenizes");
+        parse(&tokens).expect("php accepts include on the right of any assignment");
+    }
 }
 
 /// Issue #476 review follow-up: PHP allows a comma list in the `for` CONDITION as well, but

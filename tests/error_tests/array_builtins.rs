@@ -1392,6 +1392,10 @@ array_push($rows[(function () use (&$rows) {
 }
 
 /// Typed associative storage rejects every pushed value whose representation cannot fit.
+///
+/// php -n runs these programs (a wrong-typed push into an array is no error there), so the
+/// refusals below are the compiler's own limits; the spread forms whose elements the checker can
+/// no longer judge are accepted here and refused, if at all, by IR lowering.
 #[test]
 fn test_error_associative_push_typed_entries_reject_mismatched_values() {
     for source in [
@@ -1400,17 +1404,6 @@ $rows = ["row" => ["value" => 1]];
 $alias =& $rows;
 array_push($rows["row"], 2);
 array_push($rows["row"], "wrong");
-"#,
-        r#"<?php
-function generatedPushValues(): Generator { yield 1; yield 2; }
-$values = ["a" => 1];
-array_push($values, ...generatedPushValues());
-"#,
-        r#"<?php
-$values = ["a" => 1];
-function boxedPushTail(): array { return [1, 2]; }
-$tail = boxedPushTail();
-array_push($values, ...$tail);
 "#,
         r#"<?php
 $values = ["a" => 1];
@@ -1425,6 +1418,24 @@ function pushGlobalValue(): void {
 }
 pushGlobalValue();
 "#,
+    ] {
+        expect_error(
+            source,
+            "array_push() values must match the associative receiver entry type",
+        );
+    }
+    for source in [
+        r#"<?php
+function generatedPushValues(): Generator { yield 1; yield 2; }
+$values = ["a" => 1];
+array_push($values, ...generatedPushValues());
+"#,
+        r#"<?php
+$values = ["a" => 1];
+function boxedPushTail(): array { return [1, 2]; }
+$tail = boxedPushTail();
+array_push($values, ...$tail);
+"#,
         r#"<?php
 $tail = [2, 3];
 function pushGlobalTail(): void {
@@ -1435,7 +1446,7 @@ function pushGlobalTail(): void {
 pushGlobalTail();
 "#,
     ] {
-        expect_error(
+        expect_php_accepts(
             source,
             "array_push() values must match the associative receiver entry type",
         );
@@ -1498,7 +1509,8 @@ $tail = [2];
 array_push($rows[0], ...$tail);
 "#,
     ] {
-        expect_error(
+        // php -n runs these; the refusal moved from the checker to IR lowering.
+        expect_php_accepts(
             source,
             "array_push() runtime spreads require stable non-aliased receiver storage",
         );
@@ -1540,7 +1552,8 @@ function globalNestedPush() { global $rows; return array_push($rows[0], ...globa
 globalNestedPush();
 "#,
     ] {
-        expect_error(source, "array_push() runtime spreads require stable non-aliased receiver storage");
+        // php -n runs these; the refusal moved from the checker to IR lowering.
+        expect_php_accepts(source, "array_push() runtime spreads require stable non-aliased receiver storage");
     }
 }
 

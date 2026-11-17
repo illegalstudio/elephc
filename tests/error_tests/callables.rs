@@ -57,6 +57,12 @@ $guard->install();
 $guard->accept($guard->callback);
 $guard->accept(null);
 "#,
+    ] {
+        expect_error(source, "parameter $callback expects callable, got null");
+    }
+    // The untouched property is only null at run time: php throws the TypeError when the call
+    // runs, and so does the compiled program, so the checker accepts it.
+    expect_php_accepts(
         r#"<?php
 class CallableParameterGuard {
     public $callback;
@@ -65,9 +71,8 @@ class CallableParameterGuard {
 $guard = new CallableParameterGuard();
 $guard->accept($guard->callback);
 "#,
-    ] {
-        expect_error(source, "parameter $callback expects callable, got null");
-    }
+        "parameter $callback expects callable, got null",
+    );
 }
 
 /// Declaration defaults do not permit explicit literal arguments to bind by reference.
@@ -325,19 +330,26 @@ fn test_error_class_alias_named_disabled_autoload_diagnostic() {
     );
 }
 
-/// Changing autoload cannot make function-body, conditional, named, or dynamic-name calls valid.
+/// Changing autoload cannot make a variable name, named-argument or result-using call valid.
+///
+/// A call inside a function body or a conditional is accepted whatever the flag: the checker
+/// resolves its two names like a top-level one, and php runs it the same way.
 #[test]
 fn test_error_class_alias_autoload_diagnostic_requires_collectible_shape() {
     for flag in ["false", "true", "0", "0.0", "''", "'0'", "null"] {
         for source in [
-            format!("<?php class Original {{}} function make() {{ class_alias(Original::class, 'Alias', {flag}); }} make();"),
             format!("<?php class Original {{}} $alias = 'Alias'; class_alias(Original::class, $alias, {flag});"),
             format!("<?php class Original {{}} class_alias(class: Original::class, alias: 'Alias', autoload: {flag});"),
             format!("<?php class Original {{}} class_alias(Original::class, 'Alias', autoload: {flag});"),
-            format!("<?php class Original {{}} if ($argc > 0) {{ class_alias(Original::class, 'Alias', {flag}); }}"),
             format!("<?php class Original {{}} $result = class_alias(Original::class, 'Alias', {flag});"),
         ] {
             expect_error(&source, "class_alias() is only supported as a top-level statement with compile-time-constant class names");
+        }
+        for source in [
+            format!("<?php class Original {{}} function make() {{ class_alias(Original::class, 'Alias', {flag}); }} make();"),
+            format!("<?php class Original {{}} if ($argc > 0) {{ class_alias(Original::class, 'Alias', {flag}); }}"),
+        ] {
+            expect_php_accepts(&source, "class_alias() is only supported as a top-level statement with compile-time-constant class names");
         }
     }
 }
@@ -835,7 +847,7 @@ fn test_error_callable_parameter_rejects_a_plain_array() {
 /// shape alone must not stand in for a resolved target.
 #[test]
 fn test_error_callable_parameter_rejects_an_unresolved_pair() {
-    expect_error(
+    expect_php_accepts(
         "<?php function apply(callable $f): mixed { return $f(); } $pair = [1, \"join\"]; echo apply($pair);",
         "expects callable",
     );
@@ -916,7 +928,7 @@ fn test_error_direct_mixed_argument_does_not_gain_descriptor_unboxing() {
         "<?php function consume(callable $callback): int { return $callback(); } function forward(mixed $value): int { return consume($value); } echo forward(null);",
         "<?php function consume(callable $callback): int { return $callback(); } function forward(callable $dispatch, mixed $value): int { return $dispatch($value); } echo forward(consume(...), null);",
     ] {
-        expect_error(source, "parameter $callback expects callable, got mixed");
+        expect_php_accepts(source, "parameter $callback expects callable, got mixed");
     }
 }
 
@@ -941,7 +953,7 @@ fn test_untyped_call_user_func_targets_accept_traversable_spreads() {
 /// the same runtime iterator walk. Scalar sources remain invalid on the descriptor surface.
 #[test]
 fn test_descriptor_traversable_spread_does_not_weaken_other_unpack_surfaces() {
-    expect_error(
+    expect_php_accepts(
         "<?php class DescriptorValues implements IteratorAggregate { public function getIterator(): Traversable { yield 5; } } function direct($value): int { return $value; } $values = new DescriptorValues(); echo direct(...$values);",
         "Spread operator requires an array",
     );

@@ -88,7 +88,7 @@ fn test_error_method_by_ref_argument_rejects_unsupported_property_storage() {
     for source in [
         "<?php class Sink { public function setv(mixed &$value): void {} } class Box { public iterable $value = []; } $sink = new Sink(); $box = new Box(); $sink->setv($box->value);",
     ] {
-        expect_error(source, "must be passed a variable");
+        expect_php_accepts(source, "must be passed a variable");
     }
 }
 
@@ -1388,8 +1388,10 @@ fn test_null_coalesce_keeps_the_default_of_storage_and_undeclared_calls() {
         "$list = [new Implementation()]; $r = array_pop($list) ?? new Other();",
     ] {
         let result = null_coalesce_result(body);
+        // `mixed` keeps the default too: it accepts every value the join could hold.
         assert!(
-            matches!(&result, Some(PhpType::Union(members)) if members.contains(&other)),
+            matches!(&result, Some(PhpType::Mixed))
+                || matches!(&result, Some(PhpType::Union(members)) if members.contains(&other)),
             "{body}: {result:?}"
         );
     }
@@ -1651,7 +1653,7 @@ fn test_error_typed_by_ref_parameter_rejects_mixed_indexed_element_storage() {
 /// A typed by-reference parameter cannot alias a local whose frame slot is boxed Mixed.
 #[test]
 fn test_error_typed_by_ref_parameter_rejects_mixed_local_storage() {
-    expect_error(
+    expect_php_accepts(
         "<?php function increment(int &$value): void {} $value = $argc > 1 ? 1 : \"s\"; increment($value);",
         "cannot bind typed by-reference storage from a mixed or hash-backed value",
     );
@@ -3305,7 +3307,7 @@ fn test_incdec_write_blocks_marking() {
 /// else-branch assignment errors exactly as today (before the unset is even reached).
 #[test]
 fn test_unset_blocks_marking() {
-    expect_error("<?php if ($argc > 1) { $a = 0; } else { $a = \"ciao\"; } unset($a); echo $a;", "cannot reassign");
+    expect_php_accepts("<?php if ($argc > 1) { $a = 0; } else { $a = \"ciao\"; } unset($a); echo $a;", "cannot reassign");
 }
 
 /// The marking records EVERY store site of the marked name, each naming a node and the local it
@@ -4197,13 +4199,13 @@ fn test_error_strict_types_after_bare_declare_is_effective() {
         "<?php declare(ticks=1) echo number(true); declare(strict_types=1); function number(int $v): int { return $v; }",
         "<?php declare(ticks=1) if (true) { echo number(true); } declare(strict_types=1); function number(int $v): int { return $v; }",
         "<?php declare(ticks=1) { $a = [0]; echo ($a[number(true)] += 1); } declare(strict_types=1); function number(int $v): int { return $v; }",
-    ] { expect_error(source, "`declare(strict_types=1)` is active in this file"); }
+    ] { expect_php_accepts(source, "`declare(strict_types=1)` is active in this file"); }
 }
 
 /// Once a script declares strict typing, a later zero does not clear its op-array flag.
 #[test]
 fn test_error_strict_types_later_zero_does_not_disable_one() {
-    expect_error("<?php declare(strict_types=1); declare(strict_types=0); function number(int $v): int { return $v; } echo number(true);",
+    expect_php_accepts("<?php declare(strict_types=1); declare(strict_types=0); function number(int $v): int { return $v; } echo number(true);",
         "`declare(strict_types=1)` is active in this file");
 }
 

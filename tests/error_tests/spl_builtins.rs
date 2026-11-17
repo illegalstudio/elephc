@@ -425,13 +425,15 @@ fn test_error_filesystem_spl_constructors_validate_types() {
             "<?php $it = new RecursiveDirectoryIterator(123);",
             "Constructor 'RecursiveDirectoryIterator::__construct' parameter $directory expects string, got int",
         ),
-        (
-            "<?php $it = new RecursiveCachingIterator(new ArrayIterator([]));",
-            "Constructor 'RecursiveCachingIterator::__construct' parameter $iterator expects RecursiveIterator, got ArrayIterator",
-        ),
     ] {
         expect_error(source, expected);
     }
+    // php -n accepts the program and throws the TypeError when it runs; the compiler keeps that
+    // check at run time (a `RecursiveIterator` object parameter), so the checker no longer refuses.
+    expect_php_accepts(
+        "<?php $it = new RecursiveCachingIterator(new ArrayIterator([]));",
+        "Constructor 'RecursiveCachingIterator::__construct' parameter $iterator expects RecursiveIterator, got ArrayIterator",
+    );
 }
 
 /// Verifies that error recursive callback filter iterator requires callable.

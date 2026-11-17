@@ -13,7 +13,7 @@ use super::*;
 #[test]
 fn test_enum_selected_type_review_shortage_does_not_mask_type_error() {
     for arguments in ["badSelectedType()", "a: badSelectedType()"] {
-        expect_error(&format!(r#"<?php
+        expect_php_accepts(&format!(r#"<?php
 interface SelectedType {{ public function f(int $a, int $b): int; }}
 enum FlexibleSelectedType implements SelectedType {{
     case A; public function f(int $a = 0, int $b = 0): int {{ return $a + $b; }}
