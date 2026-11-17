@@ -161,6 +161,7 @@ impl Checker {
                     ));
                 }
                 if supplied_reference {
+                    self.record_reference_argument_contract(arg, &actual_ty);
                     // The callee holds a reference to this local from here on, and it can
                     // escape, so the local is never kill/retype eligible in this body.
                     self.record_reference_alias_root(arg);

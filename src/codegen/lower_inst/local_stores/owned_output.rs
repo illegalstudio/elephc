@@ -2,7 +2,7 @@
 //! Publishes owned builtin outputs before retiring their previous local or reference payload.
 //!
 //! Called from:
-//! - Native PCNTL status, usage and signal-array output lowerers.
+//! - Native builtin output lowerers, including PCNTL outputs and boxed settype results.
 //!
 //! Key details:
 //! - Runtime representation flags select raw or reference storage at publication.

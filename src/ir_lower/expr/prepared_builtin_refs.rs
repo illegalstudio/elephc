@@ -35,6 +35,10 @@ pub(super) fn lower_argument(ctx: &mut LoweringContext<'_, '_>, sig: &FunctionSi
     while let ExprKind::NamedArg { value, .. } | ExprKind::ErrorSuppress(value) = &place.kind { place = value; }
     if let ExprKind::Variable(name) = &place.kind {
         super::builtin_settype::preserve_binding(ctx, name);
+        if !ctx.is_ref_bound_local(name) || ctx.local_type(name).codegen_repr() == PhpType::Mixed {
+            // Bind the caller's semantic source before a synthetic alias hides its name.
+            ctx.promote_local_mixed_ref_cell(name, Some(place.span));
+        }
     } else if !managed_place(ctx, place) { return None; }
     let alias = ctx.declare_synthetic_php_local(PhpType::Mixed);
     let owner = ctx.declare_ref_cell_owner(&alias, PhpType::Mixed);

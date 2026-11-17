@@ -936,6 +936,13 @@ promotes to float, storing the result in an integer binding throws `TypeError`
 and preserves the previous value. A standalone overflowing expression retains
 PHP promotion unless `--strict-overflow` is separately enabled.
 
+The same membership rule protects inferred string, boolean, null, object and PHP
+array bindings. A conversion with `settype()` validates the converted value before
+publication, including direct calls, runtime-selected types and callable aliases.
+A rejected conversion preserves the original value; explicit `mixed` declarations
+remain open. Passing a value through `call_user_func()` uses a separate argument
+cell rather than attaching the caller's binding contract to that copy.
+
 Explicit `int|float` declarations accept both numeric kinds, and explicit `mixed`
 declarations remain open. Nullable numeric bindings keep their declared null
 alternative: an `int|null` binding accepts null and integers, and rejects float.

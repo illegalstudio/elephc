@@ -133,3 +133,23 @@ fn strict_nullable_numeric_locals_guard_before_reference_storage_on_every_target
         }
     }
 }
+
+/// Literal and runtime conversions preserve source contracts through every target's reference ABI.
+#[test]
+fn strict_settype_local_contracts_emit_on_every_target() {
+    let source = include_str!("../../../tests/fixtures/strict/local_settype_contracts.php");
+    let program = crate::parser::parse_with_mode(&crate::lexer::tokenize(source).unwrap(), SourceMode::Php).unwrap();
+    let mut inventory = crate::optimize::reachability::PreludeInventory::new();
+    let program = crate::object_cast_prelude::inject_if_used(program, &mut inventory).unwrap();
+    let program = crate::name_resolver::resolve(program).unwrap();
+    let profile = SemanticProfile::PERMISSIVE.with(StrictFeature::Locals, true);
+    for name in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+        let target = Target::parse(name).unwrap();
+        let checked = crate::types::checker::check_staged_semantics(&program, target, profile).unwrap();
+        assert!(checked.local_store_contracts.iter().filter(|((_, _, local), _)| local == "ordered").count() >= 3,
+            "{name}: typed argument must preserve its caller contract: {:?}", checked.local_store_contracts);
+        let module = crate::ir_lower::lower_program(&program, &checked, target, false).unwrap();
+        crate::ir::validate_module(&module).unwrap();
+        crate::codegen::generate_user_asm_from_ir(&module, false, false).unwrap();
+    }
+}

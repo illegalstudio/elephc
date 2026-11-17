@@ -18,7 +18,8 @@ pub(crate) fn checked_casts(profile: SemanticProfile, source: SourceMode) -> boo
 
 /// Keeps live reference argument protocols independent from explicit cast-domain checks.
 pub(crate) fn checked_references(profile: SemanticProfile, source: SourceMode) -> bool {
-    source != SourceMode::Internal && crate::types::checked_property_references(profile)
+    source != SourceMode::Internal && (profile.contains(elephc_semantics::StrictFeature::Locals)
+        || crate::types::checked_property_references(profile))
 }
 
 /// Projects only scalar source annotations whose meaning needs no class or generic context.

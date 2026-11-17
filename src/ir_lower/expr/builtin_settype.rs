@@ -52,6 +52,8 @@ pub(in crate::ir_lower) fn lower(ctx: &mut LoweringContext<'_, '_>, place: Value
                 _ => unreachable!("remaining targets are scalar") };
             super::ternary_cast::lower_scalar_cast_value(ctx, &cast, input, &expression)
         };
+        let converted = crate::ir_lower::conversion_boundaries::local_store(ctx, &name, converted, span)
+            .map_or(converted, |(value, _)| value);
         let converted = ctx.box_value_as_mixed(converted, PhpType::Mixed, Some(span));
         if !ctx.store_operand_local(place, converted.value, PhpType::Mixed, Some(span)) {
             return Err(BuiltinLoweringError::new("checked settype lost its original writable binding"));

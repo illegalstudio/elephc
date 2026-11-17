@@ -362,9 +362,7 @@ fn store_settype_local_result(
     let target_ty = target_ty.codegen_repr();
     if storage_ty == PhpType::Mixed && target_ty != PhpType::Mixed {
         emit_box_current_value_as_mixed(ctx.emitter, &target_ty);
-        let offset = ctx.local_offset(slot)?;
-        abi::emit_store(ctx.emitter, &PhpType::Mixed, offset);
-        return Ok(());
+        return super::super::local_stores::publish_current_owned_output(ctx, slot, &PhpType::Mixed);
     }
     let offset = ctx.local_offset(slot)?;
     abi::emit_store(ctx.emitter, &target_ty, offset);

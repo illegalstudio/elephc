@@ -22,6 +22,17 @@ impl Checker {
         }
     }
 
+    /// Captures the original local contract independently of a callee's physical parameter ABI.
+    pub(crate) fn record_reference_argument_contract(&mut self,
+        arg: &crate::parser::ast::Expr, actual: &PhpType) {
+        let mut source = arg;
+        while let crate::parser::ast::ExprKind::NamedArg { value, .. }
+            | crate::parser::ast::ExprKind::ErrorSuppress(value) = &source.kind { source = value; }
+        if let crate::parser::ast::ExprKind::Variable(name) = &source.kind {
+            self.record_local_reference_contract(name, actual, source.span);
+        }
+    }
+
     /// Carries the semantic binding contract across promotion to boxed reference storage.
     pub(crate) fn record_local_reference_contract(&mut self, name: &str, actual: &PhpType, span: Span) -> bool {
         if self.semantic_source_mode == crate::source::SourceMode::Internal

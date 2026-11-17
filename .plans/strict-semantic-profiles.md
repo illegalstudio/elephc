@@ -371,7 +371,7 @@ evidence and outstanding guarantees are recorded below.
 
 ## Implementation progress
 
-Verified through step120 (this commit), with remaining feature integration in progress. Issue:
+Verified through step121 (this commit), with remaining feature integration in progress. Issue:
 https://github.com/illegalstudio/elephc/issues/2347.
 
 The full task remains active. The user requested complete implementation, with a
@@ -856,3 +856,40 @@ global/capture/foreach flow and remaining feature families, then verify the full
 umbrella and hosts. The task-owned verification directory is removed after
 baseline evidence capture; the reverse-eval and settype sources remain saved for
 the next implementation steps.
+
+
+### Verified121: mutating conversion and typed reference source contracts
+
+Locals-owned settype calls use the existing checked conversion/publication graph,
+including literal targets, runtime targets and prepared callable bodies. Literal
+success-only type updates no longer poison a catch's original view. Each candidate
+passes the shared local membership boundary before publication, while explicit
+mixed remains open. Locals selects reference/copy protocols independently of the
+Casts and Coercions policies. Prepared aliases bind the original caller source
+before introducing their synthetic names; call_user_func values retain separate
+argument cells.
+
+A shared checker helper records caller source contracts for resolved, inferred
+and descriptor function calls. EIR prepares eligible owned bindings before typed
+reference arguments, so a later widened frame layout cannot expose a boxed pointer
+as a raw bool payload. This preserves named-argument source order, rejected writes
+and the current false value without leaking the original boolean box.
+Permissive scalar specialization retains its raw ABI; boxed legacy settype output
+now uses the shared owned-output publisher and retires its previous occupant.
+
+Job00d2da5e passed the all-five-target source-registration/emission gate. Job53a27848
+passed the build and six exact gates: new target/native settype cases, extended
+example, existing checked callable values/owners, permissive prepared bodies and
+valid local reference/union membership. Both native optimizer modes have clean
+heaps for literal/runtime targets, first-class/runtime-selected callbacks, value
+copies, named source-order effects, null, explicit mixed and array membership.
+Permissive bool-to-int and argc-to-string controls preserve values and clean heaps.
+Final jobee32fb15 passed the full builtin documentation generation, site compatibility
+and architecture audits, restored default Magician/compiler archives and passed
+two exact numeric reference lifetime/nullable update controls in14s. Generated
+registry/pages have no diff. Assembly comments and git diff hygiene pass.
+
+The complete implementation remains active: literal eval decision maps and their
+old permissive expectations (37ae1f9b), runtime-established reverse eval origins
+(b99d1b21), remaining global/capture/foreach/mutation flow, the six unintegrated
+feature families and full umbrella/host acceptance still require completion.

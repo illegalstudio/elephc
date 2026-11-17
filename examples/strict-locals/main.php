@@ -48,3 +48,10 @@ try {
 } catch (TypeError $error) {
     echo "The label kept its string value", PHP_EOL;
 }
+
+// Explicit conversion does not remove a binding's independent value contract.
+try {
+    settype($label, 'int');
+} catch (TypeError $error) {
+    echo "The conversion kept the label value", PHP_EOL;
+}

@@ -22,7 +22,7 @@ builtin! {
     semantics: semantics(),
 }
 
-/// Keeps the ordinary typed backend while giving checked callable bodies the full EIR context.
+/// Shares checked conversion graphs while retaining permissive scalar storage specialization.
 const fn semantics() -> crate::builtins::semantics::BuiltinSemantics {
     use crate::builtins::semantics::*;
     let mut semantics = runtime_fn_semantics(crate::ir::RuntimeFnId::Settype);
@@ -37,11 +37,9 @@ const fn semantics() -> crate::builtins::semantics::BuiltinSemantics {
     semantics
 }
 
-/// String conversion may invoke user code and mutate globals inside the checked value graph.
-fn effects(input: &crate::builtins::semantics::BuiltinSemanticInput<'_>) -> crate::ir::Effects {
-    if crate::semantics::conversions::checked_references(input.semantic_profile, input.source_mode) {
-        crate::ir::Effects::php_conversion()
-    } else { crate::ir::RuntimeFnId::Settype.effects() }
+/// Conversion or displaced-value retirement may invoke user code before returning.
+fn effects(_input: &crate::builtins::semantics::BuiltinSemanticInput<'_>) -> crate::ir::Effects {
+    crate::ir::Effects::php_conversion()
 }
 
 /// Shares evaluated original values and reference storage between direct and callable checked paths.
@@ -61,6 +59,12 @@ fn lower(ctx: &mut dyn crate::builtins::semantics::BuiltinLoweringContext,
 fn check(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
     let source = cx.checker.infer_type(&cx.args[0], cx.env)?;
     let ty = cx.checker.infer_type(&cx.args[1], cx.env)?;
+    if let crate::parser::ast::ExprKind::Variable(name) = &cx.args[0].kind {
+        // The selected target can be runtime-only. Record membership without changing the
+        // caller's value view before the conversion and its ordinary publication succeed.
+        cx.checker.check_local_binding_store(name, &PhpType::Mixed, cx.span, cx.env, None)?;
+        cx.checker.record_local_reference_contract(name, &source, cx.args[0].span);
+    }
     if ty != PhpType::Str {
         return Err(CompileError::new(
             cx.span,

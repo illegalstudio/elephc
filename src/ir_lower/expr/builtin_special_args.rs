@@ -80,6 +80,14 @@ pub(super) fn lower_static_settype(
     {
         ctx.promote_local_mixed_ref_cell(local_name, Some(var_arg.span));
     }
+    if ctx.source_mode != crate::source::SourceMode::Internal
+        && ctx.semantic_profile.contains(elephc_semantics::StrictFeature::Locals)
+    {
+        // A target literal cannot establish a success-only type after a rejected mutation.
+        let sig = call_signature(ctx, name, source_prefers_extension_builtin(name));
+        let operands = lower_builtin_call_args(ctx, name, sig.as_ref(), args);
+        return Some(emit_builtin_call_value(ctx, name, operands, PhpType::Bool, expr.span, None));
+    }
     // A narrowed value view still occupies its boxed slot after an earlier conversion.
     // Every replacement must publish an EIR store and retire the previous occupant.
     let boxed_storage = ctx.local_slots.get(local_name)

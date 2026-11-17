@@ -24,6 +24,20 @@ pub(super) fn prepare_eval_bindings(ctx: &mut super::context::LoweringContext<'_
     for name in names { ctx.promote_local_mixed_ref_cell(&name, Some(span)); }
 }
 
+/// Publishes a caller's exact binding before a typed reference can observe widened frame storage.
+pub(super) fn prepare_argument_binding(ctx: &mut super::context::LoweringContext<'_, '_>,
+    arg: &crate::parser::ast::Expr) {
+    let mut source = arg;
+    while let crate::parser::ast::ExprKind::NamedArg { value, .. }
+        | crate::parser::ast::ExprKind::ErrorSuppress(value) = &source.kind { source = value; }
+    let crate::parser::ast::ExprKind::Variable(name) = &source.kind else { return; };
+    if ctx.local_store_contracts.get(&(ctx.loop_storage_scope.clone(), source.span, name.clone()))
+        .is_some_and(|contract| contract.feature == elephc_semantics::StrictFeature::Locals)
+        && ctx.local_is_promotable_to_ref_cell(name)
+        && (!ctx.is_ref_bound_local(name) || ctx.local_type(name).codegen_repr() == PhpType::Mixed)
+    { ctx.promote_local_mixed_ref_cell(name, Some(source.span)); }
+}
+
 /// Generates one typed callback per selected binding contract, without PHP entry metadata.
 pub(super) fn lower_requested(module: &mut Module) -> Result<(), super::LoweringError> {
     let mut contracts = Vec::new();

@@ -10,6 +10,31 @@
 
 use crate::support::*;
 
+/// Mutating conversion validates the original binding, including aliases and named argument effects.
+#[test]
+fn test_strict_settype_preserves_local_contracts_and_owned_outputs() {
+    for mode in ["--ir-opt=off", "--ir-opt=on"] {
+        let output = StrictFixture::new(include_str!("../fixtures/strict/local_settype_contracts.php"))
+            .capture(&["--strict-locals", "--heap-debug", mode]);
+        assert!(output.status.success(), "{mode}: {}", String::from_utf8_lossy(&output.stderr));
+        assert_eq!(String::from_utf8_lossy(&output.stdout), concat!(
+            "Tboolean:1|Tinteger:1|Tboolean:1|Wboolean:1|Tboolean:1|Tboolean:1|Wboolean:1|",
+            "STboolean:|integer:1|TNULL:|Tarray|"), "{mode}: {}", String::from_utf8_lossy(&output.stderr));
+        assert!(String::from_utf8_lossy(&output.stderr).contains("HEAP DEBUG: leak summary: clean"),
+            "{mode}: {}", String::from_utf8_lossy(&output.stderr));
+        for (source, expected) in [
+            (include_str!("../fixtures/strict/local_settype_boolean.php"), "Winteger|1"),
+            (include_str!("../fixtures/strict/local_settype_integer.php"), "Wstring|1"),
+        ] {
+            let output = StrictFixture::new(source).capture(&["--heap-debug", mode]);
+            assert!(output.status.success(), "{mode}: {}", String::from_utf8_lossy(&output.stderr));
+            assert_eq!(String::from_utf8_lossy(&output.stdout), expected);
+            assert!(String::from_utf8_lossy(&output.stderr).contains("HEAP DEBUG: leak summary: clean"),
+                "{mode}: {}", String::from_utf8_lossy(&output.stderr));
+        }
+    }
+}
+
 /// Valid scalar, nominal and container replacements keep exact values and balanced ownership.
 #[test]
 fn test_strict_local_value_contracts_accept_valid_reference_and_union_members() {
@@ -174,7 +199,7 @@ numericScope($argc);
 fn test_strict_numeric_locals_example() {
     let source = include_str!("../../examples/strict-locals/main.php");
     assert_eq!(StrictFixture::new(source).run(&["--strict-locals"]),
-        "Quantity requires an integer or null\nQuantity: 2\nQuantity: 3\nQuantity: not tracked\nThe integer binding kept its value\nArithmetic result: double\nFresh measurement: 2.5\nThe referenced quantity kept its integer value\nThe label kept its string value\n");
+        "Quantity requires an integer or null\nQuantity: 2\nQuantity: 3\nQuantity: not tracked\nThe integer binding kept its value\nArithmetic result: double\nFresh measurement: 2.5\nThe referenced quantity kept its integer value\nThe label kept its string value\nThe conversion kept the label value\n");
 }
 
 
