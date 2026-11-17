@@ -50,12 +50,16 @@ pub(in crate::interpreter) fn eval_private_scope_shadow_bridge_scope(
 pub(in crate::interpreter) fn bind_method_scope_args(
     method_scope: &mut ElephcEvalScope,
     params: &[String],
+    parameter_types: &[Option<EvalParameterType>],
+    parameter_is_variadic: &[bool],
     parameter_is_by_ref: &[bool],
     bound_args: &[BoundMethodArg],
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<(), EvalStatus> {
     for (position, (name, bound_arg)) in params.iter().zip(bound_args.iter()).enumerate() {
+        bind_parameter_origin(method_scope, name, parameter_types.get(position).and_then(Option::as_ref),
+            parameter_is_variadic.get(position).copied().unwrap_or(false), context)?;
         if parameter_is_by_ref.get(position).copied().unwrap_or(false) {
             method_scope.set_reference(
                 name.clone(),

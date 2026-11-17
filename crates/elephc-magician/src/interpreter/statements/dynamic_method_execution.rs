@@ -127,6 +127,8 @@ pub(in crate::interpreter) fn eval_dynamic_method_with_values_and_ref_mode(
     let binding_result = bind_method_scope_args(
         &mut method_scope,
         &binding_params,
+        method.parameter_types(),
+        method.parameter_is_variadic(),
         &scope_parameter_is_by_ref,
         &evaluated_args,
         context,
@@ -282,6 +284,8 @@ pub(in crate::interpreter) fn eval_dynamic_static_method_with_values_and_ref_mod
     let binding_result = bind_method_scope_args(
         &mut method_scope,
         &binding_params,
+        method.parameter_types(),
+        method.parameter_is_variadic(),
         &scope_parameter_is_by_ref,
         &evaluated_args,
         context,

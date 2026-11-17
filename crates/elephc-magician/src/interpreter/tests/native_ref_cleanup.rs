@@ -127,7 +127,7 @@ fn variadic_reference_writeback_releases_owned_element_reads() {
                 scope: target_scope, name: "target".into(),
             })],
         };
-        bind_method_scope_args(&mut callee, &["values".into()], &[true],
+        bind_method_scope_args(&mut callee, &["values".into()], &[], &[], &[true],
             std::slice::from_ref(&bound), &mut context, &mut values).unwrap();
         let before = values.cell_owners[&(replacement.as_ptr() as usize)];
         let result = write_back_method_ref_args(&["values".into()], std::slice::from_ref(&bound),

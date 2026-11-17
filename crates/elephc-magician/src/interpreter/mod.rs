@@ -53,7 +53,7 @@ mod runtime_ops;
 pub(crate) use runtime_ops::{EVAL_TAG_BOOL, EVAL_TAG_FLOAT, EVAL_TAG_INT, EVAL_TAG_NULL, EVAL_TAG_STRING};
 mod scope_cells;
 mod local_binding_origins;
-use local_binding_origins::{local_producer_contract, store_local_with_origin};
+use local_binding_origins::{bind_parameter_origin, local_producer_contract, store_local_with_origin};
 mod persistent_references;
 mod superglobals;
 mod statements;

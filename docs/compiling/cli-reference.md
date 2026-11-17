@@ -955,6 +955,15 @@ A rejected conversion preserves the original value; explicit `mixed` declaration
 remain open. Passing a value through `call_user_func()` uses a separate argument
 cell rather than attaching the caller's binding contract to that copy.
 
+Function, closure and method parameters retain their declared binding contract
+inside the body, including functions created by runtime eval. Union and nullable
+parameters accept every declared alternative; mixed and untyped parameters stay
+open. A variadic parameter has an array binding inside the body; its element hint
+is checked when arguments enter. Ordinary PHP argument conversion still applies
+unless `--strict-coercions` is enabled separately. Inferred closure bindings accept
+other callable values without adopting the first closure's incidental signature.
+See the [runtime plugin example](https://github.com/illegalstudio/elephc/blob/main/examples/strict-eval-locals/main.php).
+
 Explicit `int|float` declarations accept both numeric kinds, and explicit `mixed`
 declarations remain open. Nullable numeric bindings keep their declared null
 alternative: an `int|null` binding accepts null and integers, and rejects float.

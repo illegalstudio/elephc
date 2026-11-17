@@ -31,6 +31,10 @@ pub(in crate::interpreter) fn local_producer_contract(expr: &EvalExpr,
             EvalConst::String(_) | EvalConst::Bytes(_) => EvalParameterType::new(vec![EvalParameterTypeVariant::String], false),
         }),
         EvalExpr::Array(_) => Some(EvalParameterType::new(vec![EvalParameterTypeVariant::Array], false)),
+        EvalExpr::Closure { .. } | EvalExpr::FunctionCallable { .. }
+            | EvalExpr::InvokableCallable { .. } | EvalExpr::MethodCallable { .. }
+            | EvalExpr::StaticMethodCallable { .. } | EvalExpr::DynamicStaticMethodCallable { .. } =>
+            Some(EvalParameterType::new(vec![EvalParameterTypeVariant::Callable], false)),
         EvalExpr::Cast { target, .. } => Some(EvalParameterType::new(vec![match target {
             EvalCastType::Array => EvalParameterTypeVariant::Array,
             EvalCastType::Int => EvalParameterTypeVariant::Int,
@@ -85,10 +89,31 @@ fn binding_kind_type(ty: Type) -> Type {
     match ty {
         Type::Atom(name) if name == "void" => Type::atom("null"),
         Type::Apply(name, _) if name == "array" => Type::atom("array"),
+        Type::Callable(_, _) => Type::atom("callable"),
         Type::Nullable(inner) => Type::Nullable(Box::new(binding_kind_type(*inner))),
         Type::Union(members) => Type::Union(members.into_iter().map(binding_kind_type).collect()),
+        Type::Intersection(members) => Type::Intersection(members.into_iter().map(binding_kind_type).collect()),
         ty => ty,
     }
+}
+
+/// Seeds a parameter binding from its declaration rather than its incidental incoming value.
+pub(in crate::interpreter) fn bind_parameter_origin(scope: &mut ElephcEvalScope, name: &str,
+    declared: Option<&EvalParameterType>, variadic: bool, context: &ElephcEvalContext,
+) -> Result<(), EvalStatus> {
+    if !context.semantic_profile().contains(elephc_semantics::StrictFeature::Locals) { return Ok(()); }
+    let ty = if variadic { Type::atom("array") }
+        else { declared.map(generic_type).unwrap_or_else(|| Type::atom("mixed")) };
+    let origin = parameter_type(&binding_kind_type(ty));
+    let variants = origin.variants().iter().map(|variant| match variant {
+        EvalParameterTypeVariant::Class(name) => eval_method_parameter_runtime_class_name(name, context)
+            .map(EvalParameterTypeVariant::Class),
+        variant => Ok(variant.clone()),
+    }).collect::<Result<Vec<_>, _>>()?;
+    let origin = if origin.is_intersection() { EvalParameterType::intersection(variants) }
+        else { EvalParameterType::new(variants, origin.allows_null()) };
+    scope.infer_local_type(name.to_string(), origin);
+    Ok(())
 }
 
 /// Infers a PHP value kind without accidentally enabling inferred array element constraints.
@@ -104,7 +129,7 @@ fn value_contract(value: RuntimeCellHandle, context: &ElephcEvalContext,
         EVAL_TAG_ARRAY | EVAL_TAG_ASSOC => EvalParameterTypeVariant::Array,
         EVAL_TAG_OBJECT => {
             let ty = runtime_generic_type(value, context, values, 0)?;
-            EvalParameterTypeVariant::Generic(ty)
+            return Ok(parameter_type(&binding_kind_type(ty)));
         }
         EVAL_TAG_CALLABLE => EvalParameterTypeVariant::Callable,
         EVAL_TAG_RESOURCE => EvalParameterTypeVariant::Resource,

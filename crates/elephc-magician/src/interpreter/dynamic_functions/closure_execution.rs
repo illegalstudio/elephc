@@ -109,6 +109,8 @@ pub(in crate::interpreter) fn eval_dynamic_function_with_evaluated_args_and_ref_
     let binding_result = bind_method_scope_args(
         &mut function_scope,
         &binding_params,
+        function.parameter_types(),
+        function.parameter_is_variadic(),
         &scope_parameter_is_by_ref,
         &evaluated_args,
         context,
@@ -464,6 +466,8 @@ fn eval_closure_with_optional_binding(
     let binding_result = bind_method_scope_args(
         &mut function_scope,
         &binding_params,
+        function.parameter_types(),
+        function.parameter_is_variadic(),
         &scope_parameter_is_by_ref,
         &evaluated_args,
         context,

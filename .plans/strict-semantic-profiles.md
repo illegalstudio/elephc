@@ -371,7 +371,7 @@ evidence and outstanding guarantees are recorded below.
 
 ## Implementation progress
 
-Verified through step134 (this commit). Remaining feature integration is active. Issue:
+Verified through step135 (this commit). Remaining feature integration is active. Issue:
 https://github.com/illegalstudio/elephc/issues/2347.
 
 The full task remains active. The user requested complete implementation, with a
@@ -632,7 +632,8 @@ paths. Keep this plan, agent documentation and the current journal log synchroni
 | 131 | `ed4423fae2` | fix(strict): validate native writes against current eval origins |
 | 132 | `bba9d412bd` | feat(strict): retain independent native copy contracts |
 | 133 | `b3e9fd2292` | feat(strict): preserve callable and iterable binding contracts |
-| 134 | this commit | feat(strict): preserve resource local binding contracts |
+| 134 | `ac5e3f53aa` | feat(strict): preserve resource local binding contracts |
+| 135 | this commit | feat(strict): retain interpreted parameter binding origins |
 
 
 ### Latest verified admission checkpoint
@@ -749,3 +750,30 @@ records inferred closure capability directly, with mixed/untyped controls.
 Continue all approved work through complete Locals flow, Nullability, Mixed,
 Initialization, ArrayTypes, ArrayKeys, Indexing and final host/umbrella acceptance.
 No full local suite, push or PR has been requested or performed.
+
+### Verified135: interpreted parameter and callable origins
+
+The shared interpreter parameter binder transfers declared binding kinds into scope
+origins for functions, closures and instance/static methods. Union/null alternatives
+survive, mixed/untyped remain open, and variadic bindings are arrays. Nominal self
+and parent atoms resolve through the existing declaration-scope parameter helper.
+Inferred closure/first-class callable producers retain callable capability rather
+than their first incidental signature. Explicit local declarations retain their
+existing structural checks. No callee-only type is permanently installed on caller
+storage merely by entering the binder.
+
+Prooff33c2615 passes default build, two new exact caller/owner gates, the existing
+Coercions parameter control and native parameter/alias/method/closure/variadic/unset
+cases in1m29s. Default289/289 and Locals480/480 allocation/free counts are clean.
+Finala75f3ccf passes build and five exact gates in4m34s: both new owner regressions
+(including false controls), the existing Resource alias/owner regression, permanent
+both-IR/default/Locals native bundle176.48s with self/parent cases, and the focused
+runtime-plugin example37.98s. All native heap reports are clean. CLI docs explain
+parameter, variadic and inferred-callable rules. Hygiene passes and only inherited
+warnings remain; no target-specific assembly or external ABI changed.
+
+The next related baseline ec663cb8 measures by-value/reference captures, escaping
+closures, mixed/union/nullable sources, fresh capture bindings, globals, static
+locals and foreach. Its outcome is not yet known. Continue broader binding flow,
+all six pending families and final host/umbrella acceptance. No full local suite,
+push or PR has been requested or run.
