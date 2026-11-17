@@ -3923,14 +3923,27 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         self.mark_slot_initialized(owner_slot);
     }
 
-    /// Shares an eval-created persistent PHP reference before native assignment can replace its box.
+    /// Selects owned boxed eval bindings without changing borrowed or raw typed-reference ABIs.
+    pub(super) fn supports_eval_native_binding_store(&self, name: &str) -> bool {
+        self.builder.function().flags.tracks_local_binding_state && self.eval_barrier_active
+            && !crate::names::is_generated_local_name(name) && self.local_can_own_reference_cell(name)
+            && eval_barrier_can_widen(&self.local_type(name))
+            && (!self.is_ref_bound_local(name) || self.ref_cell_owner_slot(name).is_some_and(|owner|
+                self.builder.local_php_type(owner) == PhpType::Mixed))
+    }
+
+    /// Shares the surviving scope reference even when a conditional predecessor left raw storage.
     pub(super) fn prepare_eval_native_binding_store(&mut self, name: &str, span: Span) {
-        if !self.builder.function().flags.tracks_local_binding_state || !self.eval_barrier_active
-            || crate::names::is_generated_local_name(name) || self.is_ref_bound_local(name)
-            || self.local_kinds.get(name).is_some_and(|kind| *kind != LocalKind::PhpLocal)
-            || !eval_barrier_can_widen(&self.local_type(name)) { return; }
-        // This is storage preparation only. The surviving scope origin owns its semantic source.
-        self.promote_local_mixed_ref_cell_storage(name, Some(span));
+        if !self.supports_eval_native_binding_store(name) { return; }
+        let suppressed = self.binding_state_suppressed;
+        self.binding_state_suppressed = true;
+        let slot = self.declare_local(name, PhpType::Mixed);
+        self.builder.widen_local_storage_type(slot, PhpType::Mixed);
+        self.set_local_type(name, PhpType::Mixed);
+        // Keep the original scope wrapper intact before reading any narrowed source view.
+        // MAY alias facts do not prove that eval left a cell attached at runtime.
+        self.promote_local_ref_cell(name, Some(span));
+        self.binding_state_suppressed = suppressed;
     }
 
     /// Widens a concrete local to boxed `Mixed` storage, then promotes that storage to a

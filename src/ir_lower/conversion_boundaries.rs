@@ -106,6 +106,19 @@ pub(super) fn local_store(ctx: &mut LoweringContext<'_, '_>, name: &str, value: 
     span: Span) -> Option<(LoweredValue, PhpType)> {
     let contract = ctx.local_store_contracts.get(
         &(ctx.loop_storage_scope.clone(), span, name.to_string())).cloned();
+    if ctx.source_mode != crate::source::SourceMode::Internal
+        && ctx.supports_eval_native_binding_store(name)
+        && contract.as_ref().is_none_or(|contract| contract.feature == elephc_semantics::StrictFeature::Locals) {
+        if let Some(contract) = &contract {
+            let slot = ctx.declare_local(name, PhpType::Mixed);
+            super::local_binding_state::unless_eval_bound(ctx, slot, span, |ctx| {
+                membership(ctx, value, &contract.ty, contract.feature, span);
+            });
+        }
+        ctx.prepare_eval_native_binding_store(name, span);
+        // The canonical publisher validates the original candidate against the surviving origin.
+        return Some((value, PhpType::Mixed));
+    }
     let Some(contract) = contract else {
         ctx.prepare_eval_native_binding_store(name, span);
         return None;

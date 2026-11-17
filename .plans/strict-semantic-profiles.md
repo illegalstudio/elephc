@@ -1213,3 +1213,31 @@ pure-literal native copy also prints Winteger:1| instead of Tdouble:2.5|. Both
 baselines have clean heaps. Complete native dynamic-origin store/copy transport,
 then remaining binding flow, six pending semantic families and umbrella plus host
 acceptance.
+
+
+### Verified131: native writes follow the surviving eval origin
+
+GetEvalBindingState reads the existing private frame provenance word. A shared
+provenance-dependent CFG helper keeps old membership guards only while eval has
+not replaced the binding. Owned Mixed destinations retain the original RHS and
+refresh canonical reference storage idempotently, without inventing a logical
+initialization event or reboxing a narrowed stale view. Raw and borrowed reference
+ABIs retain their existing paths. The checker preserves incoming source views
+after an opaque barrier and defers old inferred membership to the native-origin
+predecessor, including known float replacements.
+
+First gatee9fcde78 exposed a by-value Mixed copy regression: a native copy changed
+the original2.5 to3.5. The assignment path now reuses copy_assignment_value.
+Gate2f601e48 then exposed a missing slot on a fresh post-eval assignment; the
+source state slot is declared before the provenance read. Final43e1625e passed
+build and nine exact gates in5m21s: all-five-target EIR/CFG and real clang state
+assembly, native runtime origins/producers/rebinding, pure literal conditional
+and known-float stores, existing scalar/null aliases and typed references, settype
+and the example. The combined native bundle passed117.92s, both IR modes and
+permissive/Locals modes with clean heaps. Comments and diff hygiene pass.
+
+Independent native copies still need their own transferred producer contract,
+including runtime-created and pure literal-created origins. Preserve the saved
+copy fixtures for that next portion, then finish remaining binding flow, six
+pending semantic families and full umbrella/host acceptance. No full suite,
+push or PR was run.

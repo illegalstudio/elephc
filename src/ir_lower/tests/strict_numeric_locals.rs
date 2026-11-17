@@ -335,3 +335,27 @@ fn strict_eval_conditional_native_origins_use_guarded_cfg_on_every_target() {
         crate::codegen::generate_user_asm_from_ir(&module, false, false).unwrap();
     }
 }
+
+/// Post-eval stores keep the original candidate and select old guards only for surviving native origins.
+#[test]
+fn strict_eval_current_origin_native_stores_emit_on_every_target() {
+    let source = "<?php function currentOrigin(bool $bound, mixed $next): void { if($bound) {$value=1;} eval('$value=2.5;'); $value=$next; $value=3.5; $value=4.5; $fresh=3.5; } currentOrigin($argc>0,1);";
+    let program = crate::parser::parse_with_mode(&crate::lexer::tokenize(source).unwrap(), SourceMode::Php).unwrap();
+    let profile = SemanticProfile::PERMISSIVE.with(StrictFeature::Locals, true)
+        .with(StrictFeature::DynamicCode, true);
+    for name in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+        let target = Target::parse(name).unwrap();
+        let checked = crate::types::checker::check_staged_semantics(&program, target, profile).unwrap();
+        let module = crate::ir_lower::lower_program(&program, &checked, target, false).unwrap();
+        let function = module.functions.iter().find(|function| function.name == "currentOrigin").unwrap();
+        let slot = function.locals.iter().find(|local| local.name.as_deref() == Some("value")).unwrap();
+        assert_eq!(slot.php_type, crate::types::PhpType::Mixed, "{name}: original source kind remains boxed");
+        assert!(function.instructions.iter().any(|inst| inst.op == crate::ir::Op::GetEvalBindingState
+            && inst.immediate == Some(crate::ir::Immediate::LocalSlot(slot.id))), "{name}: replaced origins skip obsolete guards");
+        assert!(function.instructions.iter().filter(|inst| inst.op == crate::ir::Op::PromoteLocalRefCell
+            && matches!(inst.immediate, Some(crate::ir::Immediate::LocalSlotPair { first, .. }) if first == slot.id)).count() >= 2,
+            "{name}: idempotent storage refresh handles the detached runtime predecessor");
+        crate::ir::validate_module(&module).unwrap();
+        crate::codegen::generate_user_asm_from_ir(&module, false, false).unwrap();
+    }
+}

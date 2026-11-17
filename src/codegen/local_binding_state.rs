@@ -10,7 +10,7 @@
 //! - All operations use the shared target ABI helpers and frame-assigned state offsets.
 
 use super::{abi, context::FunctionContext, CodegenIrError, Result};
-use crate::ir::{Immediate, Instruction, LocalSlotId};
+use crate::ir::{Immediate, Instruction, LocalSlotId, Op};
 use crate::codegen::platform::Arch;
 
 const NATIVE_ORIGIN: i64 = 1;
@@ -56,9 +56,11 @@ pub(super) fn lower_get(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Re
     let result = inst.result.ok_or_else(|| CodegenIrError::invalid_module("binding state read has no result"))?;
     let register = abi::int_result_reg(ctx.emitter);
     abi::load_at_offset(ctx.emitter, register, offset);
-    match ctx.emitter.target.arch {
-        Arch::AArch64 => ctx.emitter.instruction(&format!("and {register}, {register}, #{NATIVE_ORIGIN}")), // exclude eval-created binding origins
-        Arch::X86_64 => ctx.emitter.instruction(&format!("and {register}, {NATIVE_ORIGIN}")), // return only the native-origin bit as Bool
+    match (ctx.emitter.target.arch, inst.op) {
+        (Arch::AArch64, Op::GetEvalBindingState) => ctx.emitter.instruction(&format!("lsr {register}, {register}, #1")), // normalize the eval-origin bit to Bool
+        (Arch::X86_64, Op::GetEvalBindingState) => ctx.emitter.instruction(&format!("shr {register}, 1")), // native and absent states both become false
+        (Arch::AArch64, _) => ctx.emitter.instruction(&format!("and {register}, {register}, #{NATIVE_ORIGIN}")), // exclude eval-created binding origins
+        (Arch::X86_64, _) => ctx.emitter.instruction(&format!("and {register}, {NATIVE_ORIGIN}")), // return only the native-origin bit as Bool
     }
     ctx.store_result_value(result)
 }
@@ -143,7 +145,11 @@ mod tests {
                 IrType::Void, PhpType::Void, Ownership::NonHeap);
             let result = builder.emit(Op::GetNativeBindingState, Vec::new(), Some(Immediate::LocalSlot(slot)),
                 IrType::I64, PhpType::Bool, Ownership::NonHeap).unwrap();
-            builder.terminate(Terminator::Return { value: Some(result) });
+            let eval_result = builder.emit(Op::GetEvalBindingState, Vec::new(), Some(Immediate::LocalSlot(slot)),
+                IrType::I64, PhpType::Bool, Ownership::NonHeap).unwrap();
+            let combined = builder.emit(Op::IBitOr, vec![result, eval_result], None,
+                IrType::I64, PhpType::Bool, Ownership::NonHeap).unwrap();
+            builder.terminate(Terminator::Return { value: Some(combined) });
             let layout = frame::layout_for_function(&function, target, false, false, false);
             let mut emitter = Emitter::new(target); let mut data = DataSection::new();
             let mut shared = SharedCodegenState::default();
@@ -157,6 +163,7 @@ mod tests {
                 super::mark(&mut ctx, slot, false);
                 super::mark(&mut ctx, slot, true);
                 super::lower_get(&mut ctx, &function.instructions[2]).unwrap();
+                super::lower_get(&mut ctx, &function.instructions[3]).unwrap();
             }
             let syntax = if target.arch == crate::codegen::platform::Arch::X86_64 { ".intel_syntax noprefix\n" } else { "" };
             let assembly = format!("{syntax}.text\n{}", emitter.output());

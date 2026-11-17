@@ -127,7 +127,7 @@ pub fn validate_module(module: &Module) -> Result<(), ValidationError> {
                 }
             }
             let mut required = inst.arithmetic_policy().requirements().bits();
-            if matches!(inst.op, Op::BindLocalRefContract | Op::SetLocalBindingState | Op::GetNativeBindingState | Op::EvalScopeBindLocalType) || matches!(&inst.immediate,
+            if matches!(inst.op, Op::BindLocalRefContract | Op::SetLocalBindingState | Op::GetNativeBindingState | Op::GetEvalBindingState | Op::EvalScopeBindLocalType) || matches!(&inst.immediate,
                 Some(Immediate::EvalScopeStore(metadata)) if metadata.contract.is_some()) {
                 required |= elephc_semantics::StrictFeature::Locals.bit();
             }
@@ -801,7 +801,7 @@ fn validate_instruction_immediate(
         PropUnset => require_immediate(inst_id, inst, "property name or initializer physical slot", |imm| {
             matches!(imm, Imm::Data(_) | Imm::PropertyRef { .. })
         }),
-        StrAppend | LocalPlace | LoadLocal | StoreLocal | SetLocalBindingState | GetNativeBindingState | UnsetLocal | ZeroLocalSlot | LoadRefCell | LoadRefCellValue | StoreRefCell
+        StrAppend | LocalPlace | LoadLocal | StoreLocal | SetLocalBindingState | GetNativeBindingState | GetEvalBindingState | UnsetLocal | ZeroLocalSlot | LoadRefCell | LoadRefCellValue | StoreRefCell
         | ReleaseLocalRefCell | AcquireRefCell | BindLocalRefContract
         | ReleaseLocalSlot | ReleaseRawLocalSlot | PushCallOperandOwner | PopCallOperandOwner
         | LoadStaticLocal | StoreStaticLocal | InitStaticLocal | StaticLocalUninitialized
@@ -1112,7 +1112,7 @@ fn validate_opcode_rules(
             }
             Ok(())
         }
-        GetNativeBindingState => {
+        GetNativeBindingState | GetEvalBindingState => {
             check_count(inst_id, inst, 0, "0")?;
             let Some(Immediate::LocalSlot(slot)) = inst.immediate else { unreachable!() };
             if !function.flags.tracks_local_binding_state

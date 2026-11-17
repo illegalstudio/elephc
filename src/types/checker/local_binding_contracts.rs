@@ -66,6 +66,16 @@ impl Checker {
                 || self.static_local_names.contains(name))).unwrap_or(incoming);
         let Some(expected) = binding_contract(original, declared.is_some()) else { return Ok(incoming.clone()); };
         if declared.is_none() { self.inferred_local_contracts.insert(name.to_string(), expected.clone()); }
+        if source.is_some() && self.eval_barrier_active && declared.is_none()
+            && !self.active_ref_params.contains(name) && !self.ref_aliased_locals.contains(name)
+            && !self.active_globals.contains(name) && !self.static_local_names.contains(name) {
+            // Eval may have ended this origin and established another one. Keep the old
+            // contract for the native-origin predecessor without narrowing the new RHS to it.
+            self.local_store_contracts.insert(key, LocalStoreContract {
+                ty: expected, feature: StrictFeature::Locals,
+            });
+            return Ok(incoming.clone());
+        }
         // Array element and storage changes do not change the PHP array value kind.
         if expected.is_php_array() && (incoming.is_php_array()
             || matches!(incoming, PhpType::Array(_) | PhpType::AssocArray { .. })) {

@@ -27,18 +27,33 @@ pub(super) fn emit(ctx: &mut LoweringContext<'_, '_>, slot: LocalSlotId, initial
 pub(super) fn when_native_bound(ctx: &mut LoweringContext<'_, '_>, slot: LocalSlotId,
     span: crate::span::Span, body: impl FnOnce(&mut LoweringContext<'_, '_>),
 ) {
+    with_origin_condition(ctx, slot, span, Op::GetNativeBindingState, true, body);
+}
+
+/// Retains a native source guard unless eval has established a replacement binding of its own.
+pub(super) fn unless_eval_bound(ctx: &mut LoweringContext<'_, '_>, slot: LocalSlotId,
+    span: crate::span::Span, body: impl FnOnce(&mut LoweringContext<'_, '_>),
+) {
+    with_origin_condition(ctx, slot, span, Op::GetEvalBindingState, false, body);
+}
+
+/// Emits one provenance-dependent effect without claiming initialization on the other predecessor.
+fn with_origin_condition(ctx: &mut LoweringContext<'_, '_>, slot: LocalSlotId,
+    span: crate::span::Span, predicate: Op, take_when_true: bool,
+    body: impl FnOnce(&mut LoweringContext<'_, '_>),
+) {
     let initialized = ctx.initialized_slots_snapshot();
-    let present = ctx.emit_value(Op::GetNativeBindingState, Vec::new(),
-        Some(Immediate::LocalSlot(slot)), PhpType::Bool, Op::GetNativeBindingState.default_effects(), Some(span));
-    let bound = ctx.builder.create_named_block("eval.binding.present", Vec::new());
+    let present = ctx.emit_value(predicate, Vec::new(),
+        Some(Immediate::LocalSlot(slot)), PhpType::Bool, predicate.default_effects(), Some(span));
+    let bound = ctx.builder.create_named_block("eval.binding.selected", Vec::new());
     let done = ctx.builder.create_named_block("eval.binding.join", Vec::new());
+    let (yes, no) = if take_when_true { (bound, done) } else { (done, bound) };
     ctx.builder.terminate(crate::ir::Terminator::CondBr { cond: present.value,
-        then_target: bound, then_args: Vec::new(), else_target: done, else_args: Vec::new() });
+        then_target: yes, then_args: Vec::new(), else_target: no, else_args: Vec::new() });
     ctx.builder.position_at_end(bound);
     body(ctx);
     ctx.builder.terminate(crate::ir::Terminator::Br { target: done, args: Vec::new() });
     ctx.builder.position_at_end(done);
-    // Promotion on one predecessor does not initialize an owner on the unbound predecessor.
     // Existing EIR reference analysis computes the raw/ref-cell representation at the join.
     ctx.restore_initialized_slots(initialized);
 }

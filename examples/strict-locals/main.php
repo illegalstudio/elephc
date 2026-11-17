@@ -112,3 +112,18 @@ function checkConditionalQuantity(bool $known): void {
 }
 checkConditionalQuantity(true);
 checkConditionalQuantity(false);
+
+// Unsetting and recreating a quantity inside eval gives later native writes its new contract.
+function replaceRuntimeQuantity(mixed $replacement, int $requestCount): void {
+    $quantity=1;
+    $source=$requestCount>0?'unset($quantity); $quantity=2.5;':'';
+    eval($source);
+    try {
+        $quantity=$replacement;
+    } catch (TypeError $error) {
+        echo "The runtime quantity kept its float value", PHP_EOL;
+    }
+    echo "Runtime quantity: ", $quantity, PHP_EOL;
+}
+replaceRuntimeQuantity(3.5, $argc);
+replaceRuntimeQuantity(1, $argc);

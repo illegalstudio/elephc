@@ -923,6 +923,8 @@ pub enum Op {
     SetLocalBindingState,
     /// Reads whether the live binding retains its native source origin, excluding eval-created bindings.
     GetNativeBindingState,
+    /// Reads whether eval established the current binding after native origin retirement.
+    GetEvalBindingState,
     UnsetLocal,
     ZeroLocalSlot,
     LoadRefCell,
@@ -1737,7 +1739,7 @@ impl Op {
                 E::READS_HEAP | E::ALLOC_HEAP | E::MAY_THROW
             }
             EvalFunctionExists | EvalClassExists | EvalConstantExists => E::READS_GLOBAL,
-            GetNativeBindingState => E::READS_LOCAL,
+            GetNativeBindingState | GetEvalBindingState => E::READS_LOCAL,
             EvalScopeBindLocalType => E::READS_LOCAL | E::READS_HEAP | E::WRITES_HEAP | E::ALLOC_HEAP | E::MAY_FATAL,
             EvalScopeGet => E::READS_HEAP | E::MAY_FATAL,
             EvalScopeSet => E::READS_HEAP | E::WRITES_HEAP | E::REFCOUNT_OP | E::MAY_THROW | E::MAY_FATAL,
@@ -1883,6 +1885,7 @@ impl Op {
             StoreLocal => "store_local",
             SetLocalBindingState => "set_local_binding_state",
             GetNativeBindingState => "get_native_binding_state",
+            GetEvalBindingState => "get_eval_binding_state",
             UnsetLocal => "unset_local",
             ZeroLocalSlot => "zero_local_slot",
             LoadRefCell => "load_ref_cell",

@@ -979,13 +979,17 @@ returns retain their permitted alternatives. `unset` retires the inferred origin
 before rebinding. Conditional native origins apply only on paths that actually
 initialized them. A binding first created by eval keeps its own origin on later
 calls, including repeated loop iterations and names recreated after eval `unset`.
+After eval recreates an inferred native name, later native writes validate the
+original candidate against its replacement contract before changing the value.
 
 A body that **calls** `eval()` anywhere is the other side of that coin: the
 eval scope reaches the surrounding function's locals BY NAME, while the kill
 and the straight-line retype end a binding and give the name a different frame
-slot. Both therefore step aside for the whole body — `unset()` is a plain
-typing no-op there, and an incompatible reassignment is the hard error in both
-modes, whether the `eval()` call sits above or below it. The branch-divergent
+slot. Both therefore step aside for the whole body: `unset()` is a plain
+typing no-op there. An incompatible reassignment before crossing an eval
+barrier is a hard error in both modes. After the barrier, `--strict-locals`
+checks writes against the surviving runtime binding, including a replacement
+created by eval. The branch-divergent
 shape is unaffected, because a boxed `Mixed` slot is exactly what the eval
 scope wants:
 
