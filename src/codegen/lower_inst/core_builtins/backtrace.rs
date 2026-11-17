@@ -76,12 +76,33 @@ pub(super) fn publish_diagnostic_site(ctx: &mut FunctionContext<'_>, inst: &Inst
     if inst.span.is_some_and(|span| !span.is_from_source()) {
         return;
     }
+    publish_span_site(ctx, inst.span);
+}
+
+/// Publishes the file and line of `span` as the current diagnostic site.
+///
+/// The span knows which physical file its coordinates belong to, including a file reached
+/// through `include`/`require`, so the diagnostic names that file instead of the program entry.
+fn publish_span_site(ctx: &mut FunctionContext<'_>, span: Option<crate::span::Span>) {
     let scratch = abi::int_result_reg(ctx.emitter);
-    abi::emit_symbol_address(ctx.emitter, scratch, "_script_source_file");
-    abi::emit_store_reg_to_symbol(ctx.emitter, scratch, "_php_diagnostic_file", 0);
-    abi::emit_load_symbol_to_reg(ctx.emitter, scratch, "_script_source_file_len", 0);
-    abi::emit_store_reg_to_symbol(ctx.emitter, scratch, "_php_diagnostic_file_len", 0);
-    abi::emit_load_int_immediate(ctx.emitter, scratch, i64::from(inst.span.map_or(0, |span| span.line)));
+    let span_file = span.and_then(|span| ctx.module.source_paths.get(&span.source_id()).cloned());
+    // The entry file already has a canonical data symbol; reuse it instead of adding a
+    // second copy of the same path (and keep it out of the per-site data block).
+    if let Some(file) = span_file.filter(|file| {
+        ctx.module.source_path.as_deref() != Some(file.as_str())
+    }) {
+        let (label, len) = ctx.data.add_string(file.as_bytes());
+        abi::emit_symbol_address(ctx.emitter, scratch, &label);
+        abi::emit_store_reg_to_symbol(ctx.emitter, scratch, "_php_diagnostic_file", 0);
+        abi::emit_load_int_immediate(ctx.emitter, scratch, len as i64);
+        abi::emit_store_reg_to_symbol(ctx.emitter, scratch, "_php_diagnostic_file_len", 0);
+    } else {
+        abi::emit_symbol_address(ctx.emitter, scratch, "_script_source_file");
+        abi::emit_store_reg_to_symbol(ctx.emitter, scratch, "_php_diagnostic_file", 0);
+        abi::emit_load_symbol_to_reg(ctx.emitter, scratch, "_script_source_file_len", 0);
+        abi::emit_store_reg_to_symbol(ctx.emitter, scratch, "_php_diagnostic_file_len", 0);
+    }
+    abi::emit_load_int_immediate(ctx.emitter, scratch, i64::from(span.map_or(0, |span| span.line)));
     abi::emit_store_reg_to_symbol(ctx.emitter, scratch, "_php_diagnostic_line", 0);
 }
 
@@ -126,34 +147,7 @@ fn publish_call_site(
     // the location the entering call just published.
     let compiler_generated = inst.span.is_some_and(|span| !span.is_from_source());
     if (instruction_may_enter_php_frame(ctx, inst) || warns_at_call_site) && !compiler_generated {
-        let scratch = abi::int_result_reg(ctx.emitter);
-        // The span knows which physical file its coordinates belong to, including a file
-        // reached through `include`/`require`; publishing that path lets a prelude-raised
-        // notice name the user's included file instead of the program entry file.
-        let span_file = inst.span.and_then(|span| {
-            ctx.module
-                .source_paths
-                .get(&span.source_id())
-                .cloned()
-        });
-        // The entry file already has a canonical data symbol; reuse it instead of adding a
-        // second copy of the same path (and keep it out of the per-site data block).
-        if let Some(file) = span_file.filter(|file| {
-            ctx.module.source_path.as_deref() != Some(file.as_str())
-        }) {
-            let (label, len) = ctx.data.add_string(file.as_bytes());
-            abi::emit_symbol_address(ctx.emitter, scratch, &label);
-            abi::emit_store_reg_to_symbol(ctx.emitter, scratch, "_php_diagnostic_file", 0);
-            abi::emit_load_int_immediate(ctx.emitter, scratch, len as i64);
-            abi::emit_store_reg_to_symbol(ctx.emitter, scratch, "_php_diagnostic_file_len", 0);
-        } else {
-            abi::emit_symbol_address(ctx.emitter, scratch, "_script_source_file");
-            abi::emit_store_reg_to_symbol(ctx.emitter, scratch, "_php_diagnostic_file", 0);
-            abi::emit_load_symbol_to_reg(ctx.emitter, scratch, "_script_source_file_len", 0);
-            abi::emit_store_reg_to_symbol(ctx.emitter, scratch, "_php_diagnostic_file_len", 0);
-        }
-        abi::emit_load_int_immediate(ctx.emitter, scratch, i64::from(inst.span.map_or(0, |span| span.line)));
-        abi::emit_store_reg_to_symbol(ctx.emitter, scratch, "_php_diagnostic_line", 0);
+        publish_span_site(ctx, inst.span);
     }
     if !ctx.backtrace_enabled || !instruction_may_enter_php_frame(ctx, inst) {
         return Ok(());

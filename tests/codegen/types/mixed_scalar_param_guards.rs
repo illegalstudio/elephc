@@ -742,3 +742,46 @@ try { echo str(box(new Bad())), "\n"; } catch (LogicException $e) { echo "caught
     );
     assert_eq!(out, "caught: bad\n");
 }
+
+/// The `int` precision deprecation names the file that declares the parameter: a function or
+/// method an included file declares reported the entry script (and the call's line, as the
+/// included function is lowered under a generated name).
+#[test]
+fn test_int_precision_deprecation_names_the_included_declaring_file() {
+    let out = compile_and_run_files(
+        &[
+            (
+                "defs.php",
+                r#"<?php
+namespace Lib;
+
+class C {
+    public function m(
+        string $s,
+        int $n
+    ): int { return $n; }
+}
+
+function f(
+    int $a
+): int { return $a; }
+"#,
+            ),
+            (
+                "main.php",
+                r#"<?php
+require __DIR__ . '/defs.php';
+function box(mixed $v): mixed { return $v; }
+set_error_handler(function (int $no, string $msg, string $file, int $line): bool {
+    echo basename($file), ":", $line, " ", $msg, "\n";
+    return true;
+});
+echo (new Lib\C())->m("x", box(1.5)), "\n";
+echo Lib\f(box("2.5")), "\n";
+"#,
+            ),
+        ],
+        "main.php",
+    );
+    assert_eq!(out, "defs.php:7 Implicit conversion from float 1.5 to int loses precision\n1\ndefs.php:12 Implicit conversion from float-string \"2.5\" to int loses precision\n2\n");
+}

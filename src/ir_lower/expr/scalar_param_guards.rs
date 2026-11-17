@@ -15,8 +15,8 @@
 //!   inline and the `TypeError` construction in the function's out-of-line cold section. For
 //!   `int`/`float` it also yields the converted value (PHP's numeric-string and float rules).
 //! - The message reports the call's line (`LoweringContext::call_site_span`); an `int`
-//!   binding's precision deprecation reports the parameter's declaration line, which the parser
-//!   records per declaration (`install_param_decl_lines`).
+//!   binding's precision deprecation reports the parameter's declaration file and line, which
+//!   the parser records per declaration (`install_param_decl_lines`).
 //! - Coercive mode rejects every non-scalar (`null`, arrays, objects other than a `Stringable`
 //!   bound to `string`, resources); `strict_types=1` additionally requires the exact scalar,
 //!   with PHP's single `int`-to-`float` widening.
@@ -30,16 +30,16 @@ use super::*;
 use std::collections::HashMap;
 
 thread_local! {
-    /// Start line of each parameter of the program's functions and methods, keyed by the
-    /// case-folded callee name the guard message uses (`f`, `C::m`); see
-    /// [`install_param_decl_lines`].
-    static PARAM_DECL_LINES: std::cell::RefCell<HashMap<String, Vec<u32>>> =
+    /// Where each parameter of the program's functions and methods starts (its line, in the
+    /// declaring file), keyed by the case-folded callee name the guard message uses (`f`,
+    /// `C::m`); see [`install_param_decl_lines`].
+    static PARAM_DECL_LINES: std::cell::RefCell<HashMap<String, Vec<Span>>> =
         std::cell::RefCell::new(HashMap::new());
 }
 
 /// Restores the previously installed parameter lines when dropped.
 pub(crate) struct ParamDeclLinesScope {
-    previous: Option<HashMap<String, Vec<u32>>>,
+    previous: Option<HashMap<String, Vec<Span>>>,
 }
 
 impl Drop for ParamDeclLinesScope {
@@ -51,23 +51,48 @@ impl Drop for ParamDeclLinesScope {
     }
 }
 
-/// Installs, for one lowering run, the line where each declared parameter starts.
+/// Installs, for one lowering run, where each declared parameter starts.
 ///
 /// PHP raises the `int` precision deprecation ("Implicit conversion from float ... to int loses
-/// precision") while binding the parameter, so it reports the PARAMETER's line, not the call's.
-/// The AST keeps no span per parameter; the parser records the lines keyed by declaration.
+/// precision") while binding the parameter, so it reports the PARAMETER's file and line, not
+/// the call's. The AST keeps no span per parameter; the parser records the lines keyed by
+/// declaration, and the declaration's span names its file (an included one too).
 pub(crate) fn install_param_decl_lines(program: &[Stmt]) -> ParamDeclLinesScope {
     let mut lines = HashMap::new();
-    for stmt in program {
+    let mut groups = Vec::new();
+    collect_param_decl_lines(program, &mut lines, &mut groups);
+    // A function an included file declares is lowered under a generated variant name, while
+    // its guards name the PHP function: give that name the variant's sites when every
+    // variant declares its parameters on the same lines of the same file.
+    for (name, variants) in groups {
+        let mut sites = variants.iter().map(|variant| lines.get(&crate::names::php_symbol_key(variant)));
+        if let Some(Some(first)) = sites.next() {
+            if sites.all(|other| other == Some(first)) {
+                let first = first.clone();
+                lines.insert(crate::names::php_symbol_key(&name), first);
+            }
+        }
+    }
+    ParamDeclLinesScope { previous: Some(PARAM_DECL_LINES.with(|slot| slot.replace(lines))) }
+}
+
+/// Records the parameter sites of the declarations in `stmts`, including those an included
+/// file, a namespace block or a conditional body declares.
+fn collect_param_decl_lines(
+    stmts: &[Stmt],
+    lines: &mut HashMap<String, Vec<Span>>,
+    groups: &mut Vec<(String, Vec<String>)>,
+) {
+    for stmt in stmts {
         match &stmt.kind {
             StmtKind::FunctionDecl { name, .. } => {
-                if let Some(params) = crate::parser::stmt::params::param_lines(stmt.span) {
+                if let Some(params) = param_sites(stmt.span) {
                     lines.insert(crate::names::php_symbol_key(name), params);
                 }
             }
-            StmtKind::ClassDecl { name, methods, .. } => {
+            StmtKind::ClassDecl { name, methods, .. } | StmtKind::EnumDecl { name, methods, .. } => {
                 for method in methods {
-                    if let Some(params) = crate::parser::stmt::params::param_lines(method.span) {
+                    if let Some(params) = param_sites(method.span) {
                         lines.insert(
                             crate::names::php_symbol_key(&format!("{name}::{}", method.name)),
                             params,
@@ -75,26 +100,46 @@ pub(crate) fn install_param_decl_lines(program: &[Stmt]) -> ParamDeclLinesScope 
                     }
                 }
             }
+            StmtKind::NamespaceBlock { body, .. } | StmtKind::Synthetic(body)
+            | StmtKind::IncludeOnceGuard { body, .. } => collect_param_decl_lines(body, lines, groups),
+            StmtKind::If { then_body, elseif_clauses, else_body, .. } => {
+                collect_param_decl_lines(then_body, lines, groups);
+                for (_, body) in elseif_clauses {
+                    collect_param_decl_lines(body, lines, groups);
+                }
+                if let Some(body) = else_body {
+                    collect_param_decl_lines(body, lines, groups);
+                }
+            }
+            StmtKind::FunctionVariantGroup { name, variants } => {
+                groups.push((name.clone(), variants.clone()));
+            }
             _ => {}
         }
     }
-    ParamDeclLinesScope { previous: Some(PARAM_DECL_LINES.with(|slot| slot.replace(lines))) }
+}
+
+/// The start of each parameter of the declaration at `decl`, as spans in the declaring file.
+fn param_sites(decl: Span) -> Option<Vec<Span>> {
+    crate::parser::stmt::params::param_lines(decl).map(|lines| {
+        lines.into_iter().map(|line| Span::new_in_source(line, decl.col, decl.source_id())).collect()
+    })
 }
 
 /// Records the parameter lines of the closure at `span` under its PHP label, which is the
 /// callee name its guards report (`{closure:file:line}`).
 pub(super) fn register_closure_param_lines(display_name: &str, span: Span) {
-    if let Some(lines) = crate::parser::stmt::params::param_lines(span) {
+    if let Some(sites) = param_sites(span) {
         PARAM_DECL_LINES.with(|slot| {
-            slot.borrow_mut().insert(crate::names::php_symbol_key(display_name), lines);
+            slot.borrow_mut().insert(crate::names::php_symbol_key(display_name), sites);
         });
     }
 }
 
-/// Returns the line where parameter `index` of `callee` is declared, if known.
-fn param_decl_line(callee: &str, index: usize) -> Option<u32> {
+/// Returns where parameter `index` of `callee` is declared, if known.
+fn param_decl_site(callee: &str, index: usize) -> Option<Span> {
     PARAM_DECL_LINES.with(|slot| {
-        slot.borrow().get(&crate::names::php_symbol_key(callee)).and_then(|lines| lines.get(index).copied())
+        slot.borrow().get(&crate::names::php_symbol_key(callee)).and_then(|sites| sites.get(index).copied())
     })
 }
 
@@ -219,11 +264,10 @@ pub(super) fn guard_scalar_param(
     );
     let data = ctx.intern_string(&encoded);
     if matches!(declared, PhpType::Int | PhpType::Float) {
-        // The instruction's span is the line its diagnostics report: an `int` binding's
-        // precision deprecation names the parameter's declaration line, as in PHP.
+        // The instruction's span is the site its diagnostics report: an `int` binding's
+        // precision deprecation names the parameter's declaration file and line, as in PHP.
         let diagnostic_span = match declared {
-            PhpType::Int => param_decl_line(&callable, index)
-                .map_or(span, |line| Span { line, end_line: line.max(span.end_line), ..span }),
+            PhpType::Int => param_decl_site(&callable, index).unwrap_or(span),
             _ => span,
         };
         let converted = ctx.emit_value(
