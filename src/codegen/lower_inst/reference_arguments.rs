@@ -1737,6 +1737,7 @@ fn emit_mixed_nominal_object_unbox_guard(
         return Ok(());
     };
     let source_reg = abi::int_arg_reg_name(ctx.emitter.target, 0);
+    let unbox_reg = abi::int_result_reg(ctx.emitter);
     abi::emit_push_reg(ctx.emitter, source_reg);
     objects::emit_match_call(ctx, target_id, target_kind, "__rt_mixed_instanceof");
     let accepted_label = ctx.next_label("mixed_unbox_nominal_accepted");
@@ -1775,7 +1776,9 @@ fn emit_mixed_nominal_object_unbox_guard(
         )?;
         ctx.emitter.label(&native_fallback_label);
     }
-    abi::emit_pop_reg(ctx.emitter, source_reg);
+    // The matcher consumes the C argument register; unboxing consumes the result register.
+    // On x86_64 those are rdi and rax, so the original cell must replace the boolean verdict.
+    abi::emit_pop_reg(ctx.emitter, unbox_reg);
     abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
     let type_error_label = ctx.next_label("mixed_unbox_nominal_type_error");
     builtins::arrays::union_type_guard::emit_mixed_wrong_tag_type_error_dispatch(
@@ -1784,7 +1787,7 @@ fn emit_mixed_nominal_object_unbox_guard(
         &|given| format!("Value must be of type {}, {} given", expected, given),
     );
     ctx.emitter.label(&accepted_label);
-    abi::emit_pop_reg(ctx.emitter, source_reg);
+    abi::emit_pop_reg(ctx.emitter, unbox_reg);
     abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
     Ok(())
 }
