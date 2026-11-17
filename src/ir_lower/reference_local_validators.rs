@@ -139,13 +139,22 @@ fn lower_callback(index: usize, contract: PhpType, message: crate::ir::DataId,
             IrType::I64, PhpType::Bool, Ownership::NonHeap).expect("nominal membership is boolean"));
     }
     for constraint in crate::semantics::conversions::runtime_constraints(&contract) {
-        let predicate = match constraint {
-            crate::semantics::conversions::RuntimeConstraint::Array => PhpTypePredicate::Array,
-            _ => unreachable!("inferred binding planner selected an unsupported constraint"),
+        use crate::semantics::conversions::RuntimeConstraint;
+        let (op, immediate, effects) = match constraint {
+            RuntimeConstraint::Callable => {
+                let target = crate::ir::RuntimeFnId::IsCallable;
+                (Op::RuntimeCall, Immediate::RuntimeCall(crate::ir::RuntimeCallTarget::Function(target)), target.effects())
+            }
+            constraint => (Op::TypePredicate, Immediate::TypePredicate(match constraint {
+                RuntimeConstraint::Array => PhpTypePredicate::Array,
+                RuntimeConstraint::Iterable => PhpTypePredicate::Iterable,
+                RuntimeConstraint::Resource => PhpTypePredicate::Resource,
+                RuntimeConstraint::Callable => unreachable!(),
+            }), Op::TypePredicate.default_effects()),
         };
-        conditions.push(builder.emit(Op::TypePredicate, vec![original],
-            Some(Immediate::TypePredicate(predicate)), IrType::I64, PhpType::Bool,
-            Ownership::NonHeap).expect("container membership is boolean"));
+        conditions.push(builder.emit_with_effects(op, vec![original], Some(immediate),
+            IrType::I64, PhpType::Bool, Ownership::NonHeap, effects, None)
+            .expect("structural membership is boolean"));
     }
     let condition = conditions.into_iter().reduce(|left, right|
         builder.emit(Op::IBitOr, vec![left, right], None, IrType::I64,

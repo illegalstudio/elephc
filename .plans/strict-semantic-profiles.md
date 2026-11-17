@@ -1288,3 +1288,38 @@ Continue broader local binding flow and Callable/Resource/Iterable coverage, the
 Nullability, Mixed, Initialization, ArrayTypes, ArrayKeys and Indexing, complete
 host/eval parity and full umbrella acceptance. The whole approved implementation
 remains active. No full suite, push or PR was run.
+
+### Verified133: native callable and iterable binding capabilities
+
+Inferred native callable bindings now require actual callability rather than a
+string/array/object shape. Native iterable bindings preserve array-or-Traversable
+membership, including parameter reassignment and writes through mixed reference
+aliases. The shared local callback builder selects the existing typed IsCallable
+runtime target or structural predicate and preserves the original candidate until
+validation succeeds. The Magician exact matchers also select callable lookup for
+Locals alone, with declared-local walker/VM owner-accounting controls.
+
+Late callable guards reserve object-cast dependencies before checking. Declaration
+reachability attaches their lookup hazards to the owning checked body, including
+lexical closures, so a dead function cannot widen executable roots. The scanner
+and late guards share one unknown-callable hazard helper. Native user-function
+lookup now compares names case-insensitively on both architectures. NormalizeCallable
+results are classified as owning temporaries after retaining consumers, fixing a
+96-byte descriptor and 24-byte invokable receiver leak.
+
+Proof93848a70 accepts uppercase names and leaves default217/217 and strict265/265
+heaps clean. Final ef8b00e4 passes the build/default archives and nine exact gates:
+five-target EIR, real clang program/runtime assembly, reachable/dead guard dependency
+controls, prelude reservation, walker/VM declared callable checks, both-optimizer
+native capability/alias/expression/static/trait/invokable cases (6.50s), the updated
+example (37.05s), and the existing opaque sort ownership regression (58.99s).
+Two earlier verification attempts exposed brittle assertions about explicit EIR
+release shapes; ownership acceptance uses the native retaining-store heap regression.
+Diff hygiene and assembly comment alignment pass. Only inherited warnings remain.
+
+Resource origins and inferred/interpreted parameter/capture/global/foreach binding
+flows remain under audit. The related resource and parameter probes run separately
+from these nine acceptance gates; proposed resource patches are not yet applied.
+Continue the full approved implementation, including Nullability, Mixed,
+Initialization, ArrayTypes, ArrayKeys, Indexing and final host/umbrella acceptance.
+No full local suite, push or PR was run.

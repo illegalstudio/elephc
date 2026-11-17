@@ -71,7 +71,8 @@ fn declared_variant_accepts_exact(
         EvalParameterTypeVariant::Array => Ok(matches!(tag, EVAL_TAG_ARRAY | EVAL_TAG_ASSOC)),
         EvalParameterTypeVariant::Bool => Ok(tag == EVAL_TAG_BOOL),
         EvalParameterTypeVariant::Callable => {
-            if context.semantic_profile().contains(elephc_semantics::StrictFeature::Coercions) {
+            if context.semantic_profile().contains(elephc_semantics::StrictFeature::Coercions)
+                || context.semantic_profile().contains(elephc_semantics::StrictFeature::Locals) {
                 eval_is_callable_value(value, None, context, values)
             } else {
                 Ok(matches!(tag, EVAL_TAG_STRING | EVAL_TAG_ARRAY | EVAL_TAG_ASSOC | EVAL_TAG_OBJECT | EVAL_TAG_CALLABLE))

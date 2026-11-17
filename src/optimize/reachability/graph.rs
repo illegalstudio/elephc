@@ -82,12 +82,13 @@ pub fn compute(
     options: &PruneOptions<'_>,
 ) -> Reachability {
     let call_signatures = usage::CallSignatureIndex::from_check_result(check_result);
-    let index = DeclarationIndex::build_with_signatures(
+    let mut index = DeclarationIndex::build_with_signatures(
         program,
         check_result,
         &call_signatures,
     );
-    let executable_usage = usage::scan_executable_program(program, &call_signatures);
+    let mut executable_usage = usage::scan_executable_program(program, &call_signatures);
+    super::checked_callables::include_guard_dependencies(&mut index, &mut executable_usage, check_result);
     let mut state = GraphState::new(
         index,
         executable_usage.hazards,

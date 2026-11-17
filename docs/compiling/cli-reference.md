@@ -939,6 +939,11 @@ PHP promotion unless `--strict-overflow` is separately enabled.
 The same membership rule protects inferred string, boolean, null, object and PHP
 array bindings. A conversion with `settype()` validates the converted value before
 publication, including direct calls, runtime-selected types and callable aliases.
+Native inferred callable bindings require a callable value, including function names
+(case-insensitive), valid callable arrays, closures and invokable objects. A
+missing name or method fails before the old value changes. Native iterable parameters
+retain their array-or-Traversable contract during reassignment. These checks also
+apply through reference aliases and assignment expressions.
 A rejected conversion preserves the original value; explicit `mixed` declarations
 remain open. Passing a value through `call_user_func()` uses a separate argument
 cell rather than attaching the caller's binding contract to that copy.

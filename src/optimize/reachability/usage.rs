@@ -60,6 +60,15 @@ pub struct Hazards {
     pub literal_eval: bool,
 }
 
+impl Hazards {
+    /// Retains every declaration family that an unknown callable value can select.
+    pub(crate) fn include_unknown_callable(&mut self) {
+        self.dynamic_function = true;
+        self.dynamic_method = true;
+        self.dynamic_class = true;
+    }
+}
+
 impl Usage {
     /// Unions another subtree summary into this one.
     pub(crate) fn merge(&mut self, other: Self) {

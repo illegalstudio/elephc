@@ -669,9 +669,7 @@ impl Scanner<'_> {
     /// Widens the function, method and class hazards together, as a runtime-named lookup of
     /// unknown shape requires.
     pub(super) fn widen_dynamic_hazards(&mut self) {
-        self.usage.hazards.dynamic_function = true;
-        self.usage.hazards.dynamic_method = true;
-        self.usage.hazards.dynamic_class = true;
+        self.usage.hazards.include_unknown_callable();
     }
 
     /// Widens the hazards of a callable whose shape is only known at runtime (`$f()`,

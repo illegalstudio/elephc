@@ -4352,6 +4352,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
                     | Op::ClosureBind
                     | Op::FirstClassCallableNew
                     | Op::CallableValueNew
+                    | Op::NormalizeCallable
                     | Op::CallableArrayNew
                     | Op::BufferNew
                     | Op::GeneratorNew

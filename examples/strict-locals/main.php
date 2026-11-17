@@ -139,3 +139,15 @@ function copyEvalQuantity(int $requestCount): void {
     echo "Copied quantity: ", $copy, PHP_EOL;
 }
 copyEvalQuantity($argc);
+
+// Callable bindings keep their capability, including writes through a reference.
+function checkQuantityCallback(mixed $replacement): void {
+    $format = static fn(int $quantity): string => "Quantity: " . strval($quantity);
+    try {
+        replaceValue($format, $replacement);
+    } catch (TypeError $error) {
+        echo "The callback kept its callable contract", PHP_EOL;
+    }
+    echo $format(3), PHP_EOL;
+}
+checkQuantityCallback('missingQuantityFormatter');

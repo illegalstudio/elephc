@@ -198,7 +198,7 @@ pub fn inject_with_semantics(
 ) -> Result<Program, CompileError> {
     crate::compiler_stack::with_compiler_stack(|| {
         inject_if_used_on_compiler_stack(program, inventory,
-            crate::types::checked_property_references(profile))
+            crate::semantics::conversions::checked_references(profile, crate::source::SourceMode::Php))
     })
 }
 
@@ -263,7 +263,7 @@ mod tests {
     #[test]
     fn checked_callable_catalogs_reserve_object_cast_dependencies() {
         use elephc_semantics::{SemanticProfile, StrictFeature};
-        for feature in [None, Some(StrictFeature::Casts), Some(StrictFeature::Coercions)] {
+        for feature in [None, Some(StrictFeature::Casts), Some(StrictFeature::Coercions), Some(StrictFeature::Locals)] {
             let profile = feature.map_or(SemanticProfile::PERMISSIVE,
                 |feature| SemanticProfile::PERMISSIVE.with(feature, true));
             let mut inventory = crate::optimize::reachability::PreludeInventory::new();
