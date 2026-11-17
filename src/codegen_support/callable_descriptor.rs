@@ -387,9 +387,17 @@ pub(crate) fn emit_branch_on_descriptor_origin(
     }
 }
 
-/// Replaces the shared static descriptor in the result register with a fresh runtime copy of
-/// its header that records the PHP value it stands for. A static descriptor is shared by every
-/// conversion of the same name, so only a private copy can carry the origin.
+/// Returns a second static descriptor equal to the one at `label` but recording, in its kind word,
+/// the PHP value it stands for (`CALLABLE_DESC_ORIGIN_*`). A runtime string or array conversion
+/// selects it instead of the shared descriptor, so the origin costs no allocation. `None` when
+/// `label` is no static descriptor record.
+pub(crate) fn static_descriptor_with_origin(data: &mut DataSection, label: &str, origin: u64) -> Option<String> {
+    data.add_words_with_first_word_flags(label, origin)
+}
+
+/// Replaces the static descriptor in the result register with a fresh runtime copy of its header
+/// that records the PHP value it stands for. Only for a descriptor that
+/// [`static_descriptor_with_origin`] cannot duplicate at compile time.
 pub(crate) fn emit_runtime_copy_with_origin(emitter: &mut Emitter, origin: u64) {
     use crate::codegen_support::platform::Arch;
     let result = abi::int_result_reg(emitter);
