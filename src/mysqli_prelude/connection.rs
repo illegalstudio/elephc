@@ -206,7 +206,7 @@ class mysqli {
                 $_driverConfig = $_driverConfig . "cipher=" . str_replace("=", "%3D", str_replace(";", "%3B", str_replace("%", "%25", $this->sslCipher))) . ";";
             }
         }
-        $_conn = elephc_pdo_open_persistent($_dsn, $_persistent, 0, $this->optInitCommand, $_sslConfig, $_foundRows, "", $_driverConfig);
+        $_conn = elephc_pdo_open_persistent($_dsn, $_persistent, 0, $this->optInitCommand, $_sslConfig, $_foundRows, $_sslConfig . "|" . $_driverConfig, $_driverConfig);
         if ($_conn < 0) {
             $_message = elephc_pdo_last_open_error();
             $_state = elephc_pdo_last_open_sqlstate();
