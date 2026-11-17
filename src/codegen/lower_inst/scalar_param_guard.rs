@@ -742,6 +742,12 @@ fn emit_word(ctx: &mut FunctionContext<'_>, word: &[u8]) {
 /// Throws `TypeError(prefix . <name in the string result registers> . suffix)`, first
 /// releasing `releases`, the call's owned operands no cleanup root covers (the refused value
 /// among them when it is one).
+///
+/// The operands are released BEFORE the message is built: a release can run a destructor that
+/// throws, and that exception must not escape while an owned message sits on the native stack,
+/// where nothing releases it. The type name does not depend on the operands (a type word, a
+/// class-table name, or the bridge's own copy for an eval-declared class), so it survives the
+/// release.
 fn emit_throw_with_name(
     ctx: &mut FunctionContext<'_>,
     prefix: &str,
@@ -753,8 +759,19 @@ fn emit_throw_with_name(
         Arch::AArch64 => ("x3", "x4"),
         Arch::X86_64 => ("rdi", "rsi"),
     };
-    // -- message: prefix . type name . suffix, persisted, then thrown as TypeError --
+    // -- the type name waits on the stack while the unpublished owned operands are released --
     abi::emit_push_reg_pair(ctx.emitter, ptr_reg, len_reg);
+    for value in releases {
+        // Lowering lists only owned temporaries, so a box is released unconditionally;
+        // anything else (a converted string) takes the generic release.
+        if matches!(ctx.value_php_type(*value)?.codegen_repr(), PhpType::Mixed | PhpType::Union(_)) {
+            ctx.load_value_to_result(*value)?;
+            abi::emit_decref_if_refcounted(ctx.emitter, &PhpType::Mixed);
+        } else {
+            super::ownership::release_value_if_owned(ctx, *value)?;
+        }
+    }
+    // -- message: prefix . type name . suffix, persisted, then thrown as TypeError --
     let (prefix_label, prefix_len) = ctx.data.add_string(prefix.as_bytes());
     abi::emit_symbol_address(ctx.emitter, ptr_reg, &prefix_label);
     abi::emit_load_int_immediate(ctx.emitter, len_reg, prefix_len as i64);
@@ -762,22 +779,6 @@ fn emit_throw_with_name(
     abi::emit_call_label(ctx.emitter, "__rt_concat");
     super::enums::emit_concat_current_string_with_static_suffix(ctx, suffix);
     abi::emit_call_label(ctx.emitter, "__rt_str_persist");
-    if !releases.is_empty() {
-        // -- release the call's unpublished owned operands; the persisted message survives --
-        let (ptr_reg, len_reg) = abi::string_result_regs(ctx.emitter);
-        abi::emit_push_reg_pair(ctx.emitter, ptr_reg, len_reg);
-        for value in releases {
-            // Lowering lists only owned temporaries, so a box is released unconditionally;
-            // anything else (a converted string) takes the generic release.
-            if matches!(ctx.value_php_type(*value)?.codegen_repr(), PhpType::Mixed | PhpType::Union(_)) {
-                ctx.load_value_to_result(*value)?;
-                abi::emit_decref_if_refcounted(ctx.emitter, &PhpType::Mixed);
-            } else {
-                super::ownership::release_value_if_owned(ctx, *value)?;
-            }
-        }
-        abi::emit_pop_reg_pair(ctx.emitter, ptr_reg, len_reg);
-    }
     super::enums::emit_throw_type_error_from_string_result(ctx);
     Ok(())
 }

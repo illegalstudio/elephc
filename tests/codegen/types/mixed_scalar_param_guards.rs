@@ -1012,3 +1012,24 @@ echo s($o), "\n";
     );
     assert_eq!(out, "1\n2\n[ev]\n[ev]\n");
 }
+
+/// A refused argument whose release runs a throwing destructor no longer leaks the `TypeError`
+/// message: the operands are released before the message is built. (PHP reports the
+/// `TypeError` and destroys the argument afterwards; here the destructor's exception escapes
+/// the binding, so only the leak is asserted.)
+#[test]
+fn test_guard_refusal_with_throwing_destructor_does_not_leak_the_message() {
+    let output = compile_and_run_with_heap_debug(
+        r#"<?php
+class D { public function __destruct() { throw new LogicException("d"); } }
+function mk(): mixed { return new D(); }
+function p(string $s): void {}
+for ($i = 0; $i < 3; $i++) {
+    try { p(mk()); echo "bound\n"; } catch (Throwable $e) { echo "caught\n"; }
+}
+"#,
+    );
+    assert!(output.success, "{}", output.stderr);
+    assert_eq!(output.stdout, "caught\ncaught\ncaught\n");
+    assert!(output.stderr.contains("leak summary: clean"), "{}", output.stderr);
+}
