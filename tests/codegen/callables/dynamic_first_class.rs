@@ -174,6 +174,14 @@ class Scoped828 {
         $callback = self::class . "::hiddenStatic";
         return $callback(...);
     }
+    public static function makeStaticArray(string $class): Closure {
+        $callback = [$class, "hiddenStatic"];
+        return $callback(...);
+    }
+    public static function makeStaticString(string $class): Closure {
+        $callback = $class . "::hiddenStatic";
+        return Closure::fromCallable($callback);
+    }
 }
 class ScopedChild828 extends Scoped828 {
     private function secret(): string { return "child|"; }
@@ -182,6 +190,29 @@ class ScopedChild828 extends Scoped828 {
         return $callback(...);
     }
 }
+class ScopedStaticShadow828 extends Scoped828 {
+    private static function hiddenStatic(): string { return "shadow|"; }
+}
+class ScopedStaticGrandchild828 extends ScopedStaticShadow828 {}
+class ProtectedRoot828 {
+    protected function f(): string { return "root|"; }
+    protected static function g(): string { return "root|"; }
+}
+class ProtectedLeft828 extends ProtectedRoot828 {
+    public function make(object $object): Closure {
+        $callback = [$object, "f"];
+        return $callback(...);
+    }
+    public static function makeStatic(string $class): Closure {
+        $callback = [$class, "g"];
+        return Closure::fromCallable($callback);
+    }
+}
+class ProtectedRight828 extends ProtectedRoot828 {
+    protected function f(): string { return "right|"; }
+    protected static function g(): string { return "right|"; }
+}
+class ProtectedGrandchild828 extends ProtectedRight828 {}
 $object = new Scoped828();
 $child = new ScopedChild828();
 $first = $object->make();
@@ -190,11 +221,22 @@ $third = Scoped828::makeStatic();
 $fourth = $child->makeProtected();
 $fifth = $child->make();
 echo $first(), $second(), $third(), $fourth(), $fifth();
+$sixth = Scoped828::makeStaticArray(ScopedChild828::class);
+$seventh = Scoped828::makeStaticString(ScopedChild828::class);
+echo $sixth(), $seventh();
+$left = new ProtectedLeft828();
+$sibling = $left->make(new ProtectedRight828());
+$descendant = $left->make(new ProtectedGrandchild828());
+$siblingStatic = ProtectedLeft828::makeStatic(ProtectedRight828::class);
+$descendantStatic = ProtectedLeft828::makeStatic(ProtectedGrandchild828::class);
+echo $sibling(), $descendant(), $siblingStatic(), $descendantStatic();
+try { $bad = Scoped828::makeStaticArray(ScopedStaticShadow828::class); } catch (Error $e) { echo "shadow|"; }
+try { $bad = Scoped828::makeStaticString(ScopedStaticGrandchild828::class); } catch (TypeError $e) { echo "grandchild|"; }
 $outside = [$object, "secret"];
 try { $bad = $outside(...); } catch (Error $e) { echo get_class($e), "|"; }
 try { $bad = Closure::fromCallable($outside); } catch (TypeError $e) { echo get_class($e); }
 "#);
-    assert_eq!(out.stdout, "private|private|static|protected|private|Error|TypeError", "{}", out.stderr);
+    assert_eq!(out.stdout, "private|private|static|protected|private|static|static|right|right|right|right|shadow|grandchild|Error|TypeError", "{}", out.stderr);
     assert!(out.success, "{}", out.stderr);
     assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
 }

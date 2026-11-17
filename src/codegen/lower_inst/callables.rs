@@ -41,6 +41,8 @@ use crate::codegen::{CodegenIrError, Result};
 
 mod instance_expr;
 pub(super) mod results;
+mod scope;
+use scope::{factory_method_visible, inherits_lexical_private_static};
 
 const MIXED_METHOD_TAG_OFFSET: usize = 0;
 const MIXED_METHOD_PAYLOAD_OFFSET: usize = 16;
@@ -1745,7 +1747,7 @@ fn runtime_array_instance_method_targets_with_scope(
         for (method_name, sig) in methods {
             let declaring = class_info.method_declaring_classes.get(method_name)
                 .map_or(class_name.as_str(), String::as_str);
-            if !factory_method_visible(ctx, class_info.method_visibilities.get(method_name), declaring, scoped) {
+            if !factory_method_visible(ctx, class_info.method_visibilities.get(method_name), declaring, method_name, false, scoped) {
                 continue;
             }
             let method_key = php_symbol_key(method_name);
@@ -1817,12 +1819,23 @@ fn runtime_static_method_descriptor_cases_with_scope(
     let mut classes = ctx.module.class_infos.iter().collect::<Vec<_>>();
     classes.sort_by(|left, right| left.0.cmp(right.0));
     for (class_name, class_info) in classes {
-        let mut static_methods = class_info.static_methods.iter().collect::<Vec<_>>();
+        let mut static_methods = class_info.static_methods.iter()
+            .map(|(name, sig)| (name, sig, class_info)).collect::<Vec<_>>();
+        if let Some(scope_info) = ctx.lexical_class().filter(|_| scoped)
+            .and_then(|scope| ctx.module.class_infos.get(scope)) {
+            for (method, sig) in &scope_info.static_methods {
+                if scope_info.static_method_visibilities.get(method) == Some(&Visibility::Private)
+                    && scope_info.static_method_declaring_classes.get(method).map(String::as_str) == ctx.lexical_class()
+                    && inherits_lexical_private_static(ctx, class_name, method) {
+                    static_methods.push((method, sig, scope_info));
+                }
+            }
+        }
         static_methods.sort_by(|left, right| left.0.cmp(right.0));
-        for (method_name, sig) in static_methods {
-            let declaring = class_info.static_method_declaring_classes.get(method_name)
+        for (method_name, sig, method_info) in static_methods {
+            let declaring = method_info.static_method_declaring_classes.get(method_name)
                 .map_or(class_name.as_str(), String::as_str);
-            if !factory_method_visible(ctx, class_info.static_method_visibilities.get(method_name), declaring, scoped) {
+            if !factory_method_visible(ctx, method_info.static_method_visibilities.get(method_name), declaring, method_name, true, scoped) {
                 continue;
             }
             let method_key = php_symbol_key(method_name);
@@ -1830,7 +1843,7 @@ fn runtime_static_method_descriptor_cases_with_scope(
             if !runtime_callable_name_is_reachable(&php_name, candidate_names) {
                 continue;
             }
-            let impl_class = class_info
+            let impl_class = method_info
                 .static_method_impl_classes
                 .get(&method_key)
                 .cloned()
@@ -3619,19 +3632,5 @@ fn emit_undefined_runtime_string_call_fatal(ctx: &mut FunctionContext<'_>) {
             ctx.emitter.instruction("syscall");                                 // emit the fatal diagnostic before terminating
             abi::emit_exit(ctx.emitter, 1);
         }
-    }
-}
-
-/// Applies declaration-scope visibility while leaving ordinary callback inventories public.
-fn factory_method_visible(
-    ctx: &FunctionContext<'_>, visibility: Option<&Visibility>, declaring: &str, scoped: bool,
-) -> bool {
-    match visibility {
-        Some(Visibility::Public) => true,
-        Some(Visibility::Private) if scoped => ctx.lexical_class() == Some(declaring),
-        Some(Visibility::Protected) if scoped => ctx.lexical_class().is_some_and(|scope|
-            super::method_dispatch::class_is_same_or_subclass(ctx, scope, declaring)
-                || super::method_dispatch::class_is_same_or_subclass(ctx, declaring, scope)),
-        _ => false,
     }
 }
