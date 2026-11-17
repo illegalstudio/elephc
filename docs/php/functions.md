@@ -390,7 +390,10 @@ keeps the first value successfully installed by an inner call.
 
 With `--strict-locals`, the persistent binding keeps its initializer's original
 contract, including union alternatives. A rejected replacement throws `TypeError`
-before changing the stored value. See
+before changing the stored value. `unset($name)` detaches only the current
+activation name. A subsequent assignment creates a fresh local contract; prior
+aliases and the next call still reach the persistent static and its original
+contract. Writes through an escaped reference retain that contract too. See
 [the static binding example](../../examples/strict-static-locals/main.php).
 
 ## Pass by reference

@@ -27,3 +27,26 @@ fn test_strict_native_static_activation_bindings_and_owners_bundle() {
         }
     }
 }
+
+/// Detaching a static name preserves its aliases and gives a fresh local its own contract.
+#[test]
+fn test_strict_native_static_detachment_and_reference_contracts_bundle() {
+    let source = include_str!("../fixtures/strict/native_static_detachment.php");
+    for mode in ["--ir-opt=off", "--ir-opt=on"] {
+        for strict in [false, true] {
+            let mut flags = vec![mode, "--heap-debug"];
+            if strict { flags.push("--strict-locals"); }
+            let output = StrictFixture::new(source).capture(&flags);
+            let expected = if strict {
+                "integer:1|Wdouble:3.5:1|integer:1|Tdouble:2.5:1|Tinteger:1|Tinteger:1|\
+                Tinteger:1|Tinteger:1|Tstring:9|Tstring:9|seed|9|"
+            } else {
+                "integer:1|Wdouble:3.5:1|integer:1|Wstring:fresh:1|Wdouble:2.5|Wdouble:3.5|\
+                Wdouble:2.5|Wdouble:3.5|Winteger:10|Winteger:11|seed|9|"
+            };
+            assert_eq!(String::from_utf8_lossy(&output.stdout), expected, "{flags:?}");
+            assert!(String::from_utf8_lossy(&output.stderr).contains("HEAP DEBUG: leak summary: clean"),
+                "{flags:?}: {}", String::from_utf8_lossy(&output.stderr));
+        }
+    }
+}

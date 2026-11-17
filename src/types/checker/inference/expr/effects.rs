@@ -478,12 +478,14 @@ impl Checker {
                             // `unset($var)` ends this binding even when escaped-reference
                             // conservatism keeps the name in `ref_aliased_locals`. A later `=&`
                             // assignment must establish fresh cell provenance for the new binding.
+                            let static_binding = self.local_has_canonical_static_binding(var);
+                            let detaches_reference = self.local_reference_is_detachable(var);
                             self.definitely_bound_locals.remove(var);
                             self.invalidate_boxed_ref_alias_binding(var);
                             // Detaching a promoted reference is separate from killing its type
                             // binding: escaped aliases still prohibit incompatible reassignments.
                             if arg.span.identifies_a_node() {
-                                if env.contains_key(var) && self.local_reference_is_detachable(var) {
+                                if env.contains_key(var) && detaches_reference {
                                     self.local_ref_detach_sites.entry(arg.span).or_default()
                                         .insert(var.clone());
                                     self.active_ref_params.remove(var);
@@ -492,6 +494,10 @@ impl Checker {
                                     self.ref_aliased_locals.remove(var);
                                     self.non_builtin_ref_aliased_locals.remove(var);
                                     self.ref_assign_aliased_locals.remove(var);
+                                    if static_binding {
+                                        self.static_local_names.remove(var);
+                                        self.active_statics.remove(var);
+                                    }
                                 } else if let Some(names) = self.local_ref_detach_sites.get_mut(&arg.span) {
                                     if names.remove(var.as_str()) {
                                         self.retired_ref_detach_sites.insert((arg.span, var.clone()));

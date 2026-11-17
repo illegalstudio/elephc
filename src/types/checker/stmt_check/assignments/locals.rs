@@ -1706,6 +1706,18 @@ pub(super) fn check_static_var(
     checker.invalidate_local_flow_narrowing(name, env);
     checker.clear_local_binding_metadata(name);
     checker.active_statics.insert(name.to_string());
+    if !checker.null_probe_scope_is_top_level {
+        // The name now owns an activation lease on boxed persistent storage, independently of
+        // its former parameter, reference or global binding. Conditional joins retire this proof.
+        checker.active_globals.remove(name);
+        checker.active_ref_params.remove(name);
+        checker.active_external_ref_bindings.remove(name);
+        checker.non_builtin_ref_aliased_locals.remove(name);
+        checker.ref_assign_aliased_locals.remove(name);
+        checker.ref_aliased_locals.insert(name.to_string());
+        checker.boxed_ref_aliased_locals.insert(name.to_string());
+        checker.local_binding_depth.insert(name.to_string(), checker.local_conditional_depth);
+    }
     if checker.semantic_profile.contains(elephc_semantics::StrictFeature::Locals)
         && checker.semantic_source_mode != crate::source::SourceMode::Internal
     {

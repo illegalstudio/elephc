@@ -102,3 +102,41 @@ fn strict_native_static_bindings_assemble_on_every_target() {
         }
     }
 }
+
+/// Every target keeps the persistent static while unset gives its activation name fresh storage.
+#[test]
+fn strict_native_static_detachment_keeps_persistent_owners_on_every_target() {
+    let source = include_str!("../../../tests/fixtures/strict/native_static_detachment.php");
+    let program = crate::parser::parse(&crate::lexer::tokenize(source).unwrap()).unwrap();
+    for strict in [false, true] {
+        for name in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+            let target = Target::parse(name).unwrap();
+            let profile = SemanticProfile::PERMISSIVE.with(StrictFeature::Locals, strict);
+            let checked = crate::types::checker::check_staged_semantics(&program, target, profile).unwrap();
+            let module = crate::ir_lower::lower_program(&program, &checked, target, false).unwrap();
+            let function = module.functions.iter().find(|function| function.name == "native_detach_static").unwrap();
+            let bind = function.instructions.iter().find(|inst| inst.op == Op::BindRefCellPtr).unwrap();
+            let Some(Immediate::LocalSlotPair { first: old, .. }) = bind.immediate else { panic!("owned activation binding"); };
+            assert!(function.instructions.iter().any(|inst| inst.op == Op::UnsetLocal
+                && inst.immediate == Some(Immediate::LocalSlot(old))), "{name}: detach the old activation");
+            assert!(function.instructions.iter().any(|inst| inst.op == Op::ZeroLocalSlot
+                && inst.immediate == Some(Immediate::LocalSlot(old))), "{name}: retire the old frame storage");
+            assert!(function.locals.iter().any(|local| local.name.as_deref() == Some("value")
+                && local.kind == LocalKind::PhpLocal && local.id != old), "{name}: fresh local storage");
+            assert_eq!(function.locals.iter().filter(|local| local.kind == LocalKind::StaticLocal).count(), 1);
+            crate::ir::validate_module(&module).unwrap();
+            crate::codegen::generate_user_asm_from_ir(&module, false, false).unwrap();
+        }
+    }
+}
+
+/// A fresh binding after static detachment takes its own kind instead of the persistent origin.
+#[test]
+fn strict_native_static_detachment_reports_the_fresh_local_contract() {
+    let source = "<?php function detached_origin(): void { static $value=1; unset($value); $value=2.5; $value='bad'; }";
+    let program = crate::parser::parse(&crate::lexer::tokenize(source).unwrap()).unwrap();
+    let target = Target::parse("linux-x86_64").unwrap();
+    let profile = SemanticProfile::PERMISSIVE.with(StrictFeature::Locals, true);
+    let error = crate::types::checker::check_staged_semantics(&program, target, profile).err().expect("fresh binding rejects another kind");
+    assert!(error.message.contains("--strict-locals") && error.message.contains("from float"), "{error:?}");
+}

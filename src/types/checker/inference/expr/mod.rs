@@ -543,8 +543,9 @@ impl Checker {
     /// The operator can retype its target (`"9"++` is `int(10)`), which elephc implements by
     /// giving the local boxed `Mixed` frame storage. Two storage shapes cannot take that
     /// contract: a by-reference parameter aliases a caller slot whose declared `string` type
-    /// the callee must not change, and a `static` local's initializer writes its symbol with
-    /// the declared `string` representation before any boxing store runs. Both are rejected
+    /// the callee must not change, and a legacy top-level static initializer writes its symbol
+    /// with the raw `string` representation. Proven canonical function statics already hold
+    /// boxed values and can use the ordinary checked update. Raw storage is rejected
     /// here so the program gets a source-level diagnostic instead of a backend error or a
     /// silently wrong value.
     fn reject_unboxable_string_incdec(
@@ -552,6 +553,7 @@ impl Checker {
         name: &str,
         span: Span,
     ) -> Result<(), CompileError> {
+        if self.local_has_canonical_static_binding(name) { return Ok(()); }
         let storage = if self.active_ref_params.contains(name) {
             "a by-reference parameter"
         } else if self.active_statics.contains(name) {

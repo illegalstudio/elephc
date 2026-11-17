@@ -11,6 +11,11 @@ function updateCounter(mixed $replacement): void {
         echo "Counter requires an integer", PHP_EOL;
     }
     echo "Counter: ", $counter, "; previous: ", $previous, PHP_EOL;
+
+    // Ending this local name leaves the persistent counter available to the next call.
+    unset($counter);
+    $counter=0.5;
+    echo "Temporary counter: ", $counter, PHP_EOL;
 }
 
 updateCounter(2);

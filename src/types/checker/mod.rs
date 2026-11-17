@@ -932,6 +932,12 @@ impl Checker {
             && !self.typed_local_names.contains_key(name)
     }
 
+    /// Recognizes a reached function static whose current binding has proven canonical storage.
+    pub(crate) fn local_has_canonical_static_binding(&self, name: &str) -> bool {
+        !self.null_probe_scope_is_top_level && self.static_local_names.contains(name)
+            && self.boxed_ref_aliased_locals.contains(name) && !self.active_globals.contains(name)
+    }
+
     /// Authorizes reference-binding detachment outside conditional flow and name-addressed storage.
     /// The reference may be frame-owned or incoming from a caller/capture. `unset()` detaches the
     /// local name in both cases, while the external cell and its value remain owned by that scope.
@@ -941,7 +947,7 @@ impl Checker {
             && (self.ref_aliased_locals.contains(name)
                 || self.active_external_ref_bindings.contains(name))
             && !self.active_globals.contains(name)
-            && !self.static_local_names.contains(name)
+            && (!self.static_local_names.contains(name) || self.local_has_canonical_static_binding(name))
             && !self.typed_local_names.contains_key(name)
             && !self.name_is_seeded_program_storage(name)
             && !self.top_level_binding_is_program_global(name)

@@ -889,3 +889,26 @@ through its existing canonical cell, and remove checker restrictions that assume
 raw static payloads. Dynamic Reflection placeholders, foreach producer flow, all
 six pending semantic families and final host/umbrella acceptance remain active.
 No full local suite, push or PR was run.
+
+### Verified140: native static detachment and reference writes
+
+Reached nonmain statics install the existing canonical boxed-reference proof and
+binding depth after successful inference. Rebinding retires old parameter/global/
+reference roles. Unset consults its current proof before invalidation, then the
+existing detach and kill mechanisms end only that activation name and origin.
+The persistent cell and its immutable validator remain alive. Mixed reference
+formals and escaped reference returns share that same cell; string updates use
+ordinary checked semantics when canonical storage is proven. No new runtime ABI
+or target emitter is needed.
+
+Final queue316f0948 passes in2m51s: default build36.97s; all-five-target storage/
+owner gate0.72s; fresh-binding diagnostic0.04s; both-IR/default-Locals native
+reference/detachment bundle2.39s; prior activation/lifetime bundle7.61s. All22
+native probe programs now compile and execute with clean heaps, resolving the
+three inherited checker refusals from139. The expanded example passes both IR
+modes with clean heaps. PHP reference output/syntax and diff hygiene pass.
+
+These straight-line source-point mechanisms preserve conservative conditional/
+eval detachment gates. Continue remaining control-flow/global/foreach audits,
+dynamic Reflection placeholders, all six pending families and final host/umbrella
+acceptance. No full local suite, push or PR was run.
