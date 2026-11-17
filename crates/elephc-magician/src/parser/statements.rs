@@ -166,16 +166,6 @@ impl Parser {
                 self.advance();
                 Ok(vec![EvalStmt::Continue(self.parse_loop_control_level()?)])
             }
-            TokenKind::Ident(name) if ident_eq(name, "goto") => {
-                self.advance();
-                let TokenKind::Ident(label) = self.current() else {
-                    return Err(EvalParseError::UnexpectedToken);
-                };
-                let label = label.clone();
-                self.advance();
-                self.expect_semicolon()?;
-                Ok(vec![EvalStmt::Goto(label)])
-            }
             TokenKind::Ident(name)
                 if ident_eq(name, "declare") && matches!(self.peek(), TokenKind::LParen) =>
             {
@@ -260,12 +250,6 @@ impl Parser {
                 Err(EvalParseError::UnsupportedConstruct)
             }
             TokenKind::Ident(name) if ident_eq(name, "while") => self.parse_while_stmt(),
-            TokenKind::Ident(name) if matches!(self.peek(), TokenKind::Colon) => {
-                let label = name.clone();
-                self.advance();
-                self.advance();
-                Ok(vec![EvalStmt::Label(label)])
-            }
             TokenKind::Ident(name) if is_unsupported_statement_keyword(name) => {
                 Err(EvalParseError::UnsupportedConstruct)
             }

@@ -17,6 +17,14 @@ pub(super) fn needs_dimension_tail(target: &EvalExpr, next: &TokenKind) -> bool 
             | EvalExpr::PropertyCompoundAssign { .. } | EvalExpr::PropertyIncDec { .. } => true,
         EvalExpr::ArrayGet { array, .. } => !matches!(array.as_ref(), EvalExpr::LoadVar(_))
             || !matches!(next, TokenKind::Equal),
+        // The expression parser folds an element write into one assignment node, where main left
+        // the `[...]` for the statement tail. Main's shape is `DimensionWrite` for everything
+        // except the plain `$name[i] = v` / `$name[] = v` local stores, which keep their fast
+        // statements (and the typed-local checks they carry).
+        EvalExpr::ArrayAppendAssign { target, .. } => !matches!(target.as_ref(), EvalExpr::LoadVar(_)),
+        EvalExpr::Assign { target, .. } => matches!(target.as_ref(),
+            EvalExpr::ArrayGet { array, .. } if !matches!(array.as_ref(), EvalExpr::LoadVar(_))),
+        EvalExpr::CompoundAssign { target, .. } => matches!(target.as_ref(), EvalExpr::ArrayGet { .. }),
         _ => false,
     }
 }

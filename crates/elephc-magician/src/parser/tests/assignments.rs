@@ -55,13 +55,13 @@ fn parse_fragment_accepts_a_chained_array_append() {
         .expect("a chained append should parse");
     assert_eq!(
         program.statements(),
-        &[EvalStmt::Expr(EvalExpr::ArrayAppendAssign {
-            target: Box::new(EvalExpr::LoadVar("dirs".to_string())),
-            value: Box::new(EvalExpr::ArrayAppendAssign {
+        &[EvalStmt::ArrayAppendVar {
+            name: "dirs".to_string(),
+            value: EvalExpr::ArrayAppendAssign {
                 target: Box::new(EvalExpr::LoadVar("paths".to_string())),
                 value: Box::new(EvalExpr::Const(EvalConst::String("/res".to_string()))),
-            }),
-        })]
+            },
+        }]
     );
 }
 
@@ -76,16 +76,18 @@ fn parse_fragment_accepts_an_append_through_a_property_element() {
         .expect("an append through a property element should parse");
     assert_eq!(
         program.statements(),
-        &[EvalStmt::Expr(EvalExpr::ArrayAppendAssign {
-            target: Box::new(EvalExpr::ArrayGet {
+        &[EvalStmt::DimensionWrite {
+            array: EvalExpr::ArrayGet {
                 array: Box::new(EvalExpr::PropertyGet {
                     object: Box::new(EvalExpr::LoadVar("this".to_string())),
                     property: "rows".to_string(),
                 }),
                 index: Box::new(EvalExpr::Const(EvalConst::String("k".to_string()))),
-            }),
-            value: Box::new(EvalExpr::Const(EvalConst::Int(1))),
-        })]
+            },
+            index: None,
+            op: None,
+            value: EvalExpr::Const(EvalConst::Int(1)),
+        }]
     );
 }
 
@@ -389,9 +391,9 @@ fn parse_fragment_accepts_nested_array_append_statement() {
         .expect("nested append should parse");
     assert!(matches!(
         program.statements(),
-        [EvalStmt::Expr(EvalExpr::ArrayAppendAssign { target, value })]
-            if matches!(value.as_ref(), EvalExpr::LoadVar(value) if value == "value")
-            && matches!(target.as_ref(), EvalExpr::ArrayGet { array, index }
+        [EvalStmt::DimensionWrite { array, index: None, op: None, value }]
+            if matches!(value, EvalExpr::LoadVar(value) if value == "value")
+            && matches!(array, EvalExpr::ArrayGet { array, index }
                 if matches!(array.as_ref(), EvalExpr::LoadVar(name) if name == "index")
                     && matches!(index.as_ref(), EvalExpr::LoadVar(name) if name == "key"))
     ));

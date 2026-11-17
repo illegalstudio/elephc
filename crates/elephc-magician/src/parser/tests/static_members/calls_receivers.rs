@@ -272,16 +272,13 @@ fn parse_fragment_accepts_expression_static_receiver_property_writes() {
                 property: "items".to_string(),
                 value: EvalExpr::Const(EvalConst::Int(4)),
             },
-            EvalStmt::Expr(EvalExpr::Assign {
-                target: Box::new(EvalExpr::ArrayGet {
-                    array: Box::new(EvalExpr::DynamicStaticPropertyGet {
-                        class_name: Box::new(factory_call()),
-                        property: "items".to_string(),
-                    }),
-                    index: Box::new(EvalExpr::Const(EvalConst::Int(0))),
-                }),
-                value: Box::new(EvalExpr::Const(EvalConst::Int(5))),
-            }),
+            EvalStmt::DynamicStaticPropertyArraySet {
+                class_name: factory_call(),
+                property: "items".to_string(),
+                index: EvalExpr::Const(EvalConst::Int(0)),
+                op: None,
+                value: EvalExpr::Const(EvalConst::Int(5)),
+            },
             EvalStmt::Expr(EvalExpr::PostfixIncDec {
                 target: Box::new(EvalExpr::DynamicStaticPropertyGet {
                     class_name: Box::new(factory_call()),

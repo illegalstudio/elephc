@@ -20,8 +20,8 @@ fn cold_fragment_and_token_parsing_fit_small_caller_stacks() {
                 $consumer->apply('callback');
             } else { NativePausedConsumer::applyStatic('callback'); }
         "#;
-        let fragment = crate::parser::parse_fragment(source).expect("cold fragment must parse");
-        assert_eq!(fragment.statements().len(), 2);
+        let fragment = crate::parser::parse_eval_fragment(source).expect("cold fragment must parse");
+        assert_eq!(fragment.statements().iter().filter(|stmt| !matches!(stmt, crate::eval_ir::EvalStmt::SourceLine(_))).count(), 2);
         let tokens = crate::lexer::tokenize(std::str::from_utf8(source).unwrap()).unwrap();
         let included = crate::parser::parse_tokens(tokens, source.len()).expect("included tokens must parse");
         assert_eq!(fragment, included);

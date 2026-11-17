@@ -114,7 +114,7 @@ mod tests {
     /// `break`/`continue`, `Assign` over a target expression, `SourceLine` markers,
     /// `EvalClosureCapture::implicit`). The fingerprint below must be RE-RECORDED once the merged
     /// tree compiles: the guard test prints the new value. It still holds main's value at 30.
-    const RECORDED_FINGERPRINT: u64 = 11216578342854289318;
+    const RECORDED_FINGERPRINT: u64 = 10444680137962048264;
 
     /// Returns a stable fingerprint of every source the stored format depends on.
     ///

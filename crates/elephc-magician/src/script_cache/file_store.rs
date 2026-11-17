@@ -124,7 +124,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 /// target expression, `SourceLine` markers, `EvalClosureCapture::implicit`, next to main's
 /// dimension writes, property update expressions, jumps and bytecode metadata), so neither
 /// side's published entries may be read as the combined shape.
-pub(crate) const FORMAT_VERSION: u32 = 31;
+pub(crate) const FORMAT_VERSION: u32 = 32;
 
 /// Identifies the writer, so one build never reads another's entries.
 ///

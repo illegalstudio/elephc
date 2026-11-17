@@ -42,7 +42,15 @@ impl Parser {
                 *self = expression;
                 return Ok(statements);
             }
-            if expression.consume(TokenKind::Semicolon) {
+            // A plain local element store keeps main's `ArraySetVar` / `ArrayAppendVar` statements
+            // (they carry the typed-local checks), so the folded node is parsed again below.
+            let plain_local_store = match &value {
+                EvalExpr::Assign { target, .. } => matches!(target.as_ref(),
+                    EvalExpr::ArrayGet { array, .. } if matches!(array.as_ref(), EvalExpr::LoadVar(_))),
+                EvalExpr::ArrayAppendAssign { target, .. } => matches!(target.as_ref(), EvalExpr::LoadVar(_)),
+                _ => false,
+            };
+            if !plain_local_store && expression.consume(TokenKind::Semicolon) {
                 *self = expression;
                 return Ok(vec![EvalStmt::Expr(value)]);
             }

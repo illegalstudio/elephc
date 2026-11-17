@@ -198,7 +198,9 @@ impl Parser {
                 expr = self.parse_dynamic_static_member_expr(expr)?;
                 continue;
             }
-            if self.consume(TokenKind::PlusPlus) {
+            if !matches!(expr, EvalExpr::PropertyGet { .. } | EvalExpr::DynamicPropertyGet { .. })
+                && self.consume(TokenKind::PlusPlus)
+            {
                 if !is_assignment_target(&expr) {
                     return Err(EvalParseError::UnexpectedToken);
                 }
@@ -207,7 +209,9 @@ impl Parser {
                     increment: true,
                 });
             }
-            if self.consume(TokenKind::MinusMinus) {
+            if !matches!(expr, EvalExpr::PropertyGet { .. } | EvalExpr::DynamicPropertyGet { .. })
+                && self.consume(TokenKind::MinusMinus)
+            {
                 if !is_assignment_target(&expr) {
                     return Err(EvalParseError::UnexpectedToken);
                 }

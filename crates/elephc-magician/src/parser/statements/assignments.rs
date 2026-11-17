@@ -752,6 +752,21 @@ impl Parser {
                 })]),
             };
         }
+        // A whole-statement ELEMENT write arrives folded as one assignment node; main's statement
+        // for it is `DimensionWrite` (or the property-array statements), so unfold it back.
+        let target = match target {
+            EvalExpr::Assign { target: element, value } if matches!(element.as_ref(), EvalExpr::ArrayGet { .. }) => {
+                let EvalExpr::ArrayGet { array, index } = *element else { unreachable!() };
+                if require_semicolon { self.expect_semicolon()?; }
+                return property_array_set_stmt(*array, *index, None, *value).map(|stmt| vec![stmt]);
+            }
+            EvalExpr::CompoundAssign { target: element, op, value } if matches!(element.as_ref(), EvalExpr::ArrayGet { .. }) => {
+                let EvalExpr::ArrayGet { array, index } = *element else { unreachable!() };
+                if require_semicolon { self.expect_semicolon()?; }
+                return property_array_set_stmt(*array, *index, Some(op), *value).map(|stmt| vec![stmt]);
+            }
+            target => target,
+        };
         let target = match target {
             EvalExpr::PropertyCompoundAssign { object, property, dynamic, op, value } => {
                 if require_semicolon { self.expect_semicolon()?; }
