@@ -178,7 +178,7 @@ fn emit_array_sum_int_aarch64(
         if raw_result {
             emitter.instruction("mov x11, xzr");                                // restart from the zero seed
         } else {
-            emitter.instruction("mov x11, x3");                                // restart from the raw integer seed
+            emitter.instruction("mov x11, x3");                                 // restart from the raw integer seed
         }
     } else {
         emitter.instruction("ldr x11, [x3, #8]");                               // restart from the borrowed seed payload
@@ -401,7 +401,7 @@ fn emit_array_sum_int_x86_64(
         if raw_result {
             emitter.instruction("xor r8d, r8d");                                // restart from the zero seed
         } else {
-            emitter.instruction("mov r8, rcx");                                // restart from the raw integer seed
+            emitter.instruction("mov r8, rcx");                                 // restart from the raw integer seed
         }
     } else {
         emitter.instruction("mov r8, QWORD PTR [rcx + 8]");                     // restart from the borrowed seed payload
