@@ -140,6 +140,11 @@ pub struct ElephcEvalContext {
     pub(super) file_magic_override: Option<String>,
     /// Deprecation notices captured during eager constant-expression evaluation.
     pub(super) deprecation_notices: super::deprecation_notices::EvalDeprecationNotices,
+    /// Class lookups made by the override checks of the class being bound early, if any.
+    /// The checks only hold a shared context, hence the cell. A record left open by a panic is
+    /// replaced by the next bind, so the cell is safe to carry across `catch_unwind`.
+    pub(super) override_lookups:
+        std::panic::AssertUnwindSafe<std::cell::RefCell<Option<super::override_lookups::EvalOverrideLookups>>>,
 }
 
 impl ElephcEvalContext {
@@ -245,6 +250,7 @@ impl ElephcEvalContext {
             call_line: 0,
             file_magic_override: None,
             deprecation_notices: Default::default(),
+            override_lookups: Default::default(),
         }
     }
 
@@ -351,6 +357,7 @@ impl ElephcEvalContext {
             call_line: 0,
             file_magic_override: None,
             deprecation_notices: Default::default(),
+            override_lookups: Default::default(),
         }
     }
 

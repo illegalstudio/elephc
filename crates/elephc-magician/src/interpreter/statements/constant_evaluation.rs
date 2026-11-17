@@ -792,64 +792,10 @@ pub(in crate::interpreter) fn eval_expr_constructs_object(expr: &EvalExpr) -> bo
     }
 }
 
-/// Takes, when eval program `statements` starts, the declaration snapshot of each class php-src
-/// binds while compiling the program (early binding, no opcache): a top-level class with no
-/// interfaces and no traits whose parent, if any, is already bound, as a class declared before
-/// the program or bound earlier in it. Such a class copies its parent's default table as it is
-/// then, before any statement of the program runs. Returns the classes marked, which the class
-/// statement consumes; the caller forgets any left when the program ends.
-pub(in crate::interpreter) fn eval_record_early_binding_snapshots(
-    statements: &[EvalStmt],
-    context: &mut ElephcEvalContext,
-    values: &mut impl RuntimeValueOps,
-) -> Result<Vec<String>, EvalStatus> {
-    let mut early: Vec<&EvalClass> = Vec::new();
-    for stmt in statements {
-        let EvalStmt::ClassDecl(class) = stmt else { continue };
-        if !class.interfaces().is_empty() || !class.traits().is_empty() {
-            continue;
-        }
-        if let Some(parent) = class.parent() {
-            let in_program = early.iter().any(|bound| same_eval_class_name(bound.name(), parent));
-            if !in_program && !context.has_class(parent) && !values.class_exists(parent.trim_start_matches('\\'))? {
-                continue;
-            }
-            let parent_initialized = context.class_initialization_ran(parent);
-            let mut records = Vec::new();
-            let mut ancestor = Some(parent.to_string());
-            let mut depth = 0;
-            while let Some(name) = ancestor.take() {
-                depth += 1;
-                if depth > 64 {
-                    break;
-                }
-                let decl = early
-                    .iter()
-                    .find(|bound| same_eval_class_name(bound.name(), &name))
-                    .map(|bound| (*bound).clone())
-                    .or_else(|| context.class(&name).cloned());
-                let Some(decl) = decl else { break };
-                for property in decl.properties().iter().filter(|property| !property.is_static()) {
-                    if parent_initialized || context.slot_precopied(parent, decl.name(), property.name()) {
-                        records.push((decl.name().to_string(), property.name().to_string()));
-                    }
-                }
-                ancestor = decl.parent().map(str::to_string);
-            }
-            for (declaring, property) in records {
-                context.record_precopied_slot(class.name(), &declaring, &property);
-            }
-        }
-        context.mark_early_bound_class(class.name());
-        early.push(class);
-    }
-    Ok(early.iter().map(|class| class.name().to_string()).collect())
-}
-
 /// Records what eval class or trait `name` copied already evaluated when it was declared.
-/// A declaration php-src binds at its statement (not while compiling the program, see
-/// [`eval_record_early_binding_snapshots`]) copies its parent's
-/// default table and its traits' defaults and constants as they are then: an instance slot is
+/// A declaration copies its parent's default table and its traits' defaults and constants as
+/// they are when it is bound, which is program entry for a class php-src binds while compiling
+/// the program (see `early_binding`) and its statement for any other: an instance slot is
 /// copied evaluated when the parent (or trait) it comes from was initialized, or had itself
 /// copied it evaluated, and a trait constant the trait already evaluated is not evaluated
 /// again for the class.
