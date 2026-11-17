@@ -540,6 +540,7 @@ fn parse_template(rest: &str, variance: Variance) -> Option<TypeParam> {
         bound,
         default,
         variance,
+        from_docblock: true,
     })
 }
 
