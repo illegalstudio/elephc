@@ -40,47 +40,35 @@ echo ($box->{"number"} += 1);
 
 /// Indexed receivers keep property stores and updates on the property mutation path.
 ///
-/// A plain property write is an assignment expression over a property target (the parser moved
-/// every property write onto the general assignment path); the compound and increment forms keep
-/// their dedicated statements.
+/// Every form keeps its dedicated member statement.
 #[test]
 fn parse_fragment_accepts_indexed_property_mutations() {
     let program = parse_fragment(br#"$view[0]->y = 1; $held[0][0]->y += 2; $view[0]->{$name}++; $view[0]->{"y"} += 3;"#)
         .expect("indexed property mutations should parse");
-    assert!(matches!(&program.statements()[0], EvalStmt::Expr(EvalExpr::Assign {
-        target, ..
-    }) if matches!(target.as_ref(), EvalExpr::PropertyGet { object, .. } if matches!(object.as_ref(), EvalExpr::ArrayGet { .. }))));
+    assert!(matches!(&program.statements()[0], EvalStmt::PropertySet { object: EvalExpr::ArrayGet { .. }, .. }));
     assert!(matches!(&program.statements()[1], EvalStmt::PropertyCompoundAssign { object: EvalExpr::ArrayGet { .. }, .. }));
     assert!(matches!(&program.statements()[2], EvalStmt::DynamicPropertyIncDec { object: EvalExpr::ArrayGet { .. }, .. }));
     assert!(matches!(&program.statements()[3], EvalStmt::DynamicPropertyCompoundAssign { object: EvalExpr::ArrayGet { .. }, .. }));
 }
 
-/// Verifies an object property write parses as an assignment expression over a property target.
-///
-/// This asserted a dedicated `EvalStmt::PropertySet` until the parser moved every property write
-/// onto the general assignment path, and then said nothing for months while red. The behaviour it
-/// was standing in for is pinned against `php -n` 8.5.6 in
-/// `interpreter::tests::classes::basics::execute_program_writes_every_property_mutation_form`, so
-/// what is left here is the SHAPE the interpreter has to understand.
+/// Verifies object property writes parse as dedicated EvalIR statements.
 #[test]
 fn parse_fragment_accepts_property_write_source() {
     let program = parse_fragment(br#"$this->x = $this->x + 1;"#).expect("fragment should parse");
     assert_eq!(
         program.statements(),
-        &[EvalStmt::Expr(EvalExpr::Assign {
-            target: Box::new(EvalExpr::PropertyGet {
-                object: Box::new(EvalExpr::LoadVar("this".to_string())),
-                property: "x".to_string(),
-            }),
-            value: Box::new(EvalExpr::Binary {
+        &[EvalStmt::PropertySet {
+            object: EvalExpr::LoadVar("this".to_string()),
+            property: "x".to_string(),
+            value: EvalExpr::Binary {
                 op: EvalBinOp::Add,
                 left: Box::new(EvalExpr::PropertyGet {
                     object: Box::new(EvalExpr::LoadVar("this".to_string())),
                     property: "x".to_string(),
                 }),
                 right: Box::new(EvalExpr::Const(EvalConst::Int(1))),
-            }),
-        })]
+            },
+        }]
     );
 }
 
@@ -174,13 +162,11 @@ fn parse_fragment_accepts_dynamic_property_write_source() {
     let program = parse_fragment(br#"$this->{$name} = 7;"#).expect("fragment should parse");
     assert_eq!(
         program.statements(),
-        &[EvalStmt::Expr(EvalExpr::Assign {
-            target: Box::new(EvalExpr::DynamicPropertyGet {
-                object: Box::new(EvalExpr::LoadVar("this".to_string())),
-                property: Box::new(EvalExpr::LoadVar("name".to_string())),
-            }),
-            value: Box::new(EvalExpr::Const(EvalConst::Int(7))),
-        })]
+        &[EvalStmt::DynamicPropertySet {
+            object: EvalExpr::LoadVar("this".to_string()),
+            property: EvalExpr::LoadVar("name".to_string()),
+            value: EvalExpr::Const(EvalConst::Int(7)),
+        }]
     );
 }
 

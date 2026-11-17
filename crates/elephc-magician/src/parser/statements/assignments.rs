@@ -760,6 +760,14 @@ impl Parser {
                 if require_semicolon { self.expect_semicolon()?; }
                 return property_array_set_stmt(*array, *index, None, *value).map(|stmt| vec![stmt]);
             }
+            EvalExpr::Assign { target: place, value } if matches!(place.as_ref(), EvalExpr::PropertyGet { .. } | EvalExpr::DynamicPropertyGet { .. }) => {
+                if require_semicolon { self.expect_semicolon()?; }
+                return Ok(vec![match *place {
+                    EvalExpr::PropertyGet { object, property } => EvalStmt::PropertySet { object: *object, property, value: *value },
+                    EvalExpr::DynamicPropertyGet { object, property } => EvalStmt::DynamicPropertySet { object: *object, property: *property, value: *value },
+                    _ => unreachable!(),
+                }]);
+            }
             EvalExpr::CompoundAssign { target: element, op, value } if matches!(element.as_ref(), EvalExpr::ArrayGet { .. }) => {
                 let EvalExpr::ArrayGet { array, index } = *element else { unreachable!() };
                 if require_semicolon { self.expect_semicolon()?; }
