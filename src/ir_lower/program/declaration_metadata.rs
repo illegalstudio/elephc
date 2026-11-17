@@ -129,22 +129,48 @@ pub(super) fn collect_declared_trait_source_lines(program: &Program) -> HashMap<
 }
 
 /// Collects source line ranges for user-declared functions, keyed by canonical function name.
+///
+/// A function declared under a condition or loaded from an include is hoisted under a private
+/// variant symbol and keeps its public name only on its `FunctionVariantGroup`. The group's name
+/// takes the lines of its first variant, so a reflector looking the function up by the name the
+/// program spells finds a user-defined function instead of reporting an internal one.
 pub(super) fn collect_declared_function_source_lines(
     program: &Program,
 ) -> HashMap<String, (u32, u32)> {
     let mut lines = HashMap::default();
+    let mut groups = Vec::new();
+    collect_function_lines_and_groups(program, &mut lines, &mut groups);
+    for (name, first_variant) in groups {
+        if let Some(range) = lines.get(&first_variant).copied() {
+            lines.entry(name).or_insert(range);
+        }
+    }
+    lines
+}
+
+/// Fills `lines` with every hoisted function declaration and `groups` with each variant group's
+/// public name paired with its first variant symbol.
+fn collect_function_lines_and_groups(
+    program: &Program,
+    lines: &mut HashMap<String, (u32, u32)>,
+    groups: &mut Vec<(String, String)>,
+) {
     for stmt in program {
         match &stmt.kind {
             StmtKind::FunctionDecl { name, .. } => {
                 lines.insert(name.clone(), (stmt.span.line, stmt.span.end_line));
             }
+            StmtKind::FunctionVariantGroup { name, variants } => {
+                if let Some(first) = variants.first() {
+                    groups.push((name.clone(), first.clone()));
+                }
+            }
             StmtKind::NamespaceBlock { body, .. } | StmtKind::Synthetic(body) => {
-                lines.extend(collect_declared_function_source_lines(body));
+                collect_function_lines_and_groups(body, lines, groups);
             }
             _ => {}
         }
     }
-    lines
 }
 
 /// Collects direct trait-to-trait use declarations keyed by declaring trait name.
