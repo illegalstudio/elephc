@@ -809,3 +809,5 @@ mod semantic_sources;
 mod duplicate_unpack_values;
 
 mod reflection_array_evaluation;
+
+mod reflection_guarded_properties;

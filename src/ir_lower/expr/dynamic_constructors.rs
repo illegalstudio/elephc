@@ -248,13 +248,21 @@ fn dynamic_new_class_is_planning_candidate(
     let Some(sig) = constructor_owner.methods.get(constructor_key) else {
         return false;
     };
-    let owns_promoted_references = body_owner.constructor_param_to_prop.iter().flatten()
-        .any(|property| body_owner.visible_property_index(property)
-            .is_some_and(|slot| body_owner.property_slot_owns_reference(slot)));
+    // Guarded by-value properties own cells without retaining a caller's reference binding.
+    let owns_promoted_references = body_owner.constructor_param_to_prop.iter().enumerate()
+        .any(|(index, property)| sig.ref_params.get(index).copied().unwrap_or(false)
+            && property.as_ref().and_then(|property| body_owner.visible_property_index(property))
+                .is_some_and(|slot| body_owner.property_slot_owns_reference(slot)));
+    let needs_original_values = sig.params.iter()
+        .take(crate::types::call_args::regular_param_count(sig))
+        .enumerate().any(|(index, (_, ty))| {
+            !sig.ref_params.get(index).copied().unwrap_or(false)
+                && crate::ir_lower::conversion_boundaries::active(ctx, ty)
+        });
+    let needs_fixed_binding = owns_promoted_references || needs_original_values;
     // Eval and backtraces append a hidden collector even to nonvariadic constructors.
-    // The generic padding thunk refuses references, so these constructors must retain the
-    // fixed-class argument planner that promotes and transfers their caller-owned cells.
-    if owns_promoted_references && crate::func_args::sig_collects_surplus_args(sig)
+    // Fixed binding promotes caller references and checks user value kinds before ABI conversion.
+    if needs_fixed_binding && crate::func_args::sig_collects_surplus_args(sig)
         && !args.iter().any(is_spread_arg)
     {
         if args.iter().any(|arg| matches!(arg.kind, ExprKind::NamedArg { .. })) {
@@ -266,7 +274,7 @@ fn dynamic_new_class_is_planning_candidate(
     if sig.variadic.is_some() {
         return false;
     }
-    if !dynamic_new_args_need_planning(sig, args) && !owns_promoted_references {
+    if !dynamic_new_args_need_planning(sig, args) && !needs_fixed_binding {
         return false;
     }
     dynamic_new_args_lower_to_exact_arity(ctx, sig, args)

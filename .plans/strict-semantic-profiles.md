@@ -1194,3 +1194,26 @@ The original full Reflection example succeeds without flags but fails under
 php-only plus Coercions with a missing ReflectionParameter default literal data
 ID, independently of invocation arrays. Investigate that strict metadata path
 next. ArrayKeys and the six pending strict families remain gated.
+
+### Verified155: constructor value guards and caller references
+
+Dynamic constructor selection distinguishes actual by-reference parameters from
+owned cells backing ordinary typed properties. User value contracts independently
+request fixed binding through conversion_boundaries::active before ABI conversion;
+trusted Internal default machinery and hidden collectors retain their own roles.
+This removes speculative Reflection subclass construction from ordinary default
+metadata while preserving PHP/LFC scalar checks and promoted caller references.
+
+Job3acd2d42 passes ten profile/target generations58.21s and sixteen native
+metadata/value-contract variants90.47s with clean heaps. PHP, LFC and Internal
+policies, optimizer settings and owning user arguments are covered. Final0550cfd3
+passes in2m33s: compiler/bridge builds36.32s, five exact promoted-reference target
+controls and five integration controls. A bounded captured-argument fixture helper
+supplies the unpruned catalog's conversion declarations. All12 unique gates,
+assembly comments and diff hygiene pass. The original full Reflection example
+passes with php-only plus Coercions4.50s; tagless LFC with heap checks passes9.36s.
+
+Raw permissive dynamic constructor Mixed-to-string ABI conversion still leaves a
+string owner; this is isolated independently and is the next cleanup step. The
+optional Reflection subclass limitation reproduces without semantic flags and is
+tracked separately as taskbc259636. ArrayKeys and six pending families stay gated.
