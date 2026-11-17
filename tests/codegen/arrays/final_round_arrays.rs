@@ -213,3 +213,24 @@ echo $arr[$j++] ?? 'd', $arr[$j++] ?? 'd', $arr[$j++] ?? 'd', "\n";
     assert!(out.success, "program failed: {}", out.stderr);
     assert_eq!(out.stdout, "1:0\n1\n56d\n");
 }
+
+/// `unset($array[$object])` over a native array throws php's TypeError naming the key's class
+/// (it reached an `offsetUnset()` call on the array); an `ArrayAccess` receiver still unsets.
+#[test]
+fn test_unset_array_element_with_an_object_key() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+class C {}
+$arr = [1];
+$o = new C;
+try { unset($arr[$o]); } catch (TypeError $e) { echo $e->getMessage(), "\n"; }
+echo count($arr), "\n";
+$map = new WeakMap();
+$map[$o] = 5;
+unset($map[$o]);
+echo count($map), "\n";
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "Cannot unset offset of type C on array\n1\n0\n");
+}

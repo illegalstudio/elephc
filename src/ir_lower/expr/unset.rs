@@ -294,6 +294,32 @@ pub(super) fn lower_unset_array_access(
         crate::ir_lower::expr::array_access::index_expr_key_type(ctx, index),
         PhpType::Object(_)
     ) {
+        // A native array has no `offsetUnset()`: php throws "Cannot unset offset of type C on
+        // array" naming the key's run-time class.
+        if matches!(
+            materialized_expr_type_for_merge(ctx, array).codegen_repr(),
+            PhpType::Array(_) | PhpType::AssocArray { .. }
+        ) {
+            use crate::synthetic_class::{e_binop, e_bool, e_call, e_new, e_str, s_if, s_throw};
+            let message = e_binop(
+                e_binop(
+                    e_str("Cannot unset offset of type "),
+                    BinOp::Concat,
+                    e_call("get_class", vec![index.clone()]),
+                ),
+                BinOp::Concat,
+                e_str(" on array"),
+            );
+            // Guarded by a constant condition so the code after the unset keeps a live block.
+            let throw = s_if(
+                e_bool(true),
+                vec![s_throw(e_new("TypeError", vec![message]))],
+                vec![],
+                None,
+            );
+            crate::ir_lower::stmt::lower_stmt(ctx, &throw);
+            return None;
+        }
         let synthetic = Expr::new(
             ExprKind::MethodCall {
                 object: Box::new(array.clone()),
