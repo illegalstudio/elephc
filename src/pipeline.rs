@@ -1124,11 +1124,6 @@ fn compile_config(mut config: CliConfig, entry: EntryKind<'_>) {
         return;
     }
 
-    // A call that binds a `mixed`/union argument to a declared scalar parameter can throw
-    // `TypeError` at run time even when its callee is pure; every optimizer phase, and the
-    // effect summaries built with the optimizer, must keep it observable.
-    let scalar_guard_sites =
-        optimize::install_scalar_guard_arg_sites(check_result.scalar_guard_arg_sites.clone());
     crate::progress::phase("opt-prop");
     let phase_started = Instant::now();
     let post_typecheck_optimizer = optimize::PostTypecheckOptimizer::new_with_type_metadata(
@@ -1136,6 +1131,10 @@ fn compile_config(mut config: CliConfig, entry: EntryKind<'_>) {
         &check_result.functions,
         &check_result.classes,
         &check_result.interfaces,
+        // A call that binds a `mixed`/union argument to a declared scalar parameter can throw
+        // `TypeError` at run time even when its callee is pure; the optimizer installs these
+        // around its analyses and every phase.
+        &check_result.scalar_guard_arg_sites,
     );
     // Substituting a literal for a read of a local the checker boxed as `mixed` would hand EIR
     // lowering a concrete type the checker never approved for that name, so the pass is told which
@@ -1165,7 +1164,6 @@ fn compile_config(mut config: CliConfig, entry: EntryKind<'_>) {
     // the original's spans — the same span-keyed hazard, in the other pass that clones.
     let ast = post_typecheck_optimizer
         .eliminate_dead_code(ast, check_result.local_binding_decision_spans());
-    drop(scalar_guard_sites);
     timings.record_since("dce", phase_started);
 
     crate::progress::phase("decl-reach");

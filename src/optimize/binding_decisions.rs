@@ -72,6 +72,12 @@ pub fn install_scalar_guard_arg_sites(sites: HashSet<Span>) -> ScalarGuardArgSit
     }
 }
 
+/// Runs `f` with `sites` installed, or with whatever set is already installed when `None`.
+pub(crate) fn with_scalar_guard_arg_sites<R>(sites: Option<&HashSet<Span>>, f: impl FnOnce() -> R) -> R {
+    let _scope = sites.map(|sites| install_scalar_guard_arg_sites(sites.clone()));
+    f()
+}
+
 /// Returns whether a call with these arguments binds a `mixed`/union value to a declared
 /// scalar parameter, so it can throw `TypeError` before the callee's body runs.
 ///
