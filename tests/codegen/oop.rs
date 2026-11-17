@@ -65,6 +65,8 @@ mod property_hooks;
 mod datetime;
 #[path = "oop/datetime_lazy_evaluation.rs"]
 mod datetime_lazy_evaluation;
+#[path = "oop/datetime_static_returns.rs"]
+mod datetime_static_returns;
 #[path = "oop/reflection_properties.rs"]
 mod reflection_properties;
 #[path = "oop/reflection_functions.rs"]
