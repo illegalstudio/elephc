@@ -24,20 +24,21 @@ pub(crate) fn emit_guard_owned_at_stack(
     cleanup: &str,
     record_offset: usize,
 ) {
-    let scratch = temp_int_reg(emitter.target);
-    emit_store_to_sp(emitter, owner,
-        record_offset + crate::codegen_support::try_handlers::EXCEPTION_GUARD_OWNER_OFFSET);
-    emit_symbol_address(emitter, scratch, cleanup);
-    emit_store_to_sp(emitter, scratch, record_offset + 8);
-    emit_temporary_stack_address(emitter, int_arg_reg_name(emitter.target, 0), record_offset);
-    emit_load_int_immediate(emitter, int_arg_reg_name(emitter.target, 1), 0);
-    emit_call_label(emitter, "__rt_exception_guard_owned");
+    elephc_memoir::guarded_owners::emit_publish_at_stack(
+        emitter,
+        owner,
+        cleanup,
+        temp_int_reg(emitter.target),
+        elephc_memoir::RecordOffset::new(record_offset),
+        elephc_memoir::RecordOffset::new(crate::codegen_support::try_handlers::EXCEPTION_GUARD_OWNER_OFFSET),
+    );
 }
 
 /// Detaches a preallocated value guard while preserving any guards published after it.
 pub(crate) fn emit_unguard_owned_at_stack(emitter: &mut Emitter, record_offset: usize) {
-    emit_temporary_stack_address(emitter, int_arg_reg_name(emitter.target, 0), record_offset);
-    emit_call_label(emitter, "__rt_exception_unguard_owned");
+    elephc_memoir::guarded_owners::emit_detach_at_stack(
+        emitter, elephc_memoir::RecordOffset::new(record_offset),
+    );
 }
 
 /// Links a caller-owned slot into the cleanup chain without consuming its current payload.

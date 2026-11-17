@@ -35,3 +35,5 @@ pub mod array_unbox_slots;
 pub mod owned_container;
 
 pub mod owned_payload;
+
+pub mod boxed_array;

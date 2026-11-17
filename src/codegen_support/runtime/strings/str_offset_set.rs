@@ -25,7 +25,22 @@ use crate::codegen_support::abi;
 use crate::codegen_support::emit::Emitter;
 use crate::codegen_support::platform::Arch;
 use crate::codegen_support::runtime::arrays::value_error;
-use crate::codegen_support::sentinels::CONCAT_TEMP_HEAP_KIND;
+use crate::codegen_support::try_handlers::{EXCEPTION_GUARD_OWNER_OFFSET, EXCEPTION_GUARD_SLOT_SIZE};
+use elephc_memoir::strings::guarded_snapshot::{self, CopyGuard, SnapshotLayout};
+use elephc_memoir::{FrameOffset, RecordOffset};
+
+const SNAPSHOT: SnapshotLayout = SnapshotLayout {
+    arm_pair: RecordOffset::new(0),
+    arm_owner: RecordOffset::new(56),
+    x86_pointer: FrameOffset::new(8),
+    x86_length: FrameOffset::new(16),
+    x86_owner: FrameOffset::new(72),
+};
+const GUARD: CopyGuard<'static> = CopyGuard {
+    bytes: EXCEPTION_GUARD_SLOT_SIZE,
+    owner: RecordOffset::new(EXCEPTION_GUARD_OWNER_OFFSET),
+    cleanup: "__rt_str_offset_set_unwind",
+};
 
 const FIRST_BYTE_MSG_LEN: usize =
     "Warning: Only the first byte will be assigned to the string offset\n".len();
@@ -47,9 +62,9 @@ const EMPTY_ASSIGN_MSG_LEN: usize = "Cannot assign an empty string to a string o
 /// value's first byte is written at the offset, padding any gap past the end with spaces.
 /// Clobbers every caller-saved register, because the reservation can reach `__rt_heap_alloc`.
 /// The subject is only borrowed on the silent path; a warning path reads a private copy (see
-/// `emit_pin_subject_aarch64`).
+/// `guarded_snapshot::emit_pin`).
 pub fn emit_str_offset_set(emitter: &mut Emitter) {
-    emit_str_offset_set_unwind(emitter);
+    guarded_snapshot::emit_unwind(emitter, GUARD);
     if emitter.target.arch == Arch::X86_64 {
         emit_str_offset_set_x86_64(emitter);
         return;
@@ -84,12 +99,12 @@ pub fn emit_str_offset_set(emitter: &mut Emitter) {
     emitter.instruction("cbz x4, __rt_str_offset_set_empty");                   // an empty value cannot be written to an offset
     emitter.instruction("cmp x4, #1");                                          // is the value exactly one byte?
     emitter.instruction("b.eq __rt_str_offset_set_sized");                      // a single byte is written without a warning
-    emit_pin_subject_aarch64(emitter, "first_byte");
-    emit_copy_guard_push_aarch64(emitter);
+    guarded_snapshot::emit_pin(emitter, SNAPSHOT, "__rt_str_offset_set_pinned_first_byte");
+    guarded_snapshot::emit_guard_push(emitter, SNAPSHOT, GUARD);
     abi::emit_symbol_address(emitter, "x1", "_diag_string_offset_first_byte_msg");
     emitter.instruction(&format!("mov x2, #{}", FIRST_BYTE_MSG_LEN));           // pass the first-byte warning length
     abi::emit_call_label(emitter, "__rt_diag_warning");                         // warn that only the first byte is assigned
-    emit_copy_guard_pop_aarch64(emitter);
+    guarded_snapshot::emit_guard_pop(emitter, GUARD);
 
     // -- the result is the subject, widened to reach the offset --
     emitter.label("__rt_str_offset_set_sized");
@@ -104,11 +119,11 @@ pub fn emit_str_offset_set(emitter: &mut Emitter) {
 
     // -- an index before the start: warn with the requested offset, keep the bytes --
     emitter.label("__rt_str_offset_set_illegal");
-    emit_pin_subject_aarch64(emitter, "illegal");
-    emit_copy_guard_push_aarch64(emitter);
+    guarded_snapshot::emit_pin(emitter, SNAPSHOT, "__rt_str_offset_set_pinned_illegal");
+    guarded_snapshot::emit_guard_push(emitter, SNAPSHOT, GUARD);
     emitter.instruction("ldr x0, [sp, #64]");                                   // reload the requested offset (above the guard), unresolved on this path
     abi::emit_call_label(emitter, "__rt_warn_illegal_string_offset");           // warn `Illegal string offset N`
-    emit_copy_guard_pop_aarch64(emitter);
+    guarded_snapshot::emit_guard_pop(emitter, GUARD);
     emitter.instruction("str xzr, [sp, #48]");                                  // no byte is written on this path
     emitter.instruction("ldr x9, [sp, #8]");                                    // the result keeps the subject length
 
@@ -205,12 +220,12 @@ fn emit_str_offset_set_x86_64(emitter: &mut Emitter) {
     emitter.instruction("jz __rt_str_offset_set_empty");                        // an empty value cannot be written to an offset
     emitter.instruction("cmp r9, 1");                                           // is the value exactly one byte?
     emitter.instruction("je __rt_str_offset_set_sized");                        // a single byte is written without a warning
-    emit_pin_subject_x86_64(emitter, "first_byte");
-    emit_copy_guard_push_x86_64(emitter);
+    guarded_snapshot::emit_pin(emitter, SNAPSHOT, "__rt_str_offset_set_pinned_first_byte");
+    guarded_snapshot::emit_guard_push(emitter, SNAPSHOT, GUARD);
     abi::emit_symbol_address(emitter, "rdi", "_diag_string_offset_first_byte_msg");
     emitter.instruction(&format!("mov esi, {}", FIRST_BYTE_MSG_LEN));           // pass the first-byte warning length
     abi::emit_call_label(emitter, "__rt_diag_warning");                         // warn that only the first byte is assigned
-    emit_copy_guard_pop_x86_64(emitter);
+    guarded_snapshot::emit_guard_pop(emitter, GUARD);
 
     // -- the result is the subject, widened to reach the offset --
     emitter.label("__rt_str_offset_set_sized");
@@ -224,11 +239,11 @@ fn emit_str_offset_set_x86_64(emitter: &mut Emitter) {
 
     // -- an index before the start: warn with the requested offset, keep the bytes --
     emitter.label("__rt_str_offset_set_illegal");
-    emit_pin_subject_x86_64(emitter, "illegal");
-    emit_copy_guard_push_x86_64(emitter);
+    guarded_snapshot::emit_pin(emitter, SNAPSHOT, "__rt_str_offset_set_pinned_illegal");
+    guarded_snapshot::emit_guard_push(emitter, SNAPSHOT, GUARD);
     emitter.instruction("mov rax, QWORD PTR [rbp - 40]");                       // pass the requested offset, unresolved on this path
     abi::emit_call_label(emitter, "__rt_warn_illegal_string_offset");           // warn `Illegal string offset N`
-    emit_copy_guard_pop_x86_64(emitter);
+    guarded_snapshot::emit_guard_pop(emitter, GUARD);
     emitter.instruction("mov QWORD PTR [rbp - 56], 0");                         // no byte is written on this path
     emitter.instruction("mov rax, QWORD PTR [rbp - 16]");                       // the result keeps the subject length
 
@@ -288,100 +303,4 @@ fn emit_str_offset_set_x86_64(emitter: &mut Emitter) {
         "_string_offset_empty_assign_msg",
         EMPTY_ASSIGN_MSG_LEN,
     );
-}
-
-/// Replaces the borrowed subject in the AArch64 frame with a private owned copy.
-///
-/// Emitted right before a warning: the warning can run a user error handler that reassigns
-/// the variable holding the subject and frees its string. The copy lands in both the subject
-/// slot `[sp, #0]`, which every later read uses, and the release slot `[sp, #56]`, which the
-/// shared exit frees. A transient `.` temporary (`CONCAT_TEMP_HEAP_KIND`) is left alone: no
-/// variable owns it, so no handler can free it, and `__rt_str_persist` would adopt it in place
-/// instead of copying it. `site` keeps the skip label unique per call site. Clobbers every
-/// caller-saved register.
-fn emit_pin_subject_aarch64(emitter: &mut Emitter, site: &str) {
-    let skip = format!("__rt_str_offset_set_pinned_{}", site);
-    emitter.instruction("ldr x0, [sp, #0]");                                    // load the borrowed subject pointer
-    abi::emit_call_label(emitter, "__rt_heap_kind");                            // classify its storage
-    emitter.instruction(&format!("cmp x0, #{}", CONCAT_TEMP_HEAP_KIND));        // is it a transient concat temporary?
-    emitter.instruction(&format!("b.eq {}", skip));                             // nothing can free it: keep borrowing it
-    emitter.instruction("ldp x1, x2, [sp, #0]");                                // load the borrowed subject pointer and length
-    abi::emit_call_label(emitter, "__rt_str_persist");                          // x1 = an owned copy the handler cannot free
-    emitter.instruction("str x1, [sp, #0]");                                    // read the copy from here on
-    emitter.instruction("str x1, [sp, #56]");                                   // and release it once the result is built
-    emitter.label(&skip);
-}
-
-/// Replaces the borrowed subject in the x86_64 frame with a private owned copy.
-///
-/// Same contract as `emit_pin_subject_aarch64`: the copy lands in the subject slot
-/// `[rbp - 8]` and the release slot `[rbp - 72]`, and a transient concat temporary is left
-/// alone. Clobbers every caller-saved register.
-fn emit_pin_subject_x86_64(emitter: &mut Emitter, site: &str) {
-    let skip = format!("__rt_str_offset_set_pinned_{}", site);
-    emitter.instruction("mov rax, QWORD PTR [rbp - 8]");                        // load the borrowed subject pointer
-    abi::emit_call_label(emitter, "__rt_heap_kind");                            // classify its storage
-    emitter.instruction(&format!("cmp eax, {}", CONCAT_TEMP_HEAP_KIND));        // is it a transient concat temporary?
-    emitter.instruction(&format!("je {}", skip));                               // nothing can free it: keep borrowing it
-    emitter.instruction("mov rax, QWORD PTR [rbp - 8]");                        // load the borrowed subject pointer
-    emitter.instruction("mov rdx, QWORD PTR [rbp - 16]");                       // load the borrowed subject length
-    abi::emit_call_label(emitter, "__rt_str_persist");                          // rax = an owned copy the handler cannot free
-    emitter.instruction("mov QWORD PTR [rbp - 8], rax");                        // read the copy from here on
-    emitter.instruction("mov QWORD PTR [rbp - 72], rax");                       // and release it once the result is built
-    emitter.label(&skip);
-}
-
-/// Pushes a 32-byte AArch64 unwind guard over the private subject copy (`[sp, #56]`, 0 when
-/// none was made) before a warning that can run a throwing user error handler. Every frame
-/// slot is `#32` further from `sp` until [`emit_copy_guard_pop_aarch64`].
-fn emit_copy_guard_push_aarch64(emitter: &mut Emitter) {
-    emitter.instruction("ldr x9, [sp, #56]");                                   // the private subject copy, or 0
-    emitter.instruction("sub sp, sp, #32");                                     // reserve the guard record below the frame
-    emitter.instruction("str x9, [sp, #24]");                                   // the record's owner
-    abi::emit_symbol_address(emitter, "x9", "__rt_str_offset_set_unwind");
-    emitter.instruction("str x9, [sp, #8]");                                    // the cleanup the unwinder calls
-    emitter.instruction("mov x0, sp");                                          // the record
-    emitter.instruction("mov x1, #0");                                          // link it at the chain head
-    abi::emit_call_label(emitter, "__rt_exception_guard_owned");
-}
-
-/// Unlinks and pops the AArch64 guard once the warning returned normally; the shared exit
-/// frees the copy.
-fn emit_copy_guard_pop_aarch64(emitter: &mut Emitter) {
-    emitter.instruction("mov x0, sp");                                          // the guard record
-    abi::emit_call_label(emitter, "__rt_exception_unguard_owned");
-    emitter.instruction("add sp, sp, #32");                                     // pop the guard record
-}
-
-/// Pushes the x86_64 guard over the private subject copy (`[rbp - 72]`); frame slots are
-/// `rbp`-relative, so they keep their offsets while the record sits at `[rsp]`.
-fn emit_copy_guard_push_x86_64(emitter: &mut Emitter) {
-    emitter.instruction("sub rsp, 32");                                         // reserve the guard record, keeping calls aligned
-    emitter.instruction("mov r10, QWORD PTR [rbp - 72]");                       // the private subject copy, or 0
-    emitter.instruction("mov QWORD PTR [rsp + 24], r10");                       // the record's owner
-    emitter.instruction("lea r10, [rip + __rt_str_offset_set_unwind]");         // the cleanup the unwinder calls
-    emitter.instruction("mov QWORD PTR [rsp + 8], r10");                        // store it in the record
-    emitter.instruction("mov rdi, rsp");                                        // the record
-    emitter.instruction("xor esi, esi");                                        // link it at the chain head
-    abi::emit_call_label(emitter, "__rt_exception_guard_owned");
-}
-
-/// Unlinks and pops the x86_64 guard once the warning returned normally.
-fn emit_copy_guard_pop_x86_64(emitter: &mut Emitter) {
-    emitter.instruction("mov rdi, rsp");                                        // the guard record
-    abi::emit_call_label(emitter, "__rt_exception_unguard_owned");
-    emitter.instruction("add rsp, 32");                                         // pop the guard record
-}
-
-/// Emits `__rt_str_offset_set_unwind`, the cleanup the unwinder calls with the guard record
-/// when a warning handler throws: it frees the private subject copy (a null owner is skipped).
-fn emit_str_offset_set_unwind(emitter: &mut Emitter) {
-    emitter.label_global("__rt_str_offset_set_unwind");
-    if emitter.target.arch == Arch::X86_64 {
-        emitter.instruction("mov rax, QWORD PTR [rdi + 24]");                   // the private subject copy, or 0
-        emitter.instruction("jmp __rt_heap_free_safe");                         // free it and return to the unwinder
-        return;
-    }
-    emitter.instruction("ldr x0, [x0, #24]");                                   // the private subject copy, or 0
-    emitter.instruction("b __rt_heap_free_safe");                               // free it and return to the unwinder
 }

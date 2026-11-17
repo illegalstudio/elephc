@@ -108,6 +108,22 @@ handles false and null results.
 `frame_owners` clears a typed frame slot before calling the selected release helper.
 Its callers define cleanup order and install the surrounding exception handler.
 
+`values::boxed_array` emits outer-cell copy-on-write, empty indexed-array
+construction and hash payload preparation. It publishes a replacement hash before
+retiring the old indexed payload. The compiler selects the lvalue, key and
+conditions that allow creation of an empty array.
+`callables::argument_owners` manages the private list of adapted descriptors used
+by eval. It exposes the actual owner slots to the collector and detaches each
+node before protected retirement. Bridge frame placement and entry labels come
+from the compiler.
+`reference_cells::validated_commit` publishes the validated candidate, optionally
+consumes the publisher's snapshot lease, and retires the displaced owner through
+the caller's pending Throwable slot. The compiler provides status values and
+chooses when validation and commit run.
+`strings::guarded_snapshot` parks a private string copy before a reentrant callback
+and installs a guard that can free it during unwind. The caller supplies the frame
+layout and selects the warning and its timing.
+
 The compiler retains EIR lifetime analysis, ownership optimization and placement,
 PHP reference/type validation, formatting, output routing, zval pack/unpack,
 resource identity/inventory policy, class/coroutine/SPL layout definitions, platform
@@ -146,6 +162,8 @@ ordinary and staging-pin release, conditional retirement and the surrounding PHP
 refusal path. These cases also cross-assemble on all five targets and six modes.
 String copies, reusable C-string destinations, frame owner release and both web
 reset paths add 90 assembly fingerprints across the same target and mode matrix.
+Boxed array preparation, descriptor lists, reference commit and guarded string
+snapshots add another 60 fingerprints across all five targets and six modes.
 
 `build.rs` includes this crate's Rust sources in the runtime-cache identity.
 Changes to these emitters therefore invalidate cached runtime objects even when

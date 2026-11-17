@@ -320,3 +320,5 @@ pub mod mixed_payload;
 pub mod static_cells;
 
 pub mod mixed_symbol;
+
+pub mod validated_commit;

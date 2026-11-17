@@ -82,6 +82,15 @@ the compiler selects request cleanup timing and arena policy. An already owned
 string or pointer can be adopted directly by a new Mixed cell. Callback cleanup
 loads an owner from its frame slot and clears the slot before releasing the value,
 so reentrant destruction cannot retire the same slot twice.
+Boxed-array storage helpers separate shared cells, create an empty indexed
+payload when the caller requests one, and install a promoted hash before
+releasing the displaced array. Eval argument lists own staged callable descriptors
+and expose their actual slots to GC. A native reference commit publishes the
+validated owner before it retires the displaced value and any snapshot lease,
+reporting cleanup exceptions through the caller's context. String writes can use
+a private snapshot and an unwind guard to keep their input valid while a warning
+handler runs. The compiler supplies the layouts and controls when these
+operations run.
 Memoir source changes also participate in runtime-object cache identity.
 
 The host API composes assembly output, target ABI and memory-context capabilities.
