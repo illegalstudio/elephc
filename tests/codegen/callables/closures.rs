@@ -187,6 +187,31 @@ try { echo $f::class, "\n"; } catch (TypeError $e) { echo $e->getMessage(), "\n"
     )]);
 }
 
+/// In a function that runs eval() on runtime source, a callable is a Mixed, and get_class() asked
+/// the eval bridge, which only names objects (tag 6): a Closure, an invokable object and an
+/// implicit callable (tag 10) all answered "". They take the native lookup now, so a Closure is
+/// `Closure`, an invokable object names its class, and an implicit callable throws PHP's
+/// TypeError. Expected output measured with php 8.5.12.
+#[test]
+fn test_get_class_of_callable_in_eval_function() {
+    let out = compile_and_run_per_argv(
+        r#"<?php
+class Cls { public function m() {} public static function sm() {} }
+class Inv { public function __invoke() {} }
+function g(callable $f, string $code): string { eval($code); try { return get_class($f); } catch (TypeError $e) { return $e->getMessage(); } }
+$code = $argc > 9 ? 'echo 1;' : '$q = 1;';
+$o = new Cls();
+echo g(fn() => 1, $code), "|", g('strlen', $code), "|", g([$o, 'm'], $code), "|", g(strlen(...), $code), "\n";
+$gb = $argv[1] ?? 'g';
+echo $gb(new Inv(), $code), "|", $gb('Cls::sm', $code), "|", $gb(['Cls', 'sm'], $code), "\n";
+"#,
+        &[&[]],
+    );
+    let string = "get_class(): Argument #1 ($object) must be of type object, string given";
+    let array = "get_class(): Argument #1 ($object) must be of type object, array given";
+    assert_eq!(out, [format!("Closure|{string}|{array}|Closure\nInv|{string}|{array}\n")]);
+}
+
 /// A missed read from an array of closures leaves null in a `callable` slot, not a descriptor:
 /// `is_object()`, `instanceof Closure`, `is_a()` (literal and runtime target) and gettype() answer
 /// for null instead of reading through the sentinel, held as a callable or passed into a
