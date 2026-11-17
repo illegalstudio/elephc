@@ -120342,10 +120342,7 @@
         "reason": "PCNTL callbacks use a dedicated process-runtime ABI"
       },
       "effects": {
-        "kind": "static",
-        "names": [
-          "alloc_heap"
-        ]
+        "kind": "shared"
       },
       "lowering": {
         "kind": "runtime_call",
@@ -123778,10 +123775,7 @@
         "reason": "PCNTL callbacks use a dedicated process-runtime ABI"
       },
       "effects": {
-        "kind": "static",
-        "names": [
-          "alloc_heap"
-        ]
+        "kind": "shared"
       },
       "lowering": {
         "kind": "runtime_call",

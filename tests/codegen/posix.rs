@@ -379,3 +379,49 @@ fn test_posix_isatty_warns_for_non_integer_operands() {
         );
     }
 }
+
+/// Keeps stores read only by a catch block alive across refused `int` operands.
+///
+/// The int guard throws before the bridge runs, so each call must be treated as throwing:
+/// otherwise dead-store elimination drops `$state = 2` and the catch reads the stale 1.
+#[test]
+fn test_refused_int_operand_throw_preserves_catch_visible_store() {
+    let out = compile_and_run(
+        r#"<?php
+        function strerror_literal(): int {
+            $state = 1;
+            try {
+                $state = 2;
+                posix_strerror('abc');
+                $state = 3;
+            } catch (\TypeError $error) {
+                return $state;
+            }
+            return $state;
+        }
+        function pcntl_strerror_boxed(mixed $code): int {
+            $state = 1;
+            try {
+                $state = 2;
+                pcntl_strerror($code);
+                $state = 3;
+            } catch (\TypeError $error) {
+                return $state;
+            }
+            return $state;
+        }
+        function kill_literal(): int {
+            $state = 1;
+            try {
+                $state = 2;
+                posix_kill('abc', 0);
+                $state = 3;
+            } catch (\TypeError $error) {
+                return $state;
+            }
+            return $state;
+        }
+        echo strerror_literal(), pcntl_strerror_boxed([]), kill_literal();"#,
+    );
+    assert_eq!(out, "222");
+}
