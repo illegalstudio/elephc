@@ -724,8 +724,18 @@ fn emit_inline_mixed_callable_descriptor_value(
         Arch::X86_64 => ctx.emitter.instruction("mov rax, rdi"),                // return the unboxed descriptor payload
     }
     if fresh_closure {
+        // A missed read (`@$callbacks[$missing]`) leaves null, which no factory accepts.
+        let missing_label = ctx.next_label("mixed_callable_value_missing_descriptor");
+        let result = abi::int_result_reg(ctx.emitter);
+        callable_descriptor::emit_branch_if_missing_descriptor(ctx.emitter, result, &missing_label);
         // PHP returns a Closure as is, but wraps an implicit or invokable-object callable in one.
         abi::emit_call_label(ctx.emitter, "__rt_callable_closure_copy");
+        abi::emit_jump(ctx.emitter, &done_label);
+        ctx.emitter.label(&missing_label);
+        match invalid_type_error {
+            Some(error) => emit_callable_conversion_error(ctx, error),
+            None => emit_mixed_callable_not_callable_fatal(ctx, op_name),
+        }
     } else if retain_existing_descriptor {
         callable_descriptor::emit_retain_current_descriptor(ctx.emitter);
     }

@@ -9,13 +9,15 @@
 //! Key details:
 //! - A descriptor with an object handle already is a Closure: PHP returns that same object, so
 //!   the helper only retains it.
-//! - Any other descriptor is an implicit string or array callable, or an invokable object
-//!   converted to a callable. PHP wraps it in a new Closure, so the helper copies the header and
-//!   its single heap capture (a bound receiver) into a fresh descriptor with its own handle,
-//!   clears the `CALLABLE_DESC_ORIGIN_*` flags and turns an `ObjectInvoke` kind back into the
-//!   instance-method call it performs.
-//! - A shape it cannot copy safely (several captures, an owned string or a reference capture)
-//!   is retained unchanged, as before this helper existed.
+//! - Any other descriptor is an implicit string or array callable, an invokable object converted
+//!   to a callable, or an eval callback adapter (an eval closure, invokable object or function
+//!   name). PHP wraps it in a new Closure, so the helper copies the header and every capture slot
+//!   into a fresh descriptor with its own handle, retains the captures descriptor release will
+//!   drop, clears the `CALLABLE_DESC_ORIGIN_*` flags and turns an `ObjectInvoke` kind back into
+//!   the instance-method call it performs.
+//! - A descriptor with an owned string or a reference capture would need a deep copy, so it is
+//!   retained unchanged. No callable a factory receives has one.
+//! - The caller rejects a missing descriptor (null or the in-band null sentinel) first.
 
 use crate::codegen_support::callable_descriptor::{
     emit_initialize_runtime_descriptor, CALLABLE_DESC_ENVIRONMENT_OFFSET,
@@ -43,7 +45,7 @@ pub(crate) fn emit_callable_closure_copy(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: callable closure copy ---");
     emitter.label_global("__rt_callable_closure_copy");
-    emitter.instruction("sub sp, sp, #48");                                     // reserve source, capture shape and result slots
+    emitter.instruction("sub sp, sp, #48");                                     // reserve source, count, result and index slots
     emitter.instruction("stp x29, x30, [sp, #32]");                             // save frame pointer and return address across helper calls
     emitter.instruction("add x29, sp, #32");                                    // establish the helper frame
     emitter.instruction("str x0, [sp, #0]");                                    // save the source descriptor
@@ -57,28 +59,29 @@ pub(crate) fn emit_callable_closure_copy(emitter: &mut Emitter) {
     emitter.instruction("ldr x0, [sp, #0]");                                    // return the shared descriptor
     emitter.instruction("b __rt_callable_closure_copy_return");                 // skip the copy
 
-    // -- accept no capture, or one by-value heap capture --
+    // -- every capture must be a by-value scalar or heap value --
     emitter.label("__rt_callable_closure_copy_shape");
     emitter.instruction("str xzr, [sp, #8]");                                   // default to a descriptor without captures
     emitter.instruction("ldr x9, [sp, #0]");                                    // reload the source descriptor
     emitter.instruction(&format!("ldr x10, [x9, #{env}]"));                     // x10 = environment record
     emitter.instruction("cbz x10, __rt_callable_closure_copy_alloc");           // no environment, no captures
     emitter.instruction("ldr x11, [x10]");                                      // x11 = capture count
+    emitter.instruction("str x11, [sp, #8]");                                   // remember how many slots to copy
     emitter.instruction("cbz x11, __rt_callable_closure_copy_alloc");           // no captures to copy
-    emitter.instruction("cmp x11, #1");                                         // only a single bound receiver is copied
-    emitter.instruction("b.ne __rt_callable_closure_copy_retain");              // keep a wider capture shape unchanged
     emitter.instruction("ldr x12, [x10, #16]");                                 // x12 = capture binding metadata table
     emitter.instruction("cbz x12, __rt_callable_closure_copy_retain");          // untyped captures cannot be retained safely
-    emitter.instruction("ldr x13, [x12, #24]");                                 // load the capture's reference flag
-    emitter.instruction("cbnz x13, __rt_callable_closure_copy_retain");         // a reference capture owns a cell lease
-    emitter.instruction("ldr x13, [x12, #16]");                                 // x13 = capture type tag
-    for tag in HEAP_CAPTURE_TAGS {
-        emitter.instruction(&format!("cmp x13, #{tag}"));                       // is the capture a refcounted heap value?
-        emitter.instruction("b.eq __rt_callable_closure_copy_heap_capture");    // copy and retain it
-    }
-    emitter.instruction("b __rt_callable_closure_copy_retain");                 // strings and scalars keep the original descriptor
-    emitter.label("__rt_callable_closure_copy_heap_capture");
-    emitter.instruction("str x11, [sp, #8]");                                   // record the single capture to copy
+    emitter.instruction("mov x13, #0");                                         // start with the first capture
+    emitter.label("__rt_callable_closure_copy_check");
+    emitter.instruction("cmp x13, x11");                                        // has every capture been checked?
+    emitter.instruction("b.hs __rt_callable_closure_copy_alloc");               // the shape can be copied
+    emitter.instruction("add x14, x12, x13, lsl #5");                           // x14 = this capture's 32-byte binding entry
+    emitter.instruction("ldr x15, [x14, #24]");                                 // load the capture's reference flag
+    emitter.instruction("cbnz x15, __rt_callable_closure_copy_retain");         // a reference capture owns a cell lease
+    emitter.instruction("ldr x15, [x14, #16]");                                 // x15 = capture type tag
+    emitter.instruction("cmp x15, #1");                                         // is it an owned string copy?
+    emitter.instruction("b.eq __rt_callable_closure_copy_retain");              // a string capture would need its own copy
+    emitter.instruction("add x13, x13, #1");                                    // check the next capture
+    emitter.instruction("b __rt_callable_closure_copy_check");                  // continue the shape check
 
     // -- allocate the Closure with its own object handle --
     emitter.label("__rt_callable_closure_copy_alloc");
@@ -107,13 +110,47 @@ pub(crate) fn emit_callable_closure_copy(emitter: &mut Emitter) {
     emitter.label("__rt_callable_closure_copy_kind");
     emitter.instruction("str x2, [x0]");                                        // store the Closure's kind word
 
-    // -- copy and retain the bound receiver --
+    // -- copy every capture slot --
     emitter.instruction("ldr x10, [sp, #8]");                                   // reload the capture count
-    emitter.instruction("cbz x10, __rt_callable_closure_copy_done");            // nothing captured
-    emitter.instruction(&format!("ldp x2, x3, [x1, #{capture}]"));              // load the capture slot
-    emitter.instruction(&format!("stp x2, x3, [x0, #{capture}]"));              // store it into the Closure
-    emitter.instruction("mov x0, x2");                                          // pass the captured heap value to the incref helper
+    emitter.instruction(&format!("mov x14, #{capture}"));                       // offset of the first capture slot
+    emitter.instruction("add x15, x14, x10, lsl #4");                           // offset past the last capture slot
+    emitter.label("__rt_callable_closure_copy_slot");
+    emitter.instruction("cmp x14, x15");                                        // has every slot been copied?
+    emitter.instruction("b.hs __rt_callable_closure_copy_slots_done");          // continue with the capture owners
+    emitter.instruction("ldr x2, [x1, x14]");                                   // load a capture word
+    emitter.instruction("str x2, [x0, x14]");                                   // store it into the Closure
+    emitter.instruction("add x14, x14, #8");                                    // advance to the next capture word
+    emitter.instruction("b __rt_callable_closure_copy_slot");                   // continue copying
+    emitter.label("__rt_callable_closure_copy_slots_done");
+
+    // -- the Closure owns its own reference to every heap capture --
+    emitter.instruction("str xzr, [sp, #24]");                                  // start with the first capture
+    emitter.label("__rt_callable_closure_copy_owner");
+    emitter.instruction("ldr x13, [sp, #24]");                                  // reload the capture index
+    emitter.instruction("ldr x10, [sp, #8]");                                   // reload the capture count
+    emitter.instruction("cmp x13, x10");                                        // has every capture been retained?
+    emitter.instruction("b.hs __rt_callable_closure_copy_done");                // return the Closure
+    emitter.instruction("ldr x9, [sp, #0]");                                    // reload the source descriptor
+    emitter.instruction(&format!("ldr x10, [x9, #{env}]"));                     // reload its environment record
+    emitter.instruction("ldr x12, [x10, #16]");                                 // reload the capture binding table
+    emitter.instruction("add x14, x12, x13, lsl #5");                           // x14 = this capture's binding entry
+    emitter.instruction("ldr x15, [x14, #16]");                                 // x15 = capture type tag
+    for tag in HEAP_CAPTURE_TAGS {
+        emitter.instruction(&format!("cmp x15, #{tag}"));                       // is the capture a refcounted heap value?
+        emitter.instruction("b.eq __rt_callable_closure_copy_owned");           // retain it
+    }
+    emitter.instruction("b __rt_callable_closure_copy_next");                   // scalars and borrowed words own nothing
+    emitter.label("__rt_callable_closure_copy_owned");
+    emitter.instruction("ldr x0, [sp, #16]");                                   // reload the new Closure
+    emitter.instruction(&format!("add x0, x0, #{capture}"));                    // address its first capture slot
+    emitter.instruction("add x0, x0, x13, lsl #4");                             // address this capture slot
+    emitter.instruction("ldr x0, [x0]");                                        // pass the captured heap value to the incref helper
     emitter.instruction("bl __rt_incref");                                      // the Closure owns its own reference to the capture
+    emitter.label("__rt_callable_closure_copy_next");
+    emitter.instruction("ldr x13, [sp, #24]");                                  // reload the capture index
+    emitter.instruction("add x13, x13, #1");                                    // advance to the next capture
+    emitter.instruction("str x13, [sp, #24]");                                  // persist the capture index
+    emitter.instruction("b __rt_callable_closure_copy_owner");                  // continue retaining captures
     emitter.label("__rt_callable_closure_copy_done");
     emitter.instruction("ldr x0, [sp, #16]");                                   // return the new Closure
 
@@ -133,7 +170,7 @@ fn emit_callable_closure_copy_x86_64(emitter: &mut Emitter) {
     emitter.label_global("__rt_callable_closure_copy");
     emitter.instruction("push rbp");                                            // save the caller frame pointer
     emitter.instruction("mov rbp, rsp");                                        // establish the helper frame
-    emitter.instruction("sub rsp, 32");                                         // reserve source, capture shape and result slots
+    emitter.instruction("sub rsp, 32");                                         // reserve source, count, result and index slots
     emitter.instruction("mov [rsp], rax");                                      // save the source descriptor
     emitter.instruction("call __rt_object_handle_of");                          // rax = the descriptor's object handle, 0 for none
     emitter.instruction("test rax, rax");                                       // does the descriptor already have identity?
@@ -146,7 +183,7 @@ fn emit_callable_closure_copy_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rax, [rsp]");                                      // return the shared descriptor
     emitter.instruction("jmp __rt_callable_closure_copy_return");               // skip the copy
 
-    // -- accept no capture, or one by-value heap capture --
+    // -- every capture must be a by-value scalar or heap value --
     emitter.label("__rt_callable_closure_copy_shape");
     emitter.instruction("mov QWORD PTR [rsp+8], 0");                            // default to a descriptor without captures
     emitter.instruction("mov r9, [rsp]");                                       // reload the source descriptor
@@ -154,23 +191,25 @@ fn emit_callable_closure_copy_x86_64(emitter: &mut Emitter) {
     emitter.instruction("test r10, r10");                                       // is there an environment?
     emitter.instruction("jz __rt_callable_closure_copy_alloc");                 // no environment, no captures
     emitter.instruction("mov r11, [r10]");                                      // r11 = capture count
+    emitter.instruction("mov [rsp+8], r11");                                    // remember how many slots to copy
     emitter.instruction("test r11, r11");                                       // are there captures?
     emitter.instruction("jz __rt_callable_closure_copy_alloc");                 // no captures to copy
-    emitter.instruction("cmp r11, 1");                                          // only a single bound receiver is copied
-    emitter.instruction("jne __rt_callable_closure_copy_retain");               // keep a wider capture shape unchanged
     emitter.instruction("mov r10, [r10+16]");                                   // r10 = capture binding metadata table
-    emitter.instruction("test r10, r10");                                       // is the capture typed?
+    emitter.instruction("test r10, r10");                                       // are the captures typed?
     emitter.instruction("jz __rt_callable_closure_copy_retain");                // untyped captures cannot be retained safely
-    emitter.instruction("cmp QWORD PTR [r10+24], 0");                           // is it a reference capture?
+    emitter.instruction("xor ecx, ecx");                                        // start with the first capture
+    emitter.label("__rt_callable_closure_copy_check");
+    emitter.instruction("cmp rcx, r11");                                        // has every capture been checked?
+    emitter.instruction("jae __rt_callable_closure_copy_alloc");                // the shape can be copied
+    emitter.instruction("mov rdx, rcx");                                        // copy the capture index
+    emitter.instruction("shl rdx, 5");                                          // each binding entry is 32 bytes
+    emitter.instruction("add rdx, r10");                                        // rdx = this capture's binding entry
+    emitter.instruction("cmp QWORD PTR [rdx+24], 0");                           // is it a reference capture?
     emitter.instruction("jne __rt_callable_closure_copy_retain");               // a reference capture owns a cell lease
-    emitter.instruction("mov rcx, [r10+16]");                                   // rcx = capture type tag
-    for tag in HEAP_CAPTURE_TAGS {
-        emitter.instruction(&format!("cmp rcx, {tag}"));                        // is the capture a refcounted heap value?
-        emitter.instruction("je __rt_callable_closure_copy_heap_capture");      // copy and retain it
-    }
-    emitter.instruction("jmp __rt_callable_closure_copy_retain");               // strings and scalars keep the original descriptor
-    emitter.label("__rt_callable_closure_copy_heap_capture");
-    emitter.instruction("mov [rsp+8], r11");                                    // record the single capture to copy
+    emitter.instruction("cmp QWORD PTR [rdx+16], 1");                           // is it an owned string copy?
+    emitter.instruction("je __rt_callable_closure_copy_retain");                // a string capture would need its own copy
+    emitter.instruction("inc rcx");                                             // check the next capture
+    emitter.instruction("jmp __rt_callable_closure_copy_check");                // continue the shape check
 
     // -- allocate the Closure with its own object handle --
     emitter.label("__rt_callable_closure_copy_alloc");
@@ -199,15 +238,45 @@ fn emit_callable_closure_copy_x86_64(emitter: &mut Emitter) {
     emitter.label("__rt_callable_closure_copy_kind");
     emitter.instruction("mov [rax], rdx");                                      // store the Closure's kind word
 
-    // -- copy and retain the bound receiver --
-    emitter.instruction("cmp QWORD PTR [rsp+8], 0");                            // is anything captured?
-    emitter.instruction("je __rt_callable_closure_copy_done");                  // nothing to copy
-    emitter.instruction(&format!("mov rdx, [r9+{capture}]"));                   // load the capture payload
-    emitter.instruction(&format!("mov [rax+{capture}], rdx"));                  // store it into the Closure
-    emitter.instruction(&format!("mov rcx, [r9+{}]", capture + 8));             // load the capture's second word
-    emitter.instruction(&format!("mov [rax+{}], rcx", capture + 8));            // store it into the Closure
-    emitter.instruction("mov rax, rdx");                                        // pass the captured heap value to the incref helper
+    // -- copy every capture slot --
+    emitter.instruction("mov rcx, [rsp+8]");                                    // reload the capture count
+    emitter.instruction("shl rcx, 4");                                          // bytes of capture storage
+    emitter.instruction(&format!("add rcx, {capture}"));                        // offset past the last capture slot
+    emitter.instruction(&format!("mov rdx, {capture}"));                        // offset of the first capture slot
+    emitter.label("__rt_callable_closure_copy_slot");
+    emitter.instruction("cmp rdx, rcx");                                        // has every slot been copied?
+    emitter.instruction("jae __rt_callable_closure_copy_slots_done");           // continue with the capture owners
+    emitter.instruction("mov r10, [r9+rdx]");                                   // load a capture word
+    emitter.instruction("mov [rax+rdx], r10");                                  // store it into the Closure
+    emitter.instruction("add rdx, 8");                                          // advance to the next capture word
+    emitter.instruction("jmp __rt_callable_closure_copy_slot");                 // continue copying
+    emitter.label("__rt_callable_closure_copy_slots_done");
+
+    // -- the Closure owns its own reference to every heap capture --
+    emitter.instruction("mov QWORD PTR [rsp+24], 0");                           // start with the first capture
+    emitter.label("__rt_callable_closure_copy_owner");
+    emitter.instruction("mov rcx, [rsp+24]");                                   // reload the capture index
+    emitter.instruction("cmp rcx, [rsp+8]");                                    // has every capture been retained?
+    emitter.instruction("jae __rt_callable_closure_copy_done");                 // return the Closure
+    emitter.instruction("mov r9, [rsp]");                                       // reload the source descriptor
+    emitter.instruction(&format!("mov r10, [r9+{env}]"));                       // reload its environment record
+    emitter.instruction("mov r10, [r10+16]");                                   // reload the capture binding table
+    emitter.instruction("mov rdx, rcx");                                        // copy the capture index
+    emitter.instruction("shl rdx, 5");                                          // each binding entry is 32 bytes
+    emitter.instruction("mov rdx, [r10+rdx+16]");                               // rdx = capture type tag
+    for tag in HEAP_CAPTURE_TAGS {
+        emitter.instruction(&format!("cmp rdx, {tag}"));                        // is the capture a refcounted heap value?
+        emitter.instruction("je __rt_callable_closure_copy_owned");             // retain it
+    }
+    emitter.instruction("jmp __rt_callable_closure_copy_next");                 // scalars and borrowed words own nothing
+    emitter.label("__rt_callable_closure_copy_owned");
+    emitter.instruction("mov rax, [rsp+16]");                                   // reload the new Closure
+    emitter.instruction("shl rcx, 4");                                          // byte offset of this capture slot
+    emitter.instruction(&format!("mov rax, [rax+rcx+{capture}]"));              // pass the captured heap value to the incref helper
     emitter.instruction("call __rt_incref");                                    // the Closure owns its own reference to the capture
+    emitter.label("__rt_callable_closure_copy_next");
+    emitter.instruction("inc QWORD PTR [rsp+24]");                              // advance to the next capture
+    emitter.instruction("jmp __rt_callable_closure_copy_owner");                // continue retaining captures
     emitter.label("__rt_callable_closure_copy_done");
     emitter.instruction("mov rax, [rsp+16]");                                   // return the new Closure
 

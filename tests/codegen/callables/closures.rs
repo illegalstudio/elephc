@@ -2905,3 +2905,46 @@ object,Closure,y,107|object,Closure,y,108|object,Closure,y,12|object,Closure,y,1
     assert!(out.success, "{}", out.stderr);
     assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
 }
+
+/// A missed read from an array of closures leaves null, which `Closure::fromCallable()` rejects
+/// with a TypeError and `$v(...)` with an Error, instead of reading through the null sentinel.
+/// Expected output measured with php 8.5.
+#[test]
+fn test_closure_factories_reject_a_missing_callback() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+$callbacks = ['a' => fn($x) => $x * 2];
+$key = $argv[1] ?? 'b';
+try { $c = Closure::fromCallable(@$callbacks[$key]); echo "made\n"; } catch (TypeError $e) { echo get_class($e), "\n"; }
+$v = @$callbacks[$key];
+try { $d = $v(...); echo "made\n"; } catch (Error $e) { echo get_class($e), "\n"; }
+echo "end\n";
+"#);
+    assert_eq!(out.stdout, "TypeError\nError\nend\n", "{}", out.stderr);
+    assert!(out.success, "{}", out.stderr);
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
+/// An eval-created invokable object reaches a native `callable` parameter as an eval callback
+/// adapter. `Closure::fromCallable()` and `$c(...)` wrap it in a new Closure that still calls it.
+/// Expected output measured with php 8.5.
+#[test]
+fn test_closure_factories_wrap_an_eval_invokable_object() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+function wrap(callable $c) { return Closure::fromCallable($c); }
+function fcc(callable $c) { return $c(...); }
+$o = eval('return new class { public function __invoke($x) { return $x + 1; } };');
+$cb = $argv[1] ?? 'wrap';
+$w = $cb($o);
+var_dump(gettype($w), $w instanceof Closure, get_class($w) === 'Closure', $w(4));
+$cb2 = $argv[2] ?? 'fcc';
+$f = $cb2($o);
+var_dump($f instanceof Closure, get_class($f) === 'Closure', $f(5));
+"#);
+    assert_eq!(
+        out.stdout,
+        "string(6) \"object\"\nbool(true)\nbool(true)\nint(5)\nbool(true)\nbool(true)\nint(6)\n",
+        "{}", out.stderr,
+    );
+    assert!(out.success, "{}", out.stderr);
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
