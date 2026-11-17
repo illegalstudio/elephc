@@ -944,6 +944,7 @@ impl RuntimeFnId {
                 _ => PhpType::Array(Box::new(PhpType::Mixed)),
             },
             RuntimeFnId::ArrayKeys => PhpType::Array(Box::new(PhpType::Mixed)),
+            RuntimeFnId::ArrayColumn => PhpType::Array(Box::new(PhpType::Mixed)),
             // The removed-elements array copies the receiver's payload slots, so its element
             // layout is the receiver's. A type-changing `$replacement` promotes that receiver to
             // `array<mixed>` during lowering, and the checker's pre-promotion `array<int>` no
@@ -1063,6 +1064,18 @@ impl RuntimeFnId {
                 checked.codegen_repr(),
                 PhpType::Array(_) | PhpType::AssocArray { .. }
             )),
+            // A boxed row source is walked by the runtime and answers boxed `Mixed` cells; a
+            // concrete `array<int>` the checker derived from a call-site-specialized untyped
+            // parameter describes some other layout.
+            RuntimeFnId::ArrayColumn => match (
+                arg_types.first().map(PhpType::codegen_repr),
+                checked.codegen_repr(),
+            ) {
+                (Some(PhpType::Mixed | PhpType::Union(_)), PhpType::Array(element)) => {
+                    element.codegen_repr() == PhpType::Mixed
+                }
+                _ => true,
+            },
             // An indexed source slices to a list, or to an integer-keyed hash under a literal
             // `preserve_keys`, and a boxed source answers with the boxed PHP array. A checked hash
             // outside those shapes describes some other operand: a call-site-specialized untyped

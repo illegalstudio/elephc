@@ -134,3 +134,17 @@ $q = [1]; g($q); echo json_encode($q), "\n";
     assert!(out.success, "program failed: {}", out.stderr);
     assert_eq!(out.stdout, "[1,9,[3,7]]{\"k\":50,\"j\":6}16\n[\"z\"]\n");
 }
+
+/// `array_column()` over an untyped parameter whose only call site passes integer columns compiles
+/// (the checker's `array<int>` describes the specialized parameter, not the boxed one lowered).
+#[test]
+fn test_array_column_over_untyped_receiver_with_int_column() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+function g($r) { return array_column($r, 'a'); }
+echo json_encode(g([['a' => 1], ['a' => 2]])), "\n";
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "[1,2]\n");
+}
