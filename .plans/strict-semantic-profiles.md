@@ -930,3 +930,26 @@ strict source evidence and independent numeric domains. No unrelated suite ran.
 Continue safe Reflection initializer reduction using these shared primitives.
 Dynamic placeholders, remaining binding-flow/foreach audits, all six pending
 semantic families and final host/umbrella acceptance remain active.
+
+### Verified142: silent Reflection constant preparation
+
+Reflection prepares reached constants without executing dynamic initializer syntax.
+Shared static publication preserves the original producer contract; deferred null
+placeholders install neither storage nor origin. Preparation roots and retires all
+intermediate owners. Neutral arithmetic retains silent IEEE metadata while the
+compiler keeps its finite folding policy. Structural array union/equality reuse
+key and scalar primitives. Context teardown now also drains define-created constants.
+
+Final9c264422 passes in8m32s, including updated archive build9.90s and native
+before/after Reflection154.30s, prior static origins155.26s and snapshot148.01s.
+Those bundles cover both IR modes, default/Locals profiles and clean heaps. Together
+with unchanged numeric/compiler gates in d5660a60, all15 unique exact tests pass.
+Walker/VM callers, pending Throwable preservation, absent deferred storage/origins,
+array key/order/recursive equality, PHP8.5 reference output and diff hygiene pass.
+No runtime ABI, target emitter or builtin contract changed.
+
+Continue foreach value-before-key publication and callback-safe owner retirement,
+then structural producers, remaining binding-flow audits, all six pending families
+and final host/umbrella acceptance. General dynamic boxed eval array operators still
+need their proper structural boundary, recorded separately in factd9f697ef. No full
+suite, push or PR was run.

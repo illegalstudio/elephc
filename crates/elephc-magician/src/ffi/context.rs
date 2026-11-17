@@ -516,7 +516,7 @@ unsafe fn borrow_path(ptr: *const u8, len: u64) -> std::path::PathBuf {
 /// Consumes a context owner and returns any owned persistent-value destructor exception.
 ///
 /// Generated code raises the returned Throwable after this Rust call returns. The final ABI
-/// owner drains static locals, static properties and materialized class constants while the
+/// owner drains static locals, static properties, class constants and dynamic constants while the
 /// dynamic destructor registry is still live. PCNTL registrations defer final reclamation.
 ///
 /// Releases every retained `CURLOPT_PRIVATE` value in `context.stream_resources` ONE STEP

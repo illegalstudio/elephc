@@ -10,6 +10,19 @@
 
 use super::*;
 
+mod constants;
+
+/// Prepares only silent constants for Reflection, leaving dynamic declarations uninitialized.
+pub(super) fn initialize_constant(function: &str, name: &str, init: &EvalExpr,
+    context: &mut ElephcEvalContext, scope: &ElephcEvalScope,
+    values: &mut impl RuntimeValueOps,
+) -> Result<Option<RuntimeCellHandle>, EvalStatus> {
+    if let Some(value) = context.static_local(function, name) { return Ok(Some(value)); }
+    let producer = local_producer_contract(init, context, scope);
+    let Some(value) = constants::prepare(init, context, values)? else { return Ok(None); };
+    publish(function, name, value, producer, context, values).map(Some)
+}
+
 /// Initializes a persistent cell once, preserving producer alternatives before effects.
 pub(super) fn initialize(function: &str, name: &str, init: &EvalExpr,
     context: &mut ElephcEvalContext, scope: &mut ElephcEvalScope,
@@ -18,6 +31,14 @@ pub(super) fn initialize(function: &str, name: &str, init: &EvalExpr,
     if let Some(value) = context.static_local(function, name) { return Ok(value); }
     let producer = local_producer_contract(init, context, scope);
     let value = eval_owned_expr(init, context, scope, values)?;
+    publish(function, name, value, producer, context, values)
+}
+
+/// Consumes a prepared initializer owner and installs its original producer contract once.
+fn publish(function: &str, name: &str, value: RuntimeCellHandle,
+    producer: Option<EvalParameterType>, context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
     // A recursive initializer can complete the same static before this activation returns.
     if let Some(initialized) = context.static_local(function, name) {
         eval_release_value(context, values, value)?;

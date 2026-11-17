@@ -334,7 +334,7 @@ pub(super) fn eval_reflection_function_method_static_target(
     }
 }
 
-/// Returns the retained current static value or initializes it for reflection.
+/// Snapshots initialized constants and returns an uncached null for deferred initializers.
 pub(super) fn eval_reflection_static_local_value(
     static_key: &str,
     variable: &EvalStaticVarInitializer,
@@ -342,26 +342,29 @@ pub(super) fn eval_reflection_static_local_value(
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
-    let value = if let Some(value) = context.static_local(static_key, &variable.name) { value }
+    let value = if let Some(value) = context.static_local(static_key, &variable.name) { Some(value) }
         else { eval_reflection_static_local_initializer_value(static_key, variable, declaring_class, context, values)? };
-    super::super::static_locals::snapshot(value, context, values)
+    match value {
+        Some(value) => super::super::static_locals::snapshot(value, context, values),
+        None => values.null(),
+    }
 }
 
-/// Evaluates a static-local initializer with PHP magic class/function context.
+/// Prepares silent constant statics with their declaring PHP magic class/function context.
 pub(super) fn eval_reflection_static_local_initializer_value(
     static_key: &str,
     variable: &EvalStaticVarInitializer,
     declaring_class: Option<&str>,
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
-) -> Result<RuntimeCellHandle, EvalStatus> {
+) -> Result<Option<RuntimeCellHandle>, EvalStatus> {
     if let Some(declaring_class) = declaring_class {
         context.push_class_scope(declaring_class.to_string());
         context.push_called_class_scope(declaring_class.to_string());
     }
     context.push_function(static_key.to_string());
     let mut scope = ElephcEvalScope::new();
-    let result = super::super::static_locals::initialize(static_key, &variable.name, &variable.init, context, &mut scope, values);
+    let result = super::super::static_locals::initialize_constant(static_key, &variable.name, &variable.init, context, &scope, values);
     let mut cleanup = Ok(());
     for cell in scope.drain_owned_cells() {
         if let Err(status) = eval_release_value(context, values, cell) { cleanup = Err(status); }

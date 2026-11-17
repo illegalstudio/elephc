@@ -388,6 +388,12 @@ Earlier references to that name keep their previous value. If initialization thr
 the previous local binding remains available to the catch. Recursive initialization
 keeps the first value successfully installed by an inner call.
 
+For interpreted functions, `ReflectionFunction::getStaticVariables()` can inspect
+silent constant initializers before the first call. Dynamic initializers, including
+calls and parameter reads, appear as `null` until execution reaches the declaration.
+Inspection does not execute those initializers or cache their `null` placeholders.
+An initializer that would raise an error or warning also stays deferred.
+
 With `--strict-locals`, the persistent binding keeps its initializer's original
 contract, including union alternatives. A rejected replacement throws `TypeError`
 before changing the stored value. `unset($name)` detaches only the current

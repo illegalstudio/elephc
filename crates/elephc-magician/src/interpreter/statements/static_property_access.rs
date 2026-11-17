@@ -455,7 +455,7 @@ pub(in crate::interpreter) fn eval_class_constant_fetch_result(
 }
 
 /// Resolves eval-visible built-in Reflection class constants.
-pub(super) fn eval_builtin_reflection_class_constant(
+pub(in crate::interpreter) fn eval_builtin_reflection_class_constant(
     class_name: &str,
     constant_name: &str,
     values: &mut impl RuntimeValueOps,

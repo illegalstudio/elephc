@@ -110,6 +110,7 @@ impl ElephcEvalContext {
         self.static_locals.drain().map(|(_, entry)| entry.value)
             .chain(self.static_properties.drain().map(|(_, cell)| cell))
             .chain(self.class_constants.drain().map(|(_, cell)| cell))
+            .chain(self.constants.drain().map(|(_, cell)| cell))
             .collect()
     }
 
@@ -833,12 +834,14 @@ mod persistent_owner_tests {
         context.set_static_local("function", "local", first);
         context.set_static_property("Owner", "value", first);
         context.set_class_constant_cell("Owner", "TOKEN", second);
+        assert!(context.define_constant("DYNAMIC_TOKEN", second));
         let cells = context.take_persistent_cell_owners();
         assert_eq!(cells.iter().filter(|cell| **cell == first).count(), 2);
-        assert_eq!(cells.iter().filter(|cell| **cell == second).count(), 1);
+        assert_eq!(cells.iter().filter(|cell| **cell == second).count(), 2);
         assert!(context.static_local("function", "local").is_none());
         assert!(context.static_property("Owner", "value").is_none());
         assert!(context.class_constant_cell("Owner", "TOKEN").is_none());
+        assert!(context.constant("DYNAMIC_TOKEN").is_none());
         assert!(context.take_persistent_cell_owners().is_empty());
         context.set_static_property("Owner", "replacement", second);
         assert_eq!(context.take_persistent_cell_owners(), vec![second]);
