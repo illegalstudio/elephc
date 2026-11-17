@@ -242,6 +242,7 @@ pub(super) fn check_property_array_assign(
             refuse_scope_dynamic_element_write(checker, class_name, property, span)?;
             let (prop_ty, property_has_declared_type) =
                 resolve_object_array_property(checker, class_name, property, span)?;
+            crate::semantics::array_keys::validate_write_receiver(checker.semantic_profile, &prop_ty, &idx_ty, index.span)?;
             if prop_ty == PhpType::Str {
                 return Err(CompileError::new(
                     span,
@@ -287,6 +288,7 @@ pub(super) fn check_property_array_assign(
                 span,
                 "Array index assignment",
             )?;
+            crate::semantics::array_keys::validate_write_receiver(checker.semantic_profile, &field_ty, &idx_ty, index.span)?;
 
             if !matches!(normalized_idx_ty, PhpType::Int) {
                 return Err(CompileError::new(span, "Array index must be integer"));

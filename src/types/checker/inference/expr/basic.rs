@@ -207,7 +207,9 @@ impl Checker {
                 let mut key_ty: Option<PhpType> = None;
                 let mut val_ty: Option<PhpType> = None;
                 for (k, v) in pairs {
-                    let kt = normalized_array_key_type(k, self.infer_type(k, env)?, self.semantic_profile);
+                    let raw_key = self.infer_type(k, env)?;
+                    crate::semantics::array_keys::validate(self.semantic_profile, &raw_key, k.span)?;
+                    let kt = normalized_array_key_type(k, raw_key, self.semantic_profile);
                     let vt = self.infer_type(v, env)?;
                     key_ty = Some(match key_ty {
                         Some(current) if current == kt => current,
@@ -243,7 +245,8 @@ impl Checker {
                             self.infer_type(source, env)?
                         }
                         ArrayEntry::Keyed(key, value) => {
-                            self.infer_type(key, env)?;
+                            let key_ty = self.infer_type(key, env)?;
+                            crate::semantics::array_keys::validate(self.semantic_profile, &key_ty, key.span)?;
                             self.infer_type(value, env)?
                         }
                         ArrayEntry::Value(value) => self.infer_type(value, env)?,

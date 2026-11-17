@@ -43,6 +43,7 @@ pub(super) fn check_array_assign(
     // instead of rejecting the target, exactly as the append form already does.
     if !env.contains_key(array) {
         let idx_ty = checker.infer_type_with_assignment_effects(index, env)?;
+        crate::semantics::array_keys::validate(checker.semantic_profile, &idx_ty, index.span)?;
         let val_ty = checker.infer_type_with_assignment_effects(value, env)?;
         let key_ty = normalized_array_key_type(index, idx_ty, checker.semantic_profile);
         let created = if key_ty == PhpType::Int {
@@ -66,6 +67,7 @@ pub(super) fn check_array_assign(
     let nullable = nullable_array_write_view(&current);
     let had_nullable_read = nullable.is_some();
     let arr_ty = nullable.unwrap_or(current);
+    crate::semantics::array_keys::validate_write_receiver(checker.semantic_profile, &arr_ty, &idx_ty, index.span)?;
     if matches!(arr_ty, PhpType::Array(_) | PhpType::AssocArray { .. }) || arr_ty.is_php_array() { env.insert(array.to_string(), arr_ty.clone()); }
     if arr_ty == PhpType::Str {
         return check_string_offset_assign(array, index, &idx_ty, value, span);
@@ -403,7 +405,8 @@ pub(super) fn check_nested_array_assign(
 
     super::static_properties::promote_static_nested_write_root(checker, target, span)?;
     let arr_ty = checker.infer_nested_write_parent_with_effects(array, env)?;
-    checker.infer_type_with_assignment_effects(index, env)?;
+    let idx_ty = checker.infer_type_with_assignment_effects(index, env)?;
+    crate::semantics::array_keys::validate_write_receiver(checker.semantic_profile, &arr_ty, &idx_ty, index.span)?;
     if !nested_write_parent_can_promote(&arr_ty, array)
         || !check_promoted_nested_update_value(checker, target, value, span, env)?
     {

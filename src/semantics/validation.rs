@@ -11,11 +11,18 @@ use super::{SemanticProfile, StrictFeature};
 use crate::ast_visit::{walk_program, AstVisitor};
 use crate::errors::CompileError;
 use crate::names::php_symbol_key;
-use crate::parser::ast::{BinOp, CastType, Expr, ExprKind, Program, Stmt, StmtKind};
+use crate::parser::ast::{ArrayEntry, BinOp, CastType, Expr, ExprKind, Program, Stmt, StmtKind};
+
+/// Guarantees requiring original source checks and recursive literal-eval validation.
+const SOURCE_GUARANTEES: &[StrictFeature] = &[
+    StrictFeature::DynamicCode, StrictFeature::Bools, StrictFeature::Overflow,
+    StrictFeature::Arithmetic, StrictFeature::Coercions, StrictFeature::Casts,
+    StrictFeature::Comparisons, StrictFeature::Strings, StrictFeature::ArrayKeys,
+];
 
 /// Validates syntax-dependent guarantees without pruning any branch or declaration.
 pub fn validate_source(program: &Program, profile: SemanticProfile) -> Result<(), CompileError> {
-    if ![StrictFeature::DynamicCode, StrictFeature::Bools, StrictFeature::Overflow, StrictFeature::Arithmetic, StrictFeature::Coercions, StrictFeature::Casts, StrictFeature::Comparisons, StrictFeature::Strings].into_iter().any(|feature| profile.contains(feature)) { return Ok(()); }
+    if !SOURCE_GUARANTEES.iter().copied().any(|feature| profile.contains(feature)) { return Ok(()); }
     crate::compiler_stack::with_compiler_stack(|| {
         super::numeric_constants::validate(program, profile)?;
         let mut validator = SourceValidator { depth: 0, error: None, profile, source_modes: Default::default() };
@@ -80,6 +87,23 @@ impl AstVisitor for SourceValidator {
     fn expression(&mut self, expr: &Expr) {
         let source_mode = self.source_modes.enter_expression(expr).mode;
         if self.error.is_some() { return; }
+        if self.profile.contains(StrictFeature::ArrayKeys) {
+            match &expr.kind {
+                ExprKind::ArrayLiteralAssoc(entries) => {
+                    for (key, _) in entries { self.array_key(key); }
+                }
+                ExprKind::ArrayLiteralMixed(entries) => {
+                    for entry in entries {
+                        if let ArrayEntry::Keyed(key, _) = entry { self.array_key(key); }
+                    }
+                }
+                ExprKind::ArrayAccess { array, index } if matches!(array.kind,
+                    ExprKind::ArrayLiteral(_) | ExprKind::ArrayLiteralAssoc(_)
+                    | ExprKind::ArrayLiteralMixed(_) | ExprKind::Cast { target: CastType::Array, .. }) => self.array_key(index),
+                _ => {}
+            }
+            if self.error.is_some() { return; }
+        }
         if super::strings::active(self.profile, source_mode) {
             let result = match &expr.kind {
                 ExprKind::BinaryOp { left, op: BinOp::Concat, right } => [left, right].into_iter()
@@ -153,8 +177,7 @@ impl AstVisitor for SourceValidator {
                 "--strict-dynamic-code requires literal eval source verified during compilation"));
             return;
         };
-        let verification_flag = [StrictFeature::DynamicCode, StrictFeature::Overflow, StrictFeature::Bools,
-            StrictFeature::Arithmetic, StrictFeature::Coercions, StrictFeature::Casts, StrictFeature::Comparisons, StrictFeature::Strings].into_iter()
+        let verification_flag = SOURCE_GUARANTEES.iter().copied()
             .find(|feature| self.profile.contains(*feature)).expect("source verification was requested").flag();
         if self.depth >= 64 {
             self.error = Some(CompileError::new(expr.span,
@@ -217,6 +240,25 @@ fn concat_operand_type(expr: &Expr) -> Option<crate::types::PhpType> {
 }
 
 impl SourceValidator {
+    /// Keeps original key kinds visible before folding, including boolean-producing syntax.
+    fn array_key(&mut self, expr: &Expr) {
+        if self.error.is_some() { return; }
+        let ty = concat_operand_type(expr).or_else(|| match &expr.kind {
+            ExprKind::Not(_) | ExprKind::BinaryOp { op: BinOp::Eq | BinOp::NotEq
+                | BinOp::StrictEq | BinOp::StrictNotEq | BinOp::Lt | BinOp::Gt
+                | BinOp::LtEq | BinOp::GtEq | BinOp::And | BinOp::Or | BinOp::Xor, .. } =>
+                Some(crate::types::PhpType::Bool),
+            ExprKind::BinaryOp { op: BinOp::Div, .. } => Some(crate::types::PhpType::Float),
+            ExprKind::Cast { target: CastType::Object, .. } => Some(crate::types::PhpType::Object(String::new())),
+            _ => None,
+        });
+        if let Some(ty) = ty {
+            if let Err(error) = super::array_keys::validate(self.profile, &ty, expr.span) {
+                self.error = Some(error);
+            }
+        }
+    }
+
     /// Rejects a syntactically nonboolean condition before folding can discard it.
     fn boolean_literal(&mut self, expr: &Expr) {
         let nonboolean = match &expr.kind {

@@ -506,6 +506,7 @@ pub(super) fn check_ref_assign(
                 _ => false,
             };
             let index_ty = checker.infer_type_with_assignment_effects(index, env)?;
+            crate::semantics::array_keys::validate_receiver(checker.semantic_profile, &array_ty, &index_ty, index.span)?;
             let normalized_index_ty = normalized_array_key_type(index, index_ty, checker.semantic_profile);
             let valid_php_key = matches!(
                 normalized_index_ty,

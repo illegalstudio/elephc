@@ -1032,3 +1032,23 @@ Public ArrayKeys remains gated. Continue original-source and dynamic key-domain
 checks, spread/default/reflection identity, eval/reference metadata and constructor
 parity, then the remaining binding audits, six pending families and final umbrella
 acceptance. No full suite, push or PR was run.
+
+### Verified147: original array key domain validation
+
+Shared original-key membership distinguishes accepted kinds, rejected alternatives
+and dynamic guards without enabling another strict family. Source checks and
+literal eval share one guarantee inventory. Typed array places validate before
+normalization, including references, nested/property/static writes, probes and
+autovivifying parents. String offsets, ArrayAccess and unknown receivers keep their
+own rules; dynamic keys remain admitted for the following runtime guard work.
+
+Preflight05d4730e passes all three new exact units. Final95ef3782 passes in1m42s:
+expanded all-target place/probe checks0.80s, archives61.33s, existing all-target
+shapes2.26s, native shapes1.67s, native full-optimizer parity1.32s and original
+literal/dynamic-eval source control0.28s. All seven unique exact gates and diff
+hygiene pass. Native heaps stay clean. No ABI or target emitter changed.
+
+Public ArrayKeys remains gated. Continue receiver-aware dynamic key guards and
+owner/effect handling, then spread/default/reflection identity, eval/reference
+metadata and constructor parity. Remaining binding audits, all six pending
+families and final umbrella acceptance remain active. No full suite, push or PR.

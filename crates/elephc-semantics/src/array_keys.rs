@@ -9,6 +9,9 @@
 
 use crate::{SemanticProfile, StrictFeature};
 
+/// Shared diagnostic for original values outside the exact array-key domain.
+pub const EXACT_KEY_MESSAGE: &str = "--strict-array-keys requires int|string array keys without conversion";
+
 /// The semantic key obtained from a borrowed string spelling.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum StringKey<'a> {
