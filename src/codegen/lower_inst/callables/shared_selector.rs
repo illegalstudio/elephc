@@ -267,7 +267,7 @@ pub(super) fn emit_scope_extras(
         abi::emit_push_reg_pair(ctx.emitter, ptr_reg, len_reg);
         let matched_label = ctx.next_label("scope_callable_string_matched");
         let string_miss = ctx.next_label("scope_callable_string_miss");
-        selector_tables::emit_string_case_table_lookup(ctx, &string_cases, &matched_label, &string_miss);
+        selector_tables::emit_string_case_table_lookup(ctx, &string_cases, None, &matched_label, &string_miss);
         ctx.emitter.label(&string_miss);
         abi::emit_release_temporary_stack(ctx.emitter, 16);
         abi::emit_jump(ctx.emitter, &public_label);

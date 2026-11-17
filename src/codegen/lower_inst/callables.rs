@@ -730,6 +730,8 @@ fn emit_inline_mixed_callable_descriptor_value(
 
     ctx.emitter.label(&string_label);
     let candidate_names = ctx.runtime_callable_candidates(callable);
+    // An owned result records that PHP still sees a string here, for gettype(), get_class() and
+    // `::class`: the name selects a static descriptor variant carrying that origin.
     emit_runtime_string_descriptor_value_from_unboxed(
         ctx,
         op_name,
@@ -739,15 +741,11 @@ fn emit_inline_mixed_callable_descriptor_value(
         eval_fallback_slot.map(|_| fatal_label.as_str()),
         matches!(eval_fallback_slot, Some(EvalCallbackContext::Slot(_))),
         scoped,
+        (retain_existing_descriptor && !fresh_closure)
+            .then_some(callable_descriptor::CALLABLE_DESC_ORIGIN_STRING),
     )?;
     if fresh_closure {
         emit_fresh_closure_from_persistent_descriptor(ctx);
-    } else if retain_existing_descriptor {
-        // The name selected a shared static descriptor; an owned private copy records that PHP
-        // still sees a string here, for gettype(), get_class() and `::class`.
-        callable_descriptor::emit_runtime_copy_with_origin(
-            ctx.emitter, callable_descriptor::CALLABLE_DESC_ORIGIN_STRING,
-        );
     }
     abi::emit_jump(ctx.emitter, &done_label);
 
@@ -777,17 +775,10 @@ fn emit_inline_mixed_callable_descriptor_value(
         for case in &static_cases {
             let next_label = ctx.next_label("mixed_callable_value_array_static_next");
             emit_branch_if_mixed_static_case_mismatch(ctx, case, &next_label);
-            abi::emit_symbol_address(
-                ctx.emitter,
-                abi::int_result_reg(ctx.emitter),
-                &case.case.descriptor_label,
-            );
-            if retain_existing_descriptor && !fresh_closure {
-                // An owned private copy of the shared static descriptor records the array.
-                callable_descriptor::emit_runtime_copy_with_origin(
-                    ctx.emitter, callable_descriptor::CALLABLE_DESC_ORIGIN_ARRAY,
-                );
-            }
+            // An owned result selects the static descriptor variant that records the array.
+            let origin = (retain_existing_descriptor && !fresh_closure)
+                .then_some(callable_descriptor::CALLABLE_DESC_ORIGIN_ARRAY);
+            emit_descriptor_address_with_origin(ctx, &case.case.descriptor_label, origin);
             abi::emit_jump(ctx.emitter, &static_selected_label);
             ctx.emitter.label(&next_label);
         }
@@ -1446,6 +1437,7 @@ fn emit_runtime_string_descriptor_value_from_unboxed(
     eval_fallback: Option<&str>,
     own_eval_context: bool,
     scoped: bool,
+    origin: Option<u64>,
 ) -> Result<()> {
     let cases = runtime_string_descriptor_cases_at_arity(
         ctx,
@@ -1476,7 +1468,7 @@ fn emit_runtime_string_descriptor_value_from_unboxed(
 
     let done_label = ctx.next_label(&format!("{}_mixed_string_descriptor_done", op_name));
     let miss_label = ctx.next_label(&format!("{}_mixed_string_descriptor_missing", op_name));
-    selector_tables::emit_string_case_table_lookup(ctx, &cases, &done_label, &miss_label);
+    selector_tables::emit_string_case_table_lookup(ctx, &cases, origin, &done_label, &miss_label);
 
     ctx.emitter.label(&miss_label);
     // A function entered from `eval()` (no eval context of its own) lets the eval frame resolve
@@ -1600,6 +1592,24 @@ fn emit_strip_callable_name_separator(ctx: &mut FunctionContext<'_>, ptr_reg: &s
         }
     }
     ctx.emitter.label(&done);
+}
+
+/// Loads the static descriptor at `label` into the result register, or with an `origin`
+/// (`CALLABLE_DESC_ORIGIN_*`), its static variant that records the PHP string or array the
+/// callable stands for. A descriptor without a static variant gets a private runtime copy.
+fn emit_descriptor_address_with_origin(ctx: &mut FunctionContext<'_>, label: &str, origin: Option<u64>) {
+    let result = abi::int_result_reg(ctx.emitter);
+    let Some(origin) = origin else {
+        abi::emit_symbol_address(ctx.emitter, result, label);
+        return;
+    };
+    match callable_descriptor::static_descriptor_with_origin(ctx.data, label, origin) {
+        Some(variant) => abi::emit_symbol_address(ctx.emitter, result, &variant),
+        None => {
+            abi::emit_symbol_address(ctx.emitter, result, label);
+            callable_descriptor::emit_runtime_copy_with_origin(ctx.emitter, origin);
+        }
+    }
 }
 
 /// Lowers `call_user_func_array($object, $args)` through an `__invoke` descriptor.

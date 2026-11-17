@@ -34,16 +34,32 @@ const SCAN_STATE_BYTES: usize = 16;
 ///
 /// On a match the integer result register holds the case descriptor and control reaches
 /// `matched_label`; otherwise `miss_label`. The name stays pushed on both exits.
+///
+/// With an `origin` (`CALLABLE_DESC_ORIGIN_*`), a row holds the static descriptor variant that
+/// records the PHP string the callable stands for; a descriptor without such a variant gets a
+/// private runtime copy after the match.
 pub(super) fn emit_string_case_table_lookup(
     ctx: &mut FunctionContext<'_>,
     cases: &[callable_dispatch::RuntimeCallableCase],
+    origin: Option<u64>,
     matched_label: &str,
     miss_label: &str,
 ) {
     let mut words = Vec::new();
     let mut rows = 0usize;
+    let mut runtime_origin_copy = false;
     for case in cases {
         let Some(php_name) = case.php_name.as_ref() else { continue; };
+        let descriptor = match origin {
+            Some(origin) => callable_descriptor::static_descriptor_with_origin(
+                ctx.data, &case.descriptor_label, origin,
+            )
+            .unwrap_or_else(|| {
+                runtime_origin_copy = true;
+                case.descriptor_label.clone()
+            }),
+            None => case.descriptor_label.clone(),
+        };
         // The per-case compare accepted the bare name and its `\`-prefixed spelling.
         let mut spellings = vec![php_name.clone()];
         if !php_name.starts_with('\\') {
@@ -54,7 +70,7 @@ pub(super) fn emit_string_case_table_lookup(
             words.extend([
                 DataWord::Symbol(label),
                 DataWord::U64(len as u64),
-                DataWord::Symbol(case.descriptor_label.clone()),
+                DataWord::Symbol(descriptor.clone()),
             ]);
             rows += 1;
         }
@@ -101,8 +117,28 @@ pub(super) fn emit_string_case_table_lookup(
         }
     }
     abi::emit_release_temporary_stack(ctx.emitter, SCAN_STATE_BYTES);
+    if let (Some(origin), true) = (origin, runtime_origin_copy) {
+        emit_runtime_origin_copy_unless_marked(ctx, origin, matched_label);
+    }
     abi::emit_jump(ctx.emitter, matched_label);
     emit_scan_advance(ctx, &scan, STRING_ROW_BYTES, miss_label);
+}
+
+/// Replaces a matched descriptor that does not record `origin` yet (a row without a static
+/// origin variant) with a private runtime copy that does; a marked variant reaches `done_label`.
+fn emit_runtime_origin_copy_unless_marked(ctx: &mut FunctionContext<'_>, origin: u64, done_label: &str) {
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction("ldr x9, [x0]");                            // load the selected descriptor kind word
+            ctx.emitter.instruction(&format!("tst x9, #{}", origin));           // is it a static variant that records the origin?
+            ctx.emitter.instruction(&format!("b.ne {}", done_label));           // a marked variant needs no runtime copy
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction(&format!("test QWORD PTR [rax], {}", origin)); // is it a static variant that records the origin?
+            ctx.emitter.instruction(&format!("jnz {}", done_label));            // a marked variant needs no runtime copy
+        }
+    }
+    callable_descriptor::emit_runtime_copy_with_origin(ctx.emitter, origin);
 }
 
 /// Where the receiver (and, for callable arrays, the method name) of a scan sits on the
