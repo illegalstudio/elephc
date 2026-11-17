@@ -10,6 +10,32 @@
 
 use crate::support::*;
 
+/// Scope finalization consumes its loaded string copy after normal and rejected publication.
+#[test]
+fn test_eval_scope_finalizer_balances_loaded_string_owners() {
+    let source = include_str!("../fixtures/strict/literal_eval_scope_string_owners.php");
+    for mode in ["--ir-opt=off", "--ir-opt=on"] {
+        for strict in [false, true] {
+            let mut flags = vec![mode, "--heap-debug"];
+            if strict { flags.push("--strict-locals"); }
+            let output = StrictFixture::new(source).capture(&flags);
+            assert!(output.status.success(), "{flags:?}: {}", String::from_utf8_lossy(&output.stderr));
+            assert_eq!(String::from_utf8_lossy(&output.stdout), "after|after|after|after|");
+            assert!(String::from_utf8_lossy(&output.stderr).contains("HEAP DEBUG: leak summary: clean"),
+                "{flags:?}: {}", String::from_utf8_lossy(&output.stderr));
+        }
+        let rejected = r#"<?php $value = 1;
+try { eval('$value="before"; $value="after";'); echo 'W'; }
+catch (TypeError $error) { echo 'T'; }
+echo gettype($value), ':', $value;
+"#;
+        let output = StrictFixture::new(rejected).capture(&[mode, "--strict-locals", "--heap-debug"]);
+        assert_eq!(String::from_utf8_lossy(&output.stdout), "Tinteger:1", "{mode}: {}", String::from_utf8_lossy(&output.stderr));
+        assert!(String::from_utf8_lossy(&output.stderr).contains("HEAP DEBUG: leak summary: clean"),
+            "{mode}: {}", String::from_utf8_lossy(&output.stderr));
+    }
+}
+
 /// Native and bridge-backed literal eval retain scalar contracts, references and exact owners.
 #[test]
 fn test_strict_literal_eval_preserves_native_binding_contracts() {

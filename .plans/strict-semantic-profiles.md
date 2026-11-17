@@ -371,7 +371,7 @@ evidence and outstanding guarantees are recorded below.
 
 ## Implementation progress
 
-Verified through step122 (this commit), with remaining feature integration in progress. Issue:
+Verified through step123 (this commit), with remaining feature integration in progress. Issue:
 https://github.com/illegalstudio/elephc/issues/2347.
 
 The full task remains active. The user requested complete implementation, with a
@@ -935,3 +935,28 @@ test_eval_fragment_composes_with_strict_locals deliberately retains its previous
 own-local expectation for now; its imported native-binding part now catches the
 TypeError and observes integer1. Reverse eval origins b99d1b21, broader binding
 flow and the six remaining feature families plus umbrella/host acceptance remain.
+
+
+### Verified123: eval finalizer value ownership
+
+emit_eval_scope_finalizer now roots the loaded publication value across a throwing
+EvalScopeSet, unpins on normal return and retires that loaded value after the scope
+has taken its independent owner. The former finalizer emitted a MaybeOwned string
+load and scope store without releasing its value copy, leaking one string per
+activation. The same helper covers normal and rejected publication without a new
+target-specific path or changes to binding acceptance.
+
+Job3f893fed passed build and two exact native gates in1m26s. Final job762d9fc5
+passed build, three exact gates and diff hygiene in1m54s after sharing the valid
+same-kind string fixture with the all-five-target literal emission gate. Default
+and Locals, both IR modes, repeated fresh/open scope activations and rejected
+publication have clean heaps. Existing pure/bridge literal binding behavior passes.
+The regression uses same-kind string stores, so it does not encode the unfinished
+fresh-binding retype freedom as an approved requirement.
+
+Origin baseline45552126 remains separate: the identical fragment assigning int
+then string is shared by a fresh caller and an explicit-mixed caller, and both
+currently print changedW|changedO|. Only the fresh activation should reject.
+Reverse opaque-eval origin still prints Winteger|1 in both profiles. Continue the
+full approved implementation with source-origin transport and all remaining
+profile families, preserving legitimate mixed/union producer openness.

@@ -157,8 +157,9 @@ fn strict_settype_local_contracts_emit_on_every_target() {
 /// Literal eval publishes through scalar native sources while keeping its fully compiled scope runtime.
 #[test]
 fn strict_literal_eval_binding_contracts_emit_on_every_target() {
-    let source = include_str!("../../../tests/fixtures/strict/literal_eval_binding_contracts.php");
-    let program = crate::parser::parse_with_mode(&crate::lexer::tokenize(source).unwrap(), SourceMode::Php).unwrap();
+    let source = format!("{}\n{}", include_str!("../../../tests/fixtures/strict/literal_eval_binding_contracts.php"),
+        include_str!("../../../tests/fixtures/strict/literal_eval_scope_string_owners.php").strip_prefix("<?php").unwrap());
+    let program = crate::parser::parse_with_mode(&crate::lexer::tokenize(&source).unwrap(), SourceMode::Php).unwrap();
     let profile = SemanticProfile::PERMISSIVE.with(StrictFeature::Locals, true)
         .with(StrictFeature::DynamicCode, true);
     for name in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {

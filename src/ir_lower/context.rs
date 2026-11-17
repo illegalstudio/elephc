@@ -2138,6 +2138,8 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
             let scope = self.load_local(&scope_param, span);
             let value = self.load_local(&name, span);
             let name_data = self.intern_global_name(&name);
+            let at = span.unwrap_or_else(Span::dummy);
+            let owners = crate::ir_lower::expr::pin_in_flight_owners(self, &[value.value], at);
             self.emit_void(
                 Op::EvalScopeSet,
                 vec![scope.value, value.value],
@@ -2145,6 +2147,8 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
                 Op::EvalScopeSet.default_effects(),
                 span,
             );
+            crate::ir_lower::expr::unpin_in_flight_owners(self, owners, at);
+            crate::ir_lower::ownership::release_if_owned(self, value, span);
         }
     }
 
