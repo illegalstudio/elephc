@@ -13,10 +13,11 @@
 //! - `chr(255 - ord($c))` is `~$c` for one byte; checked against php's own `~` over all 256 bytes
 //!   and random input before transcription.
 
-use crate::parser::ast::{BinOp, Program, Stmt, TypeExpr};
+use crate::parser::ast::{BinOp, CastType, Expr, ExprKind, Program, Stmt, TypeExpr};
+use crate::span::Span;
 use crate::synthetic_class::{
-    e_binop, e_call, e_index, e_int, e_post_inc, e_str, e_var, function, internal_declarations,
-    s_assign, s_expr, s_for, s_return,
+    e_binop, e_call, e_cast, e_index, e_int, e_new, e_post_inc, e_str, e_ternary, e_var, function,
+    internal_declarations, s_assign, s_expr, s_for, s_if, s_return, s_throw, t_mixed,
 };
 
 /// The helper a `~` over a `string` operand is lowered to.
@@ -38,9 +39,50 @@ fn decl_fn_elephc_string_bitnot() -> Stmt {
         .build()
 }
 
-/// Builds the helper.
+/// The helper a `~` over a `mixed` or union operand is lowered to.
+pub(crate) const MIXED_BITNOT_NAME: &str = "__elephc_mixed_bitnot";
+
+/// `~$v` of an integer-typed value.
+fn int_bitnot(value: Expr) -> Expr {
+    Expr::new(ExprKind::BitNot(Box::new(e_cast(CastType::Int, value))), Span::dummy())
+}
+
+/// `__elephc_mixed_bitnot` — php's `~` over a value known only at run time: a string is
+/// complemented byte by byte, an int or float is complemented as an integer, and null, bool,
+/// array and object operands throw php's `Cannot perform bitwise not on <type>` TypeError.
+fn decl_fn_elephc_mixed_bitnot() -> Stmt {
+    let value_name = e_ternary(
+        e_call("is_bool", vec![e_var("v")]),
+        e_ternary(e_var("v"), e_str("true"), e_str("false")),
+        e_call("get_debug_type", vec![e_var("v")]),
+    );
+    function(MIXED_BITNOT_NAME)
+        .param("v", t_mixed())
+        .returns(t_mixed())
+        .body(vec![
+            s_if(
+                e_call("is_string", vec![e_var("v")]),
+                vec![s_return(e_call(STRING_BITNOT_NAME, vec![e_var("v")]))],
+                vec![],
+                None,
+            ),
+            s_if(
+                e_binop(e_call("is_int", vec![e_var("v")]), BinOp::Or, e_call("is_float", vec![e_var("v")])),
+                vec![s_return(int_bitnot(e_var("v")))],
+                vec![],
+                None,
+            ),
+            s_throw(e_new(
+                "TypeError",
+                vec![e_binop(e_str("Cannot perform bitwise not on "), BinOp::Concat, value_name)],
+            )),
+        ])
+        .build()
+}
+
+/// Builds the helpers.
 pub(crate) fn declarations() -> Program {
-    internal_declarations(|| vec![decl_fn_elephc_string_bitnot()])
+    internal_declarations(|| vec![decl_fn_elephc_string_bitnot(), decl_fn_elephc_mixed_bitnot()])
 }
 
 /// Whether `program` spells a `~` anywhere, the only way the helper can be reached.

@@ -928,3 +928,25 @@ fn test_reflection_constants_of_long_operator_chains() {
     assert_eq!(out.stdout, "int(16777215)\nstring(62) \"p0p1p2p3p4p5p6p7p8p9p10p11p12p13p14p15p16p17p18p19p20p21p22p23\"\nint(16777215)\nstring(62) \"p0p1p2p3p4p5p6p7p8p9p10p11p12p13p14p15p16p17p18p19p20p21p22p23\"\n");
     assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
 }
+
+/// `~` over a `mixed` operand follows its run-time type: a string is complemented byte by byte,
+/// an int or float as an integer, and null, bool and array operands throw php's TypeError. It
+/// int-cast every payload before, so `f("ab")` answered `~0` and `f(null)` answered `-1`.
+#[test]
+fn test_bitwise_not_over_a_mixed_operand_follows_its_run_time_type() {
+    let out = compile_and_run(
+        r#"<?php
+function f(mixed $x) { return ~$x; }
+var_dump(f("ab") === "\x9e\x9d");
+var_dump(f(5));
+var_dump(f(2.0));
+foreach ([null, true, []] as $bad) {
+    try { f($bad); } catch (TypeError $e) { echo $e->getMessage(), "\n"; }
+}
+"#,
+    );
+    assert_eq!(
+        out,
+        "bool(true)\nint(-6)\nint(-3)\nCannot perform bitwise not on null\nCannot perform bitwise not on true\nCannot perform bitwise not on array\n"
+    );
+}

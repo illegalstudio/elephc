@@ -442,6 +442,20 @@ fn lower_expr_inner(ctx: &mut LoweringContext<'_, '_>, expr: &Expr) -> LoweredVa
                 expr,
             )
         }
+        // A run-time-typed operand is a string, a number or a TypeError, decided by a helper.
+        ExprKind::BitNot(inner)
+            if matches!(
+                merge_temps::materialized_expr_type_for_merge(ctx, inner),
+                PhpType::Mixed | PhpType::Union(_)
+            ) =>
+        {
+            lower_function_call(
+                ctx,
+                &crate::names::Name::unqualified(crate::string_bitnot_prelude::MIXED_BITNOT_NAME),
+                std::slice::from_ref(inner.as_ref()),
+                expr,
+            )
+        }
         ExprKind::BitNot(inner) => lower_int_unary(ctx, inner, Op::IBitNot, expr),
         ExprKind::Throw(inner) => lower_throw_expr(ctx, inner, expr),
         ExprKind::ErrorSuppress(inner) => lower_error_suppress(ctx, inner, expr),
