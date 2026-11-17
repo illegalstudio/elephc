@@ -75,9 +75,9 @@ pub(crate) fn emit_callable_invoke_owned_args(emitter: &mut Emitter) {
     // -- release argument ownership before transferring a successful result --
     emitter.label(cleanup);
     release_mixed_slot(emitter, ARGUMENTS);
-    abi::load_at_offset(emitter, result, OWNED_DESCRIPTOR);
-    clear_slot(emitter, OWNED_DESCRIPTOR);
-    abi::emit_call_label(emitter, "__rt_callable_descriptor_release");
+    elephc_memoir::frame_owners::emit_release(
+        emitter, elephc_memoir::FrameOffset::new(OWNED_DESCRIPTOR), "__rt_callable_descriptor_release",
+    );
     abi::load_at_offset(emitter, result, PENDING);
     abi::emit_branch_if_int_result_zero(emitter, returned);
     release_mixed_slot(emitter, RESULT);
@@ -163,16 +163,12 @@ fn restore_handler_state(emitter: &mut Emitter) {
 
 /// Releases a boxed owner after clearing its slot, leaving reentrant cleanup idempotent.
 fn release_mixed_slot(emitter: &mut Emitter, offset: usize) {
-    abi::load_at_offset(emitter, abi::int_result_reg(emitter), offset);
-    clear_slot(emitter, offset);
-    abi::emit_call_label(emitter, "__rt_decref_mixed");
+    elephc_memoir::frame_owners::emit_release(emitter, elephc_memoir::FrameOffset::new(offset), "__rt_decref_mixed");
 }
 
 /// Clears one cleanup slot without disturbing a loaded owner or either exception-chain argument.
 fn clear_slot(emitter: &mut Emitter, offset: usize) {
-    let scratch = abi::secondary_scratch_reg(emitter);
-    abi::emit_load_int_immediate(emitter, scratch, 0);
-    abi::store_at_offset(emitter, scratch, offset);
+    elephc_memoir::frame_owners::emit_clear(emitter, elephc_memoir::FrameOffset::new(offset));
 }
 
 /// Consumes a parked exception owner into the pending chain before propagating the newest throw.

@@ -87,3 +87,5 @@ pub mod owner_records;
 
 pub mod foreign_release;
 pub mod conditional_owner;
+
+pub mod frame_owners;

@@ -15,3 +15,5 @@ pub mod str_append;
 
 pub mod concat;
 pub mod capture_buffer;
+
+pub mod strcopy;

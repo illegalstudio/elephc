@@ -375,16 +375,12 @@ fn restore_boundary(emitter: &mut Emitter) {
 
 /// Clears a helper-owned slot without destroying a loaded value or outgoing hash arguments.
 fn clear_slot(emitter: &mut Emitter, offset: usize) {
-    let scratch = abi::secondary_scratch_reg(emitter);
-    abi::emit_load_int_immediate(emitter, scratch, 0);
-    abi::store_at_offset(emitter, scratch, offset);
+    elephc_memoir::frame_owners::emit_clear(emitter, elephc_memoir::FrameOffset::new(offset));
 }
 
 /// Releases an owner only after clearing its slot, making subsequent cleanup safe to resume.
 fn release_slot(emitter: &mut Emitter, offset: usize, helper: &str) {
-    abi::load_at_offset(emitter, abi::int_result_reg(emitter), offset);
-    clear_slot(emitter, offset);
-    abi::emit_call_label(emitter, helper);
+    elephc_memoir::frame_owners::emit_release(emitter, elephc_memoir::FrameOffset::new(offset), helper);
 }
 
 /// Returns the previous-owner argument register of the shared raw-Throwable chain helper.
