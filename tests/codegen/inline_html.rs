@@ -35,6 +35,14 @@ fn test_inline_html_swallows_one_newline_after_the_closing_tag() {
     assert_eq!(out, "first\n\nsecond\n");
 }
 
+/// Verifies a lone carriage return after a closing tag is the swallowed newline too, as php's
+/// scanner treats `\r`, `\n` and `\r\n` alike.
+#[test]
+fn test_inline_html_swallows_a_lone_carriage_return_after_the_closing_tag() {
+    let out = compile_and_run("<?php echo 'a'; ?>\rtext\n");
+    assert_eq!(out, "atext\n");
+}
+
 /// Verifies alternative syntax spanning tag boundaries — the loop and branch spelling every PHP
 /// template uses — because the closing tag is lexed as a statement terminator plus an `echo`.
 #[test]

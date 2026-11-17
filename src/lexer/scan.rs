@@ -188,7 +188,7 @@ fn scan_inline_html(cursor: &mut Cursor, tokens: &mut Vec<SpannedToken>) {
     if cursor.remaining().starts_with("\r\n") {
         cursor.advance();
         cursor.advance();
-    } else if cursor.peek() == Some('\n') {
+    } else if matches!(cursor.peek(), Some('\n' | '\r')) {
         cursor.advance();
     }
     scan_inline_html_text(cursor, tokens);
