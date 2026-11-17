@@ -529,10 +529,12 @@ Using `filter_var()`, `filter_var_array()`, `filter_input()`,
 `filter_input_array()`, `filter_has_var()`, `filter_list()` or `filter_id()`
 automatically links the optional `elephc_filter` bridge and injects the complete
 `ext/filter` PHP surface. `--with-filter` also retains the surface for opaque
-dynamic eval. Integer, float, boolean, IP, MAC, domain, email, regexp and
-sanitizer validation run in the bridge on every supported target; email and
-regexp validation use its pure-Rust PCRE-compatible engine, so no managed native
-package is required.
+dynamic eval. Integer, float, boolean, IP, MAC, domain, email and sanitizer
+validation run in the bridge on every supported target; email matching uses its
+pure-Rust PCRE-compatible engine. `FILTER_VALIDATE_REGEXP` additionally links the
+managed `pcre2` package so invalid patterns report PCRE2's exact compilation
+diagnostic; declare it with `elephc native add pcre2` when the project does not
+already.
 
 ## Fileinfo
 

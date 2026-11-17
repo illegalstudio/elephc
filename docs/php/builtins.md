@@ -7,7 +7,7 @@ sidebar:
 
 ## Builtins
 
-Browse by category: [Array](./builtins/array.md) · [Buffer](./builtins/buffer.md) · [Class](./builtins/class.md) · [Database](./builtins/database.md) · [Date](./builtins/date.md) · [Filesystem](./builtins/filesystem.md) · [IO](./builtins/io.md) · [Image](./builtins/image.md) · [JSON](./builtins/json.md) · [Math](./builtins/math.md) · [Misc](./builtins/misc.md) · [Network](./builtins/network.md) · [Pointer](./builtins/pointer.md) · [Process](./builtins/process.md) · [Regex](./builtins/regex.md) · [SPL](./builtins/spl.md) · [Streams](./builtins/streams.md) · [String](./builtins/string.md) · [Tidy](./builtins/tidy.md) · [Type](./builtins/type.md) · [Web](./builtins/web.md) · [XML](./builtins/xml.md)
+Browse by category: [Array](./builtins/array.md) · [Buffer](./builtins/buffer.md) · [Class](./builtins/class.md) · [Database](./builtins/database.md) · [Date](./builtins/date.md) · [Filesystem](./builtins/filesystem.md) · [Filter](./builtins/filter.md) · [IO](./builtins/io.md) · [Image](./builtins/image.md) · [JSON](./builtins/json.md) · [Math](./builtins/math.md) · [Misc](./builtins/misc.md) · [Network](./builtins/network.md) · [Pointer](./builtins/pointer.md) · [Process](./builtins/process.md) · [Regex](./builtins/regex.md) · [SPL](./builtins/spl.md) · [Streams](./builtins/streams.md) · [String](./builtins/string.md) · [Tidy](./builtins/tidy.md) · [Type](./builtins/type.md) · [Web](./builtins/web.md) · [XML](./builtins/xml.md)
 
 | Function | Signature | Returns | AOT | eval() |
 |---|---|---|:-:|:-:|
@@ -345,6 +345,13 @@ Browse by category: [Array](./builtins/array.md) · [Buffer](./builtins/buffer.m
 | [`touch()`](./builtins/filesystem/touch.md) | `(string $filename, ?int $mtime = null, ?int $atime = null): bool` | `bool` | ✓ | ✓ |
 | [`umask()`](./builtins/filesystem/umask.md) | `(?int $mask = null): int` | `int` | ✓ | ✓ |
 | [`unlink()`](./builtins/filesystem/unlink.md) | `(string $filename): bool` | `bool` | ✓ | ✓ |
+| [`filter_has_var()`](./builtins/filter/filter_has_var.md) | `(int $input_type, string $var_name): bool` | `bool` | ✓ | ✓ |
+| [`filter_id()`](./builtins/filter/filter_id.md) | `(string $name): int|false` | `int|false` | ✓ | ✓ |
+| [`filter_input()`](./builtins/filter/filter_input.md) | `(int $type, string $var_name, int $filter = FILTER_DEFAULT, array|int $options = 0): mixed` | `mixed` | ✓ | ✓ |
+| [`filter_input_array()`](./builtins/filter/filter_input_array.md) | `(int $type, array|int $options = FILTER_DEFAULT, bool $add_empty = true): array|false|null` | `array|false|null` | ✓ | ✓ |
+| [`filter_list()`](./builtins/filter/filter_list.md) | `(): array` | `array` | ✓ | ✓ |
+| [`filter_var()`](./builtins/filter/filter_var.md) | `(mixed $value, int $filter = FILTER_DEFAULT, array|int $options = 0): mixed` | `mixed` | ✓ | ✓ |
+| [`filter_var_array()`](./builtins/filter/filter_var_array.md) | `(array $array, array|int|null $options = FILTER_DEFAULT, bool $add_empty = true): array|false|null` | `array|false|null` | ✓ | ✓ |
 | [`closedir()`](./builtins/io/closedir.md) | `(resource $dir_handle): void` | `void` | ✓ | ✓ |
 | [`fclose()`](./builtins/io/fclose.md) | `(resource $stream): bool` | `bool` | ✓ | ✓ |
 | [`fdatasync()`](./builtins/io/fdatasync.md) | `(resource $stream): bool` | `bool` | ✓ | ✓ |

@@ -617,6 +617,16 @@ PRELUDE_SOURCES: dict[str, tuple[str | tuple[str, ...], str, str]] = {
         "tidy",
         "crates/elephc-builtin-contract/src/catalog_tidy.rs",
     ),
+    # The filter surface is built AST across the public/input/surface declaration modules.
+    "filter": (
+        (
+            "filter_prelude/public.rs",
+            "filter_prelude/input.rs",
+            "filter_prelude/surface.rs",
+        ),
+        "filter",
+        "crates/elephc-builtin-contract/src/catalog_filter.rs",
+    ),
 }
 
 # PHP-visible functions whose injected prelude is not keyed by the contract ``Module`` or

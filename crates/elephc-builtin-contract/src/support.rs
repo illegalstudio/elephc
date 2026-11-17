@@ -162,7 +162,7 @@ pub fn eval_support(contract: &BuiltinContract) -> BackendSupport {
     if matches!(
         contract.kind,
         BuiltinKind::PreludeProvided | BuiltinKind::NameResolverRewrite
-    ) && !matches!(contract.area, Area::Curl | Area::Xml | Area::Tidy)
+    ) && !matches!(contract.area, Area::Curl | Area::Xml | Area::Tidy | Area::Filter)
         && !EVAL_IMPLEMENTED_PRELUDE_SURFACES.contains(&contract.name)
     {
         return BackendSupport::Unsupported(UnsupportedReason::EvalImplementationPending);
@@ -379,9 +379,10 @@ mod tests {
         // The tokenizer location helper also uses the shared runtime registry.
         // Five native heap metric bindings share the boxed runtime dispatcher.
         // The seven additional ctype contracts join the eval registry, the locale
-        // prelude exposes setlocale/nl_langinfo through forwarding eval homes, and
-        // `preg_grep`, `preg_last_error`, and `preg_last_error_msg` have eval homes.
-        assert_eq!(eval_registry, 795 + curl_surface);
+        // prelude exposes setlocale/nl_langinfo through forwarding eval homes,
+        // `preg_grep`, `preg_last_error`, and `preg_last_error_msg` have eval homes,
+        // and the filter surface adds its seven forwarding homes.
+        assert_eq!(eval_registry, 802 + curl_surface);
         // 83 compiler-internal registry helpers plus the 17 `_`-prefixed helper functions the
         // image prelude declares for its own use, plus the ELEVEN
         // `__elephc_opcache_rt_*` runtime script-cache helpers this branch adds.
@@ -424,9 +425,9 @@ mod tests {
         // and `preg_last_error` and `preg_last_error_msg` add two more.
         assert_eq!(aot_registry, 841);
         // Compiler transforms, constructs, dedicated syntax, preludes (now including
-        // `preg_grep`), and name-resolver rewrites remain outside the ordinary AOT registry.
-        // The two PHP-visible locale functions are prelude-provided.
-        assert_eq!(aot_external, 477 + curl_surface);
+        // `preg_grep` and the filter surface), and name-resolver rewrites remain outside
+        // the ordinary AOT registry. The two PHP-visible locale functions are prelude-provided.
+        assert_eq!(aot_external, 484 + curl_surface);
     }
 
     /// Verifies representative exceptional routes are attached to their contracts.
@@ -477,9 +478,9 @@ mod tests {
         // Heap usage queries keep a TypeError adapter for non-scalar flags.
         assert_eq!(hybrid_adapter, 4);
         // Includes the four float pointer builtins and `buffer_ptr`, which eval runs through
-        // interpreter adapters, plus the GMP, SimpleXML, tidy, ctype, and locale
+        // interpreter adapters, plus the GMP, SimpleXML, tidy, ctype, locale, and filter
         // forwarding homes, plus the `preg_grep` / `preg_last_error*` eval homes.
-        assert_eq!(interpreter_adapter, 700 + curl_surface);
+        assert_eq!(interpreter_adapter, 707 + curl_surface);
         // Includes the eleven `__elephc_opcache_rt_*` helpers: they lower to an eval-bridge
         // call from AOT code and have no eval execution route of their own. So do the four
         // internal aliases the extension-hosting prelude calls, the two setlocale helpers,

@@ -26,15 +26,21 @@ pub(crate) mod strict;
 mod surface;
 
 /// Public filter functions, matched case-insensitively by the usage walk.
-pub(crate) const FUNCTIONS: &[&str] = &[
-    "filter_var",
-    "filter_var_array",
-    "filter_input",
-    "filter_input_array",
-    "filter_has_var",
-    "filter_id",
-    "filter_list",
-];
+///
+/// Derived from the shared contracts so the injected surface, generated docs, parity suites
+/// and the detector cannot drift apart.
+pub(crate) fn functions() -> &'static [&'static str] {
+    static FUNCTIONS: std::sync::OnceLock<Vec<&'static str>> = std::sync::OnceLock::new();
+    FUNCTIONS.get_or_init(|| {
+        elephc_builtin_contract::contracts()
+            .iter()
+            .filter(|contract| {
+                contract.area == elephc_builtin_contract::Area::Filter && !contract.internal
+            })
+            .map(|contract| contract.name)
+            .collect()
+    })
+}
 
 /// Public constants owned by ext/filter, matched case-sensitively by the usage walk.
 pub(crate) const CONSTANTS: &[&str] = &[
@@ -132,7 +138,7 @@ pub(crate) fn program_uses_surface(program: &[crate::parser::ast::Stmt]) -> bool
     // must stay bridge-free. Literal callables are already recorded in `references`/`literals`,
     // and only an opaque eval or an explicit introspection needs the full surface.
     usage.introspects
-        || FUNCTIONS
+        || functions()
             .iter()
             .any(|name| usage.references(name) || usage.literals.contains(*name))
         || CONSTANTS.iter().any(|name| usage.constants.contains(*name))
@@ -149,7 +155,7 @@ pub fn inject_if_used(
     program: Program,
     inventory: &mut PreludeInventory,
 ) -> Program {
-    inject_if_used_with_config(program, request::FilterDefault::default(), false, false, inventory)
+    inject_if_used_with_config(program, request::FilterDefault::default(), false, false, false, inventory)
 }
 
 /// Prepends the filter surface with the program's `--ini filter.default` configuration.
@@ -163,10 +169,26 @@ pub fn inject_if_used_with_ini(
 }
 
 /// Prepends the filter surface, recording whether this is a web build for raw-input capture.
+#[allow(dead_code)]
 pub fn inject_if_used_with_ini_for_sapi(
     program: Program,
     ini_overrides: &[(String, String)],
     web: bool,
+    inventory: &mut PreludeInventory,
+) -> Program {
+    inject_if_used_with_ini_for_sapi_forced(program, ini_overrides, web, false, inventory)
+}
+
+/// Prepends the filter surface, optionally forcing it for `--with-filter`.
+///
+/// The force flag is what keeps the PHP-visible declarations in a program that reaches
+/// `filter_*` only through a dynamic callable or opaque eval source: detection cannot see
+/// those names, but the bridge and its surface are explicitly requested.
+pub fn inject_if_used_with_ini_for_sapi_forced(
+    program: Program,
+    ini_overrides: &[(String, String)],
+    web: bool,
+    force: bool,
     inventory: &mut PreludeInventory,
 ) -> Program {
     inject_if_used_with_config(
@@ -174,6 +196,7 @@ pub fn inject_if_used_with_ini_for_sapi(
         request::config_from_overrides(ini_overrides),
         true,
         web,
+        force,
         inventory,
     )
 }
@@ -195,6 +218,7 @@ pub fn inject_if_used_with_ini_and_initializer(
         request::config_from_overrides(ini_overrides),
         initialize,
         false,
+        false,
         inventory,
     )
 }
@@ -205,9 +229,11 @@ fn inject_if_used_with_config(
     config: request::FilterDefault,
     initialize: bool,
     web: bool,
+    force: bool,
     inventory: &mut PreludeInventory,
 ) -> Program {
-    let used = program_uses_surface(&program)
+    let used = force
+        || program_uses_surface(&program)
         || config.name != request::FilterDefault::default().name;
     if !used {
         return program;

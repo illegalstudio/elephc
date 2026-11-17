@@ -36,6 +36,7 @@ pub fn contracts() -> &'static [BuiltinContract] {
             let curl_capacity = 0;
             let mut contracts = Vec::with_capacity(
                 crate::catalog_data::CONTRACTS.len()
+                    + crate::catalog_filter::CONTRACTS.len()
                     + crate::catalog_gmp::CONTRACTS.len()
                     + crate::catalog_locale::CONTRACTS.len()
                     + crate::catalog_mbstring::CONTRACTS.len()
@@ -46,6 +47,7 @@ pub fn contracts() -> &'static [BuiltinContract] {
                     + curl_capacity,
             );
             contracts.extend_from_slice(crate::catalog_data::CONTRACTS);
+            contracts.extend_from_slice(crate::catalog_filter::CONTRACTS);
             contracts.extend_from_slice(crate::catalog_gmp::CONTRACTS);
             contracts.extend_from_slice(crate::catalog_locale::CONTRACTS);
             contracts.extend_from_slice(crate::catalog_mbstring::CONTRACTS);
@@ -184,7 +186,8 @@ mod tests {
         // +2: the PHP-visible setlocale/nl_langinfo contracts declared by the locale prelude.
         // +3: the internal libc setlocale and nl_langinfo helpers it calls.
         // +3: `preg_grep`, `preg_last_error`, and `preg_last_error_msg`.
-        assert_eq!(contracts().len(), 1318 + curl_surface);
+        // +7: the filter_* prelude contracts.
+        assert_eq!(contracts().len(), 1325 + curl_surface);
         assert_eq!(lookup("STRLEN").map(|contract| contract.name), Some("strlen"));
         assert_eq!(lookup("\\parse_url").map(|contract| contract.name), Some("parse_url"));
     }

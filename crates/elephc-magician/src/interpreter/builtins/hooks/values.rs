@@ -196,6 +196,8 @@ pub(in crate::interpreter) enum EvalValuesHook {
     Locale,
     /// Forwards the tidy surface to the compiled host prelude.
     Tidy,
+    /// Forwards the filter surface to the compiled host prelude.
+    Filter,
     /// Dispatches `number_format(...)`.
     NumberFormat,
     /// Dispatches the bridge-backed OpenSSL cipher builtins.
@@ -557,6 +559,7 @@ impl EvalValuesHook {
             Self::Locale => eval_locale_values_result(name, evaluated_args, context, values),
             Self::Xml => eval_xml_values_result(name, evaluated_args, context, values),
             Self::Tidy => eval_tidy_values_result(name, evaluated_args, context, values),
+            Self::Filter => eval_filter_values_result(name, evaluated_args, context, values),
             Self::NumberFormat => {
                 eval_number_format_declared_values_result(evaluated_args, values)
             }

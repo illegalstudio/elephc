@@ -170,6 +170,52 @@ var_dump(filter_var("example.com", FILTER_VALIDATE_DOMAIN, FILTER_FLAG_HOSTNAME)
     );
 }
 
+/// `--with-filter` retains the PHP-visible surface even when only a dynamic callable can
+/// reach it, so the bridge archive is not linked without its declarations.
+#[test]
+fn test_with_filter_retains_the_indirect_surface() {
+    let dir = make_cli_test_dir("filter_with_indirect");
+    std::fs::write(
+        dir.join("main.php"),
+        r#"<?php
+$f = $argv[1];
+echo $f("42", FILTER_VALIDATE_INT);
+"#,
+    )
+    .expect("write fixture");
+    let output = elephc_cli_command(&dir)
+        .args(["--with-filter", "main.php"])
+        .output()
+        .expect("run elephc");
+    assert!(
+        output.status.success(),
+        "compile failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let run = std::process::Command::new(dir.join("main"))
+        .arg("filter_var")
+        .output()
+        .expect("run compiled program");
+    assert_eq!(String::from_utf8_lossy(&run.stdout), "42");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// Percent escapes in URL credentials accept both hexadecimal digits, including a leading
+/// letter (`%AF`), as php-src's `is_userinfo_valid` does.
+#[test]
+fn test_filter_validate_url_accepts_hex_escaped_userinfo() {
+    let out = compile_and_run(
+        r#"<?php
+$url = "http://user%AF@example.com/";
+echo filter_var($url, FILTER_VALIDATE_URL) === $url ? "ok" : "no";
+echo "|";
+$url = "http://user%41@example.com/";
+echo filter_var($url, FILTER_VALIDATE_URL) === $url ? "ok" : "no";
+"#,
+    );
+    assert_eq!(out, "ok|ok");
+}
+
 /// Verifies the sanitizer map and the deprecated string sanitizer.
 #[test]
 fn test_filter_var_sanitizers_match_php() {

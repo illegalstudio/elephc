@@ -796,7 +796,7 @@
         "have": 0,
         "total": 56
       },
-      "docs": null,
+      "docs": "docs/php/filter.md#functions",
       "extension": "filter",
       "functions": {
         "eval": 0,
