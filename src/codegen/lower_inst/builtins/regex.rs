@@ -652,39 +652,23 @@ fn box_count_or_false(ctx: &mut FunctionContext<'_>) -> Result<()> {
     let invalid_label = ctx.next_label("preg_count_invalid");
     let false_label = ctx.next_label("preg_count_false");
     let done_label = ctx.next_label("preg_count_done");
-    let count_label = ctx.next_label("preg_count_valid");
+    let error_count = super::regex_errors::MATCH_ERROR_COUNT;
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
             ctx.emitter.instruction("cmn x0, #1");                              // compare the count against the failure sentinel
-            ctx.emitter.instruction(&format!("b.ne {}", count_label));          // a real count still needs the match-error check
+            ctx.emitter.instruction(&format!("b.eq {invalid_label}"));          // -1 is an invalid pattern
+            ctx.emitter.instruction(&format!("cmn x0, #{}", -error_count));     // did the call's own match fail?
+            ctx.emitter.instruction(&format!("b.eq {false_label}"));            // a match error boxes PHP false
         }
         Arch::X86_64 => {
             ctx.emitter.instruction("cmp rax, -1");                             // compare the count against the failure sentinel
-            ctx.emitter.instruction(&format!("jne {}", count_label));           // a real count still needs the match-error check
+            ctx.emitter.instruction(&format!("je {invalid_label}"));            // -1 is an invalid pattern
+            ctx.emitter.instruction(&format!("cmp rax, {error_count}"));        // did the call's own match fail?
+            ctx.emitter.instruction(&format!("je {false_label}"));              // a match error boxes PHP false
         }
     }
-    abi::emit_jump(ctx.emitter, &invalid_label);
-    ctx.emitter.label(&count_label);
-    match ctx.emitter.target.arch {
-        Arch::AArch64 => {
-            ctx.emitter.instruction(&format!("cmn x0, #{}", -super::regex_errors::MATCH_ERROR_COUNT)); // did the call's own match fail?
-            ctx.emitter.instruction(&format!("b.eq {}", false_label));          // a match error boxes PHP false
-        }
-        Arch::X86_64 => {
-            ctx.emitter.instruction(&format!("cmp rax, {}", super::regex_errors::MATCH_ERROR_COUNT)); // did the call's own match fail?
-            ctx.emitter.instruction(&format!("je {}", false_label));            // a match error boxes PHP false
-        }
-    }
-    match ctx.emitter.target.arch {
-        Arch::AArch64 => {
-            crate::codegen::emit_box_current_value_as_mixed(ctx.emitter, &PhpType::Int);
-            ctx.emitter.instruction(&format!("b {}", done_label));              // skip the false arm
-        }
-        Arch::X86_64 => {
-            crate::codegen::emit_box_current_value_as_mixed(ctx.emitter, &PhpType::Int);
-            ctx.emitter.instruction(&format!("jmp {}", done_label));            // skip the false arm
-        }
-    }
+    crate::codegen::emit_box_current_value_as_mixed(ctx.emitter, &PhpType::Int);
+    abi::emit_jump(ctx.emitter, &done_label);
     ctx.emitter.label(&invalid_label);
     super::regex_errors::emit_record_internal_error(ctx);
     ctx.emitter.label(&false_label);
@@ -721,19 +705,16 @@ fn box_split_or_false(ctx: &mut FunctionContext<'_>) -> Result<()> {
     let error_label = ctx.next_label("preg_split_match_error");
     let false_label = ctx.next_label("preg_split_false");
     let done_label = ctx.next_label("preg_split_done");
-    let array_label = ctx.next_label("preg_split_array");
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
             ctx.emitter.instruction("cmn x0, #1");                              // compare the array pointer against the failure sentinel
-            ctx.emitter.instruction(&format!("b.ne {}", array_label));          // a real array still needs the match-error check
+            ctx.emitter.instruction(&format!("b.eq {invalid_label}"));          // -1 is an invalid pattern
         }
         Arch::X86_64 => {
             ctx.emitter.instruction("cmp rax, -1");                             // compare the array pointer against the failure sentinel
-            ctx.emitter.instruction(&format!("jne {}", array_label));           // a real array still needs the match-error check
+            ctx.emitter.instruction(&format!("je {invalid_label}"));            // -1 is an invalid pattern
         }
     }
-    abi::emit_jump(ctx.emitter, &invalid_label);
-    ctx.emitter.label(&array_label);
     super::regex_errors::emit_branch_if_error(ctx, &error_label);
     crate::codegen::emit_box_current_owned_value_as_mixed(
         ctx.emitter,

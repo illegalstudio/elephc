@@ -82,13 +82,14 @@ pub(super) const MATCH_ERROR_COUNT: i64 = -2;
 /// `_preg_exec_error`, which would then fail (or pass) the outer call by someone else's result.
 pub(super) fn emit_fold_exec_error_into_count(ctx: &mut FunctionContext<'_>) {
     let keep = ctx.next_label("preg_count_keep");
+    let error_count = MATCH_ERROR_COUNT;
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
             ctx.emitter.instruction("cmn x0, #1");                              // an invalid pattern keeps its -1 sentinel
             ctx.emitter.instruction(&format!("b.eq {keep}"));                   // leave the invalid-pattern result untouched
             abi::emit_load_symbol_to_reg(ctx.emitter, "x10", EXEC_ERROR_SYMBOL, 0);
             ctx.emitter.instruction(&format!("cbz x10, {keep}"));               // a clean match keeps its real count
-            ctx.emitter.instruction(&format!("mov x0, #{}", MATCH_ERROR_COUNT)); // remember this call's own match error in the count
+            ctx.emitter.instruction(&format!("mov x0, #{error_count}"));        // remember this call's own match error in the count
         }
         Arch::X86_64 => {
             ctx.emitter.instruction("cmp rax, -1");                             // an invalid pattern keeps its -1 sentinel
@@ -96,7 +97,7 @@ pub(super) fn emit_fold_exec_error_into_count(ctx: &mut FunctionContext<'_>) {
             abi::emit_load_symbol_to_reg(ctx.emitter, "r10", EXEC_ERROR_SYMBOL, 0);
             ctx.emitter.instruction("test r10, r10");                           // did this call's own match record an error?
             ctx.emitter.instruction(&format!("jz {keep}"));                     // a clean match keeps its real count
-            ctx.emitter.instruction(&format!("mov rax, {}", MATCH_ERROR_COUNT)); // remember this call's own match error in the count
+            ctx.emitter.instruction(&format!("mov rax, {error_count}"));        // remember this call's own match error in the count
         }
     }
     ctx.emitter.label(&keep);
@@ -129,13 +130,14 @@ pub(super) fn emit_pop_last_error(ctx: &mut FunctionContext<'_>) {
 
 /// Records `PREG_INTERNAL_ERROR`, preserving the result registers.
 pub(super) fn emit_record_internal_error(ctx: &mut FunctionContext<'_>) {
+    let internal = PREG_INTERNAL_ERROR;
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
-            ctx.emitter.instruction(&format!("mov x10, #{}", PREG_INTERNAL_ERROR)); // an invalid pattern is PHP's internal error
+            ctx.emitter.instruction(&format!("mov x10, #{internal}"));          // an invalid pattern is PHP's internal error
             abi::emit_store_reg_to_symbol(ctx.emitter, "x10", ERROR_SYMBOL, 0);
         }
         Arch::X86_64 => {
-            ctx.emitter.instruction(&format!("mov r10, {}", PREG_INTERNAL_ERROR)); // an invalid pattern is PHP's internal error
+            ctx.emitter.instruction(&format!("mov r10, {internal}"));           // an invalid pattern is PHP's internal error
             abi::emit_store_reg_to_symbol(ctx.emitter, "r10", ERROR_SYMBOL, 0);
         }
     }

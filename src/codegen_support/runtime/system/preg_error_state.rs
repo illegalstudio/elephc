@@ -84,9 +84,10 @@ pub(crate) fn emit_preg_last_error_msg(emitter: &mut Emitter) {
             // -- clamp the code, then index the (ptr, len) table --
             abi::emit_load_symbol_to_reg(emitter, "rcx", "_preg_last_error", 0);
             emitter.instruction(&format!("cmp rcx, {}", count));                // is the code inside the message table?
-            emitter.instruction("jb __rt_preg_last_error_msg_index_linux_x86_64"); // in-range codes index the table directly
+            let index = "__rt_preg_last_error_msg_index_linux_x86_64";
+            emitter.instruction(&format!("jb {index}"));                        // in-range codes index the table directly
             emitter.instruction("xor ecx, ecx");                                // out-of-range codes read as PREG_NO_ERROR
-            emitter.label("__rt_preg_last_error_msg_index_linux_x86_64");
+            emitter.label(index);
             abi::emit_symbol_address(emitter, "r9", "_preg_err_msg_table");
             emitter.instruction("shl rcx, 4");                                  // step over one 16-byte (ptr, len) entry per code
             emitter.instruction("add r9, rcx");                                 // address the entry for this code
@@ -110,6 +111,7 @@ pub(crate) fn emit_preg_exec_wrapper(emitter: &mut Emitter) {
     let shim = "elephc_pcre2_v1_exec";
     let outcome = format!("{label}_outcome");
     let record = format!("{label}_record");
+    let backtrack = PREG_BACKTRACK_LIMIT_ERROR;
     emitter.blank();
     emitter.comment("--- runtime: preg_exec ---");
     emitter.label_global(label);
@@ -122,7 +124,7 @@ pub(crate) fn emit_preg_exec_wrapper(emitter: &mut Emitter) {
             emitter.instruction(&format!("cbz w0, {outcome}"));                 // success leaves the error state alone
             emitter.instruction(&format!("cmp w0, #{}", REG_NOMATCH));          // is this an ordinary failed match?
             emitter.instruction(&format!("b.eq {outcome}"));                    // a failed match is not an error
-            emitter.instruction(&format!("mov x11, #{}", PREG_BACKTRACK_LIMIT_ERROR)); // stage the match-limit error code
+            emitter.instruction(&format!("mov x11, #{backtrack}"));             // stage the match-limit error code
             emitter.instruction(&format!("cmp w0, #{}", REG_ESPACE));           // did PCRE2 exhaust its match or heap budget?
             emitter.instruction(&format!("b.eq {record}"));                     // record PREG_BACKTRACK_LIMIT_ERROR
             emitter.instruction(&format!("mov x11, #{}", PREG_BAD_UTF8_ERROR)); // stage the malformed-UTF-8 error code
@@ -145,7 +147,7 @@ pub(crate) fn emit_preg_exec_wrapper(emitter: &mut Emitter) {
             emitter.instruction(&format!("jz {outcome}"));                      // success leaves the error state alone
             emitter.instruction(&format!("cmp eax, {}", REG_NOMATCH));          // is this an ordinary failed match?
             emitter.instruction(&format!("je {outcome}"));                      // a failed match is not an error
-            emitter.instruction(&format!("mov ecx, {}", PREG_BACKTRACK_LIMIT_ERROR)); // stage the match-limit error code
+            emitter.instruction(&format!("mov ecx, {backtrack}"));              // stage the match-limit error code
             emitter.instruction(&format!("cmp eax, {}", REG_ESPACE));           // did PCRE2 exhaust its match or heap budget?
             emitter.instruction(&format!("je {record}"));                       // record PREG_BACKTRACK_LIMIT_ERROR
             emitter.instruction(&format!("mov ecx, {}", PREG_BAD_UTF8_ERROR));  // stage the malformed-UTF-8 error code
