@@ -366,7 +366,21 @@ pub(super) fn validate_method_parent_override(
     };
     // Concrete constructors have no inherited parameter or visibility contract.
     // Interface constructor requirements are checked separately for the pending class.
-    if method.name().eq_ignore_ascii_case("__construct") && !parent_method.is_abstract() {
+    // The exemption ends at an abstract constructor ANYWHERE up the chain: a concrete
+    // implementation (`M::__construct(int)` of `abstract P::__construct(int)`) keeps the abstract
+    // prototype's contract for its own subclasses, as php enforces.
+    let abstract_constructor_above = method.name().eq_ignore_ascii_case("__construct")
+        && std::iter::once(parent_declaring_class.clone())
+            .chain(context.class_parent_names(&parent_declaring_class))
+            .any(|owner| {
+                context
+                    .class_own_method(&owner, method.name())
+                    .is_some_and(|(_, candidate)| candidate.is_abstract())
+            });
+    if method.name().eq_ignore_ascii_case("__construct")
+        && !parent_method.is_abstract()
+        && !abstract_constructor_above
+    {
         return if parent_method.is_final() || method.is_abstract() || method.is_static() {
             Err(EvalStatus::RuntimeFatal)
         } else { Ok(()) };
