@@ -521,29 +521,32 @@ pub(super) fn eval_array_element_reference_write(
     value: RuntimeCellHandle,
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
-) -> Result<(), EvalStatus> {
-    let Some(key) = eval_array_reference_key(index, values)? else { return Ok(()); };
-    let Some(target) = context.array_element_alias(array, &key).cloned() else { return Ok(()); };
+) -> Result<bool, EvalStatus> {
+    let Some(key) = eval_array_reference_key(index, values)? else { return Ok(false); };
+    let Some(target) = context.array_element_alias(array, &key).cloned() else { return Ok(false); };
     match target {
         EvalReferenceTarget::Variable { scope, name } => {
             // The activation that bound the element has returned (a closure's `use (&$x)` from
             // a by-reference `foreach` outliving its method): nothing is left to update, exactly
             // as `write_back_method_ref_target` treats the same target.
             let Some(scope) = (unsafe { scope.live_mut() }) else {
-                return Ok(());
+                return Ok(false);
             };
-            write_back_owned_variable_ref_target(scope, &name, value, context, values)
+            write_back_owned_variable_ref_target(scope, &name, value, context, values).map(|()| false)
         }
         EvalReferenceTarget::Cell { cell } if !context.local_reference_types(cell).is_empty() || values.reference_is_shared(cell)? => {
-            write_back_method_ref_target(&target, value, context, values)
+            write_back_method_ref_target(&target, value, context, values).map(|()| false)
         }
         EvalReferenceTarget::Cell { .. } => {
             // The following array store owns its replacement. Keeping a borrowed RHS cell in
             // alias metadata would outlive operand cleanup and read recycled storage afterward.
             context.remove_array_element_alias(array, &key);
-            Ok(())
+            Ok(false)
         }
-        _ => write_back_method_ref_target(&target, value, context, values),
+        // The alias lives in persistent storage (an element of another array, a property or a
+        // static): the write already reached it, and the caller must not commit its own stale
+        // copy of that storage over it afterwards.
+        _ => write_back_method_ref_target(&target, value, context, values).map(|()| true),
     }
 }
 

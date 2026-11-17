@@ -338,13 +338,13 @@ fn write_value_in_storage(
     for declared in context.local_reference_types(current) {
         validate_generic_local_element(Some(&declared), array, index, value, context, values)?;
     }
-    eval_array_element_reference_write(array, index, value, context, values)?;
+    let through_alias = eval_array_element_reference_write(array, index, value, context, values)?;
     if attached {
         values.spl_storage_array_set(array, index, value)?;
     } else {
         values.array_set(array, index, value)?;
     }
-    Ok((!attached).then_some(array))
+    Ok((!attached && !through_alias).then_some(array))
 }
 
 /// Delays direct static-property append until the RHS has selected the live static slot.
