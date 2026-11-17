@@ -130,8 +130,9 @@ impl ScopePass {
 }
 
 impl Pass for ScopePass {
-    /// Widens `T $p = null` to the nullable type PHP gives it and queues PHP 8.4's compile-time
-    /// deprecation, named the way php-src names the function (`f`, `C::m`, `{closure:...}`).
+    /// Widens `T $p = null` to the nullable type PHP gives it and, under a PHP 8.4 or newer
+    /// profile, queues PHP 8.4's compile-time deprecation, named the way php-src names the
+    /// function (`f`, `C::m`, `{closure:...}`).
     ///
     /// Done per physical file, where the lexical owner is still known; every later pass then
     /// sees an ordinary `?T` parameter, so a passed or defaulted null arrives as null.
@@ -157,15 +158,18 @@ impl Pass for ScopePass {
         let Some(widened) = ty.implicitly_nullable() else {
             return ty;
         };
-        crate::errors::defer_warning(crate::errors::CompileWarning::deprecation(
-            span,
-            &format!(
-                "{}(): Implicitly marking parameter ${} as nullable is deprecated, the explicit \
-                 nullable type must be used instead",
-                self.method_name(),
-                name
-            ),
-        ));
+        // PHP 8.4 deprecated the implicit form; older `--php-version` profiles accept it silently.
+        if crate::codegen_support::compile_php_version().version_id() >= 80400 {
+            crate::errors::defer_warning(crate::errors::CompileWarning::deprecation(
+                span,
+                &format!(
+                    "{}(): Implicitly marking parameter ${} as nullable is deprecated, the \
+                     explicit nullable type must be used instead",
+                    self.method_name(),
+                    name
+                ),
+            ));
+        }
         if by_ref || exported {
             ty
         } else {

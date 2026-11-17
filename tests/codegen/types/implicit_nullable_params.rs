@@ -137,6 +137,18 @@ var_dump(f(), (new C())->m());
     assert!(stderr.contains("main.php:3:1]: App\\f()"), "{}", stderr);
 }
 
+/// Verifies the deprecation follows the `--php-version` profile: php 8.3 accepts `T $p = null`
+/// silently and php 8.4 deprecates it, while the parameter is implicitly nullable under both.
+#[test]
+fn test_implicitly_nullable_param_deprecation_starts_with_php_8_4() {
+    let source = "<?php\nfunction f(int $x = null) { return $x; }\nvar_dump(f());\n";
+    for (version, expected) in [("8.2", 0), ("8.3", 0), ("8.4", 1)] {
+        let stderr = compile_cli_file_with_flags_capturing_stderr(source, &["--php-version", version]);
+        let deprecations = stderr.lines().filter(|line| line.starts_with("deprecated[")).count();
+        assert_eq!(deprecations, expected, "--php-version {}: {}", version, stderr);
+    }
+}
+
 /// Verifies an included file's deprecation is reported once per declaration, as php 8.5 does,
 /// although the resolver parses the file twice (discovery, then expansion) under two source
 /// identities.
