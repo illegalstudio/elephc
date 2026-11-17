@@ -919,14 +919,16 @@ impl ExceptionFlowAnalysis {
     /// Queries an operation separately from operand evaluation for source-order checker edges.
     ///
     /// A call the checker recorded as binding a `mixed`/union argument to a declared scalar
-    /// parameter adds the `TypeError` its runtime argument check raises.
+    /// parameter can throw anything: the runtime check raises `TypeError`, but binding to
+    /// `int` can raise a deprecation a user error handler turns into any exception, and
+    /// binding to `string` can call a `__toString()` that throws.
     fn expr_throws_at_boundary(
         &self, expr: &Expr, bindings: &HashMap<String, ThrownTypes>,
         class_context: Option<&ExceptionClassContext>, include_operands: bool,
     ) -> ThrownTypes {
         let thrown = self.operation_throws_at_boundary(expr, bindings, class_context, include_operands);
         if super::binding_decisions::call_has_scalar_guard_arg(call_args(expr)) {
-            thrown.combined(ThrownTypes::exact("TypeError"))
+            thrown.combined(ThrownTypes::unknown())
         } else {
             thrown
         }

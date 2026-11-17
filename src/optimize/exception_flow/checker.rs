@@ -167,8 +167,9 @@ impl CheckerThrownTypes {
     /// Identifies operations with no exception edge.
     pub(crate) fn is_empty(&self) -> bool { self.0.is_empty() }
 
-    /// Adds the `TypeError` of a call's runtime scalar-parameter check when one of its
-    /// arguments is among `sites`, the guarded arguments the checker has recorded so far.
+    /// Adds what a call's runtime scalar-parameter binding can throw (its `TypeError`, or any
+    /// exception from an error handler or `__toString()`) when one of its arguments is among
+    /// `sites`, the guarded arguments the checker has recorded so far.
     ///
     /// `operation_throws` consults the optimizer's installed set, which the pipeline only
     /// installs after type checking, so the checker has to add its own decisions here.
@@ -180,7 +181,7 @@ impl CheckerThrownTypes {
         if crate::optimize::binding_decisions::call_args_hit_scalar_guard_sites(
             super::call_args(expr), sites,
         ) {
-            Self(self.0.combined(ThrownTypes::exact("TypeError")))
+            Self(self.0.combined(ThrownTypes::unknown()))
         } else { self }
     }
 }

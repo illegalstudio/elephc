@@ -699,3 +699,46 @@ for ($i = 0; $i < 2; $i++) {
     assert_eq!(output.stdout, round.repeat(2));
     assert!(output.stderr.contains("leak summary: clean"), "{}", output.stderr);
 }
+
+/// The `int` precision deprecation can reach a user error handler that throws. The exception
+/// must reach the `catch` (the call's catch flow was narrowed to `TypeError`, so a
+/// `catch (ErrorException)` was dropped) and must not leak the owned arguments: the converted
+/// box and the later arguments only the guard's own refusal released.
+#[test]
+fn test_error_handler_exception_from_a_guard_is_caught_without_leaks() {
+    let output = compile_and_run_with_heap_debug(
+        r#"<?php
+function take(int $n): int { return $n; }
+function two(int $a, string $s): string { return $a . $s; }
+function box(mixed $v): mixed { return $v; }
+function words(): mixed { return str_repeat("w", 30); }
+set_error_handler(function (int $no, string $msg): bool { throw new ErrorException($msg); });
+for ($i = 0; $i < 3; $i++) {
+    try { echo take(box(1.5)), "\n"; } catch (ErrorException $e) { echo "caught: ", $e->getMessage(), "\n"; }
+    try { echo two(box(2.5), words()), "\n"; } catch (ErrorException $e) { echo "caught: ", $e->getMessage(), "\n"; }
+    try { echo two(box("3.5"), box(words())), "\n"; } catch (ErrorException $e) { echo "caught: ", $e->getMessage(), "\n"; }
+}
+restore_error_handler();
+echo take(box(4)), "\n";
+"#,
+    );
+    assert!(output.success, "{}", output.stderr);
+    let round = "caught: Implicit conversion from float 1.5 to int loses precision\ncaught: Implicit conversion from float 2.5 to int loses precision\ncaught: Implicit conversion from float-string \"3.5\" to int loses precision\n";
+    assert_eq!(output.stdout, format!("{}4\n", round.repeat(3)));
+    assert!(output.stderr.contains("leak summary: clean"), "{}", output.stderr);
+}
+
+/// A guarded `string` parameter can call a `Stringable`'s `__toString()`, which may throw any
+/// exception: the call's catch flow must keep a `catch` for it, not only `catch (TypeError)`.
+#[test]
+fn test_stringable_exception_from_a_guarded_string_parameter_is_caught() {
+    let out = compile_and_run(
+        r#"<?php
+function str(string $s): string { return $s; }
+function box(mixed $v): mixed { return $v; }
+class Bad { public function __toString(): string { throw new LogicException("bad"); } }
+try { echo str(box(new Bad())), "\n"; } catch (LogicException $e) { echo "caught: ", $e->getMessage(), "\n"; }
+"#,
+    );
+    assert_eq!(out, "caught: bad\n");
+}

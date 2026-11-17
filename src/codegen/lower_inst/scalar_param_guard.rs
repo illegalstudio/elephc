@@ -379,13 +379,21 @@ fn emit_numeric_cold_check(
     let string_label = ctx.next_label("scalar_param_guard_peeled_string");
     let payload = crate::codegen_support::mixed_unbox_payload_reg(ctx.emitter.target);
     let tag = abi::int_result_reg(ctx.emitter);
+    // The `int` precision deprecation can enter a user error handler that throws. The owned
+    // operands only the refusal would release stay linked as cleanup owners meanwhile, so
+    // that exception releases them too; every exit below unlinks them first.
+    let protected: &[crate::ir::ValueId] =
+        if target == Numeric::Int && !strict && release { &inst.operands[1..] } else { &[] };
+    let accepted = ctx.next_label("scalar_param_guard_accepted");
     if target == Numeric::Int && !strict {
         // The precision deprecation names the parameter's line (the instruction's span).
         super::core_builtins::publish_diagnostic_site(ctx, inst);
     }
+    emit_link_operand_owners(ctx, protected)?;
     // -- cold path: peel nested cells and dispatch on the concrete tag --
     ctx.load_value_to_result(value)?;
-    emit_branch_if_null_cell(ctx, &null_label);
+    // A null cell is refused through `refuse`, which unlinks the owners and names it `null`.
+    emit_branch_if_null_cell(ctx, if protected.is_empty() { &null_label } else { &refuse });
     abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
     super::enums::emit_mixed_tag_branch(ctx, tag, 0, &int_label);
     if !strict {
@@ -403,7 +411,7 @@ fn emit_numeric_cold_check(
     if target == Numeric::Float {
         emit_int_result_to_float(ctx);
     }
-    abi::emit_jump(ctx.emitter, done);
+    abi::emit_jump(ctx.emitter, &accepted);
 
     // -- cold path: a float binds to float, or to int after PHP's precision rules --
     ctx.emitter.label(&float_label);
@@ -411,7 +419,7 @@ fn emit_numeric_cold_check(
     if target == Numeric::Int {
         super::builtins::strings::emit_float_result_int_coercion_diagnostics(ctx, &refuse);
     }
-    abi::emit_jump(ctx.emitter, done);
+    abi::emit_jump(ctx.emitter, &accepted);
 
     // -- cold path: only a fully numeric string binds --
     ctx.emitter.label(&string_label);
@@ -436,13 +444,42 @@ fn emit_numeric_cold_check(
             }
         }
     }
+    abi::emit_jump(ctx.emitter, &accepted);
+
+    // -- accepted: unlink the cleanup owners, the bound value stays in the result register --
+    ctx.emitter.label(&accepted);
+    emit_unlink_operand_owners(ctx, protected.len());
     abi::emit_jump(ctx.emitter, done);
 
     // -- message: name the refused value and throw --
     ctx.emitter.label(&refuse);
+    emit_unlink_operand_owners(ctx, protected.len());
     emit_rejected_type_name(ctx, value, &null_label)?;
     emit_throw_with_name(ctx, prefix, suffix, if release { &inst.operands[1..] } else { &[] })?;
     Ok(())
+}
+
+/// Links each owned operand, from a temporary stack slot, into the exception cleanup chain.
+fn emit_link_operand_owners(ctx: &mut FunctionContext<'_>, values: &[crate::ir::ValueId]) -> Result<()> {
+    for value in values {
+        let pointer = match ctx.load_value_to_result(*value)?.codegen_repr() {
+            PhpType::Str => abi::string_result_regs(ctx.emitter).0,
+            _ => abi::int_result_reg(ctx.emitter),
+        };
+        abi::emit_push_reg(ctx.emitter, pointer);
+        let owner_address = abi::tertiary_scratch_reg(ctx.emitter);
+        abi::emit_temporary_stack_address(ctx.emitter, owner_address, 0);
+        abi::emit_push_call_operand_owner(ctx.emitter, owner_address, false);
+    }
+    Ok(())
+}
+
+/// Unlinks the owners `emit_link_operand_owners` linked, newest first, without releasing them.
+fn emit_unlink_operand_owners(ctx: &mut FunctionContext<'_>, count: usize) {
+    for _ in 0..count {
+        abi::emit_pop_call_operand_owner(ctx.emitter);
+        abi::emit_release_temporary_stack(ctx.emitter, 16);
+    }
 }
 
 /// Emits the inline tag test: the accepted tags fall through to `done`, everything else
