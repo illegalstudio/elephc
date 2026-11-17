@@ -966,3 +966,29 @@ echo f(box("ok"), 1), "\n";
     assert_eq!(output.stdout, "caught\ncaught\ncaught\nok1\n");
     assert!(output.stderr.contains("leak summary: clean"), "{}", output.stderr);
 }
+
+/// An anonymous class's method (or constructor) is named by the class alone, as PHP prints it:
+/// `class@anonymous()`, `Parent@anonymous()`, `Interface@anonymous()`, never the generated
+/// `class@anonymous#N::m` symbol; an inherited named method keeps its declaring class.
+#[test]
+fn test_scalar_param_error_names_an_anonymous_class_like_php() {
+    let out = compile_and_run(
+        r#"<?php
+function box(mixed $v): mixed { return $v; }
+function show(TypeError $x): void { echo str_replace(__FILE__, "F", $x->getMessage()), "\n"; }
+class Base {}
+interface I {}
+class T { public function q(int $n): void {} }
+$c = new class { public function p(string $s): void {} };
+$d = new class extends Base { public function p(int $i): void {} };
+$e = new class implements I { public function p(bool $b): void {} };
+$f = new class extends T {};
+try { $c->p(box(null)); } catch (TypeError $x) { show($x); }
+try { $d->p(box(null)); } catch (TypeError $x) { show($x); }
+try { $e->p(box([])); } catch (TypeError $x) { show($x); }
+try { $f->q(box(null)); } catch (TypeError $x) { show($x); }
+try { new class(box(null)) { public function __construct(float $f) {} }; } catch (TypeError $x) { show($x); }
+"#,
+    );
+    assert_eq!(out, "class@anonymous(): Argument #1 ($s) must be of type string, null given, called in F on line 11\nBase@anonymous(): Argument #1 ($i) must be of type int, null given, called in F on line 12\nI@anonymous(): Argument #1 ($b) must be of type bool, array given, called in F on line 13\nT::q(): Argument #1 ($n) must be of type int, null given, called in F on line 14\nclass@anonymous(): Argument #1 ($f) must be of type float, null given, called in F on line 15\n");
+}

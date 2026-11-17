@@ -2474,6 +2474,20 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         &self.owner_name
     }
 
+    /// PHP's name for `class` in messages: an anonymous class reads `class@anonymous`
+    /// (`Parent@anonymous`, `Interface@anonymous` for the first declared interface) rather
+    /// than its generated `class@anonymous#N` symbol; any other class keeps its name.
+    pub(crate) fn php_class_label(&self, class: &str) -> String {
+        let class = class.trim_start_matches('\\');
+        if !crate::parser::is_anonymous_class_name(class) {
+            return class.to_string();
+        }
+        let base = self.classes.get(class).and_then(|info| info.parent.clone()
+            .or_else(|| info.declared_interfaces.first().cloned()))
+            .unwrap_or_else(|| "class".to_string());
+        format!("{}@anonymous", base.trim_start_matches('\\'))
+    }
+
     /// Returns a deterministic EIR function name for the next closure literal in this body.
     pub(crate) fn next_closure_name(&mut self) -> String {
         let name = format!(

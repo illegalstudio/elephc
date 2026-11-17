@@ -151,6 +151,16 @@ fn param_decl_site(callee: &str, index: usize) -> Option<Span> {
     })
 }
 
+/// Spells the callee of a parameter `TypeError`: an anonymous class's method is named by the
+/// class alone (`class@anonymous`, `Parent@anonymous`), as PHP prints it, because the NUL in
+/// the class's runtime name ends the string before `::method`.
+fn guard_callee_label(ctx: &LoweringContext<'_, '_>, callable: &str) -> String {
+    match callable.split_once("::") {
+        Some((class, _)) if crate::parser::is_anonymous_class_name(class) => ctx.php_class_label(class),
+        _ => callable.to_string(),
+    }
+}
+
 /// Names a method the way PHP's parameter `TypeError` does: `Declaring::method`, the class whose
 /// body declares the implementation the receiver's class dispatches to (`A::m` for an inherited
 /// `B::m`, the using class for a trait method), with the method's declared spelling. That is
@@ -293,7 +303,8 @@ pub(super) fn guard_scalar_param(
     // PHP's "called in" names the line where the call starts, not the argument's line.
     let line = ctx.call_site_span.map_or(span.line, |call| call.line);
     let encoded = format!(
-        "{mode}{release}\u{1f}{callable}(): Argument #{argument} (${}) must be of type {}, \u{1f} given, called in {source_path} on line {line}",
+        "{mode}{release}\u{1f}{}(): Argument #{argument} (${}) must be of type {}, \u{1f} given, called in {source_path} on line {line}",
+        guard_callee_label(ctx, &callable),
         sig.params[index].0,
         crate::types::diagnostic_names::php_type_name(&declared),
     );
