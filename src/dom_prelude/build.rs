@@ -359,6 +359,7 @@ fn decl_const_dom_validation_err() -> Stmt {
 fn decl_class_domexception() -> Stmt {
     class("DOMException")
         .extends("\\Exception")
+        .untyped_prop("code", Some(e_int(0)))
         .build()
 }
 
@@ -1136,7 +1137,7 @@ fn decl_class_domnode() -> Stmt {
             method("replaceChild")
                 .param("node", t_class("DOMNode"))
                 .param("child", t_class("DOMNode"))
-                .returns(t_class("DOMNode"))
+                .returns(t_union(vec![t_class("DOMNode"), TypeExpr::False]))
                 .body(vec![
                     s_assign("mine", e_method_call(e_this(), "owningDocument", vec![])),
                     s_assign("theirs", e_method_call(e_var("node"), "owningDocument", vec![])),
@@ -1151,7 +1152,7 @@ fn decl_class_domnode() -> Stmt {
                     s_if(
                         e_binop(e_this_prop("firstChild"), BinOp::StrictEq, e_null()),
                         vec![
-                            s_return(e_var("child")),
+                            s_return(e_bool(false)),
                         ],
                         vec![],
                         None,

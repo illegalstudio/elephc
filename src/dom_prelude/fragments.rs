@@ -85,6 +85,7 @@ const DOM_VALIDATION_ERR = 16;
 
 class DOMException extends \Exception
 {
+    public $code = 0;
 }
 
 class DOMNodeList implements \IteratorAggregate, \Countable
@@ -535,7 +536,7 @@ class DOMNode
         return $child;
     }
 
-    public function replaceChild(DOMNode $node, DOMNode $child): DOMNode
+    public function replaceChild(DOMNode $node, DOMNode $child): DOMNode|false
     {
         $mine = $this->owningDocument();
         $theirs = $node->owningDocument();
@@ -543,7 +544,7 @@ class DOMNode
             throw new DOMException('Wrong Document Error', 4);
         }
         if ($this->firstChild === null) {
-            return $child;
+            return false;
         }
         $this->checkInsert($node, null);
         if ($child->parentNode !== $this) {

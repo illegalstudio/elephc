@@ -1376,3 +1376,20 @@ echo "\n";
     );
     assert_eq!(out, "PBI\n");
 }
+
+/// `DOMException::$code` is a public property in php, and `replaceChild()` on a childless parent
+/// answers `false` instead of echoing the child back.
+#[test]
+fn test_domexception_code_is_public_and_replace_child_on_empty_parent_is_false() {
+    let out = compile_and_run(
+        r#"<?php
+$e = new DOMException("x", 5);
+echo $e->code, "\n";
+$d = new DOMDocument;
+$el = $d->createElement('a');
+var_dump($el->replaceChild($d->createElement('b'), $d->createElement('z')));
+var_dump((new ReflectionProperty('DOMException', 'code'))->isPublic());
+"#,
+    );
+    assert_eq!(out, "5\nbool(false)\nbool(true)\n");
+}
