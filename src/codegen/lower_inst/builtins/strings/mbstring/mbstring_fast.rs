@@ -100,6 +100,13 @@ pub(super) fn try_lower(
         }
         RuntimeBuiltinId::MbEncodeMimeheader => try_lower_mimeheader(ctx, inst),
         RuntimeBuiltinId::MbConvertKana => try_lower_convert_kana(ctx, inst),
+        RuntimeBuiltinId::MbChr => try_lower_chr(ctx, inst),
+        RuntimeBuiltinId::MbEncodeNumericentity => {
+            try_lower_encode_numericentity(ctx, inst, operation)
+        }
+        RuntimeBuiltinId::MbDecodeNumericentity => {
+            try_lower_decode_numericentity(ctx, inst, operation)
+        }
         RuntimeBuiltinId::MbOutputHandler => try_lower_output_handler(ctx, inst),
         RuntimeBuiltinId::MbInternalEncoding => try_lower_string_setting_bool(
             ctx,
@@ -1098,17 +1105,21 @@ fn try_lower_convert_kana(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> 
     {
         return Ok(false);
     }
-    let Some(mode) =
-        crate::codegen::lower_inst::builtins::shared::maybe_const_string_operand(ctx, inst.operands[1])?
+    let Some(mode) = crate::codegen::lower_inst::builtins::shared::maybe_const_string_operand(
+        ctx,
+        peel_acquire_value(ctx, inst.operands[1]),
+    )?
     else {
         return Ok(false);
     };
-    if mode != "K" {
-        return Ok(false);
-    }
+    let helper = match mode.as_str() {
+        "K" => "__rt_mb_convert_kana_k_utf8",
+        "a" => "__rt_mb_convert_kana_a_utf8",
+        _ => return Ok(false),
+    };
     let (pointer, length) = (string_ptr_reg(ctx), string_len_reg(ctx));
     load_string_arg_to_regs(ctx, inst, 0, "mb_convert_kana", pointer, length)?;
-    abi::emit_call_label(ctx.emitter, "__rt_mb_convert_kana_k_utf8");
+    abi::emit_call_label(ctx.emitter, helper);
     let fallback = ctx.next_label("mb_convert_kana_fallback");
     let done = ctx.next_label("mb_convert_kana_done");
     match ctx.emitter.target.arch {
@@ -1362,10 +1373,178 @@ pub(super) fn lower_detect_encoding_len(
     Ok(())
 }
 
+/// Lowers explicit-UTF-8 `mb_encode_numericentity()` for the full decimal Unicode map.
+///
+/// `__rt_mb_encode_numericentity_utf8` returns one owned string, or a null pointer when
+/// the input is not valid UTF-8. The runtime map checks come from the shared length sink
+/// verifier; a different map, `hex: true`, or a non-UTF-8 encoding keeps the bridge so
+/// PHP's exact table ordering and substitution behaviour are preserved.
+fn try_lower_encode_numericentity(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+    operation: RuntimeBuiltinId,
+) -> Result<bool> {
+    if !matches!(inst.operands.len(), 3 | 4)
+        || !super::explicit_utf8_encoding(ctx, inst.operands[2])?
+        || ctx.value_php_type(inst.operands[0])?.codegen_repr() != PhpType::Str
+        || inst.result_php_type.codegen_repr() != PhpType::Str
+    {
+        return Ok(false);
+    }
+    if inst.operands.len() == 4 && !const_false_operand(ctx, inst.operands[3]) {
+        return Ok(false);
+    }
+    let fallback = ctx.next_label("mb_encode_numericentity_fallback");
+    if !verify_full_decimal_map(ctx, inst.operands[1], &fallback)? {
+        return Ok(false);
+    }
+    let (pointer, length) = (string_ptr_reg(ctx), string_len_reg(ctx));
+    load_string_arg_to_regs(ctx, inst, 0, "mb_encode_numericentity", pointer, length)?;
+    abi::emit_call_label(ctx.emitter, "__rt_mb_encode_numericentity_utf8");
+    let done = ctx.next_label("mb_encode_numericentity_done");
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction(&format!("cbz x1, {fallback}"));            // a null result means invalid UTF-8
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("test rax, rax");                           // did the encoder accept the input?
+            ctx.emitter.instruction(&format!("jz {fallback}"));                 // a null result means invalid UTF-8
+        }
+    }
+    abi::emit_jump(ctx.emitter, &done);
+    ctx.emitter.label(&fallback);
+    super::lower_mbstring_impl(ctx, inst, operation, false)?;
+    ctx.emitter.label(&done);
+    store_if_result(ctx, inst)?;
+    Ok(true)
+}
+
+/// Lowers explicit-UTF-8 `mb_decode_numericentity()` for the full decimal Unicode map.
+///
+/// The shared decoder-length pre-scan accepts only well-formed decimal references whose
+/// codepoint lies in U+0080..U+10FFFF without surrogates; every other shape returns a null
+/// pointer from the string helper and keeps the bridge, so plain `&`, unmapped references,
+/// and non-UTF-8 encodings retain PHP's exact output.
+fn try_lower_decode_numericentity(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+    operation: RuntimeBuiltinId,
+) -> Result<bool> {
+    if inst.operands.len() != 3
+        || !super::explicit_utf8_encoding(ctx, inst.operands[2])?
+        || ctx.value_php_type(inst.operands[0])?.codegen_repr() != PhpType::Str
+        || inst.result_php_type.codegen_repr() != PhpType::Str
+    {
+        return Ok(false);
+    }
+    let fallback = ctx.next_label("mb_decode_numericentity_fallback");
+    if !verify_full_decimal_map(ctx, inst.operands[1], &fallback)? {
+        return Ok(false);
+    }
+    let (pointer, length) = (string_ptr_reg(ctx), string_len_reg(ctx));
+    load_string_arg_to_regs(ctx, inst, 0, "mb_decode_numericentity", pointer, length)?;
+    abi::emit_call_label(ctx.emitter, "__rt_mb_decode_numericentity_utf8");
+    let done = ctx.next_label("mb_decode_numericentity_done");
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction(&format!("cbz x1, {fallback}"));            // a null result means a rejected reference
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("test rax, rax");                           // did the decoder accept every reference?
+            ctx.emitter.instruction(&format!("jz {fallback}"));                 // a null result means a rejected reference
+        }
+    }
+    abi::emit_jump(ctx.emitter, &done);
+    ctx.emitter.label(&fallback);
+    super::lower_mbstring_impl(ctx, inst, operation, false)?;
+    ctx.emitter.label(&done);
+    store_if_result(ctx, inst)?;
+    Ok(true)
+}
+
+/// Reports whether a call operand is the literal boolean `false`.
+fn const_false_operand(ctx: &FunctionContext<'_>, value: ValueId) -> bool {
+    let value = peel_acquire_value(ctx, value);
+    let Some(definition) = ctx.function.value(value) else {
+        return false;
+    };
+    let crate::ir::ValueDef::Instruction { inst, .. } = definition.def else {
+        return false;
+    };
+    let Some(instruction) = ctx.function.instruction(inst) else {
+        return false;
+    };
+    instruction.op == Op::ConstBool
+        && matches!(instruction.immediate, Some(crate::ir::Immediate::Bool(false)))
+}
+
+/// Peels the ownership-acquiring wrappers a call argument may carry around a constant.
+fn peel_acquire_value(ctx: &FunctionContext<'_>, value: ValueId) -> ValueId {
+    let mut value = value;
+    for _ in 0..4 {
+        let Some(definition) = ctx.function.value(value) else { break };
+        let crate::ir::ValueDef::Instruction { inst, .. } = definition.def else { break };
+        let Some(instruction) = ctx.function.instruction(inst) else { break };
+        if instruction.op == Op::Acquire && instruction.operands.len() == 1 {
+            value = instruction.operands[0];
+            continue;
+        }
+        break;
+    }
+    value
+}
+
+/// Lowers explicit-UTF-8 `mb_chr()` to the native UTF-8 encoder and boxes string/false.
+fn try_lower_chr(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<bool> {
+    if inst.operands.len() != 2
+        || !super::explicit_utf8_encoding(ctx, inst.operands[1])?
+        || !matches!(
+            inst.result_php_type.codegen_repr(),
+            PhpType::Mixed | PhpType::Union(_)
+        )
+    {
+        return Ok(false);
+    }
+    load_as_int(ctx, inst.operands[0], "mb_chr codepoint")?;
+    abi::emit_call_label(ctx.emitter, "__rt_mb_chr_utf8");
+    let invalid = ctx.next_label("mb_chr_invalid");
+    let done = ctx.next_label("mb_chr_fast_done");
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction(&format!("cbz x1, {invalid}"));             // a null pointer means PHP's false result
+            crate::codegen::emit_box_current_owned_value_as_mixed(ctx.emitter, &PhpType::Str);
+            abi::emit_jump(ctx.emitter, &done);
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("test rax, rax");                           // did the encoder produce a string?
+            ctx.emitter.instruction(&format!("jz {invalid}"));                  // a null pointer means PHP's false result
+            crate::codegen::emit_box_current_owned_value_as_mixed(ctx.emitter, &PhpType::Str);
+            abi::emit_jump(ctx.emitter, &done);
+        }
+    }
+    ctx.emitter.label(&invalid);
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction("mov x0, #3");                              // runtime tag 3 = boolean
+            ctx.emitter.instruction("mov x1, #0");                              // false payload
+            ctx.emitter.instruction("mov x2, #0");                              // no high payload word
+            abi::emit_call_label(ctx.emitter, "__rt_mixed_from_value");
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("mov eax, 3");                              // runtime tag 3 = boolean
+            ctx.emitter.instruction("xor edi, edi");                            // false payload
+            ctx.emitter.instruction("xor esi, esi");                            // no high payload word
+            abi::emit_call_label(ctx.emitter, "__rt_mixed_from_value");
+        }
+    }
+    ctx.emitter.label(&done);
+    store_if_result(ctx, inst)?;
+    Ok(true)
+}
+
 /// Lowers `strlen(mb_chr(...))` to the UTF-8 byte length of one explicit-UTF-8 codepoint.
 pub(super) fn lower_chr_len(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
-    let fast = super::prepared_args::already_prepared(ctx, inst, RuntimeBuiltinId::MbChr)?
-        && inst.operands.len() == 2
+    let fast = super::prepared_args::chr_operands_prepared(ctx, inst)?
         && super::explicit_utf8_encoding(ctx, inst.operands[1])?;
     if !fast {
         super::lower_mbstring_impl(ctx, inst, RuntimeBuiltinId::MbChr, false)?;
@@ -1373,7 +1552,28 @@ pub(super) fn lower_chr_len(ctx: &mut FunctionContext<'_>, inst: &Instruction) -
         store_if_result(ctx, inst)?;
         return Ok(());
     }
+    // A tagged scalar may carry null for a missing array element. PHP deprecates that call
+    // and returns the one-byte NUL string through the bridge; only the integer payload uses
+    // the allocation-free length path.
+    let tagged = ctx.function.value(inst.operands[0]).is_some_and(|value| {
+        value.php_type.codegen_repr() == PhpType::TaggedScalar
+    });
+    let tagged_null = tagged.then(|| ctx.next_label("mb_chr_len_tagged_null"));
     load_as_int(ctx, inst.operands[0], "mb_chr codepoint")?;
+    if let Some(tagged_null) = &tagged_null {
+        let tag = crate::codegen_support::sentinels::tagged_scalar_tag_reg(ctx.emitter);
+        let null_tag = crate::codegen_support::sentinels::TAGGED_SCALAR_TAG_NULL;
+        match ctx.emitter.target.arch {
+            Arch::AArch64 => {
+                ctx.emitter.instruction(&format!("cmp {tag}, #{null_tag}"));    // does the element carry PHP null?
+                ctx.emitter.instruction(&format!("b.eq {tagged_null}"));        // null keeps the bridge's deprecation and NUL length
+            }
+            Arch::X86_64 => {
+                ctx.emitter.instruction(&format!("cmp {tag}, {null_tag}"));     // does the element carry PHP null?
+                ctx.emitter.instruction(&format!("je {tagged_null}"));          // null keeps the bridge's deprecation and NUL length
+            }
+        }
+    }
     let zero = ctx.next_label("mb_chr_len_zero");
     let one = ctx.next_label("mb_chr_len_one");
     let two = ctx.next_label("mb_chr_len_two");
@@ -1425,9 +1625,246 @@ pub(super) fn lower_chr_len(ctx: &mut FunctionContext<'_>, inst: &Instruction) -
         abi::emit_load_int_immediate(ctx.emitter, abi::int_result_reg(ctx.emitter), length);
         abi::emit_jump(ctx.emitter, &done);
     }
+    if let Some(tagged_null) = tagged_null {
+        ctx.emitter.label(&tagged_null);
+        super::lower_mbstring_impl(ctx, inst, RuntimeBuiltinId::MbChr, false)?;
+        emit_boxed_string_length(ctx);
+    }
     ctx.emitter.label(&done);
     store_if_result(ctx, inst)?;
     Ok(())
+}
+
+/// Lowers `ord(mb_chr(...)[0])` to the first UTF-8 byte of one explicit-UTF-8 codepoint.
+pub(super) fn lower_chr_first(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+    lower_chr_observation(ctx, inst, ChrObservation::FirstByte)
+}
+
+/// Lowers the combined `strlen(mb_chr(...)) + ord(mb_chr(...)[0])` shape to one packed observation.
+///
+/// The result packs the byte length in bits 8..15 and the first UTF-8 byte in bits 0..7. The IR
+/// sink extracts each half with a shift or a mask, so both observations share one classification
+/// pass and neither allocates the one-character string.
+pub(super) fn lower_chr_packed(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+    lower_chr_observation(ctx, inst, ChrObservation::Packed)
+}
+
+/// Which observation of the encoded codepoint a `mb_chr` sink needs.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum ChrObservation {
+    /// The first UTF-8 byte, matching `ord(mb_chr(...)[0])`.
+    FirstByte,
+    /// `(byte_length << 8) | first_byte`, serving both `strlen()` and `ord($x[0])`.
+    Packed,
+}
+
+/// Emits the allocation-free observation of one explicit-UTF-8 codepoint.
+fn lower_chr_observation(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+    observation: ChrObservation,
+) -> Result<()> {
+    let packed = observation == ChrObservation::Packed;
+    let fast = inst.operands.len() == 2
+        && super::explicit_utf8_encoding(ctx, inst.operands[1])?;
+    if !fast {
+        super::lower_mbstring_impl(ctx, inst, RuntimeBuiltinId::MbChr, false)?;
+        emit_boxed_string_observation(ctx, packed);
+        store_if_result(ctx, inst)?;
+        return Ok(());
+    }
+    load_as_int(ctx, inst.operands[0], "mb_chr codepoint")?;
+    let zero = ctx.next_label("mb_chr_observation_zero");
+    let one = ctx.next_label("mb_chr_observation_one");
+    let two = ctx.next_label("mb_chr_observation_two");
+    let three = ctx.next_label("mb_chr_observation_three");
+    let four = ctx.next_label("mb_chr_observation_four");
+    let done = ctx.next_label("mb_chr_observation_done");
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction("cmp x0, #0");                              // is the codepoint negative?
+            ctx.emitter.instruction(&format!("b.lt {zero}"));                   // invalid codepoints encode as false
+            ctx.emitter.instruction("cmp x0, #0x80");                           // does the codepoint fit one UTF-8 byte?
+            ctx.emitter.instruction(&format!("b.lo {one}"));                    // a one-byte sequence
+            ctx.emitter.instruction("cmp x0, #0x800");                          // does the codepoint fit two UTF-8 bytes?
+            ctx.emitter.instruction(&format!("b.lo {two}"));                    // a two-byte sequence
+            ctx.emitter.instruction("mov w9, #0xD800");                         // materialize the first surrogate codepoint
+            ctx.emitter.instruction("cmp x0, x9");                              // is the codepoint below the surrogate range?
+            ctx.emitter.instruction(&format!("b.lo {three}"));                  // a three-byte sequence
+            ctx.emitter.instruction("mov w9, #0xE000");                         // materialize the first post-surrogate codepoint
+            ctx.emitter.instruction("cmp x0, x9");                              // is the codepoint inside the surrogate range?
+            ctx.emitter.instruction(&format!("b.lo {zero}"));                   // surrogates encode as false
+            ctx.emitter.instruction("mov w9, #0x10000");                        // materialize the first four-byte codepoint
+            ctx.emitter.instruction("cmp x0, x9");                              // does the codepoint fit three UTF-8 bytes?
+            ctx.emitter.instruction(&format!("b.lo {three}"));                  // a three-byte sequence
+            ctx.emitter.instruction("mov w9, #0x110000");                       // materialize one past the last Unicode codepoint
+            ctx.emitter.instruction("cmp x0, x9");                              // is the codepoint beyond Unicode?
+            ctx.emitter.instruction(&format!("b.lo {four}"));                   // a four-byte sequence
+            abi::emit_jump(ctx.emitter, &zero);
+
+            ctx.emitter.label(&one);
+            if packed {
+                ctx.emitter.instruction("add x0, x0, #0x100");                  // pack the one-byte length above the lead byte
+            }
+            abi::emit_jump(ctx.emitter, &done);
+
+            ctx.emitter.label(&two);
+            ctx.emitter.instruction("lsr x9, x0, #6");                          // move the codepoint into the two-byte lead position
+            ctx.emitter.instruction("orr x0, x9, #0xC0");                       // set the two-byte UTF-8 lead marker
+            if packed {
+                ctx.emitter.instruction("add x0, x0, #0x200");                  // pack the two-byte length above the lead byte
+            }
+            abi::emit_jump(ctx.emitter, &done);
+
+            ctx.emitter.label(&three);
+            ctx.emitter.instruction("lsr x9, x0, #12");                         // move the codepoint into the three-byte lead position
+            ctx.emitter.instruction("orr x0, x9, #0xE0");                       // set the three-byte UTF-8 lead marker
+            if packed {
+                ctx.emitter.instruction("add x0, x0, #0x300");                  // pack the three-byte length above the lead byte
+            }
+            abi::emit_jump(ctx.emitter, &done);
+
+            ctx.emitter.label(&four);
+            ctx.emitter.instruction("lsr x9, x0, #18");                         // move the codepoint into the four-byte lead position
+            ctx.emitter.instruction("orr x0, x9, #0xF0");                       // set the four-byte UTF-8 lead marker
+            if packed {
+                ctx.emitter.instruction("add x0, x0, #0x400");                  // pack the four-byte length above the lead byte
+            }
+            abi::emit_jump(ctx.emitter, &done);
+
+            ctx.emitter.label(&zero);
+            abi::emit_load_int_immediate(ctx.emitter, abi::int_result_reg(ctx.emitter), 0);
+            ctx.emitter.label(&done);
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("test rax, rax");                           // is the codepoint negative?
+            ctx.emitter.instruction(&format!("js {zero}"));                     // invalid codepoints encode as false
+            ctx.emitter.instruction("cmp rax, 0x80");                           // does the codepoint fit one UTF-8 byte?
+            ctx.emitter.instruction(&format!("jb {one}"));                      // a one-byte sequence
+            ctx.emitter.instruction("cmp rax, 0x800");                          // does the codepoint fit two UTF-8 bytes?
+            ctx.emitter.instruction(&format!("jb {two}"));                      // a two-byte sequence
+            ctx.emitter.instruction("cmp rax, 0xD800");                         // is the codepoint below the surrogate range?
+            ctx.emitter.instruction(&format!("jb {three}"));                    // a three-byte sequence
+            ctx.emitter.instruction("cmp rax, 0xE000");                         // is the codepoint inside the surrogate range?
+            ctx.emitter.instruction(&format!("jb {zero}"));                     // surrogates encode as false
+            ctx.emitter.instruction("cmp rax, 0x10000");                        // does the codepoint fit three UTF-8 bytes?
+            ctx.emitter.instruction(&format!("jb {three}"));                    // a three-byte sequence
+            ctx.emitter.instruction("cmp rax, 0x110000");                       // is the codepoint beyond Unicode?
+            ctx.emitter.instruction(&format!("jb {four}"));                     // a four-byte sequence
+            abi::emit_jump(ctx.emitter, &zero);
+
+            ctx.emitter.label(&one);
+            if packed {
+                ctx.emitter.instruction("add rax, 0x100");                      // pack the one-byte length above the lead byte
+            }
+            abi::emit_jump(ctx.emitter, &done);
+
+            ctx.emitter.label(&two);
+            ctx.emitter.instruction("mov r10, rax");                            // preserve the codepoint for the lead-byte shift
+            ctx.emitter.instruction("shr r10, 6");                              // move the codepoint into the two-byte lead position
+            ctx.emitter.instruction("or r10, 0xC0");                            // set the two-byte UTF-8 lead marker
+            ctx.emitter.instruction("mov rax, r10");                            // return the two-byte lead byte
+            if packed {
+                ctx.emitter.instruction("add rax, 0x200");                      // pack the two-byte length above the lead byte
+            }
+            abi::emit_jump(ctx.emitter, &done);
+
+            ctx.emitter.label(&three);
+            ctx.emitter.instruction("mov r10, rax");                            // preserve the codepoint for the lead-byte shift
+            ctx.emitter.instruction("shr r10, 12");                             // move the codepoint into the three-byte lead position
+            ctx.emitter.instruction("or r10, 0xE0");                            // set the three-byte UTF-8 lead marker
+            ctx.emitter.instruction("mov rax, r10");                            // return the three-byte lead byte
+            if packed {
+                ctx.emitter.instruction("add rax, 0x300");                      // pack the three-byte length above the lead byte
+            }
+            abi::emit_jump(ctx.emitter, &done);
+
+            ctx.emitter.label(&four);
+            ctx.emitter.instruction("mov r10, rax");                            // preserve the codepoint for the lead-byte shift
+            ctx.emitter.instruction("shr r10, 18");                             // move the codepoint into the four-byte lead position
+            ctx.emitter.instruction("or r10, 0xF0");                            // set the four-byte UTF-8 lead marker
+            ctx.emitter.instruction("mov rax, r10");                            // return the four-byte lead byte
+            if packed {
+                ctx.emitter.instruction("add rax, 0x400");                      // pack the four-byte length above the lead byte
+            }
+            abi::emit_jump(ctx.emitter, &done);
+
+            ctx.emitter.label(&zero);
+            abi::emit_load_int_immediate(ctx.emitter, abi::int_result_reg(ctx.emitter), 0);
+            ctx.emitter.label(&done);
+        }
+    }
+    store_if_result(ctx, inst)?;
+    Ok(())
+}
+
+/// Unboxes one bridge-produced `mb_chr()` result and reads its byte length and first byte.
+///
+/// The payload byte is loaded before the boxed cell is released: the cell owns the string on the
+/// bridge-result path, so reading it afterwards would access freed storage.
+fn emit_boxed_string_observation(ctx: &mut FunctionContext<'_>, packed: bool) {
+    let released = ctx.next_label("mb_chr_observation_boxed_released");
+    let done = ctx.next_label("mb_chr_observation_boxed_done");
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction("sub sp, sp, #32");                         // reserve the cell, tag, length, and first-byte slots
+            ctx.emitter.instruction("str x0, [sp, #0]");                        // save the boxed cell before unboxing
+            abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
+            ctx.emitter.instruction("str x0, [sp, #8]");                        // save the runtime tag
+            ctx.emitter.instruction("str xzr, [sp, #16]");                      // default the byte length to zero
+            ctx.emitter.instruction("str xzr, [sp, #24]");                      // default the first byte to zero
+            ctx.emitter.instruction("cmp x0, #1");                              // is this a boxed string?
+            ctx.emitter.instruction(&format!("b.ne {released}"));               // false and null have no bytes
+            ctx.emitter.instruction("str x2, [sp, #16]");                       // save the string byte length
+            ctx.emitter.instruction(&format!("cbz x2, {released}"));            // an empty string has no first byte
+            ctx.emitter.instruction("ldrb w9, [x1]");                           // load the first encoded byte before the cell release
+            ctx.emitter.instruction("str x9, [sp, #24]");                       // save the first byte across the release
+            ctx.emitter.label(&released);
+            ctx.emitter.instruction("ldr x0, [sp, #0]");                        // reload the cell for its final release
+            abi::emit_call_label(ctx.emitter, "__rt_decref_any");
+            if packed {
+                ctx.emitter.instruction("ldr x10, [sp, #16]");                  // reload the string byte length
+                ctx.emitter.instruction("ldr x11, [sp, #24]");                  // reload the first encoded byte
+                ctx.emitter.instruction("lsl x0, x10, #8");                     // place the byte length above the first byte
+                ctx.emitter.instruction("orr x0, x0, x11");                     // combine both observations into one integer
+            } else {
+                ctx.emitter.instruction("ldr x0, [sp, #24]");                   // the first-byte observation is the raw byte
+            }
+            abi::emit_jump(ctx.emitter, &done);
+            ctx.emitter.label(&done);
+            ctx.emitter.instruction("add sp, sp, #32");                         // release the observation spill slots
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("sub rsp, 32");                             // reserve the cell, tag, length, and first-byte slots
+            ctx.emitter.instruction("mov QWORD PTR [rsp], rax");                // save the boxed cell before unboxing
+            abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
+            ctx.emitter.instruction("mov QWORD PTR [rsp + 8], rax");            // save the runtime tag
+            ctx.emitter.instruction("mov QWORD PTR [rsp + 16], 0");             // default the byte length to zero
+            ctx.emitter.instruction("mov QWORD PTR [rsp + 24], 0");             // default the first byte to zero
+            ctx.emitter.instruction("cmp rax, 1");                              // is this a boxed string?
+            ctx.emitter.instruction(&format!("jne {released}"));                // false and null have no bytes
+            ctx.emitter.instruction("mov QWORD PTR [rsp + 16], rdx");           // save the string byte length
+            ctx.emitter.instruction("test rdx, rdx");                           // does the string hold any byte?
+            ctx.emitter.instruction(&format!("jz {released}"));                 // an empty string has no first byte
+            ctx.emitter.instruction("movzx r10d, BYTE PTR [rdi]");              // load the first encoded byte before the cell release
+            ctx.emitter.instruction("mov QWORD PTR [rsp + 24], r10");           // save the first byte across the release
+            ctx.emitter.label(&released);
+            ctx.emitter.instruction("mov rax, QWORD PTR [rsp]");                // reload the cell for its final release
+            abi::emit_call_label(ctx.emitter, "__rt_decref_any");
+            if packed {
+                ctx.emitter.instruction("mov r10, QWORD PTR [rsp + 16]");       // reload the string byte length
+                ctx.emitter.instruction("mov r11, QWORD PTR [rsp + 24]");       // reload the first encoded byte
+                ctx.emitter.instruction("shl r10, 8");                          // place the byte length above the first byte
+                ctx.emitter.instruction("or r11, r10");                         // combine both observations into one integer
+                ctx.emitter.instruction("mov rax, r11");                        // return the packed observation
+            } else {
+                ctx.emitter.instruction("mov rax, QWORD PTR [rsp + 24]");       // the first-byte observation is the raw byte
+            }
+            abi::emit_jump(ctx.emitter, &done);
+            ctx.emitter.label(&done);
+            ctx.emitter.instruction("add rsp, 32");                             // release the observation spill slots
+        }
+    }
 }
 
 /// Lowers `strlen(mb_strimwidth(...))` for a zero start and explicit UTF-8 ASCII strings.

@@ -178,6 +178,9 @@ fn test_min_max_static_typed_matrix_matches_php() {
 /// print the same matrix.
 #[test]
 fn test_min_max_gmp_reducer_matrix_matches_php() {
+    if skip_without_gmp_native("gmp min/max matrix") {
+        return;
+    }
     let source = RUNTIME_MATRIX.replacen(
         "<?php\n",
         "<?php\n$g = gmp_init(7);\necho gmp_strval($g), \"\\n\";\n",

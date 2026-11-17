@@ -87,7 +87,7 @@ fn is_raw_sum_call(inst: &crate::ir::Instruction) -> bool {
 }
 
 /// Returns the defining instruction and its id when `value` is instruction-defined.
-fn defining_instruction_with_id(function: &Function, value: ValueId) -> Option<(InstId, &crate::ir::Instruction)> {
+pub(super) fn defining_instruction_with_id(function: &Function, value: ValueId) -> Option<(InstId, &crate::ir::Instruction)> {
     let ValueDef::Instruction { inst, .. } = function.value(value)?.def else {
         return None;
     };
@@ -95,7 +95,7 @@ fn defining_instruction_with_id(function: &Function, value: ValueId) -> Option<(
 }
 
 /// Returns the block index and instruction position of every instruction.
-fn instruction_positions(function: &Function) -> HashMap<InstId, (usize, usize)> {
+pub(super) fn instruction_positions(function: &Function) -> HashMap<InstId, (usize, usize)> {
     let mut positions = HashMap::new();
     for (block_index, block) in function.blocks.iter().enumerate() {
         for (position, &id) in block.instructions.iter().enumerate() {
@@ -213,7 +213,7 @@ fn specialize(
 }
 
 /// Returns the instruction positions of the complete scaffold in role order.
-fn call_positions(
+pub(super) fn call_positions(
     function: &Function,
     call: InstId,
     load: InstId,
@@ -271,7 +271,7 @@ fn call_positions(
 }
 
 /// Returns the temporary store and its slot for the acquired receiver value.
-fn acquire_store(function: &Function, acquired: ValueId) -> Option<(InstId, LocalSlotId)> {
+pub(super) fn acquire_store(function: &Function, acquired: ValueId) -> Option<(InstId, LocalSlotId)> {
     let mut found = None;
     for (raw, inst) in function.instructions.iter().enumerate() {
         if inst.op != Op::StoreLocal || inst.operands.as_slice() != [acquired] {
@@ -288,7 +288,7 @@ fn acquire_store(function: &Function, acquired: ValueId) -> Option<(InstId, Loca
 }
 
 /// Returns the owner push/pop and every release for the temporary slot.
-fn temp_scaffold(
+pub(super) fn temp_scaffold(
     function: &Function,
     temp_slot: LocalSlotId,
     expected_store: InstId,
@@ -330,7 +330,7 @@ fn temp_scaffold(
 }
 
 /// Rejects every acquire-result use other than the temporary store and the reducer call.
-fn acquired_uses_are_scaffold(
+pub(super) fn acquired_uses_are_scaffold(
     function: &Function,
     acquired: ValueId,
     store: InstId,

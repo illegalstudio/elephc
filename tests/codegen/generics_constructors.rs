@@ -98,53 +98,21 @@ echo $explicit->first + 1, "|", strtoupper($explicit->second), "|",
     assert_eq!(compile_and_run(source), "8|SEVEN|EIGHT|9");
 }
 
-/// Constructor inference reads a PHPDoc bound in both PHP modes and reports a construction that
-/// breaks it as a warning: php-src never enforces the annotation, so the program still compiles
-/// and runs (issue #1899).
+/// Constructor inference checks declared bounds before native execution in both PHP modes.
 #[test]
-fn test_generic_constructor_docblock_bound_violation_warns() {
+fn test_generic_constructors_enforce_docblock_bounds() {
     let source = r#"<?php
 class Box {
     /**
      * @template T of int
      * @param T $value
      */
-    public function __construct(public $value) {}
+    public function __construct($value) {}
 }
-echo (new Box("seven"))->value;
+new Box("seven");
 "#;
     for flags in [&[][..], &["--strict-php"][..]] {
-        let warnings = compile_cli_file_with_flags_capturing_stderr(source, flags);
-        assert!(
-            warnings.contains("<T>") && warnings.contains("does not satisfy its bound int"),
-            "{warnings}"
-        );
-        assert_eq!(compile_cli_file_and_run_with_flags(source, flags), "seven", "{flags:?}");
+        let error = compile_cli_file_with_flags_expect_failure(source, flags);
+        assert!(error.contains("<T>") && error.contains("does not satisfy"), "{error}");
     }
-}
-
-/// A constructor template that takes over a native hint keeps it binding: php-src enforces
-/// `Model $value` whatever `@param T $value` says, so an unrelated argument is rejected and a
-/// subclass still specializes the promoted property.
-#[test]
-fn test_generic_constructor_docblock_template_keeps_the_native_hint() {
-    let declarations = r#"<?php
-class Model {}
-class User extends Model { public function hi() { return "hi"; } }
-class Other {}
-class Box {
-    /**
-     * @template T of Model
-     * @param T $value
-     */
-    public function __construct(public Model $value) {}
-}
-"#;
-    let valid = format!("{declarations}echo (new Box(new User()))->value->hi();\n");
-    assert_eq!(compile_cli_file_and_run_with_flags(&valid, &[]), "hi");
-    let error = compile_cli_file_with_flags_expect_failure(
-        &format!("{declarations}new Box(new Other());\n"),
-        &[],
-    );
-    assert!(error.contains("expects Model, got Other"), "{error}");
 }

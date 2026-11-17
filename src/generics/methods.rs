@@ -252,18 +252,17 @@ fn attach(
 /// checker from treating the result as a template again.
 fn substitute(mut method: ClassMethod, instantiated: &str, bindings: &Bindings) -> ClassMethod {
     method.name = instantiated.to_string();
-    let erased = super::docblock_params_read_as_mixed(&method.type_params, bindings);
     method.type_params = Vec::new();
     for (_, declared, _, _) in method.params.iter_mut() {
         if let Some(ty) = declared.as_mut() {
-            *ty = super::substitute_signature_type(ty, bindings, &erased);
+            *ty = super::substitute_value_type(ty, bindings);
         }
     }
     if let Some(ty) = method.variadic_type.as_mut() {
-        *ty = super::substitute_signature_type(ty, bindings, &erased);
+        *ty = super::substitute_value_type(ty, bindings);
     }
     if let Some(ty) = method.return_type.as_mut() {
-        *ty = super::substitute_signature_type(ty, bindings, &erased);
+        *ty = super::substitute_value_type(ty, bindings);
     }
     method.body = substitute_body(std::mem::take(&mut method.body), bindings);
     method

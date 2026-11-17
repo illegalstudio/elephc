@@ -46,21 +46,21 @@ fn length_only_transforms_use_raw_str_len() {
     for (source, producer) in [
         (
             r#"<?php
-$s = str_repeat('abc', 40);
+$s = $argv[0] ?? str_repeat('abc', 40);
 echo strlen(strtr($s, 'abc', 'xyz'));
 "#,
             "runtime.strtr",
         ),
         (
             r#"<?php
-$s = 'the quick brown fox';
+$s = $argv[0] ?? 'the quick brown fox';
 echo strlen(ucwords($s));
 "#,
             "runtime.ucwords",
         ),
         (
             r#"<?php
-$s = 'The Quick Brown Fox';
+$s = $argv[0] ?? 'The Quick Brown Fox';
 echo strlen(strtolower($s));
 "#,
             "runtime.strtolower",

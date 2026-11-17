@@ -372,9 +372,32 @@ fn try_emit_direct_closure_wrapper(
         return Ok(None);
     }
     let symbol = crate::names::function_symbol(&closure.name);
+    let return_ty = closure.return_php_type.clone();
     Ok(Some(emit_direct_closure_wrapper(
-        ctx, &symbol, &element, &param,
+        ctx, &symbol, &element, &param, &return_ty,
     )))
+}
+
+/// Boxes one direct closure result into the Mixed cell the map helper expects.
+///
+/// The closure's EIR return type is authoritative: an untyped `fn($v) => $v * 1.5` returns a raw
+/// `F64` in `d0`/`xmm0`, while the Mixed map helper reads an owned Mixed pointer from `x0`/`rax`.
+/// Scalars keep the ordinary value-boxing path; owned string/container results transfer their
+/// owner exactly like the shared callable invoker does.
+fn box_direct_closure_return(emitter: &mut crate::codegen_support::emit::Emitter, return_ty: &PhpType) {
+    let repr = return_ty.codegen_repr();
+    match &repr {
+        PhpType::Mixed | PhpType::Union(_) => {}
+        PhpType::Str
+        | PhpType::Array(_)
+        | PhpType::AssocArray { .. }
+        | PhpType::Iterable
+        | PhpType::Object(_)
+        | PhpType::Callable => {
+            crate::codegen::emit_box_current_owned_value_as_mixed(emitter, &repr)
+        }
+        _ => crate::codegen::emit_box_current_value_as_mixed(emitter, return_ty),
+    }
 }
 
 /// Emits one out-of-line wrapper that calls a closure entry point with the map element.
@@ -383,6 +406,7 @@ fn emit_direct_closure_wrapper(
     closure_symbol: &str,
     element: &PhpType,
     param: &PhpType,
+    return_ty: &PhpType,
 ) -> String {
     let label = ctx.next_global_label("array_map_direct_closure");
     let scope = ctx.emitter.begin_out_of_line();
@@ -394,12 +418,34 @@ fn emit_direct_closure_wrapper(
     }
     ctx.emitter.label_global(&label);
     if param == element {
+        if return_ty.codegen_repr() == PhpType::Mixed {
+            match ctx.emitter.target.arch {
+                Arch::AArch64 => {
+                    ctx.emitter.instruction(&format!("b {closure_symbol}"));    // tail-call a closure that already returns an owned Mixed cell
+                }
+                Arch::X86_64 => {
+                    ctx.emitter.instruction(&format!("jmp {closure_symbol}"));  // tail-call a closure that already returns an owned Mixed cell
+                }
+            }
+            ctx.emitter.end_out_of_line(scope);
+            return label;
+        }
         match ctx.emitter.target.arch {
             Arch::AArch64 => {
-                ctx.emitter.instruction(&format!("b {closure_symbol}"));        // tail-call a closure whose ABI already matches
+                ctx.emitter.instruction("stp x29, x30, [sp, #-16]!");           // preserve the wrapper return address across the closure and boxing calls
+                ctx.emitter.instruction("mov x29, sp");                         // establish a stable wrapper frame
+                ctx.emitter.instruction(&format!("bl {closure_symbol}"));       // invoke the closure with the raw map element
+                box_direct_closure_return(ctx.emitter, return_ty);
+                ctx.emitter.instruction("ldp x29, x30, [sp], #16");             // restore the wrapper return address
+                ctx.emitter.instruction("ret");                                 // return the boxed Mixed result to the map helper
             }
             Arch::X86_64 => {
-                ctx.emitter.instruction(&format!("jmp {closure_symbol}"));      // tail-call a closure whose ABI already matches
+                ctx.emitter.instruction("push rbp");                            // preserve the wrapper return address across the closure and boxing calls
+                ctx.emitter.instruction("mov rbp, rsp");                        // establish a stable wrapper frame
+                ctx.emitter.instruction(&format!("call {closure_symbol}"));     // invoke the closure with the raw map element
+                box_direct_closure_return(ctx.emitter, return_ty);
+                ctx.emitter.instruction("pop rbp");                             // restore the wrapper return address
+                ctx.emitter.instruction("ret");                                 // return the boxed Mixed result to the map helper
             }
         }
         ctx.emitter.end_out_of_line(scope);
@@ -416,6 +462,7 @@ fn emit_direct_closure_wrapper(
             );
             ctx.emitter.instruction("str x0, [sp, #0]");                        // keep the owned input box across the closure call
             ctx.emitter.instruction(&format!("bl {closure_symbol}"));           // invoke the closure body directly
+            box_direct_closure_return(ctx.emitter, return_ty);
             ctx.emitter.instruction("str x0, [sp, #8]");                        // keep the owned Mixed result
             ctx.emitter.instruction("ldr x0, [sp, #0]");                        // reload the owned input box
             ctx.emitter.instruction("bl __rt_decref_mixed");                    // retire the temporary argument box
@@ -436,6 +483,7 @@ fn emit_direct_closure_wrapper(
             ctx.emitter.instruction("mov QWORD PTR [rbp - 8], rax");            // keep the owned input box across the closure call
             ctx.emitter.instruction("mov rdi, rax");                            // pass the boxed cell as the closure parameter
             ctx.emitter.instruction(&format!("call {closure_symbol}"));         // invoke the closure body directly
+            box_direct_closure_return(ctx.emitter, return_ty);
             ctx.emitter.instruction("mov QWORD PTR [rbp - 16], rax");           // keep the owned Mixed result
             ctx.emitter.instruction("mov rax, QWORD PTR [rbp - 8]");            // reload the owned input box
             ctx.emitter.instruction("call __rt_decref_mixed");                  // retire the temporary argument box

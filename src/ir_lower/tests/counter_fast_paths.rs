@@ -44,7 +44,8 @@ fn counter_fast_path_checked_bound_has_integer_version() {
 function productCounter(int $a, int $b): int {
     $cells = $a * $b;
     $count = 0;
-    for ($cell = 0; $cell < $cells; $cell++) { $count += 1; }
+    // The counter read keeps the closed-form accumulator reduction out of this fixture.
+    for ($cell = 0; $cell < $cells; $cell++) { $count += $cell; }
     return $count;
 }
 echo productCounter($argc, $argc + 4);
@@ -215,9 +216,10 @@ fn counter_fast_path_conditional_region_retires_maybe_written_owner() {
     let source = r#"<?php
 function conditionalRegion(int $n, bool $c): int {
     $count = 0;
-    for ($r = 0; $r < $n; $r++) { $count += 1; }
-    if ($c) { for ($r = $n - 1; $r >= 0; $r--) { $count += 1; } }
-    for ($r = 0; $r < $n; $r++) { $count += 1; }
+    // The counter read keeps the closed-form accumulator reduction out of this fixture.
+    for ($r = 0; $r < $n; $r++) { $count += $r; }
+    if ($c) { for ($r = $n - 1; $r >= 0; $r--) { $count += $r; } }
+    for ($r = 0; $r < $n; $r++) { $count += $r; }
     return $count;
 }
 echo conditionalRegion($argc + 2, true);

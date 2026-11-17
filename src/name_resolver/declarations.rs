@@ -73,31 +73,6 @@ fn resolve_type_params(
                 .as_ref()
                 .map(|ty| resolve_type_expr_with_type_params(ty, namespace, imports, symbols, type_params)),
             variance: param.variance,
-            from_docblock: param.from_docblock,
-            native_hint: param.native_hint.as_ref().map(|hint| {
-                let resolve = |ty: &crate::parser::ast::TypeExpr| {
-                    resolve_type_expr_with_type_params(ty, namespace, imports, symbols, type_params)
-                };
-                crate::parser::ast::NativeHint {
-                    ty: resolve(&hint.ty),
-                    params: hint
-                        .params
-                        .iter()
-                        .map(|(name, ty)| (name.clone(), resolve(ty)))
-                        .collect(),
-                    return_type: hint.return_type.as_ref().map(resolve),
-                    member_returns: hint
-                        .member_returns
-                        .iter()
-                        .map(|(method, ty)| (method.clone(), resolve(ty)))
-                        .collect(),
-                    member_params: hint
-                        .member_params
-                        .iter()
-                        .map(|(method, param, ty)| (method.clone(), param.clone(), resolve(ty)))
-                        .collect(),
-                }
-            }),
         })
         .collect()
 }

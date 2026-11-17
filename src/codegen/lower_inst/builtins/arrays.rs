@@ -54,6 +54,8 @@ mod filter;
 mod map_dispatch;
 mod map_results;
 mod reduce_sets;
+mod reduce_product_seed;
+mod reduce_sum_seed;
 mod misc_dispatch;
 mod mixed_array_argument_guard;
 mod callback_builtins;
@@ -93,7 +95,11 @@ use in_array_coercions::*;
 use in_array_strings::*;
 
 pub(crate) use keyed_kernels::{
-    lower_array_filter_count_mod, lower_array_map_sum_add, lower_array_map_sum_add_int,
+    lower_array_filter_count_mod, lower_array_map_affine, lower_array_map_float_affine,
+    lower_array_map_float_div, lower_array_map_float_scale, lower_array_map_int_div,
+    lower_array_map_numeric, lower_array_map_square,
+    lower_array_map_square_affine, lower_array_map_sum_int_div,
+    lower_array_map_sum_add, lower_array_map_sum_add_int,
     lower_array_map_sum_add_int_cached, lower_array_map_sum_add_safe,
     lower_array_map_sum_probe_int,
 };
@@ -110,6 +116,12 @@ pub(crate) use filter::{
 };
 pub(crate) use map_dispatch::{
     lower_array_map,
+};
+pub(crate) use reduce_product_seed::{
+    lower_array_reduce_product_float_seed, lower_array_reduce_product_seed,
+};
+pub(crate) use reduce_sum_seed::{
+    lower_array_reduce_sum_float_seed, lower_array_reduce_sum_seed,
 };
 pub(crate) use reduce_sets::{
     lower_array_walk, lower_array_merge, lower_array_diff,

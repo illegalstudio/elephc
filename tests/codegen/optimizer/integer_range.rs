@@ -568,3 +568,22 @@ function range_boolean_chain(int $input): bool {
         }
     }
 }
+
+/// A non-main local named `argc` is ordinary user storage, not the process argument count:
+/// its negative value must bound the loop exactly as PHP does.
+#[test]
+fn test_non_main_local_named_argc_keeps_its_value() {
+    let source = r#"<?php
+function localArgc(): int {
+    $argc = -3;
+    $sum = 0;
+    for ($i = 0; $i < $argc; $i++) {
+        $sum += 1;
+    }
+    return $sum;
+}
+echo localArgc(), "\n";
+"#;
+    assert_eq!(run_variant(source, false).0, "0\n");
+    assert_eq!(run_variant(source, true).0, "0\n");
+}

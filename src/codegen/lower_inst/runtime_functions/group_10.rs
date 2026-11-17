@@ -86,6 +86,12 @@ pub(super) fn lower(
         RuntimeFnId::MbChrLen => Some({
             crate::codegen::lower_inst::builtins::strings::lower_mb_chr_len(ctx, inst, target)
         }),
+        RuntimeFnId::MbChrFirst => Some({
+            crate::codegen::lower_inst::builtins::strings::lower_mb_chr_first(ctx, inst, target)
+        }),
+        RuntimeFnId::MbChrPacked => Some({
+            crate::codegen::lower_inst::builtins::strings::lower_mb_chr_packed(ctx, inst, target)
+        }),
         RuntimeFnId::MbStrimwidthLen => Some({
             crate::codegen::lower_inst::builtins::strings::lower_mb_strimwidth_len(ctx, inst, target)
         }),

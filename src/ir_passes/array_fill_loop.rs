@@ -16,10 +16,16 @@
 //!   and the induction value must not be observed outside the loop.
 //! - The rewritten push stores one int and advances the header length without COW,
 //!   growth, metadata checks or a source-local writeback.
+//! - The array pointer load feeding the append moves to the preheader: the receiver slot has
+//!   one entry store, so the pointer cannot change across the loop.
+//! - The append stores at the induction index and the final element count is published once in
+//!   the loop exit, so the body neither loads nor stores the header length.
+//! - A zero-based `$i % D` append becomes an `IWrapIncrement` rotating remainder, removing the
+//!   integer divide while preserving PHP's non-negative remainder.
 
 use crate::ir::{
-    BlockId, CmpPredicate, DataPool, Function, Immediate, InstId, LocalKind, LocalSlotId, Op,
-    PassOrigin, Terminator, ValueDef, ValueId,
+    BlockId, CmpPredicate, DataPool, Function, Immediate, InstId, IrType, LocalKind, LocalSlotId,
+    Op, Ownership, PassOrigin, Terminator, ValueDef, ValueId,
 };
 use crate::types::PhpType;
 
@@ -88,6 +94,11 @@ impl IrPass for ArrayFillLoop {
             let Some(start) = constant_i64(function, induction.start_value) else {
                 continue;
             };
+            // The reserved append stores at the induction index, which is the array key only
+            // when the fill starts at zero (an empty array's first append is key 0).
+            if start != 0 {
+                continue;
+            }
             let capacity = bound - start;
             if capacity < 0 || capacity > i64::from(i32::MAX) {
                 continue;
@@ -95,9 +106,20 @@ impl IrPass for ArrayFillLoop {
             if count_slot_pushes(function, slot) != 1 {
                 continue;
             }
+            let Some(exit) = loop_exit_block(function, loop_ref) else {
+                continue;
+            };
             if reserve_array_new(function, array_new, capacity)
-                && rewrite_push(function, push)
+                && rewrite_push(function, push, induction.param)
             {
+                hoist_array_load(function, loop_ref, preheader, slot, push);
+                let _ = rotate_induction_modulo(function, loop_ref, preheader, induction, start, value);
+                if let Some(array) = function
+                    .instruction(push)
+                    .and_then(|inst| inst.operands.first().copied())
+                {
+                    publish_final_length(function, preheader, exit, capacity, array);
+                }
                 changed = true;
             }
         }
@@ -343,15 +365,334 @@ fn reserve_array_new(function: &mut Function, array_new: InstId, capacity: i64) 
     true
 }
 
-/// Rewrites the append to the reserved, check-free form.
-fn rewrite_push(function: &mut Function, push: InstId) -> bool {
+/// Rewrites the append to the reserved, check-free form at the induction index.
+fn rewrite_push(function: &mut Function, push: InstId, index: ValueId) -> bool {
     let Some(inst) = function.instruction_mut(push) else {
         return false;
     };
     inst.op = Op::ArrayPushReserved;
+    inst.operands.push(index);
     inst.effects = Op::ArrayPushReserved.default_effects();
     inst.origin = Some(PassOrigin::ArrayFillLoop);
     true
+}
+
+/// Returns the block the loop's header branches to when its condition fails.
+fn loop_exit_block(
+    function: &Function,
+    loop_ref: &super::loops::NaturalLoop,
+) -> Option<BlockId> {
+    let Terminator::CondBr { else_target, .. } = function.block(loop_ref.header)?.terminator.as_ref()?
+    else {
+        return None;
+    };
+    Some(*else_target)
+}
+
+/// Publishes the final element count at the start of the loop exit.
+fn publish_final_length(
+    function: &mut Function,
+    preheader: BlockId,
+    exit: BlockId,
+    capacity: i64,
+    array: ValueId,
+) -> bool {
+    let Some(length) = push_preheader_const(function, preheader, capacity) else {
+        return false;
+    };
+    insert_void_instruction(function, exit, 0, Op::ArraySetLength, vec![array, length])
+}
+
+/// Inserts a result-less instruction at `position`, refreshing later definition indexes.
+fn insert_void_instruction(
+    function: &mut Function,
+    block: BlockId,
+    position: usize,
+    op: Op,
+    operands: Vec<ValueId>,
+) -> bool {
+    let block_index = block.as_raw() as usize;
+    if function
+        .blocks
+        .get(block_index)
+        .is_none_or(|block| position > block.instructions.len())
+    {
+        return false;
+    }
+    let inst_id = InstId::from_raw(function.instructions.len() as u32);
+    let mut inst = crate::ir::Instruction::new(
+        op,
+        operands,
+        None,
+        None,
+        IrType::Void,
+        PhpType::Void,
+        Ownership::NonHeap,
+        op.default_effects(),
+        None,
+    );
+    inst.origin = Some(PassOrigin::ArrayFillLoop);
+    function.instructions.push(inst);
+    function.blocks[block_index].instructions.insert(position, inst_id);
+    let results: Vec<(ValueId, usize)> = function.blocks[block_index]
+        .instructions
+        .iter()
+        .enumerate()
+        .skip(position)
+        .filter_map(|(index, id)| {
+            function
+                .instruction(*id)
+                .and_then(|inst| inst.result)
+                .map(|result| (result, index))
+        })
+        .collect();
+    for (result, index) in results {
+        if let Some(value) = function.value_mut(result) {
+            if let ValueDef::Instruction {
+                index: def_index, ..
+            } = &mut value.def
+            {
+                *def_index = index as u32;
+            }
+        }
+    }
+    true
+}
+
+/// Moves the append's array-pointer load into the loop preheader.
+///
+/// The fill slot has one entry store and no other write, so its pointer is invariant across the
+/// loop. Only a single-use load is hoisted; any other observation keeps the load in place.
+fn hoist_array_load(
+    function: &mut Function,
+    loop_ref: &super::loops::NaturalLoop,
+    preheader: BlockId,
+    slot: LocalSlotId,
+    push: InstId,
+) -> bool {
+    let Some(array_value) = function
+        .instruction(push)
+        .and_then(|inst| inst.operands.first().copied())
+    else {
+        return false;
+    };
+    let Some(ValueDef::Instruction {
+        block: load_block,
+        inst: load_id,
+        ..
+    }) = function.value(array_value).map(|value| value.def)
+    else {
+        return false;
+    };
+    let Some(load) = function.instruction(load_id).cloned() else {
+        return false;
+    };
+    if load.op != Op::LoadLocal
+        || load.immediate != Some(Immediate::LocalSlot(slot))
+        || !loop_ref.contains(load_block)
+        || function.value_use_counts().get(&array_value).copied() != Some(1)
+    {
+        return false;
+    }
+    let (ir_type, php_type, ownership) = {
+        let Some(value) = function.value(array_value) else {
+            return false;
+        };
+        (value.ir_type, value.php_type.clone(), value.ownership)
+    };
+    let Some(preheader_index) = function
+        .blocks
+        .iter()
+        .position(|block| block.id == preheader)
+    else {
+        return false;
+    };
+    let position = function.blocks[preheader_index].instructions.len();
+    let new_inst = InstId::from_raw(function.instructions.len() as u32);
+    let hoisted_value = ValueId::from_raw(function.values.len() as u32);
+    function.values.push(crate::ir::Value {
+        ir_type,
+        php_type,
+        def: ValueDef::Instruction {
+            block: preheader,
+            index: position as u32,
+            inst: new_inst,
+        },
+        ownership,
+    });
+    let mut hoisted = load;
+    hoisted.result = Some(hoisted_value);
+    hoisted.origin = Some(PassOrigin::ArrayFillLoop);
+    function.instructions.push(hoisted);
+    function.blocks[preheader_index].instructions.push(new_inst);
+    if let Some(inst) = function.instruction_mut(push) {
+        inst.operands[0] = hoisted_value;
+    }
+    if let Some(inst) = function.instruction_mut(load_id) {
+        super::rewrite::neutralize_to_nop(inst);
+    }
+    true
+}
+
+/// Replaces `$i % d` on a zero-based unit induction with a rotating remainder parameter.
+///
+/// The fill loop advances `i` by exactly one from zero, so a preheader-zeroed `r` that increments
+/// and wraps at `d` is the exact remainder on every iteration. This removes the integer divide
+/// from the hot path while keeping PHP's non-negative remainder for positive divisors.
+fn rotate_induction_modulo(
+    function: &mut Function,
+    loop_ref: &super::loops::NaturalLoop,
+    preheader: BlockId,
+    induction: Induction,
+    start: i64,
+    pushed: ValueId,
+) -> Option<()> {
+    if start != 0 {
+        return None;
+    }
+    let Some(ValueDef::Instruction { inst: modulo_id, .. }) =
+        function.value(pushed).map(|value| value.def)
+    else {
+        return None;
+    };
+    let Some(modulo) = function.instruction(modulo_id).cloned() else {
+        return None;
+    };
+    if modulo.op != Op::ISMod || modulo.operands.first().copied() != Some(induction.param) {
+        return None;
+    }
+    let Some(divisor) = modulo.operands.get(1).copied() else {
+        return None;
+    };
+    let Some(divisor_value) = constant_i64(function, divisor) else {
+        return None;
+    };
+    if divisor_value <= 1 {
+        return None;
+    }
+    let Some(result) = modulo.result else {
+        return None;
+    };
+    let header_index = loop_ref.header.as_raw() as usize;
+    let latch_index = loop_ref.latches.first()?.as_raw() as usize;
+    let param_index = function.blocks[header_index].params.len() as u32;
+    let remainder = ValueId::from_raw(function.values.len() as u32);
+    function.values.push(crate::ir::Value {
+        ir_type: IrType::I64,
+        php_type: PhpType::Int,
+        def: ValueDef::BlockParam {
+            block: loop_ref.header,
+            index: u16::try_from(param_index).ok()?,
+        },
+        ownership: Ownership::NonHeap,
+    });
+    function.blocks[header_index].params.push(remainder);
+    // Seed the new parameter from the preheader.
+    let zero = push_preheader_const(function, preheader, 0)?;
+    if let Some(Terminator::Br { args, .. }) = &mut function.blocks[preheader.as_raw() as usize].terminator {
+        args.push(zero);
+    } else {
+        return None;
+    }
+    // Wrap `r + 1` at the divisor in the latch, before its back edge.
+    let next = push_latch_inst(
+        function,
+        loop_ref.latches[0],
+        Op::IWrapIncrement,
+        vec![remainder, divisor],
+        None,
+        IrType::I64,
+        PhpType::Int,
+    )?;
+    let Some(Terminator::Br { args, .. }) = &mut function.blocks[latch_index].terminator else {
+        return None;
+    };
+    if args.len() != param_index as usize {
+        return None;
+    }
+    args.push(next);
+    super::rewrite::replace_all_uses(
+        function,
+        &std::collections::HashMap::from([(result, remainder)]),
+    );
+    if let Some(inst) = function.instruction_mut(modulo_id) {
+        super::rewrite::neutralize_to_nop(inst);
+    }
+    Some(())
+}
+/// Appends an `i64` constant to a block and returns its value.
+fn push_block_const(function: &mut Function, block: BlockId, value: i64) -> Option<ValueId> {
+    let block_index = block.as_raw() as usize;
+    let position = function.blocks.get(block_index)?.instructions.len();
+    let inst = InstId::from_raw(function.instructions.len() as u32);
+    let result = ValueId::from_raw(function.values.len() as u32);
+    function.values.push(crate::ir::Value {
+        ir_type: IrType::I64,
+        php_type: PhpType::Int,
+        def: ValueDef::Instruction {
+            block,
+            index: position as u32,
+            inst,
+        },
+        ownership: Ownership::NonHeap,
+    });
+    function.instructions.push(crate::ir::Instruction::new(
+        Op::ConstI64,
+        Vec::new(),
+        Some(Immediate::I64(value)),
+        Some(result),
+        IrType::I64,
+        PhpType::Int,
+        Ownership::NonHeap,
+        Op::ConstI64.default_effects(),
+        None,
+    ));
+    function.blocks[block_index].instructions.push(inst);
+    Some(result)
+}
+
+/// Appends a `const_i64` to the preheader.
+fn push_preheader_const(function: &mut Function, preheader: BlockId, value: i64) -> Option<ValueId> {
+    push_block_const(function, preheader, value)
+}
+
+/// Appends one typed instruction to the latch and returns its result value.
+fn push_latch_inst(
+    function: &mut Function,
+    latch: BlockId,
+    op: Op,
+    operands: Vec<ValueId>,
+    immediate: Option<Immediate>,
+    ir_type: IrType,
+    php_type: PhpType,
+) -> Option<ValueId> {
+    let block_index = latch.as_raw() as usize;
+    let position = function.blocks.get(block_index)?.instructions.len();
+    let inst_id = InstId::from_raw(function.instructions.len() as u32);
+    let result = ValueId::from_raw(function.values.len() as u32);
+    function.values.push(crate::ir::Value {
+        ir_type,
+        php_type: php_type.clone(),
+        def: ValueDef::Instruction {
+            block: latch,
+            index: position as u32,
+            inst: inst_id,
+        },
+        ownership: Ownership::NonHeap,
+    });
+    function.instructions.push(crate::ir::Instruction::new(
+        op,
+        operands,
+        immediate,
+        Some(result),
+        ir_type,
+        php_type,
+        Ownership::NonHeap,
+        op.default_effects(),
+        None,
+    ));
+    function.blocks[block_index].instructions.push(inst_id);
+    Some(result)
 }
 
 /// Reads one integer constant, if the value is defined by `const_i64`.

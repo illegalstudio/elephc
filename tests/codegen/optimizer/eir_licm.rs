@@ -78,6 +78,34 @@ fn emit_main_ir(source: &str) -> String {
     main
 }
 
+/// Emits the optimized EIR text of one named user function.
+fn emit_function_ir(source: &str, name: &str) -> String {
+    let dir = make_cli_test_dir("elephc_licm_mbstring_function_ir");
+    let php_path = dir.join("main.php");
+    fs::write(&php_path, source).expect("write LICM function fixture");
+    let output = elephc_cli_command(&dir)
+        .arg("--emit-ir")
+        .arg(&php_path)
+        .output()
+        .expect("run elephc --emit-ir");
+    assert!(
+        output.status.success(),
+        "emit-ir failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let text = String::from_utf8(output.stdout).expect("EIR is UTF-8");
+    let body = text
+        .split(&format!("function {name}("))
+        .nth(1)
+        .unwrap_or_else(|| panic!("EIR contains {name}"))
+        .split("\n  function ")
+        .next()
+        .expect("function body")
+        .to_string();
+    let _ = fs::remove_dir_all(dir);
+    body
+}
+
 /// An explicit-UTF-8 `mb_strlen` over a single-assignment local is evaluated once
 /// in the loop preheader.
 #[test]
@@ -90,7 +118,7 @@ for ($i = 0; $i < $iters; $i++) { $n ^= mb_strlen($s, "UTF-8") + $i; }
 echo $n;
 "#;
     let ir = emit_main_ir(source);
-    let (preheader, body) = ir.split_once("for.body:").expect("fixture has a for body");
+    let (preheader, body) = ir.split_once("for.body").expect("fixture has a for body");
     assert!(
         preheader.contains("runtime.mb_strlen") && preheader.contains("origin: licm"),
         "the invariant call must be hoisted into the preheader:\n{preheader}"
@@ -134,7 +162,7 @@ for ($i = 0; $i < $iters; $i++) { $n ^= strlen(mb_substr($s, 10, 20, "UTF-8")) +
 echo $n;
 "#;
     let ir = emit_main_ir(source);
-    let (preheader, body) = ir.split_once("for.body:").expect("fixture has a for body");
+    let (preheader, body) = ir.split_once("for.body").expect("fixture has a for body");
     assert!(
         preheader.contains("runtime.mb_substr")
             && preheader.contains("str_len")
@@ -154,15 +182,16 @@ echo $n;
 #[test]
 fn test_licm_hoists_numericentity_length_with_the_full_decimal_map() {
     let source = r#"<?php
-$s = "héllo wörld";
-$map = [0x80, 0x10FFFF, 0, 0x1FFFFF];
-$iters = (int)($argc + 3);
-$n = 0;
-for ($i = 0; $i < $iters; $i++) { $n ^= strlen(mb_encode_numericentity($s, $map, "UTF-8")) + $i; }
-echo $n;
+function probe(string $s, int $iters): int {
+    $map = [0x80, 0x10FFFF, 0, 0x1FFFFF];
+    $n = 0;
+    for ($i = 0; $i < $iters; $i++) { $n ^= strlen(mb_encode_numericentity($s, $map, "UTF-8")) + $i; }
+    return $n;
+}
+echo probe("héllo wörld", 3);
 "#;
-    let ir = emit_main_ir(source);
-    let (preheader, body) = ir.split_once("for.body:").expect("fixture has a for body");
+    let ir = emit_function_ir(source, "probe");
+    let (preheader, body) = ir.split_once("for.body").expect("fixture has a for body");
     assert!(
         preheader.contains("runtime.mb_encode_numericentity_len")
             && preheader.contains("origin: licm"),
@@ -172,7 +201,7 @@ echo $n;
         !body.contains("runtime.mb_encode_numericentity_len"),
         "the loop body must only read the hoisted length:\n{body}"
     );
-    assert_eq!(compile_and_run(source), "12");
+    assert_eq!(compile_and_run(source), "20");
 }
 
 /// A map that is not the full decimal range keeps the call in the loop because
@@ -193,4 +222,29 @@ echo $n;
         body.contains("runtime.mb_encode_numericentity_len"),
         "a nonstandard map must keep the call in the loop:\n{body}"
     );
+}
+
+/// `substr_count()` over a single-assignment haystack and a literal non-empty
+/// needle is total and reads no mutable state, so it moves to the preheader even
+/// when the loop updates a mixed accumulator whose release conservatively writes
+/// globals.
+#[test]
+fn test_licm_hoists_invariant_substr_count_call() {
+    let source = r#"<?php
+$haystack = str_repeat("abc", 699 + $argc);
+$total = 0;
+for ($i = 0; $i < 10; $i++) { $total += substr_count($haystack, "abc"); }
+echo $total;
+"#;
+    let ir = emit_main_ir(source);
+    let (preheader, body) = ir.split_once("for.body").expect("fixture has a for body");
+    assert!(
+        preheader.contains("runtime.substr_count") && preheader.contains("origin: licm"),
+        "the invariant call must be hoisted into the preheader:\n{preheader}"
+    );
+    assert!(
+        !body.contains("runtime.substr_count"),
+        "the loop body must not call substr_count:\n{body}"
+    );
+    assert_eq!(compile_and_run(source), "7000");
 }

@@ -36,3 +36,50 @@ pub(crate) fn emit_json_encode_str(emitter: &mut Emitter) {
 
     aarch64::emit(emitter);
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::codegen_support::platform::Target;
+
+    /// The short plain-ASCII fast path classifies every byte before it reserves output, so an
+    /// escapable byte can never abandon a transient heap block. Covers every supported target.
+    #[test]
+    fn json_str_fast_path_classifies_before_reserving() {
+        for target in [
+            "macos-aarch64",
+            "ios-arm64",
+            "ios-sim-arm64",
+            "linux-aarch64",
+            "linux-x86_64",
+        ] {
+            let mut emitter = Emitter::new(Target::parse(target).unwrap());
+            emit_json_encode_str(&mut emitter);
+            let asm = emitter.output();
+            let (quoted, slow) = if target == "linux-x86_64" {
+                ("__rt_json_str_quoted_x", "__rt_json_str_size_slow_x")
+            } else {
+                ("__rt_json_str_quoted", "__rt_json_str_size_slow")
+            };
+            let quoted_label = format!("{quoted}:");
+            let slow_label = format!("{slow}:");
+            let fast_path = asm
+                .split(&quoted_label)
+                .nth(1)
+                .unwrap_or_else(|| panic!("{target}: missing quoted fast path\n{asm}"))
+                .split(&slow_label)
+                .next()
+                .unwrap();
+            let scan = fast_path.find("scan_loop").unwrap_or_else(|| {
+                panic!("{target}: fast path lacks a classification pass\n{fast_path}")
+            });
+            let reserve = fast_path
+                .find("__rt_strbuf_reserve_temp")
+                .unwrap_or_else(|| panic!("{target}: fast path lacks a reservation\n{fast_path}"));
+            assert!(
+                scan < reserve,
+                "{target}: fast path reserves before classifying\n{fast_path}"
+            );
+        }
+    }
+}
