@@ -293,10 +293,7 @@ pub(crate) fn emit_runtime_data_fixed(
     // arrays (heap buffer base pointer, used bytes, capacity) indexed by level-1.
     // Buffers are heap-allocated by __rt_ob_start, grown by __rt_ob_append, and
     // written to the terminal sink by __rt_ob_flush_all at process exit.
-    out.push_str(&comm_directive("_ob_level", 8, target));
-    out.push_str(&comm_directive("_ob_ptrs", 512, target));
-    out.push_str(&comm_directive("_ob_lens", 512, target));
-    out.push_str(&comm_directive("_ob_caps", 512, target));
+    elephc_memoir::data::append_output_buffer_storage(&mut out, &target);
     // Per-level output-buffer metadata (parallel to _ob_ptrs, indexed by level-1):
     // the user-handler invocation stub + env word (stub 0 = default handler; env
     // is a retained callable-descriptor pointer for AOT handlers or a magician

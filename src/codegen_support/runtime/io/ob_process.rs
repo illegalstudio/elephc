@@ -73,8 +73,7 @@ fn aarch64(emitter: &mut Emitter) {
     emitter.instruction("bl __rt_decref_any");                                  // release byte storage after every parent-write outcome
     emitter.label("__rt_ob_process_truncate");
     emitter.instruction("ldr x10, [sp]");                                       // recover the slot whose operation must complete
-    abi::emit_symbol_address(emitter, "x11", "_ob_lens");
-    emitter.instruction("str xzr, [x11, x10, lsl #3]");                         // empty the buffer before exposing its exception
+    elephc_memoir::buffers::output::emit_truncate_slot(emitter);
     emitter.instruction("ldr x9, [sp, #8]");                                    // recover the requested finalization phase
     emitter.instruction("tbz x9, #3, __rt_ob_process_done");                    // clean and flush retain their emptied buffer
     emitter.instruction("mov x0, #0");                                          // the pop operation accepts no payload
@@ -142,8 +141,7 @@ fn x86_64(emitter: &mut Emitter) {
     emitter.instruction("call __rt_decref_any");                                // free replacement storage after the parent returns or throws
     emitter.label("__rt_ob_process_truncate");
     emitter.instruction("mov r10, QWORD PTR [rsp]");                            // recover the slot to empty
-    abi::emit_symbol_address(emitter, "r11", "_ob_lens");
-    emitter.instruction("mov QWORD PTR [r11 + r10*8], 0");                      // finish the requested cleanup before rethrowing
+    elephc_memoir::buffers::output::emit_truncate_slot(emitter);
     emitter.instruction("test QWORD PTR [rsp + 8], 8");                         // inspect the FINAL phase bit
     emitter.instruction("jz __rt_ob_process_done");                             // ordinary clean and flush retain their buffer
     emitter.instruction("xor edi, edi");                                        // the unary pop adapter requires no payload

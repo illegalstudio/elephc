@@ -214,8 +214,8 @@ pub(super) fn emit_web_reset(emitter: &mut Emitter, module: &Module, data: &Data
 /// armed for its successor.
 fn emit_output_buffer_reset(emitter: &mut Emitter) {
     emitter.comment("discard output buffers left open by the previous request");
+    elephc_memoir::buffers::output::emit_reset_depth(emitter);
     for symbol in [
-        "_ob_level",
         "_ob_in_handler",
         "_ob_flushing",
         "_ob_implicit_flush",
