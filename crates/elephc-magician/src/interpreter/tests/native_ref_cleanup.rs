@@ -132,7 +132,9 @@ fn variadic_reference_writeback_releases_owned_element_reads() {
         let before = values.cell_owners[&(replacement.as_ptr() as usize)];
         let result = write_back_method_ref_args(&["values".into()], std::slice::from_ref(&bound),
             &callee, &mut context, &mut values);
-        assert_eq!(result, if reject { Err(EvalStatus::RuntimeFatal) } else { Ok(()) });
+        // A binding whose activation already returned has nothing left to update: php just drops
+        // the reference (a closure's `use (&$x)` outliving its function), so it is not an error.
+        assert_eq!(result, Ok(()));
         assert_eq!(values.cell_owners[&(replacement.as_ptr() as usize)], before + usize::from(!reject));
         assert_eq!(values.releases.iter().filter(|value| **value == replacement).count(), 1,
             "the acquired array read must retire independently of publication");
