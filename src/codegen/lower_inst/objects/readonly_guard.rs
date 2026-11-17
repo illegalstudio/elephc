@@ -79,7 +79,15 @@ fn class_is_or_extends(ctx: &FunctionContext<'_>, sub: &str, base: &str) -> bool
 }
 
 /// Whether the body being lowered may initialize a readonly property declared in `declaring`.
-pub(super) fn scope_may_initialize(ctx: &FunctionContext<'_>, declaring: &str) -> bool {
+///
+/// An explicit `public(set)` lets every scope initialize the property; `private(set)` limits it to
+/// the declaring class itself, not its subclasses.
+pub(super) fn scope_may_initialize(ctx: &FunctionContext<'_>, declaring: &str, property: &str) -> bool {
+    let set_visibility = class_info_by_name(ctx, declaring)
+        .and_then(|info| info.property_set_visibilities.get(property));
+    if matches!(set_visibility, Some(crate::parser::ast::Visibility::Public)) {
+        return true;
+    }
     if ctx.local_slot_by_name(crate::names::CLOSURE_SCOPE_LOCAL).is_some() {
         return true;
     }
@@ -87,6 +95,9 @@ pub(super) fn scope_may_initialize(ctx: &FunctionContext<'_>, declaring: &str) -
         // `ReflectionProperty::setValue()` writes from the property's own scope, whichever class
         // its body happens to be compiled in. Only an initialized slot still refuses it.
         Some(scope) if scope.trim_start_matches('\\').eq_ignore_ascii_case("ReflectionProperty") => true,
+        Some(scope) if matches!(set_visibility, Some(crate::parser::ast::Visibility::Private)) => {
+            php_symbol_key(scope.trim_start_matches('\\')) == php_symbol_key(declaring.trim_start_matches('\\'))
+        }
         Some(scope) => class_is_or_extends(ctx, scope, declaring),
         None => false,
     }
@@ -99,7 +110,7 @@ pub(super) fn slot_has_readonly_guard(ctx: &FunctionContext<'_>, slot: &Property
 
 fn plan_for(ctx: &FunctionContext<'_>, slot: &PropertySlot) -> Option<ReadonlyPlan> {
     let declaring = readonly_declaring_class(ctx, slot)?;
-    let in_scope = scope_may_initialize(ctx, &declaring);
+    let in_scope = scope_may_initialize(ctx, &declaring, &slot.property);
     let scope_text = match ctx.function.lexical_class.as_deref() {
         Some(scope) => format!("scope {}", scope.trim_start_matches('\\')),
         None => "global scope".to_string(),

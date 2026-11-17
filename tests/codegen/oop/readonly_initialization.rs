@@ -308,3 +308,15 @@ unset($copy, $original);' . ' // ' . $argc;
 eval($source);
 "#, "3|Cannot modify readonly property EvalCloneEmptyPhases::$id");
 }
+
+/// A `public(set)` readonly property is initialized from any scope through a runtime-name write.
+#[test]
+fn test_readonly_initialization_public_set_runtime_name_write() {
+    verify(r#"<?php
+class Box { public public(set) readonly int $id; }
+$box = new Box();
+$name = $argc > 5 ? 'other' : 'id';
+$box->{$name} = 7;
+echo $box->id;
+"#, "7");
+}
