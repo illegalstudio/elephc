@@ -652,6 +652,68 @@ fn join_fallthrough_type_envs(checker: &Checker, branches: &[TypeEnv]) -> Option
     Some(joined)
 }
 
+/// Lists the untyped locals whose types two reachable branch exits bind incompatibly.
+///
+/// Under `--strict-locals` that is the documented compile error (`cannot reassign $a from int to
+/// string`): permissive mode joins the exits into a union or boxed `Mixed` storage, strict mode
+/// refuses to. Only a name every exit binds, with no declaration, superglobal or boxed-reference
+/// contract of its own, is reported, and each name at most once.
+fn strict_branch_conflicts(
+    checker: &Checker,
+    branches: &[TypeEnv],
+) -> Vec<(String, PhpType, PhpType)> {
+    let mut conflicts = Vec::new();
+    if !checker.strict_locals || branches.len() < 2 {
+        return conflicts;
+    }
+    let mut names = branches
+        .iter()
+        .flat_map(|branch| branch.keys().cloned())
+        .collect::<Vec<_>>();
+    names.sort();
+    names.dedup();
+    for name in names {
+        if name.starts_with('\u{1}')
+            || crate::superglobals::is_superglobal(&name)
+            || checker.typed_local_names.contains_key(&name)
+            || checker.mixed_storage_locals.contains(&name)
+            || checker.mixed_static_locals.contains(&name)
+            || checker.untyped_ref_params.contains(&name)
+            || checker.boxed_ref_aliased_locals.contains(&name)
+            || checker.ref_aliased_locals.contains(&name)
+            || checker.narrowed_local_origins.contains_key(&name)
+            || checker
+                .declared_local_types
+                .contains_key(&(checker.current_loop_storage_scope.clone(), name.clone()))
+        {
+            continue;
+        }
+        let types = branches
+            .iter()
+            .filter_map(|branch| branch.get(&name))
+            .collect::<Vec<_>>();
+        if types.len() != branches.len() {
+            continue;
+        }
+        let mut seen = types[0].clone();
+        for next in &types[1..] {
+            // Either direction: a branch that stored the narrower type of a union the other
+            // branch kept holds nothing incompatible with it.
+            match checker
+                .merged_assignment_type(&seen, next)
+                .or_else(|| checker.merged_assignment_type(next, &seen))
+            {
+                Some(merged) => seen = merged,
+                None => {
+                    conflicts.push((name.clone(), seen, (*next).clone()));
+                    break;
+                }
+            }
+        }
+    }
+    conflicts
+}
+
 /// Joins one binding's types across reachable branch exits without losing container shape.
 ///
 /// A compatible supertype wins when it accepts every observed value. Differing array element
@@ -1190,6 +1252,15 @@ impl Checker {
                 );
                 self.callable_array_targets = joined_targets;
                 self.callable_array_target_versions = joined_target_versions;
+                for (name, left, right) in strict_branch_conflicts(self, &fallthrough_clause_envs) {
+                    errors.push(CompileError::new(
+                        stmt.span,
+                        &format!(
+                            "Type error: cannot reassign ${} from {} to {}",
+                            name, left, right
+                        ),
+                    ));
+                }
                 if let Some(joined) = join_fallthrough_type_envs(self, &fallthrough_clause_envs) {
                     *env = joined;
                 }
