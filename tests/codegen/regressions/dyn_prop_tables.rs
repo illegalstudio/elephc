@@ -1810,3 +1810,50 @@ try { put(new R(1), 2); } catch (\Error $e) { echo $e->getMessage(), "\n"; }
          Cannot modify readonly property R::$value\n"
     );
 }
+
+/// A runtime static-property name that resolves to a private or protected property outside its
+/// scope throws php's `Error` for both reads and writes (it used to read and overwrite it).
+///
+/// `php -n` 8.5.6: `Cannot access private property C::$secret` (twice), `Cannot access protected
+/// property C::$prot`, then the public one reads back.
+#[test]
+fn dynamic_static_property_names_respect_visibility() {
+    let out = compile_and_run(
+        r#"<?php
+class C { private static $secret = 'x'; protected static $prot = 'p'; public static $pub = 'q'; }
+foreach (['secret', 'prot', 'pub'] as $n) {
+    try { echo C::$$n, "\n"; } catch (Error $e) { echo $e->getMessage(), "\n"; }
+}
+$n = 'secret';
+try { C::$$n = 'y'; echo "written\n"; } catch (Error $e) { echo $e->getMessage(), "\n"; }
+"#,
+    );
+    assert_eq!(
+        out,
+        "Cannot access private property C::$secret\nCannot access protected property C::$prot\nq\nCannot access private property C::$secret\n"
+    );
+}
+
+/// `new $name` on an abstract class or an enum throws php's `Error` even when too few classes
+/// exist for the dynamic-new table, so the explicit per-class arms handle it (they used to build
+/// the object).
+///
+/// `php -n` 8.5.6 prints `Cannot instantiate abstract class Abs`, `Cannot instantiate enum En`.
+#[test]
+fn dynamic_new_refuses_abstract_classes_and_enums_in_explicit_arms() {
+    let out = compile_cli_file_and_run(
+        r#"<?php
+abstract class Abs { }
+enum En { case A; }
+class Plain { }
+foreach (['Abs', 'En', 'Plain'] as $c) {
+    try { var_dump(new $c()); } catch (Error $e) { echo $e->getMessage(), "\n"; }
+}
+"#,
+        &[],
+    );
+    assert_eq!(
+        out,
+        "Cannot instantiate abstract class Abs\nCannot instantiate enum En\nobject(Plain)#1 (0) {\n}\n"
+    );
+}

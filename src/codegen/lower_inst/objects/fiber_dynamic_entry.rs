@@ -471,6 +471,25 @@ pub(in crate::codegen::lower_inst) fn lower_dynamic_object_new_mixed(
                 continue;
             }
         }
+        // php refuses an abstract class or an enum at `new $name`, whichever layout the class has;
+        // the table path does it from its record flags, the explicit arms here by class.
+        let refusal = if ctx.module.enum_infos.contains_key(&candidate.class_name) {
+            Some("Cannot instantiate enum ")
+        } else if ctx
+            .module
+            .class_infos
+            .get(&candidate.class_name)
+            .is_some_and(|info| info.is_abstract)
+        {
+            Some("Cannot instantiate abstract class ")
+        } else {
+            None
+        };
+        if let Some(prefix) = refusal {
+            let message = format!("{prefix}{}", candidate.class_name.trim_start_matches('\\'));
+            super::super::exceptions::emit_error(ctx, &message);
+            continue;
+        }
         emit_dynamic_new_mixed_candidate(
             ctx,
             candidate,
