@@ -961,7 +961,10 @@ parameters accept every declared alternative; mixed and untyped parameters stay
 open. A variadic parameter has an array binding inside the body; its element hint
 is checked when arguments enter. Ordinary PHP argument conversion still applies
 unless `--strict-coercions` is enabled separately. Inferred closure bindings accept
-other callable values without adopting the first closure's incidental signature.
+other callable values without adopting the first closure's incidental signature. By-value
+closure captures copy the source binding contract, including union/null alternatives
+and open mixed origins. The contract survives the defining activation and closure
+rebinding; unsetting the captured local permits a fresh binding.
 See the [runtime plugin example](https://github.com/illegalstudio/elephc/blob/main/examples/strict-eval-locals/main.php).
 
 Explicit `int|float` declarations accept both numeric kinds, and explicit `mixed`

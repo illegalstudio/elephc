@@ -14,6 +14,15 @@ function updatePluginQuantity(int $quantity, mixed $replacement): void {
 function formatPluginQuantity(int $quantity): string {
     return "Quantity: " . strval($quantity);
 }
+function makePluginUpdater(int $quantity): callable {
+    return static function(mixed $replacement) use($quantity): void {
+        try {
+            $quantity = $replacement;
+        } catch (TypeError $error) {
+            echo "The captured quantity kept its integer value", PHP_EOL;
+        }
+    };
+}
 
 $format = static function(int $quantity): string {
     return "Quantity: " . strval($quantity);
@@ -21,5 +30,7 @@ $format = static function(int $quantity): string {
 $format = "formatPluginQuantity";
 updatePluginQuantity(2, 2.5);
 echo $format(3), PHP_EOL;
+$update = makePluginUpdater(2);
+$update(2.5);
 ' : '';
 eval($plugin);

@@ -564,6 +564,9 @@ fn bind_closure_captures(
     captures: &[EvalClosureCaptureBinding],
 ) {
     for capture in captures {
+        if let Some(origin) = capture.binding_type() {
+            function_scope.infer_local_type(capture.name().to_string(), origin.clone());
+        }
         if let Some(target) = capture.by_ref_target().cloned() {
             function_scope.set_reference(
                 capture.name().to_string(),

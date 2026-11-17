@@ -371,7 +371,7 @@ evidence and outstanding guarantees are recorded below.
 
 ## Implementation progress
 
-Verified through step135 (this commit). Remaining feature integration is active. Issue:
+Verified through step136 (this commit). Remaining feature integration is active. Issue:
 https://github.com/illegalstudio/elephc/issues/2347.
 
 The full task remains active. The user requested complete implementation, with a
@@ -633,7 +633,8 @@ paths. Keep this plan, agent documentation and the current journal log synchroni
 | 132 | `bba9d412bd` | feat(strict): retain independent native copy contracts |
 | 133 | `b3e9fd2292` | feat(strict): preserve callable and iterable binding contracts |
 | 134 | `ac5e3f53aa` | feat(strict): preserve resource local binding contracts |
-| 135 | this commit | feat(strict): retain interpreted parameter binding origins |
+| 135 | `f3f1a66f47` | feat(strict): retain interpreted parameter binding origins |
+| 136 | this commit | feat(strict): preserve closure capture binding origins |
 
 
 ### Latest verified admission checkpoint
@@ -774,6 +775,32 @@ warnings remain; no target-specific assembly or external ABI changed.
 
 The next related baseline ec663cb8 measures by-value/reference captures, escaping
 closures, mixed/union/nullable sources, fresh capture bindings, globals, static
-locals and foreach. Its outcome is not yet known. Continue broader binding flow,
+locals and foreach. The result confirms missing by-value/escaping capture, static and foreach origins;
+reference captures and globals already enforce theirs. Continue broader binding flow,
 all six pending families and final host/umbrella acceptance. No full local suite,
 push or PR has been requested or run.
+
+### Verified136: immutable closure capture origins
+
+EvalClosureCaptureBinding retains an optional immutable producer contract. Creation
+copies it before capture evaluation; each activation installs it in the existing
+scope origin map. The metadata owns no PHP cells and follows existing Clone paths
+through escaping, nesting and bindTo. Mixed/union/null and nominal alternatives
+remain intact, and unset permits a fresh local binding.
+
+Job0a1516c5 passes default build and all four exact gates in3m28s: new walker/VM-
+caller capture ownership alternatives, existing escaped property-reference owners,
+permanent both-IR default/Locals native capture lifetime bundle121.70s and updated plugin
+example37.09s. Coverage includes nullable/mixed/union, array-kind independence,
+callable lookup, Resource|false, nested/escaping/bound closures, self after rebinding
+and rejected-value preservation. All native heap reports are clean. Hygiene passes;
+only inherited warnings remain. No target emitter or external ABI changed.
+
+Static and foreach origin gaps from ec663cb8 remain open. The next static integration
+must preserve initialization order, activation/capture lifetime, legitimate unset
+and Reflection snapshot semantics. Reference PHP prints1|2|11| for ordinary static
+snapshots, already-escaped reference snapshots, and unset/new-local replacements.
+Reuse reference_is_shared before retaining a snapshot, plus the existing canonical
+reference/origin coordinator. Foreach needs the array producer/element policy audit
+alongside ArrayTypes. Continue all six pending families and final host/umbrella
+acceptance; no full local suite, push or PR was requested or run.

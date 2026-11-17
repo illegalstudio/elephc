@@ -6,6 +6,7 @@
 //!
 //! Key details:
 //! - Bound receivers/scopes and by-reference captures remain explicit runtime metadata.
+//! - Captured producer types own only metadata, independently of borrowed PHP value edges.
 //! - Foreign PCNTL handler closures retain the eval context that owns their callable metadata.
 
 use super::*;
@@ -72,6 +73,7 @@ pub struct EvalClosureCaptureBinding {
     pub(super) name: String,
     pub(super) value: RuntimeCellHandle,
     pub(super) by_ref_target: Option<EvalReferenceTarget>,
+    binding_type: Option<EvalParameterType>,
 }
 
 impl EvalClosureCaptureBinding {
@@ -85,7 +87,19 @@ impl EvalClosureCaptureBinding {
             name: name.into(),
             value,
             by_ref_target,
+            binding_type: None,
         }
+    }
+
+    /// Attaches an immutable producer contract without retaining its captured PHP value.
+    pub(crate) fn with_binding_type(mut self, binding_type: Option<EvalParameterType>) -> Self {
+        self.binding_type = binding_type;
+        self
+    }
+
+    /// Returns the producer alternatives copied from the defining activation.
+    pub(crate) fn binding_type(&self) -> Option<&EvalParameterType> {
+        self.binding_type.as_ref()
     }
 
     /// Returns the captured variable name without the leading `$`.
