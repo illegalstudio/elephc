@@ -101,8 +101,14 @@ try { $f = $number(...); } catch (Error $e) { echo get_class($e), "|"; }
 $invalid = $argc > 0 ? 1 : "missing_callable_828";
 try { $f = $invalid(...); } catch (Error $e) { echo get_class($e), "|"; }
 try { $f = Closure::fromCallable($name); } catch (TypeError $e) { echo get_class($e); }
+$short = ["strtoupper"];
+try { $f = $short(...); } catch (Error $e) { echo "|short"; }
+$extra = ["Missing828", "m", "extra"];
+try { $f = $extra(...); } catch (Error $e) { echo "|extra"; }
+$keys = [0 => "Missing828", 2 => "m"];
+try { $f = $keys(...); } catch (Error $e) { echo "|keys"; }
 "#);
-    assert_eq!(out, "Error|Error|Error|TypeError");
+    assert_eq!(out, "Error|Error|Error|TypeError|short|extra|keys");
 }
 
 /// All callable storage shapes preserve runtime receivers and key-based array selectors.
@@ -146,4 +152,49 @@ $named = Closure::fromCallable(callback: $name);
 echo $named("yes");
 "#);
     assert_eq!(out, "OK|YES");
+}
+
+/// Factory descriptors retain lexical access after escaping and deny outside conversions.
+#[test]
+fn test_issue_828_dynamic_first_class_callable_lexical_scope() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+class Scoped828 {
+    private function secret(): string { return "private|"; }
+    protected function inherited(): string { return "protected|"; }
+    private static function hiddenStatic(): string { return "static|"; }
+    public function make(): Closure {
+        $callback = [$this, "secret"];
+        return $callback(...);
+    }
+    public function factory(): Closure {
+        $callback = [$this, "secret"];
+        return Closure::fromCallable($callback);
+    }
+    public static function makeStatic(): Closure {
+        $callback = self::class . "::hiddenStatic";
+        return $callback(...);
+    }
+}
+class ScopedChild828 extends Scoped828 {
+    private function secret(): string { return "child|"; }
+    public function makeProtected(): Closure {
+        $callback = [1 => "inherited", 0 => $this];
+        return $callback(...);
+    }
+}
+$object = new Scoped828();
+$child = new ScopedChild828();
+$first = $object->make();
+$second = $object->factory();
+$third = Scoped828::makeStatic();
+$fourth = $child->makeProtected();
+$fifth = $child->make();
+echo $first(), $second(), $third(), $fourth(), $fifth();
+$outside = [$object, "secret"];
+try { $bad = $outside(...); } catch (Error $e) { echo get_class($e), "|"; }
+try { $bad = Closure::fromCallable($outside); } catch (TypeError $e) { echo get_class($e); }
+"#);
+    assert_eq!(out.stdout, "private|private|static|protected|private|Error|TypeError", "{}", out.stderr);
+    assert!(out.success, "{}", out.stderr);
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
 }

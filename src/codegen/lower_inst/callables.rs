@@ -413,6 +413,29 @@ fn lower_mixed_callable_descriptor_invoke(
     Ok(())
 }
 
+/// Catchable error selected by a callable-conversion surface.
+#[derive(Clone, Copy)]
+enum CallableConversionError { Type(&'static str), Error(&'static str) }
+
+/// Emits the conversion surface's PHP exception class.
+fn emit_callable_conversion_error(ctx: &mut FunctionContext<'_>, error: CallableConversionError) {
+    match error {
+        CallableConversionError::Type(message) => super::exceptions::emit_type_error(ctx, message),
+        CallableConversionError::Error(message) => super::exceptions::emit_error(ctx, message),
+    }
+}
+
+/// Normalizes a factory operand with the instruction's lexical method visibility.
+pub(super) fn emit_factory_callable_descriptor(
+    ctx: &mut FunctionContext<'_>, callable: ValueId, dynamic: bool,
+) -> Result<()> {
+    let error = if dynamic { CallableConversionError::Error("Value is not callable") }
+        else { CallableConversionError::Type("Failed to create closure from callable") };
+    let scoped = ctx.lexical_class().is_some();
+    emit_runtime_mixed_callable_descriptor_value_impl(ctx, callable, "callable_factory", true,
+        Some(error), Some(error), None, scoped)
+}
+
 /// Materializes a descriptor pointer for any callable shape boxed in `Mixed`.
 ///
 /// PDO's SQLite callbacks keep this descriptor for later native invocation, so this normalizes
@@ -432,6 +455,7 @@ pub(super) fn emit_runtime_mixed_callable_descriptor_value(
         None,
         None,
         None,
+        false,
     )
 }
 
@@ -448,9 +472,10 @@ pub(in crate::codegen) fn emit_runtime_mixed_callable_descriptor_value_with_stri
         callable,
         op_name,
         retain_existing_descriptor,
-        Some(message),
+        Some(CallableConversionError::Type(message)),
         None,
         None,
+        false,
     )
 }
 
@@ -462,7 +487,7 @@ pub(super) fn emit_runtime_mixed_callable_descriptor_value_with_type_error(
     message: &'static str,
 ) -> Result<()> {
     emit_runtime_mixed_callable_descriptor_value_impl(
-        ctx, callable, op_name, true, Some(message), Some(message), None,
+        ctx, callable, op_name, true, Some(CallableConversionError::Type(message)), Some(CallableConversionError::Type(message)), None, false,
     )
 }
 
@@ -470,7 +495,7 @@ pub(super) fn emit_runtime_mixed_callable_descriptor_value_with_type_error(
 pub(in crate::codegen) fn emit_runtime_unary_callback_descriptor_value(
     ctx: &mut FunctionContext<'_>, callable: ValueId, op_name: &str, message: &'static str,
 ) -> Result<()> {
-    emit_runtime_mixed_callable_descriptor_value_impl(ctx, callable, op_name, true, Some(message), Some(message), Some(1))
+    emit_runtime_mixed_callable_descriptor_value_impl(ctx, callable, op_name, true, Some(CallableConversionError::Type(message)), Some(CallableConversionError::Type(message)), Some(1), false)
 }
 
 /// Implements boxed callable descriptor selection with a configurable string-name miss path.
@@ -479,17 +504,18 @@ fn emit_runtime_mixed_callable_descriptor_value_impl(
     callable: ValueId,
     op_name: &str,
     retain_existing_descriptor: bool,
-    string_type_error: Option<&'static str>,
-    invalid_type_error: Option<&'static str>,
+    string_type_error: Option<CallableConversionError>,
+    invalid_type_error: Option<CallableConversionError>,
     arity: Option<usize>,
+    scoped: bool,
 ) -> Result<()> {
-    let instance_targets = runtime_array_instance_method_targets_for_descriptor(ctx);
+    let instance_targets = runtime_array_instance_method_targets_with_scope(ctx, scoped);
     let invokable_targets = instance_targets
         .iter()
         .filter(|target| target.method_key == "__invoke")
         .cloned()
         .collect::<Vec<_>>();
-    let static_cases = runtime_static_method_descriptor_cases(ctx, None);
+    let static_cases = runtime_static_method_descriptor_cases_with_scope(ctx, None, scoped);
     let array_label = (!instance_targets.is_empty() || !static_cases.is_empty())
         .then(|| ctx.next_label("mixed_callable_value_array"));
     let object_label = (!invokable_targets.is_empty())
@@ -563,6 +589,7 @@ fn emit_runtime_mixed_callable_descriptor_value_impl(
         candidate_names.as_deref(),
         arity,
         eval_fallback_slot.map(|_| fatal_label.as_str()),
+        scoped,
     )?;
     abi::emit_jump(ctx.emitter, &done_label);
 
@@ -591,7 +618,7 @@ fn emit_runtime_mixed_callable_descriptor_value_impl(
             ctx.emitter.label(&next_label);
         }
         if let Some(message) = invalid_type_error {
-            super::exceptions::emit_type_error(ctx, message);
+            emit_callable_conversion_error(ctx, message);
         } else {
             emit_runtime_callable_array_no_match_abort(ctx);
         }
@@ -634,7 +661,7 @@ fn emit_runtime_mixed_callable_descriptor_value_impl(
             abi::emit_release_temporary_stack(ctx.emitter, MIXED_VALUE_BYTES);
             abi::emit_jump(ctx.emitter, &fatal_label);
         } else if let Some(message) = invalid_type_error {
-            super::exceptions::emit_type_error(ctx, message);
+            emit_callable_conversion_error(ctx, message);
         } else {
             emit_mixed_callable_not_callable_fatal(ctx, op_name);
         }
@@ -648,7 +675,7 @@ fn emit_runtime_mixed_callable_descriptor_value_impl(
         emit_eval_closure_descriptor_fallback(ctx, callable, slot, &done_label)?;
     }
     if let Some(message) = invalid_type_error {
-        super::exceptions::emit_type_error(ctx, message);
+        emit_callable_conversion_error(ctx, message);
     } else {
         emit_mixed_callable_not_callable_fatal(ctx, op_name);
     }
@@ -817,7 +844,7 @@ pub(super) fn runtime_string_descriptor_cases(
     candidate_names: Option<&[String]>,
     strict_php: bool,
 ) -> Result<Vec<callable_dispatch::RuntimeCallableCase>> {
-    runtime_string_descriptor_cases_at_arity(ctx, source_arg_ty, candidate_names, strict_php, None)
+    runtime_string_descriptor_cases_at_arity(ctx, source_arg_ty, candidate_names, strict_php, None, false)
 }
 
 /// Builds descriptor cases for a host with an optional known callback arity.
@@ -827,9 +854,10 @@ fn runtime_string_descriptor_cases_at_arity(
     candidate_names: Option<&[String]>,
     strict_php: bool,
     arity: Option<usize>,
+    scoped: bool,
 ) -> Result<Vec<callable_dispatch::RuntimeCallableCase>> {
     let cache_ty = source_arg_ty.map(PhpType::codegen_repr);
-    if arity.is_none() {
+    if arity.is_none() && !scoped {
         if let Some(cases) = ctx
             .shared
             .runtime_string_descriptor_cases(cache_ty.as_ref(), candidate_names, strict_php)
@@ -852,22 +880,22 @@ fn runtime_string_descriptor_cases_at_arity(
         strict_php,
     ));
     cases.extend(
-        runtime_static_method_descriptor_cases(ctx, candidate_names)
+        runtime_static_method_descriptor_cases_with_scope(ctx, candidate_names, scoped)
             .into_iter()
             .map(|case| case.case),
     );
     cases.sort_by(|left, right| left.label.cmp(&right.label));
     cases.dedup_by(|left, right| left.label == right.label);
     if cases.is_empty() && candidate_names.is_some() {
-        let fallback = runtime_string_descriptor_cases_at_arity(ctx, source_arg_ty, None, strict_php, arity)?;
-        if arity.is_none() {
+        let fallback = runtime_string_descriptor_cases_at_arity(ctx, source_arg_ty, None, strict_php, arity, scoped)?;
+        if arity.is_none() && !scoped {
             ctx.shared.cache_runtime_string_descriptor_cases(
                 cache_ty.as_ref(), candidate_names, strict_php, &fallback,
             );
         }
         return Ok(fallback);
     }
-    if arity.is_none() {
+    if arity.is_none() && !scoped {
         ctx.shared.cache_runtime_string_descriptor_cases(
             cache_ty.as_ref(), candidate_names, strict_php, &cases,
         );
@@ -1112,7 +1140,7 @@ pub(super) fn emit_runtime_string_descriptor_value_with_type_error(
         dest_reg,
         op_name,
         strict_php,
-        Some(message),
+        Some(CallableConversionError::Type(message)),
     )
 }
 
@@ -1123,7 +1151,7 @@ fn emit_runtime_string_descriptor_value_impl(
     dest_reg: &str,
     op_name: &str,
     strict_php: bool,
-    type_error: Option<&'static str>,
+    type_error: Option<CallableConversionError>,
 ) -> Result<()> {
     let candidate_names = ctx.runtime_callable_candidates(callable);
     let cases =
@@ -1159,7 +1187,7 @@ fn emit_runtime_string_descriptor_value_impl(
     ctx.emitter.label(&miss_label);
     if let Some(message) = type_error {
         abi::emit_release_temporary_stack(ctx.emitter, 16);
-        super::exceptions::emit_type_error(ctx, message);
+        emit_callable_conversion_error(ctx, message);
     } else {
         emit_undefined_runtime_string_call_fatal(ctx);
     }
@@ -1173,10 +1201,11 @@ fn emit_runtime_string_descriptor_value_impl(
 fn emit_runtime_string_descriptor_value_from_unboxed(
     ctx: &mut FunctionContext<'_>,
     op_name: &str,
-    type_error: Option<&'static str>,
+    type_error: Option<CallableConversionError>,
     candidate_names: Option<&[String]>,
     arity: Option<usize>,
     eval_fallback: Option<&str>,
+    scoped: bool,
 ) -> Result<()> {
     let cases = runtime_string_descriptor_cases_at_arity(
         ctx,
@@ -1184,6 +1213,7 @@ fn emit_runtime_string_descriptor_value_from_unboxed(
         candidate_names,
         crate::strict_php::is_enabled(),
         arity,
+        scoped,
     )?;
     if cases.is_empty() {
         if let Some(fallback) = eval_fallback {
@@ -1231,7 +1261,7 @@ fn emit_runtime_string_descriptor_value_from_unboxed(
         abi::emit_jump(ctx.emitter, fallback);
     } else if let Some(message) = type_error {
         abi::emit_release_temporary_stack(ctx.emitter, 16);
-        super::exceptions::emit_type_error(ctx, message);
+        emit_callable_conversion_error(ctx, message);
     } else {
         emit_undefined_runtime_string_call_fatal(ctx);
     }
@@ -1699,6 +1729,13 @@ fn emit_string_callable_array_descriptor_value(
 fn runtime_array_instance_method_targets_for_descriptor(
     ctx: &FunctionContext<'_>,
 ) -> Vec<RuntimeArrayInstanceMethodTarget> {
+    runtime_array_instance_method_targets_with_scope(ctx, false)
+}
+
+/// Collects methods accessible from the factory's lexical scope when requested.
+fn runtime_array_instance_method_targets_with_scope(
+    ctx: &FunctionContext<'_>, scoped: bool,
+) -> Vec<RuntimeArrayInstanceMethodTarget> {
     let mut targets = Vec::new();
     let mut classes = ctx.module.class_infos.iter().collect::<Vec<_>>();
     classes.sort_by(|left, right| left.0.cmp(right.0));
@@ -1706,11 +1743,9 @@ fn runtime_array_instance_method_targets_for_descriptor(
         let mut methods = class_info.methods.iter().collect::<Vec<_>>();
         methods.sort_by(|left, right| left.0.cmp(right.0));
         for (method_name, sig) in methods {
-            if !class_info
-                .method_visibilities
-                .get(method_name)
-                .is_some_and(|visibility| matches!(visibility, Visibility::Public))
-            {
+            let declaring = class_info.method_declaring_classes.get(method_name)
+                .map_or(class_name.as_str(), String::as_str);
+            if !factory_method_visible(ctx, class_info.method_visibilities.get(method_name), declaring, scoped) {
                 continue;
             }
             let method_key = php_symbol_key(method_name);
@@ -1732,6 +1767,31 @@ fn runtime_array_instance_method_targets_for_descriptor(
             });
         }
     }
+    // A private method in the creation scope shadows a same-named child method.
+    // PHP binds that private declaration even when the captured receiver is a child.
+    if let Some(scope) = ctx.lexical_class().filter(|_| scoped) {
+        if let Some(info) = ctx.module.class_infos.get(scope) {
+            let mut private_methods = info.methods.iter().filter(|(name, _)|
+                info.method_visibilities.get(*name) == Some(&Visibility::Private)
+                    && info.method_declaring_classes.get(*name).is_some_and(|owner| owner == scope))
+                .collect::<Vec<_>>();
+            private_methods.sort_by(|left, right| left.0.cmp(right.0));
+            for (class_name, class_info) in &ctx.module.class_infos {
+                if !super::method_dispatch::class_is_same_or_subclass(ctx, class_name, scope) { continue; }
+                for (method, sig) in &private_methods {
+                    let key = php_symbol_key(method);
+                    let impl_class = info.method_impl_classes.get(&key).map_or(scope, String::as_str);
+                    if !class_method_already_emitted(ctx, impl_class, &key, false) { continue; }
+                    targets.retain(|target| target.class_id != class_info.class_id || target.method_key != key);
+                    targets.push(RuntimeArrayInstanceMethodTarget {
+                        class_name: class_name.clone(), class_id: class_info.class_id,
+                        method_key: key, method_name: (*method).clone(), impl_class: impl_class.to_string(), sig: (*sig).clone(),
+                    });
+                }
+            }
+        }
+    }
+    targets.sort_by(|left, right| (&left.class_name, &left.method_key).cmp(&(&right.class_name, &right.method_key)));
     targets
 }
 
@@ -1740,9 +1800,16 @@ fn runtime_static_method_descriptor_cases(
     ctx: &mut FunctionContext<'_>,
     candidate_names: Option<&[String]>,
 ) -> Vec<callable_dispatch::RuntimeStaticMethodCallableCase> {
-    if let Some(cases) = ctx
+    runtime_static_method_descriptor_cases_with_scope(ctx, candidate_names, false)
+}
+
+/// Builds static cases without sharing scope-specific candidate inventories.
+fn runtime_static_method_descriptor_cases_with_scope(
+    ctx: &mut FunctionContext<'_>, candidate_names: Option<&[String]>, scoped: bool,
+) -> Vec<callable_dispatch::RuntimeStaticMethodCallableCase> {
+    if let Some(cases) = (!scoped).then(|| ctx
         .shared
-        .runtime_static_method_descriptor_cases(candidate_names)
+        .runtime_static_method_descriptor_cases(candidate_names)).flatten()
     {
         return cases;
     }
@@ -1753,11 +1820,9 @@ fn runtime_static_method_descriptor_cases(
         let mut static_methods = class_info.static_methods.iter().collect::<Vec<_>>();
         static_methods.sort_by(|left, right| left.0.cmp(right.0));
         for (method_name, sig) in static_methods {
-            if !class_info
-                .static_method_visibilities
-                .get(method_name)
-                .is_some_and(|visibility| matches!(visibility, Visibility::Public))
-            {
+            let declaring = class_info.static_method_declaring_classes.get(method_name)
+                .map_or(class_name.as_str(), String::as_str);
+            if !factory_method_visible(ctx, class_info.static_method_visibilities.get(method_name), declaring, scoped) {
                 continue;
             }
             let method_key = php_symbol_key(method_name);
@@ -1837,12 +1902,10 @@ fn runtime_static_method_descriptor_cases(
             method_name,
             case,
         };
-        ctx.shared
-            .cache_runtime_static_method_descriptor_case(&static_case);
+        if !scoped { ctx.shared.cache_runtime_static_method_descriptor_case(&static_case); }
         cases.push(static_case);
     }
-    ctx.shared
-        .cache_runtime_static_method_descriptor_cases(candidate_names, &cases);
+    if !scoped { ctx.shared.cache_runtime_static_method_descriptor_cases(candidate_names, &cases); }
     cases
 }
 
@@ -1912,7 +1975,7 @@ fn emit_mixed_callable_array_selector_slots(
 fn emit_mixed_callable_array_selector_slots_with_error(
     ctx: &mut FunctionContext<'_>,
     source: &CallableArraySource,
-    type_error: Option<&'static str>,
+    type_error: Option<CallableConversionError>,
 ) -> Result<()> {
     emit_require_mixed_callable_array_pair(ctx, source, type_error)?;
     match source {
@@ -1945,7 +2008,7 @@ fn emit_mixed_callable_array_selector_slots_with_error(
 fn emit_boxed_callable_array_selector_slots(
     ctx: &mut FunctionContext<'_>,
     source: &CallableArraySource,
-    type_error: Option<&'static str>,
+    type_error: Option<CallableConversionError>,
 ) -> Result<()> {
     let array_reg = abi::symbol_scratch_reg(ctx.emitter);
     let stamp_reg = abi::secondary_scratch_reg(ctx.emitter);
@@ -2124,7 +2187,7 @@ fn emit_load_callable_array_base(
 fn emit_require_mixed_callable_array_pair(
     ctx: &mut FunctionContext<'_>,
     source: &CallableArraySource,
-    type_error: Option<&'static str>,
+    type_error: Option<CallableConversionError>,
 ) -> Result<()> {
     let array_reg = abi::symbol_scratch_reg(ctx.emitter);
     emit_load_callable_array_base(ctx, source, array_reg)?;
@@ -2148,7 +2211,7 @@ fn emit_require_string_callable_array_pair(
 fn emit_require_callable_array_pair_in_reg(
     ctx: &mut FunctionContext<'_>,
     array_reg: &str,
-    type_error: Option<&'static str>,
+    type_error: Option<CallableConversionError>,
 ) {
     let valid_label = ctx.next_label("callable_array_pair_valid");
     let invalid_label = ctx.next_label("callable_array_pair_invalid");
@@ -2173,9 +2236,9 @@ fn emit_require_callable_array_pair_in_reg(
 }
 
 /// Uses a catchable builtin diagnostic for malformed pairs without changing legacy call behavior.
-fn emit_callable_array_shape_error(ctx: &mut FunctionContext<'_>, type_error: Option<&'static str>) {
+fn emit_callable_array_shape_error(ctx: &mut FunctionContext<'_>, type_error: Option<CallableConversionError>) {
     if let Some(message) = type_error {
-        super::exceptions::emit_type_error(ctx, message);
+        emit_callable_conversion_error(ctx, message);
     } else {
         emit_runtime_callable_array_no_match_abort(ctx);
     }
@@ -3556,5 +3619,19 @@ fn emit_undefined_runtime_string_call_fatal(ctx: &mut FunctionContext<'_>) {
             ctx.emitter.instruction("syscall");                                 // emit the fatal diagnostic before terminating
             abi::emit_exit(ctx.emitter, 1);
         }
+    }
+}
+
+/// Applies declaration-scope visibility while leaving ordinary callback inventories public.
+fn factory_method_visible(
+    ctx: &FunctionContext<'_>, visibility: Option<&Visibility>, declaring: &str, scoped: bool,
+) -> bool {
+    match visibility {
+        Some(Visibility::Public) => true,
+        Some(Visibility::Private) if scoped => ctx.lexical_class() == Some(declaring),
+        Some(Visibility::Protected) if scoped => ctx.lexical_class().is_some_and(|scope|
+            super::method_dispatch::class_is_same_or_subclass(ctx, scope, declaring)
+                || super::method_dispatch::class_is_same_or_subclass(ctx, declaring, scope)),
+        _ => false,
     }
 }

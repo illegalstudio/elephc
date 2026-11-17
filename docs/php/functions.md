@@ -318,7 +318,9 @@ A callable value can be converted to a `Closure` with `$callback(...)`, includin
 callable parameters, array elements such as `$callbacks[0](...)`, and returned
 callables such as `factory()(...)`. The expression is evaluated once when the
 closure is created; invocation happens later. Existing captures and bound
-receivers remain available through the returned closure.
+receivers remain available through the returned closure. Private and protected method
+callables use the class scope where the closure is created; the returned closure can
+then be invoked outside that scope.
 
 ```php
 function wrap(callable $method): Closure {

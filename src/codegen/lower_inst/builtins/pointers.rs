@@ -176,6 +176,10 @@ pub(crate) fn lower_elephc_normalize_callable(
 ) -> Result<()> {
     ensure_arg_count(inst, "__elephc_normalize_callable", 1)?;
     let value = expect_operand(inst, 0)?;
+    if let Some(Immediate::Bool(dynamic)) = inst.immediate {
+        super::super::callables::emit_factory_callable_descriptor(ctx, value, dynamic)?;
+        return store_if_result(ctx, inst);
+    }
     match ctx.value_php_type(value)? {
         PhpType::Callable => {
             ctx.load_value_to_result(value)?;

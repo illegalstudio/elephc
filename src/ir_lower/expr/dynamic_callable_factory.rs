@@ -37,6 +37,18 @@ pub(super) fn lower(
     let valid = ctx.emit_value(Op::RuntimeCall, vec![value.value],
         Some(Immediate::RuntimeCall(crate::ir::RuntimeCallTarget::Function(target))),
         PhpType::Bool, target.effects(), Some(expr.span));
+    // Public probes cannot decide class-scoped method access. Let descriptor selection
+    // validate strings and arrays against the instruction's lexical class instead.
+    let array_kind = ctx.emit_value(Op::TypePredicate, vec![value.value],
+        Some(Immediate::TypePredicate(crate::ir::PhpTypePredicate::Array)), PhpType::Bool,
+        Op::TypePredicate.default_effects(), Some(expr.span));
+    let string_kind = ctx.emit_value(Op::TypePredicate, vec![value.value],
+        Some(Immediate::TypePredicate(crate::ir::PhpTypePredicate::String)), PhpType::Bool,
+        Op::TypePredicate.default_effects(), Some(expr.span));
+    let method_shape = ctx.emit_value(Op::IBitOr, vec![array_kind.value, string_kind.value], None,
+        PhpType::Bool, Op::IBitOr.default_effects(), Some(expr.span));
+    let valid = ctx.emit_value(Op::IBitOr, vec![valid.value, method_shape.value], None,
+        PhpType::Bool, Op::IBitOr.default_effects(), Some(expr.span));
     let accepted = ctx.builder.create_named_block("callable.accepted", Vec::new());
     let rejected = ctx.builder.create_named_block("callable.rejected", Vec::new());
     ctx.builder.terminate(Terminator::CondBr { cond: valid.value,
@@ -46,15 +58,24 @@ pub(super) fn lower(
     ctx.builder.position_at_end(accepted);
     // Canonicalize both indexed and associative callable pairs by key, not insertion order.
     // The non-array arm preserves the runtime object class for the shared __invoke ladder.
-    let array = ctx.emit_value(Op::TypePredicate, vec![value.value],
-        Some(Immediate::TypePredicate(crate::ir::PhpTypePredicate::Array)), PhpType::Bool,
-        Op::TypePredicate.default_effects(), Some(expr.span));
     let array_block = ctx.builder.create_named_block("callable.array", Vec::new());
     let other_block = ctx.builder.create_named_block("callable.other", Vec::new());
     let merge = ctx.builder.create_named_block("callable.normalized", Vec::new());
-    ctx.builder.terminate(Terminator::CondBr { cond: array.value,
+    ctx.builder.terminate(Terminator::CondBr { cond: array_kind.value,
         then_target: array_block, then_args: Vec::new(), else_target: other_block, else_args: Vec::new() });
     ctx.builder.position_at_end(array_block);
+    let count_fn = crate::ir::RuntimeFnId::Count;
+    let count = ctx.emit_value(Op::RuntimeCall, vec![value.value],
+        Some(Immediate::RuntimeCall(crate::ir::RuntimeCallTarget::Function(count_fn))),
+        PhpType::Int, count_fn.effects(), Some(expr.span));
+    let two = lower_int_literal(ctx, 2, expr);
+    let pair_count = ctx.emit_value(Op::ICmp, vec![count.value, two.value],
+        Some(Immediate::CmpPredicate(CmpPredicate::Eq)), PhpType::Bool,
+        Op::ICmp.default_effects(), Some(expr.span));
+    let pair_block = ctx.builder.create_named_block("callable.pair", Vec::new());
+    ctx.builder.terminate(Terminator::CondBr { cond: pair_count.value,
+        then_target: pair_block, then_args: Vec::new(), else_target: rejected, else_args: Vec::new() });
+    ctx.builder.position_at_end(pair_block);
     let pair_type = PhpType::Array(Box::new(PhpType::Mixed));
     let pair = ctx.emit_owned_value(Op::ArrayNew, Vec::new(), Some(Immediate::Capacity(2)),
         pair_type, Op::ArrayNew.default_effects(), Some(expr.span));
@@ -68,13 +89,17 @@ pub(super) fn lower(
             Op::ArrayPush.default_effects(), Some(expr.span));
         crate::ir_lower::stmt::release_indexed_array_write_operand(ctx, Some(&PhpType::Mixed), item, expr.span);
     }
-    let descriptor = ctx.emit_owned_value(Op::NormalizeCallable, vec![pair.value], None,
+    let boxed_pair = ctx.emit_owned_value(Op::MixedBox, vec![pair.value], None,
+        PhpType::Mixed, Op::MixedBox.default_effects(), Some(expr.span));
+    let (boxed_pair, boxed_owner) = root_closure_bind_operand(ctx, boxed_pair, expr.span);
+    let descriptor = ctx.emit_owned_value(Op::NormalizeCallable, vec![boxed_pair.value], Some(Immediate::Bool(dynamic)),
         PhpType::Callable, Op::NormalizeCallable.default_effects(), Some(expr.span));
     ctx.store_local(&result_name, descriptor, PhpType::Callable, Some(expr.span));
+    if let Some(owner) = boxed_owner { retire_owned_call_operand(ctx, owner, expr.span); }
     if let Some(owner) = pair_owner { retire_owned_call_operand(ctx, owner, expr.span); }
     branch_to(ctx, merge);
     ctx.builder.position_at_end(other_block);
-    let descriptor = ctx.emit_owned_value(Op::NormalizeCallable, vec![value.value], None,
+    let descriptor = ctx.emit_owned_value(Op::NormalizeCallable, vec![value.value], Some(Immediate::Bool(dynamic)),
         PhpType::Callable, Op::NormalizeCallable.default_effects(), Some(expr.span));
     ctx.store_local(&result_name, descriptor, PhpType::Callable, Some(expr.span));
     branch_to(ctx, merge);

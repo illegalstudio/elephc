@@ -321,7 +321,7 @@ impl Scanner<'_> {
             "function_exists" => self.literal_function_or_hazard(first),
             "get_defined_functions" => self.usage.hazards.enumerates_functions = true,
             "array_map" => self.scan_array_map_class_introspection(&normalized),
-            "is_callable" | "call_user_func" | "call_user_func_array" | "__elephc_normalize_callable" => {
+            "is_callable" | "call_user_func" | "call_user_func_array" => {
                 self.callable_or_hazard(first);
                 self.scan_call_user_func_class_introspection(&key, &normalized);
             }
