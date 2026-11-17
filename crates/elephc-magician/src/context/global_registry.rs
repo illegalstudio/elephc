@@ -589,6 +589,22 @@ pub(crate) fn publish_compiled_constant(name: &str, handle: RuntimeCellHandle) {
     }
 }
 
+/// Answers whether the request-wide constant `name` is already defined by interpreted code.
+///
+/// A COMPILED `define()` asks before it stores: php has one constant namespace, so defining a
+/// name an `eval()` already defined is "already defined", not an overwrite of the value the
+/// interpreter hands out.
+#[cfg(not(test))]
+pub(crate) fn global_eval_constant_is_defined(name: &str) -> bool {
+    let key = normalize_constant_name(name);
+    global_eval_constants()
+        .lock()
+        .is_ok_and(|constants| constants.contains_key(&key))
+        || global_eval_orphan_constants()
+            .lock()
+            .is_ok_and(|orphans| orphans.contains_key(&key))
+}
+
 /// Forgets every request-defined constant at a `--web` request boundary.
 ///
 /// Both tables hold addresses in the request arena, which the boundary wipes; a constant that

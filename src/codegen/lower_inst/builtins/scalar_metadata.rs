@@ -26,8 +26,28 @@ pub(crate) fn lower_define(ctx: &mut FunctionContext<'_>, inst: &Instruction) ->
     let first_label = ctx.next_label("define_first");
     let done_label = ctx.next_label("define_done");
     let result_reg = abi::int_result_reg(ctx.emitter);
+    let duplicate_label = ctx.next_label("define_duplicate");
+    if ctx.module.required_runtime_features.eval_bridge {
+        // php has one constant namespace: a name an `eval()` already defined is "already
+        // defined" here too, and must keep the interpreter's value.
+        let (name_label, name_len) = ctx.data.add_string(constant_name.trim_start_matches('\\').as_bytes());
+        abi::emit_symbol_address(
+            ctx.emitter,
+            abi::int_arg_reg_name(ctx.emitter.target, 0),
+            &name_label,
+        );
+        abi::emit_load_int_immediate(
+            ctx.emitter,
+            abi::int_arg_reg_name(ctx.emitter.target, 1),
+            name_len as i64,
+        );
+        let symbol = ctx.emitter.target.extern_symbol("__elephc_eval_constant_is_defined");
+        abi::emit_call_label(ctx.emitter, &symbol);
+        abi::emit_branch_if_int_result_nonzero(ctx.emitter, &duplicate_label);
+    }
     abi::emit_load_symbol_to_reg(ctx.emitter, result_reg, &flag_symbol, 0);
     abi::emit_branch_if_int_result_zero(ctx.emitter, &first_label);
+    ctx.emitter.label(&duplicate_label);
     emit_duplicate_define_warning(ctx);
     abi::emit_load_int_immediate(ctx.emitter, result_reg, 0);
     abi::emit_jump(ctx.emitter, &done_label);

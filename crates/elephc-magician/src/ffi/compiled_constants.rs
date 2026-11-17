@@ -38,3 +38,24 @@ pub unsafe extern "C" fn __elephc_eval_publish_constant(
         crate::context::publish_compiled_constant(name, RuntimeCellHandle::from_raw(cell));
     });
 }
+
+/// Answers 1 when interpreted code already defined the constant `name`, otherwise 0.
+///
+/// The compiled `define()` calls this before storing its value: a name an `eval()` defined first
+/// must keep that value and make the compiled call report "already defined", as in php.
+///
+/// # Safety
+/// `name_ptr` must be readable for `name_len` bytes.
+#[no_mangle]
+pub unsafe extern "C" fn __elephc_eval_constant_is_defined(name_ptr: *const u8, name_len: u64) -> u64 {
+    crate::ffi::util::trace_eval_ffi_entry("__elephc_eval_constant_is_defined");
+    if name_ptr.is_null() {
+        return 0;
+    }
+    let bytes = slice::from_raw_parts(name_ptr, name_len as usize);
+    let Ok(name) = std::str::from_utf8(bytes) else {
+        return 0;
+    };
+    std::panic::catch_unwind(|| u64::from(crate::context::global_eval_constant_is_defined(name)))
+        .unwrap_or(0)
+}
