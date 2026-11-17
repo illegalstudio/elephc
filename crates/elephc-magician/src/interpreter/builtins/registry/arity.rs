@@ -129,7 +129,6 @@ pub(super) const PHP_ARITY_OVERRIDES: &[(&str, EvalBuiltinArity)] = &[
     ("pcntl_setqos_class", EvalBuiltinArity::exact(0, 1)),
     ("pfsockopen", EvalBuiltinArity::ranged(1, Some(5))),
     ("preg_match", EvalBuiltinArity::ranged(2, Some(5))),
-    ("preg_match_all", EvalBuiltinArity::ranged(2, Some(5))),
     ("preg_replace", EvalBuiltinArity::ranged(3, Some(5))),
     ("preg_replace_callback", EvalBuiltinArity::ranged(3, Some(6))),
     ("rand", EvalBuiltinArity::zero_or_exactly(2)),
