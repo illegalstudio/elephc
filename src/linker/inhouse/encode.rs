@@ -741,7 +741,6 @@ fn add_sub(sub: bool, flags: bool, dst: Gp, first: Gp, rest: &[&str]) -> Option<
         Some(12) if magnitude <= 0xFFF => (magnitude, 1),
         Some(12) => return None,
         _ if magnitude <= 0xFFF => (magnitude, 0),
-        _ if magnitude <= 0xFFF => (magnitude, 0),
         _ if magnitude & 0xFFF == 0 && magnitude <= 0xFF_F000 => (magnitude >> 12, 1),
         _ => return None,
     };

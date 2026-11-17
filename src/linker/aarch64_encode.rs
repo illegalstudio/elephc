@@ -108,7 +108,8 @@ fn mem(rest: &str) -> Option<Mem> {
         Some((base, offset)) => (reg(base)?, imm(offset)?),
         None => (reg(inner)?, 0),
     };
-    if !base.wide {
+    // Register 31 in the base field is SP, so `xzr` there would silently become an SP access.
+    if !base.wide || base.zr {
         return None;
     }
     if after.is_empty() {
@@ -444,6 +445,9 @@ mod tests {
             "bl __rt_incref",
             "add x1, x1, _str_3@PAGEOFF",
             "ldr x9, [x9, x10, lsl #3]",
+            "ldr x0, [xzr]",
+            "ldr x0, [xzr, #8]",
+            "str w3, [xzr], #8",
         ] {
             assert_eq!(encode(line), None, "{line}");
         }
