@@ -11,15 +11,15 @@
 //!   staging answer of 1 is success, 0 a bridge failure whose php-src warning text(s)
 //!   `elephc_proc_last_error()` returns (joined by U+001F), 2 a staged file spec that
 //!   still warns (an unregistered wrapper), and -1 a failure already warned about here.
-//! - `__elephc_proc_open` converts an int/float/bool `$command` or `$cwd` to a string only
-//!   when its trailing `$strict` (the calling file's `strict_types`) is false; strict mode
-//!   throws php-src's TypeError before anything is spawned.
+//! - `__elephc_proc_open` converts an int/float/bool/`Stringable` `$command` or `$cwd` to a
+//!   string only when its trailing `$strict` (the calling file's `strict_types`) is false;
+//!   strict mode throws php-src's TypeError before anything is spawned.
 //! - A stream spec must be a kind 0/1/3 resource with a real descriptor payload
 //!   (below the synthetic-wrapper base `0x40000000`).
 
 use crate::parser::ast::{BinOp, CastType, Stmt, TypeExpr};
 use crate::synthetic_class::{
-    e_array, e_binop, e_bool, e_call, e_cast, e_index, e_int, e_neg, e_new_fq, e_not,
+    e_array, e_binop, e_bool, e_call, e_cast, e_index, e_instance_of, e_int, e_neg, e_new_fq, e_not,
     e_null, e_post_inc, e_str, e_var, function, s_array_assign, s_assign, s_continue,
     s_expr, s_for, s_foreach, s_if, s_return, s_throw, s_try, t_array, t_mixed,
 };
@@ -193,7 +193,7 @@ pub(super) fn decl_fn_elephc_proc_open() -> Stmt {
                     ),
                 ],
                 vec![
-                (e_binop(e_not(e_var("strict")), BinOp::And, e_binop(e_binop(e_call("is_int", vec![e_var("command")]), BinOp::Or, e_call("is_float", vec![e_var("command")])), BinOp::Or, e_call("is_bool", vec![e_var("command")]))), vec![
+                (e_binop(e_not(e_var("strict")), BinOp::And, e_binop(e_binop(e_binop(e_call("is_int", vec![e_var("command")]), BinOp::Or, e_call("is_float", vec![e_var("command")])), BinOp::Or, e_call("is_bool", vec![e_var("command")])), BinOp::Or, e_instance_of(e_var("command"), "\\Stringable"))), vec![
                     s_assign("command", e_cast(CastType::String, e_var("command"))),
                 ]),
                 (e_not(e_call("is_string", vec![e_var("command")])), vec![
@@ -211,7 +211,7 @@ pub(super) fn decl_fn_elephc_proc_open() -> Stmt {
                 None,
             ),
             s_if(
-                e_binop(e_not(e_var("strict")), BinOp::And, e_binop(e_binop(e_call("is_int", vec![e_var("cwd")]), BinOp::Or, e_call("is_float", vec![e_var("cwd")])), BinOp::Or, e_call("is_bool", vec![e_var("cwd")]))),
+                e_binop(e_not(e_var("strict")), BinOp::And, e_binop(e_binop(e_binop(e_call("is_int", vec![e_var("cwd")]), BinOp::Or, e_call("is_float", vec![e_var("cwd")])), BinOp::Or, e_call("is_bool", vec![e_var("cwd")])), BinOp::Or, e_instance_of(e_var("cwd"), "\\Stringable"))),
                 vec![
                     s_assign("cwd", e_cast(CastType::String, e_var("cwd"))),
                 ],

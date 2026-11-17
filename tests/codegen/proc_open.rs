@@ -338,6 +338,59 @@ try { proc_open('true', [], $pipes, false); } catch (TypeError $e) { echo $e->ge
     assert!(coercive.stderr.contains("posix_spawn() failed"), "{}", coercive.stderr);
 }
 
+/// Coercive mode converts a `Stringable` command or cwd (and scalar cwds) like PHP; strict
+/// mode rejects the object, and a plain object is a TypeError in either mode.
+#[test]
+fn test_proc_open_converts_stringable_arguments_only_in_coercive_mode() {
+    let fixture = r#"
+class Text { public function __construct(private string $text) {} public function __toString(): string { return $this->text; } }
+class Plain {}
+function open($command, $cwd): void {
+    try {
+        $process = @proc_open($command, [1 => ['pipe', 'w']], $pipes, $cwd);
+        if ($process === false) { echo "false\n"; return; }
+        echo trim(stream_get_contents($pipes[1])), "|", proc_close($process), "\n";
+    } catch (TypeError $e) {
+        echo $e->getMessage(), "\n";
+    }
+}
+open(new Text('echo object'), null);
+open('echo cwd', new Text('/'));
+open(['echo', 5, 1.5, true, new Text('x')], new Text('/'));
+open('echo plain', new Plain());
+open(new Plain(), null);
+open('pwd', 1);
+open('pwd', false);
+$command = new Text('echo direct');
+try {
+    $process = proc_open($command, [1 => ['pipe', 'w']], $pipes);
+    echo trim(stream_get_contents($pipes[1])), "|", proc_close($process), "\n";
+} catch (TypeError $e) {
+    echo $e->getMessage(), "\n";
+}
+"#;
+    let coercive = compile_and_run(&format!("<?php{fixture}"));
+    assert_eq!(
+        coercive,
+        "object|0\ncwd|0\n5 1.5 1 x|0\n\
+         proc_open(): Argument #4 ($cwd) must be of type ?string, Plain given\n\
+         proc_open(): Argument #1 ($command) must be of type array|string, Plain given\n\
+         false\nfalse\ndirect|0\n"
+    );
+    let strict = compile_and_run(&format!("<?php\ndeclare(strict_types=1);{fixture}"));
+    assert_eq!(
+        strict,
+        "proc_open(): Argument #1 ($command) must be of type array|string, Text given\n\
+         proc_open(): Argument #4 ($cwd) must be of type ?string, Text given\n\
+         proc_open(): Argument #4 ($cwd) must be of type ?string, Text given\n\
+         proc_open(): Argument #4 ($cwd) must be of type ?string, Plain given\n\
+         proc_open(): Argument #1 ($command) must be of type array|string, Plain given\n\
+         proc_open(): Argument #4 ($cwd) must be of type ?string, int given\n\
+         proc_open(): Argument #4 ($cwd) must be of type ?string, false given\n\
+         proc_open(): Argument #1 ($command) must be of type array|string, Text given\n"
+    );
+}
+
 /// A helper exception releases the operand boxes the lowering created, and leaves the
 /// caller's own values (typed locals and `Mixed` elements passed through) intact.
 #[test]
