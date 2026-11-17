@@ -170,6 +170,19 @@ fn emit_array_sum_int_aarch64(
     }
 
     emitter.label(&vector_restart);
+    // A tail that fails the gate arrives here after the vector lanes were folded into the
+    // accumulator, so restart from the seed instead of adding every element a second time.
+    if raw_float_seed {
+        emitter.instruction("mov x11, x3");                                     // restart from the raw float seed bits
+    } else if raw_seed {
+        if raw_result {
+            emitter.instruction("mov x11, xzr");                                // restart from the zero seed
+        } else {
+            emitter.instruction("mov x11, x3");                                // restart from the raw integer seed
+        }
+    } else {
+        emitter.instruction("ldr x11, [x3, #8]");                               // restart from the borrowed seed payload
+    }
     emitter.instruction("add x12, x0, #24");                                    // rebuild the element cursor from the original array base
     emitter.instruction("add x12, x12, x1, lsl #3");                            // address the first element in the requested range
     emitter.instruction("sub x9, x2, x1");                                      // rebuild the exact element count after the failed gate
@@ -380,6 +393,19 @@ fn emit_array_sum_int_x86_64(
     }
 
     emitter.label(&vector_restart);
+    // A tail that fails the gate arrives here after the vector lanes were folded into the
+    // accumulator, so restart from the seed instead of adding every element a second time.
+    if raw_float_seed {
+        emitter.instruction("mov r8, rcx");                                     // restart from the raw float seed bits
+    } else if raw_seed {
+        if raw_result {
+            emitter.instruction("xor r8d, r8d");                                // restart from the zero seed
+        } else {
+            emitter.instruction("mov r8, rcx");                                // restart from the raw integer seed
+        }
+    } else {
+        emitter.instruction("mov r8, QWORD PTR [rcx + 8]");                     // restart from the borrowed seed payload
+    }
     emitter.instruction("lea r9, [rdi + 24]");                                  // rebuild the element cursor from the original array base
     emitter.instruction("lea r9, [r9 + rsi * 8]");                              // address the first element in the requested range
     emitter.instruction("mov r10, rdx");                                        // rebuild the exclusive end before subtracting the start
