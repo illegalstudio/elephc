@@ -2869,3 +2869,39 @@ echo $f() + $b, "|", $g();
     );
     assert_eq!(out, "110|7");
 }
+
+/// `Closure::fromCallable()` and `$callable(...)` wrap an implicit callable (a function name, a
+/// method array, a `callable` parameter holding either) or an invokable object in a new Closure,
+/// which is an object of class Closure, while the source callable keeps its string identity.
+/// Expected output measured with php 8.5.
+#[test]
+fn test_closure_factories_wrap_implicit_callables_in_a_closure() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+class A { public static function s($x) { return $x + 1; } public function m($x) { return $x + 3; } }
+class Inv { public function __invoke($x) { return $x + 100; } }
+function f($x) { return $x * 10; }
+function g(callable $c) { return Closure::fromCallable($c); }
+function h(callable $c) { return $c(...); }
+function k(callable $c) { $w = Closure::fromCallable($c); return gettype($c) . "," . gettype($w) . "|"; }
+function d($c, $arg) { return gettype($c) . "," . get_class($c) . "," . ($c instanceof Closure ? "y" : "n") . "," . $c($arg) . "|"; }
+$names = ['f', 'A::s', ['A', 's'], [new A, 'm']];
+foreach ($names as $n) { echo d($n(...), 1), d(Closure::fromCallable($n), 2); }
+echo d(g('f'), 3), d(h('A::s'), 4), d(g([new A, 'm']), 5), d(h(['A', 's']), 6);
+$i = new Inv();
+echo d(Closure::fromCallable($i), 7), d($i(...), 8);
+$m = [new A, 'm'];
+$z = Closure::fromCallable($m);
+$y = Closure::fromCallable($z);
+echo d($z, 9), d($y, 10), gettype($m), "|", k('f'), "\n";
+"#);
+    assert_eq!(
+        out.stdout,
+        "object,Closure,y,10|object,Closure,y,20|object,Closure,y,2|object,Closure,y,3|\
+object,Closure,y,2|object,Closure,y,3|object,Closure,y,4|object,Closure,y,5|\
+object,Closure,y,30|object,Closure,y,5|object,Closure,y,8|object,Closure,y,7|\
+object,Closure,y,107|object,Closure,y,108|object,Closure,y,12|object,Closure,y,13|array|string,object|\n",
+        "{}", out.stderr,
+    );
+    assert!(out.success, "{}", out.stderr);
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
