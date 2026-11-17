@@ -799,23 +799,15 @@ pub(super) fn release_discarded_branch_value(
 /// `$this->app['session'] ?? null`) answered for keys `offsetExists` denies, and the read of a
 /// `mixed` receiver came back as `int(0)` in a closure.
 ///
-/// Only a receiver that can be read twice without effect takes this form (a variable or a
-/// property chain over one, with a side-effect-free offset): the receiver is evaluated once and
-/// both calls go through it. Any other shape keeps the quiet read.
+/// The receiver is evaluated once, including factories and coalescing assignments, and pinned
+/// across both method calls. Offsets with side effects still need a separate frozen argument.
 fn lower_array_access_offset_exists_coalesce(
     ctx: &mut LoweringContext<'_, '_>,
     array: &Expr,
     index: &Expr,
     expr: &Expr,
 ) -> Option<LoweredValue> {
-    fn repeatable(expr: &Expr) -> bool {
-        match &expr.kind {
-            ExprKind::Variable(_) | ExprKind::This | ExprKind::StaticPropertyAccess { .. } => true,
-            ExprKind::PropertyAccess { object, .. } => repeatable(object),
-            _ => false,
-        }
-    }
-    if !repeatable(array) || crate::optimize::expr_has_side_effects(index) {
+    if crate::optimize::expr_has_side_effects(index) {
         return None;
     }
     let receiver = lower_subscript_receiver_silently(ctx, array);
