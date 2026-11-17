@@ -421,7 +421,7 @@ mod tests {
         // 34 registry builtins awaiting eval homes (the five `proc_*` functions among them),
         // plus the 348 PHP-visible prelude-provided and name-resolver-rewritten functions
         // eval does not reach (see `eval_support`).
-        assert_eq!(eval_pending, 381);
+        assert_eq!(eval_pending, 386);
         // The shared mbstring catalog adds sixty-four registry contracts, including
         // its internal INI helper, to the prior compiler registry surface; the eleven
         // `__elephc_opcache_rt_*` runtime script-cache helpers rolled through above add the rest.
