@@ -44,8 +44,6 @@ pub(in crate::interpreter) enum EvalDirectHook {
     BaseConvert,
     /// Dispatches the six fixed-base conversions (`dechex`, `hexdec`, ...).
     BaseDigits,
-    /// Dispatches `setlocale(...)`.
-    Setlocale,
     /// Dispatches the PHP BCMath procedural surface.
     Bcmath,
     /// Dispatches `base64_decode(...)`.
@@ -428,7 +426,6 @@ impl EvalDirectHook {
             Self::Atan2 => eval_builtin_atan2(args, context, scope, values),
             Self::BaseConvert => eval_builtin_base_convert(args, context, scope, values),
             Self::BaseDigits => eval_builtin_base_digits(name, args, context, scope, values),
-            Self::Setlocale => eval_builtin_setlocale(args, context, scope, values),
             Self::Bcmath => eval_builtin_bcmath_call(name, args, context, scope, values),
             Self::Base64Decode => eval_builtin_base64_decode(args, context, scope, values),
             Self::Highlight => match name {

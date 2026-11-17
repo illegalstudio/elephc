@@ -182,7 +182,6 @@ pub mod restore_error_handler;
 pub mod restore_exception_handler;
 pub mod serialize;
 pub mod set_time_limit;
-pub mod setlocale;
 pub mod set_error_handler;
 pub mod set_exception_handler;
 pub mod shell_exec;

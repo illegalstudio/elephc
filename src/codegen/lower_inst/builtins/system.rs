@@ -18,30 +18,6 @@ use crate::types::PhpType;
 use super::super::super::context::FunctionContext;
 use super::{expect_operand, load_value_to_first_int_arg, store_if_result};
 
-/// Lowers `setlocale($category, $locale, ...)` through Elephc's deterministic `C`-locale model.
-pub(crate) fn lower_setlocale(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
-    ensure_arg_count_between(inst, "setlocale", 2, usize::MAX)?;
-    let locale = expect_operand(inst, 1)?;
-    let locale_ty = ctx.load_value_to_result(locale)?;
-    match locale_ty.codegen_repr() {
-        PhpType::Str => {
-            emit_box_current_value_as_mixed(ctx.emitter, &PhpType::Str);
-        }
-        PhpType::Mixed | PhpType::Union(_) => {
-            super::strings::common::emit_mixed_cast_string_borrowed(ctx);
-            emit_box_current_value_as_mixed(ctx.emitter, &PhpType::Str);
-        }
-        _ => {
-            let (label, len) = ctx.data.add_string(b"C");
-            let (ptr_reg, len_reg) = abi::string_result_regs(ctx.emitter);
-            abi::emit_symbol_address(ctx.emitter, ptr_reg, &label);
-            abi::emit_load_int_immediate(ctx.emitter, len_reg, len as i64);
-            emit_box_current_value_as_mixed(ctx.emitter, &PhpType::Str);
-        }
-    }
-    store_if_result(ctx, inst)
-}
-
 /// Lowers `date(format, timestamp?)` through the shared formatter runtime helper.
 pub(crate) fn lower_date(
     ctx: &mut FunctionContext<'_>,

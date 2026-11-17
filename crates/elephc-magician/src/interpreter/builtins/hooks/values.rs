@@ -47,8 +47,6 @@ pub(in crate::interpreter) enum EvalValuesHook {
     BaseConvert,
     /// Dispatches the six fixed-base conversions (`dechex`, `hexdec`, ...).
     BaseDigits,
-    /// Dispatches `setlocale(...)`.
-    Setlocale,
     /// Dispatches the PHP BCMath procedural surface.
     Bcmath,
     /// Dispatches the `ext/gmp` procedural surface by forwarding to the compiled GMP prelude.
@@ -440,7 +438,6 @@ impl EvalValuesHook {
             Self::BaseDigits => one_arg(evaluated_args, values, |value, values| {
                 eval_base_digits_result(name, value, values)
             }),
-            Self::Setlocale => eval_setlocale_values(evaluated_args, values),
             Self::Bcmath => eval_bcmath_values_result(name, evaluated_args, context, values),
             Self::Gmp => eval_gmp_values_result(name, evaluated_args, context, values),
             Self::Base64Decode => match evaluated_args {
