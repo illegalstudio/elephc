@@ -1345,3 +1345,34 @@ try {
 } catch (DOMException $e) {
     echo $e->getCode(), ' ', $e->getMessage(), "\n";
 }
+var_dump(libxml_get_last_error());
+var_dump(@libxml_disable_entity_loader(true));
+var_dump(@libxml_disable_entity_loader(false));
+echo $doc->createElement('z', 'a &bogus; b')->nodeValue, "|\n";
+echo $doc->createElement('z', 'x &amp; &#65;')->nodeValue, "|\n";
+"####,
+    );
+    assert_eq!(
+        out,
+        "NULL\n/r/e2/@a\n<r><e1/><e2 a=\"1\"/></r>\n8 Not Found Error\nbool(false)\nbool(false)\nbool(true)\na  b|\nx & A|\n"
+    );
+}
+
+/// `Dom\Node::insertBefore($node, $node)` leaves the node at its position (the spec's pre-insert
+/// takes the reference child's next sibling), instead of moving it to the front of the list.
+#[test]
+fn test_dom_html_insert_before_itself_keeps_the_node_in_place() {
+    let out = compile_and_run(
+        r####"<?php
+$d = Dom\HTMLDocument::createFromString('<div><p id=a>x</p><b id=b></b><i id=c></i></div>');
+$div = $d->getElementById('a')->parentNode;
+$b = $d->getElementById('b');
+$div->insertBefore($b, $b);
+foreach ($div->childNodes as $c) {
+    echo $c->nodeName;
+}
+echo "\n";
+"####,
+    );
+    assert_eq!(out, "PBI\n");
+}

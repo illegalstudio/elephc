@@ -2852,6 +2852,14 @@ fn decl_class_dom_node_m22() -> MethodBuilder {
                 None,
             ),
             s_if(
+                e_binop(e_var("child"), BinOp::StrictEq, e_var("node")),
+                vec![
+                    s_return(e_var("node")),
+                ],
+                vec![],
+                None,
+            ),
+            s_if(
                 e_binop(e_prop(e_var("node"), "parentNode"), BinOp::StrictNotEq, e_null()),
                 vec![
                     s_expr(e_method_call(e_prop(e_var("node"), "parentNode"), "removeChild", vec![e_var("node")])),

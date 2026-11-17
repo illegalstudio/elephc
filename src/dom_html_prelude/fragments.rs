@@ -228,6 +228,9 @@ class Dom__Node
         if ($child !== null && array_search($child, $this->kids, true) === false) {
             throw new \DOMException('Not Found Error', 8);
         }
+        if ($child === $node) {
+            return $node;
+        }
         if ($node->parentNode !== null) {
             $node->parentNode->removeChild($node);
         }
