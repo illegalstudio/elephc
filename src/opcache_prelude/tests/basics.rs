@@ -129,6 +129,29 @@ fn configured_eval_injects_all_opcache_targets() {
     }
 }
 
+/// What the autoload closure references or declares drives injection as the entry program's
+/// own code does: a reference injects, and a declaration there wins.
+#[test]
+fn autoload_closure_facts_drive_injection() {
+    use crate::opcache_prelude::AutoloadedFunctions;
+    let inject = |autoloaded: &AutoloadedFunctions, overrides: &[(String, String)]| {
+        let mut inventory = crate::optimize::reachability::PreludeInventory::new();
+        inject_if_used(
+            parse("<?php echo 1;"), PhpVersion::Php85, false, None, &[], overrides, None, false,
+            false, autoloaded, &mut inventory,
+        ).0
+    };
+    let facts = AutoloadedFunctions::for_test(
+        &["opcache_reset", "opcache_get_status", "ini_get"],
+        &["opcache_get_status", "ini_get"],
+    );
+    let injected = inject(&facts, &[]);
+    assert!(detect::program_declares(&injected, "opcache_reset"));
+    assert!(!detect::program_declares(&injected, "opcache_get_status"));
+    assert!(!detect::program_declares(&injected, "ini_get"));
+    assert!(!detect::program_declares(&injected, "opcache_compile_file"));
+}
+
     /// Injection fires when `opcache_get_configuration` is called.
     #[test]
 pub(super) fn injects_when_called() {
@@ -484,7 +507,7 @@ pub(super) fn injects_file_functions_per_function() {
             None,
             false,
             true,
-            &|_| false,
+            &crate::opcache_prelude::AutoloadedFunctions::default(),
             &mut inventory,
         );
         assert!(program.iter().any(|stmt| matches!(
