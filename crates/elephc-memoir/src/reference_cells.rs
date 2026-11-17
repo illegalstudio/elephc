@@ -318,3 +318,5 @@ pub mod parameter_bindings;
 pub mod mixed_payload;
 
 pub mod static_cells;
+
+pub mod mixed_symbol;

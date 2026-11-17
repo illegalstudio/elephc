@@ -20,7 +20,7 @@ scalar/empty-array cleanup eligibility checks, static binding storage, guarded
 owner slots, depth-stamped temporary owner lists, abandoned activation cleanup
 and hydrated-property owner transfers, non-owning observer caches, hash-entry
 reference promotion and borrowed payload views, temporary/fixed-frame owner record
-publication, exact chain unlink and consuming container boxing.
+publication, exact chain unlink, consuming container boxing and Mixed symbol publication.
 It also owns fixed heap/GC/buffer state, handle tables and string-scratch
 declarations. It is an ordinary compiler dependency and is never linked as a Rust
 library into compiled PHP programs. Those programs contain the same
@@ -57,6 +57,12 @@ calls. The compiler chooses frame placement and owner discipline, and its target
 ABI supplies stack addressing and scratch storage operations. Fresh-container
 boxing acquires the Mixed payload owner before retiring the builder's original
 owner. The JSON parser retains flag handling, failure propagation and throwing policy.
+Mixed symbol publication receives the compiler's storage symbol, initialization
+offset, release policy, optional transferred-owner frame slot and label prefix.
+It follows an existing persistent wrapper before replacing its child owner.
+Transferred temporary ownership and initialization metadata are cleared before
+the displaced value can run a destructor. The compiler retains static-property
+type validation, layout selection and EIR ownership decisions.
 Memoir source changes also participate in runtime-object cache identity.
 
 The host API composes assembly output, target ABI and memory-context capabilities.

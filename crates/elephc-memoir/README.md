@@ -23,7 +23,7 @@ records, depth-stamped temporary owner lists, abandoned activation cleanup,
 stored-property ownership completion, previous-slot release and box reuse during hydration,
 non-owning observer caches, hash-entry reference promotion and borrowed payload views,
 temporary/fixed-frame owner record publication, exact chain unlink and consuming
-container boxing.
+container boxing and Mixed symbol publication through persistent reference children.
 It also emits fixed heap, GC, buffer, reference-root, handle-table and string-scratch
 declarations, including raw capture-buffer storage, keeping their existing order
 and byte layout.
@@ -76,6 +76,12 @@ emit no runtime calls and preserve newer activation records and live arguments.
 `values::owned_container` receives its entry label and assembly heading from the
 compiler. It lets Mixed acquire the fresh container before retiring the caller's
 original owner. JSON flags, parsing and exception publication stay in the compiler.
+`reference_cells::mixed_symbol` receives the host symbol, initialization metadata
+offset, prior-owner release policy, optional transfer slot and label prefix.
+`RecordOffset` and `FrameOffset` keep metadata layout separate from owner parking.
+It publishes the replacement through any persistent wrapper, clears transferred
+ownership and initialization metadata, then retires the prior owner when requested.
+Static-property type checks and EIR ownership decisions remain in the compiler.
 
 The compiler retains EIR lifetime analysis, ownership optimization and placement,
 PHP reference/type validation, formatting, output routing, zval pack/unpack,
@@ -108,6 +114,8 @@ complete hash-reference integration, and two inline register arrangements. These
 60 cases cover every supported target and emission mode without fixed semantic data.
 Another 60 cases preserve the complete temporary-owner adapter inventory and recursive
 JSON decoder, including custom callback records and fixed return leases.
+Mixed symbol publication adds 180 cases covering both release policies and absent,
+small and large transferred-owner slots on every target and emission mode.
 
 `build.rs` includes this crate's Rust sources in the runtime-cache identity.
 Changes to these emitters therefore invalidate cached runtime objects even when
