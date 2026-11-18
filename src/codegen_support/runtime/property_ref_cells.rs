@@ -1,5 +1,5 @@
 //! Purpose:
-//! Emits the managed reference cells and runtime guards that enforce a typed property's
+//! Emits the runtime guards that enforce a typed property's
 //! declared type on writes through a by-reference call temporary.
 //!
 //! Called from:
@@ -15,111 +15,17 @@
 use crate::codegen_support::abi;
 use crate::codegen_support::emit::Emitter;
 use crate::codegen_support::platform::Arch;
-use crate::codegen_support::sentinels::{
-    x86_64_heap_kind_word, REFERENCE_CELL_HEAP_KIND,
-};
+use crate::codegen_support::sentinels::REFERENCE_CELL_HEAP_KIND;
 use crate::types::param_binding::{
     PROPERTY_REF_TYPE_ARRAY, PROPERTY_REF_TYPE_BOOL, PROPERTY_REF_TYPE_FALSE,
     PROPERTY_REF_TYPE_FLOAT, PROPERTY_REF_TYPE_INT, PROPERTY_REF_TYPE_STRING,
 };
-
-/// Header flag distinguishing a typed-property reference cell from an ordinary owned cell.
-///
-/// The bit sits above the payload tag and the collector pin, so every existing cell kind and
-/// ownership dispatcher keeps reading the same low bytes. Only this module and the store guard
-/// inspect it.
-pub(crate) const PROPERTY_REFERENCE_CELL_FLAG: i64 = 1 << 19;
-
-/// Byte size of a typed-property reference cell: two payload words plus four metadata words.
-const PROPERTY_REFERENCE_CELL_BYTES: i64 = 48;
-/// Offset of the static diagnostic suffix pointer in a typed-property reference cell.
-const PROPERTY_REFERENCE_SUFFIX_PTR: usize = 16;
-/// Offset of the static diagnostic suffix length.
-const PROPERTY_REFERENCE_SUFFIX_LEN: usize = 24;
-/// Offset of the runtime acceptance code selected from the property's declared type.
-const PROPERTY_REFERENCE_TYPE_CODE: usize = 32;
+use elephc_memoir::reference_cells::property::{
+    self, CELL_FLAG, SUFFIX_PTR_OFFSET, SUFFIX_LEN_OFFSET, TYPE_CODE_OFFSET,
+};
 
 /// Prefix php-src uses for every typed-reference assignment diagnostic.
 const PROPERTY_REFERENCE_ERROR_PREFIX: &str = "Cannot assign ";
-
-
-/// Allocates a managed cell carrying a typed-property reference-assignment guard.
-///
-/// Input: payload descriptor tag plus the static diagnostic suffix pointer/length and the
-/// acceptance code selected by the property's declared type. The cell has the ordinary two
-/// payload words at offset zero, so callees keep reading and writing it with the parameter's
-/// native representation. The extra words are read only by the store guard.
-fn emit_property_new(emitter: &mut Emitter) {
-    emitter.blank();
-    emitter.label_global("__rt_property_reference_cell_new");
-    match emitter.target.arch {
-        Arch::AArch64 => {
-            // -- preserve the descriptor and diagnostics, then allocate the owned cell --
-            emitter.instruction("sub sp, sp, #48");                             // reserve metadata and linkage slots
-            emitter.instruction("stp x29, x30, [sp, #32]");                     // preserve the caller frame and return address
-            emitter.instruction("add x29, sp, #32");                            // establish the allocator frame
-            emitter.instruction("stp x1, x2, [sp, #0]");                        // keep the static suffix pointer and length
-            emitter.instruction("str x3, [sp, #16]");                           // keep the acceptance code
-            emitter.instruction("str x0, [sp, #24]");                           // keep the payload descriptor tag
-            abi::emit_load_int_immediate(emitter, "x0", PROPERTY_REFERENCE_CELL_BYTES); // request payload plus metadata words
-            abi::emit_call_label(emitter, "__rt_heap_alloc");                   // allocate the owned cell
-            // -- publish the cell header, diagnostic metadata, and zeroed payload --
-            emitter.instruction("ldr x9, [sp, #24]");                           // reload the payload descriptor tag
-            emitter.instruction("lsl x9, x9, #8");                              // position the tag above the cell kind
-            abi::emit_load_int_immediate(emitter, "x10", PROPERTY_REFERENCE_CELL_FLAG); // materialize the typed-property marker
-            emitter.instruction("orr x9, x9, x10");                             // identify a typed-property reference cell
-            emitter.instruction(&format!("mov x10, #{}", REFERENCE_CELL_HEAP_KIND)); // load the managed reference-cell heap kind
-            emitter.instruction("orr x9, x9, x10");                             // preserve ordinary cell ownership dispatch
-            emitter.instruction("str x9, [x0, #-8]");                           // publish the cell header
-            emitter.instruction("ldr x10, [sp, #0]");                           // reload the static suffix pointer
-            emitter.instruction("ldr x11, [sp, #8]");                           // reload the static suffix length
-            emitter.instruction(&format!("str x10, [x0, #{PROPERTY_REFERENCE_SUFFIX_PTR}]")); // publish the diagnostic suffix pointer
-            emitter.instruction(&format!("str x11, [x0, #{PROPERTY_REFERENCE_SUFFIX_LEN}]")); // publish the diagnostic suffix length
-            emitter.instruction("ldr x10, [sp, #16]");                          // reload the property acceptance code
-            emitter.instruction(&format!("str x10, [x0, #{PROPERTY_REFERENCE_TYPE_CODE}]")); // publish the guard selector
-            emitter.instruction(&format!("str xzr, [x0, #{}]", PROPERTY_REFERENCE_TYPE_CODE + 8)); // leave the metadata tail zeroed
-            emitter.instruction("str xzr, [x0, #0]");                           // initialize the low payload word
-            emitter.instruction("str xzr, [x0, #8]");                           // initialize the high payload word
-            // -- restore the allocator frame --
-            emitter.instruction("ldp x29, x30, [sp, #32]");                     // restore the caller frame and return address
-            emitter.instruction("add sp, sp, #48");                             // release the allocator frame
-            abi::emit_return(emitter);
-        }
-        Arch::X86_64 => {
-            // -- preserve the descriptor and diagnostics, then allocate the owned cell --
-            emitter.instruction("push rbp");                                    // preserve the caller frame pointer
-            emitter.instruction("mov rbp, rsp");                                // establish the allocator frame
-            emitter.instruction("sub rsp, 48");                                 // reserve metadata and linkage slots
-            emitter.instruction("mov QWORD PTR [rbp - 8], rdi");                // keep the payload descriptor tag
-            emitter.instruction("mov QWORD PTR [rbp - 16], rsi");               // keep the static suffix pointer
-            emitter.instruction("mov QWORD PTR [rbp - 24], rdx");               // keep the static suffix length
-            emitter.instruction("mov QWORD PTR [rbp - 32], rcx");               // keep the property acceptance code
-            abi::emit_load_int_immediate(emitter, "rax", PROPERTY_REFERENCE_CELL_BYTES); // request payload plus metadata words
-            abi::emit_call_label(emitter, "__rt_heap_alloc");                   // allocate the owned cell
-            // -- publish the cell header, diagnostic metadata, and zeroed payload --
-            emitter.instruction("mov r10, QWORD PTR [rbp - 8]");                // reload the payload descriptor tag
-            emitter.instruction("shl r10, 8");                                  // position the tag above the cell kind
-            abi::emit_load_int_immediate(emitter, "r11", PROPERTY_REFERENCE_CELL_FLAG); // materialize the typed-property marker
-            emitter.instruction("or r10, r11");                                 // identify a typed-property reference cell
-            emitter.instruction(&format!("mov r11, 0x{:x}", x86_64_heap_kind_word(REFERENCE_CELL_HEAP_KIND))); // load the managed reference-cell heap kind
-            emitter.instruction("or r10, r11");                                 // preserve ordinary cell ownership dispatch
-            emitter.instruction("mov QWORD PTR [rax - 8], r10");                // publish the cell header
-            emitter.instruction("mov r10, QWORD PTR [rbp - 16]");               // reload the static suffix pointer
-            emitter.instruction("mov r11, QWORD PTR [rbp - 24]");               // reload the static suffix length
-            emitter.instruction(&format!("mov QWORD PTR [rax + {PROPERTY_REFERENCE_SUFFIX_PTR}], r10")); // publish the diagnostic suffix pointer
-            emitter.instruction(&format!("mov QWORD PTR [rax + {PROPERTY_REFERENCE_SUFFIX_LEN}], r11")); // publish the diagnostic suffix length
-            emitter.instruction("mov r10, QWORD PTR [rbp - 32]");               // reload the property acceptance code
-            emitter.instruction(&format!("mov QWORD PTR [rax + {PROPERTY_REFERENCE_TYPE_CODE}], r10")); // publish the guard selector
-            emitter.instruction(&format!("mov QWORD PTR [rax + {}], 0", PROPERTY_REFERENCE_TYPE_CODE + 8)); // leave the metadata tail zeroed
-            emitter.instruction("mov QWORD PTR [rax], 0");                      // initialize the low payload word
-            emitter.instruction("mov QWORD PTR [rax + 8], 0");                  // initialize the high payload word
-            // -- restore the allocator frame --
-            emitter.instruction("mov rsp, rbp");                                // release the allocator frame
-            emitter.instruction("pop rbp");                                     // restore the caller frame pointer
-            abi::emit_return(emitter);
-        }
-    }
-}
 
 /// Rejects a callee write that the typed property backing a reference cell would refuse.
 ///
@@ -148,7 +54,7 @@ fn emit_property_store_guard_aarch64(emitter: &mut Emitter) {
     emitter.instruction(&format!("cmp w10, #{REFERENCE_CELL_HEAP_KIND}"));      // is this an owned reference cell?
     emitter.instruction("b.ne __rt_property_reference_store_guard_done");       // ordinary heap allocations have no typed-property metadata
     emitter.instruction("ldr x10, [x0, #-8]");                                  // reload the full cell header
-    abi::emit_load_int_immediate(emitter, "x11", PROPERTY_REFERENCE_CELL_FLAG); // materialize the property marker
+    abi::emit_load_int_immediate(emitter, "x11", CELL_FLAG); // materialize the property marker
     emitter.instruction("tst x10, x11");                                        // does this cell carry a typed-property guard?
     emitter.instruction("b.eq __rt_property_reference_store_guard_done");       // ordinary local references keep their fast path
     emitter.instruction("str x0, [sp, #16]");                                   // keep the validated property cell
@@ -159,7 +65,7 @@ fn emit_property_store_guard_aarch64(emitter: &mut Emitter) {
     emitter.instruction("str x2, [sp, #40]");                                   // keep the source high payload word for string lengths
     // -- dispatch on the property's declared type --
     emitter.instruction("ldr x9, [sp, #16]");                                   // reload the property cell
-    emitter.instruction(&format!("ldr x10, [x9, #{PROPERTY_REFERENCE_TYPE_CODE}]")); // load the declared-type acceptance code
+    emitter.instruction(&format!("ldr x10, [x9, #{TYPE_CODE_OFFSET}]"));        // load the declared-type acceptance code
     emitter.instruction(&format!("cmp x10, #{PROPERTY_REF_TYPE_INT}"));         // is the property declared int?
     emitter.instruction("b.eq __rt_property_reference_guard_int");              // apply weak int assignment rules
     emitter.instruction(&format!("cmp x10, #{PROPERTY_REF_TYPE_STRING}"));      // is the property declared string?
@@ -269,8 +175,8 @@ fn emit_property_store_guard_aarch64(emitter: &mut Emitter) {
     emit_property_reference_name_row_aarch64(emitter);
     emitter.label("__rt_property_reference_guard_throw");
     emitter.instruction("ldr x9, [sp, #16]");                                   // reload the property cell
-    emitter.instruction(&format!("ldr x3, [x9, #{PROPERTY_REFERENCE_SUFFIX_PTR}]")); // load the static diagnostic suffix pointer
-    emitter.instruction(&format!("ldr x4, [x9, #{PROPERTY_REFERENCE_SUFFIX_LEN}]")); // load the static diagnostic suffix length
+    emitter.instruction(&format!("ldr x3, [x9, #{SUFFIX_PTR_OFFSET}]"));        // load the static diagnostic suffix pointer
+    emitter.instruction(&format!("ldr x4, [x9, #{SUFFIX_LEN_OFFSET}]"));        // load the static diagnostic suffix length
     emitter.instruction("add x2, sp, #48");                                     // point at the {name, length} row
     abi::emit_symbol_address(emitter, "x0", "_unser_property_assign_prefix");  // load php's "Cannot assign " prefix
     emitter.instruction(&format!("mov x1, #{}", PROPERTY_REFERENCE_ERROR_PREFIX.len())); // pass its byte length
@@ -354,7 +260,7 @@ fn emit_property_store_guard_x86_64(emitter: &mut Emitter) {
     emitter.instruction("je __rt_property_reference_store_guard_done_x");       // stack-backed references need no property guard
     emitter.instruction(&format!("cmp BYTE PTR [rax - 8], {REFERENCE_CELL_HEAP_KIND}")); // is this an owned reference cell?
     emitter.instruction("jne __rt_property_reference_store_guard_done_x");      // ordinary allocations have no typed-property metadata
-    abi::emit_load_int_immediate(emitter, "r10", PROPERTY_REFERENCE_CELL_FLAG); // materialize the property marker
+    abi::emit_load_int_immediate(emitter, "r10", CELL_FLAG); // materialize the property marker
     emitter.instruction("test QWORD PTR [rax - 8], r10");                       // does this cell carry a typed-property guard?
     emitter.instruction("je __rt_property_reference_store_guard_done_x");       // ordinary local references keep their fast path
     emitter.instruction("mov QWORD PTR [rbp - 24], rax");                       // keep the validated property cell
@@ -366,7 +272,7 @@ fn emit_property_store_guard_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov QWORD PTR [rbp - 48], rdx");                       // keep the source high payload word for string lengths
     // -- dispatch on the property's declared type --
     emitter.instruction("mov r9, QWORD PTR [rbp - 24]");                        // reload the property cell
-    emitter.instruction(&format!("mov r10, QWORD PTR [r9 + {PROPERTY_REFERENCE_TYPE_CODE}]")); // load the declared-type acceptance code
+    emitter.instruction(&format!("mov r10, QWORD PTR [r9 + {TYPE_CODE_OFFSET}]")); // load the declared-type acceptance code
     emitter.instruction(&format!("cmp r10, {PROPERTY_REF_TYPE_INT}"));          // is the property declared int?
     emitter.instruction("je __rt_property_reference_guard_int_x");              // apply weak int assignment rules
     emitter.instruction(&format!("cmp r10, {PROPERTY_REF_TYPE_STRING}"));       // is the property declared string?
@@ -479,8 +385,8 @@ fn emit_property_store_guard_x86_64(emitter: &mut Emitter) {
     emit_property_reference_name_row_x86_64(emitter);
     emitter.label("__rt_property_reference_guard_throw_x");
     emitter.instruction("mov r9, QWORD PTR [rbp - 24]");                        // reload the property cell
-    emitter.instruction(&format!("mov rcx, QWORD PTR [r9 + {PROPERTY_REFERENCE_SUFFIX_PTR}]")); // load the static diagnostic suffix pointer
-    emitter.instruction(&format!("mov r8, QWORD PTR [r9 + {PROPERTY_REFERENCE_SUFFIX_LEN}]")); // load the static diagnostic suffix length
+    emitter.instruction(&format!("mov rcx, QWORD PTR [r9 + {SUFFIX_PTR_OFFSET}]")); // load the static diagnostic suffix pointer
+    emitter.instruction(&format!("mov r8, QWORD PTR [r9 + {SUFFIX_LEN_OFFSET}]")); // load the static diagnostic suffix length
     emitter.instruction("lea rdx, [rbp - 80]");                                 // point at the {name, length} row
     abi::emit_symbol_address(emitter, "rdi", "_unser_property_assign_prefix"); // load php's "Cannot assign " prefix
     emitter.instruction(&format!("mov rsi, {}", PROPERTY_REFERENCE_ERROR_PREFIX.len())); // pass its byte length
@@ -924,7 +830,7 @@ fn emit_property_numeric_x86_64(emitter: &mut Emitter) {
 
 /// Emits every typed-property reference allocator, guard and numeric predicate.
 pub(super) fn emit(emitter: &mut Emitter) {
-    emit_property_new(emitter);
+    property::emit_new(emitter);
     emit_property_store_guard(emitter);
     emit_property_numeric(emitter);
 }
