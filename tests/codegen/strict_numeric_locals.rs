@@ -482,3 +482,41 @@ fn test_strict_nullable_numeric_locals_known_kinds_and_explicit_null() {
     let source = "<?php function nullableMember(?int $value): void { $value = null; echo $value === null ? 'N' : 'X'; $value = 9007199254740993; echo $value; } nullableMember($argc);";
     assert_eq!(StrictFixture::new(source).run(&["--strict-locals"]), "N9007199254740993");
 }
+
+/// Ordinary source diagnostics survive constant guards consumed during loader discovery.
+#[test]
+fn test_strict_locals_cli_rejects_discarded_top_level_sources() {
+    for tail in [
+        "if(false) {$value='bad';}",
+        "if(true) {} else {$value='bad';}",
+        "if(true) {spl_autoload_register(function($name) {require $name;});} else {$value='bad';}",
+        "if(false) {spl_autoload_register(function($name) {require $name;}); $value='bad';}",
+    ] {
+        let fixture = StrictFixture::new(&format!("<?php declare(strict_types=0); $value=1; {tail}"));
+        for optimize in ["--ir-opt=off", "--ir-opt=on"] {
+            fixture.assert_error(&["--strict-locals", optimize], "--strict-locals");
+        }
+    }
+}
+
+/// Selected loader setup still discovers classes without executing inactive ordinary source.
+#[test]
+fn test_strict_locals_cli_keeps_guarded_autoload_execution() {
+    let fixture = StrictFixture::new(r#"<?php
+if(false) {
+    spl_autoload_register(function($name) { require __DIR__ . '/missing/' . $name . '.php'; });
+    echo 'dead';
+} elseif(true) {
+    spl_autoload_register(function($name) { require __DIR__ . '/lib/' . $name . '.php'; });
+    echo 'live|';
+} else { echo 'dead'; }
+$value = new SourceGuarded();
+echo $value->tag();
+"#);
+    fixture.file("lib/SourceGuarded.php", "<?php class SourceGuarded {public function tag(): string {return 'loaded';}}");
+    for optimize in ["--ir-opt=off", "--ir-opt=on"] {
+        let output = fixture.capture(&["--strict-locals", optimize, "--heap-debug"]);
+        assert_eq!(String::from_utf8_lossy(&output.stdout), "live|loaded");
+        assert!(String::from_utf8_lossy(&output.stderr).contains("HEAP DEBUG: leak summary: clean"));
+    }
+}

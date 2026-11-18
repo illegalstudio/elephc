@@ -9,6 +9,8 @@
 //! - Matching unregister calls remove earlier rules, and consumed loader sources are stripped from the program.
 //! - `spl_autoload_*` builtin names are matched case-insensitively before name resolution runs.
 
+mod source_branches;
+
 use std::collections::{HashMap, HashSet};
 
 use crate::errors::CompileWarning;
@@ -50,13 +52,32 @@ impl PartialEq for AutoloadRule {
 pub fn collect_register_calls(
     program: Program,
 ) -> (Program, Vec<AutoloadRule>, Vec<CompileWarning>) {
-    // -- Pass 0: flatten top-level `if` statements whose condition folds
-    //    to a literal bool. PHP autoloader code routinely guards
-    //    spl_autoload_register with `if (PHP_SAPI === 'cli')` etc.; when
-    //    the condition decides at compile time, we want the chosen branch
-    //    to participate in collection.
-    let program = flatten_foldable_ifs(program);
+    let (cleaned, rules, warnings, _) = collect_flat_register_calls(flatten_foldable_ifs(program));
+    (cleaned, rules, warnings)
+}
 
+/// Extracts executable loader rules without erasing original strict-local source branches.
+pub(super) fn collect_register_calls_with_semantics(
+    program: Program,
+    profile: elephc_semantics::SemanticProfile,
+) -> (Program, Vec<AutoloadRule>, Vec<CompileWarning>) {
+    if !profile.contains(elephc_semantics::StrictFeature::Locals) {
+        return collect_register_calls(program);
+    }
+    let (_, rules, warnings, mut consumed) =
+        collect_flat_register_calls(flatten_foldable_ifs(program.clone()));
+    let (alternatives, inactive) = source_branches::alternatives(&program);
+    if !inactive.is_empty() {
+        let (_, _, _, inactive_loaders) = collect_flat_register_calls(alternatives);
+        consumed.extend(inactive_loaders.intersection(&inactive).copied());
+    }
+    (source_branches::restore(program, &consumed), rules, warnings)
+}
+
+/// Collects a linear view and reports consumed physical source identities for restoration.
+fn collect_flat_register_calls(
+    program: Program,
+) -> (Program, Vec<AutoloadRule>, Vec<CompileWarning>, HashSet<crate::span::Span>) {
     let local_functions = collect_declared_function_keys(&program);
 
     // -- Pass 1: index top-level functions whose bodies look like autoload rules.
@@ -131,7 +152,8 @@ pub fn collect_register_calls(
         }
     }
 
-    // -- Pass 4: rebuild cleaned program.
+    // -- Pass 4: rebuild cleaned program and retain consumed physical identities.
+    let source_identities = consumed.iter().map(|index| program[*index].span).collect();
     let cleaned: Program = program
         .into_iter()
         .enumerate()
@@ -144,7 +166,7 @@ pub fn collect_register_calls(
         })
         .collect();
 
-    (cleaned, chain, warnings)
+    (cleaned, chain, warnings, source_identities)
 }
 
 #[derive(Clone)]
@@ -533,9 +555,11 @@ fn flatten_foldable_ifs(program: Program) -> Program {
                 ref then_body,
                 ref elseif_clauses,
                 ref else_body,
-            } => match select_taken_branch(condition, then_body, elseif_clauses, else_body) {
-                BranchOutcome::Taken(body) => {
-                    out.extend(flatten_foldable_ifs(body));
+            } => match select_taken_branch(condition, elseif_clauses, else_body.is_some()) {
+                BranchOutcome::Taken(index) => {
+                    let body = std::iter::once(then_body).chain(elseif_clauses.iter().map(|(_, body)| body))
+                        .chain(else_body.iter()).nth(index).expect("selected branch exists");
+                    out.extend(flatten_foldable_ifs(body.clone()));
                 }
                 BranchOutcome::None => {
                     // Condition folded to false and no else branch: drop entirely.
@@ -550,10 +574,11 @@ fn flatten_foldable_ifs(program: Program) -> Program {
     out
 }
 
+#[derive(Clone, Copy)]
 enum BranchOutcome {
     /// The condition evaluated to a known boolean at compile time and the
     /// corresponding branch's statements should replace the `if` statement.
-    Taken(Vec<Stmt>),
+    Taken(usize),
     /// The condition evaluated to `false` and no `else` branch exists.
     None,
     /// The condition could not be evaluated at compile time; the `if`
@@ -565,26 +590,23 @@ enum BranchOutcome {
 /// returning which branch should be taken, if determinable.
 fn select_taken_branch(
     condition: &Expr,
-    then_body: &[Stmt],
     elseif_clauses: &[(Expr, Vec<Stmt>)],
-    else_body: &Option<Vec<Stmt>>,
+    has_else: bool,
 ) -> BranchOutcome {
     match fold_compile_time_bool(condition) {
-        Some(true) => return BranchOutcome::Taken(then_body.to_vec()),
+        Some(true) => return BranchOutcome::Taken(0),
         Some(false) => {}
         None => return BranchOutcome::Unfoldable,
     }
-    for (clause_cond, clause_body) in elseif_clauses {
+    for (index, (clause_cond, _)) in elseif_clauses.iter().enumerate() {
         match fold_compile_time_bool(clause_cond) {
-            Some(true) => return BranchOutcome::Taken(clause_body.to_vec()),
+            Some(true) => return BranchOutcome::Taken(index + 1),
             Some(false) => continue,
             None => return BranchOutcome::Unfoldable,
         }
     }
-    match else_body {
-        Some(body) => BranchOutcome::Taken(body.clone()),
-        None => BranchOutcome::None,
-    }
+    if has_else { BranchOutcome::Taken(elseif_clauses.len() + 1) }
+    else { BranchOutcome::None }
 }
 
 /// Best-effort compile-time boolean fold. Returns `None` for any
@@ -642,3 +664,7 @@ fn fold_compile_time_value(expr: &Expr) -> Option<FoldedValue> {
         _ => None,
     }
 }
+
+#[cfg(test)]
+#[path = "rule/source_branch_tests.rs"]
+mod source_branch_tests;

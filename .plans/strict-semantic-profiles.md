@@ -1860,3 +1860,31 @@ function-local source checks are covered. Correct that source preservation next,
 without weakening or duplicating the semantic checker. Eval-containing bodies,
 pre-bound/exposed storage and stronger Locals joins still require their own audit.
 Nullability, Mixed, Initialization, ArrayTypes and Indexing remain unadmitted.
+
+### Verified181: original binding source survives autoload discovery
+
+Strict-local compilation now separates the executable autoload collection view
+from the original source AST. A shared branch selector drives both views. The
+collector reports consumed physical statement identities, and a focused source
+helper removes only loader setup while preserving ordinary branch statements,
+profiles, spans and control flow for the existing checker. Inactive setup does not
+register rules, and its consumed sources are restricted to inactive spans so an
+outer live callback is retained. Nested runtime conditions inside an unreachable
+guard are handled without executing or registering their callbacks. The permissive
+compatibility entry point retains its previous branch selection behavior.
+
+The pipeline and test-suite registry pass the immutable semantic profile into
+collection. Three focused library gates verify six invalid source shapes on all
+five targets, selected and inactive loaders, nested guards, closure variables,
+namespace shadowing and live outer callback sources. Two real CLI regressions
+cover original-source refusals and class discovery/execution with optimizer on
+and off. Both existing constant-guard loader execution controls still pass. The
+default serial compiler build has no new warnings, and diff hygiene passes.
+A further twelve public PHP/LFC cases reproduce eight expected source refusals
+and four successful selected-loader executions with clean heaps. All ten gates
+are accepted. Factf2634d3d records the earlier unconditional flattening cause.
+
+The root is fixed without a second checker pass or disabling ordinary optimization.
+This step does not admit another registered family; Nullability, Mixed,
+Initialization, ArrayTypes and Indexing remain pending, along with stronger
+Locals joins and legitimate reference-binding creation after unset.

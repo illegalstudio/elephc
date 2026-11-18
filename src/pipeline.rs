@@ -244,9 +244,11 @@ fn compile_config(config: CliConfig, entry: EntryKind<'_>) {
     } else if entry.is_test_suite() {
         // The compiler stands in for PHPUnit: an installed `phpunit/phpunit` (and what only
         // it requires) must not be autoloaded into the suite. See `autoload::dev_packages`.
-        autoload::Registry::build_excluding(parent, parsed, &autoload::phpunit_closure(parent))
+        autoload::Registry::build_excluding_with_semantics(
+            parent, parsed, &autoload::phpunit_closure(parent), semantic_profile)
     } else {
-        autoload::Registry::build(parent, parsed)
+        autoload::Registry::build_excluding_with_semantics(
+            parent, parsed, &HashSet::new(), semantic_profile)
     };
     codegen::set_autoload_rule_count(autoload_registry.rule_count());
     for warning in autoload_registry.warnings() {

@@ -951,7 +951,9 @@ Beyond those shared exclusions the shapes are gated differently:
   already absorbs every assignment, since the advice to compile with
   `--strict-locals` would be false there.
 
-`--strict-locals` rejects a known incompatible write to a live binding:
+`--strict-locals` checks ordinary statements in constant top-level branches too,
+including branches used to select an autoloader. An unreachable branch cannot
+hide a known incompatible write to a live binding:
 
 ```text
 --strict-locals: cannot reassign $a from int to string
