@@ -576,6 +576,70 @@ echo id("seven");
     assert!(error.contains("expects int"), "{error}");
 }
 
+/// The method path keeps the native hint when a refused `@param` cannot bind the return
+/// template, exactly like the function path.
+#[test]
+fn test_docblock_method_return_template_without_a_binding_keeps_the_hint() {
+    let source = r#"<?php
+class Holder {
+    /**
+     * @template T
+     * @param T $v
+     * @return T
+     */
+    public function id(int $v) { return $v; }
+}
+echo (new Holder)->id(1), "\n";
+"#;
+    assert_eq!(compile_cli_file_and_run_with_flags(source, &[]), "1\n");
+    let rejected = source.replace("->id(1)", "->id(\"seven\")");
+    let error = compile_cli_file_with_flags_expect_failure(&rejected, &[]);
+    assert!(error.contains("expects int"), "{error}");
+}
+
+/// A return-only PHPDoc template stays usable through an explicit type argument or a default.
+#[test]
+fn test_docblock_return_only_template_binds_explicitly_or_by_default() {
+    let source = r#"<?php
+/**
+ * @template T
+ * @return T
+ */
+function make() { return 7; }
+class Maker {
+    /**
+     * @template T
+     * @return T
+     */
+    public function make() { return 8; }
+}
+/**
+ * @template T = int
+ * @return T
+ */
+function defaulted() { return 9; }
+echo make<int>(), "|", (new Maker)->make<int>(), "|", defaulted(), "\n";
+"#;
+    assert_eq!(compile_cli_file_and_run_with_flags(source, &[]), "7|8|9\n");
+}
+
+/// A written `T` parameter binds a method template even without a matching `@param` tag.
+#[test]
+fn test_docblock_written_parameter_binds_the_return_template() {
+    let source = r#"<?php
+class Holder {
+    /**
+     * @template T
+     * @return array<T>
+     */
+    public function values(T $value): array { return ["wrong"]; }
+}
+(new Holder)->values(7);
+"#;
+    let error = compile_cli_file_with_flags_expect_failure(source, &[]);
+    assert!(error.contains("array<int>") && error.contains("array<string>"), "{error}");
+}
+
 /// A class template documented on a constructor binds from the call.
 ///
 /// `@param T $items` above `__construct(array $items)` mentions the CLASS parameter, so the
