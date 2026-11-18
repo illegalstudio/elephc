@@ -91,15 +91,12 @@ echo $doc->saveXML();
     assert!(module.functions.iter().any(|function| {
         function.name == "__elephc_dom_escape_attr_non_ascii"
     }), "{target}: Unicode attribute references use the ordinary target-aware PHP lowering path");
+    // The Termwind scanner helpers (implied-body filters, head/frame exclusions) were replaced
+    // by the libxml2 2.9.13 parser model; its entry points take their place.
     assert!(module.functions.iter().any(|function| {
-        function.name == "__elephc_dom_filter_html_children"
-    }), "{target}: implied-body boundaries use the shared target-aware lowering path");
-    assert!(module.functions.iter().any(|function| {
-        function.name == "__elephc_dom_is_head_element"
-    }), "{target}: late-body repair uses ordinary target-aware PHP lowering");
-    assert!(module.functions.iter().any(|function| {
-        function.name == "__elephc_dom_is_frame_element"
-    }), "{target}: frame exclusions use ordinary target-aware PHP lowering");
+        function.name == "__elephc_dom_parse_html"
+    }), "{target}: loadHTML runs the HTML4 parser through the ordinary target-aware PHP lowering path");
+    assert!(assembly.contains(&crate::names::method_symbol("__ElephcHtmlParser", "parse")), "{target}: HTML4 parser entry");
     let generic = super::lower_source_at_for_target(r#"<?php
 namespace GenericDefaults;
 class Entity {}

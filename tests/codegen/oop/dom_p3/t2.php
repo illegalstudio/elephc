@@ -1,0 +1,31 @@
+<?php
+function t($f) { try { $v = $f(); echo var_export($v, true), "\n"; } catch (Throwable $e) { echo get_class($e), ": ", $e->getMessage(), " (", $e->getCode(), ")\n"; } }
+$n = new DOMText("abc");
+echo $n->nodeName, "|", $n->nodeValue, "|", $n->data, "|", $n->length, "|", $n->textContent, "|", $n->wholeText, "\n";
+var_dump($n->parentNode);
+echo count($n->childNodes), "\n";
+$n = new DOMText();
+var_dump($n->data);
+$n = new DOMComment("abc");
+echo $n->nodeName, "|", $n->nodeValue, "|", $n->data, "|", $n->length, "\n";
+$n = new DOMCdataSection("abc");
+echo $n->nodeName, "|", $n->nodeValue, "|", $n->data, "|", var_export($n instanceof DOMText, true), "\n";
+$n->data = "q";
+echo $n->nodeValue, "\n";
+$a = new DOMAttr("a", "v");
+echo $a->name, "|", $a->value, "|", $a->nodeName, "|", $a->nodeValue, "|", var_export($a->specified, true), "|", var_export($a->isId(), true), "\n";
+var_dump($a->ownerElement);
+$a->value = "w";
+echo $a->nodeValue, "\n";
+t(fn() => new DOMAttr(""));
+t(fn() => new DOMAttr("1a"));
+t(fn() => new DOMAttr("a b"));
+$a = new DOMAttr("p:a", "x");
+echo $a->name, "|", $a->nodeName, "\n";
+$a = new DOMAttr("e");
+var_dump($a->value);
+$dt = new DOMDocumentType();
+var_dump($dt instanceof DOMNode);
+$m = new DOMNamedNodeMap([]);
+echo $m->length, " ", count($m), "\n";
+var_dump($m->item(0), $m->getNamedItem("x"));

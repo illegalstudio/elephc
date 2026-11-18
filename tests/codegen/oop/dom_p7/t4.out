@@ -1,0 +1,18 @@
+<html><body><p class="a b" data-x="1" href="a%20b">x<br>&amp; &lt; &gt;<b>t</b></p><!--c--><script>if (a<b) {}</script><div><input disabled name="n"><a href="x%20y?z=1&amp;w=2">l</a><img src="a.png" alt=""></div><p href="%C3%A9%20y">&eacute; &amp; &lt;</p></body></html>
+<p class="a b" data-x="1" href="a%20b">x<br>&amp; &lt; &gt;<b>t</b></p>|
+<div><input disabled name="n"><a href="x%20y?z=1&amp;w=2">l</a><img src="a.png" alt=""></div>|
+<html><body>
+<p class="a b" data-x="1" href="a%20b">x<br>&amp; &lt; &gt;<b>t</b></p>
+<!--c--><script>if (a<b) {}</script><div>
+<input disabled name="n"><a href="x%20y?z=1&amp;w=2">l</a><img src="a.png" alt="">
+</div>
+<p href="%C3%A9%20y">&eacute; &amp; &lt;</p>
+</body></html>
+277
+<html><body>
+<p class="a b" data-x="1" href="a%20b">x<br>&amp; &lt; &gt;<b>t</b></p>
+<!--c--><script>if (a<b) {}</script><div>
+<input disabled name="n"><a href="x%20y?z=1&amp;w=2">l</a><img src="a.png" alt="">
+</div>
+<p href="%C3%A9%20y">&eacute; &amp; &lt;</p>
+</body></html>

@@ -85,8 +85,21 @@ const PARSE_INTO_STRUCT_PARAMS: &[&str] = &["parser", "data", "values", "index"]
 
 /// Returns whether `name` is one of the xml surface's PHP-visible builtins.
 pub(in crate::interpreter) fn eval_xml_builtin_name(name: &str) -> bool {
-    (name.starts_with("xml_") || name.starts_with("xmlwriter_") || name.starts_with("simplexml_"))
+    (name.starts_with("xml_")
+        || name.starts_with("xmlwriter_")
+        || name.starts_with("simplexml_")
+        || name.starts_with("libxml_"))
         && eval_php_visible_builtin_exists(name)
+}
+
+/// Whether the host registered the function `name` names: the `libxml_*` functions belong to
+/// the DOM prelude's `Libxml` part (linked on their own), the rest to the xml bridge.
+fn eval_xml_name_linked(context: &ElephcEvalContext, name: &str) -> bool {
+    if name.to_ascii_lowercase().starts_with("libxml_") {
+        context.native_function("libxml_use_internal_errors").is_some()
+    } else {
+        eval_xml_bridge_linked(context)
+    }
 }
 
 /// Returns whether the host program linked the xml bridge, i.e. registered the prelude.
@@ -108,7 +121,7 @@ fn eval_xml_require_bridge(
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<(), EvalStatus> {
-    if eval_xml_bridge_linked(context) || eval_xml_registry_builtin(&name.to_ascii_lowercase()) {
+    if eval_xml_name_linked(context, name) || eval_xml_registry_builtin(&name.to_ascii_lowercase()) {
         return Ok(());
     }
     eval_xml_throw_undefined(name, context, values)
@@ -123,7 +136,7 @@ pub(in crate::interpreter) fn eval_xml_builtin_linked(
     context: &ElephcEvalContext,
     name: &str,
 ) -> bool {
-    if !eval_xml_builtin_name(name) || eval_xml_bridge_linked(context) {
+    if !eval_xml_builtin_name(name) || eval_xml_name_linked(context, name) {
         return true;
     }
     elephc_builtin_contract::lookup(name)

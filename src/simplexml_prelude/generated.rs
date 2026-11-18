@@ -2530,6 +2530,27 @@ fn decl_class_simplexmlelement() -> Stmt {
                 .body(vec![
                     s_assign("handle", e_method_call(e_this(), "__elephc_initialized_handle", vec![])),
                     s_if(
+                        e_binop(e_binop(e_instance_of(e_var("node"), "DOMCdataSection"), BinOp::Or, e_instance_of(e_var("node"), "DOMComment")), BinOp::Or, e_instance_of(e_var("node"), "DOMProcessingInstruction")),
+                        vec![
+                            s_assign("kind", e_ternary(e_instance_of(e_var("node"), "DOMCdataSection"), e_int(4), e_ternary(e_instance_of(e_var("node"), "DOMComment"), e_int(5), e_int(6)))),
+                            s_assign("appended", e_call("elephc_xml_sx_html_append", vec![e_var("handle"), e_var("kind"), e_ternary(e_instance_of(e_var("node"), "DOMProcessingInstruction"), e_cast(CastType::String, e_prop(e_var("node"), "nodeName")), e_str("")), e_cast(CastType::String, e_prop(e_var("node"), "nodeValue"))])),
+                            s_if(
+                                e_binop(e_var("appended"), BinOp::StrictNotEq, e_int(0)),
+                                vec![
+                                    s_prop_assign(e_var("node"), "parentNode", e_var("parent")),
+                                    s_prop_assign(e_var("node"), "ownerDocument", e_ternary(e_instance_of(e_var("parent"), "DOMDocument"), e_var("parent"), e_prop(e_var("parent"), "ownerDocument"))),
+                                    s_expr(e_call("__elephc_simplexml_bind_dom", vec![e_var("node"), e_call("__elephc_simplexml_wrap", vec![e_var("appended"), e_str("SimpleXMLElement")])])),
+                                    s_return(e_var("node")),
+                                ],
+                                vec![],
+                                None,
+                            ),
+                            s_throw(e_new("DOMException", vec![e_str("Hierarchy Request Error"), e_int(3)])),
+                        ],
+                        vec![],
+                        None,
+                    ),
+                    s_if(
                         e_instance_of(e_var("node"), "DOMText"),
                         vec![
                             s_assign("appended", e_call("elephc_xml_sx_html_append", vec![e_var("handle"), e_int(3), e_str(""), e_cast(CastType::String, e_prop(e_var("node"), "nodeValue"))])),
@@ -2552,7 +2573,7 @@ fn decl_class_simplexmlelement() -> Stmt {
                     s_if(
                         e_instance_of(e_var("node"), "DOMElement"),
                         vec![
-                            s_assign("child", e_method_call(e_this(), "addChild", vec![e_prop(e_var("node"), "nodeName")])),
+                            s_assign("child", e_method_call(e_this(), "addChild", vec![e_prop(e_var("node"), "nodeName"), e_null(), e_prop(e_var("node"), "__elephc_dom_ns")])),
                             s_if(
                                 e_not(e_instance_of(e_var("child"), "SimpleXMLElement")),
                                 vec![
@@ -2578,7 +2599,8 @@ fn decl_class_simplexmlelement() -> Stmt {
                                         s_if(
                                             e_call("is_array", vec![e_var("pair")]),
                                             vec![
-                                                s_expr(e_method_call(e_var("child"), "addAttribute", vec![e_cast(CastType::String, e_index(e_var("pair"), e_int(0))), e_cast(CastType::String, e_index(e_var("pair"), e_int(1)))])),
+                                                s_assign("pairNs", e_ternary(e_call("is_string", vec![e_index(e_var("pair"), e_int(2))]), e_index(e_var("pair"), e_int(2)), e_str(""))),
+                                                s_expr(e_method_call(e_var("child"), "addAttribute", vec![e_cast(CastType::String, e_index(e_var("pair"), e_int(0))), e_cast(CastType::String, e_index(e_var("pair"), e_int(1))), e_ternary(e_binop(e_var("pairNs"), BinOp::StrictEq, e_str("")), e_null(), e_var("pairNs"))])),
                                             ],
                                             vec![],
                                             None,
@@ -2673,7 +2695,7 @@ fn decl_class_simplexmlelement() -> Stmt {
                             None,
                         ),
                     ]),
-                    s_return(e_new("DOMNodeList", vec![e_null(), e_var("children")])),
+                    s_return(e_new("DOMNodeList", vec![e_var("children")])),
                 ]),
         )
         .method(
@@ -2711,9 +2733,8 @@ fn decl_class_simplexmlelement() -> Stmt {
                     s_if(
                         e_binop(e_var("kind"), BinOp::StrictEq, e_int(4)),
                         vec![
-                            s_assign("node", e_new("DOMText", vec![])),
-                            s_prop_assign(e_var("node"), "__elephc_raw_text", e_bool(true)),
-                            s_return(e_method_call(e_this(), "__elephc_dom_bind_node", vec![e_var("node"), e_var("document"), e_var("parent"), e_str("#cdata-section")])),
+                            s_assign("cdata", e_new("DOMCdataSection", vec![e_str("")])),
+                            s_return(e_method_call(e_this(), "__elephc_dom_bind_node", vec![e_var("cdata"), e_var("document"), e_var("parent"), e_str("#cdata-section")])),
                         ],
                         vec![],
                         None,
@@ -2747,7 +2768,7 @@ fn decl_class_simplexmlelement() -> Stmt {
                     s_if(
                         e_binop(e_var("kind"), BinOp::StrictEq, e_int(1)),
                         vec![
-                            s_return(e_method_call(e_this(), "__elephc_dom_bind_node", vec![e_new("DOMElement", vec![e_method_call(e_this(), "getName", vec![])]), e_var("document"), e_var("parent"), e_call("elephc_xml_sx_string", vec![e_var("handle"), e_int(6)])])),
+                            s_return(e_method_call(e_this(), "__elephc_dom_bind_node", vec![e_new("DOMElement", vec![]), e_var("document"), e_var("parent"), e_call("elephc_xml_sx_string", vec![e_var("handle"), e_int(6)])])),
                         ],
                         vec![],
                         None,
@@ -3057,7 +3078,7 @@ fn decl_fn_elephc_simplexml_load_dom() -> Stmt {
                 vec![
                     s_assign("object", e_call("__elephc_simplexml_wrap", vec![e_var("handle"), e_str("SimpleXMLElement")])),
                     s_prop_assign(e_var("document"), "__elephc_simplexml", e_var("object")),
-                    s_prop_assign(e_var("document"), "childNodes", e_new("DOMNodeList", vec![e_var("document")])),
+                    s_prop_assign(e_var("document"), "childNodes", e_null()),
                 ],
                 vec![],
                 None,

@@ -20,7 +20,7 @@ fn xml_reachability(source: &str, force: bool) -> graph::Reachability {
     let mut inventory = PreludeInventory::new();
     let ast = crate::core_prelude::inject_if_used(ast, false, false, &mut inventory);
     let ast = crate::xml_prelude::inject_if_used(ast, true, &mut inventory);
-    let ast = crate::dom_html_prelude::inject_if_used(ast, crate::php_version::PhpVersion::default(), false, &mut inventory);
+    let ast = crate::dom_modern_prelude::inject_if_used(ast, crate::php_version::PhpVersion::default(), false, &mut inventory);
     let ast = crate::name_resolver::resolve(ast).expect("fixture must resolve");
     let ast = crate::func_args::desugar(ast).expect("fixture must desugar");
     let ast = crate::optimize::fold_constants(ast);

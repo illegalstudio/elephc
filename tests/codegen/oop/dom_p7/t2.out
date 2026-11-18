@@ -1,0 +1,68 @@
+<?xml version="1.0"?>
+<root xmlns:p="urn:p" a="1"><p:x b="&amp;&lt;">t &amp; &#xE9;<![CDATA[c]]></p:x><!--c--><?pi d?><e/><f/></root>
+<p:x b="&amp;&lt;">t &amp; é<![CDATA[c]]></p:x>
+<?xml version="1.0" encoding="UTF-8"?>
+<root xmlns:p="urn:p" a="1"><p:x b="&amp;&lt;">t &amp; é<![CDATA[c]]></p:x><!--c--><?pi d?><e/><f/></root>
+
+<?xml version="1.0"?>
+<root xmlns:p="urn:p" a="1">
+  <p:x b="&amp;&lt;">t &amp; &#xE9;<![CDATA[c]]></p:x>
+  <!--c-->
+  <?pi d?>
+  <e/>
+  <f/>
+</root>
+<root xmlns:p="urn:p" a="1">
+  <p:x b="&amp;&lt;">t &amp; é<![CDATA[c]]></p:x>
+  <!--c-->
+  <?pi d?>
+  <e/>
+  <f/>
+</root>
+<?xml version="1.0"?>
+<root xmlns:p="urn:p" a="1">
+  <p:x b="&amp;&lt;">t &amp; &#xE9;<![CDATA[c]]></p:x>
+  <!--c-->
+  <?pi d?>
+  <e></e>
+  <f></f>
+</root>
+<root xmlns:p="urn:p" a="1">
+  <p:x b="&amp;&lt;">t &amp; &#xE9;<![CDATA[c]]></p:x>
+  <!--c-->
+  <?pi d?>
+  <e/>
+  <f/>
+</root>
+<root xmlns:p="urn:p" a="1">
+  <p:x b="&amp;&lt;">t &amp; é<![CDATA[c]]></p:x>
+  <!--c-->
+  <?pi d?>
+  <e></e>
+  <f></f>
+</root>
+<f>a&lt;b&amp;"</f>
+<f></f>
+<root xmlns:p="urn:p" a="1"><p:x b="&amp;&lt;">t &amp; éc</p:x><?pi d?><e></e><f></f></root>
+<root xmlns:p="urn:p" a="1"><p:x b="&amp;&lt;">t &amp; éc</p:x><?pi d?><e></e><f></f></root>
+<root a="1"><p:x xmlns:p="urn:p" b="&amp;&lt;">t &amp; éc</p:x><?pi d?><e></e><f></f></root>
+<root xmlns:p="urn:p" a="1"><p:x b="&amp;&lt;">t &amp; éc</p:x><!--c--><?pi d?><e></e><f></f></root>
+<root xmlns:p="urn:p" a="1"><p:x b="&amp;&lt;">t &amp; éc</p:x><?pi d?><e></e><f></f></root>
+<p:x xmlns:p="urn:p" b="&amp;&lt;">t &amp; éc</p:x>
+153
+<?xml version="1.0"?>
+<root xmlns:p="urn:p" a="1">
+  <p:x b="&amp;&lt;">t &amp; &#xE9;<![CDATA[c]]></p:x>
+  <!--c-->
+  <?pi d?>
+  <e/>
+  <f></f>
+</root>
+93
+<root xmlns:p="urn:p" a="1"><p:x b="&amp;&lt;">t &amp; éc</p:x><?pi d?><e></e><f></f></root>
+<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<s><b>é</b></s>
+|
+<s><b>é</b></s>|
+3c3f786d6c2076657273696f6e3d22312e302220656e636f64696e673d2249534f2d383835392d31223f3e0a3c6c3e636166e93c2f6c3e0a
+3c6c3e636166c3a93c2f6c3e

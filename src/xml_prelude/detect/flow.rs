@@ -217,7 +217,7 @@ impl Detector {
     /// Rules out literal data pairs while retaining unknown runtime method names.
     pub(super) fn method_may_load_xml(method: &Expr) -> bool {
         match &method.kind {
-            ExprKind::StringLiteral(name) => name.eq_ignore_ascii_case("loadXML"),
+            ExprKind::StringLiteral(name) => super::is_xml_bridge_method(name),
             ExprKind::IntLiteral(_) | ExprKind::FloatLiteral(_) | ExprKind::BoolLiteral(_)
             | ExprKind::Null | ExprKind::ArrayLiteral(_) | ExprKind::ArrayLiteralAssoc(_)
             | ExprKind::ArrayLiteralMixed(_) => false,

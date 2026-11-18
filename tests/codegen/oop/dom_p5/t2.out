@@ -1,0 +1,41 @@
+a|a|a|a|''|NULL|1
+b|p:b|b|b|'p'|'urn:p'|2
+lang|xml:lang|lang|lang|'xml'|'http://www.w3.org/XML/1998/namespace'|en
+3truer
+[true,true,false,false]
+["2","2","","","urn:p"]
+[true,false,false]
+["xmlns","xmlns:p","a","p:b","xml:lang"]
+[true,true,false,true,"2"]
+"z"
+"z"
+false
+null
+"1"
+"a"
+null
+<?xml version="1.0"?>
+<r xmlns="urn:d" xmlns:p="urn:p" xmlns:f="urn:fresh" a="changed" p:b="z" xml:lang="en" new="n" p:c="pc" f:g="fg" plain="pl"><c id="k1"/><c xml:id="k2"/></r>
+
+true
+false
+true
+<?xml version="1.0"?>
+<r xmlns="urn:d" xmlns:p="urn:p" xmlns:f="urn:fresh" a="changed" p:b="z" xml:lang="en" plain="pl"><c id="k1"/><c xml:id="k2"/></r>
+
+true
+false
+DOMException: Invalid Character Error [5]
+2
+2
+3
+2
+0
+0
+"c"
+"c"
+null
+["c","k2",2,true]
+<r xmlns="urn:d" xmlns:p="urn:p" xmlns:f="urn:fresh" a="changed" p:b="z" xml:lang="en" plain="pl"><c id="k1"/><c xml:id="k2"/><added k="v"/><!--note--><![CDATA[raw <x>]]><?tgt dat?><n:item xmlns:n="urn:ns" z="1"/></r>
+["v",8,4,7,"urn:ns","n"]
+<r xmlns="urn:d" xmlns:p="urn:p" xmlns:f="urn:fresh" a="changed" p:b="z" xml:lang="en" plain="pl"><first/><c id="k1"/>AFTER<c xml:id="k2"/><added k="v"/><!--note--><![CDATA[raw <x>]]><?tgt dat?><n:item xmlns:n="urn:ns" z="1"/></r>

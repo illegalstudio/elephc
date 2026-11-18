@@ -16,7 +16,7 @@ use std::collections::HashSet;
 pub(super) struct NodePin {
     node: Node,
     doc: Weak<Document>,
-    retired: RefCell<Option<Rc<RetiredSubtree>>>,
+    pub(super) retired: RefCell<Option<Rc<RetiredSubtree>>>,
 }
 impl Drop for NodePin {
     /// Removes dead pointer bookkeeping before releasing its possible native tree owner.
@@ -31,10 +31,13 @@ pub(super) struct RetiredSubtree {
     doc: Rc<Document>,
     _clone_owner: Option<Rc<CloneOwner>>,
     _parents: Vec<Rc<RetiredSubtree>>,
+    /// Set when the tree was linked back into its document: the document owns it again.
+    pub(super) adopted: Cell<bool>,
 }
 impl Drop for RetiredSubtree {
     /// Frees children before their document, clone, and ancestor namespace owners can die.
     fn drop(&mut self) {
+        if self.adopted.get() { return; }
         self.doc.detached.borrow_mut().remove(&self.node);
         unsafe { ffi::retired_free(self.node); }
     }
@@ -69,7 +72,7 @@ impl Document {
         if let Some(owner) = &clone_owner {
             if owner.node == node { owner.transferred.set(true); }
         }
-        let owner = Rc::new(RetiredSubtree { node, doc: self.clone(), _clone_owner: clone_owner, _parents: parents });
+        let owner = Rc::new(RetiredSubtree { node, doc: self.clone(), _clone_owner: clone_owner, _parents: parents, adopted: Cell::new(false) });
         self.detached.borrow_mut().insert(node, Rc::downgrade(&owner));
         owner
     }

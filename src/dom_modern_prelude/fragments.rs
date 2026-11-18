@@ -3,7 +3,7 @@
 //! from, kept under `cfg(test)` as the node-by-node parse-parity oracle.
 //!
 //! Called from:
-//! - `crate::dom_html_prelude::oracle`.
+//! - `crate::dom_modern_prelude::oracle`.
 //!
 //! Key details:
 //! - Class names are MANGLED (`Dom__Node` for `Dom\\Node`) because the transcriber does not model

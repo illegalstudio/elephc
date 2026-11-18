@@ -1,0 +1,48 @@
+"a:b"
+DOMException: Invalid Character Error [5]
+"v&<"
+"p"
+DOMException: Namespace Error [14]
+DOMException: Namespace Error [14]
+DOMException: Namespace Error [14]
+"urn:x"
+DOMException: Invalid Character Error [5]
+"a"
+"DOMCdataSection"
+"x]]>y"
+"a--b"
+"tgt"
+DOMException: Invalid Character Error [5]
+"DOMEntityReference"
+["nbsp",5]
+DOMException: Invalid Character Error [5]
+true
+["#document-fragment",11]
+[null,null,null]
+DOMException: Not Supported Error [9]
+[true,null,1,"k",true]
+[0,true]
+true
+null
+"r"
+<root><f1/><f2/></root>
+[true,true,false]
+"-\/\/W3C\/\/DTD"
+ValueError: DOMImplementation::createDocumentType(): Argument #1 ($qualifiedName) must not be empty [0]
+null
+["p:root",true,true]
+null
+<a/>
+DOMException: Namespace Error [14]
+[null,null,"1.0","1.0",false,false,null]
+[false,true,false,false,false,false,true]
+"DOMImplementation"
+["ISO-8859-1","ISO-8859-1","1.1","1.1",true,true]
+"1.0"
+["UTF-8","UTF-8","1.1","1.1"]
+["DOMDocument","ISO-8859-1","1.0","r",true]
+[null,"1.0"]
+false
+[null,null]
+<root><f1/><f2/>BB<e>AB<k/></e>AA</root>
+DOMException: Syntax Error [12]

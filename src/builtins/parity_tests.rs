@@ -74,6 +74,7 @@ fn injected_prelude_programs() -> Vec<(&'static str, crate::parser::ast::Program
         ("curl_prelude", parsed_curl_prelude()),
         ("xml_prelude", crate::xml_prelude::xml_declarations()),
         ("simplexml_prelude", crate::simplexml_prelude::declarations()),
+        ("dom_html_prelude", crate::dom_html_prelude::declarations()),
         ("tidy_prelude", crate::tidy_prelude::tidy_declarations()),
         ("fileinfo_prelude", crate::fileinfo_prelude::fileinfo_declarations()),
         ("tokenizer_prelude", crate::tokenizer_prelude::tokenizer_declarations()),

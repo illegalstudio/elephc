@@ -8,6 +8,9 @@
 //! - Declarations are built directly as AST nodes (no PHP source text is parsed here) and
 //!   compile through the ordinary EIR pipeline.
 
+mod dom_element;
+mod dom_tree;
+mod dom_write;
 mod generated;
 use crate::parser::ast::Program;
 use std::sync::OnceLock;
@@ -15,5 +18,13 @@ use std::sync::OnceLock;
 /// Returns the cached SimpleXML externs, classes, and PHP functions as AST declarations.
 pub(crate) fn declarations() -> Program {
     static DECLARATIONS: OnceLock<Program> = OnceLock::new();
-    DECLARATIONS.get_or_init(generated::declarations).clone()
+    DECLARATIONS
+        .get_or_init(|| {
+            let mut program = generated::declarations();
+            dom_tree::extend(&mut program);
+            dom_element::extend(&mut program);
+            dom_write::extend(&mut program);
+            program
+        })
+        .clone()
 }

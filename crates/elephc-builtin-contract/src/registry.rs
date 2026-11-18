@@ -190,7 +190,7 @@ mod tests {
         // declarations, the internal last-error readers `__elephc_last_error_int` / `_str`, ...) net of the
         // contracts main now owns (`setlocale`), estimated from the per-file catalog deltas of the merge
         // and to be re-measured when the tree compiles.
-        assert_eq!(contracts().len(), 1389 + curl_surface);
+        assert_eq!(contracts().len(), 1395 + curl_surface);
         assert_eq!(lookup("STRLEN").map(|contract| contract.name), Some("strlen"));
         assert_eq!(lookup("\\parse_url").map(|contract| contract.name), Some("parse_url"));
     }

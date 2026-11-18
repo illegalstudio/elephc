@@ -266,7 +266,7 @@ if ($argc === 1) {
     $document = new DOMDocument(); echo $document->childNodes->length;
 } elseif ($argc === 2) {
     for ($i = 0; $i < 3; $i++) {
-        $tree = __elephc_dom_parse_html('<html><body><p>x</p></body></html>', 0);
+        $tree = __elephc_dom_parse_html('<html><body><p>x</p></body></html>', 4);
         echo count($tree['children']); unset($tree);
     }
 } elseif ($argc === 3) {
@@ -625,7 +625,7 @@ echo $second->saveXML(), "|", $div->textContent;
     assert!(out.success, "stdout={} stderr={}", out.stdout, out.stderr);
     assert_eq!(
         out.stdout,
-        "<?xml version=\"1.0\"?>\n|<style>foo</style>|style:0:foo|<?xml version=\"1.0\"?>\n<div>text</div>|text"
+        "<?xml version=\"1.0\"?>\n|<style>foo</style>|style:0:foo|<?xml version=\"1.0\"?>\n<div>text</div>\n|text"
     );
     assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
 }

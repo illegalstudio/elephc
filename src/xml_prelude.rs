@@ -170,6 +170,7 @@ mod oracle_tests {
             .iter()
             .filter(|contract| contract.area == elephc_builtin_contract::Area::Xml)
             .filter(|contract| contract.kind == elephc_builtin_contract::BuiltinKind::PreludeProvided)
+            .filter(|contract| !contract.name.starts_with("libxml_"))
             .map(|contract| contract.name)
             .collect();
         let simplexml_functions = crate::simplexml_prelude::declarations().into_iter()
