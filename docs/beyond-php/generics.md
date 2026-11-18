@@ -341,6 +341,26 @@ function spawn(int $count): array<Actor> {
 }
 ```
 
+An array literal joins the classes of its items the same way. Instances of sibling classes,
+or a base-typed value beside instances of its subclasses, form an array of their nearest
+common class, so the literal fits a declared `array<Base>` local, property, parameter or
+return without a cast, and each element keeps its own class and identity:
+
+```php
+<?php
+abstract class Actor { abstract public function value(): int; }
+final class Player extends Actor { public function value(): int { return 42; } }
+final class Enemy extends Actor { public function value(): int { return 7; } }
+
+array<Actor> $actors = [new Player(), new Player(), new Enemy()];
+foreach ($actors as $actor) {
+    echo get_class($actor), ':', $actor->value(), "\n"; // Player:42, Player:42, Enemy:7
+}
+```
+
+Classes that share no class ancestor, including two classes that only implement the same
+interface, form an `array<mixed>` literal instead.
+
 An argument whose element type disagrees is rejected rather than widening the parameter:
 
 ```php

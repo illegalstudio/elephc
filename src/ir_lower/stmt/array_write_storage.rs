@@ -291,9 +291,7 @@ fn indexed_object_write_keeps_element(
     let PhpType::Array(element) = current_ty.codegen_repr() else { return false; };
     let (PhpType::Object(element), PhpType::Object(value)) =
         (element.codegen_repr(), value_ty.codegen_repr()) else { return false; };
-    !element.is_empty()
-        && (crate::ir_lower::expr::class_extends_class(ctx, &value, &element)
-            || ctx.type_is_or_implements_interface(&value, &element))
+    crate::ir_lower::expr::object_class_is_a(ctx, &value, &element)
 }
 
 /// Returns the widened storage when a stamped hash value type cannot hold `value_ty`.
