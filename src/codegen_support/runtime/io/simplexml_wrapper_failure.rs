@@ -16,7 +16,7 @@
 use crate::codegen_support::sentinels::{
     emit_throwable_creation_line_unknown, x86_64_heap_kind_word,
 };
-use crate::codegen_support::{abi, emit::Emitter, platform::Arch};
+use crate::codegen_support::{abi, emit::Emitter, platform::Arch, throwable_layout};
 
 /// Message of the Error SimpleXML raises when the wrapper context write reaches an
 /// uninitialized object.
@@ -25,9 +25,6 @@ pub(crate) const SIMPLEXML_WRAPPER_INIT_MESSAGE: &str = "SimpleXMLElement is not
 /// Message php-src raises when the wrapper context resource cannot be stored.
 pub(crate) const SIMPLEXML_WRAPPER_CONTEXT_MESSAGE: &str =
     "It's not possible to assign a complex type to properties, resource given";
-
-/// Compact Throwable payload size shared by every runtime-created exception.
-const THROWABLE_PAYLOAD_SIZE: u64 = 56;
 
 /// Emits `__rt_simplexml_wrapper_failure` for the active target.
 pub(crate) fn emit_simplexml_wrapper_failure(emitter: &mut Emitter) {
@@ -57,7 +54,7 @@ fn emit_aarch64(emitter: &mut Emitter) {
     // -- allocate the TypeError with the Error as previous --
     emit_error_aarch64(emitter, "_spl_type_error_class_id",
         "_simplexml_wrapper_context_message", SIMPLEXML_WRAPPER_CONTEXT_MESSAGE.len());
-    emitter.instruction("str x19, [x0, #40]");                                  // transfer the fresh Error reference into previous
+    emitter.instruction(&format!("str x19, [x0, #{}]", throwable_layout::PREVIOUS_OFFSET)); // transfer the fresh Error reference into previous
     abi::emit_store_reg_to_symbol(emitter, "x0", "_exc_value", 0);              // publish the TypeError for the unwinder
 
     emitter.instruction("ldr x19, [sp, #16]");                                  // restore the callee-saved register
@@ -69,8 +66,7 @@ fn emit_aarch64(emitter: &mut Emitter) {
 
 /// Allocates and initializes one compact AArch64 Throwable in `x0`.
 fn emit_error_aarch64(emitter: &mut Emitter, class_id: &str, message: &str, length: usize) {
-    abi::emit_load_int_immediate(emitter, "x0", THROWABLE_PAYLOAD_SIZE as i64); // request one compact Throwable payload
-    abi::emit_call_label(emitter, "__rt_heap_alloc");                          // x0 = fresh payload storage
+    throwable_layout::emit_allocate(emitter, throwable_layout::PAYLOAD_SIZE);   // x0 = fresh, fully cleared Throwable payload
     emitter.instruction("mov x9, #6");                                          // heap kind 6 marks runtime object payloads
     emitter.instruction("str x9, [x0, #-8]");                                   // stamp the heap header before the payload
     abi::emit_call_label(emitter, "__rt_object_handle_acquire");               // bind the new object to its PHP handle
@@ -82,7 +78,6 @@ fn emit_error_aarch64(emitter: &mut Emitter, class_id: &str, message: &str, leng
     emitter.instruction("str x9, [x0, #16]");                                   // store the message length
     emitter.instruction("str xzr, [x0, #24]");                                  // exception code defaults to zero
     emit_throwable_creation_line_unknown(emitter, "x0");                       // no user `new` location for this internal throwable
-    emitter.instruction("str xzr, [x0, #40]");                                  // previous defaults to null
 }
 
 /// Emits the x86_64 chained-exception helper.
@@ -104,7 +99,7 @@ fn emit_x86_64(emitter: &mut Emitter) {
     // -- allocate the TypeError with the Error as previous --
     emit_error_x86_64(emitter, "_spl_type_error_class_id",
         "_simplexml_wrapper_context_message", SIMPLEXML_WRAPPER_CONTEXT_MESSAGE.len());
-    emitter.instruction("mov QWORD PTR [rax + 40], r12");                       // transfer the fresh Error reference into previous
+    emitter.instruction(&format!("mov QWORD PTR [rax + {}], r12", throwable_layout::PREVIOUS_OFFSET)); // transfer the fresh Error reference into previous
     abi::emit_store_reg_to_symbol(emitter, "rax", "_exc_value", 0);            // publish the TypeError for the unwinder
 
     emitter.instruction("mov r12, QWORD PTR [rbp - 8]");                        // restore the callee-saved register
@@ -115,8 +110,7 @@ fn emit_x86_64(emitter: &mut Emitter) {
 
 /// Allocates and initializes one compact x86_64 Throwable in `rax`.
 fn emit_error_x86_64(emitter: &mut Emitter, class_id: &str, message: &str, length: usize) {
-    emitter.instruction(&format!("mov rax, {THROWABLE_PAYLOAD_SIZE}"));         // request one compact Throwable payload
-    abi::emit_call_label(emitter, "__rt_heap_alloc");                          // rax = fresh payload storage
+    throwable_layout::emit_allocate(emitter, throwable_layout::PAYLOAD_SIZE);   // rax = fresh, fully cleared Throwable payload
     emitter.instruction(&format!(
         "mov r10, 0x{:x}",
         x86_64_heap_kind_word(6)
@@ -131,5 +125,4 @@ fn emit_error_x86_64(emitter: &mut Emitter, class_id: &str, message: &str, lengt
     emitter.instruction("mov QWORD PTR [rax + 16], r10");                       // store the message length
     emitter.instruction("mov QWORD PTR [rax + 24], 0");                         // exception code defaults to zero
     emit_throwable_creation_line_unknown(emitter, "rax");                      // no user `new` location for this internal throwable
-    emitter.instruction("mov QWORD PTR [rax + 40], 0");                         // previous defaults to null
 }
