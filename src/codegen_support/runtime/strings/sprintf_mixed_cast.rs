@@ -24,9 +24,7 @@ use crate::codegen_support::runtime::data::{
     SPRINTF_OBJECT_TO_FLOAT_WARNING_SUFFIX, SPRINTF_OBJECT_TO_INT_WARNING_SUFFIX,
     UNSER_OBJECT_STRING_ERROR_PREFIX, UNSER_OBJECT_STRING_ERROR_SUFFIX,
 };
-use crate::codegen_support::sentinels::{
-    emit_throwable_creation_line_unknown, x86_64_heap_kind_word,
-};
+use crate::codegen_support::sentinels::emit_throwable_creation_line_unknown;
 use crate::codegen_support::{abi, emit::Emitter, platform::Arch};
 
 /// Emits the deferred non-scalar coercion helpers used by `__rt_sprintf`.
@@ -770,10 +768,7 @@ fn emit_sprintf_string_error_aarch64(emitter: &mut Emitter) {
     emitter.instruction("bl __rt_str_persist");                                 // give the Error stable message ownership
     emitter.instruction("stp x1, x2, [sp, #16]");                               // preserve the message pair across allocation
     emitter.instruction("mov x0, #56");                                         // canonical Throwable payload size
-    emitter.instruction("bl __rt_heap_alloc");                                  // allocate the Error object payload
-    emitter.instruction("mov x9, #6");                                          // heap kind 6 identifies a throwable object
-    emitter.instruction("str x9, [x0, #-8]");                                   // stamp the runtime object heap header
-    emitter.instruction("bl __rt_object_handle_acquire");                       // assign the Error's PHP object handle
+    elephc_memoir::values::object_storage::emit_allocate_throwable(emitter);
     abi::emit_load_symbol_to_reg(emitter, "x9", "_spl_error_class_id", 0);
     emitter.instruction("str x9, [x0]");                                        // stamp the per-program Error class id
     emitter.instruction("ldp x10, x11, [sp, #16]");                             // recover the persisted message pair
@@ -835,10 +830,7 @@ fn emit_sprintf_string_error_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov QWORD PTR [rbp - 24], rax");                       // preserve persisted message pointer
     emitter.instruction("mov QWORD PTR [rbp - 32], rdx");                       // preserve persisted message length
     emitter.instruction("mov rax, 56");                                         // canonical Throwable payload size
-    emitter.instruction("call __rt_heap_alloc");                                // allocate the Error object payload
-    emitter.instruction(&format!("mov r10, 0x{:x}", x86_64_heap_kind_word(6))); // throwable heap-kind marker
-    emitter.instruction("mov QWORD PTR [rax - 8], r10");                        // stamp the uniform heap header
-    emitter.instruction("call __rt_object_handle_acquire");                     // assign the Error's PHP object handle
+    elephc_memoir::values::object_storage::emit_allocate_throwable(emitter);
     abi::emit_load_symbol_to_reg(emitter, "r10", "_spl_error_class_id", 0);
     emitter.instruction("mov QWORD PTR [rax], r10");                            // stamp the per-program Error class id
     emitter.instruction("mov r10, QWORD PTR [rbp - 24]");                       // recover persisted message pointer

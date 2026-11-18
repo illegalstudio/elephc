@@ -108,10 +108,7 @@ fn emit_parse_url_throw_component_aarch64(emitter: &mut Emitter) {
     emitter.instruction("bl __rt_str_persist");                                 // give the exception object owned message storage
     emitter.instruction("stp x1, x2, [sp, #16]");                               // preserve message pointer and length during object allocation
     emitter.instruction("mov x0, #56");                                         // request the standard Throwable payload size
-    emitter.instruction("bl __rt_heap_alloc");                                  // allocate the ValueError object
-    emitter.instruction("mov x9, #6");                                          // heap kind 6 identifies object payloads
-    emitter.instruction("str x9, [x0, #-8]");                                   // stamp the ValueError allocation as an object
-    emitter.instruction("bl __rt_object_handle_acquire");                       // assign the object its PHP-visible handle
+    elephc_memoir::values::object_storage::emit_allocate_throwable(emitter);
     abi::emit_symbol_address(emitter, "x9", "_spl_value_error_class_id");
     emitter.instruction("ldr x9, [x9]");                                        // load the program-local ValueError class id
     emitter.instruction("str x9, [x0]");                                        // install the ValueError class id
@@ -146,10 +143,7 @@ fn emit_parse_url_throw_component_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov QWORD PTR [rbp - 24], rax");                       // preserve owned message pointer
     emitter.instruction("mov QWORD PTR [rbp - 32], rdx");                       // preserve owned message length
     emitter.instruction("mov rax, 56");                                         // request the standard Throwable payload size
-    emitter.instruction("call __rt_heap_alloc");                                // allocate the ValueError object
-    emitter.instruction(&format!("mov r10, 0x{:x}", crate::codegen_support::sentinels::x86_64_heap_kind_word(6))); // materialize the canonical object heap marker
-    emitter.instruction("mov QWORD PTR [rax - 8], r10");                        // stamp the ValueError allocation as an object
-    emitter.instruction("call __rt_object_handle_acquire");                     // assign the object its PHP-visible handle
+    elephc_memoir::values::object_storage::emit_allocate_throwable(emitter);
     abi::emit_load_symbol_to_reg(emitter, "r10", "_spl_value_error_class_id", 0);
     emitter.instruction("mov QWORD PTR [rax], r10");                            // install the ValueError class id
     emitter.instruction("mov r10, QWORD PTR [rbp - 24]");                       // reload owned diagnostic message pointer

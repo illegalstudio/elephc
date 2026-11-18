@@ -140,10 +140,7 @@ fn emit_throw_dynamic_bcmath_error_aarch64(emitter: &mut Emitter) {
     emitter.instruction("bl __rt_str_persist");                                 // copy the message into refcounted PHP storage
     emitter.instruction("stp x1, x2, [sp, #24]");                               // preserve the owned message across object allocation
     emitter.instruction("mov x0, #56");                                         // request the standard Throwable payload size
-    emitter.instruction("bl __rt_heap_alloc");                                  // allocate the BCMath throwable object
-    emitter.instruction("mov x9, #6");                                          // heap kind 6 identifies object payloads
-    emitter.instruction("str x9, [x0, #-8]");                                   // stamp the throwable allocation as an object
-    emitter.instruction("bl __rt_object_handle_acquire");                       // assign the throwable its PHP-visible object handle
+    elephc_memoir::values::object_storage::emit_allocate_throwable(emitter);
     emitter.instruction("ldr x10, [sp, #0]");                                   // reload the BCMath status for class selection
     emitter.instruction("cmp x10, #3");                                         // status 3 is the DivisionByZeroError family
     emitter.instruction("b.eq __rt_bcmath_throw_div_zero_class");               // select DivisionByZeroError for division-like failures
@@ -185,10 +182,7 @@ fn emit_throw_dynamic_bcmath_error_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov QWORD PTR [rbp - 32], rax");                       // preserve the owned message pointer
     emitter.instruction("mov QWORD PTR [rbp - 40], rdx");                       // preserve the owned message length
     emitter.instruction("mov rax, 56");                                         // request the standard Throwable payload size
-    emitter.instruction("call __rt_heap_alloc");                                // allocate the BCMath throwable object
-    emitter.instruction(&format!("mov r10, 0x{:x}", crate::codegen_support::sentinels::x86_64_heap_kind_word(6))); // materialize the canonical throwable heap marker
-    emitter.instruction("mov QWORD PTR [rax - 8], r10");                        // stamp the allocation as an object payload
-    emitter.instruction("call __rt_object_handle_acquire");                     // assign the throwable its PHP-visible object handle
+    elephc_memoir::values::object_storage::emit_allocate_throwable(emitter);
     emitter.instruction("cmp QWORD PTR [rbp - 8], 3");                          // status 3 is the DivisionByZeroError family
     emitter.instruction("je __rt_bcmath_throw_div_zero_class_x86_64");          // select DivisionByZeroError for division-like failures
     abi::emit_load_symbol_to_reg(emitter, "r10", "_spl_value_error_class_id", 0);

@@ -201,10 +201,7 @@ fn emit_alloc_reflection_attribute_object_aarch64(
 ) {
     let payload_size = 8 + layout.property_count * 16;
     emitter.instruction(&format!("mov x0, #{}", payload_size));                 // request ReflectionAttribute object payload storage
-    abi::emit_call_label(emitter, "__rt_heap_alloc");
-    emitter.instruction("mov x9, #4");                                          // heap kind 4 marks ReflectionAttribute as an object
-    emitter.instruction("str x9, [x0, #-8]");                                   // stamp the object heap header before the payload
-    emitter.instruction("bl __rt_object_handle_acquire");                       // bind the new object to its PHP object handle
+    elephc_memoir::values::object_storage::emit_allocate_object(emitter);
     emitter.instruction(&format!("mov x10, #{}", layout.class_id));             // materialize the ReflectionAttribute class id
     emitter.instruction("str x10, [x0]");                                       // store the class id at object payload offset zero
     for index in 0..layout.property_count {
@@ -221,13 +218,7 @@ fn emit_alloc_reflection_attribute_object_x86_64(
 ) {
     let payload_size = 8 + layout.property_count * 16;
     emitter.instruction(&format!("mov rax, {}", payload_size));                 // request ReflectionAttribute object payload storage
-    abi::emit_call_label(emitter, "__rt_heap_alloc");
-    emitter.instruction(&format!(
-        "mov r10, 0x{:x}",
-        crate::codegen_support::sentinels::x86_64_heap_kind_word(4)
-    ));                                                                         // materialize the x86_64 object heap kind word
-    emitter.instruction("mov QWORD PTR [rax - 8], r10");                        // stamp the object heap header before the payload
-    emitter.instruction("call __rt_object_handle_acquire");                     // bind the new object to its PHP object handle
+    elephc_memoir::values::object_storage::emit_allocate_object(emitter);
     emitter.instruction(&format!("mov r10, {}", layout.class_id));              // materialize the ReflectionAttribute class id
     emitter.instruction("mov QWORD PTR [rax], r10");                            // store the class id at object payload offset zero
     for index in 0..layout.property_count {

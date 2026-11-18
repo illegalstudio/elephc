@@ -1188,10 +1188,7 @@ fn emit_uninitialized_static_property_fatal(
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
             ctx.emitter.instruction("mov x0, #56");                             // request Throwable payload storage (message/code/previous)
-            ctx.emitter.instruction("bl __rt_heap_alloc");                      // allocate the Error object payload
-            ctx.emitter.instruction("mov x9, #6");                              // heap kind 6 = object instance
-            ctx.emitter.instruction("str x9, [x0, #-8]");                       // stamp allocation as a runtime object
-            ctx.emitter.instruction("bl __rt_object_handle_acquire");           // bind the new object to its PHP object handle
+            elephc_memoir::values::object_storage::emit_allocate_throwable(ctx.emitter);
             abi::emit_symbol_address(ctx.emitter, "x9", "_spl_error_class_id");   // load Error's runtime class id symbol
             ctx.emitter.instruction("ldr x9, [x9]");                            // load Error's runtime class id for this program
             ctx.emitter.instruction("str x9, [x0]");                            // store class id at the object header
@@ -1211,12 +1208,7 @@ fn emit_uninitialized_static_property_fatal(
             ctx.emitter.instruction("mov rbp, rsp");                            // establish aligned helper frame
             ctx.emitter.instruction("sub rsp, 16");                             // keep the nested heap allocation call 16-byte aligned
             ctx.emitter.instruction("mov rax, 56");                             // request Throwable payload storage (message/code/previous)
-            ctx.emitter.instruction("call __rt_heap_alloc");                    // allocate the Error object payload
-            ctx.emitter.instruction(                                            // materialize the canonical x86_64 Throwable heap-kind word
-                &format!("mov r10, 0x{:x}", crate::codegen_support::sentinels::x86_64_heap_kind_word(6))
-            );
-            ctx.emitter.instruction("mov QWORD PTR [rax - 8], r10");            // stamp allocation as a runtime object
-            ctx.emitter.instruction("call __rt_object_handle_acquire");         // bind the new object to its PHP object handle
+            elephc_memoir::values::object_storage::emit_allocate_throwable(ctx.emitter);
             abi::emit_load_symbol_to_reg(ctx.emitter, "r10", "_spl_error_class_id", 0); // load Error's runtime class id for this program
             ctx.emitter.instruction("mov QWORD PTR [rax], r10");                // store class id at the object header
             abi::emit_symbol_address(ctx.emitter, "r10", &message_label);          // materialize static Error message pointer

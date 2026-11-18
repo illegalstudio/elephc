@@ -433,10 +433,7 @@ fn emit_static_throwable_owner(
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
             abi::emit_load_int_immediate(ctx.emitter, "x0", 56); // compact Throwable: message/code/previous
-            abi::emit_call_label(ctx.emitter, "__rt_heap_alloc");
-            ctx.emitter.instruction("mov x9, #6");                              // heap kind 6 = throwable object instance
-            ctx.emitter.instruction("str x9, [x0, #-8]");                       // stamp the allocation as a runtime object
-            ctx.emitter.instruction("bl __rt_object_handle_acquire");           // bind the new object to its PHP object handle
+            elephc_memoir::values::object_storage::emit_allocate_throwable(ctx.emitter);
             abi::emit_load_symbol_to_reg(ctx.emitter, "x9", class_id_symbol, 0);
             ctx.emitter.instruction("str x9, [x0]");                            // store the built-in throwable class id
             abi::emit_symbol_address(ctx.emitter, "x9", &message_label);
@@ -454,10 +451,7 @@ fn emit_static_throwable_owner(
         }
         Arch::X86_64 => {
             abi::emit_load_int_immediate(ctx.emitter, "rax", 56); // compact Throwable: message/code/previous
-            abi::emit_call_label(ctx.emitter, "__rt_heap_alloc");
-            ctx.emitter.instruction(&format!("mov r10, 0x{:x}", crate::codegen_support::sentinels::x86_64_heap_kind_word(6))); // stamp the canonical x86_64 throwable heap kind
-            ctx.emitter.instruction("mov QWORD PTR [rax - 8], r10");            // stamp the allocation as a runtime object
-            ctx.emitter.instruction("call __rt_object_handle_acquire");         // bind the new object to its PHP object handle
+            elephc_memoir::values::object_storage::emit_allocate_throwable(ctx.emitter);
             abi::emit_load_symbol_to_reg(ctx.emitter, "r10", class_id_symbol, 0);
             ctx.emitter.instruction("mov QWORD PTR [rax], r10");                // store the built-in throwable class id
             abi::emit_symbol_address(ctx.emitter, "r10", &message_label);
@@ -638,10 +632,7 @@ fn emit_dynamic_throwable_object(ctx: &mut FunctionContext<'_>, class_id_symbol:
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
             abi::emit_load_int_immediate(ctx.emitter, "x0", 56); // compact Throwable: message/code/previous
-            abi::emit_call_label(ctx.emitter, "__rt_heap_alloc");
-            ctx.emitter.instruction("mov x9, #6");                              // heap kind 6 = throwable object instance
-            ctx.emitter.instruction("str x9, [x0, #-8]");                       // stamp the allocation as a runtime object
-            ctx.emitter.instruction("bl __rt_object_handle_acquire");           // bind the new object to its PHP object handle
+            elephc_memoir::values::object_storage::emit_allocate_throwable(ctx.emitter);
             abi::emit_load_symbol_to_reg(ctx.emitter, "x9", class_id_symbol, 0);
             ctx.emitter.instruction("str x9, [x0]");                            // store the built-in throwable class id
             abi::emit_load_temporary_stack_slot(ctx.emitter, "x9", 0);
@@ -657,10 +648,7 @@ fn emit_dynamic_throwable_object(ctx: &mut FunctionContext<'_>, class_id_symbol:
         }
         Arch::X86_64 => {
             abi::emit_load_int_immediate(ctx.emitter, "rax", 56); // compact Throwable: message/code/previous
-            abi::emit_call_label(ctx.emitter, "__rt_heap_alloc");
-            ctx.emitter.instruction(&format!("mov r10, 0x{:x}", crate::codegen_support::sentinels::x86_64_heap_kind_word(6))); // stamp the canonical x86_64 throwable heap kind
-            ctx.emitter.instruction("mov QWORD PTR [rax - 8], r10");            // stamp the allocation as a runtime object
-            ctx.emitter.instruction("call __rt_object_handle_acquire");         // bind the new object to its PHP object handle
+            elephc_memoir::values::object_storage::emit_allocate_throwable(ctx.emitter);
             abi::emit_load_symbol_to_reg(ctx.emitter, "r10", class_id_symbol, 0);
             ctx.emitter.instruction("mov QWORD PTR [rax], r10");                // store the built-in throwable class id
             abi::emit_load_temporary_stack_slot(ctx.emitter, "r10", 0);

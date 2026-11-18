@@ -168,10 +168,7 @@ fn emit_named_parameter_error_aarch64(
     emitter.instruction("stp x1, x2, [sp]");                                    // preserve the message pair across the allocation
 
     emitter.instruction("mov x0, #56");                                         // canonical Throwable payload size
-    emitter.instruction("bl __rt_heap_alloc");                                  // allocate the Error object payload
-    emitter.instruction("mov x9, #6");                                          // heap kind 6 identifies a throwable object
-    emitter.instruction("str x9, [x0, #-8]");                                   // stamp the allocation as a runtime object
-    emitter.instruction("bl __rt_object_handle_acquire");                       // bind the Error to its PHP object handle
+    elephc_memoir::values::object_storage::emit_allocate_throwable(emitter);
     abi::emit_load_symbol_to_reg(emitter, "x9", "_spl_error_class_id", 0);
     emitter.instruction("str x9, [x0]");                                        // stamp the per-program Error class id
     emitter.instruction("ldp x10, x11, [sp]");                                  // recover the persisted message pair

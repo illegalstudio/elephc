@@ -245,10 +245,7 @@ fn throw_type_error(emitter: &mut Emitter) {
     match emitter.target.arch {
         Arch::AArch64 => {
             emitter.instruction("mov x0, #56");                                 // allocate the compact Throwable payload
-            emitter.instruction("bl __rt_heap_alloc");                          // acquire the exception's owned block
-            emitter.instruction("mov x9, #6");                                  // classify the allocation as a Throwable
-            emitter.instruction("str x9, [x0, #-8]");                           // stamp the object heap kind
-            emitter.instruction("bl __rt_object_handle_acquire");               // acquire its PHP object handle
+            elephc_memoir::values::object_storage::emit_allocate_throwable(emitter);
             abi::emit_load_symbol_to_reg(emitter, "x9", "_spl_type_error_class_id", 0);
             emitter.instruction("str x9, [x0]");                                // identify the TypeError class
             abi::emit_pop_reg_pair(emitter, ptr, len);

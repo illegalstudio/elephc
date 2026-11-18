@@ -252,10 +252,7 @@ fn emit_intdiv_overflow_throw(ctx: &mut FunctionContext<'_>) {
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
             ctx.emitter.instruction("mov x0, #56");                             // request Throwable payload storage (message/code/previous) for the ArithmeticError
-            ctx.emitter.instruction("bl __rt_heap_alloc");                      // allocate the ArithmeticError object payload
-            ctx.emitter.instruction("mov x9, #6");                              // heap kind 6 marks an object instance allocation
-            ctx.emitter.instruction("str x9, [x0, #-8]");                       // stamp the allocation header as a runtime object
-            ctx.emitter.instruction("bl __rt_object_handle_acquire");           // bind the new object to its PHP object handle
+            elephc_memoir::values::object_storage::emit_allocate_throwable(ctx.emitter);
             abi::emit_symbol_address(ctx.emitter, "x9", "_spl_arithmetic_error_class_id");
             ctx.emitter.instruction("ldr x9, [x9]");                            // load ArithmeticError's runtime class id for this program
             ctx.emitter.instruction("str x9, [x0]");                            // store the ArithmeticError class id in the Throwable header
@@ -276,12 +273,7 @@ fn emit_intdiv_overflow_throw(ctx: &mut FunctionContext<'_>) {
             ctx.emitter.instruction("mov rbp, rsp");                            // establish an aligned helper frame for heap allocation
             ctx.emitter.instruction("sub rsp, 16");                             // keep the nested heap allocation call 16-byte aligned
             ctx.emitter.instruction("mov rax, 56");                             // request Throwable payload storage (message/code/previous) for the ArithmeticError
-            ctx.emitter.instruction("call __rt_heap_alloc");                    // allocate the ArithmeticError object payload
-            ctx.emitter.instruction(
-                &format!("mov r10, 0x{:x}", crate::codegen_support::sentinels::x86_64_heap_kind_word(6))
-            );                                                                  // materialize the x86_64 object heap-kind header
-            ctx.emitter.instruction("mov QWORD PTR [rax - 8], r10");            // stamp the allocation header as a runtime object
-            ctx.emitter.instruction("call __rt_object_handle_acquire");         // bind the new object to its PHP object handle
+            elephc_memoir::values::object_storage::emit_allocate_throwable(ctx.emitter);
             ctx.emitter.instruction(
                 "mov r10, QWORD PTR [rip + _spl_arithmetic_error_class_id]"
             );                                                                  // load ArithmeticError's runtime class id for this program

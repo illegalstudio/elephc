@@ -65,10 +65,7 @@ pub(crate) fn emit_json_throw_error(emitter: &mut Emitter) {
 
     // Allocate a 56-byte JsonException payload (class_id + message, code, and previous slots).
     emitter.instruction("mov x0, #56");                                         // size = class_id + message + code + previous slots
-    emitter.instruction("bl __rt_heap_alloc");                                  // allocate the JsonException payload
-    emitter.instruction("mov x9, #6");                                          // heap kind 6 = object
-    emitter.instruction("str x9, [x0, #-8]");                                   // tag the allocation as an object in the uniform header
-    emitter.instruction("bl __rt_object_handle_acquire");                       // bind the new object to its PHP object handle
+    elephc_memoir::values::object_storage::emit_allocate_throwable(emitter);
 
     // Stamp the per-program JsonException class id into [obj+0].
     crate::codegen_support::abi::emit_symbol_address(emitter, "x9", "_json_exception_class_id");
@@ -223,10 +220,7 @@ fn emit_json_throw_error_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("je __rt_json_throw_error_return_x");                   // bail out when throwing is not requested
 
     emitter.instruction("mov rax, 56");                                         // size = class_id + message + code + previous slots
-    emitter.instruction("call __rt_heap_alloc");                                // allocate the JsonException payload (rax = payload ptr)
-    emitter.instruction(&format!("mov r10, 0x{:x}", crate::codegen_support::sentinels::x86_64_heap_kind_word(6))); // stamp the canonical x86_64 heap-kind word (magic + kind 6 throwable)
-    emitter.instruction("mov QWORD PTR [rax - 8], r10");                        // tag the allocation as an object in the uniform header
-    emitter.instruction("call __rt_object_handle_acquire");                     // bind the new object to its PHP object handle
+    elephc_memoir::values::object_storage::emit_allocate_throwable(emitter);
 
     abi::emit_load_symbol_to_reg(emitter, "r10", "_json_exception_class_id", 0); // load JsonException's runtime class id (-1 when absent)
     emitter.instruction("mov QWORD PTR [rax], r10");                            // store the class id at the object header slot

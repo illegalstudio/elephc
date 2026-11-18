@@ -55,10 +55,7 @@ fn aarch64(emitter: &mut Emitter) {
     emitter.instruction("bl __rt_str_persist");                                 // copy message bytes into native runtime ownership
     emitter.instruction("stp x1, x2, [sp, #56]");                               // retain the owned string while allocating its Throwable
     emitter.instruction("mov x0, #56");                                         // request the canonical compact Throwable payload
-    emitter.instruction("bl __rt_heap_alloc");                                  // allocate one object that will own the message and previous chain
-    emitter.instruction("mov x9, #6");                                          // select the compact native object heap kind
-    emitter.instruction("str x9, [x0, #-8]");                                   // stamp the allocation before registering its PHP handle
-    emitter.instruction("bl __rt_object_handle_acquire");                       // assign the Throwable its native object identity
+    elephc_memoir::values::object_storage::emit_allocate_throwable(emitter);
     emitter.instruction("ldr x9, [sp, #48]");                                   // restore the selected exception class
     emitter.instruction("str x9, [x0]");                                        // initialize its class identity before exposing the object
     emitter.instruction("ldp x9, x10, [sp, #56]");                              // recover the native-owned binary message
@@ -124,10 +121,7 @@ fn x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov QWORD PTR [rsp + 56], rax");                       // retain the native-owned message across object allocation
     emitter.instruction("mov QWORD PTR [rsp + 64], rdx");                       // retain its complete byte length
     emitter.instruction("mov rax, 56");                                         // request the canonical compact Throwable payload
-    emitter.instruction("call __rt_heap_alloc");                                // allocate the owner of this message and previous chain
-    emitter.instruction(&format!("mov r10, 0x{:x}", crate::codegen_support::sentinels::x86_64_heap_kind_word(6))); // select the canonical compact object heap marker
-    emitter.instruction("mov QWORD PTR [rax - 8], r10");                        // stamp the allocation before binding its PHP identity
-    emitter.instruction("call __rt_object_handle_acquire");                     // assign the Throwable a native object handle
+    elephc_memoir::values::object_storage::emit_allocate_throwable(emitter);
     emitter.instruction("mov r10, QWORD PTR [rsp + 48]");                       // restore the chosen per-program exception class
     emitter.instruction("mov QWORD PTR [rax], r10");                            // initialize class identity before publishing the object
     emitter.instruction("mov r10, QWORD PTR [rsp + 56]");                       // recover the native-owned binary message

@@ -3813,10 +3813,7 @@ fn emit_invoker_throwable(
     match emitter.target.arch {
         Arch::AArch64 => {
             emitter.instruction("mov x0, #56");                                 // request the compact Throwable payload
-            emitter.instruction("bl __rt_heap_alloc");                          // allocate the catchable builtin throwable
-            emitter.instruction("mov x9, #6");                                  // heap kind 6 identifies a throwable object
-            emitter.instruction("str x9, [x0, #-8]");                           // stamp the allocation before acquiring its PHP handle
-            emitter.instruction("bl __rt_object_handle_acquire");               // assign the object its runtime handle
+            elephc_memoir::values::object_storage::emit_allocate_throwable(emitter);
             abi::emit_load_symbol_to_reg(emitter, "x9", class_id_symbol, 0);
             emitter.instruction("str x9, [x0]");                                // identify the requested builtin throwable class
             abi::emit_symbol_address(emitter, "x9", &message_label);
