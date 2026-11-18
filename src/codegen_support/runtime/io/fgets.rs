@@ -12,6 +12,8 @@
 //!   A line longer than the 64 KiB concat scratch therefore produces owned heap storage
 //!   instead of running past `_concat_buf` into the adjacent BSS globals.
 
+use elephc_memoir::strings::concat_window::{self, ReadAhead, WindowSlots};
+
 use crate::codegen_support::{emit::Emitter, platform::Arch};
 use crate::codegen_support::abi;
 
@@ -77,23 +79,12 @@ pub fn emit_fgets(emitter: &mut Emitter) {
     // -- read loop: one byte at a time until \n or EOF --
     emitter.label("__rt_fgets_loop");
 
-    // -- make room for one more byte before reading it --
-    emitter.instruction("ldr x9, [sp, #8]");                                    // current line length
-    emitter.instruction("add x9, x9, #1");                                      // capacity needed once the next byte lands
-    emitter.instruction("ldr x10, [sp, #24]");                                  // current line capacity
-    emitter.instruction("cmp x9, x10");                                         // does the next byte still fit the reservation?
-    emitter.instruction("b.ls __rt_fgets_have_room");                           // no growth needed for this iteration
-    emitter.instruction("lsl x10, x10, #1");                                    // double the line capacity
-    emitter.instruction("str x10, [sp, #24]");                                  // save the grown line capacity
-    emitter.instruction("ldr x1, [sp, #16]");                                   // old line buffer pointer
-    emitter.instruction("mov x2, #0");                                          // release the whole claimed window
-    emitter.instruction("bl __rt_concat_publish");                              // hand the old scratch window back before moving to heap storage
-    emitter.instruction("ldr x0, [sp, #16]");                                   // old line buffer pointer
-    emitter.instruction("ldr x1, [sp, #8]");                                    // bytes accumulated so far must survive the move
-    emitter.instruction("ldr x2, [sp, #24]");                                   // grown line capacity
-    emitter.instruction("bl __rt_concat_grow");                                 // move the accumulated line into a larger owned buffer
-    emitter.instruction("str x0, [sp, #16]");                                   // save the grown line buffer pointer
-    emitter.label("__rt_fgets_have_room");
+    concat_window::emit_ensure_before_read(
+        emitter,
+        WindowSlots { buffer: 16, used: 8, capacity: 24 },
+        ReadAhead::Byte,
+        "__rt_fgets_have_room",
+    );
     emitter.instruction("ldr x1, [sp, #16]");                                   // line buffer base pointer
     emitter.instruction("ldr x10, [sp, #8]");                                   // current line length
     emitter.instruction("add x1, x1, x10");                                     // buf pointer for read syscall
@@ -232,23 +223,12 @@ fn emit_fgets_linux_x86_64(emitter: &mut Emitter) {
 
     emitter.label("__rt_fgets_loop_x86");
 
-    // -- make room for one more byte before reading it --
-    emitter.instruction("mov r8, QWORD PTR [rbp - 16]");                        // current line length
-    emitter.instruction("add r8, 1");                                           // capacity needed once the next byte lands
-    emitter.instruction("mov r9, QWORD PTR [rbp - 40]");                        // current line capacity
-    emitter.instruction("cmp r8, r9");                                          // does the next byte still fit the reservation?
-    emitter.instruction("jbe __rt_fgets_have_room_x86");                        // no growth needed for this iteration
-    emitter.instruction("add r9, r9");                                          // double the line capacity
-    emitter.instruction("mov QWORD PTR [rbp - 40], r9");                        // save the grown line capacity
-    emitter.instruction("mov rax, QWORD PTR [rbp - 24]");                       // old line buffer pointer
-    emitter.instruction("xor edx, edx");                                        // release the whole claimed window
-    emitter.instruction("call __rt_concat_publish");                            // hand the old scratch window back before moving to heap storage
-    emitter.instruction("mov rax, QWORD PTR [rbp - 24]");                       // old line buffer pointer
-    emitter.instruction("mov rdi, QWORD PTR [rbp - 16]");                       // bytes accumulated so far must survive the move
-    emitter.instruction("mov rsi, QWORD PTR [rbp - 40]");                       // grown line capacity
-    emitter.instruction("call __rt_concat_grow");                               // move the accumulated line into a larger owned buffer
-    emitter.instruction("mov QWORD PTR [rbp - 24], rax");                       // save the grown line buffer pointer
-    emitter.label("__rt_fgets_have_room_x86");
+    concat_window::emit_ensure_before_read(
+        emitter,
+        WindowSlots { buffer: 24, used: 16, capacity: 40 },
+        ReadAhead::Byte,
+        "__rt_fgets_have_room_x86",
+    );
     emitter.instruction("mov rsi, QWORD PTR [rbp - 24]");                       // line buffer base pointer
     emitter.instruction("add rsi, QWORD PTR [rbp - 16]");                       // compute the address where libc read() should append the next byte
     emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // pass the tracked file descriptor as the first libc read() argument

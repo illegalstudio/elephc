@@ -16,6 +16,8 @@
 //! - The read-all loop uses `__rt_fread` so TLS sessions, filters, and wrapper
 //!   reads share one I/O dispatch path.
 
+use elephc_memoir::strings::concat_window::{self, ConcatWindow, ReadAhead, WindowSlots};
+
 use crate::codegen_support::{emit::Emitter, platform::Arch};
 
 /// Initial accumulation capacity, in bytes. Two read chunks wide so the first `__rt_fread`
@@ -67,25 +69,7 @@ pub fn emit_stream_get_contents(emitter: &mut Emitter) {
     emitter.instruction("cbnz x0, __rt_stream_get_contents_done");              // wrapper EOF means no extra stream_read call
     emitter.label("__rt_stream_get_contents_after_feof");
 
-    // -- make room for one more chunk before asking fread for it --
-    emitter.instruction("ldr x9, [sp, #24]");                                   // running result length
-    emitter.instruction(&format!("add x9, x9, #{}", READ_CHUNK));               // capacity needed once the next chunk lands
-    emitter.instruction("ldr x10, [sp, #48]");                                  // current accumulation capacity
-    emitter.instruction("cmp x9, x10");                                         // does the next chunk still fit the current reservation?
-    emitter.instruction("b.ls __rt_stream_get_contents_have_room");             // no growth needed for this iteration
-    emitter.instruction("lsl x10, x10, #1");                                    // double the accumulation capacity
-    emitter.instruction("cmp x10, x9");                                         // is the doubled capacity already large enough?
-    emitter.instruction("csel x10, x10, x9, hi");                               // keep whichever capacity is larger
-    emitter.instruction("str x10, [sp, #48]");                                  // save the grown accumulation capacity
-    emitter.instruction("ldr x1, [sp, #16]");                                   // old accumulation buffer pointer
-    emitter.instruction("mov x2, #0");                                          // release the whole claimed window
-    emitter.instruction("bl __rt_concat_publish");                              // hand the old scratch window back before moving to heap storage
-    emitter.instruction("ldr x0, [sp, #16]");                                   // old accumulation buffer pointer
-    emitter.instruction("ldr x1, [sp, #24]");                                   // bytes accumulated so far must survive the move
-    emitter.instruction("ldr x2, [sp, #48]");                                   // grown accumulation capacity
-    emitter.instruction("bl __rt_concat_grow");                                 // move the accumulated bytes into a larger owned buffer
-    emitter.instruction("str x0, [sp, #16]");                                   // save the grown accumulation buffer pointer
-    emitter.label("__rt_stream_get_contents_have_room");
+    ensure_requested_chunk_capacity(emitter, false, "__rt_stream_get_contents_have_room");
 
     emitter.instruction("ldr x0, [sp, #0]");                                    // reload fd for __rt_fread
     emitter.instruction(&format!("mov x1, #{}", READ_CHUNK));                   // request one read-all chunk
@@ -181,31 +165,7 @@ fn emit_stream_get_contents_bounded_aarch64(emitter: &mut Emitter) {
     emitter.instruction("cbnz x0, __rt_stream_get_contents_bounded_done");      // wrapper EOF means no extra stream_read call
     emitter.label("__rt_stream_get_contents_bounded_after_feof");
 
-    // -- make room for one more (cap-clamped) chunk before asking fread for it --
-    emitter.instruction("ldr x9, [sp, #32]");                                   // running result length
-    emitter.instruction(&format!("add x9, x9, #{}", READ_CHUNK));               // capacity needed once the next chunk lands
-    emitter.instruction("ldr x10, [sp, #8]");                                   // requested byte cap
-    emitter.instruction("cmp x9, x10");                                         // would that exceed the caller's cap?
-    emitter.instruction("csel x9, x9, x10, lt");                                // never grow the reservation past the requested cap
-    emitter.instruction("ldr x10, [sp, #56]");                                  // current accumulation capacity
-    emitter.instruction("cmp x9, x10");                                         // does the next chunk still fit the current reservation?
-    emitter.instruction("b.ls __rt_stream_get_contents_bounded_have_room");     // no growth needed for this iteration
-    emitter.instruction("lsl x10, x10, #1");                                    // double the accumulation capacity
-    emitter.instruction("cmp x10, x9");                                         // is the doubled capacity already large enough?
-    emitter.instruction("csel x10, x10, x9, hi");                               // keep whichever capacity is larger
-    emitter.instruction("ldr x11, [sp, #8]");                                   // requested byte cap
-    emitter.instruction("cmp x10, x11");                                        // did doubling overshoot the caller's cap?
-    emitter.instruction("csel x10, x10, x11, lt");                              // clamp the grown capacity to the requested cap
-    emitter.instruction("str x10, [sp, #56]");                                  // save the grown accumulation capacity
-    emitter.instruction("ldr x1, [sp, #24]");                                   // old accumulation buffer pointer
-    emitter.instruction("mov x2, #0");                                          // release the whole claimed window
-    emitter.instruction("bl __rt_concat_publish");                              // hand the old scratch window back before moving to heap storage
-    emitter.instruction("ldr x0, [sp, #24]");                                   // old accumulation buffer pointer
-    emitter.instruction("ldr x1, [sp, #32]");                                   // bytes accumulated so far must survive the move
-    emitter.instruction("ldr x2, [sp, #56]");                                   // grown accumulation capacity
-    emitter.instruction("bl __rt_concat_grow");                                 // move the accumulated bytes into a larger owned buffer
-    emitter.instruction("str x0, [sp, #24]");                                   // save the grown accumulation buffer pointer
-    emitter.label("__rt_stream_get_contents_bounded_have_room");
+    ensure_requested_chunk_capacity(emitter, true, "__rt_stream_get_contents_bounded_have_room");
 
     emitter.instruction("ldr x9, [sp, #32]");                                   // running result length
     emitter.instruction("ldr x10, [sp, #8]");                                   // requested byte cap
@@ -294,25 +254,7 @@ fn emit_stream_get_contents_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("jnz __rt_stream_get_contents_done_x86");               // wrapper EOF means no extra stream_read call
     emitter.label("__rt_stream_get_contents_after_feof_x86");
 
-    // -- make room for one more chunk before asking fread for it --
-    emitter.instruction("mov r8, QWORD PTR [rbp - 32]");                        // running result length
-    emitter.instruction(&format!("add r8, {}", READ_CHUNK));                    // capacity needed once the next chunk lands
-    emitter.instruction("mov r9, QWORD PTR [rbp - 56]");                        // current accumulation capacity
-    emitter.instruction("cmp r8, r9");                                          // does the next chunk still fit the current reservation?
-    emitter.instruction("jbe __rt_stream_get_contents_have_room_x86");          // no growth needed for this iteration
-    emitter.instruction("add r9, r9");                                          // double the accumulation capacity
-    emitter.instruction("cmp r9, r8");                                          // is the doubled capacity already large enough?
-    emitter.instruction("cmovb r9, r8");                                        // keep whichever capacity is larger
-    emitter.instruction("mov QWORD PTR [rbp - 56], r9");                        // save the grown accumulation capacity
-    emitter.instruction("mov rax, QWORD PTR [rbp - 24]");                       // old accumulation buffer pointer
-    emitter.instruction("xor edx, edx");                                        // release the whole claimed window
-    emitter.instruction("call __rt_concat_publish");                            // hand the old scratch window back before moving to heap storage
-    emitter.instruction("mov rax, QWORD PTR [rbp - 24]");                       // old accumulation buffer pointer
-    emitter.instruction("mov rdi, QWORD PTR [rbp - 32]");                       // bytes accumulated so far must survive the move
-    emitter.instruction("mov rsi, QWORD PTR [rbp - 56]");                       // grown accumulation capacity
-    emitter.instruction("call __rt_concat_grow");                               // move the accumulated bytes into a larger owned buffer
-    emitter.instruction("mov QWORD PTR [rbp - 24], rax");                       // save the grown accumulation buffer pointer
-    emitter.label("__rt_stream_get_contents_have_room_x86");
+    ensure_requested_chunk_capacity(emitter, false, "__rt_stream_get_contents_have_room_x86");
 
     emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // reload fd for __rt_fread
     emitter.instruction(&format!("mov rsi, {}", READ_CHUNK));                   // request one read-all chunk
@@ -406,31 +348,7 @@ fn emit_stream_get_contents_bounded_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("jnz __rt_stream_get_contents_bounded_done_x86");       // wrapper EOF means no extra stream_read call
     emitter.label("__rt_stream_get_contents_bounded_after_feof_x86");
 
-    // -- make room for one more (cap-clamped) chunk before asking fread for it --
-    emitter.instruction("mov r8, QWORD PTR [rbp - 40]");                        // running result length
-    emitter.instruction(&format!("add r8, {}", READ_CHUNK));                    // capacity needed once the next chunk lands
-    emitter.instruction("mov r9, QWORD PTR [rbp - 16]");                        // requested byte cap
-    emitter.instruction("cmp r8, r9");                                          // would that exceed the caller's cap?
-    emitter.instruction("cmovg r8, r9");                                        // never grow the reservation past the requested cap
-    emitter.instruction("mov r9, QWORD PTR [rbp - 64]");                        // current accumulation capacity
-    emitter.instruction("cmp r8, r9");                                          // does the next chunk still fit the current reservation?
-    emitter.instruction("jbe __rt_stream_get_contents_bounded_have_room_x86");  // no growth needed for this iteration
-    emitter.instruction("add r9, r9");                                          // double the accumulation capacity
-    emitter.instruction("cmp r9, r8");                                          // is the doubled capacity already large enough?
-    emitter.instruction("cmovb r9, r8");                                        // keep whichever capacity is larger
-    emitter.instruction("mov r10, QWORD PTR [rbp - 16]");                       // requested byte cap
-    emitter.instruction("cmp r9, r10");                                         // did doubling overshoot the caller's cap?
-    emitter.instruction("cmovg r9, r10");                                       // clamp the grown capacity to the requested cap
-    emitter.instruction("mov QWORD PTR [rbp - 64], r9");                        // save the grown accumulation capacity
-    emitter.instruction("mov rax, QWORD PTR [rbp - 32]");                       // old accumulation buffer pointer
-    emitter.instruction("xor edx, edx");                                        // release the whole claimed window
-    emitter.instruction("call __rt_concat_publish");                            // hand the old scratch window back before moving to heap storage
-    emitter.instruction("mov rax, QWORD PTR [rbp - 32]");                       // old accumulation buffer pointer
-    emitter.instruction("mov rdi, QWORD PTR [rbp - 40]");                       // bytes accumulated so far must survive the move
-    emitter.instruction("mov rsi, QWORD PTR [rbp - 64]");                       // grown accumulation capacity
-    emitter.instruction("call __rt_concat_grow");                               // move the accumulated bytes into a larger owned buffer
-    emitter.instruction("mov QWORD PTR [rbp - 32], rax");                       // save the grown accumulation buffer pointer
-    emitter.label("__rt_stream_get_contents_bounded_have_room_x86");
+    ensure_requested_chunk_capacity(emitter, true, "__rt_stream_get_contents_bounded_have_room_x86");
 
     emitter.instruction("mov r8, QWORD PTR [rbp - 40]");                        // running result length
     emitter.instruction("mov rsi, QWORD PTR [rbp - 16]");                       // requested byte cap
@@ -487,18 +405,36 @@ fn emit_stream_get_contents_bounded_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("ret");                                                 // return the bounded string
 }
 
+/// Reserves room for the next requested read within the caller's optional byte limit.
+fn ensure_requested_chunk_capacity(emitter: &mut Emitter, bounded: bool, ready: &str) {
+    let limit = bounded.then_some(match emitter.target.arch {
+        Arch::AArch64 => 8,
+        Arch::X86_64 => 16,
+    });
+    let request = ReadAhead::Chunk { bytes: READ_CHUNK, limit };
+    let slots = stream_window(emitter.target.arch, bounded).slots;
+    concat_window::emit_ensure_before_read(emitter, slots, request, ready);
+}
+
 /// Expanding filters can return more bytes than fread requested; grow before copying that chunk.
 /// The bounded path already clamps its actual chunk length to the caller's remaining limit.
 fn ensure_returned_chunk_capacity(emitter: &mut Emitter, bounded: bool) {
-    let (buffer, used, capacity, chunk, length) = match (emitter.target.arch, bounded) {
+    let frame = stream_window(emitter.target.arch, bounded);
+    let ready = format!("__rt_stream_actual_chunk_ready_{}", u8::from(bounded));
+    concat_window::emit_ensure(emitter, frame, &ready);
+}
+
+/// Returns the pre-read window and post-read chunk slots for this native frame.
+fn stream_window(arch: Arch, bounded: bool) -> ConcatWindow {
+    let (buffer, used, capacity, chunk, length) = match (arch, bounded) {
         (Arch::AArch64, false) => (16, 24, 48, 32, 40),
         (Arch::AArch64, true) => (24, 32, 56, 40, 48),
         (Arch::X86_64, false) => (24, 32, 56, 40, 48),
         (Arch::X86_64, true) => (32, 40, 64, 48, 56),
     };
-    let frame = elephc_memoir::strings::concat_window::ConcatWindow {
-        buffer, used, capacity, chunk, length,
-    };
-    let ready = format!("__rt_stream_actual_chunk_ready_{}", u8::from(bounded));
-    elephc_memoir::strings::concat_window::emit_ensure(emitter, frame, &ready);
+    ConcatWindow {
+        slots: WindowSlots { buffer, used, capacity },
+        chunk,
+        length,
+    }
 }
