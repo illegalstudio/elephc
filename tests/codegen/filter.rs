@@ -397,6 +397,12 @@ catch (TypeError $e) { echo $e->getMessage(), "
 try { filter_input_array("x", [], []); }
 catch (TypeError $e) { echo $e->getMessage(), "
 "; }
+try { filter_var_array([], new stdClass, []); }
+catch (TypeError $e) { echo $e->getMessage(), "
+"; }
+try { filter_input_array(INPUT_GET, new stdClass, []); }
+catch (TypeError $e) { echo $e->getMessage(), "
+"; }
 foreach ([["array", []], ["object", new stdClass]] as [$name, $value]) {
     try { filter_var_array(["a" => "1"], ["missing" => FILTER_DEFAULT], $value); }
     catch (TypeError $e) { echo $e->getMessage(), "
@@ -417,6 +423,8 @@ var_dump(filter_var_array(["a" => "1"], ["missing" => FILTER_DEFAULT], null));
         out,
         "filter_var_array(): Argument #1 ($array) must be of type array, string given
 filter_input_array(): Argument #1 ($type) must be of type int, string given
+filter_var_array(): Argument #2 ($options) must be of type array|int, stdClass given
+filter_input_array(): Argument #2 ($options) must be of type array|int, stdClass given
 filter_var_array(): Argument #3 ($add_empty) must be of type bool, array given
 filter_var_array(): Argument #3 ($add_empty) must be of type bool, stdClass given
 filter_input_array(): Argument #3 ($add_empty) must be of type bool, array given

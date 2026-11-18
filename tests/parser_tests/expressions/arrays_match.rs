@@ -254,19 +254,27 @@ fn test_parse_keyed_and_legacy_reference_array_elements() {
     }
 }
 
-/// `$data['k'] = &$value` lowers to the store-then-alias statement sequence.
+/// `$data['k'] = &$value` keeps the reference marker in the element value.
 #[test]
 fn test_parse_array_element_reference_assignment() {
     let stmts = parse_source("<?php $data['k'] = &$value;");
     let StmtKind::Synthetic(parts) = &stmts[0].kind else {
         panic!("expected synthetic sequence, got {:?}", stmts[0].kind);
     };
-    assert_eq!(parts.len(), 2);
-    assert!(matches!(parts[0].kind, StmtKind::ArrayAssign { .. }));
+    assert_eq!(parts.len(), 1);
+    let StmtKind::ArrayAssign {
+        array,
+        index: _,
+        value,
+    } = &parts[0].kind
+    else {
+        panic!("expected one array assignment, got {:?}", parts[0].kind);
+    };
+    assert_eq!(array, "data");
     assert!(matches!(
-        &parts[1].kind,
-        StmtKind::RefAssign { target, source }
-            if target == "value" && matches!(source.kind, ExprKind::ArrayAccess { .. })
+        &value.kind,
+        ExprKind::Reference(inner)
+            if matches!(&inner.kind, ExprKind::Variable(name) if name == "value")
     ));
 }
 

@@ -338,18 +338,18 @@ fn filter_var_array_decl() -> Stmt {
                 vec![],
                 None,
             ),
-            // PHP coerces typed arguments in parameter order, so argument #1 above is
-            // validated before this weak bool coercion of argument #3.
+            s_assign("options", e_call("__elephc_filter_options_arg", vec![
+                e_var("options"),
+                e_str("filter_var_array"),
+                e_int(2),
+            ])),
+            // PHP coerces typed arguments in parameter order: argument #1 above and the
+            // options contract at #2 both fail before this weak bool coercion of #3.
             s_assign("add_empty", e_call("__elephc_filter_bool_arg", vec![
                 e_var("add_empty"),
                 e_str("filter_var_array"),
                 e_int(3),
                 e_str("add_empty"),
-            ])),
-            s_assign("options", e_call("__elephc_filter_options_arg", vec![
-                e_var("options"),
-                e_str("filter_var_array"),
-                e_int(2),
             ])),
             s_if(
                 e_not(e_call("is_array", vec![e_var("options")])),
@@ -395,19 +395,19 @@ fn filter_input_array_decl() -> Stmt {
                 e_int(1),
                 e_str("type"),
             ])),
-            // PHP coerces typed arguments in parameter order, so argument #1 above is
-            // validated before this weak bool coercion of argument #3. The check runs
-            // before the storage lookup, which may legitimately be empty in the CLI.
+            s_assign("options", e_call("__elephc_filter_options_arg", vec![
+                e_var("options"),
+                e_str("filter_input_array"),
+                e_int(2),
+            ])),
+            // PHP coerces typed arguments in parameter order: argument #1 above and the
+            // options contract at #2 both fail before this weak bool coercion of #3. The
+            // check still runs before the storage lookup, which may legitimately be empty.
             s_assign("add_empty", e_call("__elephc_filter_bool_arg", vec![
                 e_var("add_empty"),
                 e_str("filter_input_array"),
                 e_int(3),
                 e_str("add_empty"),
-            ])),
-            s_assign("options", e_call("__elephc_filter_options_arg", vec![
-                e_var("options"),
-                e_str("filter_input_array"),
-                e_int(2),
             ])),
             s_if(
                 e_not(e_call("is_array", vec![e_var("options")])),
