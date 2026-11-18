@@ -136,7 +136,7 @@ pub fn validate_module(module: &Module) -> Result<(), ValidationError> {
                 }
             }
             let mut required = inst.arithmetic_policy().requirements().bits();
-            if matches!(inst.op, Op::BindLocalRefContract | Op::EvalScopeBindLocalType | Op::EvalScopeStartBinding | Op::EvalScopeEndBinding | Op::EvalScopeCopyBindingType) || matches!(&inst.immediate,
+            if matches!(inst.op, Op::BindLocalRefContract | Op::EvalScopeBindingType | Op::EvalScopeBindLocalType | Op::EvalScopeStartBinding | Op::EvalScopeEndBinding | Op::EvalScopeCopyBindingType) || matches!(&inst.immediate,
                 Some(Immediate::EvalScopeStore(metadata)) if metadata.contract.is_some()) {
                 required |= elephc_semantics::StrictFeature::Locals.bit();
             }
@@ -823,7 +823,7 @@ fn validate_instruction_immediate(
         PromoteLocalRefCell | AliasLocalRefCell | RetainLocalRefCell | AdoptRefCellPtr => require_immediate(inst_id, inst, "local slot pair", |imm| {
             matches!(imm, Imm::LocalSlotPair { .. })
         }),
-        EvalScopeGet | EvalScopeEndBinding => require_immediate(inst_id, inst, "global name", |imm| {
+        EvalScopeGet | EvalScopeBindingType | EvalScopeEndBinding => require_immediate(inst_id, inst, "global name", |imm| {
             matches!(imm, Imm::GlobalName(_))
         }),
         EvalScopeBindLocalType => require_immediate(inst_id, inst, "checked scope binding type", |imm| {
@@ -1008,7 +1008,9 @@ fn validate_opcode_rules(
             check_count(inst_id, inst, 1, "1")
         }
         EvalScopeCopyBindingType => {
-            check_count(inst_id, inst, 1, "1")?;
+            if !(1..=2).contains(&inst.operands.len()) {
+                return check_count(inst_id, inst, 1, "native origin and optional frozen descriptor");
+            }
             let Some(Immediate::EvalBindingCopy { destination, owner, .. }) = inst.immediate else { unreachable!() };
             let valid = function.locals.get(destination.as_raw() as usize).is_some_and(|local|
                 local.kind == LocalKind::PhpLocal && local.name.as_deref().is_some_and(|name|
@@ -1017,7 +1019,17 @@ fn validate_opcode_rules(
                     local.kind == LocalKind::RefCell && local.php_type == crate::types::PhpType::Mixed);
             if !valid || !function.flags.tracks_local_binding_state || inst.result.is_some()
                 || !function.locals.iter().any(|local| local.kind == LocalKind::EvalScope)
-                || !function.value(inst.operands[0]).is_some_and(|value| value.php_type == PhpType::Bool) {
+                || !function.value(inst.operands[0]).is_some_and(|value| value.php_type == PhpType::Bool)
+                || inst.operands.get(1).is_some_and(|descriptor|
+                    !function.value(*descriptor).is_some_and(|value| value.php_type == PhpType::Int)) {
+                return Err(ValidationError::InvalidLocalReferenceContract(inst_id));
+            }
+            Ok(())
+        },
+        EvalScopeBindingType => {
+            check_count(inst_id, inst, 0, "0")?;
+            if inst.result_php_type != PhpType::Int || inst.result.is_none()
+                || !function.locals.iter().any(|local| local.kind == LocalKind::EvalScope) {
                 return Err(ValidationError::InvalidLocalReferenceContract(inst_id));
             }
             Ok(())

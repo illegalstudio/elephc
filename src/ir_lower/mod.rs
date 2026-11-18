@@ -15,6 +15,7 @@ mod boxed_array_appends;
 mod builtin_datetime;
 mod clone_overrides;
 mod closure_hints;
+mod captured_binding_origins;
 mod closure_scopes;
 mod context;
 mod diagnostics;

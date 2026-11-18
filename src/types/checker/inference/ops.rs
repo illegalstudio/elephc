@@ -509,7 +509,7 @@ impl Checker {
         // Save producer contracts while the enclosing frame's origins are still installed.
         let capture_contracts: std::collections::HashMap<_, _> = captures.iter()
             .filter_map(|name| env.get(name).map(|ty|
-                (name.clone(), self.local_binding_origin(name, ty)))).collect();
+                (name.clone(), (self.local_binding_origin(name, ty), self.runtime_local_binding_origin(name))))).collect();
         let mut capture_storage = Vec::new();
         for capture in captures {
             let read = env.get(capture).map(|ty| self.binding_read_type(capture, ty, env));
@@ -604,9 +604,10 @@ impl Checker {
         // Parameters use the resolved closure environment, where their own hints override any
         // same-named outer variable. Their entry contracts can request an owning recreation slot.
         let mut pre_bound_own_storage: crate::types::checker::PreBoundLocals = captures.iter()
-            .filter_map(|name| env.get(name).map(|ty|
-                (name.clone(), crate::types::checker::PreBoundLocal::capture(ty,
-                    capture_contracts.get(name).cloned().unwrap_or_else(|| ty.clone()))))).collect();
+            .filter_map(|name| env.get(name).map(|ty| {
+                let (contract, runtime) = capture_contracts.get(name).cloned().unwrap_or_else(|| (ty.clone(), false));
+                (name.clone(), crate::types::checker::PreBoundLocal::capture(ty, contract, runtime))
+            })).collect();
         pre_bound_own_storage.extend(params.iter().map(|(name, hint, ..)| (name, hint.is_some()))
             .chain(variadic.iter().map(|name| (name, true))).filter_map(|(name, declared)|
                 closure_sig.env.get(name).map(|ty|

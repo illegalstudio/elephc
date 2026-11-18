@@ -82,6 +82,7 @@ pub struct LocalStoreContracts {
 struct LocalEntryOrigin {
     contract: PhpType,
     by_ref: bool,
+    frozen_capture: bool,
 }
 
 impl LocalStoreContracts {
@@ -92,12 +93,22 @@ impl LocalStoreContracts {
 
     /// Gives a recreatable owned parameter its declared incoming source contract.
     pub(crate) fn record_entry_origin(&mut self, scope: String, name: String, contract: PhpType) {
-        self.entry_origins.insert((scope, name), LocalEntryOrigin { contract, by_ref: false });
+        self.entry_origins.insert((scope, name), LocalEntryOrigin { contract, by_ref: false, frozen_capture: false });
     }
 
     /// Keeps a foreign reference identity while giving its local name an incoming contract.
     pub(crate) fn record_reference_entry_origin(&mut self, scope: String, name: String, contract: PhpType) {
-        self.entry_origins.insert((scope, name), LocalEntryOrigin { contract, by_ref: true });
+        self.entry_origins.insert((scope, name), LocalEntryOrigin { contract, by_ref: true, frozen_capture: false });
+    }
+
+    /// Keeps a descriptor selected when the closure captured its enclosing producer.
+    pub(crate) fn record_captured_entry_origin(&mut self, scope: String, name: String, contract: PhpType, by_ref: bool) {
+        self.entry_origins.insert((scope, name), LocalEntryOrigin { contract, by_ref, frozen_capture: true });
+    }
+
+    /// Selects hidden immutable metadata rather than the capture's current PHP value kind.
+    pub(crate) fn entry_has_captured_contract(&self, scope: &str, name: &str) -> bool {
+        self.entry_origins.get(&(scope.to_string(), name.to_string())).is_some_and(|origin| origin.frozen_capture)
     }
 
     /// Reads an incoming contract without conflating it with an assignment source position.

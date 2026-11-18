@@ -481,6 +481,7 @@ pub(super) fn lower_instruction(ctx: &mut FunctionContext<'_>, inst_id: InstId) 
         Op::LanguageConstructCall => builtins::lower_language_construct_call(ctx, &inst),
         Op::EvalLiteralCall => builtins::lower_eval_literal_call(ctx, &inst),
         Op::EvalScopeGet => builtins::lower_eval_scope_get(ctx, &inst),
+        Op::EvalScopeBindingType => builtins::lower_eval_scope_binding_type(ctx, &inst),
         Op::EvalScopeSet => builtins::lower_eval_scope_set(ctx, &inst),
         Op::EvalScopeBindLocalType | Op::EvalScopeStartBinding => builtins::lower_eval_scope_bind_local_type(ctx, &inst),
         Op::EvalScopeEndBinding => builtins::lower_eval_scope_end_binding(ctx, &inst),

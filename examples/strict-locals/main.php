@@ -219,3 +219,21 @@ class QuantityLabels {
 $labels = new QuantityLabels();
 $labels->initialize($newLabel);
 echo "Reference label: ", $newLabel, PHP_EOL;
+
+// A value snapshot keeps its selected contract after capture, independently of its source.
+function checkQuantitySnapshot(bool $numeric, mixed $replacement): void {
+    if ($numeric) { $value = 1; } else { $value = 'pending'; }
+    $replace = function(mixed $replacement) use ($value): mixed {
+        replaceValue($value, $replacement);
+        return $value;
+    };
+    try {
+        $updated = $replace($replacement);
+        echo "Snapshot value: ", $updated, PHP_EOL;
+    } catch (TypeError $error) {
+        echo "The snapshot kept its original kind", PHP_EOL;
+    }
+    echo "Snapshot original: ", $value, PHP_EOL;
+}
+checkQuantitySnapshot(true, 2.5);
+checkQuantitySnapshot(false, 'ready');

@@ -52,6 +52,10 @@ fn prepare_producer(ctx: &mut LoweringContext<'_, '_>, name: &str, span: Span) {
 
 /// Seeds a by-value parameter's declared origin before its owned shadow receives the input.
 pub(super) fn prepare_entry(ctx: &mut LoweringContext<'_, '_>, name: &str) {
+    if ctx.local_store_contracts.entry_has_captured_contract(&ctx.loop_storage_scope, name) {
+        super::captured_binding_origins::prepare_entry(ctx, name);
+        return;
+    }
     let Some(contract) = ctx.local_store_contracts.entry_origin(&ctx.loop_storage_scope, name).cloned()
         else { return; };
     start_producer(ctx, name, contract, Span::dummy());

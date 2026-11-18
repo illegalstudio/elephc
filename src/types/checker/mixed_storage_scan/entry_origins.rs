@@ -38,15 +38,18 @@ impl Checker {
     pub(super) fn mark_entry_binding_origins(&mut self, facts: &Facts, incoming: &crate::types::checker::PreBoundLocals) {
         if !self.strict_locals { return; }
         for (name, incoming) in incoming {
-            let Some(source) = facts.names.get(name).filter(|source|
+            let source = facts.names.get(name).filter(|source|
                 !source.disqualified && (source.conditional_unset
-                    || (source.has_unset && (facts.contains_eval || !self.local_parameter_names.contains(name)))))
-                else { continue; };
+                    || (source.has_unset && (facts.contains_eval || !self.local_parameter_names.contains(name)))));
+            if !incoming.runtime_contract && source.is_none() { continue; }
             if name == "this" || self.name_is_seeded_program_storage(name)
                 || matches!(incoming.storage.codegen_repr(), PhpType::Pointer(_) | PhpType::Buffer(_) | PhpType::Packed(_)) {
                 continue;
             }
-            if self.active_ref_params.contains(name) {
+            if incoming.runtime_contract {
+                self.local_store_contracts.record_captured_entry_origin(self.current_loop_storage_scope.clone(),
+                    name.clone(), incoming.contract.clone(), self.active_ref_params.contains(name));
+            } else if self.active_ref_params.contains(name) {
                 self.local_store_contracts.record_reference_entry_origin(self.current_loop_storage_scope.clone(),
                     name.clone(), incoming.contract.clone());
             } else {
@@ -55,7 +58,7 @@ impl Checker {
             }
             self.inferred_local_contracts.insert(name.clone(), incoming.contract.clone());
             self.mixed_storage_locals.insert(name.clone());
-            for assignment in &source.assigns {
+            for assignment in facts.names.get(name).into_iter().flat_map(|source| &source.assigns) {
                 self.mixed_storage_store_sites.entry(assignment.span).or_default().insert(name.clone());
                 self.retired_mixed_storage_store_sites.remove(&(assignment.span, name.clone()));
             }

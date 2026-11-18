@@ -1,5 +1,5 @@
 //! Purpose:
-//! Keeps incoming frame storage separate from PHP-visible parameter binding contracts.
+//! Keeps incoming frame storage separate from PHP-visible binding contracts.
 //!
 //! Called from:
 //! - Function, method and closure body setup before the shared storage scan.
@@ -15,6 +15,7 @@ use std::collections::HashMap;
 pub(crate) struct PreBoundLocal {
     pub storage: PhpType,
     pub contract: PhpType,
+    pub runtime_contract: bool,
 }
 
 /// Incoming locals indexed by their source names, without importing the outer environment.
@@ -23,12 +24,12 @@ pub(crate) type PreBoundLocals = HashMap<String, PreBoundLocal>;
 impl PreBoundLocal {
     /// Separates the inferred checker entry view from a declared or open parameter contract.
     pub(crate) fn parameter(storage: &PhpType, declared: bool) -> Self {
-        Self { storage: storage.clone(), contract: if declared { storage.clone() } else { PhpType::Mixed } }
+        Self { storage: storage.clone(), contract: if declared { storage.clone() } else { PhpType::Mixed }, runtime_contract: false }
     }
 
     /// Keeps a capture snapshot layout separate from its enclosing producer contract.
-    pub(crate) fn capture(storage: &PhpType, contract: PhpType) -> Self {
-        Self { storage: storage.clone(), contract }
+    pub(crate) fn capture(storage: &PhpType, contract: PhpType, runtime_contract: bool) -> Self {
+        Self { storage: storage.clone(), contract, runtime_contract }
     }
 }
 

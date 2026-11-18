@@ -2243,3 +2243,31 @@ reference controls. Acceptance additionally requires all-five-target emission,
 default build, assembly comments, public PHP/LFC optimizer pairs and the complete
 example, which now writes through a reference-capturing closure with unchanged
 expected output. The signed result is backed by step193-evidence.json.
+
+### Verified194: immutable producer descriptors travel with value captures
+
+Closure snapshots now carry the enclosing runtime-selected producer descriptor as
+an ordinary generated hidden capture. The descriptor borrows immutable program
+metadata and survives retirement or rebinding of the source activation without
+sharing its cell. Checker entry evidence distinguishes these captures from open
+Mixed inputs, including read-only intermediate captures needed by nested closures.
+Each activation uses the common entry-prefix and existing canonical binding-copy
+operation to install an independent contract before publishing its value shadow.
+
+The new typed EIR descriptor read reuses the existing scope registry ABI on every
+target. Binding-copy lowering accepts an optional frozen descriptor and normalizes
+owned #cow storage names back to their PHP names. Explicit open descriptors remain
+open. Validator checks require StrictLocals and typed descriptor operands; shared
+ABI helpers handle all emission without changing closure headers or reference-cell
+layouts. Generated names keep descriptor values outside PHP scope enumeration.
+
+The fixture checks rejected and accepted writes for both executed first producers,
+unchanged enclosing values, escaped factories, repeated activations, nested closures,
+call_user_func and call_user_func_array, open producer alternatives and hidden-name
+filtering. Native optimizer pairs and both eval entries/profiles retire every owner.
+Extended acceptance in step194-evidence.json requires real opaque eval against both
+interpreted and native captured scopes, previous reference/capture/copy controls,
+all-five-target emission and validator negatives, interleaved hidden descriptors and
+string pairs spilling to the stack through callable descriptors, assembly comments, the default
+build and public PHP/LFC optimizer pairs. The example and its expected-output test
+show independent snapshot values and source values. No broad suite, push or PR.

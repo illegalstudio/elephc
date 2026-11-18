@@ -290,6 +290,14 @@ pub(super) fn lower_closure_with_context(
         };
         capture_params.push((capture.clone(), physical_php_type, by_ref));
         logical_capture_params.push((capture.clone(), php_type, by_ref));
+        if let Some(descriptor) = crate::ir_lower::captured_binding_origins::freeze(ctx, capture, expr.span) {
+            let hidden = crate::names::captured_contract_local_name(capture);
+            ctx.emit_void(Op::ClosureCapture, vec![descriptor.value], None,
+                Op::ClosureCapture.default_effects(), Some(expr.span));
+            captured_values.push(ClosureCapture { value: descriptor.value, by_ref_local: None });
+            capture_params.push((hidden.clone(), PhpType::Int, false));
+            logical_capture_params.push((hidden, PhpType::Int, false));
+        }
     }
     if ctx.current_class.is_some()
         && (ctx.local_slots.contains_key(CALLED_CLASS_ID_CAPTURE)

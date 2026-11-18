@@ -9,6 +9,13 @@
 
 use super::*;
 
+/// Borrows the immutable descriptor selected by an enclosing native producer.
+pub(in crate::codegen::lower_inst) fn lower_eval_scope_binding_type(
+    ctx: &mut FunctionContext<'_>, inst: &Instruction,
+) -> Result<()> {
+    eval::lower_eval_scope_binding_type(ctx, inst)
+}
+
 /// Copies an eval producer contract onto fresh independent native reference storage.
 pub(in crate::codegen::lower_inst) fn lower_eval_scope_copy_binding_type(
     ctx: &mut FunctionContext<'_>, inst: &Instruction,

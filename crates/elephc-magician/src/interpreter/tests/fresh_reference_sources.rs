@@ -125,3 +125,11 @@ fn captured_reference_producers_eval_values_and_owners() {
         "Tinteger:1|integer:1|Tstring:old|string:old|Winteger:3|integer:3|Wstring:ready|string:ready|1:new|old:new|1|",
         "Wstring:new|string:new|Winteger:2|integer:2|Winteger:3|integer:3|Wstring:ready|string:ready|1:new|old:new|1|");
 }
+
+/// Value snapshots retain original producer alternatives across escaped and nested closures.
+#[test]
+fn captured_value_producers_eval_values_and_owners() {
+    assert_reference_fixture(include_str!("../../../../../tests/fixtures/strict/captured_value_producers.php"),
+        "2|Tinteger:1|integer:1|2|Tstring:old|string:old|2|Winteger:3|integer:1|2|Wstring:ready|string:old|Tinteger:1|Winteger:2|Tinteger:1|Tstring:old|Wstring:ready|Wstring:new|Tinteger:1|",
+        "2|Wstring:new|integer:1|2|Winteger:2|string:old|2|Winteger:3|integer:1|2|Wstring:ready|string:old|Wstring:bad|Winteger:2|Wstring:again|Winteger:2|Wstring:ready|Wstring:new|Wstring:new|");
+}

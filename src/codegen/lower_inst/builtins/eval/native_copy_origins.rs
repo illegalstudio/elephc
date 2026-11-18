@@ -15,6 +15,23 @@ const DESCRIPTOR: usize = 8;
 const METADATA: usize = 24;
 const NATIVE_ORIGIN: usize = 80;
 
+/// Reads immutable producer metadata without retaining the source value or its activation.
+pub(in crate::codegen::lower_inst::builtins) fn lower_eval_scope_binding_type(
+    ctx: &mut FunctionContext<'_>, inst: &Instruction,
+) -> Result<()> {
+    let name = super::scope_access::eval_scope_instruction_name(ctx, inst)?;
+    let (label, len) = ctx.data.add_string(name.as_bytes());
+    abi::emit_reserve_temporary_stack(ctx.emitter, EVAL_STACK_BYTES);
+    ensure_eval_scope(ctx)?;
+    load_eval_scope_to_arg(ctx, 0);
+    abi::emit_symbol_address(ctx.emitter, abi::int_arg_reg_name(ctx.emitter.target, 1), &label);
+    abi::emit_load_int_immediate(ctx.emitter, abi::int_arg_reg_name(ctx.emitter.target, 2), len as i64);
+    let entry = ctx.emitter.target.extern_symbol("__elephc_reference_scope_type_v1");
+    abi::emit_call_label(ctx.emitter, &entry);
+    abi::emit_release_temporary_stack(ctx.emitter, EVAL_STACK_BYTES);
+    store_if_result(ctx, inst)
+}
+
 /// Attaches one independent origin through shared target ABI and canonical reference helpers.
 pub(in crate::codegen::lower_inst::builtins) fn lower_eval_scope_copy_binding_type(
     ctx: &mut FunctionContext<'_>, inst: &Instruction,
@@ -26,6 +43,7 @@ pub(in crate::codegen::lower_inst::builtins) fn lower_eval_scope_copy_binding_ty
         .ok_or_else(|| CodegenIrError::invalid_module("binding copy source name is missing"))?.clone();
     let target_name = ctx.function.locals[destination.as_raw() as usize].name.clone()
         .ok_or_else(|| CodegenIrError::invalid_module("binding copy destination name is missing"))?;
+    let target_name = target_name.strip_suffix("#cow").unwrap_or(&target_name);
     let source = ctx.data.add_string(source_name.as_bytes());
     let target = ctx.data.add_string(target_name.as_bytes());
     let offset = ctx.local_offset(owner)?;
@@ -36,20 +54,24 @@ pub(in crate::codegen::lower_inst::builtins) fn lower_eval_scope_copy_binding_ty
     load_eval_scope_to_arg(ctx, 0);
     abi::emit_store_to_sp(ctx.emitter, abi::int_arg_reg_name(ctx.emitter.target, 0), SCOPE);
 
-    let query = ctx.next_label("copy_eval_origin");
     let selected = ctx.next_label("copy_origin_selected");
-    if crate::semantics::conversions::inferred_binding_contract(&inst.result_php_type).is_some() {
-        abi::emit_load_temporary_stack_slot(ctx.emitter, abi::int_result_reg(ctx.emitter), NATIVE_ORIGIN);
-        abi::emit_branch_if_int_result_zero(ctx.emitter, &query);
-        let descriptor = crate::codegen::runtime_metadata::local_reference_descriptor(ctx.module, &inst.result_php_type)?;
-        abi::emit_symbol_address(ctx.emitter, abi::int_result_reg(ctx.emitter), &descriptor);
-        abi::emit_jump(ctx.emitter, &selected);
+    if let Some(descriptor) = inst.operands.get(1) {
+        ctx.load_value_to_result(*descriptor)?;
+    } else {
+        let query = ctx.next_label("copy_eval_origin");
+        if crate::semantics::conversions::inferred_binding_contract(&inst.result_php_type).is_some() {
+            abi::emit_load_temporary_stack_slot(ctx.emitter, abi::int_result_reg(ctx.emitter), NATIVE_ORIGIN);
+            abi::emit_branch_if_int_result_zero(ctx.emitter, &query);
+            let descriptor = crate::codegen::runtime_metadata::local_reference_descriptor(ctx.module, &inst.result_php_type)?;
+            abi::emit_symbol_address(ctx.emitter, abi::int_result_reg(ctx.emitter), &descriptor);
+            abi::emit_jump(ctx.emitter, &selected);
+        }
+        ctx.emitter.label(&query);
+        load_scope(ctx);
+        load_name(ctx, 1, &source);
+        let entry = ctx.emitter.target.extern_symbol("__elephc_reference_scope_type_v1");
+        abi::emit_call_label(ctx.emitter, &entry);
     }
-    ctx.emitter.label(&query);
-    load_scope(ctx);
-    load_name(ctx, 1, &source);
-    let entry = ctx.emitter.target.extern_symbol("__elephc_reference_scope_type_v1");
-    abi::emit_call_label(ctx.emitter, &entry);
     ctx.emitter.label(&selected);
     abi::emit_store_to_sp(ctx.emitter, abi::int_result_reg(ctx.emitter), DESCRIPTOR);
     store_copy_metadata(ctx, &source, &target);
