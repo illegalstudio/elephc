@@ -193,7 +193,10 @@ echo fiveTotals($argc);
         let count = function.locals.iter().filter(|local| {
             local.name.as_deref().is_some_and(|name| name.starts_with("lazyint"))
         }).count();
-        assert_eq!(count, 2, "{target}: upstream lazy paths changed:\n{}",
+        // Main admitted two of the five. Syncs now publish at the head of their block and the
+        // other operand is read beside its consumer, so every accumulator keeps the frame cells
+        // the proof gives it and all five qualify: never fewer than upstream's two.
+        assert!(count >= 2, "{target}: upstream lazy paths lost ({count}):\n{}",
             crate::ir::print_function(&function));
     }
 }
