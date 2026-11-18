@@ -195,7 +195,10 @@ error makes the call fail like PHP: `preg_match()`, `preg_match_all()` and
 return `null`, and `preg_grep()` returns the entries collected so far (from PHP 8.6,
 `--php-version 8.6`, it returns `false` instead, like php-src GH-11936). A subject
 PCRE2 rejects as malformed UTF-8 under `/u` sets `PREG_BAD_UTF8_ERROR`; an
-exhausted PCRE2 match or heap limit sets `PREG_BACKTRACK_LIMIT_ERROR`. As in
+exhausted PCRE2 match limit sets `PREG_BACKTRACK_LIMIT_ERROR`, an exhausted depth
+limit (`(*LIMIT_DEPTH=n)`) `PREG_RECURSION_LIMIT_ERROR`, and an exhausted heap
+limit or memory `PREG_INTERNAL_ERROR`, like PHP without JIT. The managed PCRE2
+has no JIT, so `PREG_JIT_STACKLIMIT_ERROR` never occurs. As in
 PHP, an error recorded by a `preg_*` call inside a `preg_replace_callback()`
 callback stays visible to `preg_last_error()` without failing the outer call.
 

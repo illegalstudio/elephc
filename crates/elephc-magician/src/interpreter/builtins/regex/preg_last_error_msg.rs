@@ -5,7 +5,7 @@
 //! - `crate::interpreter::builtins::hooks`.
 //!
 //! Key details:
-//! - Messages match PHP 8.5 and the AOT `_preg_err_msg_*` table; an unknown code
+//! - Messages come from `elephc_builtin_contract::pcre_errors`, shared with the AOT table; an unknown code
 //!   reads as "No error", like the AOT helper.
 
 use super::super::super::*;
@@ -17,17 +17,6 @@ eval_builtin! {
     direct: PregLastErrorMsg,
     values: PregLastErrorMsg,
 }
-
-/// PHP 8.5's `preg_last_error_msg()` strings, indexed by `PREG_*_ERROR` code.
-const EVAL_PREG_ERROR_MESSAGES: &[&str] = &[
-    "No error",
-    "Internal error",
-    "Backtrack limit exhausted",
-    "Recursion limit exhausted",
-    "Malformed UTF-8 characters, possibly incorrectly encoded",
-    "The offset did not correspond to the beginning of a valid UTF-8 code point",
-    "JIT stack limit exhausted",
-];
 
 /// Evaluates PHP `preg_last_error_msg()` with no eval arguments.
 pub(in crate::interpreter) fn eval_builtin_preg_last_error_msg(
@@ -44,10 +33,7 @@ pub(in crate::interpreter) fn eval_builtin_preg_last_error_msg(
 pub(in crate::interpreter) fn eval_preg_last_error_msg_result(
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
-    let message = usize::try_from(eval_preg_last_error_code())
-        .ok()
-        .and_then(|code| EVAL_PREG_ERROR_MESSAGES.get(code))
-        .copied()
-        .unwrap_or(EVAL_PREG_ERROR_MESSAGES[0]);
-    values.string(message)
+    values.string(elephc_builtin_contract::pcre_errors::preg_error_message(
+        eval_preg_last_error_code(),
+    ))
 }

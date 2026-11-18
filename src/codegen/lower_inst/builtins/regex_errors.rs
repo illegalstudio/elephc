@@ -16,6 +16,8 @@
 //!   `preg_split`) or `null` (`preg_replace`, `preg_replace_callback`) instead of the
 //!   partial result the helper produced; that result is released.
 
+use elephc_builtin_contract::pcre_errors::PREG_INTERNAL_ERROR;
+
 use crate::codegen::abi;
 use crate::codegen::platform::Arch;
 use crate::codegen::Result;
@@ -25,7 +27,6 @@ use super::super::super::context::FunctionContext;
 
 const ERROR_SYMBOL: &str = "_preg_last_error";
 const EXEC_ERROR_SYMBOL: &str = "_preg_exec_error";
-const PREG_INTERNAL_ERROR: i64 = 1;
 const NULL_TAG: i64 = 8;
 
 /// Lowers `preg_last_error()` to a load of the runtime error slot.

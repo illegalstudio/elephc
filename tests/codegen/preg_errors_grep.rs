@@ -276,6 +276,24 @@ echo PREG_BAD_UTF8_ERROR, PCRE_VERSION_MAJOR;' . ' // ' . $argc;
 eval($source);
 "#;
 
+/// Fixture: each PCRE2 match-error category reports php-src's code, on every helper: the depth
+/// limit is `PREG_RECURSION_LIMIT_ERROR`, the heap limit `PREG_INTERNAL_ERROR` and the match
+/// limit `PREG_BACKTRACK_LIMIT_ERROR` (PHP 8.5 with `pcre.jit=0`; the managed PCRE2 has no JIT).
+const PCRE2_ERROR_CATEGORIES: &str = r#"$depth = '/(*NO_START_OPT)(*LIMIT_DEPTH=10)(a|b)*c/';
+$s = str_repeat('a', 50) . 'b';
+echo json_encode([preg_match($depth, $s), preg_last_error()]);
+echo json_encode([preg_match($depth, $s, $m), $m, preg_last_error()]);
+echo json_encode([preg_match_all($depth, $s), preg_last_error()]);
+echo json_encode([preg_replace($depth, '-', $s), preg_last_error()]);
+echo json_encode([preg_split($depth, $s), preg_last_error()]);
+echo json_encode([preg_replace_callback($depth, function ($m) { return '-'; }, $s), preg_last_error_msg()]), "\n";
+$heap = '/(*NO_START_OPT)(*LIMIT_HEAP=1)(a|b)*c/';
+$long = str_repeat('a', 100000) . 'b';
+echo json_encode([preg_match($heap, $long), preg_last_error()]);
+echo json_encode([preg_match_all($heap, $long, $all), preg_last_error_msg()]);
+echo json_encode([preg_match('/(*NO_START_OPT)(*LIMIT_MATCH=10)(a|b)*c/', $s), preg_last_error()]), "\n";
+"#;
+
 /// The stdout-only regex error fixtures, each in compiled code and through a runtime-built
 /// `eval()`, share one compile: every opaque eval lowers the whole builtin catalog.
 #[test]
@@ -293,7 +311,10 @@ fn test_preg_errors_compiled_and_eval_bundle() {
         aot(GREP_PATTERN_CHECK), opaque_eval(GREP_PATTERN_CHECK),
         aot(CALLBACK_LATER_ERRORS), opaque_eval(CALLBACK_LATER_ERRORS),
         aot(GREP_MATCH_ERROR), opaque_eval(GREP_MATCH_ERROR),
+        aot(PCRE2_ERROR_CATEGORIES), opaque_eval(PCRE2_ERROR_CATEGORIES),
     ];
+    let categories_expected = "[false,3][false,[],3][false,3][null,3][false,3][null,\"Recursion limit exhausted\"]\n\
+        [false,1][false,\"Internal error\"][false,2]\n";
     assert_bundle_with(
         &[
             BundleCase {
@@ -311,6 +332,8 @@ fn test_preg_errors_compiled_and_eval_bundle() {
             BundleCase { name: "callback_later_errors_eval", source: &sources[7], expected: later_expected },
             BundleCase { name: "grep_match_error_aot", source: &sources[8], expected: grep_error_expected },
             BundleCase { name: "grep_match_error_eval", source: &sources[9], expected: grep_error_expected },
+            BundleCase { name: "pcre2_error_categories_aot", source: &sources[10], expected: categories_expected },
+            BundleCase { name: "pcre2_error_categories_eval", source: &sources[11], expected: categories_expected },
         ],
         compile_and_run_with_regex,
     );

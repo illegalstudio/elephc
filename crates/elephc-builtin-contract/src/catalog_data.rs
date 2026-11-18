@@ -29120,7 +29120,7 @@ echo memory_get_peak_usage();
         arity_error: None,
         returns: TypeSpec::Int,
         by_ref_return: false,
-        summary: "Returns the `PREG_*_ERROR` code of the last PCRE function call: `PREG_INTERNAL_ERROR` for an invalid pattern or offset, `PREG_BACKTRACK_LIMIT_ERROR` when PCRE2 runs out of match or heap budget, `PREG_BAD_UTF8_ERROR` for a subject PCRE2 rejects as invalid UTF-8 under `/u`.",
+        summary: "Returns the `PREG_*_ERROR` code of the last PCRE function call: `PREG_INTERNAL_ERROR` for an invalid pattern or an exhausted PCRE2 heap, `PREG_BACKTRACK_LIMIT_ERROR` when PCRE2 runs out of match budget, `PREG_RECURSION_LIMIT_ERROR` when it runs out of depth budget, `PREG_BAD_UTF8_ERROR` for a subject PCRE2 rejects as invalid UTF-8 under `/u`.",
         examples: &[
         ],
         php_manual: Some("https://www.php.net/manual/en/function.preg-last-error.php"),

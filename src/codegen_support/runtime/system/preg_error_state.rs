@@ -15,32 +15,21 @@
 //!   to decide whether the call failed, so an error a nested `preg_*` call recorded from
 //!   inside a `preg_replace_callback()` callback stays visible to `preg_last_error()`
 //!   without failing the outer call, like php-src.
-//! - The opaque shim folds PCRE2 match errors into POSIX codes: `REG_ESPACE` (match,
-//!   heap or memory limit) is reported as `PREG_BACKTRACK_LIMIT_ERROR`, `REG_INVARG`
-//!   (PCRE2's UTF-8 and argument errors) as `PREG_BAD_UTF8_ERROR`, any other non-match
-//!   status as `PREG_INTERNAL_ERROR`. `REG_NOMATCH` is not an error.
+//! - The opaque shim keeps the PCRE2 match-error categories php-src tells apart:
+//!   `elephc_builtin_contract::pcre_errors` maps the match limit to
+//!   `PREG_BACKTRACK_LIMIT_ERROR`, the depth limit to `PREG_RECURSION_LIMIT_ERROR`,
+//!   malformed UTF-8 to `PREG_BAD_UTF8_ERROR`, a bad UTF-8 offset to
+//!   `PREG_BAD_UTF8_OFFSET_ERROR`, and every other failure (heap limit and out of memory
+//!   included) to `PREG_INTERNAL_ERROR`. `REG_NOMATCH` is not an error.
 //! - The wrapper preserves the shim's ABI: arguments pass through untouched and the
 //!   status comes back in `w0` / `eax`.
 
+use elephc_builtin_contract::pcre_errors::{
+    PCRE2_SHIM_NOMATCH, PCRE2_SHIM_STATUS_ERRORS, PREG_ERROR_MESSAGES as MESSAGES,
+    PREG_INTERNAL_ERROR,
+};
+
 use crate::codegen_support::{abi, emit::Emitter, platform::Arch};
-
-const PREG_INTERNAL_ERROR: i64 = 1;
-const PREG_BACKTRACK_LIMIT_ERROR: i64 = 2;
-const PREG_BAD_UTF8_ERROR: i64 = 4;
-const REG_ESPACE: i64 = 14;
-const REG_INVARG: i64 = 16;
-const REG_NOMATCH: i64 = 17;
-
-/// PHP 8.5's `preg_last_error_msg()` strings, indexed by `PREG_*_ERROR` code.
-const MESSAGES: &[&str] = &[
-    "No error",
-    "Internal error",
-    "Backtrack limit exhausted",
-    "Recursion limit exhausted",
-    "Malformed UTF-8 characters, possibly incorrectly encoded",
-    "The offset did not correspond to the beginning of a valid UTF-8 code point",
-    "JIT stack limit exhausted",
-];
 
 /// Emits the message strings, their `(ptr, len)` table and the table cardinality.
 pub(crate) fn emit_preg_error_data() -> String {
@@ -111,7 +100,6 @@ pub(crate) fn emit_preg_exec_wrapper(emitter: &mut Emitter) {
     let shim = "elephc_pcre2_v1_exec";
     let outcome = format!("{label}_outcome");
     let record = format!("{label}_record");
-    let backtrack = PREG_BACKTRACK_LIMIT_ERROR;
     emitter.blank();
     emitter.comment("--- runtime: preg_exec ---");
     emitter.label_global(label);
@@ -122,14 +110,13 @@ pub(crate) fn emit_preg_exec_wrapper(emitter: &mut Emitter) {
             emitter.bl_c(shim);                                                 // call the opaque PCRE2 shim with the caller's arguments
             emitter.instruction("mov x11, #0");                                 // stage PREG_NO_ERROR as this call's outcome
             emitter.instruction(&format!("cbz w0, {outcome}"));                 // success leaves the error state alone
-            emitter.instruction(&format!("cmp w0, #{}", REG_NOMATCH));          // is this an ordinary failed match?
+            emitter.instruction(&format!("cmp w0, #{}", PCRE2_SHIM_NOMATCH));   // is this an ordinary failed match?
             emitter.instruction(&format!("b.eq {outcome}"));                    // a failed match is not an error
-            emitter.instruction(&format!("mov x11, #{backtrack}"));             // stage the match-limit error code
-            emitter.instruction(&format!("cmp w0, #{}", REG_ESPACE));           // did PCRE2 exhaust its match or heap budget?
-            emitter.instruction(&format!("b.eq {record}"));                     // record PREG_BACKTRACK_LIMIT_ERROR
-            emitter.instruction(&format!("mov x11, #{}", PREG_BAD_UTF8_ERROR)); // stage the malformed-UTF-8 error code
-            emitter.instruction(&format!("cmp w0, #{}", REG_INVARG));           // did PCRE2 reject the subject?
-            emitter.instruction(&format!("b.eq {record}"));                     // record PREG_BAD_UTF8_ERROR
+            for (status, code) in PCRE2_SHIM_STATUS_ERRORS {
+                emitter.instruction(&format!("mov x11, #{code}"));              // stage the PHP code for this shim status
+                emitter.instruction(&format!("cmp w0, #{status}"));             // did PCRE2 fail with this error category?
+                emitter.instruction(&format!("b.eq {record}"));                 // record the staged PREG_*_ERROR code
+            }
             emitter.instruction(&format!("mov x11, #{}", PREG_INTERNAL_ERROR)); // every other failure is an internal error
             emitter.label(&record);
             abi::emit_store_reg_to_symbol(emitter, "x11", "_preg_last_error", 0);
@@ -145,14 +132,13 @@ pub(crate) fn emit_preg_exec_wrapper(emitter: &mut Emitter) {
             emitter.instruction("xor ecx, ecx");                                // stage PREG_NO_ERROR as this call's outcome
             emitter.instruction("test eax, eax");                               // did the shim succeed?
             emitter.instruction(&format!("jz {outcome}"));                      // success leaves the error state alone
-            emitter.instruction(&format!("cmp eax, {}", REG_NOMATCH));          // is this an ordinary failed match?
+            emitter.instruction(&format!("cmp eax, {}", PCRE2_SHIM_NOMATCH));   // is this an ordinary failed match?
             emitter.instruction(&format!("je {outcome}"));                      // a failed match is not an error
-            emitter.instruction(&format!("mov ecx, {backtrack}"));              // stage the match-limit error code
-            emitter.instruction(&format!("cmp eax, {}", REG_ESPACE));           // did PCRE2 exhaust its match or heap budget?
-            emitter.instruction(&format!("je {record}"));                       // record PREG_BACKTRACK_LIMIT_ERROR
-            emitter.instruction(&format!("mov ecx, {}", PREG_BAD_UTF8_ERROR));  // stage the malformed-UTF-8 error code
-            emitter.instruction(&format!("cmp eax, {}", REG_INVARG));           // did PCRE2 reject the subject?
-            emitter.instruction(&format!("je {record}"));                       // record PREG_BAD_UTF8_ERROR
+            for (status, code) in PCRE2_SHIM_STATUS_ERRORS {
+                emitter.instruction(&format!("mov ecx, {code}"));               // stage the PHP code for this shim status
+                emitter.instruction(&format!("cmp eax, {status}"));             // did PCRE2 fail with this error category?
+                emitter.instruction(&format!("je {record}"));                   // record the staged PREG_*_ERROR code
+            }
             emitter.instruction(&format!("mov ecx, {}", PREG_INTERNAL_ERROR));  // every other failure is an internal error
             emitter.label(&record);
             abi::emit_store_reg_to_symbol(emitter, "rcx", "_preg_last_error", 0);

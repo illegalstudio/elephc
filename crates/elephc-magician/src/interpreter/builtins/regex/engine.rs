@@ -32,13 +32,10 @@ const REG_UNGREEDY: c_int = 0x0200;
 const ELEPHC_PCRE2_EXTENDED: c_int = 0x2000;
 const REG_UCP: c_int = 0x0400;
 const REG_UTF: c_int = 0x0040;
-const REG_NOMATCH: c_int = 17;
-const REG_ESPACE: c_int = 14;
-const REG_INVARG: c_int = 16;
+const REG_NOMATCH: c_int = elephc_builtin_contract::pcre_errors::PCRE2_SHIM_NOMATCH;
 /// `PREG_INTERNAL_ERROR`, recorded for an invalid pattern or an unexpected match status.
-pub(in crate::interpreter) const EVAL_PREG_INTERNAL_ERROR: i64 = 1;
-const EVAL_PREG_BACKTRACK_LIMIT_ERROR: i64 = 2;
-const EVAL_PREG_BAD_UTF8_ERROR: i64 = 4;
+pub(in crate::interpreter) const EVAL_PREG_INTERNAL_ERROR: i64 =
+    elephc_builtin_contract::pcre_errors::PREG_INTERNAL_ERROR;
 
 thread_local! {
     /// The eval `preg_last_error()` code of the last eval regex call on this thread.
@@ -62,11 +59,7 @@ pub(in crate::interpreter) fn eval_preg_failed() -> bool {
 
 /// Maps a failing shim match status to PHP's error code, like the AOT `__rt_preg_exec`.
 fn eval_preg_record_exec_status(status: c_int) {
-    let code = match status {
-        REG_ESPACE => EVAL_PREG_BACKTRACK_LIMIT_ERROR,
-        REG_INVARG => EVAL_PREG_BAD_UTF8_ERROR,
-        _ => EVAL_PREG_INTERNAL_ERROR,
-    };
+    let code = elephc_builtin_contract::pcre_errors::preg_error_for_exec_status(status);
     eval_preg_set_last_error(code);
 }
 

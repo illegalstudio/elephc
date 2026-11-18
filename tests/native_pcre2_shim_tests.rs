@@ -247,6 +247,53 @@ static int check_mime_native_contract(void) {
     return 0;
 }
 
+/* Match errors keep the categories PHP's preg_last_error() tells apart, with and without
+ * REG_STARTEND: depth limit 0x103, malformed UTF-8 REG_INVARG (16), match limit REG_ESPACE
+ * (14), heap limit REG_ASSERT (1), and a plain nonmatch REG_NOMATCH (17). */
+static int check_match_error_statuses(void) {
+    void *handle = NULL;
+    uint64_t slots = 0;
+    int64_t pairs[4];
+    char *long_subject;
+    size_t length = 100000;
+
+    CHECK(elephc_pcre2_v1_compile(&handle, "(*NO_START_OPT)(*LIMIT_DEPTH=10)(a|b)*c", 0, &slots) == 0,
+        "depth-limit fixture must compile");
+    CHECK(elephc_pcre2_v1_exec(handle, "aaaaaaaaaaaaaaaaaaaab", 0, NULL, 0) == 0x103,
+        "the depth limit must not fold into REG_ASSERT without captures");
+    pairs[0] = 0;
+    pairs[1] = 21;
+    CHECK(elephc_pcre2_v1_exec(handle, "aaaaaaaaaaaaaaaaaaaab", 2, pairs, 0x0080) == 0x103,
+        "the depth limit must not fold into REG_INVARG on a REG_STARTEND search");
+    CHECK(elephc_pcre2_v1_exec(handle, "c", 2, pairs, 0) == 0 && pairs[0] == 0 && pairs[1] == 1,
+        "a whole-subject search still reports offsets");
+    elephc_pcre2_v1_free(handle);
+
+    CHECK(elephc_pcre2_v1_compile(&handle, "(*NO_START_OPT)(*LIMIT_MATCH=10)(a|b)*c", 0, &slots) == 0,
+        "match-limit fixture must compile");
+    CHECK(elephc_pcre2_v1_exec(handle, "aaaaaaaaaaaaaaaaaaaab", 0, NULL, 0) == 14,
+        "the match limit is REG_ESPACE");
+    elephc_pcre2_v1_free(handle);
+
+    long_subject = malloc(length + 2);
+    CHECK(long_subject != NULL, "heap-limit subject must allocate");
+    memset(long_subject, 'a', length);
+    long_subject[length] = 'b';
+    long_subject[length + 1] = 0;
+    CHECK(elephc_pcre2_v1_compile(&handle, "(*NO_START_OPT)(*LIMIT_HEAP=1)(a|b)*c", 0, &slots) == 0,
+        "heap-limit fixture must compile");
+    CHECK(elephc_pcre2_v1_exec(handle, long_subject, 0, NULL, 0) == 1,
+        "the heap limit is an internal error, not REG_ESPACE");
+    elephc_pcre2_v1_free(handle);
+    free(long_subject);
+
+    CHECK(elephc_pcre2_v1_compile(&handle, ".", 0x0040, &slots) == 0, "UTF fixture must compile");
+    CHECK(elephc_pcre2_v1_exec(handle, "\xff", 1, pairs, 0) == 16, "malformed UTF-8 is REG_INVARG");
+    CHECK(elephc_pcre2_v1_exec(handle, "", 1, pairs, 0) == 17, "an empty subject is a plain nonmatch");
+    elephc_pcre2_v1_free(handle);
+    return 0;
+}
+
 int main(void) {
     int result;
 
@@ -271,6 +318,10 @@ int main(void) {
         return result;
     }
     result = check_mime_native_contract();
+    if (result != 0) {
+        return result;
+    }
+    result = check_match_error_statuses();
     if (result != 0) {
         return result;
     }
