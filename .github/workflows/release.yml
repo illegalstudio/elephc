@@ -243,6 +243,7 @@ jobs:
             libelephc_bcmath.a \
             libelephc_gmp.a \
             libelephc_random.a \
+            libelephc_filter.a \
             libelephc_mbstring.a \
             libelephc_iconv.a \
             libelephc_phar.a \
@@ -447,6 +448,7 @@ jobs:
               lib.install "libelephc_bcmath.a"
               lib.install "libelephc_gmp.a"
               lib.install "libelephc_random.a"
+              lib.install "libelephc_filter.a"
               lib.install "libelephc_mbstring.a"
               lib.install "libelephc_iconv.a"
               lib.install "libelephc_phar.a"
