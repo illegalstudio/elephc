@@ -36,9 +36,7 @@ impl ArrayReferenceOperands {
                 };
                 if ctx.semantic_profile.contains(elephc_semantics::StrictFeature::ArrayKeys) {
                     // The enclosing operand window owns receiver cleanup; the guard borrows it.
-                    let borrowed = ctx.emit_value(Op::Borrow, vec![receiver.value], None,
-                        ctx.builder.value_php_type(receiver.value), Op::Borrow.default_effects(), Some(span));
-                    ctx.builder.set_value_ownership(borrowed.value, Ownership::Borrowed);
+                    let borrowed = crate::ir_lower::ownership::borrow_value(ctx, receiver, Some(span));
                     crate::ir_lower::array_key_guards::for_receiver(ctx, borrowed, key, index.span);
                 }
                 (key, owner)

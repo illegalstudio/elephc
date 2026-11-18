@@ -210,9 +210,11 @@ pub(super) fn lower_boxed_set(
     branch_to(ctx, merge);
     ctx.builder.position_at_end(array_block);
     ctx.restore_initialized_slots(initialized.clone());
-    ctx.emit_void(Op::RuntimeCall, vec![receiver.value, key.value, value.value],
-        key_already_diagnosed.then_some(Immediate::Bool(true)),
-        Op::RuntimeCall.default_effects(), Some(span));
+    crate::ir_lower::expr::lower_array_access_set_or(ctx, receiver, key, value, span, |ctx| {
+        ctx.emit_void(Op::RuntimeCall, vec![receiver.value, key.value, value.value],
+            key_already_diagnosed.then_some(Immediate::Bool(true)),
+            Op::RuntimeCall.default_effects(), Some(span));
+    });
     branch_to(ctx, merge);
     ctx.builder.position_at_end(merge);
     ctx.restore_initialized_slots(initialized);

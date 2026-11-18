@@ -16,23 +16,25 @@ pub(in crate::ir_lower) fn load_array_local_for_write(
     name: &str,
     span: Span,
 ) -> LoweredValue {
-    let value = ctx.load_local_for_mutation(name, Some(span));
-    let ty = ctx.builder.value_php_type(value.value);
-    if ty.codegen_repr() != PhpType::Mixed
-        || ctx.append_update_cell_aliases.contains(name)
-    {
-        return value;
-    }
-    let detached = ctx.emit_owned_value(
-        Op::MixedClone,
-        vec![value.value],
-        None,
-        ty.clone(),
-        Op::MixedClone.default_effects(),
-        Some(span),
-    );
-    ctx.store_call_argument_local(name, detached, ty, Some(span));
-    ctx.load_local_for_mutation(name, Some(span))
+    ctx.with_independent_write_receiver(|ctx| {
+        let value = ctx.load_local_for_mutation(name, Some(span));
+        let ty = ctx.builder.value_php_type(value.value);
+        if ty.codegen_repr() != PhpType::Mixed
+            || ctx.append_update_cell_aliases.contains(name)
+        {
+            return value;
+        }
+        let detached = ctx.emit_owned_value(
+            Op::MixedClone,
+            vec![value.value],
+            None,
+            ty.clone(),
+            Op::MixedClone.default_effects(),
+            Some(span),
+        );
+        ctx.store_call_argument_local(name, detached, ty, Some(span));
+        ctx.load_local_for_mutation(name, Some(span))
+    })
 }
 
 /// Lowers `$array[] = value`.

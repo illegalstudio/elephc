@@ -8,7 +8,7 @@
 //! - Mixed receivers retain string and ArrayAccess dispatch; operands are never converted.
 
 use super::{context::{LoweredValue, LoweringContext}, conversion_boundaries, semantic_guards};
-use crate::{ir::{IrHeapKind, IrType, Op, Ownership, PhpTypePredicate, Terminator}, span::Span, types::PhpType};
+use crate::{ir::{IrHeapKind, IrType, Op, PhpTypePredicate, Terminator}, span::Span, types::PhpType};
 use elephc_semantics::StrictFeature;
 
 /// Keeps an evaluated receiver alive across a catchable key check and returns the original key.
@@ -49,12 +49,12 @@ pub(super) fn for_prepared_write(
     ctx: &mut LoweringContext<'_, '_>, receiver: LoweredValue, key: LoweredValue, span: Span,
 ) {
     if !needs_check(ctx, key) { return; }
-    let key = borrowed_view(ctx, key, span);
+    let key = super::ownership::borrow_value(ctx, key, Some(span));
     if matches!(receiver.ir_type, IrType::Heap(IrHeapKind::Array | IrHeapKind::Hash) | IrType::Void) {
         conversion_boundaries::array_key(ctx, key, span);
         return;
     }
-    let receiver = borrowed_view(ctx, receiver, span);
+    let receiver = super::ownership::borrow_value(ctx, receiver, Some(span));
     let array = semantic_guards::matches_any_kind(ctx, receiver, &[PhpTypePredicate::Array], Some(span));
     let null = ctx.emit_value(Op::IsNull, vec![receiver.value], None, PhpType::Bool,
         Op::IsNull.default_effects(), Some(span));
@@ -74,15 +74,6 @@ fn needs_check(ctx: &LoweringContext<'_, '_>, key: LoweredValue) -> bool {
     ctx.semantic_profile.contains(StrictFeature::ArrayKeys)
         && crate::semantics::array_keys::plan(ctx.semantic_profile,
             &ctx.builder.value_php_type(key.value)) != elephc_semantics::conversions::ConversionPlan::Identity
-}
-
-/// Borrows an already-rooted operand so the membership helper does not publish its lease twice.
-fn borrowed_view(ctx: &mut LoweringContext<'_, '_>, value: LoweredValue, span: Span) -> LoweredValue {
-    let ty = ctx.builder.value_php_type(value.value);
-    let borrowed = ctx.emit_value(Op::Borrow, vec![value.value], None, ty,
-        Op::Borrow.default_effects(), Some(span));
-    ctx.builder.set_value_ownership(borrowed.value, Ownership::Borrowed);
-    borrowed
 }
 
 /// Validates a key only on paths that operate on an existing or materialized PHP array.
