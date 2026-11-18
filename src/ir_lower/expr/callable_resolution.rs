@@ -69,7 +69,7 @@ pub(super) fn lower_static_callable_call(
             begin_call_argument_evaluation(ctx);
             let previous_description = ctx.call_description.replace(function_name.clone());
             let previous_call_site = ctx.call_site_span.replace(expr.span);
-            let mut operands = lower_args_with_signature(ctx, sig.as_ref(), callback_args);
+            let mut operands = lower_callable_value_args(ctx, sig.as_ref(), callback_args);
             ctx.call_description = previous_description;
             ctx.call_site_span = previous_call_site;
             let evaluation_intermediates = finish_call_argument_evaluation(ctx, &mut operands);
@@ -208,7 +208,7 @@ pub(super) fn lower_static_callable_call(
                 .unwrap_or_else(|| "{closure}".to_string());
             let previous_description = ctx.call_description.replace(label);
             let previous_call_site = ctx.call_site_span.replace(expr.span);
-            let mut arg_values = lower_args_with_signature(ctx, Some(&signature), callback_args);
+            let mut arg_values = lower_callable_value_args(ctx, Some(&signature), callback_args);
             ctx.call_description = previous_description;
             ctx.call_site_span = previous_call_site;
             let evaluation_intermediates = finish_call_argument_evaluation(ctx, &mut arg_values);
@@ -246,7 +246,11 @@ pub(super) fn lower_static_callable_call(
             Some(finish_reference_return_value(ctx, call, reference_staging, expr.span))
         }
         StaticCallableBinding::StaticMethod { receiver, method } => {
-            Some(lower_static_method_call(ctx, &receiver, &method, callback_args, expr))
+            // `$f = 'K::m'; $f($v)`: no recorded argument sites, as for a function alias.
+            ctx.scalar_guards_unrecorded = true;
+            let call = lower_static_method_call(ctx, &receiver, &method, callback_args, expr);
+            ctx.scalar_guards_unrecorded = false;
+            Some(call)
         }
         StaticCallableBinding::StaticMethodDescriptor { receiver, method } => {
             Some(lower_static_method_descriptor_call(
@@ -797,4 +801,17 @@ pub(super) fn builtin_call_signature(name: &str) -> Option<FunctionSig> {
 /// Looks up precise first-class builtin metadata using the normalized global builtin name.
 pub(super) fn first_class_builtin_signature(name: &str) -> Option<FunctionSig> {
     crate::types::first_class_callable_builtin_sig(&php_symbol_key(name.trim_start_matches('\\')))
+}
+
+/// Lowers the arguments of a call through a statically resolved callable value: the checker
+/// recorded no argument sites for it, so the scalar-parameter checks decide from the values.
+fn lower_callable_value_args(
+    ctx: &mut LoweringContext<'_, '_>,
+    sig: Option<&FunctionSig>,
+    args: &[Expr],
+) -> Vec<crate::ir::ValueId> {
+    ctx.scalar_guards_unrecorded = true;
+    let operands = lower_args_with_signature(ctx, sig, args);
+    ctx.scalar_guards_unrecorded = false;
+    operands
 }

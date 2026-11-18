@@ -1196,3 +1196,33 @@ function handler(int $no, string $msg): bool { global $x; $x = 2; return true; }
     );
     assert_eq!(out, "map 2\nmap-named 2\nfilter 2\nusort 2\ncuf 2\ncufa 2\nreduce 2\nvar 2\nclosure 2\n");
 }
+
+/// A call through a callable value the compiler resolves statically (`$f = 'ts'; $f($v)`, a
+/// `'K::sm'` string) binds through the direct-call path, but the checker records no argument
+/// site for it, so its scalar checks were skipped: `null` reached `string` as `""` and a lossy
+/// float reached `int` without the deprecation. They now decide from the values.
+#[test]
+fn test_statically_resolved_callable_values_check_scalar_parameters() {
+    let out = compile_and_run(
+        r#"<?php
+function box(mixed $v): mixed { return $v; }
+function ts(string $s): string { return "[$s]"; }
+function ti(int $n): int { return $n; }
+class K { public function m(string $s): string { return $s; } public static function sm(string $s): string { return $s; } }
+function show(Throwable $e): void { echo str_replace(__FILE__, "F", $e->getMessage()), "\n"; }
+$f = 'ts';
+try { var_dump($f(box(null))); } catch (TypeError $e) { show($e); }
+$g = [new K(), 'm'];
+try { var_dump($g(box(null))); } catch (TypeError $e) { show($e); }
+$h = 'K::sm';
+try { var_dump($h(box(null))); } catch (TypeError $e) { show($e); }
+try { var_dump(call_user_func('ts', box(null))); } catch (TypeError $e) { show($e); }
+$c = fn(string $s) => $s;
+try { var_dump($c(box(null))); } catch (TypeError $e) { show($e); }
+set_error_handler(function (int $no, string $msg, string $file, int $line) { echo "deprecation on line $line\n"; return true; });
+$i = 'ti';
+echo $i(box(1.5)), "\n";
+"#,
+    );
+    assert_eq!(out, "ts(): Argument #1 ($s) must be of type string, null given, called in F on line 8\nK::m(): Argument #1 ($s) must be of type string, null given, called in F on line 10\nK::sm(): Argument #1 ($s) must be of type string, null given, called in F on line 12\nts(): Argument #1 ($s) must be of type string, null given, called in F on line 13\n{closure:F:14}(): Argument #1 ($s) must be of type string, null given, called in F on line 15\ndeprecation on line 4\n1\n");
+}
