@@ -133,7 +133,9 @@ eval($source);
         "{name}: an eval override must precede its native backing method");
     let named_call = format!("{}\n", target.extern_symbol("__elephc_eval_object_is_a"));
     let dynamic_call = format!("{}\n", target.extern_symbol("__elephc_eval_object_is_a_dynamic"));
-    assert!(body.matches(&named_call).count() >= 4, "{name}");
+    // `instanceof`, `is_a` and `is_a(.., 'stdClass')` probe through the named helper; the merged
+    // `is_subclass_of` takes its own run-time arm (not a fourth named probe).
+    assert!(body.matches(&named_call).count() >= 3, "{name}");
     assert_eq!(body.matches(&dynamic_call).count(), 1, "{name}");
     let guard_symbol = crate::names::function_symbol("acceptEscapedEvalReference");
     let guard_body = assembly.split_once(&format!("{guard_symbol}:\n")).unwrap().1;
@@ -474,20 +476,21 @@ fn check_profiled_eval_owns_its_result_and_roots_its_source(target: &str) {
     let root = function.instructions[..index].iter().find(|inst| {
         inst.op == Op::StoreLocal && inst.operands == [call.operands[0]]
     }).expect("the source must be visible to exceptional frame cleanup");
-    let guard = function.instructions[..index].iter().find(|inst| {
+    // The source root is published on the call-operand owner stack, which is what releases the
+    // source on an unwinding throw; an argument guard on the same value would free it twice
+    // (free-list corruption in every catch around a dynamic eval), so the merged lowering
+    // registers no guard beside the root.
+    assert!(function.instructions[..index].iter().any(|inst| {
+        inst.op == Op::PushCallOperandOwner && inst.immediate == root.immediate
+    }), "{target}: the eval source root must be published for exceptional cleanup");
+    assert!(!function.instructions.iter().any(|inst| {
         inst.immediate == Some(Immediate::RuntimeCall(crate::ir::RuntimeCallTarget::ExceptionGuardOwned))
             && inst.operands.first() == call.operands.first()
-    }).expect("the eval argument must have an exceptional ownership guard");
-    let token = guard.result.expect("argument guard token");
+    }), "{target}: a rooted eval source takes no second guard");
     let cleanup = &function.instructions[index + 1..];
-    let unguard = cleanup.iter().position(|inst| {
-        inst.immediate == Some(Immediate::RuntimeCall(crate::ir::RuntimeCallTarget::ExceptionUnguardOwned))
-            && inst.operands == [token]
-    }).expect("normal eval completion must remove its argument guard");
-    let detach = cleanup.iter().position(|inst| {
+    cleanup.iter().position(|inst| {
         inst.op == Op::PopCallOperandOwner && inst.immediate == root.immediate
     }).expect("normal eval completion must detach its source root");
-    assert!(unguard < detach, "{target}: remove the newer guard before detaching the source root");
     assert!(function.instructions[index + 1..].iter().any(|inst| {
         inst.op == Op::ReleaseLocalSlot && inst.immediate == root.immediate
     }), "{target}: normal return must clear and retire the source root");
