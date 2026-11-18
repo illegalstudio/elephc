@@ -130,7 +130,9 @@ pub(super) fn lower_wider_override_dispatch(
             Op::Move.default_effects(),
             Some(expr.span),
         );
-        let call = lower_method_call_with_receiver(ctx, narrowed, method, args, Op::MethodCall, expr);
+        // The narrowed class must survive: `lower_method_call_with_receiver` would re-type the
+        // receiver to the class the checker recorded for this site (the ancestor).
+        let call = lower_method_call_with_refined_receiver(ctx, narrowed, method, args, Op::MethodCall, expr);
         store_value_into_temp(ctx, &temp_name, result_type.clone(), call, expr.span);
         branch_to(ctx, merge);
 

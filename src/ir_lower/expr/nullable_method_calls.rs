@@ -428,6 +428,23 @@ pub(super) fn lower_method_call_with_receiver(
         }
     }
     let object = refine_member_receiver(ctx, object, expr);
+    lower_method_call_with_refined_receiver(ctx, object, method, args, op, expr)
+}
+
+/// [`lower_method_call_with_receiver`] for a receiver whose static class is already settled.
+///
+/// `refine_member_receiver` re-types the value to the class the checker recorded for the member
+/// expression. A receiver the override ladder narrowed to a descendant (`Op::Move` to the wider
+/// override's class) must keep that class, or the call is lowered against the ancestor's
+/// signature again and the override reads arguments the site never materialized.
+pub(super) fn lower_method_call_with_refined_receiver(
+    ctx: &mut LoweringContext<'_, '_>,
+    object: LoweredValue,
+    method: &str,
+    args: &[Expr],
+    op: Op,
+    expr: &Expr,
+) -> LoweredValue {
     if let Some(call) = enum_interface_calls::lower_enum_interface_call(ctx, object, method, args, op, expr) {
         return call;
     }
