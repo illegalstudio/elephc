@@ -14,7 +14,7 @@ use crate::runtime_hooks::owner_frames::{with_runtime_owners, RuntimeOwnerSlot};
 /// Produces an independent object owner before the caller publishes any reference mutation.
 pub(super) fn object(value: RuntimeCellHandle, context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps) -> Result<RuntimeCellHandle, EvalStatus> {
-    if values.type_tag(value)? == EVAL_TAG_OBJECT { return values.retain(value); }
+    if values.type_tag(value)? == EVAL_TAG_OBJECT { return values.copy_value(value); }
     let object = RuntimeOwnerSlot::new(values.new_object("stdClass")?);
     with_runtime_owners(&object, || {
         let result = (|| {
@@ -24,7 +24,7 @@ pub(super) fn object(value: RuntimeCellHandle, context: &mut ElephcEvalContext,
                     values.release(updated)?;
                 }
             } else if !values.is_null(value)? {
-                values.property_set_bytes(object.borrowed(), b"scalar", value)?;
+                scalar_property(object.borrowed(), value, context, values)?;
             }
             Ok(())
         })();
@@ -33,6 +33,16 @@ pub(super) fn object(value: RuntimeCellHandle, context: &mut ElephcEvalContext,
             Err(status) => { let _ = eval_release_value(context, values, object.take()); Err(status) }
         }
     })
+}
+
+/// Snapshots a scalar before storing it in an object that will replace its reference receiver.
+fn scalar_property(object: RuntimeCellHandle, value: RuntimeCellHandle,
+    context: &mut ElephcEvalContext, values: &mut impl RuntimeValueOps) -> Result<(), EvalStatus> {
+    let snapshot = RuntimeOwnerSlot::new(values.copy_value(value)?);
+    let result = with_runtime_owners(&snapshot, ||
+        values.property_set_bytes(object, b"scalar", snapshot.borrowed()).map(|()| object));
+    let held = finish_synthesized_method_arguments(result, [snapshot.take()], context, values)?;
+    values.release(held)
 }
 
 /// Writes one byte-named property while retiring every temporary key, text and value on failure.

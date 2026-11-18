@@ -143,25 +143,18 @@ fn strict_settype_eval_kernel_controls_and_value_argument_retirement() {
 /// Collection targets preserve object identity, original array values and every activation owner.
 #[test]
 fn strict_settype_eval_collection_targets_identity_cow_and_owners() {
-    let mut context = ElephcEvalContext::new();
-    context.install_semantic_profile(SemanticProfile::PERMISSIVE.with(StrictFeature::Casts, true)).unwrap();
-    let mut scope = ElephcEvalScope::new(); let mut values = FakeOps::default();
-    let source = r#"$value = null; $alias =& $value; $cast = settype(...);
-$cast($value, 'array'); echo count($alias), '|';
-$value = 'item'; $cast($value, 'array'); echo $alias[0], '|';
-$value = ['name' => 'kept', 2 => 'number']; $cast($value, 'object');
-echo $alias->name, ':', $alias->{'2'}, '|';
-$same = $value; $name = 'settype'; $name($value, 'OBJECT'); echo $same === $alias ? 'I|' : 'X|';
-$name($value, 'array'); echo $alias['name'], ':', $alias[2], '|';
-$value = null; $cast($value, 'object'); echo is_object($alias) ? 'N|' : 'X|';
-$value = 42; settype($value, 'object'); echo $alias->scalar, '|';
-$items = ['k' => ['name' => 'kept']]; $copy = $items;
-$cast($items['k'], 'object'); echo $items['k']->name, ':', $copy['k']['name'];
-return true;"#;
-    let result = staged_numeric_execution(source, false, &mut context, &mut scope, &mut values);
-    let Ok(EvalControl::Return(result)) = result else { panic!("collection settype: {:?}, {}", result.err(), values.output); };
-    assert_eq!(values.output, "0|item|kept:number|I|kept:number|N|42|kept:kept");
-    values.release(result).unwrap(); clean(&mut scope, &mut values);
+    for casts in [false, true] {
+        let mut context = ElephcEvalContext::new();
+        context.install_semantic_profile(SemanticProfile::PERMISSIVE.with(StrictFeature::Casts, casts)).unwrap();
+        let mut scope = ElephcEvalScope::new(); let mut values = FakeOps::default();
+        let source = include_str!(concat!(env!("CARGO_MANIFEST_DIR"),
+            "/../../tests/fixtures/strict/settype_reference_snapshots.php"))
+            .strip_prefix("<?php\n").unwrap();
+        let result = staged_numeric_execution(source, false, &mut context, &mut scope, &mut values);
+        let Ok(EvalControl::Return(result)) = result else { panic!("collection settype: {:?}, {}", result.err(), values.output); };
+        assert_eq!(values.output, "0|item|kept:number|I|kept:number|N|42|kept:kept");
+        values.release(result).unwrap(); clean(&mut scope, &mut values);
+    }
 }
 
 /// String targets invoke eval-defined hooks before publication and preserve the original on throws.

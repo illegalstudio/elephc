@@ -21,7 +21,12 @@ macro_rules! impl_fake_collection_call_ops {
                         .unwrap_or_else(|| FakeKey::String(name.into_bytes()));
                     (key, value)
                 }).collect()),
-            _ => FakeValue::Array(vec![value.owned()]),
+            _ => {
+                let scalar = self.copy_value(value)?;
+                let array = self.alloc(FakeValue::Array(vec![scalar.borrowed()]));
+                self.transfer_reference_value_owner(scalar);
+                return Ok(array);
+            },
         };
         Ok(self.alloc(result))
     }

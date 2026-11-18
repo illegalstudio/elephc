@@ -371,7 +371,7 @@ evidence and outstanding guarantees are recorded below.
 
 ## Implementation progress
 
-Verified through step175 (this commit). Remaining feature integration is active. Issue:
+Verified through step176 (this commit). Remaining feature integration is active. Issue:
 https://github.com/illegalstudio/elephc/issues/2347.
 
 The full task remains active. The user requested complete implementation, with a
@@ -1713,3 +1713,32 @@ hypothesis: heap kind3 denotes hashes, and object cleanup was already balanced.
 ArrayKeys admission remains staged. The preexisting checked settype collection
 failure and Casts-off escaped array-parameter lifetime control remain active work,
 followed by the outstanding ArrayKeys admission gates and other strict families.
+
+### Verified176: independent collection snapshots for settype
+
+Scalar array casts now transfer a cloned, dereferenced PHP value into element
+zero on both architectures. Checked object construction leases a copied scalar
+before storing its scalar property; existing objects copy their value cell while
+preserving object identity. The fake array cast models the same snapshot and
+transfers the new child owner into the array graph. This prevents a converted
+collection from retaining the reference receiver that it subsequently replaces.
+
+Valid array, object and null targets also use the shared conversion helpers in
+permissive eval. The existing invalid-target false-result control is unchanged.
+The shared PHP fixture checks scalar references, null, object identity, numeric
+property names, array element updates and an independent copy. The original
+native baseline printed Array instead of item and then failed while formatting
+a self-referential scalar property (journal6077cbcf, extending e7aeaa47).
+
+The interpreter control passes with Casts on and off and no retained activation
+owners. Four opaque native eval programs pass with exact PHP8.5.12 output and
+clean heaps in145.83s. The focused AOT scalar and existing collection controls
+cover all supported targets and native optimizer modes. All nineteen required
+gates pass, including the builtin exporter/generator/audit workflow, serial default
+build and assembly/diff hygiene. No builtin signature is changed.
+
+The full eval fixture additionally exposed an AOT limitation: applying settype
+directly to an array element can pass checking and then panic during lowering.
+Task29118b0b records that separate place-lowering/diagnostic work; AOT target
+coverage here uses supported mixed local/reference storage. ArrayKeys remains
+staged while escaped source lifetimes and its remaining admission gates continue.

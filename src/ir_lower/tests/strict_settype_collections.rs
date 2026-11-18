@@ -72,3 +72,46 @@ fn strict_settype_collections_native_values_and_owners() {
         }
     }
 }
+
+/// Explicit mixed storage supports collection writeback through every supported AOT target.
+#[test]
+fn strict_settype_reference_snapshots_emit_on_all_targets() {
+    let source = r#"<?php
+function collectionScalarSnapshot(mixed $value): void {
+    $alias =& $value;
+    settype($value, 'array'); echo $alias[0];
+    $value = 42; settype($value, 'object'); echo $alias->scalar;
+}
+collectionScalarSnapshot('item');
+"#;
+    let profile = SemanticProfile::PERMISSIVE.with(StrictFeature::Casts, true);
+    for name in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+        let module = super::semantic_sources::lower_capturing_arguments(source,
+            Target::parse(name).unwrap(), profile, false, crate::source::SourceMode::Php);
+        crate::ir::validate_module(&module).unwrap();
+        crate::codegen::generate_user_asm_from_ir(&module, false, false).unwrap();
+    }
+}
+
+/// Opaque eval snapshots scalar references before array and object writeback in both profiles.
+#[cfg(any(all(target_os = "macos", target_arch = "aarch64"),
+    all(target_os = "linux", any(target_arch = "x86_64", target_arch = "aarch64"))))]
+#[test]
+fn strict_settype_reference_snapshots_native_eval_values_and_owners() {
+    let fragment = include_str!("../../../tests/fixtures/strict/settype_reference_snapshots.php")
+        .strip_prefix("<?php\n").unwrap().replace('\\', "\\\\").replace('\'', "\\'");
+    let source = format!("<?php $code = $argc > 0 ? '{fragment}' : ''; eval($code);");
+    for casts in [false, true] {
+        for optimize in [false, true] {
+            let profile = SemanticProfile::PERMISSIVE.with(StrictFeature::Casts, casts);
+            let module = super::semantic_sources::lower_capturing_arguments(&source,
+                Target::detect_host(), profile, optimize, crate::source::SourceMode::Php);
+            let output = super::native_module::run(&module);
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            assert!(output.status.success(), "casts={casts} opt={optimize}: {:?}; {stderr}", output.status);
+            assert_eq!(String::from_utf8_lossy(&output.stdout),
+                "0|item|kept:number|I|kept:number|N|42|kept:kept", "casts={casts} opt={optimize}: {stderr}");
+            assert!(stderr.contains("HEAP DEBUG: leak summary: clean"), "casts={casts} opt={optimize}: {stderr}");
+        }
+    }
+}

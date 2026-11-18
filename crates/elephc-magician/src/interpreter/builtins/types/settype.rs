@@ -112,6 +112,9 @@ pub(in crate::interpreter) fn eval_settype_cast_value(
         "float" | "double" => Some(values.cast_float(value)?),
         "int" | "integer" => Some(values.cast_int(value)?),
         "string" => Some(values.cast_string(value)?),
+        "array" => Some(eval_cast_value(&EvalCastType::Array, value, context, values)?),
+        "object" => Some(collections::object(value, context, values)?),
+        "null" => Some(values.null()?),
         _ => None,
     };
     Ok(converted)
