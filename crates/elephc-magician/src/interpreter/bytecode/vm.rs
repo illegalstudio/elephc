@@ -25,7 +25,7 @@ use crate::interpreter::{
     eval_inc_dec_value, eval_output_value, eval_boolean_condition, finish_eval_argument_values, release_function_args,
     eval_pcntl_maybe_dispatch, eval_release_value, eval_unary_value,
     finish_activation_scope, set_owned_scope_cell, visible_scope_cell, EvalControl, RuntimeValueOps,
-    warn_eval_discarded_function_call, local_producer_contract, store_local_with_origin,
+    warn_eval_discarded_function_call, local_producer_contract, store_local_with_origin, retire_scope_replacements,
 };
 use crate::runtime_hooks::owner_frames::with_runtime_owners;
 use crate::scope::ElephcEvalScope;
@@ -215,7 +215,7 @@ fn step(
             let slot = vm.frames.last().ok_or(EvalStatus::RuntimeFatal)?.scope_slot;
             let scope = frame_scope(slot, &mut vm.scopes, scope);
             let replaced = store_local_with_origin(context, scope, name, value, producer, values)?;
-            for cell in replaced { eval_release_value(context, values, cell)?; }
+            retire_scope_replacements(replaced, context, values)?;
         }
         Op::Pop => {
             let value = pop(&mut vm.stack)?;

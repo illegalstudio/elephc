@@ -11,6 +11,18 @@ use super::super::*;
 use super::{support::*, strict_semantics::staged_numeric_execution};
 use elephc_semantics::{SemanticProfile, StrictFeature};
 
+/// Exposes the pending exception message when a shared reference fixture fails.
+fn reference_fixture_pending_error(context: &mut ElephcEvalContext, values: &FakeOps) -> Option<FakeValue> {
+    let pending = values.pending_runtime_throwable.or_else(|| context.take_pending_throw())?;
+    let value = values.get(pending);
+    if let FakeValue::Object(fields) = &value {
+        if let Some((_, message)) = fields.iter().find(|(name, _)| name == "message") {
+            return Some(values.get(*message));
+        }
+    }
+    Some(value)
+}
+
 /// Checks both eval entry points, profiles and complete scope-owner retirement.
 fn assert_reference_fixture(source: &str, checked: &str, permissive: &str) {
     let source = source.strip_prefix("<?php").unwrap();
@@ -24,12 +36,12 @@ fn assert_reference_fixture(source: &str, checked: &str, permissive: &str) {
                 let program = crate::parser::parse_fragment_with_semantics(source.as_bytes(), context.semantic_profile()).unwrap();
                 let result = execute_program_with_context(&mut context, &program, &mut scope, &mut values)
                     .unwrap_or_else(|error| panic!("locals={locals} dispatch={dispatch}: {error:?}; output={}; pending={:?}",
-                        values.output, values.pending_runtime_throwable.map(|cell| values.get(cell))));
+                        values.output, reference_fixture_pending_error(&mut context, &values)));
                 values.release(result).unwrap();
             } else {
                 staged_numeric_execution(source, false, &mut context, &mut scope, &mut values)
                     .unwrap_or_else(|error| panic!("locals={locals} dispatch={dispatch}: {error:?}; output={}; pending={:?}",
-                        values.output, values.pending_runtime_throwable.map(|cell| values.get(cell))));
+                        values.output, reference_fixture_pending_error(&mut context, &values)));
             }
             assert_eq!(values.output, if locals { checked } else { permissive }, "locals={locals} dispatch={dispatch}");
             for value in scope.drain_owned_cells() { values.release(value).unwrap(); }
@@ -155,4 +167,11 @@ fn conditional_static_origins_eval_values_and_owners() {
 fn global_binding_leases_eval_values_and_owners() {
     let expected = "2|1|2:1|2:2|2|1|2:2|2:3|2|absent:created|present:created|after|2|3.5|1.5|after|before|double:2.5|DCNULL:|DCNULL:|";
     assert_reference_fixture(include_str!("../../../../../tests/fixtures/strict/global_binding_leases.php"), expected, expected);
+}
+
+/// Program publication preserves references and balances every heap source after a throwing retirement.
+#[test]
+fn global_publication_sources_eval_values_and_owners() {
+    let expected = "DCobject:2|DCarray:3|DCstring:xx|";
+    assert_reference_fixture(include_str!("../../../../../tests/fixtures/strict/global_publication_owners.php"), expected, expected);
 }

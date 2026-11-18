@@ -2055,6 +2055,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
 
     /// Ensures this function has a persistent eval scope handle slot.
     pub(crate) fn declare_eval_scope_local(&mut self) -> LocalSlotId {
+        if self.in_main { return self.declare_eval_global_scope_local(); }
         self.declare_local_with_kind(EVAL_SCOPE_LOCAL_NAME, PhpType::Int, LocalKind::EvalScope)
     }
 
@@ -3034,9 +3035,16 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         // from the final widened type either way.
         self.builder.widen_local_storage_type(slot, widen_type);
         if uses_global {
+            // Publication owns the acquired value; its source lease must survive a throwing retirement.
+            let source_owner = if release_source_after_store && !transfer_source_to_store {
+                crate::ir_lower::expr::root_owned_call_operand(self, source,
+                    span.unwrap_or_else(Span::dummy)).1
+            } else { None };
             self.store_global_name(name, slot, value, span);
             self.set_local_type(name, php_type);
-            if release_source_after_store && !transfer_source_to_store {
+            if let Some(owner) = source_owner {
+                crate::ir_lower::expr::retire_owned_call_operand(self, owner, span.unwrap_or_else(Span::dummy));
+            } else if release_source_after_store && !transfer_source_to_store {
                 crate::ir_lower::ownership::release_if_owned(self, source, span);
             }
             return value;

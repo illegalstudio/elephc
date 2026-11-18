@@ -330,3 +330,19 @@ pub(in crate::interpreter) fn finish_activation_scope(
         (Ok(value), Ok(())) => Ok(value),
     }
 }
+
+/// Retires every displaced/source lease even when an earlier destructor throws.
+pub(in crate::interpreter) fn retire_scope_replacements(
+    cells: Vec<RuntimeCellHandle>, context: &mut ElephcEvalContext, values: &mut impl RuntimeValueOps,
+) -> Result<(), EvalStatus> {
+    use crate::runtime_hooks::owner_frames::{RuntimeOwnerSlot, with_runtime_owners};
+    let owners = cells.into_iter().map(RuntimeOwnerSlot::new).collect::<Vec<_>>();
+    with_runtime_owners(&owners, || {
+        let mut result = Ok(());
+        for owner in &owners {
+            let released = eval_release_value(context, values, owner.take());
+            if result.is_ok() { result = released; }
+        }
+        result
+    })
+}

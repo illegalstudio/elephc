@@ -870,3 +870,5 @@ mod global_value_snapshots;
 mod conditional_static_origins;
 
 mod global_binding_leases;
+
+mod global_publication_owners;

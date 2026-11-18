@@ -1019,6 +1019,8 @@ an independent snapshot. A conditional detach affects only its executed path,
 including across runtime eval. Replacing an existing local during `global` can
 run its destructor before the alias is published. If that destructor throws, the
 local remains null and the program value stays intact.
+For ordinary assignments to a global, the replacement is visible before the old
+value's destructor runs, and remains valid if that destructor throws.
 Reflection snapshots copy ordinary unescaped values and preserve references already
 shared with an activation or an escaping alias. Writes through a shared snapshot
 validate the same static contract before changing its value.

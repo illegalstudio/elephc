@@ -143,3 +143,20 @@ fn fake_reference_payload_owner_transfers_without_a_phantom_root() {
     values.release(previous).unwrap();
     assert_eq!(values.cell_owners[&(object.as_ptr() as usize)], 1);
 }
+
+/// A live wrapper and an independent snapshot each prevent premature object destruction.
+#[test]
+fn fake_reference_children_prevent_early_destructors() {
+    let mut values = FakeOps::default();
+    let object = values.alloc(FakeValue::Object(Vec::new()));
+    let identity = values.object_identity(object).unwrap();
+    let reference = values.reference_new(object).unwrap();
+    assert_eq!(values.final_object_identity_for_release(object).unwrap(), None);
+    values.release(object).unwrap();
+    let snapshot = values.copy_value(reference).unwrap();
+    assert_eq!(values.final_object_identity_for_release(reference).unwrap(), None);
+    values.release(snapshot).unwrap();
+    assert_eq!(values.final_object_identity_for_release(reference).unwrap(), Some(identity));
+    values.release(reference).unwrap();
+    assert!(values.cell_owners.values().all(|count| *count == 0));
+}

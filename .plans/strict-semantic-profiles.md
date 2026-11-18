@@ -2336,3 +2336,17 @@ Acceptance covers a default compiler/Magician archive build, exact owned-transfe
 No additional semantic family is admitted. Global producer-origin enforcement, Nullability, Mixed, Initialization, ArrayTypes, Indexing and complete umbrella acceptance remain active.
 
 All 19 acceptance gates passed in job e0987ad4. PHP 8.5.12 produces the same complete fixture output; every public executable reports a clean heap.
+
+### Verified199: complete source-owner retirement at global publication
+
+Program-global publication now parks its separate source lease through existing unwind-visible operand helpers before StoreGlobal can retire a throwing old value. The published owner remains independent. Main producer metadata allocates the EvalGlobalScope slot already selected by codegen, and shared validation requires exactly that owner for main or EvalScope for function activations. Scope start, bind, end, query and copy instructions consume the same rule. A negative validator test exercises an actual binding instruction with the wrong owner kind.
+
+The new fixture publishes an object, array and runtime-produced string through a program symbol observed by an escaped reference. Every old value throws during destruction. The native baseline printed the right object but retained40bytes with refs1; the corrected path preserves PHP's DCobject:2|DCarray:3|DCstring:xx| and balances source owners. The fixture retains its global-declaring function through an actual call/capture, and the emitter assertion requires StoreGlobal, so ordinary frame storage cannot silently replace this acceptance surface.
+
+Interpreter acceptance exposed two separate problems. FakeOps final destruction ignored live wrapper/container edges; it now checks the existing physical-owner graph for both the released handle and its projected object, with an independent snapshot regression. After fixing that premature destruction, a real array source lease remained because retirement loops stopped at the first exception. Shared retire_scope_replacements roots actual RuntimeOwnerSlot fields, takes each before PHP cleanup and retires all leases while preserving failure. Walker statements, assignment expressions, the VM and the top-level static fallback reuse it. The shared fixture reporter exposes pending Throwable messages for failures; temporary diagnostic markers were removed.
+
+Focused acceptance refreshes the compiler and Magician archive, covers all five emitters, native and real opaque-eval execution with both profiles and optimizer settings, both interpreter entries with zero retained owners, the selected-scope validator and physical-owner regression, directly affected global/capture/static controls, diff hygiene, eight public PHP/LFC/profile/optimizer cases and the complete strict-locals example. PHP supplies the fixture oracle. The unrelated pre-existing ordinary frame retirement order remains tracked as task4471067e; this step does not claim to repair it.
+
+No additional strict family is admitted. Reached global producer roles and conditional recreation remain active, followed by Nullability, Mixed, Initialization, ArrayTypes, Indexing and complete umbrella acceptance.
+
+All 14 acceptance gates passed in job b76365ef. The refreshed compiler/archive, four real opaque executions, eight public combinations and the complete example all pass, with clean heap/owner assertions.

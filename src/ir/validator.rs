@@ -11,6 +11,7 @@
 
 mod string_append;
 mod reference_results;
+mod eval_scope_owners;
 mod dominators;
 
 use dominators::DominatorSets;
@@ -1018,7 +1019,7 @@ fn validate_opcode_rules(
                 && function.locals.get(owner.as_raw() as usize).is_some_and(|local|
                     local.kind == LocalKind::RefCell && local.php_type == crate::types::PhpType::Mixed);
             if !valid || !function.flags.tracks_local_binding_state || inst.result.is_some()
-                || !function.locals.iter().any(|local| local.kind == LocalKind::EvalScope)
+                || !eval_scope_owners::has_scope_owner(function)
                 || !function.value(inst.operands[0]).is_some_and(|value| value.php_type == PhpType::Bool)
                 || inst.operands.get(1).is_some_and(|descriptor|
                     !function.value(*descriptor).is_some_and(|value| value.php_type == PhpType::Int)) {
@@ -1029,14 +1030,14 @@ fn validate_opcode_rules(
         EvalScopeBindingType => {
             check_count(inst_id, inst, 0, "0")?;
             if inst.result_php_type != PhpType::Int || inst.result.is_none()
-                || !function.locals.iter().any(|local| local.kind == LocalKind::EvalScope) {
+                || !eval_scope_owners::has_scope_owner(function) {
                 return Err(ValidationError::InvalidLocalReferenceContract(inst_id));
             }
             Ok(())
         },
         EvalScopeBindLocalType | EvalScopeStartBinding | EvalScopeEndBinding => {
             check_count(inst_id, inst, 0, "0")?;
-            if !function.locals.iter().any(|local| local.kind == LocalKind::EvalScope) {
+            if !eval_scope_owners::has_scope_owner(function) {
                 return Err(ValidationError::InvalidLocalReferenceContract(inst_id));
             }
             Ok(())
