@@ -43,9 +43,11 @@ use crate::codegen_support::runtime_features::RuntimeFeatures;
 ///
 /// NOTHING HERE REACHES THE `elephc_curl` BRIDGE — that was checked, not assumed: none of
 /// these helpers calls a decref/release helper, so none of them can reach
-/// `__rt_mixed_free_deep`'s resource ladder. The one entry that DOES reach code outside
-/// the hand-written runtime (`__rt_usort`) is called out individually below and is the one
-/// worth fixing first.
+/// `__rt_mixed_free_deep`'s resource ladder, and none of them reaches code outside the
+/// hand-written runtime any more. (`__rt_usort` was the last that did: its `call r12` entered
+/// the user's comparator 8 bytes off, which crashed once a comparator's parameter binding
+/// raised the precision deprecation and its error handler reached libc. `__rt_fiber_entry`
+/// is entered on an aligned stack; see [`ENTERED_ON_ALIGNED_STACK`].)
 const ALLOWED_MISALIGNED_CALLS: &[(&str, &str)] = &[
     // -- No frame at all: the helper calls without adjusting rsp, so the callee is entered
     //    8 bytes off. Every callee here is hand-written assembly that touches only integer
@@ -103,13 +105,6 @@ const ALLOWED_MISALIGNED_CALLS: &[(&str, &str)] = &[
         "__rt_wordwrap",
         "multi-push frame off by 8: calls __rt_concat_reserve / __rt_wordwrap_cpy_x86_64, \
          integer-only assembly",
-    ),
-    // -- The one that reaches code this runtime did not write. FIX THIS FIRST.
-    (
-        "__rt_usort",
-        "REACHES NON-RUNTIME CODE: `call r12` is the user's comparator, i.e. COMPILED PHP. \
-         It has survived because codegen spills floats with `movsd`/`movq` (alignment-\
-         tolerant) rather than `movaps`, which is luck, not design",
     ),
 ];
 
