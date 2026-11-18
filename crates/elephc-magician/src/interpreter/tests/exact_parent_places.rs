@@ -17,9 +17,9 @@ use elephc_semantics::{SemanticProfile, StrictFeature};
 fn exact_eval_parent_places_walker_vm_publication_and_owners() {
     let source = include_str!("../../../../../tests/fixtures/strict/array_parent_places.php")
         .strip_prefix("<?php\n").unwrap();
-    for exact in [false, true] {
+    for (exact, coordinated) in [(false, false), (false, true), (true, false), (true, true)] {
         for vm in [false, true] {
-            let profile = SemanticProfile::PERMISSIVE.with(StrictFeature::ArrayKeys, exact);
+            let profile = SemanticProfile::PERMISSIVE.with(StrictFeature::ArrayKeys, exact).with(StrictFeature::Casts, coordinated);
             let mut context = ElephcEvalContext::new(); context.install_semantic_profile(profile).unwrap();
             let mut scope = ElephcEvalScope::new(); let mut values = FakeOps::default(); values.fixed_profile = Some(profile);
             assert!(context.set_global_scope(&mut scope));
@@ -42,18 +42,22 @@ fn exact_eval_parent_places_walker_vm_publication_and_owners() {
                         else { expected.push_str(&format!("ok|array:1|integer:{text}:9|")); }
                     }
                 }
-                for mutation in [1, 2] {
+                let mut call = format!("placeWrite({static_parent}, true, 0, 3);");
+                if vm { call = format!("if(false){{function placeWrite($static,$falseParent,$key,$mutation){{}}}} {call}"); }
+                staged_numeric_execution(&call, vm, &mut context, &mut scope, &mut values).unwrap();
+                expected.push_str("K|R|F|array:0|ok|array:1|integer:0:9|");
+                for mutation in [1, 2, 4, 5] {
                     let mut call = format!("placeWrite({static_parent}, true, 0, {mutation});");
                     if vm { call = format!("if(false){{function placeWrite($static,$falseParent,$key,$mutation){{}}}} {call}"); }
                     staged_numeric_execution(&call, vm, &mut context, &mut scope, &mut values).unwrap();
                     expected.push_str("K|R|F|array:0|ok|array:1|string:h:7|");
                 }
             }
-            assert_eq!(values.output, expected, "exact={exact} vm={vm}");
+            assert_eq!(values.output, expected, "exact={exact} casts={coordinated} vm={vm}");
             assert!(values.warnings.is_empty(), "{:?}", values.warnings);
             for value in scope.drain_owned_cells() { values.release(value).unwrap(); }
             for value in context.take_persistent_cell_owners() { values.release(value).unwrap(); }
-            for (id, owners) in &values.cell_owners { assert_eq!(*owners, 0, "exact={exact} vm={vm}: {:?}", values.values[id]); }
+            for (id, owners) in &values.cell_owners { assert_eq!(*owners, 0, "exact={exact} casts={coordinated} vm={vm}: {:?}", values.values[id]); }
         }
     }
 }

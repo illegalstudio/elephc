@@ -8,10 +8,20 @@ function placeDescribe(mixed $parent): void {
         foreach ($parent as $key => $value) { echo gettype($key), ':', $key, ':', $value, '|'; }
     }
 }
+function placeBindAlias(mixed &$value): void {
+    global $placeAlias;
+    $placeAlias =& $value;
+}
 function placeWrite(bool $static, bool $falseParent, mixed $key, int $mutation): void {
+    global $placeAlias;
     $holder = new ParentPlace();
     $holder->value = $falseParent ? false : null;
     ParentPlace::$shared = $falseParent ? false : null;
+    if ($mutation >= 3) {
+        if ($static) { placeBindAlias(ParentPlace::$shared); }
+        else { placeBindAlias($holder->value); }
+        $mutation -= 3;
+    }
     set_error_handler(function (int $severity, string $message) use ($static, $holder, $mutation): bool {
         if (str_contains($message, 'false to array')) {
             echo 'F|';
@@ -37,4 +47,5 @@ function placeWrite(bool $static, bool $falseParent, mixed $key, int $mutation):
     if ($static) { placeDescribe(ParentPlace::$shared); }
     else { placeDescribe($holder->value); }
     ParentPlace::$shared = null;
+    unset($placeAlias);
 }

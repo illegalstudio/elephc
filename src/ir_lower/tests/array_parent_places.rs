@@ -28,7 +28,9 @@ fn source(exact: bool) -> (String, String) {
                 else { expected.push_str(&format!("ok|array:1|integer:{text}:9|")); }
             }
         }
-        for mutation in [1, 2] {
+        source.push_str(&format!("placeWrite({static_parent}, true, 0, 3);\n"));
+        expected.push_str("K|R|F|array:0|ok|array:1|integer:0:9|");
+        for mutation in [1, 2, 4, 5] {
             source.push_str(&format!("placeWrite({static_parent}, true, 0, {mutation});\n"));
             expected.push_str("K|R|F|array:0|ok|array:1|string:h:7|");
         }
@@ -77,13 +79,16 @@ fn array_parent_places_native_eval_publication_and_owners() {
     let (fragment, expected) = source(false);
     let fragment = fragment.strip_prefix("<?php\n").unwrap().replace('\\', "\\\\").replace('\'', "\\'");
     let source = format!("<?php $code = $argc > 0 ? '{fragment}' : ''; eval($code);");
-    for optimize in [false, true] {
-        let module = super::semantic_sources::lower_capturing_arguments(&source, Target::detect_host(),
-            SemanticProfile::PERMISSIVE, optimize, SourceMode::Php);
-        let output = super::native_module::run(&module);
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        assert!(output.status.success(), "opt={optimize}: {:?}; {stderr}", output.status);
-        assert_eq!(String::from_utf8_lossy(&output.stdout), expected, "opt={optimize}: {stderr}");
-        assert!(stderr.contains("HEAP DEBUG: leak summary: clean"), "opt={optimize}: {stderr}");
+    for coordinated in [false, true] {
+        for optimize in [false, true] {
+            let profile = SemanticProfile::PERMISSIVE.with(StrictFeature::Casts, coordinated);
+            let module = super::semantic_sources::lower_capturing_arguments(&source, Target::detect_host(),
+                profile, optimize, SourceMode::Php);
+            let output = super::native_module::run(&module);
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            assert!(output.status.success(), "casts={coordinated} opt={optimize}: {:?}; {stderr}", output.status);
+            assert_eq!(String::from_utf8_lossy(&output.stdout), expected, "casts={coordinated} opt={optimize}: {stderr}");
+            assert!(stderr.contains("HEAP DEBUG: leak summary: clean"), "casts={coordinated} opt={optimize}: {stderr}");
+        }
     }
 }

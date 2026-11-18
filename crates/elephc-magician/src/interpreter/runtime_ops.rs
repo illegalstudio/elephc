@@ -1045,6 +1045,13 @@ pub trait RuntimeValueOps {
     /// Reports whether a reference still has another physical owner before array COW.
     fn reference_is_shared(&mut self, _value: RuntimeCellHandle) -> Result<bool, EvalStatus> { Ok(false) }
 
+    /// Pins the current value cell without copying it or retaining a mutable reference wrapper.
+    /// Reference-aware hosts must override this with an owner of the dereferenced current cell.
+    fn retain_value_cell(&mut self, value: RuntimeCellHandle) -> Result<RuntimeCellHandle, EvalStatus> {
+        if self.is_reference(value)? { return Err(EvalStatus::UnsupportedConstruct); }
+        self.retain(value)
+    }
+
     /// Creates an owned reference containing an independent PHP value.
     fn reference_new(&mut self, _value: RuntimeCellHandle) -> Result<RuntimeCellHandle, EvalStatus> {
         Err(EvalStatus::UnsupportedConstruct)

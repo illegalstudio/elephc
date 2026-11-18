@@ -35,7 +35,9 @@ impl ArrayParentPlace<'_> {
         };
         let current = if current.is_borrowed() { values.retain(current)? } else { current };
         owners.push(current);
-        Ok(current)
+        let value = values.retain_value_cell(current)?;
+        owners.push(value);
+        Ok(value)
     }
 }
 

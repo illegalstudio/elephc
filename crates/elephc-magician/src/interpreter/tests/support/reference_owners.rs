@@ -11,6 +11,23 @@
 use super::*;
 use std::collections::HashSet;
 
+/// Equal-valued replacements change the child identity while an earlier pin retains its owner.
+#[test]
+fn fake_reference_value_pins_survive_equal_array_replacement() {
+    let mut values = FakeOps::default();
+    let empty = values.array_new(0).unwrap();
+    let reference = values.reference_new(empty).unwrap();
+    let before = values.retain_value_cell(reference).unwrap();
+    let previous = values.reference_replace(reference, empty).unwrap();
+    values.release(previous).unwrap();
+    let after = values.retain_value_cell(reference).unwrap();
+    assert_ne!(before, after, "structurally equal arrays still have distinct value cells");
+    assert_eq!(values.array_len(before).unwrap(), 0);
+    assert_eq!(values.cell_owners[&(before.as_ptr() as usize)], 1);
+    for value in [after, before, reference, empty] { values.release(value).unwrap(); }
+    assert!(values.cell_owners.values().all(|count| *count == 0));
+}
+
 impl FakeOps {
     /// Counts explicit owners plus stored edges reachable from live fake activation owners.
     pub(in crate::interpreter::tests) fn reference_owner_count(&self, reference: RuntimeCellHandle) -> usize {

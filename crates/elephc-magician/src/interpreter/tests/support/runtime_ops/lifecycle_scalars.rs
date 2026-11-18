@@ -92,6 +92,12 @@ macro_rules! impl_fake_lifecycle_scalar_ops {
     fn reference_is_shared(&mut self, value: RuntimeCellHandle) -> Result<bool, EvalStatus> {
         Ok(self.references.contains_key(&(value.as_ptr() as usize)) && self.reference_owner_count(value) > 1)
     }
+
+    /// Pins the actual fake child so replacing its wrapper preserves a distinct old identity.
+    fn retain_value_cell(&mut self, mut value: RuntimeCellHandle) -> Result<RuntimeCellHandle, EvalStatus> {
+        while let Some(child) = self.references.get(&(value.as_ptr() as usize)) { value = *child; }
+        self.retain(value)
+    }
     /// Creates a stable fake reference holding one detached value.
     fn reference_new(&mut self, value: RuntimeCellHandle) -> Result<RuntimeCellHandle, EvalStatus> {
         let value = self.copy_value(value)?;

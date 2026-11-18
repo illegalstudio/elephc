@@ -1556,3 +1556,29 @@ All five focused gates pass: native AOT policy/optimizer controls in2.97s, all f
 target emitters in1.30s, staged interpreter engines and complete owner retirement
 in0.28s, real opaque eval with both optimizers and clean heap in64.70s, and default
 compiler/bridge builds in35.44s. No new compiler warnings; diff hygiene passes.
+
+### Verified171: parent value identity through coordinated references
+
+The eval runtime contract now exposes a retained current value cell independently
+from a mutable reference wrapper. The native v1 adapter uses target-aware ABI
+helpers to dereference and retain that cell without making a PHP value copy.
+FakeOps models the same ownership transfer. Property parent suspension checks pin
+and compare those child identities, preserving callback replacements when Casts
+or Coercions coordinates persistent property references.
+
+The shared fixture now retains explicit aliases through a by-reference helper and
+checks callback replacement, in-place mutation and the no-mutation control. This
+uses syntax supported by both existing source parsers. PHP confirms the handler's
+replacement survives even while the original property has another reference owner.
+Staged engines also exercise ArrayKeys and Casts together, not just isolated flags.
+The standalone pin regression distinguishes equal-valued array replacements while
+holding the earlier cell alive. Public ArrayKeys admission remains closed.
+
+All seven focused gates pass: native AOT policy/optimizer cases in2.81s, five-target
+program emission in1.44s and value-pin ABI emission in0.26s, eight staged profile/VM
+combinations with owner retirement in0.43s, the equal-array pin regression in0.14s,
+and four real opaque-eval programs (Casts on/off and both optimizers) with clean
+heap in112.73s. Default builds pass in39.43s with one Cargo job after the prior
+parallel link received an unexplained SIGKILL. No new compiler warnings; diff and
+assembly-comment hygiene pass. Callback unsets and pending handler exceptions
+remain explicitly scheduled before ArrayKeys admission.
