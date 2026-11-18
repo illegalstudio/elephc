@@ -106,6 +106,8 @@ struct NameFacts {
     has_unset: bool,
     /// An outgoing capture may use the owning eval frame's canonical cell, never a foreign slot.
     captured_by_ref: bool,
+    /// A reached function static lends canonical persistent storage to this activation name.
+    static_binding: bool,
 }
 
 /// Everything one scan of one body collects.
@@ -233,6 +235,7 @@ impl Checker {
 
         self.mark_owned_eval_binding_origins(&facts, pre_bound_own_storage);
         self.mark_entry_binding_origins(&facts, pre_bound_own_storage);
+        self.mark_static_binding_origins(&facts, pre_bound_own_storage);
         if self.strict_locals && facts.contains_eval { return; }
 
         // Collected before pushing so the warnings come out in source order regardless of the
@@ -939,6 +942,7 @@ fn collect_stmt_in_current_source_mode(checker: &Checker, stmt: &Stmt, depth: u3
         StmtKind::StaticVar { name, init } => {
             // A `static` local's storage outlives the call, so the body does not own its layout.
             disqualify(facts, name);
+            if !facts.trusted_source { facts.names.entry(name.clone()).or_default().static_binding = true; }
             collect_expr(checker, init, depth, facts);
         }
         StmtKind::Foreach { array, key_var, value_var, value_by_ref, body } => {

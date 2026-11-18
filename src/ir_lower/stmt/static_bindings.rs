@@ -48,14 +48,18 @@ pub(super) fn lower(ctx: &mut LoweringContext<'_, '_>, name: &str, init: &Expr, 
     let pointer = ctx.emit_value(Op::LoadStaticLocalRefCell, Vec::new(),
         Some(Immediate::LocalSlot(slot)), PhpType::Pointer(None),
         Op::LoadStaticLocalRefCell.default_effects(), Some(span));
-    if let Some(contract) = ctx.local_store_contracts.get(&(ctx.loop_storage_scope.clone(), span, name.to_string()))
+    let contract = ctx.local_store_contracts.get(&(ctx.loop_storage_scope.clone(), span, name.to_string()))
         .filter(|contract| contract.feature == elephc_semantics::StrictFeature::Locals)
-    {
+        .cloned();
+    if let Some(contract) = &contract {
         ctx.builder.emit_with_effects(Op::BindLocalRefContract, Vec::new(),
             Some(Immediate::LocalSlot(slot)), IrType::Void, contract.ty.clone(),
             Ownership::NonHeap, Op::BindLocalRefContract.default_effects(), Some(span));
     }
+    crate::ir_lower::local_binding_origins::end(ctx, name, Some(span));
     ctx.bind_static_ref_cell_ptr(name, pointer, span);
+    crate::ir_lower::local_binding_origins::start_reference_declaration(ctx, name,
+        contract.map_or(PhpType::Mixed, |contract| contract.ty), span);
     if let Some(owner) = displaced { crate::ir_lower::expr::retire_owned_call_operand(ctx, owner, span); }
     ctx.clear_static_callable_locals();
 }

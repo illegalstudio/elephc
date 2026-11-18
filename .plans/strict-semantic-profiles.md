@@ -2312,3 +2312,13 @@ existing captured-value controls, the default build and public PHP/LFC combinati
 plus the updated complete example. Evidence is recorded in step196-evidence.json
 before committing. Global alias unset and reference rebinding remain separate active
 work; this ownership correction does not claim to resolve them.
+
+### Verified197: conditional native static binding origins
+
+Conditional and eval-visible static binding ends now preserve the successful initializer's producer independently of activation-local replacements. The existing per-body storage scan selects these already-canonical static names and retains displaced parameter/capture entry contracts. A shared declaration-contract recorder uses explicit producer evidence instead of importing the name's earlier runtime origin. Reached declarations mark binding presence after initialization, retire the displaced origin, bind the persistent cell and publish the new activation origin through existing reference/state helpers.
+
+Coverage includes scalar and array statics, an older open parameter, escaped old reference captures, runtime membership rejection, literal eval and known-invalid stores. Native output and heap owners are checked with both optimizer settings; real opaque eval checks attached and detached paths. The interpreter fixture uses both entries and profiles, retiring its persistent context owners before the final zero-owner assertion. This corrects test teardown rather than changing interpreter static semantics. Existing storage and unconditional-detachment controls remain covered. Public PHP/LFC cases with both optimizer settings exercise the strict behavior and preserve the existing no-flag retyping diagnostic. Native permissive storage still excludes statics from generic branch widening; the new selector is gated on Locals. The complete strict-locals example exercises the conditional static behavior. Documentation explains persistent values and activation bindings separately.
+
+No additional semantic family is admitted. Native global roles and Nullability, Mixed, Initialization, ArrayTypes and Indexing remain active work.
+
+All 12 acceptance gates passed. The public controls include four strict clean-heap runs, four preserved legacy diagnostics and the complete example.

@@ -248,3 +248,12 @@ $globalSnapshot = snapshotGlobalQuantity();
 $globalQuantity = 2;
 echo "Global snapshot: ", $globalSnapshot(), PHP_EOL;
 echo "Global quantity: ", $globalQuantity, PHP_EOL;
+
+// Detaching a static name leaves the persistent quantity available to the next call.
+function selectStoredQuantity(bool $reset): void {
+    static $quantity = 1;
+    if ($reset) { unset($quantity); $quantity = 'not tracked'; }
+    echo "Stored quantity: ", $quantity, PHP_EOL;
+}
+selectStoredQuantity(true);
+selectStoredQuantity(false);

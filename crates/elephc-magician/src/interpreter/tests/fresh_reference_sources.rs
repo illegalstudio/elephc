@@ -33,6 +33,7 @@ fn assert_reference_fixture(source: &str, checked: &str, permissive: &str) {
             }
             assert_eq!(values.output, if locals { checked } else { permissive }, "locals={locals} dispatch={dispatch}");
             for value in scope.drain_owned_cells() { values.release(value).unwrap(); }
+            for value in context.take_persistent_cell_owners() { values.release(value).unwrap(); }
             for (id, owners) in &values.cell_owners { assert_eq!(*owners, 0, "locals={locals} dispatch={dispatch}: {:?}", values.values[id]); }
         }
     }
@@ -140,4 +141,11 @@ fn captured_value_producers_eval_values_and_owners() {
 fn global_value_snapshots_eval_values_and_owners() {
     let expected = "1:2|old:next|1:2|1:2|";
     assert_reference_fixture(include_str!("../../../../../tests/fixtures/strict/global_value_snapshots.php"), expected, expected);
+}
+
+/// Conditional static binding ends preserve the persistent value and old reference targets.
+#[test]
+fn conditional_static_origins_eval_values_and_owners() {
+    assert_reference_fixture(include_str!("../../../../../tests/fixtures/strict/conditional_static_origins.php"),
+        "string:new|integer:1|string:new|integer:1|1|string:new|array:1|1:string:new|1:integer:1|Tinteger:1|Tstring:new|string:new|integer:1|", "string:new|integer:1|string:new|integer:1|1|string:new|array:1|1:string:new|1:integer:1|Wstring:bad|Winteger:2|string:new|integer:1|");
 }

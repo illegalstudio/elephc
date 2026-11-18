@@ -25,8 +25,20 @@ impl Checker {
                 || self.local_store_contracts.entry_origin(&self.current_loop_storage_scope, name).is_some())
             && (!self.by_ref_captured_locals.contains(name)
                 || self.local_store_contracts.has_runtime_origin(&self.current_loop_storage_scope, name))
-            && !self.active_globals.contains(name) && !self.static_local_names.contains(name)
+            && !self.active_globals.contains(name)
+            && (!self.static_local_names.contains(name)
+                || self.local_store_contracts.has_runtime_origin(&self.current_loop_storage_scope, name))
             && (self.mixed_storage_locals.contains(name) || self.local_store_contracts.has_runtime_origin(&self.current_loop_storage_scope, name))
+    }
+
+    /// Records a declaration's incoming producer independently of an older runtime origin.
+    pub(crate) fn record_declared_binding_contract(&mut self, name: &str, original: &PhpType, span: Span) {
+        if self.semantic_source_mode == crate::source::SourceMode::Internal
+            || !self.semantic_profile.contains(StrictFeature::Locals) { return; }
+        let key = (self.current_loop_storage_scope.clone(), span, name.into());
+        if let Some(contract) = crate::semantics::conversions::inferred_binding_contract(original) {
+            self.local_store_contracts.insert(key, LocalStoreContract { ty: contract, feature: StrictFeature::Locals });
+        } else { self.local_store_contracts.remove(&key); }
     }
 
     /// Captures initialized binding origins before an opaque eval can widen their views.

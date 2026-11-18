@@ -866,3 +866,5 @@ mod captured_value_producers;
 mod foreach_binding_ends;
 
 mod global_value_snapshots;
+
+mod conditional_static_origins;

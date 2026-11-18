@@ -1727,10 +1727,12 @@ pub(super) fn check_static_var(
     if checker.semantic_profile.contains(elephc_semantics::StrictFeature::Locals)
         && checker.semantic_source_mode != crate::source::SourceMode::Internal
     {
-        checker.inferred_local_contracts.insert(name.to_string(), origin.unwrap_or_else(|| ty.clone()));
-        checker.record_local_reference_contract(name, &ty, span);
+        let contract = origin.unwrap_or_else(|| ty.clone());
+        checker.inferred_local_contracts.insert(name.to_string(), contract.clone());
+        checker.record_declared_binding_contract(name, &contract, span);
     }
     env.insert(name.to_string(), ty);
+    checker.definitely_bound_locals.insert(name.to_string());
     checker.record_binding_retirement_exception_flow(&retired, env);
     Ok(())
 }

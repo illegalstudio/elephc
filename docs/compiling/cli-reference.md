@@ -1005,10 +1005,13 @@ other callable values without adopting the first closure's incidental signature.
 closure captures copy the source binding contract, including union/null alternatives
 and open mixed origins. The contract survives the defining activation and closure
 rebinding; unsetting the captured local permits a fresh binding.
-Interpreted static locals keep the successful initializer's producer contract across
+Static locals keep the successful initializer's producer contract across
 calls, including union and mixed alternatives. Initialization completes before an
 older local of the same name is detached; failed initialization leaves it intact.
 Unsetting or rebinding the local does not replace the persistent static value.
+An executed conditional `unset` starts a new activation-local binding with its
+replacement producer's contract. The other path keeps the static contract, and
+aliases captured before detachment still observe the persistent value.
 Reflection snapshots copy ordinary unescaped values and preserve references already
 shared with an activation or an escaping alias. Writes through a shared snapshot
 validate the same static contract before changing its value.

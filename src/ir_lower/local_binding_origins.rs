@@ -80,6 +80,17 @@ fn start_producer(ctx: &mut LoweringContext<'_, '_>, name: &str, contract: PhpTy
     });
 }
 
+/// Starts a reached reference declaration without importing the name's displaced producer.
+pub(super) fn start_reference_declaration(ctx: &mut LoweringContext<'_, '_>, name: &str,
+    contract: PhpType, span: Span,
+) {
+    if !ctx.local_store_contracts.has_runtime_origin(&ctx.loop_storage_scope, name) { return; }
+    let slot = ctx.local_slots[name];
+    super::local_binding_state::emit(ctx, slot, false);
+    start_producer(ctx, name, contract, span);
+    super::local_binding_state::emit(ctx, slot, true);
+}
+
 /// Ends the logical origin without abandoning a frame slot shared by other source paths.
 pub(super) fn end(ctx: &mut LoweringContext<'_, '_>, name: &str, span: Option<Span>) {
     if !ctx.local_store_contracts.has_runtime_origin(&ctx.loop_storage_scope, name) { return; }
