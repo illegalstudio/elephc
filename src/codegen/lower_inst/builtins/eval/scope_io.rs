@@ -337,7 +337,7 @@ const EVAL_SCOPE_OWNED_VALUE_FLAGS: i64 = EVAL_SCOPE_FLAG_PRESENT | (1 << 4);
 
 /// Scope-entry flags that make an entry more than a copied value: by-reference, a native-storage
 /// binding, a native global name (`crate::abi::SCOPE_FLAG_*` in magician).
-const EVAL_SCOPE_BINDING_FLAGS: i64 = (1 << 3) | (1 << 5) | (1 << 6);
+const EVAL_SCOPE_BINDING_FLAGS: i64 = (1 << 3) | (1 << 7) | (1 << 8);
 
 /// Gives back the function frame's eval scope copy of one local once the native slot holds it.
 ///

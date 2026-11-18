@@ -4,8 +4,8 @@
 
 use super::*;
 
-pub(super) const NATIVE_REF: i64 = 1 << 5;
-pub(super) const NATIVE_GLOBAL: i64 = 1 << 6;
+pub(super) const NATIVE_REF: i64 = 1 << 7;
+pub(super) const NATIVE_GLOBAL: i64 = 1 << 8;
 pub(super) const NATIVE_BINDING: i64 = NATIVE_REF | NATIVE_GLOBAL;
 
 /// Branches on binding metadata returned by the scope getter at scratch offset 8.
