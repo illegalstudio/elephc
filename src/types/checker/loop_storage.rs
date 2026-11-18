@@ -408,19 +408,56 @@ fn checked_scalar_arithmetic_type(
     env: &TypeEnv,
     infer_value: &mut dyn FnMut(&Expr, &TypeEnv) -> Option<PhpType>,
 ) -> Option<PhpType> {
-    let ExprKind::BinaryOp { left, op: BinOp::Add | BinOp::Sub | BinOp::Mul, right } = &expr.kind
-    else {
+    let ExprKind::BinaryOp { left, op, right } = &expr.kind else {
         return None;
     };
-    let mut result = PhpType::Int;
-    for operand in [left, right] {
-        match infer_value(operand, env)? {
-            PhpType::Int => {}
-            PhpType::Float => result = PhpType::Float,
-            _ => return None,
+    match op {
+        BinOp::Add | BinOp::Sub | BinOp::Mul => {
+            let mut result = PhpType::Int;
+            for operand in [left, right] {
+                match infer_value(operand, env)? {
+                    PhpType::Int => {}
+                    PhpType::Float => result = PhpType::Float,
+                    _ => return None,
+                }
+            }
+            Some(result)
         }
+        // Bitwise, shift and modulo operators convert both operands to int, so the result is an
+        // int whatever the operands' own numeric type is, nested checked arithmetic included
+        // (`$sum = ($sum + $i) & 65535`).
+        BinOp::BitAnd | BinOp::BitOr | BinOp::BitXor | BinOp::ShiftLeft | BinOp::ShiftRight | BinOp::Mod => {
+            for operand in [left, right] {
+                checked_numeric_operand(operand, env, infer_value)?;
+            }
+            Some(PhpType::Int)
+        }
+        _ => None,
     }
-    Some(result)
+}
+
+/// A numeric operand of an int-converting operator: an int/float expression, or a nested
+/// numeric operator whose operands are themselves such operands.
+fn checked_numeric_operand(
+    operand: &Expr,
+    env: &TypeEnv,
+    infer_value: &mut dyn FnMut(&Expr, &TypeEnv) -> Option<PhpType>,
+) -> Option<()> {
+    if matches!(infer_value(operand, env), Some(PhpType::Int | PhpType::Float)) {
+        return Some(());
+    }
+    let ExprKind::BinaryOp { left, op, right } = &operand.kind else {
+        return None;
+    };
+    if !matches!(
+        op,
+        BinOp::Add | BinOp::Sub | BinOp::Mul | BinOp::BitAnd | BinOp::BitOr | BinOp::BitXor
+            | BinOp::ShiftLeft | BinOp::ShiftRight | BinOp::Mod
+    ) {
+        return None;
+    }
+    checked_numeric_operand(left, env, infer_value)?;
+    checked_numeric_operand(right, env, infer_value)
 }
 
 /// Joins the numeric alternatives of a tagged local without erasing its nullable read type.
