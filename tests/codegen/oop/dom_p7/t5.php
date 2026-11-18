@@ -11,4 +11,3 @@ $b = new DOMDocument();
 $b->loadHTML('<div><input disabled name=n><a href="x y?z=1&amp;w=1">l</a><img src="a.png" alt=""></div>', LIBXML_HTML_NOIMPLIED | LIBXML_HTML_NODEFDTD);
 echo $b->saveHTML();
 echo $b->saveHTML($b->documentElement), "|\n";
-if ($argc > 99) { simplexml_import_dom($h); }

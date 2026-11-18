@@ -34,4 +34,3 @@ echo $d->saveHTML();
 echo $d->saveHTMLFile('/tmp/elephc_p7_t4.html'), "\n";
 echo file_get_contents('/tmp/elephc_p7_t4.html');
 unlink('/tmp/elephc_p7_t4.html');
-if ($argc > 99) { simplexml_import_dom($d); }

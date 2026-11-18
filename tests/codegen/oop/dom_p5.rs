@@ -24,12 +24,6 @@ fn check(name: &str, source: &str, expected: &str, leak_clean: bool) {
     }
 }
 
-/// Keeps the SimpleXML bridge reachable (see package S): a plain AOT `loadXML` does not find
-/// `__elephc_simplexml_load_dom` unless the program also names a SimpleXML entry point.
-fn with_opaque_eval(source: &str) -> String {
-    format!("{source}\nif ($argc > 99) {{ simplexml_import_dom($d); }}\n")
-}
-
 /// The attribute API, ParentNode / ChildNode helpers, IDs and element-only traversal properties
 /// on a free-standing tree.
 #[test]
@@ -42,7 +36,7 @@ fn test_dom_p5_free_standing_element_api() {
 #[test]
 fn test_dom_p5_bound_element_api() {
     if skip_without_xml_native("test_dom_p5_bound_element_api") { return; }
-    check("t2", &with_opaque_eval(include_str!("dom_p5/t2.php")), include_str!("dom_p5/t2.out"), false);
+    check("t2", include_str!("dom_p5/t2.php"), include_str!("dom_p5/t2.out"), false);
 }
 
 /// `create*`, `importNode`, `adoptNode`, `DOMImplementation`, `cloneNode` and the document

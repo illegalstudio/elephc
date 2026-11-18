@@ -24,12 +24,6 @@ fn check(name: &str, source: &str, expected: &str, leak_clean: bool) {
     }
 }
 
-/// Keeps the SimpleXML bridge reachable: a plain AOT `loadXML` does not find
-/// `__elephc_simplexml_load_dom` unless the program also names a SimpleXML entry point (package S).
-fn with_opaque_eval(source: &str) -> String {
-    format!("{source}\nif ($argc > 99) {{ simplexml_import_dom($d); }}\n")
-}
-
 /// A free-standing tree: insertBefore / replaceChild / removeChild / appendChild order, siblings,
 /// the hierarchy / wrong-document / not-found errors, fragments, normalize, cloneNode, isEqualNode,
 /// getNodePath and the kind and namespace properties.
@@ -44,7 +38,7 @@ fn test_dom_p4_free_standing_tree_mutation() {
 #[test]
 fn test_dom_p4_bound_tree_mutation_and_namespaces() {
     if skip_without_xml_native("test_dom_p4_bound_tree_mutation_and_namespaces") { return; }
-    check("t2", &with_opaque_eval(include_str!("dom_p4/t2.php")), include_str!("dom_p4/t2.out"), false);
+    check("t2", include_str!("dom_p4/t2.php"), include_str!("dom_p4/t2.out"), false);
 }
 
 /// A free-standing parent/child tree is freed with its last reference (parent and sibling links

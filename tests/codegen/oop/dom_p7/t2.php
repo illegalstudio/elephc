@@ -35,4 +35,3 @@ $l = new DOMDocument();
 $l->loadXML('<?xml version="1.0" encoding="ISO-8859-1"?><l>caf' . "\xE9" . '</l>');
 echo bin2hex($l->saveXML()), "\n";
 echo bin2hex($l->saveXML($l->documentElement)), "\n";
-if ($argc > 99) { simplexml_import_dom($d); }

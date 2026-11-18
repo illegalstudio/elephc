@@ -94,6 +94,16 @@ pub(super) fn program_uses_xml(program: &[Stmt]) -> bool {
     })
 }
 
+/// DOMDocument methods that read or write the native libxml2 tree through the SimpleXML bridge:
+/// the loaders and the serializers (`saveHTML*` included: an eager HTML tree is imported into the
+/// native serializer). A DOM-only program calling one of them pulls the bridge in by itself, with
+/// no `simplexml_*` call to name it.
+pub(super) fn is_xml_bridge_method(method: &str) -> bool {
+    ["loadXML", "load", "saveXML", "save", "saveHTML", "saveHTMLFile", "C14N", "C14NFile"]
+        .iter()
+        .any(|candidate| method.eq_ignore_ascii_case(candidate))
+}
+
 /// Returns whether a resolved name is one of the xml global functions. Function names are
 /// case-insensitive, but a name with namespace segments is unrelated to the global surface.
 fn name_is_xml_function(name: &Name) -> bool {
@@ -225,9 +235,9 @@ impl Detector {
         match target {
             CallableTarget::Function(name) => name_is_xml_function(name),
             CallableTarget::StaticMethod { receiver, method } =>
-                ((method.eq_ignore_ascii_case("loadXML") || method.eq_ignore_ascii_case("load")) && self.dom.may_load_static(receiver)) || receiver_refs_xml(receiver),
+                (is_xml_bridge_method(method) && self.dom.may_load_static(receiver)) || receiver_refs_xml(receiver),
             CallableTarget::Method { object, method } => {
-                ((method.eq_ignore_ascii_case("loadXML") || method.eq_ignore_ascii_case("load")) && self.dom.may_load_xml(object)) || self.expr_refs_xml(object)
+                (is_xml_bridge_method(method) && self.dom.may_load_xml(object)) || self.expr_refs_xml(object)
             },
         }
     }
@@ -409,12 +419,12 @@ impl Detector {
             }
             ExprKind::StaticPropertyAccess { receiver, .. } => receiver_refs_xml(receiver),
             ExprKind::MethodCall { object, method, args, .. } => {
-                ((method.eq_ignore_ascii_case("loadXML") || method.eq_ignore_ascii_case("load")) && self.dom.may_load_xml(object))
+                (is_xml_bridge_method(method) && self.dom.may_load_xml(object))
                     || self.reflection_lookup_refs_xml(object, method, args)
                     || self.expr_refs_xml(object) || args.iter().any(|value| self.expr_refs_xml(value))
             }
             ExprKind::NullsafeMethodCall { object, method, args, .. } => {
-                ((method.eq_ignore_ascii_case("loadXML") || method.eq_ignore_ascii_case("load")) && self.dom.may_load_xml(object))
+                (is_xml_bridge_method(method) && self.dom.may_load_xml(object))
                     || self.reflection_lookup_refs_xml(object, method, args)
                     || self.expr_refs_xml(object) || self.optional_args_refs_xml(args)
             }
@@ -430,7 +440,7 @@ impl Detector {
                 result
             },
             ExprKind::StaticMethodCall { receiver, method, args } => {
-                ((method.eq_ignore_ascii_case("loadXML") || method.eq_ignore_ascii_case("load")) && self.dom.may_load_static(receiver))
+                (is_xml_bridge_method(method) && self.dom.may_load_static(receiver))
                     || receiver_refs_xml(receiver) || args.iter().any(|value| self.expr_refs_xml(value))
             }
             ExprKind::FirstClassCallable(target) => self.callable_target_refs_xml(target),

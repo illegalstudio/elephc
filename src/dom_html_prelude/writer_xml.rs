@@ -496,7 +496,7 @@ fn writer() -> Stmt {
                             s_if(
                                 e_binop(e_var("default"), BinOp::StrictNotEq, e_null()),
                                 vec![
-                                    s_prop_assign(e_this(), "out", e_binop(e_this_prop("out"), BinOp::Concat, e_binop(e_binop(e_str(" xmlns=\""), BinOp::Concat, e_self_call("attribute", vec![e_var("default"), e_this_prop("attrAscii")])), BinOp::Concat, e_str("\"")))),
+                                    s_prop_assign(e_this(), "out", e_binop(e_this_prop("out"), BinOp::Concat, e_binop(e_binop(e_str(" xmlns=\""), BinOp::Concat, e_self_call("attribute", vec![e_var("default"), e_bool(false)])), BinOp::Concat, e_str("\"")))),
                                 ],
                                 vec![],
                                 None,
@@ -509,11 +509,11 @@ fn writer() -> Stmt {
                                     s_if(
                                         e_binop(e_var("colon"), BinOp::StrictEq, e_bool(false)),
                                         vec![
-                                            s_prop_assign(e_this(), "out", e_binop(e_this_prop("out"), BinOp::Concat, e_binop(e_binop(e_str(" xmlns=\""), BinOp::Concat, e_self_call("attribute", vec![e_var("uri"), e_this_prop("attrAscii")])), BinOp::Concat, e_str("\"")))),
+                                            s_prop_assign(e_this(), "out", e_binop(e_this_prop("out"), BinOp::Concat, e_binop(e_binop(e_str(" xmlns=\""), BinOp::Concat, e_self_call("attribute", vec![e_var("uri"), e_bool(false)])), BinOp::Concat, e_str("\"")))),
                                         ],
                                         vec![],
                                         Some(vec![
-                                        s_prop_assign(e_this(), "out", e_binop(e_this_prop("out"), BinOp::Concat, e_binop(e_binop(e_binop(e_binop(e_str(" xmlns:"), BinOp::Concat, e_call("substr", vec![e_var("name"), e_int(0), e_var("colon")])), BinOp::Concat, e_str("=\"")), BinOp::Concat, e_self_call("attribute", vec![e_var("uri"), e_this_prop("attrAscii")])), BinOp::Concat, e_str("\"")))),
+                                        s_prop_assign(e_this(), "out", e_binop(e_this_prop("out"), BinOp::Concat, e_binop(e_binop(e_binop(e_binop(e_str(" xmlns:"), BinOp::Concat, e_call("substr", vec![e_var("name"), e_int(0), e_var("colon")])), BinOp::Concat, e_str("=\"")), BinOp::Concat, e_self_call("attribute", vec![e_var("uri"), e_bool(false)])), BinOp::Concat, e_str("\"")))),
                                     ]),
                                     ),
                                 ],

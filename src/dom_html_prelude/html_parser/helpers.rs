@@ -284,7 +284,6 @@ fn decl_fn_elephc_dom_make_node() -> Stmt {
             s_prop_assign(e_var("_el"), "ownerDocument", e_var("doc")),
             s_assign("_kids", e_call("__elephc_dom_make_children", vec![e_var("doc"), e_var("_el"), e_index(e_var("tree"), e_str("children"))])),
             s_prop_assign(e_var("_el"), "childNodes", e_new("DOMNodeList", vec![e_var("_kids")])),
-            s_prop_assign(e_var("_el"), "nodeValue", e_call("__elephc_dom_text_of", vec![e_var("tree")])),
             s_return(e_var("_el")),
         ])
         .build()

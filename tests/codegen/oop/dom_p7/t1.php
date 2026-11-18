@@ -54,4 +54,3 @@ try {
 } catch (DOMException $e) {
     echo $e->getMessage(), ' ', $e->getCode(), "\n";
 }
-if ($argc > 99) { simplexml_import_dom($d); }

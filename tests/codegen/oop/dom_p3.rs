@@ -28,19 +28,11 @@ fn check_leaks(name: &str, source: &str, expected: &str, leak_clean: bool) {
     }
 }
 
-/// Keeps the SimpleXML bridge reachable: at the base of this work a plain AOT `loadXML` does not
-/// find `__elephc_simplexml_load_dom` (13 of the 22 `dom_and_iterator` / `dom_cache` tests fail
-/// the same way), because reachability prunes the XML group unless the program also names a
-/// SimpleXML entry point. Remove this once that base defect is repaired.
-fn with_opaque_eval(source: &str) -> String {
-    format!("{source}\nif ($argc > 99) {{ simplexml_import_dom($d); }}\n")
-}
-
 /// Character-data offset methods and `data` / `length` on nodes bound to the native libxml2 tree.
 #[test]
 fn test_dom_p3_character_data_on_bound_nodes() {
     if skip_without_xml_native("test_dom_p3_character_data_on_bound_nodes") { return; }
-    check("t1", &with_opaque_eval(include_str!("dom_p3/t1.php")), include_str!("dom_p3/t1.out"));
+    check("t1", include_str!("dom_p3/t1.php"), include_str!("dom_p3/t1.out"));
 }
 
 /// Constructors and properties of free-standing text, comment, CDATA, attribute, doctype and map.
@@ -54,7 +46,7 @@ fn test_dom_p3_free_standing_node_constructors() {
 #[test]
 fn test_dom_p3_split_text_on_bound_nodes() {
     if skip_without_xml_native("test_dom_p3_split_text_on_bound_nodes") { return; }
-    check("t3", &with_opaque_eval(include_str!("dom_p3/t3.php")), include_str!("dom_p3/t3.out"));
+    check("t3", include_str!("dom_p3/t3.php"), include_str!("dom_p3/t3.out"));
 }
 
 /// Named-node-map lookups, doctype constructor, fragment `appendXML` (elephc-only setup, outputs
@@ -62,7 +54,7 @@ fn test_dom_p3_split_text_on_bound_nodes() {
 #[test]
 fn test_dom_p3_named_node_map_doctype_and_fragment() {
     if skip_without_xml_native("test_dom_p3_named_node_map_doctype_and_fragment") { return; }
-    check_leaks("t5", &with_opaque_eval(include_str!("dom_p3/t5.php")), include_str!("dom_p3/t5.out"), false);
+    check_leaks("t5", include_str!("dom_p3/t5.php"), include_str!("dom_p3/t5.out"), false);
 }
 
 /// `splitText` and `wholeText` on free-standing nodes.

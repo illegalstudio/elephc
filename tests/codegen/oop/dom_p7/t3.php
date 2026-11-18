@@ -15,4 +15,3 @@ echo $d->saveXML($e), "\n";
 $t = new DOMText('txt');
 $t->textContent = 'viaText';
 echo $t->nodeValue, "\n";
-if ($argc > 99) { simplexml_import_dom($d); }

@@ -11,8 +11,8 @@
 //! - Bound documents are serialized by libxml2 itself (`xmlSaveToIO`, `xmlSaveTree`,
 //!   `xmlC14NExecute`); free-standing trees by the PHP writer of `writer_xml.rs`, and HTML by
 //!   importing the tree into a native HTML document (`htmlDocDumpMemoryFormat`).
-//! - `loadXML` / `loadHTML` need the managed libxml2 native package, hence the skip gate; each
-//!   program names `simplexml_import_dom` behind `$argc > 99` to keep the SimpleXML bridge reachable.
+//! - `loadXML` / `loadHTML` need the managed libxml2 native package, hence the skip gate;
+//!   serializer and loader programs pull the SimpleXML bridge in by themselves.
 
 use crate::support::*;
 
