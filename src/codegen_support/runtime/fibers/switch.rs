@@ -384,7 +384,8 @@ mod tests {
             emit_fiber_switch(&mut emitter);
             let asm = emitter.output();
             let offset = FIBER_OWN_GC_RELEASE_SUPPRESSED_OFFSET;
-            assert_eq!(super::super::FIBER_OBJECT_SIZE, offset + 8);
+            // Later coroutine fields (the magic-setter guard chain) follow the protection slot.
+            assert!(super::super::FIBER_OBJECT_SIZE >= offset + 8);
             let (save, load) = if target.arch == Arch::AArch64 {
                 assert!(asm.contains(&format!("str xzr, [x21, #{offset}]")), "{name}: fresh context");
                 (format!("str x14, [x10, #{offset}]"), format!("ldr x14, [x0, #{offset}]"))

@@ -4517,7 +4517,9 @@ mod tests {
     /// Pins the contracts used by argument cleanup and synthetic callable wrappers.
     #[test]
     fn runtime_result_ownership_distinguishes_fresh_boxes_from_concat_storage() {
-        assert_eq!(RuntimeFnId::FilePutContents.result_ownership(), BuiltinResultOwnership::NonHeap);
+        // `file_put_contents()` answers `int|false` (Symfony tests `false ===`), a fresh boxed
+        // Mixed, not a bare byte count: the branch's Fresh contract holds over main's NonHeap one.
+        assert_eq!(RuntimeFnId::FilePutContents.result_ownership(), BuiltinResultOwnership::Fresh);
         for target in [
             RuntimeFnId::Getdate,
             RuntimeFnId::Localtime,

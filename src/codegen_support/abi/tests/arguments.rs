@@ -59,10 +59,8 @@ fn test_emit_store_incoming_float_overflow_uses_volatile_scratch() {
 }
 
 /// Tests that `emit_frame_slot_address` reaches an offset too large for a single immediate
-/// instruction by materializing the whole distance and applying it with one register-form `sub`,
-/// rather than walking the frame pointer down in 4095-byte steps.
-///
-/// The walk is what made `sub x9, x9, #4095` 11.6% of the Symfony `--web` artifact.
+/// instruction with two shifted/plain immediate `sub`s (main's shape), rather than walking the
+/// frame pointer down in 4095-byte steps.
 #[test]
 fn test_emit_frame_slot_address_large_offset() {
     let mut emitter = test_emitter();
@@ -70,12 +68,13 @@ fn test_emit_frame_slot_address_large_offset() {
 
     assert_eq!(
         emitter.output(),
-        concat!("    mov x0, #5000\n", "    sub x0, x29, x0\n")
+        concat!("    sub x0, x29, #1, lsl #12\n", "    sub x0, x0, #904\n")
     );
 }
 
-/// Tests that an offset past the 16-bit `movz` range still costs one `movk` and one `sub`, so the
-/// far-slot sequence stays constant-size however deep the frame is.
+/// Tests that an offset past the 16-bit range still costs two immediate `sub`s, so the far-slot
+/// sequence stays constant-size however deep the frame is (main's shape: a 12-bit shifted `sub`
+/// followed by the remainder).
 #[test]
 fn test_emit_frame_slot_address_offset_past_the_movz_range() {
     let mut emitter = test_emitter();
@@ -84,8 +83,8 @@ fn test_emit_frame_slot_address_offset_past_the_movz_range() {
     assert_eq!(
         emitter.output(),
         concat!(
-            "    sub x0, x29, #1, lsl #12\n",
-            "    sub x0, x0, #904\n",
+            "    sub x9, x29, #73, lsl #12\n",
+            "    sub x9, x9, #992\n",
         )
     );
 }
