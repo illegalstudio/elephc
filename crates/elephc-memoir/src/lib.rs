@@ -95,3 +95,5 @@ pub mod deferred_owners;
 pub mod handler_owners;
 
 pub mod coroutine_storage;
+
+pub mod callback_result;

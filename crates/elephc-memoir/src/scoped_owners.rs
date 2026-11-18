@@ -133,7 +133,7 @@ pub fn emit_drain_detached_data(emitter: &mut impl Emitter) {
     emitter.store_at_offset(scratch, 48);
     emitter.emit_call_label("__rt_heap_free");
     emitter.load_at_offset(result, 48);
-    emitter.emit_guarded_cleanup_call("__rt_decref_any", result, 24);
+    crate::cleanup::invoke::emit_guarded_cleanup_call(emitter, "__rt_decref_any", result, 24);
     emitter.emit_branch_if_int_result_zero("__rt_unserialize_finish_data_next");
     emitter.emit_load_int_immediate(result, 1);
     emitter.store_at_offset(result, 32);

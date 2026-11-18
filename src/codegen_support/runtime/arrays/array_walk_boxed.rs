@@ -22,6 +22,9 @@ use crate::codegen_support::{
 };
 use crate::types::PhpType;
 
+use elephc_memoir::FrameOffset;
+use elephc_memoir::reference_cells::unmanaged_borrows;
+
 const FRAME: usize = TRY_HANDLER_SLOT_SIZE + 96;
 const HANDLER: usize = FRAME - 16;
 const CALLBACK: usize = 8;
@@ -52,7 +55,6 @@ const VISIT_KEY_HI: usize = 64;
 const VISIT_OLD_CELL: usize = 72;
 const VISIT_CELL_VALUE: usize = 80;
 const VISIT_ARGUMENT_OWNER: usize = 88;
-const VISIT_BORROW_CELL: usize = 96;
 const VISIT_BORROW_PREVIOUS: usize = 104;
 const VISIT_INVOCATION_SCOPE: usize = 112;
 
@@ -81,8 +83,7 @@ fn emit_entry(emitter: &mut Emitter) {
     for offset in [SOURCE, PENDING, ARGUMENTS, CALLBACK_RESULT, BORROW_HEAD] {
         clear_slot(emitter, offset);
     }
-    abi::emit_load_symbol_to_reg(emitter, result, "_rt_unmanaged_ref_borrow_top", 0);
-    abi::store_at_offset(emitter, result, BORROW_HEAD);
+    unmanaged_borrows::emit_save_head(emitter, result, FrameOffset::new(BORROW_HEAD));
     install_boundary(emitter);
     reject_opaque_callback(emitter);
 
@@ -308,27 +309,20 @@ fn reject_opaque_callback(emitter: &mut Emitter) {
 
 /// Publishes this visitor's exact borrowed hash-entry slot for nested escape checks.
 fn install_visit_borrow(emitter: &mut Emitter) {
-    let scratch = scratch_reg(emitter);
-    abi::emit_load_symbol_to_reg(emitter, scratch, "_rt_unmanaged_ref_borrow_top", 0);
-    abi::store_at_offset(emitter, scratch, VISIT_BORROW_PREVIOUS);
-    abi::load_at_offset(emitter, scratch, VISIT_ENTRY);
-    abi::store_at_offset(emitter, scratch, VISIT_BORROW_CELL);
-    abi::emit_frame_slot_address(emitter, scratch, VISIT_BORROW_PREVIOUS);
-    abi::emit_store_reg_to_symbol(emitter, scratch, "_rt_unmanaged_ref_borrow_top", 0);
+    unmanaged_borrows::emit_push(
+        emitter, scratch_reg(emitter), FrameOffset::new(VISIT_BORROW_PREVIOUS),
+        FrameOffset::new(VISIT_ENTRY),
+    );
 }
 
 /// Pops the current visitor node after a callback has returned normally.
 fn restore_visit_borrow(emitter: &mut Emitter) {
-    let scratch = scratch_reg(emitter);
-    abi::load_at_offset(emitter, scratch, VISIT_BORROW_PREVIOUS);
-    abi::emit_store_reg_to_symbol(emitter, scratch, "_rt_unmanaged_ref_borrow_top", 0);
+    unmanaged_borrows::emit_restore_head(emitter, scratch_reg(emitter), FrameOffset::new(VISIT_BORROW_PREVIOUS));
 }
 
 /// Restores the chain saved before this walk, including after a callback longjmp.
 fn restore_entry_borrow_head(emitter: &mut Emitter) {
-    let scratch = scratch_reg(emitter);
-    abi::load_at_offset(emitter, scratch, BORROW_HEAD);
-    abi::emit_store_reg_to_symbol(emitter, scratch, "_rt_unmanaged_ref_borrow_top", 0);
+    unmanaged_borrows::emit_restore_head(emitter, scratch_reg(emitter), FrameOffset::new(BORROW_HEAD));
 }
 
 /// Builds owned `(value-ref, key)` callback arguments under the outer unwind owner slot.

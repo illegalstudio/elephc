@@ -29,7 +29,10 @@ non-owning observer caches, hash-entry reference promotion and borrowed payload 
 temporary/fixed-frame owner record publication, exact chain unlink and consuming
 container boxing, Mixed symbol publication through persistent reference children,
 external owner record publication, contained foreign-owner release and conditional
-retirement of independently acquired helper owners.
+retirement of independently acquired helper owners, bounded cleanup invocation,
+borrowed reference chains, scratch growth in `implode`, nested C export scratch
+rewind, guarded callback-result ownership, staged reference pins and the Zend
+storage transfers used by pack and unpack.
 It also emits fixed heap, GC, buffer, reference-root, handle-table and string-scratch
 declarations, including raw capture-buffer storage, keeping their existing order
 and byte layout.

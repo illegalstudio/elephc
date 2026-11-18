@@ -15,8 +15,6 @@ pub trait MemoryContext {
     fn graph_layout(&self) -> GraphLayout;
     /// Provides the compiler gc status selectors contract.
     fn gc_status_selectors(&self) -> GcStatusSelectors;
-    /// Contains throws while releasing a weak observer through the compiler boundary.
-    fn emit_guarded_cleanup_call(&mut self, entry: &str, payload: &str, pending_offset: usize);
     /// Returns the configured string scratch capacity.
     fn concat_capacity(&self) -> usize;
     /// Keeps reference-registry status translation in the compiler.

@@ -33,7 +33,7 @@ pub fn begin(emitter: &mut impl Emitter) {
 
 /// Invokes one potentially throwing unary cleanup while preserving this frame's pending owner.
 pub fn invoke(emitter: &mut impl Emitter, entry: &str, payload: &str) {
-    emitter.emit_guarded_cleanup_call(entry, payload, pending_offset(emitter));
+    crate::cleanup::invoke::emit_guarded_cleanup_call(emitter, entry, payload, pending_offset(emitter));
 }
 
 /// Restores GC state and returns or propagates only after every child and the container are freed.

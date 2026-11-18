@@ -49,7 +49,7 @@ pub fn emit_release<E: Emitter>(emitter: &mut E, prefix: &str, active: [&str; 4]
         let skip = format!("{prefix}_release_skip_{offset}");
         emitter.emit_load_from_address(result, stack, offset);
         emitter.emit_branch_if_int_result_zero(&skip);
-        emitter.emit_guarded_cleanup_call(helper, result, PENDING);
+        crate::cleanup::invoke::emit_guarded_cleanup_call(emitter, helper, result, PENDING);
         emitter.label(&skip);
     }
     let done = format!("{prefix}_release_done");
@@ -74,7 +74,8 @@ pub fn emit_pop<E: Emitter>(emitter: &mut E, prefix: &str, fields: &[&str], fini
     emitter.emit_frame_prologue(48);
     emitter.emit_store_zero_to_local_slot(PENDING);
     emitter.emit_load_int_immediate(result, 0);
-    emitter.emit_guarded_cleanup_call(
+    crate::cleanup::invoke::emit_guarded_cleanup_call(
+        emitter,
         &format!("{prefix}_release"), result, PENDING,
     );
     emitter.emit_load_symbol_to_reg(result, fields[0], 0);

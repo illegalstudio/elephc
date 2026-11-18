@@ -134,15 +134,9 @@ pub fn emit_zval_unpack(emitter: &mut Emitter) {
     emitter.instruction("bl __rt_zval_unpack_array");                           // x0 = runtime tag (4 indexed, 5 hash), x1 = fresh array (refcount 1)
     emitter.instruction("str x0, [sp, #24]");                                   // save the runtime array tag across the cell alloc
     emitter.instruction("str x1, [sp, #16]");                                   // save the owned array pointer across the cell alloc
-    emitter.instruction("mov x0, #24");                                         // a Mixed cell stores tag plus two payload words
-    emitter.instruction("bl __rt_heap_alloc");                                  // allocate the Mixed cell storage
-    emitter.instruction("mov x9, #5");                                          // low byte 5 = Mixed cell heap kind
-    emitter.instruction("str x9, [x0, #-8]");                                   // stamp the Mixed-cell heap kind in the uniform header
-    emitter.instruction("ldr x9, [sp, #24]");                                   // reload the runtime array tag (4 or 5)
-    emitter.instruction("str x9, [x0]");                                        // store the runtime value tag at mixed[0]
-    emitter.instruction("ldr x1, [sp, #16]");                                   // reload the owned array pointer
-    emitter.instruction("str x1, [x0, #8]");                                    // store the array pointer at mixed[8] (no incref: cell owns it)
-    emitter.instruction("str xzr, [x0, #16]");                                  // hi = 0 (array payload is single-word)
+    elephc_memoir::values::owned_payload::emit_owned_tagged_pointer_from_slots(
+        emitter, "[sp, #24]", "[sp, #16]",
+    );
     emitter.instruction("ldp x29, x30, [sp, #32]");                             // restore frame pointer and return address
     emitter.instruction("add sp, sp, #48");                                     // release the stack frame
     emitter.instruction("ret");                                                 // return the Mixed cell pointer in x0
@@ -265,15 +259,9 @@ fn emit_zval_unpack_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("call __rt_zval_unpack_array");                         // rax = runtime tag (4 indexed, 5 hash), rdx = fresh array (refcount 1)
     emitter.instruction("mov QWORD PTR [rbp - 24], rax");                       // save the runtime array tag across the cell alloc
     emitter.instruction("mov QWORD PTR [rbp - 16], rdx");                       // save the owned array pointer across the cell alloc
-    emitter.instruction("mov rax, 24");                                         // a Mixed cell stores tag plus two payload words
-    emitter.instruction("call __rt_heap_alloc");                                // allocate the Mixed cell storage
-    emitter.instruction(&format!("mov r10, 0x{:x}", crate::codegen_support::sentinels::x86_64_heap_kind_word(5))); // materialize the Mixed-cell heap kind word (x86_64 marker | kind 5)
-    emitter.instruction("mov QWORD PTR [rax - 8], r10");                        // stamp the allocated payload as a Mixed cell in the uniform header
-    emitter.instruction("mov r10, QWORD PTR [rbp - 24]");                       // reload the runtime array tag (4 or 5)
-    emitter.instruction("mov QWORD PTR [rax], r10");                            // store the runtime value tag at mixed[0]
-    emitter.instruction("mov r10, QWORD PTR [rbp - 16]");                       // reload the owned array pointer
-    emitter.instruction("mov QWORD PTR [rax + 8], r10");                        // store the array pointer at mixed[8] (no incref: cell owns it)
-    emitter.instruction("mov QWORD PTR [rax + 16], 0");                         // hi = 0 (array payload is single-word)
+    elephc_memoir::values::owned_payload::emit_owned_tagged_pointer_from_slots(
+        emitter, "QWORD PTR [rbp - 24]", "QWORD PTR [rbp - 16]",
+    );
     emitter.instruction("add rsp, 32");                                         // release the local slot
     emitter.instruction("pop rbp");                                             // restore the caller frame pointer
     emitter.instruction("ret");                                                 // return the Mixed cell pointer in rax

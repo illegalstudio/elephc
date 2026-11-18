@@ -15,6 +15,16 @@ use crate::codegen_support::runtime::RESOURCE_ID_TABLE_SLOTS;
 use crate::codegen_support::try_handlers::EXCEPTION_GUARD_OWNER_OFFSET;
 use crate::codegen_support::sentinels::emit_branch_if_null_container;
 
+use elephc_memoir::{ValueTag, callback_result};
+
+/// Ownership tags of the normalized stream-cast callback result.
+const RESULT_OWNER_TAGS: callback_result::OwnerTags = callback_result::OwnerTags {
+    string: ValueTag::new(1),
+    callable: ValueTag::new(10),
+    first_refcounted: ValueTag::new(4),
+    last_refcounted: ValueTag::new(7),
+};
+
 /// Emits the C ABI callback query and transfers its status and owned return into an opaque record.
 pub(super) fn emit_fileinfo_cast(emitter: &mut Emitter) {
     let arm = emitter.target.arch == Arch::AArch64;
@@ -160,7 +170,7 @@ pub(super) fn emit_fileinfo_cast(emitter: &mut Emitter) {
     abi::emit_store_to_address(emitter, a, frame, 56);
     emitter.label("__rt_finfo_cast_done");
     // -- transfer the callback owner into its record before restoring the caller --
-    emit_pack_result(emitter);
+    callback_result::emit_pack(emitter, EXCEPTION_GUARD_OWNER_OFFSET, RESULT_OWNER_TAGS);
     if arm {
         emitter.instruction("ldp x29, x30, [sp, #128]");                        // restore the caller frame and return address
         emitter.instruction("add sp, sp, #144");                                // release the complete aligned callback frame
@@ -172,102 +182,12 @@ pub(super) fn emit_fileinfo_cast(emitter: &mut Emitter) {
     emit_result_accessors(emitter);
 }
 
-/// Guards the returned owner across allocation, then transfers it into a non-graph record.
-fn emit_pack_result(emitter: &mut Emitter) {
-    let arm = emitter.target.arch == Arch::AArch64;
-    let (ret, frame, scratch, callback) = if arm { ("x0", "sp", "x9", "x14") } else { ("rax", "rsp", "r9", "r11") };
-    // -- guard the transferred callback owner before allocating its opaque record --
-    abi::emit_store_zero_to_address(emitter, frame, 64 + EXCEPTION_GUARD_OWNER_OFFSET);
-    abi::emit_symbol_address(emitter, callback, "__rt_exception_release_owned");
-    abi::emit_store_to_address(emitter, callback, frame, 72);
-    abi::emit_load_from_address(emitter, scratch, frame, 8);
-    emitter.instruction(if arm { "cmp x9, #10" } else { "cmp r9, 10" });        // callable descriptors have a dedicated exceptional release path
-    emitter.instruction(if arm { "b.ne __rt_finfo_guard_heap" } else { "jne __rt_finfo_guard_heap" }); // use ordinary typed heap cleanup for other values
-    abi::emit_symbol_address(emitter, callback, "__rt_exception_release_callable");
-    abi::emit_store_to_address(emitter, callback, frame, 72);
-    emitter.instruction(if arm { "b __rt_finfo_guard_owner" } else { "jmp __rt_finfo_guard_owner" }); // guard the returned callable and its captures
-    emitter.label("__rt_finfo_guard_heap");
-    emitter.instruction(if arm { "cmp x9, #1" } else { "cmp r9, 1" });          // returned strings also transfer an allocation owner
-    emitter.instruction(if arm { "b.eq __rt_finfo_guard_owner" } else { "je __rt_finfo_guard_owner" }); // protect an owned string during record allocation
-    emitter.instruction(if arm { "cmp x9, #4" } else { "cmp r9, 4" });          // scalar return registers must never be treated as heap pointers
-    emitter.instruction(if arm { "b.lo __rt_finfo_guard_publish" } else { "jb __rt_finfo_guard_publish" }); // leave scalar guards empty
-    emitter.instruction(if arm { "cmp x9, #7" } else { "cmp r9, 7" });          // arrays, objects and Mixed returns are refcounted owners
-    emitter.instruction(if arm { "b.hi __rt_finfo_guard_publish" } else { "ja __rt_finfo_guard_publish" }); // raw resources and null carry no heap owner
-    emitter.label("__rt_finfo_guard_owner");
-    abi::emit_load_from_address(emitter, scratch, frame, 16);
-    abi::emit_store_to_address(emitter, scratch, frame, 64 + EXCEPTION_GUARD_OWNER_OFFSET);
-    emitter.label("__rt_finfo_guard_publish");
-    emitter.instruction(if arm { "add x0, sp, #64" } else { "lea rdi, [rsp + 64]" }); // point at the stack-local activation prefix
-    emitter.instruction(if arm { "mov x1, #0" } else { "xor esi, esi" });       // publish this owner as a new unwind group
-    emitter.instruction(if arm { "bl __rt_exception_guard_owned" } else { "call __rt_exception_guard_owned" }); // protect the return if allocation invokes throwing GC cleanup
-    abi::emit_load_int_immediate(emitter, ret, 32);
-    // -- move the owned result into a record and consume its temporary unwind guard --
-    emitter.instruction(if arm { "bl __rt_heap_alloc" } else { "call __rt_heap_alloc" }); // allocate the opaque owner record using ordinary heap failure handling
-    for (source, destination) in [(56, 0), (8, 8), (16, 16), (24, 24)] {
-        abi::emit_load_from_address(emitter, scratch, frame, source);
-        abi::emit_store_to_address(emitter, scratch, ret, destination);
-    }
-    abi::emit_store_to_address(emitter, ret, frame, 104);
-    emitter.instruction(if arm { "add x0, sp, #64" } else { "lea rdi, [rsp + 64]" }); // consume exactly the guard whose owner now lives in the record
-    emitter.instruction(if arm { "bl __rt_exception_unguard_owned" } else { "call __rt_exception_unguard_owned" }); // transfer ownership to the caller's PHP finally without releasing it
-    abi::emit_load_from_address(emitter, ret, frame, 104);
-}
-
-/// Exposes the result status and consumes each transferred record before running its destructor.
+/// Exposes the opaque result record through Fileinfo's status and release entry points.
 fn emit_result_accessors(emitter: &mut Emitter) {
-    let arm = emitter.target.arch == Arch::AArch64;
-    let (arg, ret, frame, scratch) = if arm { ("x0", "x0", "sp", "x9") } else { ("rdi", "rax", "rsp", "r9") };
     let name = emitter.target.extern_symbol("elephc_runtime_fileinfo_cast_status");
-    // -- borrow the status without consuming the callback's result owner --
     emitter.label_global(&name);
-    abi::emit_load_from_address(emitter, ret, arg, 0);
-    emitter.instruction("ret");                                                 // borrow the result status without consuming its owner
+    callback_result::emit_read_status(emitter);
     let name = emitter.target.extern_symbol("elephc_runtime_fileinfo_cast_release");
     emitter.label_global(&name);
-    // -- retain the typed value while retiring its opaque record before callbacks --
-    if arm {
-        emitter.instruction("sub sp, sp, #48");                                 // reserve the transferred value and caller linkage
-        emitter.instruction("stp x29, x30, [sp, #32]");                         // preserve the caller frame and return address
-    } else {
-        emitter.instruction("push rbp");                                        // preserve the SysV caller frame pointer
-        emitter.instruction("mov rbp, rsp");                                    // establish the release frame pointer
-        emitter.instruction("sub rsp, 32");                                     // retain the value across record release and destructor calls
-    }
-    for (source, destination) in [(8, 0), (16, 8), (24, 16)] {
-        abi::emit_load_from_address(emitter, scratch, arg, source);
-        abi::emit_store_to_address(emitter, scratch, frame, destination);
-    }
-    abi::emit_store_zero_to_address(emitter, arg, 16);
-    if !arm { emitter.instruction("mov rax, rdi"); }                            // pass the consumed record through the native heap ABI
-    emitter.instruction(if arm { "bl __rt_heap_free_safe" } else { "call __rt_heap_free_safe" }); // retire the record before any PHP destructor can reenter
-    // -- dispatch the transferred owner to its declared representation's release path --
-    abi::emit_load_from_address(emitter, scratch, frame, 0);
-    emitter.instruction(if arm { "cmp x9, #1" } else { "cmp r9, 1" });          // raw strings use the validated allocation release helper
-    emitter.instruction(if arm { "b.eq __rt_finfo_result_string" } else { "je __rt_finfo_result_string" }); // release the transferred string allocation
-    emitter.instruction(if arm { "cmp x9, #10" } else { "cmp r9, 10" });        // callable captures require descriptor cleanup
-    emitter.instruction(if arm { "b.eq __rt_finfo_result_callable" } else { "je __rt_finfo_result_callable" }); // preserve the callable ownership protocol
-    emitter.instruction(if arm { "cmp x9, #4" } else { "cmp r9, 4" });          // lower tags are non-owning scalars
-    emitter.instruction(if arm { "b.lo __rt_finfo_result_done" } else { "jb __rt_finfo_result_done" }); // scalar results carry no transferred heap owner
-    emitter.instruction(if arm { "cmp x9, #7" } else { "cmp r9, 7" });          // arrays, objects and Mixed results are refcounted
-    emitter.instruction(if arm { "b.hi __rt_finfo_result_done" } else { "ja __rt_finfo_result_done" }); // null and raw descriptors have no heap owner
-    abi::emit_load_from_address(emitter, ret, frame, 8);
-    emitter.instruction(if arm { "bl __rt_decref_any" } else { "call __rt_decref_any" }); // release the result under PHP's active finally exception state
-    emitter.instruction(if arm { "b __rt_finfo_result_done" } else { "jmp __rt_finfo_result_done" }); // finish after the complete typed release
-    emitter.label("__rt_finfo_result_string");
-    abi::emit_load_from_address(emitter, ret, frame, 8);
-    emitter.instruction(if arm { "bl __rt_heap_free_safe" } else { "call __rt_heap_free_safe" }); // release a returned string without touching static data
-    emitter.instruction(if arm { "b __rt_finfo_result_done" } else { "jmp __rt_finfo_result_done" }); // retain the normal finally control flow
-    emitter.label("__rt_finfo_result_callable");
-    abi::emit_load_from_address(emitter, ret, frame, 8);
-    emitter.instruction(if arm { "bl __rt_callable_descriptor_release" } else { "call __rt_callable_descriptor_release" }); // release captured callable owners through their descriptor
-    emitter.label("__rt_finfo_result_done");
-    // -- restore the caller after the complete typed result release --
-    if arm {
-        emitter.instruction("ldp x29, x30, [sp, #32]");                         // restore the caller linkage after result destruction
-        emitter.instruction("add sp, sp, #48");                                 // release the complete aligned release frame
-    } else {
-        emitter.instruction("add rsp, 32");                                     // release the aligned transferred-value storage
-        emitter.instruction("pop rbp");                                         // restore the SysV caller frame pointer
-    }
-    emitter.instruction("ret");                                                 // leave exception chaining to the enclosing PHP finally
+    callback_result::emit_release(emitter, RESULT_OWNER_TAGS);
 }

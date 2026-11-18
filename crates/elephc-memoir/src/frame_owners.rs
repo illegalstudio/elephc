@@ -31,7 +31,7 @@ pub fn emit_guarded_release(
     pending: FrameOffset,
 ) {
     emit_take(emitter, offset);
-    emitter.emit_guarded_cleanup_call(entry, emitter.int_result_reg(), pending.bytes());
+    crate::cleanup::invoke::emit_guarded_cleanup_call(emitter, entry, emitter.int_result_reg(), pending.bytes());
 }
 
 /// Transfers the owner to the native result register and clears its former slot.

@@ -151,7 +151,7 @@ pub fn append_heap_storage(out: &mut String, heap_size: usize, target: &impl Dat
 
 /// Reserves borrowed-reference and validation-pin root heads.
 pub fn append_reference_roots(out: &mut String, target: &impl DataTarget) {
-    out.push_str(&target.common("_rt_unmanaged_ref_borrow_top", 8));
+    out.push_str(&target.common(crate::reference_cells::unmanaged_borrows::HEAD_SYMBOL, 8));
     // Active boxed-value validation roots are excluded from PHP-visible sharing counts.
     out.push_str(&target.common("_rt_reference_validation_pins_top", 8));
 }
