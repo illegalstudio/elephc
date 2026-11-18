@@ -81,6 +81,7 @@ mod nested_write_sources;
 mod nested_plain_writes;
 mod nested_spl_writes;
 mod nested_false_errors;
+pub(in crate::ir_lower) use nested_false_errors::raise_invalid_key_type_error as raise_invalid_array_key_type_error;
 mod return_coercions;
 mod repr_fixpoint;
 mod static_property_helpers;

@@ -105,8 +105,13 @@ pub(super) fn lower(
             PhpType::Mixed, Op::MixedClone.default_effects(), Some(expr.span));
         let (detached, detached_owner) = root_owned_call_operand(ctx, detached, expr.span);
         let key_value = lower_expr(ctx, &key);
+        let prepared = crate::ir_lower::offset_key_operands::PreparedOffsetKey::prepare(ctx, key_value, expr.span);
+        let key_value = prepared.value;
+        let receiver = crate::ir_lower::ownership::borrow_value(ctx, detached, Some(expr.span));
+        crate::ir_lower::array_key_guards::for_removal(ctx, receiver, key_value, expr.span);
         ctx.emit_void(Op::OffsetUnset, vec![detached.value, key_value.value], None,
             Op::OffsetUnset.default_effects(), Some(expr.span));
+        prepared.finish(ctx, expr.span);
         if let Some(slot) = detached_owner { retire_owned_call_operand(ctx, slot, expr.span); }
     } else {
         let message = if storage_receiver {

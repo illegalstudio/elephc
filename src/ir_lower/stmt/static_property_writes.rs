@@ -609,15 +609,20 @@ pub(crate) fn lower_static_property_array_unset(
     // `unset_target_supported` only admits this shape for a declared PHP `array` static
     // property, and the separation succeeds for exactly that type.
     let array = separate_php_array_static_property(ctx, receiver, property, span)?;
+    let prepared = crate::ir_lower::offset_key_operands::PreparedOffsetKey::prepare(ctx, index, span);
+    let index = prepared.value;
+    crate::ir_lower::array_key_guards::for_removal(ctx, array, index, span);
     // The runtime flag reports a removed value that may own a cycle-capable graph.
-    Some(ctx.emit_value(
+    let removed = ctx.emit_value(
         Op::OffsetUnset,
         vec![array.value, index.value],
         None,
         PhpType::Bool,
         Op::OffsetUnset.default_effects(),
         Some(span),
-    ))
+    );
+    prepared.finish(ctx, span);
+    Some(removed)
 }
 
 /// Publishes a detached boxed PHP array before a static-property element mutation.

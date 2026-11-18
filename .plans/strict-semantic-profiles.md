@@ -1370,3 +1370,21 @@ clean heaps. Throwable trace argument retention is a separate baseline
 feature tracked as taskf82cb27c; this step does not claim default PHP trace-owner
 lifetime parity. Unset, typed-miss null provenance, producers/eval, dependency
 profiles and the remaining binding/family integrations remain open.
+
+### Verified163: original keys and current storage at removal boundaries
+
+Local, property, static and detached nested removals check the original key only
+when the selected receiver is a PHP array. ArrayAccess receives its original
+kinds; null/false removal behavior and readonly error priority remain intact.
+`PreparedOffsetKey` shares representation-only boxing and its independent owner
+ledger with writes. A shared local dispatcher evaluates the key first, then
+selects the current packed, hash or boxed storage. Packed conversion derives its
+element type from that current storage, including callback-driven replacements.
+
+Twenty-four native profile/source/optimizer variants and twenty target/profile
+emissions pass with clean heaps. All eight focused gates pass, including compiler/bridge builds in57.23s and
+property-write/boolean-parent compatibility controls. Three public CLI variants
+(PHP with both optimization settings and LFC with Coercions) pass in2.52s with
+clean heaps. ArrayKeys remains pending
+until typed-miss null provenance, producers/eval and other outstanding boundaries
+are complete; no public feature admission changes in this step.

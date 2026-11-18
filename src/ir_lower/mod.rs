@@ -50,6 +50,7 @@ mod scoped_writes;
 mod semantic_guards;
 mod conversion_boundaries;
 mod array_key_guards;
+mod offset_key_operands;
 mod checked_arithmetic;
 mod numeric_domains;
 mod numeric_operands;

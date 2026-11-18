@@ -11,24 +11,6 @@
 
 use super::*;
 
-/// Boxes key kinds that the array fallback cannot materialize directly, without converting them.
-pub(super) fn prepare_key(
-    ctx: &mut LoweringContext<'_, '_>, key: LoweredValue, span: Span,
-    roots: &mut Vec<LocalSlotId>,
-) -> LoweredValue {
-    if !matches!(ctx.builder.value_php_type(key.value).codegen_repr(),
-        PhpType::Object(_) | PhpType::Callable | PhpType::Array(_)
-        | PhpType::AssocArray { .. } | PhpType::Iterable)
-    { return key; }
-    ctx.with_independent_write_receiver(|ctx| {
-        let key = crate::ir_lower::ownership::borrow_value(ctx, key, Some(span));
-        let key = ctx.box_value_as_mixed(key, PhpType::Mixed, Some(span));
-        let (key, owner) = crate::ir_lower::expr::root_owned_call_operand(ctx, key, span);
-        if let Some(owner) = owner { roots.push(owner); }
-        key
-    })
-}
-
 /// Protects caller-owned operands while the boxed writer borrows independent views of them.
 /// The caller retains its existing normal-path cleanup and every earlier pending record.
 pub(super) fn lower_set(

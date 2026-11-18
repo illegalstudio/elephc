@@ -88,3 +88,45 @@ fn conditionally_require_key(ctx: &mut LoweringContext<'_, '_>, condition: Lower
     ctx.builder.terminate(Terminator::Br { target: continuation, args: Vec::new() });
     ctx.builder.position_at_end(continuation);
 }
+
+/// Rejects array/object keys only when this access selects a PHP array, preserving object setters.
+pub(super) fn reject_invalid_kind(
+    ctx: &mut LoweringContext<'_, '_>, parent: LoweredValue, key: LoweredValue, span: Span,
+) {
+    if !matches!(ctx.builder.value_php_type(key.value).codegen_repr(),
+        PhpType::Mixed | PhpType::Union(_) | PhpType::Array(_) | PhpType::AssocArray { .. }
+        | PhpType::Object(_) | PhpType::Callable | PhpType::Iterable)
+    { return; }
+    let array = crate::ir_lower::semantic_guards::matches_any_kind(ctx, parent,
+        &[crate::ir::PhpTypePredicate::Array], Some(span));
+    let invalid = crate::ir_lower::semantic_guards::matches_any_kind(ctx, key,
+        &[crate::ir::PhpTypePredicate::Array, crate::ir::PhpTypePredicate::Object], Some(span));
+    let rejected = ctx.emit_value(Op::IBitAnd, vec![array.value, invalid.value], None,
+        PhpType::Bool, Op::IBitAnd.default_effects(), Some(span));
+    let error = ctx.builder.create_named_block("offset.key.type.error", Vec::new());
+    let accepted = ctx.builder.create_named_block("offset.key.type.accepted", Vec::new());
+    let initialized = ctx.initialized_slots_snapshot();
+    ctx.builder.terminate(Terminator::CondBr {
+        cond: rejected.value, then_target: error, then_args: Vec::new(),
+        else_target: accepted, else_args: Vec::new(),
+    });
+    ctx.builder.position_at_end(error);
+    super::stmt::raise_invalid_array_key_type_error(ctx, key, span);
+    ctx.builder.position_at_end(accepted);
+    ctx.restore_initialized_slots(initialized);
+}
+
+/// Validates a removal's original key while its caller keeps the key owner published.
+/// Only actual arrays participate; null/false and ArrayAccess retain their own behavior.
+pub(super) fn for_removal(
+    ctx: &mut LoweringContext<'_, '_>, receiver: LoweredValue, key: LoweredValue, span: Span,
+) {
+    let key = super::ownership::borrow_value(ctx, key, Some(span));
+    let borrowed = super::ownership::borrow_value(ctx, receiver, Some(span));
+    let mut pending = [receiver];
+    let (_, pins) = super::expr::lower_with_pending_owners(ctx, &mut pending, span, |ctx| {
+        reject_invalid_kind(ctx, borrowed, key, span);
+        for_receiver(ctx, borrowed, key, span);
+    });
+    super::expr::unpin_in_flight_owners(ctx, pins, span);
+}

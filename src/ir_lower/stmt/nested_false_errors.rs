@@ -132,7 +132,7 @@ fn complete_and_rethrow(
 }
 
 /// Builds the PHP array/object key TypeError without allocating an unconsumed stored-value box.
-pub(super) fn raise_invalid_key_type_error(
+pub(in crate::ir_lower) fn raise_invalid_key_type_error(
     ctx: &mut LoweringContext<'_, '_>, key: LoweredValue, span: Span,
 ) {
     let ty = ctx.builder.value_php_type(key.value);

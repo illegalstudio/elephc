@@ -845,15 +845,20 @@ pub(crate) fn lower_property_array_unset(
         Some(span),
     );
     ctx.builder.set_value_ownership(container.value, Ownership::Borrowed);
+    let prepared = crate::ir_lower::offset_key_operands::PreparedOffsetKey::prepare(ctx, index, span);
+    let index = prepared.value;
+    crate::ir_lower::array_key_guards::for_removal(ctx, container, index, span);
     // The runtime flag reports a removed value that may own a cycle-capable graph.
-    ctx.emit_value(
+    let removed = ctx.emit_value(
         remove,
         vec![container.value, index.value],
         None,
         PhpType::Bool,
         remove.default_effects(),
         Some(span),
-    )
+    );
+    prepared.finish(ctx, span);
+    removed
 }
 
 /// Separates a declared PHP array property before mutating its packed-or-hash boxed payload.

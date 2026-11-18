@@ -58,34 +58,7 @@ fn store(
     ctx: &mut LoweringContext<'_, '_>, parent: LoweredValue,
     key: LoweredValue, value: LoweredValue, span: Span, key_already_diagnosed: bool,
 ) {
-    reject_invalid_array_key(ctx, parent, key, span);
+    crate::ir_lower::array_key_guards::reject_invalid_kind(ctx, parent, key, span);
     crate::ir_lower::array_key_guards::for_prepared_write(ctx, parent, key, span);
     super::string_offset_writes::lower_boxed_set(ctx, parent, key, value, span, key_already_diagnosed);
-}
-
-/// Rejects array/object keys only when this access selects a PHP array, preserving object setters.
-fn reject_invalid_array_key(
-    ctx: &mut LoweringContext<'_, '_>, parent: LoweredValue, key: LoweredValue, span: Span,
-) {
-    if !matches!(ctx.builder.value_php_type(key.value).codegen_repr(),
-        PhpType::Mixed | PhpType::Union(_) | PhpType::Array(_) | PhpType::AssocArray { .. }
-        | PhpType::Object(_) | PhpType::Callable | PhpType::Iterable)
-    { return; }
-    let array = crate::ir_lower::semantic_guards::matches_any_kind(ctx, parent,
-        &[crate::ir::PhpTypePredicate::Array], Some(span));
-    let invalid = crate::ir_lower::semantic_guards::matches_any_kind(ctx, key,
-        &[crate::ir::PhpTypePredicate::Array, crate::ir::PhpTypePredicate::Object], Some(span));
-    let rejected = ctx.emit_value(Op::IBitAnd, vec![array.value, invalid.value], None,
-        PhpType::Bool, Op::IBitAnd.default_effects(), Some(span));
-    let error = ctx.builder.create_named_block("offset.key.type.error", Vec::new());
-    let accepted = ctx.builder.create_named_block("offset.key.type.accepted", Vec::new());
-    let initialized = ctx.initialized_slots_snapshot();
-    ctx.builder.terminate(Terminator::CondBr {
-        cond: rejected.value, then_target: error, then_args: Vec::new(),
-        else_target: accepted, else_args: Vec::new(),
-    });
-    ctx.builder.position_at_end(error);
-    super::nested_false_errors::raise_invalid_key_type_error(ctx, key, span);
-    ctx.builder.position_at_end(accepted);
-    ctx.restore_initialized_slots(initialized);
 }

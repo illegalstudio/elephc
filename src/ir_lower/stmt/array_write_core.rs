@@ -571,7 +571,8 @@ pub(super) fn lower_boxed_array_set(
         let index = lower_operand(ctx, index, true);
         (index, lower_operand(ctx, value, false))
     };
-    let index = super::boxed_write_owners::prepare_key(ctx, index, span, &mut roots);
+    let index = crate::ir_lower::offset_key_operands::PreparedOffsetKey::prepare(ctx, index, span)
+        .into_value_with_owners(&mut roots);
     super::boxed_write_parents::lower(
         ctx, array, index, value, span, key_already_diagnosed,
     );
@@ -603,7 +604,8 @@ pub(super) fn lower_boxed_array_set_values(
     };
     let index = ctx.with_independent_write_receiver(|ctx| root(ctx, index));
     let value = root(ctx, value);
-    let index = super::boxed_write_owners::prepare_key(ctx, index, span, &mut roots);
+    let index = crate::ir_lower::offset_key_operands::PreparedOffsetKey::prepare(ctx, index, span)
+        .into_value_with_owners(&mut roots);
     super::boxed_write_parents::lower(
         ctx, array, index, value, span, key_already_diagnosed,
     );
