@@ -2098,7 +2098,9 @@ fn decl_class_domnode() -> Stmt {
                         vec![],
                         None,
                     ),
-                    s_return(e_this_prop("previousSibling")),
+                    s_assign("_raw", e_this_prop("previousSibling")),
+                    s_if(e_instance_of(e_var("_raw"), "WeakReference"), vec![s_return(e_method_call(e_var("_raw"), "get", vec![]))], vec![], None),
+                    s_return(e_var("_raw")),
                 ]),
         )
         .method(
@@ -2106,7 +2108,7 @@ fn decl_class_domnode() -> Stmt {
                 .param("value", t_mixed())
                 .returns(TypeExpr::Void)
                 .body(vec![
-                    s_prop_assign(e_this(), "previousSibling", e_ternary(e_call("is_object", vec![e_this_prop("__elephc_simplexml")]), e_null(), e_var("value"))),
+                    s_prop_assign(e_this(), "previousSibling", e_ternary(e_call("is_object", vec![e_this_prop("__elephc_simplexml")]), e_null(), e_ternary(e_instance_of(e_var("value"), "DOMNode"), e_static_call("WeakReference", "create", vec![e_var("value")]), e_var("value")))),
                 ]),
         )
         .method(
@@ -2130,7 +2132,9 @@ fn decl_class_domnode() -> Stmt {
                         vec![],
                         None,
                     ),
-                    s_return(e_this_prop("nextSibling")),
+                    s_assign("_raw", e_this_prop("nextSibling")),
+                    s_if(e_instance_of(e_var("_raw"), "WeakReference"), vec![s_return(e_method_call(e_var("_raw"), "get", vec![]))], vec![], None),
+                    s_return(e_var("_raw")),
                 ]),
         )
         .method(
@@ -2138,7 +2142,7 @@ fn decl_class_domnode() -> Stmt {
                 .param("value", t_mixed())
                 .returns(TypeExpr::Void)
                 .body(vec![
-                    s_prop_assign(e_this(), "nextSibling", e_ternary(e_call("is_object", vec![e_this_prop("__elephc_simplexml")]), e_null(), e_var("value"))),
+                    s_prop_assign(e_this(), "nextSibling", e_ternary(e_call("is_object", vec![e_this_prop("__elephc_simplexml")]), e_null(), e_ternary(e_instance_of(e_var("value"), "DOMNode"), e_static_call("WeakReference", "create", vec![e_var("value")]), e_var("value")))),
                 ]),
         )
         .method(
@@ -2162,7 +2166,9 @@ fn decl_class_domnode() -> Stmt {
                         vec![],
                         None,
                     ),
-                    s_return(e_this_prop("parentNode")),
+                    s_assign("_raw", e_this_prop("parentNode")),
+                    s_if(e_instance_of(e_var("_raw"), "WeakReference"), vec![s_return(e_method_call(e_var("_raw"), "get", vec![]))], vec![], None),
+                    s_return(e_var("_raw")),
                 ]),
         )
         .method(
@@ -2170,7 +2176,7 @@ fn decl_class_domnode() -> Stmt {
                 .param("value", t_mixed())
                 .returns(TypeExpr::Void)
                 .body(vec![
-                    s_prop_assign(e_this(), "parentNode", e_ternary(e_call("is_object", vec![e_this_prop("__elephc_simplexml")]), e_null(), e_var("value"))),
+                    s_prop_assign(e_this(), "parentNode", e_ternary(e_call("is_object", vec![e_this_prop("__elephc_simplexml")]), e_null(), e_ternary(e_instance_of(e_var("value"), "DOMNode"), e_static_call("WeakReference", "create", vec![e_var("value")]), e_var("value")))),
                 ]),
         )
         .method(
@@ -2317,72 +2323,6 @@ fn decl_class_domnode() -> Stmt {
                 ]),
         )
         .method(
-            method("appendChild")
-                .param("node", t_class("DOMNode"))
-                .returns(t_class("DOMNode"))
-                .body(vec![
-                    s_if(
-                        e_instance_of(e_var("node"), "DOMDocument"),
-                        vec![
-                            s_throw(e_new("DOMException", vec![e_str("Hierarchy Request Error"), e_int(3)])),
-                        ],
-                        vec![],
-                        None,
-                    ),
-                    s_assign("bound", e_this_prop("__elephc_simplexml")),
-                    s_if(
-                        e_call("is_object", vec![e_var("bound")]),
-                        vec![
-                            s_assign("appended", e_method_call(e_var("bound"), "__elephc_dom_append_child", vec![e_this(), e_var("node")])),
-                            s_if(
-                                e_instance_of(e_var("appended"), "DOMNode"),
-                                vec![
-                                    s_return(e_var("appended")),
-                                ],
-                                vec![],
-                                None,
-                            ),
-                            s_throw(e_new("DOMException", vec![e_str("Hierarchy Request Error"), e_int(3)])),
-                        ],
-                        vec![],
-                        None,
-                    ),
-                    s_assign("previous", e_prop(e_var("node"), "parentNode")),
-                    s_if(
-                        e_instance_of(e_var("previous"), "DOMNode"),
-                        vec![
-                            s_expr(e_method_call(e_var("previous"), "removeChild", vec![e_var("node")])),
-                        ],
-                        vec![],
-                        None,
-                    ),
-                    s_assign("items", e_array(vec![])),
-                    s_assign("children", e_this_prop("childNodes")),
-                    s_if(
-                        e_instance_of(e_var("children"), "DOMNodeList"),
-                        vec![
-                            s_foreach(e_var("children"), None, "child", vec![
-                                s_if(
-                                    e_instance_of(e_var("child"), "DOMNode"),
-                                    vec![
-                                        s_array_push("items", e_var("child")),
-                                    ],
-                                    vec![],
-                                    None,
-                                ),
-                            ]),
-                        ],
-                        vec![],
-                        None,
-                    ),
-                    s_array_push("items", e_var("node")),
-                    s_prop_assign(e_this(), "childNodes", e_new("DOMNodeList", vec![e_var("items")])),
-                    s_prop_assign(e_var("node"), "parentNode", e_this()),
-                    s_prop_assign(e_var("node"), "ownerDocument", e_ternary(e_instance_of(e_this(), "DOMDocument"), e_this(), e_this_prop("ownerDocument"))),
-                    s_return(e_var("node")),
-                ]),
-        )
-        .method(
             method("append")
                 .variadic("nodes", Some(t_union(vec![TypeExpr::Str, t_class("DOMNode")])))
                 .returns(TypeExpr::Void)
@@ -2404,35 +2344,6 @@ fn decl_class_domnode() -> Stmt {
                         s_prop_assign(e_var("text"), "childNodes", e_new("DOMNodeList", vec![e_array(vec![])])),
                         s_expr(e_method_call(e_this(), "appendChild", vec![e_var("text")])),
                     ]),
-                ]),
-        )
-        .method(
-            method("removeChild")
-                .param("node", t_class("DOMNode"))
-                .returns(t_class("DOMNode"))
-                .body(vec![
-                    s_assign("items", e_array(vec![])),
-                    s_assign("children", e_this_prop("childNodes")),
-                    s_if(
-                        e_instance_of(e_var("children"), "DOMNodeList"),
-                        vec![
-                            s_foreach(e_var("children"), None, "child", vec![
-                                s_if(
-                                    e_binop(e_instance_of(e_var("child"), "DOMNode"), BinOp::And, e_binop(e_var("child"), BinOp::StrictNotEq, e_var("node"))),
-                                    vec![
-                                        s_array_push("items", e_var("child")),
-                                    ],
-                                    vec![],
-                                    None,
-                                ),
-                            ]),
-                        ],
-                        vec![],
-                        None,
-                    ),
-                    s_prop_assign(e_this(), "childNodes", e_new("DOMNodeList", vec![e_var("items")])),
-                    s_prop_assign(e_var("node"), "parentNode", e_null()),
-                    s_return(e_var("node")),
                 ]),
         )
         .method(

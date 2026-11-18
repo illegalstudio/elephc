@@ -489,15 +489,15 @@ mod tests {
                 "DOMComment",
                 "DOMProcessingInstruction",
                 "Dom\\XMLDocument",
+                // Part::Libxml (package P2)
+                "__ElephcDomState",
+                "LibXMLError",
                 // package P3
                 "DOMNamedNodeMap",
                 "DOMCdataSection",
                 "DOMAttr",
                 "DOMDocumentFragment",
                 "DOMDocumentType",
-                // Part::Libxml (package P2)
-                "__ElephcDomState",
-                "LibXMLError",
             ]
         );
     }

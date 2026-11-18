@@ -15,6 +15,7 @@ mod cloning;
 mod diagnostics;
 mod ffi;
 mod iteration;
+mod dom_tree;
 mod mutation;
 mod query;
 mod retirement;

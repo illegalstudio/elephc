@@ -235,47 +235,8 @@ fn text() -> ClassBuilder {
                     s_if(
                         e_instance_of(e_var("_parent"), "DOMNode"),
                         vec![
-                            // TODO(P4): use `DOMNode::insertBefore($new, $this->nextSibling)` once
-                            // it lands (it is the only way to insert after a sibling of a node
-                            // bound to the libxml2 tree, where appending merges adjacent text,
-                            // which php's splitText does not). Until then insert after `$this`
-                            // with the primitives every node has: lift the siblings that follow
-                            // it out of the parent's child list, append the new node, put them
-                            // back. Right for a free-standing parent only.
-                            s_assign("_after", e_array(vec![])),
-                            s_assign("_seen", e_bool(false)),
-                            s_foreach(
-                                e_prop(e_var("_parent"), "childNodes"),
-                                None,
-                                "_child",
-                                vec![
-                                    s_if(
-                                        e_var("_seen"),
-                                        vec![s_array_push("_after", e_var("_child"))],
-                                        vec![],
-                                        None,
-                                    ),
-                                    s_if(
-                                        e_binop(e_var("_child"), BinOp::StrictEq, e_this()),
-                                        vec![s_assign("_seen", e_bool(true))],
-                                        vec![],
-                                        None,
-                                    ),
-                                ],
-                            ),
-                            s_foreach(
-                                e_var("_after"),
-                                None,
-                                "_moved",
-                                vec![s_expr(e_method_call(e_var("_parent"), "removeChild", vec![e_var("_moved")]))],
-                            ),
-                            s_expr(e_method_call(e_var("_parent"), "appendChild", vec![e_var("_new")])),
-                            s_foreach(
-                                e_var("_after"),
-                                None,
-                                "_moved",
-                                vec![s_expr(e_method_call(e_var("_parent"), "appendChild", vec![e_var("_moved")]))],
-                            ),
+                            // php links the new node right after this one without merging text.
+                            s_expr(e_method_call(e_var("_parent"), "insertBefore", vec![e_var("_new"), e_this_prop("nextSibling")])),
                         ],
                         vec![],
                         None,

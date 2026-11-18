@@ -133,9 +133,13 @@ impl Contributions {
         self.entries.push(Entry::Class { part, stmt: class });
     }
 
-    /// Adds a new top-level function declaration.
+    /// Adds a new top-level function declaration, or an `extern` function declaration (a native
+    /// bridge entry point the part's code calls).
     pub(crate) fn add_function(&mut self, part: Part, function: Stmt) {
-        assert!(matches!(function.kind, StmtKind::FunctionDecl { .. }), "add_function takes a function");
+        assert!(
+            matches!(function.kind, StmtKind::FunctionDecl { .. } | StmtKind::ExternFunctionDecl { .. }),
+            "add_function takes a function"
+        );
         self.entries.push(Entry::Function { part, stmt: function });
     }
 }

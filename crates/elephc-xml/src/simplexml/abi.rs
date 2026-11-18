@@ -19,9 +19,9 @@ thread_local! {
     static OUTPUT: RefCell<CString> = RefCell::new(CString::default());
 }
 /// Runs an ABI operation without allowing Rust panics to unwind into generated code.
-fn guard<T: Default>(body: impl FnOnce() -> T) -> T { catch_unwind(AssertUnwindSafe(body)).unwrap_or_default() }
+pub(super) fn guard<T: Default>(body: impl FnOnce() -> T) -> T { catch_unwind(AssertUnwindSafe(body)).unwrap_or_default() }
 /// Clones a wrapper so registry borrows never span native operations or new handles.
-fn view(handle: i64) -> Option<View> { REGISTRY.with(|r| r.borrow().views.get(&handle).cloned()) }
+pub(super) fn view(handle: i64) -> Option<View> { REGISTRY.with(|r| r.borrow().views.get(&handle).cloned()) }
 /// Stores one independent PHP wrapper and allocates a nonzero monotonically increasing handle.
 fn insert(value: View) -> i64 {
     REGISTRY.with(|registry| {
@@ -31,7 +31,7 @@ fn insert(value: View) -> i64 {
     })
 }
 /// Stashes an owned string until the next string-returning call on this thread.
-fn output(value: impl AsRef<[u8]>) -> *const c_char {
+pub(super) fn output(value: impl AsRef<[u8]>) -> *const c_char {
     OUTPUT.with(|cell| { let mut out = cell.borrow_mut(); *out = cstring(value.as_ref()); out.as_ptr() })
 }
 /// Encodes arbitrary bytes for the NUL-terminated string boundary without changing their contents.
