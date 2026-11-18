@@ -1,0 +1,195 @@
+//! Purpose:
+//! Scans PHP source into byte-preserving tokens and lexical diagnostics.
+//!
+//! Called from:
+//! - The shared PHP tokenizer API used by the native bridge and Magician.
+//!
+//! Key details:
+//! - Zend token boundaries and IDs come from the shared PHP 8.5 token catalog.
+//! - All tokens and diagnostic offsets refer to the original source buffer.
+//! - No operation launches PHP, reads files, or retains a borrowed source buffer.
+
+use std::collections::HashMap;
+use std::sync::OnceLock;
+
+mod keywords;
+mod lex;
+mod lexeme;
+mod names;
+mod operators;
+mod strings;
+pub use keywords::is_label_start as identifier_start;
+pub use lex::{LexError, LexWarning};
+pub use lexeme::{compiler_trivia_len, digits_len, identifier_len};
+pub use names::token_name;
+pub use operators::{operator, Operator};
+pub use strings::{
+    braced_expression_len, braced_interpolation, decode_single_quoted, heredoc_closing,
+    heredoc_opening, quoted_len, BracedInterpolation, HeredocOpening, HeredocOpeningError, HeredocProfile,
+    InterpolationComment, InterpolationError,
+};
+
+/// One token's identifier and original source coordinates.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Token {
+    /// PHP token identifier, or a single byte's unsigned value.
+    pub id: i64,
+    /// Zero-based byte offset, including any opening PHP tag or inline HTML.
+    pub pos: usize,
+    /// Byte length in the original input.
+    pub len: usize,
+    /// One-based starting line, counting CR, LF and CRLF like Zend.
+    pub line: usize,
+}
+
+/// One non-fatal diagnostic with its original source location.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Warning {
+    /// PHP's exact parser-facing message, without a "Deprecated: " prefix.
+    pub message: String,
+    /// One-based source line.
+    pub line: usize,
+    /// Zero-based byte offset.
+    pub pos: usize,
+    /// PHP error level Zend raises for this diagnostic (`E_WARNING` = 2 or
+    /// `E_DEPRECATED` = 8192).
+    pub severity: i64,
+}
+
+/// A successful scan with its non-fatal diagnostics.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct TokenizeOutput {
+    /// Tokens in source order.
+    pub tokens: Vec<Token>,
+    /// Non-fatal diagnostics emitted by the requested tokenization mode.
+    pub warnings: Vec<Warning>,
+}
+
+/// An error reported by a checked tokenizer entry point.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ParseError {
+    /// PHP-style error message, without a filename suffix.
+    pub message: String,
+    /// One-based source line at which parsing failed.
+    pub line: usize,
+    /// Zero-based source byte offset at which parsing failed.
+    pub pos: usize,
+    /// Non-fatal diagnostics PHP emits before raising the error.
+    pub warnings: Vec<Warning>,
+}
+
+/// Tokens and lexical diagnostics before applying tokenization-mode policies.
+pub struct Scan {
+    /// Tokens in source order.
+    pub tokens: Vec<Token>,
+    /// Lexical errors that matter to syntax validation.
+    pub errors: Vec<LexError>,
+    /// Lexical warnings with their original offsets.
+    pub warnings: Vec<LexWarning>,
+}
+
+/// Scans byte-preserving PHP tokens and collects lexical diagnostics.
+pub fn scan(source: &[u8]) -> Result<Scan, ParseError> {
+    if source.len() > u32::MAX as usize {
+        return Err(ParseError {
+            message: "PHP source exceeds the tokenizer size limit".into(),
+            line: 1,
+            pos: 0,
+            warnings: Vec::new(),
+        });
+    }
+    let (tokens, errors, warnings) = lex::scan(source);
+    Ok(Scan { tokens, errors, warnings })
+}
+
+/// Tokenizes PHP source without syntax validation and keeps lexical warnings.
+pub fn tokenize(source: &[u8]) -> Result<TokenizeOutput, ParseError> {
+    let Scan { tokens, warnings, .. } = scan(source)?;
+    // Octal-escape warnings exist without TOKEN_PARSE. Cast deprecations are parse-only.
+    let warnings = warnings
+        .into_iter()
+        .filter(|warning| !warning.parse_only)
+        .collect();
+    Ok(TokenizeOutput { tokens, warnings: attach_warning_lines(source, warnings) })
+}
+
+/// Assigns one-based source lines to warnings in a single forward pass.
+///
+/// The lexer and the validator both report byte offsets, so recomputing each line from the
+/// start of the source turned a file with many deprecated casts into quadratic work.
+pub fn attach_warning_lines(source: &[u8], mut warnings: Vec<LexWarning>) -> Vec<Warning> {
+    warnings.sort_by_key(|warning| warning.pos);
+    let mut line = 1usize;
+    let mut cursor = 0usize;
+    warnings
+        .into_iter()
+        .map(|warning| {
+            let end = warning.pos.min(source.len());
+            while cursor < end {
+                match source[cursor] {
+                    b'\n' => line += 1,
+                    b'\r' => {
+                        line += 1;
+                        // A CRLF pair is one line break.
+                        if source.get(cursor + 1) == Some(&b'\n') {
+                            cursor += 1;
+                        }
+                    }
+                    _ => {}
+                }
+                cursor += 1;
+            }
+            Warning {
+                message: warning.message,
+                line,
+                pos: warning.pos,
+                severity: warning.severity,
+            }
+        })
+        .collect()
+}
+
+/// Resolves one token constant from the authoritative shared catalog.
+pub(crate) fn id(name: &str) -> i64 {
+    *TOKEN_IDS
+        .get_or_init(|| {
+            elephc_builtin_contract::constants()
+                .iter()
+                .filter(|constant| constant.module == elephc_builtin_contract::PhpModule::Tokenizer)
+                .filter_map(|constant| match constant.value {
+                    elephc_builtin_contract::ConstValue::Int(value) => {
+                        Some((constant.name, value))
+                    }
+                    _ => None,
+                })
+                .collect()
+        })
+        .get(name)
+        .unwrap_or_else(|| panic!("missing tokenizer constant {name}"))
+}
+
+/// Immutable tokenizer-name to identifier index, built once per process.
+static TOKEN_IDS: OnceLock<HashMap<&'static str, i64>> = OnceLock::new();
+
+/// Counts logical PHP newlines, treating a CRLF pair as one line break.
+pub fn newline_count(bytes: &[u8]) -> usize {
+    bytes.iter().enumerate().filter(|&(i, b)| *b == b'\n' || *b == b'\r' && bytes.get(i + 1) != Some(&b'\n')).count()
+}
+
+/// Raw scanning keeps malformed source bytes and records the error for the validator.
+#[cfg(test)]
+#[test]
+fn malformed_php_remains_tokenizable_without_a_parser() {
+    let source = b"<?php \xff /* unterminated";
+    let scanned = scan(source).expect("lexical errors are collected separately");
+    assert!(!scanned.errors.is_empty());
+
+    let output = tokenize(source).expect("standalone tokenization accepts malformed source");
+    assert_eq!(output.tokens, scanned.tokens);
+    let bytes: Vec<_> = output
+        .tokens
+        .iter()
+        .flat_map(|token| source[token.pos..token.pos + token.len].iter().copied())
+        .collect();
+    assert_eq!(bytes, source);
+}

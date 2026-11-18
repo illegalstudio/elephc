@@ -730,6 +730,7 @@ dependencies = [
  "console",
  "elephc-bcmath",
  "elephc-builtin-contract",
+ "elephc-chopper",
  "elephc-crypto",
  "elephc-curl",
  "elephc-generics",
@@ -744,7 +745,6 @@ dependencies = [
  "elephc-probe",
  "elephc-random",
  "elephc-reference",
- "elephc-syntax",
  "elephc-tidy",
  "elephc-tls",
  "elephc-tz",
@@ -780,6 +780,15 @@ name = "elephc-builtin-contract"
 version = "0.1.0"
 dependencies = [
  "serde_json",
+]
+
+[[package]]
+name = "elephc-chopper"
+version = "0.1.0"
+dependencies = [
+ "elephc-builtin-contract",
+ "serde_json",
+ "stacker",
 ]
 
 [[package]]
@@ -860,6 +869,7 @@ dependencies = [
  "bincode",
  "elephc-bcmath",
  "elephc-builtin-contract",
+ "elephc-chopper",
  "elephc-crypto",
  "elephc-generics",
  "elephc-iconv",
@@ -867,7 +877,6 @@ dependencies = [
  "elephc-pcntl",
  "elephc-phar",
  "elephc-process-context",
- "elephc-tokenizer-engine",
  "flate2",
  "inventory",
  "libc",
@@ -967,22 +976,6 @@ name = "elephc-reference"
 version = "0.1.0"
 
 [[package]]
-name = "elephc-syntax"
-version = "0.1.0"
-dependencies = [
- "elephc-builtin-contract",
- "stacker",
-]
-
-[[package]]
-name = "elephc-syntax-validate"
-version = "0.1.0"
-dependencies = [
- "elephc-builtin-contract",
- "stacker",
-]
-
-[[package]]
 name = "elephc-tidy"
 version = "0.1.0"
 
@@ -1001,16 +994,7 @@ name = "elephc-tokenizer"
 version = "0.1.0"
 dependencies = [
  "elephc-builtin-contract",
- "elephc-tokenizer-engine",
-]
-
-[[package]]
-name = "elephc-tokenizer-engine"
-version = "0.1.0"
-dependencies = [
- "elephc-builtin-contract",
- "elephc-syntax-validate",
- "serde_json",
+ "elephc-chopper",
 ]
 
 [[package]]

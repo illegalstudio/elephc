@@ -42,9 +42,8 @@ pub fn local_inputs_newer_than(workspace: &Path, crate_name: &str, built_at: Sys
 
 /// Returns the crate directories behind `[lib]` / `[[bin]]` sources that live outside `crate_dir`.
 ///
-/// A wrapper crate can compile another crate's sources WITHOUT a `path` dependency:
-/// `elephc-syntax-validate` builds `../elephc-syntax/src/lib.rs`, so walking only declared
-/// dependencies left an edited parser looking fresh. The owning crate directory is the nearest
+/// A wrapper crate can compile another crate's sources through a target path. Its archive
+/// must track those sources as well as declared dependencies. The owning crate directory is the nearest
 /// ancestor of the declared source path that carries a `Cargo.toml`.
 pub fn external_source_crates(manifest: &toml::Table, crate_dir: &Path) -> Vec<PathBuf> {
     let mut targets: Vec<&str> = Vec::new();

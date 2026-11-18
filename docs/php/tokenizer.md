@@ -91,8 +91,8 @@ Non-canonical casts (`integer`, `boolean`, `double` and `binary`) raise
 rejected with PHP's removed-cast message. `declare(encoding=...)` raises PHP's
 "ignored because Zend multibyte feature is turned off by settings" warning.
 
-The optional bridge embeds a native Rust lexer and uses the leaf `elephc-syntax`
-frontend for validation. It does not execute PHP or require a PHP installation,
+The optional bridge uses the native Rust scanner and parser in `elephc-chopper`.
+It does not execute PHP or require a PHP installation,
 managed native package or third-party PHP grammar at runtime. Tokenization,
 parser feedback and constant lookup are shared with runtime `eval()`.
 

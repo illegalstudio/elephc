@@ -1918,7 +1918,7 @@ jobs:
         env:
           ELEPHC_TOKENIZER_REQUIRE_PHP85: '1'
         shell: elephc-ci-shell {0}
-        run: bash scripts/ci/run_prebuilt_tests.sh 'package(=elephc-tokenizer-engine) and kind(lib)'
+        run: bash scripts/ci/run_prebuilt_tests.sh 'package(=elephc-chopper) and binary(=php_tokenizer)'
 
       - name: Audit consumer compilation
         if: always()

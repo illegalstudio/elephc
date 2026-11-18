@@ -13,12 +13,12 @@ into assembly.
 **Authoritative source audit for this spec:**
 
 - `src/types/model.rs`
-- `crates/elephc-syntax/src/parser/ast/expr.rs`
-- `crates/elephc-syntax/src/parser/ast/stmt.rs`
-- `crates/elephc-syntax/src/parser/ast/operators.rs`
-- `crates/elephc-syntax/src/parser/ast/types.rs`
-- `crates/elephc-syntax/src/parser/ast/oop.rs`
-- `crates/elephc-syntax/src/parser/ast/ffi.rs`
+- `crates/elephc-chopper/src/syntax/parser/ast/expr.rs`
+- `crates/elephc-chopper/src/syntax/parser/ast/stmt.rs`
+- `crates/elephc-chopper/src/syntax/parser/ast/operators.rs`
+- `crates/elephc-chopper/src/syntax/parser/ast/types.rs`
+- `crates/elephc-chopper/src/syntax/parser/ast/oop.rs`
+- `crates/elephc-chopper/src/syntax/parser/ast/ffi.rs`
 - `src/ir/`
 - `src/ir_lower/`
 - `src/codegen/`
@@ -2426,8 +2426,8 @@ preheader exists, so passes either skip the loop or create one when needed.
 
 ## AST Lowering Catalogue
 
-Lowering must cover every variant in `crates/elephc-syntax/src/parser/ast/expr.rs` and
-`crates/elephc-syntax/src/parser/ast/stmt.rs`. The catalogue below is exhaustive for the current
+Lowering must cover every variant in `crates/elephc-chopper/src/syntax/parser/ast/expr.rs` and
+`crates/elephc-chopper/src/syntax/parser/ast/stmt.rs`. The catalogue below is exhaustive for the current
 source tree.
 
 ### Supporting AST Metadata

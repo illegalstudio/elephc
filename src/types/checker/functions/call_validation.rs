@@ -137,7 +137,7 @@ fn is_assoc_spread_source(expr: &Expr, env: &TypeEnv) -> bool {
 
 /// Maps shared signature-independent ordering rules for checker and parser call surfaces.
 pub(crate) fn validate_unresolved_call_argument_order(args: &[Expr], callee_desc: &str) -> Result<(), CompileError> {
-    elephc_syntax::call_args::validate_call_argument_order(args, callee_desc)
+    elephc_chopper::syntax::call_args::validate_call_argument_order(args, callee_desc)
 }
 
 impl Checker {

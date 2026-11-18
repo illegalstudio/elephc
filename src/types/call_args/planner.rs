@@ -23,7 +23,7 @@ use super::plan::{
     SpreadBoundsCheck,
 };
 use super::static_spread::{expand_static_assoc_spread_args_with_origins, ExpandedArgOrigin};
-use elephc_syntax::call_args::CallArgumentOrderError;
+use elephc_chopper::syntax::call_args::CallArgumentOrderError;
 
 /// Validates and normalizes call-site arguments against `sig`, inferring the
 /// caller-visible regular parameter count from the signature.
@@ -195,17 +195,17 @@ fn call_order_error(error: CallArgumentOrderError) -> CallArgPlanError {
 /// `plan_named_call_args`. Only literal `name:` syntax counts as a preceding
 /// named argument, matching PHP: `f(...["a" => 1], ...$rest)` stays legal.
 fn validate_no_spread_after_named(args: &[Expr]) -> Result<(), CallArgPlanError> {
-    elephc_syntax::call_args::validate_spread_after_named(args).map_err(call_order_error)
+    elephc_chopper::syntax::call_args::validate_spread_after_named(args).map_err(call_order_error)
 }
 
 /// Validates that no positional argument follows an unpack.
 fn validate_positional_spread_order(args: &[Expr]) -> Result<(), CallArgPlanError> {
-    elephc_syntax::call_args::validate_positional_spread_order(args).map_err(call_order_error)
+    elephc_chopper::syntax::call_args::validate_positional_spread_order(args).map_err(call_order_error)
 }
 
 /// Validates the order of a statically known associative unpack.
 fn validate_static_unpack_order(args: &[Expr]) -> Result<(), CallArgPlanError> {
-    elephc_syntax::call_args::validate_static_unpack_order(args).map_err(call_order_error)
+    elephc_chopper::syntax::call_args::validate_static_unpack_order(args).map_err(call_order_error)
 }
 
 /// Core named-argument planning: resolves named params, spreads, positional prefixes,

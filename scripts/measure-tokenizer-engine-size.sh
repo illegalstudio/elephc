@@ -1,18 +1,15 @@
 #!/usr/bin/env bash
 #
-# Measures the engine-only tokenizer binary, including the optional AST parser
-# that TOKEN_PARSE uses.
+# Measures a standalone tokenizer binary including the parser used by TOKEN_PARSE.
 #
 # Usage:
 #   ./scripts/measure-tokenizer-engine-size.sh size [source.php]
 #   ./scripts/measure-tokenizer-engine-size.sh fast [source.php]
 #
-# `size` uses opt-level z; `fast` keeps the lexer at opt-level 3 and compiles the
-# validation-only parser at opt-level z, because TOKEN_PARSE is not the lexer's hot
-# path. Both use fat LTO, one codegen unit, symbol stripping and
+# `size` uses opt-level z and `fast` uses opt-level 3. Both use fat LTO, one
+# codegen unit, symbol stripping and
 # `panic = "immediate-abort"`, which removes the std panic/backtrace formatter from
-# the executable. The parser is enabled, so this is the full TOKEN_PARSE engine,
-# not the lexer-only default build.
+# the executable. The probe exercises the full TOKEN_PARSE path.
 #
 # The panic strategy is unstable in the pinned toolchain, so the probe is built
 # in a throwaway Cargo project with `-Z build-std=std,panic_abort`. This keeps the
@@ -24,7 +21,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
-ENGINE_DIR="$(cd "$PROJECT_DIR/crates/elephc-tokenizer-engine" && pwd -P)"
+CHOPPER_DIR="$(cd "$PROJECT_DIR/crates/elephc-chopper" && pwd -P)"
 TOOLCHAIN="${RUST_TOOLCHAIN:-1.98}"
 
 MODE="size"
@@ -75,7 +72,7 @@ publish = false
 [workspace]
 
 [dependencies]
-elephc-tokenizer-engine = { path = "$ENGINE_DIR", features = ["parse"] }
+elephc-chopper = { path = "$CHOPPER_DIR" }
 
 [profile.size]
 inherits = "release"
@@ -92,8 +89,6 @@ codegen-units = 1
 panic = "immediate-abort"
 strip = "symbols"
 
-[profile.fast.package.elephc-syntax-validate]
-opt-level = "z"
 EOF
 
 cat > "$WORK/src/main.rs" <<'EOF'
@@ -103,9 +98,9 @@ fn main() {
         .nth(1)
         .map(|path| std::fs::read(path).expect("read source"))
         .unwrap_or_else(|| b"<?php echo 1 + 2;".to_vec());
-    let output = elephc_tokenizer_engine::tokenize_with_warnings(
+    let output = elephc_chopper::syntax::php_tokenizer::tokenize_with_warnings(
         &source,
-        elephc_tokenizer_engine::TOKEN_PARSE,
+        elephc_chopper::syntax::php_tokenizer::TOKEN_PARSE,
     )
     .expect("tokenize");
     println!("{}", output.tokens.len());

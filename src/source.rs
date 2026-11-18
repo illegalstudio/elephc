@@ -36,7 +36,7 @@ pub(crate) fn canonical_span_source_path(span: crate::span::Span) -> Option<Stri
 }
 
 #[allow(unused_imports)]
-pub use elephc_syntax::source::{
+pub use elephc_chopper::syntax::source::{
     composer_source_stem, current_parse_mode, current_strict_types, declare_strict_types,
     is_composer_source_path, scoped_parse_mode, with_parse_mode, SourceMode, SourceProfile,
 };

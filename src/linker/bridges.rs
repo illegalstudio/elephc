@@ -799,8 +799,7 @@ fn path_dependency_dirs(crate_dir: &Path) -> Vec<PathBuf> {
             collect_path_dependencies(entry, crate_dir, &mut dirs);
         }
     }
-    // A wrapper crate can compile another crate's sources without a `path` dependency, as
-    // `elephc-syntax-validate` does for `../elephc-syntax/src/lib.rs`.
+    // A wrapper target may point to a sibling crate's library source.
     dirs.extend(elephc::bridge_sources::external_source_crates(&parsed, crate_dir));
     dirs
 }
@@ -1549,9 +1548,8 @@ mod tests {
 
     /// A wrapper crate that compiles another crate's `[lib].path` source is watched too.
     ///
-    /// `elephc-syntax-validate` builds `../elephc-syntax/src/lib.rs` through `[lib].path`
-    /// rather than a `path` dependency, so a parser edit used to leave its archive looking
-    /// fresh and an old validator linked into compiled programs.
+    /// Changes to a source reached through `[lib].path` invalidate the wrapper archive
+    /// the same way as changes to a declared path dependency.
     #[test]
     fn path_dependency_dirs_follows_an_external_lib_path() {
         let root = scratch("external_lib_path");

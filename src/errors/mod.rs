@@ -5,10 +5,10 @@
 //! - Every compiler pass that constructs diagnostics and `crate::pipeline::compile()`.
 //!
 //! Key details:
-//! - The value types live in `elephc-syntax` so the tokenizer bridge links no reporting stack.
+//! - The value types live in Chopper's syntax module so the tokenizer bridge links no reporting stack.
 //! - Reporting keeps optional file data so included-file errors can point at their real source.
 
-pub use elephc_syntax::errors::{
+pub use elephc_chopper::syntax::errors::{
     CompileError, CompileErrorKind, CompileWarning, WarningKind,
 };
 

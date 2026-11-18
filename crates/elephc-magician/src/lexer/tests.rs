@@ -76,6 +76,25 @@ fn single_quoted_literal_never_interpolates() {
     );
 }
 
+/// Shared operator recognition preserves token boundaries expected by the eval grammar.
+#[test]
+fn shared_operator_scan_preserves_eval_token_shapes() {
+    assert_eq!(
+        kinds("??= >>= <=> <> |>"),
+        vec![
+            TokenKind::QuestionQuestion,
+            TokenKind::Equal,
+            TokenKind::GreaterGreaterEqual,
+            TokenKind::Spaceship,
+            TokenKind::Less,
+            TokenKind::Greater,
+            TokenKind::Pipe,
+            TokenKind::Greater,
+            TokenKind::Eof,
+        ],
+    );
+}
+
 /// Verifies `\$` yields a literal `$` and suppresses interpolation, still as one token.
 #[test]
 fn escaped_dollar_stays_literal_and_suppresses_interpolation() {
@@ -566,6 +585,16 @@ fn a_comment_inside_a_complex_interpolation_is_inert() {
     ] {
         assert_eq!(kinds(source), plain, "{source}");
     }
+}
+
+/// Shared scans count newlines before handing the lexer back to the next token.
+#[test]
+fn shared_string_scans_preserve_following_token_lines() {
+    let source = "'a\nb';\n\"{$a[/* a\nb */ 'k']}\";\n__LINE__;";
+    let tokens = tokenize(source).expect("multiline strings should tokenize");
+    assert!(matches!(tokens[0].kind(), TokenKind::String(value) if value == "a\nb"));
+    assert_eq!(tokens[1].line(), 2);
+    assert_eq!(tokens[tokens.len() - 3].line(), 5);
 }
 
 /// Retains generic PHPDoc comments while ordinary block and line comments remain trivia.

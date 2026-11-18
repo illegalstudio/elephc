@@ -12,6 +12,8 @@
 //! - Double-quoted literals are expanded by `super::strings` into concatenation token
 //!   streams, so one source character can yield more than one token.
 
+use elephc_chopper::scanner::{decode_single_quoted, digits_len, operator, quoted_len, Operator};
+
 use super::{Token, TokenKind};
 use crate::errors::EvalParseError;
 use crate::eval_ir::EvalMagicConst;
@@ -85,148 +87,57 @@ impl<'a> Lexer<'a> {
         if ch == '?' && self.peek_next_char() == Some('>') {
             return Ok(self.lex_close_tag(line));
         }
+        if let Some((kind, len)) = eval_operator(&self.source.as_bytes()[self.pos..]) {
+            self.pos += len;
+            return Ok(vec![Token::new(kind, line)]);
+        }
         let kind = match ch {
             '$' => self.lex_variable(),
             '\'' => self.lex_single_quoted(),
             '0'..='9' => self.lex_number(),
             '+' => {
                 self.bump_char();
-                if self.peek_char() == Some('+') {
-                    self.bump_char();
-                    Ok(TokenKind::PlusPlus)
-                } else if self.peek_char() == Some('=') {
-                    self.bump_char();
-                    Ok(TokenKind::PlusEqual)
-                } else {
-                    Ok(TokenKind::Plus)
-                }
+                Ok(TokenKind::Plus)
             }
             '-' => {
                 self.bump_char();
-                if self.peek_char() == Some('>') {
-                    self.bump_char();
-                    Ok(TokenKind::Arrow)
-                } else if self.peek_char() == Some('-') {
-                    self.bump_char();
-                    Ok(TokenKind::MinusMinus)
-                } else if self.peek_char() == Some('=') {
-                    self.bump_char();
-                    Ok(TokenKind::MinusEqual)
-                } else {
-                    Ok(TokenKind::Minus)
-                }
+                Ok(TokenKind::Minus)
             }
             '*' => {
                 self.bump_char();
-                if self.peek_char() == Some('*') {
-                    self.bump_char();
-                    if self.peek_char() == Some('=') {
-                        self.bump_char();
-                        Ok(TokenKind::StarStarEqual)
-                    } else {
-                        Ok(TokenKind::StarStar)
-                    }
-                } else if self.peek_char() == Some('=') {
-                    self.bump_char();
-                    Ok(TokenKind::StarEqual)
-                } else {
-                    Ok(TokenKind::Star)
-                }
+                Ok(TokenKind::Star)
             }
             '/' => {
                 self.bump_char();
-                if self.peek_char() == Some('=') {
-                    self.bump_char();
-                    Ok(TokenKind::SlashEqual)
-                } else {
-                    Ok(TokenKind::Slash)
-                }
+                Ok(TokenKind::Slash)
             }
             '%' => {
                 self.bump_char();
-                if self.peek_char() == Some('=') {
-                    self.bump_char();
-                    Ok(TokenKind::PercentEqual)
-                } else {
-                    Ok(TokenKind::Percent)
-                }
+                Ok(TokenKind::Percent)
             }
             '.' => {
                 self.bump_char();
-                if self.peek_char() == Some('.') && self.peek_next_char() == Some('.') {
-                    self.bump_char();
-                    self.bump_char();
-                    Ok(TokenKind::Ellipsis)
-                } else if self.peek_char() == Some('=') {
-                    self.bump_char();
-                    Ok(TokenKind::DotEqual)
-                } else {
-                    Ok(TokenKind::Dot)
-                }
+                Ok(TokenKind::Dot)
             }
             '=' => {
                 self.bump_char();
-                if self.peek_char() == Some('=') {
-                    self.bump_char();
-                    if self.peek_char() == Some('=') {
-                        self.bump_char();
-                        Ok(TokenKind::EqualEqualEqual)
-                    } else {
-                        Ok(TokenKind::EqualEqual)
-                    }
-                } else if self.peek_char() == Some('>') {
-                    self.bump_char();
-                    Ok(TokenKind::FatArrow)
-                } else {
-                    Ok(TokenKind::Equal)
-                }
+                Ok(TokenKind::Equal)
             }
             '!' => {
                 self.bump_char();
-                if self.peek_char() == Some('=') {
-                    self.bump_char();
-                    if self.peek_char() == Some('=') {
-                        self.bump_char();
-                        Ok(TokenKind::NotEqualEqual)
-                    } else {
-                        Ok(TokenKind::NotEqual)
-                    }
-                } else {
-                    Ok(TokenKind::Bang)
-                }
+                Ok(TokenKind::Bang)
             }
             '&' => {
                 self.bump_char();
-                if self.peek_char() == Some('&') {
-                    self.bump_char();
-                    Ok(TokenKind::AndAnd)
-                } else if self.peek_char() == Some('=') {
-                    self.bump_char();
-                    Ok(TokenKind::AmpEqual)
-                } else {
-                    Ok(TokenKind::Ampersand)
-                }
+                Ok(TokenKind::Ampersand)
             }
             '|' => {
                 self.bump_char();
-                if self.peek_char() == Some('|') {
-                    self.bump_char();
-                    Ok(TokenKind::OrOr)
-                } else if self.peek_char() == Some('=') {
-                    self.bump_char();
-                    Ok(TokenKind::PipeEqual)
-                } else {
-                    Ok(TokenKind::Pipe)
-                }
+                Ok(TokenKind::Pipe)
             }
             '^' => {
                 self.bump_char();
-                if self.peek_char() == Some('=') {
-                    self.bump_char();
-                    Ok(TokenKind::CaretEqual)
-                } else {
-                    Ok(TokenKind::Caret)
-                }
+                Ok(TokenKind::Caret)
             }
             '~' => {
                 self.bump_char();
@@ -234,55 +145,15 @@ impl<'a> Lexer<'a> {
             }
             '<' => {
                 self.bump_char();
-                if self.peek_char() == Some('<') {
-                    self.bump_char();
-                    if self.peek_char() == Some('=') {
-                        self.bump_char();
-                        Ok(TokenKind::LessLessEqual)
-                    } else {
-                        Ok(TokenKind::LessLess)
-                    }
-                } else if self.peek_char() == Some('=') {
-                    self.bump_char();
-                    if self.peek_char() == Some('>') {
-                        self.bump_char();
-                        Ok(TokenKind::Spaceship)
-                    } else {
-                        Ok(TokenKind::LessEqual)
-                    }
-                } else {
-                    Ok(TokenKind::Less)
-                }
+                Ok(TokenKind::Less)
             }
             '>' => {
                 self.bump_char();
-                if self.peek_char() == Some('>') {
-                    self.bump_char();
-                    if self.peek_char() == Some('=') {
-                        self.bump_char();
-                        Ok(TokenKind::GreaterGreaterEqual)
-                    } else {
-                        Ok(TokenKind::GreaterGreater)
-                    }
-                } else if self.peek_char() == Some('=') {
-                    self.bump_char();
-                    Ok(TokenKind::GreaterEqual)
-                } else {
-                    Ok(TokenKind::Greater)
-                }
+                Ok(TokenKind::Greater)
             }
             '?' => {
                 self.bump_char();
-                if self.peek_char() == Some('-') && self.peek_next_char() == Some('>') {
-                    self.bump_char();
-                    self.bump_char();
-                    Ok(TokenKind::QuestionArrow)
-                } else if self.peek_char() == Some('?') {
-                    self.bump_char();
-                    Ok(TokenKind::QuestionQuestion)
-                } else {
-                    Ok(TokenKind::Question)
-                }
+                Ok(TokenKind::Question)
             }
             ';' => {
                 self.bump_char();
@@ -318,12 +189,7 @@ impl<'a> Lexer<'a> {
             }
             ':' => {
                 self.bump_char();
-                if self.peek_char() == Some(':') {
-                    self.bump_char();
-                    Ok(TokenKind::DoubleColon)
-                } else {
-                    Ok(TokenKind::Colon)
-                }
+                Ok(TokenKind::Colon)
             }
             '\\' => {
                 self.bump_char();
@@ -402,17 +268,17 @@ impl<'a> Lexer<'a> {
         if self.peek_char() == Some('0') {
             if let Some(prefix) = self.peek_next_char() {
                 match prefix {
-                    'x' | 'X' => return self.lex_radix_number(16, |c| c.is_ascii_hexdigit()),
+                    'x' | 'X' => return self.lex_radix_number(16),
                     'o' | 'O' => {
-                        return self.lex_radix_number(8, |c| c.is_ascii_digit() && c < '8')
+                        return self.lex_radix_number(8)
                     }
-                    'b' | 'B' => return self.lex_radix_number(2, |c| c == '0' || c == '1'),
+                    'b' | 'B' => return self.lex_radix_number(2),
                     _ => {}
                 }
             }
         }
 
-        let mut digits = self.lex_digits(|c| c.is_ascii_digit());
+        let mut digits = self.lex_digits(10);
         if digits.is_empty() {
             return Err(EvalParseError::InvalidNumber);
         }
@@ -424,7 +290,7 @@ impl<'a> Lexer<'a> {
             if has_fraction {
                 digits.push('.');
                 self.bump_char();
-                digits.push_str(&self.lex_digits(|c| c.is_ascii_digit()));
+                digits.push_str(&self.lex_digits(10));
             }
             if matches!(self.peek_char(), Some('e') | Some('E')) {
                 digits.push('e');
@@ -433,7 +299,7 @@ impl<'a> Lexer<'a> {
                     digits.push(sign);
                     self.bump_char();
                 }
-                digits.push_str(&self.lex_digits(|c| c.is_ascii_digit()));
+                digits.push_str(&self.lex_digits(10));
             }
             self.reject_trailing_literal_char()?;
             return digits
@@ -468,11 +334,10 @@ impl<'a> Lexer<'a> {
     fn lex_radix_number(
         &mut self,
         radix: u32,
-        is_digit: impl Fn(char) -> bool,
     ) -> Result<TokenKind, EvalParseError> {
         self.bump_char();
         self.bump_char();
-        let digits = self.lex_digits(is_digit);
+        let digits = self.lex_digits(radix);
         if digits.is_empty() {
             return Err(EvalParseError::InvalidNumber);
         }
@@ -493,54 +358,21 @@ impl<'a> Lexer<'a> {
         }
     }
 
-    /// Reads a run of digits accepted by `is_digit`, dropping PHP's `_` separators.
-    fn lex_digits(&mut self, is_digit: impl Fn(char) -> bool) -> String {
-        let mut digits = String::new();
-        while let Some(ch) = self.peek_char() {
-            if ch == '_' {
-                // A separator is only legal BETWEEN digits, which is what this checks.
-                if digits.is_empty() || !self.peek_next_char().is_some_and(&is_digit) {
-                    break;
-                }
-                self.bump_char();
-                continue;
-            }
-            if !is_digit(ch) {
-                break;
-            }
-            digits.push(ch);
-            self.bump_char();
-        }
-        digits
+    /// Reads one digit run with separators removed for numeric conversion.
+    fn lex_digits(&mut self, radix: u32) -> String {
+        let remaining = &self.source[self.pos..];
+        let len = digits_len(remaining.as_bytes(), radix);
+        self.pos += len;
+        remaining[..len].replace('_', "")
     }
 
     /// Reads a single-quoted string literal, which never interpolates.
     fn lex_single_quoted(&mut self) -> Result<TokenKind, EvalParseError> {
-        self.bump_char();
-        let mut out = String::new();
-        while let Some(ch) = self.peek_char() {
-            self.bump_char();
-            if ch == '\'' {
-                return Ok(TokenKind::String(out));
-            }
-            if ch == '\\' {
-                let Some(escaped) = self.peek_char() else {
-                    return Err(EvalParseError::UnterminatedString);
-                };
-                self.bump_char();
-                match escaped {
-                    '\\' => out.push('\\'),
-                    '\'' => out.push('\''),
-                    other => {
-                        out.push('\\');
-                        elephc_builtin_contract::string_literal::push_literal_char(other, &mut out);
-                    }
-                }
-            } else {
-                elephc_builtin_contract::string_literal::push_literal_char(ch, &mut out);
-            }
-        }
-        Err(EvalParseError::UnterminatedString)
+        let source = &self.remaining()[1..];
+        let len = quoted_len(source.as_bytes(), b'\'').ok_or(EvalParseError::UnterminatedString)?;
+        let value = decode_single_quoted(&source[..len - 1]);
+        self.skip_bytes(1 + len);
+        Ok(TokenKind::String(value))
     }
 
     /// Advances past ASCII/Unicode whitespace and PHP comments.
@@ -591,6 +423,17 @@ impl<'a> Lexer<'a> {
         Err(EvalParseError::UnterminatedComment)
     }
 
+    /// Returns the source tail at the current character boundary.
+    pub(super) fn remaining(&self) -> &'a str {
+        &self.source[self.pos..]
+    }
+
+    /// Consumes a known byte range and updates the line count for subsequent tokens.
+    pub(super) fn skip_bytes(&mut self, len: usize) {
+        self.line += self.remaining()[..len].bytes().filter(|&byte| byte == b'\n').count() as i64;
+        self.pos += len;
+    }
+
     /// Returns the current char without advancing.
     pub(super) fn peek_char(&self) -> Option<char> {
         self.source[self.pos..].chars().next()
@@ -620,6 +463,50 @@ impl<'a> Lexer<'a> {
             }
         }
     }
+}
+
+/// Adapts Chopper's operator boundaries to the token shapes consumed by the eval parser.
+fn eval_operator(source: &[u8]) -> Option<(TokenKind, usize)> {
+    let (op, len) = operator(source)?;
+    let kind = match op {
+        // Preserve the eval lexer's two-token spelling for coalescing assignment.
+        Operator::QuestionQuestionAssign => return Some((TokenKind::QuestionQuestion, 2)),
+        // These spellings were separate punctuation in the eval token stream.
+        Operator::LessGreater | Operator::PipeArrow => return None,
+        Operator::StarStarAssign => TokenKind::StarStarEqual,
+        Operator::Ellipsis => TokenKind::Ellipsis,
+        Operator::Spaceship => TokenKind::Spaceship,
+        Operator::EqualEqualEqual => TokenKind::EqualEqualEqual,
+        Operator::NotEqualEqual => TokenKind::NotEqualEqual,
+        Operator::LessLessAssign => TokenKind::LessLessEqual,
+        Operator::GreaterGreaterAssign => TokenKind::GreaterGreaterEqual,
+        Operator::QuestionArrow => TokenKind::QuestionArrow,
+        Operator::StarStar => TokenKind::StarStar,
+        Operator::PlusPlus => TokenKind::PlusPlus,
+        Operator::MinusMinus => TokenKind::MinusMinus,
+        Operator::DoubleArrow => TokenKind::FatArrow,
+        Operator::LessEqual => TokenKind::LessEqual,
+        Operator::GreaterEqual => TokenKind::GreaterEqual,
+        Operator::EqualEqual => TokenKind::EqualEqual,
+        Operator::NotEqual => TokenKind::NotEqual,
+        Operator::PlusAssign => TokenKind::PlusEqual,
+        Operator::MinusAssign => TokenKind::MinusEqual,
+        Operator::StarAssign => TokenKind::StarEqual,
+        Operator::SlashAssign => TokenKind::SlashEqual,
+        Operator::DotAssign => TokenKind::DotEqual,
+        Operator::PercentAssign => TokenKind::PercentEqual,
+        Operator::AmpAssign => TokenKind::AmpEqual,
+        Operator::PipeAssign => TokenKind::PipeEqual,
+        Operator::CaretAssign => TokenKind::CaretEqual,
+        Operator::AndAnd => TokenKind::AndAnd,
+        Operator::OrOr => TokenKind::OrOr,
+        Operator::QuestionQuestion => TokenKind::QuestionQuestion,
+        Operator::DoubleColon => TokenKind::DoubleColon,
+        Operator::Arrow => TokenKind::Arrow,
+        Operator::LessLess => TokenKind::LessLess,
+        Operator::GreaterGreater => TokenKind::GreaterGreater,
+    };
+    Some((kind, len))
 }
 
 /// Returns true for the first character of a PHP variable/function identifier.

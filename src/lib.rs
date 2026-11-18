@@ -8,7 +8,7 @@
 //! Key details:
 //! - Public module boundaries here are part of the crate-facing compiler API.
 
-pub use elephc_syntax::{compiler_stack, lexer, names, parser, span};
+pub use elephc_chopper::syntax::{compiler_stack, lexer, names, parser, span};
 
 pub mod autoload;
 /// Local Cargo source inputs shared by bridge discovery and integration-test builders.
@@ -115,7 +115,7 @@ pub mod source;
 /// Source span tracking.
 /// `--strict-php` mode state and PHP-compatibility audit pass.
 pub mod strict_php;
-pub use elephc_syntax::string_bytes;
+pub use elephc_chopper::syntax::string_bytes;
 /// Canonical HTTP-request superglobal set and shared type helper.
 pub mod superglobals;
 /// Rust builder for the synthetic PHP class surfaces the compiler injects itself.
@@ -134,7 +134,7 @@ pub mod fileinfo_prelude;
 pub mod locale_prelude;
 pub mod tokenizer_prelude;
 /// TOKEN_PARSE validation through the compiler AST parser.
-pub use elephc_syntax::tokenizer_validation;
+pub use elephc_chopper::syntax::tokenizer_validation;
 /// Conditionally-injected `var_export` prelude (elephc-PHP rendering function).
 pub mod var_export_prelude;
 /// Conditionally-injected PHP version-surface prelude (`zend_version`, `php_sapi_name`,

@@ -138,7 +138,7 @@ pub(crate) fn array_key_type_from_value_type(raw_ty: PhpType) -> PhpType {
     }
 }
 
-pub(crate) use elephc_syntax::call_args::is_php_integer_array_key;
+pub(crate) use elephc_chopper::syntax::call_args::is_php_integer_array_key;
 
 /// Parses a string literal as a PHP string-offset index, returning the integer value.
 ///

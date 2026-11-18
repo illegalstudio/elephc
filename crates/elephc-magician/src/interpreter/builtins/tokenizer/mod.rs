@@ -8,6 +8,8 @@
 //! - Runtime arrays own their text and nested token tuples through EvalArrayBuilder.
 //! - Parse errors leave through the ordinary catchable Throwable channel.
 
+use elephc_chopper::syntax::php_tokenizer;
+
 use super::super::*;
 use super::collection_builder::EvalArrayBuilder;
 mod arguments;
@@ -35,7 +37,7 @@ pub(in crate::interpreter) fn eval_builtin_tokenizer(
 /// through the shared user-error dispatcher keeps a throwing handler catchable by the
 /// `try`/`catch` around `eval()`.
 fn report_tokenizer_warnings(
-    warnings: &[elephc_tokenizer_engine::Warning],
+    warnings: &[php_tokenizer::Warning],
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<(), EvalStatus> {
@@ -60,14 +62,14 @@ pub(in crate::interpreter) fn eval_tokenizer_values(
     if name == "token_name" {
         let [value] = args else { return Err(EvalStatus::RuntimeFatal); };
         let id = tokenizer_int(*value, name, 1, "id", context, values)?;
-        return values.string(elephc_tokenizer_engine::token_name(id).unwrap_or("UNKNOWN"));
+        return values.string(php_tokenizer::token_name(id).unwrap_or("UNKNOWN"));
     }
     let Some(code) = args.first().copied() else { return Err(EvalStatus::RuntimeFatal); };
     let code = tokenizer_source(code, name, context, values)?;
     let flags = match args.get(1) {
         Some(value) => tokenizer_int(*value, name, 2, "flags", context, values)?, None => 0,
     };
-    let output = match elephc_tokenizer_engine::tokenize_with_warnings(&code, flags) {
+    let output = match php_tokenizer::tokenize_with_warnings(&code, flags) {
         Ok(output) => output,
         Err(error) => {
             // PHP emits the diagnostics that precede the failure, then throws.
@@ -109,7 +111,7 @@ pub(in crate::interpreter) fn eval_tokenizer_static_method(
             Some(value) => tokenizer_int(*value, "PhpToken::tokenize", 2, "flags", context, values)?,
             None => 0,
         };
-        let output = match elephc_tokenizer_engine::tokenize_with_warnings(&code, flags) {
+        let output = match php_tokenizer::tokenize_with_warnings(&code, flags) {
             Ok(output) => output,
             Err(error) => {
                 report_tokenizer_warnings(&error.warnings, context, values)?;
