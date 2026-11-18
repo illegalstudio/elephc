@@ -859,7 +859,7 @@ pub(crate) fn coerce_scalar_arg_to_param_storage(
     // guard below keeps the `Class|false` / `Class|null` unions it already covered.
     let by_reference = sig.ref_params.get(index).copied().unwrap_or(false);
     if !by_reference {
-        if let Some(guarded) = guard_runtime_object_param(ctx, sig, index, value, arg) {
+        if let Some(guarded) = guard_runtime_object_param(ctx, sig, index, value, arg, true) {
             return guarded;
         }
     }
@@ -911,19 +911,21 @@ pub(crate) fn coerce_scalar_arg_to_param_storage(
 /// That guard re-reads its argument to name the runtime type, so it only covers side-effect
 /// free sources bound to one class. This one names the type from a rooted copy, which covers
 /// every source and the nullable and union declarations whose storage stays boxed. A raw object
-/// declaration receives the unboxed payload.
+/// declaration receives the unboxed payload. `reread_guard_follows` is false on the named
+/// argument path, which has no re-reading guard, so this one covers every source there.
 fn guard_runtime_object_param(
     ctx: &mut LoweringContext<'_, '_>,
     sig: &FunctionSig,
     index: usize,
     value: LoweredValue,
     arg: &Expr,
+    reread_guard_follows: bool,
 ) -> Option<LoweredValue> {
     let (param_name, param_ty) = sig.params.get(index)?;
-    let source_ty = argument_static_type(ctx, arg)
-        .unwrap_or_else(|| ctx.builder.value_php_type(value.value));
-    let boundary = crate::types::object_boundary::runtime_object_boundary(param_ty, &source_ty)?;
-    if let PhpType::Object(class_name) = param_ty {
+    let boundary = runtime_object_param_boundary(ctx, param_ty, value.value, arg)?;
+    if let (PhpType::Object(class_name), true) = (param_ty, reread_guard_follows) {
+        let source_ty = argument_static_type(ctx, arg)
+            .unwrap_or_else(|| ctx.builder.value_php_type(value.value));
         let guarded_by_rereading = union_object_guard_word(&source_ty, class_name).is_some()
             || (matches!(arg.kind, ExprKind::Variable(_) | ExprKind::This)
                 && source_ty.codegen_repr() == PhpType::Mixed);
@@ -951,6 +953,15 @@ fn guard_runtime_object_param(
         Op::mixed_unbox_effects(param_ty), span);
     release_coerced_source_if_owned(ctx, value, span);
     Some(result)
+}
+
+/// Returns the runtime class check a `mixed` or `object|null` argument needs at `param_ty`.
+fn runtime_object_param_boundary(
+    ctx: &LoweringContext<'_, '_>, param_ty: &PhpType, value: crate::ir::ValueId, arg: &Expr,
+) -> Option<crate::types::object_boundary::ObjectBoundary> {
+    let source_ty = argument_static_type(ctx, arg)
+        .unwrap_or_else(|| ctx.builder.value_php_type(value));
+    crate::types::object_boundary::runtime_object_boundary(param_ty, &source_ty)
 }
 
 /// Returns the checker-facing type of one argument expression when lowering still knows it.
@@ -1251,12 +1262,25 @@ fn apply_scalar_param_cast(
 pub(super) fn coerce_operands_to_params(
     ctx: &mut LoweringContext<'_, '_>,
     sig: &FunctionSig,
+    operands: Vec<crate::ir::ValueId>,
+) -> Vec<crate::ir::ValueId> {
+    coerce_operands_to_params_from_sources(ctx, sig, operands, &[])
+}
+
+/// Normalizes the operands of a named-argument call, whose sources never passed through the
+/// positional coercion: a `mixed` or `object|null` source bound to a class-like parameter also
+/// gets its runtime class check here, after every argument was evaluated.
+fn coerce_operands_to_params_from_sources(
+    ctx: &mut LoweringContext<'_, '_>,
+    sig: &FunctionSig,
     mut operands: Vec<crate::ir::ValueId>,
+    sources: &[Expr],
 ) -> Vec<crate::ir::ValueId> {
     let regular_param_count = crate::types::call_args::regular_param_count(sig);
     let limit = operands.len().min(regular_param_count);
     let needs_coercion = (0..limit)
-        .map(|index| operand_needs_param_coercion(ctx, sig, &operands, index))
+        .map(|index| operand_needs_param_coercion(ctx, sig, &operands, index)
+            || named_object_param_source(ctx, sig, &operands, sources, index).is_some())
         .collect::<Vec<_>>();
     if needs_coercion.iter().any(|needs_coercion| *needs_coercion) {
         // Source evaluation has completed, but any parameter conversion below can throw.
@@ -1279,6 +1303,13 @@ pub(super) fn coerce_operands_to_params(
             continue;
         };
         let value = operands[index];
+        if let Some(arg) = named_object_param_source(ctx, sig, &operands, sources, index) {
+            let lowered = lowered_value_from_id(ctx, value);
+            if let Some(guarded) = guard_runtime_object_param(ctx, sig, index, lowered, arg, false) {
+                operands[index] = root_evaluated_call_argument(ctx, guarded, Span::dummy()).value;
+            }
+            continue;
+        }
         let operand_ty = ctx.builder.value_php_type(value).codegen_repr();
         let param_ty = param_ty.codegen_repr();
         if param_ty == PhpType::Float && matches!(operand_ty, PhpType::Int | PhpType::Bool) {
@@ -1365,6 +1396,23 @@ pub(super) fn coerce_operands_to_params(
         }
     }
     operands
+}
+
+/// Returns the named-call source of a by-value operand that needs a runtime class check.
+fn named_object_param_source<'a>(
+    ctx: &LoweringContext<'_, '_>,
+    sig: &FunctionSig,
+    operands: &[crate::ir::ValueId],
+    sources: &'a [Expr],
+    index: usize,
+) -> Option<&'a Expr> {
+    if sig.ref_params.get(index).copied().unwrap_or(false) {
+        return None;
+    }
+    let arg = named_call_param_source(sig, sources, index)?;
+    let (_, param_ty) = sig.params.get(index)?;
+    runtime_object_param_boundary(ctx, param_ty, operands[index], arg)?;
+    Some(arg)
 }
 
 /// Returns whether parameter-order normalization will emit a conversion for one operand.
@@ -1748,7 +1796,7 @@ pub(super) fn lower_args_with_signature_options_for_capture(
         let operands = lower_named_args_with_signature_options(
             ctx, sig, args, trim_trailing_defaults, capture_values, capture_output_index,
         );
-        return coerce_operands_to_params(ctx, sig, operands);
+        return coerce_operands_to_params_from_sources(ctx, sig, operands, args);
     }
     if let Some(operands) = lower_positional_spread_args_with_signature(
         ctx, sig, args, None, capture_values, capture_output_index.as_ref(),

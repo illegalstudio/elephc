@@ -419,9 +419,9 @@ A value of the wrong class or type throws `TypeError` with PHP's message for tha
 - parameter: `take(): Argument #1 ($t) must be of type Timer, int given, called in … on line N`
 - property: `Cannot assign int to property Holder::$timer of type Timer`
 
-A `static` return is checked against the called class, as in PHP. After the boundary, the value has the declared type.
+A `static` return is checked against the called class, as in PHP. Named arguments (`take(t: $m)`) are checked like positional ones. After the boundary, the value has the declared type.
 
-**Not covered yet.** A `callable` boundary still rejects a `mixed` value at compile time. A named argument (`take(t: $m)`) to a nullable or union class parameter is not checked at the call; issue #2159 tracks the named-argument path for class parameters. A union that mixes classes with scalar types (`Timer|int`) keeps the static rules.
+**Not covered yet.** A `callable` boundary still rejects a `mixed` value at compile time. A call through a dynamic method name (`$obj->$name($m)`) does not check its arguments. A union that mixes classes with scalar types (`Timer|int`) keeps the static rules.
 
 ### Strict types
 

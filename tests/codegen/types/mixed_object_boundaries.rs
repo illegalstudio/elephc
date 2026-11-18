@@ -258,6 +258,46 @@ finally|caught: guarded(): Return value must be of type Key, float returned
 "#);
 }
 
+/// Named arguments reach the same class checks as positional ones: nullable, union, `object`
+/// and promoted constructor parameters, in any order, after every argument was evaluated.
+#[test]
+fn test_mixed_named_arguments_reach_class_like_parameter_checks() {
+    let out = compile_and_run(
+        r#"<?php
+interface Shape {}
+final class T implements Shape { public function __construct(public string $id = "t") {} }
+final class Box {
+    public function __construct(public ?Shape $a = null, public string $label = "-") {}
+    public function pair(T $first, ?T $second = null, object|null $third = null): string {
+        return $first->id . "/" . ($second?->id ?? "null") . "/" . ($third === null ? "null" : get_class($third));
+    }
+    public static function one(Shape|null $s, int $n = 0): string { return ($s === null ? "null" : get_class($s)) . $n; }
+}
+function getMixed(mixed $v): mixed { return $v; }
+function trace(string $tag, mixed $v): mixed { echo "[eval $tag]"; return $v; }
+function msg(TypeError $e): string { return explode(", called in", $e->getMessage())[0]; }
+$b = new Box();
+try { echo $b->pair(second: getMixed(new T("s")), first: getMixed(new T("f"))), "\n"; } catch (TypeError $e) { echo msg($e), "\n"; }
+try { echo $b->pair(getMixed(new T("f")), third: getMixed(new ArrayObject([]))), "\n"; } catch (TypeError $e) { echo msg($e), "\n"; }
+try { echo $b->pair(getMixed(new T("f")), third: getMixed(5)), "\n"; } catch (TypeError $e) { echo msg($e), "\n"; }
+try { echo $b->pair(second: trace("s", "str"), first: trace("f", new T("f"))), "\n"; } catch (TypeError $e) { echo msg($e), "\n"; }
+try { echo $b->pair(first: trace("f", 1.5), second: trace("s", new T("s"))), "\n"; } catch (TypeError $e) { echo msg($e), "\n"; }
+try { echo Box::one(n: 3, s: getMixed(new T())), "\n"; } catch (TypeError $e) { echo msg($e), "\n"; }
+try { echo Box::one(n: 3, s: getMixed([])), "\n"; } catch (TypeError $e) { echo msg($e), "\n"; }
+try { $x = new Box(label: "x", a: getMixed("nope")); echo $x->label, "\n"; } catch (TypeError $e) { echo msg($e), "\n"; }
+"#,
+    );
+    assert_eq!(out, r#"f/s/null
+f/null/ArrayObject
+Box::pair(): Argument #3 ($third) must be of type ?object, int given
+[eval s][eval f]Box::pair(): Argument #2 ($second) must be of type ?T, string given
+[eval f][eval s]Box::pair(): Argument #1 ($first) must be of type T, float given
+T3
+Box::one(): Argument #1 ($s) must be of type ?Shape, array given
+Box::__construct(): Argument #1 ($a) must be of type ?Shape, string given
+"#);
+}
+
 /// A `?object` parameter returned from a `?Class` function is checked at run time, so the
 /// optimizer must keep the call and the `catch`/`finally` that observe its `TypeError`.
 #[test]
