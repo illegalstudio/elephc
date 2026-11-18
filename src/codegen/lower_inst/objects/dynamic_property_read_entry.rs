@@ -455,14 +455,16 @@ pub(super) fn lower_runtime_dynamic_mixed_prop_get(
     let inside_shared_body = ctx.function.name.starts_with("_eir_shared_property_read_");
     let inside_outlined_body =
         ctx.function.flags.is_synthetic && ctx.function.name.contains("_dyn_prop_get_");
-    if !inside_shared_body && try_lower_outlined_mixed_prop_get(ctx, inst, object, property_value)? {
-        return Ok(());
-    }
+    // The scope-keyed helper is the base design; the per-name outlined body only serves reads it
+    // does not cover.
     if !inside_outlined_body {
         if let Some(label) = crate::codegen::shared_property_read::helper_label(ctx, inst) {
             crate::codegen::shared_property_read::emit_call(ctx, object, property_value, &label)?;
             return store_if_result(ctx, inst);
         }
+    }
+    if !inside_shared_body && try_lower_outlined_mixed_prop_get(ctx, inst, object, property_value)? {
+        return Ok(());
     }
     ensure_runtime_dynamic_property_name(ctx, property_value, inst)?;
     ensure_dynamic_property_miss_supported(inst)?;

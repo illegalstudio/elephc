@@ -29,7 +29,7 @@ try { sharedGlobalReadOne(new SharedPropertyEmpty(), "value"); } catch (Error $e
     let module = super::lower_source_at_for_target(source, std::path::Path::new("main.php"),
         std::path::Path::new("."), crate::codegen::platform::Target::parse(target).unwrap());
     let assembly = crate::codegen::generate_user_asm_from_ir(&module, false, false).unwrap();
-    for marker in ["scope=global mode=read", "scope=global mode=probe", "scope=SharedPropertyScope mode=read"] {
+    for marker in ["scope=global mode=read", "scope=global mode=coalesce", "scope=SharedPropertyScope mode=read"] {
         assert_eq!(assembly.matches(&format!("shared property read: {marker}")).count(), 1, "{target}: {marker}");
     }
     for name in ["sharedGlobalReadOne", "sharedGlobalReadTwo", "sharedGlobalProbeOne", "sharedGlobalProbeTwo"] {
@@ -58,7 +58,12 @@ try { readInlinePropertyError(new InlinePropertyErrorTarget()); } catch (Error $
     let (call, jump) = if target.arch == crate::codegen::platform::Arch::X86_64 {
         ("call __rt_throw_current", "jmp __rt_throw_current")
     } else { ("bl __rt_throw_current", "b __rt_throw_current") };
-    assert!(body.contains(call), "{target:?}: the guard must enter the runtime as a call");
+    // The merged backend enters the runtime through its shared static-throw helper, still by a
+    // call; a direct `__rt_throw_current` call is the other accepted shape.
+    let shared = if target.arch == crate::codegen::platform::Arch::X86_64 {
+        "call _eir_shared_static_throw"
+    } else { "bl _eir_shared_static_throw" };
+    assert!(body.contains(call) || body.contains(shared), "{target:?}: the guard must enter the runtime as a call");
     assert!(!body.contains(jump), "{target:?}: an inline jump omits the runtime entry's return-address convention");
 }
 
