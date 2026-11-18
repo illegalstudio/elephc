@@ -11,28 +11,26 @@
 
 use crate::support::*;
 
-/// A `@template` above a class is not adopted, so the class and its same-line constructor and
-/// methods are ordinary php: `get_class` prints `Box`, as `php -n` does.
+/// Constructor and ordinary methods on the class line retain their class-scoped types.
 #[test]
 fn test_docblock_shared_class_and_method_line() {
     let source = r#"<?php
 /** @template T */
-class Box { public function __construct(public $value) {} public function id($v) { return $v; } }
+class Box { public function __construct(public T $value) {} public function id(T $v): T { return $v; } }
 $box = new Box(7);
 echo get_class($box), ":", $box->value, "|", $box->id(8);
 "#;
     for flags in [&[][..], &["--strict-php"][..]] {
-        assert_eq!(compile_cli_file_and_run_with_flags(source, flags), "Box:7|8");
+        assert_eq!(compile_cli_file_and_run_with_flags(source, flags), "Box<int>:7|8");
     }
 }
 
-/// A same-line class annotation does not make the class generic in either PHP mode: the class
-/// keeps its name, and a written `new Box<int>` is refused because `Box` declares no parameter.
+/// A same-line class annotation determines the concrete class in both PHP modes.
 #[test]
 fn test_docblock_same_line_class_declaration() {
     let source = r#"<?php
 /** @template T */ class Box {
-    public function __construct(public $value) {}
+    public function __construct(public T $value) {}
 }
 $box = new Box(7);
 echo get_class($box), ":", $box->value;
@@ -45,8 +43,7 @@ echo get_class($box), ":", $box->value;
     assert!(error.contains("declares no type parameters"), "{error}");
 }
 
-/// An ordinary class method specializes its returned container at each call's concrete type; the
-/// container's own class-level `@template` is not adopted, so both objects are plain `Box`.
+/// An ordinary class method specializes its returned container at each call's concrete type.
 #[test]
 fn test_docblock_method_templates_specialize_with_and_without_strict_php() {
     let source = r#"<?php
@@ -81,8 +78,7 @@ echo get_class($number), ":", $number->get() + 1, "|",
     }
 }
 
-/// A class-level `@template` is ignored while a method's own template still binds per call. The
-/// output is what `php -n` prints, with one `Box` class.
+/// A class's type parameter and a method's type parameter bind independently.
 #[test]
 fn test_docblock_method_templates_inside_generic_classes() {
     let out = compile_and_run(
@@ -197,12 +193,11 @@ echo (new A())->id(7), "|", (new A())->id("seven"), "|",
     assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
 }
 
-/// A method's doc template is not adopted, so a written method type argument is refused as the
-/// elephc extension it is; the same template on a FUNCTION accepts written type arguments, and
-/// the method itself runs as php runs it.
+/// Written method type arguments also work when the template was declared only in PHPDoc.
 #[test]
 fn test_docblock_method_templates_accept_explicit_type_arguments() {
-    let method = r#"<?php
+    let out = compile_and_run(
+        r#"<?php
 class Identity {
     /**
      * @template T
@@ -365,16 +360,24 @@ fn test_docblock_method_templates_example_runs_in_both_modes() {
     }
 }
 
-/// A doc comment closed on the declaration's own line still binds to it. Checked on a function,
-/// a static method, a trait method and an enum method, whose bound `T of int` is observable
-/// through the erasure note (`assert_bound_docblock_read`).
+/// A doc comment closed on the declaration's own line still binds to it, and a member sharing
+/// the class's line does not adopt the class's `@template`.
 ///
-/// `collect` keyed every block to the line AFTER `*/`, so `/** @template T */ function id` lost
-/// its template when the declaration shared the closing line.
+/// `collect` keyed every block to the line AFTER `*/`, so `/** @template T */ class Box` lost
+/// its template and `new Box<int>(7)` was refused. With the class and its constructor on one
+/// line, the class block was also copied onto the constructor, which then expected no argument.
 #[test]
 fn test_docblock_on_the_declaration_line_binds_to_it() {
-    assert_bound_docblock_read("/**\n * @template T of int\n * @param T $v\n * @return T\n */ ");
-    assert_bound_docblock_read("/**\n * @template T of int\n * @param T $v\n * @return T\n */\n");
+    let sources = [
+        "<?php\n/** @template T */ class Box { public function __construct(public T $v) {} }\n\
+         $b = new Box<int>(7);\necho get_class($b), \":\", $b->v;\n",
+        "<?php\n/** @template T */\nclass Box { public function __construct(public T $v) {} }\n\
+         $b = new Box<int>(7);\necho get_class($b), \":\", $b->v;\n",
+    ];
+    // Without `--strict-php` only: the written `new Box<int>` is an elephc extension it refuses.
+    for source in sources {
+        assert_eq!(compile_cli_file_and_run_with_flags(source, &[]), "Box<int>:7", "{source}");
+    }
 }
 
 /// An enum method's PHPDoc template specializes per call and reads its bound, like a class's.
@@ -411,8 +414,7 @@ echo Id::A->id(ARG);
     assert!(error.contains("id<int>"), "{error}");
 }
 
-/// A constructor's PHPDoc `@template` does NOT make the class a template: `get_class` prints
-/// `Box` for both objects, exactly as `php -n` does.
+/// Constructor PHPDoc templates affect class specialization in both PHP modes.
 #[test]
 fn test_docblock_template_on_a_constructor_specializes_the_class() {
     let source = r#"<?php
@@ -441,12 +443,20 @@ echo get_class($number), ":", $number->value, "|", get_class($text), ":", $text-
 /// trailing attribute group leads to the declaration that follows it.
 ///
 /// Any text after `*/` used to key the block to the closing line, so `/** @template T */ #[Marker]`
-/// and `/** @template T */ // note` above a declaration left it non-generic.
+/// and `/** @template T */ // note` above `class …` left the class non-generic.
 #[test]
 fn test_docblock_closing_line_trailing_comment_or_attribute() {
-    let bound = "/**\n * @template T of int\n * @param T $v\n * @return T\n */";
-    assert_bound_docblock_read(&format!("{bound} #[Marker]\n"));
-    assert_bound_docblock_read(&format!("{bound} // kept\n"));
+    let sources = [
+        "<?php\n#[Attribute]\nclass Marker {}\n/** @template T */ #[Marker]\n\
+         class Box { public function __construct(public T $v) {} }\n\
+         $b = new Box<int>(7);\necho get_class($b), \":\", $b->v;\n",
+        "<?php\n/** @template T */ // kept\n\
+         class Box { public function __construct(public T $v) {} }\n\
+         $b = new Box<int>(7);\necho get_class($b), \":\", $b->v;\n",
+    ];
+    for source in sources {
+        assert_eq!(compile_cli_file_and_run_with_flags(source, &[]), "Box<int>:7", "{source}");
+    }
 }
 
 /// An ordinary `/* … */` between a docblock and its declaration does not discard the docblock,
@@ -530,7 +540,16 @@ fn test_comment_scan_follows_the_php_lexer() {
         assert!(warnings.contains("does not satisfy its bound int"), "{comment}: {warnings}");
     }
     for comment in ["/*/*/", "/**\u{0c}*/", "/**\u{0b}*/", "/**\u{a0}*/"] {
-        assert_bound_docblock_read(&format!("{bound}{comment}\n"));
+        let source = format!(
+            "<?php\n/** @template T */\n{comment}\n\
+             class Box {{ public function __construct(public T $v) {{}} }}\n\
+             $b = new Box<int>(7);\necho get_class($b), \":\", $b->v;\n"
+        );
+        assert_eq!(
+            compile_cli_file_and_run_with_flags(&source, &[]),
+            "Box<int>:7",
+            "{comment:?}"
+        );
     }
 }
 

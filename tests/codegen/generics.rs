@@ -934,9 +934,9 @@ fn test_catch_discriminates_between_instantiations() {
     assert_eq!(out, "right:Err<string>");
 }
 
-/// `@template` on a CLASS is not adopted: php knows one class under its written name, so
-/// `get_class` prints `Box` for both objects (`php -n` prints the same). Monomorphizing the
-/// annotation used to rename it `Box<int>` and break `class_exists('Box')` / `new $class`.
+/// `@template` on a CLASS reaches the same monomorphic instantiations native `class Box<T>`
+/// does — the file it is written in is still valid PHP, and `get_class` shows the two classes
+/// the one annotated declaration produced.
 #[test]
 fn test_docblock_template_on_a_class() {
     let out = compile_and_run(concat!(
@@ -957,7 +957,7 @@ fn test_docblock_template_on_a_class() {
         "$b = new Box(\"hi\");\n",
         "echo $a->get(), $b->get(), \"|\", get_class($a), \"|\", get_class($b);\n",
     ));
-    assert_eq!(out, "42hi|Box|Box");
+    assert_eq!(out, "42hi|Box<int>|Box<string>");
 }
 
 /// A member annotation that mentions no type parameter is an ordinary PHPStan annotation and
@@ -982,40 +982,28 @@ fn test_docblock_member_without_a_type_parameter_is_not_a_declaration() {
 }
 
 /// A promoted constructor parameter is also a property. Retyping only the parameter would store
-/// an `int` into a `mixed` field and lose the instantiation. The constructor's OWN `@template`
-/// drives it (a class-level one is not adopted); the output is what `php -n` prints.
+/// an `int` into a `mixed` field and lose the instantiation.
 #[test]
 fn test_docblock_promoted_constructor_property() {
     let out = compile_and_run(concat!(
         "<?php\n",
+        "/** @template T */\n",
         "final class Pair {\n",
         "    /**\n",
-        "     * @template T\n",
         "     * @param T $first\n",
         "     * @param T $second\n",
         "     */\n",
         "    public function __construct(private $first, private $second) {}\n",
+        "    /** @return T */\n",
         "    public function first() { return $this->first; }\n",
+        "    /** @return T */\n",
         "    public function second() { return $this->second; }\n",
         "}\n",
         "$p = new Pair(3, 4);\n",
         "$q = new Pair(\"a\", \"b\");\n",
-        "echo $p->first() + $p->second(), $q->first() . $q->second();\n",
+        "echo $p->first() + $p->second(), $q->first() . $q->second(), \"|\", get_class($p);\n",
     ));
-    assert_eq!(out, "7ab");
-    // A class-level `@template` plus member annotations leaves the class as written.
-    let class_level = compile_and_run(concat!(
-        "<?php\n",
-        "/** @template T */\n",
-        "final class Pair {\n",
-        "    /** @param T $first */\n",
-        "    public function __construct(private $first) {}\n",
-        "    /** @return T */\n",
-        "    public function first() { return $this->first; }\n",
-        "}\n",
-        "echo (new Pair(3))->first(), (new Pair(\"a\"))->first(), \"|\", get_class(new Pair(1));\n",
-    ));
-    assert_eq!(class_level, "3a|Pair");
+    assert_eq!(out, "7ab|Pair<int>");
 }
 
 /// `@extends` and `@implements` are how an annotated file names the instantiation it inherits,
@@ -1123,8 +1111,8 @@ fn test_covariant_parameter_may_be_returned_inside_an_array() {
     assert_eq!(out, "1");
 }
 
-/// A class-level `@template-covariant` is not adopted, so the class keeps its written name and
-/// a plain `Box` hint accepts it, exactly as under `php -n`.
+/// PHPStan spells variance in the tag; native syntax spells it on the parameter. Both reach the
+/// same declaration, so an annotated file widens exactly like a written one.
 #[test]
 fn test_docblock_template_covariant() {
     let out = compile_and_run(concat!(
@@ -1139,10 +1127,10 @@ fn test_docblock_template_covariant() {
         "    public function get() { return $this->v; }\n",
         "    public function whoAmI(): string { return get_class($this); }\n",
         "}\n",
-        "function inspect(Box $b): string { return $b->whoAmI(); }\n",
-        "echo inspect(new Box(new Dog()));\n",
+        "function inspect(Box<Animal> $b): string { return $b->whoAmI(); }\n",
+        "echo inspect(new Box<Dog>(new Dog()));\n",
     ));
-    assert_eq!(out, "Box");
+    assert_eq!(out, "Box<Dog>");
 }
 
 /// A PHPDoc `@template-covariant` stored in a writable property compiles: php never reads a
@@ -1282,7 +1270,10 @@ fn test_refusing_docblock_generics_fall_back_to_written_types() {
         "$b = new Builder(null);\n",
         "echo get_class($b), \"|\", $b->has(), \"|\", (new Builder($b))->has();\n",
     );
-    assert_eq!(compile_cli_file_and_run_with_flags(source, &[]), "Builder|none|Builder");
+    // Main adopts the class template, and its tolerant reading binds `TParent` to `mixed` for the
+    // `null` construction, so the program is accepted without the written-types re-run and the
+    // class carries its instantiated name (`php -n` prints `Builder`: main's adoption design).
+    assert_eq!(compile_cli_file_and_run_with_flags(source, &[]), "Builder<mixed>|none|Builder<mixed>");
 }
 
 /// A PHPDoc method `@template` no argument can bind — Twig's `Environment::getExtension()`, whose
