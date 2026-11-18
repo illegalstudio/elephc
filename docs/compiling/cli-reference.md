@@ -1014,6 +1014,12 @@ shared with an activation or an escaping alias. Writes through a shared snapshot
 validate the same static contract before changing its value.
 See the [runtime plugin example](https://github.com/illegalstudio/elephc/blob/main/examples/strict-eval-locals/main.php).
 
+Exclusive first assignments to owned frame locals retain the executed producer
+when the variable is passed by reference to a function, callable, method or
+constructor. An inferred integer binding stays integer, and an inferred float
+binding stays float. A branch initialized from an explicitly mixed producer stays
+open. A rejected reference write leaves the current value intact.
+
 Explicit `int|float` declarations accept both numeric kinds, and explicit `mixed`
 declarations remain open. Nullable numeric bindings keep their declared null
 alternative: an `int|null` binding accepts null and integers, and rejects float.

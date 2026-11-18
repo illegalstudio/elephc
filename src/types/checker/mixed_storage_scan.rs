@@ -91,10 +91,13 @@ struct NameFacts {
     /// Set by any write or aliasing shape that is not a plain statement-form assignment.
     disqualified: bool,
     /// Set when the bare local is an argument of a call that may bind it BY REFERENCE. Such a
-    /// name is never marked for branch divergence, but a local that only ever holds `null` gets
+    /// name is not marked for permissive branch divergence. Strict owned origins use canonical
+    /// reference cells and retain the executed producer. A null-only reference source also gets
     /// boxed storage so the callee can write any value through the reference (see
     /// [`Checker::mark_null_reference_outputs`]).
     passed_by_ref: bool,
+    /// Dynamic call metadata may require a raw nullable pointer, so null-only slots stay natural.
+    preserve_null_storage: bool,
 }
 
 /// Everything one scan of one body collects.
@@ -325,6 +328,7 @@ impl Checker {
         for (name, name_facts) in &facts.names {
             if !name_facts.passed_by_ref
                 || name_facts.disqualified
+                || name_facts.preserve_null_storage
                 || name_facts.assigns.is_empty()
                 || !name_facts.assigns.iter().all(|site| matches!(site.ty, PhpType::Void))
                 || !name_facts.assigns.iter().all(|site| site.span.identifies_a_node())
@@ -377,7 +381,7 @@ impl Checker {
     /// Separated from the replay so the caller can answer it BEFORE building the per-name
     /// transparency vector, which walks every guard region in the body.
     fn name_is_markable(&self, name: &str, facts: &NameFacts) -> bool {
-        if facts.disqualified || facts.passed_by_ref || facts.assigns.len() < 2 {
+        if facts.disqualified || (facts.passed_by_ref && !self.strict_locals) || facts.assigns.len() < 2 {
             return false;
         }
         // A reference-aliased name is NEVER markable: the mark gives the local one boxed `Mixed`
@@ -1379,10 +1383,19 @@ fn callee_may_bind_arguments_by_ref(checker: &Checker, name: &Name) -> bool {
     true
 }
 
-/// Disqualifies every argument root, with no null-only promotion: the arguments of a call
-/// whose callee, and so its parameter storage, the scan cannot resolve.
+/// Keeps unresolved call ABIs natural for null-only sources while retaining strict owned origins.
 fn disqualify_args(facts: &mut Facts, args: &[Expr]) {
     for arg in args {
+        let mut bare = arg;
+        while let ExprKind::NamedArg { value, .. } | ExprKind::ErrorSuppress(value) = &bare.kind { bare = value; }
+        if facts.semantic_profile.contains(elephc_semantics::StrictFeature::Locals) {
+            if let ExprKind::Variable(name) = &bare.kind {
+                let source = facts.names.entry(name.clone()).or_default();
+                source.passed_by_ref = true;
+                source.preserve_null_storage = true;
+                continue;
+            }
+        }
         disqualify_root(facts, arg);
     }
 }

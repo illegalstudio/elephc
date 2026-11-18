@@ -848,3 +848,5 @@ mod unused_reference_capture;
 mod fresh_reference_arguments;
 
 mod fresh_member_reference_arguments;
+
+mod reference_binding_alternatives;

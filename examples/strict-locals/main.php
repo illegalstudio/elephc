@@ -165,11 +165,11 @@ function checkQuantityStream(mixed $replacement): void {
 }
 checkQuantityStream(1);
 
-// Exclusive first bindings keep the contract of the path that actually ran.
+// Exclusive first bindings keep their executed contract across a reference call.
 function replaceSelectedValue(bool $numeric, mixed $replacement): void {
     if ($numeric) { $value = 1; } else { $value = 'pending'; }
     try {
-        $value = $replacement;
+        replaceValue($value, $replacement);
     } catch (TypeError $error) {
         echo "The selected binding kept its original kind", PHP_EOL;
     }

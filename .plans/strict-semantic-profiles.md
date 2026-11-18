@@ -2018,3 +2018,38 @@ eval, prior free-reference and discarded-capture controls, nullable result stora
 the default serial build, PHP/LFC public CLI combinations and the complete updated
 example. PHP confirms the permissive fixture. No additional strict guarantee is
 admitted by this step.
+
+### Verified186: first producers survive native reference exposure
+
+Strict scalar frame origins now remain eligible when a call may expose the local
+by reference. Foreign reference parameters, pre-bound storage, globals/statics,
+aliased lvalue roots and unsupported representations keep their existing storage
+exclusions. The old scanner rejected exclusive int/string first assignments as soon
+as a reference-taking call appeared later in the body. New tests prove direct and
+named calls, tracked first-class callables, instance/static methods and constructors
+retain the executed first producer through accepted and rejected writes.
+
+Calls whose parameter ABI is unresolved now distinguish reference exposure from
+natural null-only storage. Their null-only sources remain unboxed for nullable
+pointer inputs; the separate fact cannot disable strict origin tracking for
+informative scalar alternatives. Pointer-by-reference sources still require the
+existing explicit nullable-pointer declaration. The control covers a declared
+reference source and an untyped null passed by value through a typed closure,
+checks natural frame representation on all five targets, and executes it natively.
+The direct staged LFC helper requires a PHP header even though public LFC source
+does not; Fact672cbc3c records the test-harness distinction.
+
+All twelve gates pass. Five-target strict emission and native optimizer pairs
+preserve exact int/string and int/float origins, open Mixed producers, callee
+side effects, constructor unwind and clean owners. Known impossible stores remain
+diagnostics. Walker and normal dispatcher agree in both profiles and drain every
+Fake owner. Previous ordinary-origin, free/member reference and diagnostic controls
+remain green. The default serial build and diff hygiene pass. Four public strict
+PHP/LFC optimizer cases and the complete reference-enabled example pass with clean
+heaps. The unchanged permissive AOT scan still rejects this particular exclusive
+reference-exposed source; ordinary accepted permissive reference fixtures remain
+green, and the interpreter's permissive output agrees with PHP. This step changes
+no permissive scan eligibility and admits no additional strict feature.
+
+Conditional parameter unset and eval-containing unset remain active, alongside the
+five pending guarantees. Plain straight-line parameter unset already works.

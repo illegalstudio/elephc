@@ -56,3 +56,11 @@ fn fresh_member_reference_arguments_eval_values_and_owners() {
     assert_reference_fixture(include_str!("../../../../../tests/fixtures/strict/fresh_member_reference_arguments.php"),
         &format!("{prefix}Tinteger|"), &format!("{prefix}Wstring|"));
 }
+
+/// Reference exposure keeps exclusive first producers, including open and numeric alternatives.
+#[test]
+fn reference_binding_alternatives_eval_values_and_owners() {
+    assert_reference_fixture(include_str!("../../../../../tests/fixtures/strict/reference_binding_alternatives.php"),
+        "Tinteger:1|Tstring:before|Winteger:2|Wstring:after|Tinteger:1|Tstring:before|Tinteger:1|Tstring:before|Tinteger:1|Tstring:before|Tinteger:1|Tdouble:2.5|Wdouble:3.5|Wstring:after|Tinteger:1|Tinteger:1|Tstring:before|Winteger:2|",
+        "Wstring:after|Winteger:2|Winteger:2|Wstring:after|Wstring:after|Winteger:2|Wstring:after|Winteger:2|Wstring:after|Winteger:2|Wdouble:2.5|Winteger:1|Wdouble:3.5|Wstring:after|Wstring:after|Wstring:after|Winteger:2|Winteger:2|");
+}
