@@ -52,6 +52,16 @@ fn check_source_strict(src: &str) -> Result<(), String> {
 /// defines and the `CheckOptions` the two callers otherwise hand-duplicated. Keeping ONE copy of
 /// this pipeline means [`check_source_with_defines`] and [`check_source_strict`] cannot drift out
 /// of step with each other — the full suite exercising both is the proof they still agree.
+/// Returns the host platform the locale prelude must be specialized for.
+fn host_platform() -> elephc::codegen_support::platform::Platform {
+    if cfg!(target_os = "macos") {
+        elephc::codegen_support::platform::Platform::MacOS
+    } else {
+        elephc::codegen_support::platform::Platform::Linux
+    }
+}
+
+/// Checks source with defines and options for this module.
 fn check_source_with_defines_and_options(
     src: &str,
     defines: &[&str],
@@ -73,6 +83,10 @@ fn check_source_with_defines_and_options(
     let mut prelude_inventory = elephc::optimize::reachability::PreludeInventory::new();
     let ast = elephc::hash_prelude::inject_if_used(ast, false, &mut prelude_inventory);
     let ast = elephc::filter_prelude::inject_if_used(ast, &mut prelude_inventory);
+    // The locale surface is a prelude too: without it `setlocale()` reports `Undefined
+    // function` before its arity diagnostic can run.
+    let locale_used = elephc::locale_prelude::program_uses_locale(&ast);
+    let ast = elephc::locale_prelude::inject_if_used(ast, locale_used, host_platform());
     let ast = elephc::core_prelude::inject_if_used(ast, false, false, &mut prelude_inventory);
     let ast = elephc::parse_str_prelude::inject_if_used(ast, &[], &mut prelude_inventory);
     let ast = elephc::bcmath_prelude::inject_if_used(ast, false, &mut prelude_inventory);
@@ -114,6 +128,10 @@ fn check_source_full(src: &str) -> Result<elephc::types::CheckResult, elephc::er
     let mut prelude_inventory = elephc::optimize::reachability::PreludeInventory::new();
     let ast = elephc::hash_prelude::inject_if_used(ast, false, &mut prelude_inventory);
     let ast = elephc::filter_prelude::inject_if_used(ast, &mut prelude_inventory);
+    // The locale surface is a prelude too: without it `setlocale()` reports `Undefined
+    // function` before its arity diagnostic can run.
+    let locale_used = elephc::locale_prelude::program_uses_locale(&ast);
+    let ast = elephc::locale_prelude::inject_if_used(ast, locale_used, host_platform());
     let ast = elephc::core_prelude::inject_if_used(ast, false, false, &mut prelude_inventory);
     let ast = elephc::bcmath_prelude::inject_if_used(ast, false, &mut prelude_inventory);
     let ast = elephc::random_prelude::inject_if_used(ast, false, &mut prelude_inventory);

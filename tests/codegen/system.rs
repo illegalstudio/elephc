@@ -3854,7 +3854,12 @@ var_dump(setlocale(LC_ALL, 'C'));
 var_dump(setlocale(LC_ALL, 'POSIX'));
 "#,
     );
-    assert_eq!(out, "string(1) \"C\"\nstring(5) \"POSIX\"\n");
+    // glibc reports the POSIX alias as its canonical "C" name; Darwin reports "POSIX".
+    assert!(
+        out == "string(1) \"C\"\nstring(5) \"POSIX\"\n"
+            || out == "string(1) \"C\"\nstring(1) \"C\"\n",
+        "setlocale(POSIX) must preserve the platform's canonical name: {out:?}"
+    );
 }
 
 /// Additional locale arguments are tried left to right; unsupported names report false.

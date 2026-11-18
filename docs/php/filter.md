@@ -156,3 +156,25 @@ sanitized string; nested arrays are walked recursively.
   PCRE-compatible engine; exotic matching constructs may still differ from PCRE2.
 - `Uri\Rfc3986\Uri` and `Uri\WhatWg\Url` are accepted by `uri_parser_class` for URL
   validation. The URI objects' component methods are not exposed outside the filter surface.
+
+<!-- elephc:generated:symbols:begin -->
+
+## Functions {#functions}
+
+Generated from the shared symbol catalog by `scripts/docs/gen_module_sections.py`; do not edit this section by hand. Each function links to its reference page.
+
+| Function | Signature | Returns | AOT | eval() |
+|---|---|---|:-:|:-:|
+| [`filter_has_var()`](./builtins/filter/filter_has_var.md) | `(int $input_type, string $var_name): bool` | `bool` | ✓ | ✓ |
+| [`filter_id()`](./builtins/filter/filter_id.md) | `(string $name): int|false` | `int|false` | ✓ | ✓ |
+| [`filter_input()`](./builtins/filter/filter_input.md) | `(int $type, string $var_name, int $filter = FILTER_DEFAULT, array|int $options = 0): mixed` | `mixed` | ✓ | ✓ |
+| [`filter_input_array()`](./builtins/filter/filter_input_array.md) | `(int $type, array|int $options = FILTER_DEFAULT, bool $add_empty = true): array|false|null` | `array|false|null` | ✓ | ✓ |
+| [`filter_list()`](./builtins/filter/filter_list.md) | `(): array` | `array` | ✓ | ✓ |
+| [`filter_var()`](./builtins/filter/filter_var.md) | `(mixed $value, int $filter = FILTER_DEFAULT, array|int $options = 0): mixed` | `mixed` | ✓ | ✓ |
+| [`filter_var_array()`](./builtins/filter/filter_var_array.md) | `(array $array, array|int|null $options = FILTER_DEFAULT, bool $add_empty = true): array|false|null` | `array|false|null` | ✓ | ✓ |
+
+Classes: `Filter\FilterException`, `Filter\FilterFailedException`.
+
+Constants: `FILTER_CALLBACK`, `FILTER_DEFAULT`, `FILTER_FLAG_ALLOW_FRACTION`, `FILTER_FLAG_ALLOW_HEX`, `FILTER_FLAG_ALLOW_OCTAL`, `FILTER_FLAG_ALLOW_SCIENTIFIC`, `FILTER_FLAG_ALLOW_THOUSAND`, `FILTER_FLAG_EMAIL_UNICODE`, `FILTER_FLAG_EMPTY_STRING_NULL`, `FILTER_FLAG_ENCODE_AMP`, `FILTER_FLAG_ENCODE_HIGH`, `FILTER_FLAG_ENCODE_LOW`, `FILTER_FLAG_GLOBAL_RANGE`, `FILTER_FLAG_HOSTNAME`, `FILTER_FLAG_IPV4`, `FILTER_FLAG_IPV6`, `FILTER_FLAG_NONE`, `FILTER_FLAG_NO_ENCODE_QUOTES`, `FILTER_FLAG_NO_PRIV_RANGE`, `FILTER_FLAG_NO_RES_RANGE`, `FILTER_FLAG_PATH_REQUIRED`, `FILTER_FLAG_QUERY_REQUIRED`, `FILTER_FLAG_STRIP_BACKTICK`, `FILTER_FLAG_STRIP_HIGH`, `FILTER_FLAG_STRIP_LOW`, `FILTER_FORCE_ARRAY`, `FILTER_NULL_ON_FAILURE`, `FILTER_REQUIRE_ARRAY`, `FILTER_REQUIRE_SCALAR`, `FILTER_SANITIZE_ADD_SLASHES`, `FILTER_SANITIZE_EMAIL`, `FILTER_SANITIZE_ENCODED`, `FILTER_SANITIZE_FULL_SPECIAL_CHARS`, `FILTER_SANITIZE_NUMBER_FLOAT`, `FILTER_SANITIZE_NUMBER_INT`, `FILTER_SANITIZE_SPECIAL_CHARS`, `FILTER_SANITIZE_STRING`, `FILTER_SANITIZE_STRIPPED`, `FILTER_SANITIZE_URL`, `FILTER_THROW_ON_FAILURE`, `FILTER_UNSAFE_RAW`, `FILTER_VALIDATE_BOOL`, `FILTER_VALIDATE_BOOLEAN`, `FILTER_VALIDATE_DOMAIN`, `FILTER_VALIDATE_EMAIL`, `FILTER_VALIDATE_FLOAT`, `FILTER_VALIDATE_INT`, `FILTER_VALIDATE_IP`, `FILTER_VALIDATE_MAC`, `FILTER_VALIDATE_REGEXP`, `FILTER_VALIDATE_URL`, `INPUT_COOKIE`, `INPUT_ENV`, `INPUT_GET`, `INPUT_POST`, `INPUT_SERVER`.
+
+<!-- elephc:generated:symbols:end -->

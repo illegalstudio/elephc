@@ -415,18 +415,32 @@ fn lower_hash_reference_set_aarch64(
     cell: ValueId,
     reload: Option<&super::objects::InPlacePropertyContainer>,
 ) -> Result<()> {
+    // Snapshot the borrowed cell and the table before key materialization can run a warning
+    // handler. Their SSA homes may be caller-saved, and the key helpers and `__rt_incref`
+    // clobber those registers.
+    abi::emit_reserve_temporary_stack(ctx.emitter, 32);
+    ctx.load_value_to_reg(cell, "x0")?;
+    abi::emit_store_to_sp(ctx.emitter, "x0", 0);
+    ctx.load_value_to_reg(hash, "x0")?;
+    abi::emit_store_to_sp(ctx.emitter, "x0", 8);
     materialize_hash_key_aarch64(ctx, key)?;
+    // The key pair is pushed below the reserved snapshot area, so the saved cell and table
+    // move up by one 16-byte slot until the pair is popped.
     abi::emit_push_reg_pair(ctx.emitter, "x1", "x2");
     if let Some(property) = reload {
         property.reload(ctx, hash)?;
+        // The reload replaced the property's table pointer in the hash operand.
+        ctx.load_value_to_reg(hash, "x0")?;
+        abi::emit_store_to_sp(ctx.emitter, "x0", 24);
     }
-    ctx.load_value_to_reg(cell, "x0")?;
+    abi::emit_load_temporary_stack_slot(ctx.emitter, "x0", 16);
     abi::emit_call_label(ctx.emitter, "__rt_incref");
-    ctx.load_value_to_reg(cell, "x3")?;
+    abi::emit_load_temporary_stack_slot(ctx.emitter, "x3", 16);
+    abi::emit_load_temporary_stack_slot(ctx.emitter, "x0", 24);
     abi::emit_pop_reg_pair(ctx.emitter, "x1", "x2");
     abi::emit_load_int_immediate(ctx.emitter, "x4", 0);
     abi::emit_load_int_immediate(ctx.emitter, "x5", REFERENCE_CELL_VALUE_TAG as i64);
-    ctx.load_value_to_reg(hash, "x0")?;
+    abi::emit_release_temporary_stack(ctx.emitter, 32);
     abi::emit_call_label(ctx.emitter, "__rt_hash_set_value");
     Ok(())
 }
@@ -439,18 +453,32 @@ fn lower_hash_reference_set_x86_64(
     cell: ValueId,
     reload: Option<&super::objects::InPlacePropertyContainer>,
 ) -> Result<()> {
+    // Snapshot the borrowed cell and the table before key materialization can run a warning
+    // handler. Their SSA homes may be caller-saved, and the key helpers and `__rt_incref`
+    // clobber those registers.
+    abi::emit_reserve_temporary_stack(ctx.emitter, 32);
+    ctx.load_value_to_reg(cell, "rdi")?;
+    abi::emit_store_to_sp(ctx.emitter, "rdi", 0);
+    ctx.load_value_to_reg(hash, "rdi")?;
+    abi::emit_store_to_sp(ctx.emitter, "rdi", 8);
     materialize_hash_key_x86_64(ctx, key)?;
+    // The key pair is pushed below the reserved snapshot area, so the saved cell and table
+    // move up by one 16-byte slot until the pair is popped.
     abi::emit_push_reg_pair(ctx.emitter, "rsi", "rdx");
     if let Some(property) = reload {
         property.reload(ctx, hash)?;
+        // The reload replaced the property's table pointer in the hash operand.
+        ctx.load_value_to_reg(hash, "rdi")?;
+        abi::emit_store_to_sp(ctx.emitter, "rdi", 24);
     }
-    ctx.load_value_to_reg(cell, "rdi")?;
+    abi::emit_load_temporary_stack_slot(ctx.emitter, "rdi", 16);
     abi::emit_call_label(ctx.emitter, "__rt_incref");
-    ctx.load_value_to_reg(cell, "rcx")?;
+    abi::emit_load_temporary_stack_slot(ctx.emitter, "rcx", 16);
+    abi::emit_load_temporary_stack_slot(ctx.emitter, "rdi", 24);
     abi::emit_pop_reg_pair(ctx.emitter, "rsi", "rdx");
     abi::emit_load_int_immediate(ctx.emitter, "r8", 0);
     abi::emit_load_int_immediate(ctx.emitter, "r9", REFERENCE_CELL_VALUE_TAG as i64);
-    ctx.load_value_to_reg(hash, "rdi")?;
+    abi::emit_release_temporary_stack(ctx.emitter, 32);
     abi::emit_call_label(ctx.emitter, "__rt_hash_set_value");
     Ok(())
 }
