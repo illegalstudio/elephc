@@ -381,6 +381,9 @@ pub struct InterfaceInfo {
 #[derive(Debug, Clone, PartialEq)]
 pub struct ClassInfo {
     pub class_id: u64,
+    /// The name php shows for the class when it differs from the compiler's own: a monomorphized
+    /// PHPDoc template (`Box<int>`) is the class php knows as `Box`. `None` for every other class.
+    pub written_name: Option<String>,
     /// Source span of the class-like declaration, or `Span::dummy()` for compiler-injected classes.
     pub declaration_span: crate::span::Span,
     /// Verbatim PHP doc comment declared directly on this class, when present.

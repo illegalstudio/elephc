@@ -21,7 +21,7 @@ $box = new Box(7);
 echo get_class($box), ":", $box->value, "|", $box->id(8);
 "#;
     for flags in [&[][..], &["--strict-php"][..]] {
-        assert_eq!(compile_cli_file_and_run_with_flags(source, flags), "Box<int>:7|8");
+        assert_eq!(compile_cli_file_and_run_with_flags(source, flags), "Box:7|8");
     }
 }
 
@@ -35,10 +35,10 @@ fn test_docblock_same_line_class_declaration() {
 $box = new Box<int>(7);
 echo get_class($box), ":", $box->value;
 "#;
-    assert_eq!(compile_and_run(source), "Box<int>:7");
+    assert_eq!(compile_and_run(source), "Box:7");
     let portable = source.replace("Box<int>(7)", "Box(7)");
     for flags in [&[][..], &["--strict-php"][..]] {
-        assert_eq!(compile_cli_file_and_run_with_flags(&portable, flags), "Box<int>:7");
+        assert_eq!(compile_cli_file_and_run_with_flags(&portable, flags), "Box:7");
     }
 }
 
@@ -71,7 +71,7 @@ echo get_class($number), ":", $number->get() + 1, "|",
     for flags in [&[][..], &["--strict-php"][..]] {
         assert_eq!(
             compile_cli_file_and_run_with_flags(source, flags),
-            "Box<int>:8|Box<string>:SEVEN",
+            "Box:8|Box:SEVEN",
             "{flags:?}"
         );
     }
@@ -103,7 +103,7 @@ echo $left->get(), "|", $right->get(), "|", get_class($mapped), ":", $mapped->ge
     "|", get_class($back), ":", $back->get();
 "#,
     );
-    assert_eq!(out, "7|seven|Box<string>:eight|Box<int>:9");
+    assert_eq!(out, "7|seven|Box:eight|Box:9");
 }
 
 /// Static, named, variadic and defaulted calls use the existing method-template argument rules.
@@ -363,7 +363,7 @@ fn test_docblock_on_the_declaration_line_binds_to_it() {
     ];
     // Without `--strict-php` only: the written `new Box<int>` is an elephc extension it refuses.
     for source in sources {
-        assert_eq!(compile_cli_file_and_run_with_flags(source, &[]), "Box<int>:7", "{source}");
+        assert_eq!(compile_cli_file_and_run_with_flags(source, &[]), "Box:7", "{source}");
     }
 }
 
@@ -417,7 +417,7 @@ echo get_class($number), ":", $number->value, "|", get_class($text), ":", $text-
     for flags in [&[][..], &["--strict-php"][..]] {
         assert_eq!(
             compile_cli_file_and_run_with_flags(source, flags),
-            "Box<int>:5|Box<string>:x",
+            "Box:5|Box:x",
             "{flags:?}"
         );
     }
@@ -439,7 +439,7 @@ fn test_docblock_closing_line_trailing_comment_or_attribute() {
          $b = new Box<int>(7);\necho get_class($b), \":\", $b->v;\n",
     ];
     for source in sources {
-        assert_eq!(compile_cli_file_and_run_with_flags(source, &[]), "Box<int>:7", "{source}");
+        assert_eq!(compile_cli_file_and_run_with_flags(source, &[]), "Box:7", "{source}");
     }
 }
 
@@ -460,7 +460,7 @@ fn test_block_comment_between_docblock_and_declaration_keeps_the_template() {
          $b = new Box<int>(7);\necho get_class($b), \":\", $b->v;\n",
     ];
     for source in class_sources {
-        assert_eq!(compile_cli_file_and_run_with_flags(source, &[]), "Box<int>:7", "{source}");
+        assert_eq!(compile_cli_file_and_run_with_flags(source, &[]), "Box:7", "{source}");
     }
     let bounded = r#"<?php
 /**
@@ -486,7 +486,7 @@ fn test_star_banner_comment_keeps_the_docblock_above_it() {
     let banner = "<?php\n/** @template T */\n/***\n * banner\n */\n\
                   class Box { public function __construct(public T $v) {} }\n\
                   $b = new Box<int>(7);\necho get_class($b), \":\", $b->v;\n";
-    assert_eq!(compile_cli_file_and_run_with_flags(banner, &[]), "Box<int>:7");
+    assert_eq!(compile_cli_file_and_run_with_flags(banner, &[]), "Box:7");
     let bound = "/**\n * @template T of int\n * @param T $v\n * @return T\n */\n/*** kept */\n";
     for source in [
         format!("<?php\n{bound}function id($v) {{ return $v; }}\necho id(\"seven\");\n"),
@@ -531,7 +531,7 @@ fn test_comment_scan_follows_the_php_lexer() {
         );
         assert_eq!(
             compile_cli_file_and_run_with_flags(&source, &[]),
-            "Box<int>:7",
+            "Box:7",
             "{comment:?}"
         );
     }
@@ -1180,4 +1180,33 @@ function through(Sink $sink): string { return get_class($sink->accept(new User()
         &[],
     );
     assert!(error.contains("expects Model, got Other"), "{error}");
+}
+
+/// Every php-visible spelling of a PHPDoc-template class is the written name: the instantiation
+/// the compiler monomorphizes (`Box<int>`) never leaks through `get_class`, `::class`,
+/// `static::class`, `var_dump` or `print_r`, and `instanceof`/`is_a` answer for `Box`. The
+/// expected output is what `php -n` prints for the same program.
+#[test]
+fn test_docblock_template_instantiation_keeps_the_written_class_name_everywhere() {
+    let source = r#"<?php
+/** @template T */
+class Box {
+    /** @param T $v */
+    public function __construct(public $v) {}
+    /** @return T */
+    public function get() { return $this->v; }
+    public function me() { return [get_class($this), static::class, self::class, __CLASS__]; }
+}
+$a = new Box(42);
+$b = new Box("hi");
+echo get_class($a), "|", $a::class, "|", get_class($b), "\n";
+echo implode(",", $a->me()), "\n";
+var_dump($a);
+print_r($b);
+var_dump($a instanceof Box, is_a($a, 'Box'));
+"#;
+    let expected = "Box|Box|Box\nBox,Box,Box,Box\nobject(Box)#1 (1) {\n  [\"v\"]=>\n  int(42)\n}\nBox Object\n(\n    [v] => hi\n)\nbool(true)\nbool(true)\n";
+    for flags in [&[][..], &["--strict-php"][..]] {
+        assert_eq!(compile_cli_file_and_run_with_flags(source, flags), expected, "{flags:?}");
+    }
 }

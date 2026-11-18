@@ -209,6 +209,7 @@ fn class_info(_class_name: &str) -> ClassInfo {
         class_id: 1,
         declaration_span: crate::span::Span::dummy(),
         doc_comment: None,
+        written_name: None,
         is_internal: false,
         parent: None,
         is_abstract: false,

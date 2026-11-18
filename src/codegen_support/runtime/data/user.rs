@@ -204,7 +204,13 @@ pub(crate) fn emit_runtime_data_user(
     emit_callable_function_data(&mut out, functions, function_variant_groups);
     out.push_str(".p2align 3\n");
     super::instanceof::emit_instanceof_target_lookup_data(&mut out, &sorted_interfaces, &sorted_classes);
-    emit_class_name_lookup_data(&mut out, max_class_id, &class_name_by_id);
+    let class_display_name_by_id: HashMap<u64, &str> = sorted_classes
+        .iter()
+        .map(|(name, class_info)| {
+            (class_info.class_id, class_info.written_name.as_deref().unwrap_or(name.as_str()))
+        })
+        .collect();
+    emit_class_name_lookup_data(&mut out, max_class_id, &class_display_name_by_id);
     super::throwable_previous::emit_previous_slots(&mut out, max_class_id, &class_info_by_id);
     emit_class_native_xml_table(&mut out, max_class_id, &class_name_by_id, classes);
     let weak_map_retire = classes.get("WeakMap")
@@ -2114,7 +2120,7 @@ fn global_definition_symbol(line: &str) -> Option<&str> {
 fn emit_class_name_lookup_data(
     out: &mut String,
     max_class_id: Option<u64>,
-    class_name_by_id: &HashMap<u64, &String>,
+    class_name_by_id: &HashMap<u64, &str>,
 ) {
     out.push_str(".p2align 3\n");
     out.push_str(".globl _class_name_count\n_class_name_count:\n");
@@ -5613,6 +5619,7 @@ mod tests {
             class_id,
             declaration_span: crate::span::Span::dummy(),
             doc_comment: None,
+            written_name: None,
             is_internal: false,
             parent: None,
             is_abstract: false,

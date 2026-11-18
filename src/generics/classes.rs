@@ -1230,6 +1230,11 @@ fn instantiate_declaration(template: &Stmt, target: &str, bindings: &Bindings) -
             .unwrap_or_default(),
         _ => Vec::new(),
     };
+    if let StmtKind::ClassDecl { generics: Some(declared), .. } = &template.kind {
+        if !declared.type_params.is_empty() && declared.type_params.iter().all(|p| p.from_docblock) {
+            super::note_docblock_instance(target);
+        }
+    }
     match &mut declaration.kind {
         StmtKind::ClassDecl { name, generics, implements, .. } => {
             // Every instantiation implements the template's marker interface, so `instanceof

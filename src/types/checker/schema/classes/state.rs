@@ -199,6 +199,7 @@ impl ClassBuildState {
             class_id,
             declaration_span: class.span,
             doc_comment: None,
+            written_name: None,
             is_internal,
             parent: class.extends.clone(),
             is_abstract: class.is_abstract,

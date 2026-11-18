@@ -66,7 +66,16 @@ pub(super) fn lower_const_class_name(ctx: &mut FunctionContext<'_>, inst: &Instr
         lower_late_static_class_name(ctx)?;
         return store_if_result(ctx, inst);
     }
-    let (label, len) = ctx.intern_class_name_data(data_id)?;
+    // A monomorphized PHPDoc template is the class php knows under its written name.
+    let (label, len) = match ctx
+        .module
+        .class_infos
+        .get(&class_name)
+        .and_then(|class| class.written_name.as_deref())
+    {
+        Some(written) => ctx.data.add_string(&crate::string_bytes::literal_bytes(written)),
+        None => ctx.intern_class_name_data(data_id)?,
+    };
     let (ptr_reg, len_reg) = abi::string_result_regs(ctx.emitter);
     abi::emit_symbol_address(ctx.emitter, ptr_reg, &label);
     abi::emit_load_int_immediate(ctx.emitter, len_reg, len as i64);

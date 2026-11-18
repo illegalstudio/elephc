@@ -957,7 +957,7 @@ fn test_docblock_template_on_a_class() {
         "$b = new Box(\"hi\");\n",
         "echo $a->get(), $b->get(), \"|\", get_class($a), \"|\", get_class($b);\n",
     ));
-    assert_eq!(out, "42hi|Box<int>|Box<string>");
+    assert_eq!(out, "42hi|Box|Box");
 }
 
 /// A member annotation that mentions no type parameter is an ordinary PHPStan annotation and
@@ -1003,7 +1003,7 @@ fn test_docblock_promoted_constructor_property() {
         "$q = new Pair(\"a\", \"b\");\n",
         "echo $p->first() + $p->second(), $q->first() . $q->second(), \"|\", get_class($p);\n",
     ));
-    assert_eq!(out, "7ab|Pair<int>");
+    assert_eq!(out, "7ab|Pair");
 }
 
 /// `@extends` and `@implements` are how an annotated file names the instantiation it inherits,
@@ -1130,7 +1130,7 @@ fn test_docblock_template_covariant() {
         "function inspect(Box<Animal> $b): string { return $b->whoAmI(); }\n",
         "echo inspect(new Box<Dog>(new Dog()));\n",
     ));
-    assert_eq!(out, "Box<Dog>");
+    assert_eq!(out, "Box");
 }
 
 /// A PHPDoc `@template-covariant` stored in a writable property compiles: php never reads a
@@ -1270,10 +1270,10 @@ fn test_refusing_docblock_generics_fall_back_to_written_types() {
         "$b = new Builder(null);\n",
         "echo get_class($b), \"|\", $b->has(), \"|\", (new Builder($b))->has();\n",
     );
-    // Main adopts the class template, and its tolerant reading binds `TParent` to `mixed` for the
-    // `null` construction, so the program is accepted without the written-types re-run and the
-    // class carries its instantiated name (`php -n` prints `Builder`: main's adoption design).
-    assert_eq!(compile_cli_file_and_run_with_flags(source, &[]), "Builder<mixed>|none|Builder<mixed>");
+    // The tolerant reading binds `TParent` to `mixed` for the `null` construction, so the program
+    // is accepted without the written-types re-run; the instantiated class still shows as the
+    // written `Builder`, exactly as `php -n` prints it.
+    assert_eq!(compile_cli_file_and_run_with_flags(source, &[]), "Builder|none|Builder");
 }
 
 /// A PHPDoc method `@template` no argument can bind — Twig's `Environment::getExtension()`, whose

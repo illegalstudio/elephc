@@ -647,6 +647,7 @@ pub(crate) fn insert_enum_metadata(
             class_id: *next_class_id,
             declaration_span,
             doc_comment: None,
+            written_name: None,
             is_internal,
             parent: None,
             is_abstract: false,

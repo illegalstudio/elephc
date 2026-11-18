@@ -143,6 +143,7 @@ where
     ) -> Result<crate::types::CheckResult, crate::errors::CompileError>,
 {
     let lost = |error: crate::errors::CompileError| (None, error);
+    DOCBLOCK_INSTANCES.with(|names| names.borrow_mut().clear());
     // Generic CLASSES are resolved first and entirely without the checker: their type arguments
     // are written, not inferred, so instantiating them is pure syntax. Doing it here rather than
     // in the pipeline is what keeps the two in step — an instantiated FUNCTION body can name
@@ -290,6 +291,7 @@ where
     // names types with no representation — `new Box<U>` — so leaving it in reaches lowering and
     // panics there. Every call the program makes has its own instantiated method by now.
     let program = methods::strip_templates(program);
+    record_written_class_names(&mut check_result);
     Ok((program, check_result))
 }
 
@@ -976,6 +978,36 @@ pub fn describe_written_error(
             if *written == 1 { "" } else { "s" },
             param
         ),
+    }
+}
+
+thread_local! {
+    /// Instantiated names of classes whose generic half came from PHPDoc only (`Box<int>`),
+    /// collected while one program monomorphizes.
+    static DOCBLOCK_INSTANCES: std::cell::RefCell<crate::fast_hash::FastSet<String>> =
+        std::cell::RefCell::new(crate::fast_hash::FastSet::default());
+}
+
+/// Records that `instantiated` monomorphizes a PHPDoc-only template: php never read the
+/// annotation, so the class it knows is the written one.
+pub(crate) fn note_docblock_instance(instantiated: &str) {
+    DOCBLOCK_INSTANCES.with(|names| {
+        names.borrow_mut().insert(instantiated.to_string());
+    });
+}
+
+/// Gives each PHPDoc-template instantiation of the finished check the name php shows for it
+/// (`Box<int>` is `Box`). A native `class Box<T>` instantiation is elephc's own extension and
+/// keeps its spelling.
+fn record_written_class_names(check_result: &mut crate::types::CheckResult) {
+    let names = DOCBLOCK_INSTANCES.with(|names| std::mem::take(&mut *names.borrow_mut()));
+    for name in names {
+        let Some(cut) = name.find('<') else {
+            continue;
+        };
+        if let Some(info) = check_result.classes.get_mut(&name) {
+            info.written_name = Some(name[..cut].to_string());
+        }
     }
 }
 
