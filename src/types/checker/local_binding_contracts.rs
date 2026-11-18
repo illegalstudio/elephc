@@ -18,7 +18,9 @@ impl Checker {
         self.semantic_profile.contains(StrictFeature::Locals)
             && (!self.body_contains_eval
                 || self.local_store_contracts.has_runtime_origin(&self.current_loop_storage_scope, name))
-            && !self.typed_local_names.contains_key(name) && !self.active_ref_params.contains(name)
+            && !self.typed_local_names.contains_key(name)
+            && (!self.active_ref_params.contains(name)
+                || self.local_store_contracts.entry_is_reference(&self.current_loop_storage_scope, name))
             && (!self.local_parameter_names.contains(name)
                 || self.local_store_contracts.entry_origin(&self.current_loop_storage_scope, name).is_some())
             && (!self.by_ref_captured_locals.contains(name)

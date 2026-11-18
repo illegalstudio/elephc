@@ -31,6 +31,16 @@ impl Drop for NativeDirectory {
 
 /// Links user and runtime assembly as separate objects through the host C toolchain and runs them.
 pub(super) fn run(module: &crate::ir::Module) -> Output {
+    run_with_optional_c_source(module, None)
+}
+
+/// Adds a host C caller to native ABI fixtures that do not need the interpreter bridge.
+pub(super) fn run_with_c_source(module: &crate::ir::Module, source: &str) -> Output {
+    run_with_optional_c_source(module, Some(source))
+}
+
+/// Shares native assembly, runtime, linking and isolated-directory ownership across caller kinds.
+fn run_with_optional_c_source(module: &crate::ir::Module, c_source: Option<&str>) -> Output {
     let directory = NativeDirectory::new();
     let generated = crate::codegen::generate_user_asm_from_ir_with_options_and_features(
         module, false, false, crate::codegen::Instrumentation::Off, false, true, false,
@@ -46,12 +56,18 @@ pub(super) fn run(module: &crate::ir::Module) -> Output {
     let executable = directory.0.join("main");
     std::fs::write(&user_path, generated.asm).unwrap(); std::fs::write(&runtime_path, runtime).unwrap();
     if features.eval_bridge {
+        assert!(c_source.is_none(), "C caller fixture requires a native-only runtime");
         link_eval_fixture(module.target, features, &directory.0, &user_path, &runtime_path, &executable);
         return Command::new(&executable).current_dir(&directory.0).output().expect("run native eval fixture");
     }
     let mut compiler = Command::new("cc");
     if cfg!(target_os = "linux") { compiler.arg("-no-pie"); }
     compiler.arg(&user_path).arg(&runtime_path);
+    if let Some(source) = c_source {
+        let path = directory.0.join("caller.c");
+        std::fs::write(&path, source).unwrap();
+        compiler.arg(path);
+    }
     if features.native_reference_validation {
         compiler.arg(reference_validation_archive());
         if cfg!(target_os = "linux") { compiler.arg("-ldl"); }

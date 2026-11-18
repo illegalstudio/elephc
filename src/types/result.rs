@@ -72,9 +72,16 @@ pub struct LocalStoreContracts {
     stores: HashMap<(String, Span, String), LocalStoreContract>,
     pub(crate) copies: HashMap<(String, Span, String), LocalCopyContract>,
     pub(crate) origins: HashMap<(String, Span, String), PhpType>,
-    entry_origins: HashMap<(String, String), PhpType>,
+    entry_origins: HashMap<(String, String), LocalEntryOrigin>,
     origin_bindings: HashSet<(String, String)>,
     origin_scopes: HashSet<String>,
+}
+
+/// Incoming semantic evidence independent of whether its pointee belongs to this frame.
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct LocalEntryOrigin {
+    contract: PhpType,
+    by_ref: bool,
 }
 
 impl LocalStoreContracts {
@@ -85,12 +92,22 @@ impl LocalStoreContracts {
 
     /// Gives a recreatable owned parameter its declared incoming source contract.
     pub(crate) fn record_entry_origin(&mut self, scope: String, name: String, contract: PhpType) {
-        self.entry_origins.insert((scope, name), contract);
+        self.entry_origins.insert((scope, name), LocalEntryOrigin { contract, by_ref: false });
+    }
+
+    /// Keeps a foreign reference identity while giving its local name an incoming contract.
+    pub(crate) fn record_reference_entry_origin(&mut self, scope: String, name: String, contract: PhpType) {
+        self.entry_origins.insert((scope, name), LocalEntryOrigin { contract, by_ref: true });
     }
 
     /// Reads an incoming contract without conflating it with an assignment source position.
     pub(crate) fn entry_origin(&self, scope: &str, name: &str) -> Option<&PhpType> {
-        self.entry_origins.get(&(scope.to_string(), name.to_string()))
+        self.entry_origins.get(&(scope.to_string(), name.to_string())).map(|origin| &origin.contract)
+    }
+
+    /// Prevents reference inputs from entering the by-value shadow-copy path.
+    pub(crate) fn entry_is_reference(&self, scope: &str, name: &str) -> bool {
+        self.entry_origins.get(&(scope.to_string(), name.to_string())).is_some_and(|origin| origin.by_ref)
     }
 
     /// Records immutable source metadata and indexes its body/name without scanning other stores.

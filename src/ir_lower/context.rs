@@ -1504,6 +1504,16 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         self.set_local_type(name, incoming.clone());
     }
 
+    /// Tracks a detachable incoming reference without copying or replacing its caller's cell.
+    pub(crate) fn initialize_recreatable_reference_parameter(&mut self, name: &str, incoming: &PhpType) {
+        let slot = self.local_slots[name];
+        self.builder.widen_local_storage_type(slot, PhpType::Mixed);
+        super::local_binding_state::emit(self, slot, false);
+        super::local_binding_origins::prepare_entry(self, name);
+        super::local_binding_state::emit(self, slot, true);
+        self.set_local_logical_type(name, incoming.clone());
+    }
+
     /// Marks a local slot as initialized by caller or synthetic setup.
     pub(crate) fn mark_local_initialized(&mut self, name: &str) {
         if let Some(slot) = self.local_slots.get(name).copied() {
@@ -3955,7 +3965,8 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
             && !crate::names::is_generated_local_name(name) && self.local_can_own_reference_cell(name)
             && eval_barrier_can_widen(&self.local_type(name))
             && (!self.is_ref_bound_local(name) || self.ref_cell_owner_slot(name).is_some_and(|owner|
-                self.builder.local_php_type(owner) == PhpType::Mixed))
+                self.builder.local_php_type(owner) == PhpType::Mixed
+                    || self.local_store_contracts.entry_is_reference(&self.loop_storage_scope, name)))
     }
 
     /// Shares the surviving scope reference even when a conditional predecessor left raw storage.

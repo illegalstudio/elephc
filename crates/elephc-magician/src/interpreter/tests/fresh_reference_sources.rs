@@ -21,10 +21,14 @@ fn assert_reference_fixture(source: &str, checked: &str, permissive: &str) {
             let mut scope = ElephcEvalScope::new(); let mut values = FakeOps::default();
             if dispatch {
                 let program = crate::parser::parse_fragment_with_semantics(source.as_bytes(), context.semantic_profile()).unwrap();
-                let result = execute_program_with_context(&mut context, &program, &mut scope, &mut values).unwrap();
+                let result = execute_program_with_context(&mut context, &program, &mut scope, &mut values)
+                    .unwrap_or_else(|error| panic!("locals={locals} dispatch={dispatch}: {error:?}; output={}; pending={:?}",
+                        values.output, values.pending_runtime_throwable.map(|cell| values.get(cell))));
                 values.release(result).unwrap();
             } else {
-                staged_numeric_execution(source, false, &mut context, &mut scope, &mut values).unwrap();
+                staged_numeric_execution(source, false, &mut context, &mut scope, &mut values)
+                    .unwrap_or_else(|error| panic!("locals={locals} dispatch={dispatch}: {error:?}; output={}; pending={:?}",
+                        values.output, values.pending_runtime_throwable.map(|cell| values.get(cell))));
             }
             assert_eq!(values.output, if locals { checked } else { permissive }, "locals={locals} dispatch={dispatch}");
             for value in scope.drain_owned_cells() { values.release(value).unwrap(); }
@@ -87,4 +91,12 @@ fn eval_parameter_origins_eval_values_and_owners() {
     assert_reference_fixture(include_str!("../../../../../tests/fixtures/strict/eval_parameter_origins.php"),
         "Tinteger:1|Tstring:1|1:new|Winteger|Tstring|integer|string|integer|string|new|1|",
         "Wstring:bad|Winteger:1|1:new|Winteger|Winteger|integer|string|integer|string|new|1|");
+}
+
+/// A conditional reference detach preserves the caller's cell and the replacement local origin.
+#[test]
+fn conditional_reference_origins_eval_values_and_owners() {
+    assert_reference_fixture(include_str!("../../../../../tests/fixtures/strict/conditional_reference_origins.php"),
+        "Tinteger:2:2|2|Tstring:new:2|2|Winteger|3|Tstring|1|Tstring|string|Tstring|early|Winteger|integer|Tstring|string|",
+        "Wstring:bad:bad|bad|Winteger:3:2|2|Winteger|3|Winteger|1|Winteger|integer|Winteger|early|Winteger|integer|Winteger|string|");
 }

@@ -34,17 +34,28 @@ pub(in crate::codegen::lower_inst) fn lower_bind_local_ref_contract(ctx: &mut Fu
     if ctx.local_kind(slot)? != LocalKind::RefCell {
         return Err(CodegenIrError::invalid_module("local reference contract requires an owned binding"));
     }
-    let payload = crate::types::canonical_property_reference_payload(&ctx.local_php_type(slot)?)
+    let incoming = ctx.function.params.iter().enumerate().find_map(|(index, parameter)| {
+        (parameter.by_ref && ctx.function.locals.get(index)
+            .is_some_and(|local| local.ref_cell_owner == Some(slot)))
+            .then_some(LocalSlotId::from_raw(index as u32))
+    });
+    let physical = incoming.and_then(|source| ctx.proven_ref_cell_payload_type(source))
+        .unwrap_or(ctx.local_php_type(slot)?);
+    let payload = crate::types::canonical_property_reference_payload(
+        &physical)
         .ok_or_else(|| CodegenIrError::invalid_module("local reference contract requires a supported payload"))?;
     let descriptor = crate::codegen::runtime_metadata::local_reference_descriptor(
         ctx.module, &inst.result_php_type)?;
     let offset = ctx.local_offset(slot)?;
     abi::load_at_offset(ctx.emitter, abi::int_result_reg(ctx.emitter), offset);
+    let unowned = ctx.next_label("local_contract_unowned_reference");
+    abi::emit_branch_if_int_result_zero(ctx.emitter, &unowned);
     abi::emit_call_label(ctx.emitter,
         crate::codegen_support::runtime::reference_cells::promotion_entry(payload));
     abi::emit_frame_slot_address(ctx.emitter, abi::int_arg_reg_name(ctx.emitter.target, 0), offset);
     abi::emit_symbol_address(ctx.emitter, abi::int_arg_reg_name(ctx.emitter.target, 1), &descriptor);
     abi::emit_call_label(ctx.emitter, "__rt_reference_sources_bind_local");
+    ctx.emitter.label(&unowned);
     Ok(())
 }
 

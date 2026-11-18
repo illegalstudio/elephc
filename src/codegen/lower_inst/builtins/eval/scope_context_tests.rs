@@ -63,3 +63,42 @@ fn eval_scope_scalar_proof_covers_all_supported_targets() {
         assert_eq!(asm.matches("scalar_ok").count(), 3, "{target}: {asm}");
     }
 }
+
+/// A missing binding never reaches the snapshot retain or unbox used by the numeric fast path.
+#[test]
+fn eval_scope_numeric_probe_checks_binding_presence_on_every_target() {
+    use crate::codegen::{context::FunctionContext, data_section::DataSection, shared_state::SharedCodegenState};
+    use crate::{ir::{Builder, Function, IrType, LocalKind, Module, Terminator}, types::PhpType};
+    for name in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+        let target = Target::parse(name).unwrap();
+        let module = Module::new(target);
+        let mut function = Function::new("scope_presence".into(), IrType::Void, PhpType::Void);
+        function.flags.tracks_local_binding_state = true;
+        let slot = function.add_local(Some("value".into()), IrType::from_php(&PhpType::Mixed),
+            PhpType::Mixed, LocalKind::PhpLocal);
+        let mut builder = Builder::new(&mut function);
+        let entry = builder.create_named_block("entry", Vec::new());
+        builder.set_entry(entry); builder.position_at_end(entry);
+        builder.terminate(Terminator::Return { value: None });
+        let layout = crate::codegen::frame::layout_for_function(&function, target, false, false, false);
+        let presence = layout.binding_state_offsets[&slot];
+        let mut emitter = Emitter::new(target);
+        let mut data = DataSection::new();
+        let mut shared = SharedCodegenState::default();
+        {
+            let mut ctx = FunctionContext::new(&module, &function, &mut emitter, &mut data,
+                &mut shared, layout, false, false, false, None);
+            let local = super::EvalSyncLocal { name: "value".into(), slot, ty: PhpType::Mixed };
+            super::promote_unsafe_eval_scope_access_to_full(&mut ctx, &[local], &[]).unwrap();
+        }
+        let assembly = emitter.output();
+        let address = if name == "linux-x86_64" { format!("[rbp - {presence}]") }
+            else { format!("[x29, #-{presence}]") };
+        let check = assembly.find(&address).unwrap_or_else(|| panic!("{name}: {assembly}"));
+        let retain = assembly.find("__rt_incref").unwrap();
+        let unbox = assembly.find("__rt_mixed_unbox").unwrap();
+        assert!(check < retain && retain < unbox, "{name}: {assembly}");
+        let guard = &assembly[check..retain];
+        assert!(guard.contains("eval_scope_access_local_type_safe"), "{name}: {assembly}");
+    }
+}

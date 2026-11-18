@@ -227,17 +227,24 @@ pub(in crate::interpreter) fn write_back_method_ref_args(
             continue;
         };
         if let Some(target) = bound_arg.ref_target.as_ref() {
-            let Some(entry) = method_scope
-                .entry(param)
-                .filter(|entry| entry.flags().is_visible() && entry.flags().by_ref)
-            else {
-                continue;
-            };
-            write_back_method_ref_target(target, entry.cell(), context, values)?;
+            write_back_live_reference_binding(method_scope, param, target, context, values)?;
         }
         write_back_method_variadic_ref_args(param, bound_arg, method_scope, context, values)?;
     }
     Ok(())
+}
+
+/// Writes only the original alias, excluding a name unset and recreated as another reference.
+pub(in crate::interpreter) fn write_back_live_reference_binding(
+    scope: &ElephcEvalScope, name: &str, original: &EvalReferenceTarget,
+    context: &mut ElephcEvalContext, values: &mut impl RuntimeValueOps,
+) -> Result<(), EvalStatus> {
+    let Some(entry) = scope.entry(name).filter(|entry|
+        entry.flags().is_visible() && entry.flags().by_ref) else { return Ok(()); };
+    if !scope.reference_target(name).is_some_and(|target| same_method_ref_target(target, original)) {
+        return Ok(());
+    }
+    write_back_method_ref_target(original, entry.cell(), context, values)
 }
 
 /// Writes element-level changes from a by-reference variadic method parameter back to callers.

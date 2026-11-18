@@ -596,13 +596,7 @@ fn write_back_closure_ref_captures(
         let Some(target) = capture.by_ref_target() else {
             continue;
         };
-        let Some(entry) = function_scope
-            .entry(capture.name())
-            .filter(|entry| entry.flags().is_visible() && entry.flags().by_ref)
-        else {
-            continue;
-        };
-        write_back_method_ref_target(target, entry.cell(), context, values)?;
+        write_back_live_reference_binding(function_scope, capture.name(), target, context, values)?;
     }
     Ok(())
 }

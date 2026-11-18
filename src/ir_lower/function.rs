@@ -2040,7 +2040,11 @@ fn lower_body_into_function(
             continue;
         }
         if ctx.local_store_contracts.entry_origin(&ctx.loop_storage_scope, name).is_some() {
-            ctx.privatize_recreatable_parameter(name, php_type);
+            if ctx.local_store_contracts.entry_is_reference(&ctx.loop_storage_scope, name) {
+                ctx.initialize_recreatable_reference_parameter(name, php_type);
+            } else {
+                ctx.privatize_recreatable_parameter(name, php_type);
+            }
             continue;
         }
         if !FunctionSig::parameter_needs_owned_shadow(

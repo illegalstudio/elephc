@@ -2138,3 +2138,39 @@ opaque-eval test proves native and eval source origins, old aliases, rejected st
 and complete owner retirement with both optimizer modes. Public PHP/LFC optimizer
 pairs and the complete updated example passed with clean heap diagnostics. See the final
 step189-evidence.json for acceptance and gate timings.
+
+### Verified190: conditional incoming reference origins
+
+Incoming reference handles now retain logical entry contracts independently of the
+foreign pointee. Conditional unset ends the local name without copying the caller
+into a value shadow. Existing managed leases, runtime representation flags and
+binding-origin helpers create a fresh local only on the executed detach path.
+Open reference parameters preserve caller constraints, and explicit mixed callers
+remain open until a new binding establishes a replacement contract.
+
+The canonical binder skips unowned handles. Its payload comes from the current CFG
+proof rather than the original declaration, avoiding two leaked null boxes when a
+new Mixed cell replaces an integer reference. Headerless host reads retain the
+incoming raw ABI when current payload proof is unavailable; the binder keeps that
+fallback separate from actual fresh-cell evidence. A reusable native test helper
+links C callers, checking attached writes, detached values, post-join stores,
+string pairs and floating payloads with optimizer on/off and clean heap reports.
+All supported targets emit these paths through the existing ABI helpers.
+
+Interpreted parameter and capture writeback now share a live-target identity check,
+so an unset/recreated name cannot overwrite the original argument merely because
+it becomes a reference again. Both interpreter entries/profiles, original closure
+and method writeback regressions and full owner retirement passed. A real opaque
+source test exercises these interpreted cases and native incoming reference scopes.
+That test exposed an absent-slot read in eval's numeric access-mask preflight:
+a detached native parameter still held NULL_SENTINEL, and unboxing it crashed.
+The preflight now uses the existing presence guard before taking any snapshot;
+a focused all-five-target test checks that presence precedes retain and unbox.
+Debug copying hooks and saved binaries/assembly were removed.
+
+The focused validation includes all-five-target emitters, native optimizer pairs,
+C callers, both eval entries/profiles, prior parameter/fresh-reference controls,
+raw/canonical reference reader controls, known-invalid source diagnostics, opaque eval with a freshly rebuilt Magician
+archive, default build, assembly comments, PHP/LFC optimizer pairs and the updated
+complete example. Final acceptance is recorded in step190-evidence.json. No runtime
+layout changed and no broad local suite, push or PR was requested.

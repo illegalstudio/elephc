@@ -1607,14 +1607,21 @@ impl<'a> FunctionContext<'a> {
     /// the function signature. Other promoted locals use their final frame storage shape for
     /// both representations.
     pub(super) fn ref_cell_payload_type(&self, slot: LocalSlotId) -> Result<PhpType> {
-        if let Some(ty) = self.current_inst.and_then(|inst|
-            self.local_analysis.ref_cell_payload_type_before_inst(inst, slot)) {
-            return Ok(ty.clone());
-        }
-        if let Some(ty) = self.local_analysis.stable_ref_cell_payload_type(slot) {
-            return Ok(ty.clone());
+        if let Some(ty) = self.proven_ref_cell_payload_type(slot) { return Ok(ty); }
+        if let Some(parameter) = self.function.params.get(slot.as_raw() as usize)
+            .filter(|parameter| parameter.by_ref && !parameter.variadic) {
+            return Ok(parameter.php_type.clone());
         }
         self.local_php_type(slot)
+    }
+
+    /// Keeps proven current payload facts separate from a raw incoming ABI fallback.
+    pub(super) fn proven_ref_cell_payload_type(&self, slot: LocalSlotId) -> Option<PhpType> {
+        if let Some(ty) = self.current_inst.and_then(|inst|
+            self.local_analysis.ref_cell_payload_type_before_inst(inst, slot)) {
+            return Some(ty.clone());
+        }
+        self.local_analysis.stable_ref_cell_payload_type(slot).cloned()
     }
 
     /// Stores the current result register(s) through a local ref-cell pointer slot.
