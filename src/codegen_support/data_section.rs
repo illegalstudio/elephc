@@ -429,6 +429,12 @@ impl DataSection {
         (proposed, true)
     }
 
+    /// Registers the visitor an invoker of `count` parameters must share, replacing any
+    /// label-derived one an unshared emission recorded.
+    pub(crate) fn set_invoker_owner_visitor(&mut self, count: usize, label: String) {
+        self.invoker_owner_visitors.insert(count, label);
+    }
+
     /// Records one extern callback descriptor slot, so program exit and the `--web` request
     /// reset can release the descriptor it retains.
     pub fn record_extern_callback_slot(&mut self, label: String) {

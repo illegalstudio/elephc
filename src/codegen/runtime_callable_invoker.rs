@@ -271,6 +271,27 @@ fn emit_content_shared_invoker(
         shared_tails::emit_once(emitter, data);
     }
     let shared = emitter.content_sharing_active();
+    if shared {
+        // A shared body is renamed from its text, which names the invoker's own label: an owner
+        // visitor spelled `{label}__gc_argument_owners` and emitted beside the body would be
+        // referenced as `_eir_cbody_*__gc_argument_owners` and never defined (any program with a
+        // trait calling `method_exists` failed to link). The visitor is keyed by owner count
+        // instead, emitted once per module outside every body, and registered so the body finds
+        // it as an existing shared layout.
+        let count = invoker.sig.params.len();
+        let key = format!("_eir_invoker_owners_{count}");
+        let visitor = format!("{key}__gc_argument_owners");
+        emitter.emit_keyed_once(
+            &key,
+            crate::codegen::context::HELPER_MARKER_OPEN,
+            crate::codegen::context::HELPER_MARKER_CLOSE,
+            |emitter| {
+                InvokerArgumentOwners::new(INVOKER_BOUNDARY_FRAME_SIZE, count)
+                    .emit_frame_visitor(emitter, &visitor);
+            },
+        );
+        data.set_invoker_owner_visitor(count, visitor);
+    }
     let stub_table = table.clone();
     emitter.emit_content_shared_with_entry(
         invoker.label,

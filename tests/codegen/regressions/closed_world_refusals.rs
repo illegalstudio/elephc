@@ -383,3 +383,18 @@ echo implode(',', $empty), ' ', implode(',', prefixed(['k'])), "\n";
     );
     assert_eq!(out, "3 a,b,c b,c\n5 y,z,a,b,c\n80 p39 p0 s0 s39\nonly x1,k\n");
 }
+
+/// A trait method calling `method_exists` compiles, links and runs: the reflection invokers'
+/// owner visitors stay defined when their bodies are shared under content names.
+#[test]
+fn test_method_exists_inside_a_trait_links_and_runs() {
+    let out = compile_and_run(
+        r#"<?php
+trait T { public function has(string $m): string { return method_exists($this, $m) ? "y" : "n"; } }
+class A { use T; public function f(): void {} }
+$a = new A;
+echo $a->has("f"), $a->has("g"), $a->has("has"), "\n";
+"#,
+    );
+    assert_eq!(out, "yny\n");
+}
