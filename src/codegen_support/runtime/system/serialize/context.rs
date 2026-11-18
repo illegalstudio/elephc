@@ -11,6 +11,8 @@
 //!   lives in this frame, so a `serialize()` inside a hook gets its own stream. The enclosing
 //!   stream is reinstated on every exit, and a grown buffer is freed when a hook throws.
 
+use elephc_memoir::{FrameOffset, strings::scoped_stream::StreamScope};
+
 use crate::codegen_support::{abi, emit::Emitter, platform::Arch};
 use crate::codegen_support::runtime::exceptions::emit_guarded_cleanup_call;
 
@@ -28,6 +30,11 @@ const TAG: usize = 80;
 const STREAM: usize = 120; // 32-byte `__rt_strbuf_*` descriptor owned by this call (spans 120 down to 89)
 const OUTER: usize = 128; // the enclosing call's `_ser_stream`, reinstated on every exit
 
+const OUTPUT_STREAM: StreamScope<'static> = StreamScope {
+    active: super::stream::ACTIVE_STREAM,
+    saved: FrameOffset::new(OUTER),
+};
+
 /// Emits an exception-safe public entry and its unary guarded dispatch adapter.
 pub(super) fn emit(emitter: &mut Emitter) {
     let result = abi::int_result_reg(emitter);
@@ -41,13 +48,7 @@ pub(super) fn emit(emitter: &mut Emitter) {
     }
     abi::emit_store_zero_to_local_slot(emitter, PENDING);
     // -- open this call's output stream at the scratch tail and install it as the active one --
-    let arg0 = abi::int_arg_reg_name(emitter.target, 0);
-    abi::emit_load_symbol_to_reg(emitter, result, "_ser_stream", 0);
-    abi::store_at_offset(emitter, result, OUTER);
-    abi::emit_frame_slot_address(emitter, arg0, STREAM);
-    abi::emit_call_label(emitter, "__rt_strbuf_init");
-    abi::emit_frame_slot_address(emitter, result, STREAM);
-    abi::emit_store_reg_to_symbol(emitter, result, "_ser_stream", 0);
+    OUTPUT_STREAM.emit_enter(emitter, FrameOffset::new(STREAM));
     abi::emit_load_symbol_to_reg(emitter, result, "_ser_legacy_active", 0);
     abi::store_at_offset(emitter, result, LEGACY);
     abi::emit_branch_if_int_result_nonzero(emitter, "__rt_serialize_context_ready");
@@ -63,20 +64,11 @@ pub(super) fn emit(emitter: &mut Emitter) {
     emit_guarded_cleanup_call(emitter, "__rt_serialize_guarded_dispatch", result, PENDING);
     // -- publish the finished stream, or free its grown buffer when a hook threw, then reinstate
     //    the enclosing stream --
-    abi::load_at_offset(emitter, result, PENDING);
-    abi::emit_branch_if_int_result_zero(emitter, "__rt_serialize_stream_finish");
-    abi::emit_frame_slot_address(emitter, arg0, STREAM);
-    abi::emit_call_label(emitter, "__rt_strbuf_release");
-    abi::emit_jump(emitter, "__rt_serialize_stream_closed");
-    emitter.label("__rt_serialize_stream_finish");
-    abi::emit_frame_slot_address(emitter, arg0, STREAM);
-    abi::emit_call_label(emitter, "__rt_strbuf_finish_owned");
-    let (stream_pointer, stream_length) = abi::string_result_regs(emitter);
-    abi::store_at_offset(emitter, stream_pointer, POINTER);
-    abi::store_at_offset(emitter, stream_length, LENGTH);
-    emitter.label("__rt_serialize_stream_closed");
-    abi::load_at_offset(emitter, result, OUTER);
-    abi::emit_store_reg_to_symbol(emitter, result, "_ser_stream", 0);
+    OUTPUT_STREAM.emit_close(
+        emitter, FrameOffset::new(STREAM), FrameOffset::new(PENDING),
+        [FrameOffset::new(POINTER), FrameOffset::new(LENGTH)],
+        "__rt_serialize_stream_finish", "__rt_serialize_stream_closed",
+    );
     abi::load_at_offset(emitter, result, LEGACY);
     abi::emit_branch_if_int_result_nonzero(emitter, "__rt_serialize_context_restored");
     emit_reference_copy(emitter, true);
