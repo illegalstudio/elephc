@@ -2220,22 +2220,22 @@ fn emit_set_owner_metadata_arrays_property_aarch64(
     fail_label: &str,
 ) {
     if let (Some(low), Some(high)) = (layout.interface_names_lo, layout.interface_names_hi) {
-        emit_set_owner_metadata_array_slot_aarch64(emitter, 80, low, high, false, fail_label);
+        emit_set_owner_metadata_array_slot_aarch64(emitter, 80, low, high, fail_label);
     }
     if let (Some(low), Some(high)) = (layout.trait_names_lo, layout.trait_names_hi) {
-        emit_set_owner_metadata_array_slot_aarch64(emitter, 88, low, high, false, fail_label);
+        emit_set_owner_metadata_array_slot_aarch64(emitter, 88, low, high, fail_label);
     }
     if let (Some(low), Some(high)) = (layout.method_names_lo, layout.method_names_hi) {
-        emit_set_owner_metadata_array_slot_aarch64(emitter, 104, low, high, false, fail_label);
+        emit_set_owner_metadata_array_slot_aarch64(emitter, 104, low, high, fail_label);
     }
     if let (Some(low), Some(high)) = (layout.property_names_lo, layout.property_names_hi) {
-        emit_set_owner_metadata_array_slot_aarch64(emitter, 112, low, high, false, fail_label);
+        emit_set_owner_metadata_array_slot_aarch64(emitter, 112, low, high, fail_label);
     }
     if let (Some(low), Some(high)) = (layout.method_objects_lo, layout.method_objects_hi) {
-        emit_set_owner_metadata_array_slot_aarch64(emitter, 120, low, high, true, fail_label);
+        emit_set_owner_metadata_array_slot_aarch64(emitter, 120, low, high, fail_label);
     }
     if let (Some(low), Some(high)) = (layout.property_objects_lo, layout.property_objects_hi) {
-        emit_set_owner_metadata_array_slot_aarch64(emitter, 128, low, high, true, fail_label);
+        emit_set_owner_metadata_array_slot_aarch64(emitter, 128, low, high, fail_label);
     }
 }
 
@@ -2245,7 +2245,6 @@ fn emit_set_owner_metadata_array_slot_aarch64(
     boxed_slot: usize,
     low_offset: usize,
     high_offset: usize,
-    object_elements: bool,
     fail_label: &str,
 ) {
     emitter.instruction(&format!("ldr x0, [sp, #{}]", boxed_slot));             // reload the boxed ReflectionClass metadata-name array
@@ -2253,12 +2252,6 @@ fn emit_set_owner_metadata_array_slot_aarch64(
     emitter.instruction("bl __rt_mixed_unbox");                                 // expose the metadata-name array tag and payload pointer
     emitter.instruction("cmp x0, #4");                                          // runtime tag 4 means indexed array
     emitter.instruction(&format!("b.ne {}", fail_label));                       // reject non-array metadata-name metadata
-    if object_elements {
-        emitter.instruction("mov x0, x1");                                      // pass the boxed-cell array to the object-slot normalizer
-        emitter.instruction(&format!("bl {}", REFLECTION_OBJECT_ARRAY_UNBOX_LABEL)); // rewrite validated Mixed(object) slots to raw pointers
-        emitter.instruction(&format!("cbz x0, {}", fail_label));                // reject malformed Reflection object arrays
-        emitter.instruction("mov x1, x0");                                      // restore the normalized array payload convention
-    }
     emitter.instruction("str x1, [sp, #40]");                                   // save the unboxed metadata-name array across incref
     emitter.instruction("mov x0, x1");                                          // move the array payload into the incref argument register
     emitter.instruction("bl __rt_incref");                                      // retain the metadata-name array for ReflectionClass storage
@@ -2276,22 +2269,22 @@ fn emit_set_owner_metadata_arrays_property_x86_64(
     fail_label: &str,
 ) {
     if let (Some(low), Some(high)) = (layout.interface_names_lo, layout.interface_names_hi) {
-        emit_set_owner_metadata_array_slot_x86_64(emitter, -88, low, high, false, fail_label);
+        emit_set_owner_metadata_array_slot_x86_64(emitter, -88, low, high, fail_label);
     }
     if let (Some(low), Some(high)) = (layout.trait_names_lo, layout.trait_names_hi) {
-        emit_set_owner_metadata_array_slot_x86_64(emitter, -96, low, high, false, fail_label);
+        emit_set_owner_metadata_array_slot_x86_64(emitter, -96, low, high, fail_label);
     }
     if let (Some(low), Some(high)) = (layout.method_names_lo, layout.method_names_hi) {
-        emit_set_owner_metadata_array_slot_x86_64(emitter, -112, low, high, false, fail_label);
+        emit_set_owner_metadata_array_slot_x86_64(emitter, -112, low, high, fail_label);
     }
     if let (Some(low), Some(high)) = (layout.property_names_lo, layout.property_names_hi) {
-        emit_set_owner_metadata_array_slot_x86_64(emitter, -120, low, high, false, fail_label);
+        emit_set_owner_metadata_array_slot_x86_64(emitter, -120, low, high, fail_label);
     }
     if let (Some(low), Some(high)) = (layout.method_objects_lo, layout.method_objects_hi) {
-        emit_set_owner_metadata_array_slot_x86_64(emitter, -128, low, high, true, fail_label);
+        emit_set_owner_metadata_array_slot_x86_64(emitter, -128, low, high, fail_label);
     }
     if let (Some(low), Some(high)) = (layout.property_objects_lo, layout.property_objects_hi) {
-        emit_set_owner_metadata_array_slot_x86_64(emitter, -136, low, high, true, fail_label);
+        emit_set_owner_metadata_array_slot_x86_64(emitter, -136, low, high, fail_label);
     }
 }
 
@@ -2301,7 +2294,6 @@ fn emit_set_owner_metadata_array_slot_x86_64(
     boxed_slot: isize,
     low_offset: usize,
     high_offset: usize,
-    object_elements: bool,
     fail_label: &str,
 ) {
     let boxed_slot = if boxed_slot < 0 {
@@ -2315,13 +2307,6 @@ fn emit_set_owner_metadata_array_slot_x86_64(
     emitter.instruction("call __rt_mixed_unbox");                               // expose the metadata-name array tag and payload pointer
     emitter.instruction("cmp rax, 4");                                          // runtime tag 4 means indexed array
     emitter.instruction(&format!("jne {}", fail_label));                        // reject non-array metadata-name metadata
-    if object_elements {
-        emitter.instruction("mov rax, rdi");                                    // pass the boxed-cell array to the object-slot normalizer
-        emitter.instruction(&format!("call {}", REFLECTION_OBJECT_ARRAY_UNBOX_LABEL)); // rewrite validated Mixed(object) slots to raw pointers
-        emitter.instruction("test rax, rax");                                   // did object-slot validation succeed?
-        emitter.instruction(&format!("jz {}", fail_label));                     // reject malformed Reflection object arrays
-        emitter.instruction("mov rdi, rax");                                    // restore the normalized array payload convention
-    }
     emitter.instruction("mov QWORD PTR [rbp - 48], rdi");                       // save the unboxed metadata-name array across incref
     emitter.instruction("mov rax, rdi");                                        // move the array payload into the incref argument register
     emitter.instruction("call __rt_incref");                                    // retain the metadata-name array for ReflectionClass storage
