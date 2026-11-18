@@ -428,7 +428,11 @@ fn try_compile_source_to_asm_with_defines_repr_inner(
     // and dominates their compile time. The fixture suite only needs the surface when the
     // source or resolved program actually names it; the filter/eval visibility tests do.
     let source_lower = source.to_ascii_lowercase();
-    let filter_mentioned = source_lower.contains("filter_")
+    // `parse_str()` applies `filter.default` through the filter prelude, so a configured
+    // filter setting requires the declarations even when the PHP source never names one.
+    let filter_configured = overrides.iter().any(|(name, _)| name.starts_with("filter."));
+    let filter_mentioned = filter_configured
+        || source_lower.contains("filter_")
         || source_lower.contains("filter\\")
         || elephc::filter_prelude::program_uses_explicit_surface(&resolved);
     let resolved = if filter_mentioned {
