@@ -169,11 +169,12 @@ back.
 
 Known `$GLOBALS` limits:
 
-- The snapshot only contains names the compiler materialized. PHP's CLI SAPI also
-  exposes `_GET`, `_POST`, `_COOKIE`, `_FILES`, and `_SERVER` in `$GLOBALS`; elephc
-  adds one of those only when the source names it, so `count($GLOBALS)` can be lower
-  than PHP's. Under `--web` the snapshot carries every request superglobal, because
-  the request prelude populates all of them.
+- A bare `$GLOBALS` snapshot carries the same always-present CLI superglobals PHP's
+  SAPI puts there — `_GET`, `_POST`, `_COOKIE`, `_FILES`, and `_SERVER` — even when
+  the source never spells them. `_ENV` and `_REQUEST` stay lazy, matching PHP: they
+  appear once the program names them. Under `--web` the snapshot carries every
+  request superglobal, because the request prelude populates all of them. The key
+  order of the snapshot is the compiler's, not php-src's symbol-table order.
 - `unset($GLOBALS['x'])` detaches a `global $x` alias: the removed value stays
   readable through the local reference, later `$x` writes stay local, and
   `$GLOBALS['x']` remains unset, matching PHP. A straight-line unset is handled by
