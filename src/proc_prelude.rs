@@ -19,6 +19,8 @@
 mod build;
 mod detect;
 
+pub(crate) use detect::program_uses_proc;
+
 use crate::parser::ast::{CType, Program, Stmt};
 use crate::synthetic_class::extern_fn;
 

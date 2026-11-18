@@ -1,6 +1,6 @@
 //! Purpose:
-//! Exercises Random, BcMath, GMP, DateTimeZone::listIdentifiers, and preg_grep when
-//! only Composer-autoloaded classes use those surfaces.
+//! Exercises Random, BcMath, GMP, proc_open(), DateTimeZone::listIdentifiers, and
+//! preg_grep when only Composer-autoloaded classes use those surfaces.
 //!
 //! Called from:
 //! - The codegen integration harness on every executable supported target.
@@ -328,4 +328,43 @@ echo implode(',', (new App\Digits())->keep(['1', 'x', '23'])), "\n";
         String::from_utf8_lossy(&output.stderr)
     );
     assert_eq!(String::from_utf8(output.stdout).unwrap(), "1,23\n");
+}
+
+/// `proc_open()` called only from an autoloaded class method, with a local `$pipes`,
+/// still injects the proc prelude and links the `elephc_proc` bridge.
+#[test]
+fn test_autoload_proc_prelude() {
+    let project = AutoloadPreludeProject(make_cli_test_dir("elephc_autoload_proc"));
+    let dir = &project.0;
+    write_composer_class(
+        dir,
+        "Runner.php",
+        r#"<?php
+namespace App;
+class Runner {
+    public function run(): string {
+        $process = proc_open(['echo', 'hi'], [1 => ['pipe', 'w']], $pipes);
+        $out = (string) stream_get_contents($pipes[1]);
+        fclose($pipes[1]);
+        return $out . proc_close($process);
+    }
+}
+"#,
+    );
+    fs::write(
+        dir.join("main.php"),
+        r#"<?php
+echo (new App\Runner())->run(), "\n";
+"#,
+    )
+    .unwrap();
+    let compiled = compile_autoload_project(dir, &["elephc_proc"]);
+    assert!(
+        compiled.status.success(),
+        "autoloaded proc compilation failed: {}",
+        String::from_utf8_lossy(&compiled.stderr)
+    );
+    let output = run_binary_with_args(&dir.join("main"), dir, &[]);
+    assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
+    assert_eq!(String::from_utf8(output.stdout).unwrap(), "hi\n0\n");
 }

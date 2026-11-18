@@ -3,6 +3,7 @@
 //!
 //! Called from:
 //! - `crate::proc_prelude::inject_if_used`.
+//! - `crate::autoload::prelude_probe`, on the program's Composer/SPL autoload closure.
 //!
 //! Key details:
 //! - Runs before name resolution, so names are raw source text and PHP function lookup
@@ -15,14 +16,14 @@
 //! - Soundness beats precision: a missed reference would leave a lowering calling an
 //!   undeclared helper, while a false positive only adds prunable declarations.
 
-use crate::parser::ast::Program;
+use crate::parser::ast::Stmt;
 
 /// Returns whether any statement references a `proc_*` builtin.
 ///
 /// A call this walk cannot name (`$f(0)`, `call_user_func($f)`) may reach a proc builtin
 /// through a string the program spells anywhere, such as `run('proc_nice')` handing it to a
 /// user function, so such a program's string literals count as references too.
-pub(super) fn program_uses_proc(program: &Program) -> bool {
+pub(crate) fn program_uses_proc(program: &[Stmt]) -> bool {
     let usage = crate::prelude_prune::usage::collect(program);
     let indirect = usage.dynamic_function_call || usage.introspects;
     usage
