@@ -262,6 +262,7 @@ impl Checker {
                     &generator_ty,
                     true,
                     true,
+                    true,
                     span,
                     "Closure return type",
                 )?;
@@ -302,6 +303,7 @@ impl Checker {
                     &return_info.ty,
                     return_info.has_value,
                     return_info.strict_types,
+                    return_info.local_read,
                     span,
                     "Closure return type",
                 )?;

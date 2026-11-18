@@ -1313,6 +1313,7 @@ impl Checker {
                                 &return_info.ty,
                                 return_info.has_value,
                                 return_info.strict_types,
+                                return_info.local_read,
                                 method.span,
                                 &format!("Method '{}::{}' return type", class.name, method.name),
                             ) {
@@ -1585,6 +1586,7 @@ impl Checker {
                     type_ann,
                     &declared,
                     &generator_ty,
+                    true,
                     true,
                     true,
                     method.span,

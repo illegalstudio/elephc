@@ -23,6 +23,9 @@ pub(crate) struct ReturnInfo {
     pub ty: PhpType,
     pub has_value: bool,
     pub strict_types: bool,
+    /// The returned expression is a plain local read: the only shape whose nullable union the
+    /// checker rejects up front (see `require_compatible_return_type`).
+    pub local_read: bool,
 }
 
 /// Adds one scalar member to an inferred return type, the way [`nullable_return_type`] adds
@@ -243,6 +246,7 @@ impl Checker {
                         ty,
                         has_value: true,
                         strict_types: stmt.strict_types,
+                        local_read: matches!(expr.kind, crate::parser::ast::ExprKind::Variable(_)),
                     });
                 }
             }
@@ -251,6 +255,7 @@ impl Checker {
                     ty: PhpType::Void,
                     has_value: false,
                     strict_types: stmt.strict_types,
+                    local_read: false,
                 });
             }
             // A body folded to a plain block (`if (true) { return false; }` becomes one
@@ -533,7 +538,7 @@ impl Checker {
     /// Keeps source null and void return rules separate while retaining their shared runtime value.
     pub(crate) fn require_compatible_return_hint(
         &self, hint: &TypeExpr, expected: &PhpType, actual: &PhpType, has_value: bool,
-        strict_types: bool, span: crate::span::Span, context: &str,
+        strict_types: bool, local_read: bool, span: crate::span::Span, context: &str,
     ) -> Result<(), CompileError> {
         if matches!(hint, TypeExpr::Named(name) if name.as_str().eq_ignore_ascii_case("null")) {
             if has_value && *actual == PhpType::Void { return Ok(()); }
@@ -548,7 +553,9 @@ impl Checker {
                 &format!("{context} must not return a value"),
             ));
         }
-        self.require_compatible_return_type(expected, actual, has_value, strict_types, span, context)
+        self.require_compatible_return_type(
+            expected, actual, has_value, strict_types, local_read, span, context,
+        )
     }
 
     /// Checks that an actual return type is compatible with the declared return type.
@@ -563,6 +570,7 @@ impl Checker {
         actual: &PhpType,
         has_value: bool,
         strict_types: bool,
+        local_read: bool,
         span: crate::span::Span,
         context: &str,
     ) -> Result<(), CompileError> {
@@ -594,9 +602,10 @@ impl Checker {
             ));
         }
         // Parameter compatibility accepts `Object|null` because PHP only throws when the
-        // value is actually null at run time. A return type is a static contract, though:
-        // a nullable union returned as `W` is exactly the property-hook narrowing bug.
-        if Self::union_contains_void(actual) && !Self::declared_type_accepts_null(expected) {
+        // value is actually null at run time. A nullable LOCAL returned as `W` is refused up
+        // front (the property-hook narrowing bug); any other expression (a property read, a
+        // call) reaches PHP's runtime `Return value must be of type W, null returned`.
+        if local_read && Self::union_contains_void(actual) && !Self::declared_type_accepts_null(expected) {
             return Err(CompileError::new(
                 span,
                 &format!("{} expects {}, got {}", context, expected, actual),
@@ -651,6 +660,14 @@ impl Checker {
         // Return lowering already normalizes a boxed gradual value into iterable storage.
         // Parameter binding has a distinct ABI path and deliberately remains stricter.
         if matches!((expected, actual), (PhpType::Iterable, PhpType::Mixed)) {
+            return Ok(());
+        }
+
+        // A gradual value returned as the bare `object` type (`new $cls()` of a runtime-named
+        // class) is checked at the return boundary, like a named class above.
+        if matches!(expected, PhpType::Object(name) if name.is_empty())
+            && matches!(actual.codegen_repr(), PhpType::Mixed | PhpType::Union(_))
+        {
             return Ok(());
         }
 
