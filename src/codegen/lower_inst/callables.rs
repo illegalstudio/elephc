@@ -449,9 +449,9 @@ fn emit_fresh_closure_from_persistent_descriptor(ctx: &mut FunctionContext<'_>) 
         callable_descriptor::CALLABLE_DESC_STATIC_SIZE as i64,
     );
     abi::emit_call_label(ctx.emitter, "__rt_heap_alloc");
-    crate::codegen_support::runtime::emit_acquire_object_handle(ctx.emitter); // the conversion result is a Closure object with its own handle
+    crate::codegen_support::runtime::emit_acquire_object_handle(ctx.emitter);   // the conversion result is a Closure object with its own handle
     ctx.emitter
-        .instruction(&format!("mov {}, {}", descriptor_reg, result_reg)); // keep the new closure descriptor while copying the persistent header
+        .instruction(&format!("mov {}, {}", descriptor_reg, result_reg));       // keep the new closure descriptor while copying the persistent header
     abi::emit_pop_reg(ctx.emitter, source_reg);
     callable_descriptor::emit_copy_descriptor_header_to_runtime(
         ctx.emitter,
@@ -460,7 +460,7 @@ fn emit_fresh_closure_from_persistent_descriptor(ctx: &mut FunctionContext<'_>) 
     );
     if descriptor_reg != result_reg {
         ctx.emitter
-            .instruction(&format!("mov {}, {}", result_reg, descriptor_reg)); // return the new closure descriptor
+            .instruction(&format!("mov {}, {}", result_reg, descriptor_reg));   // return the new closure descriptor
     }
 }
 
