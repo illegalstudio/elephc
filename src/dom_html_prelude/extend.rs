@@ -191,7 +191,15 @@ fn merge_class(into: &mut Stmt, from: &Stmt) {
             !into_methods.iter().any(|existing| existing.name.eq_ignore_ascii_case(&method.name)),
             "DOM extension: {name}::{} is already defined", method.name
         );
-        into_methods.push(method.clone());
+        // The parser re-creates every hooked property's accessors ahead of the plain methods, so an
+        // accessor lands after the last accessor already present to keep print -> parse stable.
+        let is_accessor = |name: &str| name.starts_with("__propget_") || name.starts_with("__propset_");
+        if is_accessor(&method.name) {
+            let at = into_methods.iter().rposition(|existing| is_accessor(&existing.name)).map_or(0, |last| last + 1);
+            into_methods.insert(at, method.clone());
+        } else {
+            into_methods.push(method.clone());
+        }
     }
     for property in properties {
         assert!(

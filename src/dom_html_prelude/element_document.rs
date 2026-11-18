@@ -145,7 +145,7 @@ fn node_members() -> ClassBuilder {
                         ]),
                 )
                 .method(
-                    method("__propget_baseURI")
+                    method("__propget_baseURI").returns(t_mixed())
                         .body(vec![
                             s_assign("doc", e_ternary(e_instance_of(e_this(), "DOMDocument"), e_this(), e_this_prop("ownerDocument"))),
                             s_if(
@@ -447,7 +447,7 @@ fn element_members() -> ClassBuilder {
                         ]),
                 )
                 .method(
-                    method("__propget_schemaTypeInfo")
+                    method("__propget_schemaTypeInfo").returns(t_mixed())
                         .body(vec![
                             s_return(e_null()),
                         ]),
