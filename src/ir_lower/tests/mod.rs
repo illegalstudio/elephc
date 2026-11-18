@@ -876,3 +876,5 @@ mod global_publication_owners;
 mod reached_global_producers;
 
 mod conditional_global_origins;
+
+mod global_producer_boundaries;

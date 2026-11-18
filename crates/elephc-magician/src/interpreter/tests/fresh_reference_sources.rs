@@ -190,3 +190,10 @@ fn conditional_global_origins_eval_values_and_owners() {
         "Wstring:new:1|1|Tinteger:1:1|1|Tinteger:1:1|1|Winteger:2:2|2|integer:2|integer:2|Tstring:local|2|Winteger:3|3|",
         "Wstring:new:1|1|Wstring:bad:bad|bad|Wdouble:1.5:1.5|1.5|Winteger:2:2|2|integer:2|integer:2|Winteger:3|2|Winteger:3|3|");
 }
+
+/// Global sources retain complete original alternatives after earlier root-level stores.
+#[test]
+fn global_producer_boundaries_eval_values_and_owners() {
+    assert_reference_fixture(include_str!("../../../../../tests/fixtures/strict/global_producer_boundaries.php"),
+        "Wdouble:2.5|Winteger:3|Wstring:final|Wstring:next|Winteger:3|Tinteger:3|WNULL:|TNULL:|Winteger:4|Tinteger:1|Tinteger:1|Winteger:2|", "Wdouble:2.5|Winteger:3|Wstring:final|Wstring:next|Winteger:3|Wdouble:1.5|WNULL:|Wdouble:1.5|Winteger:4|Wdouble:2.5|Wstring:bad|Winteger:2|");
+}
