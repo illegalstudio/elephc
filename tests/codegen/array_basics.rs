@@ -1359,15 +1359,21 @@ try { exit(true); } catch (TypeError $e) { echo "true: ", $e->getMessage(), "\n"
 try { exit(false); } catch (TypeError $e) { echo "false: ", $e->getMessage(), "\n"; }
 try { exit(1.5); } catch (TypeError $e) { echo "float: ", $e->getMessage(), "\n"; }
 try { exit(null); } catch (TypeError $e) { echo "null: ", $e->getMessage(), "\n"; }
+$flag = $argc > 0;
+try { exit($flag); } catch (TypeError $e) { echo "var: ", $e->getMessage(), "\n"; }
+$other = $argc > 1;
+try { exit($other); } catch (TypeError $e) { echo "var-false: ", $e->getMessage(), "\n"; }
 echo "done";
 "#,
     );
     assert_eq!(
         out,
-        "true: exit(): Argument #1 ($status) must be of type string|int, bool given\n\
-false: exit(): Argument #1 ($status) must be of type string|int, bool given\n\
+        "true: exit(): Argument #1 ($status) must be of type string|int, true given\n\
+false: exit(): Argument #1 ($status) must be of type string|int, false given\n\
 float: exit(): Argument #1 ($status) must be of type string|int, float given\n\
 null: exit(): Argument #1 ($status) must be of type string|int, null given\n\
+var: exit(): Argument #1 ($status) must be of type string|int, true given\n\
+var-false: exit(): Argument #1 ($status) must be of type string|int, false given\n\
 done"
     );
 }

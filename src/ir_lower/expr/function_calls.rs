@@ -648,26 +648,8 @@ fn emit_builtin_call_value_with_target(
     let exit_name = php_symbol_key(name.trim_start_matches('\\'));
     if matches!(exit_name.as_str(), "exit" | "die") && crate::source::current_strict_types() {
         if let Some(status) = operands.first().copied() {
-            let actual = match ctx.builder.value_php_type(status).codegen_repr() {
-                PhpType::Bool | PhpType::False => Some("bool"),
-                PhpType::Float => Some("float"),
-                PhpType::Void => Some("null"),
-                _ => None,
-            };
-            if let Some(actual) = actual {
-                let message = format!(
-                    "{}(): Argument #1 ($status) must be of type string|int, {actual} given",
-                    exit_name
-                );
-                let exception = Expr::new(
-                    ExprKind::NewObject {
-                        class_name: Name::unqualified("TypeError"),
-                        args: vec![Expr::new(ExprKind::StringLiteral(message), span)],
-                    },
-                    span,
-                );
-                let throw = Expr::new(ExprKind::Throw(Box::new(exception)), span);
-                return lower_expr(ctx, &throw);
+            if let Some(value) = lower_strict_exit_type_error(ctx, &exit_name, status, span) {
+                return value;
             }
         }
     }
@@ -726,6 +708,102 @@ fn emit_builtin_call_value_with_target(
         }
     }
     call
+}
+
+/// Lowers a strict `exit()`/`die()` status that violates PHP's `string|int` signature.
+///
+/// Returns the terminating throw when the lowered status is provably a `float`, `null`, or
+/// boolean, and `None` when the call keeps its ordinary exit lowering. PHP reports boolean
+/// statuses by their literal name, so a non-constant boolean dispatches on its runtime value
+/// instead of naming the `bool` type.
+fn lower_strict_exit_type_error(
+    ctx: &mut LoweringContext<'_, '_>,
+    exit_name: &str,
+    status: ValueId,
+    span: Span,
+) -> Option<LoweredValue> {
+    match ctx.builder.value_php_type(status).codegen_repr() {
+        PhpType::Float => Some(throw_strict_exit_type_error(ctx, exit_name, "float", span)),
+        PhpType::Void => Some(throw_strict_exit_type_error(ctx, exit_name, "null", span)),
+        PhpType::False => Some(throw_strict_exit_type_error(ctx, exit_name, "false", span)),
+        PhpType::Bool => {
+            if let Some(instruction) = ctx.builder.value_defining_instruction(status) {
+                if instruction.op == Op::ConstBool {
+                    if let Some(Immediate::Bool(value)) = instruction.immediate {
+                        let actual = if value { "true" } else { "false" };
+                        return Some(throw_strict_exit_type_error(ctx, exit_name, actual, span));
+                    }
+                }
+            }
+            // A dynamic boolean still reports its literal name. Snapshot the already-evaluated
+            // status in a hidden local so the ternary re-reads it without repeating side effects.
+            let status_ir_type = ctx.builder.value_type(status);
+            let temp = ctx.declare_synthetic_php_local(PhpType::Bool);
+            ctx.store_local(
+                &temp,
+                LoweredValue {
+                    value: status,
+                    ir_type: status_ir_type,
+                },
+                PhpType::Bool,
+                Some(span),
+            );
+            let condition = Expr::new(ExprKind::Variable(temp), span);
+            let actual = Expr::new(
+                ExprKind::Ternary {
+                    condition: Box::new(condition),
+                    then_expr: Box::new(Expr::new(ExprKind::StringLiteral("true".into()), span)),
+                    else_expr: Box::new(Expr::new(ExprKind::StringLiteral("false".into()), span)),
+                },
+                span,
+            );
+            Some(throw_strict_exit_type_error_expr(ctx, exit_name, actual, span))
+        }
+        _ => None,
+    }
+}
+
+/// Emits one catchable `TypeError` naming the rejected `exit()`/`die()` status value.
+fn throw_strict_exit_type_error(
+    ctx: &mut LoweringContext<'_, '_>,
+    exit_name: &str,
+    actual: &str,
+    span: Span,
+) -> LoweredValue {
+    throw_strict_exit_type_error_expr(
+        ctx,
+        exit_name,
+        Expr::new(ExprKind::StringLiteral(actual.to_string()), span),
+        span,
+    )
+}
+
+/// Emits one catchable `TypeError` whose status name may be selected at runtime.
+fn throw_strict_exit_type_error_expr(
+    ctx: &mut LoweringContext<'_, '_>,
+    exit_name: &str,
+    actual: Expr,
+    span: Span,
+) -> LoweredValue {
+    let message = crate::synthetic_class::e_concat_all(vec![
+        Expr::new(
+            ExprKind::StringLiteral(format!(
+                "{exit_name}(): Argument #1 ($status) must be of type string|int, "
+            )),
+            span,
+        ),
+        actual,
+        Expr::new(ExprKind::StringLiteral(" given".into()), span),
+    ]);
+    let exception = Expr::new(
+        ExprKind::NewObject {
+            class_name: Name::unqualified("TypeError"),
+            args: vec![message],
+        },
+        span,
+    );
+    let throw = Expr::new(ExprKind::Throw(Box::new(exception)), span);
+    lower_expr(ctx, &throw)
 }
 
 /// Returns whether a typed builtin backend consumes one by-reference operand owner.
