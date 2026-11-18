@@ -15,7 +15,13 @@
 //! - Callers must save their live state first: the allocator clobbers caller-saved
 //!   registers on both targets.
 
-use crate::{abi, Emitter, Arch, layout};
+use crate::layout::STRING_HEAP_KIND;
+use crate::{abi, Arch, Emitter, HeapKind};
+
+/// Emits an inline owned-string allocation with the byte count supplied by the caller.
+pub fn emit_allocate_owned_string(emitter: &mut impl Emitter) {
+    crate::heap_alloc::emit_fresh_with_kind(emitter, HeapKind::new(STRING_HEAP_KIND));
+}
 
 /// Emits the direct owned-string allocation helper for the active target.
 pub fn emit_str_new_owned(emitter: &mut impl Emitter) {
@@ -38,9 +44,7 @@ fn emit_str_new_owned_aarch64(emitter: &mut impl Emitter) {
     emitter.instruction("b.hi __rt_str_new_owned_too_large");                   // report a PHP-style allocation overflow instead of returning truncated storage
     emitter.instruction("stp x29, x30, [sp, #-16]!");                           // preserve the frame pointer and return address across the allocator call
     emitter.instruction("mov x29, sp");                                         // establish the allocation helper frame pointer
-    emitter.instruction("bl __rt_heap_alloc");                                  // allocate the exact owned payload on the managed heap
-    emitter.instruction("mov x9, #1");                                          // heap kind 1 = owned elephc string
-    emitter.instruction("str x9, [x0, #-8]");                                   // stamp the fresh allocation as an owned string before returning it
+    emit_allocate_owned_string(emitter);
     emitter.instruction("ldp x29, x30, [sp], #16");                             // restore the frame pointer and return address after the allocator call
     emitter.instruction("ret");                                                 // return the uninitialized owned payload to the caller
 
@@ -60,9 +64,7 @@ fn emit_str_new_owned_x86_64(emitter: &mut impl Emitter) {
     emitter.instruction("ja __rt_str_new_owned_too_large_x86");                 // report a PHP-style allocation overflow instead of returning truncated storage
     emitter.instruction("push rbp");                                            // preserve the caller frame pointer and realign the stack for the allocator call
     emitter.instruction("mov rbp, rsp");                                        // establish the allocation helper frame pointer
-    emitter.instruction("call __rt_heap_alloc");                                // allocate the exact owned payload on the managed heap
-    emitter.instruction(&format!("mov r10, 0x{:x}", layout::x86_64_heap_kind_word(1))); // materialize the owned-string kind word with the heap magic marker
-    emitter.instruction("mov QWORD PTR [rax - 8], r10");                        // stamp the fresh allocation as an owned string before returning it
+    emit_allocate_owned_string(emitter);
     emitter.instruction("pop rbp");                                             // restore the caller frame pointer after the allocator call
     emitter.instruction("ret");                                                 // return the uninitialized owned payload to the caller
 

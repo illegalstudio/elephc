@@ -1,23 +1,25 @@
 //! Purpose:
-//! Reads and fills the inherited previous slot in native Throwable storage.
+//! Fills the inherited previous slot in native Throwable storage.
 //!
 //! Called from:
-//! - Native cleanup exception chaining and Throwable::getPrevious lowering.
+//! - Native cleanup exception chaining after the compiler selects the insertion slot.
 //!
 //! Key details:
 //! - Heap kind 6 stores a raw previous object; ordinary subclasses store a boxed nullable value.
 //! - Both layouts preserve the inherited slot at offset 40; insertion consumes the previous owner.
 
-use crate::codegen_support::{emit::Emitter, platform::Arch};
+use crate::{Arch, Emitter};
 
-/// Emits borrowed previous reads and ownership-transferring insertion for both native layouts.
-pub(super) fn emit(emitter: &mut Emitter) {
-    if emitter.target.arch == Arch::AArch64 { aarch64(emitter); }
-    else { x86_64(emitter); }
+/// Emits a transfer of one previous owner into an empty compact or boxed previous slot.
+pub fn emit_append_previous(emitter: &mut impl Emitter) {
+    match emitter.arch() {
+        Arch::AArch64 => aarch64(emitter),
+        Arch::X86_64 => x86_64(emitter),
+    }
 }
 
 /// Adapts compact and ordinary Throwable payloads using AArch64 native arguments.
-fn aarch64(emitter: &mut Emitter) {
+fn aarch64(emitter: &mut impl Emitter) {
     emitter.label_global("__rt_throwable_append_previous");
     emitter.instruction("ldrb w9, [x0, #-8]");                                  // distinguish compact raw ownership from a boxed property
     emitter.instruction("cmp w9, #6");                                          // check whether insertion can transfer the raw previous pointer
@@ -51,7 +53,7 @@ fn aarch64(emitter: &mut Emitter) {
 }
 
 /// Applies the same previous-slot representation and owner-transfer rules under SysV.
-fn x86_64(emitter: &mut Emitter) {
+fn x86_64(emitter: &mut impl Emitter) {
     emitter.label_global("__rt_throwable_append_previous");
     emitter.instruction("cmp BYTE PTR [rdi - 8], 6");                           // distinguish compact raw previous storage
     emitter.instruction("je __rt_throwable_append_previous_raw");               // transfer directly when no nullable cell is needed
@@ -64,7 +66,7 @@ fn x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov QWORD PTR [rsp + 16], r10");                       // retain the replaced cell until new storage is published
     emitter.instruction("mov rax, 24");                                         // reserve a full three-word Mixed cell
     emitter.instruction("call __rt_heap_alloc");                                // allocate independent property storage
-    emitter.instruction(&format!("mov r10, 0x{:x}", crate::codegen_support::sentinels::x86_64_heap_kind_word(5))); // materialize the canonical Mixed kind and allocator marker
+    emitter.instruction(&format!("mov r10, 0x{:x}", crate::layout::x86_64_heap_kind_word(5))); // materialize the canonical Mixed kind and allocator marker
     emitter.instruction("mov QWORD PTR [rax - 8], r10");                        // stamp the Mixed cell header
     emitter.instruction("mov QWORD PTR [rax], 6");                              // identify the transferred child as an object
     emitter.instruction("mov r10, QWORD PTR [rsp + 8]");                        // recover the consumed previous owner

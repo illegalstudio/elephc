@@ -9,6 +9,7 @@
 //! - Declared slots and their visibility gates always take precedence over this fallback.
 //! - Hash setters consume a retained cell owner and publish COW or growth replacements.
 
+use elephc_memoir::layout::object_declared_slot_offset;
 use super::{abi, Arch, Emitter, Module};
 
 pub(super) const SLOT_HELPER: &str = "__elephc_eval_property_hash_slot";
@@ -68,7 +69,7 @@ pub(super) fn emit_property_hash_slot_helper(module: &Module, emitter: &mut Emit
                 }
             }
         }
-        let offset = 8 + info.properties.len() * 16;
+        let offset = object_declared_slot_offset(info.properties.len());
         match module.target.arch {
             Arch::AArch64 => {
                 abi::emit_load_int_immediate(emitter, "x10", offset as i64);

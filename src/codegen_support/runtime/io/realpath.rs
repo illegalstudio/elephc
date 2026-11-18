@@ -8,6 +8,7 @@
 //! Key details:
 //! - I/O helpers bridge PHP strings, resources, descriptors, and libc calls while returning runtime arrays or pointer/length strings.
 
+use elephc_memoir::strings::str_new_owned::emit_allocate_owned_string;
 use crate::codegen_support::{emit::Emitter, platform::Arch};
 
 
@@ -43,9 +44,7 @@ pub fn emit_realpath(emitter: &mut Emitter) {
 
     // -- allocate a 4096-byte owned buffer for the canonical path --
     emitter.instruction("mov x0, #4096");                                       // PATH_MAX-style buffer for the canonical result
-    emitter.instruction("bl __rt_heap_alloc");                                  // allocate owned heap storage; result in x0
-    emitter.instruction("mov x9, #1");                                          // heap-kind 1 = persisted elephc string
-    emitter.instruction("str x9, [x0, #-8]");                                   // tag the buffer as an owned string in the uniform heap header
+    emit_allocate_owned_string(emitter);
     emitter.instruction("str x0, [sp, #0]");                                    // preserve the owned buffer pointer across the libc call
 
     // -- call libc realpath(c_path, buf) --
@@ -102,9 +101,7 @@ fn emit_realpath_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov QWORD PTR [rbp - 8], rax");                        // preserve the C path pointer across the heap_alloc() call
 
     emitter.instruction("mov rax, 4096");                                       // request a 4096-byte owned buffer for the canonical path
-    emitter.instruction("call __rt_heap_alloc");                                // allocate owned heap storage; pointer returned in rax
-    emitter.instruction(&format!("mov r10, 0x{:x}", crate::codegen_support::sentinels::x86_64_heap_kind_word(1))); // materialize the owned-string heap kind word with the x86_64 heap marker
-    emitter.instruction("mov QWORD PTR [rax - 8], r10");                        // stamp the allocated buffer as a persisted elephc string in the uniform heap header
+    emit_allocate_owned_string(emitter);
     emitter.instruction("mov QWORD PTR [rbp - 16], rax");                       // preserve the owned buffer pointer across the libc realpath() call
 
     emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // first argument: C path pointer

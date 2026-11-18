@@ -9,6 +9,7 @@
 //! - Class and attribute lookup follows PHP's case-insensitive symbol rules.
 //! - Captured literal attribute arguments are boxed as owned Mixed cells.
 
+use elephc_memoir::layout::object_declared_slot_offset;
 use crate::codegen::abi;
 use crate::codegen::platform::Arch;
 use crate::codegen::{CodegenIrError, Result};
@@ -231,7 +232,7 @@ fn emit_reflection_attribute_object(
     ctx: &mut FunctionContext<'_>,
     layout: &ReflectionAttributeLayout,
 ) {
-    let payload_size = 8 + layout.property_count * 16;
+    let payload_size = object_declared_slot_offset(layout.property_count);
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
             ctx.emitter
@@ -251,11 +252,9 @@ fn emit_reflection_attribute_object(
         }
     }
     let object_reg = abi::int_result_reg(ctx.emitter);
-    for index in 0..layout.property_count {
-        let offset = 8 + index * 16;
-        abi::emit_store_zero_to_address(ctx.emitter, object_reg, offset);
-        abi::emit_store_zero_to_address(ctx.emitter, object_reg, offset + 8);
-    }
+    elephc_memoir::values::object_storage::emit_zero_declared_slots(
+        ctx.emitter, object_reg, layout.property_count,
+    );
 }
 
 /// Stores the reflected attribute name into the object currently parked on the stack.

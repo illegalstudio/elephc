@@ -8,6 +8,7 @@
 //! Key details:
 //! - I/O helpers bridge PHP strings, resources, descriptors, and libc calls while returning runtime arrays or pointer/length strings.
 
+use elephc_memoir::strings::str_new_owned::emit_allocate_owned_string;
 use crate::codegen_support::{emit::Emitter, platform::Arch};
 use crate::codegen_support::abi;
 
@@ -83,9 +84,7 @@ pub fn emit_file_get_contents(emitter: &mut Emitter) {
 
     // -- allocate heap buffer for file contents --
     emitter.instruction("ldr x0, [sp, #8]");                                    // load file size as allocation request
-    emitter.instruction("bl __rt_heap_alloc");                                  // allocate buffer, x0=pointer
-    emitter.instruction("mov x9, #1");                                          // heap kind 1 = persisted elephc string
-    emitter.instruction("str x9, [x0, #-8]");                                   // store string kind in the uniform heap header
+    emit_allocate_owned_string(emitter);
     emitter.instruction(&format!("str x0, [sp, #{}]", heap_off));               // save heap buffer pointer
 
     // -- read entire file into buffer --
@@ -164,9 +163,7 @@ fn emit_file_get_contents_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction(&format!("mov QWORD PTR [rbp - {}], rax", fd_off));     // preserve the opened file descriptor across the later heap allocation and read() call
 
     emitter.instruction(&format!("mov rax, QWORD PTR [rbp - {}]", size_slot_off)); // reload the requested file size before allocating the owned destination buffer
-    emitter.instruction("call __rt_heap_alloc");                                // allocate owned heap storage for the file payload through the shared x86_64 heap wrapper
-    emitter.instruction(&format!("mov r10, 0x{:x}", crate::codegen_support::sentinels::x86_64_heap_kind_word(1))); // materialize the owned-string heap kind word with the x86_64 heap marker
-    emitter.instruction("mov QWORD PTR [rax - 8], r10");                        // stamp the allocated buffer as a persisted elephc string in the uniform heap header
+    emit_allocate_owned_string(emitter);
     emitter.instruction(&format!("mov QWORD PTR [rbp - {}], rax", heap_off));   // preserve the owned destination buffer pointer across the libc read() and close() calls
 
     emitter.instruction(&format!("mov rdi, QWORD PTR [rbp - {}]", fd_off));     // pass the opened file descriptor as the first libc read() argument

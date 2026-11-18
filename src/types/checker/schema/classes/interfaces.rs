@@ -8,6 +8,7 @@
 //! Key details:
 //! - Class metadata is shared globally after construction, so validation must reject inconsistent inheritance early.
 
+use elephc_memoir::layout::object_declared_slot_offset;
 use std::collections::{HashMap, HashSet};
 
 use crate::errors::CompileError;
@@ -900,7 +901,7 @@ fn defer_interface_property_contract(
         state.prop_types.push((property_name.to_string(), ty));
         state
             .property_offsets
-            .insert(property_name.to_string(), 8 + slot_index * 16);
+            .insert(property_name.to_string(), object_declared_slot_offset(slot_index));
         state.defaults.push(None);
     }
     state

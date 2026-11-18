@@ -28,6 +28,7 @@
 //! - Growth publishes the new output base into its stack slot before returning, so
 //!   the throw path releases that block rather than a register `setjmp` restored.
 
+use elephc_memoir::strings::str_new_owned::emit_allocate_owned_string;
 use crate::codegen_support::{abi, emit::Emitter, platform::Arch};
 
 /// Emits the target's in-band null string pair into the given pointer/length registers.
@@ -144,9 +145,7 @@ pub(crate) fn emit_preg_replace_callback(emitter: &mut Emitter) {
     emitter.instruction("b.cc __rt_preg_replace_callback_subject_len_ok");      // a representable length continues to allocation
     emitter.instruction("b __rt_alloc_overflow");                               // a wrapped length can never be terminated
     emitter.label("__rt_preg_replace_callback_subject_len_ok");
-    emitter.instruction("bl __rt_heap_alloc");                                  // allocate a private subject copy callbacks cannot replace
-    emitter.instruction("mov x9, #1");                                          // heap kind 1 = owned string payload
-    emitter.instruction("str x9, [x0, #-8]");                                   // stamp the private copy so the epilogue can release it
+    emit_allocate_owned_string(emitter);
     emitter.instruction(&format!("str x0, [sp, #{}]", subject_cstr_off));       // save the private null-terminated subject pointer
     emitter.instruction("mov x9, x0");                                          // destination cursor
     emitter.instruction(&format!("ldr x10, [sp, #{}]", subject_ptr_off));       // source byte pointer
@@ -168,9 +167,7 @@ pub(crate) fn emit_preg_replace_callback(emitter: &mut Emitter) {
     // -- allocate a dedicated output buffer that callback scratch cannot clobber --
     emitter.instruction("mov x19, #4096");                                      // initial output capacity
     emitter.instruction("mov x0, x19");                                         // request the initial output block
-    emitter.instruction("bl __rt_heap_alloc");                                  // allocate owned output storage
-    emitter.instruction("mov x9, #1");                                          // heap kind 1 = owned string payload
-    emitter.instruction("str x9, [x0, #-8]");                                   // stamp the output block so growth can release it
+    emit_allocate_owned_string(emitter);
     emitter.instruction("mov x20, x0");                                         // output write cursor
     emitter.instruction("mov x19, x0");                                         // output base pointer
     emitter.instruction("mov x21, #4096");                                      // output capacity in bytes
@@ -535,9 +532,7 @@ fn emit_preg_replace_callback_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("jnc __rt_preg_replace_callback_subject_len_ok_linux_x86_64"); // a representable length continues to allocation
     emitter.instruction("jmp __rt_alloc_overflow");                             // a wrapped length can never be terminated
     emitter.label("__rt_preg_replace_callback_subject_len_ok_linux_x86_64");
-    emitter.instruction("call __rt_heap_alloc");                                // allocate a private subject copy callbacks cannot replace
-    emitter.instruction(&format!("mov r10, 0x{:x}", crate::codegen_support::sentinels::x86_64_heap_kind_word(1))); // materialize the owned-string kind word
-    emitter.instruction("mov QWORD PTR [rax - 8], r10");                        // stamp the private copy so the epilogue can release it
+    emit_allocate_owned_string(emitter);
     emitter.instruction(&format!("mov QWORD PTR [rsp + {}], rax", subject_cstr_off)); // save the private null-terminated subject pointer
     emitter.instruction("mov rdi, rax");                                        // destination cursor
     emitter.instruction(&format!("mov rsi, QWORD PTR [rsp + {}]", subject_ptr_off)); // source byte pointer
@@ -558,9 +553,7 @@ fn emit_preg_replace_callback_linux_x86_64(emitter: &mut Emitter) {
 
     // -- allocate a dedicated output buffer that callback scratch cannot clobber --
     emitter.instruction("mov rax, 4096");                                       // initial output capacity
-    emitter.instruction("call __rt_heap_alloc");                                // allocate owned output storage
-    emitter.instruction(&format!("mov r10, 0x{:x}", crate::codegen_support::sentinels::x86_64_heap_kind_word(1))); // materialize the owned-string kind word
-    emitter.instruction("mov QWORD PTR [rax - 8], r10");                        // stamp the output block so growth can release it
+    emit_allocate_owned_string(emitter);
     emitter.instruction("mov r12, rax");                                        // output base pointer
     emitter.instruction("mov r13, rax");                                        // output write cursor
     emitter.instruction("mov r14, 4096");                                       // output capacity in bytes

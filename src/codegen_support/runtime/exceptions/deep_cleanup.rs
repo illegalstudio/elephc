@@ -18,7 +18,7 @@ pub(super) fn emit(emitter: &mut Emitter) {
     super::emit_protected(emitter, "__rt_cleanup_call_protected", invoke_body);
     elephc_memoir::cleanup::emit_deep_cleanup_callback(emitter);
     super::cleanup_previous::emit(emitter);
-    super::previous_storage::emit(emitter);
+    elephc_memoir::values::throwable_previous::emit_append_previous(emitter);
 }
 
 /// Calls the retained unary function with both supported native and C value conventions.

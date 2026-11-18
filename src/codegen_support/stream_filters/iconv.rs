@@ -27,6 +27,7 @@
 //!   after, so it always converts under its own options and needs none of the
 //!   write filter's `iconvctl()` restore (#811).
 
+use elephc_memoir::strings::str_new_owned::emit_allocate_owned_string;
 use crate::codegen_support::abi;
 use crate::codegen_support::emit::Emitter;
 
@@ -87,9 +88,7 @@ pub(crate) fn emit_read_arm64<F>(
     emitter.label(&sized);
     emitter.instruction("str x9, [sp, #24]");                                   // save the output buffer capacity
     emitter.instruction("mov x0, x9");                                          // buffer size into the allocator argument
-    emitter.instruction("bl __rt_heap_alloc");                                  // allocate the converted-data buffer
-    emitter.instruction("mov x9, #1");                                          // heap kind 1 = persisted elephc string
-    emitter.instruction("str x9, [x0, #-8]");                                   // stamp the buffer header
+    emit_allocate_owned_string(emitter);
     emitter.instruction("str x0, [sp, #16]");                                   // save the output buffer pointer
 
     // -- iconv_open(tocode, fromcode): a -1 result leaves the stream unconverted --
@@ -220,12 +219,7 @@ pub(crate) fn emit_read_x86_64<F>(
     emitter.label(&sized);
     emitter.instruction("mov QWORD PTR [rsp + 24], r9");                        // save the output buffer capacity
     emitter.instruction("mov rax, r9");                                         // buffer size into the allocator argument
-    emitter.instruction("call __rt_heap_alloc");                                // allocate the converted-data buffer
-    emitter.instruction(&format!(                                               // owned-string heap-kind word
-        "mov r10, 0x{:x}",
-        crate::codegen_support::sentinels::x86_64_heap_kind_word(1)
-    ));
-    emitter.instruction("mov QWORD PTR [rax - 8], r10");                        // stamp the buffer header
+    emit_allocate_owned_string(emitter);
     emitter.instruction("mov QWORD PTR [rsp + 16], rax");                       // save the output buffer pointer
 
     // -- iconv_open(tocode, fromcode): a -1 result leaves the stream unconverted --

@@ -12,6 +12,7 @@
 //!   properties when the active eval class scope satisfies PHP visibility.
 //! - Setters borrow their boxed input; property hashes acquire independent references.
 
+use elephc_memoir::layout::object_declared_slot_offset;
 use std::collections::BTreeMap;
 
 use crate::codegen::data_section::DataSection;
@@ -169,7 +170,7 @@ fn collect_class_property_slots(
             allowed_scopes: visibility_scope_names(module, &declaring_class, &visibility),
             property: property.clone(),
             visibility,
-            offset: 8 + index * 16,
+            offset: object_declared_slot_offset(index),
             ty: super::eval_argument_helpers::bridge_storage_type(ty),
             is_declared: class_info.property_slot_is_declared(index, property),
             is_reference: class_info.property_slot_is_reference(index, property),

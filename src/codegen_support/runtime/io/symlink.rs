@@ -12,6 +12,7 @@
 //!   (`string|false`).
 //! - `__rt_linkinfo` returns the `st_dev` field or PHP's `-1` failure value.
 
+use elephc_memoir::strings::str_new_owned::emit_allocate_owned_string;
 use crate::codegen_support::{emit::Emitter, platform::Arch};
 
 
@@ -98,9 +99,7 @@ pub fn emit_symlink(emitter: &mut Emitter) {
     emitter.instruction("str x0, [sp, #0]");                                    // save C path pointer
 
     emitter.instruction("mov x0, #4096");                                       // PATH_MAX-style buffer for the link target
-    emitter.instruction("bl __rt_heap_alloc");                                  // allocate owned heap storage; result in x0
-    emitter.instruction("mov x9, #1");                                          // heap-kind 1 = persisted elephc string
-    emitter.instruction("str x9, [x0, #-8]");                                   // tag the buffer in the uniform heap header
+    emit_allocate_owned_string(emitter);
     emitter.instruction("str x0, [sp, #8]");                                    // save buffer pointer
 
     emitter.instruction("ldr x0, [sp, #0]");                                    // first arg: path
@@ -233,9 +232,7 @@ fn emit_symlink_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov QWORD PTR [rbp - 8], rax");                        // save C path
 
     emitter.instruction("mov rax, 4096");                                       // request 4 KiB owned buffer
-    emitter.instruction("call __rt_heap_alloc");                                // allocate owned heap storage in rax
-    emitter.instruction(&format!("mov r10, 0x{:x}", crate::codegen_support::sentinels::x86_64_heap_kind_word(1))); // owned-string heap kind word
-    emitter.instruction("mov QWORD PTR [rax - 8], r10");                        // tag the buffer in the uniform heap header
+    emit_allocate_owned_string(emitter);
     emitter.instruction("mov QWORD PTR [rbp - 16], rax");                       // save buffer pointer
 
     emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // first libc readlink arg = path

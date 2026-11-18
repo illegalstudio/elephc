@@ -13,6 +13,7 @@
 //!   source fd stay positioned at end-of-file — fread returns empty bytes,
 //!   matching how the `zlib.inflate` filter degrades on broken input.
 
+use elephc_memoir::strings::str_new_owned::emit_allocate_owned_string;
 use crate::codegen_support::abi;
 use crate::codegen_support::emit::Emitter;
 
@@ -74,9 +75,7 @@ where
     emitter.instruction("csel x9, x9, x10, gt");                                // max(256x, 64KiB)
     emitter.instruction("str w9, [sp, #48]");                                   // destLen = capacity (u32)
     emitter.instruction("mov x0, x9");                                          // allocation size for decompressed output
-    emitter.instruction("bl __rt_heap_alloc");                                  // allocate output buffer
-    emitter.instruction("mov x9, #1");                                          // heap kind 1 = persisted string
-    emitter.instruction("str x9, [x0, #-8]");                                   // stamp the heap kind for the output buffer
+    emit_allocate_owned_string(emitter);
     emitter.instruction("str x0, [sp, #16]");                                   // save output buffer ptr
 
     // BZ2_bzBuffToBuffDecompress(dest, &destLen, source, sourceLen, 0, 0).
@@ -185,11 +184,7 @@ where
     emitter.instruction("cmovl rax, rcx");                                      // max(256x, 64KiB)
     emitter.instruction("mov DWORD PTR [rbp - 48], eax");                       // destLen u32 = capacity
     emitter.instruction("mov rdi, rax");                                        // allocation size for decompressed output
-    emitter.instruction("call __rt_heap_alloc");                                // allocate output buffer
-    emitter.instruction(
-        &format!("mov r10, 0x{:x}", crate::codegen_support::sentinels::x86_64_heap_kind_word(1))
-    );                                                                          // materialize the owned string marker
-    emitter.instruction("mov QWORD PTR [rax - 8], r10");                        // mark the temporary buffer for safe release
+    emit_allocate_owned_string(emitter);
     emitter.instruction("mov QWORD PTR [rbp - 24], rax");                       // save output buffer ptr
 
     // BZ2_bzBuffToBuffDecompress(dest, &destLen, source, sourceLen, 0, 0).

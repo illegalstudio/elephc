@@ -14,6 +14,7 @@
 //!   unset and reference overwrite cannot invalidate private metadata slots.
 //! - The helper retains supplied array payloads for object ownership.
 
+use elephc_memoir::layout::object_declared_slot_offset;
 use crate::codegen::abi;
 use crate::codegen::emit::Emitter;
 use crate::codegen::platform::Arch;
@@ -929,7 +930,7 @@ fn emit_alloc_reflection_owner_object_aarch64(
     emitter: &mut Emitter,
     layout: &ReflectionOwnerLayout,
 ) {
-    let payload_size = 8 + layout.property_count * 16;
+    let payload_size = object_declared_slot_offset(layout.property_count);
     emitter.instruction(&format!("mov x0, #{}", payload_size));                 // request Reflection owner object payload storage
     elephc_memoir::values::object_storage::emit_allocate_object(emitter);
     emitter.instruction(&format!("mov x10, #{}", layout.class_id));             // materialize the Reflection owner class id
@@ -942,7 +943,7 @@ fn emit_alloc_reflection_owner_object_x86_64(
     emitter: &mut Emitter,
     layout: &ReflectionOwnerLayout,
 ) {
-    let payload_size = 8 + layout.property_count * 16;
+    let payload_size = object_declared_slot_offset(layout.property_count);
     emitter.instruction(&format!("mov rax, {}", payload_size));                 // request Reflection owner object payload storage
     elephc_memoir::values::object_storage::emit_allocate_object(emitter);
     emitter.instruction(&format!("mov r10, {}", layout.class_id));              // materialize the Reflection owner class id

@@ -10,6 +10,7 @@
 //!   still carries a strict ancestor's private slot under its plain name, which php resolves to a
 //!   DYNAMIC property everywhere except inside the class that declared it.
 
+use elephc_memoir::layout::object_declared_slot_offset;
 use super::*;
 
 use crate::types::PropertyNameResolution;
@@ -98,7 +99,7 @@ pub(super) fn resolve_physical_property_slot(
         class_name: class_name.clone(),
         property: property.clone(),
         php_type: php_type.clone(),
-        offset: 8 + index * 16,
+        offset: object_declared_slot_offset(index),
         is_declared: info.property_slot_is_declared(index, property),
         is_packed: false,
         width: None,
@@ -1164,7 +1165,7 @@ fn resolve_scope_private_property_slot(
         class_name: scope_class.to_string(),
         property: property.to_string(),
         php_type,
-        offset: 8 + index * 16,
+        offset: object_declared_slot_offset(index),
         is_declared: class_info.property_slot_is_declared(index, slot_property),
         is_packed: false,
         width: None,
@@ -1279,7 +1280,7 @@ pub(super) fn resolve_property_slot_for_class(
     let php_type = runtime_property_type_override(ctx, normalized, property)
         .unwrap_or_else(|| php_type.clone());
     ensure_property_type_supported(&php_type, inst)?;
-    let offset = 8 + index * 16;
+    let offset = object_declared_slot_offset(index);
     Ok(PropertySlot {
         class_name: normalized.to_string(),
         property: property.to_string(),

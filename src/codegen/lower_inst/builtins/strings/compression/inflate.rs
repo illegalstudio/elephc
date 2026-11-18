@@ -8,6 +8,7 @@
 //! - Output storage doubles without restarting zlib or dropping decoded bytes.
 //! - Replaced buffers and failed results are released before returning.
 
+use elephc_memoir::strings::str_new_owned::emit_allocate_owned_string;
 use super::*;
 
 /// Emits AArch64 `gzinflate()` inline raw-inflate calls.
@@ -31,9 +32,7 @@ pub(super) fn lower_gzinflate_aarch64(
     ctx.emitter.instruction("csel x9, x9, x10, gt");                            // choose the larger output buffer size
     ctx.emitter.instruction("str x9, [sp, #144]");                              // save the output capacity
     ctx.emitter.instruction("mov x0, x9");                                      // pass the output capacity to the heap allocator
-    ctx.emitter.instruction("bl __rt_heap_alloc");                              // allocate the decompressed-data buffer
-    ctx.emitter.instruction("mov x9, #1");                                      // heap kind 1 = owned string
-    ctx.emitter.instruction("str x9, [x0, #-8]");                               // stamp the output buffer as a heap string
+    emit_allocate_owned_string(ctx.emitter);
     ctx.emitter.instruction("str x0, [sp, #128]");                              // save the destination buffer pointer
 
     // -- zero z_stream before initializing its allocator callbacks --
@@ -86,9 +85,7 @@ pub(super) fn lower_gzinflate_aarch64(
     ctx.emitter.instruction(&format!("cbnz x10, {}", finish));                  // stop if another doubling cannot be represented
     ctx.emitter.instruction("lsl x0, x9, #1");                                  // double the output capacity
     ctx.emitter.instruction("str x0, [sp, #144]");                              // save the expanded output capacity
-    ctx.emitter.instruction("bl __rt_heap_alloc");                              // allocate replacement storage before releasing the old buffer
-    ctx.emitter.instruction("mov x9, #1");                                      // heap kind 1 is an owned string
-    ctx.emitter.instruction("str x9, [x0, #-8]");                               // mark the replacement as releasable string storage
+    emit_allocate_owned_string(ctx.emitter);
     ctx.emitter.instruction("str x0, [sp, #160]");                              // keep the replacement pointer across the copy
     ctx.emitter.instruction("ldr x1, [sp, #128]");                              // copy from the old output buffer
     ctx.emitter.instruction("ldr x2, [sp, #152]");                              // preserve every byte zlib already produced
@@ -149,11 +146,7 @@ pub(super) fn lower_gzinflate_x86_64(
     ctx.emitter.label(&sized);
     ctx.emitter.instruction("mov QWORD PTR [rsp + 144], r9");                   // save the output capacity
     ctx.emitter.instruction("mov rax, r9");                                     // pass the output capacity to the heap allocator
-    ctx.emitter.instruction("call __rt_heap_alloc");                            // allocate the decompressed-data buffer
-    ctx.emitter.instruction(
-        &format!("mov r10, 0x{:x}", crate::codegen_support::sentinels::x86_64_heap_kind_word(1))
-    );                                                                          // materialize the x86_64 string heap kind word
-    ctx.emitter.instruction("mov QWORD PTR [rax - 8], r10");                    // stamp the output buffer as a heap string
+    emit_allocate_owned_string(ctx.emitter);
     ctx.emitter.instruction("mov QWORD PTR [rsp + 128], rax");                  // save the destination buffer pointer
 
     // -- zero z_stream before initializing its allocator callbacks --
@@ -207,11 +200,7 @@ pub(super) fn lower_gzinflate_x86_64(
     ctx.emitter.instruction(&format!("jnz {}", finish));                        // stop if another doubling cannot be represented
     ctx.emitter.instruction("shl rax, 1");                                      // double the output capacity
     ctx.emitter.instruction("mov QWORD PTR [rsp + 144], rax");                  // save the expanded output capacity
-    ctx.emitter.instruction("call __rt_heap_alloc");                            // allocate replacement storage before releasing the old buffer
-    ctx.emitter.instruction(
-        &format!("mov r10, 0x{:x}", crate::codegen_support::sentinels::x86_64_heap_kind_word(1))
-    );                                                                          // materialize the owned string marker
-    ctx.emitter.instruction("mov QWORD PTR [rax - 8], r10");                    // mark the replacement as releasable string storage
+    emit_allocate_owned_string(ctx.emitter);
     ctx.emitter.instruction("mov QWORD PTR [rsp + 160], rax");                  // keep the replacement pointer across the copy
     ctx.emitter.instruction("mov rdi, rax");                                    // destination is the replacement output buffer
     ctx.emitter.instruction("mov rsi, QWORD PTR [rsp + 128]");                  // copy from the old output buffer

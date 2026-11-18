@@ -13,6 +13,7 @@
 //! - Numeric pointer builtins do not allocate, box, retain, or release PHP runtime values.
 //! - String pointer builtins delegate allocation/copy semantics to the existing runtime helpers.
 
+use elephc_memoir::layout::object_declared_slot_offset;
 use crate::codegen::abi;
 use crate::codegen::platform::Arch;
 use crate::codegen::{CodegenIrError, Result};
@@ -648,7 +649,7 @@ fn pointer_target_size(ctx: &FunctionContext<'_>, type_name: &str) -> Option<usi
             .get(class_name)
             .map(|info| {
                 let dynamic_slot = if info.has_property_hash_storage() { 8 } else { 0 };
-                8 + info.properties.len() * 16 + dynamic_slot
+                object_declared_slot_offset(info.properties.len()) + dynamic_slot
             })
             .or_else(|| {
                 ctx.module

@@ -24,6 +24,10 @@ use crate::codegen_support::data_section::{DataSection, DataWord};
 use crate::codegen_support::emit::Emitter;
 use crate::parser::ast::{Expr, ExprKind};
 use crate::types::{FunctionSig, PhpType};
+pub(crate) use elephc_memoir::callables::storage::{
+    HEADER_BYTES as CALLABLE_DESC_STATIC_SIZE, emit_copy_descriptor_header_to_runtime,
+    emit_copy_static_descriptor_to_runtime, emit_initialize_runtime_descriptor,
+};
 
 pub(crate) const CALLABLE_DESC_KIND_CLOSURE: u64 = CallableDescriptorShape::Closure as u64;
 pub(crate) const CALLABLE_DESC_KIND_FIRST_CLASS: u64 =
@@ -58,7 +62,6 @@ pub(crate) const CALLABLE_DESC_ENVIRONMENT_OFFSET: usize = 40;
 pub(crate) const CALLABLE_DESC_INVOCATION_OFFSET: usize = 48;
 #[allow(dead_code)]
 pub(crate) const CALLABLE_DESC_INVOKER_OFFSET: usize = 56;
-pub(crate) const CALLABLE_DESC_STATIC_SIZE: usize = 64;
 pub(crate) const CALLABLE_DESC_RUNTIME_CAPTURE_OFFSET: usize = CALLABLE_DESC_STATIC_SIZE;
 
 const CALLABLE_DESC_VARIADIC_NONE: u64 = u64::MAX;
@@ -308,33 +311,6 @@ pub(crate) fn emit_release_current_descriptor(emitter: &mut Emitter) {
     abi::emit_call_label(emitter, "__rt_callable_descriptor_release");
 }
 
-/// Copies the fixed static descriptor header into a runtime descriptor allocation.
-pub(crate) fn emit_copy_static_descriptor_to_runtime(
-    emitter: &mut Emitter,
-    dest_reg: &str,
-    descriptor_label: &str,
-) {
-    let source_reg = abi::symbol_scratch_reg(emitter);
-    abi::emit_symbol_address(emitter, source_reg, descriptor_label);
-    emit_copy_descriptor_header_to_runtime(emitter, dest_reg, source_reg);
-}
-
-/// Copies the fixed header of the descriptor in `source_reg` into a runtime descriptor allocation.
-///
-/// `source_reg` must differ from the secondary scratch register, which carries each word.
-pub(crate) fn emit_copy_descriptor_header_to_runtime(
-    emitter: &mut Emitter,
-    dest_reg: &str,
-    source_reg: &str,
-) {
-    let word_reg = abi::secondary_scratch_reg(emitter);
-    for offset in (0..CALLABLE_DESC_STATIC_SIZE).step_by(8) {
-        abi::emit_load_from_address(emitter, word_reg, source_reg, offset);
-        abi::emit_store_to_address(emitter, word_reg, dest_reg, offset);
-    }
-    emit_initialize_runtime_descriptor(emitter, dest_reg);
-}
-
 /// Branches to `label` when `descriptor_reg` holds no descriptor: a zero pointer or the in-band
 /// null sentinel a missed read (`$callbacks[$missing]`) leaves in a `callable` slot. Checks that
 /// read the descriptor's words must take this branch first. Clobbers one scratch register.
@@ -415,40 +391,6 @@ pub(crate) fn emit_runtime_copy_with_origin(emitter: &mut Emitter, origin: u64) 
     }
     emit_initialize_runtime_descriptor(emitter, result);
     emit_mark_runtime_descriptor_origin(emitter, result, origin);
-}
-
-/// Clears capture storage before publishing a fresh allocation as a managed callable node.
-pub(crate) fn emit_initialize_runtime_descriptor(emitter: &mut Emitter, dest: &str) {
-    use crate::codegen_support::{platform::Arch, sentinels::{CALLABLE_HEAP_KIND, x86_64_heap_kind_word}};
-    // -- recycled captures must be null before any later allocation or ownership cleanup --
-    match emitter.target.arch {
-        Arch::AArch64 => {
-            emitter.instruction(&format!("ldr w9, [{dest}, #-16]"));            // bound initialization by the allocator's actual payload capacity
-            emitter.instruction("mov x10, #64");                                // preserve the copied fixed descriptor header
-            emitter.label("1");
-            emitter.instruction("cmp x10, x9");                                 // stop before crossing the allocated descriptor payload
-            emitter.instruction("b.hs 2f");                                     // descriptors without captures need no slot initialization
-            emitter.instruction(&format!("str xzr, [{dest}, x10]"));            // leave every not-yet-written capture null for nested cleanup
-            emitter.instruction("add x10, x10, #8");                            // initialize the next capture word, including metadata halves
-            emitter.instruction("b 1b");                                        // finish initialization before publishing the graph kind
-            emitter.label("2");
-            emitter.instruction(&format!("mov x9, #{CALLABLE_HEAP_KIND}"));     // register callable ownership independently from raw helper buffers
-            emitter.instruction(&format!("str x9, [{dest}, #-8]"));             // publish the canonical managed callable kind
-        }
-        Arch::X86_64 => {
-            emitter.instruction(&format!("mov r11d, DWORD PTR [{dest} - 16]")); // bound initialization by the allocator's actual payload capacity
-            emitter.instruction("mov r10d, 64");                                // preserve the copied fixed descriptor header
-            emitter.label("1");
-            emitter.instruction("cmp r10, r11");                                // stop before crossing the allocated descriptor payload
-            emitter.instruction("jae 2f");                                      // descriptors without captures need no slot initialization
-            emitter.instruction(&format!("mov QWORD PTR [{dest} + r10], 0"));   // leave every not-yet-written capture null for nested cleanup
-            emitter.instruction("add r10, 8");                                  // initialize the next capture word, including metadata halves
-            emitter.instruction("jmp 1b");                                      // finish initialization before publishing the graph kind
-            emitter.label("2");
-            emitter.instruction(&format!("mov r10, 0x{:x}", x86_64_heap_kind_word(CALLABLE_HEAP_KIND))); // preserve canonical heap magic while registering callable ownership
-            emitter.instruction(&format!("mov QWORD PTR [{dest} - 8], r10"));   // publish the canonical managed callable kind
-        }
-    }
 }
 
 /// Stores the current result registers into a runtime descriptor capture slot.

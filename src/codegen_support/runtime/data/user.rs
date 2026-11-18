@@ -8,6 +8,7 @@
 //! Key details:
 //! - User data is program-specific and must match class ids, static property slots, and generated call sites.
 
+use elephc_memoir::layout::object_declared_slot_offset;
 use std::collections::{HashMap, HashSet};
 
 use crate::codegen_support::data_section::comm_directive;
@@ -3181,7 +3182,7 @@ fn class_object_payload_size(class_name: &str, class_info: &ClassInfo) -> usize 
     } else {
         0
     };
-    8 + class_info.properties.len() * 16 + dyn_props_slot
+    object_declared_slot_offset(class_info.properties.len()) + dyn_props_slot
 }
 
 /// Returns whether this class layout stores a dynamic-property hash tail.
