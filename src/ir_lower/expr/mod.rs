@@ -524,6 +524,9 @@ fn lower_expr_inner(ctx: &mut LoweringContext<'_, '_>, expr: &Expr) -> LoweredVa
                     || ctx.reads_from_eval_scope(name)
                     || ctx.has_eval_barrier()
                     || entry_initialized_local(ctx, name)
+                    // A `$GLOBALS['x']` alias names the global's own storage, which exists whether
+                    // or not this frame has read it before (`isset($GLOBALS['x'])` is the first).
+                    || crate::globals_array::is_alias(name)
                     || checker_read.is_some_and(|ty| *ty != PhpType::Void)
                 {
                     // The definedness flags warn for a variable that is only conditionally

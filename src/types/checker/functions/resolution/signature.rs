@@ -375,6 +375,7 @@ impl Checker {
                         &generator_ty,
                         true,
                         true,
+                        true,
                         decl.span,
                         &format!("Function '{}' return type", name),
                     )?;
@@ -408,6 +409,7 @@ impl Checker {
                         &return_info.ty,
                         return_info.has_value,
                         return_info.strict_types,
+                        return_info.local_read,
                         decl.span,
                         &format!("Function '{}' return type", name),
                     )?;
