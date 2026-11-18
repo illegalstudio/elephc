@@ -208,10 +208,7 @@ fn emit_stdclass_new_aarch64(emitter: &mut Emitter) {
     emitter.instruction("add x29, sp, #16");                                    // set new frame pointer
 
     emitter.instruction("mov x0, #16");                                         // payload size = class_id + hash_ptr
-    emitter.instruction("bl __rt_heap_alloc");                                  // x0 = obj pointer (8-byte aligned)
-    emitter.instruction("mov x9, #4");                                          // heap kind 4 = object instance
-    emitter.instruction("str x9, [x0, #-8]");                                   // stamp the heap header with the object kind
-    emitter.instruction("bl __rt_object_handle_acquire");                       // bind the new object to its PHP object handle
+    elephc_memoir::values::object_storage::emit_allocate_object(emitter);
     emitter.instruction("str x0, [sp, #0]");                                    // park the obj pointer while we initialize fields
 
     abi::emit_symbol_address(emitter, "x9", "_stdclass_class_id");
@@ -247,10 +244,7 @@ fn emit_stdclass_from_hash_aarch64(emitter: &mut Emitter) {
     emitter.instruction("str x0, [sp, #0]");                                    // save the incoming hash pointer for later
 
     emitter.instruction("mov x0, #16");                                         // payload size = class_id + hash_ptr
-    emitter.instruction("bl __rt_heap_alloc");                                  // x0 = obj pointer
-    emitter.instruction("mov x9, #4");                                          // heap kind 4 = object instance
-    emitter.instruction("str x9, [x0, #-8]");                                   // stamp the heap header with the object kind
-    emitter.instruction("bl __rt_object_handle_acquire");                       // bind the new object to its PHP object handle
+    elephc_memoir::values::object_storage::emit_allocate_object(emitter);
 
     abi::emit_symbol_address(emitter, "x9", "_stdclass_class_id");
     emitter.instruction("ldr x10, [x9]");                                       // load the compile-time stdClass class_id
@@ -517,10 +511,7 @@ fn emit_stdclass_new_x86_64(emitter: &mut Emitter) {
     emitter.instruction("sub rsp, 16");                                         // reserve a slot for the obj pointer
 
     emitter.instruction("mov rax, 16");                                         // payload size = class_id + hash_ptr
-    emitter.instruction("call __rt_heap_alloc");                                // rax = obj pointer
-    emitter.instruction(&format!("mov r10, 0x{:x}", crate::codegen_support::sentinels::x86_64_heap_kind_word(4))); // x86_64 heap header word: ELPH marker | object kind 4
-    emitter.instruction("mov QWORD PTR [rax - 8], r10");                        // stamp the heap header with the object kind
-    emitter.instruction("call __rt_object_handle_acquire");                     // bind the new object to its PHP object handle
+    elephc_memoir::values::object_storage::emit_allocate_object(emitter);
     emitter.instruction("mov QWORD PTR [rbp - 8], rax");                        // park the obj pointer in the local slot
 
     abi::emit_load_symbol_to_reg(emitter, "r10", "_stdclass_class_id", 0);      // load the compile-time stdClass class_id
@@ -557,10 +548,7 @@ fn emit_stdclass_from_hash_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov QWORD PTR [rbp - 8], rdi");                        // save the incoming hash pointer for later
 
     emitter.instruction("mov rax, 16");                                         // payload size = class_id + hash_ptr
-    emitter.instruction("call __rt_heap_alloc");                                // rax = obj pointer
-    emitter.instruction(&format!("mov r10, 0x{:x}", crate::codegen_support::sentinels::x86_64_heap_kind_word(4))); // x86_64 heap header word: ELPH marker | object kind 4
-    emitter.instruction("mov QWORD PTR [rax - 8], r10");                        // stamp the heap header with the object kind
-    emitter.instruction("call __rt_object_handle_acquire");                     // bind the new object to its PHP object handle
+    elephc_memoir::values::object_storage::emit_allocate_object(emitter);
 
     abi::emit_load_symbol_to_reg(emitter, "r10", "_stdclass_class_id", 0);      // load the compile-time stdClass class_id
     emitter.instruction("mov QWORD PTR [rax], r10");                            // store class_id at obj+0

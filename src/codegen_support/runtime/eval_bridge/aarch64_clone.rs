@@ -48,10 +48,7 @@ pub(super) fn emit_aarch64_object_clone_shallow_wrapper(emitter: &mut Emitter, n
     emitter.instruction("str x12, [sp, #48]");                                  // save payload size for allocation and dyn-prop offsets
     abi::emit_symbol_address(emitter, "x10", "_class_object_allocation_sizes");
     emitter.instruction("ldr x0, [x10, x11, lsl #3]");                          // include ordinary Throwable construction metadata in the allocation
-    emitter.instruction("bl __rt_heap_alloc");                                  // allocate a clone object payload with the same byte size
-    emitter.instruction("mov x9, #4");                                          // heap kind 4 marks object instances for ownership helpers
-    emitter.instruction("str x9, [x0, #-8]");                                   // stamp the uniform object heap header
-    emitter.instruction("bl __rt_object_handle_acquire");                       // bind the new object to its PHP object handle
+    elephc_memoir::values::object_storage::emit_allocate_object(emitter);
     emitter.instruction("ldr x11, [sp, #56]");                                  // reload the source class id
     emitter.instruction("str x11, [x0]");                                       // store the class id at the clone payload head
     emitter.instruction("str x0, [sp, #8]");                                    // save the clone object payload pointer

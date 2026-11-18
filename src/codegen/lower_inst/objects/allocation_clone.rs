@@ -29,23 +29,14 @@ pub(in crate::codegen::lower_inst) fn emit_object_allocation(
         Arch::AArch64 => {
             ctx.emitter
                 .instruction(&format!("mov x0, #{}", payload_size)); // request object payload storage for the class id and property slots
-            abi::emit_call_label(ctx.emitter, "__rt_heap_alloc");
-            ctx.emitter.instruction("mov x9, #4");                              // heap kind 4 marks object instances for ownership helpers
-            ctx.emitter.instruction("str x9, [x0, #-8]");                       // stamp the heap header before the object payload
-            ctx.emitter.instruction("bl __rt_object_handle_acquire");           // bind the new object to its PHP object handle
+            elephc_memoir::values::object_storage::emit_allocate_object(ctx.emitter);
             ctx.emitter.instruction(&format!("mov x10, #{}", class_id));        // materialize the compile-time class id
             ctx.emitter.instruction("str x10, [x0]");                           // store the class id at object payload offset zero
         }
         Arch::X86_64 => {
             ctx.emitter
                 .instruction(&format!("mov rax, {}", payload_size)); // request object payload storage for the class id and property slots
-            abi::emit_call_label(ctx.emitter, "__rt_heap_alloc");
-            ctx.emitter.instruction(&format!(                                   // materialize the x86_64 object heap kind word
-                "mov r10, 0x{:x}",
-                crate::codegen_support::sentinels::x86_64_heap_kind_word(4)
-            ));
-            ctx.emitter.instruction("mov QWORD PTR [rax - 8], r10");            // stamp the heap header before the object payload
-            ctx.emitter.instruction("call __rt_object_handle_acquire");         // bind the new object to its PHP object handle
+            elephc_memoir::values::object_storage::emit_allocate_object(ctx.emitter);
             ctx.emitter.instruction(&format!("mov r10, {}", class_id));         // materialize the compile-time class id
             ctx.emitter.instruction("mov QWORD PTR [rax], r10");                // store the class id at object payload offset zero
         }
@@ -54,11 +45,7 @@ pub(in crate::codegen::lower_inst) fn emit_object_allocation(
     if let Some(offset) = creation_line_offset {
         abi::emit_store_zero_to_address(ctx.emitter, object_reg, offset);
     }
-    for index in 0..property_count {
-        let offset = 8 + index * 16;
-        abi::emit_store_zero_to_address(ctx.emitter, object_reg, offset);
-        abi::emit_store_zero_to_address(ctx.emitter, object_reg, offset + 8);
-    }
+    elephc_memoir::values::object_storage::emit_zero_declared_slots(ctx.emitter, object_reg, property_count);
     if !uninitialized_marker_offsets.is_empty() {
         let marker_reg = abi::secondary_scratch_reg(ctx.emitter);
         abi::emit_load_int_immediate(

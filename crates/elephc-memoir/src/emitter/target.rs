@@ -103,6 +103,8 @@ pub trait TargetAbi {
     fn emit_reserve_temporary_stack(&mut self, amount: usize);
     /// Releases scratch through the host stack ABI.
     fn emit_release_temporary_stack(&mut self, amount: usize);
+    /// Places two live registers into one aligned temporary stack record.
+    fn emit_push_reg_pair(&mut self, low: &str, high: &str);
     /// Restores a register from host temporary stack storage.
     fn emit_load_temporary_stack_slot(&mut self, reg: &str, offset: usize);
 }
