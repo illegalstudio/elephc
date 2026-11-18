@@ -1800,3 +1800,28 @@ Nullability, Mixed, Initialization, ArrayTypes and Indexing remain unadmitted.
 Stronger Locals binding joins/unset and the signed157 foreach/unset crash remain
 active work before complete umbrella acceptance. The AOT settype array-element
 limitation remains tracked separately as task29118b0b.
+
+### Verified179: unset foreach aliases promote canonical boxed null
+
+The signed157 foreach/unset crash still reproduced on signed178. GDB showed a
+correctly detached raw local containing NULL_SENTINEL being promoted into a Mixed
+reference cell without boxing. The next displaced-binding read dereferenced the
+sentinel. Shared native promotion now canonicalizes only absent Mixed slots to
+owned boxed null before the existing retain/release sequence. The new owner is
+installed in the raw slot so promotion retires it normally. Native scalar payloads,
+live boxed values and existing reference authentication retain their contracts.
+
+A tracked regression covers repeated nested foreach references, rejected original
+key kinds, exact numeric-looking strings, copy-on-write and throwing key evaluation.
+All five supported targets emit it. Native permissive/exact profiles with both IR
+optimizer settings pass with clean heaps. Existing loop-capture and conditional
+unset representation controls pass. The serial default build, assembly-comment
+hygiene and diff checks pass. Public CLI repeats all four crash cases and checks
+supported closure promotion of Mixed null/live values, integer zero and the
+sentinel-shaped integer in both optimizer modes, all with balanced ownership.
+All eight focused gates are accepted. Fact2e16a69a records the promotion cause.
+
+An extra CLI control found an existing checker refusal for by-reference closure
+capture immediately after unset (Undefined variable in use()). Reinitializing the
+local first succeeds. That refusal is not claimed as fixed by this promotion repair;
+include it when checking initialization and binding-creation exceptions.

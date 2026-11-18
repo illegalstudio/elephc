@@ -12,9 +12,11 @@ use crate::ir::RuntimeCallTarget;
 
 mod owned_output;
 mod native_reference_store;
+mod promoted_null;
 #[cfg(test)]
 mod tests;
 pub(super) use native_reference_store::emit_static_if_managed;
+pub(super) use promoted_null::canonicalize_missing_mixed_slot;
 pub(super) use native_reference_store::lower_bind_local_ref_contract;
 pub(in crate::codegen) use native_reference_store::unbind_local_contract;
 pub(in crate::codegen) use owned_output::publish_current_owned_output;
