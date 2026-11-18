@@ -1147,3 +1147,25 @@ echo f(box(1.5)), "\n";
     );
     assert_eq!(out, "5\n13 Implicit conversion from float 1.5 to int loses precision\n1\n");
 }
+
+/// The named-call precheck binds in parameter order as PHP does: an accepted `Stringable` runs
+/// `__toString()` (and can throw from it) before a later supplied parameter is refused, even
+/// when the later one is named first.
+#[test]
+fn test_named_call_precheck_converts_a_stringable_before_the_next_parameter() {
+    let out = compile_and_run(
+        r#"<?php
+function box(mixed $v): mixed { return $v; }
+class Name { public function __toString(): string { echo "toString ran\n"; return "n"; } }
+class Bad { public function __toString(): string { throw new LogicException("from toString"); } }
+function f(string $s, int $n, int $d = MT_RAND_PHP) { echo "body\n"; }
+function g(string $s, int $n, int $d = 1 % 0) { echo "body\n"; }
+function show(Throwable $e): void { echo get_class($e), ": ", explode(', called', $e->getMessage())[0], "\n"; }
+try { f(s: box(new Name()), n: box(null)); } catch (Throwable $e) { show($e); }
+try { g(s: box(new Name()), n: box(null)); } catch (Throwable $e) { show($e); }
+try { g(s: box(new Bad()), n: box(null)); } catch (Throwable $e) { show($e); }
+try { g(n: box(null), s: box(new Name())); } catch (Throwable $e) { show($e); }
+"#,
+    );
+    assert_eq!(out, "toString ran\nTypeError: f(): Argument #2 ($n) must be of type int, null given\ntoString ran\nTypeError: g(): Argument #2 ($n) must be of type int, null given\nLogicException: from toString\ntoString ran\nTypeError: g(): Argument #2 ($n) must be of type int, null given\n");
+}

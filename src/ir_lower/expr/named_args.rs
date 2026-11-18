@@ -167,7 +167,8 @@ pub(super) fn lower_named_args_with_signature_options(
 ///
 /// Every supplied value is rooted first, so a refusal (or the throwing default afterwards)
 /// releases them through the unwind chain. An `int`/`float` check leaves the converted scalar
-/// in place; a `string`/`bool` operand stays boxed and the call's ordinary checks convert it.
+/// in place and a `string` is converted right after its check, in parameter order as PHP binds
+/// them; a `bool` operand stays boxed and the call's ordinary coercion converts it.
 fn check_supplied_scalar_params_before_defaults(
     ctx: &mut LoweringContext<'_, '_>,
     sig: &FunctionSig,
@@ -203,6 +204,14 @@ fn check_supplied_scalar_params_before_defaults(
             ctx, sig, param_index, lowered, GuardSource::Unrecorded, guard_span, false, &[],
         ) {
             source_values[source_index] = converted.value;
+        } else if sig.params[param_index].1.codegen_repr() == PhpType::Str {
+            // PHP binds (converts) each parameter before it checks the next: an accepted
+            // `Stringable` runs `__toString()` now, so its side effects and its own exception
+            // come before a later parameter's `TypeError`. The string stays rooted while the
+            // defaults run.
+            let string = coerce_to_string_at_span(ctx, lowered, Some(guard_span));
+            source_values[source_index] =
+                super::call_operand_owners::root_evaluated_call_argument(ctx, string, Span::dummy()).value;
         }
     }
 }
