@@ -2711,9 +2711,8 @@ fn decl_class_simplexmlelement() -> Stmt {
                     s_if(
                         e_binop(e_var("kind"), BinOp::StrictEq, e_int(4)),
                         vec![
-                            s_assign("node", e_new("DOMText", vec![])),
-                            s_prop_assign(e_var("node"), "__elephc_raw_text", e_bool(true)),
-                            s_return(e_method_call(e_this(), "__elephc_dom_bind_node", vec![e_var("node"), e_var("document"), e_var("parent"), e_str("#cdata-section")])),
+                            s_assign("cdata", e_new("DOMCdataSection", vec![e_str("")])),
+                            s_return(e_method_call(e_this(), "__elephc_dom_bind_node", vec![e_var("cdata"), e_var("document"), e_var("parent"), e_str("#cdata-section")])),
                         ],
                         vec![],
                         None,

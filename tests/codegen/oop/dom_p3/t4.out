@@ -1,0 +1,9 @@
+DOMText|ab|cdef|3
+ab|cdef|b
+abcdef|abcdef
+bool(false)
+DOMText::splitText(): Argument #1 ($offset) must be greater than or equal to 0
+4|''|abcdef
+lo|ose
+DOMText|a|bcd
+h|éé|2

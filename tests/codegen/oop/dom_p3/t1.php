@@ -1,0 +1,37 @@
+<?php
+function t($f) { try { $v = $f(); echo var_export($v, true), "\n"; } catch (Throwable $e) { echo get_class($e), ": ", $e->getMessage(), " (", $e->getCode(), ")\n"; } }
+$d = new DOMDocument();
+$d->loadXML('<r>héllo<!--c--><![CDATA[xy]]></r>');
+$list = $d->documentElement->childNodes;
+$t = $list->item(0);
+echo get_class($t), " ", $t->length, " ", $t->data, "\n";
+t(fn() => $t->substringData(1, 2));
+t(fn() => $t->substringData(1, 100));
+t(fn() => $t->substringData(5, 2));
+t(fn() => $t->substringData(-1, 2));
+t(fn() => $t->substringData(1, -2));
+t(fn() => $t->substringData(9, 2));
+t(fn() => $t->insertData(1, "ZZ"));
+echo $t->data, "|", $t->nodeValue, "|", $t->textContent, "\n";
+t(fn() => $t->deleteData(0, 2));
+echo $t->data, "\n";
+t(fn() => $t->replaceData(0, 1, "Q"));
+echo $t->data, "\n";
+t(fn() => $t->insertData(-1, "Q"));
+t(fn() => $t->insertData(99, "Q"));
+t(fn() => $t->deleteData(99, 1));
+t(fn() => $t->replaceData(99, 1, "x"));
+t(fn() => $t->appendData("!!"));
+echo $t->data, " ", $t->length, "\n";
+$t->data = "new é";
+echo $t->nodeValue, " ", $t->length, "\n";
+t(fn() => $t->isWhitespaceInElementContent());
+$t->data = " \n";
+t(fn() => $t->isWhitespaceInElementContent());
+$c = $list->item(1);
+echo get_class($c), " ", $c->data, " ", $c->length, "\n";
+$c->appendData("z");
+echo $c->data, "\n";
+$x = $list->item(2);
+echo get_class($x), " ", $x->data, "\n";
+echo $d->saveXML($d->documentElement), "\n";

@@ -489,6 +489,12 @@ mod tests {
                 "DOMComment",
                 "DOMProcessingInstruction",
                 "Dom\\XMLDocument",
+                // package P3
+                "DOMNamedNodeMap",
+                "DOMCdataSection",
+                "DOMAttr",
+                "DOMDocumentFragment",
+                "DOMDocumentType",
             ]
         );
     }

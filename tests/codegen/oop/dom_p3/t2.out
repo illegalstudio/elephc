@@ -1,0 +1,19 @@
+#text|abc|abc|3|abc|abc
+NULL
+0
+string(0) ""
+#comment|abc|abc|3
+#cdata-section|abc|abc|true
+q
+a|v|a|v|true|false
+NULL
+w
+DOMException: Invalid Character Error (5)
+DOMException: Invalid Character Error (5)
+DOMException: Invalid Character Error (5)
+p:a|p:a
+string(0) ""
+bool(true)
+0 0
+NULL
+NULL

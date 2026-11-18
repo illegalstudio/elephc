@@ -1,0 +1,12 @@
+2|2|2|NULL|NULL
+2|NULL|same
+1|2|NULL|NULL
+x=1,p:y=2,
+r|r|pub|sys|NULL|0|0
+#document-fragment|0
+No Modification Allowed Error|7
+bool(false)
+bool(true)
+3|a|t|#comment
+bool(false)
+3
