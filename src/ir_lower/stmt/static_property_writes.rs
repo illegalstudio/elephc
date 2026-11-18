@@ -682,11 +682,10 @@ pub(crate) fn lower_static_property_array_assign_with_diagnosed_key(
     } else {
         load_static_property(ctx, receiver, property, span)
     };
-    // A boxed slot is written through the mixed-array writer, which may vivify or relocate what
-    // the box holds, so the box goes back to the slot like an eval-owned one.
-    let boxed_slot = static_property_type(ctx, receiver, property)
-        .is_some_and(|ty| matches!(ty.codegen_repr(), PhpType::Mixed));
-    if boxed_slot || static_property_may_be_eval_dynamic(ctx, receiver) {
+    // A boxed slot was separated above: the mixed-array writer vivifies or relocates inside the
+    // cell the slot already owns, so only an eval-owned slot needs the box published back (a
+    // second store of the same cell would release it, dropping the write).
+    if static_property_may_be_eval_dynamic(ctx, receiver) {
         ctx.emit_void(
             Op::RuntimeCall,
             vec![property_value.value, index.value, value.value],
