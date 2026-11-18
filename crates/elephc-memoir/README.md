@@ -32,7 +32,10 @@ external owner record publication, contained foreign-owner release and condition
 retirement of independently acquired helper owners, bounded cleanup invocation,
 borrowed reference chains, scratch growth in `implode`, nested C export scratch
 rewind, guarded callback-result ownership, staged reference pins and the Zend
-storage transfers used by pack and unpack.
+storage transfers used by pack and unpack. Memoir also marks transient concat
+reservations, probes buckets using normalized keys, tracks append-index storage,
+adopts staged payloads into Mixed cells, owns scoped serialization streams, and
+snapshots the nested deserializer's borrowed registry and outer context.
 It also emits fixed heap, GC, buffer, reference-root, handle-table and string-scratch
 declarations, including raw capture-buffer storage, keeping their existing order
 and byte layout.
