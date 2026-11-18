@@ -104,6 +104,8 @@ pub(super) fn declarations() -> Program {
         .returns(TypeExpr::Void).body(vec![remove(entry())]));
     map = map.method(method("__elephc_retire").static_().private().param("__id", TypeExpr::Int)
         .returns(TypeExpr::Void).body(vec![
+            // Objects retired during shutdown, after the static registry is torn down, have no observers.
+            s_if(e_not(present(e_static_prop("WeakMap", "__elephc_maps"))), vec![s_return_void()], vec![], None),
             s_if(e_not(present(registry())), vec![s_return_void()], vec![], None),
             s_typed_assign(t_array(), "__maps", e_static_call("WeakMap", "__elephc_array", vec![registry()])), remove(registry()),
             s_typed_assign(t_nullable(t_class("Throwable")), "__pending", e_null()),
