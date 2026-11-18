@@ -1481,3 +1481,28 @@ in117.43s, exporter build in62.85s, and all required builtin generation/audit st
 pass. Diff and assembly-comment hygiene pass. Public ArrayKeys admission remains
 closed; remaining runtime producer shapes, reflection, false/null parent parity,
 escaped-reference key owners and dependency validation still require completion.
+
+### Verified168: Reflection key forwarding and explicit capability boundaries
+
+Known AOT ReflectionFunction/ReflectionMethod invoke and invokeArgs targets retain
+original builtin keys through positional and named argument arrays. A shared
+adapter records a rollback-safe source lowering refusal when an unresolved target
+has a concrete Reflection receiver. Boxed/unknown receivers check their actual
+class and raise an explicit Error only for the unsupported Reflection invocation;
+ordinary user invoke/invokeArgs methods retain their own dispatch and values.
+
+The implementation preserves existing permissive behavior and does not restore
+Reflection targets from unchanged local slot epochs. PHP permits reconstructing
+the same Reflection object through an alias (factbb54adb0), so that attempted
+optimization was discarded. Legacy runtime Reflection fallback remains a separate
+baseline task e7e7419e. The capability boundary is documented in the codegen guide;
+ArrayKeys is still pending public admission.
+
+All seven focused gates pass: four native PHP/exact optimizer cases in12.74s,
+two native boxed receiver/exception owner cases in6.56s, five-target supported
+emission in9.51s, five-target concrete refusals and boxed guard emission in19.35s,
+both staged eval engines and policies with complete owner retirement, and the
+existing conditional Reflection target control. Default compiler build passes
+in123.58s without new warnings; PHP matches the permissive supported fixture.
+Diff hygiene passes. Remaining source evidence, producer, parent-materialization,
+escaped-reference, dependency and binding-flow audits continue before admission.

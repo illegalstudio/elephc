@@ -11,6 +11,30 @@
 
 use super::*;
 
+/// Diagnoses unresolved exact-key Reflection targets while preserving ordinary invocation dispatch.
+pub(super) fn refuse_unresolved_key_reflection_call(
+    ctx: &mut LoweringContext<'_, '_>, receiver: LoweredValue, class: &str, method: &str, expr: &Expr,
+) -> Option<LoweredValue> {
+    if !ctx.semantic_profile.contains(elephc_semantics::StrictFeature::ArrayKeys)
+        || !matches!(method, "invoke" | "invokeargs") { return None; }
+    let ty = ctx.builder.value_php_type(receiver.value).codegen_repr();
+    let message = format!("--strict-array-keys requires a known {class} invocation target; targets selected at run time or lost at control flow joins are unsupported");
+    if matches!(&ty, PhpType::Object(name) if php_symbol_key(name) == php_symbol_key(class)) {
+        crate::ir_lower::diagnostics::refuse(expr.span, &message);
+        release_owning_receiver_temporary(ctx, receiver, expr.span);
+        return Some(lower_boxed_null(ctx, expr));
+    }
+    if matches!(receiver.ir_type, IrType::Heap(IrHeapKind::Object | IrHeapKind::Mixed | IrHeapKind::Union)) {
+        let pins = pin_in_flight_owners(ctx, &[receiver.value], expr.span);
+        let class = ctx.intern_class_name(class);
+        let unsupported = ctx.emit_value(Op::InstanceOf, vec![receiver.value], Some(Immediate::Data(class)),
+            PhpType::Bool, Op::InstanceOf.default_effects(), Some(expr.span));
+        crate::ir_lower::semantic_guards::require_false(ctx, unsupported, Op::ThrowError, &message, Some(expr.span));
+        unpin_in_flight_owners(ctx, pins, expr.span);
+    }
+    None
+}
+
 /// Holds evaluated parameters and their cleanup records through reflected dispatch.
 pub(super) struct ReflectionArrayCall {
     reflector: LoweredValue,

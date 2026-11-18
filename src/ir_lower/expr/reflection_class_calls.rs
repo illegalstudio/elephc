@@ -221,8 +221,10 @@ pub(super) fn lower_reflection_function_invoke_call(
     expr: &Expr,
 ) -> Option<LoweredValue> {
     let method_key = php_symbol_key(method);
-    let object_expr = object_expr?;
-    let function_name = reflection_function_reflected_target(ctx, object_expr)?;
+    let function_name = match object_expr.and_then(|object| reflection_function_reflected_target(ctx, object)) {
+        Some(name) => name,
+        None => return refuse_unresolved_key_reflection_call(ctx, reflector, "ReflectionFunction", &method_key, expr),
+    };
     let mut array_call = None;
     let Some(forwarded_args) = (match method_key.as_str() {
         "invoke" => Some(reflection_function_invoke_args(args, ctx.semantic_profile)),

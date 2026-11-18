@@ -22,6 +22,20 @@ pub(super) fn lower_capturing_arguments(source: &str, target: Target, profile: S
 
 /// Shares checking and lowering after selecting the fixture's required frontend preparation.
 fn lower_with_capture(source: &str, target: Target, profile: SemanticProfile, optimize: bool, mode: SourceMode, capture: bool) -> crate::ir::Module {
+    try_lower_with_capture(source, target, profile, optimize, mode, capture).unwrap()
+}
+
+/// Shares the staged frontend while preserving lowering refusals for diagnostic regressions.
+pub(super) fn try_lower_capturing_arguments(source: &str, target: Target, profile: SemanticProfile,
+    optimize: bool, mode: SourceMode,
+) -> Result<crate::ir::Module, crate::ir_lower::LoweringError> {
+    try_lower_with_capture(source, target, profile, optimize, mode, true)
+}
+
+/// Prepares one staged module and returns a source-located refusal before code generation.
+fn try_lower_with_capture(source: &str, target: Target, profile: SemanticProfile, optimize: bool,
+    mode: SourceMode, capture: bool,
+) -> Result<crate::ir::Module, crate::ir_lower::LoweringError> {
     let mut program = crate::parser::parse_with_mode(&crate::lexer::tokenize(source).unwrap(), mode).unwrap();
     let mut inventory = crate::optimize::reachability::PreludeInventory::new();
     program = crate::core_prelude::inject_if_used(program, &mut inventory);
@@ -44,8 +58,8 @@ fn lower_with_capture(source: &str, target: Target, profile: SemanticProfile, op
         program = crate::optimize::normalize_control_flow(program, checked.local_binding_decision_spans());
         program = crate::optimize::eliminate_dead_code(program, checked.local_binding_decision_spans());
     }
-    let mut module = crate::ir_lower::lower_program(&program, &checked, target, false).unwrap();
+    let mut module = crate::ir_lower::lower_program(&program, &checked, target, false)?;
     if optimize { crate::ir_passes::optimize_module(&mut module); }
-    module
+    Ok(module)
 }
 

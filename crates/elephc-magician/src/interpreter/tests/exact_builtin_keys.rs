@@ -85,3 +85,38 @@ fn exact_eval_builtin_key_producers_reject_original_kinds_and_release_partial_re
         for (id, owners) in &values.cell_owners { assert_eq!(*owners, 0, "vm={vm}: {:?}", values.values[id]); }
     }
 }
+
+/// Reflected builtin invocations and methods validate original keys after named argument planning.
+#[test]
+fn exact_eval_builtin_key_reflection_walker_vm_types_and_owners() {
+    let source = include_str!("../../../../../tests/fixtures/strict/builtin_key_reflection.php")
+        .strip_prefix("<?php\n").unwrap()
+        .replace("$function = new ReflectionFunction('array_key_exists');",
+            "global $builtinReflection; $function = $builtinReflection;");
+    for exact in [false, true] {
+        for vm in [false, true] {
+            let profile = SemanticProfile::PERMISSIVE.with(StrictFeature::ArrayKeys, exact);
+            let mut context = ElephcEvalContext::new(); context.install_semantic_profile(profile).unwrap();
+            let mut scope = ElephcEvalScope::new(); let mut values = FakeOps::default(); values.fixed_profile = Some(profile);
+            assert!(context.set_global_scope(&mut scope));
+            // FakeOps has no native builtin-reflection constructor. Supply its registered
+            // identity while retaining the real invoke/invokeArgs dispatch and key guards.
+            let reflection = values.new_object("ReflectionFunction").unwrap();
+            context.register_eval_reflection_function(values.object_identity(reflection).unwrap(), "array_key_exists");
+            scope.set("builtinReflection", reflection, ScopeCellOwnership::Owned);
+            staged_numeric_execution(&source, false, &mut context, &mut scope, &mut values).unwrap();
+            let mut expected = String::new();
+            for (argument, invalid) in [("true", true), ("0.0", true), ("null", true),
+                ("0", false), ("'0'", false), ("''", false)] {
+                call(&format!("reflectedKeyInputs({argument});"), "function reflectedKeyInputs($key){}", vm,
+                    &mut context, &mut scope, &mut values);
+                expected.push_str(if exact && invalid { "R|A|C|T|V|" } else { "r|a|c|t|v|" });
+                expected.push_str(if exact { "4|p|q|" } else { "3|p|q|" });
+            }
+            assert_eq!(values.output, expected, "exact={exact} vm={vm}");
+            for value in scope.drain_owned_cells() { values.release(value).unwrap(); }
+            for value in context.take_persistent_cell_owners() { values.release(value).unwrap(); }
+            for (id, owners) in &values.cell_owners { assert_eq!(*owners, 0, "exact={exact} vm={vm}: {:?}", values.values[id]); }
+        }
+    }
+}
