@@ -1,0 +1,9 @@
+<html><body><p class="a b" data-x="1" href="a%20b">x<br>&eacute; &amp; <b>t</b></p><!--c--><script>if (a<b) {}</script></body></html>
+<p class="a b" data-x="1" href="a%20b">x<br>é &amp; <b>t</b></p>|
+<b>t</b>|
+<html><body>
+<p class="a b" data-x="1" href="a%20b">x<br>&eacute; &amp; <b>t</b></p>
+<!--c--><script>if (a<b) {}</script>
+</body></html>
+<div><input disabled name="n"><a href="x%20y?z=1&amp;w=1">l</a><img src="a.png" alt=""></div>
+<div><input disabled name="n"><a href="x%20y?z=1&amp;w=1">l</a><img src="a.png" alt=""></div>|

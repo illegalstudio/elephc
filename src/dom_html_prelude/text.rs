@@ -26,7 +26,7 @@ fn decl_fn_elephc_dom_descendant_text() -> Stmt {
                 None,
             ),
             s_if(
-                e_binop(e_not(e_instance_of(e_var("node"), "DOMElement")), BinOp::And, e_not(e_instance_of(e_var("node"), "DOMDocument"))),
+                e_binop(e_binop(e_not(e_instance_of(e_var("node"), "DOMElement")), BinOp::And, e_not(e_instance_of(e_var("node"), "DOMDocument"))), BinOp::And, e_not(e_instance_of(e_var("node"), "DOMDocumentFragment"))),
                 vec![
                     s_return(e_str("")),
                 ],

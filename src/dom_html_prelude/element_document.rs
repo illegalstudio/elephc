@@ -1412,18 +1412,6 @@ fn element_members() -> ClassBuilder {
 fn document_members() -> ClassBuilder {
             class("DOMDocument")
                 .method(
-                    method("__construct")
-                        .param_default("version", TypeExpr::Str, e_str("1.0"))
-                        .param_default("encoding", TypeExpr::Str, e_str(""))
-                        .body(vec![
-                            s_prop_assign(e_this(), "nodeName", e_str("#document")),
-                            s_prop_assign(e_this(), "childNodes", e_new("DOMNodeList", vec![e_array(vec![])])),
-                            s_prop_assign(e_this(), "__elephc_dom_decl", e_array_assoc(vec![(e_str("version"), e_var("version")), (e_str("encoding"), e_ternary(e_binop(e_var("encoding"), BinOp::StrictEq, e_str("")), e_null(), e_var("encoding"))), (e_str("standalone"), e_bool(false))])),
-                            s_prop_assign(e_this(), "__elephc_dom_version", e_var("version")),
-                            s_prop_assign(e_this(), "__elephc_dom_encoding", e_ternary(e_binop(e_var("encoding"), BinOp::StrictEq, e_str("")), e_null(), e_var("encoding"))),
-                        ]),
-                )
-                .method(
                     method("__elephc_dom_declaration")
                         .returns(t_array())
                         .body(vec![
@@ -2236,17 +2224,6 @@ fn implementation_class() -> Stmt {
 .build()
 }
 
-/// Hidden slots and `formatOutput` that package P7 (serializers) declares on its own branch. They
-/// are declared here only so this branch builds on its own: DELETE this function and its
-/// `contributions.members` call when the P7 branch is merged (a duplicate member panics the
-/// extension merge), and keep P7's constructor in `generated.rs` instead of the one in
-/// `document_members` (the setters here already write the same two slots).
-fn p7_shared_props() -> ClassBuilder {
-    class("DOMDocument")
-        .prop("formatOutput", TypeExpr::Bool, Some(e_bool(false)))
-        .prop("__elephc_dom_version", TypeExpr::Str, Some(e_str("1.0")))
-        .prop("__elephc_dom_encoding", t_nullable(TypeExpr::Str), Some(e_null()))
-}
 
 /// Registers this package's declarations.
 pub(super) fn contribute(contributions: &mut Contributions) {
@@ -2257,5 +2234,4 @@ pub(super) fn contribute(contributions: &mut Contributions) {
     contributions.members(Part::Walker, node_members());
     contributions.members(Part::Walker, element_members());
     contributions.members(Part::Walker, document_members());
-    contributions.members(Part::Walker, p7_shared_props());
 }

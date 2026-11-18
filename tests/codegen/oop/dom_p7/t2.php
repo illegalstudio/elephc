@@ -1,0 +1,38 @@
+<?php
+// A parsed (libxml2-bound) document: native serialization, options, formatOutput, node form, C14N, save.
+$d = new DOMDocument();
+$d->loadXML('<?xml version="1.0"?><root a="1" xmlns:p="urn:p"><p:x b="&amp;&lt;">t &amp; é<![CDATA[c]]></p:x><!--c--><?pi d?><e/><f></f></root>');
+echo $d->saveXML();
+echo $d->saveXML($d->documentElement->firstChild), "\n";
+echo $d->saveXML($d), "\n";
+$d->formatOutput = true;
+echo $d->saveXML();
+echo $d->saveXML($d->documentElement), "\n";
+echo $d->saveXML(null, LIBXML_NOEMPTYTAG);
+echo $d->saveXML(null, LIBXML_NOXMLDECL);
+echo $d->saveXML($d->documentElement, LIBXML_NOEMPTYTAG), "\n";
+$e = $d->documentElement->lastChild;
+$e->textContent = 'a<b&"';
+echo $d->saveXML($e), "\n";
+$e->textContent = '';
+echo $d->saveXML($e), "\n";
+echo $d->documentElement->C14N(), "\n";
+echo $d->C14N(), "\n";
+echo $d->C14N(true), "\n";
+echo $d->C14N(false, true), "\n";
+echo $d->C14N(true, false, null, ['p']), "\n";
+echo $d->documentElement->firstChild->C14N(), "\n";
+echo $d->save('/tmp/elephc_p7_t2.xml'), "\n";
+echo file_get_contents('/tmp/elephc_p7_t2.xml');
+echo $d->C14NFile('/tmp/elephc_p7_t2.xml'), "\n";
+echo file_get_contents('/tmp/elephc_p7_t2.xml'), "\n";
+unlink('/tmp/elephc_p7_t2.xml');
+$s = new DOMDocument();
+$s->loadXML('<?xml version="1.0" encoding="UTF-8" standalone="yes"?><s><b>é</b></s>');
+echo $s->saveXML(), "|\n";
+echo $s->saveXML($s->documentElement), "|\n";
+$l = new DOMDocument();
+$l->loadXML('<?xml version="1.0" encoding="ISO-8859-1"?><l>caf' . "\xE9" . '</l>');
+echo bin2hex($l->saveXML()), "\n";
+echo bin2hex($l->saveXML($l->documentElement)), "\n";
+if ($argc > 99) { simplexml_import_dom($d); }

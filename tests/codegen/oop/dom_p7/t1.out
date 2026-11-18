@@ -1,0 +1,43 @@
+<?xml version="1.0"?>
+|
+<?xml version="1.0"?>
+<r/>
+<?xml version="1.0"?>
+<r><empty/><t>plain</t>a&lt;b&gt;&amp;"c'x&#xD;y<!-- c --><![CDATA[1 < 2]]><?pi v?><u>&#xE9;&#x65E5;</u></r>
+<t>plain</t>
+a&lt;b&gt;&amp;"c'
+<u>é日</u>
+<r><empty></empty><t>plain</t>a&lt;b&gt;&amp;"c'x&#13;y<!-- c --><![CDATA[1 < 2]]><?pi v?><u>é日</u></r>
+<r><empty/><t>plain</t>a&lt;b&gt;&amp;"c'x&#xD;y<!-- c --><![CDATA[1 < 2]]><?pi v?><u>&#xE9;&#x65E5;</u></r>
+<?xml version="1.0" encoding="UTF-8"?>
+<é>é日</é>
+3c3f786d6c2076657273696f6e3d22312e302220656e636f64696e673d2249534f2d383835392d31223f3e0a3c6c3ee93c2f6c3e0a
+<?xml version="1.0"?>
+<r><empty/><t>plain</t>a&lt;b&gt;&amp;"c'x&#xD;y<!-- c --><![CDATA[1 < 2]]><?pi v?><u>&#xE9;&#x65E5;</u></r>
+<r><empty/><t>plain</t>a&lt;b&gt;&amp;"c'x&#13;y<!-- c --><![CDATA[1 < 2]]><?pi v?><u>é日</u></r>
+<?xml version="1.0"?>
+<root k="v&quot;&lt;&amp;&gt;&#10;&#9;" é="&#xE9;">
+  <a>
+    <b/>
+    <c>
+      <d>text</d>
+    </c>
+  </a>
+  <mixed>t<inner/></mixed>
+  <!--trailing-->
+</root>
+<a>
+  <b/>
+  <c>
+    <d>text</d>
+  </c>
+</a>
+<?xml version="1.0"?>
+<root k="v&quot;&lt;&amp;&gt;&#10;&#9;" é="&#xE9;"><a><b/><c><d>text</d></c></a><mixed>t<inner/></mixed><!--trailing--></root>
+<?xml version="1.0" encoding="UTF-8"?>
+<root k="v&quot;&lt;&amp;&gt;&#10;&#9;" é="é"><a><b/><c><d>text</d></c></a><mixed>t<inner/></mixed><!--trailing--></root>
+
+150
+<?xml version="1.0"?>
+<root k="v&quot;&lt;&amp;&gt;&#10;&#9;" é="&#xE9;"><a><b/><c><d>text</d></c></a><mixed>t<inner/></mixed><!--trailing--></root>
+Wrong Document Error 4

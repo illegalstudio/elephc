@@ -71,6 +71,8 @@ mod dom_p3;
 mod dom_p4;
 #[path = "oop/dom_p5.rs"]
 mod dom_p5;
+#[path = "oop/dom_p7.rs"]
+mod dom_p7;
 #[path = "oop/datetime_lazy_evaluation.rs"]
 mod datetime_lazy_evaluation;
 #[path = "oop/reflection_properties.rs"]

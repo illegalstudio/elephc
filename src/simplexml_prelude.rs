@@ -10,6 +10,7 @@
 
 mod dom_element;
 mod dom_tree;
+mod dom_write;
 mod generated;
 use crate::parser::ast::Program;
 use std::sync::OnceLock;
@@ -22,6 +23,7 @@ pub(crate) fn declarations() -> Program {
             let mut program = generated::declarations();
             dom_tree::extend(&mut program);
             dom_element::extend(&mut program);
+            dom_write::extend(&mut program);
             program
         })
         .clone()

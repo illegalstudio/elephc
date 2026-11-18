@@ -504,6 +504,9 @@ mod tests {
                 // Part::Html (package P6)
                 "__ElephcHtmlTables",
                 "__ElephcHtmlParser",
+                // package P7
+                "__ElephcDomXmlWriter",
+                "__ElephcDomHtmlWriter",
             ]
         );
     }
