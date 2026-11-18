@@ -13,7 +13,7 @@
 //! - The parser builds a flat node table and folds it into the tree arrays
 //!   `__elephc_dom_make_children` reads (`helpers`); the eager nodes are free-standing, like
 //!   every HTML document of the prelude (`__elephc_dom_html`).
-//! - Everything here is `Part::Html`, so a program that never loads HTML does not carry it. The
+//! - Everything here is `Part::Html` except the eager-tree helpers, which the SimpleXML bridge's DOM views call too (`Part::Walker`), so a program that never loads HTML does not carry the parser. The
 //!   scanner `loadHTML` used to be built on is gone from `generated.rs`.
 //! - The parser model was written as PHP, checked against `php -n` over ~100k fuzzed documents,
 //!   then converted with `synthetic_class::transcribe` (see the module comments of `parser`).
@@ -96,7 +96,7 @@ fn load_html_file() -> MethodBuilder {
 /// Registers this package's declarations.
 pub(super) fn contribute(contributions: &mut Contributions) {
     for function in helpers::declarations() {
-        contributions.add_function(Part::Html, function);
+        contributions.add_function(Part::Walker, function);
     }
     contributions.add_function(Part::Html, parse_html());
     contributions.add_class(Part::Html, tables::declaration());

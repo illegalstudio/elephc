@@ -102,7 +102,7 @@ fn node_members() -> ClassBuilder {
                                 s_assign("colon", e_call("strpos", vec![e_var("name"), e_str(":")])),
                                 s_assign("local", e_ternary(e_binop(e_var("colon"), BinOp::StrictEq, e_bool(false)), e_var("name"), e_call("substr", vec![e_var("name"), e_binop(e_var("colon"), BinOp::Add, e_int(1))]))),
                                 s_assign("prefix", e_ternary(e_binop(e_var("colon"), BinOp::StrictEq, e_bool(false)), e_str(""), e_call("substr", vec![e_var("name"), e_int(0), e_var("colon")]))),
-                                s_assign("uri", e_ternary(e_call("is_string", vec![e_index(e_var("pair"), e_int(2))]), e_cast(CastType::String, e_index(e_var("pair"), e_int(2))), e_str(""))),
+                                s_assign("uri", e_ternary(e_binop(e_call("array_key_exists", vec![e_int(2), e_var("pair")]), BinOp::And, e_call("is_string", vec![e_index(e_var("pair"), e_int(2))])), e_cast(CastType::String, e_index(e_var("pair"), e_int(2))), e_str(""))),
                                 s_array_push("out", e_array(vec![e_str("a"), e_var("name"), e_var("local"), e_var("prefix"), e_var("uri"), e_cast(CastType::String, e_index(e_var("pair"), e_int(1)))])),
                             ]),
                             s_return(e_var("out")),
@@ -977,7 +977,7 @@ fn element_members() -> ClassBuilder {
                             s_assign("updated", e_array(vec![])),
                             s_assign("found", e_bool(false)),
                             s_foreach(e_this_prop("__attrs"), None, "pair", vec![
-                                s_assign("pairUri", e_ternary(e_call("is_string", vec![e_index(e_var("pair"), e_int(2))]), e_cast(CastType::String, e_index(e_var("pair"), e_int(2))), e_str(""))),
+                                s_assign("pairUri", e_ternary(e_binop(e_call("array_key_exists", vec![e_int(2), e_var("pair")]), BinOp::And, e_call("is_string", vec![e_index(e_var("pair"), e_int(2))])), e_cast(CastType::String, e_index(e_var("pair"), e_int(2))), e_str(""))),
                                 s_assign("pairName", e_cast(CastType::String, e_index(e_var("pair"), e_int(0)))),
                                 s_assign("pairColon", e_call("strpos", vec![e_var("pairName"), e_str(":")])),
                                 s_assign("pairLocal", e_ternary(e_binop(e_var("pairColon"), BinOp::StrictEq, e_bool(false)), e_var("pairName"), e_call("substr", vec![e_var("pairName"), e_binop(e_var("pairColon"), BinOp::Add, e_int(1))]))),
@@ -1023,7 +1023,7 @@ fn element_members() -> ClassBuilder {
                             ),
                             s_assign("kept", e_array(vec![])),
                             s_foreach(e_this_prop("__attrs"), None, "pair", vec![
-                                s_assign("pairUri", e_ternary(e_call("is_string", vec![e_index(e_var("pair"), e_int(2))]), e_cast(CastType::String, e_index(e_var("pair"), e_int(2))), e_str(""))),
+                                s_assign("pairUri", e_ternary(e_binop(e_call("array_key_exists", vec![e_int(2), e_var("pair")]), BinOp::And, e_call("is_string", vec![e_index(e_var("pair"), e_int(2))])), e_cast(CastType::String, e_index(e_var("pair"), e_int(2))), e_str(""))),
                                 s_assign("pairName", e_cast(CastType::String, e_index(e_var("pair"), e_int(0)))),
                                 s_assign("pairColon", e_call("strpos", vec![e_var("pairName"), e_str(":")])),
                                 s_assign("pairLocal", e_ternary(e_binop(e_var("pairColon"), BinOp::StrictEq, e_bool(false)), e_var("pairName"), e_call("substr", vec![e_var("pairName"), e_binop(e_var("pairColon"), BinOp::Add, e_int(1))]))),
