@@ -1506,3 +1506,31 @@ existing conditional Reflection target control. Default compiler build passes
 in123.58s without new warnings; PHP matches the permissive supported fixture.
 Diff hygiene passes. Remaining source evidence, producer, parent-materialization,
 escaped-reference, dependency and binding-flow audits continue before admission.
+
+### Verified169: empty array parents, diagnostics and reference storage
+
+Native boxed writes materialize a null parent before checking the original key.
+Reference-bound indexed writers borrow their canonical child, matching the existing
+append protocol, rather than detaching the in-flight write from its caller.
+Normal value snapshots retain their PHP copy-on-write behavior.
+
+Eval local/global/reference writes publish the empty array before false-conversion
+diagnostics or invalid-key errors. The shared contextual error dispatcher invokes
+handlers against that published state. A captured independent value and the owning
+scope generation preserve handler rebinds and in-place writes without overwriting
+them when the suspended write completes. Array/object key rejection remains active
+in permissive eval, before a primitive can erase the original kind. The fake runtime
+now promotes sparse integer writes instead of introducing nonexistent null cells.
+
+The shared fixture covers 26 parent/key/reference/callback combinations plus a
+copy-on-write control, PHP and exact policies, both optimizers, staged walker/VM,
+five-target emission, native heap accounting and the real opaque-eval bridge.
+Public ArrayKeys admission remains closed. Property/static publication, pending
+handler exceptions, remaining producers, source evidence, escaped reference owners
+and dependency profiles continue before feature admission.
+
+All six focused gates pass: native PHP/exact policy and optimizer combinations
+in3.09s, all five target emitters in1.44s, staged walker/VM and owner retirement
+in0.29s, sparse FakeOps adapter regression in0.16s, real opaque eval with both
+optimizers and clean heap in66.50s, and default compiler/bridge builds in75.10s.
+No new compiler warnings; diff and assembly-comment hygiene pass.

@@ -7,15 +7,15 @@
 //!
 //! Key details:
 //! - The writable cell is updated before the deprecation callback observes it.
-//! - Update-only null conversion is silent and precedes missing-key diagnostics.
+//! - Null conversion is silent and precedes key validation and missing-key diagnostics.
 //! - Static updates stop on callback throws; plain writes preserve opcode completion separately.
 //! - Existing receiver owners stay published across notification on every target.
 //! - A sole pending owner after notification means the original parent was detached.
 
 use super::*;
 
-/// Converts a retained null update receiver before its write-context dimension is read.
-pub(super) fn normalize_null_for_update(
+/// Materializes a retained null receiver before a write-context key is validated or read.
+pub(super) fn normalize_null_for_write(
     ctx: &mut LoweringContext<'_, '_>, parent: LoweredValue, span: Span,
 ) {
     if ctx.builder.value_php_type(parent.value).codegen_repr() != PhpType::Mixed {

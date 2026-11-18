@@ -123,7 +123,7 @@ pub(in crate::interpreter) use abstract_setter::*;
 use readonly_property_writes::*;
 pub(in crate::interpreter) use reference_writeback::*;
 pub(in crate::interpreter) use reflection_instantiation::*;
-use scalar_offsets::{eval_array_autovivification, eval_string_offset_write};
+use scalar_offsets::{eval_array_autovivification, eval_false_array_parent_diagnostic, eval_string_offset_write};
 pub(in crate::interpreter) use static_method_dispatch::*;
 pub(in crate::interpreter) use static_property_access::*;
 pub(in crate::interpreter) use trait_declarations::*;

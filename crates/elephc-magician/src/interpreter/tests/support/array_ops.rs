@@ -209,15 +209,10 @@ impl FakeOps {
         };
         match slot {
             FakeValue::Array(elements) => match key {
-                FakeKey::Int(index) => {
-                    if index < 0 {
-                        return Err(EvalStatus::UnsupportedConstruct);
-                    }
+                FakeKey::Int(index) if index >= 0 && index as usize <= elements.len() => {
                     let index = index as usize;
-                    while elements.len() <= index {
-                        elements.push(RuntimeCellHandle::from_raw(std::ptr::null_mut()));
-                    }
-                    elements[index] = value;
+                    if index == elements.len() { elements.push(value); }
+                    else { elements[index] = value; }
                 }
                 key => {
                     let mut entries = std::mem::take(elements)
@@ -267,4 +262,27 @@ impl FakeOps {
             FakeValue::Array(_) | FakeValue::Assoc(_)
         ))
     }
+}
+
+/// Sparse and negative integer writes retain PHP entry count, key order and readable values.
+#[test]
+fn fake_sparse_array_key_writes_preserve_count_order_and_values() {
+    let mut values = FakeOps::default();
+    let mut array = values.array_new(0).unwrap();
+    let value = values.int(9).unwrap();
+    for key in [1, -2, 5] {
+        let key = values.int(key).unwrap();
+        array = values.array_set(array, key, value).unwrap();
+        values.release(key).unwrap();
+    }
+    assert_eq!(values.array_len(array).unwrap(), 3);
+    for (position, expected) in [1, -2, 5].into_iter().enumerate() {
+        let key = values.array_iter_key(array, position).unwrap();
+        assert_eq!(values.get(key), FakeValue::Int(expected));
+        let read = values.array_get(array, key).unwrap();
+        assert_eq!(values.get(read), FakeValue::Int(9));
+        values.release(read).unwrap(); values.release(key).unwrap();
+    }
+    values.release(value).unwrap(); values.release(array).unwrap();
+    assert!(values.cell_owners.values().all(|owners| *owners == 0));
 }

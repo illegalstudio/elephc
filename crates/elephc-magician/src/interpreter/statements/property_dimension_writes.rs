@@ -313,7 +313,11 @@ fn write_value_in_storage(
         || matches!(storage, ArrayWriteStorage::Published) && values.is_array_like(current)?;
     let array = if reuse { current }
         else if values.is_array_like(current)? { values.array_clone_shallow(current)? }
-        else { eval_array_autovivification(Some(current), append, context, values)? };
+        else {
+            let was_false = values.type_tag(current)? == EVAL_TAG_BOOL && !values.truthy(current)?;
+            eval_false_array_parent_diagnostic(was_false, context, values)?;
+            eval_array_autovivification(Some(current), append, context, values)?
+        };
     if !reuse {
         operands.push(array);
         if values.type_tag(current)? == EVAL_TAG_ASSOC {

@@ -58,6 +58,7 @@ fn store(
     ctx: &mut LoweringContext<'_, '_>, parent: LoweredValue,
     key: LoweredValue, value: LoweredValue, span: Span, key_already_diagnosed: bool,
 ) {
+    super::static_false_parent::normalize_null_for_write(ctx, parent, span);
     crate::ir_lower::array_key_guards::reject_invalid_kind(ctx, parent, key, span);
     crate::ir_lower::array_key_guards::for_prepared_write(ctx, parent, key, span);
     super::string_offset_writes::lower_boxed_set(ctx, parent, key, value, span, key_already_diagnosed);

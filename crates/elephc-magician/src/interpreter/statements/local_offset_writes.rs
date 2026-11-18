@@ -83,12 +83,22 @@ fn eval_local_offset_write(
                 }
             }
         }
+        let mut published_generation = None;
         let array = match current {
             Some(cell) if matches!(tag, Some(EVAL_TAG_ARRAY | EVAL_TAG_ASSOC)) => cell,
             _ => {
+                let was_false = tag == Some(EVAL_TAG_BOOL)
+                    && !values.truthy(current.ok_or(EvalStatus::RuntimeFatal)?)?;
                 let array = eval_array_autovivification(current, index.is_none(), context, values)?;
                 operands.push(array);
-                array
+                write_back_owned_variable_ref_target(scope, name, array, context, values)?;
+                published_generation = scope_entry(context, scope, name).map(|entry| entry.generation());
+                // The warning callback may detach or replace the published receiver. Keep
+                // this in-flight write on its own PHP value and preserve the callback's binding.
+                let captured = values.copy_value(array)?;
+                operands.push(captured);
+                eval_false_array_parent_diagnostic(was_false, context, values)?;
+                captured
             }
         };
         let declared = generic_local_contracts(scope, name, context);
@@ -110,6 +120,10 @@ fn eval_local_offset_write(
         } else {
             eval_array_append_owned_value_with_type(array, value, &declared, context, values)?
         };
+        if published_generation.is_some_and(|generation|
+            scope_entry(context, scope, name).map(|entry| entry.generation()) != Some(generation)) {
+            return Ok(());
+        }
         if visible_scope_cell(context, scope, name) == Some(replacement) {
             mark_scope_binding_changed(context, scope, name)?;
             return Ok(());

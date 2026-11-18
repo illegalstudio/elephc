@@ -15,10 +15,17 @@ pub(super) fn for_receiver(
     receiver: RuntimeCellHandle, key: RuntimeCellHandle,
     context: &mut ElephcEvalContext, values: &mut impl RuntimeValueOps,
 ) -> Result<(), EvalStatus> {
-    if !context.semantic_profile().contains(elephc_semantics::StrictFeature::ArrayKeys)
-        || !matches!(values.type_tag(receiver)?, EVAL_TAG_ARRAY | EVAL_TAG_ASSOC)
-    { return Ok(()); }
-    require_key(key, false, context, values)
+    if !matches!(values.type_tag(receiver)?, EVAL_TAG_ARRAY | EVAL_TAG_ASSOC) { return Ok(()); }
+    if context.semantic_profile().contains(elephc_semantics::StrictFeature::ArrayKeys) {
+        return require_key(key, false, context, values);
+    }
+    let tag = values.type_tag(key)?;
+    if matches!(tag, EVAL_TAG_ARRAY | EVAL_TAG_ASSOC | EVAL_TAG_OBJECT) {
+        let name = if tag == EVAL_TAG_OBJECT { eval_dynamic_class_name(key, context, values)? }
+            else { "array".to_string() };
+        return eval_throw_type_error(&format!("Cannot access offset of type {name} on array"), context, values);
+    }
+    Ok(())
 }
 
 /// Checks a key-producing builtin input; null may explicitly select a whole column.
