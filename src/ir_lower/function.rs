@@ -2041,9 +2041,9 @@ fn lower_body_into_function(
         }
         if ctx.local_store_contracts.entry_origin(&ctx.loop_storage_scope, name).is_some() {
             if ctx.local_store_contracts.entry_is_reference(&ctx.loop_storage_scope, name) {
-                ctx.initialize_recreatable_reference_parameter(name, php_type);
+                ctx.initialize_reference_parameter_binding(name, php_type);
             } else {
-                ctx.privatize_recreatable_parameter(name, php_type);
+                ctx.privatize_parameter_binding(name, php_type);
             }
             continue;
         }

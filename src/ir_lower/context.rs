@@ -1490,7 +1490,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
     }
 
     /// Moves a recreatable by-value parameter into an owned cell without changing its input ABI.
-    pub(crate) fn privatize_recreatable_parameter(&mut self, name: &str, incoming: &PhpType) {
+    pub(crate) fn privatize_parameter_binding(&mut self, name: &str, incoming: &PhpType) {
         let borrowed = self.load_local(name, None);
         let value = self.box_value_as_mixed(borrowed, PhpType::Mixed, None);
         let shadow = self.builder.add_local(Some(format!("{name}#cow")), value_ir_type(&PhpType::Mixed),
@@ -1505,7 +1505,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
     }
 
     /// Tracks a detachable incoming reference without copying or replacing its caller's cell.
-    pub(crate) fn initialize_recreatable_reference_parameter(&mut self, name: &str, incoming: &PhpType) {
+    pub(crate) fn initialize_reference_parameter_binding(&mut self, name: &str, incoming: &PhpType) {
         let slot = self.local_slots[name];
         self.builder.widen_local_storage_type(slot, PhpType::Mixed);
         super::local_binding_state::emit(self, slot, false);

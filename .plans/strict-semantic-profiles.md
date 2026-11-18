@@ -2174,3 +2174,28 @@ raw/canonical reference reader controls, known-invalid source diagnostics, opaqu
 archive, default build, assembly comments, PHP/LFC optimizer pairs and the updated
 complete example. Final acceptance is recorded in step190-evidence.json. No runtime
 layout changed and no broad local suite, push or PR was requested.
+
+### Verified191: open parameter contracts independent of inferred views
+
+Strict local checking now seeds every explicit parameter with its declared or open
+source contract before scanning body storage. An unannotated input remains open
+when call-site inference narrows its checker entry view to int, float or a resource.
+Ordinary stores update the flow view without inventing a reference cell; potentially
+externally coerced aliases retain a conservative Mixed view. A real unset still
+ends the incoming origin and lets the first fresh producer close the new binding.
+Declared parameters and ordinary inferred locals remain constrained.
+
+The existing EIR ABI already boxes ordinary untyped by-value inputs. A production
+baseline on the preceding signed commit confirmed that distinction, so this change
+does not widen the ABI or add owner shadows for ordinary stores. Existing origin
+helpers were renamed to describe their shared binding responsibility. Raw pointer,
+buffer and packed entry representations keep their explicit exclusions.
+
+Focused regressions cover repeated call-site inference, methods, static methods,
+closures, promoted constructor parameters, by-reference propagation, resources and
+closed caller contracts. The example now demonstrates an untyped open input. The
+new fixture runs on native optimizer pairs, both interpreter entries/profiles and
+real opaque eval, with owner retirement checked, plus all-five-target emission,
+known-invalid diagnostics and previous detached parameter controls. Public PHP/LFC
+optimizer pairs and the complete example are required in step191-evidence.json,
+along with the default build and hygiene checks, before acceptance.

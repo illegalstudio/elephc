@@ -232,7 +232,7 @@ impl Checker {
         }
 
         self.mark_owned_eval_binding_origins(&facts, pre_bound_own_storage);
-        self.mark_recreatable_parameter_origins(&facts, pre_bound_own_storage);
+        self.mark_parameter_binding_origins(&facts, pre_bound_own_storage);
         if self.strict_locals && facts.contains_eval { return; }
 
         // Collected before pushing so the warnings come out in source order regardless of the

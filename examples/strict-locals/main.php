@@ -199,12 +199,12 @@ function recreateQuantityReference(): void {
 }
 recreateQuantityReference();
 
-// A reference argument creates an open binding before the callee writes its value.
-function createQuantityArgument(): void {
+// An unannotated input keeps its open contract when a reference argument changes its value.
+function createQuantityArgument($newQuantity): void {
     replaceValue($newQuantity, 'ready');
     echo "Reference argument: ", $newQuantity, PHP_EOL;
 }
-createQuantityArgument();
+createQuantityArgument(1);
 
 // A method can initialize a fresh label through the same reference argument rules.
 class QuantityLabels {

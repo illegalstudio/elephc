@@ -35,12 +35,12 @@ impl Checker {
     }
 
     /// Records entry contracts and store sites without conflating value and reference inputs.
-    pub(super) fn mark_recreatable_parameter_origins(&mut self, facts: &Facts, incoming: &crate::types::checker::PreBoundLocals) {
+    pub(super) fn mark_parameter_binding_origins(&mut self, facts: &Facts, incoming: &crate::types::checker::PreBoundLocals) {
         if !self.strict_locals { return; }
         for (name, incoming) in incoming {
             let Some(source) = facts.names.get(name).filter(|source|
-                (source.conditional_unset || (facts.contains_eval && source.has_unset))
-                    && !source.disqualified) else { continue; };
+                !source.disqualified && (source.conditional_unset || (facts.contains_eval && source.has_unset)))
+                else { continue; };
             if !self.local_parameter_names.contains(name)
                 || self.name_is_seeded_program_storage(name)
                 || matches!(incoming.storage.codegen_repr(), PhpType::Pointer(_) | PhpType::Buffer(_) | PhpType::Packed(_)) {

@@ -100,3 +100,11 @@ fn conditional_reference_origins_eval_values_and_owners() {
         "Tinteger:2:2|2|Tstring:new:2|2|Winteger|3|Tstring|1|Tstring|string|Tstring|early|Winteger|integer|Tstring|string|",
         "Wstring:bad:bad|bad|Winteger:3:2|2|Winteger|3|Winteger|1|Winteger|integer|Winteger|early|Winteger|integer|Winteger|string|");
 }
+
+/// Unannotated inputs remain open while declared inputs and caller-owned aliases retain contracts.
+#[test]
+fn open_parameter_contracts_eval_values_and_owners() {
+    assert_reference_fixture(include_str!("../../../../../tests/fixtures/strict/open_parameter_contracts.php"),
+        "integer:2|string:ready|double:2.5|double:3.5|integer:2|Tinteger:1|Tinteger:1|string:new|Tinteger:1|method|static|closure|local:1|stream|1|closed|merged|merged|",
+        "integer:2|string:ready|double:2.5|double:3.5|integer:2|Wstring:bad|Wstring:bad|string:new|Wstring:new|method|static|closure|local:1|stream|1|closed|merged|merged|");
+}

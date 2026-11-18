@@ -1201,6 +1201,10 @@ fn merge_local_assignment_type(
         env.insert(name.to_string(), PhpType::Mixed);
         return Ok(());
     }
+    if let Some(view) = checker.open_parameter_store_view(name, ty) {
+        env.insert(name.to_string(), view);
+        return Ok(());
+    }
     if let Some(existing) = env.get(name) {
         let merged_ty = checker.merged_assignment_type(existing, ty).or_else(|| {
             // Locals owns the PHP container kind. Element and packed/hash representation
