@@ -48,6 +48,7 @@ pub(crate) fn emit_eval_value_runtime(emitter: &mut Emitter, features: RuntimeFe
     release_boundary::emit(emitter);
     bit_not::emit(emitter);
     checked_numeric::emit(emitter);
+    unserialize_boundary::emit(emitter);
     numeric_unary::emit(emitter);
     diagnostics::emit(emitter);
     throwable_chain::emit(emitter);
@@ -142,6 +143,7 @@ mod aarch64_clone;
 mod x86_64_clone;
 mod clone_rejections;
 mod runtime_builtin_dispatch;
+mod unserialize_boundary;
 mod memory;
 mod resources;
 mod backtrace;

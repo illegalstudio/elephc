@@ -48,7 +48,7 @@ features! {
 pub const INTEGRATED_FEATURE_BITS: u64 = StrictFeature::Locals.bit() | StrictFeature::Bools.bit()
     | StrictFeature::DynamicCode.bit() | StrictFeature::Opcache.bit() | StrictFeature::Arithmetic.bit()
     | StrictFeature::Overflow.bit() | StrictFeature::Strings.bit() | StrictFeature::Coercions.bit()
-    | StrictFeature::Casts.bit() | StrictFeature::Comparisons.bit();
+    | StrictFeature::Casts.bit() | StrictFeature::Comparisons.bit() | StrictFeature::ArrayKeys.bit();
 
 /// User-facing metadata for one strict feature.
 #[derive(Clone, Copy, Debug)]

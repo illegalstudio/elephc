@@ -64,7 +64,7 @@ pub(super) fn emit_aarch64_runtime_builtin_dispatch(emitter: &mut Emitter, featu
     emit_aarch64_zero_arg_boxed_bool_case(emitter, RuntimeBuiltinId::ObEndClean, "ob_end_clean");
     emit_aarch64_zero_arg_boxed_bool_case(emitter, RuntimeBuiltinId::ObEndFlush, "ob_end_flush");
     emit_aarch64_unary_case(emitter, RuntimeBuiltinId::Serialize, "serialize", "__elephc_eval_value_serialize");
-    emit_aarch64_unary_case(emitter, RuntimeBuiltinId::Unserialize, "unserialize", "__elephc_eval_value_unserialize");
+    super::unserialize_boundary::emit_dispatch(emitter);
 
     super::memory::emit_cases(emitter);
 
@@ -146,7 +146,7 @@ pub(super) fn emit_x86_64_runtime_builtin_dispatch(emitter: &mut Emitter, featur
     emit_x86_64_zero_arg_boxed_bool_case(emitter, RuntimeBuiltinId::ObEndClean, "ob_end_clean");
     emit_x86_64_zero_arg_boxed_bool_case(emitter, RuntimeBuiltinId::ObEndFlush, "ob_end_flush");
     emit_x86_64_unary_case(emitter, RuntimeBuiltinId::Serialize, "serialize", "__elephc_eval_value_serialize");
-    emit_x86_64_unary_case(emitter, RuntimeBuiltinId::Unserialize, "unserialize", "__elephc_eval_value_unserialize");
+    super::unserialize_boundary::emit_dispatch(emitter);
 
     super::memory::emit_cases(emitter);
 

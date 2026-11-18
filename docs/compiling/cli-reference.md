@@ -606,11 +606,38 @@ order. Repeating an explicit feature option uses the last value.
 
 Integration is in progress. This build accepts the existing strict-locals and
 strict-opcache rules plus strict-dynamic-code, strict-bools, strict-arithmetic,
-strict-overflow, strict-strings, strict-coercions, strict-casts and strict-comparisons.
+strict-overflow, strict-strings, strict-coercions, strict-casts, strict-comparisons
+and strict-array-keys.
 Other registered guarantees,
 including the complete umbrella, fail explicitly until their enforcement is
 complete. Eval embedding entry points reject execution with those profiles too. The [implementation plan](https://github.com/illegalstudio/elephc/issues/2347)
 tracks the remaining work.
+
+### Exact array keys
+
+`--strict-array-keys` preserves integer and string key identity. Numeric strings
+are hashed from their original bytes: `"1"`, `1` and `"01"` are three separate
+keys. Strings retain their byte length, embedded NUL bytes and case. No Unicode
+normalization is applied. Hash collisions compare both key kind and original
+value.
+
+PHP array dimensions and key-producing builtins accept only integer or string
+keys. A proven invalid key is a compile error, including in source that an
+optimizer would remove. Dynamic invalid keys throw `TypeError` before PHP key
+coercion. Reads, writes, probes, aliases and callable forwarding use the same
+original-key checks. String offsets and `ArrayAccess` object offsets keep their
+own contracts. An optional null column selector in `array_column()` remains
+valid.
+
+```php
+$values = ["1" => "string", 1 => "integer", "01" => "leading zero"];
+echo count($values); // 3 with --strict-array-keys
+```
+
+See `examples/strict-array-keys/main.php` for a complete program. Source-known
+Reflection calls preserve the same key checks. A Reflection target selected only
+at runtime, or lost at a control-flow join, is explicitly refused by the current
+adapter; see [Reflection lowering](../internals/the-codegen.md).
 
 ### Strict value coercions
 

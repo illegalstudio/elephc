@@ -371,7 +371,7 @@ evidence and outstanding guarantees are recorded below.
 
 ## Implementation progress
 
-Verified through step177 (this commit). Remaining feature integration is active. Issue:
+Verified through step178 (this commit). Remaining feature integration is active. Issue:
 https://github.com/illegalstudio/elephc/issues/2347.
 
 The full task remains active. The user requested complete implementation, with a
@@ -641,20 +641,18 @@ paths. Keep this plan, agent documentation and the current journal log synchroni
 
 ### Latest verified admission checkpoint
 
-Verified114 admits Comparisons as the tenth feature, following Strings109,
-Coercions110 and Casts111. Signed112 and113 provide comparator result ownership,
-native source policy and optimizer retention. Public native/opaque domains,
-callable/Reflection hosts, REPL recovery, example, independent flags and all-five-
-target library emission are verified. Job8f891928 passed nine exact primary gates,
-all builtin generation/architecture audits and restored default builds (6m43s).
-Job8cf9054e passed six method-focused gates, repeated the audits and restored
-builds (3m20s). Integer and heap-string argument owners retire on free-function,
-instance-method and static-method failures; source arity and receiver destruction
-remain correct. No generated documentation changed. Local native execution is
-Linux x86_64, with emitter/library checks for the complete supported matrix.
+Verified178 admits ArrayKeys as the eleventh feature. Public PHP/LFC checks,
+native/direct and opaque eval, exact key producers, original-source/optimizer
+rules, Reflection diagnostics, cache identity, immutable FFI profiles and twenty-four
+CLI/example cases are verified. All twenty-seven focused gates pass, including
+real assembly for every supported target and the builtin documentation workflow.
+The retained unserialize wire and its missing protected exception boundary are
+repaired. Native execution is Linux x86_64; all supported targets have emission
+and assembler coverage.
 
-The complete umbrella, stronger Locals and six remaining feature integrations
-remain unfinished. No push, PR or full local suite has been requested or run.
+Five families remain pending: Nullability, Mixed, Initialization, ArrayTypes and
+Indexing. Stronger Locals and complete umbrella acceptance remain active work.
+No push, PR or full local suite has been requested or run.
 
 ### Completed Coercions and Casts admissions
 
@@ -1767,3 +1765,38 @@ diff hygiene, are accepted.
 ArrayKeys remains staged while producer/source, host/cache/mode and the disabled
 strict native eval admission gate are completed. Stronger Locals and the other
 five pending families remain part of the authorized implementation.
+
+### Verified178: public exact array key admission
+
+ArrayKeys is the eleventh admitted guarantee. Public checker, CLI and native eval
+entry points now accept the independently selected profile. String keys preserve
+their bytes and kind; integer keys remain distinct. The formerly ignored strict
+native eval gate is enabled, and native builtin producer coverage includes the
+exact profile. A new producer fixture covers JSON numeric names and serialized
+keys with explicit string/integer kinds. The complete CLI example and reference
+document the feature and the existing unresolved-Reflection restriction.
+
+Producer integration exposed a retained converted unserialize wire. Both native
+wrappers now publish shared owned-value exception guards for that wire and the
+parsed result, then retire the conversion after context teardown. The unary
+runtime builtin dispatcher also needed protection beneath Rust: its former direct
+call let warning-handler ValueError escape the interpreter catch. A small shared
+adapter now uses the existing PendingThrowable status and protected-call helper.
+Facts54c9e03b and the unserialize-boundary entry record these observed failures.
+Malformed strings, a mixed integer formatting input and throwing warning handlers
+now preserve both control flow and ownership in native/direct and opaque eval.
+
+All twenty-seven focused gates pass. Public PHP/LFC checking covers all five
+targets. Native strict guards, builtin producers, original-source/folding and
+Reflection controls pass with balanced heaps. The extended producer matrix passes
+in68.79s. Clang assembles the complete eval runtime on Linux x86_64/AArch64, macOS,
+iOS device and Simulator. Cache identity, immutable FFI profiles, twenty successful
+CLI/profile/mode/cache cases and four original-key refusals pass. Explicit overrides
+work with the umbrella in either order, and declare(strict_types=0) preserves the
+selected semantic profile. The builtin exporter, all generators/audits, assembly
+hygiene and restored default compiler build pass without generated-doc changes.
+
+Nullability, Mixed, Initialization, ArrayTypes and Indexing remain unadmitted.
+Stronger Locals binding joins/unset and the signed157 foreach/unset crash remain
+active work before complete umbrella acceptance. The AOT settype array-element
+limitation remains tracked separately as task29118b0b.

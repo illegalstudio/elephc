@@ -2,7 +2,7 @@
 //! Checks original eval array keys through the real native bridge and every target emitter.
 //!
 //! Called from:
-//! - Focused staged semantic-profile integration regressions.
+//! - Focused public semantic-profile integration regressions.
 //!
 //! Key details:
 //! - Runtime-selected source reaches Magician rather than literal-eval AOT lowering.
@@ -48,17 +48,16 @@ fn eval_array_key_guards_emit_on_every_target() {
     }
 }
 
-/// Native permissive eval keeps its values and owners while the guarded profile is staged.
+/// Native permissive eval keeps its values and owners alongside the independent exact profile.
 #[cfg(any(all(target_os = "macos", target_arch = "aarch64"),
     all(target_os = "linux", any(target_arch = "x86_64", target_arch = "aarch64"))))]
 #[test]
 fn eval_array_key_guards_native_permissive_bridge_compatibility() { assert_native(false); }
 
-/// Executes strict native guards after ArrayKeys completes public interpreter/FFI admission.
+/// Strict native guards preserve original key kinds through the public interpreter boundary.
 #[cfg(any(all(target_os = "macos", target_arch = "aarch64"),
     all(target_os = "linux", any(target_arch = "x86_64", target_arch = "aarch64"))))]
 #[test]
-#[ignore = "ArrayKeys runtime admission remains pending; enable with the complete feature"]
 fn eval_array_key_guards_native_strict_bridge_kinds_and_owners() { assert_native(true); }
 
 /// Runs one real bridge profile through both optimization modes with exact stdout and heap checks.

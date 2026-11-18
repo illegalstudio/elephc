@@ -63,12 +63,27 @@ fn builtin_key_inputs_native_values_and_owners() {
     all(target_os = "linux", any(target_arch = "x86_64", target_arch = "aarch64"))))]
 #[test]
 fn builtin_key_inputs_native_eval_permissive_values_and_owners() {
-    let (fragment, expected) = source(false);
+    assert_native_eval(false);
+}
+
+/// Public exact-key eval preserves producer identities and diagnoses original invalid inputs.
+#[cfg(any(all(target_os = "macos", target_arch = "aarch64"),
+    all(target_os = "linux", any(target_arch = "x86_64", target_arch = "aarch64"))))]
+#[test]
+fn builtin_key_inputs_native_eval_exact_values_and_owners() {
+    assert_native_eval(true);
+}
+
+/// Runs the same builtin observations under one independently selected native eval profile.
+#[cfg(any(all(target_os = "macos", target_arch = "aarch64"),
+    all(target_os = "linux", any(target_arch = "x86_64", target_arch = "aarch64"))))]
+fn assert_native_eval(exact: bool) {
+    let (fragment, expected) = source(exact);
     let fragment = fragment.strip_prefix("<?php\n").unwrap().replace('\\', "\\\\").replace('\'', "\\'");
     let source = format!("<?php $code = $argc > 0 ? '{fragment}' : ''; eval($code);");
     for optimize in [false, true] {
         let module = super::semantic_sources::lower_capturing_arguments(&source, Target::detect_host(),
-            SemanticProfile::PERMISSIVE, optimize, SourceMode::Php);
+            SemanticProfile::PERMISSIVE.with(StrictFeature::ArrayKeys, exact), optimize, SourceMode::Php);
         let output = super::native_module::run(&module);
         let stderr = String::from_utf8_lossy(&output.stderr);
         assert!(output.status.success(), "opt={optimize}: {:?}; {stderr}", output.status);

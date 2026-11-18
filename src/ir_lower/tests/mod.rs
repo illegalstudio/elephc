@@ -838,3 +838,4 @@ mod array_parent_places;
 mod false_parent_completion;
 mod owned_reference_keys;
 mod escaped_reference_sources;
+mod array_key_admission;
