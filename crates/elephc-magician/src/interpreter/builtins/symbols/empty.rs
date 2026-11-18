@@ -172,6 +172,7 @@ pub(in crate::interpreter) fn eval_empty_arg(
                 if values.type_tag(array)? == EVAL_TAG_OBJECT {
                     empty = eval_array_access_empty_result(array, index, context, values)?;
                 } else {
+                    checked_array_keys::for_receiver(array, index, context, values)?;
                     let value = values.array_get(array, index)?;
                     let answer = values.truthy(value).map(|truthy| !truthy);
                     let released = eval_release_value(context, values, value);

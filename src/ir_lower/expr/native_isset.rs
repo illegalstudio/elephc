@@ -98,7 +98,12 @@ pub(super) fn lower_native_isset_offset_probe_from_value(
     let (array_value, owner) = if ctx.semantic_profile.contains(elephc_semantics::StrictFeature::ArrayKeys) {
         root_owned_call_operand(ctx, array_value, expr.span)
     } else { (array_value, None) };
-    let result = lower_native_isset_offset_probe_with_key(ctx, array_value, index, expr);
+    // The root owns this lease through key evaluation and the guard. The probe borrows it;
+    // retiring both the probe operand and the root would release the receiver twice.
+    let probe_receiver = if owner.is_some() {
+        crate::ir_lower::ownership::borrow_value(ctx, array_value, Some(expr.span))
+    } else { array_value };
+    let result = lower_native_isset_offset_probe_with_key(ctx, probe_receiver, index, expr);
     if let Some(owner) = owner { retire_owned_call_operand(ctx, owner, expr.span); }
     result
 }

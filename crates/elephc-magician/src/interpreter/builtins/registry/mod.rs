@@ -420,6 +420,9 @@ fn call_shared_runtime_builtin(
             }
         }
     }
+    if let (RuntimeBuiltinId::ArrayKeyExists, [key, array]) = (id, args) {
+        checked_array_keys::for_receiver(*array, *key, context, values)?;
+    }
     let result = values.runtime_builtin_call(id, args);
     crate::interpreter::native_results::finish(result, context, values)
 }

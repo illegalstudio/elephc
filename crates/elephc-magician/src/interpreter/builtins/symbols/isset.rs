@@ -142,6 +142,7 @@ pub(in crate::interpreter) fn eval_isset_arg(
                 if values.type_tag(array)? == EVAL_TAG_OBJECT {
                     exists = eval_array_access_isset_result(array, index, context, values)?;
                 } else {
+                    checked_array_keys::for_receiver(array, index, context, values)?;
                     let value = values.array_get(array, index)?;
                     let answer = values.is_null(value).map(|null| !null);
                     let released = eval_release_value(context, values, value);

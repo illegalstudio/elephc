@@ -359,6 +359,12 @@ pub trait BuiltinLoweringContext {
         Err(BuiltinLoweringError::new("numeric argument guards require a prepared builtin wrapper"))
     }
 
+    /// Guards one original builtin key after normalized arguments have been evaluated and rooted.
+    fn emit_array_key_guard(&mut self, _input: super::array_key_inputs::ArrayKeyInput,
+        _operands: &[ValueId], _span: Span) -> Result<(), BuiltinLoweringError> {
+        Err(BuiltinLoweringError::new("array key guards require a prepared builtin context"))
+    }
+
     /// Lowers an operator graph over borrowed operands after argument evaluation has finished.
     fn emit_numeric_binary(
         &mut self, left: ValueId, operation: crate::parser::ast::BinOp, right: ValueId,
@@ -542,6 +548,8 @@ pub struct BuiltinSemantics {
     pub target_support: BuiltinTargetSupport,
     /// Runtime functions the backend-neutral lowering may emit.
     pub runtime_functions: BuiltinRuntimeFunctions,
+    /// Original key inputs retained before array builtin normalization.
+    pub array_key_input: Option<super::array_key_inputs::ArrayKeyInput>,
     /// Source-order argument preparation used before normalized semantic lowering.
     pub argument_lowering: BuiltinArgumentLowering,
     /// Callable availability contract.
@@ -585,6 +593,19 @@ pub const fn with_argument_lowering(
     semantics
 }
 
+/// Associates a builtin with its original-key contract while preserving its existing runtime target.
+pub const fn with_array_key_input(mut semantics: BuiltinSemantics,
+    input: super::array_key_inputs::ArrayKeyInput) -> BuiltinSemantics {
+    semantics.array_key_input = Some(input);
+    if matches!(input, super::array_key_inputs::ArrayKeyInput::Value { .. }) {
+        semantics.argument_lowering = BuiltinArgumentLowering::PreserveUncoerced;
+        if matches!(semantics.runtime_functions, BuiltinRuntimeFunctions::One(RuntimeFnId::ArrayKeyExists)) {
+            semantics.callable = BuiltinCallablePolicy::Prepared(callable_accepts_any_source);
+        }
+    }
+    semantics
+}
+
 /// Builds the complete semantic descriptor for a fresh `Str -> Str` runtime transform.
 pub const fn unary_string_runtime(
     target: RuntimeCallTarget,
@@ -599,6 +620,7 @@ pub const fn unary_string_runtime(
         target_strategy: BuiltinTargetStrategy::RuntimeCall,
         target_support: BuiltinTargetSupport::All,
         runtime_functions: BuiltinRuntimeFunctions::None,
+        array_key_input: None,
         argument_lowering: BuiltinArgumentLowering::Standard,
         callable: BuiltinCallablePolicy::Dynamic(callable_accepts_string_coercible_source),
         lowering: BuiltinLowering::Runtime(target),
@@ -616,6 +638,7 @@ pub const fn runtime_fn_semantics(target: RuntimeFnId) -> BuiltinSemantics {
         target_strategy: BuiltinTargetStrategy::RuntimeCall,
         target_support: BuiltinTargetSupport::All,
         runtime_functions: BuiltinRuntimeFunctions::One(target),
+        array_key_input: None,
         argument_lowering: if target.uses_mbstring_runtime() {
             BuiltinArgumentLowering::PreserveValues
         } else { BuiltinArgumentLowering::Standard },
@@ -668,6 +691,7 @@ pub const fn pcntl_semantics(target: crate::ir::PcntlRuntime) -> BuiltinSemantic
         target_strategy: BuiltinTargetStrategy::RuntimeCall,
         target_support,
         runtime_functions: BuiltinRuntimeFunctions::None,
+        array_key_input: None,
         argument_lowering: BuiltinArgumentLowering::Standard,
         callable: BuiltinCallablePolicy::StaticOnly(
             "PCNTL callbacks use a dedicated process-runtime ABI",
@@ -730,6 +754,7 @@ pub const fn array_pointer_semantics(
         target_strategy: BuiltinTargetStrategy::RuntimeCall,
         target_support: BuiltinTargetSupport::All,
         runtime_functions: BuiltinRuntimeFunctions::None,
+        array_key_input: None,
         argument_lowering: BuiltinArgumentLowering::ArrayInternalPointer(op),
         callable: BuiltinCallablePolicy::StaticOnly(
             "the internal array pointer needs a named array variable receiver",
@@ -749,6 +774,7 @@ pub const fn type_predicate_semantics(predicate: PhpTypePredicate) -> BuiltinSem
         target_strategy: BuiltinTargetStrategy::EirPrimitive,
         target_support: BuiltinTargetSupport::All,
         runtime_functions: BuiltinRuntimeFunctions::None,
+        array_key_input: None,
         argument_lowering: BuiltinArgumentLowering::Standard,
         callable: BuiltinCallablePolicy::Dynamic(callable_accepts_any_source),
         lowering: BuiltinLowering::TypePredicate(predicate),
@@ -774,6 +800,7 @@ pub const fn internal_eir_semantics(
         target_strategy: BuiltinTargetStrategy::EirPrimitive,
         target_support: BuiltinTargetSupport::All,
         runtime_functions: BuiltinRuntimeFunctions::None,
+        array_key_input: None,
         argument_lowering: BuiltinArgumentLowering::Standard,
         callable: BuiltinCallablePolicy::StaticOnly("internal compiler primitive"),
         lowering: BuiltinLowering::Eir(lower),
@@ -857,6 +884,11 @@ pub fn lower_registry_call_with_source_mode(
         result_type: &resolved_result_type,
         span,
     };
+    if ctx.semantic_profile().contains(elephc_semantics::StrictFeature::ArrayKeys) {
+        if let Some(input @ super::array_key_inputs::ArrayKeyInput::Value { .. }) = def.spec.semantics.array_key_input {
+            ctx.emit_array_key_guard(input, operands, span)?;
+        }
+    }
     match def.spec.semantics.lowering {
         BuiltinLowering::Eir(lower) => lower(ctx, &normalized),
         BuiltinLowering::TypePredicate(predicate) => Ok(ctx.emit_value(
@@ -887,6 +919,10 @@ pub fn resolve_builtin_effects(
         BuiltinEffects::Shared(resolve) => resolve(input),
     };
     effects |= comparison_boundary_effects(def, input);
+    if input.semantic_profile.contains(elephc_semantics::StrictFeature::ArrayKeys)
+        && def.spec.semantics.array_key_input.is_some() {
+        effects |= Op::ThrowTypeError.default_effects();
+    }
     let weak_float_int = def
         .params
         .iter()
@@ -947,6 +983,7 @@ pub(crate) const fn test_probe_semantics() -> BuiltinSemantics {
         target_strategy: BuiltinTargetStrategy::EirGraph,
         target_support: BuiltinTargetSupport::All,
         runtime_functions: BuiltinRuntimeFunctions::None,
+        array_key_input: None,
         argument_lowering: BuiltinArgumentLowering::Standard,
         callable: BuiltinCallablePolicy::StaticOnly("test-only registry probe"),
         lowering: BuiltinLowering::Eir(lower_test_probe),

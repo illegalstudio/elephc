@@ -55,14 +55,10 @@ pub(in crate::interpreter) fn eval_array_flip_result(
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     let len = values.array_len(array)?;
-    let mut result = values.assoc_new(len)?;
+    let mut result = super::super::collection_builder::EvalArrayBuilder::assoc(values, len)?;
     for position in 0..len {
-        let key = values.array_iter_key(array, position)?;
-        let value = values.array_get(array, key)?;
-        if !matches!(values.type_tag(value)?, EVAL_TAG_INT | EVAL_TAG_STRING) {
-            continue;
-        }
-        result = values.array_set(result, value, key)?;
+        let Some(key) = super::key_inputs::countable_key_at(array, position, result.values())? else { continue; };
+        result.entry_key_first(|_| Ok(key), |values, _| values.array_iter_key(array, position))?;
     }
-    Ok(result)
+    Ok(result.finish())
 }

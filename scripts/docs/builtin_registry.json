@@ -17401,7 +17401,13 @@
     "module": "standard",
     "name": "array_column",
     "semantics": {
-      "argument_lowering": "standard",
+      "argument_lowering": "preserve_uncoerced",
+      "array_key_input": {
+        "argument": 1,
+        "kind": "value",
+        "nullable": true,
+        "receiver": 0
+      },
       "callable": {
         "kind": "static_only",
         "reason": "typed backend operation has no runtime-selected wrapper contract"
@@ -17545,6 +17551,10 @@
     "name": "array_combine",
     "semantics": {
       "argument_lowering": "standard",
+      "array_key_input": {
+        "argument": 0,
+        "kind": "values"
+      },
       "callable": {
         "kind": "static_only",
         "reason": "typed backend operation has no runtime-selected wrapper contract"
@@ -18339,6 +18349,10 @@
     "name": "array_fill_keys",
     "semantics": {
       "argument_lowering": "standard",
+      "array_key_input": {
+        "argument": 0,
+        "kind": "values"
+      },
       "callable": {
         "kind": "static_only",
         "reason": "typed backend operation has no runtime-selected wrapper contract"
@@ -19492,10 +19506,16 @@
     "module": "standard",
     "name": "array_key_exists",
     "semantics": {
-      "argument_lowering": "standard",
+      "argument_lowering": "preserve_uncoerced",
+      "array_key_input": {
+        "argument": 0,
+        "kind": "value",
+        "nullable": false,
+        "receiver": 1
+      },
       "callable": {
-        "kind": "static_only",
-        "reason": "typed backend operation has no runtime-selected wrapper contract"
+        "kind": "dynamic",
+        "prepared": true
       },
       "effects": {
         "kind": "static",

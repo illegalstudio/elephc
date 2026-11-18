@@ -1451,3 +1451,33 @@ comments and diff hygiene pass.
 Builtin/probe consumers, key producers, false/null parent parity and generic
 escaped-reference key owners remain pending, followed by dependency profiles,
 binding-flow alternatives and the other five unintegrated families.
+
+### Verified167: original builtin key contracts and result ownership
+
+Builtin home descriptors now declare reusable original-key inputs. The checker,
+pre-fold source evidence, effect resolution and EIR lowering consume that contract
+for array_key_exists, array_column, array_fill_keys and array_combine. Known invalid
+inputs are rejected before dead branches disappear, across PHP, LFC and Internal
+sources. Runtime value guards follow argument evaluation and preserve original
+kinds through named/spread calls and prepared builtin callable aliases. Probe
+constructs in eval share the same borrowed-key guard.
+
+Eval key-producing adapters reuse EvalArrayBuilder for key-first insertion,
+partial-result cleanup and balanced key/value leases. Fill/combine validate original
+kinds before their legacy conversions; column extraction preserves selected owners
+and nullable whole-row selection. Flip/count keep their existing skip policy for
+invalid values while retiring all iterator, lookup and arithmetic temporaries.
+Generated internals and registry JSON expose the shared input contract.
+
+The regressions also corrected two concrete paths: typed array_column now uses the
+shared profile-selected key materializer, and strict native isset borrows its rooted
+receiver instead of releasing that lease twice. The latter previously made later
+empty/coalesce reads miss even with an aggregate clean heap (fact92d9b006).
+
+All 14 focused gates pass: four AOT native policy/optimizer cases in2.22s, two real
+permissive native eval cases in55.92s, five-target emission in1.14s, original-source
+proof and both staged eval engine/owner gates. Default compiler/bridge builds pass
+in117.43s, exporter build in62.85s, and all required builtin generation/audit steps
+pass. Diff and assembly-comment hygiene pass. Public ArrayKeys admission remains
+closed; remaining runtime producer shapes, reflection, false/null parent parity,
+escaped-reference key owners and dependency validation still require completion.

@@ -171,6 +171,7 @@ const fn semantics_for(
         target_strategy: BuiltinTargetStrategy::EirGraph,
         target_support: BuiltinTargetSupport::All,
         runtime_functions: BuiltinRuntimeFunctions::None,
+        array_key_input: None,
         argument_lowering: BuiltinArgumentLowering::PreserveUncoerced,
         callable: BuiltinCallablePolicy::Dynamic(
             crate::builtins::semantics::callable_accepts_any_source,

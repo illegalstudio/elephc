@@ -139,7 +139,7 @@ struct Evidence {
 
 /// Checks all syntactic branches without sharing address-based memo entries between source trees.
 pub(super) fn validate(program: &Program, profile: SemanticProfile) -> Result<(), CompileError> {
-    if ![StrictFeature::Overflow, StrictFeature::Arithmetic, StrictFeature::Coercions, StrictFeature::Casts, StrictFeature::Comparisons].into_iter()
+    if ![StrictFeature::Overflow, StrictFeature::Arithmetic, StrictFeature::Coercions, StrictFeature::Casts, StrictFeature::Comparisons, StrictFeature::ArrayKeys].into_iter()
         .any(|feature| profile.contains(feature)) { return Ok(()); }
     let mut definitions = Definitions::default();
     definitions.collect(program);
@@ -194,7 +194,15 @@ impl AstVisitor for NumericValidator {
         let source = self.source_modes.enter_expression(expr);
         if self.error.is_some() { return; }
         let (_, class, _) = self.scopes.last().expect("expressions have an enclosing statement");
-        if source.mode == SourceMode::Internal { return; }
+        if source.mode == SourceMode::Internal {
+            if self.evidence.profile.contains(StrictFeature::ArrayKeys) {
+                self.evidence.strict_types = source.strict_types;
+                if let Err(error) = evaluate(expr, false, class.as_deref(), &self.definitions, &mut self.evidence) {
+                    self.error = Some(error);
+                }
+            }
+            return;
+        }
         self.evidence.strict_types = source.strict_types;
         if let Err(error) = source_calls::check(expr, class.as_deref(), &self.definitions, &self.evidence) {
             self.error = Some(error);
@@ -349,6 +357,11 @@ fn builtin_number(
     }
     let BuiltinRuntimeFunctions::One(operation) = def.spec.semantics.runtime_functions else { return Ok(None); };
     use crate::ir::RuntimeFnId;
+    if evidence.profile.contains(StrictFeature::ArrayKeys) {
+        if let Some(input) = def.spec.semantics.array_key_input {
+            key_inputs::validate(expr, def.name, args, input, checked, class, definitions, evidence)?;
+        }
+    }
     if operation == RuntimeFnId::Settype {
         if checked && evidence.profile.contains(StrictFeature::Casts) {
             casts::settype_builtin(expr, def.name, args, class, definitions, evidence)?;
@@ -442,7 +455,7 @@ fn array_numbers(
     expr: &Expr, checked: bool, class: Option<&str>, definitions: &Definitions, evidence: &mut Evidence,
     rule: Option<elephc_semantics::numeric_domains::NumericDomainRule>,
 ) -> Result<Option<Vec<Number>>, CompileError> {
-    let profile = if checked { evidence.profile } else { SemanticProfile::PERMISSIVE };
+    let profile = if checked || evidence.profile.contains(StrictFeature::ArrayKeys) { evidence.profile } else { SemanticProfile::PERMISSIVE };
     if let Some(entries) = crate::types::plan_literal_array_entries(&expr.kind,
         crate::codegen_support::compile_php_version(), profile) {
         let mut result: Vec<Option<Number>> = Vec::with_capacity(entries.len());
@@ -559,3 +572,5 @@ mod casts;
 #[cfg(test)]
 #[path = "numeric_constants/tests.rs"]
 mod tests;
+
+mod key_inputs;

@@ -5885,6 +5885,22 @@ impl crate::builtins::semantics::BuiltinLoweringContext for LoweringContext<'_, 
         Ok(())
     }
 
+    /// Borrows already-rooted builtin operands while checking the selected array's original key.
+    fn emit_array_key_guard(&mut self, input: crate::builtins::array_key_inputs::ArrayKeyInput,
+        operands: &[ValueId], span: Span) -> Result<(), crate::builtins::semantics::BuiltinLoweringError> {
+        let crate::builtins::array_key_inputs::ArrayKeyInput::Value { argument, receiver, nullable } = input
+            else { return Ok(()); };
+        let Some((&key, &array)) = operands.get(argument).zip(operands.get(receiver)) else {
+            return Err(crate::builtins::semantics::BuiltinLoweringError::new("missing builtin key operands"));
+        };
+        let key = LoweredValue { value: key, ir_type: self.builder.value_type(key) };
+        let array = LoweredValue { value: array, ir_type: self.builder.value_type(array) };
+        let key = super::ownership::borrow_value(self, key, Some(span));
+        let array = super::ownership::borrow_value(self, array, Some(span));
+        super::array_key_guards::for_receiver_with_null(self, array, key, span, nullable);
+        Ok(())
+    }
+
     /// Shares scalar and internal-object operator semantics without evaluating arguments twice.
     fn emit_numeric_binary(
         &mut self, left: ValueId, operation: crate::parser::ast::BinOp, right: ValueId,

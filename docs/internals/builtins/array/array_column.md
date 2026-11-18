@@ -28,6 +28,7 @@ description: "Compiler internals for array_column(): lowering path, type checks,
 - **Requirements**: `static (0 requirements)`
 - **Callable policy**: `static_only`
 - **Target support**: `macos-aarch64`, `ios-arm64`, `ios-sim-arm64`, `linux-aarch64`, `linux-x86_64`
+- **Original array key input**: argument #2 (null selects complete rows); validated before key conversion.
 
 ## EIR and runtime boundary
 

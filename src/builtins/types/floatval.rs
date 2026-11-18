@@ -28,6 +28,7 @@ builtin! {
         target_strategy: BuiltinTargetStrategy::EirGraph,
         target_support: BuiltinTargetSupport::All,
         runtime_functions: BuiltinRuntimeFunctions::None,
+        array_key_input: None,
         argument_lowering: crate::builtins::semantics::BuiltinArgumentLowering::Standard,
         callable: BuiltinCallablePolicy::Prepared(crate::builtins::semantics::callable_accepts_any_source),
         lowering: BuiltinLowering::Eir(lower),

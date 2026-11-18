@@ -827,3 +827,5 @@ mod array_key_removals;
 mod array_key_missing_reads;
 
 mod eval_array_key_guards;
+
+mod builtin_key_inputs;

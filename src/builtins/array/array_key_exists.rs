@@ -14,8 +14,9 @@ use crate::types::PhpType;
 builtin! {
     contract: "array_key_exists",
     check: check,
-    semantics: crate::builtins::semantics::runtime_fn_semantics(
-        crate::ir::RuntimeFnId::ArrayKeyExists,
+    semantics: crate::builtins::semantics::with_array_key_input(
+        crate::builtins::semantics::runtime_fn_semantics(crate::ir::RuntimeFnId::ArrayKeyExists),
+        crate::builtins::array_key_inputs::ArrayKeyInput::Value { argument: 0, receiver: 1, nullable: false },
     ),
 }
 

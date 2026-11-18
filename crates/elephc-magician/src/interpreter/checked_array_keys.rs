@@ -17,7 +17,16 @@ pub(super) fn for_receiver(
 ) -> Result<(), EvalStatus> {
     if !context.semantic_profile().contains(elephc_semantics::StrictFeature::ArrayKeys)
         || !matches!(values.type_tag(receiver)?, EVAL_TAG_ARRAY | EVAL_TAG_ASSOC)
-        || matches!(values.type_tag(key)?, EVAL_TAG_INT | EVAL_TAG_STRING)
     { return Ok(()); }
+    require_key(key, false, context, values)
+}
+
+/// Checks a key-producing builtin input; null may explicitly select a whole column.
+pub(super) fn require_key(
+    key: RuntimeCellHandle, nullable: bool, context: &mut ElephcEvalContext, values: &mut impl RuntimeValueOps,
+) -> Result<(), EvalStatus> {
+    if !context.semantic_profile().contains(elephc_semantics::StrictFeature::ArrayKeys) { return Ok(()); }
+    let tag = values.type_tag(key)?;
+    if matches!(tag, EVAL_TAG_INT | EVAL_TAG_STRING) || nullable && tag == EVAL_TAG_NULL { return Ok(()); }
     eval_throw_type_error(elephc_semantics::array_keys::EXACT_KEY_MESSAGE, context, values)
 }

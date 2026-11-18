@@ -18,8 +18,9 @@ use crate::types::PhpType;
 builtin! {
     contract: "array_column",
     check: check,
-    semantics: crate::builtins::semantics::runtime_fn_semantics(
-        crate::ir::RuntimeFnId::ArrayColumn,
+    semantics: crate::builtins::semantics::with_array_key_input(
+        crate::builtins::semantics::runtime_fn_semantics(crate::ir::RuntimeFnId::ArrayColumn),
+        crate::builtins::array_key_inputs::ArrayKeyInput::Value { argument: 1, receiver: 0, nullable: true },
     ),
 }
 

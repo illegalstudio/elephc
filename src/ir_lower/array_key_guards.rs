@@ -14,6 +14,12 @@ use elephc_semantics::StrictFeature;
 /// Keeps an evaluated receiver alive across a catchable key check and returns the original key.
 pub(super) fn for_receiver(ctx: &mut LoweringContext<'_, '_>, receiver: LoweredValue,
     key: LoweredValue, span: Span) -> LoweredValue {
+    for_receiver_with_null(ctx, receiver, key, span, false)
+}
+
+/// Shares array receiver selection with builtin column selection that explicitly permits null.
+pub(super) fn for_receiver_with_null(ctx: &mut LoweringContext<'_, '_>, receiver: LoweredValue,
+    key: LoweredValue, span: Span, nullable: bool) -> LoweredValue {
     if !ctx.semantic_profile.contains(StrictFeature::ArrayKeys) { return key; }
     let dynamic = match receiver.ir_type {
         IrType::Heap(IrHeapKind::Array | IrHeapKind::Hash) => false,
@@ -23,7 +29,9 @@ pub(super) fn for_receiver(ctx: &mut LoweringContext<'_, '_>, receiver: LoweredV
     let pins = super::expr::call_operand_owners::pin_in_flight_owners(ctx, &[receiver.value], span);
     if dynamic {
         let is_array = semantic_guards::matches_any_kind(ctx, receiver, &[PhpTypePredicate::Array], Some(span));
-        conditionally_require_key(ctx, is_array, key, span);
+        conditionally_require_key(ctx, is_array, key, span, nullable);
+    } else if nullable {
+        conversion_boundaries::array_key_or_null(ctx, key, span);
     } else {
         conversion_boundaries::array_key(ctx, key, span);
     }
@@ -66,7 +74,7 @@ pub(super) fn for_prepared_write(
         PhpType::Bool, Op::IBitOr.default_effects(), Some(span));
     let checked = ctx.emit_value(Op::IBitOr, vec![array.value, materializable.value], None,
         PhpType::Bool, Op::IBitOr.default_effects(), Some(span));
-    conditionally_require_key(ctx, checked, key, span);
+    conditionally_require_key(ctx, checked, key, span, false);
 }
 
 /// Avoids changing permissive writes or introducing guards for a proven int/string key.
@@ -78,13 +86,14 @@ fn needs_check(ctx: &LoweringContext<'_, '_>, key: LoweredValue) -> bool {
 
 /// Validates a key only on paths that operate on an existing or materialized PHP array.
 fn conditionally_require_key(ctx: &mut LoweringContext<'_, '_>, condition: LoweredValue,
-    key: LoweredValue, span: Span) {
+    key: LoweredValue, span: Span, nullable: bool) {
     let checked = ctx.builder.create_named_block("array.key.checked", Vec::new());
     let continuation = ctx.builder.create_named_block("array.key.continue", Vec::new());
     ctx.builder.terminate(Terminator::CondBr { cond: condition.value,
         then_target: checked, then_args: Vec::new(), else_target: continuation, else_args: Vec::new() });
     ctx.builder.position_at_end(checked);
-    conversion_boundaries::array_key(ctx, key, span);
+    if nullable { conversion_boundaries::array_key_or_null(ctx, key, span); }
+    else { conversion_boundaries::array_key(ctx, key, span); }
     ctx.builder.terminate(Terminator::Br { target: continuation, args: Vec::new() });
     ctx.builder.position_at_end(continuation);
 }

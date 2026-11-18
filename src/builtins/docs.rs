@@ -235,7 +235,7 @@ fn semantics_json(semantics: BuiltinSemantics) -> Value {
             json!({"kind": "runtime_call", "target": target.as_eir()})
         }
     };
-    json!({
+    let mut record = json!({
         "validation": validation,
         "result_type": result_type,
         "effects": effects,
@@ -248,7 +248,17 @@ fn semantics_json(semantics: BuiltinSemantics) -> Value {
         "argument_lowering": argument_lowering,
         "callable": callable,
         "lowering": lowering,
-    })
+    });
+    if let Some(input) = semantics.array_key_input {
+        use crate::builtins::array_key_inputs::ArrayKeyInput;
+        record["array_key_input"] = match input {
+            ArrayKeyInput::Value { argument, receiver, nullable } => json!({
+                "kind": "value", "argument": argument, "receiver": receiver, "nullable": nullable,
+            }),
+            ArrayKeyInput::Values { argument } => json!({"kind": "values", "argument": argument}),
+        };
+    }
+    record
 }
 
 /// Builds the documentation JSON array for every PHP-visible registered builtin.

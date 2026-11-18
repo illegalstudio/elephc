@@ -434,6 +434,9 @@ impl Checker {
                         continue;
                     }
                     let ty = self.infer_type(arg, env)?;
+                    if let Some(input) = def.spec.semantics.array_key_input.filter(|input| input.argument() == idx) {
+                        input.validate_type(self.semantic_profile, &ty, arg.span)?;
+                    }
                     if let Some(expected) = crate::builtins::input_contracts::parameter_type(def, idx) {
                         self.require_noncoercive_value_type(&expected, &ty, source_mode, arg.span, name)?;
                     }

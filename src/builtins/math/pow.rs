@@ -79,6 +79,7 @@ const fn pow_semantics() -> BuiltinSemantics {
         target_strategy: BuiltinTargetStrategy::EirGraph,
         target_support: BuiltinTargetSupport::All,
         runtime_functions: BuiltinRuntimeFunctions::One(RuntimeFnId::Pow),
+        array_key_input: None,
         argument_lowering: crate::builtins::semantics::BuiltinArgumentLowering::PreserveUncoerced,
         callable: BuiltinCallablePolicy::Prepared(
             crate::builtins::semantics::callable_accepts_any_source,

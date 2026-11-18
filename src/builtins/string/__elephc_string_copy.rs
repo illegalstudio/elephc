@@ -35,6 +35,7 @@ builtin! {
         target_strategy: BuiltinTargetStrategy::EirPrimitive,
         target_support: BuiltinTargetSupport::All,
         runtime_functions: BuiltinRuntimeFunctions::None,
+        array_key_input: None,
         argument_lowering: BuiltinArgumentLowering::Standard,
         callable: BuiltinCallablePolicy::Dynamic(|_| true),
         lowering: BuiltinLowering::Eir(lower),

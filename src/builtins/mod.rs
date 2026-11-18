@@ -13,6 +13,7 @@
 #[macro_use]
 mod macros;
 pub mod semantics;
+pub mod array_key_inputs;
 pub mod spec;
 pub mod registry;
 pub mod docs;

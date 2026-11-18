@@ -124,3 +124,5 @@ mod strict_foreach_bindings;
 mod exact_key_metadata;
 
 mod exact_key_guards;
+
+mod exact_builtin_keys;

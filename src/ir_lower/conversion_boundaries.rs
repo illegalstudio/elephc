@@ -38,6 +38,12 @@ pub(super) fn array_key(ctx: &mut LoweringContext<'_, '_>, value: LoweredValue, 
         StrictFeature::ArrayKeys, crate::source::SourceMode::Php, span)
 }
 
+/// Keeps whole-row column selection separate from using null as an actual array key.
+pub(super) fn array_key_or_null(ctx: &mut LoweringContext<'_, '_>, value: LoweredValue, span: Span) -> LoweredValue {
+    membership_at_source(ctx, value, &PhpType::Union(vec![PhpType::Int, PhpType::Str, PhpType::Void]),
+        StrictFeature::ArrayKeys, crate::source::SourceMode::Php, span)
+}
+
 /// Shares guarded membership and owner handling while keeping source policy explicit.
 fn membership_at_source(ctx: &mut LoweringContext<'_, '_>, value: LoweredValue,
     destination: &PhpType, feature: StrictFeature, source: crate::source::SourceMode, span: Span) -> LoweredValue {
