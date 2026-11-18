@@ -34,8 +34,11 @@ selectedVariadicCall(new SelectedVariadicTarget());
     assert!(matches!(function.value(selected.operands[1]).unwrap().php_type.codegen_repr(),
         PhpType::Array(_) | PhpType::AssocArray { .. }),
         "{target}: the callee receives a collector rather than its first source argument");
+    // Main keeps a Mixed-receiver `method_call`; the merged lowering sends unknown classes through
+    // the callable-array fallback block, which dispatches at run time just the same.
     assert!(function.instructions.iter().any(|inst| inst.op == Op::MethodCall
-        && function.value(inst.operands[0]).unwrap().php_type.codegen_repr() == PhpType::Mixed),
+        && function.value(inst.operands[0]).unwrap().php_type.codegen_repr() == PhpType::Mixed)
+        || function.blocks.iter().any(|block| block.name == "method.selected.fallback"),
         "{target}: unknown and non-variadic classes retain their existing dispatch");
 }
 

@@ -1346,8 +1346,15 @@ mod tests {
         assert_eq!(link_requirements_for_runtime_features(features), expected);
         assert_eq!(link_requirements_for_runtime_features(RuntimeFeatures {
             descriptor_invoker: true, ..features
-        }), vec![LinkRequirement::Bridge("elephc_crypto"), LinkRequirement::Bridge("elephc_reference")],
-            "native coordination does not carry the interpreter's crypto dependency");
+        }), vec![
+            LinkRequirement::Bridge("elephc_crypto"),
+            // A descriptor invoker also wraps the stream builtins, which publish the PHAR bridge
+            // entry points (Symfony's generated container; the branch's link set).
+            LinkRequirement::Bridge("elephc_phar"),
+            LinkRequirement::SystemLibrary("z".to_string()),
+            LinkRequirement::SystemLibrary("bz2".to_string()),
+            LinkRequirement::Bridge("elephc_reference"),
+        ], "native coordination does not carry the interpreter's crypto dependency");
         let combined = link_requirements_for_runtime_features(RuntimeFeatures {
             eval_bridge: true, ..features
         });
@@ -1555,6 +1562,10 @@ mod tests {
                 ..RuntimeFeatures::none()
             }),
             vec![
+                // A descriptor invoker wraps the stream builtins, which publish the PHAR entry
+                // points, so their system libraries link even without a named phar function.
+                LinkRequirement::SystemLibrary("z".to_string()),
+                LinkRequirement::SystemLibrary("bz2".to_string()),
                 LinkRequirement::Bridge("elephc_magician"),
                 LinkRequirement::Bridge("elephc_bcmath"),
                 LinkRequirement::Bridge("elephc_mbstring")
@@ -1575,7 +1586,8 @@ mod tests {
                 LinkRequirement::SystemLibrary("z".to_string()),
                 LinkRequirement::SystemLibrary("bz2".to_string()),
                 LinkRequirement::Bridge("elephc_magician"),
-                LinkRequirement::Bridge("elephc_bcmath")
+                LinkRequirement::Bridge("elephc_bcmath"),
+                LinkRequirement::Bridge("elephc_mbstring")
             ]
         );
     }
