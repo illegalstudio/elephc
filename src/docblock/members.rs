@@ -45,9 +45,73 @@ pub(super) fn apply(
         let method_own = block.type_params.clone();
         // A method template that adopts nothing and that no written hint mentions is not a
         // template: php-src checks the written hints, and a template would ask the call for a
-        // type argument PHP never requires.
+        // type argument PHP never requires. A return annotation that names a method template
+        // refused by a written parameter hint is dropped the same way: no argument can bind it,
+        // so a bare call would fail. A return-only method template stays usable through an
+        // explicit type argument or a template default.
+        let mut return_blocked = false;
         if is_template {
-            let names: Vec<String> = method_own.iter().map(|param| param.name.clone()).collect();
+            let method_names: Vec<String> =
+                method_own.iter().map(|param| param.name.clone()).collect();
+            let written_parameter_binds = method.params.iter().any(|(_, declared, _, _)| {
+                declared
+                    .as_ref()
+                    .is_some_and(|ty| ty.mentions_type_param(&method_names))
+            }) || method
+                .variadic_type
+                .as_ref()
+                .is_some_and(|ty| ty.mentions_type_param(&method_names));
+            let annotation_binds = method.params.iter().any(|(name, declared, _, _)| {
+                block.params.get(name).is_some_and(|annotated| {
+                    annotated.mentions_type_param(&method_names)
+                        && super::adopts_annotation(declared.as_ref(), annotated, &method_own)
+                })
+            }) || method
+                .variadic
+                .as_ref()
+                .and_then(|name| block.params.get(name))
+                .is_some_and(|annotated| {
+                    annotated.mentions_type_param(&method_names)
+                        && super::adopts_annotation(
+                            method.variadic_type.as_ref(),
+                            annotated,
+                            &method_own,
+                        )
+                });
+            let refused_parameter_annotation =
+                method.params.iter().any(|(name, declared, _, _)| {
+                    block.params.get(name).is_some_and(|annotated| {
+                        annotated.mentions_type_param(&method_names)
+                            && !super::adopts_annotation(
+                                declared.as_ref(),
+                                annotated,
+                                &method_own,
+                            )
+                            && !declared.as_ref().is_some_and(|ty| {
+                                ty.mentions_type_param(&method_names)
+                            })
+                    })
+                }) || method
+                    .variadic
+                    .as_ref()
+                    .and_then(|name| block.params.get(name))
+                    .is_some_and(|annotated| {
+                        annotated.mentions_type_param(&method_names)
+                            && !super::adopts_annotation(
+                                method.variadic_type.as_ref(),
+                                annotated,
+                                &method_own,
+                            )
+                            && !method
+                                .variadic_type
+                                .as_ref()
+                                .is_some_and(|ty| ty.mentions_type_param(&method_names))
+                    });
+            return_blocked = block.return_type.as_ref().is_some_and(|annotated| {
+                annotated.mentions_type_param(&method_names)
+                    && !(written_parameter_binds || annotation_binds)
+                    && refused_parameter_annotation
+            });
             let adopts = method.params.iter().any(|(name, declared, _, _)| {
                 block.params.get(name).is_some_and(|annotated| {
                     super::adopts_annotation(declared.as_ref(), annotated, &method_own)
@@ -59,19 +123,24 @@ pub(super) fn apply(
                 .is_some_and(|annotated| {
                     super::adopts_annotation(method.variadic_type.as_ref(), annotated, &method_own)
                 })
-                || block.return_type.as_ref().is_some_and(|annotated| {
-                    super::adopts_annotation(method.return_type.as_ref(), annotated, &method_own)
-                });
+                || (!return_blocked
+                    && block.return_type.as_ref().is_some_and(|annotated| {
+                        super::adopts_annotation(
+                            method.return_type.as_ref(),
+                            annotated,
+                            &method_own,
+                        )
+                    }));
             let written_mentions = method.params.iter().any(|(_, declared, _, _)| {
-                declared.as_ref().is_some_and(|ty| ty.mentions_type_param(&names))
+                declared.as_ref().is_some_and(|ty| ty.mentions_type_param(&method_names))
             }) || method
                 .variadic_type
                 .as_ref()
-                .is_some_and(|ty| ty.mentions_type_param(&names))
+                .is_some_and(|ty| ty.mentions_type_param(&method_names))
                 || method
                     .return_type
                     .as_ref()
-                    .is_some_and(|ty| ty.mentions_type_param(&names));
+                    .is_some_and(|ty| ty.mentions_type_param(&method_names));
             if !adopts && !written_mentions {
                 continue;
             }
@@ -84,36 +153,26 @@ pub(super) fn apply(
         // through the class parameter `T`.
         let mut own = class_own.to_vec();
         own.extend(method_own.iter().cloned());
-        let names: Vec<String> = own.iter().map(|param| param.name.clone()).collect();
         let is_constructor = method.name.eq_ignore_ascii_case("__construct");
-        let mut parameter_binds = false;
         for (name, declared, _, _) in method.params.iter_mut() {
             let Some(annotated) = block.params.get(name) else {
                 continue;
             };
-            if declared.as_ref().is_some_and(|ty| ty.mentions_type_param(&names)) {
-                parameter_binds = true;
-            }
-            if apply_type(declared, annotated, class_params, &own, is_template) {
-                parameter_binds = true;
-                if is_constructor {
-                    promoted.push((name.clone(), declared.clone()));
-                }
+            if apply_type(declared, annotated, class_params, &own, is_template)
+                && is_constructor
+            {
+                promoted.push((name.clone(), declared.clone()));
             }
         }
         if let Some(annotated) = method.variadic.as_ref().and_then(|name| block.params.get(name)) {
-            if apply_type(&mut method.variadic_type, annotated, class_params, &own, is_template) {
-                parameter_binds = true;
-            }
+            apply_type(&mut method.variadic_type, annotated, class_params, &own, is_template);
         }
         if let Some(annotated) = &block.return_type {
-            // A return annotation that mentions a METHOD template no parameter binds would ask
-            // the call for a type argument inference cannot supply, so the written hint stays. A
-            // CLASS template needs no parameter here: the construction binds it.
-            let class_names: Vec<String> =
-                class_own.iter().map(|param| param.name.clone()).collect();
-            let class_bound = annotated.mentions_type_param(&class_names);
-            if !annotated.mentions_type_param(&names) || parameter_binds || class_bound {
+            // A refused `@param` no argument can bind drops the return annotation (see
+            // `return_blocked`). A CLASS template needs no parameter here: the construction
+            // binds it, and a return-only METHOD template is bound by an explicit type
+            // argument or a default.
+            if !return_blocked {
                 apply_type(&mut method.return_type, annotated, class_params, &own, is_template);
             }
         }

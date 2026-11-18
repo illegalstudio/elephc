@@ -267,12 +267,32 @@ fn apply_to_stmt(mut stmt: Stmt, blocks: &HashMap<(u32, u32), DocBlock>) -> Stmt
                 || variadic_type
                     .as_ref()
                     .is_some_and(|ty| ty.mentions_type_param(&names));
+            // A `@param T` the written hint refused to adopt names a template no call argument
+            // can bind for this function. Adopting the return `T` then makes a bare call ask
+            // for a type argument inference cannot supply, so the written return hint stays.
+            // A return-only template has no such refused annotation and is kept: an explicit
+            // `f<int>()` or a template default still binds it.
+            let refused_parameter_annotation = params.iter().any(|(name, declared, _, _)| {
+                block.params.get(name).is_some_and(|annotated| {
+                    annotated.mentions_type_param(&names)
+                        && !declared
+                            .as_ref()
+                            .is_some_and(|ty| ty.mentions_type_param(&names))
+                })
+            }) || variadic
+                .as_ref()
+                .and_then(|name| block.params.get(name))
+                .is_some_and(|annotated| {
+                    annotated.mentions_type_param(&names)
+                        && !variadic_type
+                            .as_ref()
+                            .is_some_and(|ty| ty.mentions_type_param(&names))
+                });
             if let Some(annotated) = &block.return_type {
-                // A return annotation that mentions a template no parameter binds would ask the
-                // call for a type argument inference cannot supply, so the written hint stays.
-                if (!annotated.mentions_type_param(&names) || parameter_binds)
-                    && adopts_annotation(return_type.as_ref(), annotated, &own)
-                {
+                let return_blocked = annotated.mentions_type_param(&names)
+                    && !parameter_binds
+                    && refused_parameter_annotation;
+                if !return_blocked && adopts_annotation(return_type.as_ref(), annotated, &own) {
                     let written = return_type.take();
                     *return_type = Some(with_written_nullability(written.as_ref(), annotated.clone()));
                     adopted = true;
