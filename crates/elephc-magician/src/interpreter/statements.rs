@@ -13,6 +13,7 @@ mod abstract_requirements;
 mod abstract_method_calls;
 mod array_updates;
 mod array_append;
+mod array_parent_publication;
 mod attributes_magic_validation;
 mod core_attributes;
 mod callable_objects;

@@ -1534,3 +1534,25 @@ in3.09s, all five target emitters in1.44s, staged walker/VM and owner retirement
 in0.29s, sparse FakeOps adapter regression in0.16s, real opaque eval with both
 optimizers and clean heap in66.50s, and default compiler/bridge builds in75.10s.
 No new compiler warnings; diff and assembly-comment hygiene pass.
+
+### Verified170: ordinary property and static empty-parent publication
+
+A focused eval adapter shares ordinary instance/static parent publication through
+the existing property setters and their declaration/visibility checks. Empty null
+parents become visible before an original-key failure. False parents publish before
+the contextual deprecation dispatcher calls user handlers. The suspended write uses
+an independent captured value and preserves an ordinary slot replaced by a callback.
+Backing-slot selection is independent of an optional type hint and excludes accessor
+hooks and attached native storage.
+
+The shared PHP fixture checks both locations, null and false parents, original
+integer/bool/array/object keys, callback replacement and in-place writes. Both staged
+walker/VM engines and PHP/exact policies retire every owner. Native AOT behavior was
+already correct, so it is retained as an executable and five-target emitter control.
+ArrayKeys remains staged; explicit reference aliases, dynamic property slots and
+pending warning-handler throw completion remain part of the following boundary audit.
+
+All five focused gates pass: native AOT policy/optimizer controls in2.97s, all five
+target emitters in1.30s, staged interpreter engines and complete owner retirement
+in0.28s, real opaque eval with both optimizers and clean heap in64.70s, and default
+compiler/bridge builds in35.44s. No new compiler warnings; diff hygiene passes.

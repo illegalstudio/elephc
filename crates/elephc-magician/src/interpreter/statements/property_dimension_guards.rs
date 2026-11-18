@@ -23,6 +23,14 @@ struct Slot {
     write_visibility: EvalVisibility,
 }
 
+/// Recognizes an authorized ordinary backing slot independently of its optional type hint.
+pub(super) fn has_ordinary_backing_slot(
+    object: RuntimeCellHandle, property: &str, context: &ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<bool, EvalStatus> {
+    Ok(slot(object, property, context, values)?.is_some())
+}
+
 /// Returns a writable physical property's type without invoking hooks or changing access errors.
 pub(super) fn update_storage_contract(
     object: RuntimeCellHandle, property: &str, context: &ElephcEvalContext,

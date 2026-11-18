@@ -158,7 +158,15 @@ fn write_selected(
         return Ok(());
     }
     let index = finish_dimension_index(index, late_index, operands, context, scope, values)?;
+    let (current, attached) = if !dynamic
+        && property_dimension_guards::has_ordinary_backing_slot(object, property, context, values)?
+    {
+        super::array_parent_publication::prepare_empty_array_parent(
+            super::array_parent_publication::ArrayParentPlace::Instance(object, property),
+            current, index.is_none(), operands, context, values)?
+    } else { (current, true) };
     if let Some(array) = write_value(current, index, op, assigned, operands, context, values)? {
+        if !attached { return Ok(()); }
         if dynamic {
             super::property_append_fetch::write(object, property, array, context, values)?;
         } else {
@@ -379,6 +387,9 @@ fn static_write(
         let current = eval_static_property_get_result(class_name, property, context, values)?;
         let current = if current.is_borrowed() { values.retain(current)? } else { current };
         operands.push(current);
+        let (current, attached) = super::array_parent_publication::prepare_empty_array_parent(
+            super::array_parent_publication::ArrayParentPlace::Static(class_name, property),
+            current, key.is_none(), &mut operands, context, values)?;
         let (current, storage) = match detach_live_static_array(
             class_name, property, current, &mut operands, context, values,
         )? {
@@ -391,7 +402,7 @@ fn static_write(
         if let Some(array) = write_value_in_storage(
             current, key, op, assigned, storage, &mut operands, context, values,
         )? {
-            eval_static_property_set_result(class_name, property, array, context, values)?;
+            if attached { eval_static_property_set_result(class_name, property, array, context, values)?; }
         }
         Ok(())
     })();
