@@ -1659,9 +1659,9 @@ pub(super) fn coerce_operands_to_params_guarded(
             operands[index] =
                 root_evaluated_call_argument(ctx, lowered, Span::dummy()).value;
         }
-        // A deferred class check runs after the variadic tail array was built; publish that
-        // owned array too, so the check's `TypeError` releases it while unwinding.
-        if !object_checks.is_empty() && !variadic_param_is_by_ref(sig) {
+        // The operands after the regular parameters (a variadic's collected array, built from
+        // extra named arguments after every source was evaluated) are owned too.
+        if !sig.ref_params.get(regular_param_count).copied().unwrap_or(false) {
             for index in limit..operands.len() {
                 let lowered = lowered_value_from_id(ctx, operands[index]);
                 operands[index] =

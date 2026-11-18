@@ -185,12 +185,18 @@ fn check_supplied_scalar_params_before_defaults(
     ).is_some()) {
         return;
     }
-    for (param_index, source_index) in &supplied {
-        if sig.ref_params.get(*param_index).copied().unwrap_or(false) {
+    // Every owned source is rooted before the first check can throw: the regular parameters'
+    // values and the extra named arguments a variadic collects alike (`extra: make()` would
+    // otherwise leak its fresh array when the check for `$s` refuses).
+    let regular_param_count = crate::types::call_args::regular_param_count(sig);
+    for source in &plan.source_values {
+        let param = source.param_idx().unwrap_or(regular_param_count);
+        if sig.ref_params.get(param).copied().unwrap_or(false) {
             continue;
         }
-        let lowered = lowered_value_from_id(ctx, source_values[*source_index]);
-        source_values[*source_index] =
+        let source_index = source.source_index();
+        let lowered = lowered_value_from_id(ctx, source_values[source_index]);
+        source_values[source_index] =
             super::call_operand_owners::root_evaluated_call_argument(ctx, lowered, Span::dummy()).value;
     }
     let guard_span = ctx.call_site_span.unwrap_or_else(Span::dummy);

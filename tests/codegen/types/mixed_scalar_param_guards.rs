@@ -1226,3 +1226,30 @@ echo $i(box(1.5)), "\n";
     );
     assert_eq!(out, "ts(): Argument #1 ($s) must be of type string, null given, called in F on line 8\nK::m(): Argument #1 ($s) must be of type string, null given, called in F on line 10\nK::sm(): Argument #1 ($s) must be of type string, null given, called in F on line 12\nts(): Argument #1 ($s) must be of type string, null given, called in F on line 13\n{closure:F:14}(): Argument #1 ($s) must be of type string, null given, called in F on line 15\ndeprecation on line 4\n1\n");
 }
+
+/// A refused argument releases an extra named argument a variadic collects: `extra: make()`
+/// leaked its fresh array whenever the check for `$s` refused, both through the named-call
+/// precheck (a throwing default) and through the ordinary check, which did not root the
+/// collected variadic array. A positional variadic tail is released too.
+#[test]
+fn test_named_call_precheck_releases_extra_named_arguments_on_refusal() {
+    let output = compile_and_run_with_heap_debug(
+        r#"<?php
+function box(mixed $v): mixed { return $v; }
+function make(int $i): array { return [str_repeat("x", 50), $i]; }
+function f(string $s, int $d = PHP_INT_MAX, ...$rest) { return $s . ":" . $d; }
+function g(string $s, int $d = 1 % 0, ...$rest) { return $s . ":" . $d; }
+function p(string $s, ...$rest) { return $s; }
+for ($i = 0; $i < 3; $i++) {
+    try { f(s: box(null), extra: make($i)); } catch (TypeError $e) { echo "f\n"; }
+    try { g(s: box(null), extra: make($i)); } catch (TypeError $e) { echo "g\n"; }
+    try { p(box(null), make($i), make($i)); } catch (TypeError $e) { echo "p\n"; }
+}
+echo f(s: box("ok"), extra: make(9)), "\n";
+echo p(box("ok"), make(9)), "\n";
+"#,
+    );
+    assert!(output.success, "{}", output.stderr);
+    assert_eq!(output.stdout, "f\ng\np\nf\ng\np\nf\ng\np\nok:9223372036854775807\nok\n");
+    assert!(output.stderr.contains("leak summary: clean"), "{}", output.stderr);
+}
