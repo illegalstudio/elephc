@@ -1019,24 +1019,34 @@ thread_local! {
     /// the declaration that owns the list; see [`param_lines`].
     static PARAM_LINES: std::cell::RefCell<std::collections::HashMap<(u32, u32, u32), Vec<u32>>> =
         std::cell::RefCell::new(std::collections::HashMap::new());
-    /// Set while a parse only discovers declarations (see [`without_recording_param_lines`]).
+    /// Set while a helper, prelude or discovery-only parse runs (see [`without_recording_param_lines`]).
     static PARAM_LINES_SUSPENDED: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
 }
 
 /// Records the start line of each parameter of the function, method or closure at `span`.
+///
+/// Only compiler parses record: a `TOKEN_PARSE` validation or a Magician `eval()` fragment
+/// builds no declaration the compiler lowers, and may run inside a compiled program, where
+/// the table would only grow.
 pub(crate) fn record_param_lines(span: Span, lines: Vec<u32>) {
-    if PARAM_LINES_SUSPENDED.with(std::cell::Cell::get) {
+    if PARAM_LINES_SUSPENDED.with(std::cell::Cell::get)
+        || validation_only()
+        || crate::syntax::parser::runtime_fragment()
+    {
         return;
     }
     PARAM_LINES.with(|table| table.borrow_mut().insert((span.source_id(), span.line, span.col), lines));
 }
 
-/// Runs a parse that only discovers declarations without recording parameter lines.
+/// Runs a parse that must not record parameter lines: an internal helper or prelude source
+/// (curl, tokenizer, xml, PDO, the datetime classes, the web application contracts, ...) or a
+/// discovery-only parse (the Composer classmap scan).
 ///
-/// The Composer classmap scan parses files under the entry file's source identity 0 and never
-/// compiles them, so its records would replace the entry's own at the same line and column (a
-/// one-line classmap function at line 2 gave an entry function there its parameter line).
-pub(crate) fn without_recording_param_lines<T>(parse: impl FnOnce() -> T) -> T {
+/// Those sources are lexed under the entry file's source identity 0, so their records would
+/// replace the entry's own at the same line and column (a one-line helper function at line 12
+/// gave an entry function declared there its parameter line). User files (the entry, includes,
+/// autoloaded files) record as usual.
+pub fn without_recording_param_lines<T>(parse: impl FnOnce() -> T) -> T {
     let previous = PARAM_LINES_SUSPENDED.with(|flag| flag.replace(true));
     let result = parse();
     PARAM_LINES_SUSPENDED.with(|flag| flag.set(previous));
@@ -1047,7 +1057,7 @@ pub(crate) fn without_recording_param_lines<T>(parse: impl FnOnce() -> T) -> T {
 /// compile hands out again (`Span::reset_source_ids`): a stale entry would otherwise answer for
 /// a different file's declaration at the same position. The entry file (identity 0) has just
 /// been re-recorded by the compile that calls this.
-pub(crate) fn forget_included_param_lines() {
+pub fn forget_included_param_lines() {
     PARAM_LINES.with(|table| table.borrow_mut().retain(|(source_id, _, _), _| *source_id == 0));
 }
 
@@ -1190,5 +1200,22 @@ mod param_line_tests {
         forget_included_param_lines();
         assert_eq!(param_lines(entry), Some(vec![3, 4]));
         assert_eq!(param_lines(included), None);
+    }
+
+    /// Suspended, `TOKEN_PARSE` validation and compiler parses of one declaration: only the
+    /// compiler parse records its parameter lines.
+    #[test]
+    fn test_only_compiler_parses_record_param_lines() {
+        let source = "<?php\n\n\n\n\n\n\n\n\nfunction recorded(\n    int $a,\n    $b\n) {}\n";
+        let tokens = crate::syntax::lexer::tokenize(source).expect("tokenize");
+        let program = without_recording_param_lines(|| crate::syntax::parser::parse(&tokens))
+            .expect("parse");
+        let decl = program[0].span;
+        assert_eq!(param_lines(decl), None);
+        crate::syntax::parser::with_tokenizer_validation(|| crate::syntax::parser::parse(&tokens))
+            .expect("validation parse");
+        assert_eq!(param_lines(decl), None);
+        crate::syntax::parser::parse(&tokens).expect("parse");
+        assert_eq!(param_lines(decl), Some(vec![11, 12]));
     }
 }

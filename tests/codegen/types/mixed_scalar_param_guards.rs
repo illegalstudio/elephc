@@ -1120,3 +1120,30 @@ try { f(s: box("ok")); } catch (Throwable $e) { show($e); }
     );
     assert_eq!(out, "TypeError: f(): Argument #1 ($s) must be of type string, null given, called in F on line 6\nTypeError: f(): Argument #1 ($s) must be of type string, null given, called in F on line 7\nTypeError: C::m(): Argument #1 ($s) must be of type string, null given, called in F on line 8\nTypeError: C::sm(): Argument #1 ($i) must be of type int, string given, called in F on line 9\nTypeError: f(): Argument #1 ($s) must be of type string, array given, called in F on line 10\nDivisionByZeroError: Modulo by zero\n");
 }
+
+/// A helper prelude (here the tokenizer one, whose `token_get_all` starts on its line 12) is
+/// parsed under the entry file's source identity; its parameter lines replaced the entry
+/// function's at the same position, so the `int` precision deprecation named line 12 instead
+/// of the parameter's line 13. Only user files record parameter lines now.
+#[test]
+fn test_prelude_parse_keeps_the_entry_parameter_lines() {
+    let out = compile_and_run(
+        r#"<?php
+function box(mixed $v): mixed { return $v; }
+set_error_handler(function (int $no, string $msg, string $file, int $line): bool { echo $line, ' ', $msg, "\n"; return true; });
+echo count(token_get_all("<?php echo 1;")), "\n";
+
+
+
+
+
+
+
+function f(
+    int $n
+): int { return $n; }
+echo f(box(1.5)), "\n";
+"#,
+    );
+    assert_eq!(out, "5\n13 Implicit conversion from float 1.5 to int loses precision\n1\n");
+}
