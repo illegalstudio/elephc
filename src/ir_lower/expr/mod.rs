@@ -257,7 +257,7 @@ use merge_temps::*;
 pub(crate) use callable_resolution::{
     is_bound_closure_assignment_shape, lower_bound_closure_for_assignment,
 };
-pub(crate) use pending_owners::lower_with_pending_owners;
+pub(crate) use pending_owners::{lower_with_pending_owners, protect_additional_pending_operands};
 pub(crate) use branch_conditions::lower_condition;
 pub(crate) use call_operand_owners::{
     pin_in_flight_owners, pinned_transfer_owner, register_owned_call_operand, retire_owned_call_operand,

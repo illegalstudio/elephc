@@ -296,6 +296,9 @@ fn lower_array_assign_from_value(
     let array_value = pending[0];
     receiver_pins.append(&mut index_pins);
     index_pins = receiver_pins;
+    crate::ir_lower::array_key_guards::for_write(
+        ctx, array_value, index_value, value_value, &index_pins, index.span,
+    );
     // `??=` borrows its result temp: the slot keeps the reference and hands it to the
     // expression consumer, so the container write must retain its own owner instead of
     // adopting the temp (which would leave a dangling hash entry after the merge releases it).
@@ -564,6 +567,7 @@ pub(super) fn lower_boxed_array_set(
         let index = lower_operand(ctx, index);
         (index, lower_operand(ctx, value))
     };
+    crate::ir_lower::array_key_guards::for_prepared_write(ctx, array, index, span);
     string_offset_writes::lower_boxed_set(
         ctx, array, index, value, span, key_already_diagnosed,
     );
@@ -594,6 +598,7 @@ pub(super) fn lower_boxed_array_set_values(
     };
     let index = root(ctx, index);
     let value = root(ctx, value);
+    crate::ir_lower::array_key_guards::for_prepared_write(ctx, array, index, span);
     string_offset_writes::lower_boxed_set(
         ctx, array, index, value, span, key_already_diagnosed,
     );

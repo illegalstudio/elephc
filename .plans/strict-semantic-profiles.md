@@ -1290,3 +1290,28 @@ recorded as facte22ed52c and remains pending in binding-flow work. The key tests
 separate bindings and do not claim that failure fixed. ArrayKeys writes, unset,
 producers/eval, dependency policies, remaining Locals flow and all six pending
 guarantees still require completion. Public admission is unchanged.
+
+### Verified159: original keys at local write publication
+
+Concrete and boxed local writes check original key kinds after required RHS effects
+and before key conversion or publication. Prepared guards borrow rooted operands;
+additional guard windows protect RHS and provisional receiver owners without
+publishing an earlier lease twice. Pending-owner records retain their SSA identity
+for this deduplication. Existing temporary cleanup and normal-path write ownership
+remain authoritative. Null parents participate in the array-key check before
+materialization; string offset policy remains separate.
+
+Jobcf48be4d passes ten target/profile emissions1.50s and twelve native
+PHP/LFC/Internal, profile and optimizer variants5.05s with clean heaps. Hash and
+packed writes preserve snapshots, late variable keys, RHS effects and destruction;
+boxed arrays/null parents and string offset controls preserve receiver dispatch.
+Final1fa07799 passes in2m43s, including compiler/bridge builds73.28s and eight exact
+key/source ownership, reference and throwing string-warning controls. All10 unique
+gates, assembly comments and hygiene pass. Public CLI4ce8c36b passes both PHP
+optimizer settings and LFC with Coercions in1.34s, all with clean heaps.
+
+The full baseline probe separately exposes generic boolean-parent stores and
+ArrayAccess key normalization gaps, recorded as fact3b17799e. Those runtime paths,
+logical null keys from typed missing reads, remaining property/static writers,
+unset, producers/eval, dependency profiles and outstanding binding/family work
+remain pending. Public admission is unchanged.

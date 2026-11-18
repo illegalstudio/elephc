@@ -815,3 +815,4 @@ mod reflection_guarded_properties;
 mod constructor_string_owners;
 mod reflection_constructor_arrays;
 mod array_key_foreach_guards;
+mod array_key_write_guards;

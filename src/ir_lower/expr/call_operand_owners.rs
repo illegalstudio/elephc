@@ -955,6 +955,8 @@ pub(super) fn retire_owned_call_operand_preserving_result(
 pub(crate) enum PinnedInFlightOwner {
     /// An independent SSA owner parked in a non-retaining hidden slot.
     Temporary {
+        /// Original SSA owner, used to avoid publishing the same lease twice.
+        value: crate::ir::ValueId,
         /// Hidden `OwnedTemp` parking the pointer during the throwing window.
         temp_name: String,
         /// Owner slot published in the unwind chain for that window.
@@ -965,6 +967,13 @@ pub(crate) enum PinnedInFlightOwner {
 }
 
 impl PinnedInFlightOwner {
+    /// Identifies the lease already protected by this temporary or provisional view.
+    pub(crate) fn value(&self) -> crate::ir::ValueId {
+        match self {
+            Self::Temporary { value, .. } | Self::LocalView { value } => *value,
+        }
+    }
+
     /// Extracts the owner slot from a record returned by temporary-only pinning.
     fn into_temporary_slot(self) -> crate::ir::LocalSlotId {
         match self {
@@ -1053,7 +1062,7 @@ pub(crate) fn pin_in_flight_owners(
         let slot = ctx.local_slots[&temp_name];
         register_owned_call_operand(ctx, slot, span);
         pinned.push(*operand);
-        records.push(PinnedInFlightOwner::Temporary { temp_name, slot });
+        records.push(PinnedInFlightOwner::Temporary { value: *operand, temp_name, slot });
     }
     records
 }
@@ -1096,7 +1105,7 @@ pub(crate) fn unpin_in_flight_owners(
 ) {
     for record in records.into_iter().rev() {
         match record {
-            PinnedInFlightOwner::Temporary { temp_name, slot } => {
+            PinnedInFlightOwner::Temporary { temp_name, slot, .. } => {
                 unregister_owned_call_operand(ctx, slot, span);
                 ctx.clear_owned_hidden_temp(&temp_name, Some(span));
             }
