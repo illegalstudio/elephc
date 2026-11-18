@@ -321,3 +321,34 @@ try { echo cleanup($a), "\n"; } catch (TypeError $e) { echo $e->getMessage(), "\
     );
     assert_eq!(out, "caught\nfinally|narrow(): Return value must be of type ?T, ArrayObject returned\n");
 }
+
+/// A `Closure` cannot live in elephc's raw `object` storage, so a bare `object` return or
+/// parameter rejects it with the boundary `TypeError` (PHP accepts it), as the `object`
+/// property store already does; boxed `?object` storage keeps it.
+#[test]
+fn test_closure_is_rejected_at_raw_object_boundaries() {
+    let out = compile_and_run(
+        r#"<?php
+function asObject(mixed $m): object { return $m; }
+function asNullable(mixed $m): ?object { return $m; }
+function take(object $o): string { return get_class($o); }
+function getMixed(mixed $v): mixed { return $v; }
+function msg(TypeError $e): string { return explode(", called in", $e->getMessage())[0]; }
+$f = fn() => 1;
+try { asObject($f); echo "accepted\n"; } catch (TypeError $e) { echo msg($e), "\n"; }
+var_dump(asNullable($f) instanceof Closure);
+try { echo take(getMixed($f)), "\n"; } catch (TypeError $e) { echo msg($e), "\n"; }
+try { echo take(o: getMixed($f)), "\n"; } catch (TypeError $e) { echo msg($e), "\n"; }
+$m = getMixed($f);
+try { echo take($m), "\n"; } catch (TypeError $e) { echo msg($e), "\n"; }
+echo get_class(asObject(new ArrayObject([]))), "\n";
+"#,
+    );
+    assert_eq!(out, r#"asObject(): Return value must be of type object, Closure returned
+bool(true)
+take(): Argument #1 ($o) must be of type object, Closure given
+take(): Argument #1 ($o) must be of type object, Closure given
+take(): Argument #1 ($o) must be of type object, Closure given
+ArrayObject
+"#);
+}
